@@ -1,5 +1,55 @@
 # Iteration history
 
+## 0.4.0 — 2026-09-20
+
+### Previous issues and root causes
+
+- An archived 10,229-episode run bought no sustained attackers. Flat legal-action
+  sampling gave waiting only 1/136 initial probability; initial sun was scaled by
+  9990. This motivated controlled representation/exploration changes, not a claim
+  that one factor alone caused poor learning.
+- Difficulty increased on a fixed schedule even when elementary placement/saving
+  behavior was not demonstrated. There was no persisted mastery-gate state.
+- The reward did not distinguish kills earned by plants from mower rescues. The
+  user explicitly requested positive plant-kill credit and negative mower credit.
+
+### Improvements
+
+- Add tactical v2 (1,140 values), three distance regions per lane, economic card
+  signals and lane summaries. Preserve spatial v1 and every original action index.
+- Add a masked type/tile policy with true joint PPO probability/entropy and greedy
+  type-then-tile evaluation. Equal logits give initial waiting probability 1/4.
+- Add placement/saving lessons and a five-stage mastery state machine. Stage changes
+  apply at episode resets, retaining one policy and optimizer. Checkpoints persist
+  gates; normal easy/standard/hard validation alone chooses the shared checkpoint.
+- Add versioned profile configurations and a capped pilot with two learner seeds,
+  alternating profile order, matched completed validation budgets, and explicit
+  missing comparisons. Keep unsuccessful candidates experimental.
+- Add configurable +1/N plant-kill rewards and -1/N mower-kill penalties using public
+  killing-damage events. Projectiles, mines, bombs and chomper receive plant credit.
+  Record kill sources and contributions separately, and keep legacy missing weights
+  equivalent to zero. Changed objective/representation profiles require fresh runs.
+- Extend progress, episode metrics, and offline charts for economy, attackers,
+  grouped entropy, curriculum state and plant/mower kills. Keep CUDA transport,
+  native compact replays, and a single model for every normal difficulty.
+- Document paper evidence, local diagnosis, chosen/rejected methods, adjustments,
+  and unsuccessful diagnostics in `paper-adaptation.md`. PVZ 1.2.1 is unchanged.
+
+### Verification and limitations
+
+The complete research suite passes **166 tests**; the upstream game suite passes
+**199 tests**. Independent distribution algebra, all five lesson lanes, meaningful
+plant/mower kill controls, failed close-threat cases, Windows workers, CPU/CUDA,
+curriculum resume, shared checkpoint demos, rendering/replay hashes, package build,
+dependency and lint checks pass. Exact records and pilot results are in
+`validation.md`. No formal training suite or final-test evaluation was launched.
+
+The first pilot was interrupted to adopt the requested kill-source reward; its
+results remain separate. Failed diagnostics do not establish that the method
+improves play, and mastery gates may retain a lesson for the whole run. Regional
+aggregation loses some precise enemy positions. Event rewards intentionally change
+the objective; only the potential term has the policy-invariance guarantee.
+
 ## 0.3.2 — 2026-09-20
 
 ### Previous issues and root causes

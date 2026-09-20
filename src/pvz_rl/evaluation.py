@@ -47,6 +47,12 @@ def summarize(rows: list[dict]) -> dict:
             "win_rate": len(wins) / n,
             "truncation_rate": sum(r["status"] == "truncated" for r in group) / n,
             "mean_mowers_used": float(np.mean([r["mowers_used"] for r in group])),
+            "mean_plant_kills": float(np.mean([r["plant_kills"] for r in group]))
+            if all("plant_kills" in r for r in group)
+            else None,
+            "mean_mower_kills": float(np.mean([r["mower_kills"] for r in group]))
+            if all("mower_kills" in r for r in group)
+            else None,
             "fraction_wins_without_mowers": (
                 sum(r["mowers_used"] == 0 for r in wins) / len(wins) if wins else None
             ),
@@ -86,7 +92,8 @@ def evaluate(
     env_condition = (
         "hybrid" if baseline == "random_strategy" else "masked" if baseline else condition
     )
-    label = baseline or condition
+    profile = cfg.get("profile", "baseline")
+    label = baseline or (condition if profile == "baseline" else f"{profile}/{condition}")
     engine = verify_engine(cfg)
     protocol_hash = digest(
         {
@@ -104,8 +111,13 @@ def evaluate(
                 "training": cfg["training"],
                 "curriculum": cfg["curriculum"],
                 "condition": cfg["conditions"][condition],
+                "encoding": cfg["encoding"],
+                "policy": cfg.get("policy", {"kind": "flat"}),
             }
         )
+    )
+    game_protocol_hash = digest(
+        {"engine": engine, "environment": cfg["environment"], "reward": cfg["reward"]}
     )
     rows = []
     owns_progress = progress is None
@@ -129,6 +141,8 @@ def evaluate(
                         "split": split,
                         "engine": engine,
                         "protocol_hash": protocol_hash,
+                        "game_protocol_hash": game_protocol_hash,
+                        "profile": profile,
                         "training_config_hash": training_hash,
                     },
                 }
@@ -172,6 +186,8 @@ def evaluate(
                             "policy": label,
                             "learner_seed": learner_seed,
                             "protocol_hash": protocol_hash,
+                            "game_protocol_hash": game_protocol_hash,
+                            "profile": profile,
                             "training_config_hash": training_hash,
                             "split": split,
                             "training_steps": training_steps,

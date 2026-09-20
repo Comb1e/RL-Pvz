@@ -21,9 +21,11 @@ def make_report(paths, output, cfg, learning_paths=()):
         raise ValueError("No results supplied")
     protocols = {r.get("protocol_hash") for r in rows}
     if len(protocols) != 1 or None in protocols:
-        raise ValueError(
-            "Evaluations must have the same verified observation, reward and game protocol"
-        )
+        game_protocols = {r.get("game_protocol_hash") for r in rows}
+        if len(game_protocols) != 1 or None in game_protocols:
+            raise ValueError(
+                "Evaluations must have the same verified observation, reward and game protocol, or an explicit shared game protocol for profile comparisons"
+            )
     settings = {
         "replicates": cfg["evaluation"]["bootstrap_replicates"],
         "seed": cfg["evaluation"]["bootstrap_seed"],

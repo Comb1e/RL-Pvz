@@ -1,3 +1,4 @@
+profile = "pure-rl"
 schema_version = 1
 engine_commit = "6fd1f54706369915013a49eab5c1790f8c55ab0a"
 engine_version = "1.0.0"
@@ -34,7 +35,10 @@ zombie_states = ["walking", "carrying_pole", "vaulting", "biting", "dead"]
 mower_states = ["ready", "moving", "spent"]
 
 [encoding]
-version = 1
+version = "tactical_v2"
+local_count_scale = 5
+firepower_scale = 20
+lane_count_scale = 9
 count_scale = 75
 wave_scale = 15
 
@@ -66,6 +70,12 @@ eval_interval = 250000
 torch_threads = 1
 
 [curriculum]
+mode = "teaching"
+probe_interval = 16384
+probe_cases = 20
+consecutive_passes = 2
+minimum_stage_steps = 16384
+
 boundaries = [0.1, 0.4]
 easy_weights = [1.0, 0.0, 0.0]
 intermediate_weights = [0.5, 0.5, 0.0]
@@ -115,3 +125,41 @@ masked = true
 shaped = true
 curriculum = true
 hybrid = true
+
+[policy]
+kind = "grouped_v1"
+
+[curriculum.lessons.placement]
+spawn_ticks = [1, 81, 161]
+initial_sun = 200
+allowed_plants = ["peashooter"]
+
+[curriculum.lessons.saving]
+spawn_ticks = [1200, 1280, 1360]
+initial_sun = 50
+allowed_plants = ["sunflower", "peashooter"]
+
+[curriculum.stages.placement]
+tasks = ["placement"]
+weights = [1.0]
+requirements = {placement = 18}
+
+[curriculum.stages.saving]
+tasks = ["saving", "placement"]
+weights = [0.8, 0.2]
+requirements = {saving = 18}
+
+[curriculum.stages.easy]
+tasks = ["easy", "placement", "saving"]
+weights = [0.8, 0.1, 0.1]
+requirements = {easy = 16}
+
+[curriculum.stages.standard]
+tasks = ["easy", "standard", "saving"]
+weights = [0.45, 0.45, 0.1]
+requirements = {easy = 16, standard = 12}
+
+[curriculum.stages.shared]
+tasks = ["easy", "standard", "hard"]
+weights = [0.2, 0.4, 0.4]
+requirements = {}

@@ -139,8 +139,10 @@ def build_run_report(run, cfg=None):
         ("invalid_action_rate", "Rolling invalid-action rate"),
         ("decisions_per_second", "Training decisions / second (excludes validation/reporting)"),
         ("end_to_end_decisions_per_second", "Training decisions / wall second"),
+        ("rolling_plant_kills", "Plant kills / training episode"),
+        ("rolling_mower_kills", "Mower kills / training episode"),
     ]
-    fig, axes = plt.subplots(3, 2, figsize=(12, 10))
+    fig, axes = plt.subplots(4, 2, figsize=(12, 12))
     for ax, (key, title) in zip(axes.flat, panels):
         plotted = False
         for label, series in segments:
@@ -202,6 +204,42 @@ def build_run_report(run, cfg=None):
     _save(fig, output, "optimization-curves")
     images.append(("PPO optimization", "optimization-curves.png"))
 
+    if cfg.get("profile", "baseline") != "baseline":
+        fig, axes = plt.subplots(2, 2, figsize=(12, 7))
+        for ax, key, title in zip(
+            axes.flat,
+            (
+                "rolling_attacker_purchases",
+                "rolling_maximum_sun",
+                "type_entropy",
+                "conditional_tile_entropy",
+            ),
+            (
+                "Sustained attackers purchased / episode",
+                "Maximum sun / episode",
+                "Action-type entropy",
+                "Type-weighted tile entropy",
+            ),
+        ):
+            plotted = False
+            for label, series in segments:
+                points = [
+                    (r["training_steps"], r.get(key, r.get("optimization", {}).get(key)))
+                    for r in series["training-metrics"]
+                ]
+                points = [(x, y) for x, y in points if y is not None]
+                if points:
+                    x, y = zip(*points)
+                    ax.plot(x, y, label=label)
+                    plotted = True
+            ax.set(title=title, xlabel="Training decisions")
+            if plotted:
+                ax.legend(fontsize=7)
+            else:
+                _empty(ax)
+        _save(fig, output, "learning-diagnostics")
+        images.append(("Economy and exploration", "learning-diagnostics.png"))
+
     status = read_json(run / "status.json", {})
     best = read_json(run / "best.json", {})
     visual_status = read_json(output / "status.json", {})
@@ -236,6 +274,9 @@ def build_run_report(run, cfg=None):
     details = {
         "training_state": status.get("state", "unknown"),
         "condition": meta.get("condition"),
+        "profile": cfg.get("profile", "baseline"),
+        "observation_version": cfg["encoding"]["version"],
+        "policy": cfg.get("policy", {"kind": "flat"}),
         "learner_seed": meta.get("learner_seed"),
         "family": meta.get("family"),
         "training_settings": cfg["training"],
@@ -250,7 +291,7 @@ def build_run_report(run, cfg=None):
     )
     policy_description = (
         "Restricted diagnostic policy; this run does not evaluate the full game"
-        if meta.get("family") == "diagnostic"
+        if meta.get("family") in ("diagnostic", "placement", "saving")
         else "One shared policy for easy, standard, and hard"
     )
     page = f"""<!doctype html>
@@ -292,7 +333,11 @@ def create_demonstrations(run, cfg, progress):
         raise ValueError("Selected checkpoint hash does not match best.json")
     meta = read_json(run / "metadata.json")
     archive = not current_engine_config(meta["config"])
-    levels = ["easy"] if meta["family"] == "diagnostic" else cfg["evaluation"]["levels"]
+    levels = (
+        ["easy"]
+        if meta["family"] in ("diagnostic", "placement", "saving")
+        else cfg["evaluation"]["levels"]
+    )
     seed = cfg["splits"]["validation"][0]
     existing = read_json(output / "demos.json", {})
     demos = existing.get("demos", [])

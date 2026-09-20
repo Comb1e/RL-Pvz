@@ -89,6 +89,31 @@ algorithmic basis; no new training algorithm was adopted.
 
 ## Evidence boundaries (research claims)
 
+### Paper adaptation and pure-RL profiles — 0.4.0
+
+Inspected 2026-09-20. Source evidence and implementation decisions:
+
+| Source | Evidence actually inspected | Decision informed |
+|---|---|---|
+| Dias, Foleiss, Lopes (2022), DOI `10.1007/978-3-030-95305-8_10`; user PDF `F:/chrome/978-3-030-95305-8_10.pdf` | All 13 pages; visual inspection of pages 9–12; Table 4 representations and Table 5 scores | Test regional metadata and simpler introductory tasks. Do not infer DQN superiority, copy unspecified reward weights, or claim recurrent results. Detailed evidence boundaries are in `paper-adaptation.md`. |
+| SB3-Contrib 2.7.1, `common/maskable/distributions.py` and `policies.py` | Installed distribution interfaces, mask handling, `_build`, policy inference and action evaluation | Implement a joint type/tile distribution through existing policy interfaces, preserving the 406-action engine contract and PPO algorithm. |
+| SB3/SB3-Contrib 2.7.1 callback and on-policy update loops | Installed rollout start/end and training-end hooks | Read entropy components after optimization; stop timed pilots at completed-update boundaries; keep the same optimizer across curriculum stages. |
+| Local `runs/masked-cuda-101` episode/validation JSON | 10,229 episodes and accepted-purchase counts; selected and final validation summaries | Identify absent sustained attackers, inspect savings/exploration signals, and define focused ablations rather than changing algorithms without evidence. |
+| Lawn Lab 1.2.1, existing public scenario/observation/rule API | `LevelSpec`, `Spawn`, card costs/recharge and projectile firing intervals; independent lesson controls | Build seeded lessons without engine changes or hidden observations, and derive explicit scales from pinned rules. |
+
+Grouped action selection, lane summaries, mastery thresholds, and pilot screening
+rules are project-specific design decisions. No external project code was copied.
+The engine pin and library versions remain those recorded for 0.3.2.
+
+For the user-requested kill reward, inspected the same pinned engine's `_damage`,
+`_clear_dead`, projectile movement, explosion/swallow paths, and `_advance_mowers`.
+`DamageApplied.source` is positive for plant/projectile entities and negative for
+mower rows; deaths emit `ZombieDefeated` within the same tick. This public contract
+supports killing-blow attribution without modifying the engine. The +1/N and -1/N
+weights are a local configurable choice implementing the user's preference, not a
+published finding. Tests independently cover all damaging plants, mixed batches,
+nonlethal damage, and mower kills after plant damage.
+
 The existing game is a daytime PvZ-style clone with automatic sun collection and
 documented custom balance. Its results are not directly comparable to commercial
 PvZ or the 2024 paper's level suite. Winning through legal game actions does not

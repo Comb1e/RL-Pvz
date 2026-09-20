@@ -69,6 +69,11 @@ def configured(args):
 def main(argv=None):
     parser = argparse.ArgumentParser(prog="pvz-rl", description=__doc__)
     subs = parser.add_subparsers(dest="command", required=True)
+    pilot = subs.add_parser(
+        "pilot", help="pure-RL diagnostics and matched comparisons, capped at 30 minutes"
+    )
+    pilot.add_argument("--output", type=Path, required=True)
+    pilot.add_argument("--minutes", type=float, default=30)
     doctor = subs.add_parser("doctor", help="check engine, packages, Gym API, and CUDA")
     common(doctor)
     doctor.add_argument("--output", type=Path)
@@ -97,7 +102,15 @@ def main(argv=None):
     evaluation.add_argument(
         "--family",
         default="preset",
-        choices=("preset", "diagnostic", "redistributed", "faster", "concentrated"),
+        choices=(
+            "preset",
+            "diagnostic",
+            "placement",
+            "saving",
+            "redistributed",
+            "faster",
+            "concentrated",
+        ),
     )
     evaluation.add_argument("--output", type=Path, required=True)
     evaluation.add_argument("--record", action="store_true")
@@ -137,6 +150,12 @@ def main(argv=None):
     visual.add_argument("--run", required=True, type=Path)
     video_options(visual)
     args = parser.parse_args(argv)
+
+    if args.command == "pilot":
+        from .pilot import run_pilot
+
+        print(json.dumps(run_pilot(args.output, args.minutes), indent=2))
+        return
 
     if args.command == "replay":
         from pvz_game.replay import validate_speed
@@ -274,15 +293,21 @@ def main(argv=None):
             cfg = cfg if args.config else data["config"]
             condition, learner_seed = data["condition"], data["learner_seed"]
             checkpoint_hash = file_hash(args.checkpoint)
-            if data["family"] == "diagnostic" and args.family != "diagnostic":
+            if (
+                data["family"] in ("diagnostic", "placement", "saving")
+                and args.family != data["family"]
+            ):
                 raise ValueError(
-                    "Diagnostic checkpoints must be evaluated with --family diagnostic"
+                    f"Diagnostic checkpoints must be evaluated with --family {data['family']}"
                 )
         if args.family in cfg["evaluation"]["ood_families"] and args.split != "ood":
             raise ValueError("Changed scenario families must use --split ood")
         if args.split == "ood" and args.family not in cfg["evaluation"]["ood_families"]:
             raise ValueError("OOD split requires a changed scenario family")
-        if args.family == "diagnostic" and args.split not in ("development", "validation"):
+        if args.family in ("diagnostic", "placement", "saving") and args.split not in (
+            "development",
+            "validation",
+        ):
             raise ValueError("Diagnostic tasks are not formal test evidence")
         if args.split == "development":
             count = args.count or 10

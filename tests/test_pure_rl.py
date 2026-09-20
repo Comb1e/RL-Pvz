@@ -1,0 +1,419 @@
+import json
+import math
+import subprocess
+import sys
+from dataclasses import replace
+from time import perf_counter
+
+import numpy as np
+import pytest
+import torch
+from pvz_game import Dig, LevelSpec, Place, Spawn
+
+from pvz_rl.config import learning_profile, load_config
+from pvz_rl.curriculum import CurriculumState, stage_distribution
+from pvz_rl.env import PvZEnv
+from pvz_rl.grouped_policy import GroupedDistribution
+from pvz_rl.training import ResearchCallback, load_policy, train
+
+
+@pytest.mark.parametrize("profile", ["baseline", "tactical", "grouped", "pure-rl"])
+def test_shipped_recipes_equal_installed_profiles(profile):
+    assert load_config(f"configs/{profile}.toml") == learning_profile(profile)
+
+
+def test_tactical_dimensions_regions_scales_crowds_and_no_leaks():
+    cfg = learning_profile("tactical")
+    env = PvZEnv(cfg)
+    a, _ = env.reset(seed=5, options={"scenario": LevelSpec("hidden", (Spawn(800, "basic", 1),))})
+    b, _ = env.reset(
+        seed=700, options={"scenario": LevelSpec("other", (Spawn(1800, "buckethead", 4),))}
+    )
+    assert a.shape == (1140,)
+    np.testing.assert_array_equal(a, b)
+    encoder = env.encoder
+    assert a[encoder.slices["globals"]][0] == pytest.approx(50 / 200)
+    assert a[encoder.slices["economy"]].reshape(8, 2)[1].tolist() == [1, 0.5]
+    start, width = env.rules.game["house_x"], encoder.position_scale
+    for boundary in (1, 2):
+        first = math.ceil(start + width * boundary / 3)
+        assert encoder.bin_index(first - 1) == boundary - 1
+        assert encoder.bin_index(first) == boundary
+    assert encoder.bin_index(start - 9999) == 0
+    assert encoder.bin_index(start + width + 9999) == 2
+    spawns = tuple(Spawn(1, "buckethead" if i % 2 else "basic", 2) for i in range(120))
+    env.reset(seed=4, options={"scenario": LevelSpec("crowd", spawns, initial_sun=500)})
+    env.step(env.codec.encode(Place("peashooter", 2, 0)))
+    for _ in range(4):
+        env.step(0)
+    original = encoder.encode(env.public)
+    altered = replace(
+        env.public,
+        level="private",
+        plants=tuple(replace(p, id=888) for p in reversed(env.public.plants)),
+        zombies=tuple(replace(z, id=999) for z in reversed(env.public.zombies)),
+        projectiles=tuple(reversed(env.public.projectiles)),
+        mowers=tuple(reversed(env.public.mowers)),
+        cards=tuple(reversed(env.public.cards)),
+    )
+    np.testing.assert_array_equal(original, encoder.encode(altered))
+    zombies = original[encoder.slices["zombies"]].reshape(5, 3, 16)
+    assert zombies[:, :, :5].sum() * 5 == pytest.approx(120)
+    shots = original[encoder.slices["projectiles"]].reshape(5, 3, 3)
+    assert shots[:, :, 0].sum() * 5 == pytest.approx(len(env.public.projectiles))
+    assert shots[:, :, 1].sum() * 100 == pytest.approx(
+        sum(p.damage for p in env.public.projectiles)
+    )
+    assert original[encoder.slices["lanes"]].reshape(5, 4)[2, 1] == pytest.approx(
+        (20 * 20 / 30) / 20
+    )
+    assert np.isfinite(original).all()
+
+
+def test_grouped_equal_logits_and_wait_exploration():
+    env = PvZEnv(learning_profile("grouped"))
+    env.reset(seed=4)
+    mask = env.action_masks()
+    assert mask.sum() == 136
+    dist = GroupedDistribution().proba_distribution(torch.zeros(1, 415))
+    dist.apply_masking(mask)
+    assert dist.probs.sum() == pytest.approx(1)
+    assert dist.probs[0, 0] == pytest.approx(0.25)
+    assert torch.count_nonzero(dist.probs[0, ~torch.tensor(mask)]) == 0
+    for group in (0, 2, 4):  # sunflower, wall-nut, potato mine
+        assert dist.probs[0, 1 + group * 45 : 1 + (group + 1) * 45].sum() == pytest.approx(0.25)
+    assert dist.entropy().item() == pytest.approx(math.log(4) + 0.75 * math.log(45))
+
+
+@pytest.mark.parametrize("device", ["cpu", "cuda"])
+def test_joint_distribution_against_independent_numpy_control(device):
+    if device == "cuda" and not torch.cuda.is_available():
+        pytest.skip("CUDA unavailable")
+    rng = np.random.default_rng(8)
+    raw = rng.normal(size=(3, 415))
+    mask = rng.random((3, 406)) > 0.5
+    mask[:, 0] = True
+    mask[1, 46:91] = False
+    mask[2, :] = False
+    mask[2, 0] = True
+    logits = torch.tensor(raw, dtype=torch.float64, device=device, requires_grad=True)
+    dist = GroupedDistribution().proba_distribution(logits)
+    dist.apply_masking(mask)
+    expected = np.zeros((3, 406))
+    for row in range(3):
+        groups = [0] + [g for g in range(1, 10) if mask[row, 1 + (g - 1) * 45 : 1 + g * 45].any()]
+        weights = np.exp(raw[row, groups] - raw[row, groups].max())
+        weights /= weights.sum()
+        expected[row, 0] = weights[0]
+        for g, weight in zip(groups[1:], weights[1:]):
+            indices = np.arange(1 + (g - 1) * 45, 1 + g * 45)
+            indices = indices[mask[row, indices]]
+            local = np.exp(raw[row, indices + 9] - raw[row, indices + 9].max())
+            expected[row, indices] = weight * local / local.sum()
+    np.testing.assert_allclose(dist.probs.detach().cpu(), expected, atol=1e-12)
+    expected_entropy = -(expected * np.log(np.maximum(expected, 1e-300))).sum(1)
+    np.testing.assert_allclose(dist.entropy().detach().cpu(), expected_entropy, atol=1e-12)
+    actions = dist.sample()
+    joint_log = dist.log_prob(actions)
+    np.testing.assert_allclose(
+        joint_log.detach().cpu(), np.log(expected[np.arange(3), actions.cpu()]), atol=1e-12
+    )
+    (joint_log.mean() + dist.entropy().mean()).backward()
+    assert torch.isfinite(logits.grad).all()
+    assert torch.count_nonzero(logits.grad[2]) == 0  # forced wait has no trainable choice
+    with pytest.raises(ValueError, match="legal action"):
+        dist.apply_masking(np.zeros((3, 406), dtype=bool))
+
+
+def test_deterministic_selection_is_greedy_type_then_tile():
+    raw = torch.zeros(1, 415)
+    raw[0, 1] = 2
+    raw[0, 10 + 7] = 0.1
+    dist = GroupedDistribution().proba_distribution(raw)
+    # Wait has greater joint mass than any individual sunflower tile, but the
+    # sunflower type has greatest type mass. Deterministic evaluation chooses it.
+    assert dist.probs.argmax().item() == 0
+    assert dist.mode().item() == 8
+
+
+@pytest.mark.parametrize(
+    "family,win_tick,loss_tick", [("placement", 883, 1000), ("saving", 2074, 2199)]
+)
+@pytest.mark.parametrize("lane", range(5))
+def test_lesson_independent_shooting_and_wait_controls(family, win_tick, loss_tick, lane):
+    cfg = learning_profile("pure-rl")
+    settings = cfg["curriculum"]["lessons"][family]
+    spec = LevelSpec(
+        family,
+        tuple(Spawn(t, "basic", lane) for t in settings["spawn_ticks"]),
+        initial_sun=settings["initial_sun"],
+        mowers=False,
+    )
+    for shooting, expected in ((True, win_tick), (False, loss_tick)):
+        env = PvZEnv(cfg, family=family)
+        env.reset(seed=1, options={"scenario": spec})
+        while env.state == "running":
+            action = 0
+            if shooting and env.public.zombies and env.public.sun >= 100 and not env.public.plants:
+                action = env.codec.encode(Place("peashooter", lane, 0))
+            env.step(action)
+        assert env.public.tick == expected
+        assert env.state == ("won" if shooting else "lost")
+        assert env.episode_metrics()["attacker_purchases"] == int(shooting)
+        assert env.episode_metrics()["mowers_used"] == 0
+
+
+def test_task_restrictions_dig_cooldown_and_reset_boundaries():
+    cfg = learning_profile("pure-rl")
+    env = PvZEnv(cfg, training=True)
+    env.reset(seed=3)
+    assert env.episode_family == "placement"
+    flower = env.codec.encode(Place("sunflower", 0, 0))
+    _, _, _, _, info = env.step(flower)
+    assert not info["accepted"] and env.public.sun == 200
+    shooter = env.codec.encode(Place("peashooter", 0, 0))
+    env.step(shooter)
+    assert env.public.sun == 100
+    assert not env.action_masks()[env.codec.encode(Place("peashooter", 1, 0))]
+    assert env.action_masks()[env.codec.encode(Dig(0, 0))]
+    before = env.action_masks()
+    env.set_curriculum_stage(4)
+    np.testing.assert_array_equal(before, env.action_masks())
+    assert env.episode_family == "placement"
+    env.reset(seed=3)
+    assert env.episode_family == "preset"
+    assert env.action_masks()[flower]
+    cfg["environment"]["cutoff_seconds"] = 1
+    env = PvZEnv(cfg, family="saving")
+    env.reset(seed=3)
+    env.step(0)
+    _, _, terminated, truncated, _ = env.step(0)
+    assert truncated and not terminated
+
+
+def test_curriculum_pass_fail_minimum_and_rehearsal():
+    cfg = learning_profile("pure-rl")
+    state = CurriculumState()
+    assert not state.due(16383, cfg) and state.due(16384, cfg)
+    assert not state.observe({"placement": 18}, 16384, cfg)
+    assert not state.observe({"placement": 17}, 32768, cfg)
+    assert state.consecutive_passes == 0
+    assert not state.observe({"placement": 20}, 49152, cfg)
+    assert state.observe({"placement": 18}, 65536, cfg)
+    assert state.name == "saving" and state.entered_steps == 65536
+    assert stage_distribution(cfg, state.stage) == (["saving", "placement"], [0.8, 0.2])
+    restored = CurriculumState(**state.to_dict())
+    assert not restored.observe({"saving": 20}, 65537, cfg)
+    assert not restored.observe({"saving": 20}, 65538, cfg)  # minimum residency
+    assert restored.observe({"saving": 18}, 81920, cfg)
+    assert restored.name == "easy"
+    state = CurriculumState(stage=3)
+    assert not state.observe({"easy": 16, "standard": 11}, 16384, cfg)
+    assert not state.observe({"easy": 16, "standard": 12}, 32768, cfg)
+    assert state.observe({"easy": 16, "standard": 12}, 49152, cfg)
+    assert state.name == "shared" and not state.due(100000, cfg)
+
+
+@pytest.mark.learning
+@pytest.mark.parametrize("device", ["cpu", "cuda"])
+def test_grouped_learning_save_reload_metrics_and_complete_update_deadline(
+    smoke_cfg, tmp_path, device
+):
+    if device == "cuda" and not torch.cuda.is_available():
+        pytest.skip("CUDA unavailable")
+    cfg = learning_profile("pure-rl", smoke_cfg)
+    cfg["training"]["device"] = device
+    run = tmp_path / device
+    train(cfg, "masked", 101, run, validation_limit=1)
+    model, _ = load_policy(run / "final.zip", device)
+    assert model.curriculum_state == CurriculumState().to_dict()
+    status = json.loads((run / "status.json").read_text())
+    assert status["curriculum_incomplete"]
+    metrics = [
+        json.loads(line) for line in (run / "training-metrics.jsonl").read_text().splitlines()
+    ]
+    assert [m["training_steps"] for m in metrics] == [64, 128]
+    assert all(m["optimization"]["type_entropy"] >= 0 for m in metrics)
+    env = PvZEnv(cfg)
+    obs, _ = env.reset(seed=100000)
+    loaded, _ = load_policy(run / "final.zip", device)
+    assert (
+        model.predict(obs, deterministic=True, action_masks=env.action_masks())[0]
+        == loaded.predict(obs, deterministic=True, action_masks=env.action_masks())[0]
+    )
+    timed = tmp_path / "timed"
+    train(cfg, "masked", 101, timed, validation_limit=1, deadline=perf_counter() - 1)
+    stopped, _ = load_policy(timed / "final.zip", device)
+    assert stopped.num_timesteps == 0 and stopped._n_updates == 0
+
+
+@pytest.mark.learning
+def test_curriculum_probe_uses_same_policy_optimizer_and_persists_resume(
+    smoke_cfg, tmp_path, monkeypatch
+):
+    cfg = learning_profile("pure-rl", smoke_cfg)
+    cfg["training"].update(total_steps=192)
+    cfg["curriculum"].update(probe_interval=64, minimum_stage_steps=64)
+    identities = []
+    real_probe = ResearchCallback.probe_curriculum
+
+    def fake_evaluate(cfg, **kwargs):
+        from pvz_rl.evaluation import evaluate
+
+        if kwargs.get("split") == "curriculum_validation":
+            return [{"win": 1} for _ in range(20)]
+        return evaluate(cfg, **kwargs)
+
+    monkeypatch.setattr("pvz_rl.training.evaluate", fake_evaluate)
+
+    def probe(self):
+        identities.append((id(self.model.policy), id(self.model.policy.optimizer)))
+        real_probe(self)
+        if self.model.num_timesteps == 128:
+            raise KeyboardInterrupt()
+
+    monkeypatch.setattr(ResearchCallback, "probe_curriculum", probe)
+    first = tmp_path / "first"
+    with pytest.raises(KeyboardInterrupt):
+        train(cfg, "masked", 101, first, validation_limit=1)
+    assert len(set(identities)) == 1
+    checkpoint, _ = load_policy(first / "interrupted.zip")
+    assert checkpoint.curriculum_state["stage"] == 1
+    monkeypatch.setattr(ResearchCallback, "probe_curriculum", real_probe)
+    second = tmp_path / "second"
+    train(cfg, "masked", 101, second, validation_limit=1, resume=first / "interrupted.zip")
+    resumed, _ = load_policy(second / "final.zip")
+    assert resumed.num_timesteps == 192
+    assert resumed.curriculum_state["stage"] == 1
+    assert resumed.curriculum_state["consecutive_passes"] == 1
+    rows = [
+        json.loads(line) for line in (second / "training-episodes.jsonl").read_text().splitlines()
+    ]
+    assert any(r["family"] == "saving" for r in rows)
+
+
+def test_profile_comparison_requires_both_seeds_matched_budget_and_game_pin(tmp_path):
+    from pvz_rl.pilot import PROFILES, SEEDS, comparison_summary
+
+    assert comparison_summary(tmp_path, True)["matched_steps"] is None
+    for seed in SEEDS:
+        for profile in PROFILES:
+            run = tmp_path / f"{profile}-{seed}"
+            run.mkdir()
+            rows = [{"training_steps": 32768, "macro_win_rate": 0.2 if profile == "pure-rl" else 0}]
+            if profile == "pure-rl":
+                rows.append({"training_steps": 65536, "macro_win_rate": 0})
+            (run / "learning-curve.jsonl").write_text("\n".join(json.dumps(r) for r in rows))
+            target = run / "validation/32768/episodes.jsonl"
+            target.parent.mkdir(parents=True)
+            episodes = [
+                {
+                    "game_protocol_hash": "pin-a",
+                    "split": "validation",
+                    "family": "preset",
+                    "level": level,
+                    "scenario_seed": case,
+                    "learner_seed": seed,
+                    "profile": profile,
+                    "training_steps": 32768,
+                    "win": int(profile == "pure-rl" and case == 100000),
+                }
+                for level in ("easy", "standard", "hard")
+                for case in range(100000, 100005)
+            ]
+            target.write_text("\n".join(json.dumps(r) for r in episodes))
+    result = comparison_summary(tmp_path, True)
+    assert result["matched_steps"] == 32768
+    assert result["state"] == "recommended_for_larger_development_study"
+    assert comparison_summary(tmp_path, False)["state"] == "experimental_inconclusive"
+    target = tmp_path / "pure-rl-102/validation/32768/episodes.jsonl"
+    original = target.read_text()
+    target.write_text(original.replace('"scenario_seed": 100000', '"scenario_seed": 200000'))
+    with pytest.raises(ValueError, match="validation cases"):
+        comparison_summary(tmp_path, True)
+    target.write_text(original)
+    (tmp_path / "pure-rl-102/validation/32768/episodes.jsonl").write_text(
+        '{"game_protocol_hash":"pin-b"}'
+    )
+    with pytest.raises(ValueError, match="protocol"):
+        comparison_summary(tmp_path, True)
+
+
+@pytest.mark.parametrize("family", ["placement", "saving"])
+def test_lesson_checkpoints_cannot_enter_normal_or_final_evaluation(
+    cfg, tmp_path, monkeypatch, family
+):
+    from pvz_rl.cli import main
+
+    checkpoint = tmp_path / "model.zip"
+    checkpoint.write_bytes(b"test")
+    monkeypatch.setattr(
+        "pvz_rl.training.load_policy",
+        lambda p: (
+            object(),
+            {"config": cfg, "condition": "masked", "learner_seed": 101, "family": family},
+        ),
+    )
+    args = ["evaluate", "--checkpoint", str(checkpoint), "--output", str(tmp_path / "out")]
+    with pytest.raises(ValueError, match="--family"):
+        main(args)
+    with pytest.raises(ValueError, match="not formal test evidence"):
+        main([*args, "--family", family, "--split", "test"])
+
+
+@pytest.mark.learning
+def test_deadline_saves_only_completed_update(smoke_cfg, tmp_path, monkeypatch):
+    cfg = learning_profile("pure-rl", smoke_cfg)
+    original = ResearchCallback.capture_update
+
+    def expire_after_update(self):
+        original(self)
+        if self.model._n_updates:
+            self.deadline = perf_counter() - 1
+
+    monkeypatch.setattr(ResearchCallback, "capture_update", expire_after_update)
+    train(cfg, "masked", 101, tmp_path / "stopped", validation_limit=1)
+    model, _ = load_policy(tmp_path / "stopped/final.zip")
+    assert model.num_timesteps == 64 and model._n_updates == 1
+    status = json.loads((tmp_path / "stopped/status.json").read_text())
+    assert status["budget_stopped"] and status["curriculum_incomplete"]
+
+
+@pytest.mark.learning
+def test_grouped_spawn_and_same_checkpoint_demos(tmp_path):
+    output = tmp_path / "grouped-spawn"
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pvz_rl",
+            "train",
+            "--config",
+            "configs/pure-rl.toml",
+            "--steps",
+            "64",
+            "--n-envs",
+            "2",
+            "--rollout-size",
+            "64",
+            "--batch-size",
+            "32",
+            "--eval-interval",
+            "64",
+            "--validation-count",
+            "1",
+            "--no-videos",
+            "--device",
+            "cuda" if torch.cuda.is_available() else "cpu",
+            "--output",
+            str(output),
+        ],
+        capture_output=True,
+        text=True,
+        timeout=180,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    demos = json.loads((output / "visualizations/demos.json").read_text())["demos"]
+    assert {d["level"] for d in demos} == {"easy", "standard", "hard"}
+    assert len({d["checkpoint_hash"] for d in demos}) == 1
+    assert all(d["replay"].endswith(".pvzdemo") for d in demos)

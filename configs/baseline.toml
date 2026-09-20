@@ -1,3 +1,4 @@
+profile = "baseline"
 schema_version = 1
 engine_commit = "6fd1f54706369915013a49eab5c1790f8c55ab0a"
 engine_version = "1.0.0"

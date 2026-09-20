@@ -1,3 +1,3 @@
 """Learning through the public Lawn Lab API; no private game state in policy inputs."""
 
-__version__ = "0.3.2"
+__version__ = "0.4.0"

@@ -10,12 +10,14 @@ held-out evaluations, changed-wave scenarios, statistical analysis, progress log
 automatic offline reports, learning curves, compact game demos, and optional MP4 export.
 **Each run trains one shared policy for easy, standard, and hard.** The same
 `best.zip` is used for all three difficulties and their demonstration recordings.
-Research version **0.3.2** uses game package **1.2.1** (simulation version **1.0.0**).
-Start fresh training after this upgrade: checkpoints from the previous source pin
-cannot be resumed or evaluated. Their reports and replay files remain readable.
-**No formal multi-run comparison was launched for this implementation.** Availability
-and short integration tests exercise the pipeline; they do not establish that a
-trained agent wins reliably.
+Research version **0.4.0** uses game package **1.2.1** (simulation version **1.0.0**).
+The new pure-RL profiles add tactical observations, grouped plant/tile decisions,
+and introductory lessons. They are experimental: see [paper adaptation and pilot
+evidence](docs/paper-adaptation.md). The baseline remains the default configuration.
+Compatible 1.2.1 baseline checkpoints retain their original encoder, policy, and
+fixed curriculum. Improved profiles require fresh runs; weights are not migrated.
+Checkpoints from older game source pins cannot be resumed or evaluated. Archived
+reports and replay files remain readable. No formal research suite was launched.
 
 ## 1. Install and check availability
 
@@ -100,6 +102,102 @@ be passed to the formal test evaluator.
 
 ## 3. Train a policy
 
+To try the new experimental method, start **one shared model** with:
+
+```powershell
+.\.venv\Scripts\python.exe -m pvz_rl train `
+  --config configs\pure-rl.toml --condition masked --seed 101 `
+  --device cuda --output runs\pure-rl-101
+```
+
+This is a fresh model, not a continuation of an old flat-action checkpoint.
+`best.zip` is selected only by the average normal-game validation win rate across
+easy, standard, and hard. All three automatic `.pvzdemo` recordings use that same
+checkpoint. Lessons never select the shared checkpoint, and no scripted actions,
+imitation data, or warm-start weights enter learning.
+
+| Configuration | Observation | Action policy | Training curriculum |
+|---|---|---|---|
+| `configs/baseline.toml` | 2,719 spatial values | Flat masked | Fixed schedule |
+| `configs/tactical.toml` | 1,140 tactical values | Flat masked | Fixed schedule |
+| `configs/grouped.toml` | 1,140 tactical values | Masked type, then tile | Fixed schedule |
+| `configs/pure-rl.toml` | 1,140 tactical values | Masked type, then tile | Lesson mastery gates |
+
+Grouped profiles use `--condition masked` (or `sparse` for an explicit reward
+experiment). They do not support the unmasked or scripted-hybrid conditions.
+Use the baseline configuration for the original five-condition `suite` command.
+The new recipe comparison is:
+
+```powershell
+.\.venv\Scripts\python.exe -m pvz_rl pilot --output runs\paper-pilot --minutes 30
+```
+
+This spends at most five minutes of the budget on placement/saving learning
+diagnostics, then compares four profiles with learner seeds 101 and 102. Each run
+has at most 262,144 decisions and validates every 32,768 on the first five
+validation seeds per difficulty. Configuration order reverses for seed 102.
+Remaining time is divided among remaining jobs; collection stops between complete
+PPO updates when its slot expires. An in-progress probe/validation and checkpoint/
+report cleanup can finish afterward. It never uses final-test seeds.
+
+`report.md`, `comparison.json`, and `comparison.png` compare only validation budgets
+completed by every profile and both seeds. Missing runs/budgets are explicit.
+Diagnostics must pass and the candidate must improve over baseline for both seeds
+at a shared budget before the runner recommends a larger development study.
+Otherwise it remains experimental. Per-run offline HTML reports are under
+`PROFILE-SEED/visualizations/index.html`; pilot demos are disabled to reserve time
+for learning. To generate a pilot checkpoint's demos afterward, use a copy of its
+configuration with `visualization.demos = true` and `visualize --config ... --run ...`.
+
+The teaching stages are placement → saving/economy → easy → easy/standard → shared
+20/40/40 easy/standard/hard training. Probes run every 16,384 collected decisions,
+using 20 fixed validation cases. Advancement requires two consecutive passes and
+at least 16,384 decisions in the stage. Thresholds and rehearsal distributions are
+in the configuration. New stages affect only episode resets and retain the same
+policy and optimizer. `curriculum.json` and `curriculum-probes.jsonl` record progress;
+checkpoints embed the same state for resume. Budget exhaustion before the shared
+stage is reported as `curriculum_incomplete`; stages are never skipped to meet a
+deadline. Normal-game evaluation always permits all eight plants.
+
+Episode records also include sustained-attacker purchases, first-attacker time,
+maximum sun, spending by plant, and affordable-attacker opportunities. The report
+adds economy and grouped-entropy curves. Waiting frequency alone is not treated
+as failure. Logging remains throttled to 15 seconds, with immediate curriculum,
+validation, checkpoint, and completion messages.
+
+### Reward plant kills and penalize mower kills
+
+New configurations reward zombies killed by plants (including projectiles, mines,
+explosions, and chomper) and penalize zombies killed by the lawn mower:
+
+```toml
+[reward]
+plant_kill_weight = 1.0
+mower_kill_weight = 1.0
+normalize_kills = true
+# Keep the other reward settings in the supplied configuration.
+```
+
+Each plant kill adds `+1/N` and each mower kill adds `-1/N`, where `N` is the
+initial zombie count. This keeps total kill-reward scale comparable across
+difficulties. Set `normalize_kills = false` for literal +1/-1 per zombie, or adjust
+the two weights independently. Kill credit follows the final damage source: if a
+plant wounds a zombie and a mower finishes it, it receives the mower penalty.
+Mower activation without a kill has no kill penalty.
+
+These event rewards are added to the existing win/loss reward and optional
+potential shaping. They change the learning objective to prefer plant defense;
+the policy-invariance guarantee applies only to the potential term. `sparse` is
+the legacy condition name for disabling potential shaping; with these new reward
+weights it still receives kill rewards. Set both weights to zero for a truly
+terminal-only reward. Checkpoint selection remains normal-game **win rate**.
+
+`plant_kills`, `mower_kills`, and their reward contributions are recorded in every
+episode. Progress logs and report curves show both kill counts. Legacy configs
+without these weights use zero kill rewards, preserving their original behavior.
+Use a fresh run when changing reward settings; resume requires an identical
+research configuration. Do not pool earlier and revised-reward pilot results.
+
 Use one training command for all difficulties. Curriculum stages change which
 games are sampled, while the same policy weights and optimizer continue learning.
 There are no difficulty-specific model files or difficulty-specific checkpoint
@@ -143,7 +241,7 @@ after completed PPO updates when its interval is reached, and after the final up
 |---|---|---|---|
 | `masked` | 406 actions, legal-action mask | Potential-shaped | Curriculum |
 | `unmasked` | Same 406 actions, no mask | Same shaped reward | Curriculum |
-| `sparse` | 406 actions, legal-action mask | Win/loss only | Curriculum |
+| `sparse` | 406 actions, legal-action mask | Win/loss + configured kill rewards; no potential | Curriculum |
 | `mixed` | 406 actions, legal-action mask | Potential-shaped | 20% easy / 40% standard / 40% hard throughout |
 | `hybrid` | Five masked strategies with scripted placement | Potential-shaped | Curriculum |
 
@@ -509,8 +607,16 @@ while an interrupted evaluation restarts its affected evaluation group.
 For research conclusions, include results from all five independent learner seeds.
 Do not combine multiple checkpoints for the same learner/case. The report rejects
 duplicate or missing pairs and mismatched scenario sets in paired comparisons.
-It also rejects incompatible game/observation/reward protocols and different
-training configurations pooled under the same policy name.
+It rejects incompatible game/reward protocols. Cross-observation profile comparisons
+require explicit matching game-protocol hashes and distinct profile labels; older
+records without those hashes still require matching observation protocols. Different
+training configurations cannot be pooled under the same policy name.
+
+The implementation pilot remains inconclusive: at 65,536 matched decisions, the
+full method scored 0% and 6.7% macro validation win rate for seeds 101/102, versus
+0%/0% for baseline; neither learning diagnostic passed. See
+[validation evidence](docs/validation.md) and the
+[documented plant/dig failure and follow-ups](docs/paper-adaptation.md).
 
 Outputs include `report.md`, `statistics.json`, `win-rates.png`, and optionally
 `learning-curves.png`. Bootstrap intervals resample learner runs and scenario seeds

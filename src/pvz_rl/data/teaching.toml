@@ -1,0 +1,40 @@
+mode = "teaching"
+probe_interval = 16384
+probe_cases = 20
+consecutive_passes = 2
+minimum_stage_steps = 16384
+
+[lessons.placement]
+spawn_ticks = [1, 81, 161]
+initial_sun = 200
+allowed_plants = ["peashooter"]
+
+[lessons.saving]
+spawn_ticks = [1200, 1280, 1360]
+initial_sun = 50
+allowed_plants = ["sunflower", "peashooter"]
+
+[stages.placement]
+tasks = ["placement"]
+weights = [1.0]
+requirements = {placement = 18}
+
+[stages.saving]
+tasks = ["saving", "placement"]
+weights = [0.8, 0.2]
+requirements = {saving = 18}
+
+[stages.easy]
+tasks = ["easy", "placement", "saving"]
+weights = [0.8, 0.1, 0.1]
+requirements = {easy = 16}
+
+[stages.standard]
+tasks = ["easy", "standard", "saving"]
+weights = [0.45, 0.45, 0.1]
+requirements = {easy = 16, standard = 12}
+
+[stages.shared]
+tasks = ["easy", "standard", "hard"]
+weights = [0.2, 0.4, 0.4]
+requirements = {}

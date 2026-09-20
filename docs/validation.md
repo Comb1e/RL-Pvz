@@ -1,4 +1,108 @@
-# Availability and verification — 0.3.2
+# Availability and verification — 0.4.0
+
+## Pure-RL profiles and plant/mower rewards — 2026-09-20
+
+Game package **1.2.1**, simulation **1.0.0**, source pin
+`6fd1f54706369915013a49eab5c1790f8c55ab0a` remain unchanged. The game checkout stays
+clean. PyTorch 2.8.0+cu128 detects the RTX 4070 Laptop GPU.
+
+| Check | Result |
+|---|---|
+| Complete research suite with revised kill rewards and final reporting/diagnostic guards | **166 passed in 100.40 seconds**; one expected upstream warning about small MLP GPU utilization |
+| Complete upstream game suite | **199 passed in 9.82 seconds**; bytecode disabled, caches/temp under research artifacts |
+| Tactical observations | 1,140 values, exact region boundaries, scaling, crowd totals, entity-order/ID invariance, no task/seed/future-schedule leakage |
+| Grouped distribution | Independent NumPy joint probabilities, entropy/log-probabilities, illegal zero mass, CPU/CUDA finite gradients, forced wait and deterministic type/tile counterexample |
+| Placement/saving controls | Every lane: shooting control wins at ticks 883/2074; wait loses at 1000/2199; restrictions, legal digs, exact costs, cooldowns, cutoff and reset covered |
+| Curriculum and recovery | Two passes, failed streak reset, minimum residency, rehearsal, next-reset transition, same policy/optimizer identity, persisted resume, incomplete-budget state |
+| Kill attribution | Six attacking plants, damaging-projectile kills, bombs/mines/chomper, multiple mower kills, mixed batch, plant-wounded/mower-finished zombie, activation-only and nonlethal events, duplicate/unattributable event rejection |
+| Reward boundaries | Signed normalized/unnormalized contributions, configurable weights, legacy zero defaults, terminal mower victory, reset and known unsuccessful close-threat controls |
+| Integration | All original five conditions, Windows spawned workers, CPU/CUDA, serialization, final post-update entropy capture, completed-update deadline |
+| Shared demos | Three verified normal games from identical checkpoint weights; native final frames preserve simulation hashes and display real outcomes |
+| Packaging/tooling | Ruff and formatting, dependency check, editable 0.4.0 install, wheel/source distribution build, Git whitespace checks |
+
+Evidence: `artifacts/v040-release-tests.txt`, `artifacts/v040-engine-tests.txt`,
+`artifacts/v040-doctor.json`, and `artifacts/v040-build.txt`. The new regression cases
+are in `tests/test_pure_rl.py` and `tests/test_kill_rewards.py`. The source-attribution
+controls rely only on public events; no game source or private state was changed.
+
+The installed engine's complete tests ran with:
+
+```powershell
+$env:PYTHONDONTWRITEBYTECODE = '1'
+.\.venv\Scripts\python.exe -B -m pytest E:/Projects/pvz/tests -q `
+  -o cache_dir=E:/Projects/Tower-Defence-AI/PVZ-plant/artifacts/engine-pytest-cache `
+  --basetemp E:/Projects/Tower-Defence-AI/PVZ-plant/artifacts/engine-v040-tests
+```
+
+The first timed pilot at `artifacts/paper-pilot-v040` was interrupted when the user
+changed the reward objective. Its validated checkpoints and episode files remain.
+Placement reached 114,688 decisions with 0/20 best validation wins; saving reached
+73,728 with 1/20. No matched comparison across both seeds and all profiles exists
+for that objective. Its status/report explicitly mark this as inconclusive.
+Conservative recorded elapsed time was 583.81 seconds, leaving 20 minutes for a
+fresh revised-reward pilot. Earlier and revised results are not pooled.
+
+### Revised-reward pilot
+
+`artifacts/paper-pilot-kill-reward-v040` completed all eight comparison jobs and
+both diagnostics. Its 20-minute budget took **1,210.92 seconds including final
+checkpoint/report cleanup**. Adding the conservative 583.81 seconds of the stopped
+pilot gives **1,794.73 seconds**, within the original 30-minute allowance. The
+revised run collected 1,355,776 decisions including diagnostics. No formal research
+training or final-test performance evaluation was launched.
+
+The largest validation budget completed by every profile and both learner seeds
+was **65,536 decisions**. Every cell below uses the same 15 cases: validation seeds
+100000–100004 on easy, standard and hard, equal weighted by difficulty.
+
+| Profile | Learner 101 macro win rate | Learner 102 macro win rate |
+|---|---:|---:|
+| Baseline | 0.0% | 0.0% |
+| Tactical observation | 0.0% | 0.0% |
+| Tactical + grouped policy | 0.0% | 0.0% |
+| Full teaching method | 0.0% | 6.7% |
+
+Placement diagnostics collected 131,072 decisions with 0/20 best validation wins.
+Saving collected 114,688 with 1/20. Neither passed. Full-method seeds 101/102
+collected 86,016/81,920 decisions, both still in placement, with zero training
+episode wins or plant kills. The selected comparison result is therefore
+**experimental/inconclusive**: the method does not improve both seeds and fails the
+diagnostic rule. The single normal-game win is not evidence of reliable defense.
+
+`comparison.json`, `comparison.png`, `report.md`, all run configurations, logs,
+checkpoints, curriculum probes, and episode records are preserved under that root.
+The report independently checks complete scenario sets, profile identities, engine/
+reward protocol hashes and agreement between curve scores and episode-level wins.
+Only common completed budgets enter its curves; higher-budget results remain in
+individual run reports. Curves were visually inspected. No different objectives
+or engine pins are pooled, and no best-seed selection is used.
+
+Predetermined diagnostic replays and action traces show immediate plant/dig cycles;
+the entropy counterexample and proposed follow-ups are in `paper-adaptation.md`.
+Those follow-ups were documented, not silently applied to the timed comparison.
+
+### Saved integration presentation
+
+The 64-decision CUDA/two-worker grouped-policy integration run is preserved at
+`artifacts/pytest-v040-kill-full/test_grouped_spawn_and_same_ch0/grouped-spawn`.
+It produces an offline report and three native demos from one checkpoint:
+`d908b7f90c4153379433458dc95b13d38dc560194e633a9bf6826e524bf0563f`.
+These are availability checks, not claims of learned competence.
+
+| Difficulty | Outcome | Plant / mower kills | Plant reward / mower penalty |
+|---|---|---:|---:|
+| Easy | Won | 3 / 12 | +0.20 / -0.80 |
+| Standard | Lost | 4 / 12 | +0.10 / -0.30 |
+| Hard | Lost | 3 / 15 | +0.04 / -0.20 |
+
+All three complete simulation hashes match the corresponding pre-reward smoke
+games, demonstrating that accounting does not mutate gameplay. Native final frames
+and hash/reward verification are saved under `artifacts/pure-rl-presentation-final`.
+Relative HTML assets resolve locally with no network URLs. Final frames and the
+diagnostic economy/entropy curves were visually inspected for readable labels,
+actual outcomes, and missing-data handling. An archived
+`artifacts/speed-shared-smoke/best.zip` also loads with its original 2,719-value
+encoder and absent (zero) kill weights.
 
 ## Runtime performance and PVZ 1.2.1 — 2026-09-20
 

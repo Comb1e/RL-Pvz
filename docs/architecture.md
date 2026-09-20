@@ -12,14 +12,14 @@ flowchart LR
     Runner --> Env[Gymnasium environment]
     Env --> Game[Pinned game engine]
     Game --> Public[Public observation and events]
-    Public --> Encode[2719 numeric features]
+    Public --> Encode[Versioned spatial or tactical features]
     Game --> Legal[Legal actions]
     Legal --> Mask[406-action or 5-strategy mask]
     Encode --> Policy[PPO or baseline]
     Mask --> Policy
     Policy --> Action[Shared action decoder]
     Action --> Env
-    Public --> Reward[Terminal reward and potential shaping]
+    Public --> Reward[Terminal, potential and kill-source rewards]
     Reward --> Learn[PPO update]
     Learn --> Policy
     Runner --> Logs[Metadata, episode records, and progress log]
@@ -41,9 +41,12 @@ flowchart LR
 | Configuration and provenance | Constants, seed splits, source verification, hashes, versions |
 | Actions and encoding | Stable public schemas, no private state or future schedule |
 | Environment | One game per worker, one action per 10 ticks, explicit episode lifecycle |
-| Rewards | Potential from public observations, true terminals versus truncations |
+| Rewards | Public observation potential, terminal handling, event-based plant/mower kill credit |
 | Controllers | Frozen original heuristic, shared public-state facade, strategy proposals |
 | Training | PPO updates, curriculum progress, validation-only checkpoint selection |
+| Grouped policy | Masked action type and conditional tile; joint PPO probability and entropy |
+| Curriculum state | Mastery probes, next-reset stage changes, persisted advancement counters |
+| Pilot | Timed diagnostics, alternating profile order, matched-budget comparison |
 | Runtime transport | Masks carried with observations, local mask access, reusable CUDA rollout tensors |
 | Timings/benchmark | Separate collection and update costs, warmup excluded from measurements, paired data-path comparisons |
 | Evaluation | Same cases and timing, independent policy RNG, complete episode records |
@@ -54,15 +57,39 @@ flowchart LR
 | Rendering/video | Thin native-renderer adapter, verified playback, optional MP4 encoding |
 | Suite | Restart journal for attempts, fixed settings, training before final testing |
 
-Direct policies see a flat 2,719-element float32 vector. Plants occupy a 5×9×17
-grid, zombies a 5×20×16 grid, projectiles a 5×20×3 grid, and globals have 54 values.
+Direct policies see a versioned float32 vector. Spatial v1 has 2,719 values:
+plants occupy a 5×9×17 grid, zombies a 5×20×16 grid, projectiles a 5×20×3 grid,
+and globals have 54 values. Tactical v2 has 1,140 values: the same plant grid and
+globals, three distance regions per lane for zombies/projectiles, 16 card economy
+features, and 20 lane summaries. Fixed scales live in the profile configuration.
 Integer sums precede scaling, so tuple order does not alter aggregated observations.
 IDs and scenario labels are not inputs. The encoding is intentionally partially observed.
 
 Actions are wait 0, 360 plant/tile combinations, and 45 digs. The hybrid has five
 strategy choices, each proposing at most one placement. Invalid direct actions
 follow the engine contract; unavailable hybrid strategies wait and are logged as
-rejected choices. Masks use only current legality.
+rejected choices. Normal masks use only current legality. Placement/saving lessons
+add explicit permitted-plant restrictions; prohibited requests wait, consume time,
+and are recorded as rejected. Lessons still allow legal digs on the full board.
+
+```mermaid
+flowchart LR
+    FlatMask[406 legal flags] --> Types[Available action types]
+    FlatMask --> Tiles[Legal tiles for each type]
+    Features[Public numeric features] --> Network[Policy MLP]
+    Network --> Types
+    Network --> Tiles
+    Types --> Choice[Choose wait, plant type, or dig]
+    Choice --> Location[Choose conditional tile unless waiting]
+    Tiles --> Location
+    Location --> Index[Original action index]
+```
+
+Grouped PPO uses `log P(type) + log P(tile|type)`, with no tile term for waiting.
+Joint entropy is type entropy plus type-probability-weighted conditional entropy.
+Unavailable types have zero mass. Deterministic evaluation greedily chooses type
+then tile. Policy and distribution subclasses retain SB3's collector, PPO loss,
+GAE, optimizer, and optimized transport buffers.
 
 ```mermaid
 stateDiagram-v2
@@ -79,6 +106,17 @@ stateDiagram-v2
 The engine may still be running when the adapter is truncated. Vector wrappers
 retain the terminal observation for PPO bootstrapping before resetting that worker.
 True terminal potential is zero; truncated potential is preserved.
+
+Public `DamageApplied` and `ZombieDefeated` events attribute kills within each
+batched step. The pinned source encodes plants/projectiles with positive source
+IDs and mowers with negative row IDs. A transient ID join finds the killing damage;
+IDs never enter observations. Each defeated zombie earns either positive plant
+credit or a negative mower penalty. Earlier nonlethal hits and mower activation
+alone earn neither. Configured weights are divided by initial zombie count by
+default. Source counts and contributions are recorded separately from potential
+shaping and terminal reward. This explicitly changes the task reward; checkpoint
+selection still uses win rate. Legacy configs with absent weights retain zero
+event reward, and configurations with different rewards are not pooled.
 
 ## Training and evaluation
 
@@ -162,6 +200,31 @@ Each run owns one policy and optimizer throughout all curriculum stages. One
 earlier checkpoints win ties. Every difficulty demo records the same checkpoint
 hash. The independent seeds and ablation conditions in the suite are separate
 shared-policy experiments, not models selected by difficulty.
+
+```mermaid
+stateDiagram-v2
+    [*] --> Placement
+    Placement --> Saving: 18/20 placement wins twice
+    Saving --> Easy: 18/20 saving wins twice
+    Easy --> Standard: 16/20 easy wins twice
+    Standard --> Shared: 16/20 easy and 12/20 standard twice
+    Shared --> Shared: 20/40/40 normal games
+```
+
+Teaching gates run every 16,384 decisions and require minimum stage residency.
+Failures reset the consecutive-pass counter. Distribution changes are sent to all
+workers for their next resets; active games finish under their original task.
+Checkpoint attributes persist stage, entry step, last probe, and pass counters.
+Resume restores this state before workers reset. Lesson probes live in separate
+files and never choose `best.zip`. Budget exhaustion leaves the actual stage intact.
+Baseline profiles retain the fixed progress schedule instead of mastery gates.
+
+The timed pilot first runs two pure-RL diagnostics, then four profiles at two seeds
+in alternating order. A deadline check at an update boundary prevents partial PPO
+updates from becoming comparison checkpoints. Completed evaluations have separate
+learning-profile and game-protocol hashes. Cross-profile reports require the same
+engine, game rules, timing, and reward objective; they retain distinct method names.
+Only a budget completed by all profiles and both seeds enters the pilot comparison.
 
 ```mermaid
 stateDiagram-v2

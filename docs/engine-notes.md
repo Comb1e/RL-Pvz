@@ -4,7 +4,7 @@ Date: 2026-09-20. Adopted package 1.2.1, commit
 `6fd1f54706369915013a49eab5c1790f8c55ab0a`, from `E:/Projects/pvz`.
 
 The game now provides the offscreen rendering and replay provenance interfaces
-previously suggested here. Research version 0.3.2 uses these native APIs and the
+previously suggested here. Research version 0.4.0 uses these native APIs and the
 compact demo format. No changes to the game checkout are needed or made.
 
 | Capability supplied by the game | Research integration |
@@ -14,7 +14,7 @@ compact demo format. No changes to the game checkout are needed or made.
 | Compressed .pvzdemo files | Default to compact timed-operation recordings; retain JSON/gzip reader compatibility. |
 | Playback seeking and operation descriptions | Use the native viewer, speed controls, inspection, and action feedback. |
 | Separate package and simulation versions | Pin package 1.2.1 while preserving simulation compatibility identifier 1.0.0. |
-| Defeated/total zombie HUD | Reused automatically by research replay frames and the native viewer; numeric policy inputs stay unchanged. |
+| Defeated/total zombie HUD | Reused by research replay frames and the viewer; the engine's public numeric fields remain unchanged. |
 
 No additional engine adjustment is currently required. Rendering still depends on
 pygame, and video encoding belongs to the external research package. Metadata is
@@ -41,3 +41,16 @@ action at exact sun/cooldown/death/reset boundaries, and keep returned data deta
 This is a suggestion only; no game files were edited. Larger policies, increased
 worker counts, mixed precision, and changed PPO batches are separate experiments,
 not part of this runtime optimization.
+
+## Kill attribution and introductory tasks
+
+Version 0.4.0 uses existing public `LevelSpec` and `Spawn` for teaching scenarios.
+No task-specific combat changes are needed. Public `DamageApplied` source IDs and
+`ZombieDefeated` events support plant/projectile versus mower killing-blow credit.
+The research wrapper joins events transiently; entity IDs are not policy inputs.
+
+An optional future API improvement would be an explicit `cause`/`source_kind` on
+`ZombieDefeated`. That would make attribution self-contained instead of depending
+on the pinned convention that negative damage-source IDs identify mowers. This is
+only a suggestion. Current attribution is verified against projectile, explosion,
+mine, chomper, mixed-source, and mower controls, and the game checkout is unchanged.

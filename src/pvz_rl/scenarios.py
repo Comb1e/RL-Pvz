@@ -12,12 +12,23 @@ def namespace_seed(family: str, seed: int) -> int:
     return int.from_bytes(hashlib.sha256(f"pvz-rl/v1/{family}/{seed}".encode()).digest()[:8], "big")
 
 
-def scenario(level: str, family: str, seed: int, rules: Rules):
+def scenario(level: str, family: str, seed: int, rules: Rules, cfg=None):
     if family == "preset":
         return level
     if family == "diagnostic":
         # A peashooter anywhere in row 2 can kill this basic zombie; no mower rescue.
         return LevelSpec("diagnostic", (Spawn(100, "basic", 2),), initial_sun=100, mowers=False)
+    if family in ("placement", "saving"):
+        from .config import lesson_settings
+
+        lesson = lesson_settings(cfg)[family]
+        lane = random.Random(namespace_seed(family, seed)).randrange(rules.game["rows"])
+        return LevelSpec(
+            family,
+            tuple(Spawn(tick, "basic", lane) for tick in lesson["spawn_ticks"]),
+            initial_sun=lesson["initial_sun"],
+            mowers=False,
+        )
     if family not in ("redistributed", "faster", "concentrated"):
         raise ValueError(f"Unknown scenario family: {family}")
     raw = bundled("levels.toml")[level]

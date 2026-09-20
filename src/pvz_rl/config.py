@@ -59,7 +59,75 @@ def load_config(path: str | Path | None = None) -> dict:
     return copy.deepcopy(cfg)
 
 
+@lru_cache(maxsize=1)
+def _teaching_defaults():
+    return tomllib.loads(files("pvz_rl").joinpath("data/teaching.toml").read_text("utf-8"))
+
+
+def lesson_settings(cfg=None):
+    return (cfg or {}).get("curriculum", {}).get("lessons", _teaching_defaults()["lessons"])
+
+
+def learning_profile(name, base=None):
+    """Versioned recipes also available in installed wheels without a checkout."""
+    if name not in ("baseline", "tactical", "grouped", "pure-rl"):
+        raise ValueError("Unknown learning profile")
+    cfg = copy.deepcopy(base or load_config())
+    cfg["profile"] = name
+    if name != "baseline":
+        cfg["encoding"].update(
+            version="tactical_v2", local_count_scale=5, firepower_scale=20, lane_count_scale=9
+        )
+    if name in ("grouped", "pure-rl"):
+        cfg["policy"] = {"kind": "grouped_v1"}
+    if name == "pure-rl":
+        cfg["curriculum"].update(copy.deepcopy(_teaching_defaults()))
+    validate_config(cfg)
+    return cfg
+
+
 def validate_config(cfg: dict) -> None:
+    for key in ("plant_kill_weight", "mower_kill_weight"):
+        value = cfg["reward"].get(key, 0.0)
+        if isinstance(value, bool) or not math.isfinite(value) or value < 0:
+            raise ValueError(f"reward.{key} must be finite and nonnegative")
+    if type(cfg["reward"].get("normalize_kills", True)) is not bool:
+        raise ValueError("reward.normalize_kills must be a boolean")
+    encoding = cfg["encoding"]
+    if encoding["version"] not in (1, "tactical_v2"):
+        raise ValueError("Unsupported observation version; start a fresh compatible profile")
+    if encoding["version"] == "tactical_v2":
+        for key in ("local_count_scale", "firepower_scale", "lane_count_scale"):
+            if not math.isfinite(encoding[key]) or encoding[key] <= 0:
+                raise ValueError(f"encoding.{key} must be finite and positive")
+    if cfg.get("policy", {}).get("kind", "flat") not in ("flat", "grouped_v1"):
+        raise ValueError("Unsupported policy kind")
+    c = cfg["curriculum"]
+    if c.get("mode", "fixed") not in ("fixed", "teaching"):
+        raise ValueError("Unsupported curriculum mode")
+    if c.get("mode") == "teaching":
+        from .curriculum import STAGES
+
+        for key in ("probe_interval", "probe_cases", "consecutive_passes", "minimum_stage_steps"):
+            if type(c[key]) is not int or c[key] < 1:
+                raise ValueError(f"curriculum.{key} must be a positive integer")
+        if c["probe_cases"] > cfg["splits"]["validation"][1] - cfg["splits"]["validation"][0] + 1:
+            raise ValueError("Curriculum probes must fit the validation split")
+        for name in STAGES:
+            stage = c["stages"][name]
+            if (
+                len(stage["tasks"]) != len(stage["weights"])
+                or min(stage["weights"]) < 0
+                or abs(sum(stage["weights"]) - 1) > 1e-9
+                or any(
+                    task not in (*STAGES[:2], "easy", "standard", "hard") for task in stage["tasks"]
+                )
+                or any(
+                    type(n) is not int or not 1 <= n <= c["probe_cases"]
+                    for n in stage["requirements"].values()
+                )
+            ):
+                raise ValueError("Invalid teaching distribution or probe threshold")
     runtime = runtime_settings(cfg)
     if set(runtime) != {"cache_legal_actions", "coalesce_masks", "cache_rollout_on_device"} or any(
         type(value) is not bool for value in runtime.values()

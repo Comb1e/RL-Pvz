@@ -1,3 +1,4 @@
+profile = "tactical"
 schema_version = 1
 engine_commit = "6fd1f54706369915013a49eab5c1790f8c55ab0a"
 engine_version = "1.0.0"
@@ -34,7 +35,10 @@ zombie_states = ["walking", "carrying_pole", "vaulting", "biting", "dead"]
 mower_states = ["ready", "moving", "spent"]
 
 [encoding]
-version = 1
+version = "tactical_v2"
+local_count_scale = 5
+firepower_scale = 20
+lane_count_scale = 9
 count_scale = 75
 wave_scale = 15
 

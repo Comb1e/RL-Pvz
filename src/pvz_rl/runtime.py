@@ -60,7 +60,7 @@ class CachedMaskVecEnv(VecEnvWrapper):
                 for i, mask in zip(missing, self.venv.env_method(method_name, indices=missing)):
                     self._masks[i] = mask
             return [self._masks[i].copy() for i in selected]
-        if method_name != "set_progress":
+        if method_name not in ("set_progress", "set_curriculum_stage"):
             for i in selected:
                 self._masks[i] = None
         return self.venv.env_method(method_name, *method_args, indices=selected, **method_kwargs)

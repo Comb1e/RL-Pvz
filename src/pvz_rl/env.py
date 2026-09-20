@@ -8,12 +8,13 @@ from enum import StrEnum
 
 import gymnasium as gym
 import numpy as np
-from pvz_game import Game, LevelSpec, Place, Rules, Status, Wait, WaveSpec
+from pvz_game import Dig, Game, LevelSpec, Place, Rules, Status, Wait, WaveSpec
 from pvz_game.replay import Recorder
 
 from .actions import ActionCodec
-from .config import load_config, runtime_settings, validate_config
+from .config import lesson_settings, load_config, runtime_settings, validate_config
 from .controllers import PublicBoard, strategy_candidates
+from .curriculum import LESSONS, stage_distribution, teaching_enabled
 from .encoding import ObservationEncoder
 from .rewards import reward_parts
 from .scenarios import difficulty_weights, scenario
@@ -62,6 +63,7 @@ class PvZEnv(gym.Env):
         self.action_space = gym.spaces.Discrete(5 if self.options["hybrid"] else self.codec.size)
         self.selection_rng = np.random.default_rng(worker_seed)
         self.progress = 0
+        self.curriculum_stage = 0
         self.state = EpisodeState.NEEDS_RESET
         self.public = None
         self.recorder = None
@@ -73,6 +75,11 @@ class PvZEnv(gym.Env):
 
     def set_progress(self, decisions: int):
         self.progress = int(decisions)
+
+    def set_curriculum_stage(self, stage):
+        # Active episode_family and masks are deliberately unchanged.
+        stage_distribution(self.cfg, stage)
+        self.curriculum_stage = stage
 
     def reset(self, *, seed=None, options=None):
         super().reset(seed=seed)
@@ -93,11 +100,15 @@ class PvZEnv(gym.Env):
             game_seed = int(seed) if seed is not None else int(self.np_random.integers(2**31))
             level = options.get("level", self.level)
         family = options.get("family", self.family)
+        if self.training and self.family == "preset" and teaching_enabled(self.cfg):
+            tasks, weights = stage_distribution(self.cfg, self.curriculum_stage)
+            task = str(self.selection_rng.choice(tasks, p=weights))
+            family, level = (task, "easy") if task in LESSONS else ("preset", task)
         if family == "diagnostic" and (self.options["hybrid"] or not self.options["masked"]):
             raise ValueError("The diagnostic requires a direct-placement masked condition")
         resolved = options.get("scenario")
         if resolved is None:
-            resolved = scenario(level, family, game_seed, self.rules)
+            resolved = scenario(level, family, game_seed, self.rules, self.cfg)
         if not isinstance(resolved, (str, LevelSpec, WaveSpec)):
             raise TypeError("Scenario must be a preset, LevelSpec or WaveSpec")
         self.public = self.game.reset(resolved, game_seed)
@@ -124,6 +135,9 @@ class PvZEnv(gym.Env):
         )
         self.metrics = Counter()
         self.plant_usage = Counter()
+        self.plant_spending = Counter()
+        self.maximum_sun = self.public.sun
+        self.first_attacker_tick = None
         self.episode_reward = 0.0
         self.cutoff_ticks = self.cfg["environment"]["cutoff_seconds"] * self.public.tick_rate
         return self.encoder.encode(self.public), {"status": self.state.value}
@@ -174,6 +188,16 @@ class PvZEnv(gym.Env):
                     ]
                 )
                 mask &= allowed
+            if self.episode_family in LESSONS:
+                allowed_plants = lesson_settings(self.cfg)[self.episode_family]["allowed_plants"]
+                mask &= np.array(
+                    [
+                        isinstance(a, (Wait, Dig))
+                        or isinstance(a, Place)
+                        and a.plant_type in allowed_plants
+                        for a in self.codec.actions
+                    ]
+                )
             self._direct_mask = mask
         return self._direct_mask.copy()
 
@@ -189,10 +213,27 @@ class PvZEnv(gym.Env):
             concrete = Wait() if concrete is None else concrete
         else:
             concrete = self.codec.decode(action)
+        restricted = (
+            self.episode_family in (*LESSONS, "diagnostic") and not self.action_masks()[int(action)]
+        )
+        if restricted:
+            # Task restrictions apply even to callers that ignore the mask.
+            concrete = Wait()
+            rejected_strategy = True
         before = self.public
+        attackers = ("peashooter", "snow_pea", "repeater")
+        self.metrics["affordable_attacker_opportunities"] += int(
+            any(
+                c.plant_type in attackers and before.sun >= c.cost and c.cooldown_ticks == 0
+                for c in before.cards
+            )
+            and len(before.plants)
+            < self.cfg["environment"]["rows"] * self.cfg["environment"]["cols"]
+        )
         ticks = min(self.cfg["environment"]["decision_ticks"], self.cutoff_ticks - before.tick)
         result = (self.recorder or self.game).step(concrete, ticks=ticks)
         self.public = result.observation
+        self.maximum_sun = max(self.maximum_sun, before.sun, self.public.sun)
         if not self.cache_legal_actions:
             self._legal = None
         self._candidates = None
@@ -205,7 +246,11 @@ class PvZEnv(gym.Env):
             if truncated
             else EpisodeState.RUNNING
         )
-        parts = reward_parts(before, self.public, self.cfg, self.options["shaped"])
+        parts = reward_parts(
+            before, self.public, self.cfg, self.options["shaped"], events=result.events
+        )
+        for key in ("plant_kills", "mower_kills", "plant_kill_reward", "mower_kill_penalty"):
+            self.metrics[key] += parts[key]
         self.episode_reward += parts["total"]
         self.metrics["decisions"] += 1
         if self.training:
@@ -218,6 +263,13 @@ class PvZEnv(gym.Env):
         self.metrics["wait_actions"] += int(isinstance(concrete, Wait))
         if isinstance(concrete, Place) and result.action_result.accepted:
             self.plant_usage[concrete.plant_type] += 1
+            self.plant_spending[concrete.plant_type] += self.rules.plants[concrete.plant_type][
+                "cost"
+            ]
+            if concrete.plant_type in attackers:
+                self.metrics["attacker_purchases"] += 1
+                if self.first_attacker_tick is None:
+                    self.first_attacker_tick = before.tick
         for event in result.events:
             self.metrics[event.kind] += 1
         info = {
@@ -251,6 +303,17 @@ class PvZEnv(gym.Env):
             "simulated_seconds": obs.elapsed_seconds,
             "return": self.episode_reward,
             "decisions": self.metrics["decisions"],
+            "attacker_purchases": self.metrics["attacker_purchases"],
+            "plant_kills": self.metrics["plant_kills"],
+            "mower_kills": self.metrics["mower_kills"],
+            "plant_kill_reward": self.metrics["plant_kill_reward"],
+            "mower_kill_penalty": self.metrics["mower_kill_penalty"],
+            "first_attacker_seconds": None
+            if self.first_attacker_tick is None
+            else self.first_attacker_tick / obs.tick_rate,
+            "maximum_sun": self.maximum_sun,
+            "plant_spending": dict(self.plant_spending),
+            "affordable_attacker_opportunities": self.metrics["affordable_attacker_opportunities"],
             "invalid_actions": self.metrics["invalid_actions"],
             "wait_actions": self.metrics["wait_actions"],
             "mowers_used": self.metrics["MowerActivated"],
