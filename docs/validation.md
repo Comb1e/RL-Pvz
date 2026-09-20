@@ -1,4 +1,39 @@
-# Availability and verification — 0.3.0
+# Availability and verification — 0.3.1
+
+## CUDA default — 2026-09-20
+
+PyTorch `2.8.0+cu128` detects the NVIDIA GeForce RTX 4070 Laptop GPU. Research
+package 0.3.1 is installed; the pinned game package remains 1.2.0.
+
+| Check | Result |
+|---|---|
+| Complete research regression/integration suite | **87 passed in 59.47 seconds**, including all five CPU learning conditions and Windows/CUDA workers |
+| Complete upstream game suite | **199 passed in 9.43 seconds**; bytecode and pytest cache writes disabled for the game checkout |
+| CUDA default smoke | CLI run without `--device`: 64 diagnostic decisions, two spawned workers, four optimization epochs, complete status, checkpoint, report, and compact demo |
+| Actual GPU execution | Saved policy tensors and Adam moment tensors loaded without device remapping retain CUDA device tags; checkpoint reload places all policy parameters on CUDA |
+| Missing CUDA | Simulated unavailable GPU raises the existing `--device cpu` guidance before creating an output directory |
+| Tooling | Ruff lint/format, pip dependency check, editable package installation, and Git whitespace checks passed |
+
+Evidence: `artifacts/cuda-research-tests.txt`, `artifacts/cuda-engine-tests.txt`,
+`artifacts/cuda-default-smoke-console.txt`, and `artifacts/cuda-verification.json`.
+The saved run is `artifacts/cuda-default-smoke`; its offline report is
+`visualizations/index.html`. No formal research training was launched, and this
+diagnostic run does not establish full-game competence or a GPU speed advantage.
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest -q
+.\.venv\Scripts\python.exe -B -m pytest -q E:/Projects/pvz/tests `
+  -p no:cacheprovider --basetemp artifacts/cuda-engine-test-temp
+.\.venv\Scripts\python.exe -m pvz_rl train `
+  --condition masked --family diagnostic --seed 101 --steps 64 --n-envs 2 `
+  --rollout-size 64 --batch-size 32 --eval-interval 64 --validation-count 1 `
+  --output artifacts/cuda-default-smoke
+```
+
+The game checkout was clean after verification. Existing CPU checkpoints retain
+their original device setting and require `--device cpu` when resuming.
+
+## Previous 0.3.0 verification
 
 Date: 2026-09-20. Windows, Python 3.12, PyTorch 2.8.0+cu128,
 Gymnasium 1.2.3, SB3/SB3-Contrib 2.7.1. Game package 1.2.0, simulation 1.0.0,

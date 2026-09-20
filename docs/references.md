@@ -59,6 +59,17 @@ checked independently during integration. This is compatibility evidence, not ne
 evidence of learned performance. The original frozen baseline retains its original
 source attribution. No external RL algorithm or library version changed.
 
+## CUDA default — 0.3.1
+
+Inspected the installed Stable-Baselines3 2.7.1 implementation in
+`common/base_class.py` (`get_device`) and `common/on_policy_algorithm.py`
+(`_setup_model`, policy device transfer, and `_maybe_recommend_cpu`). These support
+using the existing configurable device interface and retaining the README's
+whole-pipeline benchmarking guidance: CUDA support alone does not imply that this
+MLP trains faster. Local PyTorch 2.8.0+cu128 availability and saved GPU tensors were
+verified on the RTX 4070 Laptop GPU; the evidence is recorded in `validation.md`.
+No algorithm or dependency version changed for this device-default update.
+
 ## Evidence boundaries (research claims)
 
 The existing game is a daytime PvZ-style clone with automatic sun collection and

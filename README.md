@@ -10,7 +10,7 @@ held-out evaluations, changed-wave scenarios, statistical analysis, progress log
 automatic offline reports, learning curves, compact game demos, and optional MP4 export.
 **Each run trains one shared policy for easy, standard, and hard.** The same
 `best.zip` is used for all three difficulties and their demonstration recordings.
-Research version **0.3.0** uses game package **1.2.0** (simulation version **1.0.0**).
+Research version **0.3.1** uses game package **1.2.0** (simulation version **1.0.0**).
 Start fresh training after this upgrade: checkpoints from the previous source pin
 cannot be resumed or evaluated. Their reports and replay files remain readable.
 **No full research training has been run.** Availability and short integration tests
@@ -35,6 +35,11 @@ For a fresh installation, use Python 3.12 and Git:
 # CPU-only installation, suitable for these small MLP policies.
 .\tools\bootstrap.ps1 -GameRepo E:\Projects\pvz
 ```
+
+Training uses **CUDA by default**. The current environment detects an NVIDIA
+GeForce RTX 4070 Laptop GPU with PyTorch `2.8.0+cu128`. For a CPU-only installation,
+add `--device cpu` to training and suite commands. If CUDA is unavailable, training
+stops with an actionable error instead of silently switching devices.
 
 The installer checks that the game checkout is clean and at commit
 `a47056d8141ec635d3ff3f4d5561d6a75cfca2cc`, stages a verified Git archive under
@@ -105,7 +110,7 @@ Start with a pilot on the real game:
 ```powershell
 .\.venv\Scripts\python.exe -m pvz_rl train `
   --condition masked --seed 101 --steps 100000 `
-  --n-envs 4 --device cpu --eval-interval 25000 --validation-count 5 `
+  --n-envs 4 --device cuda --eval-interval 25000 --validation-count 5 `
   --output runs\pilot-masked-101
 ```
 
@@ -116,10 +121,13 @@ Then train the full direct-placement condition with the default protocol:
   --condition masked --seed 101 --output runs\masked-101
 ```
 
-Defaults: 3 million decisions, eight environments, CPU execution, separate
+Defaults: 3 million decisions, eight environments, CUDA policy training, separate
 256–256 policy/value networks, learning rate `3e-4`, discount `0.999`, GAE `0.98`,
 4,096 decisions per rollout, minibatches of 256, four optimization epochs,
 clipping `0.2`, and entropy coefficient `0.01`.
+
+The policy and value networks run on the GPU; game simulation workers run on the
+CPU. Use `--device cuda` to select CUDA explicitly or `--device cpu` for CPU training.
 
 Each decision applies one action and advances 10 ticks (0.5 simulated seconds).
 `--steps` counts **aggregate policy decisions across all workers**, not ticks,
@@ -284,6 +292,8 @@ Repeat any original pilot overrides when resuming a pilot. `--steps` remains the
 original total budget; it is not an additional-step count. The earlier best checkpoint
 is retained when applicable. Resume restores the policy and optimizer but starts
 fresh game episodes; it is not a bit-for-bit continuation of rollout/RNG state.
+Device settings must also match: when resuming a compatible run created with the
+previous CPU default, pass `--device cpu` (or its original configuration file).
 
 ## 4. Choose CPU or GPU and worker count
 
@@ -305,6 +315,9 @@ Use the recommendation consistently in later comparisons:
   --hardware artifacts\hardware-benchmark\recommendation.json `
   --condition masked --seed 101 --output runs\selected-hardware-101
 ```
+
+`--hardware` overrides the bundled CUDA default; an explicit `--device` overrides
+the hardware recommendation.
 
 Parallel environments use Windows-compatible `spawn`; each worker owns its game.
 When invoking the Python API from a script, put training calls under

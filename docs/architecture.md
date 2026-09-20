@@ -80,6 +80,12 @@ True terminal potential is zero; truncated potential is preserved.
 
 ## Training and evaluation
 
+The bundled configuration uses CUDA for policy inference during training and PPO
+updates. Each spawned game worker simulates on the CPU. `--device cpu` selects CPU
+training; CUDA requests fail early when unavailable. Device settings are retained
+in experiment metadata and must match when resuming. Standalone evaluation and
+demo generation load the shared checkpoint on the CPU by default.
+
 ```mermaid
 flowchart TD
     Start[Read and validate configuration] --> Verify[Verify engine source and rules]

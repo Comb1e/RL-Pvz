@@ -1,5 +1,36 @@
 # Iteration history
 
+## 0.3.1 — 2026-09-20
+
+### Previous issue and cause
+
+The bundled training configuration explicitly selected CPU even when the installed
+CUDA-enabled PyTorch detected the laptop's NVIDIA GPU.
+
+### Improvements
+
+- Select CUDA by default for training and suite runs through the existing device
+  interface. Keep explicit CPU overrides and the unavailable-CUDA error.
+- Document GPU setup, CPU fallback, hardware override precedence, and the matching
+  device requirement for resume. Keep one shared policy across all difficulties.
+- Pin general learning regression fixtures to CPU so they remain portable; retain
+  the dedicated Windows-worker integration test that uses CUDA when available.
+
+### Verification
+
+All 87 research tests and 199 upstream game tests passed. A fresh 64-decision,
+two-worker diagnostic run without a device override completed on the RTX 4070
+Laptop GPU. Saved policy tensors and Adam moment tensors retain CUDA device tags;
+checkpoint reload on CUDA, missing-CUDA handling, lint, formatting, and dependency
+checks passed. See `validation.md` for commands and artifacts.
+
+### Remaining issues and limits
+
+GPU execution does not imply faster throughput for this small MLP and Python
+simulation. Simulation workers remain on CPU. No formal research training was run.
+Existing compatible CPU runs must still resume with their original CPU setting.
+The game folder remains unchanged; no Git remote is configured for a PR.
+
 ## 0.3.0 — 2026-09-20
 
 ### Previous issues and causes

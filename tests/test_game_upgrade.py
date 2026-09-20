@@ -147,7 +147,7 @@ from pvz_rl.training import train
 cfg = load_config()
 assert cfg['visualization']['demos'] and not cfg['visualization']['videos']
 cfg['environment']['cutoff_seconds'] = 1
-cfg['training'].update(total_steps=64, rollout_size=64, batch_size=32, n_envs=1, n_epochs=1, hidden_sizes=[32,32], eval_interval=64)
+cfg['training'].update(device='cpu', total_steps=64, rollout_size=64, batch_size=32, n_envs=1, n_epochs=1, hidden_sizes=[32,32], eval_interval=64)
 cfg['visualization']['ffmpeg'] = 'missing-ffmpeg'
 original = builtins.__import__
 def checked(name, *args, **kwargs):

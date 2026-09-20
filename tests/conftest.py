@@ -15,6 +15,7 @@ def smoke_cfg(cfg):
     cfg["visualization"].update(enabled=False, videos=False)
     cfg["environment"]["cutoff_seconds"] = 2
     cfg["training"].update(
+        device="cpu",  # Keep general regressions portable; a dedicated test exercises CUDA.
         total_steps=128,
         rollout_size=64,
         batch_size=32,
