@@ -1,0 +1,399 @@
+"""Offline run reports and fixed-case demos from one shared best checkpoint."""
+
+from __future__ import annotations
+
+import html
+import json
+from pathlib import Path
+from time import perf_counter
+
+import matplotlib
+
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+
+from .config import output_settings
+from .evaluation import evaluate
+from .progress import Phase, ProgressReporter
+from .provenance import file_hash, write_json
+from .video import export_replay
+
+
+def read_json(path, default=None):
+    path = Path(path)
+    return json.loads(path.read_text("utf-8")) if path.exists() else default
+
+
+def read_series(path):
+    path = Path(path)
+    if not path.exists():
+        return []
+    with path.open(encoding="utf-8") as stream:
+        return [json.loads(line) for line in stream if line.strip()]
+
+
+def run_segments(run):
+    """Only link ancestors with a recorded resume boundary; label times separately."""
+    result, seen, cutoff = [], set(), None
+    current = Path(run).resolve()
+    while current not in seen:
+        seen.add(current)
+        meta = read_json(current / "metadata.json", {})
+        series = {}
+        for name in ("learning-curve", "training-metrics"):
+            rows = read_series(current / f"{name}.jsonl")
+            # Updates at a repeated step supersede progress-only rows at that step.
+            series[name] = list(
+                {
+                    row["training_steps"]: row
+                    for row in rows
+                    if cutoff is None or row["training_steps"] <= cutoff
+                }.values()
+            )
+        result.append((current.name, series))
+        boundary = meta.get("resume_steps")
+        if not meta.get("resume") or boundary is None:
+            break
+        cutoff = boundary if cutoff is None else min(boundary, cutoff)
+        current = Path(meta["resume"]).resolve().parent
+        if not (current / "metadata.json").exists():
+            break
+    return list(reversed(result))
+
+
+def _save(fig, output, name):
+    fig.tight_layout()
+    temporary = output / (name + ".tmp.png")
+    try:
+        fig.savefig(temporary, dpi=150)
+        temporary.replace(output / (name + ".png"))
+    finally:
+        plt.close(fig)
+
+
+def _empty(ax, message="Not recorded yet"):
+    ax.text(0.5, 0.5, message, ha="center", va="center", transform=ax.transAxes)
+
+
+def build_run_report(run, cfg=None):
+    run = Path(run).resolve()
+    meta = read_json(run / "metadata.json", {})
+    cfg = cfg or meta["config"]
+    output = run / "visualizations"
+    output.mkdir(parents=True, exist_ok=True)
+    segments = run_segments(run)
+    images = []
+    fig, axes = plt.subplots(1, 2, figsize=(12, 4))
+    colors = {"macro": "#233d37", "easy": "#399471", "standard": "#d69536", "hard": "#b54e59"}
+    for ax, xkey, xlabel in zip(
+        axes,
+        ("training_steps", "wall_seconds"),
+        ("Training decisions", "Wall time within each run segment (hours)"),
+    ):
+        plotted = False
+        for label, series in segments:
+            rows = series["learning-curve"]
+            for level in colors:
+                points = []
+                for row in rows:
+                    value = (
+                        row.get("macro_win_rate")
+                        if level == "macro"
+                        else next(
+                            (
+                                score["win_rate"]
+                                for key, score in row.get("levels", {}).items()
+                                if key.endswith("/" + level)
+                            ),
+                            None,
+                        )
+                    )
+                    if value is not None:
+                        points.append((row[xkey] / (3600 if xkey == "wall_seconds" else 1), value))
+                if points:
+                    x, y = zip(*points)
+                    ax.plot(
+                        x,
+                        y,
+                        marker="o",
+                        markersize=3,
+                        color=colors[level],
+                        label=f"{label}: {level}",
+                        alpha=0.85,
+                    )
+                    plotted = True
+        ax.set(xlabel=xlabel, ylabel="Validation win rate", ylim=(-0.02, 1.02))
+        ax.grid(alpha=0.2)
+        if plotted:
+            ax.legend(fontsize=7)
+            ax.set_xlim(left=0)
+        else:
+            _empty(ax, "Validation has not finished yet")
+    _save(fig, output, "validation-curves")
+    images.append(("Validation performance", "validation-curves.png"))
+
+    panels = [
+        ("rolling_win_rate", "Rolling training win rate"),
+        ("rolling_return", "Rolling episode reward"),
+        ("rolling_seconds", "Rolling episode duration (simulated seconds)"),
+        ("invalid_action_rate", "Rolling invalid-action rate"),
+        ("decisions_per_second", "Training decisions / second (excludes validation/reporting)"),
+        ("end_to_end_decisions_per_second", "Training decisions / wall second"),
+    ]
+    fig, axes = plt.subplots(3, 2, figsize=(12, 10))
+    for ax, (key, title) in zip(axes.flat, panels):
+        plotted = False
+        for label, series in segments:
+            rows = [r for r in series["training-metrics"] if r.get(key) is not None]
+            if rows:
+                ax.plot(
+                    [r["training_steps"] for r in rows],
+                    [r[key] for r in rows],
+                    marker=".",
+                    label=label,
+                )
+                plotted = True
+        ax.set(title=title, xlabel="Training decisions")
+        ax.grid(alpha=0.2)
+        if plotted:
+            ax.legend(fontsize=7)
+        else:
+            has_metrics = any(s["training-metrics"] for _, s in segments)
+            _empty(
+                ax,
+                "No completed training episodes yet"
+                if has_metrics
+                else "No aggregated metrics available",
+            )
+    _save(fig, output, "training-curves")
+    images.append(("Training behavior and throughput", "training-curves.png"))
+
+    optimizer_panels = [
+        ("policy_gradient_loss", "Policy loss"),
+        ("value_loss", "Value loss"),
+        ("entropy_loss", "Entropy loss (negative entropy)"),
+        ("approx_kl", "Approximate KL"),
+        ("clip_fraction", "Clipped fraction"),
+        ("explained_variance", "Explained variance"),
+    ]
+    fig, axes = plt.subplots(3, 2, figsize=(12, 9))
+    for ax, (key, title) in zip(axes.flat, optimizer_panels):
+        plotted = False
+        for label, series in segments:
+            rows = [
+                r
+                for r in series["training-metrics"]
+                if r.get("optimization", {}).get(key) is not None
+            ]
+            if rows:
+                ax.plot(
+                    [r["training_steps"] for r in rows],
+                    [r["optimization"][key] for r in rows],
+                    marker=".",
+                    label=label,
+                )
+                plotted = True
+        ax.set(title=title, xlabel="Decisions at completed PPO update")
+        ax.grid(alpha=0.2)
+        if plotted:
+            ax.legend(fontsize=7)
+        else:
+            _empty(ax, "Optimizer metrics unavailable")
+    _save(fig, output, "optimization-curves")
+    images.append(("PPO optimization", "optimization-curves.png"))
+
+    status = read_json(run / "status.json", {})
+    best = read_json(run / "best.json", {})
+    visual_status = read_json(output / "status.json", {})
+    demos = read_json(output / "demos.json", {}).get("demos", [])
+    # Never display stale videos as demonstrations of a newly selected checkpoint.
+    demos = [d for d in demos if d.get("checkpoint_hash") == best.get("checkpoint_hash")]
+
+    def escape(value):
+        return html.escape(str(value), quote=True)
+
+    cards = []
+    for demo in demos:
+        video = demo.get("video")
+        player = (
+            f'<video controls preload="metadata" src="{escape(video)}"></video>'
+            '<label>Playback speed <select onchange="this.parentElement.previousElementSibling'
+            '.playbackRate=Number(this.value)"><option>0.5</option><option selected>1</option>'
+            "<option>2</option><option>4</option></select>×</label>"
+            if video and (output / video).exists()
+            else "<p>Video unavailable; see export status.</p>"
+        )
+        cards.append(
+            f"<article><h3>{escape(demo['level'])} — {escape(demo['outcome'])}</h3>"
+            f"<p>Validation seed {demo['scenario_seed']}; "
+            f"{demo['simulated_seconds']:.1f} simulated seconds.</p>{player}"
+            f'<p><a href="{escape(demo["replay"])}">Verified replay JSON</a></p>'
+            f'<p class="hash">Shared checkpoint SHA-256: {escape(demo["checkpoint_hash"])}</p>'
+            "</article>"
+        )
+    details = {
+        "training_state": status.get("state", "unknown"),
+        "condition": meta.get("condition"),
+        "learner_seed": meta.get("learner_seed"),
+        "family": meta.get("family"),
+        "training_settings": cfg["training"],
+        "curriculum": cfg["curriculum"],
+        "progress": status,
+        "selected_shared_checkpoint": best or "No validated checkpoint yet",
+        "visualization_status": visual_status,
+    }
+    charts = "".join(
+        f'<section><h2>{title}</h2><a href="{name}"><img src="{name}" alt="{title}"></a></section>'
+        for title, name in images
+    )
+    policy_description = (
+        "Restricted diagnostic policy; this run does not evaluate the full game"
+        if meta.get("family") == "diagnostic"
+        else "One shared policy for easy, standard, and hard"
+    )
+    page = f"""<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width">
+<title>PVZ training — {escape(run.name)}</title>
+<style>body{{font:16px/1.5 system-ui,sans-serif;background:#edf2ed;color:#203b33;
+max-width:1200px;margin:auto;padding:24px}}section,article,header{{background:white;
+border-radius:12px;padding:22px;margin:18px 0}}h1,h2,h3{{line-height:1.2}}img,video{{width:100%;
+height:auto;border-radius:6px}}pre{{white-space:pre-wrap;overflow-wrap:anywhere;font-size:13px}}
+.hash{{font:12px monospace;overflow-wrap:anywhere}}a{{color:#26684f}}select{{margin:12px}}
+</style></head><body><header><h1>PVZ / {escape(run.name)}</h1>
+<p>{policy_description}. Training: <b>{escape(status.get("state", "unknown"))}</b>.</p>
+<p>Checkpoint selection uses equal-weight validation win rates. These development curves and
+fixed validation demonstrations do not establish held-out performance.</p>
+<p>Training curves use up to {output_settings(cfg)["logging"]["rolling_window"]} completed episodes;
+difficulty composition changes with the curriculum. Reward is not comparable across reward settings.
+Resumed segments have separate wall-time axes and lines. Missing older metrics are left blank.</p>
+<details><summary>Settings, checkpoint, and export status</summary>
+<pre>{escape(json.dumps(details, indent=2))}</pre></details></header>{charts}
+<section><h2>Shared checkpoint demonstrations</h2>
+<p>Each full recording uses identical weights on a predetermined validation case.
+Diagnostic runs show only the diagnostic task. A short smoke run may end at its configured cutoff.</p>
+{"".join(cards) or "<p>No demonstrations generated yet.</p>"}</section></body></html>"""
+    temporary = output / "index.tmp.html"
+    temporary.write_text(page, encoding="utf-8")
+    temporary.replace(output / "index.html")
+    return output / "index.html"
+
+
+def create_demonstrations(run, cfg, progress):
+    from .training import load_policy
+
+    run = Path(run).resolve()
+    output = run / "visualizations"
+    checkpoint = run / "best.zip"
+    checkpoint_hash = file_hash(checkpoint)
+    best = read_json(run / "best.json", {})
+    if best.get("checkpoint_hash") != checkpoint_hash:
+        raise ValueError("Selected checkpoint hash does not match best.json")
+    model, meta = load_policy(checkpoint)  # Exactly one model for every difficulty.
+    levels = ["easy"] if meta["family"] == "diagnostic" else cfg["evaluation"]["levels"]
+    seed = cfg["splits"]["validation"][0]
+    existing = read_json(output / "demos.json", {})
+    demos = existing.get("demos", [])
+    if (
+        existing.get("checkpoint_hash") != checkpoint_hash
+        or {d["level"] for d in demos} != set(levels)
+        or any(
+            d.get("scenario_seed") != seed
+            or not (output / d["replay"]).exists()
+            or d.get("replay_hash") != file_hash(output / d["replay"])
+            for d in demos
+        )
+    ):
+        root = output / "games"
+        root.mkdir(parents=True, exist_ok=True)
+        attempt = 1
+        while (root / f"attempt-{attempt}").exists():
+            attempt += 1
+        rows = evaluate(
+            cfg,
+            seeds=[seed],
+            levels=levels,
+            output=root / f"attempt-{attempt}",
+            policy=model,
+            condition=meta["condition"],
+            learner_seed=meta["learner_seed"],
+            family=meta["family"],
+            record=True,
+            replay_limit=1,
+            training_steps=model.num_timesteps,
+            progress=progress,
+            checkpoint_hash=checkpoint_hash,
+        )
+        demos = []
+        for row in rows:
+            replay = Path(row["replay"])
+            record = {
+                **row,
+                "outcome": row["status"],
+                "seed": seed,
+                "replay_hash": file_hash(replay),
+            }
+            write_json(replay.with_suffix(".metadata.json"), record)
+            demos.append({**record, "replay": replay.relative_to(output).as_posix()})
+        write_json(output / "demos.json", {"checkpoint_hash": checkpoint_hash, "demos": demos})
+    for demo in demos:
+        destination = output / "videos" / f"{demo['level']}-{seed}.mp4"
+        video_meta = read_json(destination.with_suffix(".video.json"), {})
+        if (
+            not destination.exists()
+            or video_meta.get("checkpoint_hash") != checkpoint_hash
+            or video_meta.get("video_hash") != file_hash(destination)
+            or video_meta.get("replay_hash") != demo["replay_hash"]
+            or video_meta.get("settings")
+            != {
+                key: output_settings(cfg)["visualization"][key]
+                for key in ("crf", "final_hold_seconds")
+            }
+        ):
+            export_replay(
+                output / demo["replay"], destination, cfg, context=demo, progress=progress
+            )
+        demo["video"] = destination.relative_to(output).as_posix()
+        write_json(output / "demos.json", {"checkpoint_hash": checkpoint_hash, "demos": demos})
+    return demos
+
+
+def visualize_run(run, *, cfg=None, videos=True, progress=None):
+    """Rebuild derived artifacts. Failures are recorded separately from training."""
+    run = Path(run).resolve()
+    cfg = cfg or read_json(run / "metadata.json")["config"]
+    settings = output_settings(cfg)
+    output = run / "visualizations"
+    output.mkdir(parents=True, exist_ok=True)
+    owns_progress = progress is None
+    progress = progress or ProgressReporter(
+        run / "visualize.log", settings["logging"]["progress_seconds"]
+    )
+    started = perf_counter()
+    status = {"state": "exporting", "videos_requested": videos}
+    write_json(output / "status.json", status)
+    try:
+        progress.phase(Phase.EXPORTING, "Generating training report")
+        build_run_report(run, cfg)
+        if videos:
+            if (run / "best.zip").exists():
+                create_demonstrations(run, cfg, progress)
+            else:
+                status["note"] = "No validated best.zip available; report only"
+        status.update(state="complete", export_seconds=perf_counter() - started)
+    except Exception as exc:
+        status.update(state="failed", error=repr(exc), export_seconds=perf_counter() - started)
+        progress.emit(f"Visualization failed: {exc}; regenerate with pvz-rl visualize", force=True)
+    except KeyboardInterrupt:
+        status.update(state="interrupted", export_seconds=perf_counter() - started)
+        raise
+    finally:
+        write_json(output / "status.json", status)
+        try:
+            build_run_report(run, cfg)
+        except Exception as exc:
+            status.update(state="failed", report_error=repr(exc))
+            write_json(output / "status.json", status)
+            progress.emit(f"Report could not be written: {exc}", force=True)
+        if owns_progress:
+            progress.close()
+    return status

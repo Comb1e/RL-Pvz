@@ -10,9 +10,10 @@ from time import perf_counter
 import numpy as np
 from pvz_game.replay import verify_replay
 
-from .config import digest
+from .config import digest, output_settings
 from .env import PvZEnv
 from .frozen_baseline import choose_action
+from .progress import Phase, ProgressReporter
 from .provenance import append_jsonl, verify_engine, write_json
 from .scenarios import namespace_seed
 
@@ -74,6 +75,9 @@ def evaluate(
     split="validation",
     training_steps=0,
     record=False,
+    progress=None,
+    checkpoint_hash=None,
+    replay_limit=None,
 ) -> list[dict]:
     output = Path(output)
     output.mkdir(parents=True, exist_ok=False)
@@ -103,6 +107,15 @@ def evaluate(
         )
     )
     rows = []
+    owns_progress = progress is None
+    progress = progress or ProgressReporter(
+        output / "evaluation.log", output_settings(cfg)["logging"]["progress_seconds"]
+    )
+    if owns_progress:
+        progress.phase(Phase.VALIDATING)
+    total = len(levels) * len(seeds)
+    progress.emit(f"Evaluation: {label}, {family}/{split}, {total} games", force=True)
+    limit = cfg["evaluation"]["replays_per_outcome"] if replay_limit is None else replay_limit
     try:
         with (output / "episodes.jsonl").open("w", encoding="utf-8") as stream:
             for level in levels:
@@ -111,8 +124,7 @@ def evaluate(
                 try:
                     for seed in sorted(seeds):
                         env.record = record and any(
-                            quotas[k] < cfg["evaluation"]["replays_per_outcome"]
-                            for k in ("won", "lost", "truncated")
+                            quotas[k] < limit for k in ("won", "lost", "truncated")
                         )
                         obs, _ = env.reset(seed=seed)
                         rng = np.random.default_rng(namespace_seed(f"baseline/{label}", seed))
@@ -129,6 +141,10 @@ def evaluate(
                             )
                             inference_seconds += perf_counter() - t
                             obs, _, terminated, truncated, info = env.step(action)
+                            progress.emit(
+                                f"Evaluation {len(rows)}/{total} complete; {level}, seed {seed}, "
+                                f"game time {env.public.elapsed_seconds:.1f}s"
+                            )
                             if terminated or truncated:
                                 break
                         row = {
@@ -142,11 +158,9 @@ def evaluate(
                             "inference_seconds": inference_seconds,
                             "wall_seconds": perf_counter() - started,
                             "state_hash": env.game.state_hash(),
+                            "checkpoint_hash": checkpoint_hash,
                         }
-                        if (
-                            env.recorder
-                            and quotas[row["status"]] < cfg["evaluation"]["replays_per_outcome"]
-                        ):
+                        if env.recorder and quotas[row["status"]] < limit:
                             replay_path = (
                                 output / "replays" / f"{level}-{seed}-{row['status']}.json"
                             )
@@ -163,6 +177,7 @@ def evaluate(
                     env.close()
         write_json(output / "summary.json", summarize(rows))
         write_json(output / "status.json", {"state": "complete", "episodes": len(rows)})
+        progress.emit(f"Evaluation complete: {len(rows)}/{total} games", force=True)
         return rows
     except BaseException as exc:
         write_json(
@@ -170,6 +185,9 @@ def evaluate(
             {"state": "failed", "error": repr(exc), "completed_episodes": len(rows)},
         )
         raise
+    finally:
+        if owns_progress:
+            progress.close()
 
 
 def read_rows(paths) -> list[dict]:

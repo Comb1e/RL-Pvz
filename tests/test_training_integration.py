@@ -111,6 +111,8 @@ def test_windows_spawn_and_cuda_when_available(tmp_path):
     data = json.loads((output / "metadata.json").read_text())
     assert data["config"]["training"]["device"] == device
     assert json.loads((output / "status.json").read_text())["steps"] == 64
+    demos = json.loads((output / "visualizations/demos.json").read_text())["demos"]
+    assert len(demos) == 1 and demos[0]["family"] == "diagnostic"
 
 
 @pytest.mark.learning

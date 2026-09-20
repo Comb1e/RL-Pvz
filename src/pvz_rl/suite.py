@@ -7,7 +7,7 @@ the journal keeps previous attempts and their evidence intact.
 import json
 from pathlib import Path
 
-from .config import digest, seed_values
+from .config import digest, research_config, seed_values
 from .evaluation import BASELINES, evaluate
 from .provenance import file_hash, metadata, write_json
 from .reporting import make_report
@@ -19,7 +19,8 @@ def run_suite(cfg, output, *, resume=False):
     journal_path = output / "suite.json"
     if resume:
         journal = json.loads(journal_path.read_text("utf-8"))
-        if journal["config_hash"] != digest(cfg):
+        original = json.loads((output / "metadata.json").read_text("utf-8"))["config"]
+        if research_config(original) != research_config(cfg):
             raise ValueError("Suite resume requires its original configuration")
     else:
         output.mkdir(parents=True, exist_ok=False)
@@ -102,6 +103,7 @@ def run_suite(cfg, output, *, resume=False):
                     output=destination,
                     record=True,
                     training_steps=model.num_timesteps if model else 0,
+                    checkpoint_hash=checkpoint_hash,
                 )
                 write_json(
                     destination / "metadata.json",

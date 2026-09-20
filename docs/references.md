@@ -35,7 +35,18 @@ GitHub metadata did not identify standard licenses for the three external PvZ
 repositories at inspection time. Their source was not vendored. The only frozen
 controller comes from the user's existing local game project.
 
-## Evidence boundaries
+## Visualization and progress implementation — 0.2.0
+
+| Source | Evidence inspected | Decision informed |
+|---|---|---|
+| [SB3 callbacks](https://stable-baselines3.readthedocs.io/en/master/guide/callbacks.html) and [logger](https://stable-baselines3.readthedocs.io/en/master/common/logger.html); installed SB3/SB3-Contrib 2.7.1 | Official callback/logger documentation and installed `on_policy_algorithm.py` / `ppo_mask.py` update loops | Collect optimizer metrics at the next rollout start and training end, after updates. Keep TensorBoard and add a separate throttled operational log. |
+| [FFmpeg project](https://ffmpeg.org/), local FFmpeg 8.1 essentials build | `-version`, `-encoders`, `-h demuxer=rawvideo`, `-h muxer=mp4`; confirmed `libx264`, explicit raw frame rate/size/pixel format, and `faststart` | Stream RGB frames to H.264/yuv420p MP4, without real-time display capture or keeping all frames in memory. Binary is an external tool, not vendored. |
+| Leafy's pinned game, same commit as above | `Playback.step`, final/intermediate hash checks, public observation types, offscreen art functions | Render replay ticks and retain wrapper truncation information in research-owned sidecars. No game source change. |
+
+These are implementation references. Local smoke exports verify availability;
+they provide no new evidence that the policy wins reliably.
+
+## Evidence boundaries (research claims)
 
 The existing game is a daytime PvZ-style clone with automatic sun collection and
 documented custom balance. Its results are not directly comparable to commercial

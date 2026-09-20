@@ -19,9 +19,14 @@ flowchart LR
     Public --> Reward[Terminal reward and potential shaping]
     Reward --> Learn[PPO update]
     Learn --> Policy
-    Runner --> Logs[Metadata and episode records]
+    Runner --> Logs[Metadata, episode records, and progress log]
     Env --> Replay[Verified replay]
-    Logs --> Report[Statistics and figures]
+    Logs --> Report[Offline HTML and PNG curves]
+    Replay --> Video[Offscreen frames to FFmpeg MP4]
+    Video --> Report
+    Learn --> Shared[One best checkpoint across all difficulties]
+    Shared --> Demos[Fixed easy, standard, hard validation demos]
+    Demos --> Replay
 ```
 
 ## Ownership and interfaces
@@ -36,6 +41,9 @@ flowchart LR
 | Training | PPO updates, curriculum progress, validation-only checkpoint selection |
 | Evaluation | Same cases and timing, independent policy RNG, complete episode records |
 | Statistics/reporting | Run/scenario bootstrap, paired comparisons, figures and report |
+| Progress | Shared phase names and throttled console/file events; no per-episode printing |
+| Visualization | Offline run report, optional metrics, resume segments, checkpoint-identified demos |
+| Rendering/video | Public-state HUD, tick-by-tick verified playback, bounded-memory MP4 encoding |
 | Suite | Restart journal for attempts, fixed settings, training before final testing |
 
 Direct policies see a flat 2,719-element float32 vector. Plants occupy a 5×9×17
@@ -79,12 +87,82 @@ flowchart TD
     Due -->|no| Budget
     Budget -->|no| Collect
     Budget -->|yes| Final[Final validation and final checkpoint]
+    Final --> Close[Close simulation workers]
+    Close --> Demo[Load one best checkpoint and play fixed validation demos]
+    Demo --> Export[Verify replays and stream frames to MP4]
+    Export --> Report[Write offline HTML report and final export status]
 ```
 
 Each worker tracks global collection progress in increments of the worker count,
 so curriculum changes apply at episode reset without querying workers every action.
 Resume restores weights and optimizer, sets curriculum progress before reset, and
 starts fresh episodes. It preserves earlier eligible best checkpoints.
+
+Each run owns one policy and optimizer throughout all curriculum stages. One
+`best.zip` maximizes the equal-weight easy/standard/hard validation win rate;
+earlier checkpoints win ties. Every difficulty demo records the same checkpoint
+hash. The independent seeds and ablation conditions in the suite are separate
+shared-policy experiments, not models selected by difficulty.
+
+```mermaid
+stateDiagram-v2
+    [*] --> Starting
+    Starting --> Collecting
+    Collecting --> Updating: Rollout ends
+    Updating --> Collecting: Update finishes
+    Updating --> Validating: Validation due or final update
+    Validating --> Collecting: More decisions remain
+    Validating --> Exporting: Checkpoints saved and workers closed
+    Exporting --> Complete: Artifacts ready or export error recorded
+    Collecting --> Interrupted: User interruption
+    Updating --> Failed: Learning error
+    Validating --> Failed: Evaluation error
+```
+
+The progress reporter shares a wall-clock throttle across training, evaluation,
+and export. Routine messages default to every 15 seconds; important events print
+immediately. Collection/update phase changes update status without printing every
+rollout. Aggregates cover the last 100 completed training games. PPO statistics are
+read after updates, at the next rollout start and at training end, including the
+last optimized policy. Training ETA excludes validation and report time; export
+time is recorded separately. TensorBoard remains controlled by SB3.
+
+## Result artifacts
+
+```mermaid
+flowchart LR
+    Metrics[Post-update aggregate JSONL] --> Charts[Training and optimizer curves]
+    Validation[Validation JSONL] --> Curves[Per-difficulty and mean win-rate curves]
+    Best[Selected checkpoint and hash] --> Cases[First validation seed in each difficulty]
+    Cases --> Replay[Verified replay JSON and outcome sidecar]
+    Replay --> Playback[One engine tick per frame]
+    Playback --> Frames[Public board and HUD]
+    Frames --> Encoder[FFmpeg stdin RGB stream]
+    Encoder --> MP4[H.264 video and verification metadata]
+    Charts --> HTML[Offline index.html]
+    Curves --> HTML
+    MP4 --> HTML
+```
+
+Report assets use relative links and need no network or server. Charts refresh
+after validation and at completion; videos are generated after training. Raw episode
+records remain the research evidence. Missing metrics from old runs are shown as
+unavailable. Resume metadata supplies an exact boundary for including ancestor
+measurements; each segment retains its own wall time.
+
+Video output uses temporary files and is published only after replay hashes and
+encoder completion pass. The adapter's truncation outcome lives in a sidecar;
+the engine replay can correctly remain `running`. The encoder holds one frame at
+a time and stores its error output in a temporary file. The final outcome is held
+for two seconds by default. Export status is independent of completed training,
+so dependency/encoder failures preserve checkpoints and support regeneration.
+
+`visualize --run` rebuilds reports and missing/changed demo assets without training.
+`replay --video` exports an individual recording. Configuration separates logging
+and visualization preferences from research compatibility checks, while full
+resolved settings remain in run provenance. The pinned game is not modified.
+
+## Formal suite
 
 ```mermaid
 stateDiagram-v2

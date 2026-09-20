@@ -10,6 +10,9 @@ def cfg():
 
 @pytest.fixture
 def smoke_cfg(cfg):
+    # Most learning tests exercise the algorithm; dedicated visualization tests
+    # explicitly enable reports/video to avoid encoding dozens of duplicate demos.
+    cfg["visualization"].update(enabled=False, videos=False)
     cfg["environment"]["cutoff_seconds"] = 2
     cfg["training"].update(
         total_steps=128,

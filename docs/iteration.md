@@ -1,5 +1,53 @@
 # Iteration history
 
+## 0.2.0 — 2026-09-20
+
+### Previous issues and causes
+
+- Training used SB3 `verbose=0` with no operational progress reporter, leaving
+  collection, validation, and checkpoint activity unclear in the terminal.
+- Reports required a separate evaluation command; game replays required the
+  interactive UI and lacked exported videos with research context.
+- Shared-policy training already existed, but the output did not make it obvious
+  that one selected checkpoint was used across all difficulties.
+- Exact whole-configuration comparisons would treat presentation changes as
+  experiment changes, preventing otherwise compatible resume operations.
+
+### Improvements
+
+- Added throttled timestamped console/file progress, explicit phases, rolling
+  aggregates, post-update PPO metrics, and preserved TensorBoard logging.
+- Added automatic offline HTML reports, validation/training/optimizer PNG curves,
+  labeled resume segments, and support for missing older metrics.
+- Added fixed validation demos of one shared `best.zip`, public-state HUD rendering,
+  verified replay sidecars, and streamed H.264 MP4 export with playback controls.
+- Separated export outcomes from learning success; added regeneration commands,
+  encoder availability checks, output configuration defaults, and compatibility
+  comparisons that exclude presentation settings.
+- Updated training instructions, architecture diagrams, implementation references,
+  and optional game-engine suggestions in `engine-notes.md`. The game folder was
+  not edited.
+
+### Verification
+
+See `validation.md` for executed checks and saved smoke artifacts. Verification
+covers shared checkpoint identity, unchanged learned weights with visualization,
+post-update/final metrics, log cadence, old configurations, resume boundaries,
+natural wins/losses and external cutoffs, corrupt replays, missing FFmpeg, and an
+encoder process failure. Only short learning runs and availability checks were run.
+
+### Remaining issues
+
+- Learning performance and generalization still require the formal experiment.
+- Video export requires pygame-ce and an FFmpeg build with libx264. It adds time
+  after training; progress and export duration are recorded separately.
+- Older runs lack newly added aggregate metrics; their missing panels remain blank.
+- Reports are static files: reload the page after a validation refresh.
+- Raw older replays without wrapper metadata cannot identify external cutoffs;
+  they retain their actual engine status.
+- Resume still starts fresh game episodes and is not exact rollout/RNG restoration.
+- No Git remote is configured, so the feature commit is prepared locally for a PR.
+
 ## 0.1.0 — 2026-09-20
 
 ### Previous state and issues

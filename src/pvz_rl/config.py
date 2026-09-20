@@ -7,6 +7,7 @@ import hashlib
 import json
 import math
 import tomllib
+from functools import lru_cache
 from importlib.resources import files
 from pathlib import Path
 
@@ -19,6 +20,22 @@ def digest(value: object) -> str:
     ).hexdigest()
 
 
+@lru_cache(maxsize=1)
+def _output_defaults():
+    bundled = tomllib.loads(files("pvz_rl").joinpath("data/research.toml").read_text("utf-8"))
+    return {key: bundled[key] for key in ("logging", "visualization")}
+
+
+def output_settings(cfg: dict) -> dict:
+    """Optional output settings also work with pre-0.2.0 checkpoint configurations."""
+    return {key: {**values, **cfg.get(key, {})} for key, values in _output_defaults().items()}
+
+
+def research_config(cfg: dict) -> dict:
+    """Output preferences cannot change experiment identity or resume compatibility."""
+    return {key: value for key, value in cfg.items() if key not in ("logging", "visualization")}
+
+
 def load_config(path: str | Path | None = None) -> dict:
     source = Path(path) if path else files("pvz_rl").joinpath("data/research.toml")
     cfg = tomllib.loads(source.read_text("utf-8"))
@@ -27,6 +44,20 @@ def load_config(path: str | Path | None = None) -> dict:
 
 
 def validate_config(cfg: dict) -> None:
+    output = output_settings(cfg)
+    log, visual = output["logging"], output["visualization"]
+    if not math.isfinite(log["progress_seconds"]) or log["progress_seconds"] <= 0:
+        raise ValueError("Logging progress_seconds must be finite and positive")
+    if type(log["rolling_window"]) is not int or log["rolling_window"] < 1:
+        raise ValueError("Logging rolling_window must be a positive integer")
+    if any(type(visual[key]) is not bool for key in ("enabled", "videos")):
+        raise ValueError("Visualization enabled/videos must be booleans")
+    if not isinstance(visual["ffmpeg"], str):
+        raise ValueError("Visualization ffmpeg must be an executable path or empty")
+    if type(visual["crf"]) is not int or not 0 <= visual["crf"] <= 51:
+        raise ValueError("Visualization crf must be an integer from 0 to 51")
+    if not math.isfinite(visual["final_hold_seconds"]) or visual["final_hold_seconds"] < 0:
+        raise ValueError("Visualization final_hold_seconds must be finite and nonnegative")
     env, train = cfg["environment"], cfg["training"]
     if cfg["schema_version"] != 1 or (env["rows"], env["cols"], env["bins"]) != (5, 9, 20):
         raise ValueError("Unsupported research schema/board")

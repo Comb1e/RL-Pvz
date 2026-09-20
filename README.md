@@ -6,7 +6,10 @@ an independent dependency at `E:/Projects/pvz`.
 
 Implemented: a Gymnasium adapter, MaskablePPO and PPO training, five research
 conditions, four non-learning baselines, checkpoint recovery, deterministic replays,
-held-out evaluations, changed-wave scenarios, statistical analysis, and plots.
+held-out evaluations, changed-wave scenarios, statistical analysis, progress logs,
+automatic offline reports, learning curves, and playable replay videos.
+**Each run trains one shared policy for easy, standard, and hard.** The same
+`best.zip` is used for all three difficulties and their demonstration videos.
 **No full research training has been run.** Availability and short integration tests
 exercise the pipeline; they do not establish that a trained agent wins reliably.
 
@@ -40,6 +43,14 @@ with the checkpoint.
 The commands below use `python -m pvz_rl`; `pvz-rl.exe` in the virtual environment
 is an equivalent entry point. No environment activation is required.
 
+Video export needs `pygame-ce` (included in the installer) and FFmpeg with the
+`libx264` encoder. FFmpeg 8.1 is available on this machine. For a fresh Windows
+installation, install FFmpeg, for example with `winget install --id Gyan.FFmpeg`,
+then open a new terminal. `doctor` reports rendering and encoder availability.
+Alternatively set `visualization.ffmpeg` to an executable path in your TOML file.
+Missing video dependencies leave checkpoints and curves usable; the export error
+is recorded and videos can be regenerated later.
+
 ## 2. Run a short smoke test
 
 This executes 128 training decisions on the restricted diagnostic task, evaluates
@@ -54,12 +65,20 @@ one validation case, and saves real checkpoints. It checks integration, not skil
 ```
 
 Output directories must be new. Existing runs and checkpoints are not overwritten.
+The smoke run also produces a report and a diagnostic replay video. Add
+`--no-videos` to skip encoding while retaining curves and logs.
 The diagnostic uses one threatened lane, 100 starting sun, no mowers, and a
 peashooter/wait action mask. A manually placed peashooter provides an independently
 tested winning control. Diagnostic policies are not benchmark results and cannot
 be passed to the formal test evaluator.
 
 ## 3. Train a policy
+
+Use one training command for all difficulties. Curriculum stages change which
+games are sampled, while the same policy weights and optimizer continue learning.
+There are no difficulty-specific model files or difficulty-specific checkpoint
+selection. The five conditions below are optional research comparisons, and learner
+seeds are independent repetitions; each individual run still learns one shared policy.
 
 Start with a pilot on the real game:
 
@@ -107,9 +126,27 @@ placement. It uses scripted placement knowledge, so evaluate it alongside the
 
 ### Monitor training
 
+The terminal and `train.log` show startup settings immediately, progress every
+15 seconds, curriculum changes, validation progress/results, checkpoint saves,
+and video export progress. Completed episodes are stored as research data rather
+than printed individually. Example progress format (illustrative values):
+
+```text
+2026-09-20T12:00:15+00:00 [collecting] 8,192/100,352 decisions (8.2%); 550 decisions/s; elapsed 00:00:15; training ETA 00:02:47; last 18 games win 22.2%, reward 0.145; best validation pending
+2026-09-20T12:01:00+00:00 [validating] Validation at 28,672 decisions
+2026-09-20T12:01:12+00:00 [validating] Saved shared best.zip at 20.0%
+```
+
+The ETA estimates remaining collection/optimization time; validation and final
+video export add time. Rolling statistics use up to 100 completed training games.
+The rolling win rate changes with the curriculum's difficulty mix, so use the
+fixed validation curves for progress comparisons.
+
 ```powershell
 .\.venv\Scripts\tensorboard.exe --logdir runs
 Get-Content runs\masked-101\status.json
+# In a separate terminal, follow the persistent log:
+Get-Content runs\masked-101\train.log -Wait
 ```
 
 The main artifacts in a run are:
@@ -118,6 +155,8 @@ The main artifacts in a run are:
 |---|---|
 | `metadata.json`, `config.json` | Resolved settings, seeds, dependency versions, Git state, engine and rules hashes |
 | `status.json` | Lifecycle state, collected decisions, elapsed time, validation result |
+| `train.log` | Timestamped operational progress and significant events |
+| `training-metrics.jsonl` | Rolling training statistics, throughput, and metrics after each PPO update |
 | `training-episodes.jsonl` | Outcomes, plant usage, mowers, invalid actions, and episode lengths |
 | `learning-curve.jsonl` | Validation win rates against training decisions and wall time |
 | `validation/<steps>/` | Full validation episode records and summaries |
@@ -125,9 +164,71 @@ The main artifacts in a run are:
 | `latest.zip` | Most recent validation checkpoint |
 | `final.zip` | Policy after the final optimization update |
 | `interrupted.zip` | Recovery checkpoint when an interruption/error can be handled |
+| `visualizations/index.html` | Offline report with curves and playable demonstrations |
+| `visualizations/*-curves.png` | Validation, training behavior, throughput, and PPO figures |
+| `visualizations/demos.json` | Fixed demo cases, outcomes, replay paths, and shared checkpoint hash |
+| `visualizations/videos/*.mp4` | One video per difficulty; diagnostic runs produce one diagnostic demo |
+| `visualizations/status.json` | Export outcome and duration, separately from training success |
 
 The checkpoint criterion averages easy, standard, and hard win rates equally.
 It does not use shaped return or final-test results.
+
+### Open the curves and game demos
+
+```powershell
+Start-Process runs\masked-101\visualizations\index.html
+```
+
+The report refreshes after validation and at completion; reload the browser to see
+updates. It works offline and includes validation win rates overall/per difficulty
+against decisions and wall time, rolling training statistics, PPO losses/entropy/KL,
+and throughput. TensorBoard remains available for detailed inspection.
+
+After training, one load of the selected `best.zip` plays easy, standard, and hard
+using deterministic actions on the first validation seed (100000 by default).
+The videos show the actual outcome, including losses and cutoffs, with identical
+checkpoint hashes listed beside all three players. Games are recorded to completion
+or the configured cutoff and hash-verified before their exported videos are published.
+Replay playback runs at 20 frames/second with a two-second final outcome hold.
+Videos have play/pause, seeking, and speed controls and do not autoplay.
+
+These fixed validation demonstrations are for inspection, not held-out evidence.
+Diagnostic checkpoints produce only a diagnostic demonstration. Video generation
+begins after training workers close and does not update model weights.
+
+Regenerate reports/videos without training, including for older runs:
+
+```powershell
+.\.venv\Scripts\python.exe -m pvz_rl visualize --run runs\masked-101
+.\.venv\Scripts\python.exe -m pvz_rl visualize --run runs\masked-101 --no-videos
+```
+
+Older runs may lack aggregated optimizer/training metrics; the report marks those
+panels unavailable. Resumed runs display labeled segments with separate elapsed
+times and exclude ancestor data beyond the checkpoint used to resume. If an older
+resume has no recorded boundary, the report displays only that run's segment.
+Reports and videos are derived artifacts and can be rebuilt. Export failures are
+logged separately and do not invalidate completed training or saved checkpoints.
+
+Optional settings in a copied configuration file:
+
+```toml
+[logging]
+progress_seconds = 15
+rolling_window = 100
+
+[visualization]
+enabled = true
+videos = true
+ffmpeg = "" # PATH lookup; or a literal path such as 'E:\Tools\ffmpeg.exe'
+crf = 23
+final_hold_seconds = 2
+```
+
+Set `videos = false` (or pass `--no-videos` to `train`/`suite`) for curves without
+videos. Set `enabled = false` to disable automatic visualization entirely.
+Logging/visualization settings are saved in metadata but excluded from experiment
+compatibility checks. Changing these preferences alone does not prevent resuming.
 
 ### Resume an interrupted run
 
@@ -245,11 +346,15 @@ truncations per difficulty in seed order. Paths are included in episode records.
 ```powershell
 .\.venv\Scripts\python.exe -m pvz_rl replay runs\baseline-development\replays\easy-0-won.json
 .\.venv\Scripts\python.exe -m pvz_rl replay runs\baseline-development\replays\easy-0-won.json --watch
+.\.venv\Scripts\python.exe -m pvz_rl replay runs\baseline-development\replays\easy-0-won.json --video artifacts\easy-0.mp4
 ```
 
 Replay files deliberately contain complete engine snapshots for verification. They
 are not policy observations. A truncated replay ends with the engine still running;
 the evaluation record supplies the wrapper's cutoff outcome.
+Automatically generated demos include an adjacent `.metadata.json` sidecar so
+standalone video re-export preserves the wrapper outcome. An older engine-only
+replay ending in `running` is not labeled as a loss or an inferred cutoff.
 
 ## 6. Run the full research protocol when ready
 
@@ -355,6 +460,7 @@ Windows/CUDA check when CUDA is available. These tests do not launch formal runs
 - [Version history and remaining limitations](docs/iteration.md)
 - [Papers and projects actually used](docs/references.md)
 - [Availability and verification results](docs/validation.md)
+- [Notes and optional suggestions for the separate game](docs/engine-notes.md)
 
 Use feature branches, Conventional Commits, and PRs; never push directly to main.
 The initial study is about winning with normal actions in this daytime clone.

@@ -6,7 +6,7 @@ import argparse
 import json
 from pathlib import Path
 
-from .config import load_config, seed_values, validate_config
+from .config import load_config, research_config, seed_values, validate_config
 from .provenance import file_hash, metadata, write_json
 
 
@@ -25,6 +25,9 @@ def training_options(parser):
     parser.add_argument("--rollout-size", type=int)
     parser.add_argument("--batch-size", type=int)
     parser.add_argument("--eval-interval", type=int)
+    parser.add_argument(
+        "--no-videos", action="store_true", help="generate curves without replay videos"
+    )
 
 
 def configured(args):
@@ -43,6 +46,8 @@ def configured(args):
         value = getattr(args, arg, None)
         if value is not None:
             cfg["training"][key] = value
+    if getattr(args, "no_videos", False):
+        cfg.setdefault("visualization", {})["videos"] = False
     validate_config(cfg)
     return cfg
 
@@ -53,7 +58,7 @@ def main(argv=None):
     doctor = subs.add_parser("doctor", help="check engine, packages, Gym API, and CUDA")
     common(doctor)
     doctor.add_argument("--output", type=Path)
-    training = subs.add_parser("train", help="train a single condition")
+    training = subs.add_parser("train", help="train one shared policy across all difficulties")
     training_options(training)
     training.add_argument(
         "--condition", default="masked", choices=("masked", "unmasked", "sparse", "mixed", "hybrid")
@@ -103,6 +108,14 @@ def main(argv=None):
     replay = subs.add_parser("replay", help="verify or watch an engine replay")
     replay.add_argument("path", type=Path)
     replay.add_argument("--watch", action="store_true")
+    replay.add_argument("--video", type=Path, help="export a verified offscreen MP4")
+    common(replay)
+    visual = subs.add_parser(
+        "visualize", help="regenerate a run's offline report and shared-policy demos"
+    )
+    common(visual)
+    visual.add_argument("--run", required=True, type=Path)
+    visual.add_argument("--no-videos", action="store_true")
     args = parser.parse_args(argv)
 
     if args.command == "replay":
@@ -122,10 +135,28 @@ def main(argv=None):
             from pvz_game.ui import App
 
             App(replay_path=args.path).run()
+        if args.video:
+            from .video import export_replay
+
+            export_replay(args.path, args.video, load_config(args.config))
         return
 
     cfg = configured(args)
-    if args.command == "doctor":
+    if args.command == "visualize":
+        from .visualization import visualize_run
+
+        original = json.loads((args.run / "metadata.json").read_text("utf-8"))["config"]
+        if args.config and research_config(cfg) != research_config(original):
+            raise ValueError(
+                "Visualization config must preserve the checkpoint's research settings"
+            )
+        result = visualize_run(
+            args.run, cfg=cfg if args.config else original, videos=not args.no_videos
+        )
+        print(f"Report: {(args.run / 'visualizations' / 'index.html').resolve()}")
+        if result["state"] != "complete":
+            raise SystemExit(1)
+    elif args.command == "doctor":
         import torch
         from gymnasium.utils.env_checker import check_env
 
@@ -137,6 +168,19 @@ def main(argv=None):
             check_env(env, skip_render_check=True)
             env.close()
         details["gymnasium_checks"] = "passed: all five conditions"
+        try:
+            from .rendering import render_observation
+
+            frame = render_observation(env.public)
+            details["rendering"] = {"available": True, "shape": list(frame.shape)}
+        except Exception as exc:
+            details["rendering"] = {"available": False, "error": str(exc)}
+        try:
+            from .video import ffmpeg_info
+
+            details["video"] = {"available": True, **ffmpeg_info(cfg)}
+        except Exception as exc:
+            details["video"] = {"available": False, "error": str(exc)}
         details["cuda_available"] = torch.cuda.is_available()
         if details["cuda_available"]:
             value = (torch.ones(2, device="cuda") + 1).sum().item()
@@ -145,7 +189,11 @@ def main(argv=None):
             write_json(args.output, details)
         print(
             json.dumps(
-                {k: details[k] for k in ("engine", "gymnasium_checks", "cuda_available")}, indent=2
+                {
+                    k: details[k]
+                    for k in ("engine", "gymnasium_checks", "cuda_available", "rendering", "video")
+                },
+                indent=2,
             )
         )
     elif args.command == "train":
@@ -168,11 +216,12 @@ def main(argv=None):
         policy, condition, learner_seed, checkpoint_hash = None, "masked", None, None
         if args.checkpoint:
             policy, data = load_policy(args.checkpoint)
-            if args.config and cfg != data["config"]:
+            if args.config and research_config(cfg) != research_config(data["config"]):
                 raise ValueError(
                     "Evaluation config must match the checkpoint; omit --config to reuse it"
                 )
-            cfg, condition, learner_seed = data["config"], data["condition"], data["learner_seed"]
+            cfg = cfg if args.config else data["config"]
+            condition, learner_seed = data["condition"], data["learner_seed"]
             checkpoint_hash = file_hash(args.checkpoint)
             if data["family"] == "diagnostic" and args.family != "diagnostic":
                 raise ValueError(
@@ -215,6 +264,7 @@ def main(argv=None):
             output=args.output,
             record=args.record,
             training_steps=policy.num_timesteps if policy else 0,
+            checkpoint_hash=checkpoint_hash,
         )
         write_json(args.output / "metadata.json", details)
         print(json.dumps(summarize(rows), indent=2))
