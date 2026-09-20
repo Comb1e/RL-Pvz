@@ -1,21 +1,26 @@
 # Notes for the separate PVZ game
 
-Date: 2026-09-20. Inspected engine commit:
-`b3cfbd886ab378313a1fdb57ee43a9a1b36a0793` in `E:/Projects/pvz`.
+Date: 2026-09-20. Adopted package 1.2.0, commit
+`a47056d8141ec635d3ff3f4d5561d6a75cfca2cc`, from `E:/Projects/pvz`.
 
-The existing engine is sufficient for the shared-policy training, logging, reports,
-and replay videos in research version 0.2.0. This work changes only the research
-project. The installed engine remains checked against its pinned source manifest.
+The game now provides the offscreen rendering and replay provenance interfaces
+previously suggested here. Research version 0.3.0 uses these native APIs and the
+compact demo format. No changes to the game checkout are needed or made.
 
-## Optional future adjustments
+| Capability supplied by the game | Research integration |
+|---|---|
+| Recorder metadata and verified display outcomes | Embed policy/checkpoint identity and external cutoff reasons; retain legacy sidecars as read-only fallbacks. |
+| BoardRenderer, RenderContext, and packed RGBFrame | Reuse the game's board/HUD for Gym rendering and optional MP4 export. |
+| Compressed .pvzdemo files | Default to compact timed-operation recordings; retain JSON/gzip reader compatibility. |
+| Playback seeking and operation descriptions | Use the native viewer, speed controls, inspection, and action feedback. |
+| Separate package and simulation versions | Pin package 1.2.0 while preserving simulation compatibility identifier 1.0.0. |
 
-| Observation | Possible future engine improvement | Current research solution |
-|---|---|---|
-| A replay's final engine status remains `running` when the research wrapper reaches its time limit. | Allow optional non-simulation metadata in replay files, such as external termination reason and policy identifier. Keep it outside simulation hashes and policy observations. | Adjacent replay metadata records the wrapper outcome and shared checkpoint hash. The renderer uses that metadata to display `TRUNCATED`. |
-| The full interactive UI creates a display window, while the reusable plant/zombie art can draw onto a surface. | Expose a documented offscreen board/HUD rendering interface if several external consumers need it. | The research package owns its offscreen public-observation renderer and adds the research HUD. |
-| Playback verifies state while advancing individual ticks, but standalone raw engine replays do not identify the learner checkpoint. | Consider optional replay provenance fields or a documented sidecar convention for external tools. | Demo manifests record checkpoint, replay, video, and final-state hashes. |
+No additional engine adjustment is currently required. Rendering still depends on
+pygame, and video encoding belongs to the external research package. Metadata is
+caller-supplied, so the research manifest hashes whole recordings in addition to
+checking simulation hashes. Seeds, private snapshots, and future schedules remain
+excluded from policy inputs.
 
-These are optional maintenance suggestions, not prerequisites or requested engine
-patches. Any future engine revision should receive a new pin and repeat action,
-legality, observation, deterministic playback, and baseline regression checks.
-Keep seeds, private snapshots, and future schedules excluded from policy inputs.
+Any future engine revision should receive a new source pin and repeat action,
+legality, observation, deterministic playback, and known baseline checks before use.
+Keep experimental results separated by source pin even if combat rules are identical.

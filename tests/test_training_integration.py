@@ -14,7 +14,8 @@ from pvz_rl.training import load_policy, train
 
 def test_installed_engine_matches_recorded_commit(cfg):
     result = verify_engine(cfg)
-    assert result["commit"] == "b3cfbd886ab378313a1fdb57ee43a9a1b36a0793"
+    assert result["commit"] == "a47056d8141ec635d3ff3f4d5561d6a75cfca2cc"
+    assert result["package_version"] == "1.2.0" and result["version"] == "1.0.0"
 
 
 @pytest.mark.learning

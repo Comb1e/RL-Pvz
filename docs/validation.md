@@ -1,4 +1,76 @@
-# Availability and verification — 0.2.0
+# Availability and verification — 0.3.0
+
+Date: 2026-09-20. Windows, Python 3.12, PyTorch 2.8.0+cu128,
+Gymnasium 1.2.3, SB3/SB3-Contrib 2.7.1. Game package 1.2.0, simulation 1.0.0,
+commit `a47056d8141ec635d3ff3f4d5561d6a75cfca2cc`.
+
+## Current migration checks
+
+The research package and the installed game were tested together, including the
+complete upstream game suite. Availability/smoke tests use short learning budgets;
+no formal training or final-test performance study was launched.
+
+| Check | Evidence |
+|---|---|
+| Research regression/integration suite | **87 passed in 66.19 seconds** in the final complete pass |
+| New game regression suite | **199 passed in 9.61 seconds** in the final complete pass, using the installed 1.2.0 package and read-only access to upstream tests |
+| Native game installation | Non-editable installation from a verified Git archive staged in research `build/game-1.2.0`; engine source manifest verified |
+| Package/simulation identity | Separate checks for package 1.2.0 and simulation 1.0.0, source hashes, and unchanged rules hash |
+| Known gameplay controls | Existing easy/standard/hard success and failure cases retain expected outcomes/ticks |
+| Learning | All five conditions, CPU and two-worker Windows/CUDA, checkpoint serialization, and same-pin resume |
+| Default recording | Fresh subprocess blocks pygame imports and uses an absent FFmpeg path; training still generates all three compact demos and the HTML report |
+| Shared model | Identical checkpoint hash in all easy/standard/hard demos; output-enabled and disabled short runs retain identical learned tensors |
+| Compatibility boundaries | Old source-pin checkpoints rejected before deserialization; archived reports/recordings processed without model loading |
+| Recordings | `.pvzdemo`, `.json.gz`, and `.json` equivalence; embedded provenance; metadata-independent observations/masks/hashes; legacy sidecar fallback |
+| Native viewer | Mid-entry and backward seeks, completion/rewind, pause, single-step, speed, restart, and inspection exercised by game tests; smoke viewer rendered and inspected |
+| Optional videos | Native packed RGB bytes, configurable even dimensions, H.264/yuv420p MP4; natural outcomes and truncation preserved |
+| Errors | Missing encoder, failed encoder process, replay corruption, altered metadata checksums, and rendering/export recovery |
+| Browser playback | Microsoft Edge played all three locally exported 1280×820 videos at 2×, sought to the middle, and reported no media errors |
+| Build/install tooling | Ruff lint/format, pip dependency check, PowerShell installer syntax, wheel/source distribution build, and packaged manifest checks passed |
+
+The final complete pass contains **286 passing tests**, with no failures. Logs:
+`artifacts/pvz12-final-research-tests.txt`, `artifacts/pvz12-final-engine-tests.txt`,
+and `artifacts/pvz12-final-build.txt`. Doctor output is
+`artifacts/pvz12-availability.json`; browser playback evidence is
+`artifacts/pvz12-browser-playback.json`. The rendered report/video and native viewer
+were visually inspected. `git -C E:/Projects/pvz status --porcelain=v1` stayed empty.
+
+Commands used for the final complete test pass:
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest -q
+.\.venv\Scripts\python.exe -B -m pytest -q E:/Projects/pvz/tests `
+  -p no:cacheprovider --basetemp artifacts/pvz12-final-engine-test-temp
+.\.venv\Scripts\ruff.exe check src tests tools
+.\.venv\Scripts\ruff.exe format src tests tools --check
+.\.venv\Scripts\python.exe -m pip check
+.\.venv\Scripts\python.exe -m build --no-isolation
+```
+
+## Saved fresh-run evidence
+
+`artifacts/pvz-1.2-shared-smoke` contains a fresh 128-decision CPU run with one worker
+and one validation seed per difficulty. Its shared selected checkpoint SHA-256 is
+`7f5e83e60f5ec1da3da45f9e7142cd2ed89327f9618582f92bde03addb3e4cd4`.
+Default training created the report and three compact demos, with no video directory.
+Optional video export was requested separately after confirming this default behavior.
+
+| Difficulty / seed | Observed outcome | Compact bytes | Final simulation hash |
+|---|---|---:|---|
+| Easy / 100000 | Won; all five mowers used | 6616 | `571a1d13a203ec1af454f4dc3105acf3b559995e3503dfee09b268c6f19c1970` |
+| Standard / 100000 | Lost | 7205 | `f3ea524b87f2a2fac241cf3e10087f7b906d1eac49e0a236496a8ea27e9feb3e` |
+| Hard / 100000 | Lost | 7492 | `232526650f507859a242a24a243724a2db15258ce37529852acc58a804934aa2` |
+
+These predetermined demonstrations are compatibility checks, not estimates of
+win rate. Their final simulation hashes reproduce the previous version's smoke
+games. The native seekable viewer screenshot is `artifacts/pvz-1.2-native-viewer.png`.
+
+## Historical verification before the upgrade
+
+The following 0.2.0 evidence used the previous game source pin and is retained as
+historical context. It must not be pooled with current-pin experiment results.
+
+## Availability and verification — 0.2.0
 
 Date: 2026-09-20. Verified locally on Windows with Python 3.12, an Intel
 Core i9-14900HX, approximately 32 GB RAM, and an RTX 4070 Laptop GPU (8 GB).

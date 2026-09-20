@@ -98,6 +98,7 @@ def test_shared_checkpoint_reports_and_videos(smoke_cfg, tmp_path, monkeypatch):
         info = json.loads(video.with_suffix(".video.json").read_text())
         assert info["verified"] and info["final_state_hash"] == demo["state_hash"]
         assert info["frames"] == 41 and info["fps"] == 20
+        assert (info["width"], info["height"]) == (1280, 820)
         result = subprocess.run(
             [ffmpeg_info(smoke_cfg)["path"], "-v", "error", "-i", str(video), "-f", "null", "-"],
             capture_output=True,

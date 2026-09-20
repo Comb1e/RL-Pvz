@@ -1,6 +1,7 @@
 schema_version = 1
-engine_commit = "b3cfbd886ab378313a1fdb57ee43a9a1b36a0793"
+engine_commit = "a47056d8141ec635d3ff3f4d5561d6a75cfca2cc"
 engine_version = "1.0.0"
+engine_package_version = "1.2.0"
 
 [logging]
 progress_seconds = 15
@@ -8,7 +9,9 @@ rolling_window = 100
 
 [visualization]
 enabled = true
-videos = true
+demos = true
+videos = false
+video_size = [1280, 820]
 ffmpeg = "" # Empty discovers ffmpeg on PATH.
 crf = 23
 final_hold_seconds = 2

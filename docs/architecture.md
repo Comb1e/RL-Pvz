@@ -1,7 +1,10 @@
 # Current architecture
 
 The research project depends on a pinned, separately installed game. Only the game
-owns simulation state. A manifest verifies the installed engine before experiments.
+owns simulation state. A manifest verifies package version 1.2.0, simulation version
+1.0.0, the Git source pin, source hashes, and rules hash before experiments. The
+installer stages a verified Git archive in this project's build directory and
+installs non-editably from there, without writing to the game checkout.
 
 ```mermaid
 flowchart LR
@@ -20,9 +23,11 @@ flowchart LR
     Reward --> Learn[PPO update]
     Learn --> Policy
     Runner --> Logs[Metadata, episode records, and progress log]
-    Env --> Replay[Verified replay]
+    Env --> Replay[Verified compact demo with metadata]
     Logs --> Report[Offline HTML and PNG curves]
-    Replay --> Video[Offscreen frames to FFmpeg MP4]
+    Replay --> Viewer[Native viewer with seeking]
+    Replay --> Report
+    Replay --> Video[Optional native frames to FFmpeg MP4]
     Video --> Report
     Learn --> Shared[One best checkpoint across all difficulties]
     Shared --> Demos[Fixed easy, standard, hard validation demos]
@@ -43,7 +48,8 @@ flowchart LR
 | Statistics/reporting | Run/scenario bootstrap, paired comparisons, figures and report |
 | Progress | Shared phase names and throttled console/file events; no per-episode printing |
 | Visualization | Offline run report, optional metrics, resume segments, checkpoint-identified demos |
-| Rendering/video | Public-state HUD, tick-by-tick verified playback, bounded-memory MP4 encoding |
+| Recording compatibility | Native metadata, legacy sidecar fallback, natural outcome precedence |
+| Rendering/video | Thin native-renderer adapter, verified playback, optional MP4 encoding |
 | Suite | Restart journal for attempts, fixed settings, training before final testing |
 
 Direct policies see a flat 2,719-element float32 vector. Plants occupy a 5×9×17
@@ -89,14 +95,21 @@ flowchart TD
     Budget -->|yes| Final[Final validation and final checkpoint]
     Final --> Close[Close simulation workers]
     Close --> Demo[Load one best checkpoint and play fixed validation demos]
-    Demo --> Export[Verify replays and stream frames to MP4]
-    Export --> Report[Write offline HTML report and final export status]
+    Demo --> VerifyDemo[Verify and save compact demos]
+    VerifyDemo --> Requested{Video requested?}
+    Requested -->|yes| Export[Native RGB frames to MP4]
+    Requested -->|no| Report[Write offline report with demo links]
+    Export --> Report
 ```
 
 Each worker tracks global collection progress in increments of the worker count,
 so curriculum changes apply at episode reset without querying workers every action.
 Resume restores weights and optimizer, sets curriculum progress before reset, and
 starts fresh episodes. It preserves earlier eligible best checkpoints.
+Checkpoints with a different engine source pin are rejected before deserializing
+model weights. Archived reports and recordings can be read without loading a model;
+archived checkpoints cannot generate new gameplay. Comparisons retain distinct
+protocol hashes for each engine source pin, even when combat rules match.
 
 Each run owns one policy and optimizer throughout all curriculum stages. One
 `best.zip` maximizes the equal-weight easy/standard/hard validation win rate;
@@ -134,25 +147,31 @@ flowchart LR
     Metrics[Post-update aggregate JSONL] --> Charts[Training and optimizer curves]
     Validation[Validation JSONL] --> Curves[Per-difficulty and mean win-rate curves]
     Best[Selected checkpoint and hash] --> Cases[First validation seed in each difficulty]
-    Cases --> Replay[Verified replay JSON and outcome sidecar]
+    Cases --> Replay[Compressed .pvzdemo with outcome and provenance]
+    Replay --> Viewer[Native viewer with seeking]
     Replay --> Playback[One engine tick per frame]
-    Playback --> Frames[Public board and HUD]
-    Frames --> Encoder[FFmpeg stdin RGB stream]
+    Playback --> Frames[Native BoardRenderer and RenderContext]
+    Frames --> Encoder[Optional FFmpeg RGB stream]
     Encoder --> MP4[H.264 video and verification metadata]
     Charts --> HTML[Offline index.html]
     Curves --> HTML
+    Replay --> HTML
     MP4 --> HTML
 ```
 
 Report assets use relative links and need no network or server. Charts refresh
-after validation and at completion; videos are generated after training. Raw episode
+after validation and at completion. Compact demos are generated after training by
+default; videos require configuration or an explicit `--videos` flag. Raw episode
 records remain the research evidence. Missing metrics from old runs are shown as
 unavailable. Resume metadata supplies an exact boundary for including ancestor
 measurements; each segment retains its own wall time.
 
 Video output uses temporary files and is published only after replay hashes and
-encoder completion pass. The adapter's truncation outcome lives in a sidecar;
-the engine replay can correctly remain `running`. The encoder holds one frame at
+encoder completion pass. The adapter records truncation and provenance in native
+replay metadata, outside simulation state. The engine can correctly remain `running`.
+The shared loader fills missing metadata from legacy sidecars but gives embedded
+fields precedence. `Playback.display_outcome` controls labels at the verified end,
+and natural outcomes take precedence over annotations. The encoder holds one frame at
 a time and stores its error output in a temporary file. The final outcome is held
 for two seconds by default. Export status is independent of completed training,
 so dependency/encoder failures preserve checkpoints and support regeneration.
@@ -161,6 +180,13 @@ so dependency/encoder failures preserve checkpoints and support regeneration.
 `replay --video` exports an individual recording. Configuration separates logging
 and visualization preferences from research compatibility checks, while full
 resolved settings remain in run provenance. The pinned game is not modified.
+
+The Gym renderer retains a writable `(600, 1000, 3)` NumPy RGB array. MP4 output
+defaults to native 1280×820 dimensions, configurable with two positive even numbers.
+Rendering uses only public observations and explicitly provided presentation context.
+The game owns drawing, action descriptions, seek controls, and compressed-file I/O;
+the research project owns experiment selection, provenance, reports, and FFmpeg.
+Compact recording and reports do not require pygame or FFmpeg.
 
 ## Formal suite
 

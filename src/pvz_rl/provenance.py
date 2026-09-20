@@ -44,11 +44,37 @@ def source_manifest(root: Path) -> dict[str, str]:
     }
 
 
+def engine_pin() -> dict:
+    return json.loads(files("pvz_rl").joinpath("data/engine-lock.json").read_text("utf-8"))
+
+
+def current_engine_config(cfg: dict) -> bool:
+    expected = engine_pin()
+    return (
+        cfg.get("engine_commit") == expected["commit"]
+        and cfg.get("engine_version") == expected["version"]
+        and cfg.get("engine_package_version") == expected["package_version"]
+    )
+
+
 def verify_engine(cfg: dict) -> dict:
-    expected = json.loads(files("pvz_rl").joinpath("data/engine-lock.json").read_text("utf-8"))
+    expected = engine_pin()
+    if not current_engine_config(cfg):
+        raise RuntimeError(
+            "This configuration/checkpoint uses an older or different game source pin. "
+            "Start a fresh training run with the bundled PVZ 1.2.0 configuration. "
+            "Checkpoint migration is unsupported; archived reports and replays remain readable."
+        )
+    package_version = importlib.metadata.version("pvz-research-game")
+    if (
+        ENGINE_VERSION != expected["version"]
+        or getattr(pvz_game, "PACKAGE_VERSION", None) != expected["package_version"]
+        or package_version != expected["package_version"]
+    ):
+        raise RuntimeError(
+            "Installed game package/simulation version differs from the pin; reinstall the staged game"
+        )
     actual = source_manifest(Path(pvz_game.__file__).parent)
-    if ENGINE_VERSION != cfg["engine_version"] or expected["commit"] != cfg["engine_commit"]:
-        raise RuntimeError("Engine version/commit does not match the research configuration")
     if actual != expected["files"]:
         changed = sorted(
             k
@@ -56,9 +82,12 @@ def verify_engine(cfg: dict) -> dict:
             if actual.get(k) != expected["files"].get(k)
         )
         raise RuntimeError(f"Installed game differs from pinned engine: {changed}")
+    if Rules().digest != expected["rules_hash"]:
+        raise RuntimeError("Installed game rules differ from the pinned rules hash")
     return {
         "commit": expected["commit"],
         "version": ENGINE_VERSION,
+        "package_version": package_version,
         "source_hash": digest(actual),
         "rules_hash": Rules().digest,
     }

@@ -15,8 +15,8 @@ import matplotlib.pyplot as plt
 from .config import output_settings
 from .evaluation import evaluate
 from .progress import Phase, ProgressReporter
-from .provenance import file_hash, write_json
-from .video import export_replay
+from .provenance import current_engine_config, file_hash, write_json
+from .video import export_replay, video_settings
 
 
 def read_json(path, default=None):
@@ -221,13 +221,15 @@ def build_run_report(run, cfg=None):
             '.playbackRate=Number(this.value)"><option>0.5</option><option selected>1</option>'
             "<option>2</option><option>4</option></select>×</label>"
             if video and (output / video).exists()
-            else "<p>Video unavailable; see export status.</p>"
+            else "<p>Recording available for the game viewer. MP4 export is optional.</p>"
         )
         cards.append(
             f"<article><h3>{escape(demo['level'])} — {escape(demo['outcome'])}</h3>"
             f"<p>Validation seed {demo['scenario_seed']}; "
             f"{demo['simulated_seconds']:.1f} simulated seconds.</p>{player}"
-            f'<p><a href="{escape(demo["replay"])}">Verified replay JSON</a></p>'
+            f'<p><a href="{escape(demo["replay"])}">Verified '
+            f"{'compact demo' if demo['replay'].endswith('.pvzdemo') else 'legacy replay'}</a></p>"
+            f'<pre>pvz-rl replay "{escape((output / demo["replay"]).resolve())}" --watch --speed 2</pre>'
             f'<p class="hash">Shared checkpoint SHA-256: {escape(demo["checkpoint_hash"])}</p>'
             "</article>"
         )
@@ -288,13 +290,31 @@ def create_demonstrations(run, cfg, progress):
     best = read_json(run / "best.json", {})
     if best.get("checkpoint_hash") != checkpoint_hash:
         raise ValueError("Selected checkpoint hash does not match best.json")
-    model, meta = load_policy(checkpoint)  # Exactly one model for every difficulty.
+    meta = read_json(run / "metadata.json")
+    archive = not current_engine_config(meta["config"])
     levels = ["easy"] if meta["family"] == "diagnostic" else cfg["evaluation"]["levels"]
     seed = cfg["splits"]["validation"][0]
     existing = read_json(output / "demos.json", {})
     demos = existing.get("demos", [])
+    reusable = (
+        existing.get("checkpoint_hash") == checkpoint_hash
+        and bool(demos)
+        and all(
+            (output / d["replay"]).is_file()
+            and (not d.get("replay_hash") or d["replay_hash"] == file_hash(output / d["replay"]))
+            for d in demos
+        )
+    )
+    if archive:
+        # Historical reports and recordings are readable without deserializing a model.
+        if reusable:
+            return demos
+        raise RuntimeError(
+            "Archived checkpoint cannot regenerate gameplay. Start a fresh run; "
+            "existing replay files can still be watched/exported individually."
+        )
     if (
-        existing.get("checkpoint_hash") != checkpoint_hash
+        not reusable
         or {d["level"] for d in demos} != set(levels)
         or any(
             d.get("scenario_seed") != seed
@@ -303,6 +323,7 @@ def create_demonstrations(run, cfg, progress):
             for d in demos
         )
     ):
+        model, _ = load_policy(checkpoint)  # Exactly one model for every difficulty.
         root = output / "games"
         root.mkdir(parents=True, exist_ok=True)
         attempt = 1
@@ -332,22 +353,27 @@ def create_demonstrations(run, cfg, progress):
                 "seed": seed,
                 "replay_hash": file_hash(replay),
             }
-            write_json(replay.with_suffix(".metadata.json"), record)
             demos.append({**record, "replay": replay.relative_to(output).as_posix()})
         write_json(output / "demos.json", {"checkpoint_hash": checkpoint_hash, "demos": demos})
+    return demos
+
+
+def export_demonstrations(run, demos, cfg, progress):
+    output = Path(run).resolve() / "visualizations"
     for demo in demos:
-        destination = output / "videos" / f"{demo['level']}-{seed}.mp4"
+        checkpoint_hash = demo["checkpoint_hash"]
+        replay = output / demo["replay"]
+        replay_hash = file_hash(replay)
+        if demo.get("replay_hash") and demo["replay_hash"] != replay_hash:
+            raise ValueError("Replay checksum differs from the saved demo manifest")
+        destination = output / "videos" / f"{demo['level']}-{demo['scenario_seed']}.mp4"
         video_meta = read_json(destination.with_suffix(".video.json"), {})
         if (
             not destination.exists()
             or video_meta.get("checkpoint_hash") != checkpoint_hash
             or video_meta.get("video_hash") != file_hash(destination)
-            or video_meta.get("replay_hash") != demo["replay_hash"]
-            or video_meta.get("settings")
-            != {
-                key: output_settings(cfg)["visualization"][key]
-                for key in ("crf", "final_hold_seconds")
-            }
+            or video_meta.get("replay_hash") != replay_hash
+            or video_meta.get("settings") != video_settings(cfg)
         ):
             export_replay(
                 output / demo["replay"], destination, cfg, context=demo, progress=progress
@@ -357,11 +383,12 @@ def create_demonstrations(run, cfg, progress):
     return demos
 
 
-def visualize_run(run, *, cfg=None, videos=True, progress=None):
+def visualize_run(run, *, cfg=None, videos=None, progress=None):
     """Rebuild derived artifacts. Failures are recorded separately from training."""
     run = Path(run).resolve()
     cfg = cfg or read_json(run / "metadata.json")["config"]
     settings = output_settings(cfg)
+    videos = settings["visualization"]["videos"] if videos is None else videos
     output = run / "visualizations"
     output.mkdir(parents=True, exist_ok=True)
     owns_progress = progress is None
@@ -374,11 +401,28 @@ def visualize_run(run, *, cfg=None, videos=True, progress=None):
     try:
         progress.phase(Phase.EXPORTING, "Generating training report")
         build_run_report(run, cfg)
-        if videos:
-            if (run / "best.zip").exists():
-                create_demonstrations(run, cfg, progress)
-            else:
-                status["note"] = "No validated best.zip available; report only"
+        archived = not current_engine_config(read_json(run / "metadata.json")["config"])
+        demos = []
+        if archived:
+            best = read_json(run / "best.json", {})
+            demos = [
+                d
+                for d in read_json(output / "demos.json", {}).get("demos", [])
+                if d.get("checkpoint_hash") == best.get("checkpoint_hash")
+            ]
+            status["note"] = (
+                "Archived run: report and existing recordings only; fresh training required"
+            )
+            if videos and not demos:
+                raise RuntimeError(
+                    "No archived demonstrations to export; old checkpoints cannot regenerate gameplay"
+                )
+        elif (settings["visualization"]["demos"] or videos) and (run / "best.zip").exists():
+            demos = create_demonstrations(run, cfg, progress)
+        else:
+            status["note"] = "Report only: no validated checkpoint or demos disabled"
+        if videos and demos:
+            export_demonstrations(run, demos, cfg, progress)
         status.update(state="complete", export_seconds=perf_counter() - started)
     except Exception as exc:
         status.update(state="failed", error=repr(exc), export_seconds=perf_counter() - started)

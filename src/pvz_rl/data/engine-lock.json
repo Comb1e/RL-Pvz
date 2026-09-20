@@ -1,16 +1,25 @@
 {
-  "commit": "b3cfbd886ab378313a1fdb57ee43a9a1b36a0793",
+  "commit": "a47056d8141ec635d3ff3f4d5561d6a75cfca2cc",
   "files": {
-    "__init__.py": "6c9ed564a8357e670c1af98a2d3cb9c5c8b202bf98e13517089994710105887e",
+    "__init__.py": "0ff0ce51659ef6f96d1a55694c8c4bd444702102a85d838222081ba8fbe44515",
     "__main__.py": "935a1c1166b0c1ea35a82256345000bf2c73ded718d77773bc27a71ecce28f7d",
-    "cli.py": "3d95e35d36d8d3f6aa53fab79661996ca4712000165b4bc9926ef80606d805b1",
+    "art.py": "edf14cd6677f585b86dcbb71b16193675cdfbf30862704855db17376910ef602",
+    "cli.py": "2cf39b5a928b252c909463299e07a47c9982a3867ecb246f198a35c2f7248f22",
     "config.py": "8d321c8ae120198e1d700ebc210769af23c15e09794e5f82ef4b38ec3673f9c0",
+    "data/demo.toml": "de330da07ac63b75d00fcd2ad7ba72d03d83e6b8c3375d0f2a8e6bf17c155115",
     "data/levels.toml": "ba714d5919854b0cd1291399add4fa0ec5f7d3de0c27c95b32b0b6aaa9364aeb",
     "data/rules.toml": "432e2570d831fb8ccda17e3cb880e94440bba10bb0c88af3324c6bab9a863dfd",
+    "data/theme.toml": "f6dfb232cfb9ed42b17a96ee8bcce0865346b8d2ca0b49ddc9210b5e5debdf48",
     "data/ui.toml": "b4564ba548fcdffa311fd12bf1466f082f15316547e68f736363c11987e0ac37",
+    "demo.py": "c98f4c92c1f50b842732786552eace48124dff47e8ea6fec28c3908c75fda3b4",
+    "demo_ui.py": "9191fecf3c23ff39aa23577af27d66c0d6aa041fadf29956ab4441c740f8cd1b",
     "engine.py": "d91370cda0eb010cff0f2b348c5edfdaa8eb7ac6b5c7f2e5dd97e3e356918bcb",
-    "replay.py": "8eca75736f897e91b82aa89bf2a6429dc43742e1c0724ffefeb86f1a82114867",
-    "types.py": "81adcde0093cb4bc85b09656c13994d454e0326317d0612c0d45d46884ac7a96",
-    "ui.py": "d53c50ea341c6e9d2c5264f1d2617a44a1eaaf49f31314b1302d406b070e32f7"
-  }
+    "rendering.py": "708e041403e40ee9d57ce1623963b24cd1e353c971acfe8af9b9d4433751f58e",
+    "replay.py": "5a3e76f082ad9a235149e8e86b86caf827eb8e6213773fed910f84e89ce3f5e4",
+    "types.py": "17a07e6869dd6516c37791ffac12450ba828ce1b38022c9df112f5f72075e8db",
+    "ui.py": "fcc7c601aa00bb75316ec32aad690ce598a5e44ce15132f16423209a5e101ec3"
+  },
+  "package_version": "1.2.0",
+  "rules_hash": "a7486688fa43a9b50193f82715fa519bd27cfebc7ed054bebe4f7990f9c268de",
+  "version": "1.0.0"
 }

@@ -46,6 +46,19 @@ controller comes from the user's existing local game project.
 These are implementation references. Local smoke exports verify availability;
 they provide no new evidence that the policy wins reliably.
 
+## PVZ 1.2.0 integration — 0.3.0
+
+| Source | Evidence inspected | Decision informed |
+|---|---|---|
+| Leafy's Lawn Lab, `a47056d8141ec635d3ff3f4d5561d6a75cfca2cc`, package 1.2.0 | `docs/api.md`, `docs/demos.md`, `rendering.py`, `replay.py`, `ui.py`, `tools/export_engine_pin.py`, and rendering/demo/seek tests | Adopt BoardRenderer/RGBFrame, native metadata conventions, compressed `.pvzdemo` I/O, and the seekable viewer. Record package and simulation versions separately. |
+| Git project, installed `git archive` command | Verified pinned commit archive and compared Python/TOML hashes with the source manifest | Stage packaging inputs in the research workspace so building/installing cannot write into the game checkout. |
+
+The new game version's engine, rules, scenario-generation code, and preset wave
+files are unchanged from the previous pin. Known gameplay regression cases were
+checked independently during integration. This is compatibility evidence, not new
+evidence of learned performance. The original frozen baseline retains its original
+source attribution. No external RL algorithm or library version changed.
+
 ## Evidence boundaries (research claims)
 
 The existing game is a daytime PvZ-style clone with automatic sun collection and

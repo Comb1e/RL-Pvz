@@ -7,9 +7,12 @@ an independent dependency at `E:/Projects/pvz`.
 Implemented: a Gymnasium adapter, MaskablePPO and PPO training, five research
 conditions, four non-learning baselines, checkpoint recovery, deterministic replays,
 held-out evaluations, changed-wave scenarios, statistical analysis, progress logs,
-automatic offline reports, learning curves, and playable replay videos.
+automatic offline reports, learning curves, compact game demos, and optional MP4 export.
 **Each run trains one shared policy for easy, standard, and hard.** The same
-`best.zip` is used for all three difficulties and their demonstration videos.
+`best.zip` is used for all three difficulties and their demonstration recordings.
+Research version **0.3.0** uses game package **1.2.0** (simulation version **1.0.0**).
+Start fresh training after this upgrade: checkpoints from the previous source pin
+cannot be resumed or evaluated. Their reports and replay files remain readable.
 **No full research training has been run.** Availability and short integration tests
 exercise the pipeline; they do not establish that a trained agent wins reliably.
 
@@ -34,11 +37,27 @@ For a fresh installation, use Python 3.12 and Git:
 ```
 
 The installer checks that the game checkout is clean and at commit
-`b3cfbd886ab378313a1fdb57ee43a9a1b36a0793`, installs a non-editable game package,
-and installs the pinned dependencies. It does not modify the game repository.
+`a47056d8141ec635d3ff3f4d5561d6a75cfca2cc`, stages a verified Git archive under
+this project's `build` directory, and installs the game non-editably from that copy.
+Packaging inputs and build artifacts stay outside the game repository.
 Every training/evaluation command verifies the installed game's source manifest
-and rules hash. Source files, observation schema, and rules must remain compatible
-with the checkpoint.
+and rules hash, package version 1.2.0, and simulation version 1.0.0. Source pins
+must match the checkpoint even when two releases share the same combat rules.
+
+For an existing research virtual environment, upgrade only the game and research package:
+
+```powershell
+$gameStage = Join-Path 'build' ('game-' + [guid]::NewGuid().ToString('N'))
+.\.venv\Scripts\python.exe -B tools\stage_game.py --repo E:\Projects\pvz --output $gameStage
+.\.venv\Scripts\python.exe -m pip install --no-deps --force-reinstall $gameStage
+.\.venv\Scripts\python.exe -m pip install --no-deps -e ".[dev,ui]"
+.\.venv\Scripts\python.exe -m pvz_rl doctor
+```
+
+Use a new output directory and the bundled configuration for new training.
+Do not edit old run metadata to bypass version checks. The original game checkout
+and existing run directories are preserved; old models require their original
+research environment. No checkpoint migration is provided.
 
 The commands below use `python -m pvz_rl`; `pvz-rl.exe` in the virtual environment
 is an equivalent entry point. No environment activation is required.
@@ -48,8 +67,9 @@ Video export needs `pygame-ce` (included in the installer) and FFmpeg with the
 installation, install FFmpeg, for example with `winget install --id Gyan.FFmpeg`,
 then open a new terminal. `doctor` reports rendering and encoder availability.
 Alternatively set `visualization.ffmpeg` to an executable path in your TOML file.
-Missing video dependencies leave checkpoints and curves usable; the export error
-is recorded and videos can be regenerated later.
+Compact recording and report generation require neither pygame nor FFmpeg.
+The native viewer and frame/video rendering need pygame; optional MP4 export also
+needs FFmpeg. Missing video dependencies do not block default training or demos.
 
 ## 2. Run a short smoke test
 
@@ -65,8 +85,8 @@ one validation case, and saves real checkpoints. It checks integration, not skil
 ```
 
 Output directories must be new. Existing runs and checkpoints are not overwritten.
-The smoke run also produces a report and a diagnostic replay video. Add
-`--no-videos` to skip encoding while retaining curves and logs.
+The smoke run also produces a report and a diagnostic `.pvzdemo` recording.
+Add `--videos` to export an MP4 as well.
 The diagnostic uses one threatened lane, 100 starting sun, no mowers, and a
 peashooter/wait action mask. A manually placed peashooter provides an independently
 tested winning control. Diagnostic policies are not benchmark results and cannot
@@ -164,10 +184,11 @@ The main artifacts in a run are:
 | `latest.zip` | Most recent validation checkpoint |
 | `final.zip` | Policy after the final optimization update |
 | `interrupted.zip` | Recovery checkpoint when an interruption/error can be handled |
-| `visualizations/index.html` | Offline report with curves and playable demonstrations |
+| `visualizations/index.html` | Offline curves, compact-demo links/viewer commands, and available videos |
 | `visualizations/*-curves.png` | Validation, training behavior, throughput, and PPO figures |
 | `visualizations/demos.json` | Fixed demo cases, outcomes, replay paths, and shared checkpoint hash |
-| `visualizations/videos/*.mp4` | One video per difficulty; diagnostic runs produce one diagnostic demo |
+| `visualizations/games/attempt-*/replays/*.pvzdemo` | Verified compact recordings with embedded outcome and provenance |
+| `visualizations/videos/*.mp4` | Optional videos, created with `--videos`; omitted by default |
 | `visualizations/status.json` | Export outcome and duration, separately from training success |
 
 The checkpoint criterion averages easy, standard, and hard win rates equally.
@@ -186,25 +207,34 @@ and throughput. TensorBoard remains available for detailed inspection.
 
 After training, one load of the selected `best.zip` plays easy, standard, and hard
 using deterministic actions on the first validation seed (100000 by default).
-The videos show the actual outcome, including losses and cutoffs, with identical
-checkpoint hashes listed beside all three players. Games are recorded to completion
-or the configured cutoff and hash-verified before their exported videos are published.
-Replay playback runs at 20 frames/second with a two-second final outcome hold.
-Videos have play/pause, seeking, and speed controls and do not autoplay.
+Compact demos show the actual outcome, including losses and cutoffs, and all three
+carry identical checkpoint hashes. Each `.pvzdemo` contains compressed timed actions
+and an initial snapshot, with no video frames or model weights. Games are recorded
+to completion or the configured cutoff and hash-verified. Follow the report's
+viewer command to watch, pause, seek, inspect entities, or change playback speed.
+
+Optional MP4 export uses the game's native 1280×820 renderer at 20 frames/second,
+with a two-second final outcome hold. Available videos appear in the HTML report
+with play/pause, seeking, and speed controls; they do not autoplay.
 
 These fixed validation demonstrations are for inspection, not held-out evidence.
-Diagnostic checkpoints produce only a diagnostic demonstration. Video generation
+Diagnostic checkpoints produce only a diagnostic demonstration. Demo generation
 begins after training workers close and does not update model weights.
 
-Regenerate reports/videos without training, including for older runs:
+Regenerate reports/demos or request MP4 export without training:
 
 ```powershell
 .\.venv\Scripts\python.exe -m pvz_rl visualize --run runs\masked-101
+.\.venv\Scripts\python.exe -m pvz_rl visualize --run runs\masked-101 --videos
 .\.venv\Scripts\python.exe -m pvz_rl visualize --run runs\masked-101 --no-videos
 ```
 
 Older runs may lack aggregated optimizer/training metrics; the report marks those
-panels unavailable. Resumed runs display labeled segments with separate elapsed
+panels unavailable. Archived runs rebuild reports and can export existing recordings
+without loading old models; missing gameplay cannot be regenerated from an old
+checkpoint. Use `--no-videos` to rebuild an old report without encoding, since older
+saved configurations may have enabled video by default.
+Resumed runs display labeled segments with separate elapsed
 times and exclude ancestor data beyond the checkpoint used to resume. If an older
 resume has no recorded boundary, the report displays only that run's segment.
 Reports and videos are derived artifacts and can be rebuilt. Export failures are
@@ -219,18 +249,25 @@ rolling_window = 100
 
 [visualization]
 enabled = true
-videos = true
+demos = true
+videos = false
+video_size = [1280, 820] # positive even dimensions for H.264
 ffmpeg = "" # PATH lookup; or a literal path such as 'E:\Tools\ffmpeg.exe'
 crf = 23
 final_hold_seconds = 2
 ```
 
-Set `videos = false` (or pass `--no-videos` to `train`/`suite`) for curves without
-videos. Set `enabled = false` to disable automatic visualization entirely.
+`train`, `suite`, and `visualize` accept mutually exclusive `--videos` / `--no-videos`;
+with neither flag they respect configuration. Disabling videos retains compact demos.
+Set `demos = false` and `videos = false` for reports only, or `enabled = false` to
+disable automatic visualization entirely. Explicit video generation also creates
+the necessary demos, even when `demos = false`.
 Logging/visualization settings are saved in metadata but excluded from experiment
 compatibility checks. Changing these preferences alone does not prevent resuming.
 
 ### Resume an interrupted run
+
+Resume is supported only for checkpoints using the current game source pin.
 
 Resume into a **new directory**, using the same configuration, learner seed,
 condition, diagnostic setting, and validation count as the original run:
@@ -341,20 +378,28 @@ standard, so success across the normal presets alone is not structural generaliz
 ### Inspect replays
 
 With `--record`, evaluation saves and hash-verifies the first ten wins, losses, and
-truncations per difficulty in seed order. Paths are included in episode records.
+truncations per difficulty in seed order. Paths and whole-file checksums are included
+in episode records. The default output is a compact `.pvzdemo` file.
 
 ```powershell
-.\.venv\Scripts\python.exe -m pvz_rl replay runs\baseline-development\replays\easy-0-won.json
-.\.venv\Scripts\python.exe -m pvz_rl replay runs\baseline-development\replays\easy-0-won.json --watch
-.\.venv\Scripts\python.exe -m pvz_rl replay runs\baseline-development\replays\easy-0-won.json --video artifacts\easy-0.mp4
+.\.venv\Scripts\python.exe -m pvz_rl replay runs\baseline-development\replays\easy-0-won.pvzdemo
+.\.venv\Scripts\python.exe -m pvz_rl replay runs\baseline-development\replays\easy-0-won.pvzdemo --watch --speed 2
+.\.venv\Scripts\python.exe -m pvz_rl replay runs\baseline-development\replays\easy-0-won.pvzdemo --video artifacts\easy-0.mp4
 ```
 
 Replay files deliberately contain complete engine snapshots for verification. They
 are not policy observations. A truncated replay ends with the engine still running;
-the evaluation record supplies the wrapper's cutoff outcome.
-Automatically generated demos include an adjacent `.metadata.json` sidecar so
-standalone video re-export preserves the wrapper outcome. An older engine-only
-replay ending in `running` is not labeled as a loss or an inferred cutoff.
+embedded metadata supplies the wrapper's cutoff outcome. Verification prints both
+the engine `status` and the presentation `outcome`. Natural wins/losses always take
+precedence. Caller-supplied metadata is outside simulation hashes, so the research
+manifest also hashes the complete recording file.
+
+The native viewer supports timeline dragging, Space to pause, period for one tick,
+Left/Right for five-second seeks, Home/End, R to restart, and I to inspect entities.
+`--speed` requires `--watch` and accepts 0.5, 1, 2, 4, or 8. Viewing and optional
+video export also accept `.json.gz` and legacy `.json` files. Legacy sidecars fill
+missing metadata; embedded fields take precedence. A raw older replay ending in
+`running` is not labeled as a loss or an inferred cutoff.
 
 ## 6. Run the full research protocol when ready
 

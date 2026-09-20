@@ -1,5 +1,54 @@
 # Iteration history
 
+## 0.3.0 — 2026-09-20
+
+### Previous issues and causes
+
+- The research environment was pinned to game package 1.0.0; the new 1.2.0 game
+  source would fail its manifest check despite unchanged simulation semantics.
+- The research package duplicated the game's board drawing and required sidecars
+  for external replay outcomes. Game 1.2.0 now supplies both native interfaces.
+- Demo creation was coupled to MP4 encoding, adding an encoder dependency and
+  export delay even when compact timed-operation recordings were sufficient.
+- Package version and simulation compatibility version were treated as one value.
+
+### Improvements
+
+- Adopted game commit `a47056d8141ec635d3ff3f4d5561d6a75cfca2cc`, package 1.2.0,
+  retaining simulation 1.0.0. Verify source, package, simulation, and rules separately.
+- Stage a hash-checked Git archive inside the research project before non-editable
+  installation, so packaging does not write into the game checkout.
+- Record compressed `.pvzdemo` files with native checkpoint identity, experiment
+  provenance, outcome, and termination reason. Hash whole recordings in manifests.
+- Generate compact demos by default, independently of optional MP4 encoding;
+  retain one shared checkpoint for easy, standard, and hard.
+- Use BoardRenderer/RGBFrame for rendering and Playback's outcome/operation/seek
+  APIs for presentation. Preserve Gym's RGB array size and expose native video size.
+- Add `--videos` and native replay `--speed`, preserve legacy file/sidecar reads,
+  and rebuild archived reports/export existing recordings without loading old models.
+- Require fresh training for old source-pin checkpoints; same-pin resume still
+  restores policy and optimizer. Update README, architecture, references, and engine notes.
+
+### Verification
+
+Full research and game suites, short CPU/CUDA integration runs, a 128-decision
+fresh shared-policy smoke run, native replay controls, optional MP4 playback,
+availability, dependency, and package checks are recorded in `validation.md`.
+Known win/loss ticks and the rules hash remain unchanged. Tests cover compact
+recording without pygame/FFmpeg, metadata isolation/precedence, strict version
+rejection, legacy archives, seeking, and tampered recording checksums.
+
+### Remaining issues and limits
+
+- The smoke run is not evidence of learned competence; formal training was not run.
+- Old model checkpoints require their original environment; no migration is offered.
+- Metadata is caller-supplied. Simulation hashes verify dynamics, while whole-file
+  hashes detect changes to stored experiment annotations.
+- Native viewing/rendering requires pygame; optional MP4 encoding requires FFmpeg.
+- Static reports require browser reload after refresh. Resume is not exact RNG or
+  interrupted-rollout restoration. Font pixels may differ across platforms.
+- The game folder is unchanged. There is no configured remote for opening a PR.
+
 ## 0.2.0 — 2026-09-20
 
 ### Previous issues and causes

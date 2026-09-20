@@ -1,6 +1,5 @@
 """Stream hash-checked engine playback to portable MP4, without a display window."""
 
-import json
 import os
 import shutil
 import subprocess
@@ -8,12 +7,18 @@ import tempfile
 from pathlib import Path
 from time import perf_counter
 
-from pvz_game.replay import Playback
+from pvz_game.replay import operation_text
 
 from .config import output_settings
 from .progress import Phase, ProgressReporter
 from .provenance import file_hash, write_json
-from .rendering import render_observation
+from .recordings import open_playback
+from .rendering import board_renderer, render_context
+
+
+def video_settings(cfg):
+    visual = output_settings(cfg)["visualization"]
+    return {key: visual[key] for key in ("crf", "final_hold_seconds", "video_size")}
 
 
 def _process_options():
@@ -52,12 +57,10 @@ def export_replay(source, destination, cfg, *, context=None, progress=None):
         raise ValueError("Video destination must have an .mp4 extension")
     settings = output_settings(cfg)
     encoder = ffmpeg_info(cfg)
-    playback = Playback(source)
-    sidecar = source.with_suffix(".metadata.json")
-    details = json.loads(sidecar.read_text("utf-8")) if sidecar.exists() else {}
-    details.update(context or {})
-    # The engine remains running at a wrapper cutoff. Never infer a loss from it.
-    outcome = details.get("outcome", details.get("status", playback.data["final_status"]))
+    playback = open_playback(source, fallback=context)
+    details = playback.metadata
+    width, height = settings["visualization"]["video_size"]
+    renderer = board_renderer((width, height))
     fps = playback.game.observe().tick_rate
     destination.parent.mkdir(parents=True, exist_ok=True)
     temporary = destination.with_name(destination.stem + ".tmp.mp4")
@@ -70,7 +73,6 @@ def export_replay(source, destination, cfg, *, context=None, progress=None):
     started = perf_counter()
     process = None
     frames = 0
-    last_action = "Waiting for the next decision"
     try:
         with tempfile.TemporaryFile() as errors:
             command = [
@@ -84,7 +86,7 @@ def export_replay(source, destination, cfg, *, context=None, progress=None):
                 "-pixel_format",
                 "rgb24",
                 "-video_size",
-                "1000x600",
+                f"{width}x{height}",
                 "-framerate",
                 str(fps),
                 "-i",
@@ -110,41 +112,39 @@ def export_replay(source, destination, cfg, *, context=None, progress=None):
                 **_process_options(),
             )
 
-            def write_frame(final=False):
+            def write_frame():
                 nonlocal frames
                 observation = playback.game.observe()
-                frame = render_observation(
-                    observation,
-                    context={
-                        **details,
-                        "action": last_action,
-                        "outcome": outcome if final else observation.status.value,
-                    },
+                experiment = details.get("experiment", {})
+                prefix = " / ".join(
+                    str(experiment[key])
+                    for key in ("family", "level", "scenario_seed")
+                    if key in experiment
                 )
-                process.stdin.write(frame.tobytes())
+                frame = renderer.rgb_frame(
+                    observation,
+                    context=render_context(
+                        {
+                            **details,
+                            "outcome": playback.display_outcome,
+                            "message": f"{prefix} | {operation_text(playback.last_operation)}",
+                        }
+                    ),
+                )
+                process.stdin.write(frame.data)
                 frames += 1
 
             try:
-                write_frame(final=playback.done)
+                write_frame()
                 while not playback.done:
-                    entry = playback.data["entries"][playback.index]
-                    starts_action = playback.offset == 0
-                    result = playback.step()  # Verifies intermediate and final hashes.
-                    action = entry["action"]
-                    if starts_action and action["kind"] != "wait":
-                        name = action.get("plant_type", action["kind"]).replace("_", " ")
-                        accepted = "" if result.action_result.accepted else " (rejected)"
-                        last_action = (
-                            f"{entry['tick'] / fps:.1f}s: {action['kind']} {name}, "
-                            f"row {action['row'] + 1}, column {action['col'] + 1}{accepted}"
-                        )
-                    write_frame(final=playback.done)
+                    playback.step()  # Verifies intermediate and final hashes.
+                    write_frame()
                     progress.emit(
                         f"Encoding {destination.name}: game time "
                         f"{playback.game.observe().elapsed_seconds:.1f}s, {frames} frames"
                     )
                 for _ in range(round(settings["visualization"]["final_hold_seconds"] * fps)):
-                    write_frame(final=True)
+                    write_frame()
                 process.stdin.close()
                 code = process.wait(timeout=60)
             except BrokenPipeError as exc:
@@ -161,7 +161,10 @@ def export_replay(source, destination, cfg, *, context=None, progress=None):
         temporary.replace(destination)
         record = {
             **details,
-            "outcome": outcome,
+            "outcome": playback.display_outcome,
+            "checkpoint_hash": details.get("checkpoint_sha256"),
+            "width": width,
+            "height": height,
             "frames": frames,
             "fps": fps,
             "duration_seconds": frames / fps,
@@ -170,9 +173,7 @@ def export_replay(source, destination, cfg, *, context=None, progress=None):
             "final_state_hash": playback.game.state_hash(),
             "video_hash": file_hash(destination),
             "encoder": encoder,
-            "settings": {
-                key: settings["visualization"][key] for key in ("crf", "final_hold_seconds")
-            },
+            "settings": video_settings(cfg),
             "verified": True,
         }
         write_json(destination.with_suffix(".video.json"), record)

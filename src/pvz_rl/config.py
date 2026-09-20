@@ -50,8 +50,15 @@ def validate_config(cfg: dict) -> None:
         raise ValueError("Logging progress_seconds must be finite and positive")
     if type(log["rolling_window"]) is not int or log["rolling_window"] < 1:
         raise ValueError("Logging rolling_window must be a positive integer")
-    if any(type(visual[key]) is not bool for key in ("enabled", "videos")):
-        raise ValueError("Visualization enabled/videos must be booleans")
+    if any(type(visual[key]) is not bool for key in ("enabled", "demos", "videos")):
+        raise ValueError("Visualization enabled/demos/videos must be booleans")
+    size = visual["video_size"]
+    if (
+        not isinstance(size, (tuple, list))
+        or len(size) != 2
+        or any(type(n) is not int or n < 2 or n % 2 for n in size)
+    ):
+        raise ValueError("Visualization video_size must contain two positive even dimensions")
     if not isinstance(visual["ffmpeg"], str):
         raise ValueError("Visualization ffmpeg must be an executable path or empty")
     if type(visual["crf"]) is not int or not 0 <= visual["crf"] <= 51:

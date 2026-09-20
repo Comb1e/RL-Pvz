@@ -14,7 +14,7 @@ from .config import digest, output_settings
 from .env import PvZEnv
 from .frozen_baseline import choose_action
 from .progress import Phase, ProgressReporter
-from .provenance import append_jsonl, verify_engine, write_json
+from .provenance import append_jsonl, file_hash, verify_engine, write_json
 from .scenarios import namespace_seed
 
 BASELINES = ("wait", "random_legal", "heuristic", "random_strategy")
@@ -87,9 +87,10 @@ def evaluate(
         "hybrid" if baseline == "random_strategy" else "masked" if baseline else condition
     )
     label = baseline or condition
+    engine = verify_engine(cfg)
     protocol_hash = digest(
         {
-            "engine": verify_engine(cfg),
+            "engine": engine,
             "environment": cfg["environment"],
             "encoding": cfg["encoding"],
             "reward": cfg["reward"],
@@ -120,7 +121,26 @@ def evaluate(
         with (output / "episodes.jsonl").open("w", encoding="utf-8") as stream:
             for level in levels:
                 quotas = Counter()
-                env = PvZEnv(cfg, condition=env_condition, level=level, family=family)
+                replay_metadata = {
+                    "policy_id": label,
+                    "experiment": {
+                        "learner_seed": learner_seed,
+                        "training_steps": training_steps,
+                        "split": split,
+                        "engine": engine,
+                        "protocol_hash": protocol_hash,
+                        "training_config_hash": training_hash,
+                    },
+                }
+                if checkpoint_hash:
+                    replay_metadata["checkpoint_sha256"] = checkpoint_hash
+                env = PvZEnv(
+                    cfg,
+                    condition=env_condition,
+                    level=level,
+                    family=family,
+                    replay_metadata=replay_metadata,
+                )
                 try:
                     for seed in sorted(seeds):
                         env.record = record and any(
@@ -162,7 +182,7 @@ def evaluate(
                         }
                         if env.recorder and quotas[row["status"]] < limit:
                             replay_path = (
-                                output / "replays" / f"{level}-{seed}-{row['status']}.json"
+                                output / "replays" / f"{level}-{seed}-{row['status']}.pvzdemo"
                             )
                             env.recorder.save(replay_path)
                             verified = verify_replay(replay_path)
@@ -170,6 +190,7 @@ def evaluate(
                                 raise RuntimeError("Evaluation replay diverged")
                             row["replay"] = str(replay_path.resolve())
                             row["replay_verified"] = True
+                            row["replay_hash"] = file_hash(replay_path)
                             quotas[row["status"]] += 1
                         append_jsonl(stream, row)
                         rows.append(row)

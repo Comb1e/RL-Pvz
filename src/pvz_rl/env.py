@@ -40,6 +40,7 @@ class PvZEnv(gym.Env):
         training=False,
         worker_seed=0,
         record=False,
+        replay_metadata=None,
         render_mode=None,
         rules=None,
     ):
@@ -50,6 +51,7 @@ class PvZEnv(gym.Env):
         self.options = self.cfg["conditions"][condition]
         self.level, self.family, self.training = level, family, training
         self.record, self.render_mode = record, render_mode
+        self.replay_metadata = copy.deepcopy(replay_metadata or {})
         if render_mode not in (None, "rgb_array"):
             raise ValueError("Only rgb_array rendering is supported")
         self.rules = rules or Rules()
@@ -99,7 +101,23 @@ class PvZEnv(gym.Env):
         self.episode_level, self.episode_family, self.episode_seed = level, family, game_seed
         self.state = EpisodeState.RUNNING
         self._legal = self._candidates = None
-        self.recorder = Recorder(self.game) if self.record else None
+        self.recorder = (
+            Recorder(
+                self.game,
+                metadata={
+                    **self.replay_metadata,
+                    "outcome": "running",
+                    "experiment": {
+                        **self.replay_metadata.get("experiment", {}),
+                        "level": level,
+                        "family": family,
+                        "scenario_seed": game_seed,
+                    },
+                },
+            )
+            if self.record
+            else None
+        )
         self.metrics = Counter()
         self.plant_usage = Counter()
         self.episode_reward = 0.0
@@ -183,6 +201,15 @@ class PvZEnv(gym.Env):
             "ticks_advanced": result.ticks_advanced,
         }
         if terminated or truncated:
+            if self.recorder:
+                self.recorder.update_metadata(
+                    {
+                        "outcome": self.state.value,
+                        "termination_reason": "time_limit"
+                        if truncated
+                        else ("victory" if self.state == EpisodeState.WON else "house_breach"),
+                    }
+                )
             info["episode_metrics"] = self.episode_metrics()
         return self.encoder.encode(self.public), parts["total"], terminated, truncated, info
 

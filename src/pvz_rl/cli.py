@@ -14,6 +14,22 @@ def common(parser):
     parser.add_argument("--config", type=Path)
 
 
+def video_options(parser):
+    group = parser.add_mutually_exclusive_group()
+    group.add_argument(
+        "--videos",
+        action="store_true",
+        default=None,
+        help="export MP4 videos in addition to compact demos",
+    )
+    group.add_argument(
+        "--no-videos",
+        dest="videos",
+        action="store_false",
+        help="skip MP4 encoding; retain compact demos and curves",
+    )
+
+
 def training_options(parser):
     common(parser)
     parser.add_argument("--hardware", type=Path, help="benchmark recommendation.json")
@@ -25,9 +41,7 @@ def training_options(parser):
     parser.add_argument("--rollout-size", type=int)
     parser.add_argument("--batch-size", type=int)
     parser.add_argument("--eval-interval", type=int)
-    parser.add_argument(
-        "--no-videos", action="store_true", help="generate curves without replay videos"
-    )
+    video_options(parser)
 
 
 def configured(args):
@@ -46,8 +60,8 @@ def configured(args):
         value = getattr(args, arg, None)
         if value is not None:
             cfg["training"][key] = value
-    if getattr(args, "no_videos", False):
-        cfg.setdefault("visualization", {})["videos"] = False
+    if getattr(args, "videos", None) is not None:
+        cfg.setdefault("visualization", {})["videos"] = args.videos
     validate_config(cfg)
     return cfg
 
@@ -108,6 +122,7 @@ def main(argv=None):
     replay = subs.add_parser("replay", help="verify or watch an engine replay")
     replay.add_argument("path", type=Path)
     replay.add_argument("--watch", action="store_true")
+    replay.add_argument("--speed", type=float, help="native viewer speed; requires --watch")
     replay.add_argument("--video", type=Path, help="export a verified offscreen MP4")
     common(replay)
     visual = subs.add_parser(
@@ -115,18 +130,29 @@ def main(argv=None):
     )
     common(visual)
     visual.add_argument("--run", required=True, type=Path)
-    visual.add_argument("--no-videos", action="store_true")
+    video_options(visual)
     args = parser.parse_args(argv)
 
     if args.command == "replay":
-        from pvz_game.replay import verify_replay
+        from pvz_game.replay import validate_speed
 
-        game = verify_replay(args.path)
+        from .recordings import open_playback
+
+        if args.speed is not None and not args.watch:
+            parser.error("--speed requires --watch")
+        try:
+            speed = validate_speed(1 if args.speed is None else args.speed)
+        except ValueError as exc:
+            parser.error(str(exc))
+        playback = open_playback(args.path)
+        game = playback.verify()
         print(
             json.dumps(
                 {
                     "verified": True,
                     "status": game.observe().status.value,
+                    "outcome": playback.display_outcome,
+                    "metadata": playback.metadata,
                     "state_hash": game.state_hash(),
                 }
             )
@@ -134,7 +160,8 @@ def main(argv=None):
         if args.watch:
             from pvz_game.ui import App
 
-            App(replay_path=args.path).run()
+            # Pass the normalized payload so legacy sidecars retain their cutoff labels.
+            App(replay_path=playback.data, speed=speed).run()
         if args.video:
             from .video import export_replay
 
@@ -150,9 +177,7 @@ def main(argv=None):
             raise ValueError(
                 "Visualization config must preserve the checkpoint's research settings"
             )
-        result = visualize_run(
-            args.run, cfg=cfg if args.config else original, videos=not args.no_videos
-        )
+        result = visualize_run(args.run, cfg=cfg if args.config else original, videos=args.videos)
         print(f"Report: {(args.run / 'visualizations' / 'index.html').resolve()}")
         if result["state"] != "complete":
             raise SystemExit(1)
@@ -168,6 +193,20 @@ def main(argv=None):
             check_env(env, skip_render_check=True)
             env.close()
         details["gymnasium_checks"] = "passed: all five conditions"
+        from tempfile import TemporaryDirectory
+
+        from pvz_game.replay import Playback, Recorder, read_recording, write_recording
+
+        with TemporaryDirectory(prefix="pvz-doctor-") as temporary:
+            replay_path = Path(temporary) / "probe.pvzdemo"
+            recorder = Recorder(env.game, metadata={"policy_id": "doctor"})
+            write_recording(recorder.to_dict(), replay_path)
+            probe = Playback(replay_path)
+            probe.verify()
+            details["compact_replay"] = {
+                "available": read_recording(replay_path)["metadata"]["policy_id"] == "doctor",
+                "seek_supported": hasattr(probe, "seek"),
+            }
         try:
             from .rendering import render_observation
 
@@ -191,7 +230,14 @@ def main(argv=None):
             json.dumps(
                 {
                     k: details[k]
-                    for k in ("engine", "gymnasium_checks", "cuda_available", "rendering", "video")
+                    for k in (
+                        "engine",
+                        "gymnasium_checks",
+                        "cuda_available",
+                        "rendering",
+                        "video",
+                        "compact_replay",
+                    )
                 },
                 indent=2,
             )
