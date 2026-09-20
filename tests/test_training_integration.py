@@ -29,6 +29,19 @@ def test_real_training_serialization_and_replay(smoke_cfg, tmp_path, condition):
     assert all(torch.isfinite(p).all() for p in model.policy.parameters())
     assert json.loads((output / "status.json").read_text())["state"] == "complete"
     assert (output / "best.zip").exists()
+    episodes = [
+        json.loads(line) for line in (output / "training-episodes.jsonl").read_text().splitlines()
+    ]
+    assert episodes and all(
+        "damage_reward" in row and "mower_activation_penalty" in row for row in episodes
+    )
+    updates = [
+        json.loads(line) for line in (output / "training-metrics.jsonl").read_text().splitlines()
+    ]
+    assert all(
+        "rolling_damage_reward" in row and "rolling_empty_mower_activations" in row
+        for row in updates
+    )
     model.save(output / "roundtrip.zip")
     reloaded, _ = load_policy(output / "roundtrip.zip")
     env = PvZEnv(smoke_cfg, condition=condition, record=True)
@@ -74,6 +87,36 @@ def test_interrupt_resume_preserves_best_and_finishes_budget(smoke_cfg, tmp_path
     assert file_hash(resumed / "best.zip") == previous_hash  # equal scores keep earliest checkpoint
     with pytest.raises(FileExistsError):
         train(smoke_cfg, "masked", 101, resumed, validation_limit=1)
+
+
+@pytest.mark.learning
+def test_legacy_rewards_reload_but_cannot_resume_into_new_objective(smoke_cfg, tmp_path):
+    import copy
+
+    legacy = copy.deepcopy(smoke_cfg)
+    legacy["reward"] = dict(
+        gamma=0.999,
+        defeated_weight=0.5,
+        sun_weight=0.3,
+        flower_weight=0.2,
+        sun_target=300,
+        flower_target=8,
+        plant_kill_weight=1.0,
+        mower_kill_weight=1.0,
+        normalize_kills=True,
+    )
+    run = train(legacy, "masked", 101, tmp_path / "legacy", validation_limit=1)
+    _, data = load_policy(run / "final.zip")
+    assert data["config"]["reward"] == legacy["reward"]
+    with pytest.raises(ValueError, match="start a fresh run"):
+        train(
+            smoke_cfg,
+            "masked",
+            101,
+            tmp_path / "changed",
+            resume=run / "final.zip",
+            validation_limit=1,
+        )
 
 
 @pytest.mark.learning

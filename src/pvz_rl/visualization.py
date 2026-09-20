@@ -141,8 +141,10 @@ def build_run_report(run, cfg=None):
         ("end_to_end_decisions_per_second", "Training decisions / wall second"),
         ("rolling_plant_kills", "Plant kills / training episode"),
         ("rolling_mower_kills", "Mower kills / training episode"),
+        ("rolling_damage_reward", "Nonlethal damage reward / training episode"),
+        ("rolling_empty_mower_activations", "Empty mower activations / training episode"),
     ]
-    fig, axes = plt.subplots(4, 2, figsize=(12, 12))
+    fig, axes = plt.subplots(5, 2, figsize=(12, 15))
     for ax, (key, title) in zip(axes.flat, panels):
         plotted = False
         for label, series in segments:

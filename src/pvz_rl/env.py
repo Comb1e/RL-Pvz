@@ -16,7 +16,7 @@ from .config import lesson_settings, load_config, runtime_settings, validate_con
 from .controllers import PublicBoard, strategy_candidates
 from .curriculum import LESSONS, stage_distribution, teaching_enabled
 from .encoding import ObservationEncoder
-from .rewards import reward_parts
+from .rewards import REWARD_METRICS, reward_parts
 from .scenarios import difficulty_weights, scenario
 
 
@@ -247,9 +247,14 @@ class PvZEnv(gym.Env):
             else EpisodeState.RUNNING
         )
         parts = reward_parts(
-            before, self.public, self.cfg, self.options["shaped"], events=result.events
+            before,
+            self.public,
+            self.cfg,
+            self.options["shaped"],
+            events=result.events,
+            rules=self.rules,
         )
-        for key in ("plant_kills", "mower_kills", "plant_kill_reward", "mower_kill_penalty"):
+        for key in REWARD_METRICS:
             self.metrics[key] += parts[key]
         self.episode_reward += parts["total"]
         self.metrics["decisions"] += 1
@@ -304,10 +309,7 @@ class PvZEnv(gym.Env):
             "return": self.episode_reward,
             "decisions": self.metrics["decisions"],
             "attacker_purchases": self.metrics["attacker_purchases"],
-            "plant_kills": self.metrics["plant_kills"],
-            "mower_kills": self.metrics["mower_kills"],
-            "plant_kill_reward": self.metrics["plant_kill_reward"],
-            "mower_kill_penalty": self.metrics["mower_kill_penalty"],
+            **{key: self.metrics[key] for key in REWARD_METRICS},
             "first_attacker_seconds": None
             if self.first_attacker_tick is None
             else self.first_attacker_tick / obs.tick_rate,

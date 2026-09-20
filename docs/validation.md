@@ -1,4 +1,52 @@
-# Availability and verification — 0.4.0
+# Availability and verification — 0.4.1
+
+## Damage, mower and economic-value rewards — 2026-09-20
+
+Game package **1.2.1**, simulation **1.0.0**, source pin
+`6fd1f54706369915013a49eab5c1790f8c55ab0a` remain unchanged. Verification found no
+tracked or untracked changes in the game checkout. Tests used the installed game;
+upstream bytecode writes were disabled and all caches/temp output stayed here.
+
+| Check | Result |
+|---|---|
+| Complete research suite | **207 passed in 104.49 s**; one existing SB3 small-MLP CUDA utilization warning |
+| Complete upstream game suite | **199 passed in 9.09 s** |
+| New independent reward controls | 40 tests: starting versus remaining HP, 200/400-HP types, armor-only/mixed hits, lethal exclusion, earlier damage and mower finishes, entirely new spawn/death batches, same-tick/lane activation matching |
+| Potential and lifecycle | All eight plant purchases preserve value; digging/death remove full cost above the scale; plant damage leaves value intact; multiple plants/order invariance; custom rule costs/HP; terminal zero and truncation bootstrap; reset and telescoping/cycle controls |
+| Engine batch equivalence | One-tick and ten-tick shooting episodes have identical final hashes and combat totals; real mower activation has zero empty-activation penalty |
+| Learning availability | CPU/CUDA, Windows spawned workers, grouped/shared policies, all five conditions, checkpoint reload, unchanged optimizer through curriculum stages, same-version resume |
+| Compatibility | Legacy potential/kill configs reproduce old formulas and reload; resuming into revised reward settings is rejected; malformed new settings rejected |
+| Reports and demos | New metrics reach episode files and post-update summaries; offline assets resolve; compact demos and optional H.264 MP4 decode; identical checkpoint identity across easy/standard/hard |
+| Tooling/package | Ruff, format checks, pip dependency check, 0.4.1 editable install and wheel/source-distribution build passed |
+
+Evidence files: `artifacts/v041-research-tests.txt`, `artifacts/v041-engine-tests.txt`,
+`artifacts/v041-doctor.json`, and `artifacts/v041-build.txt`. The doctor confirms
+CUDA, all five Gymnasium conditions, native rendering and compact playback, and
+FFmpeg 8.1/libx264. Its pre-existing infinite observation-bound warnings preserve
+crowd totals and are unchanged.
+
+The report/MP4 smoke run is at
+`artifacts/pytest-v041-rewards/test_shared_checkpoint_reports0/shared`. It collects
+128 decisions with a two-second test cutoff. All three demos are correctly labeled
+truncated and identify checkpoint SHA-256
+`407e040a50e93b12383ab4bdbe89067abf73c63ab3068403c9b624cd0ccbab48`.
+Its ten-panel training chart was visually inspected, including the new damage
+reward and empty-activation curves. A native 1280×820 final frame was inspected at
+`artifacts/v041-demo-final.png`; rendering preserved final simulation hash
+`69c2aeda7bc19c17b7a88723ab089ce499915b2931bfeb1c3ea3f8498408c44e`.
+
+These runs verify integration, not gameplay skill. No new timed comparison pilot
+or formal training was launched. All previous pilot results below used the old
+reward and must not be presented as evidence for version 0.4.1.
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest -q --basetemp artifacts/pytest-v041-rewards
+$env:PYTHONDONTWRITEBYTECODE = '1'
+$env:HYPOTHESIS_STORAGE_DIRECTORY = 'E:/Projects/Tower-Defence-AI/PVZ-plant/artifacts/hypothesis-v041-engine'
+.\.venv\Scripts\python.exe -B -m pytest E:/Projects/pvz/tests -q `
+  -o cache_dir=E:/Projects/Tower-Defence-AI/PVZ-plant/artifacts/engine-pytest-cache `
+  --basetemp E:/Projects/Tower-Defence-AI/PVZ-plant/artifacts/engine-v041-tests
+```
 
 ## Pure-RL profiles and plant/mower rewards — 2026-09-20
 

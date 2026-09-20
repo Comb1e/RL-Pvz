@@ -44,14 +44,15 @@ wave_scale = 15
 
 [reward]
 plant_kill_weight = 1.0
-mower_kill_weight = 1.0
+mower_kill_weight = 2.0
 normalize_kills = true
+damage_weight = 1.0
+empty_mower_activation_penalty = 0.2
 gamma = 0.999
+potential_mode = "plant_value"
 defeated_weight = 0.5
-sun_weight = 0.3
-flower_weight = 0.2
-sun_target = 300
-flower_target = 8
+economy_weight = 0.5
+economy_scale = 300
 
 [training]
 total_steps = 3000000

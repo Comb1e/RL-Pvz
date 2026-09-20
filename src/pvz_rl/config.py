@@ -87,12 +87,38 @@ def learning_profile(name, base=None):
 
 
 def validate_config(cfg: dict) -> None:
-    for key in ("plant_kill_weight", "mower_kill_weight"):
+    for key in (
+        "plant_kill_weight",
+        "mower_kill_weight",
+        "damage_weight",
+        "empty_mower_activation_penalty",
+    ):
         value = cfg["reward"].get(key, 0.0)
-        if isinstance(value, bool) or not math.isfinite(value) or value < 0:
+        if type(value) not in (int, float) or not math.isfinite(value) or value < 0:
             raise ValueError(f"reward.{key} must be finite and nonnegative")
     if type(cfg["reward"].get("normalize_kills", True)) is not bool:
         raise ValueError("reward.normalize_kills must be a boolean")
+    potential_mode = cfg["reward"].get("potential_mode", "legacy")
+    if potential_mode not in ("legacy", "plant_value"):
+        raise ValueError("Unsupported reward.potential_mode")
+    targets = (
+        ("economy_scale",) if potential_mode == "plant_value" else ("sun_target", "flower_target")
+    )
+    weights = (
+        ("economy_weight",) if potential_mode == "plant_value" else ("sun_weight", "flower_weight")
+    )
+    for key in targets + ("defeated_weight",) + weights:
+        value = cfg["reward"].get(key)
+        if (
+            type(value) not in (int, float)
+            or not math.isfinite(value)
+            or value < 0
+            or key in targets
+            and value == 0
+        ):
+            raise ValueError(
+                f"Invalid reward.{key}: expected finite {'positive' if key in targets else 'nonnegative'} value"
+            )
     encoding = cfg["encoding"]
     if encoding["version"] not in (1, "tactical_v2"):
         raise ValueError("Unsupported observation version; start a fresh compatible profile")
@@ -194,15 +220,11 @@ def validate_config(cfg: dict) -> None:
         raise ValueError("Hidden layer sizes must be positive integers")
     for group, keys in (
         ("encoding", ("count_scale", "wave_scale")),
-        ("reward", ("sun_target", "flower_target")),
         ("training", ("learning_rate", "gae_lambda", "clip_range")),
     ):
         for key in keys:
             if not math.isfinite(cfg[group][key]) or cfg[group][key] <= 0:
                 raise ValueError(f"{group}.{key} must be finite and positive")
-    for key in ("defeated_weight", "sun_weight", "flower_weight"):
-        if not math.isfinite(cfg["reward"][key]) or cfg["reward"][key] < 0:
-            raise ValueError("Potential weights must be finite and nonnegative")
     if train["gae_lambda"] > 1 or not math.isfinite(train["ent_coef"]) or train["ent_coef"] < 0:
         raise ValueError("Invalid GAE or entropy coefficient")
     if (

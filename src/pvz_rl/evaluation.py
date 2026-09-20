@@ -15,6 +15,7 @@ from .env import PvZEnv
 from .frozen_baseline import choose_action
 from .progress import Phase, ProgressReporter
 from .provenance import append_jsonl, file_hash, verify_engine, write_json
+from .rewards import REWARD_METRICS
 from .scenarios import namespace_seed
 
 BASELINES = ("wait", "random_legal", "heuristic", "random_strategy")
@@ -47,12 +48,12 @@ def summarize(rows: list[dict]) -> dict:
             "win_rate": len(wins) / n,
             "truncation_rate": sum(r["status"] == "truncated" for r in group) / n,
             "mean_mowers_used": float(np.mean([r["mowers_used"] for r in group])),
-            "mean_plant_kills": float(np.mean([r["plant_kills"] for r in group]))
-            if all("plant_kills" in r for r in group)
-            else None,
-            "mean_mower_kills": float(np.mean([r["mower_kills"] for r in group]))
-            if all("mower_kills" in r for r in group)
-            else None,
+            **{
+                f"mean_{key}": float(np.mean([r[key] for r in group]))
+                if all(key in r for r in group)
+                else None
+                for key in REWARD_METRICS
+            },
             "fraction_wins_without_mowers": (
                 sum(r["mowers_used"] == 0 for r in wins) / len(wins) if wins else None
             ),

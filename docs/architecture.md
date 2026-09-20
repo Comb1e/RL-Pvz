@@ -19,7 +19,7 @@ flowchart LR
     Mask --> Policy
     Policy --> Action[Shared action decoder]
     Action --> Env
-    Public --> Reward[Terminal, potential and kill-source rewards]
+    Public --> Reward[Terminal, economy potential and combat rewards]
     Reward --> Learn[PPO update]
     Learn --> Policy
     Runner --> Logs[Metadata, episode records, and progress log]
@@ -41,7 +41,7 @@ flowchart LR
 | Configuration and provenance | Constants, seed splits, source verification, hashes, versions |
 | Actions and encoding | Stable public schemas, no private state or future schedule |
 | Environment | One game per worker, one action per 10 ticks, explicit episode lifecycle |
-| Rewards | Public observation potential, terminal handling, event-based plant/mower kill credit |
+| Rewards | Plant-plus-sun potential, terminal handling, shared public-event damage/kill accounting |
 | Controllers | Frozen original heuristic, shared public-state facade, strategy proposals |
 | Training | PPO updates, curriculum progress, validation-only checkpoint selection |
 | Grouped policy | Masked action type and conditional tile; joint PPO probability and entropy |
@@ -107,16 +107,38 @@ The engine may still be running when the adapter is truncated. Vector wrappers
 retain the terminal observation for PPO bootstrapping before resetting that worker.
 True terminal potential is zero; truncated potential is preserved.
 
-Public `DamageApplied` and `ZombieDefeated` events attribute kills within each
-batched step. The pinned source encodes plants/projectiles with positive source
-IDs and mowers with negative row IDs. A transient ID join finds the killing damage;
-IDs never enter observations. Each defeated zombie earns either positive plant
-credit or a negative mower penalty. Earlier nonlethal hits and mower activation
-alone earn neither. Configured weights are divided by initial zombie count by
-default. Source counts and contributions are recorded separately from potential
-shaping and terminal reward. This explicitly changes the task reward; checkpoint
-selection still uses win rate. Legacy configs with absent weights retain zero
-event reward, and configurations with different rewards are not pooled.
+Public `DamageApplied`, `ZombieSpawned`, `ZombieDefeated`, and `MowerActivated`
+events pass through one combat-accounting interface. A transient ID join identifies
+the killing hit; IDs never enter policy observations. Plant kills earn +1/N,
+mower kills −2/N, and earlier nonlethal plant hits earn removed base HP divided
+by the type's full starting HP and N. Armor damage and the lethal hit earn no
+damage reward. Type comes from the prior public observation or public spawn
+event; maximum health comes from active rules. Empty activations cost 0.2,
+matched by mower lane and engine tick even within multi-tick decisions.
+
+```mermaid
+flowchart LR
+    Events[Public events] --> Join[Match damage and deaths]
+    Join --> Kills[Plant or mower kill counts]
+    Join --> Hits[Nonlethal plant HP damage]
+    Join --> Empty[Activation with no same-tick lane kill]
+    Rules[Active zombie health rules] --> Hits
+    Board[Sun and public plant purchase costs] --> Potential[Economy and progress potential]
+    Kills --> Reward[Separate reward parts]
+    Hits --> Reward
+    Empty --> Reward
+    Potential --> Reward
+    Reward --> Metrics[Episode records, progress, curves]
+```
+
+The potential is `0.5 * defeated/N + 0.5 * (sun + living plant costs)/300`.
+Economy is uncapped and independent of plant health; purchases preserve value,
+digging and plant deaths remove value. Configurable weights and scales live in
+TOML. The shaping difference retains gamma and terminal/truncation handling.
+Event rewards explicitly change the task objective; checkpoint selection uses
+win rate. Legacy configs without `potential_mode` retain the original capped
+sun/sunflower formula; absent event weights mean zero. Changed reward settings
+require a fresh run and cannot be pooled under the same research configuration.
 
 ## Training and evaluation
 

@@ -45,7 +45,7 @@ def test_signed_normalized_rewards_and_legacy_behavior(cfg):
     plant = reward_parts(before, after, cfg, False, events=[damage(2, 1), death(2)])
     mower = reward_parts(before, after, cfg, False, events=[damage(2, -1), death(2)])
     assert plant["total"] == pytest.approx(1 / before.counts.initial_total)
-    assert mower["total"] == pytest.approx(-1 / before.counts.initial_total)
+    assert mower["total"] == pytest.approx(-2 / before.counts.initial_total)
     assert plant["plant_kills"] == mower["mower_kills"] == 1
     cfg["reward"].update(normalize_kills=False, plant_kill_weight=0.2, mower_kill_weight=0.4)
     assert reward_parts(before, after, cfg, False, events=[damage(2, 1), death(2)])["total"] == 0.2
@@ -104,10 +104,10 @@ def test_real_batched_mower_kills_count_each_zombie_once_and_terminal(cfg):
     _, total, terminated, truncated, info = env.step(0)
     assert terminated and not truncated and env.state == "won"
     assert info["reward_parts"]["terminal"] == 1
-    assert info["reward_parts"]["mower_kill_penalty"] == -1
+    assert info["reward_parts"]["mower_kill_penalty"] == -2
     assert info["episode_metrics"]["mower_kills"] == 3
     assert info["episode_metrics"]["mowers_used"] == 1
-    assert total == pytest.approx(info["reward_parts"]["shaping"])
+    assert total == pytest.approx(info["reward_parts"]["shaping"] - 1)
     env.reset(seed=8)
     assert env.episode_metrics()["mower_kills"] == 0
 
@@ -128,7 +128,7 @@ def test_real_simultaneous_batch_keeps_both_sources(cfg):
     assert terminated
     parts = info["reward_parts"]
     assert parts["plant_kills"] == parts["mower_kills"] == 1
-    assert parts["plant_kill_reward"] == 0.5 and parts["mower_kill_penalty"] == -0.5
+    assert parts["plant_kill_reward"] == 0.5 and parts["mower_kill_penalty"] == -1
     assert info["episode_metrics"]["defeated"] == 2
 
 

@@ -10,7 +10,7 @@ from pvz_rl.reporting import make_report
     "group,key,value",
     [
         ("encoding", "count_scale", 0),
-        ("reward", "sun_target", 0),
+        ("reward", "economy_scale", 0),
         ("training", "learner_seeds", [101, 101]),
         ("training", "hidden_sizes", [0]),
         ("training", "learning_rate", float("nan")),

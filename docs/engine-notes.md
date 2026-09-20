@@ -54,3 +54,10 @@ An optional future API improvement would be an explicit `cause`/`source_kind` on
 on the pinned convention that negative damage-source IDs identify mowers. This is
 only a suggestion. Current attribution is verified against projectile, explosion,
 mine, chomper, mixed-source, and mower controls, and the game checkout is unchanged.
+
+Version 0.4.1 also uses `DamageApplied.health_damage` for nonlethal reward, public
+spawn/type information plus active rule health for normalization, and public card
+costs for plant value. Existing events are sufficient. Mower activation immediately
+kills its trigger in this version, so the requested empty-activation penalty is
+normally inactive; it is tested with independent event fixtures. No upstream change
+is needed to implement these reward rules.

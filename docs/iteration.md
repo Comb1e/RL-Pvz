@@ -1,5 +1,43 @@
 # Iteration history
 
+## 0.4.1 — 2026-09-20
+
+### Previous issues and root causes
+
+- Kill-only combat rewards supplied no credit for useful partial damage. The
+  user requested −2/N mower kills, nonlethal HP reward, and −1/5 empty activations.
+- Separate capped sun and sunflower potentials did not value other living plants
+  and could hide loss of economic value above their caps.
+
+### Improvements
+
+- One public-event accounting interface distinguishes lethal hits, earlier
+  nonlethal HP damage, plant/mower kills, and same-tick/lane empty activations.
+  Normalize damage by active-rule starting HP and initial zombie count.
+- Keep plant kills +1/N; change mower kills to −2/N. Add the requested damage and
+  empty-activation terms with independent configurable weights.
+- Replace separate economy terms with `0.5*(sun + living plant costs)/300`,
+  uncapped, retaining the 0.5 zombie-progress term and discounted difference.
+- Expose reward components in episode/evaluation records and rolling logs/curves.
+  Version all supplied profiles together. Preserve old saved reward configurations
+  and reject resume across different reward settings.
+- Document assumptions, examples, and mathematical controls in `reward-design.md`.
+  PVZ 1.2.1, shared policy, action space, curriculum, and PPO settings are unchanged.
+
+### Verification and remaining issues
+
+- Complete research suite: **207 passed in 104.49 s**. Complete upstream game
+  suite: **199 passed in 9.09 s**, with caches and temporary output outside the game.
+- Forty new numerical/engine controls plus a legacy-checkpoint compatibility test;
+  CPU/CUDA, Windows workers, all five conditions, rendering, replays, and reports
+  pass. New curves and a native final frame were visually inspected.
+- Ruff, formatting, dependency checks, editable installation and wheel/sdist build
+  pass. The game checkout remains clean. Details and artifacts: `validation.md`.
+- Learning efficacy remains unmeasured for this objective. The 0.4.0 pilot cannot
+  validate it; no additional timed pilot or formal study was run. Nonlethal damage
+  intentionally gives gradual kills more cumulative credit than instant kills.
+  Empty mower activations normally cannot occur in the pinned engine.
+
 ## 0.4.0 — 2026-09-20
 
 ### Previous issues and root causes

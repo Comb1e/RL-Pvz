@@ -189,6 +189,15 @@ class ResearchCallback(BaseCallback):
             "rolling_mower_kills": sum(r.get("mower_kills", 0) for r in rows) / len(rows)
             if rows
             else None,
+            "rolling_damage_reward": sum(r.get("damage_reward", 0) for r in rows) / len(rows)
+            if rows
+            else None,
+            "rolling_empty_mower_activations": sum(
+                r.get("empty_mower_activations", 0) for r in rows
+            )
+            / len(rows)
+            if rows
+            else None,
             "rolling_maximum_sun": sum(r.get("maximum_sun", 0) for r in rows) / len(rows)
             if rows
             else None,
@@ -213,6 +222,8 @@ class ResearchCallback(BaseCallback):
             )
         kills = (
             f"; plant/mower kills per game {row['rolling_plant_kills']:.1f}/{row['rolling_mower_kills']:.1f}"
+            f"; damage reward {row['rolling_damage_reward']:.3f}"
+            f"; empty mowers {row['rolling_empty_mower_activations']:.1f}"
             if self.recent
             else ""
         )

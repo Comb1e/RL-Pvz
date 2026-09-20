@@ -3,6 +3,21 @@
 Reviewed on 2026-09-20. Source evidence is distinct from local availability tests.
 No full RL research result has been reproduced in this repository yet.
 
+## Reward revision — 0.4.1
+
+Inspected 2026-09-20. The reward weights implement Leafy's explicit request,
+including the corrected mower penalty −2/N; they are not paper-derived weights.
+
+| Source | Evidence actually used | Decision informed |
+|---|---|---|
+| Lawn Lab 1.2.1, commit `6fd1f54706369915013a49eab5c1790f8c55ab0a` | Installed `engine.py` spawn/damage/death/mower ordering; `types.py` public events/cards/zombie views; `config.py` active health/cost rules | Attribute only the killing hit, credit preceding base-HP loss, use public type plus active starting HP, and match empty activations by engine tick/lane without modifying game sources. Immediate mower kills explain why real empty-activation counts normally stay zero. |
+| Ng, Harada, Russell (1999), already catalogued below | Existing potential-difference result; independent discounted-sum and plant/dig controls in this project | Retain `gamma*Phi(next)-Phi(current)` and zero terminal potential while changing economy features. Do not extend its invariance claim to newly added damage/kill rewards. |
+| Local 0.4.1 regression and integration suite | Public-event numerical fixtures, real one-tick/batched runs, custom-rule cases, legacy checkpoint tests and generated reports | Verify formulas and compatibility. These checks do not establish improved learning; the previous 0.4.0 pilot used another reward. |
+
+The combined economy scale/weight, full purchase-cost valuation, and exclusion of
+armor and lethal damage are explicit implementation choices recorded in
+`reward-design.md`. No new algorithm or external source code was adopted.
+
 ## Papers
 
 | Source and version | Evidence inspected | Decision informed |

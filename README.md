@@ -10,7 +10,7 @@ held-out evaluations, changed-wave scenarios, statistical analysis, progress log
 automatic offline reports, learning curves, compact game demos, and optional MP4 export.
 **Each run trains one shared policy for easy, standard, and hard.** The same
 `best.zip` is used for all three difficulties and their demonstration recordings.
-Research version **0.4.0** uses game package **1.2.1** (simulation version **1.0.0**).
+Research version **0.4.1** uses game package **1.2.1** (simulation version **1.0.0**).
 The new pure-RL profiles add tactical observations, grouped plant/tile decisions,
 and introductory lessons. They are experimental: see [paper adaptation and pilot
 evidence](docs/paper-adaptation.md). The baseline remains the default configuration.
@@ -165,38 +165,67 @@ adds economy and grouped-entropy curves. Waiting frequency alone is not treated
 as failure. Logging remains throttled to 15 seconds, with immediate curriculum,
 validation, checkpoint, and completion messages.
 
-### Reward plant kills and penalize mower kills
+### Rewards and penalties
 
-New configurations reward zombies killed by plants (including projectiles, mines,
-explosions, and chomper) and penalize zombies killed by the lawn mower:
+All supplied profiles use the following reward. `N` is the initial number of
+zombies in the episode, guarded by `max(1, N)` for empty scenarios.
+
+| Event | Reward |
+|---|---:|
+| Win / loss | +1 / −1 |
+| Plant kills a zombie | +1/N |
+| Mower kills a zombie | −2/N |
+| Plant damages a zombie without that hit killing it | +actual HP removed / (full starting zombie HP × N) |
+| Mower activates and kills nothing on that tick in its lane | −1/5 |
+
+Armor-only damage earns zero. The lethal hit earns only the kill reward;
+earlier nonlethal hits still earn damage rewards, even if a mower later finishes
+the zombie. Starting HP means the base health from the active game rules, not
+remaining health or armor. For example, a nonlethal 20-HP hit on a basic zombie
+in a 10-zombie game earns `20/(200*10) = 0.01`; a mower kill costs `0.2`.
+The pinned engine immediately kills its triggering zombie when a mower activates,
+so the empty-activation penalty normally remains zero.
+
+Shaped conditions additionally receive `gamma * Phi(next) - Phi(current)`, with:
+
+```text
+Phi = 0.5 * defeated / max(1, N)
+    + 0.5 * (stored sun + sum of living plant purchase costs) / 300
+```
+
+The economy sum has no cap and uses full purchase costs, regardless of plant
+health. Buying a plant preserves value; digging or losing it removes its value.
+The difference of potentials still uses `gamma = 0.999`. Genuine wins/losses set
+`Phi(next) = 0`; external time cutoffs retain the potential for bootstrapping.
 
 ```toml
 [reward]
 plant_kill_weight = 1.0
-mower_kill_weight = 1.0
+mower_kill_weight = 2.0
 normalize_kills = true
-# Keep the other reward settings in the supplied configuration.
+damage_weight = 1.0
+empty_mower_activation_penalty = 0.2
+gamma = 0.999
+potential_mode = "plant_value"
+defeated_weight = 0.5
+economy_weight = 0.5
+economy_scale = 300
 ```
 
-Each plant kill adds `+1/N` and each mower kill adds `-1/N`, where `N` is the
-initial zombie count. This keeps total kill-reward scale comparable across
-difficulties. Set `normalize_kills = false` for literal +1/-1 per zombie, or adjust
-the two weights independently. Kill credit follows the final damage source: if a
-plant wounds a zombie and a mower finishes it, it receives the mower penalty.
-Mower activation without a kill has no kill penalty.
+The legacy `sparse` condition disables potential shaping but keeps these event
+rewards. For terminal-only reward, also set both kill weights, `damage_weight`,
+and `empty_mower_activation_penalty` to zero. Checkpoint selection remains the
+equal-weight normal-game **win rate** across easy, standard, and hard.
 
-These event rewards are added to the existing win/loss reward and optional
-potential shaping. They change the learning objective to prefer plant defense;
-the policy-invariance guarantee applies only to the potential term. `sparse` is
-the legacy condition name for disabling potential shaping; with these new reward
-weights it still receives kill rewards. Set both weights to zero for a truly
-terminal-only reward. Checkpoint selection remains normal-game **win rate**.
+Episode records separate kill counts, nonlethal HP damage, empty activations, and
+all four event-reward contributions. Progress logs and curves show kill counts,
+damage reward, and empty activations. Detailed semantics and numerical examples
+are in [docs/reward-design.md](docs/reward-design.md).
 
-`plant_kills`, `mower_kills`, and their reward contributions are recorded in every
-episode. Progress logs and report curves show both kill counts. Legacy configs
-without these weights use zero kill rewards, preserving their original behavior.
-Use a fresh run when changing reward settings; resume requires an identical
-research configuration. Do not pool earlier and revised-reward pilot results.
+**Start a fresh run to use the revised reward.** Old saved configurations retain
+their original potential and reward defaults; existing compatible checkpoints
+remain readable. Resume requires identical research settings and rejects mixing
+reward versions. The earlier 0.4.0 pilot does not evaluate this revised reward.
 
 Use one training command for all difficulties. Curriculum stages change which
 games are sampled, while the same policy weights and optimizer continue learning.
@@ -241,7 +270,7 @@ after completed PPO updates when its interval is reached, and after the final up
 |---|---|---|---|
 | `masked` | 406 actions, legal-action mask | Potential-shaped | Curriculum |
 | `unmasked` | Same 406 actions, no mask | Same shaped reward | Curriculum |
-| `sparse` | 406 actions, legal-action mask | Win/loss + configured kill rewards; no potential | Curriculum |
+| `sparse` | 406 actions, legal-action mask | Win/loss + configured combat rewards; no potential | Curriculum |
 | `mixed` | 406 actions, legal-action mask | Potential-shaped | 20% easy / 40% standard / 40% hard throughout |
 | `hybrid` | Five masked strategies with scripted placement | Potential-shaped | Curriculum |
 
@@ -655,11 +684,12 @@ not strategically undesirable placements. Games stop naturally on win/loss; a
 1,200-second external cutoff is a truncation with value bootstrapping, counted as
 unsuccessful during evaluation.
 
-Rewards use `+1` for victory, `-1` for defeat, and zero otherwise. Shaped conditions
-add `gamma * potential(next) - potential(current)`, where potential weights defeated
-fraction, capped sun, and capped living sunflower count by 0.5, 0.3, and 0.2.
-True terminals have zero potential; external truncations retain it. Tests independently
-check the discounted telescoping identity and planting/digging counterexamples.
+Rewards combine terminal outcomes, plant/mower kills, nonlethal plant damage,
+and empty mower activations as described above. Shaped conditions add
+`gamma * potential(next) - potential(current)` using defeated fraction and total
+plant-plus-sun value. True terminals have zero potential; external truncations
+retain it. Tests independently check the discounted telescoping identity,
+planting/digging counterexamples, damage normalization, and killing-blow attribution.
 
 ## Development and research notes
 
