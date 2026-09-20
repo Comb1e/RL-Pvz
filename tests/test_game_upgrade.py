@@ -37,12 +37,47 @@ def test_strict_installed_game_verification(cfg, monkeypatch, changed):
         verify_engine(cfg)
 
 
-def test_old_checkpoint_rejected_before_model_deserialization(cfg, tmp_path):
-    cfg["engine_commit"] = "b3cfbd886ab378313a1fdb57ee43a9a1b36a0793"
+@pytest.mark.parametrize(
+    "old_pin",
+    [
+        "b3cfbd886ab378313a1fdb57ee43a9a1b36a0793",
+        "a47056d8141ec635d3ff3f4d5561d6a75cfca2cc",
+    ],
+)
+def test_old_checkpoint_rejected_before_model_deserialization(cfg, tmp_path, old_pin):
+    cfg["engine_commit"] = old_pin
     cfg.pop("engine_package_version")
     write_json(tmp_path / "metadata.json", {"config": cfg, "condition": "masked"})
     with pytest.raises(RuntimeError, match="fresh training"):
         load_policy(tmp_path / "old.zip")
+
+
+@pytest.mark.parametrize("defeated,total", [(0, 15), (2, 15), (15, 15), (0, 0), (200, 200)])
+def test_native_121_progress_counter_and_rendering_purity(cfg, monkeypatch, defeated, total):
+    from dataclasses import replace
+
+    from pvz_game.rendering import _BoardCanvas
+
+    from pvz_rl.rendering import render_observation
+
+    env = PvZEnv(cfg)
+    env.reset(seed=42)
+    before = env.game.state_hash()
+    obs = replace(
+        env.public, counts=replace(env.public.counts, defeated=defeated, initial_total=total)
+    )
+    labels = []
+    original = _BoardCanvas.text
+
+    def capture(self, value, *args, **kwargs):
+        labels.append(str(value))
+        return original(self, value, *args, **kwargs)
+
+    monkeypatch.setattr(_BoardCanvas, "text", capture)
+    assert render_observation(obs).shape == (600, 1000, 3)
+    assert f"{defeated}/{total}" in labels
+    assert "ZOMBIES DEFEATED / TOTAL" in labels
+    assert env.game.state_hash() == before
 
 
 def test_compact_recording_metadata_and_input_isolation(cfg, tmp_path):
@@ -63,7 +98,7 @@ def test_compact_recording_metadata_and_input_isolation(cfg, tmp_path):
     native = Playback(path)
     assert native.display_outcome == "running"
     assert native.metadata["checkpoint_sha256"] == "a" * 64
-    assert native.metadata["experiment"]["engine"]["package_version"] == "1.2.0"
+    assert native.metadata["experiment"]["engine"]["package_version"] == "1.2.1"
     native.verify()
     assert native.display_outcome == "truncated"
     assert native.metadata["termination_reason"] == "time_limit"

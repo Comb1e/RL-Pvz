@@ -16,7 +16,7 @@ from pathlib import Path
 import pvz_game
 from pvz_game import ENGINE_VERSION, Rules
 
-from .config import digest
+from .config import digest, runtime_settings
 
 
 def write_json(path: str | Path, value: object):
@@ -62,7 +62,7 @@ def verify_engine(cfg: dict) -> dict:
     if not current_engine_config(cfg):
         raise RuntimeError(
             "This configuration/checkpoint uses an older or different game source pin. "
-            "Start a fresh training run with the bundled PVZ 1.2.0 configuration. "
+            f"Start a fresh training run with the bundled PVZ {expected['package_version']} configuration. "
             "Checkpoint migration is unsupported; archived reports and replays remain readable."
         )
     package_version = importlib.metadata.version("pvz-research-game")
@@ -136,6 +136,7 @@ def metadata(cfg: dict, **extra) -> dict:
         "engine": verify_engine(cfg),
         "config_hash": digest(cfg),
         "config": cfg,
+        "runtime": runtime_settings(cfg),
         "research_source_hash": digest(source_manifest(Path(__file__).parent)),
         **extra,
     }

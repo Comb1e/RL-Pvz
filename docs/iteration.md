@@ -1,5 +1,60 @@
 # Iteration history
 
+## 0.3.2 — 2026-09-20
+
+### Previous issues and root causes
+
+- The small CUDA policy used little VRAM; collection spent time in worker mask
+  requests, repeated engine legality queries, and small GPU operations. Low memory
+  allocation alone did not measure GPU utilization or training throughput.
+- Each PPO minibatch copied rollout arrays from CPU again, even when subsequent
+  epochs reused exactly the same rollout. Logs did not separate collection/update
+  time, and short hardware benchmarks included one-time initialization costs.
+- The separate game checkout had advanced to 1.2.1, with defeated/total HUD text,
+  while research still pinned 1.2.0.
+
+### Improvements
+
+- Cache authoritative engine legality while its public inputs remain equivalent.
+  Requery on occupancy/status/card-availability changes or reset. Hybrid strategy
+  proposals still refresh each decision; direct masks remain unchanged.
+- Deliver masks alongside observations through stock SB3 workers, preserving reset
+  and terminal-observation semantics. Cache one completed rollout on CUDA for all
+  PPO epochs, retaining CPU GAE and exact NumPy sample order.
+- Keep networks, optimizer, precision, workers, rollout/minibatch sizes, losses,
+  seed splits, reward, curriculum, and shared checkpoint selection unchanged.
+  Optional runtime flags and resolved metadata support comparisons and same-pin
+  resume without changing research compatibility.
+- Add phase timings to logs/metrics and paired benchmarks with warmup, alternating
+  run order, separate startup time, policy hashes, and CUDA memory measurements.
+- Pin and stage game 1.2.1 without writing into its checkout. Reuse the native
+  defeated/total renderer; preserve strict rejection of older source-pin models.
+
+### Verification
+
+The complete research suite passes **120 tests** and the upstream game suite
+passes **199 tests**. CPU and CUDA runs across all five conditions retain exactly
+equal learned weights and optimizer state between reference and optimized paths.
+Complete seed-42 games retain identical actions, observations, masks, rewards, and
+state hashes on all difficulties. Natural terminals, truncation/reset masks,
+cooldowns, exact sun thresholds, plant disappearance, minibatch dimensions/order,
+cache reset, same-pin resume, and 1.2.1 HUD boundary counts are covered.
+Measured speed, smoke artifacts, packaging, and final checks are in `validation.md`.
+The final paired CUDA benchmark measured 22.4% higher median throughput
+(2,176 to 2,664 decisions/s), with equal final policy weights in all three pairs.
+A saved 8,192-decision shared-policy smoke generated verified demos and inspected
+curves using the 1.2.1 native renderer.
+
+### Remaining limits and adjustments
+
+Small GPU inference batches and CPU simulation still limit throughput. The rollout
+cache intentionally adds only about 49 MiB at the default size; filling VRAM is
+not an objective. Measurements on a laptop depend on other work, power, and thermal
+state. No formal research suite was launched or running user job interrupted.
+Source-pin isolation requires fresh training after moving from game 1.2.0 to 1.2.1;
+old recordings/reports remain readable. Optional upstream performance suggestions
+are recorded in `engine-notes.md`; the game folder remains unchanged.
+
 ## 0.3.1 — 2026-09-20
 
 ### Previous issue and cause

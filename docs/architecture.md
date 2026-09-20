@@ -1,7 +1,7 @@
 # Current architecture
 
 The research project depends on a pinned, separately installed game. Only the game
-owns simulation state. A manifest verifies package version 1.2.0, simulation version
+owns simulation state. A manifest verifies package version 1.2.1, simulation version
 1.0.0, the Git source pin, source hashes, and rules hash before experiments. The
 installer stages a verified Git archive in this project's build directory and
 installs non-editably from there, without writing to the game checkout.
@@ -44,6 +44,8 @@ flowchart LR
 | Rewards | Potential from public observations, true terminals versus truncations |
 | Controllers | Frozen original heuristic, shared public-state facade, strategy proposals |
 | Training | PPO updates, curriculum progress, validation-only checkpoint selection |
+| Runtime transport | Masks carried with observations, local mask access, reusable CUDA rollout tensors |
+| Timings/benchmark | Separate collection and update costs, warmup excluded from measurements, paired data-path comparisons |
 | Evaluation | Same cases and timing, independent policy RNG, complete episode records |
 | Statistics/reporting | Run/scenario bootstrap, paired comparisons, figures and report |
 | Progress | Shared phase names and throttled console/file events; no per-episode printing |
@@ -80,11 +82,49 @@ True terminal potential is zero; truncated potential is preserved.
 
 ## Training and evaluation
 
+The installed game is package 1.2.1 at source pin
+`6fd1f54706369915013a49eab5c1790f8c55ab0a`, simulation version 1.0.0.
+The native HUD displays defeated/total zombies. The research adapter does not
+duplicate the counter or change the numeric observation fields.
+
 The bundled configuration uses CUDA for policy inference during training and PPO
 updates. Each spawned game worker simulates on the CPU. `--device cpu` selects CPU
 training; CUDA requests fail early when unavailable. Device settings are retained
 in experiment metadata and must match when resuming. Standalone evaluation and
 demo generation load the shared checkpoint on the CPU by default.
+
+```mermaid
+flowchart LR
+    Worker[CPU game worker] --> Response[Observation and legal mask together]
+    Response --> Cached[Local mask cache]
+    Response --> Collect[Stock SB3 rollout collector]
+    Cached --> Collect
+    Collect --> GAE[Stock returns and advantages]
+    GAE --> Copy[One completed rollout copied to CUDA]
+    Copy --> Batch[Original NumPy minibatch order]
+    Batch --> Update[Stock PPO update on device tensors]
+    Update --> Reset[Release cached tensors at next rollout]
+```
+
+Transport wrappers retain SB3's spawned-worker implementation. Masks are metadata,
+not observation features. On automatic reset, the mask comes from the new episode;
+the old terminal observation remains available for time-limit bootstrapping. Mask
+queries use a local copy and unknown worker mutations invalidate cached entries.
+The adapter reuses the engine's legal-action query until public legality inputs
+change: status, occupied tiles, and each card's affordability/recharge availability.
+It queries the engine again on changes or reset. Strategy candidates still update
+each decision because threats and plant health matter to placement. This bounded
+single-state cache applies to training, validation, and demos, with unchanged masks.
+
+The device buffer subclasses retain SB3's GAE calculation, flattening, and NumPy
+permutation generator. Only minibatch indexing moves onto the GPU. CPU sampling
+uses the original implementation. Loss functions and validation stay unchanged.
+Resuming may recreate an empty runtime buffer, preserving policy and optimizer.
+
+Runtime flags live in `[runtime]`, have defaults for older configurations, and are
+recorded in full provenance. They do not affect research compatibility. Networks,
+precision, worker counts, rollout size, minibatches, rewards, curriculum, and
+checkpoint selection are still governed by the same research settings.
 
 ```mermaid
 flowchart TD
@@ -145,6 +185,11 @@ rollout. Aggregates cover the last 100 completed training games. PPO statistics 
 read after updates, at the next rollout start and at training end, including the
 last optimized policy. Training ETA excludes validation and report time; export
 time is recorded separately. TensorBoard remains controlled by SB3.
+Collection/update timing uses rollout boundaries and captures the final update;
+validation and report gaps are excluded. Completed phase totals and latest phase
+durations enter the aggregate metrics and progress log. The benchmark warms up
+one full rollout and reports setup/warmup separately. Optional paired measurement
+alternates reference/configured order and compares final policy hashes.
 
 ## Result artifacts
 

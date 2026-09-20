@@ -70,6 +70,23 @@ MLP trains faster. Local PyTorch 2.8.0+cu128 availability and saved GPU tensors 
 verified on the RTX 4070 Laptop GPU; the evidence is recorded in `validation.md`.
 No algorithm or dependency version changed for this device-default update.
 
+## Runtime transport and game patch integration — 0.3.2
+
+Inspected on 2026-09-20. These sources inform implementation; timing measurements
+are local evidence and do not imply improved learned skill.
+
+| Source | Evidence actually inspected | Decision informed |
+|---|---|---|
+| [Stable-Baselines3](https://github.com/DLR-RM/stable-baselines3), installed 2.7.1 | `common/vec_env/subproc_vec_env.py`, `base_vec_env.py`, `common/buffers.py`, callback/logger and PPO collection code | Reuse spawned workers; carry masks in existing reset/step responses; retain terminal observations; subclass sampling without changing GAE or NumPy permutation order. Time phases through callbacks and explicitly separate benchmark warmup. |
+| [SB3-Contrib](https://github.com/Stable-Baselines-Team/stable-baselines3-contrib), installed 2.7.1 | `common/maskable/utils.py`, `buffers.py`, `policies.py`, `distributions.py`, `ppo_mask/ppo_mask.py` | Keep mask-aware collection/update implementations intact. Serve mask `env_method` calls locally and reuse CUDA rollout tensors across epochs. Preserve mask/sample numeric validation. |
+| [PyTorch](https://github.com/pytorch/pytorch), installed 2.8.0+cu128 | Installed `torch/distributions/distribution.py` validation and SB3's `to_torch` calls; local cProfile of copies, distributions, and multiprocessing | Optimize repeated transfer/indexing rather than enlarge the policy to consume VRAM. Keep validation and floating-point precision unchanged. |
+| Leafy's Lawn Lab package 1.2.1, commit `6fd1f54706369915013a49eab5c1790f8c55ab0a` | API and iteration docs, complete source diff from 1.2.0, `engine.py` legality, renderer, source-pin exporter | Pin the new package; reuse defeated/total HUD. Cache engine legality only while all public legality inputs remain equivalent. Verify simulation/rule sources unchanged and run upstream tests without checkout writes. |
+
+Attempts to fetch current online SB3/PyTorch documentation encountered HTTP/DNS
+errors. The table describes the installed versioned source actually read, not an
+unverified online document. Existing PPO/masking literature above remains the
+algorithmic basis; no new training algorithm was adopted.
+
 ## Evidence boundaries (research claims)
 
 The existing game is a daytime PvZ-style clone with automatic sun collection and

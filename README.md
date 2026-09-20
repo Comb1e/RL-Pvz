@@ -10,11 +10,12 @@ held-out evaluations, changed-wave scenarios, statistical analysis, progress log
 automatic offline reports, learning curves, compact game demos, and optional MP4 export.
 **Each run trains one shared policy for easy, standard, and hard.** The same
 `best.zip` is used for all three difficulties and their demonstration recordings.
-Research version **0.3.1** uses game package **1.2.0** (simulation version **1.0.0**).
+Research version **0.3.2** uses game package **1.2.1** (simulation version **1.0.0**).
 Start fresh training after this upgrade: checkpoints from the previous source pin
 cannot be resumed or evaluated. Their reports and replay files remain readable.
-**No full research training has been run.** Availability and short integration tests
-exercise the pipeline; they do not establish that a trained agent wins reliably.
+**No formal multi-run comparison was launched for this implementation.** Availability
+and short integration tests exercise the pipeline; they do not establish that a
+trained agent wins reliably.
 
 ## 1. Install and check availability
 
@@ -42,11 +43,11 @@ add `--device cpu` to training and suite commands. If CUDA is unavailable, train
 stops with an actionable error instead of silently switching devices.
 
 The installer checks that the game checkout is clean and at commit
-`a47056d8141ec635d3ff3f4d5561d6a75cfca2cc`, stages a verified Git archive under
+`6fd1f54706369915013a49eab5c1790f8c55ab0a`, stages a verified Git archive under
 this project's `build` directory, and installs the game non-editably from that copy.
 Packaging inputs and build artifacts stay outside the game repository.
 Every training/evaluation command verifies the installed game's source manifest
-and rules hash, package version 1.2.0, and simulation version 1.0.0. Source pins
+and rules hash, package version 1.2.1, and simulation version 1.0.0. Source pins
 must match the checkpoint even when two releases share the same combat rules.
 
 For an existing research virtual environment, upgrade only the game and research package:
@@ -128,6 +129,9 @@ clipping `0.2`, and entropy coefficient `0.01`.
 
 The policy and value networks run on the GPU; game simulation workers run on the
 CPU. Use `--device cuda` to select CUDA explicitly or `--device cpu` for CPU training.
+Small VRAM usage is expected for this MLP: memory usage is not GPU utilization.
+Runtime optimizations are enabled by default; no larger network, batch, rollout,
+worker count, changed precision, or new learning strategy is needed to use them.
 
 Each decision applies one action and advances 10 ticks (0.5 simulated seconds).
 `--steps` counts **aggregate policy decisions across all workers**, not ticks,
@@ -294,6 +298,14 @@ is retained when applicable. Resume restores the policy and optimizer but starts
 fresh game episodes; it is not a bit-for-bit continuation of rollout/RNG state.
 Device settings must also match: when resuming a compatible run created with the
 previous CPU default, pass `--device cpu` (or its original configuration file).
+Only checkpoints with the current **1.2.1 source pin** can resume. Game 1.2.1 adds
+the defeated/total HUD without changing combat, but the strict source-pin rule
+still requires fresh training when upgrading from 1.2.0. Existing compact recordings
+can still be watched or exported, and archived reports remain readable.
+Runtime settings can change on same-pin resume; all research settings must match.
+An already running Python process keeps its loaded code. Use the improvements in
+your next run, or interrupt normally with Ctrl+C and resume the saved checkpoint
+into a new directory. Do not overwrite or edit the previous run's metadata.
 
 ## 4. Choose CPU or GPU and worker count
 
@@ -308,6 +320,10 @@ availability alone does not establish faster training. Measure the complete loop
 
 This performs short real training runs and writes raw measurements and a
 `recommendation.json`. CUDA configurations are recorded as unavailable if needed.
+Each measurement first warms up with one rollout. Worker/model startup and warmup
+times are recorded separately; reported throughput includes collection and PPO
+updates, but excludes validation, reports, and demos. Actual rounded decisions,
+phase timings, and peak PyTorch CUDA memory are saved in `measurements.json`.
 Use the recommendation consistently in later comparisons:
 
 ```powershell
@@ -322,6 +338,43 @@ the hardware recommendation.
 Parallel environments use Windows-compatible `spawn`; each worker owns its game.
 When invoking the Python API from a script, put training calls under
 `if __name__ == "__main__":`.
+
+### Measure runtime improvements with the same training strategy
+
+```powershell
+.\.venv\Scripts\python.exe -m pvz_rl benchmark `
+  --workers 8 --devices cuda --steps 32768 --repeats 3 --compare-runtime `
+  --output artifacts\runtime-benchmark
+```
+
+This compares the stock data path with the configured optimizations using the same
+learner seeds, environments, PPO settings, and warmup budget. Pair order alternates.
+`runtime-comparison.json` records each speed ratio and whether the final policy
+weights match exactly. Avoid overlapping other training or tests while measuring.
+This command runs short benchmarks only; it does not start the formal suite.
+
+On the RTX 4070 Laptop GPU, the local three-pair benchmark measured **2,176 → 2,664
+decisions/s median (22% faster)**, with exactly equal final policy weights in every
+pair. This measures early curriculum collection and updates, excluding validation
+and reports. See [validation details](docs/validation.md) for raw evidence and limits.
+
+The training log now includes `last rollout 1.80s collect / 0.30s update` (example
+values). Collection includes simulation, policy inference, and worker communication;
+update time covers PPO optimization. These timings also appear in
+`training-metrics.jsonl`. Validation and report time remain separate.
+
+In the optional `[runtime]` TOML section, `coalesce_masks = true` sends legal masks
+with observations instead of requesting them separately from every worker.
+`cache_legal_actions = true` reuses the engine's legality query while occupied
+tiles, card availability, and game status are unchanged. It does not predict new
+legal moves: changes trigger a fresh engine query. This also accelerates evaluation.
+`cache_rollout_on_device = true` copies the completed rollout to CUDA once and
+reuses it across optimization epochs; it adds about 49 MiB at default settings.
+CPU training uses the stock buffer sampler. These settings preserve NumPy minibatch
+permutations, arithmetic precision, PPO losses, and the policy/optimizer.
+Set any option to `false` for diagnosis. Older configs receive current defaults;
+resolved runtime settings are recorded in metadata but excluded from research
+compatibility checks. Mask and numeric validation checks stay enabled.
 
 ## 5. Evaluate baselines and checkpoints
 

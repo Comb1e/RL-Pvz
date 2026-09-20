@@ -108,6 +108,11 @@ def main(argv=None):
     bench.add_argument("--workers", type=int, nargs="+", default=[1, 4, 8])
     bench.add_argument("--devices", nargs="+", choices=("cpu", "cuda"), default=["cpu", "cuda"])
     bench.add_argument("--repeats", type=int, default=3)
+    bench.add_argument(
+        "--compare-runtime",
+        action="store_true",
+        help="pair current data transport with stock SB3 using identical training settings",
+    )
     suite = subs.add_parser(
         "suite", help="run all 25 training jobs, held-out evaluation, and report"
     )
@@ -326,6 +331,7 @@ def main(argv=None):
                     workers=args.workers,
                     devices=args.devices,
                     repeats=args.repeats,
+                    compare_runtime=args.compare_runtime,
                 ),
                 indent=2,
             )

@@ -18,18 +18,26 @@ from stable_baselines3.common.callbacks import BaseCallback
 from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv
 
-from .config import output_settings, research_config, seed_values, validate_config
+from .config import output_settings, research_config, runtime_settings, seed_values, validate_config
 from .env import PvZEnv
 from .evaluation import evaluate, summarize
 from .progress import Phase, ProgressReporter, duration
 from .provenance import append_jsonl, file_hash, metadata, verify_engine, write_json
+from .runtime import (
+    CachedMaskVecEnv,
+    MaskTransport,
+    configure_rollout_buffer,
+    rollout_buffer_class,
+)
 from .scenarios import difficulty_weights
+from .timing import TrainingTimings
 
 
 def make_env(cfg, condition, worker_seed, family):
-    return Monitor(
-        PvZEnv(cfg, condition=condition, training=True, worker_seed=worker_seed, family=family)
-    )
+    env = PvZEnv(cfg, condition=condition, training=True, worker_seed=worker_seed, family=family)
+    if cfg["conditions"][condition]["masked"] and runtime_settings(cfg)["coalesce_masks"]:
+        env = MaskTransport(env)
+    return Monitor(env)
 
 
 def vector_env(cfg, condition, learner_seed, family="preset"):
@@ -37,11 +45,14 @@ def vector_env(cfg, condition, learner_seed, family="preset"):
         partial(make_env, cfg, condition, learner_seed * 1000 + i, family)
         for i in range(cfg["training"]["n_envs"])
     ]
-    return (
+    env = (
         DummyVecEnv(factories)
         if len(factories) == 1
         else SubprocVecEnv(factories, start_method="spawn")
     )
+    if cfg["conditions"][condition]["masked"] and runtime_settings(cfg)["coalesce_masks"]:
+        env = CachedMaskVecEnv(env)
+    return env
 
 
 def build_model(cfg, condition, env, seed, log_dir=None):
@@ -63,6 +74,10 @@ def build_model(cfg, condition, env, seed, log_dir=None):
         device=t["device"],
         verbose=0,
         tensorboard_log=str(log_dir) if log_dir else None,
+        rollout_buffer_class=rollout_buffer_class(
+            cfg["conditions"][condition]["masked"],
+            runtime_settings(cfg)["cache_rollout_on_device"],
+        ),
     )
 
 
@@ -97,6 +112,7 @@ class ResearchCallback(BaseCallback):
         self.report_seconds = 0.0
         self.last_updates = 0
         self.last_weights = None
+        self.timings = TrainingTimings()
         t = cfg["training"]
         self.target = math.ceil(t["total_steps"] / t["rollout_size"]) * t["rollout_size"]
 
@@ -114,6 +130,7 @@ class ResearchCallback(BaseCallback):
             self.cfg["conditions"][self.condition]["curriculum"],
         )
         return {
+            **self.timings.snapshot(),
             "state": self.progress.state.value,
             "steps": self.model.num_timesteps,
             "training_steps": self.model.num_timesteps,
@@ -146,11 +163,18 @@ class ResearchCallback(BaseCallback):
         win = "pending" if row["rolling_win_rate"] is None else f"{row['rolling_win_rate']:.1%}"
         reward = "pending" if row["rolling_return"] is None else f"{row['rolling_return']:.3f}"
         best = "pending" if self.best_score == -math.inf else f"{self.best_score:.1%}"
+        timing = ""
+        if row["last_optimization_seconds"] is not None:
+            timing = (
+                f"; last rollout {row['last_collection_seconds']:.2f}s collect / "
+                f"{row['last_optimization_seconds']:.2f}s update"
+            )
         self.progress.emit(
             f"{row['steps']:,}/{self.target:,} decisions ({row['steps'] / self.target:.1%}); "
             f"{row['decisions_per_second']:.0f} decisions/s; elapsed {duration(row['wall_seconds'])}; "
             f"training ETA {duration(row['estimated_remaining_training_seconds'])}; "
-            f"last {len(self.recent)} games win {win}, reward {reward}; best validation {best}",
+            f"last {len(self.recent)} games win {win}, reward {reward}; best validation {best}"
+            + timing,
             force=force,
         )
         write_json(self.output / "status.json", row)
@@ -245,14 +269,17 @@ class ResearchCallback(BaseCallback):
     def _on_rollout_start(self):
         # This hook runs after the preceding PPO update. A step callback would
         # save pre-update weights while labeling them with the newly collected steps.
+        self.timings.end_update()
         self.capture_update()
         if self.model.num_timesteps >= self.next_eval:
             self.validate()
             while self.next_eval <= self.model.num_timesteps:
                 self.next_eval += self.cfg["training"]["eval_interval"]
         self.progress.phase(Phase.COLLECTING)
+        self.timings.begin_collection()
 
     def _on_rollout_end(self):
+        self.timings.end_collection()
         self.progress.phase(Phase.UPDATING)
         write_json(self.output / "status.json", self.snapshot())
         self.log_progress()
@@ -313,6 +340,7 @@ class ResearchCallback(BaseCallback):
         self.refresh_report()
 
     def _on_training_end(self):
+        self.timings.end_update()
         self.capture_update()
         if self.last_eval != self.model.num_timesteps:
             self.validate()
@@ -378,6 +406,7 @@ def train(
         f"family {family}; output {output.resolve()}",
         force=True,
     )
+    progress.emit(f"Data transport: {runtime_settings(cfg)}", force=True)
     training_complete = False
     try:
         env = vector_env(cfg, condition, learner_seed, family)
@@ -392,6 +421,11 @@ def train(
             if old["learner_seed"] != learner_seed or old["validation_limit"] != validation_limit:
                 raise ValueError("Resume learner seed differs")
             model.set_env(env)
+            configure_rollout_buffer(
+                model,
+                cfg["conditions"][condition]["masked"],
+                runtime_settings(cfg)["cache_rollout_on_device"],
+            )
             model.tensorboard_log = str(output / "tensorboard")
             details["resume_steps"] = model.num_timesteps
             write_json(output / "metadata.json", details)

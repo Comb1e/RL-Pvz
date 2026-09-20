@@ -1,4 +1,97 @@
-# Availability and verification — 0.3.1
+# Availability and verification — 0.3.2
+
+## Runtime performance and PVZ 1.2.1 — 2026-09-20
+
+Research package 0.3.2 uses game package 1.2.1 at
+`6fd1f54706369915013a49eab5c1790f8c55ab0a`; simulation remains 1.0.0.
+Diff inspection confirms only rendering and the package version changed in game
+source. Engine, combat rules, replay, and scenario code have identical hashes.
+The new manifest was exported with bytecode disabled into the research project;
+the game was built non-editably from `build/game-1.2.1`.
+
+| Check | Result |
+|---|---|
+| Full research regression/integration suite | **120 passed in 76.22 seconds** in the final run; expected upstream warning that small MLP PPO may underutilize CUDA |
+| Full game regression suite | **199 passed in 10.01 seconds**, with bytecode/cache writes disabled and temporary output in research artifacts |
+| All five learning conditions on CPU and CUDA | Optimized/reference learned policy tensors and Adam state match exactly after multiple updates |
+| Device buffer | Same dtype, shapes, values, minibatch order, next RNG draw, multiple epochs, partial final batch, and reset as stock SB3 |
+| Legality and worker caches | Independent engine validation, cooldown/cost boundaries, bomb disappearance, reset, natural win/loss, external truncation, and Windows spawned-worker trajectories |
+| Full gameplay controls | Identical observations/actions/rewards/masks and complete hashes at every decision for known seed-42 wins across all difficulties; existing known failing seeds also pass |
+| Same-pin checkpoint recovery | Stock buffer checkpoint resumes with current runtime defaults, preserving optimizer and earliest best checkpoint; different source pins remain rejected |
+| Native 1.2.1 renderer | Defeated/total labels verified for 0/15, 2/15, 15/15, 0/0, 200/200; Gym dimensions and rendering purity retained |
+| Timing | Validation gaps excluded from collection/update totals, final update captured, paired benchmark accounts for warmup separately |
+| Tooling | Ruff checks, formatting, pip dependency check, non-editable game install, editable research install, wheel/source build, Git whitespace checks |
+
+Evidence: `artifacts/speed-final-research-tests.txt`,
+`artifacts/speed-full-engine-tests.txt`, `artifacts/speed-doctor.json`, and
+`artifacts/speed-final-packaging.txt`.
+The performance benchmark and smoke results below are short engineering checks,
+not evidence of learned skill or research win-rate improvements.
+
+Final paired CUDA benchmark on the RTX 4070 Laptop GPU, eight Windows workers,
+with three seeds and **32,768 measured decisions plus 4,096 warmup decisions per
+run**. The reference disables all three runtime flags; every research setting is
+identical. Runs were sequential with alternating order and no overlapping tests
+or training. Callback reference cycles and unused allocator memory are reclaimed
+before each run so peak memory belongs to that measurement.
+
+| Learner seed | Reference decisions/s | Optimized decisions/s | Throughput increase | Final weights |
+|---|---:|---:|---:|---|
+| 800 | 2,187 | 2,645 | 20.9% | Exactly equal |
+| 801 | 2,151 | 2,729 | 26.9% | Exactly equal |
+| 802 | 2,176 | 2,664 | 22.4% | Exactly equal |
+| Median | **2,176** | **2,664** | **22.4%** | 3/3 pairs equal |
+
+Median collection time decreased from 12.26 to 10.13 seconds; median update time
+decreased from 2.80 to 2.17 seconds. Peak allocated PyTorch CUDA memory was stable
+at 51.85 MiB reference versus 100.99 MiB optimized. The approximately 49 MiB extra
+is the cached rollout; these figures exclude CUDA driver/context overhead counted
+by tools such as Task Manager. Low overall VRAM use remains expected.
+
+Raw measurements, full policy hashes, and pair ratios are in
+`artifacts/speed-pvz121-final/measurements.json` and `runtime-comparison.json`.
+This measures early easy-curriculum collection/updates on one laptop, not a
+confidence interval or a full-run wall-time guarantee. Startup, validation, reports,
+and demos are excluded and reported separately where applicable. An earlier
+three-pair run measured 25.3% median improvement; the final memory-isolated results
+above are the reported result. Preliminary overlapping profiler/test runs are not
+used for the speed claim.
+
+The saved CUDA smoke run `artifacts/speed-shared-smoke` collected 8,192 decisions
+using eight workers, the default 256–256 networks, 4,096-decision rollouts,
+256-sample minibatches, and four epochs. Only the short budget and one-case-per-
+difficulty validation were overridden. Both post-update metric rows were captured.
+The offline report and all relative assets resolve; a CUDA checkpoint reload passed.
+All three compact demos use checkpoint
+`594a2a9babc62b359e73c09db1947e2915708b8b399e21c5ab4e763f59f3dfd9`
+and validation seed 100000. Their final hashes verify. Outcomes were losses:
+easy tick 2678, standard/hard tick 3652. These are integration cases, not failures
+of the proposed research targets after meaningful training.
+
+Visually inspected the optimization/training curves and mid-game/final native
+replay frames. The 1.2.1 HUD clearly shows `2/75` mid-game and `13/75` at the hard
+loss, with the actual outcome banner. No MP4 encoder was invoked by default.
+Evidence is in `artifacts/speed-smoke-verification.json` and the smoke run's
+`visualizations` directory. Full-suite tests separately exercise optional MP4
+export, all three outcomes, diagnostic runs, interrupted runs, and report recovery.
+
+All three compact recordings from the user's existing game-1.2.0 run also verify
+under 1.2.1 with identical final hashes; the archived run was read only. See
+`artifacts/speed-archived-replay-verification.json`. The separate game checkout
+remains clean at the new pin. No formal research training was launched, and the
+user's running training job was allowed to complete without interruption.
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest -q
+.\.venv\Scripts\python.exe -B -m pytest -q E:/Projects/pvz/tests `
+  -p no:cacheprovider --basetemp artifacts/speed-engine-test-temp
+.\.venv\Scripts\python.exe -m pvz_rl benchmark `
+  --workers 8 --devices cuda --steps 32768 --repeats 3 --compare-runtime `
+  --output artifacts/speed-pvz121-final
+.\.venv\Scripts\python.exe -m pvz_rl train `
+  --condition masked --seed 101 --steps 8192 --eval-interval 4096 `
+  --validation-count 1 --output artifacts/speed-shared-smoke
+```
 
 ## CUDA default — 2026-09-20
 

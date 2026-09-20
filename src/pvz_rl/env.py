@@ -12,7 +12,7 @@ from pvz_game import Game, LevelSpec, Place, Rules, Status, Wait, WaveSpec
 from pvz_game.replay import Recorder
 
 from .actions import ActionCodec
-from .config import load_config, validate_config
+from .config import load_config, runtime_settings, validate_config
 from .controllers import PublicBoard, strategy_candidates
 from .encoding import ObservationEncoder
 from .rewards import reward_parts
@@ -66,6 +66,9 @@ class PvZEnv(gym.Env):
         self.public = None
         self.recorder = None
         self._legal = None
+        self._legal_key = None
+        self._direct_mask = None
+        self.cache_legal_actions = runtime_settings(self.cfg)["cache_legal_actions"]
         self._candidates = None
 
     def set_progress(self, decisions: int):
@@ -101,6 +104,7 @@ class PvZEnv(gym.Env):
         self.episode_level, self.episode_family, self.episode_seed = level, family, game_seed
         self.state = EpisodeState.RUNNING
         self._legal = self._candidates = None
+        self._legal_key = self._direct_mask = None
         self.recorder = (
             Recorder(
                 self.game,
@@ -125,8 +129,25 @@ class PvZEnv(gym.Env):
         return self.encoder.encode(self.public), {"status": self.state.value}
 
     def public_board(self):
-        if self._legal is None:
+        obs = self.public
+        # In the pinned engine legality depends only on status, occupied tiles,
+        # affordability, and whether recharge has completed. Other public changes
+        # (health, projectiles, zombie movement) cannot change legal actions.
+        key = (
+            (
+                obs.status,
+                frozenset((p.row, p.col) for p in obs.plants),
+                tuple(
+                    (c.plant_type, c.cooldown_ticks == 0 and obs.sun >= c.cost) for c in obs.cards
+                ),
+            )
+            if self.cache_legal_actions
+            else None
+        )
+        if self._legal is None or self.cache_legal_actions and key != self._legal_key:
             self._legal = frozenset(self.game.legal_actions())
+            self._legal_key = key
+            self._direct_mask = None
         return PublicBoard(self.public, self._legal)
 
     def candidates(self):
@@ -139,19 +160,22 @@ class PvZEnv(gym.Env):
             return np.zeros(self.action_space.n, dtype=np.bool_)
         if self.options["hybrid"]:
             return np.array([a is not None for a in self.candidates()], dtype=np.bool_)
-        mask = np.zeros(self.codec.size, dtype=np.bool_)
-        for action in self.public_board().legal:
-            mask[self.codec.encode(action)] = True
-        if self.episode_family == "diagnostic":
-            # An explicitly restricted learning diagnostic, never a formal game condition.
-            allowed = np.array(
-                [
-                    isinstance(a, Wait) or isinstance(a, Place) and a.plant_type == "peashooter"
-                    for a in self.codec.actions
-                ]
-            )
-            mask &= allowed
-        return mask
+        legal = self.public_board().legal
+        if self._direct_mask is None or not self.cache_legal_actions:
+            mask = np.zeros(self.codec.size, dtype=np.bool_)
+            for action in legal:
+                mask[self.codec.encode(action)] = True
+            if self.episode_family == "diagnostic":
+                # An explicitly restricted learning diagnostic, never a formal game condition.
+                allowed = np.array(
+                    [
+                        isinstance(a, Wait) or isinstance(a, Place) and a.plant_type == "peashooter"
+                        for a in self.codec.actions
+                    ]
+                )
+                mask &= allowed
+            self._direct_mask = mask
+        return self._direct_mask.copy()
 
     def step(self, action):
         if self.state != EpisodeState.RUNNING:
@@ -169,7 +193,9 @@ class PvZEnv(gym.Env):
         ticks = min(self.cfg["environment"]["decision_ticks"], self.cutoff_ticks - before.tick)
         result = (self.recorder or self.game).step(concrete, ticks=ticks)
         self.public = result.observation
-        self._legal = self._candidates = None
+        if not self.cache_legal_actions:
+            self._legal = None
+        self._candidates = None
         terminated = result.status != Status.RUNNING
         truncated = not terminated and self.public.tick >= self.cutoff_ticks
         self.state = (

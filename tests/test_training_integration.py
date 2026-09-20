@@ -14,8 +14,8 @@ from pvz_rl.training import load_policy, train
 
 def test_installed_engine_matches_recorded_commit(cfg):
     result = verify_engine(cfg)
-    assert result["commit"] == "a47056d8141ec635d3ff3f4d5561d6a75cfca2cc"
-    assert result["package_version"] == "1.2.0" and result["version"] == "1.0.0"
+    assert result["commit"] == "6fd1f54706369915013a49eab5c1790f8c55ab0a"
+    assert result["package_version"] == "1.2.1" and result["version"] == "1.0.0"
 
 
 @pytest.mark.learning
@@ -59,12 +59,15 @@ def test_interrupt_resume_preserves_best_and_finishes_budget(smoke_cfg, tmp_path
 
     monkeypatch.setattr(ResearchCallback, "_on_rollout_start", interrupt)
     first = tmp_path / "first"
+    # An old configuration and stock buffer remain resumable on the same engine pin.
+    smoke_cfg["runtime"] = {key: False for key in smoke_cfg["runtime"]}
     with pytest.raises(KeyboardInterrupt):
         train(smoke_cfg, "masked", 101, first, validation_limit=1)
     previous_hash = file_hash(first / "best.zip")
     assert json.loads((first / "status.json").read_text())["steps"] == 64
     monkeypatch.setattr(ResearchCallback, "_on_rollout_start", original)
     resumed = tmp_path / "resumed"
+    smoke_cfg.pop("runtime")  # Missing runtime section gets current defaults on resume.
     train(smoke_cfg, "masked", 101, resumed, validation_limit=1, resume=first / "interrupted.zip")
     model, _ = load_policy(resumed / "final.zip")
     assert model.num_timesteps == 128 and model._n_updates == 2

@@ -1,7 +1,12 @@
 schema_version = 1
-engine_commit = "a47056d8141ec635d3ff3f4d5561d6a75cfca2cc"
+engine_commit = "6fd1f54706369915013a49eab5c1790f8c55ab0a"
 engine_version = "1.0.0"
-engine_package_version = "1.2.0"
+engine_package_version = "1.2.1"
+
+[runtime]
+cache_legal_actions = true
+coalesce_masks = true
+cache_rollout_on_device = true
 
 [logging]
 progress_seconds = 15

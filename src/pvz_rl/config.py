@@ -32,8 +32,24 @@ def output_settings(cfg: dict) -> dict:
 
 
 def research_config(cfg: dict) -> dict:
-    """Output preferences cannot change experiment identity or resume compatibility."""
-    return {key: value for key, value in cfg.items() if key not in ("logging", "visualization")}
+    """Output and data-transport preferences do not change the research protocol."""
+    return {
+        key: value
+        for key, value in cfg.items()
+        if key not in ("logging", "visualization", "runtime")
+    }
+
+
+@lru_cache(maxsize=1)
+def _runtime_defaults():
+    return tomllib.loads(files("pvz_rl").joinpath("data/research.toml").read_text("utf-8"))[
+        "runtime"
+    ]
+
+
+def runtime_settings(cfg: dict) -> dict:
+    """Old configurations get current transport defaults without changing strategy."""
+    return {**_runtime_defaults(), **cfg.get("runtime", {})}
 
 
 def load_config(path: str | Path | None = None) -> dict:
@@ -44,6 +60,13 @@ def load_config(path: str | Path | None = None) -> dict:
 
 
 def validate_config(cfg: dict) -> None:
+    runtime = runtime_settings(cfg)
+    if set(runtime) != {"cache_legal_actions", "coalesce_masks", "cache_rollout_on_device"} or any(
+        type(value) is not bool for value in runtime.values()
+    ):
+        raise ValueError(
+            "Runtime settings must be cache_legal_actions/coalesce_masks/cache_rollout_on_device booleans"
+        )
     output = output_settings(cfg)
     log, visual = output["logging"], output["visualization"]
     if not math.isfinite(log["progress_seconds"]) or log["progress_seconds"] <= 0:

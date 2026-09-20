@@ -1,5 +1,5 @@
 {
-  "commit": "a47056d8141ec635d3ff3f4d5561d6a75cfca2cc",
+  "commit": "6fd1f54706369915013a49eab5c1790f8c55ab0a",
   "files": {
     "__init__.py": "0ff0ce51659ef6f96d1a55694c8c4bd444702102a85d838222081ba8fbe44515",
     "__main__.py": "935a1c1166b0c1ea35a82256345000bf2c73ded718d77773bc27a71ecce28f7d",
@@ -14,12 +14,12 @@
     "demo.py": "c98f4c92c1f50b842732786552eace48124dff47e8ea6fec28c3908c75fda3b4",
     "demo_ui.py": "9191fecf3c23ff39aa23577af27d66c0d6aa041fadf29956ab4441c740f8cd1b",
     "engine.py": "d91370cda0eb010cff0f2b348c5edfdaa8eb7ac6b5c7f2e5dd97e3e356918bcb",
-    "rendering.py": "708e041403e40ee9d57ce1623963b24cd1e353c971acfe8af9b9d4433751f58e",
+    "rendering.py": "262cdccd00c86614bf1b8319b65a94004f607e6674281915aa1edfdf59d3320f",
     "replay.py": "5a3e76f082ad9a235149e8e86b86caf827eb8e6213773fed910f84e89ce3f5e4",
-    "types.py": "17a07e6869dd6516c37791ffac12450ba828ce1b38022c9df112f5f72075e8db",
+    "types.py": "f0590aa7a6c448d77082650e95c70229dc36226bb896f3f54e25897f0f9a46f8",
     "ui.py": "fcc7c601aa00bb75316ec32aad690ce598a5e44ce15132f16423209a5e101ec3"
   },
-  "package_version": "1.2.0",
+  "package_version": "1.2.1",
   "rules_hash": "a7486688fa43a9b50193f82715fa519bd27cfebc7ed054bebe4f7990f9c268de",
   "version": "1.0.0"
 }
