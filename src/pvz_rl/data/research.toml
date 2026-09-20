@@ -1,0 +1,95 @@
+schema_version = 1
+engine_commit = "b3cfbd886ab378313a1fdb57ee43a9a1b36a0793"
+engine_version = "1.0.0"
+
+[environment]
+decision_ticks = 10
+cutoff_seconds = 1200
+rows = 5
+cols = 9
+bins = 20
+plants = ["sunflower", "peashooter", "wall_nut", "cherry_bomb", "potato_mine", "snow_pea", "chomper", "repeater"]
+zombies = ["basic", "flag", "conehead", "buckethead", "pole_vaulting"]
+plant_states = ["ready", "arming", "armed", "fusing", "digesting", "exploding", "detonating"]
+zombie_states = ["walking", "carrying_pole", "vaulting", "biting", "dead"]
+mower_states = ["ready", "moving", "spent"]
+
+[encoding]
+version = 1
+count_scale = 75
+wave_scale = 15
+
+[reward]
+gamma = 0.999
+defeated_weight = 0.5
+sun_weight = 0.3
+flower_weight = 0.2
+sun_target = 300
+flower_target = 8
+
+[training]
+total_steps = 3000000
+learner_seeds = [101, 102, 103, 104, 105]
+n_envs = 8
+device = "cpu"
+rollout_size = 4096
+batch_size = 256
+n_epochs = 4
+learning_rate = 0.0003
+gae_lambda = 0.98
+clip_range = 0.2
+ent_coef = 0.01
+hidden_sizes = [256, 256]
+eval_interval = 250000
+torch_threads = 1
+
+[curriculum]
+boundaries = [0.1, 0.4]
+easy_weights = [1.0, 0.0, 0.0]
+intermediate_weights = [0.5, 0.5, 0.0]
+final_weights = [0.2, 0.4, 0.4]
+
+[splits]
+train = [1000, 99999]
+validation = [100000, 100049]
+test = [200000, 200299]
+ood = [300000, 300099]
+
+[evaluation]
+levels = ["easy", "standard", "hard"]
+ood_families = ["redistributed", "faster", "concentrated"]
+ood_levels = ["standard", "hard"]
+replays_per_outcome = 10
+bootstrap_replicates = 2000
+bootstrap_seed = 1739
+targets = [0.95, 0.90, 0.75]
+
+[conditions.masked]
+masked = true
+shaped = true
+curriculum = true
+hybrid = false
+
+[conditions.unmasked]
+masked = false
+shaped = true
+curriculum = true
+hybrid = false
+
+[conditions.sparse]
+masked = true
+shaped = false
+curriculum = true
+hybrid = false
+
+[conditions.mixed]
+masked = true
+shaped = true
+curriculum = false
+hybrid = false
+
+[conditions.hybrid]
+masked = true
+shaped = true
+curriculum = true
+hybrid = true

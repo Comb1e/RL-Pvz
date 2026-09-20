@@ -1,0 +1,361 @@
+# PVZ plant-placement research
+
+Train a policy to choose **which plant, which tile, and when to act** in the existing
+[Lawn Lab game](../../pvz/README.md). This project contains the research code; the game remains
+an independent dependency at `E:/Projects/pvz`.
+
+Implemented: a Gymnasium adapter, MaskablePPO and PPO training, five research
+conditions, four non-learning baselines, checkpoint recovery, deterministic replays,
+held-out evaluations, changed-wave scenarios, statistical analysis, and plots.
+**No full research training has been run.** Availability and short integration tests
+exercise the pipeline; they do not establish that a trained agent wins reliably.
+
+## 1. Install and check availability
+
+The workspace already has a Python 3.12 virtual environment with CUDA-enabled
+PyTorch. From this directory in PowerShell:
+
+```powershell
+.\.venv\Scripts\python.exe -m pvz_rl doctor --output artifacts\availability.json
+.\.venv\Scripts\python.exe -m pytest -q
+```
+
+For a fresh installation, use Python 3.12 and Git:
+
+```powershell
+# NVIDIA GPU installation; downloads the CUDA-enabled PyTorch wheel.
+.\tools\bootstrap.ps1 -GameRepo E:\Projects\pvz -Cuda
+
+# CPU-only installation, suitable for these small MLP policies.
+.\tools\bootstrap.ps1 -GameRepo E:\Projects\pvz
+```
+
+The installer checks that the game checkout is clean and at commit
+`b3cfbd886ab378313a1fdb57ee43a9a1b36a0793`, installs a non-editable game package,
+and installs the pinned dependencies. It does not modify the game repository.
+Every training/evaluation command verifies the installed game's source manifest
+and rules hash. Source files, observation schema, and rules must remain compatible
+with the checkpoint.
+
+The commands below use `python -m pvz_rl`; `pvz-rl.exe` in the virtual environment
+is an equivalent entry point. No environment activation is required.
+
+## 2. Run a short smoke test
+
+This executes 128 training decisions on the restricted diagnostic task, evaluates
+one validation case, and saves real checkpoints. It checks integration, not skill.
+
+```powershell
+.\.venv\Scripts\python.exe -m pvz_rl train `
+  --condition masked --family diagnostic --seed 101 `
+  --steps 128 --n-envs 1 --rollout-size 64 --batch-size 32 `
+  --eval-interval 64 --validation-count 1 `
+  --output runs\smoke
+```
+
+Output directories must be new. Existing runs and checkpoints are not overwritten.
+The diagnostic uses one threatened lane, 100 starting sun, no mowers, and a
+peashooter/wait action mask. A manually placed peashooter provides an independently
+tested winning control. Diagnostic policies are not benchmark results and cannot
+be passed to the formal test evaluator.
+
+## 3. Train a policy
+
+Start with a pilot on the real game:
+
+```powershell
+.\.venv\Scripts\python.exe -m pvz_rl train `
+  --condition masked --seed 101 --steps 100000 `
+  --n-envs 4 --device cpu --eval-interval 25000 --validation-count 5 `
+  --output runs\pilot-masked-101
+```
+
+Then train the full direct-placement condition with the default protocol:
+
+```powershell
+.\.venv\Scripts\python.exe -m pvz_rl train `
+  --condition masked --seed 101 --output runs\masked-101
+```
+
+Defaults: 3 million decisions, eight environments, CPU execution, separate
+256–256 policy/value networks, learning rate `3e-4`, discount `0.999`, GAE `0.98`,
+4,096 decisions per rollout, minibatches of 256, four optimization epochs,
+clipping `0.2`, and entropy coefficient `0.01`.
+
+Each decision applies one action and advances 10 ticks (0.5 simulated seconds).
+`--steps` counts **aggregate policy decisions across all workers**, not ticks,
+episodes, or decisions per worker. Complete PPO rollouts round the 3,000,000 target
+up to **3,002,368 actual decisions**; both counts are recorded. Validation happens
+after completed PPO updates when its interval is reached, and after the final update.
+
+| `--condition` | Actions | Reward | Difficulty sampling |
+|---|---|---|---|
+| `masked` | 406 actions, legal-action mask | Potential-shaped | Curriculum |
+| `unmasked` | Same 406 actions, no mask | Same shaped reward | Curriculum |
+| `sparse` | 406 actions, legal-action mask | Win/loss only | Curriculum |
+| `mixed` | 406 actions, legal-action mask | Potential-shaped | 20% easy / 40% standard / 40% hard throughout |
+| `hybrid` | Five masked strategies with scripted placement | Potential-shaped | Curriculum |
+
+The curriculum spends the first 10% of decisions on easy, the next 30% on an equal
+easy/standard mixture, and the remaining 60% on the 20/40/40 mixture. Stage changes
+affect the next episode reset. One policy learns across all three difficulties.
+All eight plants remain available under the normal game rules.
+
+The hybrid chooses wait, economy, sustained attack, blocking defense, or emergency
+placement. It uses scripted placement knowledge, so evaluate it alongside the
+`random_strategy` baseline as well as the original heuristic.
+
+### Monitor training
+
+```powershell
+.\.venv\Scripts\tensorboard.exe --logdir runs
+Get-Content runs\masked-101\status.json
+```
+
+The main artifacts in a run are:
+
+| Artifact | Meaning |
+|---|---|
+| `metadata.json`, `config.json` | Resolved settings, seeds, dependency versions, Git state, engine and rules hashes |
+| `status.json` | Lifecycle state, collected decisions, elapsed time, validation result |
+| `training-episodes.jsonl` | Outcomes, plant usage, mowers, invalid actions, and episode lengths |
+| `learning-curve.jsonl` | Validation win rates against training decisions and wall time |
+| `validation/<steps>/` | Full validation episode records and summaries |
+| `best.zip`, `best.json` | Best validation macro win rate, with earlier checkpoints winning ties |
+| `latest.zip` | Most recent validation checkpoint |
+| `final.zip` | Policy after the final optimization update |
+| `interrupted.zip` | Recovery checkpoint when an interruption/error can be handled |
+
+The checkpoint criterion averages easy, standard, and hard win rates equally.
+It does not use shaped return or final-test results.
+
+### Resume an interrupted run
+
+Resume into a **new directory**, using the same configuration, learner seed,
+condition, diagnostic setting, and validation count as the original run:
+
+```powershell
+.\.venv\Scripts\python.exe -m pvz_rl train `
+  --condition masked --seed 101 `
+  --resume runs\masked-101\interrupted.zip `
+  --output runs\masked-101-resumed
+```
+
+If the process was killed before saving `interrupted.zip`, use `latest.zip`.
+Repeat any original pilot overrides when resuming a pilot. `--steps` remains the
+original total budget; it is not an additional-step count. The earlier best checkpoint
+is retained when applicable. Resume restores the policy and optimizer but starts
+fresh game episodes; it is not a bit-for-bit continuation of rollout/RNG state.
+
+## 4. Choose CPU or GPU and worker count
+
+This environment is mostly Python simulation plus a modest neural network, so GPU
+availability alone does not establish faster training. Measure the complete loop:
+
+```powershell
+.\.venv\Scripts\python.exe -m pvz_rl benchmark `
+  --steps 16384 --workers 1 4 8 --devices cpu cuda --repeats 3 `
+  --output artifacts\hardware-benchmark
+```
+
+This performs short real training runs and writes raw measurements and a
+`recommendation.json`. CUDA configurations are recorded as unavailable if needed.
+Use the recommendation consistently in later comparisons:
+
+```powershell
+.\.venv\Scripts\python.exe -m pvz_rl train `
+  --hardware artifacts\hardware-benchmark\recommendation.json `
+  --condition masked --seed 101 --output runs\selected-hardware-101
+```
+
+Parallel environments use Windows-compatible `spawn`; each worker owns its game.
+When invoking the Python API from a script, put training calls under
+`if __name__ == "__main__":`.
+
+## 5. Evaluate baselines and checkpoints
+
+First reproduce development cases without touching final-test seeds:
+
+```powershell
+.\.venv\Scripts\python.exe -m pvz_rl evaluate `
+  --baseline heuristic --split development --count 10 --record `
+  --output runs\baseline-development
+```
+
+Available baselines are `wait`, `random_legal`, `heuristic`, and `random_strategy`.
+The heuristic is the frozen controller from the pinned game commit. Random policies
+use reproducible scenario-derived RNGs. Every policy receives the same decision rate.
+
+Evaluate a pilot checkpoint on validation seeds:
+
+```powershell
+.\.venv\Scripts\python.exe -m pvz_rl evaluate `
+  --checkpoint runs\pilot-masked-101\best.zip `
+  --split validation --count 10 --record --output runs\pilot-validation
+```
+
+Once settings and checkpoints are frozen, run the held-out evaluation:
+
+```powershell
+.\.venv\Scripts\python.exe -m pvz_rl evaluate `
+  --checkpoint runs\masked-101\best.zip --split test --record `
+  --output runs\masked-101-test
+
+.\.venv\Scripts\python.exe -m pvz_rl evaluate `
+  --baseline heuristic --split test --record --output runs\heuristic-test
+```
+
+Default held-out evaluation uses 300 seeds for each difficulty. A checkpoint's own
+configuration is restored automatically; supplying a conflicting `--config` is rejected.
+The evaluator passes action masks to masked policies and preserves unmasked behavior
+for the unmasked ablation. An invalid action advances time without an extra penalty.
+
+| Split | Seeds | Purpose |
+|---|---|---|
+| Development | 0–9; seed 42 also exists in regression tests | Already inspected cases |
+| Training | 1,000–99,999 | Sampled only by training environments |
+| Validation | 100,000–100,049 | Checkpoint and pilot selection |
+| Test | 200,000–200,299 | Final familiar-distribution results |
+| OOD | 300,000–300,099 | Changed-scenario results, namespaced by family |
+
+### Test changed wave patterns
+
+```powershell
+.\.venv\Scripts\python.exe -m pvz_rl evaluate `
+  --checkpoint runs\masked-101\best.zip --split ood `
+  --family redistributed --record --output runs\masked-101-redistributed
+```
+
+Repeat with `--family faster` and `--family concentrated`, including each baseline.
+OOD evaluations default to standard and hard, 100 seeds each:
+
+- `redistributed`: shuffle the zombie roster across waves after the first three,
+  preserving total types and each wave's size.
+- `faster`: reduce wave spacing from 25 to 20 seconds with the same jitter draws.
+- `concentrated`: use only three seeded lanes, preserving spawn times and types.
+
+Every generated case is retained. The hard preset shares opening compositions with
+standard, so success across the normal presets alone is not structural generalization.
+
+### Inspect replays
+
+With `--record`, evaluation saves and hash-verifies the first ten wins, losses, and
+truncations per difficulty in seed order. Paths are included in episode records.
+
+```powershell
+.\.venv\Scripts\python.exe -m pvz_rl replay runs\baseline-development\replays\easy-0-won.json
+.\.venv\Scripts\python.exe -m pvz_rl replay runs\baseline-development\replays\easy-0-won.json --watch
+```
+
+Replay files deliberately contain complete engine snapshots for verification. They
+are not policy observations. A truncated replay ends with the engine still running;
+the evaluation record supplies the wrapper's cutoff outcome.
+
+## 6. Run the full research protocol when ready
+
+This is an explicit long-running command. It is not launched by installation,
+availability checks, or the short smoke example:
+
+```powershell
+.\.venv\Scripts\python.exe -m pvz_rl suite `
+  --hardware artifacts\hardware-benchmark\recommendation.json `
+  --output runs\formal
+```
+
+The suite runs five conditions × five learner seeds (`101–105`), with the same
+budget per condition. Nominal total: 75 million decisions; rollout-rounded total:
+75,059,200. It then evaluates the selected checkpoints and all four baselines on
+the final and OOD splits, captures predetermined replays, and generates a report.
+All training finishes before final evaluation begins.
+
+The suite records `suite.json` as a restart journal. Resume with exactly the same
+configuration/hardware arguments:
+
+```powershell
+.\.venv\Scripts\python.exe -m pvz_rl suite `
+  --hardware artifacts\hardware-benchmark\recommendation.json `
+  --output runs\formal --resume
+```
+
+Completed jobs are retained. Failed or interrupted attempts remain inspectable;
+new attempts use new directories. Training resumes from an available checkpoint,
+while an interrupted evaluation restarts its affected evaluation group.
+
+## 7. Generate a report yourself
+
+```powershell
+.\.venv\Scripts\python.exe -m pvz_rl report `
+  --episodes runs\masked-101-test\episodes.jsonl runs\heuristic-test\episodes.jsonl `
+  --curves runs\masked-101\learning-curve.jsonl `
+  --output artifacts\comparison
+```
+
+For research conclusions, include results from all five independent learner seeds.
+Do not combine multiple checkpoints for the same learner/case. The report rejects
+duplicate or missing pairs and mismatched scenario sets in paired comparisons.
+It also rejects incompatible game/observation/reward protocols and different
+training configurations pooled under the same policy name.
+
+Outputs include `report.md`, `statistics.json`, `win-rates.png`, and optionally
+`learning-curves.png`. Bootstrap intervals resample learner runs and scenario seeds
+and preserve pairing against the heuristic. Always report per-difficulty results,
+sample counts, and variation across runs; all-win/all-loss samples can give degenerate
+bootstrap intervals. The target win rates (95% easy, 90% standard, 75% hard) are goals,
+not implemented guarantees or current results.
+
+Episode records also include invalid/waiting rates, plant usage, mowers consumed,
+inference time, wins/loss durations, truncations, and final hashes. House breaches
+and time cutoffs are classified automatically; strategic failure explanations require
+replay inspection. A positive lower confidence bound on paired win-rate improvement
+is required to claim that a method beats the heuristic.
+
+## Configuration and interfaces
+
+The canonical configuration is [research.toml](src/pvz_rl/data/research.toml).
+To customize a study, copy it and pass the copy explicitly:
+
+```powershell
+Copy-Item src\pvz_rl\data\research.toml local-research.toml
+# Edit local-research.toml, then:
+.\.venv\Scripts\python.exe -m pvz_rl train --config local-research.toml --output runs\custom
+```
+
+The Gymnasium environment exposes `reset`, `step`, `action_masks`, and optional
+`rgb_array` rendering. Public observations are encoded into **2,719 float32 features**:
+plant tiles, aggregated zombie/projectile spatial bins, and global resource/timer data.
+Counts are accumulated without truncating crowds. Scenario names, seeds, future
+spawns, and entity IDs are excluded. Spatial aggregation loses some information;
+this is a partially observed representation, not a claim of full state observability.
+
+The 406-action mapping is fixed: wait `0`; placement `1 + 45*p + 9*r + c`; digging
+`361 + 9*r + c`. Plant order follows the game API. Masking excludes illegal actions,
+not strategically undesirable placements. Games stop naturally on win/loss; a
+1,200-second external cutoff is a truncation with value bootstrapping, counted as
+unsuccessful during evaluation.
+
+Rewards use `+1` for victory, `-1` for defeat, and zero otherwise. Shaped conditions
+add `gamma * potential(next) - potential(current)`, where potential weights defeated
+fraction, capped sun, and capped living sunflower count by 0.5, 0.3, and 0.2.
+True terminals have zero potential; external truncations retain it. Tests independently
+check the discounted telescoping identity and planting/digging counterexamples.
+
+## Development and research notes
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest -q
+.\.venv\Scripts\ruff.exe check src tests tools
+.\.venv\Scripts\python.exe -m build
+```
+
+The full test suite includes a tiny end-to-end protocol, short real PPO updates,
+serialization/replay checks, a synthetic interruption/resume, and a two-worker
+Windows/CUDA check when CUDA is available. These tests do not launch formal runs.
+
+- [Architecture, data flow, and state machines](docs/architecture.md)
+- [Version history and remaining limitations](docs/iteration.md)
+- [Papers and projects actually used](docs/references.md)
+- [Availability and verification results](docs/validation.md)
+
+Use feature branches, Conventional Commits, and PRs; never push directly to main.
+The initial study is about winning with normal actions in this daytime clone.
+Human imitation, pixel input, DQN, and recurrent policies are follow-up work.

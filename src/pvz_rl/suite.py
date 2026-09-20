@@ -1,0 +1,132 @@
+"""Explicit, restartable orchestration for the five-condition research protocol.
+
+This module never starts automatically. Every attempt uses a fresh directory, and
+the journal keeps previous attempts and their evidence intact.
+"""
+
+import json
+from pathlib import Path
+
+from .config import digest, seed_values
+from .evaluation import BASELINES, evaluate
+from .provenance import file_hash, metadata, write_json
+from .reporting import make_report
+from .training import load_policy, train
+
+
+def run_suite(cfg, output, *, resume=False):
+    output = Path(output)
+    journal_path = output / "suite.json"
+    if resume:
+        journal = json.loads(journal_path.read_text("utf-8"))
+        if journal["config_hash"] != digest(cfg):
+            raise ValueError("Suite resume requires its original configuration")
+    else:
+        output.mkdir(parents=True, exist_ok=False)
+        journal = {"state": "training", "config_hash": digest(cfg), "jobs": {}, "evaluations": {}}
+        write_json(output / "metadata.json", metadata(cfg, kind="formal-suite"))
+        write_json(journal_path, journal)
+    if journal["state"] == "complete":
+        return journal
+    try:
+        for condition in cfg["conditions"]:
+            for seed in cfg["training"]["learner_seeds"]:
+                key = f"{condition}-{seed}"
+                attempts = journal["jobs"].setdefault(key, [])
+                checkpoint = None
+                if attempts:
+                    last = Path(attempts[-1])
+                    status_path = last / "status.json"
+                    status = (
+                        json.loads(status_path.read_text("utf-8")) if status_path.exists() else {}
+                    )
+                    if status.get("state") == "complete":
+                        continue
+                    for name in ("interrupted.zip", "latest.zip"):
+                        if (last / name).exists():
+                            checkpoint = last / name
+                            break
+                destination = output / "training" / key / f"attempt-{len(attempts) + 1}"
+                attempts.append(str(destination.resolve()))
+                journal.update(state="training", active=key)
+                write_json(journal_path, journal)
+                train(cfg, condition, seed, destination, resume=checkpoint)
+
+        # Test results are exposed only after all training configurations are frozen and run.
+        journal["state"] = "evaluating"
+        write_json(journal_path, journal)
+        evaluations = journal["evaluations"]
+        families = ["preset", *cfg["evaluation"]["ood_families"]]
+        for policy in [*BASELINES, *journal["jobs"]]:
+            if policy in BASELINES:
+                model, condition, learner_seed, baseline, checkpoint_hash = (
+                    None,
+                    "masked",
+                    None,
+                    policy,
+                    None,
+                )
+            else:
+                run = Path(journal["jobs"][policy][-1])
+                model, data = load_policy(run / "best.zip")
+                condition, learner_seed, baseline = data["condition"], data["learner_seed"], None
+                checkpoint_hash = file_hash(run / "best.zip")
+            for family in families:
+                key = f"{policy}/{family}"
+                attempts = evaluations.setdefault(key, [])
+                if attempts:
+                    status = Path(attempts[-1]) / "status.json"
+                    if (
+                        status.exists()
+                        and json.loads(status.read_text("utf-8")).get("state") == "complete"
+                    ):
+                        continue
+                destination = (
+                    output / "evaluation" / policy / family / f"attempt-{len(attempts) + 1}"
+                )
+                attempts.append(str(destination.resolve()))
+                journal["active"] = key
+                write_json(journal_path, journal)
+                split = "test" if family == "preset" else "ood"
+                levels = cfg["evaluation"]["levels" if family == "preset" else "ood_levels"]
+                evaluate(
+                    cfg,
+                    policy=model,
+                    condition=condition,
+                    baseline=baseline,
+                    learner_seed=learner_seed,
+                    seeds=seed_values(cfg, split),
+                    levels=levels,
+                    family=family,
+                    split=split,
+                    output=destination,
+                    record=True,
+                    training_steps=model.num_timesteps if model else 0,
+                )
+                write_json(
+                    destination / "metadata.json",
+                    {
+                        "config_hash": digest(cfg),
+                        "checkpoint_hash": checkpoint_hash,
+                        "policy": policy,
+                    },
+                )
+        paths = [Path(attempts[-1]) / "episodes.jsonl" for attempts in evaluations.values()]
+        curves = [
+            Path(attempts[-1]) / "learning-curve.jsonl" for attempts in journal["jobs"].values()
+        ]
+        reports = journal.setdefault("reports", [])
+        report_dir = output / f"report-{len(reports) + 1}"
+        reports.append(str(report_dir.resolve()))
+        journal["state"] = "reporting"
+        write_json(journal_path, journal)
+        make_report(paths, report_dir, cfg, curves)
+        journal.update(state="complete", active=None)
+        write_json(journal_path, journal)
+        return journal
+    except BaseException as exc:
+        journal.update(
+            state="interrupted" if isinstance(exc, KeyboardInterrupt) else "failed", error=repr(exc)
+        )
+        write_json(journal_path, journal)
+        raise
