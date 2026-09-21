@@ -5,6 +5,7 @@ from time import perf_counter
 
 import torch
 
+from .cuda_diagnostics import DeviceProfiler
 from .cuda_env import CudaVecEnv
 
 
@@ -29,13 +30,12 @@ def batched_games(cfg, policy, condition, seeds, levels, family, *, record=False
             env = CudaVecEnv(local, condition, 0, family, training=False, cases=chunk)
             traces = [[] for _ in chunk]
             completed, buffered = {}, []
-            inference = 0.0
+            inference_timer = DeviceProfiler(env.cp, enabled=True)
             started = perf_counter()
             try:
                 obs = env.reset()
                 with env.device_context():
                     while len(completed) < len(chunk):
-                        inference_start = perf_counter()
                         with torch.no_grad():
                             kwargs = {}
                             if cfg["conditions"][condition]["masked"]:
@@ -44,11 +44,16 @@ def batched_games(cfg, policy, condition, seeds, levels, family, *, record=False
                                 # sent to simulation as an active game operation.
                                 masks[:, 0] |= env.header_tensor[:, 17] == 0
                                 kwargs["action_masks"] = masks
-                            actions, _, _ = policy.policy(obs, deterministic=True, **kwargs)
-                        inference += perf_counter() - inference_start
+                            with inference_timer.track("inference"):
+                                actions, _, _ = policy.policy(obs, deterministic=True, **kwargs)
                         if record:
                             buffered.append(actions)
                         obs, _, _, _, _, infos = env.step_tensors(actions, autoreset=False)
+                        # The compact completion transfer has already waited for
+                        # inference. Bound event storage and measure execution,
+                        # rather than reporting host enqueue time as GPU latency.
+                        if len(inference_timer.pending) >= 128:
+                            inference_timer.flush()
                         for i, info in enumerate(infos):
                             if "episode_metrics" in info:
                                 completed[i] = {
@@ -64,6 +69,7 @@ def batched_games(cfg, policy, condition, seeds, levels, family, *, record=False
                             progress.emit(
                                 f"GPU evaluation: {offset + len(completed)}/{len(cases)} games complete"
                             )
+                inference = inference_timer.flush().get("inference", 0.0)
                 for i in range(len(chunk)):
                     row = completed[i]
                     row["inference_seconds"] = inference / len(chunk)

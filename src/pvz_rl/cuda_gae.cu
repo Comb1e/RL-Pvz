@@ -1,7 +1,8 @@
 extern "C" __global__ void gae(const float *reward, const float *value,
-                             const float *starts, const float *last_value,
-                             const float *done, float *advantage, float *returns,
-                             int steps, int games, float gamma, float lambda) {
+                               const float *starts, const float *last_value,
+                               const float *done, float *advantage,
+                               float *returns, int steps, int games,
+                               float gamma, float lambda) {
   int i = blockIdx.x * blockDim.x + threadIdx.x;
   if (i >= games)
     return;
