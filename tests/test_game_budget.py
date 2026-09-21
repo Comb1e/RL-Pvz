@@ -146,9 +146,16 @@ def test_global_games_across_windows_workers_cuda_and_shared_demos(smoke_cfg, tm
 
 
 @pytest.mark.learning
-def test_interrupt_resume_preserves_games_and_schedule(smoke_cfg, tmp_path, monkeypatch):
+@pytest.mark.parametrize("backend", ["cpu", "cuda"])
+def test_interrupt_resume_preserves_games_and_schedule(smoke_cfg, tmp_path, monkeypatch, backend):
     cfg = game_config(smoke_cfg)
     cfg["training"]["total_games"] = 6
+    if backend == "cuda":
+        pytest.importorskip("cupy")
+        if not torch.cuda.is_available():
+            pytest.skip("CUDA unavailable")
+        cfg["simulation"] = {"backend": "cuda"}
+        cfg["training"].update(device="cuda")
     original = ResearchCallback._on_rollout_start
 
     def interrupt(self):

@@ -10,14 +10,103 @@ held-out evaluations, changed-wave scenarios, statistical analysis, progress log
 automatic offline reports, learning curves, compact game demos, and optional MP4 export.
 **Each run trains one shared policy for easy, standard, and hard.** The same
 `best.zip` is used for all three difficulties and their demonstration recordings.
-Research version **0.5.0** uses game package **1.2.1** (simulation version **1.0.0**).
+Research version **0.6.0** uses game package **1.3.0** (simulation version **1.0.0**).
 The new pure-RL profiles add tactical observations, grouped plant/tile decisions,
 and introductory lessons. They are experimental: see [paper adaptation and pilot
 evidence](docs/paper-adaptation.md). The baseline remains the default configuration.
-Compatible 1.2.1 baseline checkpoints retain their original encoder, policy, and
-fixed curriculum. Improved profiles require fresh runs; weights are not migrated.
+New CUDA runs use fresh models. Archived configurations retain their original encoder,
+flat/grouped policy and curriculum semantics in their original pinned environment.
+Weights from the prior engine source pin are not migrated.
 Checkpoints from older game source pins cannot be resumed or evaluated. Archived
 reports and replay files remain readable. No formal research suite was launched.
+
+
+## CUDA simulation and training
+
+The optional CUDA backend moves games, observation encoding, rewards, policy
+inference, rollout storage and GAE onto the GPU. **One model still plays easy,
+standard and hard.** The research defaults (networks, learning rate, reward,
+discount, GAE, minibatch 256, four PPO epochs) are unchanged. Completed games
+control the budget, curriculum, validation and ETA.
+
+The working research checkout is `E:/Projects/Tower-Defence-AI/PVZ-plant`,
+using its single `.venv`. The new game backend is committed in the pinned game
+checkout `E:/Projects/pvz-cuda-work`; the original `E:/Projects/pvz` is unchanged.
+Development used an isolated environment that was removed after verification.
+A new installation inside the research checkout uses:
+
+```powershell
+.\tools\bootstrap.ps1 -GameRepo E:\Projects\pvz-cuda-work -Cuda
+.\.venv\Scripts\python.exe -m pvz_rl doctor --output artifacts\availability.json
+```
+
+CuPy **13.6.0**, CUDA runtime **12.8.90** and NVRTC **12.8.93** are pinned in
+`requirements-cuda-lock.txt`. Their Windows wheels provide compiler DLLs and
+headers; no Visual Studio or global CUDA Toolkit installation is needed. If
+PyTorch is already installed in a separate environment, install that lock there
+after installing the newly pinned game and research packages. The `doctor`
+checks compilation, shared-stream tensor writes, state-hash parity and free VRAM.
+
+The measured default is **128 GPU games × 128 decisions per game per rollout**,
+about **10,733 decisions/s versus 2,835 with the prior CPU simulator** on this
+laptop. Start a fresh shared-policy run (training starts only when you execute this):
+
+```powershell
+.\.venv\Scripts\python.exe -m pvz_rl train `
+  --condition masked --seed 101 `
+  --games 10000 --eval-games 250 --output runs\cuda-shared-101
+```
+
+`--n-envs` means parallel GPU games, not Windows worker processes. The rollout
+contains `n_envs * rollout_steps_per_env` decisions: 4,096 at 32 games, 8,192 at
+64, and 16,384 at 128. Conflicting explicit `--rollout-size` values are rejected.
+Legacy total-rollout configurations remain readable. Use the same simulator flag
+with `--config configs\pure-rl.toml` to retain the experimental tactical/grouped/
+teaching profile; this does not introduce scripted training examples.
+
+The explicit equivalent is `--config configs\cuda.toml --simulator cuda
+--n-envs 128 --rollout-steps-per-env 128`. Explicit configs, legacy `--steps` or
+`--rollout-size`, CPU requests and resumes retain their stated settings. For
+example, CPU simulation with a CUDA policy uses `--simulator cpu --device cuda`.
+To keep the CPU workload small, CUDA suites cap their hybrid job at eight CPU
+workers with 128 decisions per worker; each job records its resolved settings.
+
+Masked, unmasked, sparse and mixed direct policies support CUDA. Grouped policies
+retain their existing masked-policy restriction. Explicit `train --condition
+hybrid --simulator cuda` is rejected; use `--simulator cpu`. The suite uses the
+Python simulator for its hybrid job, and records that distinction. Modified combat
+rules and legacy fixed-tick configurations also require the Python simulator.
+
+Progress still appears every 15 seconds in the terminal and `train.log`. For example:
+
+```text
+[starting] ... 128 parallel games; simulator cuda; 128 decisions/game/rollout; 16384 total rollout decisions
+[collecting] 250/10000 games ... games/min ... decisions/s ... training ETA ...
+[validating] ... shared-policy mean ...
+```
+
+`visualizations/index.html`, PNG curves, checkpoint hashes and `.pvzdemo` files
+are unchanged. Validation is batched on CUDA. Demonstration action traces are
+replayed through the Python engine and must match outcome and state hash before
+being saved. All three demos use the same selected `best.zip`. No videos are
+encoded unless requested. Regenerate with `pvz-rl visualize --run RUN_DIR`; watch
+with `pvz-rl replay DEMO.pvzdemo --watch`, or add `--video OUTPUT.mp4`.
+
+Measure this laptop before selecting parallelism:
+
+```powershell
+.\.venv\Scripts\python.exe -m pvz_rl benchmark-gpu `
+  --output artifacts\gpu-benchmark --minutes 15
+```
+
+This bounded command compares the existing CPU simulator, equivalent CPU/CUDA
+settings, and 32/64/128 GPU games in three repetitions. It includes combat and
+resets, separates setup/warmup, records phase timings and system load, and selects
+the smallest stable profile within 5% of the fastest median. CUDA is promoted
+only after correctness and at least 20% complete-pipeline gain pass. See
+[GPU measurements](docs/gpu-performance.md) and
+[implementation choices](docs/gpu-plan-adjustments.md). Full research training is
+never launched by availability or benchmark commands.
 
 ## 1. Install and check availability
 
@@ -33,23 +122,23 @@ For a fresh installation, use Python 3.12 and Git:
 
 ```powershell
 # NVIDIA GPU installation; downloads the CUDA-enabled PyTorch wheel.
-.\tools\bootstrap.ps1 -GameRepo E:\Projects\pvz -Cuda
+.\tools\bootstrap.ps1 -GameRepo E:\Projects\pvz-cuda-work -Cuda
 
-# CPU-only installation, suitable for these small MLP policies.
-.\tools\bootstrap.ps1 -GameRepo E:\Projects\pvz
+# Explicit CPU simulation and policy installation.
+.\tools\bootstrap.ps1 -GameRepo E:\Projects\pvz-cuda-work
 ```
 
 Training uses **CUDA by default**. The current environment detects an NVIDIA
 GeForce RTX 4070 Laptop GPU with PyTorch `2.8.0+cu128`. For a CPU-only installation,
-add `--device cpu` to training and suite commands. If CUDA is unavailable, training
+add `--simulator cpu --device cpu` to training and suite commands. If CUDA is unavailable, training
 stops with an actionable error instead of silently switching devices.
 
 The installer checks that the game checkout is clean and at commit
-`6fd1f54706369915013a49eab5c1790f8c55ab0a`, stages a verified Git archive under
+`8861824df6893a34c2cd4df7f9b68613376d7964`, stages a verified Git archive under
 this project's `build` directory, and installs the game non-editably from that copy.
 Packaging inputs and build artifacts stay outside the game repository.
 Every training/evaluation command verifies the installed game's source manifest
-and rules hash, package version 1.2.1, and simulation version 1.0.0. Source pins
+and rules hash, package version 1.3.0, and simulation version 1.0.0. Source pins
 must match the checkpoint even when two releases share the same combat rules.
 
 For an existing research virtual environment, upgrade only the game and research package:
@@ -87,7 +176,7 @@ one validation case, and saves real checkpoints. It checks integration, not skil
 ```powershell
 .\.venv\Scripts\python.exe -m pvz_rl train `
   --condition masked --family diagnostic --seed 101 `
-  --games 2 --n-envs 1 --rollout-size 64 --batch-size 32 `
+  --simulator cpu --games 2 --n-envs 1 --rollout-size 64 --batch-size 32 `
   --eval-games 1 --validation-count 1 `
   --output runs\smoke
 ```
@@ -469,9 +558,9 @@ is retained when applicable. Resume restores the policy and optimizer but starts
 fresh game episodes; it is not a bit-for-bit continuation of rollout/RNG state.
 Device settings must also match: when resuming a compatible run created with the
 previous CPU default, pass `--device cpu` (or its original configuration file).
-Only checkpoints with the current **1.2.1 source pin** can resume. Game 1.2.1 adds
-the defeated/total HUD without changing combat, but the strict source-pin rule
-still requires fresh training when upgrading from 1.2.0. Existing compact recordings
+Only checkpoints with the current **1.3.0 source pin** can resume. Upgrading the
+game source pin requires fresh training; old weights are not migrated. Without
+`--config`, resume reads the saved run's configuration. Existing compact recordings
 can still be watched or exported, and archived reports remain readable.
 Runtime settings can change on same-pin resume; all research settings must match.
 An already running Python process keeps its loaded code. Use the improvements in
@@ -480,8 +569,9 @@ into a new directory. Do not overwrite or edit the previous run's metadata.
 
 ## 4. Choose CPU or GPU and worker count
 
-This environment is mostly Python simulation plus a modest neural network, so GPU
-availability alone does not establish faster training. Measure the complete loop:
+For the CPU simulation path, measure worker/device choices with the original
+benchmark below. For CUDA simulation, use `benchmark-gpu` and the measured defaults
+described above. GPU availability alone does not establish faster training:
 
 ```powershell
 .\.venv\Scripts\python.exe -m pvz_rl benchmark `
@@ -524,9 +614,10 @@ learner seeds, environments, PPO settings, and warmup budget. Pair order alterna
 weights match exactly. Avoid overlapping other training or tests while measuring.
 This command runs short benchmarks only; it does not start the formal suite.
 
-On the RTX 4070 Laptop GPU, the local three-pair benchmark measured **2,176 → 2,664
+For the earlier CPU transport optimization, a local three-pair benchmark measured **2,176 → 2,664
 decisions/s median (22% faster)**, with exactly equal final policy weights in every
-pair. This measures early curriculum collection and updates, excluding validation
+pair. This historical measurement used the older engine pin and early curriculum
+collection and updates, excluding validation
 and reports. See [validation details](docs/validation.md) for raw evidence and limits.
 
 The training log now includes `last rollout 1.80s collect / 0.30s update` (example

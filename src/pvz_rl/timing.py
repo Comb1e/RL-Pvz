@@ -41,19 +41,36 @@ class TrainingTimings:
 
 
 class TimingCallback(BaseCallback):
-    def __init__(self):
+    def __init__(self, *, deadline=None, load_monitor=None):
         super().__init__()
         self.timings = TrainingTimings()
+        self.games, self.ticks = 0, 0
+        self.deadline, self.load_monitor = deadline, load_monitor
 
     def _on_step(self):
+        for info in self.locals.get("infos", []):
+            self.games += "episode_metrics" in info
+            self.ticks += info.get("ticks_advanced", 0)
         return True
 
     def _on_rollout_start(self):
         self.timings.end_update()
+        if self.deadline is not None and perf_counter() >= self.deadline:
+            from .training import TrainingDeadline
+
+            raise TrainingDeadline()
+        if self.load_monitor:
+            self.load_monitor.phase = (
+                self.load_monitor.phase.split("/phase-")[0] + "/phase-collecting"
+            )
         self.timings.begin_collection()
 
     def _on_rollout_end(self):
         self.timings.end_collection()
+        if self.load_monitor:
+            self.load_monitor.phase = (
+                self.load_monitor.phase.split("/phase-")[0] + "/phase-updating"
+            )
 
     def _on_training_end(self):
         self.timings.end_update()

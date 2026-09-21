@@ -4,10 +4,11 @@ This module never starts automatically. Every attempt uses a fresh directory, an
 the journal keeps previous attempts and their evidence intact.
 """
 
+import copy
 import json
 from pathlib import Path
 
-from .config import digest, research_config, seed_values
+from .config import digest, gpu_defaults, research_config, resolve_rollout, seed_values, simulator
 from .evaluation import BASELINES, evaluate
 from .provenance import file_hash, metadata, write_json
 from .reporting import make_report
@@ -31,6 +32,14 @@ def run_suite(cfg, output, *, resume=False):
         return journal
     try:
         for condition in cfg["conditions"]:
+            job_cfg = copy.deepcopy(cfg)
+            if cfg["conditions"][condition]["hybrid"]:
+                job_cfg["simulation"] = {"backend": "cpu"}
+                if simulator(cfg) == "cuda":
+                    job_cfg["training"]["n_envs"] = min(
+                        cfg["training"]["n_envs"], gpu_defaults()["hybrid_cpu_envs"]
+                    )
+                    resolve_rollout(job_cfg)
             for seed in cfg["training"]["learner_seeds"]:
                 key = f"{condition}-{seed}"
                 attempts = journal["jobs"].setdefault(key, [])
@@ -51,7 +60,7 @@ def run_suite(cfg, output, *, resume=False):
                 attempts.append(str(destination.resolve()))
                 journal.update(state="training", active=key)
                 write_json(journal_path, journal)
-                train(cfg, condition, seed, destination, resume=checkpoint)
+                train(job_cfg, condition, seed, destination, resume=checkpoint)
 
         # Test results are exposed only after all training configurations are frozen and run.
         journal["state"] = "evaluating"
@@ -59,6 +68,7 @@ def run_suite(cfg, output, *, resume=False):
         evaluations = journal["evaluations"]
         families = ["preset", *cfg["evaluation"]["ood_families"]]
         for policy in [*BASELINES, *journal["jobs"]]:
+            evaluation_cfg = cfg
             if policy in BASELINES:
                 model, condition, learner_seed, baseline, checkpoint_hash = (
                     None,
@@ -70,6 +80,7 @@ def run_suite(cfg, output, *, resume=False):
             else:
                 run = Path(journal["jobs"][policy][-1])
                 model, data = load_policy(run / "best.zip")
+                evaluation_cfg = data["config"]
                 condition, learner_seed, baseline = data["condition"], data["learner_seed"], None
                 checkpoint_hash = file_hash(run / "best.zip")
             for family in families:
@@ -91,7 +102,7 @@ def run_suite(cfg, output, *, resume=False):
                 split = "test" if family == "preset" else "ood"
                 levels = cfg["evaluation"]["levels" if family == "preset" else "ood_levels"]
                 evaluate(
-                    cfg,
+                    evaluation_cfg,
                     policy=model,
                     condition=condition,
                     baseline=baseline,

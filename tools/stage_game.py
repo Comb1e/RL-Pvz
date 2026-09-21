@@ -30,7 +30,8 @@ def stage_game(repo, output):
                 source.read(name).replace(b"\r\n", b"\n")
             ).hexdigest()
             for name in source.namelist()
-            if name.startswith("src/pvz_game/") and Path(name).suffix in (".py", ".toml")
+            if name.startswith("src/pvz_game/")
+            and Path(name).suffix in (".py", ".toml", ".cu", ".cuh")
         }
         if manifest != expected["files"]:
             raise ValueError("Archived game source differs from the research manifest")

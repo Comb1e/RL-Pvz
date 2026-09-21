@@ -1,0 +1,7 @@
+# Promoted after differential tests and three repeated collection/update measurements.
+# See docs/gpu-performance.md. Existing explicit configurations retain their defaults.
+simulator = "cuda"
+device = "cuda"
+n_envs = 128
+rollout_steps_per_env = 128
+hybrid_cpu_envs = 8

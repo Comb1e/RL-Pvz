@@ -19,7 +19,14 @@ from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv
 
 from .budget import budget_target, evaluation_interval, progress_value, uses_games
-from .config import output_settings, research_config, runtime_settings, seed_values, validate_config
+from .config import (
+    output_settings,
+    research_config,
+    runtime_settings,
+    seed_values,
+    simulator,
+    validate_config,
+)
 from .curriculum import LESSONS, CurriculumState, stage_distribution, teaching_enabled
 from .env import PvZEnv
 from .evaluation import evaluate, summarize
@@ -45,6 +52,10 @@ def make_env(cfg, condition, worker_seed, family):
 
 
 def vector_env(cfg, condition, learner_seed, family="preset"):
+    if simulator(cfg) == "cuda":
+        from .cuda_env import CudaVecEnv
+
+        return CudaVecEnv(cfg, condition, learner_seed, family)
     factories = [
         partial(make_env, cfg, condition, learner_seed * 1000 + i, family)
         for i in range(cfg["training"]["n_envs"])
@@ -75,7 +86,11 @@ def build_model(cfg, condition, env, seed, log_dir=None):
     ):
         raise ValueError("Teaching curriculum requires a direct masked curriculum condition")
     algorithm = MaskablePPO if cfg["conditions"][condition]["masked"] else PPO
-    return algorithm(
+    if simulator(cfg) == "cuda":
+        from .cuda_ppo import CudaMaskablePPO, CudaPPO
+
+        algorithm = CudaMaskablePPO if cfg["conditions"][condition]["masked"] else CudaPPO
+    model = algorithm(
         GroupedPolicy if grouped else "MlpPolicy",
         env,
         learning_rate=t["learning_rate"],
@@ -96,6 +111,11 @@ def build_model(cfg, condition, env, seed, log_dir=None):
             runtime_settings(cfg)["cache_rollout_on_device"],
         ),
     )
+    if simulator(cfg) == "cuda":
+        from .cuda_ppo import configure_tensor_buffer
+
+        configure_tensor_buffer(model, cfg["conditions"][condition]["masked"])
+    return model
 
 
 class TrainingDeadline(Exception):
@@ -532,6 +552,10 @@ def load_policy(checkpoint, device="cpu"):
     validate_config(cfg)
     verify_engine(cfg)
     algorithm = MaskablePPO if cfg["conditions"][condition]["masked"] else PPO
+    if simulator(cfg) == "cuda":
+        from .cuda_ppo import CudaMaskablePPO, CudaPPO
+
+        algorithm = CudaMaskablePPO if cfg["conditions"][condition]["masked"] else CudaPPO
     torch.set_num_threads(cfg["training"]["torch_threads"])
     model = algorithm.load(checkpoint, device=device)
     return model, data
@@ -583,7 +607,10 @@ def train(
     progress = ProgressReporter(output / "train.log", settings["logging"]["progress_seconds"])
     progress.emit(
         f"Shared {condition} policy; learner seed {learner_seed}; {cfg['training']['device']}; "
-        f"{cfg['training']['n_envs']} workers; {budget_target(cfg) if game_budget else effective_steps:,} {'games' if game_budget else 'decisions'}; "
+        f"{cfg['training']['n_envs']} parallel games; simulator {simulator(cfg)}; "
+        f"{cfg['training']['rollout_size'] // cfg['training']['n_envs']} decisions/game/rollout; "
+        f"{cfg['training']['rollout_size']} total rollout decisions; "
+        f"{budget_target(cfg) if game_budget else effective_steps:,} {'games' if game_budget else 'decisions'}; "
         f"family {family}; output {output.resolve()}",
         force=True,
     )
@@ -611,11 +638,16 @@ def train(
             if old["learner_seed"] != learner_seed or old["validation_limit"] != validation_limit:
                 raise ValueError("Resume learner seed differs")
             model.set_env(env)
-            configure_rollout_buffer(
-                model,
-                cfg["conditions"][condition]["masked"],
-                runtime_settings(cfg)["cache_rollout_on_device"],
-            )
+            if simulator(cfg) == "cuda":
+                from .cuda_ppo import configure_tensor_buffer
+
+                configure_tensor_buffer(model, cfg["conditions"][condition]["masked"])
+            else:
+                configure_rollout_buffer(
+                    model,
+                    cfg["conditions"][condition]["masked"],
+                    runtime_settings(cfg)["cache_rollout_on_device"],
+                )
             model.tensorboard_log = str(output / "tensorboard")
             details["resume_steps"] = model.num_timesteps
             details["resume_games"] = getattr(model, "training_games", 0)

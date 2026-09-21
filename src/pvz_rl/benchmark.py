@@ -25,7 +25,7 @@ def policy_digest(model):
     return digest.hexdigest()
 
 
-def measure(cfg, seed, steps, output):
+def measure(cfg, seed, steps, output, *, deadline=None, load_monitor=None):
     """One warmup rollout, then timed learning; setup and warmup are separate."""
     # SB3 callbacks retain cyclic references to models. Reclaim the previous
     # measurement before reporting this run's CUDA memory, then warm up afresh.
@@ -35,6 +35,13 @@ def measure(cfg, seed, steps, output):
     started = perf_counter()
     env = vector_env(cfg, "masked", seed)
     try:
+        if cfg.get("simulation", {}).get("benchmark_shared_mix"):
+            from .budget import budget_target
+            from .curriculum import teaching_enabled
+
+            env.env_method("set_progress", budget_target(cfg))
+            if teaching_enabled(cfg):
+                env.env_method("set_curriculum_stage", 4)
         model = build_model(cfg, "masked", env, seed)
         model.set_logger(configure(str(output), []))
         setup_seconds = perf_counter() - started
@@ -45,11 +52,22 @@ def measure(cfg, seed, steps, output):
             torch.cuda.synchronize(model.device)
         warmup_seconds = perf_counter() - started
         initial_steps = model.num_timesteps
+        if hasattr(env, "features"):
+            env.features.profiler.flush()
+            env.features.profiler.seconds.clear()
+            env.phases = dict.fromkeys(env.phases, 0.0)
         if cuda:
             torch.cuda.reset_peak_memory_stats(model.device)
-        timing = TimingCallback()
+        timing = TimingCallback(deadline=deadline, load_monitor=load_monitor)
         started = perf_counter()
-        model.learn(steps, callback=timing, reset_num_timesteps=False)
+        from .training import TrainingDeadline
+
+        stopped = False
+        try:
+            model.learn(steps, callback=timing, reset_num_timesteps=False)
+        except TrainingDeadline:
+            stopped = True
+            timing.timings.end_update()
         if cuda:
             torch.cuda.synchronize(model.device)
         seconds = perf_counter() - started
@@ -61,6 +79,13 @@ def measure(cfg, seed, steps, output):
             "warmup_seconds": warmup_seconds,
             "seconds": seconds,
             "decisions_per_second": collected / seconds,
+            "games_per_minute": timing.games / seconds * 60,
+            "simulation_ticks_per_second": timing.ticks / seconds,
+            "completed_games": timing.games,
+            "device_phase_seconds": env.features.profiler.flush()
+            if hasattr(env, "features")
+            else None,
+            "host_phase_seconds": env.phases if hasattr(env, "phases") else None,
             **timing.timings.snapshot(),
             "cuda_peak_allocated_mib": (
                 torch.cuda.max_memory_allocated(model.device) / 2**20 if cuda else None
@@ -69,7 +94,7 @@ def measure(cfg, seed, steps, output):
                 torch.cuda.max_memory_reserved(model.device) / 2**20 if cuda else None
             ),
             "policy_sha256": policy_digest(model),
-            "state": "complete",
+            "state": "deadline" if stopped else "complete",
         }
     finally:
         env.close()

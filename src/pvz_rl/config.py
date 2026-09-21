@@ -35,11 +35,14 @@ def output_settings(cfg: dict) -> dict:
 
 def research_config(cfg: dict) -> dict:
     """Output and data-transport preferences do not change the research protocol."""
-    return {
+    result = {
         key: value
         for key, value in cfg.items()
         if key not in ("logging", "visualization", "runtime")
     }
+    # Optional timing instrumentation never changes compatibility. Backend does.
+    result["simulation"] = {"backend": simulator(cfg)}
+    return result
 
 
 @lru_cache(maxsize=1)
@@ -52,6 +55,33 @@ def _runtime_defaults():
 def runtime_settings(cfg: dict) -> dict:
     """Old configurations get current transport defaults without changing strategy."""
     return {**_runtime_defaults(), **cfg.get("runtime", {})}
+
+
+def simulator(cfg):
+    """Archived configurations without a backend field retain CPU simulation."""
+    return cfg.get("simulation", {}).get("backend", "cpu")
+
+
+@lru_cache(maxsize=1)
+def gpu_defaults():
+    return tomllib.loads(files("pvz_rl").joinpath("data/gpu-defaults.toml").read_text("utf-8"))
+
+
+def resolve_rollout(cfg, *, per_env=None, total=None, new_cuda=False):
+    """Resolve one explicit rollout contract and reject ambiguous overrides."""
+    t = cfg["training"]
+    steps = per_env if per_env is not None else t.get("rollout_steps_per_env")
+    if new_cuda and steps is None:
+        steps = 128
+    if steps is not None:
+        if type(steps) is not int or steps < 1:
+            raise ValueError("rollout_steps_per_env must be a positive integer")
+        derived = steps * t["n_envs"]
+        if total is not None and total != derived:
+            raise ValueError("--rollout-size conflicts with n_envs * rollout_steps_per_env")
+        t.update(rollout_steps_per_env=steps, rollout_size=derived)
+    elif total is not None:
+        t["rollout_size"] = total
 
 
 def load_config(path: str | Path | None = None) -> dict:
@@ -89,6 +119,16 @@ def learning_profile(name, base=None):
 
 
 def validate_config(cfg: dict) -> None:
+    if simulator(cfg) not in ("cpu", "cuda"):
+        raise ValueError("simulation.backend must be cpu or cuda")
+    if "rollout_steps_per_env" in cfg["training"]:
+        steps = cfg["training"]["rollout_steps_per_env"]
+        if (
+            type(steps) is not int
+            or steps < 1
+            or steps * cfg["training"]["n_envs"] != cfg["training"]["rollout_size"]
+        ):
+            raise ValueError("rollout_size must equal n_envs * rollout_steps_per_env")
     for key in (
         "plant_kill_weight",
         "mower_kill_weight",

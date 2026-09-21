@@ -40,7 +40,7 @@ def source_manifest(root: Path) -> dict[str, str]:
             p.read_bytes().replace(b"\r\n", b"\n")
         ).hexdigest()
         for p in sorted(root.rglob("*"))
-        if p.suffix in (".py", ".toml")
+        if p.suffix in (".py", ".toml", ".cu", ".cuh")
     }
 
 
@@ -90,6 +90,9 @@ def verify_engine(cfg: dict) -> dict:
         "package_version": package_version,
         "source_hash": digest(actual),
         "rules_hash": Rules().digest,
+        "cuda_backend_source_hash": digest(
+            {k: v for k, v in actual.items() if k.startswith("cuda/")}
+        ),
     }
 
 
@@ -121,6 +124,9 @@ def metadata(cfg: dict, **extra) -> dict:
         "gymnasium",
         "stable-baselines3",
         "sb3-contrib",
+        "cupy-cuda12x",
+        "nvidia-cuda-runtime-cu12",
+        "nvidia-cuda-nvrtc-cu12",
     ):
         try:
             versions[name] = importlib.metadata.version(name)

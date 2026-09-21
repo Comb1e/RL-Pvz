@@ -32,5 +32,8 @@ $stageRoot = Join-Path $projectRoot ('build\game-' + [guid]::NewGuid().ToString(
 Invoke-Checked -Program $venvPython -CommandArgs @('-B', (Join-Path $projectRoot 'tools\stage_game.py'), '--repo', $gameRoot, '--output', $stageRoot)
 Invoke-Checked -Program $venvPython -CommandArgs @('-m', 'pip', 'install', '--no-deps', '--force-reinstall', $stageRoot)
 Invoke-Checked -Program $venvPython -CommandArgs @('-m', 'pip', 'install', '--no-deps', '-e', "${projectRoot}[dev,ui]")
+if ($Cuda) {
+    Invoke-Checked -Program $venvPython -CommandArgs @('-m', 'pip', 'install', '-r', (Join-Path $projectRoot 'requirements-cuda-lock.txt'))
+}
 Invoke-Checked -Program $venvPython -CommandArgs @('-m', 'pip', 'check')
 Invoke-Checked -Program $venvPython -CommandArgs @('-m', 'pvz_rl', 'doctor')

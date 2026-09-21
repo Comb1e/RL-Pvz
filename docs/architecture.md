@@ -1,7 +1,7 @@
 # Current architecture
 
 The research project depends on a pinned, separately installed game. Only the game
-owns simulation state. A manifest verifies package version 1.2.1, simulation version
+owns simulation state. A manifest verifies package version 1.3.0, simulation version
 1.0.0, the Git source pin, source hashes, and rules hash before experiments. The
 installer stages a verified Git archive in this project's build directory and
 installs non-editably from there, without writing to the game checkout.
@@ -10,7 +10,18 @@ installs non-editably from there, without writing to the game checkout.
 flowchart LR
     Config[TOML configuration] --> Runner[CLI and experiment runner]
     Runner --> Env[Gymnasium environment]
-    Env --> Game[Pinned game engine]
+    Env --> Game[Pinned Python reference engine]
+    Runner --> GPU[CUDA batch environment]
+    GPU --> Kernels[Ordered integer simulation]
+    Kernels --> Features[Device observation, mask and reward kernels]
+    Features --> TensorPolicy[Same PPO policy on CUDA]
+    TensorPolicy --> Kernels
+    Features --> Buffer[Tensor rollout and device GAE]
+    Buffer --> Learn
+    GPU --> Facts[Compact completion records]
+    Facts --> Logs
+    TensorPolicy --> Traces[Deterministic action traces]
+    Traces --> Replay
     Game --> Public[Public observation and events]
     Public --> Encode[Versioned spatial or tactical features]
     Game --> Legal[Legal actions]
@@ -40,7 +51,7 @@ flowchart LR
 |---|---|
 | Configuration and provenance | Constants, seed splits, source verification, hashes, versions |
 | Actions and encoding | Stable public schemas, no private state or future schedule |
-| Environment | One game per worker; immediate legal actions, one tick on wait/rejection; explicit lifecycle |
+| Environment | Explicit Python workers or batched CUDA games; immediate legal actions, one tick on wait/rejection; explicit lifecycle |
 | Action timing | Pinned research subclass suppresses only the advance hook for immediate actions |
 | Budget | Completed training games drive stopping, validation and curriculum; legacy decision mode is explicit |
 | Rewards | Terminal, plant-plus-sun potential, public-event kills/damage, sun-weighted mower activation, wall-nut absorption, empty explosions |
@@ -49,8 +60,8 @@ flowchart LR
 | Grouped policy | Masked action type and conditional tile; joint PPO probability and entropy |
 | Curriculum state | Mastery probes, next-reset stage changes, persisted advancement counters |
 | Pilot | Timed diagnostics, alternating profile order, matched-budget comparison |
-| Runtime transport | Masks carried with observations, local mask access, reusable CUDA rollout tensors |
-| Timings/benchmark | Separate collection and update costs, warmup excluded from measurements, paired data-path comparisons |
+| Runtime transport | CPU mask caching or zero-copy CuPy/PyTorch tensors on a shared stream; only compact completion records cross to CPU |
+| Timings/benchmark | Separate collection/update, optional CUDA event phases, CPU/GPU load sampling, warmup/setup excluded, repeated bounded backend comparisons |
 | Evaluation | Same cases and timing, independent policy RNG, complete episode records |
 | Statistics/reporting | Run/scenario bootstrap, paired comparisons, figures and report |
 | Progress | Shared phase names and throttled console/file events; no per-episode printing |
@@ -168,16 +179,18 @@ require a fresh run and cannot be pooled under the same research configuration.
 
 ## Training and evaluation
 
-The installed game is package 1.2.1 at source pin
-`6fd1f54706369915013a49eab5c1790f8c55ab0a`, simulation version 1.0.0.
+The installed game is package 1.3.0 at source pin
+`8861824df6893a34c2cd4df7f9b68613376d7964`, simulation version 1.0.0.
 The native HUD displays defeated/total zombies. The research adapter does not
 duplicate the counter or change the numeric observation fields.
 
-The bundled configuration uses CUDA for policy inference during training and PPO
-updates. Each spawned game worker simulates on the CPU. `--device cpu` selects CPU
-training; CUDA requests fail early when unavailable. Device settings are retained
-in experiment metadata and must match when resuming. Standalone evaluation and
-demo generation load the shared checkpoint on the CPU by default.
+New unconstrained commands use CUDA simulation and policy updates with 128 games
+and 128 decisions/game/rollout. Explicit archived-style configurations keep their
+CPU simulation defaults. `--simulator cpu` uses spawned Python workers;
+`--device cpu` also selects CPU policy updates. CUDA requests fail early when
+unavailable. Backend/device settings are retained in metadata and must match on
+resume. CUDA validation uses batched policy inference and simulation; its demo
+traces must match CPU playback. The explicit CPU transport path is:
 
 ```mermaid
 flowchart LR
@@ -414,3 +427,44 @@ flowchart LR
     Due -->|no| Episodes
     Count --> Saved[Checkpoint, logs and game-axis curves]
 ```
+
+## CUDA data ownership and workflow
+
+```mermaid
+flowchart TD
+    Reset[Completed game needs reset] --> Select[CPU selects seed and task from current curriculum]
+    Select --> Queue[Bounded scenario staging queue]
+    Queue --> Validate[Validate all submitted resets and capacities]
+    Validate --> Arrays[Apply reset to CUDA arrays]
+    Arrays --> Observe[Read only public fields into policy tensor]
+    Observe --> Act[Choose action with one shared policy]
+    Act --> Sim[Ordered integer operations within each game]
+    Sim --> Reward[Combat facts plus potential reward]
+    Reward --> Done{Natural end or cutoff}
+    Done -->|No| Observe
+    Done -->|Yes| Bootstrap[Preserve final observation and timeout value]
+    Bootstrap --> Counters[Transfer completed-game totals; update global counters]
+    Counters --> Reset
+```
+
+PPO stores **128 decisions per parallel game**, with total rollout size derived
+from the number of games. The CUDA buffer preserves SB3's environment-major
+flattening, NumPy minibatch permutations, normalized advantages and four update
+epochs. Single-kernel GAE runs on-device. Episode counts drive stopping, validation
+and curriculum; policy/optimizer identities do not change at stage transitions.
+
+The simulator preserves insertion order and tie breaking in contiguous int64
+arrays. One warp handles each game; a single lane applies ordered combat.
+Numeric masks and float32 encoders/rewards never include seeds, entity IDs,
+private schedules, snapshots or task restrictions. Completion flags are one
+compact synchronization per decision; full observations, action/value/log-probability
+tensors, masks, GAE and returns remain on-device. Completed episode totals transfer
+in a batch. CPU scenario selection occurs only at reset.
+
+Validation batches fixed cases and retains the shared checkpoint scoring/tie rule.
+GPU action traces are executed through the Python recording adapter and must match
+final status and canonical state hash before a compact demo is saved. Rendering
+and optional video encoding use the same native interfaces. The hybrid strategy
+condition remains on the Python simulator; explicitly requesting it with CUDA
+training raises an error. Suite orchestration assigns its hybrid job to Python
+with at most eight CPU workers and the configured per-worker rollout length.

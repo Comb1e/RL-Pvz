@@ -9,7 +9,7 @@ from time import perf_counter
 
 import numpy as np
 
-from .config import digest, output_settings
+from .config import digest, output_settings, simulator
 from .env import PvZEnv
 from .frozen_baseline import choose_action
 from .progress import Phase, ProgressReporter
@@ -115,6 +115,7 @@ def evaluate(
                 "condition": cfg["conditions"][condition],
                 "encoding": cfg["encoding"],
                 "policy": cfg.get("policy", {"kind": "flat"}),
+                "simulator": simulator(cfg),
             }
         )
     )
@@ -132,6 +133,15 @@ def evaluate(
     progress.emit(f"Evaluation: {label}, {family}/{split}, {total} games", force=True)
     limit = cfg["evaluation"]["replays_per_outcome"] if replay_limit is None else replay_limit
     try:
+        gpu_rows = None
+        if policy is not None and simulator(cfg) == "cuda":
+            from .cuda_evaluation import batched_games
+
+            gpu_rows = iter(
+                batched_games(
+                    cfg, policy, condition, seeds, levels, family, record=record, progress=progress
+                )
+            )
         with (output / "episodes.jsonl").open("w", encoding="utf-8") as stream:
             for level in levels:
                 quotas = Counter()
@@ -163,19 +173,26 @@ def evaluate(
                         env.record = record and any(
                             quotas[k] < limit for k in ("won", "lost", "truncated")
                         )
+                        gpu = next(gpu_rows) if gpu_rows is not None else None
                         obs, _ = env.reset(seed=seed)
                         rng = np.random.default_rng(namespace_seed(f"baseline/{label}", seed))
                         inference_seconds, started = 0.0, perf_counter()
-                        while True:
+                        trace_index = 0
+                        while gpu is None or env.record:
                             t = perf_counter()
-                            action = select_action(
-                                env,
-                                obs,
-                                policy=policy,
-                                baseline=baseline,
-                                rng=rng,
-                                masked=cfg["conditions"][condition]["masked"],
+                            action = (
+                                gpu["action_trace"][trace_index]
+                                if gpu is not None
+                                else select_action(
+                                    env,
+                                    obs,
+                                    policy=policy,
+                                    baseline=baseline,
+                                    rng=rng,
+                                    masked=cfg["conditions"][condition]["masked"],
+                                )
                             )
+                            trace_index += 1
                             inference_seconds += perf_counter() - t
                             obs, _, terminated, truncated, info = env.step(action)
                             progress.emit(
@@ -184,6 +201,29 @@ def evaluate(
                             )
                             if terminated or truncated:
                                 break
+                        if gpu is not None:
+                            if env.record and (
+                                env.game.state_hash() != gpu["state_hash"]
+                                or info["episode_metrics"]["status"] != gpu["status"]
+                                or trace_index != gpu["decisions"]
+                            ):
+                                raise RuntimeError(
+                                    "CUDA demonstration diverged from CPU reference; recording not saved"
+                                )
+                            info = {
+                                "episode_metrics": {
+                                    k: v
+                                    for k, v in gpu.items()
+                                    if k
+                                    not in (
+                                        "action_trace",
+                                        "state_hash",
+                                        "inference_seconds",
+                                        "wall_seconds",
+                                    )
+                                }
+                            }
+                            inference_seconds = gpu["inference_seconds"]
                         row = {
                             **info["episode_metrics"],
                             "policy": label,
@@ -196,8 +236,13 @@ def evaluate(
                             "training_steps": training_steps,
                             "training_games": training_games,
                             "inference_seconds": inference_seconds,
-                            "wall_seconds": perf_counter() - started,
-                            "state_hash": env.game.state_hash(),
+                            "wall_seconds": gpu["wall_seconds"]
+                            if gpu is not None
+                            else perf_counter() - started,
+                            "simulator": simulator(cfg) if gpu is not None else "cpu",
+                            "state_hash": gpu["state_hash"]
+                            if gpu is not None
+                            else env.game.state_hash(),
                             "checkpoint_hash": checkpoint_hash,
                         }
                         if env.recorder and quotas[row["status"]] < limit:

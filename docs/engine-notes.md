@@ -1,3 +1,23 @@
+# Current game integration — 0.6.0
+
+2026-09-21: game package **1.3.0**, simulation **1.0.0**, commit
+`8861824df6893a34c2cd4df7f9b68613376d7964`. Development is in isolated game
+and research worktrees. Leafy authorized framework changes for GPU training;
+the original `E:/Projects/pvz` checkout remains unchanged.
+
+The game now supplies an optional CuPy/NVRTC batch backend, numeric masks, compact
+combat facts and diagnostic snapshot/event interfaces. The research package owns
+public-state encoders, rewards, task masks, tensor PPO and game-count schedules.
+CPU simulation remains the exact oracle and the hybrid/scripted path. Existing
+native recording/rendering APIs still provide the viewer and optional MP4 frames.
+
+The original Python API still requires the research action-phase adapter for
+zero-time planting/digging. CUDA implements the same action semantics directly.
+Further suggested adjustments and measured limitations are in
+[gpu-plan-adjustments.md](gpu-plan-adjustments.md).
+
+## Historical notes
+
 # Notes for the separate PVZ game
 
 Date: 2026-09-20. Adopted package 1.2.1, commit

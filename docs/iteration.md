@@ -1,5 +1,43 @@
 # Iteration history
 
+## 0.6.0 — 2026-09-21
+
+### Previous issues and causes
+
+- CPU simulation and repeated observation/mask transfers dominated collection.
+  A small GPU policy alone could not exploit the laptop's stronger GPU.
+- A fixed total rollout hid how many decisions each parallel game contributed.
+
+### Improvements
+
+- Optional game 1.3.0 CUDA backend preserves ordered integer combat and exact
+  CPU snapshots, while simulating independent games in parallel. Pinned sources
+  include CUDA kernels; ordinary CPU gameplay keeps optional dependencies.
+- Device encoders, reward metrics, collector, rollout buffer and GAE share
+  tensors through DLPack. PPO equations, networks, optimizer settings and shared
+  policy remain unchanged. Global game counts still drive schedules.
+- Add simulator/per-game rollout flags, compilation/interop doctor probes,
+  batched validation and CPU-verified demonstration traces. Hybrid remains CPU.
+- Three repetitions selected 128 games × 128 decisions: 10,733 decisions/s,
+  3.79× the current CPU baseline. New unconstrained runs use this setting;
+  explicit and saved configurations keep their settings.
+- Consolidate the verified setup into the main `.venv` and remove the temporary
+  CUDA test environment. Keep the original game checkout and archived runs.
+
+### Verification and remaining issues
+
+Complete test results, packaging checks, short learning/replay integration and
+visual inspection are recorded in [validation](validation.md). Exact game hashes
+and tight encoder/reward, GAE, loss, gradient and optimizer controls accompany
+the [measured performance](gpu-performance.md). No formal training was launched.
+
+Eight-game CUDA is slightly slower than equivalent CPU simulation. Launch and
+encoding costs remain; three integers/game still synchronize each decision.
+Modified rules, scripted hybrid placement and legacy fixed-tick actions require
+CPU simulation. Measurements exclude validation/export and sustained thermal
+testing. [Implementation adjustments](gpu-plan-adjustments.md) explain the
+remaining queue/reset and intra-game parallelism work.
+
 
 ## 0.5.0 — 2026-09-20
 

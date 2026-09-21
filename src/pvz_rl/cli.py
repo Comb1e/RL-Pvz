@@ -6,7 +6,14 @@ import argparse
 import json
 from pathlib import Path
 
-from .config import load_config, research_config, seed_values, validate_config
+from .config import (
+    gpu_defaults,
+    load_config,
+    research_config,
+    resolve_rollout,
+    seed_values,
+    validate_config,
+)
 from .provenance import file_hash, metadata, write_json
 
 
@@ -43,6 +50,10 @@ def training_options(parser):
     parser.add_argument("--n-envs", type=int)
     parser.add_argument("--device", choices=("cpu", "cuda"))
     parser.add_argument("--rollout-size", type=int)
+    parser.add_argument("--simulator", choices=("cpu", "cuda"))
+    parser.add_argument(
+        "--rollout-steps-per-env", type=int, help="decisions per parallel game; CUDA default 128"
+    )
     parser.add_argument("--batch-size", type=int)
     parser.add_argument("--eval-interval", type=int)
     parser.add_argument(
@@ -55,9 +66,37 @@ def training_options(parser):
 
 def configured(args):
     cfg = load_config(args.config)
+    # New unconstrained runs use the measured GPU profile. Explicit CPU, legacy
+    # decision/rollout settings and saved configurations keep their old behavior.
+    promote = (
+        args.command in ("train", "suite")
+        and not args.config
+        and not getattr(args, "hardware", None)
+        and not getattr(args, "resume", None)
+        and getattr(args, "steps", None) is None
+        and getattr(args, "rollout_size", None) is None
+        and getattr(args, "simulator", None) != "cpu"
+        and getattr(args, "device", None) != "cpu"
+        and getattr(args, "condition", None) != "hybrid"
+    )
+    if promote:
+        defaults = gpu_defaults()
+        cfg["simulation"] = {"backend": defaults["simulator"]}
+        cfg["training"].update(
+            {k: defaults[k] for k in ("n_envs", "device", "rollout_steps_per_env")}
+        )
+    if getattr(args, "resume", None) and not args.config:
+        run = args.output if args.command == "suite" else args.resume.parent
+        cfg = json.loads((run / "metadata.json").read_text("utf-8"))["config"]
     if getattr(args, "hardware", None):
         hardware = json.loads(args.hardware.read_text("utf-8"))
+        if type(hardware.get("n_envs")) is not int or hardware["n_envs"] < 1:
+            raise ValueError("Hardware benchmark has no usable parallel-game recommendation")
         cfg["training"].update({k: hardware[k] for k in ("n_envs", "device")})
+        if "simulator" in hardware:
+            cfg["simulation"] = {"backend": hardware["simulator"]}
+        if "rollout_steps_per_env" in hardware:
+            cfg["training"]["rollout_steps_per_env"] = hardware["rollout_steps_per_env"]
     for arg, key in (
         ("steps", "total_steps"),
         ("games", "total_games"),
@@ -75,6 +114,15 @@ def configured(args):
         cfg["training"]["budget_unit"] = "games"
     elif getattr(args, "steps", None) is not None and args.command in ("train", "suite"):
         cfg["training"]["budget_unit"] = "decisions"
+    selected_simulator = getattr(args, "simulator", None)
+    if selected_simulator is not None:
+        cfg["simulation"] = {"backend": selected_simulator}
+    resolve_rollout(
+        cfg,
+        per_env=getattr(args, "rollout_steps_per_env", None),
+        total=getattr(args, "rollout_size", None),
+        new_cuda=selected_simulator == "cuda",
+    )
     if (
         getattr(args, "eval_games", None) is not None
         and cfg["training"].get("budget_unit") != "games"
@@ -148,6 +196,13 @@ def main(argv=None):
     bench.add_argument("--workers", type=int, nargs="+", default=[1, 4, 8])
     bench.add_argument("--devices", nargs="+", choices=("cpu", "cuda"), default=["cpu", "cuda"])
     bench.add_argument("--repeats", type=int, default=3)
+    gpu_bench = subs.add_parser(
+        "benchmark-gpu", help="bounded CPU/CUDA backend comparison at 32/64/128 games"
+    )
+    common(gpu_bench)
+    gpu_bench.add_argument("--output", type=Path, required=True)
+    gpu_bench.add_argument("--minutes", type=float, default=15)
+    gpu_bench.add_argument("--steps", type=int, default=16384)
     bench.add_argument(
         "--compare-runtime",
         action="store_true",
@@ -239,6 +294,9 @@ def main(argv=None):
         from .env import PvZEnv
 
         details = metadata(cfg, kind="availability-check")
+        from .cuda_diagnostics import cuda_doctor
+
+        details["cuda_simulator"] = cuda_doctor()
         for condition in cfg["conditions"]:
             env = PvZEnv(cfg, condition=condition)
             check_env(env, skip_render_check=True)
@@ -295,6 +353,7 @@ def main(argv=None):
                         "engine",
                         "gymnasium_checks",
                         "cuda_available",
+                        "cuda_simulator",
                         "rendering",
                         "video",
                         "compact_replay",
@@ -381,6 +440,14 @@ def main(argv=None):
         )
         write_json(args.output / "metadata.json", details)
         print(json.dumps(summarize(rows), indent=2))
+    elif args.command == "benchmark-gpu":
+        from .gpu_benchmark import benchmark_gpu
+
+        print(
+            json.dumps(
+                benchmark_gpu(cfg, args.output, minutes=args.minutes, steps=args.steps), indent=2
+            )
+        )
     elif args.command == "benchmark":
         from .benchmark import benchmark
 

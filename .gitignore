@@ -9,3 +9,6 @@ dist/
 runs/
 artifacts/
 *.pyc
+.source-evidence/
+.test-cache/
+.test-tmp/

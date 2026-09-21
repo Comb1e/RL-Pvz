@@ -1,0 +1,261 @@
+{
+  "config": {
+    "conditions": {
+      "hybrid": {
+        "curriculum": true,
+        "hybrid": true,
+        "masked": true,
+        "shaped": true
+      },
+      "masked": {
+        "curriculum": true,
+        "hybrid": false,
+        "masked": true,
+        "shaped": true
+      },
+      "mixed": {
+        "curriculum": false,
+        "hybrid": false,
+        "masked": true,
+        "shaped": true
+      },
+      "sparse": {
+        "curriculum": true,
+        "hybrid": false,
+        "masked": true,
+        "shaped": false
+      },
+      "unmasked": {
+        "curriculum": true,
+        "hybrid": false,
+        "masked": false,
+        "shaped": true
+      }
+    },
+    "curriculum": {
+      "boundaries": [
+        0.1,
+        0.4
+      ],
+      "easy_weights": [
+        1.0,
+        0.0,
+        0.0
+      ],
+      "final_weights": [
+        0.2,
+        0.4,
+        0.4
+      ],
+      "intermediate_weights": [
+        0.5,
+        0.5,
+        0.0
+      ]
+    },
+    "encoding": {
+      "count_scale": 75,
+      "version": 1,
+      "wave_scale": 15
+    },
+    "engine_commit": "8861824df6893a34c2cd4df7f9b68613376d7964",
+    "engine_package_version": "1.3.0",
+    "engine_version": "1.0.0",
+    "environment": {
+      "action_timing": "per_tick",
+      "bins": 20,
+      "cols": 9,
+      "cutoff_seconds": 1200,
+      "decision_ticks": 1,
+      "mower_states": [
+        "ready",
+        "moving",
+        "spent"
+      ],
+      "plant_states": [
+        "ready",
+        "arming",
+        "armed",
+        "fusing",
+        "digesting",
+        "exploding",
+        "detonating"
+      ],
+      "plants": [
+        "sunflower",
+        "peashooter",
+        "wall_nut",
+        "cherry_bomb",
+        "potato_mine",
+        "snow_pea",
+        "chomper",
+        "repeater"
+      ],
+      "rows": 5,
+      "zombie_states": [
+        "walking",
+        "carrying_pole",
+        "vaulting",
+        "biting",
+        "dead"
+      ],
+      "zombies": [
+        "basic",
+        "flag",
+        "conehead",
+        "buckethead",
+        "pole_vaulting"
+      ]
+    },
+    "evaluation": {
+      "bootstrap_replicates": 2000,
+      "bootstrap_seed": 1739,
+      "levels": [
+        "easy",
+        "standard",
+        "hard"
+      ],
+      "ood_families": [
+        "redistributed",
+        "faster",
+        "concentrated"
+      ],
+      "ood_levels": [
+        "standard",
+        "hard"
+      ],
+      "replays_per_outcome": 10,
+      "targets": [
+        0.95,
+        0.9,
+        0.75
+      ]
+    },
+    "logging": {
+      "progress_seconds": 15,
+      "rolling_window": 100
+    },
+    "reward": {
+      "damage_weight": 1.0,
+      "defeated_weight": 0.5,
+      "economy_scale": 300,
+      "economy_weight": 0.5,
+      "empty_explosion_penalty": 0.2,
+      "empty_mower_activation_penalty": 0.2,
+      "gamma": 0.999,
+      "loss_penalty": 2.0,
+      "mower_kill_weight": 2.0,
+      "mower_sun_scale": 300.0,
+      "mower_sun_weight": 1.0,
+      "normalize_kills": true,
+      "plant_kill_weight": 1.0,
+      "potential_mode": "plant_value",
+      "wall_nut_damage_weight": 0.2,
+      "win_reward": 1.0
+    },
+    "runtime": {
+      "cache_legal_actions": true,
+      "cache_rollout_on_device": true,
+      "coalesce_masks": true
+    },
+    "schema_version": 1,
+    "splits": {
+      "ood": [
+        300000,
+        300099
+      ],
+      "test": [
+        200000,
+        200299
+      ],
+      "train": [
+        1000,
+        99999
+      ],
+      "validation": [
+        100000,
+        100049
+      ]
+    },
+    "training": {
+      "batch_size": 256,
+      "budget_unit": "games",
+      "clip_range": 0.2,
+      "device": "cuda",
+      "ent_coef": 0.01,
+      "eval_interval": 250000,
+      "eval_interval_games": 250,
+      "gae_lambda": 0.98,
+      "hidden_sizes": [
+        256,
+        256
+      ],
+      "learner_seeds": [
+        101,
+        102,
+        103,
+        104,
+        105
+      ],
+      "learning_rate": 0.0003,
+      "n_envs": 8,
+      "n_epochs": 4,
+      "rollout_size": 4096,
+      "torch_threads": 1,
+      "total_games": 10000,
+      "total_steps": 16384
+    },
+    "visualization": {
+      "crf": 23,
+      "demos": true,
+      "enabled": true,
+      "ffmpeg": "",
+      "final_hold_seconds": 2,
+      "video_size": [
+        1280,
+        820
+      ],
+      "videos": false
+    }
+  },
+  "config_hash": "aa5964885910a304093c7fc07073c9dde6cea39853f2abf1afb76676ed5fb3f2",
+  "created_utc": "2026-09-21T04:25:11.807097+00:00",
+  "engine": {
+    "commit": "8861824df6893a34c2cd4df7f9b68613376d7964",
+    "cuda_backend_source_hash": "98c7859a1804c63af8dd9f3e5cc7d40952933bab6b2133f1e5433d6e5ccbdc34",
+    "package_version": "1.3.0",
+    "rules_hash": "a7486688fa43a9b50193f82715fa519bd27cfebc7ed054bebe4f7990f9c268de",
+    "source_hash": "5c4b358043b8253e7876aa68a46bcf272f0264d80c7de86f9e67c7c8bc6993e2",
+    "version": "1.0.0"
+  },
+  "kind": "gpu-backend-benchmark",
+  "minutes": 15.0,
+  "packages": {
+    "cupy-cuda12x": "13.6.0",
+    "gymnasium": "1.2.3",
+    "numpy": "2.5.3",
+    "nvidia-cuda-nvrtc-cu12": "12.8.93",
+    "nvidia-cuda-runtime-cu12": "12.8.90",
+    "pvz-plant-research": "0.6.0",
+    "pvz-research-game": "1.3.0",
+    "sb3-contrib": "2.7.1",
+    "stable-baselines3": "2.7.1",
+    "torch": "2.8.0+cu128"
+  },
+  "pid": 10292,
+  "platform": "Windows-11-10.0.26200-SP0",
+  "python": "3.12.3 (tags/v3.12.3:f6650f9, Apr  9 2024, 14:05:25) [MSC v.1938 64 bit (AMD64)]",
+  "repeats": 3,
+  "research": {
+    "branch": "feature/gpu-simulator",
+    "commit": "20626cca12d40d956586c1f7f04547d7e36133e6",
+    "dirty": true
+  },
+  "research_source_hash": "3fc047c16c99514814acb07b417ab4db596fae223265b898591344e1225cab7f",
+  "runtime": {
+    "cache_legal_actions": true,
+    "cache_rollout_on_device": true,
+    "coalesce_masks": true
+  },
+  "steps": 16384
+}

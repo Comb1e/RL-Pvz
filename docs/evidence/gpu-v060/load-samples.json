@@ -1,0 +1,3925 @@
+[
+  {
+    "gpu_memory_mib": 0.0,
+    "gpu_memory_percent": 0.0,
+    "gpu_percent": 0.0,
+    "gpu_watts": 16.73,
+    "phase": "cpu-current/repeat-1",
+    "seconds": 0.0004216999996060622
+  },
+  {
+    "gpu_memory_mib": 0.0,
+    "gpu_memory_percent": 0.0,
+    "gpu_percent": 0.0,
+    "gpu_watts": 18.01,
+    "phase": "cpu-current/repeat-1",
+    "seconds": 2.7771555999997872,
+    "system_cpu_percent": 34.80168480168481
+  },
+  {
+    "gpu_memory_mib": 8.0,
+    "gpu_memory_percent": 0.0,
+    "gpu_percent": 0.0,
+    "gpu_watts": 16.64,
+    "phase": "cpu-current/repeat-1",
+    "seconds": 4.316748999999618,
+    "system_cpu_percent": 12.597200622083982
+  },
+  {
+    "gpu_memory_mib": 167.0,
+    "gpu_memory_percent": 0.0,
+    "gpu_percent": 18.0,
+    "gpu_watts": 17.0,
+    "phase": "cpu-current/repeat-1",
+    "seconds": 5.640295899999728,
+    "system_cpu_percent": 13.398437500000004
+  },
+  {
+    "gpu_memory_mib": 267.0,
+    "gpu_memory_percent": 3.0,
+    "gpu_percent": 24.0,
+    "gpu_watts": 20.9,
+    "phase": "cpu-current/repeat-1/phase-collecting",
+    "seconds": 6.727770299999975,
+    "system_cpu_percent": 11.784371082323442
+  },
+  {
+    "gpu_memory_mib": 267.0,
+    "gpu_memory_percent": 0.0,
+    "gpu_percent": 19.0,
+    "gpu_watts": 17.32,
+    "phase": "cpu-current/repeat-1/phase-updating",
+    "seconds": 7.796333599999343,
+    "system_cpu_percent": 17.87254432199329
+  },
+  {
+    "gpu_memory_mib": 267.0,
+    "gpu_memory_percent": 0.0,
+    "gpu_percent": 18.0,
+    "gpu_watts": 18.73,
+    "phase": "cpu-current/repeat-1/phase-collecting",
+    "seconds": 8.865640199999689,
+    "system_cpu_percent": 13.606628870475356
+  },
+  {
+    "gpu_memory_mib": 267.0,
+    "gpu_memory_percent": 7.0,
+    "gpu_percent": 33.0,
+    "gpu_watts": 23.55,
+    "phase": "cpu-current/repeat-1/phase-collecting",
+    "seconds": 9.924596899999415,
+    "system_cpu_percent": 14.712976362759289
+  },
+  {
+    "gpu_memory_mib": 267.0,
+    "gpu_memory_percent": 0.0,
+    "gpu_percent": 18.0,
+    "gpu_watts": 16.86,
+    "phase": "cpu-current/repeat-1/phase-updating",
+    "seconds": 10.982100099999116,
+    "system_cpu_percent": 15.700267618198039
+  },
+  {
+    "gpu_memory_mib": 267.0,
+    "gpu_memory_percent": 0.0,
+    "gpu_percent": 16.0,
+    "gpu_watts": 18.54,
+    "phase": "cpu-current/repeat-1/phase-collecting",
+    "seconds": 12.0388269999994,
+    "system_cpu_percent": 15.291936978683962
+  },
+  {
+    "gpu_memory_mib": 267.0,
+    "gpu_memory_percent": 3.0,
+    "gpu_percent": 22.0,
+    "gpu_watts": 20.43,
+    "phase": "cpu-current/repeat-1/phase-collecting",
+    "seconds": 13.142734799999744,
+    "system_cpu_percent": 17.23526805494019
+  },
+  {
+    "gpu_memory_mib": 267.0,
+    "gpu_memory_percent": 0.0,
+    "gpu_percent": 16.0,
+    "gpu_watts": 16.84,
+    "phase": "cpu-current/repeat-1/phase-collecting",
+    "seconds": 14.209604099999524,
+    "system_cpu_percent": 14.747382794720076
+  },
+  {
+    "gpu_memory_mib": 269.0,
+    "gpu_memory_percent": 0.0,
+    "gpu_percent": 18.0,
+    "gpu_watts": 18.57,
+    "phase": "cpu-current/repeat-1/phase-collecting",
+    "seconds": 15.263715499999307,
+    "system_cpu_percent": 14.371534195933455
+  },
+  {
+    "gpu_memory_mib": 269.0,
+    "gpu_memory_percent": 7.0,
+    "gpu_percent": 49.0,
+    "gpu_watts": 21.16,
+    "phase": "cpu-current/repeat-1/phase-collecting",
+    "seconds": 16.33145009999953,
+    "system_cpu_percent": 13.457181694608067
+  },
+  {
+    "gpu_memory_mib": 269.0,
+    "gpu_memory_percent": 0.0,
+    "gpu_percent": 17.0,
+    "gpu_watts": 17.48,
+    "phase": "cpu-current/repeat-1/phase-collecting",
+    "seconds": 17.390437099999872,
+    "system_cpu_percent": 18.122065727699532
+  },
+  {
+    "gpu_memory_mib": 269.0,
+    "gpu_memory_percent": 3.0,
+    "gpu_percent": 32.0,
+    "gpu_watts": 17.82,
+    "phase": "cpu-current/repeat-1/phase-collecting",
+    "seconds": 18.45742969999992,
+    "system_cpu_percent": 13.648648648648653
+  },
+  {
+    "gpu_memory_mib": 269.0,
+    "gpu_memory_percent": 0.0,
+    "gpu_percent": 23.0,
+    "gpu_watts": 13.37,
+    "phase": "cpu-current/repeat-1/phase-updating",
+    "seconds": 19.528266199999962,
+    "system_cpu_percent": 15.419917393299675
+  },
+  {
+    "gpu_memory_mib": 193.0,
+    "gpu_memory_percent": 0.0,
+    "gpu_percent": 0.0,
+    "gpu_watts": 15.34,
+    "phase": "cpu-equivalent/repeat-1",
+    "seconds": 20.59704309999961,
+    "system_cpu_percent": 26.116996775679414
+  },
+  {
+    "gpu_memory_mib": 193.0,
+    "gpu_memory_percent": 0.0,
+    "gpu_percent": 0.0,
+    "gpu_watts": 17.01,
+    "phase": "cpu-equivalent/repeat-1",
+    "seconds": 21.65643589999945,
+    "system_cpu_percent": 39.0691114245416
+  },
+  {
+    "gpu_memory_mib": 193.0,
+    "gpu_memory_percent": 0.0,
+    "gpu_percent": 0.0,
+    "gpu_watts": 10.83,
+    "phase": "cpu-equivalent/repeat-1",
+    "seconds": 22.71498639999936,
+    "system_cpu_percent": 34.99546690843155
+  },
+  {
+    "gpu_memory_mib": 235.0,
+    "gpu_memory_percent": 0.0,
+    "gpu_percent": 54.0,
+    "gpu_watts": 8.59,
+    "phase": "cpu-equivalent/repeat-1/phase-collecting",
+    "seconds": 23.771987099999933,
+    "system_cpu_percent": 16.610818573480135
+  },
+  {
+    "gpu_memory_mib": 235.0,
+    "gpu_memory_percent": 24.0,
+    "gpu_percent": 55.0,
+    "gpu_watts": 13.44,
+    "phase": "cpu-equivalent/repeat-1/phase-collecting",
+    "seconds": 24.841259399999217,
+    "system_cpu_percent": 14.090106007067138
+  },
+  {
+    "gpu_memory_mib": 235.0,
+    "gpu_memory_percent": 0.0,
+    "gpu_percent": 30.0,
+    "gpu_watts": 16.32,
+    "phase": "cpu-equivalent/repeat-1/phase-collecting",
+    "seconds": 25.914040399999976,
+    "system_cpu_percent": 13.61848574237955
+  },
+  {
+    "gpu_memory_mib": 235.0,
+    "gpu_memory_percent": 0.0,
+    "gpu_percent": 30.0,
+    "gpu_watts": 12.95,
+    "phase": "cpu-equivalent/repeat-1/phase-collecting",
+    "seconds": 26.97195969999939,
+    "system_cpu_percent": 13.106382978723408
+  },
+  {
+    "gpu_memory_mib": 235.0,
+    "gpu_memory_percent": 0.0,
+    "gpu_percent": 22.0,
+    "gpu_watts": 17.59,
+    "phase": "cpu-equivalent/repeat-1/phase-updating",
+    "seconds": 28.031370799999422,
+    "system_cpu_percent": 18.7206020696143
+  },
+  {
+    "gpu_memory_mib": 235.0,
+    "gpu_memory_percent": 19.0,
+    "gpu_percent": 47.0,
+    "gpu_watts": 12.13,
+    "phase": "cpu-equivalent/repeat-1/phase-updating",
+    "seconds": 29.103056399999332,
+    "system_cpu_percent": 20.624712907671107
+  },
+  {
+    "gpu_memory_mib": 237.0,
+    "gpu_memory_percent": 19.0,
+    "gpu_percent": 41.0,
+    "gpu_watts": 14.53,
+    "phase": "cpu-equivalent/repeat-1/phase-collecting",
+    "seconds": 30.170167799999945,
+    "system_cpu_percent": 16.084229390681003
+  },
+  {
+    "gpu_memory_mib": 237.0,
+    "gpu_memory_percent": 3.0,
+    "gpu_percent": 31.0,
+    "gpu_watts": 15.56,
+    "phase": "cpu-equivalent/repeat-1/phase-collecting",
+    "seconds": 31.23717839999972,
+    "system_cpu_percent": 19.021739130434778
+  },
+  {
+    "gpu_memory_mib": 237.0,
+    "gpu_memory_percent": 2.0,
+    "gpu_percent": 24.0,
+    "gpu_watts": 15.86,
+    "phase": "cpu-equivalent/repeat-1/phase-collecting",
+    "seconds": 32.29464789999929,
+    "system_cpu_percent": 21.38888888888889
+  },
+  {
+    "gpu_memory_mib": 237.0,
+    "gpu_memory_percent": 5.0,
+    "gpu_percent": 41.0,
+    "gpu_watts": 15.67,
+    "phase": "cpu-equivalent/repeat-1/phase-collecting",
+    "seconds": 33.351472499999545,
+    "system_cpu_percent": 20.10382255781029
+  },
+  {
+    "gpu_memory_mib": 237.0,
+    "gpu_memory_percent": 0.0,
+    "gpu_percent": 26.0,
+    "gpu_watts": 17.47,
+    "phase": "cpu-equivalent/repeat-1/phase-collecting",
+    "seconds": 34.42577919999985,
+    "system_cpu_percent": 15.601251676352257
+  },
+  {
+    "gpu_memory_mib": 237.0,
+    "gpu_memory_percent": 0.0,
+    "gpu_percent": 24.0,
+    "gpu_watts": 17.87,
+    "phase": "cpu-equivalent/repeat-1/phase-updating",
+    "seconds": 35.492994799999906,
+    "system_cpu_percent": 14.191419141914196
+  },
+  {
+    "gpu_memory_mib": 237.0,
+    "gpu_memory_percent": 0.0,
+    "gpu_percent": 24.0,
+    "gpu_watts": 17.8,
+    "phase": "cpu-equivalent/repeat-1/phase-collecting",
+    "seconds": 36.55279409999912,
+    "system_cpu_percent": 19.208537127612267
+  },
+  {
+    "gpu_memory_mib": 237.0,
+    "gpu_memory_percent": 1.0,
+    "gpu_percent": 8.0,
+    "gpu_watts": 17.63,
+    "phase": "cpu-equivalent/repeat-1/phase-updating",
+    "seconds": 37.60875869999927,
+    "system_cpu_percent": 17.447795823665892
+  },
+  {
+    "gpu_memory_mib": 193.0,
+    "gpu_memory_percent": 0.0,
+    "gpu_percent": 0.0,
+    "gpu_watts": 14.93,
+    "phase": "cuda-equivalent/repeat-1",
+    "seconds": 38.694700099999864,
+    "system_cpu_percent": 22.533272143184945
+  },
+  {
+    "gpu_memory_mib": 207.0,
+    "gpu_memory_percent": 1.0,
+    "gpu_percent": 4.0,
+    "gpu_watts": 9.25,
+    "phase": "cuda-equivalent/repeat-1",
+    "seconds": 39.74869049999961,
+    "system_cpu_percent": 12.814645308924488
+  },
+  {
+    "gpu_memory_mib": 869.0,
+    "gpu_memory_percent": 0.0,
+    "gpu_percent": 63.0,
+    "gpu_watts": 18.92,
+    "phase": "cuda-equivalent/repeat-1",
+    "seconds": 40.80441949999931,
+    "system_cpu_percent": 12.292051756007394
+  },
+  {
+    "gpu_memory_mib": 869.0,
+    "gpu_memory_percent": 0.0,
+    "gpu_percent": 48.0,
+    "gpu_watts": 32.45,
+    "phase": "cuda-equivalent/repeat-1/phase-collecting",
+    "seconds": 41.866109499999766,
+    "system_cpu_percent": 11.711711711711715
+  },
+  {
+    "gpu_memory_mib": 869.0,
+    "gpu_memory_percent": 0.0,
+    "gpu_percent": 48.0,
+    "gpu_watts": 34.89,
+    "phase": "cuda-equivalent/repeat-1/phase-collecting",
+    "seconds": 42.92490569999973,
+    "system_cpu_percent": 11.94457716196846
+  },
+  {
+    "gpu_memory_mib": 869.0,
+    "gpu_memory_percent": 4.0,
+    "gpu_percent": 36.0,
+    "gpu_watts": 37.17,
+    "phase": "cuda-equivalent/repeat-1/phase-collecting",
+    "seconds": 43.98537539999961,
+    "system_cpu_percent": 13.33333333333333
+  },
+  {
+    "gpu_memory_mib": 869.0,
+    "gpu_memory_percent": 0.0,
+    "gpu_percent": 49.0,
+    "gpu_watts": 34.94,
+    "phase": "cuda-equivalent/repeat-1/phase-collecting",
+    "seconds": 45.04290519999995,
+    "system_cpu_percent": 11.274735388863322
+  },
+  {
+    "gpu_memory_mib": 869.0,
+    "gpu_memory_percent": 0.0,
+    "gpu_percent": 46.0,
+    "gpu_watts": 34.18,
+    "phase": "cuda-equivalent/repeat-1/phase-updating",
+    "seconds": 46.11240689999977,
+    "system_cpu_percent": 12.677304964539005
+  },
+  {
+    "gpu_memory_mib": 869.0,
+    "gpu_memory_percent": 2.0,
+    "gpu_percent": 44.0,
+    "gpu_watts": 36.42,
+    "phase": "cuda-equivalent/repeat-1/phase-collecting",
+    "seconds": 47.179327799999555,
+    "system_cpu_percent": 14.096109839816929
+  },
+  {
+    "gpu_memory_mib": 869.0,
+    "gpu_memory_percent": 0.0,
+    "gpu_percent": 48.0,
+    "gpu_watts": 33.99,
+    "phase": "cuda-equivalent/repeat-1/phase-updating",
+    "seconds": 48.24627999999939,
+    "system_cpu_percent": 12.42009132420091
+  },
+  {
+    "gpu_memory_mib": 869.0,
+    "gpu_memory_percent": 0.0,
+    "gpu_percent": 49.0,
+    "gpu_watts": 34.0,
+    "phase": "cuda-equivalent/repeat-1/phase-collecting",
+    "seconds": 49.32993869999973,
+    "system_cpu_percent": 12.133699633699635
+  },
+  {
+    "gpu_memory_mib": 869.0,
+    "gpu_memory_percent": 0.0,
+    "gpu_percent": 48.0,
+    "gpu_watts": 34.01,
+    "phase": "cuda-equivalent/repeat-1/phase-collecting",
+    "seconds": 50.401753799999824,
+    "system_cpu_percent": 13.352970054000979
+  },
+  {
+    "gpu_memory_mib": 869.0,
+    "gpu_memory_percent": 1.0,
+    "gpu_percent": 43.0,
+    "gpu_watts": 34.5,
+    "phase": "cuda-equivalent/repeat-1/phase-collecting",
+    "seconds": 51.46824989999914,
+    "system_cpu_percent": 10.4228961982059
+  },
+  {
+    "gpu_memory_mib": 869.0,
+    "gpu_memory_percent": 1.0,
+    "gpu_percent": 47.0,
+    "gpu_watts": 34.01,
+    "phase": "cuda-equivalent/repeat-1/phase-collecting",
+    "seconds": 52.536686099999315,
+    "system_cpu_percent": 10.778985507246375
+  },
+  {
+    "gpu_memory_mib": 869.0,
+    "gpu_memory_percent": 0.0,
+    "gpu_percent": 48.0,
+    "gpu_watts": 34.03,
+    "phase": "cuda-equivalent/repeat-1/phase-collecting",
+    "seconds": 53.592467899999974,
+    "system_cpu_percent": 13.155339805825239
+  },
+  {
+    "gpu_memory_mib": 869.0,
+    "gpu_memory_percent": 4.0,
+    "gpu_percent": 33.0,
+    "gpu_watts": 35.13,
+    "phase": "cuda-equivalent/repeat-1/phase-collecting",
+    "seconds": 54.65853489999972,
+    "system_cpu_percent": 10.854503464203235
+  },
+  {
+    "gpu_memory_mib": 937.0,
+    "gpu_memory_percent": 1.0,
+    "gpu_percent": 50.0,
+    "gpu_watts": 35.01,
+    "phase": "cuda-32/repeat-1",
+    "seconds": 55.716142399999626,
+    "system_cpu_percent": 11.342490031014618
+  },
+  {
+    "gpu_memory_mib": 937.0,
+    "gpu_memory_percent": 5.0,
+    "gpu_percent": 37.0,
+    "gpu_watts": 37.4,
+    "phase": "cuda-32/repeat-1/phase-collecting",
+    "seconds": 56.79708969999956,
+    "system_cpu_percent": 12.505504183179216
+  },
+  {
+    "gpu_memory_mib": 937.0,
+    "gpu_memory_percent": 1.0,
+    "gpu_percent": 49.0,
+    "gpu_watts": 35.66,
+    "phase": "cuda-32/repeat-1/phase-collecting",
+    "seconds": 57.86274599999979,
+    "system_cpu_percent": 12.397447584320876
+  },
+  {
+    "gpu_memory_mib": 937.0,
+    "gpu_memory_percent": 4.0,
+    "gpu_percent": 38.0,
+    "gpu_watts": 34.83,
+    "phase": "cuda-32/repeat-1/phase-updating",
+    "seconds": 58.9433298999993,
+    "system_cpu_percent": 13.402527075812277
+  },
+  {
+    "gpu_memory_mib": 937.0,
+    "gpu_memory_percent": 2.0,
+    "gpu_percent": 44.0,
+    "gpu_watts": 37.34,
+    "phase": "cuda-32/repeat-1/phase-collecting",
+    "seconds": 60.01067889999922,
+    "system_cpu_percent": 12.14482126489459
+  },
+  {
+    "gpu_memory_mib": 937.0,
+    "gpu_memory_percent": 1.0,
+    "gpu_percent": 50.0,
+    "gpu_watts": 35.71,
+    "phase": "cuda-32/repeat-1/phase-updating",
+    "seconds": 61.06383079999978,
+    "system_cpu_percent": 11.3518605746585
+  },
+  {
+    "gpu_memory_mib": 937.0,
+    "gpu_memory_percent": 1.0,
+    "gpu_percent": 49.0,
+    "gpu_watts": 35.73,
+    "phase": "cuda-32/repeat-1/phase-collecting",
+    "seconds": 62.11770459999934,
+    "system_cpu_percent": 12.62318160488034
+  },
+  {
+    "gpu_memory_mib": 937.0,
+    "gpu_memory_percent": 6.0,
+    "gpu_percent": 34.0,
+    "gpu_watts": 40.41,
+    "phase": "cuda-32/repeat-1/phase-collecting",
+    "seconds": 63.18175769999925,
+    "system_cpu_percent": 13.91184573002755
+  },
+  {
+    "gpu_memory_mib": 937.0,
+    "gpu_memory_percent": 1.0,
+    "gpu_percent": 48.0,
+    "gpu_watts": 35.72,
+    "phase": "cuda-32/repeat-1/phase-updating",
+    "seconds": 64.24664289999964,
+    "system_cpu_percent": 11.27717391304348
+  },
+  {
+    "gpu_memory_mib": 937.0,
+    "gpu_memory_percent": 2.0,
+    "gpu_percent": 41.0,
+    "gpu_watts": 35.6,
+    "phase": "cuda-32/repeat-1/phase-collecting",
+    "seconds": 65.31471539999984,
+    "system_cpu_percent": 12.275179856115104
+  },
+  {
+    "gpu_memory_mib": 937.0,
+    "gpu_memory_percent": 1.0,
+    "gpu_percent": 35.0,
+    "gpu_watts": 33.8,
+    "phase": "cuda-32/repeat-1/phase-updating",
+    "seconds": 66.36976129999948,
+    "system_cpu_percent": 16.013071895424837
+  },
+  {
+    "gpu_memory_mib": 937.0,
+    "gpu_memory_percent": 1.0,
+    "gpu_percent": 42.0,
+    "gpu_watts": 33.18,
+    "phase": "cuda-32/repeat-1/phase-updating",
+    "seconds": 67.43037969999932,
+    "system_cpu_percent": 19.735038830516217
+  },
+  {
+    "gpu_memory_mib": 937.0,
+    "gpu_memory_percent": 6.0,
+    "gpu_percent": 22.0,
+    "gpu_watts": 36.26,
+    "phase": "cuda-32/repeat-1/phase-collecting",
+    "seconds": 68.49908069999947,
+    "system_cpu_percent": 18.22820037105751
+  },
+  {
+    "gpu_memory_mib": 937.0,
+    "gpu_memory_percent": 6.0,
+    "gpu_percent": 24.0,
+    "gpu_watts": 41.12,
+    "phase": "cuda-32/repeat-1/phase-updating",
+    "seconds": 69.57046419999915,
+    "system_cpu_percent": 14.372093023255816
+  },
+  {
+    "gpu_memory_mib": 937.0,
+    "gpu_memory_percent": 4.0,
+    "gpu_percent": 33.0,
+    "gpu_watts": 38.25,
+    "phase": "cuda-32/repeat-1/phase-collecting",
+    "seconds": 70.62935959999959,
+    "system_cpu_percent": 12.255125284738044
+  },
+  {
+    "gpu_memory_mib": 937.0,
+    "gpu_memory_percent": 1.0,
+    "gpu_percent": 47.0,
+    "gpu_watts": 34.23,
+    "phase": "cuda-32/repeat-1/phase-updating",
+    "seconds": 71.69651839999915,
+    "system_cpu_percent": 12.057063966866089
+  },
+  {
+    "gpu_memory_mib": 937.0,
+    "gpu_memory_percent": 7.0,
+    "gpu_percent": 27.0,
+    "gpu_watts": 41.95,
+    "phase": "cuda-32/repeat-1/phase-collecting",
+    "seconds": 72.75168269999995,
+    "system_cpu_percent": 11.436289959477708
+  },
+  {
+    "gpu_memory_mib": 937.0,
+    "gpu_memory_percent": 1.0,
+    "gpu_percent": 50.0,
+    "gpu_watts": 35.74,
+    "phase": "cuda-32/repeat-1/phase-updating",
+    "seconds": 73.80801449999944,
+    "system_cpu_percent": 11.87935034802784
+  },
+  {
+    "gpu_memory_mib": 937.0,
+    "gpu_memory_percent": 6.0,
+    "gpu_percent": 24.0,
+    "gpu_watts": 37.46,
+    "phase": "cuda-32/repeat-1/phase-collecting",
+    "seconds": 74.87469319999946,
+    "system_cpu_percent": 12.097516099356021
+  },
+  {
+    "gpu_memory_mib": 937.0,
+    "gpu_memory_percent": 1.0,
+    "gpu_percent": 40.0,
+    "gpu_watts": 34.87,
+    "phase": "cuda-32/repeat-1/phase-updating",
+    "seconds": 75.93167249999988,
+    "system_cpu_percent": 12.586127698667893
+  },
+  {
+    "gpu_memory_mib": 937.0,
+    "gpu_memory_percent": 2.0,
+    "gpu_percent": 47.0,
+    "gpu_watts": 35.54,
+    "phase": "cuda-32/repeat-1/phase-collecting",
+    "seconds": 76.99222199999986,
+    "system_cpu_percent": 13.029465930018414
+  },
+  {
+    "gpu_memory_mib": 937.0,
+    "gpu_memory_percent": 6.0,
+    "gpu_percent": 24.0,
+    "gpu_watts": 38.84,
+    "phase": "cuda-32/repeat-1/phase-updating",
+    "seconds": 78.05894949999947,
+    "system_cpu_percent": 12.9663330300273
+  },
+  {
+    "gpu_memory_mib": 1003.0,
+    "gpu_memory_percent": 4.0,
+    "gpu_percent": 49.0,
+    "gpu_watts": 38.11,
+    "phase": "cuda-64/repeat-1",
+    "seconds": 79.12205399999948,
+    "system_cpu_percent": 15.630797773654914
+  },
+  {
+    "gpu_memory_mib": 1027.0,
+    "gpu_memory_percent": 4.0,
+    "gpu_percent": 45.0,
+    "gpu_watts": 35.92,
+    "phase": "cuda-64/repeat-1/phase-updating",
+    "seconds": 80.1827461999992,
+    "system_cpu_percent": 12.849931161083061
+  },
+  {
+    "gpu_memory_mib": 1027.0,
+    "gpu_memory_percent": 4.0,
+    "gpu_percent": 44.0,
+    "gpu_watts": 35.06,
+    "phase": "cuda-64/repeat-1/phase-updating",
+    "seconds": 81.28463639999973,
+    "system_cpu_percent": 13.453903837670932
+  },
+  {
+    "gpu_memory_mib": 1027.0,
+    "gpu_memory_percent": 4.0,
+    "gpu_percent": 51.0,
+    "gpu_watts": 37.94,
+    "phase": "cuda-64/repeat-1/phase-updating",
+    "seconds": 82.35091469999952,
+    "system_cpu_percent": 13.651087459509482
+  },
+  {
+    "gpu_memory_mib": 1027.0,
+    "gpu_memory_percent": 4.0,
+    "gpu_percent": 48.0,
+    "gpu_watts": 35.69,
+    "phase": "cuda-64/repeat-1/phase-updating",
+    "seconds": 83.41768389999925,
+    "system_cpu_percent": 11.457848160223572
+  },
+  {
+    "gpu_memory_mib": 1027.0,
+    "gpu_memory_percent": 4.0,
+    "gpu_percent": 50.0,
+    "gpu_watts": 38.3,
+    "phase": "cuda-64/repeat-1/phase-updating",
+    "seconds": 84.50054529999943,
+    "system_cpu_percent": 12.505602868668763
+  },
+  {
+    "gpu_memory_mib": 1027.0,
+    "gpu_memory_percent": 6.0,
+    "gpu_percent": 43.0,
+    "gpu_watts": 38.66,
+    "phase": "cuda-64/repeat-1/phase-updating",
+    "seconds": 85.55459089999931,
+    "system_cpu_percent": 12.117055326931869
+  },
+  {
+    "gpu_memory_mib": 1027.0,
+    "gpu_memory_percent": 6.0,
+    "gpu_percent": 28.0,
+    "gpu_watts": 39.27,
+    "phase": "cuda-64/repeat-1/phase-collecting",
+    "seconds": 86.62762509999993,
+    "system_cpu_percent": 12.068192014356216
+  },
+  {
+    "gpu_memory_mib": 1027.0,
+    "gpu_memory_percent": 8.0,
+    "gpu_percent": 27.0,
+    "gpu_watts": 40.11,
+    "phase": "cuda-64/repeat-1/phase-collecting",
+    "seconds": 87.70916089999992,
+    "system_cpu_percent": 18.77588587206627
+  },
+  {
+    "gpu_memory_mib": 1027.0,
+    "gpu_memory_percent": 5.0,
+    "gpu_percent": 41.0,
+    "gpu_watts": 39.83,
+    "phase": "cuda-64/repeat-1/phase-collecting",
+    "seconds": 88.77299429999948,
+    "system_cpu_percent": 13.992707383773928
+  },
+  {
+    "gpu_memory_mib": 1027.0,
+    "gpu_memory_percent": 4.0,
+    "gpu_percent": 52.0,
+    "gpu_watts": 39.16,
+    "phase": "cuda-64/repeat-1/phase-updating",
+    "seconds": 89.84794479999982,
+    "system_cpu_percent": 12.541254125412538
+  },
+  {
+    "gpu_memory_mib": 1027.0,
+    "gpu_memory_percent": 4.0,
+    "gpu_percent": 52.0,
+    "gpu_watts": 39.08,
+    "phase": "cuda-64/repeat-1/phase-updating",
+    "seconds": 90.92938719999984,
+    "system_cpu_percent": 12.038244241634077
+  },
+  {
+    "gpu_memory_mib": 1027.0,
+    "gpu_memory_percent": 4.0,
+    "gpu_percent": 53.0,
+    "gpu_watts": 36.14,
+    "phase": "cuda-64/repeat-1/phase-updating",
+    "seconds": 91.99022279999917,
+    "system_cpu_percent": 11.408775981524244
+  },
+  {
+    "gpu_memory_mib": 1027.0,
+    "gpu_memory_percent": 5.0,
+    "gpu_percent": 51.0,
+    "gpu_watts": 34.83,
+    "phase": "cuda-64/repeat-1/phase-updating",
+    "seconds": 93.05987019999975,
+    "system_cpu_percent": 13.263920325939338
+  },
+  {
+    "gpu_memory_mib": 1027.0,
+    "gpu_memory_percent": 8.0,
+    "gpu_percent": 26.0,
+    "gpu_watts": 40.95,
+    "phase": "cuda-64/repeat-1/phase-collecting",
+    "seconds": 94.11984809999922,
+    "system_cpu_percent": 12.529002320185612
+  },
+  {
+    "gpu_memory_mib": 1027.0,
+    "gpu_memory_percent": 7.0,
+    "gpu_percent": 26.0,
+    "gpu_watts": 41.97,
+    "phase": "cuda-64/repeat-1/phase-collecting",
+    "seconds": 95.17886299999918,
+    "system_cpu_percent": 13.229214515388144
+  },
+  {
+    "gpu_memory_mib": 1027.0,
+    "gpu_memory_percent": 6.0,
+    "gpu_percent": 33.0,
+    "gpu_watts": 41.24,
+    "phase": "cuda-64/repeat-1/phase-collecting",
+    "seconds": 96.25284459999966,
+    "system_cpu_percent": 14.494741655235476
+  },
+  {
+    "gpu_memory_mib": 1027.0,
+    "gpu_memory_percent": 5.0,
+    "gpu_percent": 49.0,
+    "gpu_watts": 38.62,
+    "phase": "cuda-64/repeat-1/phase-collecting",
+    "seconds": 97.31999159999941,
+    "system_cpu_percent": 12.025605852766342
+  },
+  {
+    "gpu_memory_mib": 1027.0,
+    "gpu_memory_percent": 4.0,
+    "gpu_percent": 53.0,
+    "gpu_watts": 36.47,
+    "phase": "cuda-64/repeat-1/phase-collecting",
+    "seconds": 98.38176489999933,
+    "system_cpu_percent": 11.739943872778301
+  },
+  {
+    "gpu_memory_mib": 1027.0,
+    "gpu_memory_percent": 5.0,
+    "gpu_percent": 27.0,
+    "gpu_watts": 36.9,
+    "phase": "cuda-64/repeat-1/phase-collecting",
+    "seconds": 99.44028319999961,
+    "system_cpu_percent": 17.803886127428825
+  },
+  {
+    "gpu_memory_mib": 1027.0,
+    "gpu_memory_percent": 7.0,
+    "gpu_percent": 31.0,
+    "gpu_watts": 39.09,
+    "phase": "cuda-64/repeat-1/phase-updating",
+    "seconds": 100.49463789999936,
+    "system_cpu_percent": 13.386194029850751
+  },
+  {
+    "gpu_memory_mib": 1027.0,
+    "gpu_memory_percent": 6.0,
+    "gpu_percent": 39.0,
+    "gpu_watts": 36.04,
+    "phase": "cuda-64/repeat-1/phase-updating",
+    "seconds": 101.5656500999994,
+    "system_cpu_percent": 14.84162895927602
+  },
+  {
+    "gpu_memory_mib": 1027.0,
+    "gpu_memory_percent": 9.0,
+    "gpu_percent": 33.0,
+    "gpu_watts": 39.75,
+    "phase": "cuda-64/repeat-1/phase-updating",
+    "seconds": 102.62604839999949,
+    "system_cpu_percent": 14.507772020725385
+  },
+  {
+    "gpu_memory_mib": 1027.0,
+    "gpu_memory_percent": 8.0,
+    "gpu_percent": 27.0,
+    "gpu_watts": 39.84,
+    "phase": "cuda-64/repeat-1/phase-updating",
+    "seconds": 103.69679279999946,
+    "system_cpu_percent": 12.340619307832423
+  },
+  {
+    "gpu_memory_mib": 1027.0,
+    "gpu_memory_percent": 7.0,
+    "gpu_percent": 26.0,
+    "gpu_watts": 41.9,
+    "phase": "cuda-64/repeat-1/phase-updating",
+    "seconds": 104.78442499999983,
+    "system_cpu_percent": 12.103617686467171
+  },
+  {
+    "gpu_memory_mib": 1027.0,
+    "gpu_memory_percent": 7.0,
+    "gpu_percent": 26.0,
+    "gpu_watts": 40.41,
+    "phase": "cuda-64/repeat-1/phase-collecting",
+    "seconds": 105.88459019999937,
+    "system_cpu_percent": 11.125654450261779
+  },
+  {
+    "gpu_memory_mib": 1027.0,
+    "gpu_memory_percent": 8.0,
+    "gpu_percent": 27.0,
+    "gpu_watts": 40.21,
+    "phase": "cuda-64/repeat-1/phase-collecting",
+    "seconds": 106.94057949999933,
+    "system_cpu_percent": 12.824207492795392
+  },
+  {
+    "gpu_memory_mib": 1027.0,
+    "gpu_memory_percent": 9.0,
+    "gpu_percent": 27.0,
+    "gpu_watts": 38.36,
+    "phase": "cuda-64/repeat-1/phase-collecting",
+    "seconds": 107.99480539999968,
+    "system_cpu_percent": 12.783964365256129
+  },
+  {
+    "gpu_memory_mib": 1027.0,
+    "gpu_memory_percent": 7.0,
+    "gpu_percent": 23.0,
+    "gpu_watts": 38.54,
+    "phase": "cuda-64/repeat-1/phase-collecting",
+    "seconds": 109.0666228,
+    "system_cpu_percent": 17.15328467153284
+  },
+  {
+    "gpu_memory_mib": 1027.0,
+    "gpu_memory_percent": 4.0,
+    "gpu_percent": 50.0,
+    "gpu_watts": 37.28,
+    "phase": "cuda-64/repeat-1/phase-collecting",
+    "seconds": 110.12084059999961,
+    "system_cpu_percent": 14.731934731934738
+  },
+  {
+    "gpu_memory_mib": 1007.0,
+    "gpu_memory_percent": 0.0,
+    "gpu_percent": 1.0,
+    "gpu_watts": 29.43,
+    "phase": "cuda-128/repeat-1",
+    "seconds": 111.17988549999973,
+    "system_cpu_percent": 13.457076566125291
+  },
+  {
+    "gpu_memory_mib": 1225.0,
+    "gpu_memory_percent": 7.0,
+    "gpu_percent": 27.0,
+    "gpu_watts": 42.3,
+    "phase": "cuda-128/repeat-1",
+    "seconds": 112.23922959999982,
+    "system_cpu_percent": 11.547344110854507
+  },
+  {
+    "gpu_memory_mib": 1227.0,
+    "gpu_memory_percent": 8.0,
+    "gpu_percent": 56.0,
+    "gpu_watts": 39.73,
+    "phase": "cuda-128/repeat-1/phase-collecting",
+    "seconds": 113.30533469999955,
+    "system_cpu_percent": 12.632549562010142
+  },
+  {
+    "gpu_memory_mib": 1227.0,
+    "gpu_memory_percent": 7.0,
+    "gpu_percent": 25.0,
+    "gpu_watts": 41.25,
+    "phase": "cuda-128/repeat-1/phase-updating",
+    "seconds": 114.35981409999931,
+    "system_cpu_percent": 13.700500682749206
+  },
+  {
+    "gpu_memory_mib": 1227.0,
+    "gpu_memory_percent": 7.0,
+    "gpu_percent": 26.0,
+    "gpu_watts": 41.33,
+    "phase": "cuda-128/repeat-1/phase-updating",
+    "seconds": 115.42584999999963,
+    "system_cpu_percent": 11.524334251606982
+  },
+  {
+    "gpu_memory_mib": 1227.0,
+    "gpu_memory_percent": 8.0,
+    "gpu_percent": 54.0,
+    "gpu_watts": 39.56,
+    "phase": "cuda-128/repeat-1/phase-updating",
+    "seconds": 116.49987119999969,
+    "system_cpu_percent": 12.35697940503433
+  },
+  {
+    "gpu_memory_mib": 1227.0,
+    "gpu_memory_percent": 9.0,
+    "gpu_percent": 28.0,
+    "gpu_watts": 40.27,
+    "phase": "cuda-128/repeat-1/phase-collecting",
+    "seconds": 117.57414969999991,
+    "system_cpu_percent": 14.15689810640216
+  },
+  {
+    "gpu_memory_mib": 1227.0,
+    "gpu_memory_percent": 7.0,
+    "gpu_percent": 26.0,
+    "gpu_watts": 42.19,
+    "phase": "cuda-128/repeat-1/phase-updating",
+    "seconds": 118.62937539999984,
+    "system_cpu_percent": 13.197969543147202
+  },
+  {
+    "gpu_memory_mib": 1227.0,
+    "gpu_memory_percent": 7.0,
+    "gpu_percent": 26.0,
+    "gpu_watts": 41.75,
+    "phase": "cuda-128/repeat-1/phase-updating",
+    "seconds": 119.68854499999998,
+    "system_cpu_percent": 13.145756457564573
+  },
+  {
+    "gpu_memory_mib": 1227.0,
+    "gpu_memory_percent": 8.0,
+    "gpu_percent": 56.0,
+    "gpu_watts": 40.21,
+    "phase": "cuda-128/repeat-1/phase-collecting",
+    "seconds": 120.75509129999955,
+    "system_cpu_percent": 13.906678865507782
+  },
+  {
+    "gpu_memory_mib": 1227.0,
+    "gpu_memory_percent": 7.0,
+    "gpu_percent": 27.0,
+    "gpu_watts": 42.33,
+    "phase": "cuda-128/repeat-1/phase-updating",
+    "seconds": 121.81364029999986,
+    "system_cpu_percent": 12.083333333333336
+  },
+  {
+    "gpu_memory_mib": 1227.0,
+    "gpu_memory_percent": 8.0,
+    "gpu_percent": 27.0,
+    "gpu_watts": 39.93,
+    "phase": "cuda-128/repeat-1/phase-updating",
+    "seconds": 122.88383189999968,
+    "system_cpu_percent": 11.596870685687987
+  },
+  {
+    "gpu_memory_mib": 1227.0,
+    "gpu_memory_percent": 9.0,
+    "gpu_percent": 57.0,
+    "gpu_watts": 39.02,
+    "phase": "cuda-128/repeat-1/phase-updating",
+    "seconds": 123.95549719999963,
+    "system_cpu_percent": 11.395881006864993
+  },
+  {
+    "gpu_memory_mib": 1227.0,
+    "gpu_memory_percent": 8.0,
+    "gpu_percent": 27.0,
+    "gpu_watts": 40.02,
+    "phase": "cuda-128/repeat-1/phase-collecting",
+    "seconds": 125.02862329999971,
+    "system_cpu_percent": 14.201718679330622
+  },
+  {
+    "gpu_memory_mib": 1227.0,
+    "gpu_memory_percent": 8.0,
+    "gpu_percent": 26.0,
+    "gpu_watts": 40.26,
+    "phase": "cuda-128/repeat-1/phase-updating",
+    "seconds": 126.0830776999992,
+    "system_cpu_percent": 11.832412523020253
+  },
+  {
+    "gpu_memory_mib": 1227.0,
+    "gpu_memory_percent": 8.0,
+    "gpu_percent": 27.0,
+    "gpu_watts": 39.99,
+    "phase": "cuda-128/repeat-1/phase-updating",
+    "seconds": 127.13788609999938,
+    "system_cpu_percent": 11.759301791456133
+  },
+  {
+    "gpu_memory_mib": 1227.0,
+    "gpu_memory_percent": 8.0,
+    "gpu_percent": 50.0,
+    "gpu_watts": 39.12,
+    "phase": "cuda-128/repeat-1/phase-collecting",
+    "seconds": 128.22096879999935,
+    "system_cpu_percent": 17.630726515502083
+  },
+  {
+    "gpu_memory_mib": 1227.0,
+    "gpu_memory_percent": 8.0,
+    "gpu_percent": 26.0,
+    "gpu_watts": 40.05,
+    "phase": "cuda-128/repeat-1/phase-updating",
+    "seconds": 129.29450409999936,
+    "system_cpu_percent": 15.470352206865801
+  },
+  {
+    "gpu_memory_mib": 1227.0,
+    "gpu_memory_percent": 9.0,
+    "gpu_percent": 40.0,
+    "gpu_watts": 40.09,
+    "phase": "cuda-128/repeat-1/phase-updating",
+    "seconds": 130.3665693999992,
+    "system_cpu_percent": 12.900315741993683
+  },
+  {
+    "gpu_memory_mib": 1227.0,
+    "gpu_memory_percent": 9.0,
+    "gpu_percent": 27.0,
+    "gpu_watts": 38.78,
+    "phase": "cuda-128/repeat-1/phase-collecting",
+    "seconds": 131.4318588999995,
+    "system_cpu_percent": 14.219546086150991
+  },
+  {
+    "gpu_memory_mib": 1227.0,
+    "gpu_memory_percent": 8.0,
+    "gpu_percent": 27.0,
+    "gpu_watts": 39.56,
+    "phase": "cuda-128/repeat-1/phase-updating",
+    "seconds": 132.5000897,
+    "system_cpu_percent": 13.345521023765993
+  },
+  {
+    "gpu_memory_mib": 1227.0,
+    "gpu_memory_percent": 9.0,
+    "gpu_percent": 56.0,
+    "gpu_watts": 38.29,
+    "phase": "cuda-128/repeat-1/phase-updating",
+    "seconds": 133.55587189999915,
+    "system_cpu_percent": 13.516024152345562
+  },
+  {
+    "gpu_memory_mib": 1227.0,
+    "gpu_memory_percent": 9.0,
+    "gpu_percent": 56.0,
+    "gpu_watts": 38.82,
+    "phase": "cuda-128/repeat-1/phase-collecting",
+    "seconds": 134.62576549999994,
+    "system_cpu_percent": 12.073732718894014
+  },
+  {
+    "gpu_memory_mib": 1227.0,
+    "gpu_memory_percent": 8.0,
+    "gpu_percent": 25.0,
+    "gpu_watts": 39.46,
+    "phase": "cuda-128/repeat-1/phase-updating",
+    "seconds": 135.69134739999936,
+    "system_cpu_percent": 13.49026708918063
+  },
+  {
+    "gpu_memory_mib": 1227.0,
+    "gpu_memory_percent": 7.0,
+    "gpu_percent": 24.0,
+    "gpu_watts": 38.83,
+    "phase": "cuda-128/repeat-1/phase-updating",
+    "seconds": 136.78029369999967,
+    "system_cpu_percent": 14.324324324324323
+  },
+  {
+    "gpu_memory_mib": 1227.0,
+    "gpu_memory_percent": 9.0,
+    "gpu_percent": 57.0,
+    "gpu_watts": 38.77,
+    "phase": "cuda-128/repeat-1/phase-updating",
+    "seconds": 137.84961769999973,
+    "system_cpu_percent": 12.890094979647216
+  },
+  {
+    "gpu_memory_mib": 1227.0,
+    "gpu_memory_percent": 9.0,
+    "gpu_percent": 29.0,
+    "gpu_watts": 39.9,
+    "phase": "cuda-128/repeat-1/phase-collecting",
+    "seconds": 138.92786239999987,
+    "system_cpu_percent": 14.266365688487582
+  },
+  {
+    "gpu_memory_mib": 1227.0,
+    "gpu_memory_percent": 8.0,
+    "gpu_percent": 28.0,
+    "gpu_watts": 40.47,
+    "phase": "cuda-128/repeat-1/phase-updating",
+    "seconds": 139.98582269999952,
+    "system_cpu_percent": 13.89798783341133
+  },
+  {
+    "gpu_memory_mib": 1227.0,
+    "gpu_memory_percent": 9.0,
+    "gpu_percent": 58.0,
+    "gpu_watts": 39.15,
+    "phase": "cuda-128/repeat-1/phase-updating",
+    "seconds": 141.04364299999997,
+    "system_cpu_percent": 12.390198797965791
+  },
+  {
+    "gpu_memory_mib": 1227.0,
+    "gpu_memory_percent": 9.0,
+    "gpu_percent": 58.0,
+    "gpu_watts": 39.1,
+    "phase": "cuda-128/repeat-1/phase-collecting",
+    "seconds": 142.1151135,
+    "system_cpu_percent": 12.847866419294995
+  },
+  {
+    "gpu_memory_mib": 1227.0,
+    "gpu_memory_percent": 8.0,
+    "gpu_percent": 28.0,
+    "gpu_watts": 40.45,
+    "phase": "cuda-128/repeat-1/phase-updating",
+    "seconds": 143.1887898999994,
+    "system_cpu_percent": 12.671688081524145
+  },
+  {
+    "gpu_memory_mib": 1227.0,
+    "gpu_memory_percent": 9.0,
+    "gpu_percent": 57.0,
+    "gpu_watts": 38.88,
+    "phase": "cuda-128/repeat-1/phase-updating",
+    "seconds": 144.30022479999934,
+    "system_cpu_percent": 11.94911403907315
+  },
+  {
+    "gpu_memory_mib": 1227.0,
+    "gpu_memory_percent": 10.0,
+    "gpu_percent": 30.0,
+    "gpu_watts": 40.06,
+    "phase": "cuda-128/repeat-1/phase-collecting",
+    "seconds": 145.3828356999993,
+    "system_cpu_percent": 12.28070175438597
+  },
+  {
+    "gpu_memory_mib": 1227.0,
+    "gpu_memory_percent": 7.0,
+    "gpu_percent": 25.0,
+    "gpu_watts": 39.19,
+    "phase": "cuda-128/repeat-1/phase-updating",
+    "seconds": 146.4461610999997,
+    "system_cpu_percent": 13.250333481547349
+  },
+  {
+    "gpu_memory_mib": 1227.0,
+    "gpu_memory_percent": 7.0,
+    "gpu_percent": 47.0,
+    "gpu_watts": 36.42,
+    "phase": "cuda-128/repeat-1/phase-updating",
+    "seconds": 147.51487069999985,
+    "system_cpu_percent": 11.501597444089462
+  },
+  {
+    "gpu_memory_mib": 1227.0,
+    "gpu_memory_percent": 8.0,
+    "gpu_percent": 55.0,
+    "gpu_watts": 35.63,
+    "phase": "cuda-128/repeat-1/phase-collecting",
+    "seconds": 148.57949579999968,
+    "system_cpu_percent": 14.88178025034771
+  },
+  {
+    "gpu_memory_mib": 1227.0,
+    "gpu_memory_percent": 8.0,
+    "gpu_percent": 26.0,
+    "gpu_watts": 39.69,
+    "phase": "cuda-128/repeat-1/phase-updating",
+    "seconds": 149.64966679999998,
+    "system_cpu_percent": 16.576086956521742
+  },
+  {
+    "gpu_memory_mib": 1227.0,
+    "gpu_memory_percent": 8.0,
+    "gpu_percent": 56.0,
+    "gpu_watts": 39.31,
+    "phase": "cuda-128/repeat-1/phase-updating",
+    "seconds": 150.71536429999924,
+    "system_cpu_percent": 12.281508739650416
+  },
+  {
+    "gpu_memory_mib": 1227.0,
+    "gpu_memory_percent": 9.0,
+    "gpu_percent": 28.0,
+    "gpu_watts": 39.37,
+    "phase": "cuda-128/repeat-1/phase-collecting",
+    "seconds": 151.7784955999996,
+    "system_cpu_percent": 13.045475424896647
+  },
+  {
+    "gpu_memory_mib": 1227.0,
+    "gpu_memory_percent": 8.0,
+    "gpu_percent": 28.0,
+    "gpu_watts": 40.43,
+    "phase": "cuda-128/repeat-1/phase-updating",
+    "seconds": 152.84572319999916,
+    "system_cpu_percent": 12.611764705882356
+  },
+  {
+    "gpu_memory_mib": 1227.0,
+    "gpu_memory_percent": 8.0,
+    "gpu_percent": 56.0,
+    "gpu_watts": 39.93,
+    "phase": "cuda-128/repeat-1/phase-updating",
+    "seconds": 153.9145822999999,
+    "system_cpu_percent": 12.466487935656833
+  },
+  {
+    "gpu_memory_mib": 1227.0,
+    "gpu_memory_percent": 9.0,
+    "gpu_percent": 28.0,
+    "gpu_watts": 39.74,
+    "phase": "cuda-128/repeat-1/phase-collecting",
+    "seconds": 154.99823489999926,
+    "system_cpu_percent": 11.893095768374163
+  },
+  {
+    "gpu_memory_mib": 1227.0,
+    "gpu_memory_percent": 8.0,
+    "gpu_percent": 27.0,
+    "gpu_watts": 40.12,
+    "phase": "cuda-128/repeat-1/phase-updating",
+    "seconds": 156.05428779999966,
+    "system_cpu_percent": 10.843373493975905
+  },
+  {
+    "gpu_memory_mib": 1227.0,
+    "gpu_memory_percent": 8.0,
+    "gpu_percent": 26.0,
+    "gpu_watts": 39.26,
+    "phase": "cuda-128/repeat-1/phase-updating",
+    "seconds": 157.10892109999986,
+    "system_cpu_percent": 14.100785945446138
+  },
+  {
+    "gpu_memory_mib": 1227.0,
+    "gpu_memory_percent": 8.0,
+    "gpu_percent": 53.0,
+    "gpu_watts": 38.43,
+    "phase": "cuda-128/repeat-1/phase-collecting",
+    "seconds": 158.184577,
+    "system_cpu_percent": 15.268915223336377
+  },
+  {
+    "gpu_memory_mib": 1227.0,
+    "gpu_memory_percent": 8.0,
+    "gpu_percent": 27.0,
+    "gpu_watts": 40.17,
+    "phase": "cuda-128/repeat-1/phase-updating",
+    "seconds": 159.25339599999916,
+    "system_cpu_percent": 13.035633739287322
+  },
+  {
+    "gpu_memory_mib": 1227.0,
+    "gpu_memory_percent": 7.0,
+    "gpu_percent": 24.0,
+    "gpu_watts": 38.72,
+    "phase": "cuda-128/repeat-1/phase-updating",
+    "seconds": 160.31689879999976,
+    "system_cpu_percent": 15.568862275449103
+  },
+  {
+    "gpu_memory_mib": 1227.0,
+    "gpu_memory_percent": 7.0,
+    "gpu_percent": 22.0,
+    "gpu_watts": 37.12,
+    "phase": "cuda-128/repeat-1/phase-collecting",
+    "seconds": 161.3761267,
+    "system_cpu_percent": 17.019230769230763
+  },
+  {
+    "gpu_memory_mib": 1227.0,
+    "gpu_memory_percent": 8.0,
+    "gpu_percent": 26.0,
+    "gpu_watts": 39.03,
+    "phase": "cuda-128/repeat-1/phase-updating",
+    "seconds": 162.44959409999956,
+    "system_cpu_percent": 14.512571680635201
+  },
+  {
+    "gpu_memory_mib": 1011.0,
+    "gpu_memory_percent": 0.0,
+    "gpu_percent": 0.0,
+    "gpu_watts": 25.83,
+    "phase": "cuda-128/repeat-2",
+    "seconds": 163.51043149999987,
+    "system_cpu_percent": 11.913523459061636
+  },
+  {
+    "gpu_memory_mib": 1227.0,
+    "gpu_memory_percent": 6.0,
+    "gpu_percent": 22.0,
+    "gpu_watts": 38.31,
+    "phase": "cuda-128/repeat-2",
+    "seconds": 164.57208489999994,
+    "system_cpu_percent": 16.11857341361742
+  },
+  {
+    "gpu_memory_mib": 1227.0,
+    "gpu_memory_percent": 7.0,
+    "gpu_percent": 27.0,
+    "gpu_watts": 42.46,
+    "phase": "cuda-128/repeat-2/phase-updating",
+    "seconds": 165.6493647999996,
+    "system_cpu_percent": 11.799013010318527
+  },
+  {
+    "gpu_memory_mib": 1227.0,
+    "gpu_memory_percent": 7.0,
+    "gpu_percent": 57.0,
+    "gpu_watts": 40.54,
+    "phase": "cuda-128/repeat-2/phase-collecting",
+    "seconds": 166.7217428999993,
+    "system_cpu_percent": 10.650887573964496
+  },
+  {
+    "gpu_memory_mib": 1227.0,
+    "gpu_memory_percent": 7.0,
+    "gpu_percent": 27.0,
+    "gpu_watts": 42.1,
+    "phase": "cuda-128/repeat-2/phase-updating",
+    "seconds": 167.78745659999913,
+    "system_cpu_percent": 13.744292237442924
+  },
+  {
+    "gpu_memory_mib": 1227.0,
+    "gpu_memory_percent": 7.0,
+    "gpu_percent": 25.0,
+    "gpu_watts": 47.31,
+    "phase": "cuda-128/repeat-2/phase-updating",
+    "seconds": 168.8466902,
+    "system_cpu_percent": 13.222376329172448
+  },
+  {
+    "gpu_memory_mib": 1227.0,
+    "gpu_memory_percent": 8.0,
+    "gpu_percent": 57.0,
+    "gpu_watts": 39.93,
+    "phase": "cuda-128/repeat-2/phase-updating",
+    "seconds": 169.93065149999984,
+    "system_cpu_percent": 12.432188065099458
+  },
+  {
+    "gpu_memory_mib": 1227.0,
+    "gpu_memory_percent": 6.0,
+    "gpu_percent": 22.0,
+    "gpu_watts": 38.34,
+    "phase": "cuda-128/repeat-2/phase-collecting",
+    "seconds": 170.98620949999986,
+    "system_cpu_percent": 15.313225058004642
+  },
+  {
+    "gpu_memory_mib": 1227.0,
+    "gpu_memory_percent": 7.0,
+    "gpu_percent": 28.0,
+    "gpu_watts": 42.41,
+    "phase": "cuda-128/repeat-2/phase-updating",
+    "seconds": 172.06749229999969,
+    "system_cpu_percent": 11.632100991884576
+  },
+  {
+    "gpu_memory_mib": 1227.0,
+    "gpu_memory_percent": 7.0,
+    "gpu_percent": 27.0,
+    "gpu_watts": 42.55,
+    "phase": "cuda-128/repeat-2/phase-updating",
+    "seconds": 173.13455149999936,
+    "system_cpu_percent": 12.003736571695466
+  },
+  {
+    "gpu_memory_mib": 1227.0,
+    "gpu_memory_percent": 8.0,
+    "gpu_percent": 57.0,
+    "gpu_watts": 39.82,
+    "phase": "cuda-128/repeat-2/phase-collecting",
+    "seconds": 174.20332839999992,
+    "system_cpu_percent": 11.106155218554859
+  },
+  {
+    "gpu_memory_mib": 1227.0,
+    "gpu_memory_percent": 8.0,
+    "gpu_percent": 28.0,
+    "gpu_watts": 42.48,
+    "phase": "cuda-128/repeat-2/phase-updating",
+    "seconds": 175.27090139999927,
+    "system_cpu_percent": 11.3584734211722
+  },
+  {
+    "gpu_memory_mib": 1227.0,
+    "gpu_memory_percent": 8.0,
+    "gpu_percent": 28.0,
+    "gpu_watts": 40.03,
+    "phase": "cuda-128/repeat-2/phase-updating",
+    "seconds": 176.32726149999962,
+    "system_cpu_percent": 11.966213045518536
+  },
+  {
+    "gpu_memory_mib": 1227.0,
+    "gpu_memory_percent": 9.0,
+    "gpu_percent": 56.0,
+    "gpu_watts": 38.73,
+    "phase": "cuda-128/repeat-2/phase-updating",
+    "seconds": 177.39524249999977,
+    "system_cpu_percent": 11.996378451788136
+  },
+  {
+    "gpu_memory_mib": 1227.0,
+    "gpu_memory_percent": 8.0,
+    "gpu_percent": 28.0,
+    "gpu_watts": 39.36,
+    "phase": "cuda-128/repeat-2/phase-collecting",
+    "seconds": 178.4655772999995,
+    "system_cpu_percent": 11.959050721265708
+  },
+  {
+    "gpu_memory_mib": 1227.0,
+    "gpu_memory_percent": 8.0,
+    "gpu_percent": 28.0,
+    "gpu_watts": 40.37,
+    "phase": "cuda-128/repeat-2/phase-updating",
+    "seconds": 179.53051789999972,
+    "system_cpu_percent": 11.673506611947104
+  },
+  {
+    "gpu_memory_mib": 1227.0,
+    "gpu_memory_percent": 8.0,
+    "gpu_percent": 27.0,
+    "gpu_watts": 40.14,
+    "phase": "cuda-128/repeat-2/phase-updating",
+    "seconds": 180.60195449999992,
+    "system_cpu_percent": 15.315315315315313
+  },
+  {
+    "gpu_memory_mib": 1227.0,
+    "gpu_memory_percent": 9.0,
+    "gpu_percent": 59.0,
+    "gpu_watts": 38.95,
+    "phase": "cuda-128/repeat-2/phase-collecting",
+    "seconds": 181.67104179999933,
+    "system_cpu_percent": 11.600928074245942
+  },
+  {
+    "gpu_memory_mib": 1227.0,
+    "gpu_memory_percent": 10.0,
+    "gpu_percent": 30.0,
+    "gpu_watts": 39.81,
+    "phase": "cuda-128/repeat-2/phase-updating",
+    "seconds": 182.73165339999923,
+    "system_cpu_percent": 12.213383247543286
+  },
+  {
+    "gpu_memory_mib": 1227.0,
+    "gpu_memory_percent": 8.0,
+    "gpu_percent": 27.0,
+    "gpu_watts": 40.02,
+    "phase": "cuda-128/repeat-2/phase-updating",
+    "seconds": 183.80027529999916,
+    "system_cpu_percent": 14.153439153439152
+  },
+  {
+    "gpu_memory_mib": 1227.0,
+    "gpu_memory_percent": 9.0,
+    "gpu_percent": 57.0,
+    "gpu_watts": 38.89,
+    "phase": "cuda-128/repeat-2/phase-updating",
+    "seconds": 184.86414409999998,
+    "system_cpu_percent": 11.411549037580205
+  },
+  {
+    "gpu_memory_mib": 1227.0,
+    "gpu_memory_percent": 9.0,
+    "gpu_percent": 29.0,
+    "gpu_watts": 39.83,
+    "phase": "cuda-128/repeat-2/phase-collecting",
+    "seconds": 185.95909399999982,
+    "system_cpu_percent": 11.764705882352944
+  },
+  {
+    "gpu_memory_mib": 1227.0,
+    "gpu_memory_percent": 8.0,
+    "gpu_percent": 28.0,
+    "gpu_watts": 40.57,
+    "phase": "cuda-128/repeat-2/phase-updating",
+    "seconds": 187.02882209999916,
+    "system_cpu_percent": 11.79417122040073
+  },
+  {
+    "gpu_memory_mib": 1227.0,
+    "gpu_memory_percent": 8.0,
+    "gpu_percent": 27.0,
+    "gpu_watts": 40.07,
+    "phase": "cuda-128/repeat-2/phase-updating",
+    "seconds": 188.09767569999985,
+    "system_cpu_percent": 11.15646258503401
+  },
+  {
+    "gpu_memory_mib": 1227.0,
+    "gpu_memory_percent": 8.0,
+    "gpu_percent": 56.0,
+    "gpu_watts": 38.95,
+    "phase": "cuda-128/repeat-2/phase-collecting",
+    "seconds": 189.16344559999925,
+    "system_cpu_percent": 11.35746606334842
+  },
+  {
+    "gpu_memory_mib": 1227.0,
+    "gpu_memory_percent": 9.0,
+    "gpu_percent": 28.0,
+    "gpu_watts": 39.17,
+    "phase": "cuda-128/repeat-2/phase-updating",
+    "seconds": 190.2360652999996,
+    "system_cpu_percent": 13.729128014842296
+  },
+  {
+    "gpu_memory_mib": 1227.0,
+    "gpu_memory_percent": 8.0,
+    "gpu_percent": 28.0,
+    "gpu_watts": 40.26,
+    "phase": "cuda-128/repeat-2/phase-updating",
+    "seconds": 191.29296889999932,
+    "system_cpu_percent": 12.244897959183676
+  },
+  {
+    "gpu_memory_mib": 1227.0,
+    "gpu_memory_percent": 8.0,
+    "gpu_percent": 57.0,
+    "gpu_watts": 39.26,
+    "phase": "cuda-128/repeat-2/phase-updating",
+    "seconds": 192.37485279999964,
+    "system_cpu_percent": 11.150599733451793
+  },
+  {
+    "gpu_memory_mib": 1227.0,
+    "gpu_memory_percent": 10.0,
+    "gpu_percent": 29.0,
+    "gpu_watts": 39.79,
+    "phase": "cuda-128/repeat-2/phase-collecting",
+    "seconds": 193.44699729999957,
+    "system_cpu_percent": 11.78057553956835
+  },
+  {
+    "gpu_memory_mib": 1227.0,
+    "gpu_memory_percent": 8.0,
+    "gpu_percent": 28.0,
+    "gpu_watts": 40.55,
+    "phase": "cuda-128/repeat-2/phase-updating",
+    "seconds": 194.51001759999963,
+    "system_cpu_percent": 11.302768951429865
+  },
+  {
+    "gpu_memory_mib": 1227.0,
+    "gpu_memory_percent": 6.0,
+    "gpu_percent": 39.0,
+    "gpu_watts": 34.75,
+    "phase": "cuda-128/repeat-2/phase-updating",
+    "seconds": 195.57891429999927,
+    "system_cpu_percent": 11.847014925373134
+  },
+  {
+    "gpu_memory_mib": 1227.0,
+    "gpu_memory_percent": 9.0,
+    "gpu_percent": 47.0,
+    "gpu_watts": 38.92,
+    "phase": "cuda-128/repeat-2/phase-collecting",
+    "seconds": 196.64243039999928,
+    "system_cpu_percent": 12.901744719926533
+  },
+  {
+    "gpu_memory_mib": 1227.0,
+    "gpu_memory_percent": 8.0,
+    "gpu_percent": 28.0,
+    "gpu_watts": 40.6,
+    "phase": "cuda-128/repeat-2/phase-updating",
+    "seconds": 197.71076249999987,
+    "system_cpu_percent": 11.801801801801803
+  },
+  {
+    "gpu_memory_mib": 1227.0,
+    "gpu_memory_percent": 7.0,
+    "gpu_percent": 55.0,
+    "gpu_watts": 39.22,
+    "phase": "cuda-128/repeat-2/phase-updating",
+    "seconds": 198.77954729999965,
+    "system_cpu_percent": 10.745313214449014
+  },
+  {
+    "gpu_memory_mib": 1227.0,
+    "gpu_memory_percent": 9.0,
+    "gpu_percent": 29.0,
+    "gpu_watts": 39.72,
+    "phase": "cuda-128/repeat-2/phase-collecting",
+    "seconds": 199.8461899999993,
+    "system_cpu_percent": 12.109920819748488
+  },
+  {
+    "gpu_memory_mib": 1227.0,
+    "gpu_memory_percent": 8.0,
+    "gpu_percent": 29.0,
+    "gpu_watts": 40.93,
+    "phase": "cuda-128/repeat-2/phase-updating",
+    "seconds": 200.90740329999971,
+    "system_cpu_percent": 12.98582533150434
+  },
+  {
+    "gpu_memory_mib": 1227.0,
+    "gpu_memory_percent": 9.0,
+    "gpu_percent": 59.0,
+    "gpu_watts": 39.14,
+    "phase": "cuda-128/repeat-2/phase-updating",
+    "seconds": 201.9747897999996,
+    "system_cpu_percent": 11.440107671601618
+  },
+  {
+    "gpu_memory_mib": 1227.0,
+    "gpu_memory_percent": 9.0,
+    "gpu_percent": 28.0,
+    "gpu_watts": 40.02,
+    "phase": "cuda-128/repeat-2/phase-collecting",
+    "seconds": 203.0324918999995,
+    "system_cpu_percent": 12.288135593220339
+  },
+  {
+    "gpu_memory_mib": 1227.0,
+    "gpu_memory_percent": 9.0,
+    "gpu_percent": 28.0,
+    "gpu_watts": 39.27,
+    "phase": "cuda-128/repeat-2/phase-updating",
+    "seconds": 204.1146536999995,
+    "system_cpu_percent": 11.704494882064974
+  },
+  {
+    "gpu_memory_mib": 1227.0,
+    "gpu_memory_percent": 8.0,
+    "gpu_percent": 27.0,
+    "gpu_watts": 40.14,
+    "phase": "cuda-128/repeat-2/phase-updating",
+    "seconds": 205.17268069999955,
+    "system_cpu_percent": 11.313697989714822
+  },
+  {
+    "gpu_memory_mib": 1227.0,
+    "gpu_memory_percent": 8.0,
+    "gpu_percent": 52.0,
+    "gpu_watts": 37.48,
+    "phase": "cuda-128/repeat-2/phase-collecting",
+    "seconds": 206.23912069999915,
+    "system_cpu_percent": 11.81356714351638
+  },
+  {
+    "gpu_memory_mib": 1227.0,
+    "gpu_memory_percent": 9.0,
+    "gpu_percent": 28.0,
+    "gpu_watts": 39.36,
+    "phase": "cuda-128/repeat-2/phase-updating",
+    "seconds": 207.29353059999994,
+    "system_cpu_percent": 11.743286299499323
+  },
+  {
+    "gpu_memory_mib": 1227.0,
+    "gpu_memory_percent": 8.0,
+    "gpu_percent": 27.0,
+    "gpu_watts": 40.1,
+    "phase": "cuda-128/repeat-2/phase-updating",
+    "seconds": 208.3498316999994,
+    "system_cpu_percent": 10.843373493975905
+  },
+  {
+    "gpu_memory_mib": 1227.0,
+    "gpu_memory_percent": 9.0,
+    "gpu_percent": 56.0,
+    "gpu_watts": 38.62,
+    "phase": "cuda-128/repeat-2/phase-collecting",
+    "seconds": 209.4090669999996,
+    "system_cpu_percent": 12.917063870352719
+  },
+  {
+    "gpu_memory_mib": 1227.0,
+    "gpu_memory_percent": 8.0,
+    "gpu_percent": 26.0,
+    "gpu_watts": 40.13,
+    "phase": "cuda-128/repeat-2/phase-updating",
+    "seconds": 210.47582189999957,
+    "system_cpu_percent": 13.126907980811165
+  },
+  {
+    "gpu_memory_mib": 1227.0,
+    "gpu_memory_percent": 8.0,
+    "gpu_percent": 27.0,
+    "gpu_watts": 40.58,
+    "phase": "cuda-128/repeat-2/phase-updating",
+    "seconds": 211.5435340999993,
+    "system_cpu_percent": 13.197729422894987
+  },
+  {
+    "gpu_memory_mib": 1227.0,
+    "gpu_memory_percent": 8.0,
+    "gpu_percent": 26.0,
+    "gpu_watts": 39.89,
+    "phase": "cuda-128/repeat-2/phase-updating",
+    "seconds": 212.60845439999957,
+    "system_cpu_percent": 12.10902591599643
+  },
+  {
+    "gpu_memory_mib": 923.0,
+    "gpu_memory_percent": 3.0,
+    "gpu_percent": 9.0,
+    "gpu_watts": 29.97,
+    "phase": "cuda-64/repeat-2",
+    "seconds": 213.66317479999998,
+    "system_cpu_percent": 11.486799444187124
+  },
+  {
+    "gpu_memory_mib": 1039.0,
+    "gpu_memory_percent": 7.0,
+    "gpu_percent": 26.0,
+    "gpu_watts": 41.93,
+    "phase": "cuda-64/repeat-2",
+    "seconds": 214.7233467999995,
+    "system_cpu_percent": 10.565338276181645
+  },
+  {
+    "gpu_memory_mib": 1039.0,
+    "gpu_memory_percent": 7.0,
+    "gpu_percent": 26.0,
+    "gpu_watts": 41.92,
+    "phase": "cuda-64/repeat-2/phase-collecting",
+    "seconds": 215.78070249999928,
+    "system_cpu_percent": 11.990740740740746
+  },
+  {
+    "gpu_memory_mib": 1039.0,
+    "gpu_memory_percent": 8.0,
+    "gpu_percent": 27.0,
+    "gpu_watts": 39.71,
+    "phase": "cuda-64/repeat-2/phase-collecting",
+    "seconds": 216.8356632999994,
+    "system_cpu_percent": 12.079299216228678
+  },
+  {
+    "gpu_memory_mib": 1039.0,
+    "gpu_memory_percent": 7.0,
+    "gpu_percent": 28.0,
+    "gpu_watts": 41.56,
+    "phase": "cuda-64/repeat-2/phase-collecting",
+    "seconds": 217.8913939999993,
+    "system_cpu_percent": 14.392175128085704
+  },
+  {
+    "gpu_memory_mib": 1039.0,
+    "gpu_memory_percent": 5.0,
+    "gpu_percent": 41.0,
+    "gpu_watts": 38.29,
+    "phase": "cuda-64/repeat-2/phase-updating",
+    "seconds": 218.95940939999946,
+    "system_cpu_percent": 14.363636363636367
+  },
+  {
+    "gpu_memory_mib": 1039.0,
+    "gpu_memory_percent": 4.0,
+    "gpu_percent": 51.0,
+    "gpu_watts": 38.58,
+    "phase": "cuda-64/repeat-2/phase-updating",
+    "seconds": 220.01758419999987,
+    "system_cpu_percent": 12.143858010275576
+  },
+  {
+    "gpu_memory_mib": 1039.0,
+    "gpu_memory_percent": 7.0,
+    "gpu_percent": 27.0,
+    "gpu_watts": 38.73,
+    "phase": "cuda-64/repeat-2/phase-updating",
+    "seconds": 221.07225889999972,
+    "system_cpu_percent": 12.72475795297372
+  },
+  {
+    "gpu_memory_mib": 1039.0,
+    "gpu_memory_percent": 7.0,
+    "gpu_percent": 27.0,
+    "gpu_watts": 40.32,
+    "phase": "cuda-64/repeat-2/phase-updating",
+    "seconds": 222.14351409999927,
+    "system_cpu_percent": 11.509180474697711
+  },
+  {
+    "gpu_memory_mib": 1039.0,
+    "gpu_memory_percent": 7.0,
+    "gpu_percent": 28.0,
+    "gpu_watts": 42.85,
+    "phase": "cuda-64/repeat-2/phase-collecting",
+    "seconds": 223.2016162,
+    "system_cpu_percent": 12.96383278534523
+  },
+  {
+    "gpu_memory_mib": 1039.0,
+    "gpu_memory_percent": 6.0,
+    "gpu_percent": 35.0,
+    "gpu_watts": 40.97,
+    "phase": "cuda-64/repeat-2/phase-collecting",
+    "seconds": 224.2687780999995,
+    "system_cpu_percent": 11.4078768673608
+  },
+  {
+    "gpu_memory_mib": 1039.0,
+    "gpu_memory_percent": 4.0,
+    "gpu_percent": 50.0,
+    "gpu_watts": 36.59,
+    "phase": "cuda-64/repeat-2/phase-collecting",
+    "seconds": 225.32878879999953,
+    "system_cpu_percent": 12.318501170960182
+  },
+  {
+    "gpu_memory_mib": 1039.0,
+    "gpu_memory_percent": 4.0,
+    "gpu_percent": 51.0,
+    "gpu_watts": 38.71,
+    "phase": "cuda-64/repeat-2/phase-updating",
+    "seconds": 226.3955619999997,
+    "system_cpu_percent": 11.976320582877964
+  },
+  {
+    "gpu_memory_mib": 1039.0,
+    "gpu_memory_percent": 4.0,
+    "gpu_percent": 52.0,
+    "gpu_watts": 38.78,
+    "phase": "cuda-64/repeat-2/phase-updating",
+    "seconds": 227.46271629999956,
+    "system_cpu_percent": 11.020036429872492
+  },
+  {
+    "gpu_memory_mib": 1039.0,
+    "gpu_memory_percent": 4.0,
+    "gpu_percent": 52.0,
+    "gpu_watts": 36.12,
+    "phase": "cuda-64/repeat-2/phase-updating",
+    "seconds": 228.54618859999937,
+    "system_cpu_percent": 12.138989169675085
+  },
+  {
+    "gpu_memory_mib": 1039.0,
+    "gpu_memory_percent": 5.0,
+    "gpu_percent": 43.0,
+    "gpu_watts": 41.52,
+    "phase": "cuda-64/repeat-2/phase-collecting",
+    "seconds": 229.6365311999998,
+    "system_cpu_percent": 11.965811965811968
+  },
+  {
+    "gpu_memory_mib": 1039.0,
+    "gpu_memory_percent": 4.0,
+    "gpu_percent": 53.0,
+    "gpu_watts": 38.83,
+    "phase": "cuda-64/repeat-2/phase-collecting",
+    "seconds": 230.7187228999992,
+    "system_cpu_percent": 11.076512455516019
+  },
+  {
+    "gpu_memory_mib": 1039.0,
+    "gpu_memory_percent": 4.0,
+    "gpu_percent": 54.0,
+    "gpu_watts": 36.49,
+    "phase": "cuda-64/repeat-2/phase-collecting",
+    "seconds": 231.7773363999995,
+    "system_cpu_percent": 13.4020618556701
+  },
+  {
+    "gpu_memory_mib": 1039.0,
+    "gpu_memory_percent": 3.0,
+    "gpu_percent": 42.0,
+    "gpu_watts": 35.57,
+    "phase": "cuda-64/repeat-2/phase-updating",
+    "seconds": 232.84742189999997,
+    "system_cpu_percent": 10.760918505177852
+  },
+  {
+    "gpu_memory_mib": 1039.0,
+    "gpu_memory_percent": 4.0,
+    "gpu_percent": 51.0,
+    "gpu_watts": 38.54,
+    "phase": "cuda-64/repeat-2/phase-updating",
+    "seconds": 233.90199499999926,
+    "system_cpu_percent": 11.905882352941177
+  },
+  {
+    "gpu_memory_mib": 1039.0,
+    "gpu_memory_percent": 4.0,
+    "gpu_percent": 52.0,
+    "gpu_watts": 38.67,
+    "phase": "cuda-64/repeat-2/phase-updating",
+    "seconds": 234.9844295999992,
+    "system_cpu_percent": 12.315930388219542
+  },
+  {
+    "gpu_memory_mib": 1039.0,
+    "gpu_memory_percent": 4.0,
+    "gpu_percent": 49.0,
+    "gpu_watts": 37.93,
+    "phase": "cuda-64/repeat-2/phase-updating",
+    "seconds": 236.05329689999962,
+    "system_cpu_percent": 11.202560585276633
+  },
+  {
+    "gpu_memory_mib": 1039.0,
+    "gpu_memory_percent": 7.0,
+    "gpu_percent": 28.0,
+    "gpu_watts": 42.63,
+    "phase": "cuda-64/repeat-2/phase-collecting",
+    "seconds": 237.1195930999993,
+    "system_cpu_percent": 11.340679522497709
+  },
+  {
+    "gpu_memory_mib": 1039.0,
+    "gpu_memory_percent": 5.0,
+    "gpu_percent": 53.0,
+    "gpu_watts": 40.64,
+    "phase": "cuda-64/repeat-2/phase-collecting",
+    "seconds": 238.17450239999926,
+    "system_cpu_percent": 12.698412698412698
+  },
+  {
+    "gpu_memory_mib": 1039.0,
+    "gpu_memory_percent": 4.0,
+    "gpu_percent": 50.0,
+    "gpu_watts": 40.66,
+    "phase": "cuda-64/repeat-2/phase-collecting",
+    "seconds": 239.2304811999993,
+    "system_cpu_percent": 12.05151793928243
+  },
+  {
+    "gpu_memory_mib": 1039.0,
+    "gpu_memory_percent": 4.0,
+    "gpu_percent": 49.0,
+    "gpu_watts": 38.45,
+    "phase": "cuda-64/repeat-2/phase-updating",
+    "seconds": 240.2991605999996,
+    "system_cpu_percent": 11.987090825265101
+  },
+  {
+    "gpu_memory_mib": 1039.0,
+    "gpu_memory_percent": 4.0,
+    "gpu_percent": 51.0,
+    "gpu_watts": 38.62,
+    "phase": "cuda-64/repeat-2/phase-updating",
+    "seconds": 241.3626764999999,
+    "system_cpu_percent": 13.574040219378425
+  },
+  {
+    "gpu_memory_mib": 1039.0,
+    "gpu_memory_percent": 6.0,
+    "gpu_percent": 48.0,
+    "gpu_watts": 36.48,
+    "phase": "cuda-64/repeat-2/phase-updating",
+    "seconds": 242.4311502999999,
+    "system_cpu_percent": 11.341134113411345
+  },
+  {
+    "gpu_memory_mib": 1039.0,
+    "gpu_memory_percent": 8.0,
+    "gpu_percent": 31.0,
+    "gpu_watts": 42.01,
+    "phase": "cuda-64/repeat-2/phase-updating",
+    "seconds": 243.48806299999978,
+    "system_cpu_percent": 11.131725417439709
+  },
+  {
+    "gpu_memory_mib": 881.0,
+    "gpu_memory_percent": 8.0,
+    "gpu_percent": 28.0,
+    "gpu_watts": 43.13,
+    "phase": "cuda-32/repeat-2",
+    "seconds": 244.55523939999966,
+    "system_cpu_percent": 11.401098901098905
+  },
+  {
+    "gpu_memory_mib": 955.0,
+    "gpu_memory_percent": 1.0,
+    "gpu_percent": 51.0,
+    "gpu_watts": 35.67,
+    "phase": "cuda-32/repeat-2/phase-collecting",
+    "seconds": 245.60820089999925,
+    "system_cpu_percent": 10.847299813780264
+  },
+  {
+    "gpu_memory_mib": 955.0,
+    "gpu_memory_percent": 6.0,
+    "gpu_percent": 35.0,
+    "gpu_watts": 38.84,
+    "phase": "cuda-32/repeat-2/phase-collecting",
+    "seconds": 246.67831749999914,
+    "system_cpu_percent": 11.580381471389645
+  },
+  {
+    "gpu_memory_mib": 955.0,
+    "gpu_memory_percent": 2.0,
+    "gpu_percent": 48.0,
+    "gpu_watts": 35.71,
+    "phase": "cuda-32/repeat-2/phase-updating",
+    "seconds": 247.73533279999992,
+    "system_cpu_percent": 11.690140845070419
+  },
+  {
+    "gpu_memory_mib": 955.0,
+    "gpu_memory_percent": 2.0,
+    "gpu_percent": 48.0,
+    "gpu_watts": 38.4,
+    "phase": "cuda-32/repeat-2/phase-collecting",
+    "seconds": 248.8063887999997,
+    "system_cpu_percent": 11.371841155234652
+  },
+  {
+    "gpu_memory_mib": 955.0,
+    "gpu_memory_percent": 6.0,
+    "gpu_percent": 34.0,
+    "gpu_watts": 37.66,
+    "phase": "cuda-32/repeat-2/phase-collecting",
+    "seconds": 249.86388019999958,
+    "system_cpu_percent": 11.284403669724774
+  },
+  {
+    "gpu_memory_mib": 955.0,
+    "gpu_memory_percent": 1.0,
+    "gpu_percent": 52.0,
+    "gpu_watts": 37.06,
+    "phase": "cuda-32/repeat-2/phase-updating",
+    "seconds": 250.9323158999996,
+    "system_cpu_percent": 11.559633027522931
+  },
+  {
+    "gpu_memory_mib": 955.0,
+    "gpu_memory_percent": 7.0,
+    "gpu_percent": 27.0,
+    "gpu_watts": 42.45,
+    "phase": "cuda-32/repeat-2/phase-collecting",
+    "seconds": 251.9996801999996,
+    "system_cpu_percent": 12.292051756007394
+  },
+  {
+    "gpu_memory_mib": 955.0,
+    "gpu_memory_percent": 1.0,
+    "gpu_percent": 47.0,
+    "gpu_watts": 35.54,
+    "phase": "cuda-32/repeat-2/phase-collecting",
+    "seconds": 253.05743189999976,
+    "system_cpu_percent": 15.913284132841332
+  },
+  {
+    "gpu_memory_mib": 955.0,
+    "gpu_memory_percent": 1.0,
+    "gpu_percent": 46.0,
+    "gpu_watts": 35.43,
+    "phase": "cuda-32/repeat-2/phase-collecting",
+    "seconds": 254.14574879999964,
+    "system_cpu_percent": 18.19383259911894
+  },
+  {
+    "gpu_memory_mib": 955.0,
+    "gpu_memory_percent": 6.0,
+    "gpu_percent": 21.0,
+    "gpu_watts": 39.81,
+    "phase": "cuda-32/repeat-2/phase-updating",
+    "seconds": 255.20665999999983,
+    "system_cpu_percent": 15.434380776340106
+  },
+  {
+    "gpu_memory_mib": 955.0,
+    "gpu_memory_percent": 1.0,
+    "gpu_percent": 48.0,
+    "gpu_watts": 35.38,
+    "phase": "cuda-32/repeat-2/phase-collecting",
+    "seconds": 256.26351519999935,
+    "system_cpu_percent": 15.516442797591479
+  },
+  {
+    "gpu_memory_mib": 955.0,
+    "gpu_memory_percent": 7.0,
+    "gpu_percent": 27.0,
+    "gpu_watts": 42.4,
+    "phase": "cuda-32/repeat-2/phase-collecting",
+    "seconds": 257.33148169999913,
+    "system_cpu_percent": 13.208409506398533
+  },
+  {
+    "gpu_memory_mib": 955.0,
+    "gpu_memory_percent": 1.0,
+    "gpu_percent": 49.0,
+    "gpu_watts": 35.83,
+    "phase": "cuda-32/repeat-2/phase-collecting",
+    "seconds": 258.3900707999992,
+    "system_cpu_percent": 14.684014869888474
+  },
+  {
+    "gpu_memory_mib": 955.0,
+    "gpu_memory_percent": 1.0,
+    "gpu_percent": 49.0,
+    "gpu_watts": 35.61,
+    "phase": "cuda-32/repeat-2/phase-collecting",
+    "seconds": 259.4561430999993,
+    "system_cpu_percent": 12.231857599269736
+  },
+  {
+    "gpu_memory_mib": 955.0,
+    "gpu_memory_percent": 5.0,
+    "gpu_percent": 32.0,
+    "gpu_watts": 35.43,
+    "phase": "cuda-32/repeat-2/phase-updating",
+    "seconds": 260.52434359999916,
+    "system_cpu_percent": 12.233549582947179
+  },
+  {
+    "gpu_memory_mib": 955.0,
+    "gpu_memory_percent": 1.0,
+    "gpu_percent": 50.0,
+    "gpu_watts": 35.49,
+    "phase": "cuda-32/repeat-2/phase-collecting",
+    "seconds": 261.59120259999963,
+    "system_cpu_percent": 12.825112107623315
+  },
+  {
+    "gpu_memory_mib": 955.0,
+    "gpu_memory_percent": 6.0,
+    "gpu_percent": 24.0,
+    "gpu_watts": 40.37,
+    "phase": "cuda-32/repeat-2/phase-updating",
+    "seconds": 262.6608514999998,
+    "system_cpu_percent": 12.676056338028175
+  },
+  {
+    "gpu_memory_mib": 955.0,
+    "gpu_memory_percent": 1.0,
+    "gpu_percent": 42.0,
+    "gpu_watts": 35.07,
+    "phase": "cuda-32/repeat-2/phase-collecting",
+    "seconds": 263.7338433999994,
+    "system_cpu_percent": 16.073903002309464
+  },
+  {
+    "gpu_memory_mib": 955.0,
+    "gpu_memory_percent": 1.0,
+    "gpu_percent": 51.0,
+    "gpu_watts": 35.95,
+    "phase": "cuda-32/repeat-2/phase-updating",
+    "seconds": 264.79984559999957,
+    "system_cpu_percent": 12.331233123312336
+  },
+  {
+    "gpu_memory_mib": 955.0,
+    "gpu_memory_percent": 7.0,
+    "gpu_percent": 26.0,
+    "gpu_watts": 42.42,
+    "phase": "cuda-32/repeat-2/phase-collecting",
+    "seconds": 265.85711339999943,
+    "system_cpu_percent": 13.90449438202247
+  },
+  {
+    "gpu_memory_mib": 955.0,
+    "gpu_memory_percent": 1.0,
+    "gpu_percent": 50.0,
+    "gpu_watts": 35.76,
+    "phase": "cuda-32/repeat-2/phase-updating",
+    "seconds": 266.9260276999994,
+    "system_cpu_percent": 11.121239744758427
+  },
+  {
+    "gpu_memory_mib": 891.0,
+    "gpu_memory_percent": 6.0,
+    "gpu_percent": 31.0,
+    "gpu_watts": 36.83,
+    "phase": "cuda-equivalent/repeat-2/phase-updating",
+    "seconds": 267.98214759999973,
+    "system_cpu_percent": 12.04311152764761
+  },
+  {
+    "gpu_memory_mib": 891.0,
+    "gpu_memory_percent": 3.0,
+    "gpu_percent": 35.0,
+    "gpu_watts": 37.49,
+    "phase": "cuda-equivalent/repeat-2/phase-collecting",
+    "seconds": 269.0669156999993,
+    "system_cpu_percent": 10.617059891107083
+  },
+  {
+    "gpu_memory_mib": 891.0,
+    "gpu_memory_percent": 0.0,
+    "gpu_percent": 44.0,
+    "gpu_watts": 33.96,
+    "phase": "cuda-equivalent/repeat-2/phase-collecting",
+    "seconds": 270.1218257999999,
+    "system_cpu_percent": 11.852861035422347
+  },
+  {
+    "gpu_memory_mib": 891.0,
+    "gpu_memory_percent": 0.0,
+    "gpu_percent": 39.0,
+    "gpu_watts": 33.87,
+    "phase": "cuda-equivalent/repeat-2/phase-collecting",
+    "seconds": 271.20145559999946,
+    "system_cpu_percent": 11.778507742843736
+  },
+  {
+    "gpu_memory_mib": 891.0,
+    "gpu_memory_percent": 0.0,
+    "gpu_percent": 46.0,
+    "gpu_watts": 34.84,
+    "phase": "cuda-equivalent/repeat-2/phase-collecting",
+    "seconds": 272.27085069999976,
+    "system_cpu_percent": 12.466001813236627
+  },
+  {
+    "gpu_memory_mib": 891.0,
+    "gpu_memory_percent": 3.0,
+    "gpu_percent": 38.0,
+    "gpu_watts": 35.09,
+    "phase": "cuda-equivalent/repeat-2/phase-collecting",
+    "seconds": 273.3363202999999,
+    "system_cpu_percent": 11.853959222380272
+  },
+  {
+    "gpu_memory_mib": 891.0,
+    "gpu_memory_percent": 2.0,
+    "gpu_percent": 41.0,
+    "gpu_watts": 33.95,
+    "phase": "cuda-equivalent/repeat-2/phase-collecting",
+    "seconds": 274.41012279999995,
+    "system_cpu_percent": 12.414965986394556
+  },
+  {
+    "gpu_memory_mib": 891.0,
+    "gpu_memory_percent": 0.0,
+    "gpu_percent": 45.0,
+    "gpu_watts": 34.04,
+    "phase": "cuda-equivalent/repeat-2/phase-collecting",
+    "seconds": 275.4821235999998,
+    "system_cpu_percent": 11.93755739210285
+  },
+  {
+    "gpu_memory_mib": 891.0,
+    "gpu_memory_percent": 0.0,
+    "gpu_percent": 49.0,
+    "gpu_watts": 34.14,
+    "phase": "cuda-equivalent/repeat-2/phase-collecting",
+    "seconds": 276.5375362999994,
+    "system_cpu_percent": 14.615029967727066
+  },
+  {
+    "gpu_memory_mib": 891.0,
+    "gpu_memory_percent": 0.0,
+    "gpu_percent": 47.0,
+    "gpu_watts": 33.97,
+    "phase": "cuda-equivalent/repeat-2/phase-collecting",
+    "seconds": 277.6070704999993,
+    "system_cpu_percent": 15.176524530032099
+  },
+  {
+    "gpu_memory_mib": 891.0,
+    "gpu_memory_percent": 4.0,
+    "gpu_percent": 34.0,
+    "gpu_watts": 37.97,
+    "phase": "cuda-equivalent/repeat-2/phase-collecting",
+    "seconds": 278.68705969999974,
+    "system_cpu_percent": 12.733911455956182
+  },
+  {
+    "gpu_memory_mib": 891.0,
+    "gpu_memory_percent": 2.0,
+    "gpu_percent": 40.0,
+    "gpu_watts": 35.27,
+    "phase": "cuda-equivalent/repeat-2/phase-collecting",
+    "seconds": 279.7605100999999,
+    "system_cpu_percent": 12.45519713261649
+  },
+  {
+    "gpu_memory_mib": 891.0,
+    "gpu_memory_percent": 0.0,
+    "gpu_percent": 48.0,
+    "gpu_watts": 34.03,
+    "phase": "cuda-equivalent/repeat-2/phase-updating",
+    "seconds": 280.8282804999999,
+    "system_cpu_percent": 11.883924458774754
+  },
+  {
+    "gpu_memory_mib": 891.0,
+    "gpu_memory_percent": 0.0,
+    "gpu_percent": 46.0,
+    "gpu_watts": 33.94,
+    "phase": "cuda-equivalent/repeat-2/phase-collecting",
+    "seconds": 281.89787779999915,
+    "system_cpu_percent": 12.918002748511226
+  },
+  {
+    "gpu_memory_mib": 835.0,
+    "gpu_memory_percent": 0.0,
+    "gpu_percent": 0.0,
+    "gpu_watts": 29.11,
+    "phase": "cpu-equivalent/repeat-2",
+    "seconds": 282.9694148999997,
+    "system_cpu_percent": 22.826086956521742
+  },
+  {
+    "gpu_memory_mib": 835.0,
+    "gpu_memory_percent": 0.0,
+    "gpu_percent": 0.0,
+    "gpu_watts": 29.11,
+    "phase": "cpu-equivalent/repeat-2",
+    "seconds": 284.0262163999996,
+    "system_cpu_percent": 37.951807228915655
+  },
+  {
+    "gpu_memory_mib": 839.0,
+    "gpu_memory_percent": 0.0,
+    "gpu_percent": 0.0,
+    "gpu_watts": 22.76,
+    "phase": "cpu-equivalent/repeat-2",
+    "seconds": 285.08298149999973,
+    "system_cpu_percent": 28.963272896327286
+  },
+  {
+    "gpu_memory_mib": 877.0,
+    "gpu_memory_percent": 23.0,
+    "gpu_percent": 55.0,
+    "gpu_watts": 8.8,
+    "phase": "cpu-equivalent/repeat-2/phase-collecting",
+    "seconds": 286.1359046999996,
+    "system_cpu_percent": 12.494172494172496
+  },
+  {
+    "gpu_memory_mib": 877.0,
+    "gpu_memory_percent": 0.0,
+    "gpu_percent": 25.0,
+    "gpu_watts": 14.68,
+    "phase": "cpu-equivalent/repeat-2/phase-collecting",
+    "seconds": 287.1926649999996,
+    "system_cpu_percent": 13.035551504102095
+  },
+  {
+    "gpu_memory_mib": 879.0,
+    "gpu_memory_percent": 3.0,
+    "gpu_percent": 33.0,
+    "gpu_watts": 16.03,
+    "phase": "cpu-equivalent/repeat-2/phase-collecting",
+    "seconds": 288.25302529999954,
+    "system_cpu_percent": 11.29995406522738
+  },
+  {
+    "gpu_memory_mib": 879.0,
+    "gpu_memory_percent": 0.0,
+    "gpu_percent": 18.0,
+    "gpu_watts": 13.43,
+    "phase": "cpu-equivalent/repeat-2/phase-updating",
+    "seconds": 289.3365733999999,
+    "system_cpu_percent": 14.883093525179858
+  },
+  {
+    "gpu_memory_mib": 879.0,
+    "gpu_memory_percent": 0.0,
+    "gpu_percent": 22.0,
+    "gpu_watts": 14.17,
+    "phase": "cpu-equivalent/repeat-2/phase-collecting",
+    "seconds": 290.4113377999993,
+    "system_cpu_percent": 14.443422263109474
+  },
+  {
+    "gpu_memory_mib": 879.0,
+    "gpu_memory_percent": 42.0,
+    "gpu_percent": 67.0,
+    "gpu_watts": 12.24,
+    "phase": "cpu-equivalent/repeat-2/phase-updating",
+    "seconds": 291.4727531999997,
+    "system_cpu_percent": 12.08390332877337
+  },
+  {
+    "gpu_memory_mib": 879.0,
+    "gpu_memory_percent": 3.0,
+    "gpu_percent": 30.0,
+    "gpu_watts": 14.63,
+    "phase": "cpu-equivalent/repeat-2/phase-collecting",
+    "seconds": 292.5287708999995,
+    "system_cpu_percent": 16.527001862197388
+  },
+  {
+    "gpu_memory_mib": 879.0,
+    "gpu_memory_percent": 3.0,
+    "gpu_percent": 32.0,
+    "gpu_watts": 11.19,
+    "phase": "cpu-equivalent/repeat-2/phase-updating",
+    "seconds": 293.5874965999992,
+    "system_cpu_percent": 12.420957542908761
+  },
+  {
+    "gpu_memory_mib": 879.0,
+    "gpu_memory_percent": 5.0,
+    "gpu_percent": 36.0,
+    "gpu_watts": 15.07,
+    "phase": "cpu-equivalent/repeat-2/phase-collecting",
+    "seconds": 294.6745684999996,
+    "system_cpu_percent": 20.37205081669692
+  },
+  {
+    "gpu_memory_mib": 879.0,
+    "gpu_memory_percent": 0.0,
+    "gpu_percent": 24.0,
+    "gpu_watts": 14.95,
+    "phase": "cpu-equivalent/repeat-2/phase-collecting",
+    "seconds": 295.7611637,
+    "system_cpu_percent": 17.3542600896861
+  },
+  {
+    "gpu_memory_mib": 879.0,
+    "gpu_memory_percent": 19.0,
+    "gpu_percent": 45.0,
+    "gpu_watts": 13.5,
+    "phase": "cpu-equivalent/repeat-2/phase-collecting",
+    "seconds": 296.82087349999983,
+    "system_cpu_percent": 17.457392906494707
+  },
+  {
+    "gpu_memory_mib": 879.0,
+    "gpu_memory_percent": 1.0,
+    "gpu_percent": 27.0,
+    "gpu_watts": 12.95,
+    "phase": "cpu-equivalent/repeat-2/phase-collecting",
+    "seconds": 297.89340249999987,
+    "system_cpu_percent": 17.75956284153005
+  },
+  {
+    "gpu_memory_mib": 879.0,
+    "gpu_memory_percent": 4.0,
+    "gpu_percent": 34.0,
+    "gpu_watts": 17.04,
+    "phase": "cpu-equivalent/repeat-2/phase-updating",
+    "seconds": 298.9506862999997,
+    "system_cpu_percent": 14.339093881363851
+  },
+  {
+    "gpu_memory_mib": 835.0,
+    "gpu_memory_percent": 0.0,
+    "gpu_percent": 0.0,
+    "gpu_watts": 9.65,
+    "phase": "cpu-current/repeat-2",
+    "seconds": 300.01034439999967,
+    "system_cpu_percent": 29.963570127504557
+  },
+  {
+    "gpu_memory_mib": 835.0,
+    "gpu_memory_percent": 0.0,
+    "gpu_percent": 0.0,
+    "gpu_watts": 8.68,
+    "phase": "cpu-current/repeat-2",
+    "seconds": 301.0674776999995,
+    "system_cpu_percent": 38.415199258572756
+  },
+  {
+    "gpu_memory_mib": 835.0,
+    "gpu_memory_percent": 0.0,
+    "gpu_percent": 0.0,
+    "gpu_watts": 3.82,
+    "phase": "cpu-current/repeat-2",
+    "seconds": 302.1546064999993,
+    "system_cpu_percent": 36.77332131590807
+  },
+  {
+    "gpu_memory_mib": 839.0,
+    "gpu_memory_percent": 0.0,
+    "gpu_percent": 40.0,
+    "gpu_watts": 3.44,
+    "phase": "cpu-current/repeat-2",
+    "seconds": 303.21191369999997,
+    "system_cpu_percent": 18.0373831775701
+  },
+  {
+    "gpu_memory_mib": 909.0,
+    "gpu_memory_percent": 43.0,
+    "gpu_percent": 73.0,
+    "gpu_watts": 9.43,
+    "phase": "cpu-current/repeat-2",
+    "seconds": 304.2851192999997,
+    "system_cpu_percent": 13.03763440860215
+  },
+  {
+    "gpu_memory_mib": 909.0,
+    "gpu_memory_percent": 0.0,
+    "gpu_percent": 24.0,
+    "gpu_watts": 14.88,
+    "phase": "cpu-current/repeat-2/phase-collecting",
+    "seconds": 305.3410718999994,
+    "system_cpu_percent": 13.979496738117426
+  },
+  {
+    "gpu_memory_mib": 909.0,
+    "gpu_memory_percent": 0.0,
+    "gpu_percent": 23.0,
+    "gpu_watts": 16.61,
+    "phase": "cpu-current/repeat-2/phase-collecting",
+    "seconds": 306.4161452999997,
+    "system_cpu_percent": 13.492779783393505
+  },
+  {
+    "gpu_memory_mib": 911.0,
+    "gpu_memory_percent": 8.0,
+    "gpu_percent": 45.0,
+    "gpu_watts": 18.73,
+    "phase": "cpu-current/repeat-2/phase-collecting",
+    "seconds": 307.47697549999975,
+    "system_cpu_percent": 12.599160055996272
+  },
+  {
+    "gpu_memory_mib": 911.0,
+    "gpu_memory_percent": 0.0,
+    "gpu_percent": 22.0,
+    "gpu_watts": 17.19,
+    "phase": "cpu-current/repeat-2/phase-updating",
+    "seconds": 308.5383082999997,
+    "system_cpu_percent": 13.037447988904304
+  },
+  {
+    "gpu_memory_mib": 911.0,
+    "gpu_memory_percent": 0.0,
+    "gpu_percent": 21.0,
+    "gpu_watts": 15.94,
+    "phase": "cpu-current/repeat-2/phase-collecting",
+    "seconds": 309.6084119999996,
+    "system_cpu_percent": 15.978211529732178
+  },
+  {
+    "gpu_memory_mib": 911.0,
+    "gpu_memory_percent": 0.0,
+    "gpu_percent": 21.0,
+    "gpu_watts": 17.92,
+    "phase": "cpu-current/repeat-2/phase-collecting",
+    "seconds": 310.67310179999913,
+    "system_cpu_percent": 15.102040816326534
+  },
+  {
+    "gpu_memory_mib": 911.0,
+    "gpu_memory_percent": 0.0,
+    "gpu_percent": 21.0,
+    "gpu_watts": 17.94,
+    "phase": "cpu-current/repeat-2/phase-collecting",
+    "seconds": 311.7476188999999,
+    "system_cpu_percent": 13.75807940904894
+  },
+  {
+    "gpu_memory_mib": 911.0,
+    "gpu_memory_percent": 0.0,
+    "gpu_percent": 26.0,
+    "gpu_watts": 18.45,
+    "phase": "cpu-current/repeat-2/phase-updating",
+    "seconds": 312.8069683999993,
+    "system_cpu_percent": 14.421338155515373
+  },
+  {
+    "gpu_memory_mib": 911.0,
+    "gpu_memory_percent": 0.0,
+    "gpu_percent": 25.0,
+    "gpu_watts": 17.38,
+    "phase": "cpu-current/repeat-2/phase-collecting",
+    "seconds": 313.86846979999973,
+    "system_cpu_percent": 12.883998165978905
+  },
+  {
+    "gpu_memory_mib": 911.0,
+    "gpu_memory_percent": 0.0,
+    "gpu_percent": 21.0,
+    "gpu_watts": 17.09,
+    "phase": "cpu-current/repeat-2/phase-collecting",
+    "seconds": 314.92869019999944,
+    "system_cpu_percent": 14.11983279145379
+  },
+  {
+    "gpu_memory_mib": 911.0,
+    "gpu_memory_percent": 2.0,
+    "gpu_percent": 27.0,
+    "gpu_watts": 17.31,
+    "phase": "cpu-current/repeat-2/phase-updating",
+    "seconds": 316.00265489999947,
+    "system_cpu_percent": 15.59674502712477
+  },
+  {
+    "gpu_memory_mib": 835.0,
+    "gpu_memory_percent": 0.0,
+    "gpu_percent": 0.0,
+    "gpu_watts": 16.43,
+    "phase": "cpu-current/repeat-3",
+    "seconds": 317.0985318999992,
+    "system_cpu_percent": 31.288614298323036
+  },
+  {
+    "gpu_memory_mib": 835.0,
+    "gpu_memory_percent": 0.0,
+    "gpu_percent": 0.0,
+    "gpu_watts": 16.47,
+    "phase": "cpu-current/repeat-3",
+    "seconds": 318.1553748999995,
+    "system_cpu_percent": 35.310602522185896
+  },
+  {
+    "gpu_memory_mib": 839.0,
+    "gpu_memory_percent": 0.0,
+    "gpu_percent": 0.0,
+    "gpu_watts": 7.41,
+    "phase": "cpu-current/repeat-3",
+    "seconds": 319.21224469999925,
+    "system_cpu_percent": 29.348837209302324
+  },
+  {
+    "gpu_memory_mib": 839.0,
+    "gpu_memory_percent": 0.0,
+    "gpu_percent": 42.0,
+    "gpu_watts": 5.78,
+    "phase": "cpu-current/repeat-3",
+    "seconds": 320.2701414999992,
+    "system_cpu_percent": 12.35592438911941
+  },
+  {
+    "gpu_memory_mib": 909.0,
+    "gpu_memory_percent": 0.0,
+    "gpu_percent": 19.0,
+    "gpu_watts": 16.83,
+    "phase": "cpu-current/repeat-3/phase-collecting",
+    "seconds": 321.3289396,
+    "system_cpu_percent": 11.867525298988035
+  },
+  {
+    "gpu_memory_mib": 909.0,
+    "gpu_memory_percent": 3.0,
+    "gpu_percent": 23.0,
+    "gpu_watts": 21.8,
+    "phase": "cpu-current/repeat-3/phase-collecting",
+    "seconds": 322.39257029999953,
+    "system_cpu_percent": 18.775696665143904
+  },
+  {
+    "gpu_memory_mib": 909.0,
+    "gpu_memory_percent": 0.0,
+    "gpu_percent": 24.0,
+    "gpu_watts": 17.39,
+    "phase": "cpu-current/repeat-3/phase-collecting",
+    "seconds": 323.4529580999997,
+    "system_cpu_percent": 17.417556897352526
+  },
+  {
+    "gpu_memory_mib": 911.0,
+    "gpu_memory_percent": 0.0,
+    "gpu_percent": 22.0,
+    "gpu_watts": 17.18,
+    "phase": "cpu-current/repeat-3/phase-collecting",
+    "seconds": 324.51079689999915,
+    "system_cpu_percent": 13.472222222222218
+  },
+  {
+    "gpu_memory_mib": 911.0,
+    "gpu_memory_percent": 8.0,
+    "gpu_percent": 42.0,
+    "gpu_watts": 22.7,
+    "phase": "cpu-current/repeat-3/phase-collecting",
+    "seconds": 325.5698380999993,
+    "system_cpu_percent": 13.525905547913798
+  },
+  {
+    "gpu_memory_mib": 911.0,
+    "gpu_memory_percent": 7.0,
+    "gpu_percent": 40.0,
+    "gpu_watts": 23.26,
+    "phase": "cpu-current/repeat-3/phase-updating",
+    "seconds": 326.6272470999993,
+    "system_cpu_percent": 14.150943396226412
+  },
+  {
+    "gpu_memory_mib": 911.0,
+    "gpu_memory_percent": 0.0,
+    "gpu_percent": 24.0,
+    "gpu_watts": 16.47,
+    "phase": "cpu-current/repeat-3/phase-collecting",
+    "seconds": 327.68458199999986,
+    "system_cpu_percent": 13.122171945701355
+  },
+  {
+    "gpu_memory_mib": 911.0,
+    "gpu_memory_percent": 0.0,
+    "gpu_percent": 24.0,
+    "gpu_watts": 16.55,
+    "phase": "cpu-current/repeat-3/phase-collecting",
+    "seconds": 328.7527911999996,
+    "system_cpu_percent": 14.823313446535103
+  },
+  {
+    "gpu_memory_mib": 911.0,
+    "gpu_memory_percent": 3.0,
+    "gpu_percent": 32.0,
+    "gpu_watts": 18.66,
+    "phase": "cpu-current/repeat-3/phase-collecting",
+    "seconds": 329.8153149,
+    "system_cpu_percent": 13.017479300827972
+  },
+  {
+    "gpu_memory_mib": 911.0,
+    "gpu_memory_percent": 0.0,
+    "gpu_percent": 25.0,
+    "gpu_watts": 16.75,
+    "phase": "cpu-current/repeat-3/phase-updating",
+    "seconds": 330.87547709999944,
+    "system_cpu_percent": 14.778554778554776
+  },
+  {
+    "gpu_memory_mib": 911.0,
+    "gpu_memory_percent": 0.0,
+    "gpu_percent": 22.0,
+    "gpu_watts": 17.13,
+    "phase": "cpu-current/repeat-3/phase-collecting",
+    "seconds": 331.9360558999997,
+    "system_cpu_percent": 16.889709275496077
+  },
+  {
+    "gpu_memory_mib": 835.0,
+    "gpu_memory_percent": 0.0,
+    "gpu_percent": 0.0,
+    "gpu_watts": 16.0,
+    "phase": "cpu-equivalent/repeat-3",
+    "seconds": 333.0110492999993,
+    "system_cpu_percent": 27.587738782763218
+  },
+  {
+    "gpu_memory_mib": 835.0,
+    "gpu_memory_percent": 0.0,
+    "gpu_percent": 0.0,
+    "gpu_watts": 16.08,
+    "phase": "cpu-equivalent/repeat-3",
+    "seconds": 334.07058269999925,
+    "system_cpu_percent": 31.389925373134332
+  },
+  {
+    "gpu_memory_mib": 835.0,
+    "gpu_memory_percent": 0.0,
+    "gpu_percent": 0.0,
+    "gpu_watts": 9.14,
+    "phase": "cpu-equivalent/repeat-3",
+    "seconds": 335.1299064999994,
+    "system_cpu_percent": 33.529145955716224
+  },
+  {
+    "gpu_memory_mib": 877.0,
+    "gpu_memory_percent": 0.0,
+    "gpu_percent": 52.0,
+    "gpu_watts": 4.24,
+    "phase": "cpu-equivalent/repeat-3",
+    "seconds": 336.1882575999998,
+    "system_cpu_percent": 21.345165810368982
+  },
+  {
+    "gpu_memory_mib": 877.0,
+    "gpu_memory_percent": 6.0,
+    "gpu_percent": 44.0,
+    "gpu_watts": 16.53,
+    "phase": "cpu-equivalent/repeat-3/phase-collecting",
+    "seconds": 337.2572249999994,
+    "system_cpu_percent": 13.17582916855975
+  },
+  {
+    "gpu_memory_mib": 879.0,
+    "gpu_memory_percent": 3.0,
+    "gpu_percent": 37.0,
+    "gpu_watts": 18.23,
+    "phase": "cpu-equivalent/repeat-3/phase-collecting",
+    "seconds": 338.3274614999991,
+    "system_cpu_percent": 15.06660542030317
+  },
+  {
+    "gpu_memory_mib": 879.0,
+    "gpu_memory_percent": 0.0,
+    "gpu_percent": 28.0,
+    "gpu_watts": 16.05,
+    "phase": "cpu-equivalent/repeat-3/phase-collecting",
+    "seconds": 339.3946806999993,
+    "system_cpu_percent": 16.086760054225035
+  },
+  {
+    "gpu_memory_mib": 879.0,
+    "gpu_memory_percent": 0.0,
+    "gpu_percent": 26.0,
+    "gpu_watts": 17.14,
+    "phase": "cpu-equivalent/repeat-3/phase-collecting",
+    "seconds": 340.45267949999925,
+    "system_cpu_percent": 13.255269320843087
+  },
+  {
+    "gpu_memory_mib": 879.0,
+    "gpu_memory_percent": 37.0,
+    "gpu_percent": 63.0,
+    "gpu_watts": 14.23,
+    "phase": "cpu-equivalent/repeat-3/phase-collecting",
+    "seconds": 341.52114059999985,
+    "system_cpu_percent": 13.069216757741353
+  },
+  {
+    "gpu_memory_mib": 879.0,
+    "gpu_memory_percent": 0.0,
+    "gpu_percent": 28.0,
+    "gpu_watts": 18.22,
+    "phase": "cpu-equivalent/repeat-3/phase-collecting",
+    "seconds": 342.57972059999975,
+    "system_cpu_percent": 15.12761020881671
+  },
+  {
+    "gpu_memory_mib": 879.0,
+    "gpu_memory_percent": 1.0,
+    "gpu_percent": 26.0,
+    "gpu_watts": 15.35,
+    "phase": "cpu-equivalent/repeat-3/phase-collecting",
+    "seconds": 343.6358432999996,
+    "system_cpu_percent": 17.459584295612007
+  },
+  {
+    "gpu_memory_mib": 879.0,
+    "gpu_memory_percent": 0.0,
+    "gpu_percent": 27.0,
+    "gpu_watts": 17.95,
+    "phase": "cpu-equivalent/repeat-3/phase-collecting",
+    "seconds": 344.6954711999997,
+    "system_cpu_percent": 13.173652694610782
+  },
+  {
+    "gpu_memory_mib": 879.0,
+    "gpu_memory_percent": 0.0,
+    "gpu_percent": 27.0,
+    "gpu_watts": 17.21,
+    "phase": "cpu-equivalent/repeat-3/phase-updating",
+    "seconds": 345.75185689999944,
+    "system_cpu_percent": 11.60631383472609
+  },
+  {
+    "gpu_memory_mib": 879.0,
+    "gpu_memory_percent": 0.0,
+    "gpu_percent": 28.0,
+    "gpu_watts": 16.4,
+    "phase": "cpu-equivalent/repeat-3/phase-collecting",
+    "seconds": 346.8127879999993,
+    "system_cpu_percent": 13.752913752913754
+  },
+  {
+    "gpu_memory_mib": 879.0,
+    "gpu_memory_percent": 46.0,
+    "gpu_percent": 70.0,
+    "gpu_watts": 14.59,
+    "phase": "cpu-equivalent/repeat-3/phase-updating",
+    "seconds": 347.8765487999999,
+    "system_cpu_percent": 14.703237410071946
+  },
+  {
+    "gpu_memory_mib": 851.0,
+    "gpu_memory_percent": 0.0,
+    "gpu_percent": 12.0,
+    "gpu_watts": 16.1,
+    "phase": "cuda-equivalent/repeat-3",
+    "seconds": 348.9370736999999,
+    "system_cpu_percent": 26.203208556149736
+  },
+  {
+    "gpu_memory_mib": 891.0,
+    "gpu_memory_percent": 2.0,
+    "gpu_percent": 44.0,
+    "gpu_watts": 36.34,
+    "phase": "cuda-equivalent/repeat-3/phase-collecting",
+    "seconds": 350.00653129999955,
+    "system_cpu_percent": 10.660124888492417
+  },
+  {
+    "gpu_memory_mib": 891.0,
+    "gpu_memory_percent": 0.0,
+    "gpu_percent": 48.0,
+    "gpu_watts": 34.16,
+    "phase": "cuda-equivalent/repeat-3/phase-collecting",
+    "seconds": 351.0731530999992,
+    "system_cpu_percent": 11.220384443451048
+  },
+  {
+    "gpu_memory_mib": 891.0,
+    "gpu_memory_percent": 0.0,
+    "gpu_percent": 50.0,
+    "gpu_watts": 34.14,
+    "phase": "cuda-equivalent/repeat-3/phase-updating",
+    "seconds": 352.1464747,
+    "system_cpu_percent": 17.333939945404907
+  },
+  {
+    "gpu_memory_mib": 891.0,
+    "gpu_memory_percent": 4.0,
+    "gpu_percent": 37.0,
+    "gpu_watts": 38.52,
+    "phase": "cuda-equivalent/repeat-3/phase-collecting",
+    "seconds": 353.2172099999998,
+    "system_cpu_percent": 12.420957542908761
+  },
+  {
+    "gpu_memory_mib": 891.0,
+    "gpu_memory_percent": 0.0,
+    "gpu_percent": 48.0,
+    "gpu_watts": 35.89,
+    "phase": "cuda-equivalent/repeat-3/phase-updating",
+    "seconds": 354.2847202999992,
+    "system_cpu_percent": 11.184210526315786
+  },
+  {
+    "gpu_memory_mib": 891.0,
+    "gpu_memory_percent": 0.0,
+    "gpu_percent": 50.0,
+    "gpu_watts": 34.16,
+    "phase": "cuda-equivalent/repeat-3/phase-collecting",
+    "seconds": 355.35144579999996,
+    "system_cpu_percent": 11.718020541549956
+  },
+  {
+    "gpu_memory_mib": 891.0,
+    "gpu_memory_percent": 5.0,
+    "gpu_percent": 35.0,
+    "gpu_watts": 39.4,
+    "phase": "cuda-equivalent/repeat-3/phase-updating",
+    "seconds": 356.41601809999975,
+    "system_cpu_percent": 10.507726269315675
+  },
+  {
+    "gpu_memory_mib": 891.0,
+    "gpu_memory_percent": 0.0,
+    "gpu_percent": 47.0,
+    "gpu_watts": 35.51,
+    "phase": "cuda-equivalent/repeat-3/phase-collecting",
+    "seconds": 357.4721114999993,
+    "system_cpu_percent": 11.411549037580205
+  },
+  {
+    "gpu_memory_mib": 891.0,
+    "gpu_memory_percent": 0.0,
+    "gpu_percent": 47.0,
+    "gpu_watts": 33.97,
+    "phase": "cuda-equivalent/repeat-3/phase-collecting",
+    "seconds": 358.53577119999954,
+    "system_cpu_percent": 12.04986149584487
+  },
+  {
+    "gpu_memory_mib": 891.0,
+    "gpu_memory_percent": 5.0,
+    "gpu_percent": 36.0,
+    "gpu_watts": 36.67,
+    "phase": "cuda-equivalent/repeat-3/phase-collecting",
+    "seconds": 359.60254989999976,
+    "system_cpu_percent": 10.82568807339449
+  },
+  {
+    "gpu_memory_mib": 891.0,
+    "gpu_memory_percent": 0.0,
+    "gpu_percent": 49.0,
+    "gpu_watts": 34.04,
+    "phase": "cuda-equivalent/repeat-3/phase-collecting",
+    "seconds": 360.6704641999995,
+    "system_cpu_percent": 11.566484517304188
+  },
+  {
+    "gpu_memory_mib": 891.0,
+    "gpu_memory_percent": 0.0,
+    "gpu_percent": 49.0,
+    "gpu_watts": 34.02,
+    "phase": "cuda-equivalent/repeat-3/phase-collecting",
+    "seconds": 361.73345339999923,
+    "system_cpu_percent": 12.077741786210083
+  },
+  {
+    "gpu_memory_mib": 891.0,
+    "gpu_memory_percent": 5.0,
+    "gpu_percent": 34.0,
+    "gpu_watts": 35.84,
+    "phase": "cuda-equivalent/repeat-3/phase-collecting",
+    "seconds": 362.79049439999926,
+    "system_cpu_percent": 10.973370064279154
+  },
+  {
+    "gpu_memory_mib": 955.0,
+    "gpu_memory_percent": 1.0,
+    "gpu_percent": 51.0,
+    "gpu_watts": 35.75,
+    "phase": "cuda-32/repeat-3/phase-collecting",
+    "seconds": 363.85814179999943,
+    "system_cpu_percent": 12.270220588235292
+  },
+  {
+    "gpu_memory_mib": 955.0,
+    "gpu_memory_percent": 1.0,
+    "gpu_percent": 48.0,
+    "gpu_watts": 36.43,
+    "phase": "cuda-32/repeat-3/phase-updating",
+    "seconds": 364.9122617999992,
+    "system_cpu_percent": 11.873840445269012
+  },
+  {
+    "gpu_memory_mib": 955.0,
+    "gpu_memory_percent": 6.0,
+    "gpu_percent": 33.0,
+    "gpu_watts": 37.75,
+    "phase": "cuda-32/repeat-3/phase-collecting",
+    "seconds": 365.9804749999994,
+    "system_cpu_percent": 11.369863013698634
+  },
+  {
+    "gpu_memory_mib": 955.0,
+    "gpu_memory_percent": 1.0,
+    "gpu_percent": 50.0,
+    "gpu_watts": 35.76,
+    "phase": "cuda-32/repeat-3/phase-updating",
+    "seconds": 367.0483478999995,
+    "system_cpu_percent": 11.069939786938399
+  },
+  {
+    "gpu_memory_mib": 955.0,
+    "gpu_memory_percent": 1.0,
+    "gpu_percent": 50.0,
+    "gpu_watts": 35.7,
+    "phase": "cuda-32/repeat-3/phase-updating",
+    "seconds": 368.1124456999996,
+    "system_cpu_percent": 12.043795620437958
+  },
+  {
+    "gpu_memory_mib": 955.0,
+    "gpu_memory_percent": 3.0,
+    "gpu_percent": 47.0,
+    "gpu_watts": 35.83,
+    "phase": "cuda-32/repeat-3/phase-collecting",
+    "seconds": 369.17673659999946,
+    "system_cpu_percent": 11.928702010968916
+  },
+  {
+    "gpu_memory_mib": 955.0,
+    "gpu_memory_percent": 6.0,
+    "gpu_percent": 33.0,
+    "gpu_watts": 39.82,
+    "phase": "cuda-32/repeat-3/phase-updating",
+    "seconds": 370.2353908999994,
+    "system_cpu_percent": 11.469194312796205
+  },
+  {
+    "gpu_memory_mib": 955.0,
+    "gpu_memory_percent": 1.0,
+    "gpu_percent": 51.0,
+    "gpu_watts": 35.87,
+    "phase": "cuda-32/repeat-3/phase-updating",
+    "seconds": 371.3023469,
+    "system_cpu_percent": 10.872483221476514
+  },
+  {
+    "gpu_memory_mib": 955.0,
+    "gpu_memory_percent": 7.0,
+    "gpu_percent": 27.0,
+    "gpu_watts": 40.64,
+    "phase": "cuda-32/repeat-3/phase-collecting",
+    "seconds": 372.36110159999953,
+    "system_cpu_percent": 11.73371647509579
+  },
+  {
+    "gpu_memory_mib": 955.0,
+    "gpu_memory_percent": 1.0,
+    "gpu_percent": 50.0,
+    "gpu_watts": 35.75,
+    "phase": "cuda-32/repeat-3/phase-updating",
+    "seconds": 373.4154359999993,
+    "system_cpu_percent": 11.824623560673164
+  },
+  {
+    "gpu_memory_mib": 955.0,
+    "gpu_memory_percent": 7.0,
+    "gpu_percent": 27.0,
+    "gpu_watts": 42.24,
+    "phase": "cuda-32/repeat-3/phase-collecting",
+    "seconds": 374.4744477999993,
+    "system_cpu_percent": 11.011342155009451
+  },
+  {
+    "gpu_memory_mib": 955.0,
+    "gpu_memory_percent": 1.0,
+    "gpu_percent": 51.0,
+    "gpu_watts": 37.33,
+    "phase": "cuda-32/repeat-3/phase-collecting",
+    "seconds": 375.53423289999955,
+    "system_cpu_percent": 11.378353376503236
+  },
+  {
+    "gpu_memory_mib": 955.0,
+    "gpu_memory_percent": 6.0,
+    "gpu_percent": 29.0,
+    "gpu_watts": 36.13,
+    "phase": "cuda-32/repeat-3/phase-updating",
+    "seconds": 376.6029101999993,
+    "system_cpu_percent": 11.285266457680255
+  },
+  {
+    "gpu_memory_mib": 955.0,
+    "gpu_memory_percent": 1.0,
+    "gpu_percent": 51.0,
+    "gpu_watts": 35.73,
+    "phase": "cuda-32/repeat-3/phase-collecting",
+    "seconds": 377.6666058999999,
+    "system_cpu_percent": 11.074612857813237
+  },
+  {
+    "gpu_memory_mib": 955.0,
+    "gpu_memory_percent": 7.0,
+    "gpu_percent": 28.0,
+    "gpu_watts": 42.26,
+    "phase": "cuda-32/repeat-3/phase-collecting",
+    "seconds": 378.72788389999914,
+    "system_cpu_percent": 10.711111111111116
+  },
+  {
+    "gpu_memory_mib": 955.0,
+    "gpu_memory_percent": 1.0,
+    "gpu_percent": 51.0,
+    "gpu_watts": 36.0,
+    "phase": "cuda-32/repeat-3/phase-updating",
+    "seconds": 379.78380919999927,
+    "system_cpu_percent": 11.524163568773238
+  },
+  {
+    "gpu_memory_mib": 955.0,
+    "gpu_memory_percent": 7.0,
+    "gpu_percent": 28.0,
+    "gpu_watts": 42.53,
+    "phase": "cuda-32/repeat-3/phase-collecting",
+    "seconds": 380.8525979999995,
+    "system_cpu_percent": 12.17745586238117
+  },
+  {
+    "gpu_memory_mib": 955.0,
+    "gpu_memory_percent": 1.0,
+    "gpu_percent": 49.0,
+    "gpu_watts": 37.83,
+    "phase": "cuda-32/repeat-3/phase-updating",
+    "seconds": 381.9231938999992,
+    "system_cpu_percent": 11.7455896007428
+  },
+  {
+    "gpu_memory_mib": 955.0,
+    "gpu_memory_percent": 7.0,
+    "gpu_percent": 28.0,
+    "gpu_watts": 42.63,
+    "phase": "cuda-32/repeat-3/phase-updating",
+    "seconds": 382.99039639999955,
+    "system_cpu_percent": 14.31807884005437
+  },
+  {
+    "gpu_memory_mib": 955.0,
+    "gpu_memory_percent": 1.0,
+    "gpu_percent": 50.0,
+    "gpu_watts": 35.82,
+    "phase": "cuda-32/repeat-3/phase-collecting",
+    "seconds": 384.04573849999997,
+    "system_cpu_percent": 15.023255813953485
+  },
+  {
+    "gpu_memory_mib": 927.0,
+    "gpu_memory_percent": 4.0,
+    "gpu_percent": 51.0,
+    "gpu_watts": 38.46,
+    "phase": "cuda-64/repeat-3",
+    "seconds": 385.11277529999916,
+    "system_cpu_percent": 10.913242009132418
+  },
+  {
+    "gpu_memory_mib": 1039.0,
+    "gpu_memory_percent": 4.0,
+    "gpu_percent": 53.0,
+    "gpu_watts": 38.8,
+    "phase": "cuda-64/repeat-3/phase-updating",
+    "seconds": 386.1989077999997,
+    "system_cpu_percent": 12.71649954421149
+  },
+  {
+    "gpu_memory_mib": 1039.0,
+    "gpu_memory_percent": 4.0,
+    "gpu_percent": 52.0,
+    "gpu_watts": 39.65,
+    "phase": "cuda-64/repeat-3/phase-updating",
+    "seconds": 387.27303629999915,
+    "system_cpu_percent": 10.715873721654068
+  },
+  {
+    "gpu_memory_mib": 1039.0,
+    "gpu_memory_percent": 8.0,
+    "gpu_percent": 32.0,
+    "gpu_watts": 41.52,
+    "phase": "cuda-64/repeat-3/phase-updating",
+    "seconds": 388.3419234999992,
+    "system_cpu_percent": 12.7669452181987
+  },
+  {
+    "gpu_memory_mib": 1039.0,
+    "gpu_memory_percent": 8.0,
+    "gpu_percent": 28.0,
+    "gpu_watts": 40.91,
+    "phase": "cuda-64/repeat-3/phase-collecting",
+    "seconds": 389.39974489999986,
+    "system_cpu_percent": 11.18299445471349
+  },
+  {
+    "gpu_memory_mib": 1039.0,
+    "gpu_memory_percent": 8.0,
+    "gpu_percent": 29.0,
+    "gpu_watts": 42.65,
+    "phase": "cuda-64/repeat-3/phase-collecting",
+    "seconds": 390.4640084999992,
+    "system_cpu_percent": 11.248852157943068
+  },
+  {
+    "gpu_memory_mib": 1039.0,
+    "gpu_memory_percent": 7.0,
+    "gpu_percent": 27.0,
+    "gpu_watts": 42.47,
+    "phase": "cuda-64/repeat-3/phase-collecting",
+    "seconds": 391.51981309999974,
+    "system_cpu_percent": 11.611374407582941
+  },
+  {
+    "gpu_memory_mib": 1039.0,
+    "gpu_memory_percent": 8.0,
+    "gpu_percent": 28.0,
+    "gpu_watts": 40.31,
+    "phase": "cuda-64/repeat-3/phase-updating",
+    "seconds": 392.5878587999996,
+    "system_cpu_percent": 16.08017817371937
+  },
+  {
+    "gpu_memory_mib": 1039.0,
+    "gpu_memory_percent": 7.0,
+    "gpu_percent": 26.0,
+    "gpu_watts": 41.35,
+    "phase": "cuda-64/repeat-3/phase-updating",
+    "seconds": 393.67156459999933,
+    "system_cpu_percent": 14.45729537366548
+  },
+  {
+    "gpu_memory_mib": 1039.0,
+    "gpu_memory_percent": 8.0,
+    "gpu_percent": 28.0,
+    "gpu_watts": 43.0,
+    "phase": "cuda-64/repeat-3/phase-updating",
+    "seconds": 394.7395725999995,
+    "system_cpu_percent": 11.718388142658643
+  },
+  {
+    "gpu_memory_mib": 1039.0,
+    "gpu_memory_percent": 9.0,
+    "gpu_percent": 29.0,
+    "gpu_watts": 40.15,
+    "phase": "cuda-64/repeat-3/phase-collecting",
+    "seconds": 395.80769749999945,
+    "system_cpu_percent": 12.35266383781235
+  },
+  {
+    "gpu_memory_mib": 1039.0,
+    "gpu_memory_percent": 8.0,
+    "gpu_percent": 28.0,
+    "gpu_watts": 42.67,
+    "phase": "cuda-64/repeat-3/phase-collecting",
+    "seconds": 396.87544889999936,
+    "system_cpu_percent": 11.151079136690644
+  },
+  {
+    "gpu_memory_mib": 1039.0,
+    "gpu_memory_percent": 7.0,
+    "gpu_percent": 27.0,
+    "gpu_watts": 42.3,
+    "phase": "cuda-64/repeat-3/phase-collecting",
+    "seconds": 397.94450719999986,
+    "system_cpu_percent": 11.526479750778817
+  },
+  {
+    "gpu_memory_mib": 1039.0,
+    "gpu_memory_percent": 7.0,
+    "gpu_percent": 38.0,
+    "gpu_watts": 38.69,
+    "phase": "cuda-64/repeat-3/phase-updating",
+    "seconds": 399.00173279999944,
+    "system_cpu_percent": 13.877362840018437
+  },
+  {
+    "gpu_memory_mib": 1039.0,
+    "gpu_memory_percent": 5.0,
+    "gpu_percent": 52.0,
+    "gpu_watts": 35.23,
+    "phase": "cuda-64/repeat-3/phase-updating",
+    "seconds": 400.0686175999999,
+    "system_cpu_percent": 14.429683921209346
+  },
+  {
+    "gpu_memory_mib": 1039.0,
+    "gpu_memory_percent": 7.0,
+    "gpu_percent": 27.0,
+    "gpu_watts": 42.2,
+    "phase": "cuda-64/repeat-3/phase-updating",
+    "seconds": 401.1384728999992,
+    "system_cpu_percent": 11.425959780621575
+  },
+  {
+    "gpu_memory_mib": 1039.0,
+    "gpu_memory_percent": 7.0,
+    "gpu_percent": 28.0,
+    "gpu_watts": 42.11,
+    "phase": "cuda-64/repeat-3/phase-updating",
+    "seconds": 402.2085199999992,
+    "system_cpu_percent": 11.694837825491089
+  },
+  {
+    "gpu_memory_mib": 1039.0,
+    "gpu_memory_percent": 6.0,
+    "gpu_percent": 23.0,
+    "gpu_watts": 41.13,
+    "phase": "cuda-64/repeat-3/phase-collecting",
+    "seconds": 403.2742178999997,
+    "system_cpu_percent": 15.148741418764299
+  },
+  {
+    "gpu_memory_mib": 1039.0,
+    "gpu_memory_percent": 7.0,
+    "gpu_percent": 27.0,
+    "gpu_watts": 42.69,
+    "phase": "cuda-64/repeat-3/phase-collecting",
+    "seconds": 404.3384675999996,
+    "system_cpu_percent": 12.442183163737274
+  },
+  {
+    "gpu_memory_mib": 1039.0,
+    "gpu_memory_percent": 7.0,
+    "gpu_percent": 27.0,
+    "gpu_watts": 42.48,
+    "phase": "cuda-64/repeat-3/phase-collecting",
+    "seconds": 405.4030337999993,
+    "system_cpu_percent": 12.569832402234638
+  },
+  {
+    "gpu_memory_mib": 1039.0,
+    "gpu_memory_percent": 7.0,
+    "gpu_percent": 26.0,
+    "gpu_watts": 42.21,
+    "phase": "cuda-64/repeat-3/phase-collecting",
+    "seconds": 406.4706000999995,
+    "system_cpu_percent": 11.342592592592593
+  },
+  {
+    "gpu_memory_mib": 1039.0,
+    "gpu_memory_percent": 7.0,
+    "gpu_percent": 28.0,
+    "gpu_watts": 42.65,
+    "phase": "cuda-64/repeat-3/phase-updating",
+    "seconds": 407.5280487,
+    "system_cpu_percent": 11.882998171846438
+  },
+  {
+    "gpu_memory_mib": 1039.0,
+    "gpu_memory_percent": 7.0,
+    "gpu_percent": 34.0,
+    "gpu_watts": 41.59,
+    "phase": "cuda-64/repeat-3/phase-updating",
+    "seconds": 408.59650989999955,
+    "system_cpu_percent": 11.231393775372123
+  },
+  {
+    "gpu_memory_mib": 1039.0,
+    "gpu_memory_percent": 7.0,
+    "gpu_percent": 27.0,
+    "gpu_watts": 40.03,
+    "phase": "cuda-64/repeat-3/phase-updating",
+    "seconds": 409.65678109999953,
+    "system_cpu_percent": 11.433840479483637
+  },
+  {
+    "gpu_memory_mib": 1039.0,
+    "gpu_memory_percent": 9.0,
+    "gpu_percent": 29.0,
+    "gpu_watts": 40.66,
+    "phase": "cuda-64/repeat-3/phase-updating",
+    "seconds": 410.72364109999944,
+    "system_cpu_percent": 11.618444846292952
+  },
+  {
+    "gpu_memory_mib": 1039.0,
+    "gpu_memory_percent": 8.0,
+    "gpu_percent": 28.0,
+    "gpu_watts": 42.55,
+    "phase": "cuda-64/repeat-3/phase-collecting",
+    "seconds": 411.78765419999945,
+    "system_cpu_percent": 11.904761904761907
+  },
+  {
+    "gpu_memory_mib": 1039.0,
+    "gpu_memory_percent": 7.0,
+    "gpu_percent": 28.0,
+    "gpu_watts": 40.77,
+    "phase": "cuda-64/repeat-3/phase-collecting",
+    "seconds": 412.84282839999923,
+    "system_cpu_percent": 11.333636777423761
+  },
+  {
+    "gpu_memory_mib": 1039.0,
+    "gpu_memory_percent": 6.0,
+    "gpu_percent": 37.0,
+    "gpu_watts": 38.09,
+    "phase": "cuda-64/repeat-3/phase-collecting",
+    "seconds": 413.9164278999997,
+    "system_cpu_percent": 12.158590308370043
+  },
+  {
+    "gpu_memory_mib": 1039.0,
+    "gpu_memory_percent": 4.0,
+    "gpu_percent": 52.0,
+    "gpu_watts": 38.72,
+    "phase": "cuda-64/repeat-3/phase-updating",
+    "seconds": 414.9768904999992,
+    "system_cpu_percent": 13.517513566847562
+  },
+  {
+    "gpu_memory_mib": 1011.0,
+    "gpu_memory_percent": 1.0,
+    "gpu_percent": 4.0,
+    "gpu_watts": 26.88,
+    "phase": "cuda-128/repeat-3",
+    "seconds": 416.03537739999956,
+    "system_cpu_percent": 10.733944954128438
+  },
+  {
+    "gpu_memory_mib": 1227.0,
+    "gpu_memory_percent": 7.0,
+    "gpu_percent": 27.0,
+    "gpu_watts": 42.18,
+    "phase": "cuda-128/repeat-3",
+    "seconds": 417.103384,
+    "system_cpu_percent": 10.690423162583517
+  },
+  {
+    "gpu_memory_mib": 1227.0,
+    "gpu_memory_percent": 7.0,
+    "gpu_percent": 27.0,
+    "gpu_watts": 41.7,
+    "phase": "cuda-128/repeat-3/phase-updating",
+    "seconds": 418.158136,
+    "system_cpu_percent": 11.692447679708827
+  },
+  {
+    "gpu_memory_mib": 1227.0,
+    "gpu_memory_percent": 7.0,
+    "gpu_percent": 56.0,
+    "gpu_watts": 40.31,
+    "phase": "cuda-128/repeat-3/phase-collecting",
+    "seconds": 419.22874989999946,
+    "system_cpu_percent": 12.207207207207205
+  },
+  {
+    "gpu_memory_mib": 1227.0,
+    "gpu_memory_percent": 9.0,
+    "gpu_percent": 28.0,
+    "gpu_watts": 38.7,
+    "phase": "cuda-128/repeat-3/phase-collecting",
+    "seconds": 420.29872539999997,
+    "system_cpu_percent": 12.337662337662337
+  },
+  {
+    "gpu_memory_mib": 1227.0,
+    "gpu_memory_percent": 9.0,
+    "gpu_percent": 29.0,
+    "gpu_watts": 40.25,
+    "phase": "cuda-128/repeat-3/phase-updating",
+    "seconds": 421.36518779999915,
+    "system_cpu_percent": 11.59618008185539
+  },
+  {
+    "gpu_memory_mib": 1227.0,
+    "gpu_memory_percent": 9.0,
+    "gpu_percent": 57.0,
+    "gpu_watts": 38.67,
+    "phase": "cuda-128/repeat-3/phase-updating",
+    "seconds": 422.43802609999966,
+    "system_cpu_percent": 10.832954028220298
+  },
+  {
+    "gpu_memory_mib": 1227.0,
+    "gpu_memory_percent": 9.0,
+    "gpu_percent": 27.0,
+    "gpu_watts": 38.1,
+    "phase": "cuda-128/repeat-3/phase-collecting",
+    "seconds": 423.49653619999935,
+    "system_cpu_percent": 12.46472248353716
+  },
+  {
+    "gpu_memory_mib": 1227.0,
+    "gpu_memory_percent": 7.0,
+    "gpu_percent": 25.0,
+    "gpu_watts": 39.78,
+    "phase": "cuda-128/repeat-3/phase-updating",
+    "seconds": 424.5670068999998,
+    "system_cpu_percent": 11.985688729874777
+  },
+  {
+    "gpu_memory_mib": 1227.0,
+    "gpu_memory_percent": 8.0,
+    "gpu_percent": 27.0,
+    "gpu_watts": 39.87,
+    "phase": "cuda-128/repeat-3/phase-updating",
+    "seconds": 425.6347990999993,
+    "system_cpu_percent": 11.500701262272095
+  },
+  {
+    "gpu_memory_mib": 1227.0,
+    "gpu_memory_percent": 8.0,
+    "gpu_percent": 56.0,
+    "gpu_watts": 39.79,
+    "phase": "cuda-128/repeat-3/phase-updating",
+    "seconds": 426.7033105999999,
+    "system_cpu_percent": 12.40774907749077
+  },
+  {
+    "gpu_memory_mib": 1227.0,
+    "gpu_memory_percent": 10.0,
+    "gpu_percent": 29.0,
+    "gpu_watts": 39.21,
+    "phase": "cuda-128/repeat-3/phase-collecting",
+    "seconds": 427.76061479999953,
+    "system_cpu_percent": 11.375291375291374
+  },
+  {
+    "gpu_memory_mib": 1227.0,
+    "gpu_memory_percent": 8.0,
+    "gpu_percent": 28.0,
+    "gpu_watts": 40.32,
+    "phase": "cuda-128/repeat-3/phase-updating",
+    "seconds": 428.8268507999992,
+    "system_cpu_percent": 11.400795404330532
+  },
+  {
+    "gpu_memory_mib": 1227.0,
+    "gpu_memory_percent": 10.0,
+    "gpu_percent": 48.0,
+    "gpu_watts": 40.67,
+    "phase": "cuda-128/repeat-3/phase-updating",
+    "seconds": 429.88634289999936,
+    "system_cpu_percent": 11.515151515151512
+  },
+  {
+    "gpu_memory_mib": 1227.0,
+    "gpu_memory_percent": 9.0,
+    "gpu_percent": 29.0,
+    "gpu_watts": 39.13,
+    "phase": "cuda-128/repeat-3/phase-collecting",
+    "seconds": 430.9560836999999,
+    "system_cpu_percent": 10.99050203527816
+  },
+  {
+    "gpu_memory_mib": 1227.0,
+    "gpu_memory_percent": 8.0,
+    "gpu_percent": 28.0,
+    "gpu_watts": 40.37,
+    "phase": "cuda-128/repeat-3/phase-updating",
+    "seconds": 432.0224367999999,
+    "system_cpu_percent": 12.243947858473003
+  },
+  {
+    "gpu_memory_mib": 1227.0,
+    "gpu_memory_percent": 10.0,
+    "gpu_percent": 35.0,
+    "gpu_watts": 39.88,
+    "phase": "cuda-128/repeat-3/phase-updating",
+    "seconds": 433.0868126999994,
+    "system_cpu_percent": 12.529002320185612
+  },
+  {
+    "gpu_memory_mib": 1227.0,
+    "gpu_memory_percent": 10.0,
+    "gpu_percent": 34.0,
+    "gpu_watts": 40.44,
+    "phase": "cuda-128/repeat-3/phase-updating",
+    "seconds": 434.14433949999966,
+    "system_cpu_percent": 10.71757129714811
+  },
+  {
+    "gpu_memory_mib": 1227.0,
+    "gpu_memory_percent": 9.0,
+    "gpu_percent": 43.0,
+    "gpu_watts": 39.26,
+    "phase": "cuda-128/repeat-3/phase-collecting",
+    "seconds": 435.19978059999994,
+    "system_cpu_percent": 13.451892384860919
+  },
+  {
+    "gpu_memory_mib": 1227.0,
+    "gpu_memory_percent": 8.0,
+    "gpu_percent": 28.0,
+    "gpu_watts": 40.28,
+    "phase": "cuda-128/repeat-3/phase-updating",
+    "seconds": 436.26854899999944,
+    "system_cpu_percent": 11.654478976234007
+  },
+  {
+    "gpu_memory_mib": 1227.0,
+    "gpu_memory_percent": 9.0,
+    "gpu_percent": 29.0,
+    "gpu_watts": 40.24,
+    "phase": "cuda-128/repeat-3/phase-updating",
+    "seconds": 437.3288759999996,
+    "system_cpu_percent": 10.84394153701085
+  },
+  {
+    "gpu_memory_mib": 1227.0,
+    "gpu_memory_percent": 9.0,
+    "gpu_percent": 54.0,
+    "gpu_watts": 39.2,
+    "phase": "cuda-128/repeat-3/phase-collecting",
+    "seconds": 438.38732419999997,
+    "system_cpu_percent": 11.75950486295314
+  },
+  {
+    "gpu_memory_mib": 1227.0,
+    "gpu_memory_percent": 8.0,
+    "gpu_percent": 28.0,
+    "gpu_watts": 40.49,
+    "phase": "cuda-128/repeat-3/phase-updating",
+    "seconds": 439.4443862999997,
+    "system_cpu_percent": 11.46408839779005
+  },
+  {
+    "gpu_memory_mib": 1227.0,
+    "gpu_memory_percent": 8.0,
+    "gpu_percent": 27.0,
+    "gpu_watts": 40.01,
+    "phase": "cuda-128/repeat-3/phase-updating",
+    "seconds": 440.5081655999993,
+    "system_cpu_percent": 11.759259259259258
+  },
+  {
+    "gpu_memory_mib": 1227.0,
+    "gpu_memory_percent": 9.0,
+    "gpu_percent": 57.0,
+    "gpu_watts": 38.83,
+    "phase": "cuda-128/repeat-3/phase-updating",
+    "seconds": 441.57882489999974,
+    "system_cpu_percent": 11.228230980751608
+  },
+  {
+    "gpu_memory_mib": 1227.0,
+    "gpu_memory_percent": 9.0,
+    "gpu_percent": 59.0,
+    "gpu_watts": 37.42,
+    "phase": "cuda-128/repeat-3/phase-collecting",
+    "seconds": 442.6335270999998,
+    "system_cpu_percent": 11.444393170281497
+  },
+  {
+    "gpu_memory_mib": 1227.0,
+    "gpu_memory_percent": 9.0,
+    "gpu_percent": 30.0,
+    "gpu_watts": 40.38,
+    "phase": "cuda-128/repeat-3/phase-updating",
+    "seconds": 443.6996588999991,
+    "system_cpu_percent": 11.359489051094895
+  },
+  {
+    "gpu_memory_mib": 1227.0,
+    "gpu_memory_percent": 8.0,
+    "gpu_percent": 28.0,
+    "gpu_watts": 40.75,
+    "phase": "cuda-128/repeat-3/phase-updating",
+    "seconds": 444.7638829999996,
+    "system_cpu_percent": 12.950971322849213
+  },
+  {
+    "gpu_memory_mib": 1227.0,
+    "gpu_memory_percent": 9.0,
+    "gpu_percent": 58.0,
+    "gpu_watts": 39.39,
+    "phase": "cuda-128/repeat-3/phase-collecting",
+    "seconds": 445.8222248999991,
+    "system_cpu_percent": 11.827956989247312
+  },
+  {
+    "gpu_memory_mib": 1227.0,
+    "gpu_memory_percent": 9.0,
+    "gpu_percent": 29.0,
+    "gpu_watts": 39.79,
+    "phase": "cuda-128/repeat-3/phase-updating",
+    "seconds": 446.88154699999996,
+    "system_cpu_percent": 10.903284671532843
+  },
+  {
+    "gpu_memory_mib": 1227.0,
+    "gpu_memory_percent": 9.0,
+    "gpu_percent": 58.0,
+    "gpu_watts": 38.35,
+    "phase": "cuda-128/repeat-3/phase-updating",
+    "seconds": 447.93788199999926,
+    "system_cpu_percent": 11.111111111111116
+  },
+  {
+    "gpu_memory_mib": 1227.0,
+    "gpu_memory_percent": 9.0,
+    "gpu_percent": 29.0,
+    "gpu_watts": 40.1,
+    "phase": "cuda-128/repeat-3/phase-collecting",
+    "seconds": 448.9998588999997,
+    "system_cpu_percent": 12.912621359223298
+  },
+  {
+    "gpu_memory_mib": 1227.0,
+    "gpu_memory_percent": 8.0,
+    "gpu_percent": 28.0,
+    "gpu_watts": 40.27,
+    "phase": "cuda-128/repeat-3/phase-updating",
+    "seconds": 450.0701283999997,
+    "system_cpu_percent": 10.537727666955766
+  },
+  {
+    "gpu_memory_mib": 1227.0,
+    "gpu_memory_percent": 7.0,
+    "gpu_percent": 24.0,
+    "gpu_watts": 39.54,
+    "phase": "cuda-128/repeat-3/phase-updating",
+    "seconds": 451.13053019999916,
+    "system_cpu_percent": 13.015873015873014
+  },
+  {
+    "gpu_memory_mib": 1227.0,
+    "gpu_memory_percent": 8.0,
+    "gpu_percent": 41.0,
+    "gpu_watts": 38.0,
+    "phase": "cuda-128/repeat-3/phase-collecting",
+    "seconds": 452.1868724999995,
+    "system_cpu_percent": 15.74728901461575
+  },
+  {
+    "gpu_memory_mib": 1227.0,
+    "gpu_memory_percent": 7.0,
+    "gpu_percent": 23.0,
+    "gpu_watts": 39.35,
+    "phase": "cuda-128/repeat-3/phase-updating",
+    "seconds": 453.2565053999997,
+    "system_cpu_percent": 11.709286675639296
+  },
+  {
+    "gpu_memory_mib": 1227.0,
+    "gpu_memory_percent": 9.0,
+    "gpu_percent": 56.0,
+    "gpu_watts": 38.42,
+    "phase": "cuda-128/repeat-3/phase-updating",
+    "seconds": 454.3380539,
+    "system_cpu_percent": 17.991821899136752
+  },
+  {
+    "gpu_memory_mib": 1227.0,
+    "gpu_memory_percent": 9.0,
+    "gpu_percent": 27.0,
+    "gpu_watts": 35.85,
+    "phase": "cuda-128/repeat-3/phase-updating",
+    "seconds": 455.4072787999994,
+    "system_cpu_percent": 16.64348632359759
+  },
+  {
+    "gpu_memory_mib": 1227.0,
+    "gpu_memory_percent": 8.0,
+    "gpu_percent": 28.0,
+    "gpu_watts": 39.72,
+    "phase": "cuda-128/repeat-3/phase-updating",
+    "seconds": 456.47554619999937,
+    "system_cpu_percent": 11.436289959477708
+  },
+  {
+    "gpu_memory_mib": 1227.0,
+    "gpu_memory_percent": 8.0,
+    "gpu_percent": 51.0,
+    "gpu_watts": 37.4,
+    "phase": "cuda-128/repeat-3/phase-updating",
+    "seconds": 457.5349477,
+    "system_cpu_percent": 12.906403940886701
+  },
+  {
+    "gpu_memory_mib": 1227.0,
+    "gpu_memory_percent": 8.0,
+    "gpu_percent": 28.0,
+    "gpu_watts": 40.47,
+    "phase": "cuda-128/repeat-3/phase-collecting",
+    "seconds": 458.5919789999998,
+    "system_cpu_percent": 14.652173913043477
+  },
+  {
+    "gpu_memory_mib": 1227.0,
+    "gpu_memory_percent": 7.0,
+    "gpu_percent": 26.0,
+    "gpu_watts": 42.08,
+    "phase": "cuda-128/repeat-3/phase-updating",
+    "seconds": 459.6536925999999,
+    "system_cpu_percent": 18.505013673655423
+  },
+  {
+    "gpu_memory_mib": 1227.0,
+    "gpu_memory_percent": 10.0,
+    "gpu_percent": 28.0,
+    "gpu_watts": 40.19,
+    "phase": "cuda-128/repeat-3/phase-updating",
+    "seconds": 460.73981729999923,
+    "system_cpu_percent": 15.37765716870194
+  },
+  {
+    "gpu_memory_mib": 1227.0,
+    "gpu_memory_percent": 9.0,
+    "gpu_percent": 28.0,
+    "gpu_watts": 39.07,
+    "phase": "cuda-128/repeat-3/phase-collecting",
+    "seconds": 461.8093288,
+    "system_cpu_percent": 17.848970251716246
+  },
+  {
+    "gpu_memory_mib": 1227.0,
+    "gpu_memory_percent": 6.0,
+    "gpu_percent": 22.0,
+    "gpu_watts": 39.1,
+    "phase": "cuda-128/repeat-3/phase-updating",
+    "seconds": 462.87349149999955,
+    "system_cpu_percent": 15.473441108545039
+  },
+  {
+    "gpu_memory_mib": 1227.0,
+    "gpu_memory_percent": 8.0,
+    "gpu_percent": 55.0,
+    "gpu_watts": 39.4,
+    "phase": "cuda-128/repeat-3/phase-updating",
+    "seconds": 463.92930739999974,
+    "system_cpu_percent": 11.678160919540225
+  },
+  {
+    "gpu_memory_mib": 1227.0,
+    "gpu_memory_percent": 9.0,
+    "gpu_percent": 28.0,
+    "gpu_watts": 39.28,
+    "phase": "cuda-128/repeat-3/phase-collecting",
+    "seconds": 464.9878097999999,
+    "system_cpu_percent": 14.71663619744058
+  },
+  {
+    "gpu_memory_mib": 1227.0,
+    "gpu_memory_percent": 8.0,
+    "gpu_percent": 28.0,
+    "gpu_watts": 40.23,
+    "phase": "cuda-128/repeat-3/phase-updating",
+    "seconds": 466.0633833999991,
+    "system_cpu_percent": 13.947001394700143
+  }
+]

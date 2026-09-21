@@ -1,5 +1,19 @@
 # Sources actually used
 
+## GPU simulator and tensor learning path — 0.6.0, 2026-09-21
+
+| Source inspected | Evidence used | Implementation decision |
+|---|---|---|
+| Lan et al., 2022, [WarpDrive: Fast End-to-End Deep Multi-Agent Reinforcement Learning on a GPU](https://jmlr.org/papers/v23/22-0185.html), and [project README](https://github.com/salesforce/warp-drive) | GPU simulation/learning architecture and explicit distinction between kernels and scenario configuration | Keep simulation and PPO tensors on one device. No WarpDrive code copied and no published speedup transferred to this laptop. |
+| CuPy **v13.6.0** [kernel guide](https://raw.githubusercontent.com/cupy/cupy/v13.6.0/docs/source/user_guide/kernel.rst) | RawKernel/RawModule, NVRTC compilation, launch configuration and cache | Optional pinned CuPy backend and fused ordered game kernels. |
+| CuPy **v13.6.0** [interoperability guide](https://raw.githubusercontent.com/cupy/cupy/v13.6.0/docs/source/user_guide/interoperability.rst) | DLPack lifetime, contiguous arrays, ExternalStream ownership/device rules | Shared CuPy/PyTorch views on one explicit stream; pointer and write tests. |
+| Installed **SB3/SB3-Contrib 2.7.1**: `common/buffers.py`, `common/on_policy_algorithm.py`, `ppo/ppo.py`, `ppo_mask/ppo_mask.py` | Collector, timeout bootstrapping, environment-major flattening, NumPy permutation, advantage normalization, PPO loss/gradient clipping/update sequence | Tensor collector/buffer and GAE, with independent fixed-data loss/gradient/optimizer comparisons; aggregate metric transfers after the final update. |
+| NVIDIA runtime **12.8.90** and NVRTC **12.8.93** Windows wheels | Installed header/DLL layout and actual kernel compilation | Optional compiler/runtime wheels remove the requirement for global CUDA Toolkit or Visual Studio; process-local discovery. |
+| Native game **1.3.0**, commit `8861824df6893a34c2cd4df7f9b68613376d7964` | Source and 214 game tests, including exact CPU/CUDA state/event/replay comparisons | The Python simulator remains the oracle. Compact facts preserve reward attribution; demonstrations require CPU replay agreement. |
+
+Local measurements are recorded separately in `gpu-performance.md`; neither GPU
+memory allocation nor utilization alone is treated as evidence of training speed.
+
 
 ## Action timing, defense rewards and game budgets — 0.5.0
 
