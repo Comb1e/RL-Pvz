@@ -32,7 +32,7 @@ control the budget, curriculum, validation and ETA.
 The working research checkout is `E:/Projects/Tower-Defence-AI/PVZ-plant`,
 using its single `.venv`. The new game backend is committed in the pinned game
 checkout `E:/Projects/pvz-cuda-work`; the original `E:/Projects/pvz` is unchanged.
-Development used an isolated environment that was removed after verification.
+Development used an isolated environment that was moved to the Recycle Bin after verification.
 A new installation inside the research checkout uses:
 
 ```powershell

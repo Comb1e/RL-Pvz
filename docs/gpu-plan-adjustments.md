@@ -40,6 +40,6 @@ No imitation, demonstrations for learning, reward edits, larger networks, mixed
 precision, extra PPO epochs, or formal research training were introduced. All
 development used isolated checkouts/environments. After verification, the research
 branch and dependencies were consolidated into the main research checkout's
-`.venv`, and the temporary environment was deleted as requested. Existing runs
+`.venv`, and the temporary environment was moved to the Recycle Bin. Existing runs
 and checkpoints remain intact. The original game checkout is unchanged; the
 optional backend is on a separate committed game feature branch.

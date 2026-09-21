@@ -1,0 +1,35 @@
+{
+  "coefficient_of_variation": {
+    "cpu-current": 0.0796808760394123,
+    "cpu-equivalent": 0.09165725646034603,
+    "cuda-128": 0.012579346773165249,
+    "cuda-32": 0.0419508819944868,
+    "cuda-64": 0.028217813687532397,
+    "cuda-equivalent": 0.026487421485272115
+  },
+  "device": "cuda",
+  "median_decisions_per_second": {
+    "cpu-current": 2834.6896670544443,
+    "cpu-equivalent": 2451.31767114797,
+    "cuda-128": 10732.725223497158,
+    "cuda-32": 6039.624817614378,
+    "cuda-64": 8842.128852886008,
+    "cuda-equivalent": 2319.47292299566
+  },
+  "n_envs": 128,
+  "note": "Complete collection+PPO updates; setup, warmup, validation and export reported separately. No promotion from utilization alone.",
+  "parity_passed": true,
+  "promote_default": true,
+  "provisional": false,
+  "review": {
+    "final_cuda_tests": 19,
+    "game_tests": 214,
+    "load": "No competing user training process observed; low-frequency system samples retained.",
+    "research_tests": 312,
+    "scope": "Short collection/update workload; validation and export excluded."
+  },
+  "rollout_steps_per_env": 128,
+  "simulator": "cuda",
+  "speedup_over_current": 3.7862081864677783,
+  "stability_limit": 0.1
+}

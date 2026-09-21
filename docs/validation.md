@@ -1,4 +1,77 @@
-# Availability and verification — 0.5.0
+# Availability and verification — 0.6.0
+
+## CUDA simulation and installed environment — 2026-09-21
+
+Research **0.6.0**, game package **1.3.0**, simulation **1.0.0**, pinned game commit
+`8861824df6893a34c2cd4df7f9b68613376d7964`. Combat rules retain hash
+`a7486688fa43a9b50193f82715fa519bd27cfebc7ed054bebe4f7990f9c268de`.
+Windows, Python 3.12, RTX 4070 Laptop GPU, Torch 2.8.0+cu128, CuPy 13.6.0.
+
+| Check | Final result |
+|---|---|
+| Complete research suite in the main `.venv` | **312 passed in 218.54 s** |
+| Complete new game suite in the main `.venv` | **214 passed in 49.23 s**; all bytecode, pytest/Hypothesis caches and temporary outputs outside the game checkout |
+| CUDA checks after final inference-timing adjustment | **19 passed in 23.36 s** |
+| Game equivalence | Exact integer snapshots, acceptance, masks, ordered events and canonical hashes; all plant/zombie mechanics, crowded mower sweeps, immediate actions, rejected requests, resets, storage limits and archived easy/standard/hard replay outcomes |
+| Numeric parity | Both encoders, lesson/changed-scenario states, unclipped crowds, order and private-schedule invariance; reward components, GAE, SB3 minibatch ordering, losses, gradients and optimizer updates |
+| Learning integration | Masked, unmasked, sparse, mixed CUDA paths; CPU hybrid and Windows workers; grouped policy reload, unchanged policy/optimizer identity through curriculum changes, completed-game stopping and interrupted resume |
+| Selected checkpoint and demos | One `best.zip` produces three CPU-verified compact demos with identical checkpoint identity; no FFmpeg call for default output; old-pin models remain rejected and archived recordings remain readable |
+| Rendering and reports | Offline assets, native renderer purity, visible truncation outcome, optional MP4/replay controls and failure recovery pass existing regressions; curves and representative replay frame visually inspected |
+| Availability | NVRTC compilation, DLPack pointer/shared-stream writes, oracle hash, free memory, 1000×600 Gym RGB, native compact playback and H.264 export available |
+| Packaging and lint | Research/game wheel and sdist build; CUDA kernels and bundled config included; Python Ruff and CUDA clang-format checks, `git diff --check`, `pip check` pass |
+| Installation and cleanup | Game installed non-editably from a verified archive staged inside research `build/`; research installed from the main checkout; main `.venv` retained, temporary CUDA `.venv` moved to Recycle Bin |
+
+The two warnings in the complete research run are SB3's existing small-MLP GPU
+warning on **stock reference** PPO paths used for numerical comparison. The
+device collector does not issue that CPU-observation warning. Earlier development
+runs exposed stale expected engine commit/version strings; those expectations
+were updated to the actual committed 1.3.0 pin before the successful full run.
+No gameplay assertions or numerical tolerances were weakened.
+
+Integer state/masks/hashes are exact. Encoder comparisons use `atol=1e-7,
+rtol=1e-6`; float32 reward/GAE comparisons use up to `2e-6` absolute tolerance,
+with double reward components checked to `1e-10`. Fixed-rollout parameter and
+gradient comparisons use `atol=2e-7, rtol=2e-6`. Independently trained policies
+are not required to remain bitwise equal.
+
+The CUDA smoke collected one 256-decision rollout (two parallel games × 128),
+completed four PPO epochs, saved/reloaded checkpoints and generated an offline
+report with easy/standard/hard demos. The configured two-game target was exceeded
+to finish the update; ten one-second-cutoff games were recorded. All demos
+correctly say **truncated**. This validates integration, not learned competence.
+The separate interrupted-resume tests perform further updates and retain global
+game/curriculum counters. No final-test seeds or formal training suite were used.
+
+The native replay frame, training and optimizer PNGs, and the static benchmark
+plot were visually inspected. Full-game wins/losses are covered by the archived
+reference replays and engine differential tests; the short training artifact
+does not claim those outcomes.
+
+An empty task-local CuPy cache measured **1.658 s** for Torch context startup,
+**2.324 s** for simulation/encoder compilation, allocation and 128-game initial
+reset, and **0.043 s** for GAE compilation/execution. These costs exclude Python
+imports and are separate from steady-state throughput. CUDA evaluation now uses
+device events for amortized batch inference time instead of host enqueue time.
+
+The reviewed three-repeat benchmark selected **128 parallel games × 128 decisions**,
+**10,733 decisions/s**, **3.79×** the current CPU-simulation baseline. CUDA at
+eight games is slightly slower than equivalent CPU; validation/export and long
+thermal behavior are outside that speed claim. See [measurements and limitations](gpu-performance.md).
+
+Local evidence is retained in `artifacts/research-tests-v060.txt`,
+`artifacts/game-tests-v130.txt`, `artifacts/cuda-tests-final-v060.txt`,
+`artifacts/availability-v060.json`, `artifacts/cold-compile-v060.json`,
+`artifacts/visual-check-v060/`, and `.test-tmp/research-v060/`. Benchmark evidence
+and the reviewed recommendation are committed under `docs/evidence/gpu-v060/`.
+Both repositories have feature-branch Conventional Commits. Neither has a remote,
+so no PR was created. The original `E:/Projects/pvz` remains unchanged.
+
+The second `.venv` isolated CUDA installation/testing from the existing setup.
+After consolidation, automatic approval review blocked permanent recursive
+deletion. Reversible Recycle Bin cleanup succeeded; the main environment imports
+the installed game from its own `site-packages` and research from this checkout.
+
+## Earlier verification records
 
 
 ## Per-tick actions, defense rewards and completed-game schedules — 2026-09-20

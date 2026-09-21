@@ -60,7 +60,9 @@ compatibility.
 Median cached setup/warmup costs were 0.046/1.955 s for CUDA128 and
 2.831/1.839 s for CPU-current. NVRTC kernels had already been compiled during
 correctness checks. These setup numbers do not represent a fresh-machine cold
-compile; the final availability record measures a separate empty-cache setup.
+compile. A separate empty-cache check took 1.658 s for Torch context startup,
+2.324 s for simulation/encoder compilation, allocations and 128 initial resets,
+and 0.043 s for GAE compilation/execution, excluding Python imports.
 
 Low-frequency system samples averaged 35.1% GPU use and 12.7% system CPU use
 for CUDA128, versus 21.9% and 17.4% for CPU-current. CUDA128 collection averaged
