@@ -1,5 +1,33 @@
 # Sources actually used
 
+## Replay and learning diagnosis — 0.7.1 (2026-09-21)
+
+- Local evidence: `runs/sc2-shared-101`, selected checkpoint SHA-256
+  `ce6b6fc3b480233c67b4009e6ce44d7412d2e2ef8fc7db8c047d34fe70fbb65e`.
+  Inspected episode records, optimization timings, validation summaries,
+  planting/digging traces and three demos. These are development results.
+- Schulman et al., [Generalized Advantage Estimation](https://arxiv.org/abs/1506.02438):
+  abstract inspected for the bias/variance role of exponentially weighted advantage
+  estimates. Installed SB3 2.7.1 supplies the recurrence used in independent controls.
+  Lambda 0.999 is a local experiment, not a PVZ result from the paper.
+- Huang and Ontanon, [Invalid Action Masking](https://arxiv.org/abs/2006.14171):
+  abstract revisited; retain ordinary legality. A singleton legal distribution has
+  no actor choice. Conditioning actor reductions on non-singleton states is a local
+  change, not an improvement established by that source.
+- Ng et al., potential-based shaping (already cited): use the discounted potential
+  difference for offensive investment. Independent telescoping and plant/dig
+  counterexamples verify cancellation. The eaten-plant penalty intentionally changes
+  the objective at Leafy's request; it is not potential shaping.
+- Pinned Lawn Lab 1.3.0, source `8861824`: `PlantRemoved(reason=eaten)` differs from
+  `dug` and `detonated`; public GPU diagnostic events provide exact attribution.
+  Native replay loaders and the research action-phase reader at research commit
+  `665aec5` explain the format mismatch. No new external library was imported.
+
+No paper establishes the chosen reward weights or a two-hour win-rate gain.
+The optional initial dig-head bias is a local response to observed rapid plant/dig
+cycles. It is a trainable initialization, with no action suppression after learning;
+it is not attributed to AlphaStar or to the invalid-action masking paper.
+
 ## GPU simulator and tensor learning path — 0.6.0, 2026-09-21
 
 | Source inspected | Evidence used | Implementation decision |

@@ -86,6 +86,11 @@ class GroupedDistribution(MaskableDistribution):
 
 
 class GroupedPolicy(MaskableActorCriticPolicy):
+    def initialize_dig_logit(self, value):
+        """Fresh-model exploration prior; no mask or inference-time rule."""
+        with torch.no_grad():
+            self.action_net.bias[self.action_dist.groups - 1] = value
+
     def _build(self, lr_schedule):
         if self.action_space.n != GroupedDistribution.action_dim:
             raise ValueError("Grouped policy requires direct Discrete(406) actions")

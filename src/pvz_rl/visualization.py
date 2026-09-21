@@ -156,6 +156,10 @@ def build_run_report(run, cfg=None):
         ("rolling_attacker_purchases", "Sustained attackers purchased / game"),
         ("rolling_maximum_sun", "Maximum sun / game"),
         ("rolling_first_attacker_seconds", "First sustained attacker (seconds; purchasing games)"),
+        ("rolling_offensive_plantings", "Offensive plants purchased / game"),
+        ("rolling_plants_eaten", "Non-wall-nut plants eaten / game"),
+        ("rolling_offensive_shaping", "Offensive potential shaping / game"),
+        ("rolling_plant_eaten_penalty", "Eaten-plant penalty / game"),
     ]
     fig, axes = plt.subplots((len(panels) + 1) // 2, 2, figsize=(12, 3 * ((len(panels) + 1) // 2)))
     for ax, (key, title) in zip(axes.flat, panels):
@@ -180,9 +184,16 @@ def build_run_report(run, cfg=None):
             ax.legend(fontsize=7)
         else:
             has_metrics = any(s["training-metrics"] for _, s in segments)
+            has_episodes = any(
+                row.get("rolling_episodes", 0) > 0
+                for _, series in segments
+                for row in series["training-metrics"]
+            )
             _empty(
                 ax,
-                "No completed training episodes yet"
+                "Metric unavailable in this run"
+                if has_episodes
+                else "No completed training episodes yet"
                 if has_metrics
                 else "No aggregated metrics available",
             )

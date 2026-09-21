@@ -1,0 +1,284 @@
+{
+  "note": "Development checks only; incomplete optimization seed 102 is excluded from comparisons. No final-test seeds used.",
+  "runs": [
+    {
+      "run": "artifacts\\sc2-learning-fix\\sc2-efficient-101",
+      "profile": "sc2-efficient-v1",
+      "state": "complete",
+      "complete": true,
+      "training_games": 1792,
+      "steps": 1818624,
+      "wall_seconds": 277.97310330000255,
+      "decisions_per_second": 10007.37402107174,
+      "best_validation_win_rate": 0.0,
+      "rolling_early_voluntary_digs": 3.0,
+      "rolling_win_rate": 0.0,
+      "placement_probe_wins": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "training_wins": 0
+    },
+    {
+      "run": "artifacts\\sc2-learning-fix\\sc2-efficient-102",
+      "profile": "sc2-efficient-v1",
+      "state": "interrupted",
+      "complete": false,
+      "training_games": 128,
+      "steps": 131072,
+      "wall_seconds": 11.787643899999239,
+      "decisions_per_second": 11119.440077419413,
+      "best_validation_win_rate": null,
+      "rolling_early_voluntary_digs": 3.0,
+      "rolling_win_rate": 0.0,
+      "placement_probe_wins": [],
+      "training_wins": 0,
+      "last_recorded_state": "updating",
+      "exclusion": "Agent-owned check interrupted at the reward-scope change; no final checkpoint or complete validation."
+    },
+    {
+      "run": "artifacts\\sc2-learning-fix\\sc2-inspired-101",
+      "profile": "sc2-inspired",
+      "state": "complete",
+      "complete": true,
+      "training_games": 1024,
+      "steps": 1048576,
+      "wall_seconds": 277.1853766999993,
+      "decisions_per_second": 5093.44829177334,
+      "best_validation_win_rate": 0.0,
+      "rolling_early_voluntary_digs": 3.0,
+      "rolling_win_rate": 0.0,
+      "placement_probe_wins": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "training_wins": 0
+    },
+    {
+      "run": "artifacts\\sc2-reward-check\\sc2-plant-rewards-101",
+      "profile": "sc2-plant-rewards-v1",
+      "state": "complete",
+      "complete": true,
+      "training_games": 1664,
+      "steps": 1687552,
+      "wall_seconds": 283.0944372999984,
+      "decisions_per_second": 10008.11667352595,
+      "best_validation_win_rate": 0.0,
+      "rolling_early_voluntary_digs": 3.0,
+      "rolling_win_rate": 0.0,
+      "placement_probe_wins": [
+        0,
+        0,
+        0,
+        7,
+        4,
+        0,
+        2,
+        4,
+        7,
+        4,
+        2,
+        0
+      ],
+      "training_wins": 0
+    },
+    {
+      "run": "artifacts\\sc2-reward-check\\sc2-plant-rewards-102",
+      "profile": "sc2-plant-rewards-v1",
+      "state": "complete",
+      "complete": true,
+      "training_games": 1792,
+      "steps": 1802240,
+      "wall_seconds": 282.5679017000002,
+      "decisions_per_second": 10059.219344967758,
+      "best_validation_win_rate": 0.0,
+      "rolling_early_voluntary_digs": 2.99,
+      "rolling_win_rate": 0.0,
+      "placement_probe_wins": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "training_wins": 0
+    },
+    {
+      "run": "artifacts\\sc2-retention-check\\sc2-plant-rewards-101",
+      "profile": "sc2-plant-rewards-v2",
+      "state": "complete",
+      "complete": true,
+      "allowance_seconds": 180,
+      "training_games": 821,
+      "steps": 1048576,
+      "wall_seconds": 173.4991313999999,
+      "decisions_per_second": 9774.905418214586,
+      "best_validation_win_rate": 0.13333333333333333,
+      "rolling_early_voluntary_digs": 0.01,
+      "rolling_win_rate": 0.64,
+      "curriculum_stage": "saving",
+      "probes": [
+        {
+          "stage": "placement",
+          "wins": {
+            "placement": 0
+          },
+          "advanced": false
+        },
+        {
+          "stage": "placement",
+          "wins": {
+            "placement": 0
+          },
+          "advanced": false
+        },
+        {
+          "stage": "placement",
+          "wins": {
+            "placement": 9
+          },
+          "advanced": false
+        },
+        {
+          "stage": "placement",
+          "wins": {
+            "placement": 20
+          },
+          "advanced": false
+        },
+        {
+          "stage": "placement",
+          "wins": {
+            "placement": 18
+          },
+          "advanced": true
+        },
+        {
+          "stage": "saving",
+          "wins": {
+            "saving": 20
+          },
+          "advanced": false
+        },
+        {
+          "stage": "saving",
+          "wins": {
+            "saving": 20
+          },
+          "advanced": false
+        }
+      ],
+      "normal_validation": {
+        "preset/easy": 0.4,
+        "preset/hard": 0.0,
+        "preset/standard": 0.0
+      },
+      "training_wins": 144
+    },
+    {
+      "run": "artifacts\\sc2-retention-check\\sc2-plant-rewards-102",
+      "profile": "sc2-plant-rewards-v2",
+      "state": "complete",
+      "complete": true,
+      "allowance_seconds": 180,
+      "training_games": 1030,
+      "steps": 1015808,
+      "wall_seconds": 174.9843389000016,
+      "decisions_per_second": 9601.924855625253,
+      "best_validation_win_rate": 0.0,
+      "rolling_early_voluntary_digs": 0.04,
+      "rolling_win_rate": 0.84,
+      "curriculum_stage": "placement",
+      "probes": [
+        {
+          "stage": "placement",
+          "wins": {
+            "placement": 0
+          },
+          "advanced": false
+        },
+        {
+          "stage": "placement",
+          "wins": {
+            "placement": 0
+          },
+          "advanced": false
+        },
+        {
+          "stage": "placement",
+          "wins": {
+            "placement": 0
+          },
+          "advanced": false
+        },
+        {
+          "stage": "placement",
+          "wins": {
+            "placement": 0
+          },
+          "advanced": false
+        },
+        {
+          "stage": "placement",
+          "wins": {
+            "placement": 0
+          },
+          "advanced": false
+        },
+        {
+          "stage": "placement",
+          "wins": {
+            "placement": 0
+          },
+          "advanced": false
+        },
+        {
+          "stage": "placement",
+          "wins": {
+            "placement": 0
+          },
+          "advanced": false
+        },
+        {
+          "stage": "placement",
+          "wins": {
+            "placement": 20
+          },
+          "advanced": false
+        }
+      ],
+      "normal_validation": {
+        "preset/easy": 0.0,
+        "preset/hard": 0.0,
+        "preset/standard": 0.0
+      },
+      "training_wins": 318
+    }
+  ],
+  "interpretation": "Final v2 improves early lesson learning and retention in shorter checks. Normal validation: seed 101 2/15 wins; seed 102 0/15. There is no demonstrated improvement for both seeds, so the candidate remains experimental. Earlier profiles and interrupted runs are separate evidence."
+}

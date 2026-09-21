@@ -1,5 +1,31 @@
 # Iteration history
 
+## 0.7.1 — 2026-09-21
+
+- Problems: standalone game readers rejected research demos; the completed SC2 run
+  achieved 42% easy and zero standard/hard validation wins. Early training dug up
+  attackers and mower-free lesson logs made zero mower kills look suspicious.
+- Causes: research recordings permit zero-time actions but native readers accepted
+  only positive-time format 1; singleton legal states dilute actor updates; the old
+  reward breakdown did not separately express offensive investment or plants eaten.
+  These learning causes are hypotheses, not a proven explanation of all failures.
+- Improvements: native compatible readers in both game branches; source viewer
+  launcher; optional choice-state PPO, longer GAE trace and larger GPU minibatches;
+  evaluation slot refill; explicit lesson/behavior logging; configurable offensive
+  potential and a smaller non-wall-nut eaten penalty; existing empty-blast penalty
+  retained. Old configurations and simulator pins retain their behavior.
+  A separately labeled final candidate also initializes a lower, fully trainable
+  digging logit after stochastic early digging persisted in reward-only checks.
+- Verification: the final complete runs passed 374 research tests, 207 CPU-game
+  tests and 222 CUDA-game tests. Independent gradients,
+  optimizer, reward, replay hash, corruption, seeking and slot reuse controls are
+  included. Sources and exact learning-check results are recorded in `validation.md`
+  and `sc2-learning-fix.md`.
+- Remaining issues: faster optimization did not improve five-minute normal-game
+  wins; the reward candidate remains experimental. No formal training or final-test
+  seeds were used. The incomplete second-seed optimization comparison is explicit.
+  No remote is configured, so changes are committed locally on feature/fix branches.
+
 ## 0.7.0 — 2026-09-21
 
 - Previous problems: current flat-policy training still rarely bought sustained

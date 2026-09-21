@@ -12,7 +12,8 @@ from pvz_rl.sc2_experiments import sc2_profile
 from pvz_rl.training import build_model, vector_env
 
 
-def test_balanced_ppo_update_matches_joint_probability_reference():
+@pytest.mark.parametrize("objective", ["all_steps", "choice_points_v1"])
+def test_balanced_ppo_update_matches_joint_probability_reference(objective):
     torch.set_num_threads(1)
     cfg = sc2_profile("C")
     cfg["simulation"]["backend"] = "cpu"
@@ -25,6 +26,7 @@ def test_balanced_ppo_update_matches_joint_probability_reference():
         device="cpu",
         n_epochs=1,
         hidden_sizes=[16, 16],
+        actor_objective=objective,
     )
     env = vector_env(cfg, "masked", 102)
     try:
@@ -37,6 +39,9 @@ def test_balanced_ppo_update_matches_joint_probability_reference():
         obs = np.repeat(observation[None], 32, axis=0)
         mask = np.repeat(raw.action_masks()[None], 32, axis=0)
         actions = rng.choice(np.flatnonzero(mask[0]), size=32)
+        if objective == "choice_points_v1":
+            mask[:16, 1:] = False
+            actions[:16] = 0
         # Deliberately exercise both clipped and unclipped policy ratios.
         with torch.no_grad():
             _, logs, _ = reference.evaluate_actions(
@@ -72,12 +77,16 @@ def test_balanced_ppo_update_matches_joint_probability_reference():
         available = counts > 0
         bonus = 0.01 * h(types) + 0.001 * (
             h(conditional) / counts.clamp_min(2).float().log() * available
-        ).sum(-1) / available.sum(-1)
+        ).sum(-1) / available.sum(-1).clamp_min(1)
         logs = joint[torch.arange(32), torch.tensor(actions)].log()
         ratio = (logs - old_logs).exp()
-        normalized = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
-        pg = -torch.minimum(ratio * normalized, ratio.clamp(0.8, 1.2) * normalized).mean()
-        loss = pg - bonus.mean() + 0.5 * (values.flatten() - returns).square().mean()
+        selected = slice(16, None) if objective == "choice_points_v1" else slice(None)
+        chosen = advantages[selected]
+        normalized = (chosen - chosen.mean()) / (chosen.std() + 1e-8)
+        pg = -torch.minimum(
+            ratio[selected] * normalized, ratio[selected].clamp(0.8, 1.2) * normalized
+        ).mean()
+        loss = pg - bonus[selected].mean() + 0.5 * (values.flatten() - returns).square().mean()
         reference.optimizer.zero_grad()
         loss.backward()
         torch.nn.utils.clip_grad_norm_(reference.parameters(), 0.5)
@@ -86,7 +95,7 @@ def test_balanced_ppo_update_matches_joint_probability_reference():
         model.train()
         assert model.logger.name_to_value["train/loss"] == pytest.approx(loss.item(), abs=2e-6)
         assert model.logger.name_to_value["train/exploration_bonus"] == pytest.approx(
-            bonus.mean().item(), abs=1e-7
+            bonus[selected].mean().item(), abs=1e-7
         )
         for actual, expected in zip(model.policy.parameters(), reference.parameters()):
             torch.testing.assert_close(actual, expected, atol=2e-7, rtol=2e-6)

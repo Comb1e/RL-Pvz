@@ -1,4 +1,103 @@
-# Availability and verification — 0.7.0
+# Availability and verification — 0.7.1
+
+## Replay, optimization and plant-role rewards — 2026-09-21
+
+The research simulator remains **1.3.0**, pinned at `8861824`, with unchanged rules.
+Native reader patches are CPU-game **1.2.2** / `a95524e` and CUDA-game **1.3.1** /
+`314528a`. They do not replace the training installation. Existing run checkpoints
+and recordings are preserved.
+
+| Check | Result |
+|---|---|
+| Final complete research regression | **374 passed, 2 warnings in 271.86 s** |
+| Complete CPU-game regression | **207 passed in 11.83 s** |
+| Complete CUDA-game regression | **222 passed in 41.48 s** |
+| Reward/kill/progress focused checks | **18 + 18 passed** in separate, overlapping runs |
+| CUDA evaluation/learning focused checks | **24 passed, 1 warning in 34.49 s** |
+| Final report-only change | **6 passed, 5 deselected in 44.99 s** |
+| Lint, formatting, dependency check | Passed |
+| Wheel/sdist and editable research install | Built and installed **0.7.1** |
+| Native demos | Three original recordings verify in both source readers; exact final hashes and ticks, including rewind |
+
+Focused checks overlap the complete suites; their counts are not added together.
+An earlier complete run passed 371 tests; the final run includes the additional
+digging-initialization and CPU custom-optimizer reload controls.
+Warnings are the existing SB3 reference-policy GPU advisories. Game caches and test
+outputs were kept outside their checkouts. No gameplay constraints or tolerances
+were weakened. The source launcher was verified without changing the installed pin.
+
+The new reward controls independently confirm +0.0999 offensive shaping on first
+placement, −0.1 on removal and zero discounted gain for plant/dig cycles; −0.02
+for a non-wall-nut eaten event; no eaten penalty for nuts, digging or detonation;
+and the unchanged −0.2 empty-blast penalty. CPU and GPU agree to 1e-10 on double
+reward components, with existing float32 rollout tolerances unchanged. Terminal
+potential is zero and time-limit potential is retained.
+
+Actor controls verify independent clipped losses, gradients and Adam updates;
+forced-only and singleton choice batches remain finite. Slot-refill tests cover
+out-of-order completion, slot reuse, wins, losses, truncations, exact action traces,
+CPU hashes and plant/mower kill totals. Legacy replay and native viewer tests pass.
+
+Logs and images are under `artifacts/`, including `research-final-v071.txt`,
+`native-game-tests-v071.txt`, `cuda-game-tests-v071.txt`, `plant-rewards-tests-v071.txt`,
+`report-focused-v071.txt` and `native-sc2-demo-v071.png`. The native winning final
+frame was inspected visually; its outcome and 15/15 defeated counter are visible.
+
+### Bounded learning evidence
+
+Seed 101 optimization-only control, five-minute allowances, five common normal
+validation cases per difficulty: baseline collected 1,024 games at 5,093 training
+decisions/s; efficient collected 1,792 at 10,007 decisions/s. Both scored 0% normal
+validation and remained in placement. The second-seed comparison was interrupted
+when the scope changed to plant-role rewards; it is incomplete, not paired evidence.
+This is a preliminary throughput observation, not a two-hour win-rate gain.
+
+Reward-only v1: two five-minute allowances, both normal validations 0/15 and no
+sampled training wins. Final v2 adds a trainable initial dig bias of −6, verified
+to retain nonzero legal probability, finite gradients, learnable preference reversal
+and exact checkpoint reload. Two three-minute allowances completed:
+
+| Seed | Games | Seconds | Training wins (all / last 100) | Early digs/game (last 100) | Normal validation |
+|---|---:|---:|---|---:|---|
+| 101 | 821 | 173.50 | 144 / 64 | 0.01 | 2/15, both easy |
+| 102 | 1,030 | 174.98 | 318 / 84 | 0.04 | 0/15 |
+
+Both reached a 20/20 placement probe. Seed 101 advanced to saving and achieved two
+20/20 saving probes; minimum stage residency prevented premature promotion. Seed
+102 lacked the second consecutive placement pass before the deadline. Both remain
+curriculum-incomplete. These diagnose improved early learning, **not** normal-game
+improvement on both seeds or a two-hour result. V2 remains experimental.
+
+Six completed check allowances total 26 minutes; actual elapsed was about 24.5
+minutes, plus a short interrupted check. Only development seeds were used.
+The final evidence summary is linked from `sc2-learning-fix.md` and stored in
+`docs/evidence/sc2-v071/diagnostics.json`. Existing completed-run evidence, controls,
+and new learning diagnostics must not be pooled. No formal training or final-test
+evaluation was launched.
+
+A loaded copy of the user's selected checkpoint also produced identical actions,
+episode metrics and final hashes with fixed versus refilled evaluation batches
+on easy development seeds 0, 1 and 2, including both losses and a win. See
+`artifacts/refill-real-policy-v071.json`; its single timing pair is not a benchmark.
+
+After training, the final v2 seed-101 checkpoint generated three more compact
+demos at validation seed 100000. All use SHA-256
+`33fe56f22763f56e6a6a5490f467e9d26bbd485dc4267eed7165e7a7037f8288`,
+and each recording's CPU replay matches its CUDA evaluation state hash.
+
+| Difficulty | Outcome / final tick | Plant / mower kills |
+|---|---|---|
+| Easy | Won / 3,419 | 6 / 9 |
+| Standard | Lost / 3,652 | 2 / 11 |
+| Hard | Lost / 3,652 | 2 / 11 |
+
+The report and recordings are in
+`artifacts/sc2-retention-check/sc2-plant-rewards-101/visualizations/`.
+The training curves and easy final frame were visually inspected; previews are
+`artifacts/retention-curves-preview-v071.png` and `artifacts/retention-demo-v071.png`.
+Export took 23.32 seconds after the diagnostic run, without additional learning
+or MP4 encoding. These predetermined demonstrations are not an additional
+win-rate estimate.
 
 ## SC2-inspired learning — 2026-09-21
 

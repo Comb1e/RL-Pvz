@@ -2,13 +2,25 @@
 
 import torch
 
+from .optimization import weighted_mean
 
-def exploration_loss(policy, entropy, log_prob, ent_coef):
+
+def uses_research_optimizer(cfg):
+    settings = cfg["training"]
+    return (
+        settings.get("exploration", {}).get("objective") == "balanced_heads_v1"
+        or settings.get("actor_objective") == "choice_points_v1"
+    )
+
+
+def exploration_loss(policy, entropy, log_prob, ent_coef, weights=None):
     """Return a loss and detached metrics for either CPU or CUDA PPO."""
     settings = getattr(policy, "exploration_settings", {})
-    joint = (-log_prob).mean() if entropy is None else entropy.mean()
+    joint_values = -log_prob if entropy is None else entropy
+    joint = joint_values.mean()
+    reduce = torch.mean if weights is None else lambda x: weighted_mean(x, weights)
     if settings.get("objective", "joint") == "joint":
-        bonus = ent_coef * joint
+        bonus = ent_coef * reduce(joint_values)
     else:
         distribution = policy.action_dist
         type_entropy = distribution.types.entropy()
@@ -16,13 +28,14 @@ def exploration_loss(policy, entropy, log_prob, ent_coef):
         available = counts > 0
         normalized = distribution.locations.entropy() / counts.clamp_min(2).float().log()
         tiles = (normalized * available).sum(-1) / available.sum(-1).clamp_min(1)
-        bonus = (settings["type_coef"] * type_entropy + settings["tile_coef"] * tiles).mean()
+        bonus = reduce(settings["type_coef"] * type_entropy + settings["tile_coef"] * tiles)
     return -bonus, {"joint_entropy": joint.detach(), "exploration_bonus": bonus.detach()}
 
 
 def configure_exploration(model, cfg):
     settings = cfg["training"].get("exploration", {"objective": "joint"})
     model.policy.exploration_settings = dict(settings)
+    model.actor_objective = cfg["training"].get("actor_objective", "all_steps")
 
 
 def pooled_spatial(features, channels, rows=5, cols=9):

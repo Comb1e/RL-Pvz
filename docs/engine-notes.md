@@ -1,4 +1,13 @@
-# Current game integration — 0.7.0
+# Current game integration — 0.7.1
+
+The CPU checkout (1.2.2) and CUDA checkout (1.3.1) now recognize
+`pvz-rl/actions-v1` directly. They apply multiple zero-time planting/digging
+operations between ordinary simulation ticks and reuse native seek/hash checks.
+Existing demos need no conversion. The positive-tick Game API is unchanged.
+The research simulator remains non-editably pinned at 1.3.0 for old-model evaluation;
+its own replay command supplies the adapter. Viewer updates and simulation pins
+are separate. The new eaten-plant reward uses existing public GPU diagnostic
+events, with no combat or private-observation change.
 
 The 0.7.0 research wrapper adds a private planting-time metric ledger; game state,
 combat rules and the pinned game checkout are unchanged.

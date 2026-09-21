@@ -11,6 +11,7 @@ backend = "cuda"
 cache_legal_actions = true
 coalesce_masks = true
 cache_rollout_on_device = true
+refill_evaluation = true
 
 [logging]
 progress_seconds = 15

@@ -12,6 +12,7 @@ from torch.nn import functional as F
 
 from .cuda_buffer import TensorRolloutBuffer
 from .exploration import exploration_loss
+from .optimization import actor_weights, policy_advantages, weighted_mean
 
 
 class TensorPPO:
@@ -79,13 +80,22 @@ class TensorPPO:
                 )
                 values = values.flatten()
                 advantages = data.advantages
-                if self.normalize_advantage and (masked or len(advantages) > 1):
+                objective = getattr(self, "actor_objective", "all_steps")
+                weights = actor_weights(
+                    data.action_masks if masked else None, advantages, objective
+                )
+                if objective == "choice_points_v1":
+                    advantages = policy_advantages(advantages, weights, self.normalize_advantage)
+                elif self.normalize_advantage and (masked or len(advantages) > 1):
                     advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
                 ratio = torch.exp(log_prob - data.old_log_prob)
-                policy_loss = -torch.min(
-                    advantages * ratio,
-                    advantages * torch.clamp(ratio, 1 - clip_range, 1 + clip_range),
-                ).mean()
+                policy_loss = -weighted_mean(
+                    torch.min(
+                        advantages * ratio,
+                        advantages * torch.clamp(ratio, 1 - clip_range, 1 + clip_range),
+                    ),
+                    weights,
+                )
                 clipped_fraction = ((ratio - 1).abs() > clip_range).float().mean()
                 predicted = (
                     values
@@ -95,12 +105,16 @@ class TensorPPO:
                 value_loss = F.mse_loss(data.returns, predicted)
                 entropy_loss = -(-log_prob).mean() if entropy is None else -entropy.mean()
                 regularizer, exploration_metrics = exploration_loss(
-                    self.policy, entropy, log_prob, self.ent_coef
+                    self.policy,
+                    entropy,
+                    log_prob,
+                    self.ent_coef,
+                    weights if objective == "choice_points_v1" else None,
                 )
                 loss = policy_loss + regularizer + self.vf_coef * value_loss
                 with torch.no_grad():
                     log_ratio = log_prob - data.old_log_prob
-                    kl = ((torch.exp(log_ratio) - 1) - log_ratio).mean()
+                    kl = weighted_mean((torch.exp(log_ratio) - 1) - log_ratio, weights)
                     last_kls.append(kl)
                     metrics.append(
                         torch.stack(
@@ -111,6 +125,7 @@ class TensorPPO:
                                 clipped_fraction,
                                 exploration_metrics["joint_entropy"],
                                 exploration_metrics["exploration_bonus"],
+                                weights.mean(),
                             )
                         )
                     )
@@ -152,6 +167,7 @@ class TensorPPO:
             "clip_fraction",
             "joint_entropy",
             "exploration_bonus",
+            "actor_sample_fraction",
             "approx_kl",
             "loss",
             "explained_variance",

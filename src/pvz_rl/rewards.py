@@ -4,6 +4,8 @@ from functools import lru_cache
 
 from pvz_game import Observation, Rules, Status
 
+from .plant_rewards import plant_reward_parts
+
 REWARD_METRICS = (
     "plant_kills",
     "mower_kills",
@@ -20,6 +22,10 @@ REWARD_METRICS = (
     "mower_sun_penalty",
     "wall_nut_reward",
     "empty_explosion_penalty",
+    "offensive_plantings",
+    "plants_eaten",
+    "offensive_shaping",
+    "plant_eaten_penalty",
 )
 
 
@@ -198,10 +204,12 @@ def reward_parts(
         settings.get("wall_nut_damage_weight", 0.0) * combat["wall_nut_damage_fraction"]
     )
     explosion_penalty = -settings.get("empty_explosion_penalty", 0.0) * combat["empty_explosions"]
+    plants = plant_reward_parts(before, after, cfg, shaped, events)
     return {
         "terminal": terminal,
         "shaping": shaping,
         **combat,
+        **plants,
         "plant_kill_reward": plant_reward,
         "mower_kill_penalty": mower_penalty,
         "damage_reward": damage_reward,
@@ -217,5 +225,7 @@ def reward_parts(
         + activation_penalty
         + mower_sun_penalty
         + wall_nut_reward
-        + explosion_penalty,
+        + explosion_penalty
+        + plants["offensive_shaping"]
+        + plants["plant_eaten_penalty"],
     }

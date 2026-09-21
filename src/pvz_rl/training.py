@@ -6,7 +6,7 @@ import copy
 import json
 import math
 import shutil
-from collections import deque
+from collections import Counter, deque
 from functools import partial
 from pathlib import Path
 from time import perf_counter
@@ -31,7 +31,7 @@ from .curriculum import LESSONS, CurriculumState, stage_distribution, teaching_e
 from .deadline import BudgetExpired, RunBudget
 from .env import PvZEnv
 from .evaluation import evaluate, summarize
-from .exploration import configure_exploration
+from .exploration import configure_exploration, uses_research_optimizer
 from .grouped_policy import GroupedPolicy
 from .progress import Phase, ProgressReporter, duration
 from .provenance import append_jsonl, file_hash, metadata, verify_engine, write_json
@@ -75,6 +75,11 @@ def vector_env(cfg, condition, learner_seed, family="preset"):
 
 def build_model(cfg, condition, env, seed, log_dir=None):
     t = cfg["training"]
+    if (
+        t.get("actor_objective") == "choice_points_v1"
+        and not cfg["conditions"][condition]["masked"]
+    ):
+        raise ValueError("choice_points_v1 requires a masked PPO condition")
     kind = cfg.get("policy", {}).get("kind", "flat")
     grouped = kind in ("grouped_v1", "spatial_grouped_v2")
     if grouped and (
@@ -94,7 +99,7 @@ def build_model(cfg, condition, env, seed, log_dir=None):
         from .cuda_ppo import CudaMaskablePPO, CudaPPO
 
         algorithm = CudaMaskablePPO if cfg["conditions"][condition]["masked"] else CudaPPO
-    if simulator(cfg) == "cpu" and t.get("exploration", {}).get("objective") == "balanced_heads_v1":
+    if simulator(cfg) == "cpu" and uses_research_optimizer(cfg):
         from .cuda_ppo import ResearchMaskablePPO
 
         algorithm = ResearchMaskablePPO
@@ -132,6 +137,8 @@ def build_model(cfg, condition, env, seed, log_dir=None):
 
         configure_tensor_buffer(model, cfg["conditions"][condition]["masked"])
     configure_exploration(model, cfg)
+    if "initial_dig_logit" in cfg.get("policy", {}):
+        model.policy.initialize_dig_logit(cfg["policy"]["initial_dig_logit"])
     return model
 
 
@@ -242,6 +249,17 @@ class ResearchCallback(BaseCallback):
             if self.curriculum
             else None,
             "rolling_episodes": len(rows),
+            "rolling_tasks": dict(
+                Counter(
+                    r.get("level", "unknown")
+                    if r.get("family") == "preset"
+                    else r.get("family", "unknown")
+                    for r in rows
+                )
+            ),
+            "rolling_mower_free_lessons": sum(
+                r.get("family") in (*LESSONS, "diagnostic") for r in rows
+            ),
             "rolling_win_rate": sum(r["win"] for r in rows) / len(rows) if rows else None,
             "rolling_return": sum(r["return"] for r in rows) / len(rows) if rows else None,
             "rolling_seconds": (
@@ -294,15 +312,22 @@ class ResearchCallback(BaseCallback):
                 f"{row['last_optimization_seconds']:.2f}s update"
             )
         kills = (
-            f"; plant/mower kills per game {row['rolling_plant_kills']:.1f}/{row['rolling_mower_kills']:.1f}"
+            f"; plant/mower kills per game {row['rolling_plant_kills']:.2f}/{row['rolling_mower_kills']:.2f}"
+            f"; attackers/game {row['rolling_attacker_purchases']:.2f}, early digs/game {row['rolling_early_voluntary_digs']:.2f}"
             f"; damage reward {row['rolling_damage_reward']:.3f}"
             f"; empty mowers {row['rolling_empty_mower_activations']:.1f}"
             f"; mower sun penalty {row['rolling_mower_sun_penalty']:.3f}"
             f"; wall-nut reward {row['rolling_wall_nut_reward']:.3f}"
             f"; empty blasts {row['rolling_empty_explosions']:.1f}"
+            f"; offense shaping {row['rolling_offensive_shaping']:.3f}, eaten penalty {row['rolling_plant_eaten_penalty']:.3f}"
             if self.recent
             else ""
         )
+        context = f"; stage {row['curriculum_stage']}"
+        if self.recent:
+            context += "; tasks " + ", ".join(f"{k}={v}" for k, v in row["rolling_tasks"].items())
+            if row["rolling_mower_free_lessons"] == len(self.recent):
+                context += "; mowers disabled in these lessons"
         self.progress.emit(
             f"{row['budget_progress']:,}/{self.target:,} {row['budget_unit']} ({row['budget_progress'] / self.target:.1%}); "
             f"{row['games_per_second'] * 60:.2f} games/min; "
@@ -311,6 +336,7 @@ class ResearchCallback(BaseCallback):
             f"training ETA {duration(row['estimated_remaining_training_seconds'])}; "
             f"last {len(self.recent)} games win {win}, reward {reward}; best validation {best}"
             + timing
+            + context
             + kills,
             force=force,
         )
@@ -327,6 +353,7 @@ class ResearchCallback(BaseCallback):
             "entropy_loss",
             "joint_entropy",
             "exploration_bonus",
+            "actor_sample_fraction",
             "approx_kl",
             "clip_fraction",
             "explained_variance",
@@ -677,10 +704,7 @@ def load_policy(checkpoint, device="cpu"):
 
         algorithm = CudaMaskablePPO if cfg["conditions"][condition]["masked"] else CudaPPO
     torch.set_num_threads(cfg["training"]["torch_threads"])
-    if (
-        simulator(cfg) == "cpu"
-        and cfg["training"].get("exploration", {}).get("objective") == "balanced_heads_v1"
-    ):
+    if simulator(cfg) == "cpu" and uses_research_optimizer(cfg):
         from .cuda_ppo import ResearchMaskablePPO
 
         algorithm = ResearchMaskablePPO
@@ -743,6 +767,12 @@ def train(
         force=True,
     )
     progress.emit(f"Data transport: {runtime_settings(cfg)}", force=True)
+    progress.emit(
+        f"Policy: {cfg.get('policy', {'kind': 'flat'})}; "
+        f"actor objective {cfg['training'].get('actor_objective', 'all_steps')}; "
+        f"GAE lambda {cfg['training']['gae_lambda']}; minibatch {cfg['training']['batch_size']}",
+        force=True,
+    )
     progress.emit(f"Reward settings: {cfg['reward']}", force=True)
     progress.emit(
         f"Action timing: {cfg['environment'].get('action_timing', 'fixed')}; "

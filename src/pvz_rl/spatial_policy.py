@@ -95,6 +95,10 @@ class SpatialLogits(nn.Module):
 
 
 class SpatialGroupedPolicy(GroupedPolicy):
+    def initialize_dig_logit(self, value):
+        with torch.no_grad():
+            self.action_net.type_head[-1].bias[self.action_dist.groups - 1] = value
+
     def _build_mlp_extractor(self):
         self.mlp_extractor = SpatialLatents(
             self.features_extractor.channels, self.net_arch["vf"], self.features_dim

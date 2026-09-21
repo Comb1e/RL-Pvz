@@ -155,6 +155,8 @@ extern "C" __global__ void encode_state(const I *headers, const I *plants,
 // the scalar reward to the same float32 rollout storage used by SB3.
 extern "C" __global__ void
 reward_metrics(const I *headers, const I *old_headers, const I *old_cd,
+               const I *old_plants, const I *new_plants,
+               const I *events, const I *event_counts,
                const I *actions, const double *facts, const double *before_phi,
                const double *after_phi, float *rewards, double *parts,
                double *totals, I n) {
@@ -190,9 +192,40 @@ reward_metrics(const I *headers, const I *old_headers, const I *old_cd,
   v[14] = -R_mower_sun_weight * f[6] / R_mower_sun_scale;
   v[15] = R_wall_nut_damage_weight * (f[7] / PH[2]);
   v[16] = -R_empty_explosion_penalty * f[8];
+  if (PLANT_EVENTS) {
+    const Plant *old = (const Plant *)(old_plants + i * 45 * 8);
+    const Plant *now = (const Plant *)(new_plants + i * 45 * 8);
+    I old_count = 0, new_count = 0;
+    for (I j = 0; j < b.np; j++)
+      old_count += (OFFENSIVE_MASK & (1 << old[j].kind)) != 0;
+    for (I j = 0; j < h.np; j++)
+      new_count += (OFFENSIVE_MASK & (1 << now[j].kind)) != 0;
+    if (action >= 1 && action <= 360 && h.accepted)
+      v[17] = (OFFENSIVE_MASK & (1 << ((action - 1) / 45))) != 0;
+    // Pinned public event schema: PlantRemoved=1, reason eaten=2.
+    // IDs only join public events to types; they never enter policy features.
+    for (I j = 0; j < event_counts[i]; j++) {
+      const I *e = events + (i * ECAP + j) * 8;
+      if (e[0] != 1 || e[3] != 2)
+        continue;
+      I kind = -1;
+      for (I k = 0; k < b.np; k++)
+        if (old[k].id == e[2])
+          kind = old[k].kind;
+      // A freshly planted entity gets the next ID before any combat tick.
+      if (kind < 0 && h.accepted && action >= 1 && action <= 360 && e[2] == b.next_id)
+        kind = (action - 1) / 45;
+      if (kind >= 0 && kind != 2)
+        v[18]++;
+    }
+    double previous = b.status ? 0. : R_offensive_plant_weight * old_count;
+    double following = h.status ? 0. : R_offensive_plant_weight * new_count;
+    v[19] = SHAPED ? R_gamma * following - previous : 0.;
+    v[20] = -R_eaten_plant_penalty * v[18];
+  }
   double total =
-      v[0] + v[1] + v[6] + v[7] + v[8] + v[9] + v[14] + v[15] + v[16];
-  v[17] = total;
+      v[0] + v[1] + v[6] + v[7] + v[8] + v[9] + v[14] + v[15] + v[16] + v[19] + v[20];
+  v[REWARD_SIZE - 1] = total;
   rewards[i] = (float)total;
   t[0] += total;
   t[1]++;
@@ -233,4 +266,6 @@ reward_metrics(const I *headers, const I *old_headers, const I *old_cd,
   }
   for (I j = 0; j < 15; j++)
     t[20 + j] += v[2 + j];
+  for (I j = 0; j < 4; j++)
+    t[81 + j] += v[17 + j];
 }

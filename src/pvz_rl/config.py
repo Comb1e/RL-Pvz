@@ -139,10 +139,21 @@ def validate_config(cfg: dict) -> None:
         "mower_sun_weight",
         "wall_nut_damage_weight",
         "empty_explosion_penalty",
+        "offensive_plant_weight",
+        "eaten_plant_penalty",
     ):
         value = cfg["reward"].get(key, 0.0)
         if type(value) not in (int, float) or not math.isfinite(value) or value < 0:
             raise ValueError(f"reward.{key} must be finite and nonnegative")
+    offensive = cfg["reward"].get("offensive_plants", [])
+    if (
+        not isinstance(offensive, list)
+        or any(p not in PLANT_TYPES or p in ("sunflower", "wall_nut") for p in offensive)
+        or len(set(offensive)) != len(offensive)
+        or cfg["reward"].get("offensive_plant_weight", 0) > 0
+        and not offensive
+    ):
+        raise ValueError("reward.offensive_plants must list distinct damaging plants")
     scale = cfg["reward"].get("mower_sun_scale", 300.0)
     if type(scale) not in (int, float) or not math.isfinite(scale) or scale <= 0:
         raise ValueError("reward.mower_sun_scale must be finite and positive")
@@ -183,6 +194,14 @@ def validate_config(cfg: dict) -> None:
     ):
         raise ValueError("Unsupported policy kind")
     policy = cfg.get("policy", {})
+    if "initial_dig_logit" in policy:
+        value = policy["initial_dig_logit"]
+        if (
+            policy.get("kind") not in ("grouped_v1", "spatial_grouped_v2")
+            or type(value) not in (int, float)
+            or not math.isfinite(value)
+        ):
+            raise ValueError("policy.initial_dig_logit requires a grouped policy and finite value")
     if policy.get("kind") == "spatial_grouped_v2":
         if (
             encoding["version"] != "tactical_v2"
@@ -191,6 +210,8 @@ def validate_config(cfg: dict) -> None:
         ):
             raise ValueError("Spatial policy requires tactical_v2 and positive channels")
     exploration = cfg["training"].get("exploration", {"objective": "joint"})
+    if cfg["training"].get("actor_objective", "all_steps") not in ("all_steps", "choice_points_v1"):
+        raise ValueError("Unsupported training.actor_objective")
     if exploration.get("objective") not in ("joint", "balanced_heads_v1"):
         raise ValueError("Unsupported exploration objective")
     if exploration["objective"] == "balanced_heads_v1":
@@ -240,11 +261,14 @@ def validate_config(cfg: dict) -> None:
             ):
                 raise ValueError("Invalid teaching distribution or probe threshold")
     runtime = runtime_settings(cfg)
-    if set(runtime) != {"cache_legal_actions", "coalesce_masks", "cache_rollout_on_device"} or any(
-        type(value) is not bool for value in runtime.values()
-    ):
+    if set(runtime) != {
+        "cache_legal_actions",
+        "coalesce_masks",
+        "cache_rollout_on_device",
+        "refill_evaluation",
+    } or any(type(value) is not bool for value in runtime.values()):
         raise ValueError(
-            "Runtime settings must be cache_legal_actions/coalesce_masks/cache_rollout_on_device booleans"
+            "Runtime settings must be cache_legal_actions/coalesce_masks/cache_rollout_on_device/refill_evaluation booleans"
         )
     output = output_settings(cfg)
     log, visual = output["logging"], output["visualization"]

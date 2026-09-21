@@ -1,3 +1,4 @@
+profile = "sc2-efficient-v1"
 schema_version = 1
 engine_commit = "8861824df6893a34c2cd4df7f9b68613376d7964"
 engine_version = "1.0.0"
@@ -36,7 +37,10 @@ zombie_states = ["walking", "carrying_pole", "vaulting", "biting", "dead"]
 mower_states = ["ready", "moving", "spent"]
 
 [encoding]
-version = 1
+version = "tactical_v2"
+local_count_scale = 5
+firepower_scale = 20
+lane_count_scale = 9
 count_scale = 75
 wave_scale = 15
 
@@ -63,14 +67,19 @@ budget_unit = "games"
 total_games = 10000
 eval_interval_games = 1000
 total_steps = 3000000 # Inactive unless budget_unit = "decisions" (legacy).
-learner_seeds = [101, 102, 103, 104, 105]
-n_envs = 8
+learner_seeds = [101, 102]
+n_envs = 128
 device = "cuda"
-rollout_size = 4096
-batch_size = 256
+rollout_size = 16384
+rollout_steps_per_env = 128
+max_minutes = 120
+finalization_minutes = 15
+actor_objective = "choice_points_v1"
+exploration = {objective = "balanced_heads_v1", type_coef = 0.01, tile_coef = 0.001}
+batch_size = 1024
 n_epochs = 4
 learning_rate = 0.0003
-gae_lambda = 0.98
+gae_lambda = 0.999
 clip_range = 0.2
 ent_coef = 0.01
 hidden_sizes = [256, 256]
@@ -78,6 +87,15 @@ eval_interval = 250000 # Legacy decision interval; new runs use eval_interval_ga
 torch_threads = 1
 
 [curriculum]
+mode = "teaching"
+residency = "episode_start_stage"
+probe_interval_games = 100
+minimum_stage_games = 100
+probe_interval = 16384
+probe_cases = 20
+consecutive_passes = 2
+minimum_stage_steps = 16384
+
 boundaries = [0.1, 0.4]
 easy_weights = [1.0, 0.0, 0.0]
 intermediate_weights = [0.5, 0.5, 0.0]
@@ -127,6 +145,48 @@ masked = true
 shaped = true
 curriculum = true
 hybrid = true
+
+[policy]
+kind = "spatial_grouped_v2"
+channels = 64
+
+[curriculum.lessons.placement]
+spawn_ticks = [1, 81, 161]
+initial_sun = 200
+allowed_plants = ["peashooter"]
+
+[curriculum.lessons.saving]
+spawn_ticks = [1200, 1280, 1360]
+initial_sun = 50
+allowed_plants = ["sunflower", "peashooter"]
+
+[curriculum.stages.placement]
+tasks = ["placement"]
+weights = [1.0]
+requirements = {placement = 18}
+
+[curriculum.stages.saving]
+tasks = ["saving", "placement"]
+weights = [0.8, 0.2]
+requirements = {saving = 18}
+
+[curriculum.stages.easy]
+tasks = ["easy", "placement", "saving"]
+weights = [0.8, 0.1, 0.1]
+requirements = {easy = 16}
+
+[curriculum.stages.standard]
+tasks = ["easy", "standard", "saving"]
+weights = [0.45, 0.45, 0.1]
+requirements = {easy = 16, standard = 12}
+
+[curriculum.stages.shared]
+tasks = ["easy", "standard", "hard"]
+weights = [0.2, 0.4, 0.4]
+requirements = {}
+
+[simulation]
+backend = "cuda"
 
 [diagnostics]
 early_dig_seconds = 5

@@ -10,7 +10,7 @@ held-out evaluations, changed-wave scenarios, statistical analysis, progress log
 automatic offline reports, learning curves, compact game demos, and optional MP4 export.
 **Each run trains one shared policy for easy, standard, and hard.** The same
 `best.zip` is used for all three difficulties and their demonstration recordings.
-Research version **0.7.0** uses game package **1.3.0** (simulation version **1.0.0**).
+Research version **0.7.1** uses game package **1.3.0** (simulation version **1.0.0**).
 The new pure-RL profiles add tactical observations, grouped plant/tile decisions,
 and introductory lessons. They are experimental: see [paper adaptation and pilot
 evidence](docs/paper-adaptation.md). The baseline remains the default configuration.
@@ -101,6 +101,64 @@ and individual run reports. Missing comparisons and rollout overshoot are explic
 Only development validation seeds are used. No full comparison or formal research
 training is launched by installation or availability checks.
 
+## Faster SC2 candidate with plant-role rewards (experimental)
+
+The completed `sc2-shared-101` run selected 42% easy / 0% standard / 0% hard on
+50 validation seeds per difficulty. Its demos mainly use wall-nuts and mines.
+This candidate addresses action-credit dilution and adds the requested plant-role
+signals, keeping the **120-minute maximum**, 128 parallel games, 128 decisions per
+game, one shared policy, per-tick controls and existing combat reward coefficients.
+Start a fresh model; do not resume the old profile into it.
+
+```powershell
+.\.venv\Scripts\python.exe -m pvz_rl train --config configs\sc2-plant-rewards.toml --max-minutes 120 --output runs\sc2-plant-rewards-101
+```
+
+- PPO actor advantages and exploration are averaged over states with at least two
+  legal actions. Forced waits still advance the game and train the value network.
+  Every legal dig, placement and wait remains available. There is no scripted control.
+- GAE lambda is 0.999 (previously 0.98), carrying more credit through the existing
+  128-decision rollout. Gamma stays 0.999. Minibatches are 1,024 instead of 256;
+  the network, learning rate and four optimization epochs are unchanged.
+- Add `0.1 × number of living offensive plants` to the shaping potential, reported
+  separately as `offensive_shaping`. Peashooter, snow pea, repeater and chomper count
+  in this profile; the list is configurable. A first immediate placement gives
+  +0.0999 at gamma 0.999. Digging/removal reverses its potential, so repeating
+  planting and digging cannot generate discounted bonus income. Genuine terminals
+  zero the potential; external truncations retain it for bootstrapping.
+- Each non-wall-nut plant removed with reason **eaten** receives −0.02. Voluntary
+  digging and normal bomb/mine detonation are not classified as being eaten.
+  Empty ash explosions retain the existing −0.2; damaging armor counts as a hit.
+- `policy.initial_dig_logit = -6` gives fresh policies a lower starting probability
+  of digging. With otherwise equal wait/dig logits this is about 0.25%, rather
+  than 50% per decision. The bias remains trainable: no action mask, retention
+  rule or inference-time override is added, and checkpoint loading preserves
+  learned values instead of applying the initialization again.
+
+These weights are in `[reward]` as `offensive_plant_weight`, `offensive_plants`
+and `eaten_plant_penalty`. The new reward components default to zero in older
+configurations, preserving compatible checkpoints. New GPU plant-event rewards
+consume the engine's public event buffer entirely on-device; observations and
+combat rules are unchanged. This adds about 252 MiB for 128 ordinary games.
+
+`configs/sc2-efficient.toml` isolates optimization changes without new rewards.
+`configs/sc2-inspired.toml` remains the original baseline. Do not pool their scores:
+profile names and reward settings are recorded with every run. Short comparisons
+and limitations are documented in [the learning diagnosis](docs/sc2-learning-fix.md).
+A throughput improvement is not a claim of improved two-hour win rate.
+
+Validation refills finished GPU slots instead of waiting for a whole batch before
+starting the next cases. Seeds, deterministic actions, checkpoint scoring and
+earliest-checkpoint ties are preserved. Set `runtime.refill_evaluation = false`
+for the original batching control. Logs show stage, recent task counts, attacker
+purchases and early digging; mower-free lessons are labeled explicitly.
+
+For a bounded development check (four five-minute allowances by default):
+
+```powershell
+.\.venv\Scripts\python.exe tools\check_sc2_learning.py --output artifacts\sc2-check
+```
+
 ## CUDA simulation and training
 
 The optional CUDA backend moves games, observation encoding, rewards, policy
@@ -110,8 +168,9 @@ discount, GAE, minibatch 256, four PPO epochs) are unchanged. Completed games
 control the budget, curriculum, validation and ETA.
 
 The working research checkout is `E:/Projects/Tower-Defence-AI/PVZ-plant`,
-using its single `.venv`. The new game backend is committed in the pinned game
-checkout `E:/Projects/pvz-cuda-work`; the original `E:/Projects/pvz` is unchanged.
+using its single `.venv`. The game backend comes from the pinned commit in
+`E:/Projects/pvz-cuda-work`. Both game checkouts now also contain newer native
+replay-reader fixes; the installed training simulator retains its original pin.
 Development used an isolated environment that was moved to the Recycle Bin after verification.
 A new installation inside the research checkout uses:
 
@@ -805,8 +864,12 @@ manifest also hashes the complete recording file.
 
 Per-tick recordings use the explicit research replay version `pvz-rl/actions-v1`
 inside `.pvzdemo`. Open them with **`pvz-rl replay`**, which supplies the research
-playback adapter to the native viewer. The standalone game loader cannot read
-zero-time operations. Native-format older demos remain readable. Seeking to a
+playback adapter to the native viewer. Updated standalone readers (CPU checkout
+1.2.2 and CUDA checkout 1.3.1) also support this format. Older installed readers
+still reject it; use the research command or update the viewer installation.
+The research environment keeps its separately pinned 1.3.0 simulator so existing
+compatible checkpoints remain evaluable. Do not replace that simulator just to
+watch a demo. Existing recordings need no conversion. Seeking to a
 tick displays all recorded instantaneous operations at that tick; MP4 still emits
 one frame per simulation tick at 20 fps, plus the configured final hold.
 

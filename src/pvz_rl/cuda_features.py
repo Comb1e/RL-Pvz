@@ -7,10 +7,12 @@ from pvz_game.cuda.backend import kernel_source
 
 from .cuda_diagnostics import DeviceProfiler
 from .encoding import ObservationEncoder
+from .plant_rewards import enabled as plant_rewards_enabled
 from .rewards import REWARD_METRICS
 
 REWARD_FIELDS = ("terminal", "shaping", *REWARD_METRICS, "total")
-METRIC_SIZE = 81  # 35 original totals + early digs + 45 planting timestamps
+METRIC_INDICES = (*range(20, 35), *range(81, 85))
+METRIC_SIZE = 85  # Preserve original totals, early digs and planting timestamps.
 
 
 class CudaFeatures:
@@ -19,6 +21,9 @@ class CudaFeatures:
         cp = batch.cp
         self.profiler = DeviceProfiler(cp, cfg.get("simulation", {}).get("profile", False))
         encoder = self.encoder = ObservationEncoder(cfg, batch.rules)
+        self.plant_events = plant_rewards_enabled(cfg)
+        if self.plant_events and not batch.diagnostic:
+            raise ValueError("Plant event rewards require the GPU public-event buffer")
         params = {
             "BINS": encoder.bins,
             "OBS_SIZE": encoder.size,
@@ -42,6 +47,11 @@ class CudaFeatures:
             "SHAPED": int(cfg["conditions"][condition]["shaped"]),
             "REWARD_SIZE": len(REWARD_FIELDS),
             "METRIC_SIZE": METRIC_SIZE,
+            "PLANT_EVENTS": int(self.plant_events),
+            "OFFENSIVE_MASK": sum(
+                1 << cfg["environment"]["plants"].index(p)
+                for p in cfg["reward"].get("offensive_plants", [])
+            ),
         }
         defaults = dict(
             win_reward=1.0,
@@ -53,6 +63,7 @@ class CudaFeatures:
             economy_scale=300.0,
         )
         reward_keys = "win_reward loss_penalty normalize_kills gamma defeated_weight economy_weight economy_scale sun_weight sun_target flower_weight flower_target plant_kill_weight mower_kill_weight damage_weight empty_mower_activation_penalty mower_sun_weight mower_sun_scale wall_nut_damage_weight empty_explosion_penalty".split()
+        reward_keys += ["offensive_plant_weight", "eaten_plant_penalty"]
         params.update(
             {f"R_{k}": float(cfg["reward"].get(k, defaults.get(k, 0.0))) for k in reward_keys}
         )
@@ -96,6 +107,7 @@ class CudaFeatures:
         b = self.batch
         before_phi = self.potential.copy()
         before_header, before_cd = b.header.copy(), b.cooldowns.copy()
+        before_plants = b.plants.copy() if self.plant_events else b.plants
         with self.profiler.track("simulation"):
             b.step_device(actions, ticks=ticks, per_tick=per_tick)
         with self.profiler.track("encoding_masks"):
@@ -108,6 +120,10 @@ class CudaFeatures:
                     b.header,
                     before_header,
                     before_cd,
+                    before_plants,
+                    b.plants,
+                    b._events,
+                    b._event_counts,
                     actions,
                     b.facts,
                     before_phi,

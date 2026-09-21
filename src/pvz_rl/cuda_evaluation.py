@@ -5,12 +5,121 @@ from time import perf_counter
 
 import torch
 
+from .config import runtime_settings
 from .cuda_diagnostics import DeviceProfiler
 from .cuda_env import CudaVecEnv
 from .deadline import check_deadline
 
 
 def batched_games(
+    cfg, policy, condition, seeds, levels, family, *, record=False, progress=None, deadline=None
+):
+    if runtime_settings(cfg)["refill_evaluation"]:
+        yield from refilled_games(
+            cfg,
+            policy,
+            condition,
+            seeds,
+            levels,
+            family,
+            record=record,
+            progress=progress,
+            deadline=deadline,
+        )
+        return
+    yield from fixed_batches(
+        cfg,
+        policy,
+        condition,
+        seeds,
+        levels,
+        family,
+        record=record,
+        progress=progress,
+        deadline=deadline,
+    )
+
+
+def refilled_games(
+    cfg, policy, condition, seeds, levels, family, *, record=False, progress=None, deadline=None
+):
+    """Refill finished GPU slots while preserving case order and exact traces."""
+    cases = [(level, family, seed) for level in levels for seed in sorted(seeds)]
+    if not cases:
+        return
+    check_deadline(deadline)
+    count = min(len(cases), cfg["training"]["n_envs"])
+    local = copy.deepcopy(cfg)
+    local["training"]["n_envs"] = count
+    local["training"]["rollout_size"] = count * local["training"].get("rollout_steps_per_env", 128)
+    original_device = policy.policy.device
+    env = None
+    policy.policy.to("cuda")
+    try:
+        env = CudaVecEnv(local, condition, 0, family, training=False, cases=cases[:count])
+        slots = list(range(count))
+        traces, buffered, completed = [[] for _ in slots], [], {}
+        next_case, next_yield, finished = count, 0, 0
+        timer = DeviceProfiler(env.cp, enabled=True)
+        started = [perf_counter()] * count
+        inference_start = [0.0] * count
+        obs = env.reset()
+        with env.device_context():
+            while finished < len(cases):
+                check_deadline(deadline)
+                with torch.no_grad():
+                    kwargs = {}
+                    if cfg["conditions"][condition]["masked"]:
+                        masks = env.action_masks().clone()
+                        masks[:, 0] |= env.header_tensor[:, 17] == 0
+                        kwargs["action_masks"] = masks
+                    with timer.track("inference"):
+                        actions, _, _ = policy.policy(obs, deterministic=True, **kwargs)
+                if record:
+                    buffered.append(actions)
+                obs, _, _, _, _, infos = env.step_tensors(actions, autoreset=False)
+                done = [i for i, info in enumerate(infos) if "episode_metrics" in info]
+                if record and (done or len(buffered) >= 128):
+                    raw = torch.stack(buffered).cpu().numpy()
+                    for i in range(count):
+                        if slots[i] is not None:
+                            traces[i].extend(raw[:, i].tolist())
+                    buffered.clear()
+                if done or len(timer.pending) >= 128:
+                    inference = timer.flush().get("inference", 0.0)
+                reset, assigned = [], []
+                for i in done:
+                    row = {
+                        **infos[i]["episode_metrics"],
+                        "state_hash": env.batch.state_hash(i),
+                        "inference_seconds": (inference - inference_start[i]) / count,
+                        "wall_seconds": perf_counter() - started[i],
+                    }
+                    if record:
+                        row["action_trace"] = traces[i][: row["decisions"]]
+                    completed[slots[i]] = row
+                    finished += 1
+                    slots[i], traces[i] = None, []
+                    if next_case < len(cases):
+                        slots[i] = next_case
+                        reset.append(i)
+                        assigned.append(cases[next_case])
+                        next_case += 1
+                        started[i], inference_start[i] = perf_counter(), inference
+                if reset:
+                    env.reset_indices(reset, assigned)
+                if progress:
+                    progress.emit(f"GPU evaluation: {finished}/{len(cases)} games complete")
+                while next_yield in completed:
+                    yield completed.pop(next_yield)
+                    next_yield += 1
+    finally:
+        if env is not None:
+            env.close()
+        policy.policy.to(original_device)
+
+
+def fixed_batches(
     cfg, policy, condition, seeds, levels, family, *, record=False, progress=None, deadline=None
 ):
     """Yield complete numeric episode records in the original level/seed order.

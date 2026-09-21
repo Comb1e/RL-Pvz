@@ -14,8 +14,9 @@ from stable_baselines3.common.vec_env import VecEnv
 
 from .budget import budget_target
 from .config import lesson_settings
-from .cuda_features import CudaFeatures
+from .cuda_features import METRIC_INDICES, CudaFeatures
 from .curriculum import LESSONS, stage_distribution, teaching_enabled
+from .plant_rewards import enabled as plant_rewards_enabled
 from .rewards import REWARD_METRICS
 from .scenarios import difficulty_weights, scenario
 
@@ -96,7 +97,10 @@ class CudaVecEnv(VecEnv):
                 game.reset(scenario(level, fam, seed, self.queue.rules, cfg), seed)
                 counts.append(game.observe().counts.initial_total)
         self.batch = CudaBatch(
-            cfg["training"]["n_envs"], zombie_capacity=max(1, *counts), max_step_ticks=1
+            cfg["training"]["n_envs"],
+            zombie_capacity=max(1, *counts),
+            max_step_ticks=1,
+            diagnostic=plant_rewards_enabled(cfg),
         )
         self.cp = self.batch.cp
         with self.device_context():
@@ -225,7 +229,7 @@ class CudaVecEnv(VecEnv):
             first_attacker_seconds=None if t[11] < 0 else float(t[11] / 20),
             plant_usage=usage,
             plant_spending={k: v * self.batch.rules.plants[k]["cost"] for k, v in usage.items()},
-            **{k: float(t[20 + j]) for j, k in enumerate(REWARD_METRICS)},
+            **{k: float(t[j]) for k, j in zip(REWARD_METRICS, METRIC_INDICES, strict=True)},
             mowers_used=int(t[28]),
             defeated=int(h[5]),
             total_zombies=int(h[8]),

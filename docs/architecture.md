@@ -1,9 +1,30 @@
 # Current architecture
 
-Research package 0.7.0 consumes the separately pinned game package 1.3.0,
+Research package 0.7.1 consumes the separately pinned game package 1.3.0,
 simulation 1.0.0. Training/evaluation verify installed package and source hashes,
 the engine commit and combat rules. Policies receive only public observations.
 The Python simulator is the reference; the CUDA simulator preserves its rules.
+
+The optional `choice_points_v1` actor objective uses states with more than one
+legal action to normalize advantages and average clipped policy loss and exploration.
+The critic and GAE use every transition. Empty and singleton choice sets have finite
+reductions; old profiles retain all-step PPO reductions.
+
+An optional `policy.initial_dig_logit` initializes the fresh grouped policy's
+trainable type-head bias. The spatial policy implements the same interface.
+It does not alter legality or inference; saved learned weights override ordinary
+constructor initialization when loading checkpoints.
+
+`plant_rewards` joins public placement/removal events by transient entity ID.
+Only `reason=eaten` penalizes a non-wall-nut loss. A separate offensive plant-count
+potential supplies placement feedback and reverses it on removal. CUDA plant-event
+profiles scan the pinned engine's public event buffer on-device; only episode
+totals cross to the CPU. No new information enters policy inputs.
+
+GPU evaluation refills completed slots with the next fixed cases. Results and
+traces are emitted in level/seed order and verified by the CPU before demo saving.
+Native viewers dispatch `pvz-rl/actions-v1` to their action-phase reader; the pinned
+research installation retains its compatible local reader.
 
 ```mermaid
 flowchart LR
@@ -14,7 +35,10 @@ flowchart LR
     Policy --> Actions[Wait, plant or dig]
     Actions --> Games
     Public --> Buffer[128 decisions per parallel game]
-    Buffer --> Update[PPO update and shared exploration loss]
+    Buffer --> Actor[Actor: configured choice states]
+    Buffer --> Critic[Value: every collected state]
+    Actor --> Update[PPO update and shared exploration loss]
+    Critic --> Update
     Update --> Policy
     Games --> Episodes[Completed-game metrics]
     Episodes --> Schedule[Game budget and mastery state]
