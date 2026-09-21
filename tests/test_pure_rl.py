@@ -140,8 +140,8 @@ def test_deterministic_selection_is_greedy_type_then_tile():
     "family,win_tick,loss_tick", [("placement", 883, 1000), ("saving", 2074, 2199)]
 )
 @pytest.mark.parametrize("lane", range(5))
-def test_lesson_independent_shooting_and_wait_controls(family, win_tick, loss_tick, lane):
-    cfg = learning_profile("pure-rl")
+def test_lesson_independent_shooting_and_wait_controls(cfg, family, win_tick, loss_tick, lane):
+    cfg = learning_profile("pure-rl", cfg)
     settings = cfg["curriculum"]["lessons"][family]
     spec = LevelSpec(
         family,
@@ -186,13 +186,14 @@ def test_task_restrictions_dig_cooldown_and_reset_boundaries():
     cfg["environment"]["cutoff_seconds"] = 1
     env = PvZEnv(cfg, family="saving")
     env.reset(seed=3)
-    env.step(0)
+    for _ in range(19):
+        assert env.step(0)[2:4] == (False, False)
     _, _, terminated, truncated, _ = env.step(0)
     assert truncated and not terminated
 
 
-def test_curriculum_pass_fail_minimum_and_rehearsal():
-    cfg = learning_profile("pure-rl")
+def test_curriculum_pass_fail_minimum_and_rehearsal(cfg):
+    cfg = learning_profile("pure-rl", cfg)
     state = CurriculumState()
     assert not state.due(16383, cfg) and state.due(16384, cfg)
     assert not state.observe({"placement": 18}, 16384, cfg)

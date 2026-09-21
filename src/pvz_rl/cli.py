@@ -33,14 +33,23 @@ def video_options(parser):
 def training_options(parser):
     common(parser)
     parser.add_argument("--hardware", type=Path, help="benchmark recommendation.json")
-    parser.add_argument(
-        "--steps", type=int, help="total training decisions, not extra resume steps"
+    budget = parser.add_mutually_exclusive_group()
+    budget.add_argument(
+        "--games", type=int, help="total completed training games across all workers"
+    )
+    budget.add_argument(
+        "--steps", type=int, help="legacy decision-budget mode; for archived protocols only"
     )
     parser.add_argument("--n-envs", type=int)
     parser.add_argument("--device", choices=("cpu", "cuda"))
     parser.add_argument("--rollout-size", type=int)
     parser.add_argument("--batch-size", type=int)
     parser.add_argument("--eval-interval", type=int)
+    parser.add_argument(
+        "--eval-games",
+        type=int,
+        help="validate after this many additional completed training games",
+    )
     video_options(parser)
 
 
@@ -51,15 +60,33 @@ def configured(args):
         cfg["training"].update({k: hardware[k] for k in ("n_envs", "device")})
     for arg, key in (
         ("steps", "total_steps"),
+        ("games", "total_games"),
         ("n_envs", "n_envs"),
         ("device", "device"),
         ("rollout_size", "rollout_size"),
         ("batch_size", "batch_size"),
         ("eval_interval", "eval_interval"),
+        ("eval_games", "eval_interval_games"),
     ):
         value = getattr(args, arg, None)
         if value is not None:
             cfg["training"][key] = value
+    if getattr(args, "games", None) is not None:
+        cfg["training"]["budget_unit"] = "games"
+    elif getattr(args, "steps", None) is not None and args.command in ("train", "suite"):
+        cfg["training"]["budget_unit"] = "decisions"
+    if (
+        getattr(args, "eval_games", None) is not None
+        and cfg["training"].get("budget_unit") != "games"
+    ):
+        raise ValueError("--eval-games requires a game-count training budget")
+    if (
+        getattr(args, "eval_interval", None) is not None
+        and cfg["training"].get("budget_unit") == "games"
+    ):
+        raise ValueError(
+            "Use --eval-games with game-count training; --eval-interval is for legacy --steps"
+        )
     if getattr(args, "videos", None) is not None:
         cfg.setdefault("visualization", {})["videos"] = args.videos
     validate_config(cfg)
@@ -182,10 +209,10 @@ def main(argv=None):
             )
         )
         if args.watch:
-            from pvz_game.ui import App
+            from .recordings import watch_recording
 
             # Pass the normalized payload so legacy sidecars retain their cutoff labels.
-            App(replay_path=playback.data, speed=speed).run()
+            watch_recording(args.path, speed=speed)
         if args.video:
             from .video import export_replay
 
@@ -219,17 +246,27 @@ def main(argv=None):
         details["gymnasium_checks"] = "passed: all five conditions"
         from tempfile import TemporaryDirectory
 
-        from pvz_game.replay import Playback, Recorder, read_recording, write_recording
+        from pvz_game import Place
+        from pvz_game.replay import read_recording
+
+        from .recordings import open_playback
 
         with TemporaryDirectory(prefix="pvz-doctor-") as temporary:
             replay_path = Path(temporary) / "probe.pvzdemo"
-            recorder = Recorder(env.game, metadata={"policy_id": "doctor"})
-            write_recording(recorder.to_dict(), replay_path)
-            probe = Playback(replay_path)
+            env = PvZEnv(cfg, record=True)
+            env.reset(seed=1)
+            info = env.step(env.codec.encode(Place("sunflower", 0, 0)))[4]
+            env.step(0)
+            env.recorder.update_metadata({"policy_id": "doctor"})
+            env.recorder.save(replay_path)
+            probe = open_playback(replay_path)
             probe.verify()
+            assert probe.game.state_hash() == env.game.state_hash()
             details["compact_replay"] = {
                 "available": read_recording(replay_path)["metadata"]["policy_id"] == "doctor",
                 "seek_supported": hasattr(probe, "seek"),
+                "action_timing": cfg["environment"].get("action_timing", "fixed"),
+                "instant_placement": info["ticks_advanced"] == 0,
             }
         try:
             from .rendering import render_observation

@@ -30,7 +30,7 @@ def test_discounted_shaping_telescopes_and_plant_dig_is_not_free_reward(cfg):
 def test_shaping_true_terminal_independent_algebra(cfg):
     obs = Game().reset("easy", 1)
     phi = potential(obs, cfg)
-    for status, terminal in ((Status.WON, 1), (Status.LOST, -1)):
+    for status, terminal in ((Status.WON, 1), (Status.LOST, -2)):
         end = replace(obs, status=status, sun=9990)
         parts = reward_parts(obs, end, cfg, True)
         assert parts["shaping"] == pytest.approx(-phi)

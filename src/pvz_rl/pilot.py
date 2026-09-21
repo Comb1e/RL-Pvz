@@ -16,18 +16,26 @@ SEEDS = (101, 102)
 def comparison_summary(output, diagnostics_passed):
     """Use a shared completed validation budget, never each method's best score."""
     output = Path(output)
-    measurements, protocols, missing = {}, set(), []
+    measurements, protocols, missing, units = {}, set(), [], set()
     for seed in SEEDS:
         for profile in PROFILES:
             run = output / f"{profile}-{seed}"
             series = read_series(run / "learning-curve.jsonl")
-            measurements[profile, seed] = {r["training_steps"]: r for r in series}
+            units.update(r.get("budget_unit", "decisions") for r in series)
+            measurements[profile, seed] = {
+                r["training_games" if r.get("budget_unit") == "games" else "training_steps"]: r
+                for r in series
+            }
             if not series:
                 missing.append(f"{profile}-{seed}")
             for file in run.glob("validation/*/episodes.jsonl"):
                 protocols.update(r.get("game_protocol_hash") for r in read_series(file))
     if len(protocols) > 1 or None in protocols:
         raise ValueError("Pilot profiles must share the same verified game/evaluation protocol")
+    if len(units) > 1:
+        raise ValueError("Pilot cannot pool game and decision budgets")
+    unit = next(iter(units), "games")
+    budget_key = "training_games" if unit == "games" else "training_steps"
     common = set.intersection(*(set(v) for v in measurements.values()))
     if common:
         reference = learning_profile("baseline")
@@ -39,8 +47,9 @@ def comparison_summary(output, diagnostics_passed):
         for budget in common:
             for seed in SEEDS:
                 for profile in PROFILES:
+                    step = measurements[profile, seed][budget]["training_steps"]
                     episodes = read_series(
-                        output / f"{profile}-{seed}" / "validation" / str(budget) / "episodes.jsonl"
+                        output / f"{profile}-{seed}" / "validation" / str(step) / "episodes.jsonl"
                     )
                     cases = {
                         (r.get("split"), r.get("family"), r.get("level"), r.get("scenario_seed"))
@@ -52,7 +61,7 @@ def comparison_summary(output, diagnostics_passed):
                         or any(
                             r.get("learner_seed") != seed
                             or r.get("profile") != profile
-                            or r.get("training_steps") != budget
+                            or r.get(budget_key) != budget
                             for r in episodes
                         )
                     ):
@@ -70,7 +79,8 @@ def comparison_summary(output, diagnostics_passed):
             {
                 "profile": profile,
                 "learner_seed": seed,
-                "training_steps": budget,
+                "training_steps": measurements[profile, seed][budget]["training_steps"],
+                "training_games": budget if unit == "games" else None,
                 "macro_win_rate": measurements[profile, seed][budget]["macro_win_rate"],
             }
             for seed in SEEDS
@@ -96,7 +106,9 @@ def comparison_summary(output, diagnostics_passed):
         if recommended
         else "experimental_inconclusive",
         "diagnostics_passed": diagnostics_passed,
-        "matched_steps": budget,
+        "matched_steps": budget if unit == "decisions" else None,
+        "matched_games": budget if unit == "games" else None,
+        "budget_unit": unit,
         "missing_runs_or_validation": missing,
         "rows": rows,
         "candidate_difference_vs_baseline": differences,
@@ -110,15 +122,15 @@ def comparison_summary(output, diagnostics_passed):
         "",
         f"Conclusion: **{result['state']}**.",
         "",
-        f"Learning diagnostics passed: {diagnostics_passed}. Matched decisions: {budget}.",
+        f"Learning diagnostics passed: {diagnostics_passed}. Matched {unit}: {budget}.",
         "",
         "Normal-game macro win rate at the same completed budget (not best-checkpoint scores).",
         "",
-        "| Profile | Learner seed | Decisions | Win rate |",
+        f"| Profile | Learner seed | {unit.capitalize()} | Win rate |",
         "|---|---:|---:|---:|",
     ]
     lines.extend(
-        f"| {r['profile']} | {r['learner_seed']} | {r['training_steps']} | {r['macro_win_rate']:.1%} |"
+        f"| {r['profile']} | {r['learner_seed']} | {r[budget_key]} | {r['macro_win_rate']:.1%} |"
         for r in rows
     )
     if missing:
@@ -152,7 +164,7 @@ def comparison_summary(output, diagnostics_passed):
                 )
             ax.set(
                 title=f"Learner seed {seed}",
-                xlabel="Matched training decisions",
+                xlabel=f"Matched training {unit}",
                 ylabel="Normal-game macro win rate",
                 ylim=(-0.02, 1.02),
             )
@@ -187,7 +199,7 @@ def run_pilot(output, minutes=30):
                 diagnostics[lesson] = {"state": "not_run", "passed": False}
                 continue
             cfg = learning_profile("pure-rl")
-            cfg["training"].update(total_steps=131072, eval_interval=16384)
+            cfg["training"].update(budget_unit="games", total_games=100, eval_interval_games=20)
             cfg["visualization"]["demos"] = False
             run = output / f"diagnostic-{lesson}"
             slot = (diagnostic_deadline - perf_counter()) / (2 - i)
@@ -206,6 +218,7 @@ def run_pilot(output, minutes=30):
                 "passed": best.get("macro_win_rate", 0) >= 0.9,
                 "best": best,
                 "steps": read_json(run / "status.json", {}).get("steps"),
+                "games": read_json(run / "status.json", {}).get("training_games"),
             }
             write_json(output / "diagnostics.json", diagnostics)
         order = [
@@ -218,7 +231,7 @@ def run_pilot(output, minutes=30):
                 jobs.append({"profile": profile, "learner_seed": seed, "state": "not_run"})
                 continue
             cfg = learning_profile(profile)
-            cfg["training"].update(total_steps=262144, eval_interval=32768)
+            cfg["training"].update(budget_unit="games", total_games=200, eval_interval_games=20)
             cfg["visualization"]["demos"] = False
             slot = (deadline - perf_counter()) / (len(order) - i)
             run = output / f"{profile}-{seed}"

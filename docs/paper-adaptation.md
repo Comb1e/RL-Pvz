@@ -225,3 +225,17 @@ The next controlled pure-RL experiments should therefore consider (separately):
   immediate removal of plants.
 
 No additional strategy change or game-checkout edit was made for these suggestions.
+
+
+## Later user-requested protocol changes — 0.5.0
+
+The archived pilot above predates the current rewards, per-tick action phases,
+and completed-game schedules. It is not evidence for their learning performance.
+New pilots target 100 games per diagnostic and 200 games per profile/learner seed,
+validate every 20 completed games, and retain the overall 30-minute ceiling.
+Matched comparisons use actual completed game counts across all profiles and both
+seeds; final-rollout excess or deadlines can leave no common budget. Such results
+remain explicitly inconclusive, without interpolation or pairing unequal budgets.
+The changes implement Leafy's preferences and do not come from the paper. No new
+pilot was launched; only correctness and availability tests were run. See
+`reward-design.md`, `architecture.md`, and `validation.md` for this protocol.

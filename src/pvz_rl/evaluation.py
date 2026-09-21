@@ -8,13 +8,13 @@ from pathlib import Path
 from time import perf_counter
 
 import numpy as np
-from pvz_game.replay import verify_replay
 
 from .config import digest, output_settings
 from .env import PvZEnv
 from .frozen_baseline import choose_action
 from .progress import Phase, ProgressReporter
 from .provenance import append_jsonl, file_hash, verify_engine, write_json
+from .recordings import verify_replay
 from .rewards import REWARD_METRICS
 from .scenarios import namespace_seed
 
@@ -94,6 +94,7 @@ def evaluate(
         "hybrid" if baseline == "random_strategy" else "masked" if baseline else condition
     )
     profile = cfg.get("profile", "baseline")
+    training_games = getattr(policy, "training_games", 0) if policy is not None else 0
     label = baseline or (condition if profile == "baseline" else f"{profile}/{condition}")
     engine = verify_engine(cfg)
     protocol_hash = digest(
@@ -139,6 +140,7 @@ def evaluate(
                     "experiment": {
                         "learner_seed": learner_seed,
                         "training_steps": training_steps,
+                        "training_games": training_games,
                         "split": split,
                         "engine": engine,
                         "protocol_hash": protocol_hash,
@@ -192,6 +194,7 @@ def evaluate(
                             "training_config_hash": training_hash,
                             "split": split,
                             "training_steps": training_steps,
+                            "training_games": training_games,
                             "inference_seconds": inference_seconds,
                             "wall_seconds": perf_counter() - started,
                             "state_hash": env.game.state_hash(),

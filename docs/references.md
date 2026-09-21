@@ -1,5 +1,23 @@
 # Sources actually used
 
+
+## Action timing, defense rewards and game budgets — 0.5.0
+
+Inspected 2026-09-20. This revision implements Leafy's requested objective and
+scheduling changes; its weights and budget sizes are not published results.
+
+| Source actually used | Evidence inspected | Decision informed |
+|---|---|---|
+| Lawn Lab 1.2.1, commit `6fd1f54706369915013a49eab5c1790f8c55ab0a` | Installed `engine.py`: `step`, `_advance`, `_sun_income`, `_detonate`, `_advance_zombies`, `_advance_mowers`; active wall-nut HP and card costs | Reuse native validation and combat, isolate zero-time action application in the research subclass; use public event-time sunlight, actual wall-nut bites, and source/tick blast attribution. |
+| Same game release, `replay.py` and `ui.py` | Recorder `_append`, compressed I/O, Playback initialization, `_checkpoint`, step/seek/cache, `_finish`, and App restart/seek integration | Explicit research replay version for zero-time actions; preserve native rendering, seek controls, outcomes and frame timing without editing upstream. |
+| Stable-Baselines3 / SB3-Contrib 2.7.1 | Installed/on-project rollout-start/end and training-end callback integration; VecEnv automatic reset behavior; existing PPO update capture and checkpoint save/load interfaces | Count completed training episodes, keep updates unchanged, check game targets after optimization, broadcast curriculum counts for subsequent resets, and persist game counters in checkpoints. |
+| Ng, Harada, Russell (1999), linked below | Previously implemented telescoping control `-Phi(initial)+gamma^T Phi(final)` retained and independently verified with immediate actions | Keep discount per policy decision and distinguish potential transformation from the new event objective. Do not claim preserved equivalence to win-only rewards. |
+| Local 0.5.0 tests and reports | Independent event arithmetic, actual engine scenarios, zero-time and native replay comparisons, game-count CPU/CUDA/Windows integration and resume checks | Establish correctness and availability only; no learning efficacy claim and no new pilot. |
+
+All relevant upstream source was read from the installed pinned dependency. No
+external controller or demonstration was introduced into learning. Existing PPO,
+masking and tower-defense literature remains the algorithmic basis.
+
 Reviewed on 2026-09-20. Source evidence is distinct from local availability tests.
 No full RL research result has been reproduced in this repository yet.
 

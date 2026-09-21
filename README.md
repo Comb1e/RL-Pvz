@@ -10,7 +10,7 @@ held-out evaluations, changed-wave scenarios, statistical analysis, progress log
 automatic offline reports, learning curves, compact game demos, and optional MP4 export.
 **Each run trains one shared policy for easy, standard, and hard.** The same
 `best.zip` is used for all three difficulties and their demonstration recordings.
-Research version **0.4.1** uses game package **1.2.1** (simulation version **1.0.0**).
+Research version **0.5.0** uses game package **1.2.1** (simulation version **1.0.0**).
 The new pure-RL profiles add tactical observations, grouped plant/tile decisions,
 and introductory lessons. They are experimental: see [paper adaptation and pilot
 evidence](docs/paper-adaptation.md). The baseline remains the default configuration.
@@ -81,14 +81,14 @@ needs FFmpeg. Missing video dependencies do not block default training or demos.
 
 ## 2. Run a short smoke test
 
-This executes 128 training decisions on the restricted diagnostic task, evaluates
+This runs two completed training games on the restricted diagnostic task, evaluates
 one validation case, and saves real checkpoints. It checks integration, not skill.
 
 ```powershell
 .\.venv\Scripts\python.exe -m pvz_rl train `
   --condition masked --family diagnostic --seed 101 `
-  --steps 128 --n-envs 1 --rollout-size 64 --batch-size 32 `
-  --eval-interval 64 --validation-count 1 `
+  --games 2 --n-envs 1 --rollout-size 64 --batch-size 32 `
+  --eval-games 1 --validation-count 1 `
   --output runs\smoke
 ```
 
@@ -107,7 +107,7 @@ To try the new experimental method, start **one shared model** with:
 ```powershell
 .\.venv\Scripts\python.exe -m pvz_rl train `
   --config configs\pure-rl.toml --condition masked --seed 101 `
-  --device cuda --output runs\pure-rl-101
+  --device cuda --games 10000 --eval-games 250 --output runs\pure-rl-101
 ```
 
 This is a fresh model, not a continuation of an old flat-action checkpoint.
@@ -134,7 +134,7 @@ The new recipe comparison is:
 
 This spends at most five minutes of the budget on placement/saving learning
 diagnostics, then compares four profiles with learner seeds 101 and 102. Each run
-has at most 262,144 decisions and validates every 32,768 on the first five
+targets at most 200 completed games and validates every 20 games on the first five
 validation seeds per difficulty. Configuration order reverses for seed 102.
 Remaining time is divided among remaining jobs; collection stops between complete
 PPO updates when its slot expires. An in-progress probe/validation and checkpoint/
@@ -150,9 +150,9 @@ for learning. To generate a pilot checkpoint's demos afterward, use a copy of it
 configuration with `visualization.demos = true` and `visualize --config ... --run ...`.
 
 The teaching stages are placement → saving/economy → easy → easy/standard → shared
-20/40/40 easy/standard/hard training. Probes run every 16,384 collected decisions,
+20/40/40 easy/standard/hard training. Probes run every 20 completed training games, after optimization,
 using 20 fixed validation cases. Advancement requires two consecutive passes and
-at least 16,384 decisions in the stage. Thresholds and rehearsal distributions are
+at least 20 completed training games in the stage. Thresholds and rehearsal distributions are
 in the configuration. New stages affect only episode resets and retain the same
 policy and optimizer. `curriculum.json` and `curriculum-probes.jsonl` record progress;
 checkpoints embed the same state for resume. Budget exhaustion before the shared
@@ -172,11 +172,14 @@ zombies in the episode, guarded by `max(1, N)` for empty scenarios.
 
 | Event | Reward |
 |---|---:|
-| Win / loss | +1 / −1 |
+| Win / loss | +1 / −2 |
 | Plant kills a zombie | +1/N |
 | Mower kills a zombie | −2/N |
 | Plant damages a zombie without that hit killing it | +actual HP removed / (full starting zombie HP × N) |
 | Mower activates and kills nothing on that tick in its lane | −1/5 |
+| Mower activates, regardless of kill count | Additional −current sun / 300 |
+| Zombie bites a wall-nut | +0.2 × actual bite damage / full wall-nut HP |
+| Cherry bomb or potato mine explodes with no zombie damage | −0.2 per empty explosion |
 
 Armor-only damage earns zero. The lethal hit earns only the kill reward;
 earlier nonlethal hits still earn damage rewards, even if a mower later finishes
@@ -184,7 +187,15 @@ the zombie. Starting HP means the base health from the active game rules, not
 remaining health or armor. For example, a nonlethal 20-HP hit on a basic zombie
 in a 10-zombie game earns `20/(200*10) = 0.01`; a mower kill costs `0.2`.
 The pinned engine immediately kills its triggering zombie when a mower activates,
-so the empty-activation penalty normally remains zero.
+so the empty-activation penalty normally remains zero. The sun-based penalty applies
+once at activation, using sun after spending and income up to that event. At 300
+sun it adds −1; at 600 sun it adds −2, separately from −2/N per mower kill.
+
+A normal 100-HP bite on a 4,000-HP wall-nut earns +0.005; a fully eaten nut
+earns +0.2 in bite rewards before other terms. Only actual HP loss counts.
+Explosion misses are matched by source plant and tick. HP or armor damage
+avoids the penalty; an untriggered mine, digging, or being eaten does not count
+as an empty explosion. These weights are configurable research choices.
 
 Shaped conditions additionally receive `gamma * Phi(next) - Phi(current)`, with:
 
@@ -200,11 +211,17 @@ The difference of potentials still uses `gamma = 0.999`. Genuine wins/losses set
 
 ```toml
 [reward]
+win_reward = 1.0
+loss_penalty = 2.0
 plant_kill_weight = 1.0
 mower_kill_weight = 2.0
 normalize_kills = true
 damage_weight = 1.0
 empty_mower_activation_penalty = 0.2
+mower_sun_weight = 1.0
+mower_sun_scale = 300.0
+wall_nut_damage_weight = 0.2
+empty_explosion_penalty = 0.2
 gamma = 0.999
 potential_mode = "plant_value"
 defeated_weight = 0.5
@@ -237,8 +254,8 @@ Start with a pilot on the real game:
 
 ```powershell
 .\.venv\Scripts\python.exe -m pvz_rl train `
-  --condition masked --seed 101 --steps 100000 `
-  --n-envs 4 --device cuda --eval-interval 25000 --validation-count 5 `
+  --condition masked --seed 101 --games 100 `
+  --n-envs 4 --device cuda --eval-games 25 --validation-count 5 `
   --output runs\pilot-masked-101
 ```
 
@@ -249,7 +266,8 @@ Then train the full direct-placement condition with the default protocol:
   --condition masked --seed 101 --output runs\masked-101
 ```
 
-Defaults: 3 million decisions, eight environments, CUDA policy training, separate
+Defaults: 10,000 completed training games, validation every 250 games, eight
+environments, CUDA policy training, separate
 256–256 policy/value networks, learning rate `3e-4`, discount `0.999`, GAE `0.98`,
 4,096 decisions per rollout, minibatches of 256, four optimization epochs,
 clipping `0.2`, and entropy coefficient `0.01`.
@@ -260,11 +278,36 @@ Small VRAM usage is expected for this MLP: memory usage is not GPU utilization.
 Runtime optimizations are enabled by default; no larger network, batch, rollout,
 worker count, changed precision, or new learning strategy is needed to use them.
 
-Each decision applies one action and advances 10 ticks (0.5 simulated seconds).
-`--steps` counts **aggregate policy decisions across all workers**, not ticks,
-episodes, or decisions per worker. Complete PPO rollouts round the 3,000,000 target
-up to **3,002,368 actual decisions**; both counts are recorded. Validation happens
-after completed PPO updates when its interval is reached, and after the final update.
+The agent can make **multiple legal actions at the same simulation tick**.
+A successful planting or digging action updates the board and mask immediately,
+without advancing time. Wait advances one tick (0.05 seconds); rejected requests
+also advance one tick. Sun, occupancy, and card cooldown rules still apply. There
+is no extra action cap per tick, and no ten-tick delay.
+
+`--games` counts **completed training games across all workers**, including wins,
+losses, and external time-limit endings. Validation, curriculum probes, and demos
+do not count. PPO still uses 4,096 decisions per rollout; it finishes optimization
+before checking the game target. Actual games can exceed the target in that last
+rollout; `extra_games_in_final_rollout` records the excess. Validation intervals
+are checked after updates, with one evaluation if several thresholds were crossed.
+Fixed-curriculum counts are broadcast after each batch of completed episodes and
+affect subsequent resets; an already auto-reset or active episode keeps its task.
+
+```toml
+[training]
+budget_unit = "games"
+total_games = 10000
+eval_interval_games = 250
+```
+
+Decision/tick counts and throughput remain diagnostics. The discount is still
+`gamma = 0.999` **per policy decision**, including zero-time actions. At all-wait
+play its half-life is about 34.6 simulated seconds; extra same-tick actions shorten
+that simulated horizon. PPO settings have not been retuned. This timing/reward/
+budget protocol needs a fresh run and is not comparable to the earlier protocol.
+Old saved configs retain their original timing and decision budget. `--steps` and
+`--eval-interval` exist only for explicit legacy runs; use `--games` and
+`--eval-games` for new training.
 
 | `--condition` | Actions | Reward | Difficulty sampling |
 |---|---|---|---|
@@ -274,7 +317,7 @@ after completed PPO updates when its interval is reached, and after the final up
 | `mixed` | 406 actions, legal-action mask | Potential-shaped | 20% easy / 40% standard / 40% hard throughout |
 | `hybrid` | Five masked strategies with scripted placement | Potential-shaped | Curriculum |
 
-The curriculum spends the first 10% of decisions on easy, the next 30% on an equal
+The curriculum spends the first 10% of completed games on easy, the next 30% on an equal
 easy/standard mixture, and the remaining 60% on the 20/40/40 mixture. Stage changes
 affect the next episode reset. One policy learns across all three difficulties.
 All eight plants remain available under the normal game rules.
@@ -291,8 +334,8 @@ and video export progress. Completed episodes are stored as research data rather
 than printed individually. Example progress format (illustrative values):
 
 ```text
-2026-09-20T12:00:15+00:00 [collecting] 8,192/100,352 decisions (8.2%); 550 decisions/s; elapsed 00:00:15; training ETA 00:02:47; last 18 games win 22.2%, reward 0.145; best validation pending
-2026-09-20T12:01:00+00:00 [validating] Validation at 28,672 decisions
+2026-09-20T12:00:15+00:00 [collecting] 18/100 games (18.0%); 1.20 games/min; 550 decisions/s; elapsed 00:15:00; 530 simulation ticks/s; training ETA 01:08:20; last 18 games win 22.2%, reward 0.145; best validation pending
+2026-09-20T12:01:00+00:00 [validating] Validation at 25 games
 2026-09-20T12:01:12+00:00 [validating] Saved shared best.zip at 20.0%
 ```
 
@@ -313,12 +356,12 @@ The main artifacts in a run are:
 | Artifact | Meaning |
 |---|---|
 | `metadata.json`, `config.json` | Resolved settings, seeds, dependency versions, Git state, engine and rules hashes |
-| `status.json` | Lifecycle state, collected decisions, elapsed time, validation result |
+| `status.json` | Lifecycle state, completed/target games, decisions, elapsed time, validation result |
 | `train.log` | Timestamped operational progress and significant events |
 | `training-metrics.jsonl` | Rolling training statistics, throughput, and metrics after each PPO update |
 | `training-episodes.jsonl` | Outcomes, plant usage, mowers, invalid actions, and episode lengths |
-| `learning-curve.jsonl` | Validation win rates against training decisions and wall time |
-| `validation/<steps>/` | Full validation episode records and summaries |
+| `learning-curve.jsonl` | Validation win rates against completed games and wall time; decisions retained |
+| `validation/<steps>/` | Full validation records including game count; folders retain decision IDs for uniqueness |
 | `best.zip`, `best.json` | Best validation macro win rate, with earlier checkpoints winning ties |
 | `latest.zip` | Most recent validation checkpoint |
 | `final.zip` | Policy after the final optimization update |
@@ -341,7 +384,7 @@ Start-Process runs\masked-101\visualizations\index.html
 
 The report refreshes after validation and at completion; reload the browser to see
 updates. It works offline and includes validation win rates overall/per difficulty
-against decisions and wall time, rolling training statistics, PPO losses/entropy/KL,
+against completed games and wall time, rolling training statistics, PPO losses/entropy/KL,
 and throughput. TensorBoard remains available for detailed inspection.
 
 After training, one load of the selected `best.zip` plays easy, standard, and hard
@@ -419,8 +462,9 @@ condition, diagnostic setting, and validation count as the original run:
 ```
 
 If the process was killed before saving `interrupted.zip`, use `latest.zip`.
-Repeat any original pilot overrides when resuming a pilot. `--steps` remains the
-original total budget; it is not an additional-step count. The earlier best checkpoint
+Repeat any original overrides when resuming. `--games` remains the original
+total game target, not an additional count. Completed-game and curriculum counters
+are restored; unfinished games do not count. The earlier best checkpoint
 is retained when applicable. Resume restores the policy and optimizer but starts
 fresh game episodes; it is not a bit-for-bit continuation of rollout/RNG state.
 Device settings must also match: when resuming a compatible run created with the
@@ -587,6 +631,13 @@ the engine `status` and the presentation `outcome`. Natural wins/losses always t
 precedence. Caller-supplied metadata is outside simulation hashes, so the research
 manifest also hashes the complete recording file.
 
+Per-tick recordings use the explicit research replay version `pvz-rl/actions-v1`
+inside `.pvzdemo`. Open them with **`pvz-rl replay`**, which supplies the research
+playback adapter to the native viewer. The standalone game loader cannot read
+zero-time operations. Native-format older demos remain readable. Seeking to a
+tick displays all recorded instantaneous operations at that tick; MP4 still emits
+one frame per simulation tick at 20 fps, plus the configured final hold.
+
 The native viewer supports timeline dragging, Space to pause, period for one tick,
 Left/Right for five-second seeks, Home/End, R to restart, and I to inspect entities.
 `--speed` requires `--watch` and accepts 0.5, 1, 2, 4, or 8. Viewing and optional
@@ -606,8 +657,8 @@ availability checks, or the short smoke example:
 ```
 
 The suite runs five conditions × five learner seeds (`101–105`), with the same
-budget per condition. Nominal total: 75 million decisions; rollout-rounded total:
-75,059,200. It then evaluates the selected checkpoints and all four baselines on
+game budget per condition. Nominal total: 250,000 completed training games, plus
+any games completed during each final rollout. It then evaluates the selected checkpoints and all four baselines on
 the final and OOD splits, captures predetermined replays, and generates a report.
 All training finishes before final evaluation begins.
 

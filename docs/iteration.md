@@ -1,5 +1,53 @@
 # Iteration history
 
+
+## 0.5.0 — 2026-09-20
+
+### Previous issues and causes
+
+- One action per ten ticks prevented multiple placements at the same tick. The
+  native API/replay format requires positive tick advances.
+- Mower use ignored stored sun, wall-nuts had no absorption credit, and empty
+  explosions had no explicit penalty. The requested terminal defeat cost is −2.
+- Counting decisions to schedule training made progress depend on action timing.
+  Leafy requested completed games as the training budget and scheduling unit.
+
+### Improvements
+
+- Isolate immediate Place/Dig execution in a pinned research subclass; Wait and
+  invalid requests advance one tick. Requery observations/masks after every action.
+  Keep native combat, costs, cooldowns, 406 indices, shared policy and optimizer.
+- Add explicitly versioned compact action-phase recordings with verification,
+  native seekable presentation, and one-frame-per-tick MP4 export.
+- Add event-time `−sun/300` per activation, `+0.2*wall-nut bite/full HP`, empty-blast
+  −0.2, and configurable terminal loss −2. Preserve earlier damage/kill/potential
+  terms and expose all components in logs, records and curves.
+- Make completed training games drive stopping, fixed/mastery curricula,
+  validation, ETA and curve axes. Defaults are 10,000 games, 250-game validation,
+  20-game mastery probes/minimum residency. Count wins/losses/timeouts across all
+  workers; exclude evaluation/probe/demo games. Finish final PPO optimization and
+  report excess games. Persist counts with checkpoints and restore them on resume.
+- Change new pilots to game budgets and exact matched-game comparisons. Preserve
+  old configuration semantics and reject resume into changed research protocols.
+- Update README, current architecture and reward specification. Document optional
+  upstream action/replay APIs in `engine-notes.md`; do not edit the game checkout.
+
+### Verification and remaining issues
+
+Complete research suite: **283 passed in 248.80 s**. Complete upstream suite:
+**199 passed in 10.75 s**. Details and inspected artifacts are in `validation.md`. Tests
+include independent successful/failing/boundary controls, complete regression
+suites, CPU/CUDA, Windows workers, game-count/mastery/resume logic, verified
+compact demos and optional video. No additional pilot or formal training is run.
+
+Per-decision gamma remains 0.999, so changing simulated action spacing changes its
+real-time horizon. New rewards and game budgets have no demonstrated learning
+advantage yet. A final rollout can exceed the requested game count; interval
+checks run after optimization. Broadcast counts affect subsequent episode resets,
+not games already active/auto-reset. Exact matched-game pilot budgets can be
+missing. Zero-time support depends on pinned private engine/playback hooks until
+upstream offers a public action-phase API. No remote is configured for a PR.
+
 ## 0.4.1 — 2026-09-20
 
 ### Previous issues and root causes

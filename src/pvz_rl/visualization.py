@@ -12,6 +12,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
+from .budget import curve_axis
 from .config import output_settings
 from .evaluation import evaluate
 from .progress import Phase, ProgressReporter
@@ -82,13 +83,14 @@ def build_run_report(run, cfg=None):
     output = run / "visualizations"
     output.mkdir(parents=True, exist_ok=True)
     segments = run_segments(run)
+    progress_key, progress_label = curve_axis(cfg)
     images = []
     fig, axes = plt.subplots(1, 2, figsize=(12, 4))
     colors = {"macro": "#233d37", "easy": "#399471", "standard": "#d69536", "hard": "#b54e59"}
     for ax, xkey, xlabel in zip(
         axes,
-        ("training_steps", "wall_seconds"),
-        ("Training decisions", "Wall time within each run segment (hours)"),
+        (progress_key, "wall_seconds"),
+        (progress_label, "Wall time within each run segment (hours)"),
     ):
         plotted = False
         for label, series in segments:
@@ -108,7 +110,7 @@ def build_run_report(run, cfg=None):
                             None,
                         )
                     )
-                    if value is not None:
+                    if value is not None and row.get(xkey) is not None:
                         points.append((row[xkey] / (3600 if xkey == "wall_seconds" else 1), value))
                 if points:
                     x, y = zip(*points)
@@ -143,21 +145,31 @@ def build_run_report(run, cfg=None):
         ("rolling_mower_kills", "Mower kills / training episode"),
         ("rolling_damage_reward", "Nonlethal damage reward / training episode"),
         ("rolling_empty_mower_activations", "Empty mower activations / training episode"),
+        ("rolling_mower_sun_penalty", "Sun-weighted mower penalty / training episode"),
+        ("rolling_wall_nut_reward", "Wall-nut absorption reward / training episode"),
+        ("rolling_empty_explosions", "Empty explosions / training episode"),
+        ("rolling_empty_explosion_penalty", "Empty explosion penalty / training episode"),
+        ("simulation_ticks_per_second", "Simulation ticks / training second"),
+        ("instant_action_fraction", "Fraction of decisions without advancing time"),
     ]
-    fig, axes = plt.subplots(5, 2, figsize=(12, 15))
+    fig, axes = plt.subplots(8, 2, figsize=(12, 24))
     for ax, (key, title) in zip(axes.flat, panels):
         plotted = False
         for label, series in segments:
-            rows = [r for r in series["training-metrics"] if r.get(key) is not None]
+            rows = [
+                r
+                for r in series["training-metrics"]
+                if r.get(key) is not None and r.get(progress_key) is not None
+            ]
             if rows:
                 ax.plot(
-                    [r["training_steps"] for r in rows],
+                    [r[progress_key] for r in rows],
                     [r[key] for r in rows],
                     marker=".",
                     label=label,
                 )
                 plotted = True
-        ax.set(title=title, xlabel="Training decisions")
+        ax.set(title=title, xlabel=progress_label)
         ax.grid(alpha=0.2)
         if plotted:
             ax.legend(fontsize=7)
@@ -188,16 +200,17 @@ def build_run_report(run, cfg=None):
                 r
                 for r in series["training-metrics"]
                 if r.get("optimization", {}).get(key) is not None
+                and r.get(progress_key) is not None
             ]
             if rows:
                 ax.plot(
-                    [r["training_steps"] for r in rows],
+                    [r[progress_key] for r in rows],
                     [r["optimization"][key] for r in rows],
                     marker=".",
                     label=label,
                 )
                 plotted = True
-        ax.set(title=title, xlabel="Decisions at completed PPO update")
+        ax.set(title=title, xlabel=progress_label + " at completed PPO update")
         ax.grid(alpha=0.2)
         if plotted:
             ax.legend(fontsize=7)
@@ -226,15 +239,15 @@ def build_run_report(run, cfg=None):
             plotted = False
             for label, series in segments:
                 points = [
-                    (r["training_steps"], r.get(key, r.get("optimization", {}).get(key)))
+                    (r.get(progress_key), r.get(key, r.get("optimization", {}).get(key)))
                     for r in series["training-metrics"]
                 ]
-                points = [(x, y) for x, y in points if y is not None]
+                points = [(x, y) for x, y in points if x is not None and y is not None]
                 if points:
                     x, y = zip(*points)
                     ax.plot(x, y, label=label)
                     plotted = True
-            ax.set(title=title, xlabel="Training decisions")
+            ax.set(title=title, xlabel=progress_label)
             if plotted:
                 ax.legend(fontsize=7)
             else:

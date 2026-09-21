@@ -13,6 +13,8 @@ from pathlib import Path
 
 from pvz_game.config import PLANT_TYPES, ZOMBIE_TYPES
 
+from .budget import uses_games
+
 
 def digest(value: object) -> str:
     return hashlib.sha256(
@@ -92,10 +94,18 @@ def validate_config(cfg: dict) -> None:
         "mower_kill_weight",
         "damage_weight",
         "empty_mower_activation_penalty",
+        "win_reward",
+        "loss_penalty",
+        "mower_sun_weight",
+        "wall_nut_damage_weight",
+        "empty_explosion_penalty",
     ):
         value = cfg["reward"].get(key, 0.0)
         if type(value) not in (int, float) or not math.isfinite(value) or value < 0:
             raise ValueError(f"reward.{key} must be finite and nonnegative")
+    scale = cfg["reward"].get("mower_sun_scale", 300.0)
+    if type(scale) not in (int, float) or not math.isfinite(scale) or scale <= 0:
+        raise ValueError("reward.mower_sun_scale must be finite and positive")
     if type(cfg["reward"].get("normalize_kills", True)) is not bool:
         raise ValueError("reward.normalize_kills must be a boolean")
     potential_mode = cfg["reward"].get("potential_mode", "legacy")
@@ -134,7 +144,12 @@ def validate_config(cfg: dict) -> None:
     if c.get("mode") == "teaching":
         from .curriculum import STAGES
 
-        for key in ("probe_interval", "probe_cases", "consecutive_passes", "minimum_stage_steps"):
+        schedule = (
+            ("probe_interval_games", "minimum_stage_games")
+            if uses_games(cfg)
+            else ("probe_interval", "minimum_stage_steps")
+        )
+        for key in (*schedule, "probe_cases", "consecutive_passes"):
             if type(c[key]) is not int or c[key] < 1:
                 raise ValueError(f"curriculum.{key} must be a positive integer")
         if c["probe_cases"] > cfg["splits"]["validation"][1] - cfg["splits"]["validation"][0] + 1:
@@ -183,6 +198,12 @@ def validate_config(cfg: dict) -> None:
     if not math.isfinite(visual["final_hold_seconds"]) or visual["final_hold_seconds"] < 0:
         raise ValueError("Visualization final_hold_seconds must be finite and nonnegative")
     env, train = cfg["environment"], cfg["training"]
+    if train.get("budget_unit", "decisions") not in ("games", "decisions"):
+        raise ValueError("training.budget_unit must be games or decisions")
+    if env.get("action_timing", "fixed") not in ("fixed", "per_tick"):
+        raise ValueError("Unsupported environment.action_timing")
+    if env.get("action_timing") == "per_tick" and env["decision_ticks"] != 1:
+        raise ValueError("per_tick action timing requires decision_ticks = 1")
     if cfg["schema_version"] != 1 or (env["rows"], env["cols"], env["bins"]) != (5, 9, 20):
         raise ValueError("Unsupported research schema/board")
     if tuple(env["plants"]) != PLANT_TYPES or tuple(env["zombies"]) != ZOMBIE_TYPES:
@@ -191,12 +212,12 @@ def validate_config(cfg: dict) -> None:
         if type(env[key]) is not int or env[key] <= 0:
             raise ValueError(f"{key} must be a positive integer")
     for key in (
-        "total_steps",
+        "total_games" if uses_games(cfg) else "total_steps",
         "n_envs",
         "rollout_size",
         "batch_size",
         "n_epochs",
-        "eval_interval",
+        "eval_interval_games" if uses_games(cfg) else "eval_interval",
         "torch_threads",
     ):
         if type(train[key]) is not int or train[key] <= 0:

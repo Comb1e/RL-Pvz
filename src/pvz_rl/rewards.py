@@ -13,6 +13,13 @@ REWARD_METRICS = (
     "mower_kill_penalty",
     "damage_reward",
     "mower_activation_penalty",
+    "mower_activations",
+    "mower_activation_sun",
+    "wall_nut_damage",
+    "empty_explosions",
+    "mower_sun_penalty",
+    "wall_nut_reward",
+    "empty_explosion_penalty",
 )
 
 
@@ -109,13 +116,60 @@ def combat_metrics(before: Observation, events, rules: Rules | None = None) -> d
         **counts,
         "nonlethal_health_damage": health_damage,
         "nonlethal_damage_fraction": damage_fraction,
+        **defense_metrics(before, events, rules),
+    }
+
+
+def defense_metrics(before: Observation, events, rules: Rules) -> dict:
+    """Attribute defense events using only public state and ordered public events.
+
+    Reconstruct spend/income in order so activation uses its actual sun even in
+    legacy multi-tick batches. Explosion damage must share source AND tick; armor
+    damage counts as a hit. Merely arming, digging, or losing a mine is no miss.
+    """
+    plants = {p.id: p.plant_type for p in before.plants}
+    costs = {c.plant_type: c.cost for c in before.cards}
+    sun = before.sun
+    activations = activation_sun = nut_damage = empty_explosions = 0
+    damaging_sources = set()
+    for event in events:
+        if event.kind == "PlantPlaced":
+            kind = event.get("plant_type")
+            plants[event.entity_id] = kind
+            sun -= costs[kind]
+        elif event.kind == "PlantRemoved":
+            plants.pop(event.entity_id, None)
+        elif event.kind == "SunProduced":
+            sun += event.get("amount", 0)  # Actual income after the engine sun cap.
+        elif event.kind == "MowerActivated":
+            activations += 1
+            activation_sun += sun
+        elif event.kind == "PlantDamaged" and plants.get(event.entity_id) == "wall_nut":
+            nut_damage += event.get("damage", 0)  # Engine caps bites at remaining HP.
+        elif event.kind == "DamageApplied":
+            if event.get("health_damage", 0) + event.get("armor_damage", 0) > 0:
+                damaging_sources.add((event.tick, event.get("source")))
+        elif event.kind == "PlantExploded":
+            empty_explosions += (event.tick, event.entity_id) not in damaging_sources
+    return {
+        "mower_activations": activations,
+        "mower_activation_sun": activation_sun,
+        "wall_nut_damage": nut_damage,
+        "wall_nut_damage_fraction": nut_damage / rules.plants["wall_nut"]["health"],
+        "empty_explosions": empty_explosions,
     }
 
 
 def reward_parts(
     before: Observation, after: Observation, cfg: dict, shaped: bool, *, events=(), rules=None
 ) -> dict:
-    terminal = 1.0 if after.status == Status.WON else -1.0 if after.status == Status.LOST else 0.0
+    terminal = (
+        cfg["reward"].get("win_reward", 1.0)
+        if after.status == Status.WON
+        else -cfg["reward"].get("loss_penalty", 1.0)
+        if after.status == Status.LOST
+        else 0.0
+    )
     shaping = (
         cfg["reward"]["gamma"] * potential(after, cfg) - potential(before, cfg) if shaped else 0.0
     )
@@ -135,6 +189,15 @@ def reward_parts(
     activation_penalty = (
         -settings.get("empty_mower_activation_penalty", 0.0) * combat["empty_mower_activations"]
     )
+    mower_sun_penalty = (
+        -settings.get("mower_sun_weight", 0.0)
+        * combat["mower_activation_sun"]
+        / settings.get("mower_sun_scale", 300.0)
+    )
+    wall_nut_reward = (
+        settings.get("wall_nut_damage_weight", 0.0) * combat["wall_nut_damage_fraction"]
+    )
+    explosion_penalty = -settings.get("empty_explosion_penalty", 0.0) * combat["empty_explosions"]
     return {
         "terminal": terminal,
         "shaping": shaping,
@@ -143,10 +206,16 @@ def reward_parts(
         "mower_kill_penalty": mower_penalty,
         "damage_reward": damage_reward,
         "mower_activation_penalty": activation_penalty,
+        "mower_sun_penalty": mower_sun_penalty,
+        "wall_nut_reward": wall_nut_reward,
+        "empty_explosion_penalty": explosion_penalty,
         "total": terminal
         + shaping
         + plant_reward
         + mower_penalty
         + damage_reward
-        + activation_penalty,
+        + activation_penalty
+        + mower_sun_penalty
+        + wall_nut_reward
+        + explosion_penalty,
     }

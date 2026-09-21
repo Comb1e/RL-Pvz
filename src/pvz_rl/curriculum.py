@@ -2,6 +2,8 @@
 
 from dataclasses import asdict, dataclass
 
+from .budget import uses_games
+
 STAGES = ("placement", "saving", "easy", "standard", "shared")
 LESSONS = ("placement", "saving")
 
@@ -16,6 +18,8 @@ class CurriculumState:
     entered_steps: int = 0
     last_probe: int = 0
     consecutive_passes: int = 0
+    entered_games: int = 0
+    last_probe_games: int = 0
 
     @property
     def name(self):
@@ -25,19 +29,24 @@ class CurriculumState:
         return asdict(self)
 
     def due(self, steps, cfg):
-        return (
-            self.stage < len(STAGES) - 1
-            and steps - self.last_probe >= cfg["curriculum"]["probe_interval"]
-        )
+        last = self.last_probe_games if uses_games(cfg) else self.last_probe
+        key = "probe_interval_games" if uses_games(cfg) else "probe_interval"
+        return self.stage < len(STAGES) - 1 and steps - last >= cfg["curriculum"][key]
 
     def requirements(self, cfg):
         return cfg["curriculum"]["stages"][self.name]["requirements"]
 
     def observe(self, wins, steps, cfg):
-        if steps < self.last_probe:
+        games = uses_games(cfg)
+        last = self.last_probe_games if games else self.last_probe
+        entered = self.entered_games if games else self.entered_steps
+        if steps < last:
             raise ValueError("Curriculum progress cannot move backwards")
         c = cfg["curriculum"]
-        self.last_probe = steps
+        if games:
+            self.last_probe_games = steps
+        else:
+            self.last_probe = steps
         requirements = self.requirements(cfg)
         passed = bool(requirements) and all(
             wins.get(task, 0) >= n for task, n in requirements.items()
@@ -46,10 +55,13 @@ class CurriculumState:
         if (
             self.stage < len(STAGES) - 1
             and self.consecutive_passes >= c["consecutive_passes"]
-            and steps - self.entered_steps >= c["minimum_stage_steps"]
+            and steps - entered >= c["minimum_stage_games" if games else "minimum_stage_steps"]
         ):
             self.stage += 1
-            self.entered_steps = steps
+            if games:
+                self.entered_games = steps
+            else:
+                self.entered_steps = steps
             self.consecutive_passes = 0
             return True
         return False

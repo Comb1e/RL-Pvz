@@ -117,12 +117,17 @@ def make_report(paths, output, cfg, learning_paths=()):
                 (str(Path(path).parent.parent.name + "/" + Path(path).parent.name), curve)
             )
     if curves:
+        units = {r.get("budget_unit", "decisions") for _, curve in curves for r in curve}
+        if len(units) != 1:
+            raise ValueError("Cannot combine learning curves with game and decision budgets")
+        unit = units.pop()
+        key = "training_games" if unit == "games" else "training_steps"
         fig, axes = plt.subplots(1, 2, figsize=(12, 4))
         for label, curve in curves:
             y = [r["macro_win_rate"] for r in curve]
-            axes[0].plot([r["training_steps"] for r in curve], y, label=label)
+            axes[0].plot([r[key] for r in curve], y, label=label)
             axes[1].plot([r["wall_seconds"] / 3600 for r in curve], y, label=label)
-        for ax, xlabel in zip(axes, ("Training decisions", "Wall time (hours)")):
+        for ax, xlabel in zip(axes, (f"Training {unit}", "Wall time (hours)")):
             ax.set(xlabel=xlabel, ylabel="Validation macro win rate", ylim=(-0.02, 1.02))
             ax.legend(fontsize=7)
         fig.tight_layout()

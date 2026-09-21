@@ -40,8 +40,10 @@ flowchart LR
 |---|---|
 | Configuration and provenance | Constants, seed splits, source verification, hashes, versions |
 | Actions and encoding | Stable public schemas, no private state or future schedule |
-| Environment | One game per worker, one action per 10 ticks, explicit episode lifecycle |
-| Rewards | Plant-plus-sun potential, terminal handling, shared public-event damage/kill accounting |
+| Environment | One game per worker; immediate legal actions, one tick on wait/rejection; explicit lifecycle |
+| Action timing | Pinned research subclass suppresses only the advance hook for immediate actions |
+| Budget | Completed training games drive stopping, validation and curriculum; legacy decision mode is explicit |
+| Rewards | Terminal, plant-plus-sun potential, public-event kills/damage, sun-weighted mower activation, wall-nut absorption, empty explosions |
 | Controllers | Frozen original heuristic, shared public-state facade, strategy proposals |
 | Training | PPO updates, curriculum progress, validation-only checkpoint selection |
 | Grouped policy | Masked action type and conditional tile; joint PPO probability and entropy |
@@ -53,7 +55,7 @@ flowchart LR
 | Statistics/reporting | Run/scenario bootstrap, paired comparisons, figures and report |
 | Progress | Shared phase names and throttled console/file events; no per-episode printing |
 | Visualization | Offline run report, optional metrics, resume segments, checkpoint-identified demos |
-| Recording compatibility | Native metadata, legacy sidecar fallback, natural outcome precedence |
+| Recording compatibility | Versioned zero-time operations, shared playback adapter, native metadata, legacy sidecars, natural outcome precedence |
 | Rendering/video | Thin native-renderer adapter, verified playback, optional MP4 encoding |
 | Suite | Restart journal for attempts, fixed settings, training before final testing |
 
@@ -67,10 +69,28 @@ IDs and scenario labels are not inputs. The encoding is intentionally partially 
 
 Actions are wait 0, 360 plant/tile combinations, and 45 digs. The hybrid has five
 strategy choices, each proposing at most one placement. Invalid direct actions
-follow the engine contract; unavailable hybrid strategies wait and are logged as
+advance one tick; unavailable hybrid strategies wait and are logged as
 rejected choices. Normal masks use only current legality. Placement/saving lessons
 add explicit permitted-plant restrictions; prohibited requests wait, consume time,
 and are recorded as rejected. Lessons still allow legal digs on the full board.
+
+Each successful Place/Dig is an immediate action phase operation; it applies
+native validation, sun spending, cooldown start and occupancy without advancing
+combat. Wait or a rejected request advances one native tick (20 ticks/second).
+New observations/masks are returned after every operation. No extra action cap is
+imposed. Positive card recharge and a finite board bound zero-time sequences.
+`ActionPhaseGame` isolates the pinned private `_advance` hook; game sources and
+installed files remain unchanged. Old configurations use native fixed-tick steps.
+
+```mermaid
+flowchart LR
+    Decide[Policy chooses action] --> Legal{Legal Place or Dig?}
+    Legal -->|yes| Apply[Apply action without a tick]
+    Legal -->|no: wait or rejected| Tick[Advance one combat tick]
+    Apply --> Observe[Public state, mask and reward]
+    Tick --> Observe
+    Observe --> Decide
+```
 
 ```mermaid
 flowchart LR
@@ -108,13 +128,17 @@ retain the terminal observation for PPO bootstrapping before resetting that work
 True terminal potential is zero; truncated potential is preserved.
 
 Public `DamageApplied`, `ZombieSpawned`, `ZombieDefeated`, and `MowerActivated`
-events pass through one combat-accounting interface. A transient ID join identifies
+events, plus `PlantPlaced`, `SunProduced`, `PlantDamaged`, and `PlantExploded`,
+pass through one combat-accounting interface. A transient ID join identifies
 the killing hit; IDs never enter policy observations. Plant kills earn +1/N,
 mower kills −2/N, and earlier nonlethal plant hits earn removed base HP divided
 by the type's full starting HP and N. Armor damage and the lethal hit earn no
 damage reward. Type comes from the prior public observation or public spawn
 event; maximum health comes from active rules. Empty activations cost 0.2,
-matched by mower lane and engine tick even within multi-tick decisions.
+matched by mower lane and engine tick even within multi-tick decisions. Every
+activation additionally costs current sun/300, reconstructed from ordered income
+and spending. Wall-nut bite damage earns 0.2 times its fraction of full HP. A blast
+with no same-source, same-tick HP or armor damage costs 0.2. Terminal defeat is −2.
 
 ```mermaid
 flowchart LR
@@ -127,6 +151,8 @@ flowchart LR
     Kills --> Reward[Separate reward parts]
     Hits --> Reward
     Empty --> Reward
+    Events --> Defense[Sun at activation, wall-nut bites, empty blasts]
+    Defense --> Reward
     Potential --> Reward
     Reward --> Metrics[Episode records, progress, curves]
 ```
@@ -233,10 +259,16 @@ stateDiagram-v2
     Shared --> Shared: 20/40/40 normal games
 ```
 
-Teaching gates run every 16,384 decisions and require minimum stage residency.
+Teaching gates run after updates every 20 completed training games and require
+at least 20 games in the stage. The fixed curriculum uses fractions of the total
+game target. Validation defaults to every 250 games; default training target is
+10,000 games across all workers. Wins, losses, and timeouts count; evaluation and
+probe games do not. Completion checks follow PPO optimization, so extra games in
+the last rollout are recorded explicitly.
 Failures reset the consecutive-pass counter. Distribution changes are sent to all
 workers for their next resets; active games finish under their original task.
-Checkpoint attributes persist stage, entry step, last probe, and pass counters.
+Checkpoint attributes persist global completed games, stage, entry game, last
+probe game, and pass counters.
 Resume restores this state before workers reset. Lesson probes live in separate
 files and never choose `best.zip`. Budget exhaustion leaves the actual stage intact.
 Baseline profiles retain the fixed progress schedule instead of mastery gates.
@@ -246,7 +278,9 @@ in alternating order. A deadline check at an update boundary prevents partial PP
 updates from becoming comparison checkpoints. Completed evaluations have separate
 learning-profile and game-protocol hashes. Cross-profile reports require the same
 engine, game rules, timing, and reward objective; they retain distinct method names.
-Only a budget completed by all profiles and both seeds enters the pilot comparison.
+Only an identical actual completed-game budget across all profiles and both seeds
+enters the new pilot comparison. Extra rollout games may leave no matched budget;
+that is reported as inconclusive. Legacy decision curves keep their original unit.
 
 ```mermaid
 stateDiagram-v2
@@ -268,12 +302,13 @@ and export. Routine messages default to every 15 seconds; important events print
 immediately. Collection/update phase changes update status without printing every
 rollout. Aggregates cover the last 100 completed training games. PPO statistics are
 read after updates, at the next rollout start and at training end, including the
-last optimized policy. Training ETA excludes validation and report time; export
+last optimized policy. Training ETA uses completed games per second and excludes validation and report time; export
 time is recorded separately. TensorBoard remains controlled by SB3.
 Collection/update timing uses rollout boundaries and captures the final update;
 validation and report gaps are excluded. Completed phase totals and latest phase
 durations enter the aggregate metrics and progress log. The benchmark warms up
-one full rollout and reports setup/warmup separately. Optional paired measurement
+one full rollout and reports setup/warmup separately. This microbenchmark still
+counts decisions to compare transport costs; it does not schedule research training. Optional paired measurement
 alternates reference/configured order and compares final policy hashes.
 
 ## Result artifacts
@@ -346,3 +381,36 @@ directory. Formal test cases do not enter learning or checkpoint selection.
 Replays contain privileged snapshots for verification, but policy code only receives
 encoded public observations and masks. Human-readable reports consume evaluation
 records, never reward curves as a substitute for win rates.
+
+## Replay action phases and progress accounting
+
+`.pvzdemo` uses the research version `pvz-rl/actions-v1` for zero-time actions.
+The shared loader verifies native snapshots/hashes and applies instantaneous
+operations before displaying each tick. The playback subclass reuses native
+seeking/caches, draining actions before caching the resulting tick. Native files
+remain supported through the same loader. The project command supplies playback
+to the native UI; standalone native loading rejects the new format explicitly.
+Video receives one packed RGB frame per simulated tick, never per policy action.
+
+`budget.py` defines the active progress unit. The training callback counts actual
+completed episodes and saves that count on the model before checkpoints. Workers
+receive the global count after each completion batch for subsequent resets. The
+vector wrapper may already have auto-reset a worker before that broadcast; its
+current episode keeps its original difficulty. Teaching changes likewise wait for
+future resets. PPO rollout/minibatch sizes and per-decision discount remain fixed.
+Validation/checkpoint selection use equal-weight normal-game win rate, independent
+of shaped score, elapsed ticks, and game duration.
+
+```mermaid
+flowchart LR
+    Episodes[Completed training episodes from all workers] --> Count[Global game counter]
+    Count --> Reset[Curriculum for subsequent resets]
+    Count --> Update[Finish current PPO update]
+    Update --> Check{Game target reached?}
+    Check -->|yes| Finish[Final validation and save]
+    Check -->|no| Due{Validation or probe game interval reached?}
+    Due -->|yes| Validate[Evaluate without incrementing training count]
+    Validate --> Episodes
+    Due -->|no| Episodes
+    Count --> Saved[Checkpoint, logs and game-axis curves]
+```

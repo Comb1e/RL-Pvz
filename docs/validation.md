@@ -1,4 +1,55 @@
-# Availability and verification — 0.4.1
+# Availability and verification — 0.5.0
+
+
+## Per-tick actions, defense rewards and completed-game schedules — 2026-09-20
+
+Pinned game package **1.2.1**, simulation **1.0.0**, commit
+`6fd1f54706369915013a49eab5c1790f8c55ab0a`. The game checkout remains clean;
+installed source hash `8d948f608d9b8a3c6e789eef35f2580bb850519d7b197524160cc3918d50db45`
+and rules hash `a7486688fa43a9b50193f82715fa519bd27cfebc7ed054bebe4f7990f9c268de`
+pass verification. All upstream bytecode/cache/temp output stays outside the checkout.
+
+| Check | Result |
+|---|---|
+| Complete research regression | **283 passed in 248.80 s**; one existing SB3 small-MLP GPU utilization warning |
+| Complete upstream regression | **199 passed in 10.75 s** |
+| Same-tick actions | Multiple card placements/digs at one tick, no artificial cap (45 digs), exact costs/cooldowns, invalid/restricted requests advance, reset and win/loss/cutoff boundaries |
+| Independent timing controls | Action plus wait matches native full state hash; all-lane placement controls win at tick 875 and saving at 2074; waiting loses at 1000/2199. Legacy placement remains tick 883 under its original cadence. |
+| Rewards | 29 new arithmetic/engine defense checks, plus preserved kill/damage/economy controls: sun/spend/income order, multiple kills per activation, partial/full/custom-health wall-nut bites, armor-only and source/tick explosions, two-bomb contention, untriggered mines and reset |
+| Reward algebra | Configurable loss −2, legacy loss −1; immediate-action shaping telescopes; plant/dig cycles lose value; natural terminals zero potential, truncations preserve it |
+| Completed-game schedules | All five conditions; count timeouts, exclude validation, finish optimization at game target and record excess; global count across Windows workers/CUDA; checkpoint reload and interrupted resume; fixed/mastery gates ignore decisions and keep optimizer identity |
+| Replays/presentation | Compact/plain equivalence, embedded hashes, corrupt recordings, trailing/empty action phases, mid-game cache-boundary seeking, completion/rewind, unchanged render hashes, optional MP4 decodes with one frame per tick |
+| Shared policy | All three automatic demos reference one selected checkpoint; default compact export does not call FFmpeg; old configs/reports/replays remain supported and changed-protocol resume is rejected |
+| Tooling | Ruff, formatting and pip checks passed; editable installation and wheel/sdist build **0.5.0** passed; no remote configured |
+
+Evidence: `artifacts/v050-release-research-tests.txt`,
+`artifacts/v050-final-engine-tests.txt`, `artifacts/v050-games-tests.txt`,
+`artifacts/v050-game-mastery.txt`, `artifacts/v050-doctor.json`, and
+`artifacts/v050-build.txt`. The doctor verifies instant placement, compact seeking,
+all five Gym interfaces, CUDA, 1000×600 Gym RGB output and FFmpeg 8.1/libx264.
+The existing infinite observation-bound advisories and SB3 small-MLP GPU utilization
+warning remain; numerical and API checks pass.
+
+The inspected game-count smoke run is
+`artifacts/pytest-v050-final/test_global_games_across_windo0/game-smoke`.
+Two CUDA workers target two games with a deliberately one-second cutoff and one
+128-decision rollout. They complete **four games**, record **two extra games**,
+and perform exactly one optimization update. All demos are correctly labeled
+truncated and reference shared checkpoint SHA-256
+`4ae4a9744bbf5d544d8521b2108e983e2201a892a3dbaf8665e44782163585a4`.
+The new game-axis/defense plots were inspected in
+`artifacts/v050-games-curves-preview.png` and `artifacts/v050-defense-curves-preview.png`.
+They have one point and zero combat events because of the short cutoff, not a
+learning-performance curve. The full offline report retains all optimizer panels.
+
+The inspected final native frame is `artifacts/v050-demo-final.png`, 1280×820,
+with visible truncated outcome. Rendering preserves simulation SHA-256
+`aafa91cc7825efc9adeb1d84ffebd3c554dc03a97ca2641090699b39e3fc61a4`.
+Tests also decode explicit H.264 exports and verify natural winning/losing frames.
+No new timed pilot, held-out study, or formal training suite was launched.
+
+The former version records below are historical evidence under their original
+reward, timing and budget protocols; do not pool their results with this release.
 
 ## Damage, mower and economic-value rewards — 2026-09-20
 

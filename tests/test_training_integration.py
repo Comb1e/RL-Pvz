@@ -5,10 +5,10 @@ import sys
 import numpy as np
 import pytest
 import torch
-from pvz_game.replay import verify_replay
 
 from pvz_rl.env import PvZEnv
 from pvz_rl.provenance import file_hash, verify_engine
+from pvz_rl.recordings import verify_replay
 from pvz_rl.training import load_policy, train
 
 
@@ -33,7 +33,17 @@ def test_real_training_serialization_and_replay(smoke_cfg, tmp_path, condition):
         json.loads(line) for line in (output / "training-episodes.jsonl").read_text().splitlines()
     ]
     assert episodes and all(
-        "damage_reward" in row and "mower_activation_penalty" in row for row in episodes
+        all(
+            key in row
+            for key in (
+                "damage_reward",
+                "mower_activation_penalty",
+                "mower_sun_penalty",
+                "wall_nut_reward",
+                "empty_explosion_penalty",
+            )
+        )
+        for row in episodes
     )
     updates = [
         json.loads(line) for line in (output / "training-metrics.jsonl").read_text().splitlines()
@@ -42,6 +52,7 @@ def test_real_training_serialization_and_replay(smoke_cfg, tmp_path, condition):
         "rolling_damage_reward" in row and "rolling_empty_mower_activations" in row
         for row in updates
     )
+    assert all(row["simulation_ticks"] > 0 and "rolling_wall_nut_reward" in row for row in updates)
     model.save(output / "roundtrip.zip")
     reloaded, _ = load_policy(output / "roundtrip.zip")
     env = PvZEnv(smoke_cfg, condition=condition, record=True)
@@ -108,6 +119,27 @@ def test_legacy_rewards_reload_but_cannot_resume_into_new_objective(smoke_cfg, t
     run = train(legacy, "masked", 101, tmp_path / "legacy", validation_limit=1)
     _, data = load_policy(run / "final.zip")
     assert data["config"]["reward"] == legacy["reward"]
+    with pytest.raises(ValueError, match="start a fresh run"):
+        train(
+            smoke_cfg,
+            "masked",
+            101,
+            tmp_path / "changed",
+            resume=run / "final.zip",
+            validation_limit=1,
+        )
+
+
+@pytest.mark.learning
+def test_legacy_timing_reload_cannot_resume_into_per_tick(smoke_cfg, tmp_path):
+    import copy
+
+    legacy = copy.deepcopy(smoke_cfg)
+    legacy["environment"].pop("action_timing")
+    legacy["environment"]["decision_ticks"] = 10
+    run = train(legacy, "masked", 101, tmp_path / "fixed", validation_limit=1)
+    _, data = load_policy(run / "final.zip")
+    assert "action_timing" not in data["config"]["environment"]
     with pytest.raises(ValueError, match="start a fresh run"):
         train(
             smoke_cfg,

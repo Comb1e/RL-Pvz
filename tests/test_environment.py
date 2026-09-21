@@ -109,7 +109,7 @@ def test_house_breach_is_loss_not_truncation(cfg):
         if terminated:
             break
     assert terminated and not truncated and env.state == EpisodeState.LOST
-    assert info["reward_parts"]["terminal"] == -1
+    assert info["reward_parts"]["terminal"] == -2
     assert reward < 0 and info["episode_metrics"]["win"] == 0
 
 

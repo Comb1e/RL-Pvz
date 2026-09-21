@@ -11,11 +11,14 @@ import numpy as np
 from pvz_game import Dig, Game, LevelSpec, Place, Rules, Status, Wait, WaveSpec
 from pvz_game.replay import Recorder
 
+from .action_timing import ActionPhaseGame, per_tick_actions
 from .actions import ActionCodec
+from .budget import budget_target, uses_games
 from .config import lesson_settings, load_config, runtime_settings, validate_config
 from .controllers import PublicBoard, strategy_candidates
 from .curriculum import LESSONS, stage_distribution, teaching_enabled
 from .encoding import ObservationEncoder
+from .recordings import ActionPhaseRecorder
 from .rewards import REWARD_METRICS, reward_parts
 from .scenarios import difficulty_weights, scenario
 
@@ -56,7 +59,12 @@ class PvZEnv(gym.Env):
         if render_mode not in (None, "rgb_array"):
             raise ValueError("Only rgb_array rendering is supported")
         self.rules = rules or Rules()
-        self.game = Game(self.rules)
+        self.per_tick = per_tick_actions(self.cfg)
+        self.game = ActionPhaseGame(self.rules) if self.per_tick else Game(self.rules)
+        self.metadata = {
+            **self.metadata,
+            "render_fps": 20 if self.per_tick else 20 / self.cfg["environment"]["decision_ticks"],
+        }
         self.codec = ActionCodec(self.cfg)
         self.encoder = ObservationEncoder(self.cfg, self.rules)
         self.observation_space = self.encoder.space
@@ -92,7 +100,7 @@ class PvZEnv(gym.Env):
             weights = difficulty_weights(
                 self.cfg,
                 self.progress,
-                self.cfg["training"]["total_steps"],
+                budget_target(self.cfg),
                 self.options["curriculum"],
             )
             level = str(self.selection_rng.choice(self.cfg["evaluation"]["levels"], p=weights))
@@ -117,7 +125,7 @@ class PvZEnv(gym.Env):
         self._legal = self._candidates = None
         self._legal_key = self._direct_mask = None
         self.recorder = (
-            Recorder(
+            (ActionPhaseRecorder if self.per_tick else Recorder)(
                 self.game,
                 metadata={
                     **self.replay_metadata,
@@ -127,6 +135,7 @@ class PvZEnv(gym.Env):
                         "level": level,
                         "family": family,
                         "scenario_seed": game_seed,
+                        "action_timing": "per_tick" if self.per_tick else "fixed",
                     },
                 },
             )
@@ -134,6 +143,7 @@ class PvZEnv(gym.Env):
             else None
         )
         self.metrics = Counter()
+        self.actions_this_tick = 0
         self.plant_usage = Counter()
         self.plant_spending = Counter()
         self.maximum_sun = self.public.sun
@@ -230,7 +240,14 @@ class PvZEnv(gym.Env):
             and len(before.plants)
             < self.cfg["environment"]["rows"] * self.cfg["environment"]["cols"]
         )
-        ticks = min(self.cfg["environment"]["decision_ticks"], self.cutoff_ticks - before.tick)
+        if self.per_tick:
+            # Accepted operations are immediate; Wait or rejection ends this tick's
+            # action phase. Revalidation observes sun/cooldown/board changes.
+            ticks = int(
+                isinstance(concrete, Wait) or not self.game.validate_action(concrete).accepted
+            )
+        else:
+            ticks = min(self.cfg["environment"]["decision_ticks"], self.cutoff_ticks - before.tick)
         result = (self.recorder or self.game).step(concrete, ticks=ticks)
         self.public = result.observation
         self.maximum_sun = max(self.maximum_sun, before.sun, self.public.sun)
@@ -258,7 +275,16 @@ class PvZEnv(gym.Env):
             self.metrics[key] += parts[key]
         self.episode_reward += parts["total"]
         self.metrics["decisions"] += 1
-        if self.training:
+        self.metrics["simulation_ticks"] += result.ticks_advanced
+        self.metrics["instant_actions"] += int(result.ticks_advanced == 0)
+        if result.action_result.accepted and not isinstance(concrete, Wait):
+            self.actions_this_tick += 1
+            self.metrics["max_actions_per_tick"] = max(
+                self.metrics["max_actions_per_tick"], self.actions_this_tick
+            )
+        if result.ticks_advanced:
+            self.actions_this_tick = 0
+        if self.training and not uses_games(self.cfg):
             # Every vector worker advances once per collection step. Updating here
             # makes the new stage visible before VecEnv's automatic episode reset.
             self.progress += self.cfg["training"]["n_envs"]
@@ -308,6 +334,10 @@ class PvZEnv(gym.Env):
             "simulated_seconds": obs.elapsed_seconds,
             "return": self.episode_reward,
             "decisions": self.metrics["decisions"],
+            "simulation_ticks": self.metrics["simulation_ticks"],
+            "instant_actions": self.metrics["instant_actions"],
+            "max_actions_per_tick": self.metrics["max_actions_per_tick"],
+            "action_timing": "per_tick" if self.per_tick else "fixed",
             "attacker_purchases": self.metrics["attacker_purchases"],
             **{key: self.metrics[key] for key in REWARD_METRICS},
             "first_attacker_seconds": None
