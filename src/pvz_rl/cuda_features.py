@@ -10,7 +10,7 @@ from .encoding import ObservationEncoder
 from .rewards import REWARD_METRICS
 
 REWARD_FIELDS = ("terminal", "shaping", *REWARD_METRICS, "total")
-METRIC_SIZE = 35
+METRIC_SIZE = 81  # 35 original totals + early digs + 45 planting timestamps
 
 
 class CudaFeatures:
@@ -31,6 +31,7 @@ class CudaFeatures:
             "DAMAGE_SCALE": encoder.damage_scale,
             "COST_SCALE": encoder.cost_scale,
             "CUTOFF_SECONDS": cfg["environment"]["cutoff_seconds"],
+            "EARLY_DIG_TICKS": cfg.get("diagnostics", {}).get("early_dig_seconds", 5) * 20,
             "WAVE_SCALE": cfg["encoding"]["wave_scale"],
             "COUNT_SCALE": encoder.count_scale,
             "FIREPOWER_SCALE": cfg["encoding"].get("firepower_scale", 1),

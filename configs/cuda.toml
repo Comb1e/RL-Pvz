@@ -64,7 +64,7 @@ economy_scale = 300
 [training]
 budget_unit = "games"
 total_games = 10000
-eval_interval_games = 250
+eval_interval_games = 1000
 total_steps = 3000000 # Inactive unless budget_unit = "decisions" (legacy).
 learner_seeds = [101, 102, 103, 104, 105]
 n_envs = 128
@@ -131,3 +131,6 @@ masked = true
 shaped = true
 curriculum = true
 hybrid = true
+
+[diagnostics]
+early_dig_seconds = 5

@@ -1,0 +1,57 @@
+{
+  "scope": "Two five-minute development diagnostics, no A-F comparison; placement lessons are not normal-game evidence.",
+  "results": [
+    {
+      "training_games": 768,
+      "steps": 851968,
+      "wall_seconds": 300.02780689999963,
+      "stop_reason": "time_budget",
+      "curriculum_stage": "placement",
+      "curriculum_incomplete": true,
+      "validation_pending": true,
+      "learner_seed": 101,
+      "placement_probes": 6,
+      "placement_probe_wins": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "training_wins": 0,
+      "mean_attacker_purchases": 3,
+      "mean_early_voluntary_digs": 3,
+      "mean_plant_kills": 0.0,
+      "normal_validation_episodes_completed": 128,
+      "research_source_hash": "d0768a0646f06e0be8d4842e69b51cd17802e61d42d846e04dfcb3a73aa3ed4d"
+    },
+    {
+      "training_games": 768,
+      "steps": 835584,
+      "wall_seconds": 300.0261098000001,
+      "stop_reason": "time_budget",
+      "curriculum_stage": "placement",
+      "curriculum_incomplete": true,
+      "validation_pending": true,
+      "learner_seed": 102,
+      "placement_probes": 6,
+      "placement_probe_wins": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "training_wins": 0,
+      "mean_attacker_purchases": 3,
+      "mean_early_voluntary_digs": 2.9088541666666665,
+      "mean_plant_kills": 0.0026041666666666665,
+      "normal_validation_episodes_completed": 128,
+      "research_source_hash": "d0768a0646f06e0be8d4842e69b51cd17802e61d42d846e04dfcb3a73aa3ed4d"
+    }
+  ],
+  "diagnostics_passed": false,
+  "recommendation": "experimental; retain baseline default"
+}

@@ -14,6 +14,7 @@ import matplotlib.pyplot as plt
 
 from .budget import curve_axis
 from .config import output_settings
+from .deadline import BudgetExpired, check_deadline
 from .evaluation import evaluate
 from .progress import Phase, ProgressReporter
 from .provenance import current_engine_config, file_hash, write_json
@@ -151,8 +152,12 @@ def build_run_report(run, cfg=None):
         ("rolling_empty_explosion_penalty", "Empty explosion penalty / training episode"),
         ("simulation_ticks_per_second", "Simulation ticks / training second"),
         ("instant_action_fraction", "Fraction of decisions without advancing time"),
+        ("rolling_early_voluntary_digs", "Voluntary digs within five seconds / game"),
+        ("rolling_attacker_purchases", "Sustained attackers purchased / game"),
+        ("rolling_maximum_sun", "Maximum sun / game"),
+        ("rolling_first_attacker_seconds", "First sustained attacker (seconds; purchasing games)"),
     ]
-    fig, axes = plt.subplots(8, 2, figsize=(12, 24))
+    fig, axes = plt.subplots((len(panels) + 1) // 2, 2, figsize=(12, 3 * ((len(panels) + 1) // 2)))
     for ax, (key, title) in zip(axes.flat, panels):
         plotted = False
         for label, series in segments:
@@ -191,8 +196,10 @@ def build_run_report(run, cfg=None):
         ("approx_kl", "Approximate KL"),
         ("clip_fraction", "Clipped fraction"),
         ("explained_variance", "Explained variance"),
+        ("joint_entropy", "True joint action entropy"),
+        ("exploration_bonus", "Exploration bonus in optimizer objective"),
     ]
-    fig, axes = plt.subplots(3, 2, figsize=(12, 9))
+    fig, axes = plt.subplots(4, 2, figsize=(12, 12))
     for ax, (key, title) in zip(axes.flat, optimizer_panels):
         plotted = False
         for label, series in segments:
@@ -245,7 +252,7 @@ def build_run_report(run, cfg=None):
                 points = [(x, y) for x, y in points if x is not None and y is not None]
                 if points:
                     x, y = zip(*points)
-                    ax.plot(x, y, label=label)
+                    ax.plot(x, y, marker="o", markersize=3, label=label)
                     plotted = True
             ax.set(title=title, xlabel=progress_label)
             if plotted:
@@ -309,6 +316,15 @@ def build_run_report(run, cfg=None):
         if meta.get("family") in ("diagnostic", "placement", "saving")
         else "One shared policy for easy, standard, and hard"
     )
+    completion = (
+        "Curriculum incomplete" if status.get("curriculum_incomplete") else "Curriculum status"
+    )
+    run_progress = (
+        f"<p>Completed games: {escape(status.get('training_games', 'not recorded'))}. "
+        f"{completion}: {escape(status.get('curriculum_stage', 'not recorded'))}. "
+        f"Stop reason: {escape(status.get('stop_reason') or 'not recorded / in progress')}. "
+        f"Game target reached: {escape(status.get('budget_complete', 'in progress'))}.</p>"
+    )
     page = f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width">
 <title>PVZ training — {escape(run.name)}</title>
@@ -319,6 +335,7 @@ height:auto;border-radius:6px}}pre{{white-space:pre-wrap;overflow-wrap:anywhere;
 .hash{{font:12px monospace;overflow-wrap:anywhere}}a{{color:#26684f}}select{{margin:12px}}
 </style></head><body><header><h1>PVZ / {escape(run.name)}</h1>
 <p>{policy_description}. Training: <b>{escape(status.get("state", "unknown"))}</b>.</p>
+{run_progress}
 <p>Checkpoint selection uses equal-weight validation win rates. These development curves and
 fixed validation demonstrations do not establish held-out performance.</p>
 <p>Training curves use up to {output_settings(cfg)["logging"]["rolling_window"]} completed episodes;
@@ -336,11 +353,12 @@ Diagnostic runs show only the diagnostic task. A short smoke run may end at its 
     return output / "index.html"
 
 
-def create_demonstrations(run, cfg, progress):
+def create_demonstrations(run, cfg, progress, deadline=None):
     from .training import load_policy
 
     run = Path(run).resolve()
     output = run / "visualizations"
+    check_deadline(deadline)
     checkpoint = run / "best.zip"
     checkpoint_hash = file_hash(checkpoint)
     best = read_json(run / "best.json", {})
@@ -403,6 +421,7 @@ def create_demonstrations(run, cfg, progress):
             training_steps=model.num_timesteps,
             progress=progress,
             checkpoint_hash=checkpoint_hash,
+            deadline=deadline,
         )
         demos = []
         for row in rows:
@@ -418,9 +437,10 @@ def create_demonstrations(run, cfg, progress):
     return demos
 
 
-def export_demonstrations(run, demos, cfg, progress):
+def export_demonstrations(run, demos, cfg, progress, deadline=None):
     output = Path(run).resolve() / "visualizations"
     for demo in demos:
+        check_deadline(deadline)
         checkpoint_hash = demo["checkpoint_hash"]
         replay = output / demo["replay"]
         replay_hash = file_hash(replay)
@@ -436,14 +456,19 @@ def export_demonstrations(run, demos, cfg, progress):
             or video_meta.get("settings") != video_settings(cfg)
         ):
             export_replay(
-                output / demo["replay"], destination, cfg, context=demo, progress=progress
+                output / demo["replay"],
+                destination,
+                cfg,
+                context=demo,
+                progress=progress,
+                deadline=deadline,
             )
         demo["video"] = destination.relative_to(output).as_posix()
         write_json(output / "demos.json", {"checkpoint_hash": checkpoint_hash, "demos": demos})
     return demos
 
 
-def visualize_run(run, *, cfg=None, videos=None, progress=None):
+def visualize_run(run, *, cfg=None, videos=None, progress=None, deadline=None):
     """Rebuild derived artifacts. Failures are recorded separately from training."""
     run = Path(run).resolve()
     cfg = cfg or read_json(run / "metadata.json")["config"]
@@ -460,6 +485,7 @@ def visualize_run(run, *, cfg=None, videos=None, progress=None):
     write_json(output / "status.json", status)
     try:
         progress.phase(Phase.EXPORTING, "Generating training report")
+        check_deadline(deadline)
         build_run_report(run, cfg)
         archived = not current_engine_config(read_json(run / "metadata.json")["config"])
         demos = []
@@ -478,12 +504,15 @@ def visualize_run(run, *, cfg=None, videos=None, progress=None):
                     "No archived demonstrations to export; old checkpoints cannot regenerate gameplay"
                 )
         elif (settings["visualization"]["demos"] or videos) and (run / "best.zip").exists():
-            demos = create_demonstrations(run, cfg, progress)
+            demos = create_demonstrations(run, cfg, progress, deadline=deadline)
         else:
             status["note"] = "Report only: no validated checkpoint or demos disabled"
         if videos and demos:
-            export_demonstrations(run, demos, cfg, progress)
+            export_demonstrations(run, demos, cfg, progress, deadline=deadline)
         status.update(state="complete", export_seconds=perf_counter() - started)
+    except BudgetExpired as exc:
+        status.update(state="pending", error=str(exc), export_seconds=perf_counter() - started)
+        progress.emit("Presentation pending; regenerate with pvz-rl visualize", force=True)
     except Exception as exc:
         status.update(state="failed", error=repr(exc), export_seconds=perf_counter() - started)
         progress.emit(f"Visualization failed: {exc}; regenerate with pvz-rl visualize", force=True)
@@ -493,7 +522,10 @@ def visualize_run(run, *, cfg=None, videos=None, progress=None):
     finally:
         write_json(output / "status.json", status)
         try:
-            build_run_report(run, cfg)
+            if deadline is None or perf_counter() < deadline:
+                build_run_report(run, cfg)
+            else:
+                pending_report(run, status)
         except Exception as exc:
             status.update(state="failed", report_error=repr(exc))
             write_json(output / "status.json", status)
@@ -501,3 +533,26 @@ def visualize_run(run, *, cfg=None, videos=None, progress=None):
         if owns_progress:
             progress.close()
     return status
+
+
+def pending_report(run, status):
+    """Update a lightweight status notice when plotting would exceed the budget."""
+    output = Path(run) / "visualizations"
+    output.mkdir(parents=True, exist_ok=True)
+    destination = output / "index.html"
+    notice = (
+        '<aside id="pending-export"><p>Presentation pending: time allowance exhausted. '
+        "Checkpoints and completed recordings are preserved.</p><pre>pvz-rl visualize --run "
+        + html.escape(str(Path(run).resolve()))
+        + "</pre></aside>"
+    )
+    if destination.exists():
+        page = destination.read_text("utf-8")
+        if 'id="pending-export"' not in page:
+            page = page.replace("</body>", notice + "</body>")
+    else:
+        page = (
+            '<!doctype html><html lang="en"><meta charset="utf-8"><title>PVZ results</title>'
+            "<body><h1>PVZ training results</h1>" + notice + "</body></html>"
+        )
+    destination.write_text(page, encoding="utf-8")

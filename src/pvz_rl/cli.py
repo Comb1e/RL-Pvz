@@ -55,6 +55,11 @@ def training_options(parser):
         "--rollout-steps-per-env", type=int, help="decisions per parallel game; CUDA default 128"
     )
     parser.add_argument("--batch-size", type=int)
+    parser.add_argument(
+        "--max-minutes",
+        type=float,
+        help="cumulative time cap per run, including validation and demos",
+    )
     parser.add_argument("--eval-interval", type=int)
     parser.add_argument(
         "--eval-games",
@@ -104,6 +109,7 @@ def configured(args):
         ("device", "device"),
         ("rollout_size", "rollout_size"),
         ("batch_size", "batch_size"),
+        ("max_minutes", "max_minutes"),
         ("eval_interval", "eval_interval"),
         ("eval_games", "eval_interval_games"),
     ):
@@ -149,6 +155,14 @@ def main(argv=None):
     )
     pilot.add_argument("--output", type=Path, required=True)
     pilot.add_argument("--minutes", type=float, default=30)
+    sc2 = subs.add_parser(
+        "compare-sc2", help="explicit A-F development comparisons; no final-test cases"
+    )
+    sc2.add_argument("--output", type=Path, required=True)
+    sc2.add_argument("--max-minutes", type=float, default=120)
+    sc2.add_argument("--games", type=int, default=10000)
+    sc2.add_argument("--diagnostics-only", action="store_true")
+    sc2.add_argument("--report-only", action="store_true")
     doctor = subs.add_parser("doctor", help="check engine, packages, Gym API, and CUDA")
     common(doctor)
     doctor.add_argument("--output", type=Path)
@@ -233,6 +247,21 @@ def main(argv=None):
     video_options(visual)
     args = parser.parse_args(argv)
 
+    if args.command == "compare-sc2":
+        from .sc2_experiments import comparison_report, run_comparison
+
+        result = (
+            comparison_report(args.output)
+            if args.report_only
+            else run_comparison(
+                args.output,
+                minutes=args.max_minutes,
+                games=args.games,
+                diagnostics_only=args.diagnostics_only,
+            )
+        )
+        print(json.dumps(result, indent=2))
+        return
     if args.command == "pilot":
         from .pilot import run_pilot
 

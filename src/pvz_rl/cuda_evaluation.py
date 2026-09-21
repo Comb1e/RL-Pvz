@@ -7,9 +7,12 @@ import torch
 
 from .cuda_diagnostics import DeviceProfiler
 from .cuda_env import CudaVecEnv
+from .deadline import check_deadline
 
 
-def batched_games(cfg, policy, condition, seeds, levels, family, *, record=False, progress=None):
+def batched_games(
+    cfg, policy, condition, seeds, levels, family, *, record=False, progress=None, deadline=None
+):
     """Yield complete numeric episode records in the original level/seed order.
 
     Recordings retain action indices in bounded device chunks, not game frames.
@@ -20,6 +23,7 @@ def batched_games(cfg, policy, condition, seeds, levels, family, *, record=False
     policy.policy.to("cuda")
     try:
         for offset in range(0, len(cases), cfg["training"]["n_envs"]):
+            check_deadline(deadline)
             chunk = cases[offset : offset + cfg["training"]["n_envs"]]
             local = copy.deepcopy(cfg)
             local["training"]["n_envs"] = len(chunk)
@@ -36,6 +40,7 @@ def batched_games(cfg, policy, condition, seeds, levels, family, *, record=False
                 obs = env.reset()
                 with env.device_context():
                     while len(completed) < len(chunk):
+                        check_deadline(deadline)
                         with torch.no_grad():
                             kwargs = {}
                             if cfg["conditions"][condition]["masked"]:

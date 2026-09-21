@@ -10,7 +10,7 @@ held-out evaluations, changed-wave scenarios, statistical analysis, progress log
 automatic offline reports, learning curves, compact game demos, and optional MP4 export.
 **Each run trains one shared policy for easy, standard, and hard.** The same
 `best.zip` is used for all three difficulties and their demonstration recordings.
-Research version **0.6.0** uses game package **1.3.0** (simulation version **1.0.0**).
+Research version **0.7.0** uses game package **1.3.0** (simulation version **1.0.0**).
 The new pure-RL profiles add tactical observations, grouped plant/tile decisions,
 and introductory lessons. They are experimental: see [paper adaptation and pilot
 evidence](docs/paper-adaptation.md). The baseline remains the default configuration.
@@ -20,6 +20,86 @@ Weights from the prior engine source pin are not migrated.
 Checkpoints from older game source pins cannot be resumed or evaluated. Archived
 reports and replay files remain readable. No formal research suite was launched.
 
+
+## SC2-inspired shared policy (experimental)
+
+The new candidate addresses exploration and plant placement using selected
+AlphaStar/SC2LE ideas. It uses tactical observations, a small spatial grouped
+policy, balanced exploration across action types, and mastery-based lessons.
+Your reward coefficients and per-tick controls remain unchanged. The baseline
+is still the default until controlled comparisons establish an improvement.
+See [the evidence and design decisions](docs/sc2-adaptation.md).
+The two five-minute diagnostics did not pass placement mastery; early digging
+persisted. The two-hour candidate is available for experiments, with no measured
+improvement over baseline yet.
+
+After any existing training job has finished, update the research package in the
+existing environment; the game dependency and environment do not need replacement:
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install --no-deps --no-build-isolation -e .
+.\.venv\Scripts\python.exe -m pvz_rl train `
+  --config configs\sc2-inspired.toml --seed 101 `
+  --games 10000 --max-minutes 120 --output runs\sc2-shared-101
+```
+
+This starts **one shared policy** on 128 GPU games with 128 decisions per game
+per PPO rollout. Normal validation uses the same 50 seeds for each difficulty,
+but runs every **1,000 completed games**; override with `--eval-games`. Mastery
+probes use 20 cases every 100 games, with two consecutive passing probes and
+100 completions from episodes started in the current stage. No scripted training
+examples or placement routines are used. Different encoders/policies require a
+fresh run; existing compatible checkpoints keep their saved settings on resume.
+
+`--max-minutes` includes startup, validation and automatic presentation and is
+cumulative across resume. At 120 minutes it reserves 15 minutes for finalization.
+For short smoke runs, the reserve is at most one eighth of the allowance. Training
+stops at a completed PPO update using an estimate of the next rollout/update time.
+The status records `stop_reason`, `budget_complete`, `curriculum_incomplete`,
+`time_budget`, and any pending validation or presentation. In-flight saves and
+kernel operations finish safely; this is a cooperative deadline, not a process kill.
+`--max-minutes` on `suite` applies separately to each training run.
+
+Progress remains every 15 seconds. The report at `RUN_DIR/visualizations/index.html`
+includes validation, behavior, optimizer and exploration curves. Metrics include
+sustained-attacker purchases, first-attacker time, maximum sun, reward components,
+and voluntary digging within five seconds of planting. The exploration bonus is
+shown separately from true joint entropy. `best.zip` is selected by mean win rate
+across all three difficulties, with the earlier checkpoint retained on ties.
+
+All three `.pvzdemo` recordings use that same `best.zip` and seed 100000. Failed or
+unfinished exports preserve checkpoints and existing recordings:
+
+```powershell
+.\.venv\Scripts\python.exe -m pvz_rl visualize --run runs\sc2-shared-101
+# MP4 is optional and requires FFmpeg:
+.\.venv\Scripts\python.exe -m pvz_rl visualize --run runs\sc2-shared-101 --videos
+```
+
+The separate `configs/sc2-long-horizon.toml` changes gamma from 0.999 to 0.9999.
+Do not resume the other profile's weights into it. It remains an ablation, with
+all combat/terminal coefficients unchanged. In balanced profiles, exploration is
+controlled by `training.exploration.type_coef` and `.tile_coef`; `ent_coef` retains
+its original meaning for joint-entropy profiles.
+
+Optional development comparisons run only when explicitly invoked:
+
+```powershell
+# Two learning-diagnostic runs, at most five minutes each:
+.\.venv\Scripts\python.exe -m pvz_rl compare-sc2 --diagnostics-only --output runs\sc2-diagnostics
+# Diagnostics followed by A-F, seeds 101 and 102; limit is PER RUN:
+.\.venv\Scripts\python.exe -m pvz_rl compare-sc2 --max-minutes 120 --games 10000 --output runs\sc2-comparison
+# Rebuild the comparison without training:
+.\.venv\Scripts\python.exe -m pvz_rl compare-sc2 --report-only --output runs\sc2-comparison
+```
+
+The complete comparison can take up to roughly 24 hours plus its diagnostics.
+It compares A: flat baseline, B: existing grouped policy, C: balanced exploration,
+D: mastery curriculum, E: spatial policy, and F: longer horizon. It reverses order
+for the second seed and writes `report.md`, `comparison.json`, comparison curves,
+and individual run reports. Missing comparisons and rollout overshoot are explicit.
+Only development validation seeds are used. No full comparison or formal research
+training is launched by installation or availability checks.
 
 ## CUDA simulation and training
 
@@ -47,14 +127,14 @@ PyTorch is already installed in a separate environment, install that lock there
 after installing the newly pinned game and research packages. The `doctor`
 checks compilation, shared-stream tensor writes, state-hash parity and free VRAM.
 
-The measured default is **128 GPU games × 128 decisions per game per rollout**,
+The measured 0.6.0 baseline default is **128 GPU games × 128 decisions per game per rollout**,
 about **10,733 decisions/s versus 2,835 with the prior CPU simulator** on this
-laptop. Start a fresh shared-policy run (training starts only when you execute this):
+laptop. This speed measurement does not establish the new spatial policy's throughput. Start a fresh shared-policy run (training starts only when you execute this):
 
 ```powershell
 .\.venv\Scripts\python.exe -m pvz_rl train `
   --condition masked --seed 101 `
-  --games 10000 --eval-games 250 --output runs\cuda-shared-101
+  --games 10000 --eval-games 1000 --output runs\cuda-shared-101
 ```
 
 `--n-envs` means parallel GPU games, not Windows worker processes. The rollout
@@ -145,7 +225,7 @@ For an existing research virtual environment, upgrade only the game and research
 
 ```powershell
 $gameStage = Join-Path 'build' ('game-' + [guid]::NewGuid().ToString('N'))
-.\.venv\Scripts\python.exe -B tools\stage_game.py --repo E:\Projects\pvz --output $gameStage
+.\.venv\Scripts\python.exe -B tools\stage_game.py --repo E:\Projects\pvz-cuda-work --output $gameStage
 .\.venv\Scripts\python.exe -m pip install --no-deps --force-reinstall $gameStage
 .\.venv\Scripts\python.exe -m pip install --no-deps -e ".[dev,ui]"
 .\.venv\Scripts\python.exe -m pvz_rl doctor
@@ -196,7 +276,7 @@ To try the new experimental method, start **one shared model** with:
 ```powershell
 .\.venv\Scripts\python.exe -m pvz_rl train `
   --config configs\pure-rl.toml --condition masked --seed 101 `
-  --device cuda --games 10000 --eval-games 250 --output runs\pure-rl-101
+  --device cuda --games 10000 --eval-games 1000 --output runs\pure-rl-101
 ```
 
 This is a fresh model, not a continuation of an old flat-action checkpoint.
@@ -355,7 +435,7 @@ Then train the full direct-placement condition with the default protocol:
   --condition masked --seed 101 --output runs\masked-101
 ```
 
-Defaults: 10,000 completed training games, validation every 250 games, eight
+Defaults: 10,000 completed training games, validation every 1,000 games, eight
 environments, CUDA policy training, separate
 256–256 policy/value networks, learning rate `3e-4`, discount `0.999`, GAE `0.98`,
 4,096 decisions per rollout, minibatches of 256, four optimization epochs,
@@ -375,7 +455,8 @@ is no extra action cap per tick, and no ten-tick delay.
 
 `--games` counts **completed training games across all workers**, including wins,
 losses, and external time-limit endings. Validation, curriculum probes, and demos
-do not count. PPO still uses 4,096 decisions per rollout; it finishes optimization
+do not count. PPO uses `n_envs × rollout_steps_per_env` decisions per rollout
+(16,384 for the CUDA default); it finishes optimization
 before checking the game target. Actual games can exceed the target in that last
 rollout; `extra_games_in_final_rollout` records the excess. Validation intervals
 are checked after updates, with one evaluation if several thresholds were crossed.
@@ -386,7 +467,7 @@ affect subsequent resets; an already auto-reset or active episode keeps its task
 [training]
 budget_unit = "games"
 total_games = 10000
-eval_interval_games = 250
+eval_interval_games = 1000
 ```
 
 Decision/tick counts and throughput remain diagnostics. The discount is still

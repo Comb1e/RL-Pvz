@@ -262,7 +262,11 @@ def test_curriculum_probe_uses_same_policy_optimizer_and_persists_resume(
         from pvz_rl.evaluation import evaluate
 
         if kwargs.get("split") == "curriculum_validation":
-            return [{"win": 1} for _ in range(20)]
+            return [
+                {"win": 1, "family": kwargs["family"], "level": level, "scenario_seed": seed}
+                for level in kwargs["levels"]
+                for seed in kwargs["seeds"]
+            ]
         return evaluate(cfg, **kwargs)
 
     monkeypatch.setattr("pvz_rl.training.evaluate", fake_evaluate)

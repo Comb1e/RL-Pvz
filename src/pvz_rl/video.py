@@ -10,6 +10,7 @@ from time import perf_counter
 from pvz_game.replay import operation_text
 
 from .config import output_settings
+from .deadline import check_deadline
 from .progress import Phase, ProgressReporter
 from .provenance import file_hash, write_json
 from .recordings import open_playback
@@ -51,7 +52,7 @@ def ffmpeg_info(cfg):
     return {"path": executable, "version": version, "encoder": "libx264"}
 
 
-def export_replay(source, destination, cfg, *, context=None, progress=None):
+def export_replay(source, destination, cfg, *, context=None, progress=None, deadline=None):
     source, destination = Path(source), Path(destination)
     if destination.suffix.lower() != ".mp4":
         raise ValueError("Video destination must have an .mp4 extension")
@@ -113,6 +114,7 @@ def export_replay(source, destination, cfg, *, context=None, progress=None):
             )
 
             def write_frame():
+                check_deadline(deadline)
                 nonlocal frames
                 observation = playback.game.observe()
                 experiment = details.get("experiment", {})

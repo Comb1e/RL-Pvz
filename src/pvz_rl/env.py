@@ -121,6 +121,8 @@ class PvZEnv(gym.Env):
             raise TypeError("Scenario must be a preset, LevelSpec or WaveSpec")
         self.public = self.game.reset(resolved, game_seed)
         self.episode_level, self.episode_family, self.episode_seed = level, family, game_seed
+        self.episode_stage = self.curriculum_stage
+        self.planted_ticks = {}
         self.state = EpisodeState.RUNNING
         self._legal = self._candidates = None
         self._legal_key = self._direct_mask = None
@@ -293,6 +295,7 @@ class PvZEnv(gym.Env):
         )
         self.metrics["wait_actions"] += int(isinstance(concrete, Wait))
         if isinstance(concrete, Place) and result.action_result.accepted:
+            self.planted_ticks[concrete.row, concrete.col] = before.tick
             self.plant_usage[concrete.plant_type] += 1
             self.plant_spending[concrete.plant_type] += self.rules.plants[concrete.plant_type][
                 "cost"
@@ -301,6 +304,13 @@ class PvZEnv(gym.Env):
                 self.metrics["attacker_purchases"] += 1
                 if self.first_attacker_tick is None:
                     self.first_attacker_tick = before.tick
+        if isinstance(concrete, Dig) and result.action_result.accepted:
+            planted_at = self.planted_ticks.pop((concrete.row, concrete.col), None)
+            self.metrics["early_voluntary_digs"] += int(
+                planted_at is not None
+                and before.tick - planted_at
+                <= self.cfg.get("diagnostics", {}).get("early_dig_seconds", 5) * before.tick_rate
+            )
         for event in result.events:
             self.metrics[event.kind] += 1
         info = {
@@ -327,6 +337,8 @@ class PvZEnv(gym.Env):
         return {
             "level": self.episode_level,
             "family": self.episode_family,
+            "episode_start_stage": self.episode_stage,
+            "early_voluntary_digs": self.metrics["early_voluntary_digs"],
             "scenario_seed": self.episode_seed,
             "status": self.state.value,
             "win": int(self.state == EpisodeState.WON),

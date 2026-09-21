@@ -1,5 +1,28 @@
 # Iteration history
 
+## 0.7.0 — 2026-09-21
+
+- Previous problems: current flat-policy training still rarely bought sustained
+  attackers; earlier grouped diagnostics dug up new plants. Validation consumed
+  substantial wall time, and runs had no public cumulative time allowance.
+- Causes investigated: joint entropy favors action groups with more legal tiles;
+  dense flattening discards useful placement structure; fixed curriculum progress
+  can advance before competence. These are tested hypotheses, not a proved single
+  cause of poor learning.
+- Improvements: separate type/tile exploration objective; tactical spatial policy;
+  stage-residency counts tied to episode starts; 100-game mastery probes; 1,000-game
+  full validation with result reuse; cumulative deadlines, safe finalization and
+  pending artifacts. A-F development comparisons retain one policy per run and
+  provide paired uncertainty without requiring identical rollout overshoot.
+- Verification: independent analytic controls, CPU/CUDA integration, reference
+  gameplay, checkpoint/replay recovery and complete regression results are recorded
+  in `validation.md`. The active job and its environment were isolated from edits.
+- Remaining issues: the full comparison is user initiated and has not been run.
+  Both five-minute E diagnostics remained at placement (0/20 on every probe);
+  early digging persisted, and final validation was pending at the deadline.
+  E/F remain experimental. The two-hour deadline is cooperative at operation
+  boundaries. No human-level behavior or held-out win-rate improvement is claimed.
+
 ## 0.6.0 — 2026-09-21
 
 ### Previous issues and causes

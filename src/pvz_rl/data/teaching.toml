@@ -1,6 +1,6 @@
 mode = "teaching"
-probe_interval_games = 20
-minimum_stage_games = 20
+probe_interval_games = 100
+minimum_stage_games = 100
 probe_interval = 16384
 probe_cases = 20
 consecutive_passes = 2

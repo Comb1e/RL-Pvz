@@ -30,6 +30,7 @@ class GroupedDistribution(MaskableDistribution):
             )
         )
         tile_mask = mask[:, 1:].reshape(-1, self.groups - 1, self.tiles)
+        self.legal_tile_counts = tile_mask.sum(-1)
         available = tile_mask.any(-1)
         group_mask = torch.cat((mask[:, :1], available), dim=1)
         if not group_mask.any(-1).all():

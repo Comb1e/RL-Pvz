@@ -64,7 +64,7 @@ economy_scale = 300
 [training]
 budget_unit = "games"
 total_games = 10000
-eval_interval_games = 250
+eval_interval_games = 1000
 total_steps = 3000000 # Inactive unless budget_unit = "decisions" (legacy).
 learner_seeds = [101, 102, 103, 104, 105]
 n_envs = 8
@@ -82,8 +82,8 @@ torch_threads = 1
 
 [curriculum]
 mode = "teaching"
-probe_interval_games = 20
-minimum_stage_games = 20
+probe_interval_games = 100
+minimum_stage_games = 100
 probe_interval = 16384
 probe_cases = 20
 consecutive_passes = 2
@@ -176,3 +176,6 @@ requirements = {easy = 16, standard = 12}
 tasks = ["easy", "standard", "hard"]
 weights = [0.2, 0.4, 0.4]
 requirements = {}
+
+[diagnostics]
+early_dig_seconds = 5

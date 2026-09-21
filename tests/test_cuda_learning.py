@@ -66,14 +66,15 @@ def test_observations_rewards_and_metrics_against_cpu(gpu_cfg, profile, conditio
 
 
 @pytest.mark.parametrize("device", ["cpu", "cuda"])
-def test_gae_and_shuffle_match_sb3(device):
+@pytest.mark.parametrize("gamma", [0.999, 0.9999])
+def test_gae_and_shuffle_match_sb3(device, gamma):
     if device == "cuda" and not torch.cuda.is_available():
         pytest.skip("CUDA unavailable")
     obs = spaces.Box(-1, 1, (5,), dtype=np.float32)
     action = spaces.Discrete(4)
-    reference = RolloutBuffer(8, obs, action, n_envs=3, gamma=0.999, gae_lambda=0.98, device=device)
+    reference = RolloutBuffer(8, obs, action, n_envs=3, gamma=gamma, gae_lambda=0.98, device=device)
     tensor = TensorRolloutBuffer(
-        8, obs, action, n_envs=3, gamma=0.999, gae_lambda=0.98, device=device, masked=False
+        8, obs, action, n_envs=3, gamma=gamma, gae_lambda=0.98, device=device, masked=False
     )
     rng = np.random.default_rng(15)
     for _ in range(8):

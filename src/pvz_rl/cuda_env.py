@@ -83,6 +83,7 @@ class CudaVecEnv(VecEnv):
         self.phases = dict(simulation_features=0.0, scenario_preparation=0.0, transfers=0.0)
         self.cases = cases
         self._episode = [None] * cfg["training"]["n_envs"]
+        self._episode_stages = [0] * cfg["training"]["n_envs"]
         # All shipped scenario families preserve roster size. Lessons use smaller
         # rosters. Custom batches derive their capacity from the supplied cases.
         game = Game()
@@ -125,6 +126,7 @@ class CudaVecEnv(VecEnv):
         allowed, digging = [], []
         for index, level, family, seed, _ in staged:
             self._episode[index] = (level, family, seed)
+            self._episode_stages[index] = self.queue.stage
             types = PLANT_TYPES
             if family == "diagnostic":
                 types = ("peashooter",)
@@ -202,6 +204,8 @@ class CudaVecEnv(VecEnv):
         return dict(
             level=level,
             family=family,
+            episode_start_stage=self._episode_stages[index],
+            early_voluntary_digs=int(t[35]),
             scenario_seed=seed,
             status=status,
             win=int(status == "won"),

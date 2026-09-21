@@ -28,8 +28,10 @@ from .config import (
     validate_config,
 )
 from .curriculum import LESSONS, CurriculumState, stage_distribution, teaching_enabled
+from .deadline import BudgetExpired, RunBudget
 from .env import PvZEnv
 from .evaluation import evaluate, summarize
+from .exploration import configure_exploration
 from .grouped_policy import GroupedPolicy
 from .progress import Phase, ProgressReporter, duration
 from .provenance import append_jsonl, file_hash, metadata, verify_engine, write_json
@@ -41,6 +43,7 @@ from .runtime import (
     rollout_buffer_class,
 )
 from .scenarios import difficulty_weights
+from .spatial_policy import SpatialFeatures, SpatialGroupedPolicy
 from .timing import TrainingTimings
 
 
@@ -72,7 +75,8 @@ def vector_env(cfg, condition, learner_seed, family="preset"):
 
 def build_model(cfg, condition, env, seed, log_dir=None):
     t = cfg["training"]
-    grouped = cfg.get("policy", {}).get("kind", "flat") == "grouped_v1"
+    kind = cfg.get("policy", {}).get("kind", "flat")
+    grouped = kind in ("grouped_v1", "spatial_grouped_v2")
     if grouped and (
         not cfg["conditions"][condition]["masked"] or cfg["conditions"][condition]["hybrid"]
     ):
@@ -90,8 +94,20 @@ def build_model(cfg, condition, env, seed, log_dir=None):
         from .cuda_ppo import CudaMaskablePPO, CudaPPO
 
         algorithm = CudaMaskablePPO if cfg["conditions"][condition]["masked"] else CudaPPO
+    if simulator(cfg) == "cpu" and t.get("exploration", {}).get("objective") == "balanced_heads_v1":
+        from .cuda_ppo import ResearchMaskablePPO
+
+        algorithm = ResearchMaskablePPO
+    policy_kwargs = {"net_arch": {"pi": t["hidden_sizes"], "vf": t["hidden_sizes"]}}
+    policy = GroupedPolicy if grouped else "MlpPolicy"
+    if kind == "spatial_grouped_v2":
+        policy = SpatialGroupedPolicy
+        policy_kwargs.update(
+            features_extractor_class=SpatialFeatures,
+            features_extractor_kwargs={"layout_cfg": cfg, "channels": cfg["policy"]["channels"]},
+        )
     model = algorithm(
-        GroupedPolicy if grouped else "MlpPolicy",
+        policy,
         env,
         learning_rate=t["learning_rate"],
         n_steps=t["rollout_size"] // t["n_envs"],
@@ -101,7 +117,7 @@ def build_model(cfg, condition, env, seed, log_dir=None):
         gae_lambda=t["gae_lambda"],
         clip_range=t["clip_range"],
         ent_coef=t["ent_coef"],
-        policy_kwargs={"net_arch": {"pi": t["hidden_sizes"], "vf": t["hidden_sizes"]}},
+        policy_kwargs=policy_kwargs,
         seed=seed,
         device=t["device"],
         verbose=0,
@@ -115,6 +131,7 @@ def build_model(cfg, condition, env, seed, log_dir=None):
         from .cuda_ppo import configure_tensor_buffer
 
         configure_tensor_buffer(model, cfg["conditions"][condition]["masked"])
+    configure_exploration(model, cfg)
     return model
 
 
@@ -137,6 +154,7 @@ class ResearchCallback(BaseCallback):
         family="preset",
         progress=None,
         deadline=None,
+        wall_budget=None,
     ):
         super().__init__()
         self.cfg, self.condition, self.learner_seed = cfg, condition, learner_seed
@@ -161,6 +179,10 @@ class ResearchCallback(BaseCallback):
         self.last_weights = None
         self.timings = TrainingTimings()
         self.deadline = deadline
+        self.wall_budget = wall_budget
+        self.validation_pending = False
+        self.evaluation_cache = {}
+        self.cache_steps = -1
         self.budget_stopped = False
         self.curriculum = None
         self.simulation_ticks = 0
@@ -212,7 +234,7 @@ class ResearchCallback(BaseCallback):
             "estimated_remaining_training_seconds": (
                 max(0, self.target - progress) / budget_rate if budget_rate > 0 else None
             ),
-            "next_episode_difficulty_weights": weights,
+            "next_episode_difficulty_weights": None if self.curriculum else weights,
             "curriculum": self.curriculum.to_dict() if self.curriculum else None,
             "curriculum_stage": self.curriculum.name if self.curriculum else "fixed",
             "curriculum_incomplete": bool(self.curriculum and self.curriculum.name != "shared"),
@@ -233,6 +255,22 @@ class ResearchCallback(BaseCallback):
                 f"rolling_{key}": sum(r.get(key, 0) for r in rows) / len(rows) if rows else None
                 for key in REWARD_METRICS
             },
+            "rolling_first_attacker_seconds": (
+                sum(
+                    r["first_attacker_seconds"]
+                    for r in rows
+                    if r.get("first_attacker_seconds") is not None
+                )
+                / sum(r.get("first_attacker_seconds") is not None for r in rows)
+            )
+            if any(r.get("first_attacker_seconds") is not None for r in rows)
+            else None,
+            "rolling_early_voluntary_digs": sum(r.get("early_voluntary_digs", 0) for r in rows)
+            / len(rows)
+            if rows
+            else None,
+            "time_budget": self.wall_budget.state() if self.wall_budget else None,
+            "validation_pending": self.validation_pending,
             "rolling_maximum_sun": sum(r.get("maximum_sun", 0) for r in rows) / len(rows)
             if rows
             else None,
@@ -287,6 +325,8 @@ class ResearchCallback(BaseCallback):
             "policy_gradient_loss",
             "value_loss",
             "entropy_loss",
+            "joint_entropy",
+            "exploration_bonus",
             "approx_kl",
             "clip_fraction",
             "explained_variance",
@@ -311,7 +351,15 @@ class ResearchCallback(BaseCallback):
     def refresh_report(self):
         if not self.settings["visualization"]["enabled"]:
             return
-        from .visualization import build_run_report
+        from .visualization import build_run_report, pending_report
+
+        if (
+            self.wall_budget is not None
+            and self.wall_budget.deadline is not None
+            and perf_counter() >= self.wall_budget.deadline
+        ):
+            pending_report(self.output, self.snapshot())
+            return
 
         started = perf_counter()
         try:
@@ -333,7 +381,9 @@ class ResearchCallback(BaseCallback):
         self.initial_games = getattr(self.model, "training_games", 0)
         interval = evaluation_interval(self.cfg)
         progress = progress_value(self.cfg, self.model)
-        self.next_eval = ((progress // interval) + 1) * interval
+        schedule = getattr(self.model, "research_schedule", {})
+        self.next_eval = schedule.get("next_eval", ((progress // interval) + 1) * interval)
+        self.last_eval = schedule.get("last_eval", -1)
         self.training_env.env_method("set_progress", progress)
         self.stream = (self.output / "training-episodes.jsonl").open("w", encoding="utf-8")
         self.metrics_stream = (self.output / "training-metrics.jsonl").open("w", encoding="utf-8")
@@ -353,6 +403,13 @@ class ResearchCallback(BaseCallback):
             if "episode_metrics" in info:
                 self.model.training_games = getattr(self.model, "training_games", 0) + 1
                 completed += 1
+                if (
+                    self.curriculum
+                    and self.cfg["curriculum"].get("residency") == "episode_start_stage"
+                ):
+                    self.curriculum.completed_episode(
+                        info["episode_metrics"].get("episode_start_stage")
+                    )
                 self.recent.append(info["episode_metrics"])
                 append_jsonl(
                     self.stream,
@@ -393,20 +450,71 @@ class ResearchCallback(BaseCallback):
         if uses_games(self.cfg) and progress_value(self.cfg, self.model) >= self.target:
             raise TrainingGamesComplete()
         self.check_deadline()
-        self.probe_curriculum()
-        self.check_deadline()
         if progress_value(self.cfg, self.model) >= self.next_eval:
-            self.validate()
+            nominal = self.next_eval
             while self.next_eval <= progress_value(self.cfg, self.model):
                 self.next_eval += evaluation_interval(self.cfg)
+            self.validate(nominal_games=nominal)
+        self.check_deadline()
+        self.probe_curriculum()
         self.check_deadline()
         self.progress.phase(Phase.COLLECTING)
         self.timings.begin_collection()
 
     def check_deadline(self):
-        if self.deadline is not None and perf_counter() >= self.deadline:
+        estimated = (self.timings.last_collection_seconds or 0) + (
+            self.timings.last_optimization_seconds or 0
+        )
+        if (
+            (self.deadline is not None and perf_counter() >= self.deadline)
+            or self.wall_budget is not None
+            and not self.wall_budget.can_collect(estimated)
+        ):
             self.budget_stopped = True
             raise TrainingDeadline()
+
+    def operation_deadline(self, final=False):
+        if self.wall_budget is None:
+            return None
+        return self.wall_budget.deadline if final else self.wall_budget.learning_deadline
+
+    def save_checkpoint(self, name):
+        if self.wall_budget:
+            self.model.wall_budget_state = self.wall_budget.state()
+        self.model.research_schedule = {"next_eval": self.next_eval, "last_eval": self.last_eval}
+        self.sync_curriculum()
+        self.model.save(self.output / name)
+
+    def cached_evaluation(self, seeds, levels, family, destination, split, final=False):
+        if self.cache_steps != self.model.num_timesteps:
+            self.evaluation_cache.clear()
+            self.cache_steps = self.model.num_timesteps
+        keys = [(family, level, seed) for level in levels for seed in seeds]
+        if all(key in self.evaluation_cache for key in keys):
+            return [self.evaluation_cache[key] for key in keys]
+        attempt = destination
+        retry = 1
+        while attempt.exists():
+            attempt = destination.with_name(destination.name + f"-retry-{retry}")
+            retry += 1
+        rows = evaluate(
+            self.cfg,
+            policy=self.model,
+            condition=self.condition,
+            learner_seed=self.learner_seed,
+            seeds=seeds,
+            levels=levels,
+            family=family,
+            split=split,
+            output=attempt,
+            training_steps=self.model.num_timesteps,
+            progress=self.progress,
+            deadline=self.operation_deadline(final),
+        )
+        self.evaluation_cache.update(
+            {(r["family"], r["level"], r["scenario_seed"]): r for r in rows}
+        )
+        return rows
 
     def sync_curriculum(self):
         if self.curriculum:
@@ -422,19 +530,18 @@ class ResearchCallback(BaseCallback):
         self.progress.phase(Phase.VALIDATING, f"Curriculum probe: {previous}")
         wins = {}
         for task in self.curriculum.requirements(self.cfg):
-            rows = evaluate(
-                self.cfg,
-                policy=self.model,
-                condition=self.condition,
-                learner_seed=self.learner_seed,
-                seeds=seed_values(self.cfg, "validation", self.cfg["curriculum"]["probe_cases"]),
-                levels=["easy" if task in LESSONS else task],
-                family=task if task in LESSONS else "preset",
-                split="curriculum_validation",
-                output=self.output / "curriculum-probes" / str(self.model.num_timesteps) / task,
-                training_steps=self.model.num_timesteps,
-                progress=self.progress,
-            )
+            try:
+                rows = self.cached_evaluation(
+                    seed_values(self.cfg, "validation", self.cfg["curriculum"]["probe_cases"]),
+                    ["easy" if task in LESSONS else task],
+                    task if task in LESSONS else "preset",
+                    self.output / "curriculum-probes" / str(self.model.num_timesteps) / task,
+                    "curriculum_validation",
+                )
+            except BudgetExpired:
+                self.progress.emit("Curriculum probe pending: time allowance exhausted", force=True)
+                self.eval_seconds += perf_counter() - started
+                return
             wins[task] = sum(row["win"] for row in rows)
         advanced = self.curriculum.observe(wins, progress, self.cfg)
         self.sync_curriculum()
@@ -464,29 +571,33 @@ class ResearchCallback(BaseCallback):
         write_json(self.output / "status.json", self.snapshot())
         self.log_progress()
 
-    def validate(self):
+    def validate(self, *, nominal_games=None, final=False):
         started = perf_counter()
         self.progress.phase(
             Phase.VALIDATING,
             f"Validation at {progress_value(self.cfg, self.model):,} {'games' if uses_games(self.cfg) else 'decisions'}",
         )
         write_json(self.output / "status.json", self.snapshot())
-        rows = evaluate(
-            self.cfg,
-            policy=self.model,
-            condition=self.condition,
-            learner_seed=self.learner_seed,
-            seeds=seed_values(self.cfg, "validation", self.validation_limit),
-            levels=(
+        try:
+            rows = self.cached_evaluation(
+                seed_values(self.cfg, "validation", self.validation_limit),
                 ["easy"]
                 if self.family in ("diagnostic", *LESSONS)
-                else self.cfg["evaluation"]["levels"]
-            ),
-            family=self.family,
-            output=self.output / "validation" / str(self.model.num_timesteps),
-            training_steps=self.model.num_timesteps,
-            progress=self.progress,
-        )
+                else self.cfg["evaluation"]["levels"],
+                self.family,
+                self.output / "validation" / str(self.model.num_timesteps),
+                "validation",
+                final=final,
+            )
+        except BudgetExpired:
+            self.validation_pending = True
+            self.eval_seconds += perf_counter() - started
+            self.progress.emit(
+                "Validation pending; partial results cannot select best.zip", force=True
+            )
+            return False
+        self.validation_pending = False
+        self.last_eval = self.model.num_timesteps
         scores = summarize(rows)
         score = sum(r["win_rate"] for r in scores.values()) / len(scores)
         self.progress.emit(
@@ -497,7 +608,7 @@ class ResearchCallback(BaseCallback):
         )
         if score > self.best_score:
             self.best_score = score
-            self.model.save(self.output / "best.zip")
+            self.save_checkpoint("best.zip")
             write_json(
                 self.output / "best.json",
                 {
@@ -508,7 +619,7 @@ class ResearchCallback(BaseCallback):
                 },
             )
             self.progress.emit(f"Saved shared best.zip at {score:.1%}", force=True)
-        self.model.save(self.output / "latest.zip")
+        self.save_checkpoint("latest.zip")
         self.progress.emit("Saved latest.zip", force=True)
         self.last_eval = self.model.num_timesteps
         self.eval_seconds += perf_counter() - started
@@ -519,6 +630,8 @@ class ResearchCallback(BaseCallback):
                     "training_steps": self.model.num_timesteps,
                     "training_games": getattr(self.model, "training_games", 0),
                     "budget_unit": "games" if uses_games(self.cfg) else "decisions",
+                    "nominal_games": nominal_games,
+                    "final": final,
                     "wall_seconds": perf_counter() - self.started,
                     "macro_win_rate": score,
                     "levels": scores,
@@ -530,10 +643,17 @@ class ResearchCallback(BaseCallback):
     def _on_training_end(self):
         self.timings.end_update()
         self.capture_update()
-        if not self.budget_stopped:
+        if self.last_eval != self.model.num_timesteps and (
+            not self.budget_stopped
+            or self.wall_budget is not None
+            and self.wall_budget.limit is not None
+        ):
+            self.validate(final=True)
+        if (
+            not self.budget_stopped
+            and self.cfg["curriculum"].get("residency") != "episode_start_stage"
+        ):
             self.probe_curriculum()
-        if self.last_eval != self.model.num_timesteps and not self.budget_stopped:
-            self.validate()
 
     def close(self):
         if self.stream:
@@ -557,7 +677,15 @@ def load_policy(checkpoint, device="cpu"):
 
         algorithm = CudaMaskablePPO if cfg["conditions"][condition]["masked"] else CudaPPO
     torch.set_num_threads(cfg["training"]["torch_threads"])
+    if (
+        simulator(cfg) == "cpu"
+        and cfg["training"].get("exploration", {}).get("objective") == "balanced_heads_v1"
+    ):
+        from .cuda_ppo import ResearchMaskablePPO
+
+        algorithm = ResearchMaskablePPO
     model = algorithm.load(checkpoint, device=device)
+    configure_exploration(model, cfg)
     return model, data
 
 
@@ -572,6 +700,7 @@ def train(
     resume=None,
     deadline=None,
 ):
+    started = perf_counter()
     cfg = copy.deepcopy(cfg)
     validate_config(cfg)
     output = Path(output)
@@ -602,7 +731,6 @@ def train(
     write_json(output / "config.json", cfg)
     write_json(output / "status.json", {"state": "starting"})
     env, model, callback = None, None, None
-    started = perf_counter()
     settings = output_settings(cfg)
     progress = ProgressReporter(output / "train.log", settings["logging"]["progress_seconds"])
     progress.emit(
@@ -623,6 +751,14 @@ def train(
         force=True,
     )
     training_complete = False
+    prior_time = 0.0
+    if resume:
+        previous_status = Path(resume).resolve().parent / "status.json"
+        if previous_status.exists():
+            prior_time = (
+                json.loads(previous_status.read_text("utf-8")).get("time_budget") or {}
+            ).get("elapsed_seconds", 0.0)
+    wall_budget = RunBudget(cfg, elapsed=prior_time, started=started)
     try:
         env = vector_env(cfg, condition, learner_seed, family)
         if resume:
@@ -637,6 +773,10 @@ def train(
                 )
             if old["learner_seed"] != learner_seed or old["validation_limit"] != validation_limit:
                 raise ValueError("Resume learner seed differs")
+            wall_budget.prior_elapsed = max(
+                wall_budget.prior_elapsed,
+                getattr(model, "wall_budget_state", {}).get("elapsed_seconds", 0.0),
+            )
             model.set_env(env)
             if simulator(cfg) == "cuda":
                 from .cuda_ppo import configure_tensor_buffer
@@ -674,6 +814,7 @@ def train(
             family,
             progress=progress,
             deadline=deadline,
+            wall_budget=wall_budget,
         )
         if resume:
             previous = Path(resume).resolve().parent
@@ -703,7 +844,7 @@ def train(
                 callback._on_training_end()
             except TrainingDeadline:
                 progress.emit(
-                    "Pilot deadline reached at a completed PPO update; saving partial run",
+                    "Time allowance reached at a completed PPO update; finalizing available results",
                     force=True,
                 )
                 callback._on_training_end()
@@ -714,21 +855,26 @@ def train(
             callback.initial_games = getattr(model, "training_games", 0)
             if teaching_enabled(cfg) and family == "preset":
                 callback.curriculum = CurriculumState(**getattr(model, "curriculum_state", {}))
-            callback.validate()
-        model.save(output / "final.zip")
+            callback.validate(final=True)
+        callback.save_checkpoint("final.zip")
         final_status = {
             **callback.snapshot(),
             "state": "complete",
             "steps": model.num_timesteps,
             "wall_seconds": perf_counter() - started,
             "budget_stopped": callback.budget_stopped,
+            "stop_reason": "time_budget"
+            if callback.budget_stopped
+            else "game_budget"
+            if game_budget
+            else "decision_budget",
             "budget_complete": progress_value(cfg, model) >= budget_target(cfg),
             "extra_games_in_final_rollout": max(0, progress_value(cfg, model) - budget_target(cfg))
             if game_budget
             else 0,
         }
         training_complete = True
-        progress.emit("Saved final.zip; optimization and validation finished", force=True)
+        progress.emit("Saved final.zip; finalization status recorded", force=True)
         write_json(output / "status.json", final_status)
         # Release worker processes before rendering. Exports never update the policy.
         env.close()
@@ -739,17 +885,21 @@ def train(
 
             write_json(output / "status.json", {**final_status, "state": "exporting"})
             visual = visualize_run(
-                output, cfg=cfg, videos=settings["visualization"]["videos"], progress=progress
+                output,
+                cfg=cfg,
+                videos=settings["visualization"]["videos"],
+                progress=progress,
+                deadline=wall_budget.deadline,
             )
             final_status.update(
                 visualization_state=visual["state"], export_seconds=visual.get("export_seconds", 0)
             )
-        write_json(
-            output / "status.json",
-            final_status,
-        )
+        final_status.update(time_budget=wall_budget.state(), wall_seconds=perf_counter() - started)
+        write_json(output / "status.json", final_status)
         progress.phase(Phase.COMPLETE, f"Training complete: {output.resolve()}")
         callback.refresh_report()
+        final_status.update(time_budget=wall_budget.state(), wall_seconds=perf_counter() - started)
+        write_json(output / "status.json", final_status)
         return output
     except BaseException as exc:
         if training_complete:
@@ -767,13 +917,18 @@ def train(
             progress.emit(f"Training is complete; artifact generation stopped: {exc}", force=True)
             raise
         if model is not None:
-            model.save(output / "interrupted.zip")
+            model.wall_budget_state = wall_budget.state()
+            if callback:
+                callback.save_checkpoint("interrupted.zip")
+            else:
+                model.save(output / "interrupted.zip")
         write_json(
             output / "status.json",
             {
                 "state": "interrupted" if isinstance(exc, KeyboardInterrupt) else "failed",
                 "error": repr(exc),
                 "steps": model.num_timesteps if model else 0,
+                "time_budget": wall_budget.state(),
             },
         )
         progress.phase(
@@ -789,3 +944,10 @@ def train(
         if env:
             env.close()
         progress.close()
+        # Recovery must include interrupted presentation and cleanup, which can
+        # happen well after the final model checkpoint was saved.
+        status_path = output / "status.json"
+        if status_path.exists():
+            status = json.loads(status_path.read_text("utf-8"))
+            status.update(time_budget=wall_budget.state(), wall_seconds=perf_counter() - started)
+            write_json(status_path, status)

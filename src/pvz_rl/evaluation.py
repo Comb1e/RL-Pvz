@@ -10,6 +10,7 @@ from time import perf_counter
 import numpy as np
 
 from .config import digest, output_settings, simulator
+from .deadline import BudgetExpired, check_deadline
 from .env import PvZEnv
 from .frozen_baseline import choose_action
 from .progress import Phase, ProgressReporter
@@ -85,6 +86,7 @@ def evaluate(
     progress=None,
     checkpoint_hash=None,
     replay_limit=None,
+    deadline=None,
 ) -> list[dict]:
     output = Path(output)
     output.mkdir(parents=True, exist_ok=False)
@@ -139,7 +141,15 @@ def evaluate(
 
             gpu_rows = iter(
                 batched_games(
-                    cfg, policy, condition, seeds, levels, family, record=record, progress=progress
+                    cfg,
+                    policy,
+                    condition,
+                    seeds,
+                    levels,
+                    family,
+                    record=record,
+                    progress=progress,
+                    deadline=deadline,
                 )
             )
         with (output / "episodes.jsonl").open("w", encoding="utf-8") as stream:
@@ -170,6 +180,7 @@ def evaluate(
                 )
                 try:
                     for seed in sorted(seeds):
+                        check_deadline(deadline)
                         env.record = record and any(
                             quotas[k] < limit for k in ("won", "lost", "truncated")
                         )
@@ -179,6 +190,7 @@ def evaluate(
                         inference_seconds, started = 0.0, perf_counter()
                         trace_index = 0
                         while gpu is None or env.record:
+                            check_deadline(deadline)
                             t = perf_counter()
                             action = (
                                 gpu["action_trace"][trace_index]
@@ -249,6 +261,7 @@ def evaluate(
                             replay_path = (
                                 output / "replays" / f"{level}-{seed}-{row['status']}.pvzdemo"
                             )
+                            check_deadline(deadline)
                             env.recorder.save(replay_path)
                             verified = verify_replay(replay_path)
                             if verified.state_hash() != row["state_hash"]:
@@ -268,10 +281,16 @@ def evaluate(
     except BaseException as exc:
         write_json(
             output / "status.json",
-            {"state": "failed", "error": repr(exc), "completed_episodes": len(rows)},
+            {
+                "state": "pending" if isinstance(exc, BudgetExpired) else "failed",
+                "error": repr(exc),
+                "completed_episodes": len(rows),
+            },
         )
         raise
     finally:
+        if gpu_rows is not None:
+            gpu_rows.close()
         if owns_progress:
             progress.close()
 

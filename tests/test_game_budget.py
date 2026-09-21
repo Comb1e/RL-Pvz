@@ -33,7 +33,7 @@ def game_config(smoke_cfg):
 
 def test_default_config_and_cli_use_games(per_tick_cfg):
     assert uses_games(per_tick_cfg)
-    assert budget_target(per_tick_cfg) == 10000 and evaluation_interval(per_tick_cfg) == 250
+    assert budget_target(per_tick_cfg) == 10000 and evaluation_interval(per_tick_cfg) == 1000
     args = argparse.Namespace(config=None, command="train", games=20, eval_games=5)
     cfg = configured(args)
     assert budget_target(cfg) == 20 and evaluation_interval(cfg) == 5
@@ -69,18 +69,18 @@ def test_fixed_curriculum_changes_only_on_reset_and_ignores_decisions(per_tick_c
 def test_teaching_gates_use_games_and_resume_counters(per_tick_cfg):
     cfg = learning_profile("pure-rl", per_tick_cfg)
     state = CurriculumState(entered_steps=999999, last_probe=999999)
-    assert not state.due(19, cfg) and state.due(20, cfg)
-    assert not state.observe({"placement": 18}, 20, cfg)
-    assert not state.observe({"placement": 17}, 40, cfg)
+    assert not state.due(99, cfg) and state.due(100, cfg)
+    assert not state.observe({"placement": 18}, 100, cfg)
+    assert not state.observe({"placement": 17}, 200, cfg)
     assert state.consecutive_passes == 0
-    assert not state.observe({"placement": 20}, 60, cfg)
-    assert state.observe({"placement": 18}, 80, cfg)
-    assert state.entered_games == state.last_probe_games == 80
+    assert not state.observe({"placement": 20}, 300, cfg)
+    assert state.observe({"placement": 18}, 400, cfg)
+    assert state.entered_games == state.last_probe_games == 400
     restored = CurriculumState(**state.to_dict())
-    assert not restored.due(99, cfg) and restored.due(100, cfg)
+    assert not restored.due(499, cfg) and restored.due(500, cfg)
     assert restored.name == "saving"
     with pytest.raises(ValueError, match="backwards"):
-        restored.observe({"saving": 20}, 79, cfg)
+        restored.observe({"saving": 20}, 399, cfg)
 
 
 @pytest.mark.parametrize(
@@ -208,7 +208,11 @@ def test_game_mastery_probes_keep_policy_and_optimizer(smoke_cfg, tmp_path, monk
         from pvz_rl.evaluation import evaluate
 
         if kwargs.get("split") == "curriculum_validation":
-            return [{"win": 1} for _ in range(20)]
+            return [
+                {"win": 1, "family": kwargs["family"], "level": level, "scenario_seed": seed}
+                for level in kwargs["levels"]
+                for seed in kwargs["seeds"]
+            ]
         return evaluate(cfg, **kwargs)
 
     def probe(self):

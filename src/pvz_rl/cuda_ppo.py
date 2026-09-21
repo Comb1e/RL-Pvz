@@ -1,7 +1,8 @@
 """SB3-compatible PPO with tensor collection and batched optimizer diagnostics.
 
-The objective and minibatch order follow SB3/SB3-Contrib 2.7.1. The differences
-are storage/transport and deferred metric transfers, not the update equations.
+The PPO ratios and minibatch order follow SB3/SB3-Contrib 2.7.1. Storage,
+transport and metric transfers stay on-device where possible. An explicitly
+configured exploration bonus can replace joint-entropy regularization.
 """
 
 import torch
@@ -10,6 +11,7 @@ from stable_baselines3 import PPO
 from torch.nn import functional as F
 
 from .cuda_buffer import TensorRolloutBuffer
+from .exploration import exploration_loss
 
 
 class TensorPPO:
@@ -92,7 +94,10 @@ class TensorPPO:
                 )
                 value_loss = F.mse_loss(data.returns, predicted)
                 entropy_loss = -(-log_prob).mean() if entropy is None else -entropy.mean()
-                loss = policy_loss + self.ent_coef * entropy_loss + self.vf_coef * value_loss
+                regularizer, exploration_metrics = exploration_loss(
+                    self.policy, entropy, log_prob, self.ent_coef
+                )
+                loss = policy_loss + regularizer + self.vf_coef * value_loss
                 with torch.no_grad():
                     log_ratio = log_prob - data.old_log_prob
                     kl = ((torch.exp(log_ratio) - 1) - log_ratio).mean()
@@ -104,6 +109,8 @@ class TensorPPO:
                                 value_loss.detach(),
                                 entropy_loss.detach(),
                                 clipped_fraction,
+                                exploration_metrics["joint_entropy"],
+                                exploration_metrics["exploration_bonus"],
                             )
                         )
                     )
@@ -120,14 +127,10 @@ class TensorPPO:
                 break
         if masked:
             self._n_updates += self.n_epochs
-        var_y = self.rollout_buffer.returns.flatten().var(unbiased=False)
-        explained = (
-            1
-            - (self.rollout_buffer.returns - self.rollout_buffer.values)
-            .flatten()
-            .var(unbiased=False)
-            / var_y
-        )
+        returns = torch.as_tensor(self.rollout_buffer.returns, device=self.device)
+        old_values = torch.as_tensor(self.rollout_buffer.values, device=self.device)
+        var_y = returns.flatten().var(unbiased=False)
+        explained = 1 - (returns - old_values).flatten().var(unbiased=False) / var_y
         explained = torch.where(var_y == 0, torch.full_like(explained, float("nan")), explained)
         # One transfer after all optimizer updates, including the final update.
         numbers = (
@@ -147,6 +150,8 @@ class TensorPPO:
             "value_loss",
             "entropy_loss",
             "clip_fraction",
+            "joint_entropy",
+            "exploration_bonus",
             "approx_kl",
             "loss",
             "explained_variance",
@@ -160,6 +165,12 @@ class TensorPPO:
 
     def _excluded_save_params(self):
         return super()._excluded_save_params()
+
+
+class ResearchMaskablePPO(MaskablePPO):
+    """CPU collector with the same tested optimization objective as CUDA."""
+
+    train = TensorPPO.train
 
 
 class CudaMaskablePPO(TensorPPO, MaskablePPO):

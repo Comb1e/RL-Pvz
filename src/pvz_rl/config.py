@@ -176,8 +176,38 @@ def validate_config(cfg: dict) -> None:
         for key in ("local_count_scale", "firepower_scale", "lane_count_scale"):
             if not math.isfinite(encoding[key]) or encoding[key] <= 0:
                 raise ValueError(f"encoding.{key} must be finite and positive")
-    if cfg.get("policy", {}).get("kind", "flat") not in ("flat", "grouped_v1"):
+    if cfg.get("policy", {}).get("kind", "flat") not in (
+        "flat",
+        "grouped_v1",
+        "spatial_grouped_v2",
+    ):
         raise ValueError("Unsupported policy kind")
+    policy = cfg.get("policy", {})
+    if policy.get("kind") == "spatial_grouped_v2":
+        if (
+            encoding["version"] != "tactical_v2"
+            or type(policy.get("channels")) is not int
+            or policy["channels"] < 1
+        ):
+            raise ValueError("Spatial policy requires tactical_v2 and positive channels")
+    exploration = cfg["training"].get("exploration", {"objective": "joint"})
+    if exploration.get("objective") not in ("joint", "balanced_heads_v1"):
+        raise ValueError("Unsupported exploration objective")
+    if exploration["objective"] == "balanced_heads_v1":
+        if policy.get("kind") not in ("grouped_v1", "spatial_grouped_v2"):
+            raise ValueError("Balanced exploration requires a grouped policy")
+        for key in ("type_coef", "tile_coef"):
+            value = exploration.get(key)
+            if type(value) not in (int, float) or not math.isfinite(value) or value < 0:
+                raise ValueError(f"Invalid exploration.{key}")
+    minutes = cfg["training"].get("max_minutes")
+    reserve = cfg["training"].get("finalization_minutes", 15)
+    if minutes is not None and (
+        type(minutes) not in (int, float) or not math.isfinite(minutes) or minutes <= 0
+    ):
+        raise ValueError("max_minutes must be finite and positive")
+    if type(reserve) not in (int, float) or not math.isfinite(reserve) or reserve < 0:
+        raise ValueError("finalization_minutes must be finite and nonnegative")
     c = cfg["curriculum"]
     if c.get("mode", "fixed") not in ("fixed", "teaching"):
         raise ValueError("Unsupported curriculum mode")

@@ -20,6 +20,11 @@ class CurriculumState:
     consecutive_passes: int = 0
     entered_games: int = 0
     last_probe_games: int = 0
+    completed_stage_games: int = 0
+
+    def completed_episode(self, episode_stage):
+        if episode_stage == self.stage:
+            self.completed_stage_games += 1
 
     @property
     def name(self):
@@ -55,7 +60,12 @@ class CurriculumState:
         if (
             self.stage < len(STAGES) - 1
             and self.consecutive_passes >= c["consecutive_passes"]
-            and steps - entered >= c["minimum_stage_games" if games else "minimum_stage_steps"]
+            and (
+                self.completed_stage_games
+                if games and c.get("residency") == "episode_start_stage"
+                else steps - entered
+            )
+            >= c["minimum_stage_games" if games else "minimum_stage_steps"]
         ):
             self.stage += 1
             if games:
@@ -63,6 +73,7 @@ class CurriculumState:
             else:
                 self.entered_steps = steps
             self.consecutive_passes = 0
+            self.completed_stage_games = 0
             return True
         return False
 

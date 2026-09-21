@@ -1,0 +1,25 @@
+learner_seeds = [101, 102]
+profiles = ["A", "B", "C", "D", "E", "F"]
+diagnostic_minutes = 5
+diagnostic_games = 1000
+early_dig_seconds = 5
+
+[training]
+budget_unit = "games"
+total_games = 10000
+eval_interval_games = 1000
+n_envs = 128
+rollout_steps_per_env = 128
+rollout_size = 16384
+max_minutes = 120
+finalization_minutes = 15
+device = "cuda"
+
+[exploration]
+objective = "balanced_heads_v1"
+type_coef = 0.01
+tile_coef = 0.001
+
+[policy]
+kind = "spatial_grouped_v2"
+channels = 64

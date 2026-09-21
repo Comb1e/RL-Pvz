@@ -1,4 +1,7 @@
-# Current game integration — 0.6.0
+# Current game integration — 0.7.0
+
+The 0.7.0 research wrapper adds a private planting-time metric ledger; game state,
+combat rules and the pinned game checkout are unchanged.
 
 2026-09-21: game package **1.3.0**, simulation **1.0.0**, commit
 `8861824df6893a34c2cd4df7f9b68613376d7964`. Development is in isolated game

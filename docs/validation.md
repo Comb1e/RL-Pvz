@@ -1,4 +1,75 @@
-# Availability and verification — 0.6.0
+# Availability and verification — 0.7.0
+
+## SC2-inspired learning — 2026-09-21
+
+Research **0.7.0** retains game package **1.3.0**, simulation **1.0.0**, engine
+commit `8861824df6893a34c2cd4df7f9b68613376d7964`, and the existing combat/reward
+coefficients. Windows/Python 3.12, RTX 4070 Laptop GPU, Torch 2.8.0+cu128 and
+CuPy 13.6.0 were used. Both game checkouts remained clean.
+
+| Check | Result |
+|---|---|
+| Complete research regression | **338 passed, 2 warnings in 265.26 s** |
+| Complete upstream game regression | **214 passed in 44.74 s**; all cache, bytecode and temporary output outside the game checkout |
+| Final focused regression | **41 passed in 84.43 s**, covering all new SC2 tests, reports, and CPU/CUDA GAE at both gamma values after the final curve-marker changes |
+| Export budget recovery | **3 passed in 41.36 s** after an independent simulated-time interruption exposed missing export time; final status now includes presentation and cleanup on every exit path |
+| Probability and optimizer controls | Independent entropy arithmetic and gradients, zero illegal-action probabilities, wait-only/single-tile boundaries, true joint PPO clipping, losses, gradients and Adam updates |
+| Spatial policy | Tactical layout, board dependence, finite gradients, complete optimizer parameter coverage, CPU collection with CPU/CUDA learning, CUDA simulation and checkpoint reload |
+| Curriculum and scheduling | Episode-start stage residency, failed/passing probes, retained policy/optimizer identity, coalesced validation thresholds, same-weight result reuse, earlier-checkpoint ties and cumulative-time resume |
+| Rewards and game controls | Existing successful and failing lesson controls, plant/dig cycles, cutoff/terminal precedence, reward parity and timeout bootstrap; both gamma values telescope correctly |
+| Demos and reports | Three CPU-verified compact replays from the same spatial checkpoint; offline relative assets, truncated outcomes, report regeneration and existing export-failure checks pass |
+| Availability | NVRTC compilation, DLPack/shared stream, simulation hash, 1000×600 RGB rendering, seekable compact replays and FFmpeg/libx264 all available |
+
+The two complete-suite warnings are the existing SB3 small-MLP GPU warnings in
+stock reference implementations used for comparison. `doctor` also retains the
+Gymnasium advisory about unbounded observations. No gameplay assertions or
+floating-point tolerances were weakened. The final focused run added the second
+gamma to existing CPU/CUDA GAE controls; its results are reported separately,
+not as a new complete-suite count.
+
+The CUDA spatial smoke completed **2 games / 64 decisions** with two parallel
+games and a deliberately one-second cutoff. All easy/standard/hard demos are
+correctly **truncated**, share one checkpoint SHA-256, and verify against the
+CPU engine. This establishes integration, not full-game competence. The teaching
+stage remains placement and `curriculum_incomplete` is true. Single-point behavior
+curves, optimizer curves and a native replay frame were visually inspected.
+The rendering inspection preserved state hash
+`7ff2c79ce9f35cf4689ecc9932543245cf79b088b7b3bea49f8416ed06d25554`.
+
+Implementation used a separate code worktree and the existing environment, with
+no second virtual environment. The original training run externally ended with
+`KeyboardInterrupt` at 2026-09-21 11:03:38 UTC after 18,972,672 decisions. This task
+issued no stop command. Full suites and GPU learning checks began after confirming
+that process had ended; the original run and recovery checkpoint were preserved.
+
+Evidence is retained in `artifacts/research-tests-v070.txt`,
+`artifacts/game-tests-v070.txt`, `artifacts/focused-tests-v070.txt`,
+`artifacts/availability-v070.json`, `artifacts/export-budget-final-v070.txt`, and
+`artifacts/sc2-replay-frame-v070.png`.
+The retained short smoke run is `artifacts/sc2-smoke-v070`.
+The A–F comparison and formal research training were not launched; final-test
+seeds remain untouched. Candidate E/F remain experimental.
+
+### Bounded learning diagnostics and delivery
+
+Two profile-E runs used learner seeds 101 and 102, each capped at five minutes.
+Both completed 768 placement games; they collected 851,968 and 835,584 decisions
+respectively and stopped at completed-update boundaries. Neither won a training
+game or passed any of six 20-case placement probes. Mean early digs/game were
+3.000 and 2.909, with three peashooter purchases/game. Saving was not reached.
+This is an unsuccessful short diagnostic; it does not establish full-game
+improvement or compare the proposed method with baseline.
+
+Both final normal-game evaluations completed 128/150 cases before the deadline,
+then correctly recorded `validation_pending=true`. Partial results did not
+produce `best.zip`; final checkpoints and available records survived. The measured
+300.03-second duration per run includes cooperative shutdown overhead. Their
+reports were subsequently regenerated without training. Detailed limitations and
+the committed summary are in [SC2 adaptation](sc2-adaptation.md).
+
+Final Ruff checks, formatting, `git diff --check`, and dependency checks pass.
+Wheel/sdist packaging and canonical-environment installation are checked as part
+of delivery. Neither repository has a remote, so a PR cannot be created.
 
 ## CUDA simulation and installed environment — 2026-09-21
 

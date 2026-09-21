@@ -16,6 +16,11 @@ from .training import load_policy, train
 
 
 def run_suite(cfg, output, *, resume=False):
+    if cfg.get("policy", {}).get("kind", "flat") != "flat":
+        raise ValueError(
+            "The five-condition suite requires the baseline flat policy. "
+            "Use train or compare-sc2 for grouped/teaching profiles."
+        )
     output = Path(output)
     journal_path = output / "suite.json"
     if resume:

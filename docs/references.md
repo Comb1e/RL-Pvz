@@ -166,3 +166,25 @@ documented custom balance. Its results are not directly comparable to commercial
 PvZ or the 2024 paper's level suite. Winning through legal game actions does not
 establish human behavioral similarity. The literature motivates this experiment;
 only independent held-out evaluations can establish performance in this environment.
+
+
+## SC2-inspired pure-RL work — 0.7.0 (2026-09-21)
+
+| Source/version inspected | Evidence inspected | Decision informed |
+|---|---|---|
+| Vinyals et al., [Grandmaster level in StarCraft II using multi-agent reinforcement learning](https://doi.org/10.1038/s41586-019-1724-z), 2019; DeepMind author PDF, 29 pages | Methods including structured actions, human-data dependence, undiscounted terminal objective, UPGO and league; relevant ablations, including visual inspection | Structured heads and a separate horizon experiment; omit imitation, league scale and privileged inputs |
+| Mathieu et al., [AlphaStar Unplugged](https://arxiv.org/abs/2308.03526), 2023, 32-page PDF | Architecture, offline training/results, memory and scaling sections; Table 3 visually inspected | Separate modalities and start without memory; do not treat BC or offline results as online PPO evidence |
+| Liu et al., [Revisiting of AlphaStar](https://doi.org/10.1109/TG.2023.3265975), online 2023, TG 16(2), 2024 | Verified abstract via Semantic Scholar and closed-access metadata via OpenAlex; full text unavailable | Motivate explicit difficulty and weakness analysis; no unverified detailed result adopted |
+| Liu, [Rethinking of AlphaStar](https://arxiv.org/abs/2108.03452), v3, 23-page PDF | Interface/replay analysis and raw-versus-human action economy experiment, Appendix D | Inspect repetitive actions; distinguish empirical results from architectural criticism |
+| Arulkumaran, Cully, Togelius, [AlphaStar: An Evolutionary Computation Perspective](https://arxiv.org/abs/1902.01724), 2019, complete 3-page PDF | PBT, coevolution and quality-diversity discussion of early AlphaStar | Retain diverse tasks; no claim that copying population training improves PVZ |
+| Vinyals et al., [StarCraft II: A New Challenge for Reinforcement Learning](https://arxiv.org/abs/1708.04782), 2017, 20-page PDF | Mini-games, FullyConv architecture, section 4.4 separate argument entropy, full-game failures; section 4.4 visually inspected | Spatial placement head and separate exploration terms; preserve win rate as outcome |
+| Chua et al., [Runtime Action Interference for AI Control of AlphaStar in StarCraft II](https://arxiv.org/abs/2608.21398), 2026, 22-page PDF | Post-inference admission/no-op wrapper, 32-person exploratory study, limitations and aggregate appendix | Audit execution and outcomes; do not adopt cooldown interference or claim training improvements |
+| [google-deepmind/alphastar](https://github.com/google-deepmind/alphastar), `700b1e74364ed5dfc66f6cd2574c5ffac2fa474e` | README and architecture encoder/head definitions through GitHub API | Reference separate feature streams and action arguments; no dependency added. Repository does not supply online RL code |
+| [liuruoze/mini-AlphaStar](https://github.com/liuruoze/mini-AlphaStar), `554206724da64b684308634fff54d3828a6114a2` | README requirements, imitation initialization, resource recommendations and experiment links | A design reference, not evidence of comparable pure-RL laptop performance |
+| [Raw-vs-Human-in-AlphaStar](https://github.com/liuruoze/Raw-vs-Human-in-AlphaStar) | README identifying the Rethinking experiment and raw/human configuration switch | Confirm experiment scope; no code imported |
+| SB3/SB3-Contrib 2.7.1 installed policy, distribution and PPO interfaces; existing project CUDA optimizer | Policy construction, optimizer parameter registration, joint action evaluation, update capture and checkpoint loading | Reuse the PPO objective, add one shared exploration-loss interface, and verify fresh/loaded spatial heads |
+
+Full-text findings, repository descriptions, local observations and new design
+choices remain separate in [sc2-adaptation.md](sc2-adaptation.md). The normalized
+unweighted tile bonus and exact architecture sizes are project adaptations. No
+AlphaStar speedup or win-rate claim is transferred to this laptop.
