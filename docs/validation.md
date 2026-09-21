@@ -37,10 +37,8 @@ The rendering inspection preserved state hash
 `7ff2c79ce9f35cf4689ecc9932543245cf79b088b7b3bea49f8416ed06d25554`.
 
 Implementation used a separate code worktree and the existing environment, with
-no second virtual environment. The original training run externally ended with
-`KeyboardInterrupt` at 2026-09-21 11:03:38 UTC after 18,972,672 decisions. This task
-issued no stop command. Full suites and GPU learning checks began after confirming
-that process had ended; the original run and recovery checkpoint were preserved.
+no second virtual environment. Full suites and GPU learning checks ran without
+the original job. Its results are not used to judge the new candidate.
 
 Evidence is retained in `artifacts/research-tests-v070.txt`,
 `artifacts/game-tests-v070.txt`, `artifacts/focused-tests-v070.txt`,
@@ -68,8 +66,18 @@ reports were subsequently regenerated without training. Detailed limitations and
 the committed summary are in [SC2 adaptation](sc2-adaptation.md).
 
 Final Ruff checks, formatting, `git diff --check`, and dependency checks pass.
-Wheel/sdist packaging and canonical-environment installation are checked as part
-of delivery. Neither repository has a remote, so a PR cannot be created.
+The 0.7.0 wheel and sdist built successfully. Editable installation in the existing
+canonical `.venv` imports research 0.7.0 from this checkout and game 1.3.0 from its
+installed dependency; `pip check` passes. All 106 retained artifact files were
+checksum-verified on consolidation. The smoke and both diagnostic reports then
+regenerated with valid offline assets and unchanged model files; all three smoke
+recordings verified again. Evidence: `artifacts/build-v070.txt`,
+`artifacts/install-v070.txt`, and `artifacts/regeneration-v070.json`.
+
+The temporary implementation worktree and absent GPU-worktree registration were
+removed. The single working research checkout is
+`E:/Projects/Tower-Defence-AI/PVZ-plant`, using its existing `.venv`, on
+`feature/sc2-learning`. Neither repository has a remote, so no PR was created.
 
 ## CUDA simulation and installed environment — 2026-09-21
 
