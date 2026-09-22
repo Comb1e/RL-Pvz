@@ -1,89 +1,14 @@
 # Sources actually used
 
-## Replay and learning diagnosis — 0.7.1 (2026-09-21)
-
-- Local evidence: `runs/sc2-shared-101`, selected checkpoint SHA-256
-  `ce6b6fc3b480233c67b4009e6ce44d7412d2e2ef8fc7db8c047d34fe70fbb65e`.
-  Inspected episode records, optimization timings, validation summaries,
-  planting/digging traces and three demos. These are development results.
-- Schulman et al., [Generalized Advantage Estimation](https://arxiv.org/abs/1506.02438):
-  abstract inspected for the bias/variance role of exponentially weighted advantage
-  estimates. Installed SB3 2.7.1 supplies the recurrence used in independent controls.
-  Lambda 0.999 is a local experiment, not a PVZ result from the paper.
-- Huang and Ontanon, [Invalid Action Masking](https://arxiv.org/abs/2006.14171):
-  abstract revisited; retain ordinary legality. A singleton legal distribution has
-  no actor choice. Conditioning actor reductions on non-singleton states is a local
-  change, not an improvement established by that source.
-- Ng et al., potential-based shaping (already cited): use the discounted potential
-  difference for offensive investment. Independent telescoping and plant/dig
-  counterexamples verify cancellation. The eaten-plant penalty intentionally changes
-  the objective at Leafy's request; it is not potential shaping.
-- Pinned Lawn Lab 1.3.0, source `8861824`: `PlantRemoved(reason=eaten)` differs from
-  `dug` and `detonated`; public GPU diagnostic events provide exact attribution.
-  Native replay loaders and the research action-phase reader at research commit
-  `665aec5` explain the format mismatch. No new external library was imported.
-
-No paper establishes the chosen reward weights or a two-hour win-rate gain.
-The optional initial dig-head bias is a local response to observed rapid plant/dig
-cycles. It is a trainable initialization, with no action suppression after learning;
-it is not attributed to AlphaStar or to the invalid-action masking paper.
-
-## GPU simulator and tensor learning path — 0.6.0, 2026-09-21
-
-| Source inspected | Evidence used | Implementation decision |
-|---|---|---|
-| Lan et al., 2022, [WarpDrive: Fast End-to-End Deep Multi-Agent Reinforcement Learning on a GPU](https://jmlr.org/papers/v23/22-0185.html), and [project README](https://github.com/salesforce/warp-drive) | GPU simulation/learning architecture and explicit distinction between kernels and scenario configuration | Keep simulation and PPO tensors on one device. No WarpDrive code copied and no published speedup transferred to this laptop. |
-| CuPy **v13.6.0** [kernel guide](https://raw.githubusercontent.com/cupy/cupy/v13.6.0/docs/source/user_guide/kernel.rst) | RawKernel/RawModule, NVRTC compilation, launch configuration and cache | Optional pinned CuPy backend and fused ordered game kernels. |
-| CuPy **v13.6.0** [interoperability guide](https://raw.githubusercontent.com/cupy/cupy/v13.6.0/docs/source/user_guide/interoperability.rst) | DLPack lifetime, contiguous arrays, ExternalStream ownership/device rules | Shared CuPy/PyTorch views on one explicit stream; pointer and write tests. |
-| Installed **SB3/SB3-Contrib 2.7.1**: `common/buffers.py`, `common/on_policy_algorithm.py`, `ppo/ppo.py`, `ppo_mask/ppo_mask.py` | Collector, timeout bootstrapping, environment-major flattening, NumPy permutation, advantage normalization, PPO loss/gradient clipping/update sequence | Tensor collector/buffer and GAE, with independent fixed-data loss/gradient/optimizer comparisons; aggregate metric transfers after the final update. |
-| NVIDIA runtime **12.8.90** and NVRTC **12.8.93** Windows wheels | Installed header/DLL layout and actual kernel compilation | Optional compiler/runtime wheels remove the requirement for global CUDA Toolkit or Visual Studio; process-local discovery. |
-| Native game **1.3.0**, commit `8861824df6893a34c2cd4df7f9b68613376d7964` | Source and 214 game tests, including exact CPU/CUDA state/event/replay comparisons | The Python simulator remains the oracle. Compact facts preserve reward attribution; demonstrations require CPU replay agreement. |
-
-Local measurements are recorded separately in `gpu-performance.md`; neither GPU
-memory allocation nor utilization alone is treated as evidence of training speed.
-
-
-## Action timing, defense rewards and game budgets — 0.5.0
-
-Inspected 2026-09-20. This revision implements Leafy's requested objective and
-scheduling changes; its weights and budget sizes are not published results.
-
-| Source actually used | Evidence inspected | Decision informed |
-|---|---|---|
-| Lawn Lab 1.2.1, commit `6fd1f54706369915013a49eab5c1790f8c55ab0a` | Installed `engine.py`: `step`, `_advance`, `_sun_income`, `_detonate`, `_advance_zombies`, `_advance_mowers`; active wall-nut HP and card costs | Reuse native validation and combat, isolate zero-time action application in the research subclass; use public event-time sunlight, actual wall-nut bites, and source/tick blast attribution. |
-| Same game release, `replay.py` and `ui.py` | Recorder `_append`, compressed I/O, Playback initialization, `_checkpoint`, step/seek/cache, `_finish`, and App restart/seek integration | Explicit research replay version for zero-time actions; preserve native rendering, seek controls, outcomes and frame timing without editing upstream. |
-| Stable-Baselines3 / SB3-Contrib 2.7.1 | Installed/on-project rollout-start/end and training-end callback integration; VecEnv automatic reset behavior; existing PPO update capture and checkpoint save/load interfaces | Count completed training episodes, keep updates unchanged, check game targets after optimization, broadcast curriculum counts for subsequent resets, and persist game counters in checkpoints. |
-| Ng, Harada, Russell (1999), linked below | Previously implemented telescoping control `-Phi(initial)+gamma^T Phi(final)` retained and independently verified with immediate actions | Keep discount per policy decision and distinguish potential transformation from the new event objective. Do not claim preserved equivalence to win-only rewards. |
-| Local 0.5.0 tests and reports | Independent event arithmetic, actual engine scenarios, zero-time and native replay comparisons, game-count CPU/CUDA/Windows integration and resume checks | Establish correctness and availability only; no learning efficacy claim and no new pilot. |
-
-All relevant upstream source was read from the installed pinned dependency. No
-external controller or demonstration was introduced into learning. Existing PPO,
-masking and tower-defense literature remains the algorithmic basis.
-
-Reviewed on 2026-09-20. Source evidence is distinct from local availability tests.
-No full RL research result has been reproduced in this repository yet.
-
-## Reward revision — 0.4.1
-
-Inspected 2026-09-20. The reward weights implement Leafy's explicit request,
-including the corrected mower penalty −2/N; they are not paper-derived weights.
-
-| Source | Evidence actually used | Decision informed |
-|---|---|---|
-| Lawn Lab 1.2.1, commit `6fd1f54706369915013a49eab5c1790f8c55ab0a` | Installed `engine.py` spawn/damage/death/mower ordering; `types.py` public events/cards/zombie views; `config.py` active health/cost rules | Attribute only the killing hit, credit preceding base-HP loss, use public type plus active starting HP, and match empty activations by engine tick/lane without modifying game sources. Immediate mower kills explain why real empty-activation counts normally stay zero. |
-| Ng, Harada, Russell (1999), already catalogued below | Existing potential-difference result; independent discounted-sum and plant/dig controls in this project | Retain `gamma*Phi(next)-Phi(current)` and zero terminal potential while changing economy features. Do not extend its invariance claim to newly added damage/kill rewards. |
-| Local 0.4.1 regression and integration suite | Public-event numerical fixtures, real one-tick/batched runs, custom-rule cases, legacy checkpoint tests and generated reports | Verify formulas and compatibility. These checks do not establish improved learning; the previous 0.4.0 pilot used another reward. |
-
-The combined economy scale/weight, full purchase-cost valuation, and exclusion of
-armor and lethal damage are explicit implementation choices recorded in
-`reward-design.md`. No new algorithm or external source code was adopted.
+Methods and adopted/rejected ideas are in [research design](research.md). This
+catalog retains source revisions and the extent of the evidence inspected.
 
 ## Papers
 
 | Source and version | Evidence inspected | Decision informed |
 |---|---|---|
 | Bergdahl, Sestini, Gisslén, [Reinforcement Learning for High-Level Strategic Control in Tower Defense Games](https://arxiv.org/abs/2406.07980v1), CoG 2024 | Full HTML methods and results, including action masking and generalization experiments | Compare direct plant placement with a five-strategy hybrid and random strategy control. The reported 57.12% vs 47.95% concerns per-level trained agents, not a successful shared policy. |
-| Dias, Foleiss, Lopes, [Reinforcement Learning in Tower Defense](https://doi.org/10.1007/978-3-030-95305-8_10), 2022 | Publisher abstract and text/conclusion | Use structured state and headless simulation. |
+| Dias, Foleiss, Lopes, [Reinforcement Learning in Tower Defense](https://doi.org/10.1007/978-3-030-95305-8_10), 2022 | All 13 pages of the user PDF `F:/chrome/978-3-030-95305-8_10.pdf`; pages 9–12/tables visually inspected | Regional metadata and simpler tasks; unspecified reward weights and scores do not establish DQN superiority. |
 | Schulman et al., [Proximal Policy Optimization Algorithms](https://arxiv.org/abs/1707.06347), 2017 | Abstract and algorithm description; library implementation | PPO as the initial algorithm, with rollout/update accounting. |
 | Huang and Ontañón, [A Closer Look at Invalid Action Masking in Policy Gradient Algorithms](https://arxiv.org/abs/2006.14171v3), 2020/FLAIRS 2022 | Abstract, theoretical rationale, experimental masking discussion | Shared legality mask at sampling, learning, and evaluation; unmasked ablation without changing rewards. |
 | Ng, Harada, Russell, [Policy Invariance Under Reward Transformations](https://people.eecs.berkeley.edu/~russell/papers/icml99-shaping.pdf), ICML 1999 | Bibliographic abstract and potential-based shaping result; source PDF availability confirmed | Discounted potential difference with terminal handling and independent telescoping tests. The chosen potential weights are this project's configuration. |
@@ -97,7 +22,7 @@ armor and lethal damage are explicit implementation choices recorded in
 
 | Project | Inspected revision/evidence | Use and limitations |
 |---|---|---|
-| Leafy's Lawn Lab, local `E:/Projects/pvz` | `b3cfbd886ab378313a1fdb57ee43a9a1b36a0793`; API, engine/config/types/replay, tests and controller | Sole game dependency. The acceptance controller is frozen in `frozen_baseline.py`; strategy proposals adapt its preferences. Installed Python/TOML files are verified against the pinned manifest. |
+| Leafy's Lawn Lab, local `E:/Projects/pvz` | `b3cfbd886ab378313a1fdb57ee43a9a1b36a0793`; API, engine/config/types/replay, tests and controller | Original game source. The acceptance controller is frozen in `frozen_baseline.py`; strategy proposals adapt its preferences. Current engine pins are listed below. |
 | [Stable-Baselines3](https://github.com/DLR-RM/stable-baselines3) | Installed 2.7.1, base/on-policy collection code | PPO implementation and vector environment lifecycle. |
 | [SB3-Contrib](https://sb3-contrib.readthedocs.io/en/master/modules/ppo_mask.html) | Installed 2.7.1; documentation and collection code | MaskablePPO, in-environment masks for subprocess workers, explicit mask passing during evaluation. Recurrent MaskablePPO is not supported. |
 | [greinermachine/PVZRL](https://github.com/greinermachine/PVZRL) | `ccef5e566d4fd03de201186b38b1c1a5097b1592`; README and adapter/reward declarations | Reference for structured PvZ observations, shared legality, and experiment artifacts. Different game/bridge; no comparable held-out performance reproduced. |
@@ -110,93 +35,7 @@ GitHub metadata did not identify standard licenses for the three external PvZ
 repositories at inspection time. Their source was not vendored. The only frozen
 controller comes from the user's existing local game project.
 
-## Visualization and progress implementation — 0.2.0
-
-| Source | Evidence inspected | Decision informed |
-|---|---|---|
-| [SB3 callbacks](https://stable-baselines3.readthedocs.io/en/master/guide/callbacks.html) and [logger](https://stable-baselines3.readthedocs.io/en/master/common/logger.html); installed SB3/SB3-Contrib 2.7.1 | Official callback/logger documentation and installed `on_policy_algorithm.py` / `ppo_mask.py` update loops | Collect optimizer metrics at the next rollout start and training end, after updates. Keep TensorBoard and add a separate throttled operational log. |
-| [FFmpeg project](https://ffmpeg.org/), local FFmpeg 8.1 essentials build | `-version`, `-encoders`, `-h demuxer=rawvideo`, `-h muxer=mp4`; confirmed `libx264`, explicit raw frame rate/size/pixel format, and `faststart` | Stream RGB frames to H.264/yuv420p MP4, without real-time display capture or keeping all frames in memory. Binary is an external tool, not vendored. |
-| Leafy's pinned game, same commit as above | `Playback.step`, final/intermediate hash checks, public observation types, offscreen art functions | Render replay ticks and retain wrapper truncation information in research-owned sidecars. No game source change. |
-
-These are implementation references. Local smoke exports verify availability;
-they provide no new evidence that the policy wins reliably.
-
-## PVZ 1.2.0 integration — 0.3.0
-
-| Source | Evidence inspected | Decision informed |
-|---|---|---|
-| Leafy's Lawn Lab, `a47056d8141ec635d3ff3f4d5561d6a75cfca2cc`, package 1.2.0 | `docs/api.md`, `docs/demos.md`, `rendering.py`, `replay.py`, `ui.py`, `tools/export_engine_pin.py`, and rendering/demo/seek tests | Adopt BoardRenderer/RGBFrame, native metadata conventions, compressed `.pvzdemo` I/O, and the seekable viewer. Record package and simulation versions separately. |
-| Git project, installed `git archive` command | Verified pinned commit archive and compared Python/TOML hashes with the source manifest | Stage packaging inputs in the research workspace so building/installing cannot write into the game checkout. |
-
-The new game version's engine, rules, scenario-generation code, and preset wave
-files are unchanged from the previous pin. Known gameplay regression cases were
-checked independently during integration. This is compatibility evidence, not new
-evidence of learned performance. The original frozen baseline retains its original
-source attribution. No external RL algorithm or library version changed.
-
-## CUDA default — 0.3.1
-
-Inspected the installed Stable-Baselines3 2.7.1 implementation in
-`common/base_class.py` (`get_device`) and `common/on_policy_algorithm.py`
-(`_setup_model`, policy device transfer, and `_maybe_recommend_cpu`). These support
-using the existing configurable device interface and retaining the README's
-whole-pipeline benchmarking guidance: CUDA support alone does not imply that this
-MLP trains faster. Local PyTorch 2.8.0+cu128 availability and saved GPU tensors were
-verified on the RTX 4070 Laptop GPU; the evidence is recorded in `validation.md`.
-No algorithm or dependency version changed for this device-default update.
-
-## Runtime transport and game patch integration — 0.3.2
-
-Inspected on 2026-09-20. These sources inform implementation; timing measurements
-are local evidence and do not imply improved learned skill.
-
-| Source | Evidence actually inspected | Decision informed |
-|---|---|---|
-| [Stable-Baselines3](https://github.com/DLR-RM/stable-baselines3), installed 2.7.1 | `common/vec_env/subproc_vec_env.py`, `base_vec_env.py`, `common/buffers.py`, callback/logger and PPO collection code | Reuse spawned workers; carry masks in existing reset/step responses; retain terminal observations; subclass sampling without changing GAE or NumPy permutation order. Time phases through callbacks and explicitly separate benchmark warmup. |
-| [SB3-Contrib](https://github.com/Stable-Baselines-Team/stable-baselines3-contrib), installed 2.7.1 | `common/maskable/utils.py`, `buffers.py`, `policies.py`, `distributions.py`, `ppo_mask/ppo_mask.py` | Keep mask-aware collection/update implementations intact. Serve mask `env_method` calls locally and reuse CUDA rollout tensors across epochs. Preserve mask/sample numeric validation. |
-| [PyTorch](https://github.com/pytorch/pytorch), installed 2.8.0+cu128 | Installed `torch/distributions/distribution.py` validation and SB3's `to_torch` calls; local cProfile of copies, distributions, and multiprocessing | Optimize repeated transfer/indexing rather than enlarge the policy to consume VRAM. Keep validation and floating-point precision unchanged. |
-| Leafy's Lawn Lab package 1.2.1, commit `6fd1f54706369915013a49eab5c1790f8c55ab0a` | API and iteration docs, complete source diff from 1.2.0, `engine.py` legality, renderer, source-pin exporter | Pin the new package; reuse defeated/total HUD. Cache engine legality only while all public legality inputs remain equivalent. Verify simulation/rule sources unchanged and run upstream tests without checkout writes. |
-
-Attempts to fetch current online SB3/PyTorch documentation encountered HTTP/DNS
-errors. The table describes the installed versioned source actually read, not an
-unverified online document. Existing PPO/masking literature above remains the
-algorithmic basis; no new training algorithm was adopted.
-
-## Evidence boundaries (research claims)
-
-### Paper adaptation and pure-RL profiles — 0.4.0
-
-Inspected 2026-09-20. Source evidence and implementation decisions:
-
-| Source | Evidence actually inspected | Decision informed |
-|---|---|---|
-| Dias, Foleiss, Lopes (2022), DOI `10.1007/978-3-030-95305-8_10`; user PDF `F:/chrome/978-3-030-95305-8_10.pdf` | All 13 pages; visual inspection of pages 9–12; Table 4 representations and Table 5 scores | Test regional metadata and simpler introductory tasks. Do not infer DQN superiority, copy unspecified reward weights, or claim recurrent results. Detailed evidence boundaries are in `paper-adaptation.md`. |
-| SB3-Contrib 2.7.1, `common/maskable/distributions.py` and `policies.py` | Installed distribution interfaces, mask handling, `_build`, policy inference and action evaluation | Implement a joint type/tile distribution through existing policy interfaces, preserving the 406-action engine contract and PPO algorithm. |
-| SB3/SB3-Contrib 2.7.1 callback and on-policy update loops | Installed rollout start/end and training-end hooks | Read entropy components after optimization; stop timed pilots at completed-update boundaries; keep the same optimizer across curriculum stages. |
-| Local `runs/masked-cuda-101` episode/validation JSON | 10,229 episodes and accepted-purchase counts; selected and final validation summaries | Identify absent sustained attackers, inspect savings/exploration signals, and define focused ablations rather than changing algorithms without evidence. |
-| Lawn Lab 1.2.1, existing public scenario/observation/rule API | `LevelSpec`, `Spawn`, card costs/recharge and projectile firing intervals; independent lesson controls | Build seeded lessons without engine changes or hidden observations, and derive explicit scales from pinned rules. |
-
-Grouped action selection, lane summaries, mastery thresholds, and pilot screening
-rules are project-specific design decisions. No external project code was copied.
-The engine pin and library versions remain those recorded for 0.3.2.
-
-For the user-requested kill reward, inspected the same pinned engine's `_damage`,
-`_clear_dead`, projectile movement, explosion/swallow paths, and `_advance_mowers`.
-`DamageApplied.source` is positive for plant/projectile entities and negative for
-mower rows; deaths emit `ZombieDefeated` within the same tick. This public contract
-supports killing-blow attribution without modifying the engine. The +1/N and -1/N
-weights are a local configurable choice implementing the user's preference, not a
-published finding. Tests independently cover all damaging plants, mixed batches,
-nonlethal damage, and mower kills after plant damage.
-
-The existing game is a daytime PvZ-style clone with automatic sun collection and
-documented custom balance. Its results are not directly comparable to commercial
-PvZ or the 2024 paper's level suite. Winning through legal game actions does not
-establish human behavioral similarity. The literature motivates this experiment;
-only independent held-out evaluations can establish performance in this environment.
-
-
-## SC2-inspired pure-RL work — 0.7.0 (2026-09-21)
+## StarCraft methods and projects
 
 | Source/version inspected | Evidence inspected | Decision informed |
 |---|---|---|
@@ -212,7 +51,52 @@ only independent held-out evaluations can establish performance in this environm
 | [Raw-vs-Human-in-AlphaStar](https://github.com/liuruoze/Raw-vs-Human-in-AlphaStar) | README identifying the Rethinking experiment and raw/human configuration switch | Confirm experiment scope; no code imported |
 | SB3/SB3-Contrib 2.7.1 installed policy, distribution and PPO interfaces; existing project CUDA optimizer | Policy construction, optimizer parameter registration, joint action evaluation, update capture and checkpoint loading | Reuse the PPO objective, add one shared exploration-loss interface, and verify fresh/loaded spatial heads |
 
-Full-text findings, repository descriptions, local observations and new design
-choices remain separate in [sc2-adaptation.md](sc2-adaptation.md). The normalized
-unweighted tile bonus and exact architecture sizes are project adaptations. No
-AlphaStar speedup or win-rate claim is transferred to this laptop.
+## GPU implementation sources
+
+| Source inspected | Evidence used | Implementation decision |
+|---|---|---|
+| Lan et al., 2022, [WarpDrive: Fast End-to-End Deep Multi-Agent Reinforcement Learning on a GPU](https://jmlr.org/papers/v23/22-0185.html), and [project README](https://github.com/salesforce/warp-drive) | GPU simulation/learning architecture and explicit distinction between kernels and scenario configuration | Keep simulation and PPO tensors on one device. No WarpDrive code copied and no published speedup transferred to this laptop. |
+| CuPy **v13.6.0** [kernel guide](https://raw.githubusercontent.com/cupy/cupy/v13.6.0/docs/source/user_guide/kernel.rst) | RawKernel/RawModule, NVRTC compilation, launch configuration and cache | Optional pinned CuPy backend and fused ordered game kernels. |
+| CuPy **v13.6.0** [interoperability guide](https://raw.githubusercontent.com/cupy/cupy/v13.6.0/docs/source/user_guide/interoperability.rst) | DLPack lifetime, contiguous arrays, ExternalStream ownership/device rules | Shared CuPy/PyTorch views on one explicit stream; pointer and write tests. |
+| Installed **SB3/SB3-Contrib 2.7.1**: `common/buffers.py`, `common/on_policy_algorithm.py`, `ppo/ppo.py`, `ppo_mask/ppo_mask.py` | Collector, timeout bootstrapping, environment-major flattening, NumPy permutation, advantage normalization, PPO loss/gradient clipping/update sequence | Tensor collector/buffer and GAE, with independent fixed-data loss/gradient/optimizer comparisons; aggregate metric transfers after the final update. |
+| NVIDIA runtime **12.8.90** and NVRTC **12.8.93** Windows wheels | Installed header/DLL layout and actual kernel compilation | Optional compiler/runtime wheels remove the requirement for global CUDA Toolkit or Visual Studio; process-local discovery. |
+| Native game **1.3.0**, commit `8861824df6893a34c2cd4df7f9b68613376d7964` | Source and 214 game tests, including exact CPU/CUDA state/event/replay comparisons | The Python simulator remains the oracle. Compact facts preserve reward attribution; demonstrations require CPU replay agreement. |
+
+## Reward, optimizer and presentation sources
+
+| Source/version | Evidence inspected | Decision informed |
+|---|---|---|
+| Schulman et al., [Generalized Advantage Estimation](https://arxiv.org/abs/1506.02438) | Abstract; installed SB3 2.7.1 recurrence and independent controls | Bias/variance tradeoff; lambda 0.999 is a local experiment, not a published PVZ result |
+| [SB3 callbacks](https://stable-baselines3.readthedocs.io/en/master/guide/callbacks.html) and [logger](https://stable-baselines3.readthedocs.io/en/master/common/logger.html), installed 2.7.1 | Documentation, collection/update loops, vector worker/buffer code | Capture final/post-update metrics, preserve TensorBoard, masks and terminal observations; optional runtime caches retain sample order |
+| PyTorch 2.8.0+cu128 | Installed distribution validation, device/buffer code and local cProfile | Avoid repeated small transfers; keep precision and validation; VRAM use alone is not speed evidence |
+| [FFmpeg](https://ffmpeg.org/), local 8.1 essentials | `-version`, `-encoders`, rawvideo demuxer and MP4 muxer help; libx264 confirmed | Stream RGB to H.264/yuv420p with explicit frame rate/size and fast-start; no binary vendored |
+| Git, installed `archive` command | Pinned archive compared with the manifest | Stage/build the game inside research `build/`, never inside its source checkout |
+
+The installed game `engine.py`, `types.py`, `config.py`, `replay.py` and CUDA event
+schema were inspected for event ordering and attribution. Plant/projectile sources
+are positive and mower sources negative; `PlantRemoved(reason=eaten)` differs from
+digging/detonation. Damage uses starting base HP; bites use actual plant HP removed;
+empty blasts match source and tick. These facts support exact CPU/CUDA accounting.
+The reward coefficients, choice-state actor reduction and initial dig bias are
+local changes implementing Leafy's preferences and diagnosed failure modes.
+Potential-shaping invariance is not claimed for added event rewards.
+
+## Local engine and experiment provenance
+
+| Version/source | Evidence inspected and use |
+|---|---|
+| Original `b3cfbd886ab378313a1fdb57ee43a9a1b36a0793` | API, rules, replay, tests and frozen baseline controller |
+| Game 1.2.0, `a47056d8141ec635d3ff3f4d5561d6a75cfca2cc` | Renderer, compressed demos, metadata, seek/viewer tests, pin exporter; package/simulation identity separated |
+| Game 1.2.1, `6fd1f54706369915013a49eab5c1790f8c55ab0a` | Source diff, native HUD and legality; unchanged combat; public events and lesson feasibility |
+| Installed game 1.3.0, `8861824df6893a34c2cd4df7f9b68613376d7964` | CUDA kernel/batch sources, 214 engine tests and exact state/event/replay differential controls |
+| Native CPU reader 1.2.2 / `a95524e`, CUDA reader 1.3.1 / `314528a` | Action-phase loader compatibility with research code at `665aec5`; retain installed simulator pin |
+| `runs/masked-cuda-101` | 10,229 episode records, purchase totals and validation; historical exploration diagnosis |
+| `runs/cuda-shared-101` | Interim 2,923-game snapshot and phase times; not a final result |
+| `runs/sc2-shared-101` | Completed records, selected/final validation, plant/dig traces, three original demos; checkpoint `ce6b6fc3b480233c67b4009e6ce44d7412d2e2ef8fc7db8c047d34fe70fbb65e` |
+| Committed `evidence/` and ignored local `artifacts/` | Tests, measured timings and bounded diagnostics; indexed in [validation](validation.md) |
+
+Sources were inspected on 2026-09-20/21; this consolidation adds no new literature
+claims. Some online SB3/PyTorch retrievals failed, so those entries explicitly use
+installed versioned source. Revisiting remains abstract-only. Repository claims,
+published findings, proposed adaptations and local results are distinct. No paper
+establishes these reward weights, human similarity or a two-hour win-rate gain.

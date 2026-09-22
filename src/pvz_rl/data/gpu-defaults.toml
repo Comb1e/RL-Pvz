@@ -1,5 +1,5 @@
 # Promoted after differential tests and three repeated collection/update measurements.
-# See docs/gpu-performance.md. Existing explicit configurations retain their defaults.
+# See docs/validation.md#gpu-performance. Existing explicit configurations retain their defaults.
 simulator = "cuda"
 device = "cuda"
 n_envs = 128

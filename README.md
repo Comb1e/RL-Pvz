@@ -1,1000 +1,195 @@
 # PVZ plant-placement research
 
-Train a policy to choose **which plant, which tile, and when to act** in the existing
-[Lawn Lab game](../../pvz/README.md). This project contains the research code; the game remains
-an independent dependency at `E:/Projects/pvz`.
+Train **one shared policy for easy, standard, and hard** using ordinary planting,
+digging, and waiting actions. Research **0.7.1** uses the pinned Lawn Lab game
+**1.3.0**, simulation **1.0.0**. CUDA simulation and learning run on the GPU;
+Python simulation remains the reference and explicit fallback.
 
-Implemented: a Gymnasium adapter, MaskablePPO and PPO training, five research
-conditions, four non-learning baselines, checkpoint recovery, deterministic replays,
-held-out evaluations, changed-wave scenarios, statistical analysis, progress logs,
-automatic offline reports, learning curves, compact game demos, and optional MP4 export.
-**Each run trains one shared policy for easy, standard, and hard.** The same
-`best.zip` is used for all three difficulties and their demonstration recordings.
-Research version **0.7.1** uses game package **1.3.0** (simulation version **1.0.0**).
-The new pure-RL profiles add tactical observations, grouped plant/tile decisions,
-and introductory lessons. They are experimental: see [paper adaptation and pilot
-evidence](docs/paper-adaptation.md). The baseline remains the default configuration.
-New CUDA runs use fresh models. Archived configurations retain their original encoder,
-flat/grouped policy and curriculum semantics in their original pinned environment.
-Weights from the prior engine source pin are not migrated.
-Checkpoints from older game source pins cannot be resumed or evaluated. Archived
-reports and replay files remain readable. No formal research suite was launched.
+The latest plant-reward profile is experimental. Short checks improved lesson
+learning, but reliable normal-game improvement has not been demonstrated. See
+[measured results](docs/validation.md#learning-results) before comparing profiles.
 
+## Install
 
-## SC2-inspired shared policy (experimental)
-
-The new candidate addresses exploration and plant placement using selected
-AlphaStar/SC2LE ideas. It uses tactical observations, a small spatial grouped
-policy, balanced exploration across action types, and mastery-based lessons.
-Your reward coefficients and per-tick controls remain unchanged. The baseline
-is still the default until controlled comparisons establish an improvement.
-See [the evidence and design decisions](docs/sc2-adaptation.md).
-The two five-minute diagnostics did not pass placement mastery; early digging
-persisted. The two-hour candidate is available for experiments, with no measured
-improvement over baseline yet.
-
-After any existing training job has finished, update the research package in the
-existing environment; the game dependency and environment do not need replacement:
+Use this checkout, `E:/Projects/Tower-Defence-AI/PVZ-plant`, and its single `.venv`.
+The existing environment already contains the pinned simulator. To update only
+the research package and check availability:
 
 ```powershell
 .\.venv\Scripts\python.exe -m pip install --no-deps --no-build-isolation -e .
-.\.venv\Scripts\python.exe -m pvz_rl train `
-  --config configs\sc2-inspired.toml --seed 101 `
-  --games 10000 --max-minutes 120 --output runs\sc2-shared-101
-```
-
-This starts **one shared policy** on 128 GPU games with 128 decisions per game
-per PPO rollout. Normal validation uses the same 50 seeds for each difficulty,
-but runs every **1,000 completed games**; override with `--eval-games`. Mastery
-probes use 20 cases every 100 games, with two consecutive passing probes and
-100 completions from episodes started in the current stage. No scripted training
-examples or placement routines are used. Different encoders/policies require a
-fresh run; existing compatible checkpoints keep their saved settings on resume.
-
-`--max-minutes` includes startup, validation and automatic presentation and is
-cumulative across resume. At 120 minutes it reserves 15 minutes for finalization.
-For short smoke runs, the reserve is at most one eighth of the allowance. Training
-stops at a completed PPO update using an estimate of the next rollout/update time.
-The status records `stop_reason`, `budget_complete`, `curriculum_incomplete`,
-`time_budget`, and any pending validation or presentation. In-flight saves and
-kernel operations finish safely; this is a cooperative deadline, not a process kill.
-`--max-minutes` on `suite` applies separately to each training run.
-
-Progress remains every 15 seconds. The report at `RUN_DIR/visualizations/index.html`
-includes validation, behavior, optimizer and exploration curves. Metrics include
-sustained-attacker purchases, first-attacker time, maximum sun, reward components,
-and voluntary digging within five seconds of planting. The exploration bonus is
-shown separately from true joint entropy. `best.zip` is selected by mean win rate
-across all three difficulties, with the earlier checkpoint retained on ties.
-
-All three `.pvzdemo` recordings use that same `best.zip` and seed 100000. Failed or
-unfinished exports preserve checkpoints and existing recordings:
-
-```powershell
-.\.venv\Scripts\python.exe -m pvz_rl visualize --run runs\sc2-shared-101
-# MP4 is optional and requires FFmpeg:
-.\.venv\Scripts\python.exe -m pvz_rl visualize --run runs\sc2-shared-101 --videos
-```
-
-The separate `configs/sc2-long-horizon.toml` changes gamma from 0.999 to 0.9999.
-Do not resume the other profile's weights into it. It remains an ablation, with
-all combat/terminal coefficients unchanged. In balanced profiles, exploration is
-controlled by `training.exploration.type_coef` and `.tile_coef`; `ent_coef` retains
-its original meaning for joint-entropy profiles.
-
-Optional development comparisons run only when explicitly invoked:
-
-```powershell
-# Two learning-diagnostic runs, at most five minutes each:
-.\.venv\Scripts\python.exe -m pvz_rl compare-sc2 --diagnostics-only --output runs\sc2-diagnostics
-# Diagnostics followed by A-F, seeds 101 and 102; limit is PER RUN:
-.\.venv\Scripts\python.exe -m pvz_rl compare-sc2 --max-minutes 120 --games 10000 --output runs\sc2-comparison
-# Rebuild the comparison without training:
-.\.venv\Scripts\python.exe -m pvz_rl compare-sc2 --report-only --output runs\sc2-comparison
-```
-
-The complete comparison can take up to roughly 24 hours plus its diagnostics.
-It compares A: flat baseline, B: existing grouped policy, C: balanced exploration,
-D: mastery curriculum, E: spatial policy, and F: longer horizon. It reverses order
-for the second seed and writes `report.md`, `comparison.json`, comparison curves,
-and individual run reports. Missing comparisons and rollout overshoot are explicit.
-Only development validation seeds are used. No full comparison or formal research
-training is launched by installation or availability checks.
-
-## Faster SC2 candidate with plant-role rewards (experimental)
-
-The completed `sc2-shared-101` run selected 42% easy / 0% standard / 0% hard on
-50 validation seeds per difficulty. Its demos mainly use wall-nuts and mines.
-This candidate addresses action-credit dilution and adds the requested plant-role
-signals, keeping the **120-minute maximum**, 128 parallel games, 128 decisions per
-game, one shared policy, per-tick controls and existing combat reward coefficients.
-Start a fresh model; do not resume the old profile into it.
-
-```powershell
-.\.venv\Scripts\python.exe -m pvz_rl train --config configs\sc2-plant-rewards.toml --max-minutes 120 --output runs\sc2-plant-rewards-101
-```
-
-- PPO actor advantages and exploration are averaged over states with at least two
-  legal actions. Forced waits still advance the game and train the value network.
-  Every legal dig, placement and wait remains available. There is no scripted control.
-- GAE lambda is 0.999 (previously 0.98), carrying more credit through the existing
-  128-decision rollout. Gamma stays 0.999. Minibatches are 1,024 instead of 256;
-  the network, learning rate and four optimization epochs are unchanged.
-- Add `0.1 × number of living offensive plants` to the shaping potential, reported
-  separately as `offensive_shaping`. Peashooter, snow pea, repeater and chomper count
-  in this profile; the list is configurable. A first immediate placement gives
-  +0.0999 at gamma 0.999. Digging/removal reverses its potential, so repeating
-  planting and digging cannot generate discounted bonus income. Genuine terminals
-  zero the potential; external truncations retain it for bootstrapping.
-- Each non-wall-nut plant removed with reason **eaten** receives −0.02. Voluntary
-  digging and normal bomb/mine detonation are not classified as being eaten.
-  Empty ash explosions retain the existing −0.2; damaging armor counts as a hit.
-- `policy.initial_dig_logit = -6` gives fresh policies a lower starting probability
-  of digging. With otherwise equal wait/dig logits this is about 0.25%, rather
-  than 50% per decision. The bias remains trainable: no action mask, retention
-  rule or inference-time override is added, and checkpoint loading preserves
-  learned values instead of applying the initialization again.
-
-These weights are in `[reward]` as `offensive_plant_weight`, `offensive_plants`
-and `eaten_plant_penalty`. The new reward components default to zero in older
-configurations, preserving compatible checkpoints. New GPU plant-event rewards
-consume the engine's public event buffer entirely on-device; observations and
-combat rules are unchanged. This adds about 252 MiB for 128 ordinary games.
-
-`configs/sc2-efficient.toml` isolates optimization changes without new rewards.
-`configs/sc2-inspired.toml` remains the original baseline. Do not pool their scores:
-profile names and reward settings are recorded with every run. Short comparisons
-and limitations are documented in [the learning diagnosis](docs/sc2-learning-fix.md).
-A throughput improvement is not a claim of improved two-hour win rate.
-
-Validation refills finished GPU slots instead of waiting for a whole batch before
-starting the next cases. Seeds, deterministic actions, checkpoint scoring and
-earliest-checkpoint ties are preserved. Set `runtime.refill_evaluation = false`
-for the original batching control. Logs show stage, recent task counts, attacker
-purchases and early digging; mower-free lessons are labeled explicitly.
-
-For a bounded development check (four five-minute allowances by default):
-
-```powershell
-.\.venv\Scripts\python.exe tools\check_sc2_learning.py --output artifacts\sc2-check
-```
-
-## CUDA simulation and training
-
-The optional CUDA backend moves games, observation encoding, rewards, policy
-inference, rollout storage and GAE onto the GPU. **One model still plays easy,
-standard and hard.** The research defaults (networks, learning rate, reward,
-discount, GAE, minibatch 256, four PPO epochs) are unchanged. Completed games
-control the budget, curriculum, validation and ETA.
-
-The working research checkout is `E:/Projects/Tower-Defence-AI/PVZ-plant`,
-using its single `.venv`. The game backend comes from the pinned commit in
-`E:/Projects/pvz-cuda-work`. Both game checkouts now also contain newer native
-replay-reader fixes; the installed training simulator retains its original pin.
-Development used an isolated environment that was moved to the Recycle Bin after verification.
-A new installation inside the research checkout uses:
-
-```powershell
-.\tools\bootstrap.ps1 -GameRepo E:\Projects\pvz-cuda-work -Cuda
 .\.venv\Scripts\python.exe -m pvz_rl doctor --output artifacts\availability.json
 ```
 
-CuPy **13.6.0**, CUDA runtime **12.8.90** and NVRTC **12.8.93** are pinned in
-`requirements-cuda-lock.txt`. Their Windows wheels provide compiler DLLs and
-headers; no Visual Studio or global CUDA Toolkit installation is needed. If
-PyTorch is already installed in a separate environment, install that lock there
-after installing the newly pinned game and research packages. The `doctor`
-checks compilation, shared-stream tensor writes, state-hash parity and free VRAM.
+For a fresh Windows installation, install Python 3.12 and Git. The installer
+requires game commit `8861824df6893a34c2cd4df7f9b68613376d7964`. The native viewer
+checkouts contain newer reader fixes, so use a temporary source copy under
+`build/` instead of switching either viewer checkout:
 
-The measured 0.6.0 baseline default is **128 GPU games × 128 decisions per game per rollout**,
-about **10,733 decisions/s versus 2,835 with the prior CPU simulator** on this
-laptop. This speed measurement does not establish the new spatial policy's throughput. Start a fresh shared-policy run (training starts only when you execute this):
+```powershell
+git clone --no-checkout E:\Projects\pvz-cuda-work build\pvz-install-source
+git -C build\pvz-install-source checkout --detach 8861824df6893a34c2cd4df7f9b68613376d7964
+.\tools\bootstrap.ps1 -GameRepo .\build\pvz-install-source -Cuda
+```
+
+The installer stages a verified archive and installs the game non-editably.
+It uses the same research `.venv`; `build/pvz-install-source` is only installation
+input. CUDA wheels include PyTorch 2.8.0+cu128, CuPy 13.6.0, runtime 12.8.90 and
+NVRTC 12.8.93; no global CUDA Toolkit or Visual Studio is required. For CPU-only
+installation, omit `-Cuda` and use `--simulator cpu --device cpu` when training.
+Missing CUDA produces an error rather than a silent fallback. FFmpeg/libx264 is
+needed only for optional MP4 export; compact demos do not require it.
+
+## Train
+
+Start a fresh model with the latest experimental rewards:
 
 ```powershell
 .\.venv\Scripts\python.exe -m pvz_rl train `
-  --condition masked --seed 101 `
-  --games 10000 --eval-games 1000 --output runs\cuda-shared-101
+  --config configs\sc2-plant-rewards.toml --seed 101 `
+  --games 10000 --max-minutes 120 --output runs\sc2-plant-rewards-101
 ```
 
-`--n-envs` means parallel GPU games, not Windows worker processes. The rollout
-contains `n_envs * rollout_steps_per_env` decisions: 4,096 at 32 games, 8,192 at
-64, and 16,384 at 128. Conflicting explicit `--rollout-size` values are rejected.
-Legacy total-rollout configurations remain readable. Use the same simulator flag
-with `--config configs\pure-rl.toml` to retain the experimental tactical/grouped/
-teaching profile; this does not introduce scripted training examples.
-
-The explicit equivalent is `--config configs\cuda.toml --simulator cuda
---n-envs 128 --rollout-steps-per-env 128`. Explicit configs, legacy `--steps` or
-`--rollout-size`, CPU requests and resumes retain their stated settings. For
-example, CPU simulation with a CUDA policy uses `--simulator cpu --device cuda`.
-To keep the CPU workload small, CUDA suites cap their hybrid job at eight CPU
-workers with 128 decisions per worker; each job records its resolved settings.
-
-Masked, unmasked, sparse and mixed direct policies support CUDA. Grouped policies
-retain their existing masked-policy restriction. Explicit `train --condition
-hybrid --simulator cuda` is rejected; use `--simulator cpu`. The suite uses the
-Python simulator for its hybrid job, and records that distinction. Modified combat
-rules and legacy fixed-tick configurations also require the Python simulator.
-
-Progress still appears every 15 seconds in the terminal and `train.log`. For example:
-
-```text
-[starting] ... 128 parallel games; simulator cuda; 128 decisions/game/rollout; 16384 total rollout decisions
-[collecting] 250/10000 games ... games/min ... decisions/s ... training ETA ...
-[validating] ... shared-policy mean ...
-```
-
-`visualizations/index.html`, PNG curves, checkpoint hashes and `.pvzdemo` files
-are unchanged. Validation is batched on CUDA. Demonstration action traces are
-replayed through the Python engine and must match outcome and state hash before
-being saved. All three demos use the same selected `best.zip`. No videos are
-encoded unless requested. Regenerate with `pvz-rl visualize --run RUN_DIR`; watch
-with `pvz-rl replay DEMO.pvzdemo --watch`, or add `--video OUTPUT.mp4`.
-
-Measure this laptop before selecting parallelism:
-
-```powershell
-.\.venv\Scripts\python.exe -m pvz_rl benchmark-gpu `
-  --output artifacts\gpu-benchmark --minutes 15
-```
-
-This bounded command compares the existing CPU simulator, equivalent CPU/CUDA
-settings, and 32/64/128 GPU games in three repetitions. It includes combat and
-resets, separates setup/warmup, records phase timings and system load, and selects
-the smallest stable profile within 5% of the fastest median. CUDA is promoted
-only after correctness and at least 20% complete-pipeline gain pass. See
-[GPU measurements](docs/gpu-performance.md) and
-[implementation choices](docs/gpu-plan-adjustments.md). Full research training is
-never launched by availability or benchmark commands.
-
-## 1. Install and check availability
-
-The workspace already has a Python 3.12 virtual environment with CUDA-enabled
-PyTorch. From this directory in PowerShell:
-
-```powershell
-.\.venv\Scripts\python.exe -m pvz_rl doctor --output artifacts\availability.json
-.\.venv\Scripts\python.exe -m pytest -q
-```
-
-For a fresh installation, use Python 3.12 and Git:
-
-```powershell
-# NVIDIA GPU installation; downloads the CUDA-enabled PyTorch wheel.
-.\tools\bootstrap.ps1 -GameRepo E:\Projects\pvz-cuda-work -Cuda
-
-# Explicit CPU simulation and policy installation.
-.\tools\bootstrap.ps1 -GameRepo E:\Projects\pvz-cuda-work
-```
-
-Training uses **CUDA by default**. The current environment detects an NVIDIA
-GeForce RTX 4070 Laptop GPU with PyTorch `2.8.0+cu128`. For a CPU-only installation,
-add `--simulator cpu --device cpu` to training and suite commands. If CUDA is unavailable, training
-stops with an actionable error instead of silently switching devices.
-
-The installer checks that the game checkout is clean and at commit
-`8861824df6893a34c2cd4df7f9b68613376d7964`, stages a verified Git archive under
-this project's `build` directory, and installs the game non-editably from that copy.
-Packaging inputs and build artifacts stay outside the game repository.
-Every training/evaluation command verifies the installed game's source manifest
-and rules hash, package version 1.3.0, and simulation version 1.0.0. Source pins
-must match the checkpoint even when two releases share the same combat rules.
-
-For an existing research virtual environment, upgrade only the game and research package:
-
-```powershell
-$gameStage = Join-Path 'build' ('game-' + [guid]::NewGuid().ToString('N'))
-.\.venv\Scripts\python.exe -B tools\stage_game.py --repo E:\Projects\pvz-cuda-work --output $gameStage
-.\.venv\Scripts\python.exe -m pip install --no-deps --force-reinstall $gameStage
-.\.venv\Scripts\python.exe -m pip install --no-deps -e ".[dev,ui]"
-.\.venv\Scripts\python.exe -m pvz_rl doctor
-```
-
-Use a new output directory and the bundled configuration for new training.
-Do not edit old run metadata to bypass version checks. The original game checkout
-and existing run directories are preserved; old models require their original
-research environment. No checkpoint migration is provided.
-
-The commands below use `python -m pvz_rl`; `pvz-rl.exe` in the virtual environment
-is an equivalent entry point. No environment activation is required.
-
-Video export needs `pygame-ce` (included in the installer) and FFmpeg with the
-`libx264` encoder. FFmpeg 8.1 is available on this machine. For a fresh Windows
-installation, install FFmpeg, for example with `winget install --id Gyan.FFmpeg`,
-then open a new terminal. `doctor` reports rendering and encoder availability.
-Alternatively set `visualization.ffmpeg` to an executable path in your TOML file.
-Compact recording and report generation require neither pygame nor FFmpeg.
-The native viewer and frame/video rendering need pygame; optional MP4 export also
-needs FFmpeg. Missing video dependencies do not block default training or demos.
-
-## 2. Run a short smoke test
-
-This runs two completed training games on the restricted diagnostic task, evaluates
-one validation case, and saves real checkpoints. It checks integration, not skill.
-
-```powershell
-.\.venv\Scripts\python.exe -m pvz_rl train `
-  --condition masked --family diagnostic --seed 101 `
-  --simulator cpu --games 2 --n-envs 1 --rollout-size 64 --batch-size 32 `
-  --eval-games 1 --validation-count 1 `
-  --output runs\smoke
-```
-
-Output directories must be new. Existing runs and checkpoints are not overwritten.
-The smoke run also produces a report and a diagnostic `.pvzdemo` recording.
-Add `--videos` to export an MP4 as well.
-The diagnostic uses one threatened lane, 100 starting sun, no mowers, and a
-peashooter/wait action mask. A manually placed peashooter provides an independently
-tested winning control. Diagnostic policies are not benchmark results and cannot
-be passed to the formal test evaluator.
-
-## 3. Train a policy
-
-To try the new experimental method, start **one shared model** with:
-
-```powershell
-.\.venv\Scripts\python.exe -m pvz_rl train `
-  --config configs\pure-rl.toml --condition masked --seed 101 `
-  --device cuda --games 10000 --eval-games 1000 --output runs\pure-rl-101
-```
-
-This is a fresh model, not a continuation of an old flat-action checkpoint.
-`best.zip` is selected only by the average normal-game validation win rate across
-easy, standard, and hard. All three automatic `.pvzdemo` recordings use that same
-checkpoint. Lessons never select the shared checkpoint, and no scripted actions,
-imitation data, or warm-start weights enter learning.
-
-| Configuration | Observation | Action policy | Training curriculum |
-|---|---|---|---|
-| `configs/baseline.toml` | 2,719 spatial values | Flat masked | Fixed schedule |
-| `configs/tactical.toml` | 1,140 tactical values | Flat masked | Fixed schedule |
-| `configs/grouped.toml` | 1,140 tactical values | Masked type, then tile | Fixed schedule |
-| `configs/pure-rl.toml` | 1,140 tactical values | Masked type, then tile | Lesson mastery gates |
-
-Grouped profiles use `--condition masked` (or `sparse` for an explicit reward
-experiment). They do not support the unmasked or scripted-hybrid conditions.
-Use the baseline configuration for the original five-condition `suite` command.
-The new recipe comparison is:
-
-```powershell
-.\.venv\Scripts\python.exe -m pvz_rl pilot --output runs\paper-pilot --minutes 30
-```
-
-This spends at most five minutes of the budget on placement/saving learning
-diagnostics, then compares four profiles with learner seeds 101 and 102. Each run
-targets at most 200 completed games and validates every 20 games on the first five
-validation seeds per difficulty. Configuration order reverses for seed 102.
-Remaining time is divided among remaining jobs; collection stops between complete
-PPO updates when its slot expires. An in-progress probe/validation and checkpoint/
-report cleanup can finish afterward. It never uses final-test seeds.
-
-`report.md`, `comparison.json`, and `comparison.png` compare only validation budgets
-completed by every profile and both seeds. Missing runs/budgets are explicit.
-Diagnostics must pass and the candidate must improve over baseline for both seeds
-at a shared budget before the runner recommends a larger development study.
-Otherwise it remains experimental. Per-run offline HTML reports are under
-`PROFILE-SEED/visualizations/index.html`; pilot demos are disabled to reserve time
-for learning. To generate a pilot checkpoint's demos afterward, use a copy of its
-configuration with `visualization.demos = true` and `visualize --config ... --run ...`.
-
-The teaching stages are placement → saving/economy → easy → easy/standard → shared
-20/40/40 easy/standard/hard training. Probes run every 20 completed training games, after optimization,
-using 20 fixed validation cases. Advancement requires two consecutive passes and
-at least 20 completed training games in the stage. Thresholds and rehearsal distributions are
-in the configuration. New stages affect only episode resets and retain the same
-policy and optimizer. `curriculum.json` and `curriculum-probes.jsonl` record progress;
-checkpoints embed the same state for resume. Budget exhaustion before the shared
-stage is reported as `curriculum_incomplete`; stages are never skipped to meet a
-deadline. Normal-game evaluation always permits all eight plants.
-
-Episode records also include sustained-attacker purchases, first-attacker time,
-maximum sun, spending by plant, and affordable-attacker opportunities. The report
-adds economy and grouped-entropy curves. Waiting frequency alone is not treated
-as failure. Logging remains throttled to 15 seconds, with immediate curriculum,
-validation, checkpoint, and completion messages.
-
-### Rewards and penalties
-
-All supplied profiles use the following reward. `N` is the initial number of
-zombies in the episode, guarded by `max(1, N)` for empty scenarios.
-
-| Event | Reward |
-|---|---:|
-| Win / loss | +1 / −2 |
-| Plant kills a zombie | +1/N |
-| Mower kills a zombie | −2/N |
-| Plant damages a zombie without that hit killing it | +actual HP removed / (full starting zombie HP × N) |
-| Mower activates and kills nothing on that tick in its lane | −1/5 |
-| Mower activates, regardless of kill count | Additional −current sun / 300 |
-| Zombie bites a wall-nut | +0.2 × actual bite damage / full wall-nut HP |
-| Cherry bomb or potato mine explodes with no zombie damage | −0.2 per empty explosion |
-
-Armor-only damage earns zero. The lethal hit earns only the kill reward;
-earlier nonlethal hits still earn damage rewards, even if a mower later finishes
-the zombie. Starting HP means the base health from the active game rules, not
-remaining health or armor. For example, a nonlethal 20-HP hit on a basic zombie
-in a 10-zombie game earns `20/(200*10) = 0.01`; a mower kill costs `0.2`.
-The pinned engine immediately kills its triggering zombie when a mower activates,
-so the empty-activation penalty normally remains zero. The sun-based penalty applies
-once at activation, using sun after spending and income up to that event. At 300
-sun it adds −1; at 600 sun it adds −2, separately from −2/N per mower kill.
-
-A normal 100-HP bite on a 4,000-HP wall-nut earns +0.005; a fully eaten nut
-earns +0.2 in bite rewards before other terms. Only actual HP loss counts.
-Explosion misses are matched by source plant and tick. HP or armor damage
-avoids the penalty; an untriggered mine, digging, or being eaten does not count
-as an empty explosion. These weights are configurable research choices.
-
-Shaped conditions additionally receive `gamma * Phi(next) - Phi(current)`, with:
-
-```text
-Phi = 0.5 * defeated / max(1, N)
-    + 0.5 * (stored sun + sum of living plant purchase costs) / 300
-```
-
-The economy sum has no cap and uses full purchase costs, regardless of plant
-health. Buying a plant preserves value; digging or losing it removes its value.
-The difference of potentials still uses `gamma = 0.999`. Genuine wins/losses set
-`Phi(next) = 0`; external time cutoffs retain the potential for bootstrapping.
-
-```toml
-[reward]
-win_reward = 1.0
-loss_penalty = 2.0
-plant_kill_weight = 1.0
-mower_kill_weight = 2.0
-normalize_kills = true
-damage_weight = 1.0
-empty_mower_activation_penalty = 0.2
-mower_sun_weight = 1.0
-mower_sun_scale = 300.0
-wall_nut_damage_weight = 0.2
-empty_explosion_penalty = 0.2
-gamma = 0.999
-potential_mode = "plant_value"
-defeated_weight = 0.5
-economy_weight = 0.5
-economy_scale = 300
-```
-
-The legacy `sparse` condition disables potential shaping but keeps these event
-rewards. For terminal-only reward, also set both kill weights, `damage_weight`,
-and `empty_mower_activation_penalty` to zero. Checkpoint selection remains the
-equal-weight normal-game **win rate** across easy, standard, and hard.
-
-Episode records separate kill counts, nonlethal HP damage, empty activations, and
-all four event-reward contributions. Progress logs and curves show kill counts,
-damage reward, and empty activations. Detailed semantics and numerical examples
-are in [docs/reward-design.md](docs/reward-design.md).
-
-**Start a fresh run to use the revised reward.** Old saved configurations retain
-their original potential and reward defaults; existing compatible checkpoints
-remain readable. Resume requires identical research settings and rejects mixing
-reward versions. The earlier 0.4.0 pilot does not evaluate this revised reward.
-
-Use one training command for all difficulties. Curriculum stages change which
-games are sampled, while the same policy weights and optimizer continue learning.
-There are no difficulty-specific model files or difficulty-specific checkpoint
-selection. The five conditions below are optional research comparisons, and learner
-seeds are independent repetitions; each individual run still learns one shared policy.
-
-Start with a pilot on the real game:
-
-```powershell
-.\.venv\Scripts\python.exe -m pvz_rl train `
-  --condition masked --seed 101 --games 100 `
-  --n-envs 4 --device cuda --eval-games 25 --validation-count 5 `
-  --output runs\pilot-masked-101
-```
-
-Then train the full direct-placement condition with the default protocol:
-
-```powershell
-.\.venv\Scripts\python.exe -m pvz_rl train `
-  --condition masked --seed 101 --output runs\masked-101
-```
-
-Defaults: 10,000 completed training games, validation every 1,000 games, eight
-environments, CUDA policy training, separate
-256–256 policy/value networks, learning rate `3e-4`, discount `0.999`, GAE `0.98`,
-4,096 decisions per rollout, minibatches of 256, four optimization epochs,
-clipping `0.2`, and entropy coefficient `0.01`.
-
-The policy and value networks run on the GPU; game simulation workers run on the
-CPU. Use `--device cuda` to select CUDA explicitly or `--device cpu` for CPU training.
-Small VRAM usage is expected for this MLP: memory usage is not GPU utilization.
-Runtime optimizations are enabled by default; no larger network, batch, rollout,
-worker count, changed precision, or new learning strategy is needed to use them.
-
-The agent can make **multiple legal actions at the same simulation tick**.
-A successful planting or digging action updates the board and mask immediately,
-without advancing time. Wait advances one tick (0.05 seconds); rejected requests
-also advance one tick. Sun, occupancy, and card cooldown rules still apply. There
-is no extra action cap per tick, and no ten-tick delay.
-
-`--games` counts **completed training games across all workers**, including wins,
-losses, and external time-limit endings. Validation, curriculum probes, and demos
-do not count. PPO uses `n_envs × rollout_steps_per_env` decisions per rollout
-(16,384 for the CUDA default); it finishes optimization
-before checking the game target. Actual games can exceed the target in that last
-rollout; `extra_games_in_final_rollout` records the excess. Validation intervals
-are checked after updates, with one evaluation if several thresholds were crossed.
-Fixed-curriculum counts are broadcast after each batch of completed episodes and
-affect subsequent resets; an already auto-reset or active episode keeps its task.
-
-```toml
-[training]
-budget_unit = "games"
-total_games = 10000
-eval_interval_games = 1000
-```
-
-Decision/tick counts and throughput remain diagnostics. The discount is still
-`gamma = 0.999` **per policy decision**, including zero-time actions. At all-wait
-play its half-life is about 34.6 simulated seconds; extra same-tick actions shorten
-that simulated horizon. PPO settings have not been retuned. This timing/reward/
-budget protocol needs a fresh run and is not comparable to the earlier protocol.
-Old saved configs retain their original timing and decision budget. `--steps` and
-`--eval-interval` exist only for explicit legacy runs; use `--games` and
-`--eval-games` for new training.
-
-| `--condition` | Actions | Reward | Difficulty sampling |
-|---|---|---|---|
-| `masked` | 406 actions, legal-action mask | Potential-shaped | Curriculum |
-| `unmasked` | Same 406 actions, no mask | Same shaped reward | Curriculum |
-| `sparse` | 406 actions, legal-action mask | Win/loss + configured combat rewards; no potential | Curriculum |
-| `mixed` | 406 actions, legal-action mask | Potential-shaped | 20% easy / 40% standard / 40% hard throughout |
-| `hybrid` | Five masked strategies with scripted placement | Potential-shaped | Curriculum |
-
-The curriculum spends the first 10% of completed games on easy, the next 30% on an equal
-easy/standard mixture, and the remaining 60% on the 20/40/40 mixture. Stage changes
-affect the next episode reset. One policy learns across all three difficulties.
-All eight plants remain available under the normal game rules.
-
-The hybrid chooses wait, economy, sustained attack, blocking defense, or emergency
-placement. It uses scripted placement knowledge, so evaluate it alongside the
-`random_strategy` baseline as well as the original heuristic.
-
-### Monitor training
-
-The terminal and `train.log` show startup settings immediately, progress every
-15 seconds, curriculum changes, validation progress/results, checkpoint saves,
-and video export progress. Completed episodes are stored as research data rather
-than printed individually. Example progress format (illustrative values):
-
-```text
-2026-09-20T12:00:15+00:00 [collecting] 18/100 games (18.0%); 1.20 games/min; 550 decisions/s; elapsed 00:15:00; 530 simulation ticks/s; training ETA 01:08:20; last 18 games win 22.2%, reward 0.145; best validation pending
-2026-09-20T12:01:00+00:00 [validating] Validation at 25 games
-2026-09-20T12:01:12+00:00 [validating] Saved shared best.zip at 20.0%
-```
-
-The ETA estimates remaining collection/optimization time; validation and final
-video export add time. Rolling statistics use up to 100 completed training games.
-The rolling win rate changes with the curriculum's difficulty mix, so use the
-fixed validation curves for progress comparisons.
-
-```powershell
-.\.venv\Scripts\tensorboard.exe --logdir runs
-Get-Content runs\masked-101\status.json
-# In a separate terminal, follow the persistent log:
-Get-Content runs\masked-101\train.log -Wait
-```
-
-The main artifacts in a run are:
-
-| Artifact | Meaning |
+This uses **128 parallel GPU games × 128 decisions per game per rollout**.
+Completed games control progress and scheduling. Legal planting/digging is
+immediate; waiting or a rejected action advances one tick. All three difficulties
+share the same policy and optimizer throughout the curriculum.
+
+| Recipe in `configs/` | Purpose |
 |---|---|
-| `metadata.json`, `config.json` | Resolved settings, seeds, dependency versions, Git state, engine and rules hashes |
-| `status.json` | Lifecycle state, completed/target games, decisions, elapsed time, validation result |
-| `train.log` | Timestamped operational progress and significant events |
-| `training-metrics.jsonl` | Rolling training statistics, throughput, and metrics after each PPO update |
-| `training-episodes.jsonl` | Outcomes, plant usage, mowers, invalid actions, and episode lengths |
-| `learning-curve.jsonl` | Validation win rates against completed games and wall time; decisions retained |
-| `validation/<steps>/` | Full validation records including game count; folders retain decision IDs for uniqueness |
-| `best.zip`, `best.json` | Best validation macro win rate, with earlier checkpoints winning ties |
-| `latest.zip` | Most recent validation checkpoint |
-| `final.zip` | Policy after the final optimization update |
-| `interrupted.zip` | Recovery checkpoint when an interruption/error can be handled |
-| `visualizations/index.html` | Offline curves, compact-demo links/viewer commands, and available videos |
-| `visualizations/*-curves.png` | Validation, training behavior, throughput, and PPO figures |
-| `visualizations/demos.json` | Fixed demo cases, outcomes, replay paths, and shared checkpoint hash |
-| `visualizations/games/attempt-*/replays/*.pvzdemo` | Verified compact recordings with embedded outcome and provenance |
-| `visualizations/videos/*.mp4` | Optional videos, created with `--videos`; omitted by default |
-| `visualizations/status.json` | Export outcome and duration, separately from training success |
+| `cuda.toml` | Flat-policy baseline with GPU simulation; default for unconstrained new runs |
+| `baseline.toml`, `tactical.toml`, `grouped.toml`, `pure-rl.toml` | Earlier observation/grouping/teaching controls; retain their explicit CPU simulation settings |
+| `sc2-inspired.toml` | Spatial grouped policy, balanced exploration, mastery lessons |
+| `sc2-long-horizon.toml` | SC2 profile with gamma 0.9999 instead of 0.999 |
+| `sc2-efficient.toml` | SC2 plus choice-state actor updates, GAE 0.999 and minibatches of 1,024 |
+| `sc2-plant-rewards.toml` | Efficient profile plus offensive/eaten-plant rewards and a trainable initial dig bias |
 
-The checkpoint criterion averages easy, standard, and hard win rates equally.
-It does not use shaped return or final-test results.
+[Research design](docs/research.md) specifies rewards, lessons, comparisons and
+profile limitations. Changed learning profiles require fresh models. Copy a TOML
+file to customize it and pass `--config`; defaults and legacy settings are never
+inferred from another profile's name.
 
-### Open the curves and game demos
+Useful overrides: `--n-envs`, `--rollout-steps-per-env`, `--device`, `--simulator`,
+`--games`, `--eval-games`, and `--max-minutes`. Total rollout size is their
+parallel-game/step product; conflicting `--rollout-size` settings are rejected.
+CUDA supports masked, unmasked, sparse and mixed direct policies. Grouped policies
+require masking; the scripted hybrid and modified combat rules use CPU simulation.
 
-```powershell
-Start-Process runs\masked-101\visualizations\index.html
-```
+Normal validation defaults to every **1,000 completed games**, with 50 fixed
+seeds per difficulty. `best.zip` maximizes their equal-weight mean win rate;
+ties keep the earlier checkpoint. Lessons and shaped returns never select it.
+A rollout may exceed the game target; its final PPO update still completes.
 
-The report refreshes after validation and at completion; reload the browser to see
-updates. It works offline and includes validation win rates overall/per difficulty
-against completed games and wall time, rolling training statistics, PPO losses/entropy/KL,
-and throughput. TensorBoard remains available for detailed inspection.
+The 120-minute allowance includes startup, validation and presentation, reserving
+15 minutes for finalization. It is cumulative across resume. Stops occur between
+updates; in-flight work finishes safely. Pending evaluation/export is recorded,
+and an unfinished teaching schedule is labeled `curriculum_incomplete`.
 
-After training, one load of the selected `best.zip` plays easy, standard, and hard
-using deterministic actions on the first validation seed (100000 by default).
-Compact demos show the actual outcome, including losses and cutoffs, and all three
-carry identical checkpoint hashes. Each `.pvzdemo` contains compressed timed actions
-and an initial snapshot, with no video frames or model weights. Games are recorded
-to completion or the configured cutoff and hash-verified. Follow the report's
-viewer command to watch, pause, seek, inspect entities, or change playback speed.
-
-Optional MP4 export uses the game's native 1280×820 renderer at 20 frames/second,
-with a two-second final outcome hold. Available videos appear in the HTML report
-with play/pause, seeking, and speed controls; they do not autoplay.
-
-These fixed validation demonstrations are for inspection, not held-out evidence.
-Diagnostic checkpoints produce only a diagnostic demonstration. Demo generation
-begins after training workers close and does not update model weights.
-
-Regenerate reports/demos or request MP4 export without training:
+For a small integration check, use a new output directory:
 
 ```powershell
-.\.venv\Scripts\python.exe -m pvz_rl visualize --run runs\masked-101
-.\.venv\Scripts\python.exe -m pvz_rl visualize --run runs\masked-101 --videos
-.\.venv\Scripts\python.exe -m pvz_rl visualize --run runs\masked-101 --no-videos
+.\.venv\Scripts\python.exe -m pvz_rl train --family diagnostic `
+  --simulator cpu --device cpu --games 2 --n-envs 1 --rollout-size 64 `
+  --batch-size 32 --eval-games 1 --validation-count 1 --output runs\smoke
 ```
 
-Older runs may lack aggregated optimizer/training metrics; the report marks those
-panels unavailable. Archived runs rebuild reports and can export existing recordings
-without loading old models; missing gameplay cannot be regenerated from an old
-checkpoint. Use `--no-videos` to rebuild an old report without encoding, since older
-saved configurations may have enabled video by default.
-Resumed runs display labeled segments with separate elapsed
-times and exclude ancestor data beyond the checkpoint used to resume. If an older
-resume has no recorded boundary, the report displays only that run's segment.
-Reports and videos are derived artifacts and can be rebuilt. Export failures are
-logged separately and do not invalidate completed training or saved checkpoints.
+This checks the pipeline with a restricted task; its result is not a full-game
+benchmark. Installation and availability checks never start formal training.
 
-Optional settings in a copied configuration file:
+## Resume
 
-```toml
-[logging]
-progress_seconds = 15
-rolling_window = 100
-
-[visualization]
-enabled = true
-demos = true
-videos = false
-video_size = [1280, 820] # positive even dimensions for H.264
-ffmpeg = "" # PATH lookup; or a literal path such as 'E:\Tools\ffmpeg.exe'
-crf = 23
-final_hold_seconds = 2
-```
-
-`train`, `suite`, and `visualize` accept mutually exclusive `--videos` / `--no-videos`;
-with neither flag they respect configuration. Disabling videos retains compact demos.
-Set `demos = false` and `videos = false` for reports only, or `enabled = false` to
-disable automatic visualization entirely. Explicit video generation also creates
-the necessary demos, even when `demos = false`.
-Logging/visualization settings are saved in metadata but excluded from experiment
-compatibility checks. Changing these preferences alone does not prevent resuming.
-
-### Resume an interrupted run
-
-Resume is supported only for checkpoints using the current game source pin.
-
-Resume into a **new directory**, using the same configuration, learner seed,
-condition, diagnostic setting, and validation count as the original run:
+Resume into a new directory from `interrupted.zip`, or `latest.zip` if necessary:
 
 ```powershell
-.\.venv\Scripts\python.exe -m pvz_rl train `
-  --condition masked --seed 101 `
-  --resume runs\masked-101\interrupted.zip `
-  --output runs\masked-101-resumed
+.\.venv\Scripts\python.exe -m pvz_rl train --seed 101 `
+  --resume runs\sc2-plant-rewards-101\interrupted.zip `
+  --output runs\sc2-plant-rewards-101-resumed
 ```
 
-If the process was killed before saving `interrupted.zip`, use `latest.zip`.
-Repeat any original overrides when resuming. `--games` remains the original
-total game target, not an additional count. Completed-game and curriculum counters
-are restored; unfinished games do not count. The earlier best checkpoint
-is retained when applicable. Resume restores the policy and optimizer but starts
-fresh game episodes; it is not a bit-for-bit continuation of rollout/RNG state.
-Device settings must also match: when resuming a compatible run created with the
-previous CPU default, pass `--device cpu` (or its original configuration file).
-Only checkpoints with the current **1.3.0 source pin** can resume. Upgrading the
-game source pin requires fresh training; old weights are not migrated. Without
-`--config`, resume reads the saved run's configuration. Existing compact recordings
-can still be watched or exported, and archived reports remain readable.
-Runtime settings can change on same-pin resume; all research settings must match.
-An already running Python process keeps its loaded code. Use the improvements in
-your next run, or interrupt normally with Ctrl+C and resume the saved checkpoint
-into a new directory. Do not overwrite or edit the previous run's metadata.
+Without `--config`, the saved configuration is restored. Repeat the original
+condition, family and validation-count overrides if used. The game/time targets
+remain total allowances, not additional budgets. Policy, optimizer, curriculum
+and counters are restored; episodes restart, so rollout/RNG continuation is not
+bit-for-bit. Learning settings and engine source pins must match. Runtime and
+presentation settings may change. Old-pin models require their original environment;
+archived statistics and recordings remain readable. Do not edit run metadata to
+bypass compatibility checks.
 
-## 4. Choose CPU or GPU and worker count
+## Logs, curves and demos
 
-For the CPU simulation path, measure worker/device choices with the original
-benchmark below. For CUDA simulation, use `benchmark-gpu` and the measured defaults
-described above. GPU availability alone does not establish faster training:
+Progress appears every 15 seconds in the terminal and `train.log`: phase, games,
+throughput, elapsed time, training ETA, recent 100-game statistics, curriculum,
+attacker purchases, digging, kills and reward components. Mower-free lessons are
+labeled. Episode records are saved without printing every episode.
 
 ```powershell
-.\.venv\Scripts\python.exe -m pvz_rl benchmark `
-  --steps 16384 --workers 1 4 8 --devices cpu cuda --repeats 3 `
-  --output artifacts\hardware-benchmark
+Get-Content runs\sc2-plant-rewards-101\train.log -Wait
+# In another terminal:
+.\.venv\Scripts\tensorboard.exe --logdir runs
+Start-Process runs\sc2-plant-rewards-101\visualizations\index.html
 ```
 
-This performs short real training runs and writes raw measurements and a
-`recommendation.json`. CUDA configurations are recorded as unavailable if needed.
-Each measurement first warms up with one rollout. Worker/model startup and warmup
-times are recorded separately; reported throughput includes collection and PPO
-updates, but excludes validation, reports, and demos. Actual rounded decisions,
-phase timings, and peak PyTorch CUDA memory are saved in `measurements.json`.
-Use the recommendation consistently in later comparisons:
+| Output within a run | Contents |
+|---|---|
+| `metadata.json`, `config.json`, `status.json` | Settings, source/rule hashes, seeds, progress and stop reason |
+| `training-episodes.jsonl`, `training-metrics.jsonl` | Episode details, rolling behavior, throughput and post-update PPO metrics |
+| `learning-curve.jsonl`, `validation/` | Fixed-case validation performance and episode records |
+| `best.zip`, `best.json`, `latest.zip`, `final.zip` | Selected, latest validation, and final policy checkpoints |
+| `visualizations/index.html`, `*-curves.png` | Offline report and charts; reload after validation |
+| `visualizations/demos.json` | Demo paths, outcomes and shared checkpoint hash |
+| `visualizations/games/attempt-*/replays/*.pvzdemo` | Three CPU-verified recordings from the same `best.zip` |
+| `visualizations/status.json`, `visualizations/videos/*.mp4` | Export status and optional videos |
+
+Demos use deterministic actions and validation seed 100000 for each difficulty,
+including actual losses or truncations. Diagnostic runs produce only a diagnostic
+demo. Report curves separate training from validation; missing data and resume
+segments are explicit. Regeneration does not train:
 
 ```powershell
-.\.venv\Scripts\python.exe -m pvz_rl train `
-  --hardware artifacts\hardware-benchmark\recommendation.json `
-  --condition masked --seed 101 --output runs\selected-hardware-101
+.\.venv\Scripts\python.exe -m pvz_rl visualize --run runs\sc2-plant-rewards-101
+.\.venv\Scripts\python.exe -m pvz_rl visualize --run runs\sc2-plant-rewards-101 --videos
+.\.venv\Scripts\python.exe -m pvz_rl replay PATH_TO_DEMO.pvzdemo --watch --speed 2
+.\.venv\Scripts\python.exe -m pvz_rl replay PATH_TO_DEMO.pvzdemo --video artifacts\demo.mp4
 ```
 
-`--hardware` overrides the bundled CUDA default; an explicit `--device` overrides
-the hardware recommendation.
+Use a replay path from `demos.json` or the report. `--videos` and `--no-videos`
+override configuration on `train`, `suite` and `visualize`. Default output is a
+report plus compact demos; disabling videos retains demos. Video is H.264/yuv420p,
+1280×820 at the engine's 20 ticks/s, with a two-second outcome hold. Configure
+`[logging]` and `[visualization]` in TOML for cadence, output, dimensions or FFmpeg.
+Export failures preserve checkpoints and can be retried.
 
-Parallel environments use Windows-compatible `spawn`; each worker owns its game.
-When invoking the Python API from a script, put training calls under
-`if __name__ == "__main__":`.
+For an incompatible-version error, use **`pvz-rl replay`**. It understands the
+`pvz-rl/actions-v1` format for zero-time actions. Standalone readers CPU 1.2.2 and
+CUDA 1.3.1 also support it; their `tools/watch_demo.ps1` can load source with this
+existing Python environment. Do not replace the pinned training simulator just
+to view a recording. Legacy JSON/gzip replays remain supported.
 
-### Measure runtime improvements with the same training strategy
+Viewer controls: Space pause, period single tick, arrows seek five seconds,
+Home/End, R restart, I inspect, and draggable timeline. Supported speeds are
+0.5, 1, 2, 4 and 8. Archived reports can reuse existing recordings but cannot
+regenerate gameplay from incompatible checkpoints.
 
-```powershell
-.\.venv\Scripts\python.exe -m pvz_rl benchmark `
-  --workers 8 --devices cuda --steps 32768 --repeats 3 --compare-runtime `
-  --output artifacts\runtime-benchmark
-```
-
-This compares the stock data path with the configured optimizations using the same
-learner seeds, environments, PPO settings, and warmup budget. Pair order alternates.
-`runtime-comparison.json` records each speed ratio and whether the final policy
-weights match exactly. Avoid overlapping other training or tests while measuring.
-This command runs short benchmarks only; it does not start the formal suite.
-
-For the earlier CPU transport optimization, a local three-pair benchmark measured **2,176 → 2,664
-decisions/s median (22% faster)**, with exactly equal final policy weights in every
-pair. This historical measurement used the older engine pin and early curriculum
-collection and updates, excluding validation
-and reports. See [validation details](docs/validation.md) for raw evidence and limits.
-
-The training log now includes `last rollout 1.80s collect / 0.30s update` (example
-values). Collection includes simulation, policy inference, and worker communication;
-update time covers PPO optimization. These timings also appear in
-`training-metrics.jsonl`. Validation and report time remain separate.
-
-In the optional `[runtime]` TOML section, `coalesce_masks = true` sends legal masks
-with observations instead of requesting them separately from every worker.
-`cache_legal_actions = true` reuses the engine's legality query while occupied
-tiles, card availability, and game status are unchanged. It does not predict new
-legal moves: changes trigger a fresh engine query. This also accelerates evaluation.
-`cache_rollout_on_device = true` copies the completed rollout to CUDA once and
-reuses it across optimization epochs; it adds about 49 MiB at default settings.
-CPU training uses the stock buffer sampler. These settings preserve NumPy minibatch
-permutations, arithmetic precision, PPO losses, and the policy/optimizer.
-Set any option to `false` for diagnosis. Older configs receive current defaults;
-resolved runtime settings are recorded in metadata but excluded from research
-compatibility checks. Mask and numeric validation checks stay enabled.
-
-## 5. Evaluate baselines and checkpoints
-
-First reproduce development cases without touching final-test seeds:
+## Evaluate and develop
 
 ```powershell
+.\.venv\Scripts\python.exe -m pvz_rl evaluate --baseline heuristic `
+  --split development --count 10 --record --output runs\baseline-development
 .\.venv\Scripts\python.exe -m pvz_rl evaluate `
-  --baseline heuristic --split development --count 10 --record `
-  --output runs\baseline-development
-```
-
-Available baselines are `wait`, `random_legal`, `heuristic`, and `random_strategy`.
-The heuristic is the frozen controller from the pinned game commit. Random policies
-use reproducible scenario-derived RNGs. Every policy receives the same decision rate.
-
-Evaluate a pilot checkpoint on validation seeds:
-
-```powershell
-.\.venv\Scripts\python.exe -m pvz_rl evaluate `
-  --checkpoint runs\pilot-masked-101\best.zip `
-  --split validation --count 10 --record --output runs\pilot-validation
-```
-
-Once settings and checkpoints are frozen, run the held-out evaluation:
-
-```powershell
-.\.venv\Scripts\python.exe -m pvz_rl evaluate `
-  --checkpoint runs\masked-101\best.zip --split test --record `
-  --output runs\masked-101-test
-
-.\.venv\Scripts\python.exe -m pvz_rl evaluate `
-  --baseline heuristic --split test --record --output runs\heuristic-test
-```
-
-Default held-out evaluation uses 300 seeds for each difficulty. A checkpoint's own
-configuration is restored automatically; supplying a conflicting `--config` is rejected.
-The evaluator passes action masks to masked policies and preserves unmasked behavior
-for the unmasked ablation. An invalid action advances time without an extra penalty.
-
-| Split | Seeds | Purpose |
-|---|---|---|
-| Development | 0–9; seed 42 also exists in regression tests | Already inspected cases |
-| Training | 1,000–99,999 | Sampled only by training environments |
-| Validation | 100,000–100,049 | Checkpoint and pilot selection |
-| Test | 200,000–200,299 | Final familiar-distribution results |
-| OOD | 300,000–300,099 | Changed-scenario results, namespaced by family |
-
-### Test changed wave patterns
-
-```powershell
-.\.venv\Scripts\python.exe -m pvz_rl evaluate `
-  --checkpoint runs\masked-101\best.zip --split ood `
-  --family redistributed --record --output runs\masked-101-redistributed
-```
-
-Repeat with `--family faster` and `--family concentrated`, including each baseline.
-OOD evaluations default to standard and hard, 100 seeds each:
-
-- `redistributed`: shuffle the zombie roster across waves after the first three,
-  preserving total types and each wave's size.
-- `faster`: reduce wave spacing from 25 to 20 seconds with the same jitter draws.
-- `concentrated`: use only three seeded lanes, preserving spawn times and types.
-
-Every generated case is retained. The hard preset shares opening compositions with
-standard, so success across the normal presets alone is not structural generalization.
-
-### Inspect replays
-
-With `--record`, evaluation saves and hash-verifies the first ten wins, losses, and
-truncations per difficulty in seed order. Paths and whole-file checksums are included
-in episode records. The default output is a compact `.pvzdemo` file.
-
-```powershell
-.\.venv\Scripts\python.exe -m pvz_rl replay runs\baseline-development\replays\easy-0-won.pvzdemo
-.\.venv\Scripts\python.exe -m pvz_rl replay runs\baseline-development\replays\easy-0-won.pvzdemo --watch --speed 2
-.\.venv\Scripts\python.exe -m pvz_rl replay runs\baseline-development\replays\easy-0-won.pvzdemo --video artifacts\easy-0.mp4
-```
-
-Replay files deliberately contain complete engine snapshots for verification. They
-are not policy observations. A truncated replay ends with the engine still running;
-embedded metadata supplies the wrapper's cutoff outcome. Verification prints both
-the engine `status` and the presentation `outcome`. Natural wins/losses always take
-precedence. Caller-supplied metadata is outside simulation hashes, so the research
-manifest also hashes the complete recording file.
-
-Per-tick recordings use the explicit research replay version `pvz-rl/actions-v1`
-inside `.pvzdemo`. Open them with **`pvz-rl replay`**, which supplies the research
-playback adapter to the native viewer. Updated standalone readers (CPU checkout
-1.2.2 and CUDA checkout 1.3.1) also support this format. Older installed readers
-still reject it; use the research command or update the viewer installation.
-The research environment keeps its separately pinned 1.3.0 simulator so existing
-compatible checkpoints remain evaluable. Do not replace that simulator just to
-watch a demo. Existing recordings need no conversion. Seeking to a
-tick displays all recorded instantaneous operations at that tick; MP4 still emits
-one frame per simulation tick at 20 fps, plus the configured final hold.
-
-The native viewer supports timeline dragging, Space to pause, period for one tick,
-Left/Right for five-second seeks, Home/End, R to restart, and I to inspect entities.
-`--speed` requires `--watch` and accepts 0.5, 1, 2, 4, or 8. Viewing and optional
-video export also accept `.json.gz` and legacy `.json` files. Legacy sidecars fill
-missing metadata; embedded fields take precedence. A raw older replay ending in
-`running` is not labeled as a loss or an inferred cutoff.
-
-## 6. Run the full research protocol when ready
-
-This is an explicit long-running command. It is not launched by installation,
-availability checks, or the short smoke example:
-
-```powershell
-.\.venv\Scripts\python.exe -m pvz_rl suite `
-  --hardware artifacts\hardware-benchmark\recommendation.json `
-  --output runs\formal
-```
-
-The suite runs five conditions × five learner seeds (`101–105`), with the same
-game budget per condition. Nominal total: 250,000 completed training games, plus
-any games completed during each final rollout. It then evaluates the selected checkpoints and all four baselines on
-the final and OOD splits, captures predetermined replays, and generates a report.
-All training finishes before final evaluation begins.
-
-The suite records `suite.json` as a restart journal. Resume with exactly the same
-configuration/hardware arguments:
-
-```powershell
-.\.venv\Scripts\python.exe -m pvz_rl suite `
-  --hardware artifacts\hardware-benchmark\recommendation.json `
-  --output runs\formal --resume
-```
-
-Completed jobs are retained. Failed or interrupted attempts remain inspectable;
-new attempts use new directories. Training resumes from an available checkpoint,
-while an interrupted evaluation restarts its affected evaluation group.
-
-## 7. Generate a report yourself
-
-```powershell
-.\.venv\Scripts\python.exe -m pvz_rl report `
-  --episodes runs\masked-101-test\episodes.jsonl runs\heuristic-test\episodes.jsonl `
-  --curves runs\masked-101\learning-curve.jsonl `
-  --output artifacts\comparison
-```
-
-For research conclusions, include results from all five independent learner seeds.
-Do not combine multiple checkpoints for the same learner/case. The report rejects
-duplicate or missing pairs and mismatched scenario sets in paired comparisons.
-It rejects incompatible game/reward protocols. Cross-observation profile comparisons
-require explicit matching game-protocol hashes and distinct profile labels; older
-records without those hashes still require matching observation protocols. Different
-training configurations cannot be pooled under the same policy name.
-
-The implementation pilot remains inconclusive: at 65,536 matched decisions, the
-full method scored 0% and 6.7% macro validation win rate for seeds 101/102, versus
-0%/0% for baseline; neither learning diagnostic passed. See
-[validation evidence](docs/validation.md) and the
-[documented plant/dig failure and follow-ups](docs/paper-adaptation.md).
-
-Outputs include `report.md`, `statistics.json`, `win-rates.png`, and optionally
-`learning-curves.png`. Bootstrap intervals resample learner runs and scenario seeds
-and preserve pairing against the heuristic. Always report per-difficulty results,
-sample counts, and variation across runs; all-win/all-loss samples can give degenerate
-bootstrap intervals. The target win rates (95% easy, 90% standard, 75% hard) are goals,
-not implemented guarantees or current results.
-
-Episode records also include invalid/waiting rates, plant usage, mowers consumed,
-inference time, wins/loss durations, truncations, and final hashes. House breaches
-and time cutoffs are classified automatically; strategic failure explanations require
-replay inspection. A positive lower confidence bound on paired win-rate improvement
-is required to claim that a method beats the heuristic.
-
-## Configuration and interfaces
-
-The canonical configuration is [research.toml](src/pvz_rl/data/research.toml).
-To customize a study, copy it and pass the copy explicitly:
-
-```powershell
-Copy-Item src\pvz_rl\data\research.toml local-research.toml
-# Edit local-research.toml, then:
-.\.venv\Scripts\python.exe -m pvz_rl train --config local-research.toml --output runs\custom
-```
-
-The Gymnasium environment exposes `reset`, `step`, `action_masks`, and optional
-`rgb_array` rendering. Public observations are encoded into **2,719 float32 features**:
-plant tiles, aggregated zombie/projectile spatial bins, and global resource/timer data.
-Counts are accumulated without truncating crowds. Scenario names, seeds, future
-spawns, and entity IDs are excluded. Spatial aggregation loses some information;
-this is a partially observed representation, not a claim of full state observability.
-
-The 406-action mapping is fixed: wait `0`; placement `1 + 45*p + 9*r + c`; digging
-`361 + 9*r + c`. Plant order follows the game API. Masking excludes illegal actions,
-not strategically undesirable placements. Games stop naturally on win/loss; a
-1,200-second external cutoff is a truncation with value bootstrapping, counted as
-unsuccessful during evaluation.
-
-Rewards combine terminal outcomes, plant/mower kills, nonlethal plant damage,
-and empty mower activations as described above. Shaped conditions add
-`gamma * potential(next) - potential(current)` using defeated fraction and total
-plant-plus-sun value. True terminals have zero potential; external truncations
-retain it. Tests independently check the discounted telescoping identity,
-planting/digging counterexamples, damage normalization, and killing-blow attribution.
-
-## Development and research notes
-
-```powershell
+  --checkpoint runs\sc2-plant-rewards-101\best.zip `
+  --split validation --count 10 --record --output runs\plant-reward-validation
 .\.venv\Scripts\python.exe -m pytest -q
 .\.venv\Scripts\ruff.exe check src tests tools
-.\.venv\Scripts\python.exe -m build
+.\.venv\Scripts\python.exe -m pip check
+.\.venv\Scripts\python.exe -m build --no-isolation
 ```
 
-The full test suite includes a tiny end-to-end protocol, short real PPO updates,
-serialization/replay checks, a synthetic interruption/resume, and a two-worker
-Windows/CUDA check when CUDA is available. These tests do not launch formal runs.
+| Document | Read it for |
+|---|---|
+| [Research design](docs/research.md) | Current rewards, policies, curriculum, seed splits and experiment commands |
+| [Architecture](docs/architecture.md) | Data flow, state machines, CUDA and native game integration |
+| [Validation](docs/validation.md) | Test records, learning results, GPU measurements and their limits |
+| [References](docs/references.md) | Papers/projects actually inspected and source revisions |
+| [Iteration history](docs/iteration.md) | Version changes, causes and remaining issues |
 
-- [Architecture, data flow, and state machines](docs/architecture.md)
-- [Version history and remaining limitations](docs/iteration.md)
-- [Papers and projects actually used](docs/references.md)
-- [Availability and verification results](docs/validation.md)
-- [Notes and optional suggestions for the separate game](docs/engine-notes.md)
-
-Use feature branches, Conventional Commits, and PRs; never push directly to main.
-The initial study is about winning with normal actions in this daytime clone.
-Human imitation, pixel input, DQN, and recurrent policies are follow-up work.
+Use Conventional Commits and feature/fix branches; use a PR when a remote is
+configured. Keep formal training and final-test evaluation explicit.

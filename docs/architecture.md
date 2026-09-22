@@ -5,27 +5,6 @@ simulation 1.0.0. Training/evaluation verify installed package and source hashes
 the engine commit and combat rules. Policies receive only public observations.
 The Python simulator is the reference; the CUDA simulator preserves its rules.
 
-The optional `choice_points_v1` actor objective uses states with more than one
-legal action to normalize advantages and average clipped policy loss and exploration.
-The critic and GAE use every transition. Empty and singleton choice sets have finite
-reductions; old profiles retain all-step PPO reductions.
-
-An optional `policy.initial_dig_logit` initializes the fresh grouped policy's
-trainable type-head bias. The spatial policy implements the same interface.
-It does not alter legality or inference; saved learned weights override ordinary
-constructor initialization when loading checkpoints.
-
-`plant_rewards` joins public placement/removal events by transient entity ID.
-Only `reason=eaten` penalizes a non-wall-nut loss. A separate offensive plant-count
-potential supplies placement feedback and reverses it on removal. CUDA plant-event
-profiles scan the pinned engine's public event buffer on-device; only episode
-totals cross to the CPU. No new information enters policy inputs.
-
-GPU evaluation refills completed slots with the next fixed cases. Results and
-traces are emitted in level/seed order and verified by the CPU before demo saving.
-Native viewers dispatch `pvz-rl/actions-v1` to their action-phase reader; the pinned
-research installation retains its compatible local reader.
-
 ```mermaid
 flowchart LR
     Config[TOML settings and source pins] --> Run[Train or explicit comparison]
@@ -53,7 +32,7 @@ flowchart LR
     Replay --> MP4[Optional native renderer and FFmpeg]
 ```
 
-## Policy and optimization
+## Policy
 
 All direct-placement policies use Discrete(406): wait; eight plant types on 45
 tiles; dig on 45 tiles. The engine's legality determines masks. Valid placements
@@ -107,7 +86,8 @@ Reward is the sum of terminal outcome, potential difference and public-event
 combat/defense terms. User coefficients remain in configuration. Win is +1 and
 loss is -2. Killing credit distinguishes plants/projectiles from mowers. Damage,
 mower activation/sun penalty, wall-nut absorption, empty explosion and economy
-potential are independently reported. See `reward-design.md` for the formulas.
+potential are independently reported. See [research rewards](research.md#rewards)
+for the formulas.
 
 ```mermaid
 stateDiagram-v2
@@ -143,8 +123,8 @@ stateDiagram-v2
     Shared --> [*]: game or time budget
 ```
 
-Each promotion additionally needs 100 completed games started in the stage.
-Probes are due every 100 completed games. Placement/saving use their existing
+For the SC2 profiles, each promotion additionally needs 100 completed games
+started in the stage. Probes are due every 100 completed games. Placement/saving use their existing
 restricted lesson plant sets and permit digging; normal games allow all plants.
 Easy rehearses both lessons; standard rehearses saving; shared uses 20% easy,
 40% standard and 40% hard. Expiry never forces promotion. Policy and optimizer
@@ -210,3 +190,81 @@ resampling preserves learner and scenario pairing. Missing comparisons remain
 explicit; no final-test case is used. `--report-only` reads records without training.
 
 Availability and tests never launch either the comparison matrix or formal suite.
+
+## Game boundary and GPU implementation
+
+| Owner | Responsibilities |
+|---|---|
+| Pinned game 1.3.0 / `8861824` | Seeded scenarios, combat rules, CPU oracle, optional CuPy/NVRTC batch simulator, public observations/events, native recording/rendering |
+| Research package | Versioned encoders, legal/lesson masks, rewards, PPO, curriculum, game/time schedules, experiment provenance and comparisons |
+| Native reader checkouts | CPU 1.2.2 / `a95524e`, CUDA 1.3.1 / `314528a`; view research action-phase demos without replacing the installed simulator |
+
+The installer stages a verified Git archive outside the game checkout. Runtime
+checks enforce package version, source manifest, simulation version and rules hash.
+New source pins require fresh models; archived reports/replays remain readable.
+Runtime/presentation preferences are excluded from research compatibility, but
+learning settings and profile identity are retained.
+
+CUDA stores plants, zombies, projectiles, timers and episode state in contiguous
+arrays. A warp belongs to each game, with one lane executing combat in reference
+order. This preserves integer movement, competing-hit credit and state hashes.
+Capacity is checked rather than silently dropping entities. Custom scenarios use
+the CPU seeded generator; modified rules and scripted hybrid use the CPU simulator.
+Arbitrary mid-game snapshots need additional projectile headroom.
+
+Observations, masks, actions, rewards, values, log probabilities, advantages and
+returns stay on-device through CuPy/PyTorch zero-copy views and a shared stream.
+A compact synchronization remains each decision: three integers per game for
+completion, timeout and elapsed ticks. Finished-game summaries transfer in batches.
+CPU curriculum state chooses resets through a bounded staging queue; this is not
+fully asynchronous simulation. GPU validation refills finished slots, then emits
+results/traces in original level/seed order. `runtime.refill_evaluation=false`
+selects the fixed-batch control.
+
+`plant_rewards` attributes eaten plants through public placement/removal events.
+CUDA uses the existing diagnostic event buffer on-device, adding about 252 MiB
+at 128 games for the optional plant-role profile. IDs only join transient events;
+they never enter policy features. A separate planting-time ledger measures early
+digging without changing game state. Shared actor/exploration interfaces serve
+CPU and CUDA; their equations are in [research design](research.md#policies-and-optimization).
+
+On the CPU path, runtime flags cache authoritative legality while its inputs
+match, deliver masks alongside worker observations, and reuse rollout tensors on
+CUDA across epochs. These preserve mask semantics, precision and NumPy minibatch
+order. Each Windows worker owns its game and uses `spawn`; API entry scripts need
+an `if __name__ == "__main__":` guard.
+
+## Replay and rendering
+
+The CPU research adapter applies legal plant/dig requests immediately by suppressing
+the pinned advance hook; wait/rejection still advances. CUDA implements the same
+semantics. The public native `Game.step` contract remains positive-time.
+`pvz-rl/actions-v1` explicitly records zero-time operations; renaming it to native
+version 1 would change playback semantics. Both newer native readers and the
+research command dispatch the format to an action-phase playback adapter.
+
+Playback drains instantaneous operations before displaying/caching a tick, reuses
+native seeking, and verifies final/intermediate hashes. Embedded metadata supplies
+policy/checkpoint identity and external truncation; legacy sidecars only fill missing
+fields. Natural outcomes take precedence. Full-file checksums protect caller metadata
+as well as the separately verified simulation hash. Metadata is never a policy input.
+
+`BoardRenderer`/`RenderContext` supply the board and HUD, `Playback.last_operation`
+and `display_outcome` supply presentation state. Gym RGB stays 1000×600; optional
+FFmpeg export streams packed RGB at the replay tick rate, default 1280×820,
+H.264/yuv420p with fast-start and a final outcome hold. No duplicated board renderer
+or frame list is maintained.
+
+## Remaining implementation opportunities
+
+Profile before further parallelization. Ordered combat is small compared with
+encoding/inference launches, synchronization and PPO minibatches in the measured
+workload. An on-device reset queue could remove host synchronization but needs
+queue-exhaustion and curriculum-boundary proofs. More intra-game concurrency needs
+ordering/collision proofs; see [measurements](validation.md#gpu-performance).
+
+A public immediate-action API could replace pinned private advance/playback hooks.
+An explicit death `source_kind` could replace the tested negative-source-ID mower
+convention. These are follow-ups, not implemented promises. Native numeric masks,
+compressed recordings, rendering and provenance are already supplied upstream;
+they no longer need separate feature proposals.

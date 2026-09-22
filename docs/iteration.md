@@ -1,464 +1,142 @@
 # Iteration history
 
+Dates and results belong to their recorded version. Current behavior lives in
+[research design](research.md) and [architecture](architecture.md); test counts,
+artifact locations and learning outcomes live in [validation](validation.md).
+The longer pre-consolidation notes remain in `git show b642c9c:docs/iteration.md`.
+
+## Documentation consolidation — 2026-09-22 (0.7.1 unchanged)
+
+- Problem/cause: release notes accumulated into repeated installation, reward,
+  architecture and experiment guides, leaving obsolete advice beside current behavior.
+- Change: replace the 1,000-line README with a daily-use guide; combine paper/SC2/
+  reward notes into `research.md`, GPU measurements into `validation.md`, and game/
+  GPU integration into `architecture.md`. Deduplicate references and version history;
+  remove the seven superseded documents after moving their useful content.
+- Verification: local links/anchors, CLI examples and source/config references are
+  checked; committed evidence files and executable settings remain unchanged.
+  No learning run or new performance claim is part of this documentation change.
+- Limit: older external bookmarks to removed documents need the new README index;
+  detailed historical prose remains in Git and local artifact paths may be absent
+  from fresh clones.
+
 ## 0.7.1 — 2026-09-21
 
-- Problems: standalone game readers rejected research demos; the completed SC2 run
-  achieved 42% easy and zero standard/hard validation wins. Early training dug up
-  attackers and mower-free lesson logs made zero mower kills look suspicious.
-- Causes: research recordings permit zero-time actions but native readers accepted
-  only positive-time format 1; singleton legal states dilute actor updates; the old
-  reward breakdown did not separately express offensive investment or plants eaten.
-  These learning causes are hypotheses, not a proven explanation of all failures.
-- Improvements: native compatible readers in both game branches; source viewer
-  launcher; optional choice-state PPO, longer GAE trace and larger GPU minibatches;
-  evaluation slot refill; explicit lesson/behavior logging; configurable offensive
-  potential and a smaller non-wall-nut eaten penalty; existing empty-blast penalty
-  retained. Old configurations and simulator pins retain their behavior.
-  A separately labeled final candidate also initializes a lower, fully trainable
-  digging logit after stochastic early digging persisted in reward-only checks.
-- Verification: the final complete runs passed 374 research tests, 207 CPU-game
-  tests and 222 CUDA-game tests. Independent gradients,
-  optimizer, reward, replay hash, corruption, seeking and slot reuse controls are
-  included. Sources and exact learning-check results are recorded in `validation.md`
-  and `sc2-learning-fix.md`.
-- Remaining issues: faster optimization did not improve five-minute normal-game
-  wins; the reward candidate remains experimental. No formal training or final-test
-  seeds were used. The incomplete second-seed optimization comparison is explicit.
-  No remote is configured, so changes are committed locally on feature/fix branches.
+- Problem/cause: native viewers rejected zero-time research recordings; SC2 normal
+  validation remained 42%/0%/0%; frequent early digging and forced-action samples
+  motivated exploration/credit hypotheses. Mower-free lesson logs lacked context.
+- Change: compatible source readers in both game branches; optional choice-state
+  PPO, GAE 0.999 and minibatches 1,024; refilled GPU validation; lesson-aware logs;
+  offensive potential, small non-nut eaten penalty and trainable initial dig bias.
+  Installed game stays pinned at 1.3.0; legacy profiles retain their semantics.
+- Verification: 374 research, 207 CPU-game and 222 CUDA-game tests; exact replay
+  hashes, gradients/optimizer, reward boundaries, reload and shared-demo checks.
+- Limit: final candidate improved early lesson learning but normal validation was
+  2/15 and 0/15 in two three-minute checks. Experimental; no two-hour advantage proved.
 
 ## 0.7.0 — 2026-09-21
 
-- Previous problems: current flat-policy training still rarely bought sustained
-  attackers; earlier grouped diagnostics dug up new plants. Validation consumed
-  substantial wall time, and runs had no public cumulative time allowance.
-- Causes investigated: joint entropy favors action groups with more legal tiles;
-  dense flattening discards useful placement structure; fixed curriculum progress
-  can advance before competence. These are tested hypotheses, not a proved single
-  cause of poor learning.
-- Improvements: separate type/tile exploration objective; tactical spatial policy;
-  stage-residency counts tied to episode starts; 100-game mastery probes; 1,000-game
-  full validation with result reuse; cumulative deadlines, safe finalization and
-  pending artifacts. A-F development comparisons retain one policy per run and
-  provide paired uncertainty without requiring identical rollout overshoot.
-- Verification: independent analytic controls, CPU/CUDA integration, reference
-  gameplay, checkpoint/replay recovery and complete regression results are recorded
-  in `validation.md`. The active job and its environment were isolated from edits.
-- Remaining issues: the full comparison is user initiated and has not been run.
-  Both five-minute E diagnostics remained at placement (0/20 on every probe);
-  early digging persisted, and final validation was pending at the deadline.
-  E/F remain experimental. The two-hour deadline is cooperative at operation
-  boundaries. No human-level behavior or held-out win-rate improvement is claimed.
+- Problem/cause: absent sustained attackers, joint entropy favoring large action
+  groups, frequent validation and no cumulative runtime bound.
+- Change: balanced type/tile exploration, spatial grouped policy, stage-start
+  residency, 100-game probes, 1,000-game validation, result reuse, cumulative time
+  allowance and explicit A–F comparisons. Game remains 1.3.0.
+- Verification: 338 research/214 game tests, later focused deadline checks and
+  two five-minute diagnostics; single environment/workspace consolidated.
+- Limit: both diagnostics failed placement; normal validation incomplete at the
+  deadline. No candidate recommended or A–F/formal matrix launched.
 
 ## 0.6.0 — 2026-09-21
 
-### Previous issues and causes
-
-- CPU simulation and repeated observation/mask transfers dominated collection.
-  A small GPU policy alone could not exploit the laptop's stronger GPU.
-- A fixed total rollout hid how many decisions each parallel game contributed.
-
-### Improvements
-
-- Optional game 1.3.0 CUDA backend preserves ordered integer combat and exact
-  CPU snapshots, while simulating independent games in parallel. Pinned sources
-  include CUDA kernels; ordinary CPU gameplay keeps optional dependencies.
-- Device encoders, reward metrics, collector, rollout buffer and GAE share
-  tensors through DLPack. PPO equations, networks, optimizer settings and shared
-  policy remain unchanged. Global game counts still drive schedules.
-- Add simulator/per-game rollout flags, compilation/interop doctor probes,
-  batched validation and CPU-verified demonstration traces. Hybrid remains CPU.
-- Three repetitions selected 128 games × 128 decisions: 10,733 decisions/s,
-  3.79× the current CPU baseline. New unconstrained runs use this setting;
-  explicit and saved configurations keep their settings.
-- Consolidate the verified setup into the main `.venv` and remove the temporary
-  CUDA test environment. Keep the original game checkout and archived runs.
-
-### Verification and remaining issues
-
-Complete test results, packaging checks, short learning/replay integration and
-visual inspection are recorded in [validation](validation.md). Exact game hashes
-and tight encoder/reward, GAE, loss, gradient and optimizer controls accompany
-the [measured performance](gpu-performance.md). No formal training was launched.
-
-Eight-game CUDA is slightly slower than equivalent CPU simulation. Launch and
-encoding costs remain; three integers/game still synchronize each decision.
-Modified rules, scripted hybrid placement and legacy fixed-tick actions require
-CPU simulation. Measurements exclude validation/export and sustained thermal
-testing. [Implementation adjustments](gpu-plan-adjustments.md) explain the
-remaining queue/reset and intra-game parallelism work.
-
+- Problem/cause: CPU simulation and transfers dominated small-policy GPU learning.
+- Change: game 1.3.0 CuPy/NVRTC backend, ordered batched combat, tensor PPO/GAE,
+  CPU-verified demos, capacity checks and 128 decisions per parallel game.
+  Promote 128 GPU games after correctness/speed gates; retain explicit CPU hybrid.
+- Verification: 312 research/214 game tests; three-repeat benchmark 10,733 vs
+  2,835 decisions/s (3.79×); installed pin `8861824`, simulation 1.0.0.
+- Limit: gain combines backend and larger rollouts; eight-game CUDA is slower.
+  Compact host synchronization remains. No thermal-soak or convergence claim.
+  Temporary development environment was moved to Recycle Bin; one research `.venv` remains.
 
 ## 0.5.0 — 2026-09-20
 
-### Previous issues and causes
-
-- One action per ten ticks prevented multiple placements at the same tick. The
-  native API/replay format requires positive tick advances.
-- Mower use ignored stored sun, wall-nuts had no absorption credit, and empty
-  explosions had no explicit penalty. The requested terminal defeat cost is −2.
-- Counting decisions to schedule training made progress depend on action timing.
-  Leafy requested completed games as the training budget and scheduling unit.
-
-### Improvements
-
-- Isolate immediate Place/Dig execution in a pinned research subclass; Wait and
-  invalid requests advance one tick. Requery observations/masks after every action.
-  Keep native combat, costs, cooldowns, 406 indices, shared policy and optimizer.
-- Add explicitly versioned compact action-phase recordings with verification,
-  native seekable presentation, and one-frame-per-tick MP4 export.
-- Add event-time `−sun/300` per activation, `+0.2*wall-nut bite/full HP`, empty-blast
-  −0.2, and configurable terminal loss −2. Preserve earlier damage/kill/potential
-  terms and expose all components in logs, records and curves.
-- Make completed training games drive stopping, fixed/mastery curricula,
-  validation, ETA and curve axes. Defaults are 10,000 games, 250-game validation,
-  20-game mastery probes/minimum residency. Count wins/losses/timeouts across all
-  workers; exclude evaluation/probe/demo games. Finish final PPO optimization and
-  report excess games. Persist counts with checkpoints and restore them on resume.
-- Change new pilots to game budgets and exact matched-game comparisons. Preserve
-  old configuration semantics and reject resume into changed research protocols.
-- Update README, current architecture and reward specification. Document optional
-  upstream action/replay APIs in `engine-notes.md`; do not edit the game checkout.
-
-### Verification and remaining issues
-
-Complete research suite: **283 passed in 248.80 s**. Complete upstream suite:
-**199 passed in 10.75 s**. Details and inspected artifacts are in `validation.md`. Tests
-include independent successful/failing/boundary controls, complete regression
-suites, CPU/CUDA, Windows workers, game-count/mastery/resume logic, verified
-compact demos and optional video. No additional pilot or formal training is run.
-
-Per-decision gamma remains 0.999, so changing simulated action spacing changes its
-real-time horizon. New rewards and game budgets have no demonstrated learning
-advantage yet. A final rollout can exceed the requested game count; interval
-checks run after optimization. Broadcast counts affect subsequent episode resets,
-not games already active/auto-reset. Exact matched-game pilot budgets can be
-missing. Zero-time support depends on pinned private engine/playback hooks until
-upstream offers a public action-phase API. No remote is configured for a PR.
+- Problem/cause: ten-tick decisions limited immediate actions; reward lacked defense
+  events; decision counts did not reflect the requested game-based progress.
+- Change: zero-time plant/dig adapter and versioned replays; one-tick wait/rejection;
+  loss −2, activation sun cost, wall-nut absorption, empty-blast cost; completed-game
+  budgets/curriculum/validation and checkpoint counters. Game stays 1.2.1.
+- Verification: 283 research/199 game tests, all-lane lesson controls, source/tick
+  rewards, game overshoot/resume, Windows/CUDA and native video checks.
+- Limit: discount remains per decision; final rollouts can exceed targets; action
+  adapter uses pinned private hooks. No new learning pilot validated these changes.
 
 ## 0.4.1 — 2026-09-20
 
-### Previous issues and root causes
-
-- Kill-only combat rewards supplied no credit for useful partial damage. The
-  user requested −2/N mower kills, nonlethal HP reward, and −1/5 empty activations.
-- Separate capped sun and sunflower potentials did not value other living plants
-  and could hide loss of economic value above their caps.
-
-### Improvements
-
-- One public-event accounting interface distinguishes lethal hits, earlier
-  nonlethal HP damage, plant/mower kills, and same-tick/lane empty activations.
-  Normalize damage by active-rule starting HP and initial zombie count.
-- Keep plant kills +1/N; change mower kills to −2/N. Add the requested damage and
-  empty-activation terms with independent configurable weights.
-- Replace separate economy terms with `0.5*(sun + living plant costs)/300`,
-  uncapped, retaining the 0.5 zombie-progress term and discounted difference.
-- Expose reward components in episode/evaluation records and rolling logs/curves.
-  Version all supplied profiles together. Preserve old saved reward configurations
-  and reject resume across different reward settings.
-- Document assumptions, examples, and mathematical controls in `reward-design.md`.
-  PVZ 1.2.1, shared policy, action space, curriculum, and PPO settings are unchanged.
-
-### Verification and remaining issues
-
-- Complete research suite: **207 passed in 104.49 s**. Complete upstream game
-  suite: **199 passed in 9.09 s**, with caches and temporary output outside the game.
-- Forty new numerical/engine controls plus a legacy-checkpoint compatibility test;
-  CPU/CUDA, Windows workers, all five conditions, rendering, replays, and reports
-  pass. New curves and a native final frame were visually inspected.
-- Ruff, formatting, dependency checks, editable installation and wheel/sdist build
-  pass. The game checkout remains clean. Details and artifacts: `validation.md`.
-- Learning efficacy remains unmeasured for this objective. The 0.4.0 pilot cannot
-  validate it; no additional timed pilot or formal study was run. Nonlethal damage
-  intentionally gives gradual kills more cumulative credit than instant kills.
-  Empty mower activations normally cannot occur in the pinned engine.
+- Problem/cause: kill-only feedback ignored partial damage; capped economy omitted
+  valuable living plants and wealth above the scale.
+- Change: mower kill −2/N, nonlethal HP reward, empty activation −0.2; uncapped
+  plant-plus-sun potential; separate logs and legacy compatibility. Game stays 1.2.1.
+- Verification: 207 research/199 game tests, 40 new reward controls and native outputs.
+- Limit: gradual damage can outscore instant kills; empty mower activations normally
+  do not occur; previous pilot results used a different objective.
 
 ## 0.4.0 — 2026-09-20
 
-### Previous issues and root causes
-
-- An archived 10,229-episode run bought no sustained attackers. Flat legal-action
-  sampling gave waiting only 1/136 initial probability; initial sun was scaled by
-  9990. This motivated controlled representation/exploration changes, not a claim
-  that one factor alone caused poor learning.
-- Difficulty increased on a fixed schedule even when elementary placement/saving
-  behavior was not demonstrated. There was no persisted mastery-gate state.
-- The reward did not distinguish kills earned by plants from mower rescues. The
-  user explicitly requested positive plant-kill credit and negative mower credit.
-
-### Improvements
-
-- Add tactical v2 (1,140 values), three distance regions per lane, economic card
-  signals and lane summaries. Preserve spatial v1 and every original action index.
-- Add a masked type/tile policy with true joint PPO probability/entropy and greedy
-  type-then-tile evaluation. Equal logits give initial waiting probability 1/4.
-- Add placement/saving lessons and a five-stage mastery state machine. Stage changes
-  apply at episode resets, retaining one policy and optimizer. Checkpoints persist
-  gates; normal easy/standard/hard validation alone chooses the shared checkpoint.
-- Add versioned profile configurations and a capped pilot with two learner seeds,
-  alternating profile order, matched completed validation budgets, and explicit
-  missing comparisons. Keep unsuccessful candidates experimental.
-- Add configurable +1/N plant-kill rewards and -1/N mower-kill penalties using public
-  killing-damage events. Projectiles, mines, bombs and chomper receive plant credit.
-  Record kill sources and contributions separately, and keep legacy missing weights
-  equivalent to zero. Changed objective/representation profiles require fresh runs.
-- Extend progress, episode metrics, and offline charts for economy, attackers,
-  grouped entropy, curriculum state and plant/mower kills. Keep CUDA transport,
-  native compact replays, and a single model for every normal difficulty.
-- Document paper evidence, local diagnosis, chosen/rejected methods, adjustments,
-  and unsuccessful diagnostics in `paper-adaptation.md`. PVZ 1.2.1 is unchanged.
-
-### Verification and limitations
-
-The complete research suite passes **166 tests**; the upstream game suite passes
-**199 tests**. Independent distribution algebra, all five lesson lanes, meaningful
-plant/mower kill controls, failed close-threat cases, Windows workers, CPU/CUDA,
-curriculum resume, shared checkpoint demos, rendering/replay hashes, package build,
-dependency and lint checks pass. Exact records and pilot results are in
-`validation.md`. No formal training suite or final-test evaluation was launched.
-
-The first pilot was interrupted to adopt the requested kill-source reward; its
-results remain separate. Failed diagnostics do not establish that the method
-improves play, and mastery gates may retain a lesson for the whole run. Regional
-aggregation loses some precise enemy positions. Event rewards intentionally change
-the objective; only the potential term has the policy-invariance guarantee.
+- Problem/cause: 10,229-game archive lacked sustained attackers; flat sampling gave
+  wait 1/136, weak economic scaling and no mastery gates.
+- Change: tactical 1,140-value encoder, grouped type/tile policy, teaching state
+  machine, capped paired pilot, +1/N plant and −1/N mower kill reward. Game stays 1.2.1.
+- Verification: 166 research/199 game tests; original pilot interrupted for reward
+  change, revised matched 65,536-decision results inconclusive; both diagnostics failed.
+- Limit: immediate plant/dig cycles persisted; joint entropy still preferred large
+  groups. Separate kill objectives and incomplete studies cannot be pooled.
 
 ## 0.3.2 — 2026-09-20
 
-### Previous issues and root causes
-
-- The small CUDA policy used little VRAM; collection spent time in worker mask
-  requests, repeated engine legality queries, and small GPU operations. Low memory
-  allocation alone did not measure GPU utilization or training throughput.
-- Each PPO minibatch copied rollout arrays from CPU again, even when subsequent
-  epochs reused exactly the same rollout. Logs did not separate collection/update
-  time, and short hardware benchmarks included one-time initialization costs.
-- The separate game checkout had advanced to 1.2.1, with defeated/total HUD text,
-  while research still pinned 1.2.0.
-
-### Improvements
-
-- Cache authoritative engine legality while its public inputs remain equivalent.
-  Requery on occupancy/status/card-availability changes or reset. Hybrid strategy
-  proposals still refresh each decision; direct masks remain unchanged.
-- Deliver masks alongside observations through stock SB3 workers, preserving reset
-  and terminal-observation semantics. Cache one completed rollout on CUDA for all
-  PPO epochs, retaining CPU GAE and exact NumPy sample order.
-- Keep networks, optimizer, precision, workers, rollout/minibatch sizes, losses,
-  seed splits, reward, curriculum, and shared checkpoint selection unchanged.
-  Optional runtime flags and resolved metadata support comparisons and same-pin
-  resume without changing research compatibility.
-- Add phase timings to logs/metrics and paired benchmarks with warmup, alternating
-  run order, separate startup time, policy hashes, and CUDA memory measurements.
-- Pin and stage game 1.2.1 without writing into its checkout. Reuse the native
-  defeated/total renderer; preserve strict rejection of older source-pin models.
-
-### Verification
-
-The complete research suite passes **120 tests** and the upstream game suite
-passes **199 tests**. CPU and CUDA runs across all five conditions retain exactly
-equal learned weights and optimizer state between reference and optimized paths.
-Complete seed-42 games retain identical actions, observations, masks, rewards, and
-state hashes on all difficulties. Natural terminals, truncation/reset masks,
-cooldowns, exact sun thresholds, plant disappearance, minibatch dimensions/order,
-cache reset, same-pin resume, and 1.2.1 HUD boundary counts are covered.
-Measured speed, smoke artifacts, packaging, and final checks are in `validation.md`.
-The final paired CUDA benchmark measured 22.4% higher median throughput
-(2,176 to 2,664 decisions/s), with equal final policy weights in all three pairs.
-A saved 8,192-decision shared-policy smoke generated verified demos and inspected
-curves using the 1.2.1 native renderer.
-
-### Remaining limits and adjustments
-
-Small GPU inference batches and CPU simulation still limit throughput. The rollout
-cache intentionally adds only about 49 MiB at the default size; filling VRAM is
-not an objective. Measurements on a laptop depend on other work, power, and thermal
-state. No formal research suite was launched or running user job interrupted.
-Source-pin isolation requires fresh training after moving from game 1.2.0 to 1.2.1;
-old recordings/reports remain readable. Optional upstream performance suggestions
-are recorded in `engine-notes.md`; the game folder remains unchanged.
+- Problem/cause: repeated mask IPC/legality queries and rollout copies; game had
+  advanced to 1.2.1 while research pinned 1.2.0.
+- Change: cached authoritative legality, masks sent with observations, reusable
+  CUDA rollout, phase timings/paired benchmark and non-editable 1.2.1 installation.
+- Verification: 120 research/199 game tests; exact learned tensors/Adam state in
+  reference comparisons; final three-pair speed gain 22.4% (2,176→2,664 decisions/s).
+- Limit: CPU simulation and small inference batches remained; startup/validation
+  excluded from timing; no learned-skill claim. New game pin required fresh training.
 
 ## 0.3.1 — 2026-09-20
 
-### Previous issue and cause
-
-The bundled training configuration explicitly selected CPU even when the installed
-CUDA-enabled PyTorch detected the laptop's NVIDIA GPU.
-
-### Improvements
-
-- Select CUDA by default for training and suite runs through the existing device
-  interface. Keep explicit CPU overrides and the unavailable-CUDA error.
-- Document GPU setup, CPU fallback, hardware override precedence, and the matching
-  device requirement for resume. Keep one shared policy across all difficulties.
-- Pin general learning regression fixtures to CPU so they remain portable; retain
-  the dedicated Windows-worker integration test that uses CUDA when available.
-
-### Verification
-
-All 87 research tests and 199 upstream game tests passed. A fresh 64-decision,
-two-worker diagnostic run without a device override completed on the RTX 4070
-Laptop GPU. Saved policy tensors and Adam moment tensors retain CUDA device tags;
-checkpoint reload on CUDA, missing-CUDA handling, lint, formatting, and dependency
-checks passed. See `validation.md` for commands and artifacts.
-
-### Remaining issues and limits
-
-GPU execution does not imply faster throughput for this small MLP and Python
-simulation. Simulation workers remain on CPU. No formal research training was run.
-Existing compatible CPU runs must still resume with their original CPU setting.
-The game folder remains unchanged; no Git remote is configured for a PR.
+- Problem/cause: configuration selected CPU despite available CUDA.
+- Change: default policy device CUDA, explicit CPU override and unavailable-device
+  errors; simulation still on CPU. Game stays 1.2.0.
+- Verification: 87 research/199 game tests; CUDA-tagged policy/Adam tensors and reload.
+- Limit: availability did not establish speed; existing CPU runs retain saved settings.
 
 ## 0.3.0 — 2026-09-20
 
-### Previous issues and causes
-
-- The research environment was pinned to game package 1.0.0; the new 1.2.0 game
-  source would fail its manifest check despite unchanged simulation semantics.
-- The research package duplicated the game's board drawing and required sidecars
-  for external replay outcomes. Game 1.2.0 now supplies both native interfaces.
-- Demo creation was coupled to MP4 encoding, adding an encoder dependency and
-  export delay even when compact timed-operation recordings were sufficient.
-- Package version and simulation compatibility version were treated as one value.
-
-### Improvements
-
-- Adopted game commit `a47056d8141ec635d3ff3f4d5561d6a75cfca2cc`, package 1.2.0,
-  retaining simulation 1.0.0. Verify source, package, simulation, and rules separately.
-- Stage a hash-checked Git archive inside the research project before non-editable
-  installation, so packaging does not write into the game checkout.
-- Record compressed `.pvzdemo` files with native checkpoint identity, experiment
-  provenance, outcome, and termination reason. Hash whole recordings in manifests.
-- Generate compact demos by default, independently of optional MP4 encoding;
-  retain one shared checkpoint for easy, standard, and hard.
-- Use BoardRenderer/RGBFrame for rendering and Playback's outcome/operation/seek
-  APIs for presentation. Preserve Gym's RGB array size and expose native video size.
-- Add `--videos` and native replay `--speed`, preserve legacy file/sidecar reads,
-  and rebuild archived reports/export existing recordings without loading old models.
-- Require fresh training for old source-pin checkpoints; same-pin resume still
-  restores policy and optimizer. Update README, architecture, references, and engine notes.
-
-### Verification
-
-Full research and game suites, short CPU/CUDA integration runs, a 128-decision
-fresh shared-policy smoke run, native replay controls, optional MP4 playback,
-availability, dependency, and package checks are recorded in `validation.md`.
-Known win/loss ticks and the rules hash remain unchanged. Tests cover compact
-recording without pygame/FFmpeg, metadata isolation/precedence, strict version
-rejection, legacy archives, seeking, and tampered recording checksums.
-
-### Remaining issues and limits
-
-- The smoke run is not evidence of learned competence; formal training was not run.
-- Old model checkpoints require their original environment; no migration is offered.
-- Metadata is caller-supplied. Simulation hashes verify dynamics, while whole-file
-  hashes detect changes to stored experiment annotations.
-- Native viewing/rendering requires pygame; optional MP4 encoding requires FFmpeg.
-- Static reports require browser reload after refresh. Resume is not exact RNG or
-  interrupted-rollout restoration. Font pixels may differ across platforms.
-- The game folder is unchanged. There is no configured remote for opening a PR.
+- Problem/cause: duplicate rendering, bulky outputs and conflated package/simulation
+  identity while game 1.2.0 introduced native presentation APIs.
+- Change: pin `a47056d`, native renderer, metadata, compressed demos and seekable
+  viewer; MP4 optional, separate versions and strict old-checkpoint rejection.
+- Verification: 87 research/199 game tests, no-FFmpeg default demos, archive reads,
+  native/browser playback, source staging, render/hash purity and packaging.
+- Limit: old weights need their original pin; metadata needs whole-recording hashes.
 
 ## 0.2.0 — 2026-09-20
 
-### Previous issues and causes
-
-- Training used SB3 `verbose=0` with no operational progress reporter, leaving
-  collection, validation, and checkpoint activity unclear in the terminal.
-- Reports required a separate evaluation command; game replays required the
-  interactive UI and lacked exported videos with research context.
-- Shared-policy training already existed, but the output did not make it obvious
-  that one selected checkpoint was used across all difficulties.
-- Exact whole-configuration comparisons would treat presentation changes as
-  experiment changes, preventing otherwise compatible resume operations.
-
-### Improvements
-
-- Added throttled timestamped console/file progress, explicit phases, rolling
-  aggregates, post-update PPO metrics, and preserved TensorBoard logging.
-- Added automatic offline HTML reports, validation/training/optimizer PNG curves,
-  labeled resume segments, and support for missing older metrics.
-- Added fixed validation demos of one shared `best.zip`, public-state HUD rendering,
-  verified replay sidecars, and streamed H.264 MP4 export with playback controls.
-- Separated export outcomes from learning success; added regeneration commands,
-  encoder availability checks, output configuration defaults, and compatibility
-  comparisons that exclude presentation settings.
-- Updated training instructions, architecture diagrams, implementation references,
-  and optional game-engine suggestions in `engine-notes.md`. The game folder was
-  not edited.
-
-### Verification
-
-See `validation.md` for executed checks and saved smoke artifacts. Verification
-covers shared checkpoint identity, unchanged learned weights with visualization,
-post-update/final metrics, log cadence, old configurations, resume boundaries,
-natural wins/losses and external cutoffs, corrupt replays, missing FFmpeg, and an
-encoder process failure. Only short learning runs and availability checks were run.
-
-### Remaining issues
-
-- Learning performance and generalization still require the formal experiment.
-- Video export requires pygame-ce and an FFmpeg build with libx264. It adds time
-  after training; progress and export duration are recorded separately.
-- Older runs lack newly added aggregate metrics; their missing panels remain blank.
-- Reports are static files: reload the page after a validation refresh.
-- Raw older replays without wrapper metadata cannot identify external cutoffs;
-  they retain their actual engine status.
-- Resume still starts fresh game episodes and is not exact rollout/RNG restoration.
-- No Git remote is configured, so the feature commit is prepared locally for a PR.
+- Problem/cause: little operational output and manual visualization; shared model
+  identity and presentation-vs-research compatibility were unclear.
+- Change: throttled logs, post-update metrics/TensorBoard, offline curves, shared
+  checkpoint demos/video and export recovery with separate compatibility settings.
+- Verification: 154 combined research/game checks; shared hashes, unchanged weights
+  with output toggled, old/empty reports, interruption, corruption and browser video.
+- Limit: rendering/FFmpeg dependencies, extra export time and missing historical metrics.
 
 ## 0.1.0 — 2026-09-20
 
-### Previous state and issues
-
-The research directory was empty. The separate game exposed a deterministic API
-but had no learning wrapper, reward, experiment protocol, or training documentation.
-One winning seed-42 replay did not establish generalization.
-
-### Root causes addressed
-
-- A placement controller needs a stable action schema and legality masks for a
-  combinatorial plant/tile action space.
-- Win/loss feedback is delayed across a long economic horizon.
-- A time cutoff is different from an engine defeat; confusing them breaks value
-  bootstrapping and terminal reward shaping.
-- Evaluating during collection can save pre-update weights under post-collection
-  step labels and miss the final optimized policy.
-- Comparing different scenario sets or pooling different training configurations
-  can produce invalid apparent improvements.
-
-### Improvements
-
-- Added an external Gymnasium package with 406 direct actions or five hybrid
-  strategies, 2,719 public-state features, a fixed 0.5-second decision interval,
-  and explicit episode states.
-- Added sparse/potential rewards with independent mathematical tests, a fixed
-  curriculum, five PPO conditions, and four non-learning baselines.
-- Preserved the original heuristic and verified both known wins and known losses.
-- Added separated seed sets, three changed-wave families, paired evaluation,
-  predetermined verified replays, bootstrap statistics, and scientific figures.
-- Added validation after completed PPO updates, best/latest/final checkpoints,
-  recovery without overwriting attempts, and a restartable experiment journal.
-- Added pinned game-source verification, dependency locks, Windows installation,
-  CPU/CUDA availability checks, complete-loop hardware benchmarking, and training
-  instructions in the README.
-- Recorded the literature actually used and documented the current architecture.
-
-### Verification
-
-See `validation.md` for the final executed checks. Availability testing includes
-short actual PPO updates and Windows subprocess/CUDA execution. Full training and
-held-out research evaluation were not launched, following the user's scope change.
-
-### Remaining issues and limits
-
-- No trained-policy win-rate or generalization claim has been established.
-- The representation aggregates nearby entities; it is partially observed.
-- Resume restores policy/optimizer but starts fresh episodes; interrupted rollouts
-  and random-generator histories are not restored exactly.
-- Large simultaneous crowds remain limited by the existing Python engine.
-- Recurrent policies, DQN, human imitation, screenshots, and commercial-game transfer
-  are outside the current study.
-- Bootstrap intervals can degenerate for all-win/all-loss samples; five independent
-  runs and transparent sample counts remain essential.
-- Windows/Python 3.12 is the verified development environment. No remote is configured,
-  so the implementation is kept on a local feature branch for later PR review.
+- Problem/cause: empty research directory; game lacked an RL wrapper and protocol.
+- Change: Gym adapter, fixed 406 actions, spatial encoder, masked PPO, baseline/hybrid
+  controls, seed separation, reward shaping, checkpoint recovery, benchmark/reporting
+  tools and pin `b3cfbd8` from the independent game.
+- Verification: action/mask/terminal controls, known heuristic wins/losses, short
+  CPU/CUDA/Windows learning, full miniature protocol and package checks.
+- Limit: no trained-skill/generalization claim; partial observation and inexact
+  rollout/RNG resume. Formal runs remain user initiated; no remote was configured.
