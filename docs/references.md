@@ -3,6 +3,23 @@
 Methods and adopted/rejected ideas are in [research design](research.md). This
 catalog retains source revisions and the extent of the evidence inspected.
 
+## Sources used for the compact method (2026-09-22)
+
+| Source and inspected version | Evidence used | Decision |
+|---|---|---|
+| Engstrom et al., [Implementation Matters in Deep Policy Gradients](https://arxiv.org/abs/2005.12729), 2020; [associated project](https://github.com/implementation-matters/code-for-paper/tree/094994f2bfd154d565c34f5d24a7ade00e0c5bdb), commit `094994f2bfd154d565c34f5d24a7ade00e0c5bdb` | Paper HTML methods and project README | Audit PPO reductions and independent loss/gradient/Adam controls; no code vendored |
+| Andrychowicz et al., [What Matters in On-Policy RL?](https://arxiv.org/abs/2006.05990), 2020 | Sections 3.2, 3.3, 3.5 and 3.8 | Small configurable architecture; account for initialization, learning rate, batch size and regularization interactions |
+| SC2LE, [arXiv:1708.04782](https://arxiv.org/abs/1708.04782), 2017 | PDF p.10 input preprocessing and FullyConv description | Categorical embeddings and spatial/scalar inputs; no additional privileged state |
+| Ng, Harada and Russell, [Policy Invariance Under Reward Transformations](https://people.eecs.berkeley.edu/~russell/papers/icml99-shaping.pdf), 1999 | PDF pp.2–4 visually inspected, definition and theorem | A discounted potential difference and independent telescoping/cycle/terminal controls |
+| [CleanRL PPO](https://github.com/vwxyzjn/cleanrl/blob/e421c2e50b81febf639fced51a69e2602593d50d/cleanrl/ppo.py), file revision `e421c2e50b81febf639fced51a69e2602593d50d` | Explicit rollout/update code | Ordinary minibatch reduction and optional KL stopping; design reference only |
+| [SB3-Contrib v2.7.1](https://github.com/Stable-Baselines-Team/stable-baselines3-contrib/blob/v2.7.1/sb3_contrib/ppo_mask/ppo_mask.py), installed source and PPO docs | Update sequence, normalization, clipping and stopping before update at KL >1.5×target | Preserve true joint policy ratios, standard reduction, optimizer/checkpoint interfaces |
+
+These sources guide implementation; none establishes an improvement in this PVZ
+setup. Local archived episode/update records support investigating instability,
+not a proven causal diagnosis. New bounded results are recorded separately in
+[validation](validation.md). Earlier entries below describe historical inspections;
+retired methods are not supported modes in 0.9.0.
+
 ## Papers
 
 | Source and version | Evidence inspected | Decision informed |
@@ -22,7 +39,7 @@ catalog retains source revisions and the extent of the evidence inspected.
 
 | Project | Inspected revision/evidence | Use and limitations |
 |---|---|---|
-| Leafy's Lawn Lab, local `E:/Projects/pvz` | `b3cfbd886ab378313a1fdb57ee43a9a1b36a0793`; API, engine/config/types/replay, tests and controller | Original game source. The acceptance controller is frozen in `frozen_baseline.py`; strategy proposals adapt its preferences. Current engine pins are listed below. |
+| PVZ game, local `E:/Projects/pvz` | `b3cfbd886ab378313a1fdb57ee43a9a1b36a0793`; API, engine/config/types/replay, tests and controller | Original game source. The acceptance controller is frozen in `frozen_baseline.py`; strategy proposals adapt its preferences. Current engine pins are listed below. |
 | [Stable-Baselines3](https://github.com/DLR-RM/stable-baselines3) | Installed 2.7.1, base/on-policy collection code | PPO implementation and vector environment lifecycle. |
 | [SB3-Contrib](https://sb3-contrib.readthedocs.io/en/master/modules/ppo_mask.html) | Installed 2.7.1; documentation and collection code | MaskablePPO, in-environment masks for subprocess workers, explicit mask passing during evaluation. Recurrent MaskablePPO is not supported. |
 | [greinermachine/PVZRL](https://github.com/greinermachine/PVZRL) | `ccef5e566d4fd03de201186b38b1c1a5097b1592`; README and adapter/reward declarations | Reference for structured PvZ observations, shared legality, and experiment artifacts. Different game/bridge; no comparable held-out performance reproduced. |
@@ -77,9 +94,9 @@ schema were inspected for event ordering and attribution. Plant/projectile sourc
 are positive and mower sources negative; `PlantRemoved(reason=eaten)` differs from
 digging/detonation. Damage uses starting base HP; bites use actual plant HP removed;
 empty blasts match source and tick. These facts support exact CPU/CUDA accounting.
-The reward coefficients, choice-state actor reduction and initial dig bias are
-local changes implementing Leafy's preferences and diagnosed failure modes.
-Potential-shaping invariance is not claimed for added event rewards.
+Historical event rewards and choice-state actor reduction were local experiments.
+Version 0.9.0 removes them; only outcome, mower activation cost and one potential
+remain. The initial dig bias is a configurable, trainable project-specific choice.
 
 ## Local engine and experiment provenance
 
@@ -95,8 +112,8 @@ Potential-shaping invariance is not claimed for added event rewards.
 | `runs/sc2-shared-101` | Completed records, selected/final validation, plant/dig traces, three original demos; checkpoint `ce6b6fc3b480233c67b4009e6ce44d7412d2e2ef8fc7db8c047d34fe70fbb65e` |
 | Committed `evidence/` and ignored local `artifacts/` | Tests, measured timings and bounded diagnostics; indexed in [validation](validation.md) |
 
-Sources were inspected on 2026-09-20/21; this consolidation adds no new literature
-claims. Some online SB3/PyTorch retrievals failed, so those entries explicitly use
+Historical sources were inspected on 2026-09-20/21. The compact-method sources
+above were inspected on 2026-09-22. Some online SB3/PyTorch retrievals failed, so those entries explicitly use
 installed versioned source. Revisiting remains abstract-only. Repository claims,
 published findings, proposed adaptations and local results are distinct. No paper
 establishes these reward weights, human similarity or a two-hour win-rate gain.
@@ -120,6 +137,6 @@ claim is introduced; the existing curriculum evidence remains as recorded above.
 For the 0.8.1 mastery follow-up (2026-09-22), re-inspected this project's curriculum
 state machine, post-update validation callback, checkpoint compatibility checks,
 and existing curriculum/seed-separation references above. The 100/100 pass gate
-is Leafy's requested acceptance rule; the 500/2,000-game intervals are local
+is the user's requested acceptance rule; the 500/2,000-game intervals are local
 configuration choices, not paper-derived optima. No new learning method or
 performance claim is introduced.

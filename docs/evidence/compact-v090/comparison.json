@@ -1,0 +1,2149 @@
+{
+  "protocol": "Four fresh runs, two methods x seeds 101/102, 300 seconds each; no final-test evaluation",
+  "runs": [
+    {
+      "run": "compact-101",
+      "allowance_seconds": 300,
+      "learner_seed": 101,
+      "lesson_evaluation": {
+        "placement": {
+          "games": 20,
+          "wins": 0
+        },
+        "saving": {
+          "games": 20,
+          "wins": 0
+        }
+      },
+      "method": "compact",
+      "missing": [],
+      "old_source_commit": "0dbe95e",
+      "wall_seconds_including_diagnostics": 285.5348023999977,
+      "config_hash": "afabeb87840e4541f54f1914bbe821196f0635d693231678b9433a1ab3a879e8",
+      "research_source_hash": "1f9e9094e317d313a8ac0b131bc79655501da057df105b505eaf65531ed09118",
+      "engine": {
+        "commit": "8861824df6893a34c2cd4df7f9b68613376d7964",
+        "cuda_backend_source_hash": "98c7859a1804c63af8dd9f3e5cc7d40952933bab6b2133f1e5433d6e5ccbdc34",
+        "package_version": "1.3.0",
+        "rules_hash": "a7486688fa43a9b50193f82715fa519bd27cfebc7ed054bebe4f7990f9c268de",
+        "source_hash": "5c4b358043b8253e7876aa68a46bcf272f0264d80c7de86f9e67c7c8bc6993e2",
+        "version": "1.0.0"
+      },
+      "config": {
+        "conditions": {
+          "masked": {
+            "curriculum": true,
+            "hybrid": false,
+            "masked": true,
+            "shaped": true
+          }
+        },
+        "curriculum": {
+          "boundaries": [
+            0.1,
+            0.4
+          ],
+          "consecutive_passes": 1,
+          "easy_weights": [
+            1.0,
+            0.0,
+            0.0
+          ],
+          "final_weights": [
+            0.2,
+            0.4,
+            0.4
+          ],
+          "intermediate_weights": [
+            0.5,
+            0.5,
+            0.0
+          ],
+          "lessons": {
+            "placement": {
+              "allowed_plants": [
+                "peashooter"
+              ],
+              "initial_sun": 200,
+              "spawn_ticks": [
+                1,
+                81,
+                161
+              ]
+            },
+            "saving": {
+              "allowed_plants": [
+                "sunflower",
+                "peashooter"
+              ],
+              "initial_sun": 50,
+              "spawn_ticks": [
+                1200,
+                1280,
+                1360
+              ]
+            }
+          },
+          "minimum_stage_games": 100,
+          "minimum_stage_steps": 16384,
+          "mode": "teaching",
+          "probe_cases": 100,
+          "probe_interval": 16384,
+          "probe_interval_games": 500,
+          "residency": "episode_start_stage",
+          "stages": {
+            "easy": {
+              "requirements": {
+                "easy": 100
+              },
+              "tasks": [
+                "easy",
+                "placement",
+                "saving"
+              ],
+              "weights": [
+                0.8,
+                0.1,
+                0.1
+              ]
+            },
+            "placement": {
+              "requirements": {
+                "placement": 100
+              },
+              "tasks": [
+                "placement"
+              ],
+              "weights": [
+                1.0
+              ]
+            },
+            "saving": {
+              "requirements": {
+                "saving": 100
+              },
+              "tasks": [
+                "saving",
+                "placement"
+              ],
+              "weights": [
+                0.8,
+                0.2
+              ]
+            },
+            "shared": {
+              "requirements": {
+                "easy": 100,
+                "hard": 100,
+                "standard": 100
+              },
+              "tasks": [
+                "easy",
+                "standard",
+                "hard"
+              ],
+              "weights": [
+                0.2,
+                0.4,
+                0.4
+              ]
+            },
+            "standard": {
+              "requirements": {
+                "easy": 100,
+                "standard": 100
+              },
+              "tasks": [
+                "easy",
+                "standard",
+                "saving"
+              ],
+              "weights": [
+                0.45,
+                0.45,
+                0.1
+              ]
+            }
+          }
+        },
+        "diagnostics": {
+          "early_dig_seconds": 5
+        },
+        "encoding": {
+          "count_scale": 75,
+          "local_count_scale": 5,
+          "version": "compact_v3",
+          "wave_scale": 15
+        },
+        "engine_commit": "8861824df6893a34c2cd4df7f9b68613376d7964",
+        "engine_package_version": "1.3.0",
+        "engine_version": "1.0.0",
+        "environment": {
+          "action_timing": "per_tick",
+          "bins": 3,
+          "cols": 9,
+          "cutoff_seconds": 1200,
+          "decision_ticks": 1,
+          "mower_states": [
+            "ready",
+            "moving",
+            "spent"
+          ],
+          "plant_states": [
+            "ready",
+            "arming",
+            "armed",
+            "fusing",
+            "digesting",
+            "exploding",
+            "detonating"
+          ],
+          "plants": [
+            "sunflower",
+            "peashooter",
+            "wall_nut",
+            "cherry_bomb",
+            "potato_mine",
+            "snow_pea",
+            "chomper",
+            "repeater"
+          ],
+          "rows": 5,
+          "zombie_states": [
+            "walking",
+            "carrying_pole",
+            "vaulting",
+            "biting",
+            "dead"
+          ],
+          "zombies": [
+            "basic",
+            "flag",
+            "conehead",
+            "buckethead",
+            "pole_vaulting"
+          ]
+        },
+        "evaluation": {
+          "bootstrap_replicates": 2000,
+          "bootstrap_seed": 1739,
+          "levels": [
+            "easy",
+            "standard",
+            "hard"
+          ],
+          "ood_families": [
+            "redistributed",
+            "faster",
+            "concentrated"
+          ],
+          "ood_levels": [
+            "standard",
+            "hard"
+          ],
+          "replays_per_outcome": 10,
+          "targets": [
+            0.95,
+            0.9,
+            0.75
+          ]
+        },
+        "logging": {
+          "progress_seconds": 15,
+          "rolling_window": 100
+        },
+        "policy": {
+          "channels": [
+            32,
+            32
+          ],
+          "initial_dig_logit": -6.0,
+          "kind": "spatial_grouped_v3",
+          "plant_embedding": 8,
+          "scalar_sizes": [
+            64
+          ],
+          "state_embedding": 4
+        },
+        "profile": "compact-ppo",
+        "reward": {
+          "defeated_weight": 0.5,
+          "economy_scale": 300.0,
+          "economy_weight": 0.5,
+          "gamma": 0.999,
+          "loss_penalty": 2.0,
+          "mower_activation_cost": 0.2,
+          "version": "potential_mower_v1",
+          "win_reward": 1.0
+        },
+        "runtime": {
+          "cache_legal_actions": true,
+          "refill_evaluation": true
+        },
+        "schema_version": 1,
+        "simulation": {
+          "backend": "cuda"
+        },
+        "splits": {
+          "curriculum": [
+            100050,
+            100149
+          ],
+          "ood": [
+            300000,
+            300099
+          ],
+          "test": [
+            200000,
+            200299
+          ],
+          "train": [
+            1000,
+            99999
+          ],
+          "validation": [
+            100000,
+            100049
+          ]
+        },
+        "training": {
+          "batch_size": 1024,
+          "budget_unit": "games",
+          "clip_range": 0.2,
+          "device": "cuda",
+          "eval_interval": 250000,
+          "eval_interval_games": 2000,
+          "exploration": {
+            "objective": "balanced_heads_v1",
+            "tile_coef": 0.001,
+            "type_coef": 0.01
+          },
+          "finalization_minutes": 0.6,
+          "gae_lambda": 0.999,
+          "hidden_sizes": [
+            128,
+            128
+          ],
+          "learner_seeds": [
+            101,
+            102
+          ],
+          "learning_rate": 0.0003,
+          "max_grad_norm": 0.5,
+          "max_minutes": 5,
+          "n_envs": 128,
+          "n_epochs": 4,
+          "normalize_advantage": true,
+          "rollout_size": 16384,
+          "rollout_steps_per_env": 128,
+          "target_kl": 0.01,
+          "torch_threads": 1,
+          "total_games": 10000,
+          "total_steps": 3000000,
+          "vf_coef": 0.5
+        },
+        "visualization": {
+          "crf": 23,
+          "demos": false,
+          "enabled": false,
+          "ffmpeg": "",
+          "final_hold_seconds": 2,
+          "video_size": [
+            1280,
+            820
+          ],
+          "videos": false
+        }
+      },
+      "training_games": 2009,
+      "decisions": 2097152,
+      "stage": "placement",
+      "training_elapsed": 262.4865995,
+      "decisions_per_second": 9607.092544256115,
+      "all_training": {
+        "games": 2009,
+        "accepted_plantings": 4628,
+        "early_digs": 93,
+        "early_digs_per_planting": 0.020095073465859984,
+        "attacker_purchases": 4628,
+        "wins": 312
+      },
+      "last_100_training": {
+        "games": 100,
+        "accepted_plantings": 262,
+        "early_digs": 2,
+        "early_digs_per_planting": 0.007633587786259542,
+        "attacker_purchases": 262,
+        "wins": 59
+      },
+      "normal_validation": [
+        {
+          "training_games": 2009,
+          "win_rate": 0.0,
+          "levels": {
+            "preset/easy": {
+              "episodes": 5,
+              "fraction_wins_without_mowers": null,
+              "inference_ms": 0.37227451254157456,
+              "invalid_action_rate": 0.0,
+              "loss_seconds": 147.72000000000003,
+              "mean_empty_explosions": 0.0,
+              "mean_empty_mower_activations": 0.0,
+              "mean_mower_activation_penalty": -0.8399999999999999,
+              "mean_mower_activation_sun": 1290.0,
+              "mean_mower_activations": 4.2,
+              "mean_mower_kills": 8.4,
+              "mean_mowers_used": 4.2,
+              "mean_nonlethal_health_damage": 0.0,
+              "mean_plant_kills": 0.0,
+              "mean_wall_nut_damage": 0.0,
+              "truncation_rate": 0.0,
+              "waiting_rate": 1.0,
+              "win_rate": 0.0,
+              "win_seconds": null
+            },
+            "preset/hard": {
+              "episodes": 5,
+              "fraction_wins_without_mowers": null,
+              "inference_ms": 0.3760808880046827,
+              "invalid_action_rate": 0.0,
+              "loss_seconds": 141.96999999999997,
+              "mean_empty_explosions": 0.0,
+              "mean_empty_mower_activations": 0.0,
+              "mean_mower_activation_penalty": -0.8400000000000001,
+              "mean_mower_activation_sun": 1290.0,
+              "mean_mower_activations": 4.2,
+              "mean_mower_kills": 7.8,
+              "mean_mowers_used": 4.2,
+              "mean_nonlethal_health_damage": 0.0,
+              "mean_plant_kills": 0.0,
+              "mean_wall_nut_damage": 0.0,
+              "truncation_rate": 0.0,
+              "waiting_rate": 1.0,
+              "win_rate": 0.0,
+              "win_seconds": null
+            },
+            "preset/standard": {
+              "episodes": 5,
+              "fraction_wins_without_mowers": null,
+              "inference_ms": 0.3760808880046827,
+              "invalid_action_rate": 0.0,
+              "loss_seconds": 141.96999999999997,
+              "mean_empty_explosions": 0.0,
+              "mean_empty_mower_activations": 0.0,
+              "mean_mower_activation_penalty": -0.8400000000000001,
+              "mean_mower_activation_sun": 1290.0,
+              "mean_mower_activations": 4.2,
+              "mean_mower_kills": 7.8,
+              "mean_mowers_used": 4.2,
+              "mean_nonlethal_health_damage": 0.0,
+              "mean_plant_kills": 0.0,
+              "mean_wall_nut_damage": 0.0,
+              "truncation_rate": 0.0,
+              "waiting_rate": 1.0,
+              "win_rate": 0.0,
+              "win_seconds": null
+            }
+          },
+          "final": false
+        }
+      ],
+      "probes": [
+        {
+          "advanced": false,
+          "stage": "placement",
+          "stage_mastered": false,
+          "state": {
+            "completed_stage_games": 506,
+            "consecutive_passes": 0,
+            "entered_games": 0,
+            "entered_steps": 0,
+            "last_probe": 0,
+            "last_probe_games": 506,
+            "mastered": false,
+            "stage": 0
+          },
+          "training_games": 506,
+          "training_steps": 557056,
+          "wins": {
+            "placement": 0
+          }
+        },
+        {
+          "advanced": false,
+          "stage": "placement",
+          "stage_mastered": false,
+          "state": {
+            "completed_stage_games": 1016,
+            "consecutive_passes": 0,
+            "entered_games": 0,
+            "entered_steps": 0,
+            "last_probe": 0,
+            "last_probe_games": 1016,
+            "mastered": false,
+            "stage": 0
+          },
+          "training_games": 1016,
+          "training_steps": 1081344,
+          "wins": {
+            "placement": 0
+          }
+        },
+        {
+          "advanced": false,
+          "stage": "placement",
+          "stage_mastered": false,
+          "state": {
+            "completed_stage_games": 1522,
+            "consecutive_passes": 0,
+            "entered_games": 0,
+            "entered_steps": 0,
+            "last_probe": 0,
+            "last_probe_games": 1522,
+            "mastered": false,
+            "stage": 0
+          },
+          "training_games": 1522,
+          "training_steps": 1622016,
+          "wins": {
+            "placement": 0
+          }
+        }
+      ],
+      "optimizer": {
+        "kl_max": 0.003250113921239972,
+        "kl_stops": 1.0
+      }
+    },
+    {
+      "run": "compact-102",
+      "allowance_seconds": 300,
+      "learner_seed": 102,
+      "lesson_evaluation": {
+        "placement": {
+          "games": 20,
+          "wins": 0
+        }
+      },
+      "method": "compact",
+      "missing": [
+        "Deadline prevented completing final lesson evaluation"
+      ],
+      "old_source_commit": "0dbe95e",
+      "wall_seconds_including_diagnostics": 300.0028790000033,
+      "config_hash": "afabeb87840e4541f54f1914bbe821196f0635d693231678b9433a1ab3a879e8",
+      "research_source_hash": "1f9e9094e317d313a8ac0b131bc79655501da057df105b505eaf65531ed09118",
+      "engine": {
+        "commit": "8861824df6893a34c2cd4df7f9b68613376d7964",
+        "cuda_backend_source_hash": "98c7859a1804c63af8dd9f3e5cc7d40952933bab6b2133f1e5433d6e5ccbdc34",
+        "package_version": "1.3.0",
+        "rules_hash": "a7486688fa43a9b50193f82715fa519bd27cfebc7ed054bebe4f7990f9c268de",
+        "source_hash": "5c4b358043b8253e7876aa68a46bcf272f0264d80c7de86f9e67c7c8bc6993e2",
+        "version": "1.0.0"
+      },
+      "config": {
+        "conditions": {
+          "masked": {
+            "curriculum": true,
+            "hybrid": false,
+            "masked": true,
+            "shaped": true
+          }
+        },
+        "curriculum": {
+          "boundaries": [
+            0.1,
+            0.4
+          ],
+          "consecutive_passes": 1,
+          "easy_weights": [
+            1.0,
+            0.0,
+            0.0
+          ],
+          "final_weights": [
+            0.2,
+            0.4,
+            0.4
+          ],
+          "intermediate_weights": [
+            0.5,
+            0.5,
+            0.0
+          ],
+          "lessons": {
+            "placement": {
+              "allowed_plants": [
+                "peashooter"
+              ],
+              "initial_sun": 200,
+              "spawn_ticks": [
+                1,
+                81,
+                161
+              ]
+            },
+            "saving": {
+              "allowed_plants": [
+                "sunflower",
+                "peashooter"
+              ],
+              "initial_sun": 50,
+              "spawn_ticks": [
+                1200,
+                1280,
+                1360
+              ]
+            }
+          },
+          "minimum_stage_games": 100,
+          "minimum_stage_steps": 16384,
+          "mode": "teaching",
+          "probe_cases": 100,
+          "probe_interval": 16384,
+          "probe_interval_games": 500,
+          "residency": "episode_start_stage",
+          "stages": {
+            "easy": {
+              "requirements": {
+                "easy": 100
+              },
+              "tasks": [
+                "easy",
+                "placement",
+                "saving"
+              ],
+              "weights": [
+                0.8,
+                0.1,
+                0.1
+              ]
+            },
+            "placement": {
+              "requirements": {
+                "placement": 100
+              },
+              "tasks": [
+                "placement"
+              ],
+              "weights": [
+                1.0
+              ]
+            },
+            "saving": {
+              "requirements": {
+                "saving": 100
+              },
+              "tasks": [
+                "saving",
+                "placement"
+              ],
+              "weights": [
+                0.8,
+                0.2
+              ]
+            },
+            "shared": {
+              "requirements": {
+                "easy": 100,
+                "hard": 100,
+                "standard": 100
+              },
+              "tasks": [
+                "easy",
+                "standard",
+                "hard"
+              ],
+              "weights": [
+                0.2,
+                0.4,
+                0.4
+              ]
+            },
+            "standard": {
+              "requirements": {
+                "easy": 100,
+                "standard": 100
+              },
+              "tasks": [
+                "easy",
+                "standard",
+                "saving"
+              ],
+              "weights": [
+                0.45,
+                0.45,
+                0.1
+              ]
+            }
+          }
+        },
+        "diagnostics": {
+          "early_dig_seconds": 5
+        },
+        "encoding": {
+          "count_scale": 75,
+          "local_count_scale": 5,
+          "version": "compact_v3",
+          "wave_scale": 15
+        },
+        "engine_commit": "8861824df6893a34c2cd4df7f9b68613376d7964",
+        "engine_package_version": "1.3.0",
+        "engine_version": "1.0.0",
+        "environment": {
+          "action_timing": "per_tick",
+          "bins": 3,
+          "cols": 9,
+          "cutoff_seconds": 1200,
+          "decision_ticks": 1,
+          "mower_states": [
+            "ready",
+            "moving",
+            "spent"
+          ],
+          "plant_states": [
+            "ready",
+            "arming",
+            "armed",
+            "fusing",
+            "digesting",
+            "exploding",
+            "detonating"
+          ],
+          "plants": [
+            "sunflower",
+            "peashooter",
+            "wall_nut",
+            "cherry_bomb",
+            "potato_mine",
+            "snow_pea",
+            "chomper",
+            "repeater"
+          ],
+          "rows": 5,
+          "zombie_states": [
+            "walking",
+            "carrying_pole",
+            "vaulting",
+            "biting",
+            "dead"
+          ],
+          "zombies": [
+            "basic",
+            "flag",
+            "conehead",
+            "buckethead",
+            "pole_vaulting"
+          ]
+        },
+        "evaluation": {
+          "bootstrap_replicates": 2000,
+          "bootstrap_seed": 1739,
+          "levels": [
+            "easy",
+            "standard",
+            "hard"
+          ],
+          "ood_families": [
+            "redistributed",
+            "faster",
+            "concentrated"
+          ],
+          "ood_levels": [
+            "standard",
+            "hard"
+          ],
+          "replays_per_outcome": 10,
+          "targets": [
+            0.95,
+            0.9,
+            0.75
+          ]
+        },
+        "logging": {
+          "progress_seconds": 15,
+          "rolling_window": 100
+        },
+        "policy": {
+          "channels": [
+            32,
+            32
+          ],
+          "initial_dig_logit": -6.0,
+          "kind": "spatial_grouped_v3",
+          "plant_embedding": 8,
+          "scalar_sizes": [
+            64
+          ],
+          "state_embedding": 4
+        },
+        "profile": "compact-ppo",
+        "reward": {
+          "defeated_weight": 0.5,
+          "economy_scale": 300.0,
+          "economy_weight": 0.5,
+          "gamma": 0.999,
+          "loss_penalty": 2.0,
+          "mower_activation_cost": 0.2,
+          "version": "potential_mower_v1",
+          "win_reward": 1.0
+        },
+        "runtime": {
+          "cache_legal_actions": true,
+          "refill_evaluation": true
+        },
+        "schema_version": 1,
+        "simulation": {
+          "backend": "cuda"
+        },
+        "splits": {
+          "curriculum": [
+            100050,
+            100149
+          ],
+          "ood": [
+            300000,
+            300099
+          ],
+          "test": [
+            200000,
+            200299
+          ],
+          "train": [
+            1000,
+            99999
+          ],
+          "validation": [
+            100000,
+            100049
+          ]
+        },
+        "training": {
+          "batch_size": 1024,
+          "budget_unit": "games",
+          "clip_range": 0.2,
+          "device": "cuda",
+          "eval_interval": 250000,
+          "eval_interval_games": 2000,
+          "exploration": {
+            "objective": "balanced_heads_v1",
+            "tile_coef": 0.001,
+            "type_coef": 0.01
+          },
+          "finalization_minutes": 0.6,
+          "gae_lambda": 0.999,
+          "hidden_sizes": [
+            128,
+            128
+          ],
+          "learner_seeds": [
+            101,
+            102
+          ],
+          "learning_rate": 0.0003,
+          "max_grad_norm": 0.5,
+          "max_minutes": 5,
+          "n_envs": 128,
+          "n_epochs": 4,
+          "normalize_advantage": true,
+          "rollout_size": 16384,
+          "rollout_steps_per_env": 128,
+          "target_kl": 0.01,
+          "torch_threads": 1,
+          "total_games": 10000,
+          "total_steps": 3000000,
+          "vf_coef": 0.5
+        },
+        "visualization": {
+          "crf": 23,
+          "demos": false,
+          "enabled": false,
+          "ffmpeg": "",
+          "final_hold_seconds": 2,
+          "video_size": [
+            1280,
+            820
+          ],
+          "videos": false
+        }
+      },
+      "training_games": 1755,
+      "decisions": 1785856,
+      "stage": "placement",
+      "training_elapsed": 287.8003781999978,
+      "decisions_per_second": 7533.154753332723,
+      "all_training": {
+        "games": 1755,
+        "accepted_plantings": 5074,
+        "early_digs": 59,
+        "early_digs_per_planting": 0.011627906976744186,
+        "attacker_purchases": 5074,
+        "wins": 440
+      },
+      "last_100_training": {
+        "games": 100,
+        "accepted_plantings": 254,
+        "early_digs": 0,
+        "early_digs_per_planting": 0.0,
+        "attacker_purchases": 254,
+        "wins": 79
+      },
+      "normal_validation": [
+        {
+          "training_games": 1755,
+          "win_rate": 0.0,
+          "levels": {
+            "preset/easy": {
+              "episodes": 5,
+              "fraction_wins_without_mowers": null,
+              "inference_ms": 0.40319568502288594,
+              "invalid_action_rate": 0.0,
+              "loss_seconds": 147.72000000000003,
+              "mean_empty_explosions": 0.0,
+              "mean_empty_mower_activations": 0.0,
+              "mean_mower_activation_penalty": -0.8399999999999999,
+              "mean_mower_activation_sun": 1290.0,
+              "mean_mower_activations": 4.2,
+              "mean_mower_kills": 8.4,
+              "mean_mowers_used": 4.2,
+              "mean_nonlethal_health_damage": 0.0,
+              "mean_plant_kills": 0.0,
+              "mean_wall_nut_damage": 0.0,
+              "truncation_rate": 0.0,
+              "waiting_rate": 1.0,
+              "win_rate": 0.0,
+              "win_seconds": null
+            },
+            "preset/hard": {
+              "episodes": 5,
+              "fraction_wins_without_mowers": null,
+              "inference_ms": 0.4009053181866576,
+              "invalid_action_rate": 0.0,
+              "loss_seconds": 141.96999999999997,
+              "mean_empty_explosions": 0.0,
+              "mean_empty_mower_activations": 0.0,
+              "mean_mower_activation_penalty": -0.8,
+              "mean_mower_activation_sun": 1050.0,
+              "mean_mower_activations": 4.0,
+              "mean_mower_kills": 7.0,
+              "mean_mowers_used": 4.0,
+              "mean_nonlethal_health_damage": 80.0,
+              "mean_plant_kills": 0.2,
+              "mean_wall_nut_damage": 0.0,
+              "truncation_rate": 0.0,
+              "waiting_rate": 0.9997183296950919,
+              "win_rate": 0.0,
+              "win_seconds": null
+            },
+            "preset/standard": {
+              "episodes": 5,
+              "fraction_wins_without_mowers": null,
+              "inference_ms": 0.40093609103044525,
+              "invalid_action_rate": 0.0,
+              "loss_seconds": 141.96999999999997,
+              "mean_empty_explosions": 0.0,
+              "mean_empty_mower_activations": 0.0,
+              "mean_mower_activation_penalty": -0.8400000000000001,
+              "mean_mower_activation_sun": 1290.0,
+              "mean_mower_activations": 4.2,
+              "mean_mower_kills": 7.8,
+              "mean_mowers_used": 4.2,
+              "mean_nonlethal_health_damage": 0.0,
+              "mean_plant_kills": 0.0,
+              "mean_wall_nut_damage": 0.0,
+              "truncation_rate": 0.0,
+              "waiting_rate": 1.0,
+              "win_rate": 0.0,
+              "win_seconds": null
+            }
+          },
+          "final": true
+        }
+      ],
+      "probes": [
+        {
+          "advanced": false,
+          "stage": "placement",
+          "stage_mastered": false,
+          "state": {
+            "completed_stage_games": 504,
+            "consecutive_passes": 0,
+            "entered_games": 0,
+            "entered_steps": 0,
+            "last_probe": 0,
+            "last_probe_games": 504,
+            "mastered": false,
+            "stage": 0
+          },
+          "training_games": 504,
+          "training_steps": 557056,
+          "wins": {
+            "placement": 0
+          }
+        },
+        {
+          "advanced": false,
+          "stage": "placement",
+          "stage_mastered": false,
+          "state": {
+            "completed_stage_games": 1013,
+            "consecutive_passes": 0,
+            "entered_games": 0,
+            "entered_steps": 0,
+            "last_probe": 0,
+            "last_probe_games": 1013,
+            "mastered": false,
+            "stage": 0
+          },
+          "training_games": 1013,
+          "training_steps": 1081344,
+          "wins": {
+            "placement": 0
+          }
+        },
+        {
+          "advanced": false,
+          "stage": "placement",
+          "stage_mastered": false,
+          "state": {
+            "completed_stage_games": 1518,
+            "consecutive_passes": 0,
+            "entered_games": 0,
+            "entered_steps": 0,
+            "last_probe": 0,
+            "last_probe_games": 1518,
+            "mastered": false,
+            "stage": 0
+          },
+          "training_games": 1518,
+          "training_steps": 1589248,
+          "wins": {
+            "placement": 0
+          }
+        }
+      ],
+      "optimizer": {
+        "kl_max": 0.0010568038560450077,
+        "kl_stops": 0
+      }
+    },
+    {
+      "run": "previous-101",
+      "allowance_seconds": 300,
+      "learner_seed": 101,
+      "lesson_evaluation": {
+        "placement": {
+          "games": 20,
+          "wins": 20
+        },
+        "saving": {
+          "games": 20,
+          "wins": 20
+        }
+      },
+      "method": "previous",
+      "missing": [],
+      "old_source_commit": "0dbe95e",
+      "wall_seconds_including_diagnostics": 297.7283357000015,
+      "config_hash": "3dcba248c0d9df9583ddf9ab93e24ebb7327a857cde83126bd678824cdfe5cc2",
+      "research_source_hash": "3803d497171671df109827de94b6a4f160a0221ad8344b933cfcbf2df46b03cf",
+      "engine": {
+        "commit": "8861824df6893a34c2cd4df7f9b68613376d7964",
+        "cuda_backend_source_hash": "98c7859a1804c63af8dd9f3e5cc7d40952933bab6b2133f1e5433d6e5ccbdc34",
+        "package_version": "1.3.0",
+        "rules_hash": "a7486688fa43a9b50193f82715fa519bd27cfebc7ed054bebe4f7990f9c268de",
+        "source_hash": "5c4b358043b8253e7876aa68a46bcf272f0264d80c7de86f9e67c7c8bc6993e2",
+        "version": "1.0.0"
+      },
+      "config": {
+        "conditions": {
+          "masked": {
+            "curriculum": true,
+            "hybrid": false,
+            "masked": true,
+            "shaped": true
+          },
+          "mixed": {
+            "curriculum": false,
+            "hybrid": false,
+            "masked": true,
+            "shaped": true
+          },
+          "sparse": {
+            "curriculum": true,
+            "hybrid": false,
+            "masked": true,
+            "shaped": false
+          },
+          "unmasked": {
+            "curriculum": true,
+            "hybrid": false,
+            "masked": false,
+            "shaped": true
+          }
+        },
+        "curriculum": {
+          "boundaries": [
+            0.1,
+            0.4
+          ],
+          "consecutive_passes": 1,
+          "easy_weights": [
+            1.0,
+            0.0,
+            0.0
+          ],
+          "final_weights": [
+            0.2,
+            0.4,
+            0.4
+          ],
+          "intermediate_weights": [
+            0.5,
+            0.5,
+            0.0
+          ],
+          "lessons": {
+            "placement": {
+              "allowed_plants": [
+                "peashooter"
+              ],
+              "initial_sun": 200,
+              "spawn_ticks": [
+                1,
+                81,
+                161
+              ]
+            },
+            "saving": {
+              "allowed_plants": [
+                "sunflower",
+                "peashooter"
+              ],
+              "initial_sun": 50,
+              "spawn_ticks": [
+                1200,
+                1280,
+                1360
+              ]
+            }
+          },
+          "minimum_stage_games": 100,
+          "minimum_stage_steps": 16384,
+          "mode": "teaching",
+          "probe_cases": 100,
+          "probe_interval": 16384,
+          "probe_interval_games": 500,
+          "residency": "episode_start_stage",
+          "stages": {
+            "easy": {
+              "requirements": {
+                "easy": 100
+              },
+              "tasks": [
+                "easy",
+                "placement",
+                "saving"
+              ],
+              "weights": [
+                0.8,
+                0.1,
+                0.1
+              ]
+            },
+            "placement": {
+              "requirements": {
+                "placement": 100
+              },
+              "tasks": [
+                "placement"
+              ],
+              "weights": [
+                1.0
+              ]
+            },
+            "saving": {
+              "requirements": {
+                "saving": 100
+              },
+              "tasks": [
+                "saving",
+                "placement"
+              ],
+              "weights": [
+                0.8,
+                0.2
+              ]
+            },
+            "shared": {
+              "requirements": {
+                "easy": 100,
+                "hard": 100,
+                "standard": 100
+              },
+              "tasks": [
+                "easy",
+                "standard",
+                "hard"
+              ],
+              "weights": [
+                0.2,
+                0.4,
+                0.4
+              ]
+            },
+            "standard": {
+              "requirements": {
+                "easy": 100,
+                "standard": 100
+              },
+              "tasks": [
+                "easy",
+                "standard",
+                "saving"
+              ],
+              "weights": [
+                0.45,
+                0.45,
+                0.1
+              ]
+            }
+          }
+        },
+        "diagnostics": {
+          "early_dig_seconds": 5
+        },
+        "encoding": {
+          "count_scale": 75,
+          "firepower_scale": 20,
+          "lane_count_scale": 9,
+          "local_count_scale": 5,
+          "version": "tactical_v2",
+          "wave_scale": 15
+        },
+        "engine_commit": "8861824df6893a34c2cd4df7f9b68613376d7964",
+        "engine_package_version": "1.3.0",
+        "engine_version": "1.0.0",
+        "environment": {
+          "action_timing": "per_tick",
+          "bins": 20,
+          "cols": 9,
+          "cutoff_seconds": 1200,
+          "decision_ticks": 1,
+          "mower_states": [
+            "ready",
+            "moving",
+            "spent"
+          ],
+          "plant_states": [
+            "ready",
+            "arming",
+            "armed",
+            "fusing",
+            "digesting",
+            "exploding",
+            "detonating"
+          ],
+          "plants": [
+            "sunflower",
+            "peashooter",
+            "wall_nut",
+            "cherry_bomb",
+            "potato_mine",
+            "snow_pea",
+            "chomper",
+            "repeater"
+          ],
+          "rows": 5,
+          "zombie_states": [
+            "walking",
+            "carrying_pole",
+            "vaulting",
+            "biting",
+            "dead"
+          ],
+          "zombies": [
+            "basic",
+            "flag",
+            "conehead",
+            "buckethead",
+            "pole_vaulting"
+          ]
+        },
+        "evaluation": {
+          "bootstrap_replicates": 2000,
+          "bootstrap_seed": 1739,
+          "levels": [
+            "easy",
+            "standard",
+            "hard"
+          ],
+          "ood_families": [
+            "redistributed",
+            "faster",
+            "concentrated"
+          ],
+          "ood_levels": [
+            "standard",
+            "hard"
+          ],
+          "replays_per_outcome": 10,
+          "targets": [
+            0.95,
+            0.9,
+            0.75
+          ]
+        },
+        "logging": {
+          "progress_seconds": 15,
+          "rolling_window": 100
+        },
+        "policy": {
+          "channels": 64,
+          "initial_dig_logit": -6.0,
+          "kind": "spatial_grouped_v2"
+        },
+        "profile": "sc2-plant-rewards-v2",
+        "reward": {
+          "damage_weight": 1.0,
+          "defeated_weight": 0.5,
+          "eaten_plant_penalty": 0.02,
+          "economy_scale": 300,
+          "economy_weight": 0.5,
+          "empty_explosion_penalty": 0.2,
+          "empty_mower_activation_penalty": 0.2,
+          "gamma": 0.999,
+          "loss_penalty": 2.0,
+          "mower_kill_weight": 2.0,
+          "mower_sun_scale": 300.0,
+          "mower_sun_weight": 1.0,
+          "normalize_kills": true,
+          "offensive_plant_weight": 0.1,
+          "offensive_plants": [
+            "peashooter",
+            "snow_pea",
+            "repeater",
+            "chomper"
+          ],
+          "plant_kill_weight": 1.0,
+          "potential_mode": "plant_value",
+          "wall_nut_damage_weight": 0.2,
+          "win_reward": 1.0
+        },
+        "runtime": {
+          "cache_legal_actions": true,
+          "refill_evaluation": true
+        },
+        "schema_version": 1,
+        "simulation": {
+          "backend": "cuda"
+        },
+        "splits": {
+          "curriculum": [
+            100050,
+            100149
+          ],
+          "ood": [
+            300000,
+            300099
+          ],
+          "test": [
+            200000,
+            200299
+          ],
+          "train": [
+            1000,
+            99999
+          ],
+          "validation": [
+            100000,
+            100049
+          ]
+        },
+        "training": {
+          "actor_objective": "choice_points_v1",
+          "batch_size": 1024,
+          "budget_unit": "games",
+          "clip_range": 0.2,
+          "device": "cuda",
+          "ent_coef": 0.01,
+          "eval_interval": 250000,
+          "eval_interval_games": 2000,
+          "exploration": {
+            "objective": "balanced_heads_v1",
+            "tile_coef": 0.001,
+            "type_coef": 0.01
+          },
+          "finalization_minutes": 0.6,
+          "gae_lambda": 0.999,
+          "hidden_sizes": [
+            256,
+            256
+          ],
+          "learner_seeds": [
+            101,
+            102
+          ],
+          "learning_rate": 0.0003,
+          "max_minutes": 5,
+          "n_envs": 128,
+          "n_epochs": 4,
+          "rollout_size": 16384,
+          "rollout_steps_per_env": 128,
+          "torch_threads": 1,
+          "total_games": 10000,
+          "total_steps": 3000000
+        },
+        "visualization": {
+          "crf": 23,
+          "demos": false,
+          "enabled": false,
+          "ffmpeg": "",
+          "final_hold_seconds": 2,
+          "video_size": [
+            1280,
+            820
+          ],
+          "videos": false
+        }
+      },
+      "training_games": 1527,
+      "decisions": 2408448,
+      "stage": "saving",
+      "training_elapsed": 283.2518930999977,
+      "decisions_per_second": 9856.021290546076,
+      "all_training": {
+        "games": 1527,
+        "accepted_plantings": 12273,
+        "early_digs": 292,
+        "early_digs_per_planting": 0.023792063880061925,
+        "attacker_purchases": 4936,
+        "wins": 669
+      },
+      "last_100_training": {
+        "games": 100,
+        "accepted_plantings": 1115,
+        "early_digs": 99,
+        "early_digs_per_planting": 0.08878923766816144,
+        "attacker_purchases": 283,
+        "wins": 63
+      },
+      "normal_validation": [
+        {
+          "training_games": 1527,
+          "win_rate": 0.0,
+          "levels": {
+            "preset/easy": {
+              "episodes": 5,
+              "fraction_wins_without_mowers": null,
+              "inference_ms": 0.26017048195893616,
+              "invalid_action_rate": 0.0,
+              "loss_seconds": 172.42,
+              "mean_damage_reward": 0.0,
+              "mean_empty_explosion_penalty": 0.0,
+              "mean_empty_explosions": 0.0,
+              "mean_empty_mower_activations": 0.0,
+              "mean_mower_activation_penalty": 0.0,
+              "mean_mower_activation_sun": 20.0,
+              "mean_mower_activations": 3.4,
+              "mean_mower_kill_penalty": -0.9333333333333332,
+              "mean_mower_kills": 7.0,
+              "mean_mower_sun_penalty": -0.06666666666666667,
+              "mean_mowers_used": 3.4,
+              "mean_nonlethal_health_damage": 0.0,
+              "mean_offensive_plantings": 0.0,
+              "mean_offensive_shaping": 0.0,
+              "mean_plant_eaten_penalty": -0.004,
+              "mean_plant_kill_reward": 0.22666666666666666,
+              "mean_plant_kills": 3.4,
+              "mean_plants_eaten": 0.2,
+              "mean_wall_nut_damage": 12180.0,
+              "mean_wall_nut_reward": 0.6090000000000004,
+              "truncation_rate": 0.0,
+              "waiting_rate": 0.9963018606263724,
+              "win_rate": 0.0,
+              "win_seconds": null
+            },
+            "preset/hard": {
+              "episodes": 5,
+              "fraction_wins_without_mowers": null,
+              "inference_ms": 0.26069833910597745,
+              "invalid_action_rate": 0.0,
+              "loss_seconds": 156.26,
+              "mean_damage_reward": 0.0,
+              "mean_empty_explosion_penalty": 0.0,
+              "mean_empty_explosions": 0.0,
+              "mean_empty_mower_activations": 0.0,
+              "mean_mower_activation_penalty": 0.0,
+              "mean_mower_activation_sun": 5.0,
+              "mean_mower_activations": 2.4,
+              "mean_mower_kill_penalty": -0.10133333333333334,
+              "mean_mower_kills": 3.8,
+              "mean_mower_sun_penalty": -0.016666666666666666,
+              "mean_mowers_used": 2.4,
+              "mean_nonlethal_health_damage": 0.0,
+              "mean_offensive_plantings": 0.0,
+              "mean_offensive_shaping": 0.0,
+              "mean_plant_eaten_penalty": -0.016,
+              "mean_plant_kill_reward": 0.05066666666666667,
+              "mean_plant_kills": 3.8,
+              "mean_plants_eaten": 0.8,
+              "mean_wall_nut_damage": 7300.0,
+              "mean_wall_nut_reward": 0.36500000000000027,
+              "truncation_rate": 0.0,
+              "waiting_rate": 0.9963654912963081,
+              "win_rate": 0.0,
+              "win_seconds": null
+            },
+            "preset/standard": {
+              "episodes": 5,
+              "fraction_wins_without_mowers": null,
+              "inference_ms": 0.26071680169969225,
+              "invalid_action_rate": 0.0,
+              "loss_seconds": 155.89000000000001,
+              "mean_damage_reward": 0.0,
+              "mean_empty_explosion_penalty": 0.0,
+              "mean_empty_explosions": 0.0,
+              "mean_empty_mower_activations": 0.0,
+              "mean_mower_activation_penalty": 0.0,
+              "mean_mower_activation_sun": 5.0,
+              "mean_mower_activations": 2.4,
+              "mean_mower_kill_penalty": -0.19,
+              "mean_mower_kills": 3.8,
+              "mean_mower_sun_penalty": -0.016666666666666666,
+              "mean_mowers_used": 2.4,
+              "mean_nonlethal_health_damage": 0.0,
+              "mean_offensive_plantings": 0.0,
+              "mean_offensive_shaping": 0.0,
+              "mean_plant_eaten_penalty": -0.02,
+              "mean_plant_kill_reward": 0.085,
+              "mean_plant_kills": 3.4,
+              "mean_plants_eaten": 1.0,
+              "mean_wall_nut_damage": 6320.0,
+              "mean_wall_nut_reward": 0.3160000000000002,
+              "truncation_rate": 0.0,
+              "waiting_rate": 0.9963568963313307,
+              "win_rate": 0.0,
+              "win_seconds": null
+            }
+          },
+          "final": true
+        }
+      ],
+      "probes": [
+        {
+          "advanced": true,
+          "stage": "placement",
+          "stage_mastered": false,
+          "state": {
+            "completed_stage_games": 0,
+            "consecutive_passes": 0,
+            "entered_games": 510,
+            "entered_steps": 0,
+            "last_probe": 0,
+            "last_probe_games": 510,
+            "mastered": false,
+            "stage": 1
+          },
+          "training_games": 510,
+          "training_steps": 557056,
+          "wins": {
+            "placement": 100
+          }
+        },
+        {
+          "advanced": false,
+          "stage": "saving",
+          "stage_mastered": false,
+          "state": {
+            "completed_stage_games": 382,
+            "consecutive_passes": 0,
+            "entered_games": 510,
+            "entered_steps": 0,
+            "last_probe": 0,
+            "last_probe_games": 1020,
+            "mastered": false,
+            "stage": 1
+          },
+          "training_games": 1020,
+          "training_steps": 1490944,
+          "wins": {
+            "saving": 77
+          }
+        }
+      ],
+      "optimizer": {
+        "kl_max": 0.04389156028628349,
+        "kl_stops": 0
+      }
+    },
+    {
+      "run": "previous-102",
+      "allowance_seconds": 300,
+      "learner_seed": 102,
+      "lesson_evaluation": {
+        "placement": {
+          "games": 20,
+          "wins": 20
+        }
+      },
+      "method": "previous",
+      "missing": [
+        "Deadline prevented completing final lesson evaluation"
+      ],
+      "old_source_commit": "0dbe95e",
+      "wall_seconds_including_diagnostics": 300.0093927000016,
+      "config_hash": "3dcba248c0d9df9583ddf9ab93e24ebb7327a857cde83126bd678824cdfe5cc2",
+      "research_source_hash": "3803d497171671df109827de94b6a4f160a0221ad8344b933cfcbf2df46b03cf",
+      "engine": {
+        "commit": "8861824df6893a34c2cd4df7f9b68613376d7964",
+        "cuda_backend_source_hash": "98c7859a1804c63af8dd9f3e5cc7d40952933bab6b2133f1e5433d6e5ccbdc34",
+        "package_version": "1.3.0",
+        "rules_hash": "a7486688fa43a9b50193f82715fa519bd27cfebc7ed054bebe4f7990f9c268de",
+        "source_hash": "5c4b358043b8253e7876aa68a46bcf272f0264d80c7de86f9e67c7c8bc6993e2",
+        "version": "1.0.0"
+      },
+      "config": {
+        "conditions": {
+          "masked": {
+            "curriculum": true,
+            "hybrid": false,
+            "masked": true,
+            "shaped": true
+          },
+          "mixed": {
+            "curriculum": false,
+            "hybrid": false,
+            "masked": true,
+            "shaped": true
+          },
+          "sparse": {
+            "curriculum": true,
+            "hybrid": false,
+            "masked": true,
+            "shaped": false
+          },
+          "unmasked": {
+            "curriculum": true,
+            "hybrid": false,
+            "masked": false,
+            "shaped": true
+          }
+        },
+        "curriculum": {
+          "boundaries": [
+            0.1,
+            0.4
+          ],
+          "consecutive_passes": 1,
+          "easy_weights": [
+            1.0,
+            0.0,
+            0.0
+          ],
+          "final_weights": [
+            0.2,
+            0.4,
+            0.4
+          ],
+          "intermediate_weights": [
+            0.5,
+            0.5,
+            0.0
+          ],
+          "lessons": {
+            "placement": {
+              "allowed_plants": [
+                "peashooter"
+              ],
+              "initial_sun": 200,
+              "spawn_ticks": [
+                1,
+                81,
+                161
+              ]
+            },
+            "saving": {
+              "allowed_plants": [
+                "sunflower",
+                "peashooter"
+              ],
+              "initial_sun": 50,
+              "spawn_ticks": [
+                1200,
+                1280,
+                1360
+              ]
+            }
+          },
+          "minimum_stage_games": 100,
+          "minimum_stage_steps": 16384,
+          "mode": "teaching",
+          "probe_cases": 100,
+          "probe_interval": 16384,
+          "probe_interval_games": 500,
+          "residency": "episode_start_stage",
+          "stages": {
+            "easy": {
+              "requirements": {
+                "easy": 100
+              },
+              "tasks": [
+                "easy",
+                "placement",
+                "saving"
+              ],
+              "weights": [
+                0.8,
+                0.1,
+                0.1
+              ]
+            },
+            "placement": {
+              "requirements": {
+                "placement": 100
+              },
+              "tasks": [
+                "placement"
+              ],
+              "weights": [
+                1.0
+              ]
+            },
+            "saving": {
+              "requirements": {
+                "saving": 100
+              },
+              "tasks": [
+                "saving",
+                "placement"
+              ],
+              "weights": [
+                0.8,
+                0.2
+              ]
+            },
+            "shared": {
+              "requirements": {
+                "easy": 100,
+                "hard": 100,
+                "standard": 100
+              },
+              "tasks": [
+                "easy",
+                "standard",
+                "hard"
+              ],
+              "weights": [
+                0.2,
+                0.4,
+                0.4
+              ]
+            },
+            "standard": {
+              "requirements": {
+                "easy": 100,
+                "standard": 100
+              },
+              "tasks": [
+                "easy",
+                "standard",
+                "saving"
+              ],
+              "weights": [
+                0.45,
+                0.45,
+                0.1
+              ]
+            }
+          }
+        },
+        "diagnostics": {
+          "early_dig_seconds": 5
+        },
+        "encoding": {
+          "count_scale": 75,
+          "firepower_scale": 20,
+          "lane_count_scale": 9,
+          "local_count_scale": 5,
+          "version": "tactical_v2",
+          "wave_scale": 15
+        },
+        "engine_commit": "8861824df6893a34c2cd4df7f9b68613376d7964",
+        "engine_package_version": "1.3.0",
+        "engine_version": "1.0.0",
+        "environment": {
+          "action_timing": "per_tick",
+          "bins": 20,
+          "cols": 9,
+          "cutoff_seconds": 1200,
+          "decision_ticks": 1,
+          "mower_states": [
+            "ready",
+            "moving",
+            "spent"
+          ],
+          "plant_states": [
+            "ready",
+            "arming",
+            "armed",
+            "fusing",
+            "digesting",
+            "exploding",
+            "detonating"
+          ],
+          "plants": [
+            "sunflower",
+            "peashooter",
+            "wall_nut",
+            "cherry_bomb",
+            "potato_mine",
+            "snow_pea",
+            "chomper",
+            "repeater"
+          ],
+          "rows": 5,
+          "zombie_states": [
+            "walking",
+            "carrying_pole",
+            "vaulting",
+            "biting",
+            "dead"
+          ],
+          "zombies": [
+            "basic",
+            "flag",
+            "conehead",
+            "buckethead",
+            "pole_vaulting"
+          ]
+        },
+        "evaluation": {
+          "bootstrap_replicates": 2000,
+          "bootstrap_seed": 1739,
+          "levels": [
+            "easy",
+            "standard",
+            "hard"
+          ],
+          "ood_families": [
+            "redistributed",
+            "faster",
+            "concentrated"
+          ],
+          "ood_levels": [
+            "standard",
+            "hard"
+          ],
+          "replays_per_outcome": 10,
+          "targets": [
+            0.95,
+            0.9,
+            0.75
+          ]
+        },
+        "logging": {
+          "progress_seconds": 15,
+          "rolling_window": 100
+        },
+        "policy": {
+          "channels": 64,
+          "initial_dig_logit": -6.0,
+          "kind": "spatial_grouped_v2"
+        },
+        "profile": "sc2-plant-rewards-v2",
+        "reward": {
+          "damage_weight": 1.0,
+          "defeated_weight": 0.5,
+          "eaten_plant_penalty": 0.02,
+          "economy_scale": 300,
+          "economy_weight": 0.5,
+          "empty_explosion_penalty": 0.2,
+          "empty_mower_activation_penalty": 0.2,
+          "gamma": 0.999,
+          "loss_penalty": 2.0,
+          "mower_kill_weight": 2.0,
+          "mower_sun_scale": 300.0,
+          "mower_sun_weight": 1.0,
+          "normalize_kills": true,
+          "offensive_plant_weight": 0.1,
+          "offensive_plants": [
+            "peashooter",
+            "snow_pea",
+            "repeater",
+            "chomper"
+          ],
+          "plant_kill_weight": 1.0,
+          "potential_mode": "plant_value",
+          "wall_nut_damage_weight": 0.2,
+          "win_reward": 1.0
+        },
+        "runtime": {
+          "cache_legal_actions": true,
+          "refill_evaluation": true
+        },
+        "schema_version": 1,
+        "simulation": {
+          "backend": "cuda"
+        },
+        "splits": {
+          "curriculum": [
+            100050,
+            100149
+          ],
+          "ood": [
+            300000,
+            300099
+          ],
+          "test": [
+            200000,
+            200299
+          ],
+          "train": [
+            1000,
+            99999
+          ],
+          "validation": [
+            100000,
+            100049
+          ]
+        },
+        "training": {
+          "actor_objective": "choice_points_v1",
+          "batch_size": 1024,
+          "budget_unit": "games",
+          "clip_range": 0.2,
+          "device": "cuda",
+          "ent_coef": 0.01,
+          "eval_interval": 250000,
+          "eval_interval_games": 2000,
+          "exploration": {
+            "objective": "balanced_heads_v1",
+            "tile_coef": 0.001,
+            "type_coef": 0.01
+          },
+          "finalization_minutes": 0.6,
+          "gae_lambda": 0.999,
+          "hidden_sizes": [
+            256,
+            256
+          ],
+          "learner_seeds": [
+            101,
+            102
+          ],
+          "learning_rate": 0.0003,
+          "max_minutes": 5,
+          "n_envs": 128,
+          "n_epochs": 4,
+          "rollout_size": 16384,
+          "rollout_steps_per_env": 128,
+          "torch_threads": 1,
+          "total_games": 10000,
+          "total_steps": 3000000
+        },
+        "visualization": {
+          "crf": 23,
+          "demos": false,
+          "enabled": false,
+          "ffmpeg": "",
+          "final_hold_seconds": 2,
+          "video_size": [
+            1280,
+            820
+          ],
+          "videos": false
+        }
+      },
+      "training_games": 1825,
+      "decisions": 1703936,
+      "stage": "saving",
+      "training_elapsed": 294.2857539999968,
+      "decisions_per_second": 7118.735168454985,
+      "all_training": {
+        "games": 1825,
+        "accepted_plantings": 5862,
+        "early_digs": 65,
+        "early_digs_per_planting": 0.011088365745479358,
+        "attacker_purchases": 4603,
+        "wins": 1076
+      },
+      "last_100_training": {
+        "games": 100,
+        "accepted_plantings": 1294,
+        "early_digs": 0,
+        "early_digs_per_planting": 0.0,
+        "attacker_purchases": 357,
+        "wins": 79
+      },
+      "normal_validation": [
+        {
+          "training_games": 1825,
+          "win_rate": 0.06666666666666667,
+          "levels": {
+            "preset/easy": {
+              "episodes": 5,
+              "fraction_wins_without_mowers": 0.0,
+              "inference_ms": 0.41463056652620517,
+              "invalid_action_rate": 0.0,
+              "loss_seconds": 162.125,
+              "mean_damage_reward": 0.28666666666666646,
+              "mean_empty_explosion_penalty": 0.0,
+              "mean_empty_explosions": 0.0,
+              "mean_empty_mower_activations": 0.0,
+              "mean_mower_activation_penalty": 0.0,
+              "mean_mower_activation_sun": 60.0,
+              "mean_mower_activations": 3.0,
+              "mean_mower_kill_penalty": -0.8266666666666665,
+              "mean_mower_kills": 6.2,
+              "mean_mower_sun_penalty": -0.19999999999999998,
+              "mean_mowers_used": 3.0,
+              "mean_nonlethal_health_damage": 860.0,
+              "mean_offensive_plantings": 1.4,
+              "mean_offensive_shaping": -0.27022000000000373,
+              "mean_plant_eaten_penalty": -0.13599999999999998,
+              "mean_plant_kill_reward": 0.37333333333333335,
+              "mean_plant_kills": 5.6,
+              "mean_plants_eaten": 6.8,
+              "mean_wall_nut_damage": 4380.0,
+              "mean_wall_nut_reward": 0.21900000000000017,
+              "truncation_rate": 0.0,
+              "waiting_rate": 0.9944501417626832,
+              "win_rate": 0.2,
+              "win_seconds": 175.75
+            },
+            "preset/hard": {
+              "episodes": 5,
+              "fraction_wins_without_mowers": null,
+              "inference_ms": 0.4139767996054161,
+              "invalid_action_rate": 0.0,
+              "loss_seconds": 180.95,
+              "mean_damage_reward": 0.03746666666666666,
+              "mean_empty_explosion_penalty": 0.0,
+              "mean_empty_explosions": 0.0,
+              "mean_empty_mower_activations": 0.0,
+              "mean_mower_activation_penalty": 0.0,
+              "mean_mower_activation_sun": 45.0,
+              "mean_mower_activations": 3.0,
+              "mean_mower_kill_penalty": -0.1706666666666667,
+              "mean_mower_kills": 6.4,
+              "mean_mower_sun_penalty": -0.15,
+              "mean_mowers_used": 3.0,
+              "mean_nonlethal_health_damage": 616.0,
+              "mean_offensive_plantings": 1.4,
+              "mean_offensive_shaping": -0.2648200000000025,
+              "mean_plant_eaten_penalty": -0.12,
+              "mean_plant_kill_reward": 0.058666666666666666,
+              "mean_plant_kills": 4.4,
+              "mean_plants_eaten": 6.0,
+              "mean_wall_nut_damage": 6340.0,
+              "mean_wall_nut_reward": 0.3170000000000003,
+              "truncation_rate": 0.0,
+              "waiting_rate": 0.994886738508907,
+              "win_rate": 0.0,
+              "win_seconds": null
+            },
+            "preset/standard": {
+              "episodes": 5,
+              "fraction_wins_without_mowers": null,
+              "inference_ms": 0.4155213479775537,
+              "invalid_action_rate": 0.0,
+              "loss_seconds": 174.27999999999997,
+              "mean_damage_reward": 0.08975000000000004,
+              "mean_empty_explosion_penalty": 0.0,
+              "mean_empty_explosions": 0.0,
+              "mean_empty_mower_activations": 0.0,
+              "mean_mower_activation_penalty": 0.0,
+              "mean_mower_activation_sun": 55.0,
+              "mean_mower_activations": 2.6,
+              "mean_mower_kill_penalty": -0.25,
+              "mean_mower_kills": 5.0,
+              "mean_mower_sun_penalty": -0.18333333333333332,
+              "mean_mowers_used": 2.6,
+              "mean_nonlethal_health_damage": 780.0,
+              "mean_offensive_plantings": 2.2,
+              "mean_offensive_shaping": -0.32638000000001155,
+              "mean_plant_eaten_penalty": -0.13199999999999998,
+              "mean_plant_kill_reward": 0.12999999999999998,
+              "mean_plant_kills": 5.2,
+              "mean_plants_eaten": 6.6,
+              "mean_wall_nut_damage": 6080.0,
+              "mean_wall_nut_reward": 0.3040000000000002,
+              "truncation_rate": 0.0,
+              "waiting_rate": 0.994408307657195,
+              "win_rate": 0.0,
+              "win_seconds": null
+            }
+          },
+          "final": true
+        }
+      ],
+      "probes": [
+        {
+          "advanced": false,
+          "stage": "placement",
+          "stage_mastered": false,
+          "state": {
+            "completed_stage_games": 505,
+            "consecutive_passes": 0,
+            "entered_games": 0,
+            "entered_steps": 0,
+            "last_probe": 0,
+            "last_probe_games": 505,
+            "mastered": false,
+            "stage": 0
+          },
+          "training_games": 505,
+          "training_steps": 557056,
+          "wins": {
+            "placement": 0
+          }
+        },
+        {
+          "advanced": false,
+          "stage": "placement",
+          "stage_mastered": false,
+          "state": {
+            "completed_stage_games": 1030,
+            "consecutive_passes": 0,
+            "entered_games": 0,
+            "entered_steps": 0,
+            "last_probe": 0,
+            "last_probe_games": 1030,
+            "mastered": false,
+            "stage": 0
+          },
+          "training_games": 1030,
+          "training_steps": 1015808,
+          "wins": {
+            "placement": 79
+          }
+        },
+        {
+          "advanced": true,
+          "stage": "placement",
+          "stage_mastered": false,
+          "state": {
+            "completed_stage_games": 0,
+            "consecutive_passes": 0,
+            "entered_games": 1531,
+            "entered_steps": 0,
+            "last_probe": 0,
+            "last_probe_games": 1531,
+            "mastered": false,
+            "stage": 1
+          },
+          "training_games": 1531,
+          "training_steps": 1294336,
+          "wins": {
+            "placement": 100
+          }
+        }
+      ],
+      "optimizer": {
+        "kl_max": 0.02009894885122776,
+        "kl_stops": 0
+      }
+    }
+  ]
+}

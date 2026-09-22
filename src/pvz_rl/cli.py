@@ -87,8 +87,6 @@ def configured(args):
     if args.command == "train":
         args.seed = 101 if getattr(args, "seed", None) is None else args.seed
         args.condition = getattr(args, "condition", None) or "masked"
-        if getattr(args, "init_from", None) and getattr(args, "stage", None) is None:
-            raise ValueError("--init-from requires --stage; use --resume to continue the same run")
         if getattr(args, "stage", None) is not None:
             cfg["curriculum"]["run_stage"] = args.stage
     if getattr(args, "hardware", None):
@@ -150,14 +148,6 @@ def configured(args):
 def main(argv=None):
     parser = argparse.ArgumentParser(prog="pvz-rl", description=__doc__)
     subs = parser.add_subparsers(dest="command", required=True)
-    sc2 = subs.add_parser(
-        "compare-sc2", help="explicit A-F development comparisons; no final-test cases"
-    )
-    sc2.add_argument("--output", type=Path, required=True)
-    sc2.add_argument("--max-minutes", type=float, default=120)
-    sc2.add_argument("--games", type=int, default=10000)
-    sc2.add_argument("--diagnostics-only", action="store_true")
-    sc2.add_argument("--report-only", action="store_true")
     doctor = subs.add_parser("doctor", help="check engine, packages, Gym API, and CUDA")
     common(doctor)
     doctor.add_argument("--output", type=Path)
@@ -176,7 +166,7 @@ def main(argv=None):
     continuation = training.add_mutually_exclusive_group()
     continuation.add_argument("--resume", type=Path, help="continue with saved budget and progress")
     continuation.add_argument(
-        "--init-from", type=Path, help="carry policy and optimizer into --stage with a fresh budget"
+        "--init-from", type=Path, help="load compatible weights into a fresh experiment or stage"
     )
     evaluation = subs.add_parser("evaluate", help="evaluate a checkpoint or non-learning baseline")
     common(evaluation)
@@ -213,7 +203,8 @@ def main(argv=None):
     gpu_bench.add_argument("--minutes", type=float, default=15)
     gpu_bench.add_argument("--steps", type=int, default=16384)
     suite = subs.add_parser(
-        "suite", help="run four CUDA conditions across learner seeds, then evaluate and report"
+        "suite",
+        help="train the shared spatial policy across learner seeds, then evaluate and report",
     )
     training_options(suite)
     suite.add_argument("--output", type=Path, required=True)
@@ -237,21 +228,6 @@ def main(argv=None):
     video_options(visual)
     args = parser.parse_args(argv)
 
-    if args.command == "compare-sc2":
-        from .sc2_experiments import comparison_report, run_comparison
-
-        result = (
-            comparison_report(args.output)
-            if args.report_only
-            else run_comparison(
-                args.output,
-                minutes=args.max_minutes,
-                games=args.games,
-                diagnostics_only=args.diagnostics_only,
-            )
-        )
-        print(json.dumps(result, indent=2))
-        return
     if args.command == "replay":
         from pvz_game.replay import validate_speed
 

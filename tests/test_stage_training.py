@@ -17,7 +17,7 @@ from pvz_rl.visualization import build_run_report, read_json, read_series
 
 @pytest.fixture
 def stage_cfg():
-    cfg = load_config("configs/sc2-plant-rewards.toml")
+    cfg = load_config("configs/train.toml")
     cfg["curriculum"]["run_stage"] = "placement"
     cfg["environment"]["cutoff_seconds"] = 1
     cfg["training"].update(
@@ -84,7 +84,7 @@ def test_transfer_compatibility_preserves_learning_contract(stage_cfg, change):
     elif change == "reward":
         altered["reward"]["gamma"] = 0.9999
     elif change == "policy":
-        altered["policy"]["channels"] = 32
+        altered["policy"]["channels"] = [48, 48]
     elif change == "tasks":
         altered["curriculum"]["lessons"]["saving"]["initial_sun"] = 100
     elif change == "optimizer":
@@ -92,7 +92,7 @@ def test_transfer_compatibility_preserves_learning_contract(stage_cfg, change):
     else:
         altered["engine_commit"] = "different"
     assert (transfer_protocol(stage_cfg, "masked") == transfer_protocol(altered, "masked")) == (
-        change == "stage"
+        change not in ("policy", "engine")
     )
     assert stage_cfg["curriculum"]["run_stage"] == "placement"
 
@@ -103,7 +103,7 @@ def test_cli_inherits_source_config_and_seed_but_requires_explicit_stage(stage_c
         {
             "config": stage_cfg,
             "learner_seed": 102,
-            "condition": "sparse",
+            "condition": "masked",
             "validation_limit": 1,
         },
     )
@@ -118,17 +118,14 @@ def test_cli_inherits_source_config_and_seed_but_requires_explicit_stage(stage_c
     cfg = configured(args)
     assert cfg["curriculum"]["run_stage"] == "saving"
     assert cfg["training"]["total_games"] == 50 and cfg["training"]["max_minutes"] == 10
-    assert (args.seed, args.condition, args.validation_count) == (102, "sparse", 1)
+    assert (args.seed, args.condition, args.validation_count) == (102, "masked", 1)
     args.stage = None
-    with pytest.raises(ValueError, match="requires --stage"):
-        configured(args)
+    assert configured(args)["curriculum"]["run_stage"] == "placement"
     with pytest.raises(SystemExit):
         main(["train", "--resume", "one.zip", "--init-from", "two.zip", "--output", "unused"])
 
 
-@pytest.mark.parametrize(
-    "case", ["fixed", "unknown", "mixed", "unmasked", "diagnostic", "missing-stage", "both"]
-)
+@pytest.mark.parametrize("case", ["fixed", "unknown", "mixed", "unmasked", "diagnostic", "both"])
 def test_invalid_stage_requests_leave_no_run(stage_cfg, tmp_path, case):
     kwargs = {}
     condition = "masked"
@@ -153,17 +150,17 @@ def test_invalid_stage_requests_leave_no_run(stage_cfg, tmp_path, case):
 
 def test_incompatible_checkpoint_rejected_before_run(stage_cfg, tmp_path):
     saved = copy.deepcopy(stage_cfg)
-    saved["reward"]["gamma"] = 0.9999
+    saved["policy"]["plant_embedding"] = 16
     write_json(
         tmp_path / "metadata.json", {"config": saved, "condition": "masked", "family": "preset"}
     )
-    with pytest.raises(ValueError, match="matching engine, policy, rewards"):
+    with pytest.raises(ValueError, match="matching engine, observation and network structure"):
         train(stage_cfg, "masked", 101, tmp_path / "out", init_from=tmp_path / "absent.zip")
     assert not (tmp_path / "out").exists()
 
 
 @pytest.mark.learning
-def test_all_stage_handoffs_preserve_weights_optimizer_and_reset_schedules(
+def test_all_stage_handoffs_preserve_only_weights_and_reset_optimizer_schedules(
     stage_cfg, tmp_path, monkeypatch
 ):
     original = ResearchCallback._on_training_start
@@ -172,10 +169,8 @@ def test_all_stage_handoffs_preserve_weights_optimizer_and_reset_schedules(
     def inspect_start(self):
         if expected is not None:
             assert_tensor_tree_equal(expected.policy.state_dict(), self.model.policy.state_dict())
-            assert_tensor_tree_equal(
-                expected.policy.optimizer.state_dict(), self.model.policy.optimizer.state_dict()
-            )
-            assert self.model._n_updates == expected._n_updates
+            assert not self.model.policy.optimizer.state
+            assert self.model._n_updates == 0
         original(self)
         starts.append(
             (
@@ -212,7 +207,7 @@ def test_all_stage_handoffs_preserve_weights_optimizer_and_reset_schedules(
         if previous:
             assert meta["initialization"]["checkpoint_sha256"] == file_hash(previous)
             assert meta["initialization"]["games"] == expected.training_games
-            assert model._n_updates > expected._n_updates
+            assert model._n_updates > 0
         else:
             assert meta["initialization"] is None
         expected, previous = model, run / "final.zip"

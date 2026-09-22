@@ -7,13 +7,12 @@ import pytest
 import torch
 from pvz_game import Dig, Place
 
-from pvz_rl.config import load_config, validate_config
+from pvz_rl.config import load_config
 from pvz_rl.curriculum import CurriculumState
 from pvz_rl.deadline import RunBudget
 from pvz_rl.env import PvZEnv
 from pvz_rl.exploration import exploration_loss
 from pvz_rl.grouped_policy import GroupedDistribution
-from pvz_rl.sc2_experiments import comparison_protocol, sc2_profile
 from pvz_rl.training import build_model, vector_env
 
 
@@ -43,7 +42,7 @@ def test_balanced_bonus_does_not_push_wait_toward_one_over_136():
             "tile_coef": 0.001,
         },
     )
-    loss, metrics = exploration_loss(policy, dist.entropy(), dist.log_prob(torch.tensor([0])), 0.01)
+    loss, metrics = exploration_loss(policy, dist.entropy(), dist.log_prob(torch.tensor([0])))
     assert metrics["exploration_bonus"].item() == pytest.approx(0.01 * np.log(4) + 0.001)
     gradient = torch.autograd.grad(loss, logits)[0]
     torch.testing.assert_close(
@@ -70,7 +69,7 @@ def test_bonus_matches_independent_entropy_and_single_choice_boundaries(counts):
             "tile_coef": 0.001,
         },
     )
-    loss, _ = exploration_loss(policy, dist.entropy(), dist.log_prob(torch.zeros(2)), 0.01)
+    loss, _ = exploration_loss(policy, dist.entropy(), dist.log_prob(torch.zeros(2)))
     p = dist.types.probs.detach().numpy()
     type_h = -np.sum(np.where(p > 0, p * np.log(np.maximum(p, 1e-300)), 0), axis=1)
     tile_h = []
@@ -90,7 +89,7 @@ def test_bonus_matches_independent_entropy_and_single_choice_boundaries(counts):
 
 
 def test_spatial_policy_shapes_gradients_and_board_dependence():
-    cfg = sc2_profile("E")
+    cfg = load_config()
     cfg["training"].update(n_envs=1, device="cuda", rollout_size=128, batch_size=128)
     env = vector_env(cfg, "masked", 101)
     try:
@@ -101,7 +100,7 @@ def test_spatial_policy_shapes_gradients_and_board_dependence():
         data[1, raw.encoder.slices["plants"].start] = 1
         masks = torch.tensor(np.stack([raw.action_masks()] * 2), device="cuda")
         features = model.policy.extract_features(data)
-        assert features.shape == (2, 64 * 46)
+        assert features.shape == (2, 64 + 32 * 45)
         assert not torch.equal(features[0], features[1])
         actions, values, logs = model.policy(data, action_masks=masks)
         assert actions.shape == logs.shape == (2,)
@@ -120,7 +119,7 @@ def test_spatial_policy_shapes_gradients_and_board_dependence():
 
 
 def test_stage_residency_counts_only_matching_episode_starts():
-    cfg = sc2_profile("E")
+    cfg = load_config()
     state = CurriculumState(stage=1)
     for _ in range(100):
         state.completed_episode(0)
@@ -136,7 +135,7 @@ def test_stage_residency_counts_only_matching_episode_starts():
 
 
 def test_wall_budget_reserves_cleanup_and_restores_consumption():
-    cfg = sc2_profile("E")
+    cfg = load_config()
     now = [100.0]
     budget = RunBudget(cfg, elapsed=6000, clock=lambda: now[0])
     assert budget.deadline == 1300
@@ -147,23 +146,6 @@ def test_wall_budget_reserves_cleanup_and_restores_consumption():
     restored = RunBudget(cfg, elapsed=budget.state()["elapsed_seconds"], clock=lambda: 500)
     assert restored.state()["remaining_seconds"] == 1050
     assert restored.state()["reserve_seconds"] == 900
-
-
-def test_profiles_share_controls_but_keep_gamma_ablation_explicit():
-    configs = [sc2_profile(letter) for letter in "ABCDEF"]
-    assert len({comparison_protocol(c) for c in configs}) == 1
-    assert configs[-1]["reward"]["gamma"] == 0.9999
-    assert all(c["reward"]["gamma"] == 0.999 for c in configs[:-1])
-    assert all(c["training"]["eval_interval_games"] == 2000 for c in configs)
-    for letter, path in [
-        ("E", "configs/sc2-inspired.toml"),
-        ("F", "configs/sc2-long-horizon.toml"),
-    ]:
-        assert sc2_profile(letter) == load_config(path)
-    bad = sc2_profile("C")
-    bad["policy"]["kind"] = "flat"
-    with pytest.raises(ValueError, match="grouped"):
-        validate_config(bad)
 
 
 def test_early_dig_metric_tracks_actual_accepted_actions(per_tick_cfg):

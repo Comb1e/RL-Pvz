@@ -280,9 +280,8 @@ def test_zero_tick_api_rejects_wait_and_recovers_after_error():
 def test_per_tick_lessons_match_independent_engine_control(
     per_tick_cfg, lane, family, win_tick, loss_tick
 ):
-    from pvz_rl.config import learning_profile
 
-    cfg = learning_profile("pure-rl", per_tick_cfg)
+    cfg = per_tick_cfg
     lesson = cfg["curriculum"]["lessons"][family]
     spec = LevelSpec(
         family,

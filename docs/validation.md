@@ -3,6 +3,88 @@
 Evidence is versioned below. Learning outcomes, simulation correctness and runtime
 speed are separate measures; [research design](research.md) defines the protocol.
 
+## 0.9.0 compact method — 2026-09-22
+
+The implementation passes correctness checks, but the five-minute learning
+comparison **does not support adopting this method as a performance improvement**.
+It is the single configurable implementation requested, with experimental status.
+Both game checkouts and the pinned game/rules hashes remain unchanged.
+
+| Verification | Result |
+|---|---|
+| Complete research regression | **314 passed**, 222.56 s |
+| Final targeted regression | **76 passed**, 3 learning cases deselected, 16.34 s |
+| Native CPU-game regression | **207 passed**, 11.60 s |
+| Native CUDA-game regression | **222 passed**, 47.62 s |
+| Independent controls | Compact CPU/CUDA observations and rewards, category boundaries, crowded regions, leakage/order invariance, shaping telescoping, forced actions, PPO losses/gradients/Adam updates and KL stopping passed |
+| Checkpoints and curriculum | Reload, weights-only initialization with changed parameters, fresh optimizer, incompatible structure rejection, saved-state resume, stage residency and validation selection passed |
+| Presentation | Offline curves inspected; three verified compact demos and decoded MP4s share one selected checkpoint; native final outcome frame inspected |
+| Static and packaging checks | Lint, formatting, dependency checks, wheel/sdist, bundled default, README links and PowerShell parsing passed |
+
+The complete suite ran before the final report-label/archive and configuration
+boundary checks; the targeted run verifies those final changes. The smoke
+uses short cutoffs to exercise learning and final outputs, not establish ability.
+Its three demonstration outcomes are accurately marked truncated. Their shared
+checkpoint SHA256 is
+`6608f58a7c1371f48ee0ad438f0774ec0d0eb6718edcecc002672e6778870125`.
+Resume restores weights, optimizer and experiment schedules, but restarts active
+games; it is not bit-for-bit continuation of simulation trajectories.
+
+### Bounded learning comparison
+
+Fresh starts compare previous commit `0dbe95e` with the compact method using learner
+seeds 101/102. Each run receives 300 seconds including initialization and evaluation,
+with 36 seconds reserved for finalization. Order is previous-101, compact-101,
+compact-102, previous-102. Both use 128 parallel games, 128 decisions/game/rollout,
+the same game pin, mastery gates and development cases. Automatic presentation
+is disabled in these timed runs. No final-test seeds are used and no settings were
+tuned after inspecting the results.
+
+| Method / seed | Completed training games | Decisions | Early digs / accepted plantings | Attacker purchases | Final placement | Final saving | Normal validation wins |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| Previous / 101 | 1,527 | 2,408,448 | 292 / 12,273 (2.379%) | 4,936 | 20/20 | 20/20 | 0/15 |
+| Compact / 101 | 2,009 | 2,097,152 | 93 / 4,628 (2.010%) | 4,628 | 0/20 | 0/20 | 0/15 |
+| Compact / 102 | 1,755 | 1,785,856 | 59 / 5,074 (1.163%) | 5,074 | 0/20 | Incomplete | 0/15 |
+| Previous / 102 | 1,825 | 1,703,936 | 65 / 5,862 (1.109%) | 4,603 | 20/20 | Incomplete | 1/15 |
+
+Early digs mean voluntary removal within five simulated seconds of planting.
+Ratios use all completed training games, including their different achieved stages;
+they are behavioral diagnostics, not a controlled causal estimate. Both previous
+runs reached saving; both compact runs remained in placement. In the last 100
+training games, the compact runs won 59 and 79 games, yet each final deterministic
+placement evaluation won zero. Stochastic training success therefore did not
+translate into deterministic mastery. Fewer late digs alone cannot establish a fix.
+
+Normal validation uses five seeds per difficulty, 100000–100004. The single previous
+seed-102 win is on easy (1/5); standard and hard are 0/5. Macro win rates are 0%,
+0%, 0%, and 6.67% in table order. Final lesson diagnostics use `final.zip` and 20
+fixed cases, 100050–100069, distinct from normal validation. Both seed-102 saving
+checks hit the deadline; missing results are not counted as losses or zeroes.
+Mastery probes still use the configured 100 cases, separately from these diagnostics.
+
+Elapsed times including diagnostics were 297.73, 285.53, 300.00 and 300.01 seconds
+in execution order. Collection-plus-update throughput was approximately 9,856,
+9,607, 7,533 and 7,119 decisions/s. These are not complete-pipeline benchmark rates:
+initialization/evaluation are excluded, desktop load varied and later trials ran
+slower. No speed advantage is established. The two bundled-method comparisons
+cannot identify which change caused the deterministic lesson regression.
+
+The acceptance condition fails: lesson performance worsened for both seeds and
+early digging did not improve for seed 102. No stronger learning or generalization
+claim is warranted. A subsequent experiment should diagnose the stochastic versus
+deterministic action gap before increasing training time or adding behavioral rules.
+
+Committed evidence: [comparison records](evidence/compact-v090/comparison.json),
+including resolved configurations, engine/source hashes, probes, optimizer metrics,
+timing and missing-result flags. Local logs are `artifacts/v090-full.txt`,
+`v090-game-cpu.txt`, `v090-game-cuda.txt`, `v090-final-targeted.txt`,
+`v090-packaging.txt` and `artifacts/v090-comparison/`.
+All 1,576 retired checkpoint files (about 5.48 GiB) were deleted at the user's
+request, including temporary reference-trial models; historical episode
+records, reports and recordings are retained. Archived reports rebuild without
+loading old models. Game-test caches and temporary files stay outside game checkouts.
+No formal training was launched.
+
 ## 0.8.1 strict mastery follow-up — 2026-09-22
 
 New teaching recipes require 100/100 wins on every required task, including all

@@ -4,7 +4,6 @@ import numpy as np
 import torch
 from sb3_contrib.common.maskable.buffers import MaskableRolloutBufferSamples
 from stable_baselines3.common.buffers import BaseBuffer
-from stable_baselines3.common.type_aliases import RolloutBufferSamples
 
 
 class TensorRolloutBuffer(BaseBuffer):
@@ -17,16 +16,13 @@ class TensorRolloutBuffer(BaseBuffer):
         gae_lambda=1,
         gamma=0.99,
         n_envs=1,
-        masked=True,
     ):
         super().__init__(buffer_size, observation_space, action_space, device, n_envs)
-        self.gae_lambda, self.gamma, self.masked = gae_lambda, gamma, masked
+        self.gae_lambda, self.gamma = gae_lambda, gamma
         self.observations = torch.empty((buffer_size, n_envs, *self.obs_shape), device=self.device)
         self.actions = torch.empty((buffer_size, n_envs, self.action_dim), device=self.device)
-        self.action_masks = (
-            torch.empty((buffer_size, n_envs, action_space.n), dtype=torch.bool, device=self.device)
-            if masked
-            else None
+        self.action_masks = torch.empty(
+            (buffer_size, n_envs, action_space.n), dtype=torch.bool, device=self.device
         )
         for key in ("values", "log_probs", "rewards", "episode_starts", "advantages", "returns"):
             setattr(self, key, torch.empty((buffer_size, n_envs), device=self.device))
@@ -46,8 +42,7 @@ class TensorRolloutBuffer(BaseBuffer):
             ("log_probs", log_prob.flatten()),
         ):
             getattr(self, key)[self.pos].copy_(value)
-        if self.masked:
-            self.action_masks[self.pos].copy_(action_masks)
+        self.action_masks[self.pos].copy_(action_masks)
         self.pos += 1
         self.full = self.pos == self.buffer_size
 
@@ -106,8 +101,7 @@ class TensorRolloutBuffer(BaseBuffer):
         # Draw exactly the same NumPy permutation as SB3; this is not a new RNG.
         indices = np.random.permutation(self.buffer_size * self.n_envs)
         fields = ("observations", "actions", "values", "log_probs", "advantages", "returns")
-        if self.masked:
-            fields += ("action_masks",)
+        fields += ("action_masks",)
         if self._flat is None:
             self._flat = [
                 getattr(self, k)
@@ -116,7 +110,7 @@ class TensorRolloutBuffer(BaseBuffer):
                 for k in fields
             ]
         size = self.buffer_size * self.n_envs if batch_size is None else batch_size
-        sample = MaskableRolloutBufferSamples if self.masked else RolloutBufferSamples
+        sample = MaskableRolloutBufferSamples
         for start in range(0, len(indices), size):
             selection = torch.as_tensor(indices[start : start + size], device=self.device)
             yield sample(*(x[selection] for x in self._flat))

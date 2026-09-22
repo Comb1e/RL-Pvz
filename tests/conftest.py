@@ -34,13 +34,6 @@ def cfg():
     cfg["training"]["budget_unit"] = "decisions"
     cfg["training"].pop("rollout_steps_per_env", None)
     cfg["simulation"] = {"backend": "cpu"}
-    for key in (
-        "mower_sun_weight",
-        "mower_sun_scale",
-        "wall_nut_damage_weight",
-        "empty_explosion_penalty",
-    ):
-        cfg["reward"].pop(key)
     return cfg
 
 
@@ -64,8 +57,22 @@ def smoke_cfg(per_tick_cfg):
         rollout_size=64,
         batch_size=32,
         n_epochs=1,
+        target_kl=0,
         n_envs=1,
         hidden_sizes=[32, 32],
         eval_interval=64,
     )
     return cfg
+
+
+@pytest.fixture
+def tiny_cli_config(tmp_path):
+    from pathlib import Path
+
+    path = tmp_path / "tiny.toml"
+    path.write_text(
+        Path("configs/train.toml")
+        .read_text()
+        .replace("cutoff_seconds = 1200", "cutoff_seconds = 1")
+    )
+    return path

@@ -39,22 +39,13 @@ def test_killing_blow_not_damage_or_mower_activation():
         defeat_counts([damage(1, 4), death(1), damage(1, 4), death(1)])
 
 
-def test_signed_normalized_rewards_and_legacy_behavior(cfg):
+def test_kills_are_diagnostics_not_extra_event_rewards(cfg):
     before = Game().reset("easy", 1)
     after = replace(before, counts=replace(before.counts, defeated=1))
-    plant = reward_parts(before, after, cfg, False, events=[damage(2, 1), death(2)])
-    mower = reward_parts(before, after, cfg, False, events=[damage(2, -1), death(2)])
-    assert plant["total"] == pytest.approx(1 / before.counts.initial_total)
-    assert mower["total"] == pytest.approx(-2 / before.counts.initial_total)
-    assert plant["plant_kills"] == mower["mower_kills"] == 1
-    cfg["reward"].update(normalize_kills=False, plant_kill_weight=0.2, mower_kill_weight=0.4)
-    assert reward_parts(before, after, cfg, False, events=[damage(2, 1), death(2)])["total"] == 0.2
-    assert (
-        reward_parts(before, after, cfg, False, events=[damage(2, -1), death(2)])["total"] == -0.4
-    )
-    cfg["reward"].pop("plant_kill_weight")
-    cfg["reward"].pop("mower_kill_weight")
-    assert reward_parts(before, after, cfg, False, events=[damage(2, -1), death(2)])["total"] == 0
+    for source, key in ((1, "plant_kills"), (-1, "mower_kills")):
+        parts = reward_parts(before, after, cfg, True, events=[damage(2, source), death(2)])
+        assert parts[key] == 1
+        assert parts["total"] == parts["shaping"]
     empty = replace(before, counts=replace(before.counts, initial_total=0), status=Status.WON)
     assert reward_parts(before, empty, cfg, False)["total"] == 1
 
@@ -87,7 +78,7 @@ def test_real_engine_credits_all_plant_damage_types(cfg, plant):
     assert env.state == "won"
     assert env.episode_metrics()["plant_kills"] == 1
     assert env.episode_metrics()["mower_kills"] == 0
-    assert sum(p["plant_kill_reward"] for p in parts) == 1
+    assert sum(p["plant_kills"] for p in parts) == 1
     assert env.episode_metrics()["defeated"] == 1
 
 
@@ -104,10 +95,10 @@ def test_real_batched_mower_kills_count_each_zombie_once_and_terminal(cfg):
     _, total, terminated, truncated, info = env.step(0)
     assert terminated and not truncated and env.state == "won"
     assert info["reward_parts"]["terminal"] == 1
-    assert info["reward_parts"]["mower_kill_penalty"] == -2
+    assert info["reward_parts"]["mower_activation_penalty"] == -0.2
     assert info["episode_metrics"]["mower_kills"] == 3
     assert info["episode_metrics"]["mowers_used"] == 1
-    assert total == pytest.approx(info["reward_parts"]["shaping"] - 1)
+    assert total == pytest.approx(info["reward_parts"]["shaping"] + 0.8)
     env.reset(seed=8)
     assert env.episode_metrics()["mower_kills"] == 0
 
@@ -128,7 +119,7 @@ def test_real_simultaneous_batch_keeps_both_sources(cfg):
     assert terminated
     parts = info["reward_parts"]
     assert parts["plant_kills"] == parts["mower_kills"] == 1
-    assert parts["plant_kill_reward"] == 0.5 and parts["mower_kill_penalty"] == -1
+    assert parts["mower_activation_penalty"] == -0.2
     assert info["episode_metrics"]["defeated"] == 2
 
 
@@ -154,7 +145,7 @@ def test_failed_close_threat_controls_do_not_earn_kill_credit(cfg, plant, col):
 
 @pytest.mark.parametrize(
     "key,value",
-    [("plant_kill_weight", -1), ("mower_kill_weight", float("nan")), ("normalize_kills", 1)],
+    [("defeated_weight", -1), ("mower_activation_cost", float("nan")), ("economy_scale", 0)],
 )
 def test_invalid_reward_configuration(cfg, key, value):
     cfg["reward"][key] = value

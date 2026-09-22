@@ -5,7 +5,6 @@ import hashlib
 import importlib.util
 import json
 import subprocess
-import zipfile
 from pathlib import Path
 
 import pytest
@@ -13,7 +12,7 @@ import torch
 
 from pvz_rl.cli import configured, main
 from pvz_rl.config import load_config
-from pvz_rl.training import load_policy, train
+from pvz_rl.training import train
 from pvz_rl.training_requirements import require_cuda_training, resume_protocol
 
 
@@ -31,10 +30,9 @@ def test_unsupported_direct_training_leaves_no_output(smoke_cfg, tmp_path, setti
     assert not output.exists()
 
 
-@pytest.mark.parametrize("entry", ["train", "suite", "comparison", "benchmark"])
+@pytest.mark.parametrize("entry", ["train", "suite", "benchmark"])
 def test_missing_cuda_fails_before_creating_output(smoke_cfg, tmp_path, monkeypatch, entry):
     from pvz_rl.gpu_benchmark import benchmark_gpu
-    from pvz_rl.sc2_experiments import run_comparison
     from pvz_rl.suite import run_suite
 
     monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
@@ -42,7 +40,6 @@ def test_missing_cuda_fails_before_creating_output(smoke_cfg, tmp_path, monkeypa
     calls = {
         "train": lambda: train(smoke_cfg, "masked", 101, output),
         "suite": lambda: run_suite(smoke_cfg, output),
-        "comparison": lambda: run_comparison(output),
         "benchmark": lambda: benchmark_gpu(smoke_cfg, output),
     }
     with pytest.raises(RuntimeError, match="CUDA training is unavailable"):
@@ -84,39 +81,6 @@ def test_cpu_resume_and_dormant_condition_compatibility(smoke_cfg, tmp_path):
     with pytest.raises(ValueError, match="CPU training was removed"):
         train(smoke_cfg, "masked", 101, tmp_path / "new", resume=tmp_path / "old.zip")
     assert not (tmp_path / "new").exists()
-
-
-@pytest.mark.parametrize("condition", ["masked", "hybrid"])
-def test_historical_cpu_checkpoint_inference_without_retired_buffer(tmp_path, condition):
-    from sb3_contrib import MaskablePPO
-
-    from pvz_rl.env import PvZEnv
-
-    cfg = load_config()
-    cfg["simulation"]["backend"] = "cpu"
-    cfg["training"].update(device="cpu", n_envs=1, rollout_size=128, batch_size=64)
-    cfg["conditions"]["hybrid"] = dict(masked=True, shaped=True, curriculum=True, hybrid=True)
-    env = PvZEnv(cfg, condition=condition)
-    # Create historical-format weights without collecting or optimizing CPU experience.
-    model = MaskablePPO("MlpPolicy", env, device="cpu", n_steps=128, seed=11)
-    model.save(tmp_path / "old.zip")
-    with zipfile.ZipFile(tmp_path / "old.zip") as source:
-        contents = {name: source.read(name) for name in source.namelist()}
-    data = json.loads(contents["data"])
-    data["rollout_buffer_class"] = {":serialized:": "retired-unimportable-class"}
-    contents["data"] = json.dumps(data).encode()
-    with zipfile.ZipFile(tmp_path / "old.zip", "w") as target:
-        for name, content in contents.items():
-            target.writestr(name, content)
-    (tmp_path / "metadata.json").write_text(json.dumps({"config": cfg, "condition": condition}))
-    restored, _ = load_policy(tmp_path / "old.zip")
-    obs, _ = env.reset(seed=42)
-    for policy in (model, restored):
-        action = policy.predict(obs, deterministic=True, action_masks=env.action_masks())[0]
-        if policy is model:
-            expected = action
-        else:
-            assert action == expected
 
 
 @pytest.fixture
@@ -187,9 +151,9 @@ def test_stage_rejects_missing_or_mismatched_pin(staged_repository, tmp_path, fa
     assert not (tmp_path / "rejected").exists()
 
 
-def test_only_five_cuda_recipes_are_shipped():
+def test_only_one_recipe_is_shipped():
     root = Path(__file__).resolve().parents[1]
-    expected = {"cuda", "sc2-inspired", "sc2-efficient", "sc2-long-horizon", "sc2-plant-rewards"}
+    expected = {"train"}
     assert {p.stem for p in (root / "configs").glob("*.toml")} == expected
     for name in expected:
         require_cuda_training(load_config(root / "configs" / f"{name}.toml"), runtime=False)

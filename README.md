@@ -1,287 +1,260 @@
 # PVZ plant-placement research
 
-Train **one shared policy across easy, standard, and hard** with CUDA simulation
-and learning. Research **0.8.1** uses the pinned game package **1.3.0**, simulation
-**1.0.0**. Python simulation remains a reference for replay verification,
-non-learning baselines, and correctness tests.
-
-The latest plant-reward recipe is experimental. Improved normal-game performance
-has not been established; see [validation](docs/validation.md).
+Research **0.9.0** trains **one shared CUDA MaskablePPO policy** for easy, standard,
+and hard. There is one recipe, [configs/train.toml](configs/train.toml), also used
+when `--config` is omitted. The compact method is experimental: five-minute checks
+regressed deterministic lesson performance. See the measured results and limitations
+in [validation](docs/validation.md) before committing a long training budget.
 
 ## Project layout
 
-Run the commands below in this project root, `PVZ-plant`.
+Run commands from this project root, `PVZ-plant`.
 
 | Path | Contents |
 |---|---|
-| `src/pvz_rl/` | CUDA training, reference adapter, evaluation, reports, and replay tools |
-| `configs/` | The five supported training recipes listed below |
-| `tools/` | Installation, source staging, and explicit diagnostic utilities |
-| `tests/` | Mathematical controls, game parity, and CUDA integration tests |
-| `docs/` | Research, architecture, references, validation, and iteration history |
-| `requirements-lock.txt` | Common research, development, and presentation dependencies |
-| `requirements-cuda-lock.txt` | Required CuPy, CUDA runtime, and NVRTC versions |
-| `.venv/` | Local Python environment, created by installation; not committed |
-| `runs/` | Training outputs, created by training; not committed |
-| `artifacts/` | Local checks and diagnostic evidence; not committed |
-| `build/`, `dist/` | Generated staging/build files and packages; not committed |
+| `src/pvz_rl/` | CUDA learning, CPU reference adapter, evaluation, reports and replay tools |
+| `configs/train.toml` | The single configurable training recipe |
+| `tools/` | Installer, pinned-source staging and diagnostic plotting |
+| `tests/` | Independent mathematical, simulation and integration controls |
+| `docs/` | Architecture, research, references, validation and iteration history |
+| `requirements-lock.txt` | Common research, development and presentation dependencies |
+| `requirements-cuda-lock.txt` | Required CuPy, CUDA runtime and NVRTC dependencies |
+| `.venv/` | Local environment; generated, not committed |
+| `runs/` | User training outputs; generated, not committed |
+| `artifacts/`, `build/`, `dist/` | Local checks, staged dependency source and built packages; generated |
 
-The game source is **outside this project**. On this machine the CUDA game
-repository is `E:/Projects/pvz-cuda-work`; `E:/Projects/pvz` is another native
-viewer checkout. Neither folder is a second training project. Use this project's
-single `.venv` for research commands. Cache folders are disposable generated files.
+The game is an **external dependency**, not a second training project. This
+machine's source repository is `E:/Projects/pvz-cuda-work`; `E:/Projects/pvz` is
+another game/viewer checkout. Both stay unchanged. The installed game remains
+package **1.3.0**, simulation **1.0.0**, commit
+`8861824df6893a34c2cd4df7f9b68613376d7964`.
 
-## Installation and availability
+## Install and check availability
 
-Requires Python 3.12, Git, an NVIDIA CUDA-capable GPU, and a compatible NVIDIA
-driver. Install with the existing game repository as source:
+Requires Python 3.12, Git, an NVIDIA CUDA GPU and a compatible driver. From the
+project root:
 
 ```powershell
 .\tools\bootstrap.ps1 -GameRepo E:\Projects\pvz-cuda-work
 ```
 
-The installer reads commit `8861824df6893a34c2cd4df7f9b68613376d7964` directly
-from Git and verifies its source manifest. Its current branch and working files
-are not changed. Packaging is staged under `build/`; no extra clone or virtual
-environment is needed. Change `-GameRepo` if the source repository is elsewhere;
-it must contain the pinned commit.
+The installer reuses `.venv`, stages the pinned Git commit under `build/`, verifies
+its source manifest and installs the game non-editably. The source repository
+need only contain the commit; its checked-out branch is irrelevant. No extra
+clone, environment, global CUDA Toolkit or Visual Studio is needed.
 
-Installation uses CUDA PyTorch 2.8.0+cu128, CuPy 13.6.0, CUDA runtime 12.8.90,
-and NVRTC 12.8.93. A global CUDA Toolkit or Visual Studio is not required.
-The old installer `-Cuda` switch remains accepted; CUDA is always installed.
+The two locks complement CUDA PyTorch **2.8.0+cu128**, installed separately by the
+installer. CUDA uses CuPy **13.6.0**, runtime **12.8.90**, NVRTC **12.8.93**.
+The old `-Cuda` installer switch is accepted; CUDA is always installed.
 
-For an already installed environment, update only the research package and check
-availability:
+For an existing environment, update this research package and check it:
 
 ```powershell
 .\.venv\Scripts\python.exe -m pip install --no-deps --no-build-isolation -e .
 .\.venv\Scripts\python.exe -m pvz_rl doctor --output artifacts\availability.json
 ```
 
-`doctor` checks the source pin, kernel compilation, shared tensors, simulation
-parity, and recording support. Missing CUDA fails the training-readiness check.
-FFmpeg/libx264 is needed only for optional MP4 export; compact demos need neither
-FFmpeg nor a display.
+`doctor` verifies the engine pin, kernels, tensor sharing and recording support.
+CPU simulation remains for non-learning baselines, replay verification and tests.
+Training and optimization require CUDA; no CPU fallback exists. FFmpeg/libx264 is
+optional and needed only for MP4 export, not reports or compact recordings.
 
 ## Train
 
-| Recipe | Purpose |
-|---|---|
-| [cuda.toml](configs/cuda.toml) | Flat-policy baseline; default when no config is supplied |
-| [sc2-inspired.toml](configs/sc2-inspired.toml) | Spatial grouped policy, balanced exploration, mastery curriculum |
-| [sc2-long-horizon.toml](configs/sc2-long-horizon.toml) | SC2 recipe with gamma 0.9999 |
-| [sc2-efficient.toml](configs/sc2-efficient.toml) | Choice-state actor, GAE 0.999, minibatches of 1,024 |
-| [sc2-plant-rewards.toml](configs/sc2-plant-rewards.toml) | Efficient recipe plus plant-role rewards and initial dig bias |
-
-Start the latest experimental recipe with a **new** output directory:
+Start with a fresh directory:
 
 ```powershell
-.\.venv\Scripts\python.exe -m pvz_rl train `
-  --config configs\sc2-plant-rewards.toml --seed 101 `
-  --games 10000 --max-minutes 120 --output runs\plant-rewards-v081-101
+.\.venv\Scripts\python.exe -m pvz_rl train --config configs\train.toml `
+  --seed 101 --games 10000 --max-minutes 120 --output runs\compact-v090-101
 ```
 
-The example run folder is generated by this command, not shipped with the
-repository. If it already exists, choose a different name and use that name in
-the commands below. Existing run folders are never overwritten.
+`runs/compact-v090-101` is created by this command. It is not shipped. If it already
+exists, choose another name and use it in the examples below. Training never
+overwrites a run.
 
-All five recipes use **128 parallel GPU games × 128 decisions per game per
-rollout**. Games control budgets, curriculum progress, and validation schedules.
-Legal planting/digging is immediate; waiting or rejection advances one tick.
-The same policy and optimizer continue across difficulties and curriculum stages.
+Defaults are **128 parallel GPU games × 128 decisions per game per rollout**,
+minibatches of 1,024 and four PPO epochs. Completed games drive budgets, curriculum
+and validation. Planting/digging is immediate; waiting or rejection advances one
+tick. A single policy and optimizer continue through all five curriculum stages.
 
-Normal checkpoint validation runs every **2,000 completed training games**, with
-50 seeds per difficulty. Mastery checks run separately every **500 training games**
-using 100 fixed cases per required task. These intervals apply after a complete
-PPO update; a rollout crossing several intervals triggers one check.
-`best.zip` maximizes the equal-weight easy/standard/hard win rate; earlier ties
-win. The 120-minute allowance includes validation and presentation, reserving
-15 minutes for finalization. Training stops between complete PPO updates, so the
-game count may overshoot. An unfinished curriculum is recorded explicitly.
+Normal checkpoint validation runs every **2,000 training games**, on 50 seeds per
+difficulty. `best.zip` maximizes the equally weighted win rate across the three
+difficulties; earlier checkpoints win ties. Checks happen after optimization and
+coalesce crossed thresholds. A final validation is attempted within the allowance.
+The 120-minute budget includes startup, validation and presentation, reserving
+15 minutes for finalization. Stops occur after complete PPO updates, so game
+counts can overshoot. Unfinished validation, exports and mastery are explicit.
 
-Overrides include `--n-envs`, `--rollout-steps-per-env`, `--batch-size`, `--games`,
-`--eval-games`, and `--max-minutes`. Rollout size is parallel games multiplied by
-steps per game; conflicting explicit totals are rejected. `--device cuda` and
-`--simulator cuda` remain accepted. CPU training and CPU fallback are removed.
+Edit a copy of the TOML to change rewards, learning rate, discount, GAE lambda,
+clipping, epochs, batch size, value coefficient, gradient clipping, advantage
+normalization, exploration coefficients or architecture widths. `profile` is just
+a label. `target_kl = 0.01` stops an update when approximate KL exceeds 0.015;
+zero disables it. PPO averages over **all transitions**, including forced waits.
 
-A small availability/integration run uses the diagnostic scenario:
+The 500 inputs use categorical plant/state embeddings, three enemy/projectile
+regions per lane and global state. Defaults are 8/4 embedding dimensions, a
+64-unit scalar encoder, two 32-channel convolutions and 128×128 policy/value heads.
+The policy selects a legal action type, then a tile, retaining all 406 actions.
+The initial dig-logit bias is −6 and remains trainable. There are no plant-retention
+rules, savings rules, early-dig penalties or action delays.
+
+Only outcome, mower cost and potential shaping contribute to reward:
+
+\[
+r = r_{outcome} - 0.2\,newMowerActivations + \gamma\Phi(next)-\Phi(current)
+\]
+
+\[
+\Phi(o)=0.5\frac{defeated}{\max(1,initialZombies)}
+ +0.5\frac{sun+livingPlantPurchaseValue}{300}.
+\]
+
+Victory gives +1 and defeat −2. Natural terminal potential is zero; time-limit
+truncation retains potential and bootstraps the critic. **300 is a scale, not a
+sun cap**. Purchase value is preserved when planting and lost when digging or a
+plant dies. Damage, kills and early digs remain diagnostics without separate rewards.
+
+CLI overrides include `--n-envs`, `--rollout-steps-per-env`, `--batch-size`,
+`--games`, `--eval-games` and `--max-minutes`. Total rollout size is their product;
+conflicting explicit totals fail. `--device cuda` and `--simulator cuda` remain
+accepted. A short pipeline check is:
 
 ```powershell
 .\.venv\Scripts\python.exe -m pvz_rl train --family diagnostic `
   --games 2 --n-envs 2 --rollout-steps-per-env 32 --batch-size 32 `
   --eval-games 1 --validation-count 1 --max-minutes 2 `
-  --output artifacts\cuda-smoke-v081
+  --output artifacts\cuda-smoke-v090
 ```
 
-This is a pipeline check, not a full-game learning benchmark. Changed learning
-profiles require fresh models. CPU/hybrid training, the old `pilot` and `benchmark`
-commands, and the four older standalone recipes were removed in 0.8.0.
-`compare-sc2` retains its CUDA A–F ablations. `suite` now trains four direct
-conditions across the configured learner seeds. These long experiments are
-explicitly user initiated; see [research design](docs/research.md).
+This tests integration, not game-playing competence. `suite` repeats this same
+method for the configured learner seeds and performs the configured evaluations;
+it can be expensive and is user initiated. `benchmark-gpu` changes parallelism
+only. Old recipes, alternate policies, CPU/hybrid training, `pilot`, `benchmark`
+and `compare-sc2` were removed.
 
-## Resume and saved models
+## Stages, initialization and resume
 
-Use an interrupted checkpoint, or the latest saved checkpoint, and a new output
-folder. This example requires `latest.zip` to exist:
+| Stage | Training tasks | Default mastery requirement |
+|---|---|---|
+| `placement` | Placement lesson | 100/100 placement wins |
+| `saving` | 80% saving, 20% placement | 100/100 saving wins |
+| `easy` | 80% easy, 10% each lesson | 100/100 easy wins |
+| `standard` | 45% easy, 45% standard, 10% saving | 100/100 each on easy and standard |
+| `shared` | 20% easy, 40% standard, 40% hard | 100/100 on each difficulty |
+
+Mastery probes run every **500 training games**, using seeds 100050–100149,
+separate from normal checkpoint validation (100000–100049). At least 100 games
+started in the current stage must finish before it can pass. One passing probe
+is required by default. Counts, intervals, consecutive passes and thresholds are
+configurable. A loss, truncation or incomplete probe prevents mastery.
+`--validation-count` never shrinks mastery probes.
+
+Use `--stage` to train a stage alone. It stops on mastery or budget and never
+promotes itself. For example:
 
 ```powershell
-.\.venv\Scripts\python.exe -m pvz_rl train --seed 101 `
-  --resume runs\plant-rewards-v081-101\latest.zip `
-  --output runs\plant-rewards-v081-101-resumed
+.\.venv\Scripts\python.exe -m pvz_rl train --stage placement --seed 101 `
+  --games 1000 --max-minutes 30 --output runs\compact-stages-101\placement
+
+# Run after the placement checkpoint exists:
+.\.venv\Scripts\python.exe -m pvz_rl train --stage saving `
+  --init-from runs\compact-stages-101\placement\final.zip `
+  --games 1000 --max-minutes 30 --output runs\compact-stages-101\saving
 ```
 
-The saved configuration, game/time allowance, curriculum, policy, optimizer, and
-validation schedule are restored. Omitting `--config` also inherits the seed,
-condition and validation count; repeat `--family diagnostic` for diagnostic runs.
-Allowances are cumulative, not additional. Episodes
-restart; continuation is not bit-for-bit. Compatible CUDA checkpoints remain
-resumable. CPU/hybrid checkpoints are inference-only. Old engine pins still require
-their original environment; archived reports and recordings remain readable.
+`--init-from` copies **weights only**. The optimizer, counters, mastery,
+checkpoint selection and time allowance start fresh. It also works without
+`--stage` for a new automatic-curriculum experiment. Without `--config`, it inherits
+the source settings; specify an edited TOML to change rewards, PPO or curriculum.
+Network dimensions, categorical layout and engine must match. Metadata records
+the source checkpoint hash, structural signature and parameter changes.
 
-## Train one curriculum stage at a time
-
-Use a teaching recipe such as `sc2-plant-rewards.toml`. The stages, in order, are
-`placement`, `saving`, `easy`, `standard`, and `shared`. Start placement, then carry
-its checkpoint into saving:
-
-```powershell
-.\.venv\Scripts\python.exe -m pvz_rl train `
-  --config configs\sc2-plant-rewards.toml --stage placement --seed 101 `
-  --games 1000 --max-minutes 30 --output runs\stages-101\placement
-
-# Run after placement finishes and final.zip exists:
-.\.venv\Scripts\python.exe -m pvz_rl train `
-  --stage saving --init-from runs\stages-101\placement\final.zip `
-  --games 1000 --max-minutes 30 --output runs\stages-101\saving
-```
-
-Repeat the second command for `easy`, `standard`, then `shared`, pointing
-`--init-from` at the preceding stage's `final.zip` and using a fresh output folder.
-The source checkpoint must stay beside its `metadata.json`. Omit `--config` to
-inherit its exact learning settings. Weights and optimizer state carry forward;
-game/decision counts, mastery probes, validation selection, and time allowance
-start fresh for each stage. The source checkpoint hash is recorded in metadata.
-
-`--stage` keeps that stage's task mix, including earlier-lesson rehearsal. **Passing
-requires a 100% win rate over 100 evaluation games for every required task:**
-
-| Stage | Required result in one mastery check |
-|---|---|
-| `placement` | 100/100 placement-lesson wins |
-| `saving` | 100/100 saving-lesson wins |
-| `easy` | 100/100 normal easy wins |
-| `standard` | 100/100 easy **and** 100/100 standard wins |
-| `shared` | 100/100 each on easy, standard, and hard |
-
-One complete passing check is sufficient, provided at least 100 training games
-started in that stage have completed. Any loss, truncation, or incomplete check
-blocks mastery. The 500-game probe interval counts training games, not evaluation
-games. Checks use seeds 100050–100149; checkpoint validation retains seeds
-100000–100049. `--validation-count` changes checkpoint validation only.
-
-A single-stage run stops at mastery or its game/time limit after a complete PPO
-update. It never promotes automatically. Automatic curriculum runs advance only
-after passing and finish when the shared stage passes. `status.json` and the report
-show `stage_mastered`, `curriculum_incomplete`, and the stopping reason. Reaching
-a budget does not certify mastery. Explicitly initializing another stage before
-mastery is still possible; it is not a recorded pass.
-
-`latest.zip` is saved after completed mastery probes and normal validation;
-`final.zip` contains the final learned state for the next stage. `best.zip` remains
-selected only by normal easy/standard/hard validation, and supplies the three demos.
-To continue an interrupted stage with its remaining original allowance, use
-`--resume` instead of `--init-from`:
+`--resume` restores the saved policy, optimizer, configuration, counts, mastery
+and validation schedule with the remaining cumulative budget. It cannot change
+research parameters. Use a fresh output directory:
 
 ```powershell
 .\.venv\Scripts\python.exe -m pvz_rl train `
-  --resume runs\stages-101\saving\interrupted.zip `
-  --output runs\stages-101\saving-resumed
+  --resume runs\compact-v090-101\latest.zip `
+  --output runs\compact-v090-101-resumed
 ```
 
-Omitting `--stage` on a fresh run keeps the automatic curriculum. Stage handoffs
-require matching policy, rewards, PPO settings, task definitions/mixes and engine
-pin. Budgets, mastery criteria and evaluation schedules may change explicitly.
-For a checkpoint created with older gates, add the current matching `--config`
-to `--init-from` to adopt the new criteria. Without `--config`, handoff inherits the
-saved rules; `--resume` always preserves the saved criteria and schedule.
-CPU/hybrid training remains unsupported.
+The checkpoint must remain beside `metadata.json`. Interrupted episodes restart;
+continuation is not bit-for-bit. Use `--init-from` for changed experiments or an
+additional allowance. `final.zip` is suitable for stage handoffs; `best.zip` is
+selected exclusively by normal-game validation and supplies demonstrations.
+A budget-limited stage is not certified as mastered.
 
-To change frequency for a new run, use `--eval-games` for checkpoint validation
-or edit `curriculum.probe_interval_games` in a copy of the recipe for mastery checks.
-Lower frequency does not remove the final checkpoint validation. Short runs ending
-before their first scheduled mastery check remain unmastered.
+**Pre-0.9.0 weights are unsupported and require fresh training.** Their model
+implementations have been removed. Existing reports, statistics and recordings
+remain readable even after obsolete checkpoint files are deleted.
 
-## Logs, reports, and demonstrations
+## Logs, curves and replay demos
 
-Progress is printed every 15 seconds and saved in `train.log`. It summarizes the
-last 100 games, curriculum, kills, attacker purchases, early digging, reward
-components, and throughput. Mower-free lessons are identified explicitly.
+Every 15 seconds, `train.log` and the terminal show phase, games, throughput,
+elapsed time, rolling performance, stage and kills. Episode records are saved
+without printing every episode. Optimization metrics include KL, actual optimizer
+steps, entropy and early stopping. Early digs per accepted planting is a diagnostic;
+no purchases produces a missing ratio rather than a misleading zero.
 
 ```powershell
-Get-Content runs\plant-rewards-v081-101\train.log -Wait
-# Run these separately after their outputs exist:
+Get-Content runs\compact-v090-101\train.log -Wait
+# Open after the report exists:
+Start-Process runs\compact-v090-101\visualizations\index.html
 .\.venv\Scripts\tensorboard.exe --logdir runs
-Start-Process runs\plant-rewards-v081-101\visualizations\index.html
 ```
 
-| Generated path inside the run | Contents |
+| Generated path inside a run | Contents |
 |---|---|
-| `metadata.json`, `config.json`, `status.json` | Source pins, settings, seeds, progress, and outcome |
-| `training-episodes.jsonl`, `training-metrics.jsonl` | Episode records and aggregated PPO/behavior metrics |
-| `learning-curve.jsonl`, `validation/` | Normal-game validation curves and cases |
-| `curriculum.json`, `curriculum-probes/` | Mastery state and lesson probes, for teaching recipes |
-| `tensorboard/` | Training event files |
-| `best.zip`, `best.json`, `latest.zip`, `final.zip` | Selected, latest validation/stage probe, and final checkpoints |
-| `visualizations/index.html`, `*-curves.png` | Offline report and chart images |
-| `visualizations/demos.json`, `visualizations/games/` | Demonstration manifest and verified `.pvzdemo` recordings |
-| `visualizations/videos/` | MP4 files, only when requested |
+| `metadata.json`, `config.json`, `status.json` | Source pins, resolved settings, provenance and current state |
+| `training-episodes.jsonl`, `training-metrics.jsonl` | Episodes, rolling behavior and completed-update PPO metrics |
+| `learning-curve.jsonl`, `validation/` | Normal-game validation results |
+| `curriculum.json`, `curriculum-probes.jsonl`, `curriculum-probes/` | Mastery state and probe evidence |
+| `best.zip`, `best.json`, `latest.zip`, `final.zip` | Selected, latest validated/probed and final checkpoints |
+| `visualizations/index.html`, `visualizations/*.png` | Offline report and curves |
+| `visualizations/demos.json`, `visualizations/games/` | Three CPU-verified compact recordings sharing one checkpoint |
+| `visualizations/videos/` | Optional MP4 exports |
 
-Reports refresh after validation and at completion. The three normal-game demos
-use the same selected checkpoint and seed 100000, showing actual wins, losses, or
-truncations. Diagnostic runs produce one diagnostic demo. Replays are verified
-against the CPU reference simulator before saving.
+All three normal-game demos use the same `best.zip` and seed 100000, showing
+actual outcomes. Diagnostic runs produce only a diagnostic demo. Reports refresh
+after validation and at completion. Rebuild or optionally export videos:
 
 ```powershell
-.\.venv\Scripts\python.exe -m pvz_rl visualize --run runs\plant-rewards-v081-101
-.\.venv\Scripts\python.exe -m pvz_rl visualize --run runs\plant-rewards-v081-101 --videos
+.\.venv\Scripts\python.exe -m pvz_rl visualize --run runs\compact-v090-101
+.\.venv\Scripts\python.exe -m pvz_rl visualize --run runs\compact-v090-101 --videos
+
+# Resolve the first recording from the generated manifest:
+$run = Resolve-Path runs\compact-v090-101
+$demo = (Get-Content "$run\visualizations\demos.json" -Raw | ConvertFrom-Json).demos[0]
+$recording = Join-Path "$run\visualizations" $demo.replay
+.\.venv\Scripts\python.exe -m pvz_rl replay $recording --watch --speed 2
+.\.venv\Scripts\python.exe -m pvz_rl replay $recording --video artifacts\demo.mp4
 ```
 
-Use a recording path listed in the HTML report or `visualizations/demos.json`:
-
-```powershell
-.\.venv\Scripts\python.exe -m pvz_rl replay PATH_TO_RECORDING.pvzdemo --watch --speed 2
-.\.venv\Scripts\python.exe -m pvz_rl replay PATH_TO_RECORDING.pvzdemo --video artifacts\demo.mp4
-```
-
-`PATH_TO_RECORDING.pvzdemo` is a placeholder. `pvz-rl replay` supports the
-zero-time research action format and legacy JSON/gzip recordings. Native readers
-CPU 1.2.2 and CUDA 1.3.1 also support it; do not replace the pinned training
-simulator just to view recordings. Space pauses, arrows seek, and Home/End jump
-to boundaries. Supported speeds: 0.5, 1, 2, 4, and 8.
-
-MP4 export is optional: `--videos` enables it and `--no-videos` disables it on
-training, suites, and visualization. Compact demos remain enabled. Failed exports
-preserve checkpoints and can be retried. Archived reports reuse their existing
-recordings; incompatible models cannot generate new gameplay.
+The replay command supports `.pvzdemo`, legacy JSON/gzip and immediate research
+actions. Space pauses, arrows seek and Home/End jump to boundaries. Supported
+speeds are 0.5, 1, 2, 4 and 8. Use this viewer without upgrading the simulator pin.
+`--videos`/`--no-videos` affect MP4 only; compact demos remain enabled. Failed
+exports preserve training results and can be retried. Archived report regeneration
+does not load retired weights or regenerate their gameplay.
 
 ## Evaluate and verify
 
 ```powershell
 .\.venv\Scripts\python.exe -m pvz_rl evaluate `
-  --checkpoint runs\plant-rewards-v081-101\best.zip `
-  --split validation --count 10 --record --output artifacts\plant-rewards-v081-validation
-.\.venv\Scripts\python.exe -m pvz_rl benchmark-gpu --minutes 15 --output artifacts\cuda-benchmark-v081
+  --checkpoint runs\compact-v090-101\best.zip `
+  --split validation --count 10 --record --output artifacts\compact-v090-validation
+.\.venv\Scripts\python.exe -m pvz_rl benchmark-gpu --minutes 15 --output artifacts\cuda-benchmark-v090
 .\.venv\Scripts\python.exe -m pytest -q
 .\.venv\Scripts\ruff.exe check src tests tools
 .\.venv\Scripts\python.exe -m pip check
 .\.venv\Scripts\python.exe -m build --no-isolation
 ```
 
-The benchmark measures CUDA collection and optimization at 32/64/128 games,
-separating setup and warmup. It does not launch formal training. Tests include
-short CUDA learning checks and independent CPU mathematical/game controls.
+Benchmarking tests 32/64/128 parallel games with three repetitions and separates
+warmup from steady-state speed. Tests include short CUDA updates and independent
+CPU mathematical/game controls. They do not launch formal research training.
 
-Further details: [research](docs/research.md), [architecture](docs/architecture.md),
-[validation](docs/validation.md), [references](docs/references.md), and
+Details: [architecture](docs/architecture.md), [research](docs/research.md),
+[references](docs/references.md), [validation](docs/validation.md),
 [iteration history](docs/iteration.md).

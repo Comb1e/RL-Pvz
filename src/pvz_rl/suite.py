@@ -1,4 +1,4 @@
-"""Explicit, restartable orchestration for the four-condition research protocol.
+"""Explicit, restartable orchestration for the single-policy research protocol.
 
 This module never starts automatically. Every attempt uses a fresh directory, and
 the journal keeps previous attempts and their evidence intact.
@@ -18,29 +18,19 @@ from .training_requirements import TRAINING_CONDITIONS, require_cuda_training
 
 def run_suite(cfg, output, *, resume=False):
     cfg = copy.deepcopy(cfg)
-    # New suites have four jobs per learner even if a caller supplies an archived
-    # configuration containing an unused hybrid definition.
-    cfg["conditions"] = {
-        name: cfg["conditions"][name] for name in TRAINING_CONDITIONS if name in cfg["conditions"]
-    }
     require_cuda_training(cfg)
-    if cfg.get("policy", {}).get("kind", "flat") != "flat":
-        raise ValueError(
-            "The four-condition suite requires the baseline flat policy. "
-            "Use train or compare-sc2 for grouped/teaching profiles."
-        )
+    cfg["conditions"] = {"masked": cfg["conditions"]["masked"]}
     output = Path(output)
     journal_path = output / "suite.json"
     if resume:
         journal = json.loads(journal_path.read_text("utf-8"))
         original = json.loads((output / "metadata.json").read_text("utf-8"))["config"]
         require_cuda_training(original)
-        if "hybrid" in original["conditions"] or any(
-            k.startswith("hybrid-") for k in journal["jobs"]
-        ):
+        if any(not k.startswith("masked-") for k in journal["jobs"]):
             raise ValueError(
-                "This archived suite includes retired hybrid training; start a new CUDA suite."
+                "This suite contains retired training modes; start a new single-policy suite."
             )
+        original["conditions"] = {"masked": original["conditions"]["masked"]}
         if research_config(original) != research_config(cfg):
             raise ValueError("Suite resume requires its original configuration")
     else:

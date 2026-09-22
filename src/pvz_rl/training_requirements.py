@@ -1,12 +1,31 @@
 """Training eligibility, separate from reading historical experiment metadata."""
 
-import copy
 from functools import lru_cache
 
 from .config import research_config, simulator, validate_config
 from .curriculum import selected_stage
 
-TRAINING_CONDITIONS = ("masked", "unmasked", "sparse", "mixed")
+TRAINING_CONDITIONS = ("masked",)
+
+
+def current_model_config(cfg):
+    return (
+        cfg.get("policy", {}).get("kind") == "spatial_grouped_v3"
+        and cfg.get("encoding", {}).get("version") == "compact_v3"
+    )
+
+
+def require_supported_policy(cfg, condition="masked"):
+    """One supported method for both model loading and learning."""
+    if (
+        condition != "masked"
+        or not cfg["conditions"].get(condition, {}).get("masked")
+        or cfg["conditions"].get(condition, {}).get("hybrid")
+        or not current_model_config(cfg)
+    ):
+        raise ValueError(
+            "Retired policy. Only compact spatial MaskablePPO is supported; start fresh with configs/train.toml. Archived reports and recordings remain readable."
+        )
 
 
 @lru_cache(maxsize=1)
@@ -25,7 +44,7 @@ def _cuda_probe():
 def require_cuda_training(cfg, condition="masked", *, runtime=True):
     """Reject unsupported runs before creating output or allocating collectors."""
     validate_config(cfg)
-    if condition not in TRAINING_CONDITIONS or cfg["conditions"].get(condition, {}).get("hybrid"):
+    if condition == "hybrid" or cfg["conditions"].get(condition, {}).get("hybrid"):
         raise ValueError("CPU/hybrid training was removed in 0.8.0; use a direct CUDA condition.")
     if condition not in cfg["conditions"]:
         raise ValueError(f"Missing training condition: {condition}")
@@ -43,6 +62,15 @@ def require_cuda_training(cfg, condition="masked", *, runtime=True):
         raise ValueError(
             "CUDA training requires per_tick actions; legacy timing is inference-only."
         )
+    require_supported_policy(cfg, condition)
+    if (
+        cfg["conditions"][condition]
+        != {"masked": True, "shaped": True, "curriculum": True, "hybrid": False}
+        or cfg["curriculum"].get("mode") != "teaching"
+    ):
+        raise ValueError(
+            "Use the single masked teaching method; adjust its reward coefficients and curriculum parameters instead of selecting retired training modes"
+        )
     if runtime:
         import torch
 
@@ -57,36 +85,46 @@ def require_cuda_training(cfg, condition="masked", *, runtime=True):
 def resume_protocol(cfg, condition):
     """Unused historical condition definitions do not alter an individual run."""
     result = research_config(cfg)
+    result.pop("profile", None)
     result["conditions"] = {condition: cfg["conditions"][condition]}
     return result
 
 
-def transfer_protocol(cfg, condition):
-    """A stage handoff may change its budget/schedule, never its learning rules."""
-    result = copy.deepcopy(resume_protocol(cfg, condition))
-    result["curriculum"].pop("run_stage", None)
-    for key in (
-        "probe_interval_games",
-        "probe_interval",
-        "probe_cases",
-        "consecutive_passes",
-        "minimum_stage_games",
-        "minimum_stage_steps",
-        "residency",
-    ):
-        result["curriculum"].pop(key, None)
-    for stage in result["curriculum"].get("stages", {}).values():
-        stage.pop("requirements", None)
-    result["splits"].pop("curriculum", None)
-    for key in (
-        "total_games",
-        "total_steps",
-        "budget_unit",
-        "max_minutes",
-        "finalization_minutes",
-        "eval_interval_games",
-        "eval_interval",
-        "learner_seeds",
-    ):
-        result["training"].pop(key, None)
-    return result
+def transfer_protocol(cfg, condition="masked"):
+    """Only the engine and input/action/network structure constrain weight reuse."""
+    env, p = cfg["environment"], cfg["policy"]
+    return {
+        "engine": [cfg[k] for k in ("engine_commit", "engine_version", "engine_package_version")],
+        "encoding": cfg["encoding"]["version"],
+        "board": {
+            k: env[k]
+            for k in (
+                "rows",
+                "cols",
+                "bins",
+                "plants",
+                "zombies",
+                "plant_states",
+                "zombie_states",
+                "mower_states",
+            )
+        },
+        "policy": {
+            k: p[k]
+            for k in ("kind", "plant_embedding", "state_embedding", "scalar_sizes", "channels")
+        },
+        "heads": cfg["training"]["hidden_sizes"],
+    }
+
+
+def parameter_changes(old, new, prefix=""):
+    """Flat, reviewable differences for explicit weights-only transfers."""
+    changes = {}
+    for key in sorted(set(old) | set(new)):
+        a, b = old.get(key), new.get(key)
+        name = f"{prefix}.{key}" if prefix else key
+        if isinstance(a, dict) and isinstance(b, dict):
+            changes.update(parameter_changes(a, b, name))
+        elif a != b:
+            changes[name] = {"before": a, "after": b}
+    return changes

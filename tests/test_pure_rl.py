@@ -10,7 +10,7 @@ import pytest
 import torch
 from pvz_game import Dig, LevelSpec, Place, Spawn
 
-from pvz_rl.config import learning_profile
+from pvz_rl.config import load_config
 from pvz_rl.curriculum import CurriculumState, stage_distribution
 from pvz_rl.env import PvZEnv
 from pvz_rl.grouped_policy import GroupedDistribution
@@ -18,17 +18,16 @@ from pvz_rl.training import ResearchCallback, load_policy, train
 
 
 def test_tactical_dimensions_regions_scales_crowds_and_no_leaks():
-    cfg = learning_profile("tactical")
+    cfg = load_config()
     env = PvZEnv(cfg)
     a, _ = env.reset(seed=5, options={"scenario": LevelSpec("hidden", (Spawn(800, "basic", 1),))})
     b, _ = env.reset(
         seed=700, options={"scenario": LevelSpec("other", (Spawn(1800, "buckethead", 4),))}
     )
-    assert a.shape == (1140,)
+    assert a.shape == (500,)
     np.testing.assert_array_equal(a, b)
     encoder = env.encoder
     assert a[encoder.slices["globals"]][0] == pytest.approx(50 / 200)
-    assert a[encoder.slices["economy"]].reshape(8, 2)[1].tolist() == [1, 0.5]
     start, width = env.rules.game["house_x"], encoder.position_scale
     for boundary in (1, 2):
         first = math.ceil(start + width * boundary / 3)
@@ -59,14 +58,12 @@ def test_tactical_dimensions_regions_scales_crowds_and_no_leaks():
     assert shots[:, :, 1].sum() * 100 == pytest.approx(
         sum(p.damage for p in env.public.projectiles)
     )
-    assert original[encoder.slices["lanes"]].reshape(5, 4)[2, 1] == pytest.approx(
-        (20 * 20 / 30) / 20
-    )
+
     assert np.isfinite(original).all()
 
 
 def test_grouped_equal_logits_and_wait_exploration():
-    env = PvZEnv(learning_profile("grouped"))
+    env = PvZEnv(load_config())
     env.reset(seed=4)
     mask = env.action_masks()
     assert mask.sum() == 136
@@ -136,7 +133,7 @@ def test_deterministic_selection_is_greedy_type_then_tile():
 )
 @pytest.mark.parametrize("lane", range(5))
 def test_lesson_independent_shooting_and_wait_controls(cfg, family, win_tick, loss_tick, lane):
-    cfg = learning_profile("pure-rl", cfg)
+    cfg = cfg
     settings = cfg["curriculum"]["lessons"][family]
     spec = LevelSpec(
         family,
@@ -159,7 +156,7 @@ def test_lesson_independent_shooting_and_wait_controls(cfg, family, win_tick, lo
 
 
 def test_task_restrictions_dig_cooldown_and_reset_boundaries():
-    cfg = learning_profile("pure-rl")
+    cfg = load_config()
     env = PvZEnv(cfg, training=True)
     env.reset(seed=3)
     assert env.episode_family == "placement"
@@ -188,7 +185,7 @@ def test_task_restrictions_dig_cooldown_and_reset_boundaries():
 
 
 def test_curriculum_pass_fail_minimum_and_rehearsal(cfg, legacy_teaching):
-    cfg = legacy_teaching(learning_profile("pure-rl", cfg))
+    cfg = legacy_teaching(cfg)
     state = CurriculumState()
     assert not state.due(16383, cfg) and state.due(16384, cfg)
     assert not state.observe({"placement": 18}, 16384, cfg)
@@ -217,7 +214,7 @@ def test_grouped_learning_save_reload_metrics_and_complete_update_deadline(
 ):
     if device == "cuda" and not torch.cuda.is_available():
         pytest.skip("CUDA unavailable")
-    cfg = learning_profile("pure-rl", smoke_cfg)
+    cfg = smoke_cfg
     cfg["training"]["device"] = device
     run = tmp_path / device
     train(cfg, "masked", 101, run, validation_limit=1)
@@ -250,7 +247,7 @@ def test_grouped_learning_save_reload_metrics_and_complete_update_deadline(
 def test_curriculum_probe_uses_same_policy_optimizer_and_persists_resume(
     smoke_cfg, tmp_path, monkeypatch, legacy_teaching
 ):
-    cfg = legacy_teaching(learning_profile("pure-rl", smoke_cfg))
+    cfg = legacy_teaching(smoke_cfg)
     cfg["training"].update(total_steps=192)
     cfg["curriculum"].update(probe_interval=64, minimum_stage_steps=64)
     identities = []
@@ -319,7 +316,7 @@ def test_lesson_checkpoints_cannot_enter_normal_or_final_evaluation(
 
 @pytest.mark.learning
 def test_deadline_saves_only_completed_update(smoke_cfg, tmp_path, monkeypatch):
-    cfg = learning_profile("pure-rl", smoke_cfg)
+    cfg = smoke_cfg
     original = ResearchCallback.capture_update
 
     def expire_after_update(self):
@@ -336,7 +333,7 @@ def test_deadline_saves_only_completed_update(smoke_cfg, tmp_path, monkeypatch):
 
 
 @pytest.mark.learning
-def test_grouped_spawn_and_same_checkpoint_demos(tmp_path):
+def test_grouped_spawn_and_same_checkpoint_demos(tmp_path, tiny_cli_config):
     output = tmp_path / "grouped-spawn"
     result = subprocess.run(
         [
@@ -345,7 +342,7 @@ def test_grouped_spawn_and_same_checkpoint_demos(tmp_path):
             "pvz_rl",
             "train",
             "--config",
-            "configs/sc2-inspired.toml",
+            str(tiny_cli_config),
             "--steps",
             "64",
             "--n-envs",

@@ -1,21 +1,20 @@
 """Fixed-data PPO and discount controls independent of the regularizer helper."""
 
-import copy
-
 import numpy as np
 import pytest
 import torch
 from stable_baselines3.common.logger import configure
 
+from pvz_rl.config import load_config
 from pvz_rl.env import PvZEnv
-from pvz_rl.sc2_experiments import sc2_profile
 from pvz_rl.training import build_model, vector_env
 
 
-@pytest.mark.parametrize("objective", ["all_steps", "choice_points_v1"])
-def test_balanced_ppo_update_matches_joint_probability_reference(objective):
+@pytest.mark.parametrize("forced", [False, True])
+@pytest.mark.parametrize("device", ["cpu", "cuda"])
+def test_balanced_ppo_update_matches_joint_probability_reference(forced, device):
     torch.set_num_threads(1)
-    cfg = sc2_profile("C")
+    cfg = load_config()
     cfg["runtime"]["cache_rollout_on_device"] = False
     cfg["training"].update(
         n_envs=1,
@@ -25,48 +24,64 @@ def test_balanced_ppo_update_matches_joint_probability_reference(objective):
         device="cuda",
         n_epochs=1,
         hidden_sizes=[16, 16],
-        actor_objective=objective,
+        target_kl=0,
     )
     env = vector_env(cfg, "masked", 102)
     try:
         model = build_model(cfg, "masked", env, 102)
         model.set_logger(configure(format_strings=[]))
-        reference = copy.deepcopy(model.policy).to("cpu")
+        model.policy.to(device)
+        model.device = torch.device(device)
+        for key, value in vars(model.rollout_buffer).items():
+            if isinstance(value, torch.Tensor):
+                setattr(model.rollout_buffer, key, value.to(device))
+        model.rollout_buffer.device = torch.device(device)
+        reference = type(model.policy)(
+            model.observation_space,
+            model.action_space,
+            lambda _: cfg["training"]["learning_rate"],
+            **model.policy_kwargs,
+        ).to(device)
+        reference.load_state_dict(model.policy.state_dict())
         rng = np.random.default_rng(44)
         raw = PvZEnv(cfg)
         observation, _ = raw.reset(seed=7)
         obs = np.repeat(observation[None], 32, axis=0)
         mask = np.repeat(raw.action_masks()[None], 32, axis=0)
         actions = rng.choice(np.flatnonzero(mask[0]), size=32)
-        if objective == "choice_points_v1":
+        if forced:
             mask[:16, 1:] = False
             actions[:16] = 0
         # Deliberately exercise both clipped and unclipped policy ratios.
         with torch.no_grad():
             _, logs, _ = reference.evaluate_actions(
-                torch.tensor(obs), torch.tensor(actions), action_masks=mask
+                torch.tensor(obs, device=device),
+                torch.tensor(actions, device=device),
+                action_masks=mask,
             )
-        old_logs = logs + torch.linspace(-0.7, 0.7, 32)
-        advantages = torch.tensor(rng.normal(size=32), dtype=torch.float32)
-        returns = torch.tensor(rng.normal(size=32), dtype=torch.float32)
+        old_logs = logs + torch.linspace(-0.7, 0.7, 32, device=device)
+        advantages = torch.tensor(rng.normal(size=32), dtype=torch.float32, device=device)
+        returns = torch.tensor(rng.normal(size=32), dtype=torch.float32, device=device)
         buffer = model.rollout_buffer
         for key, value in {
             "observations": obs,
             "actions": actions[:, None],
             "values": np.zeros(32),
-            "log_probs": old_logs.numpy(),
-            "advantages": advantages.numpy(),
-            "returns": returns.numpy(),
+            "log_probs": old_logs.cpu().numpy(),
+            "advantages": advantages.cpu().numpy(),
+            "returns": returns.cpu().numpy(),
             "action_masks": mask,
         }.items():
             getattr(buffer, key).copy_(
                 torch.as_tensor(
-                    np.asarray(value).reshape(getattr(buffer, key).shape), device="cuda"
+                    np.asarray(value).reshape(getattr(buffer, key).shape), device=device
                 )
             )
         buffer.full = True
         values, _, _ = reference.evaluate_actions(
-            torch.tensor(obs), torch.tensor(actions), action_masks=mask
+            torch.tensor(obs, device=device),
+            torch.tensor(actions, device=device),
+            action_masks=mask,
         )
         joint = reference.action_dist.probs
         group_mass = joint[:, 1:].reshape(32, 9, 45).sum(-1)
@@ -76,14 +91,14 @@ def test_balanced_ppo_update_matches_joint_probability_reference(objective):
         def h(p):
             return -(p * p.clamp_min(1e-30).log()).sum(-1)
 
-        counts = torch.tensor(mask[:, 1:].reshape(32, 9, 45).sum(-1))
+        counts = torch.tensor(mask[:, 1:].reshape(32, 9, 45).sum(-1), device=device)
         available = counts > 0
         bonus = 0.01 * h(types) + 0.001 * (
             h(conditional) / counts.clamp_min(2).float().log() * available
         ).sum(-1) / available.sum(-1).clamp_min(1)
-        logs = joint[torch.arange(32), torch.tensor(actions)].log()
+        logs = joint[torch.arange(32, device=device), torch.tensor(actions, device=device)].log()
         ratio = (logs - old_logs).exp()
-        selected = slice(16, None) if objective == "choice_points_v1" else slice(None)
+        selected = slice(None)
         chosen = advantages[selected]
         normalized = (chosen - chosen.mean()) / (chosen.std() + 1e-8)
         pg = -torch.minimum(
@@ -101,8 +116,8 @@ def test_balanced_ppo_update_matches_joint_probability_reference(objective):
             bonus[selected].mean().item(), abs=1e-7
         )
         for actual, expected in zip(model.policy.parameters(), reference.parameters()):
-            torch.testing.assert_close(actual.cpu(), expected, atol=2e-7, rtol=2e-6)
-            torch.testing.assert_close(actual.grad.cpu(), expected.grad, atol=2e-7, rtol=2e-6)
+            torch.testing.assert_close(actual, expected, atol=2e-7, rtol=2e-6)
+            torch.testing.assert_close(actual.grad, expected.grad, atol=2e-7, rtol=2e-6)
     finally:
         env.close()
 

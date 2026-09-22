@@ -4,28 +4,17 @@ from functools import lru_cache
 
 from pvz_game import Observation, Rules, Status
 
-from .plant_rewards import plant_reward_parts
-
+# Combat events remain diagnostics; only mower_activation_penalty affects reward.
 REWARD_METRICS = (
     "plant_kills",
     "mower_kills",
     "nonlethal_health_damage",
     "empty_mower_activations",
-    "plant_kill_reward",
-    "mower_kill_penalty",
-    "damage_reward",
-    "mower_activation_penalty",
     "mower_activations",
     "mower_activation_sun",
     "wall_nut_damage",
     "empty_explosions",
-    "mower_sun_penalty",
-    "wall_nut_reward",
-    "empty_explosion_penalty",
-    "offensive_plantings",
-    "plants_eaten",
-    "offensive_shaping",
-    "plant_eaten_penalty",
+    "mower_activation_penalty",
 )
 
 
@@ -39,16 +28,9 @@ def potential(obs: Observation, cfg: dict) -> float:
         return 0.0
     r = cfg["reward"]
     progress = r["defeated_weight"] * obs.counts.defeated / max(1, obs.counts.initial_total)
-    if r.get("potential_mode", "legacy") == "plant_value":
-        costs = {card.plant_type: card.cost for card in obs.cards}
-        plant_value = sum(costs[p.plant_type] for p in obs.plants)
-        return progress + r["economy_weight"] * (obs.sun + plant_value) / r["economy_scale"]
-    flowers = sum(p.plant_type == "sunflower" for p in obs.plants)
-    return (
-        progress
-        + r["sun_weight"] * min(obs.sun / r["sun_target"], 1)
-        + r["flower_weight"] * min(flowers / r["flower_target"], 1)
-    )
+    costs = {card.plant_type: card.cost for card in obs.cards}
+    plant_value = sum(costs[p.plant_type] for p in obs.plants)
+    return progress + r["economy_weight"] * (obs.sun + plant_value) / r["economy_scale"]
 
 
 def _attribute_events(events):
@@ -180,52 +162,11 @@ def reward_parts(
         cfg["reward"]["gamma"] * potential(after, cfg) - potential(before, cfg) if shaped else 0.0
     )
     combat = combat_metrics(before, events, rules)
-    settings = cfg["reward"]
-    denominator = (
-        max(1, before.counts.initial_total) if settings.get("normalize_kills", True) else 1
-    )
-    # Absent weights preserve legacy checkpoint/configuration rewards exactly.
-    plant_reward = settings.get("plant_kill_weight", 0.0) * combat["plant_kills"] / denominator
-    mower_penalty = -settings.get("mower_kill_weight", 0.0) * combat["mower_kills"] / denominator
-    damage_reward = (
-        settings.get("damage_weight", 0.0)
-        * combat["nonlethal_damage_fraction"]
-        / max(1, before.counts.initial_total)
-    )
-    activation_penalty = (
-        -settings.get("empty_mower_activation_penalty", 0.0) * combat["empty_mower_activations"]
-    )
-    mower_sun_penalty = (
-        -settings.get("mower_sun_weight", 0.0)
-        * combat["mower_activation_sun"]
-        / settings.get("mower_sun_scale", 300.0)
-    )
-    wall_nut_reward = (
-        settings.get("wall_nut_damage_weight", 0.0) * combat["wall_nut_damage_fraction"]
-    )
-    explosion_penalty = -settings.get("empty_explosion_penalty", 0.0) * combat["empty_explosions"]
-    plants = plant_reward_parts(before, after, cfg, shaped, events)
+    mower_penalty = -cfg["reward"]["mower_activation_cost"] * combat["mower_activations"]
     return {
         "terminal": terminal,
         "shaping": shaping,
         **combat,
-        **plants,
-        "plant_kill_reward": plant_reward,
-        "mower_kill_penalty": mower_penalty,
-        "damage_reward": damage_reward,
-        "mower_activation_penalty": activation_penalty,
-        "mower_sun_penalty": mower_sun_penalty,
-        "wall_nut_reward": wall_nut_reward,
-        "empty_explosion_penalty": explosion_penalty,
-        "total": terminal
-        + shaping
-        + plant_reward
-        + mower_penalty
-        + damage_reward
-        + activation_penalty
-        + mower_sun_penalty
-        + wall_nut_reward
-        + explosion_penalty
-        + plants["offensive_shaping"]
-        + plants["plant_eaten_penalty"],
+        "mower_activation_penalty": mower_penalty,
+        "total": terminal + shaping + mower_penalty,
     }

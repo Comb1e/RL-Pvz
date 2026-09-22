@@ -19,12 +19,11 @@ class ObservationEncoder:
         self.zombie_states = {state: i for i, state in enumerate(env["zombie_states"])}
         self.mower_states = {state: i for i, state in enumerate(env["mower_states"])}
         self.rows, self.cols, self.bins = env["rows"], env["cols"], env["bins"]
-        self.tactical = cfg["encoding"]["version"] == "tactical_v2"
-        if self.tactical:
-            self.bins = 3
-        self.plant_width = len(self.plants) + 2 + len(self.plant_states)
+        if cfg["encoding"]["version"] != "compact_v3":
+            raise ValueError("Only compact_v3 observations are supported")
+        self.plant_width = 4
         self.zombie_width = len(self.zombies) + 6 + len(self.zombie_states)
-        self.global_width = 10 + len(self.plants) * 3 + self.rows * 4
+        self.global_width = 7 + len(self.plants) + self.rows * 4
         sizes = [
             self.rows * self.cols * self.plant_width,
             self.rows * self.bins * self.zombie_width,
@@ -32,9 +31,6 @@ class ObservationEncoder:
             self.global_width,
         ]
         names = ["plants", "zombies", "projectiles", "globals"]
-        if self.tactical:
-            sizes.extend([len(self.plants) * 2, self.rows * 4])
-            names.extend(["economy", "lanes"])
         offsets = np.cumsum([0, *sizes])
         self.slices = dict(
             zip(
@@ -45,19 +41,15 @@ class ObservationEncoder:
         self.size = int(offsets[-1])
         self.space = spaces.Box(-np.inf, np.inf, shape=(self.size,), dtype=np.float32)
         self.count_scale = cfg["encoding"]["count_scale"]
-        self.local_count_scale = (
-            cfg["encoding"]["local_count_scale"] if self.tactical else self.count_scale
-        )
+        self.local_count_scale = cfg["encoding"]["local_count_scale"]
         self.timer_scale = max(
             v for d in rules.plants.values() for k, v in d.items() if k.endswith("_ticks")
         )
         self.hp_scale = max(z["health"] for z in rules.zombies.values())
         self.armor_scale = max(z["armor"] for z in rules.zombies.values())
-        self.damage_scale = max(p.get("damage", 0) for p in rules.plants.values())
-        if self.tactical:
-            self.damage_scale = max(
-                rules.plants[k]["damage"] for k in ("peashooter", "snow_pea", "repeater")
-            )
+        self.damage_scale = max(
+            rules.plants[k]["damage"] for k in ("peashooter", "snow_pea", "repeater")
+        )
         self.position_scale = rules.game["spawn_x"] - rules.game["house_x"]
         self.cost_scale = max(p["cost"] for p in rules.plants.values())
 
@@ -68,23 +60,28 @@ class ObservationEncoder:
     def encode(self, obs: Observation) -> np.ndarray:
         result = np.zeros(self.size, dtype=np.float32)
         plant = result[self.slices["plants"]].reshape(self.rows, self.cols, self.plant_width)
-        nplants, nzombies = len(self.plants), len(self.zombies)
+        nzombies = len(self.zombies)
         for p in obs.plants:
             tile = plant[p.row, p.col]
-            tile[self.plants[p.plant_type]] = 1
-            tile[nplants] = p.health / p.max_health
-            tile[nplants + 1] = p.timer_ticks / self.timer_scale
-            tile[nplants + 2 + self.plant_states[p.state]] = 1
+            tile[:] = (
+                self.plants[p.plant_type] + 1,
+                p.health / p.max_health,
+                p.timer_ticks / self.timer_scale,
+                self.plant_states[p.state] + 1,
+            )
 
         # All sums are exact integer operations; IDs and tuple order are never features.
         zombies = np.zeros((self.rows, self.bins, self.zombie_width), dtype=np.int64)
+        nearest = np.full((self.rows, self.bins), np.iinfo(np.int64).max, dtype=np.int64)
         for z in obs.zombies:
+            r, b = z.row, self.bin_index(z.x)
+            nearest[r, b] = min(nearest[r, b], z.x)
             cell = zombies[z.row, self.bin_index(z.x)]
             cell[self.zombies[z.zombie_type]] += 1
             cell[nzombies : nzombies + 6] += (
                 z.health,
                 z.armor,
-                z.x,
+                0,
                 z.slow_ticks,
                 int(z.has_pole),
                 z.timer_ticks,
@@ -99,7 +96,13 @@ class ObservationEncoder:
             1,
             self.timer_scale,
         )
-        result[self.slices["zombies"]] = (zombies / zscale).ravel()
+        encoded = zombies / zscale
+        encoded[:, :, nzombies + 2] = np.where(
+            nearest == np.iinfo(np.int64).max,
+            1.0,
+            (nearest.astype(np.float64) - self.rules.game["house_x"]) / self.position_scale,
+        )
+        result[self.slices["zombies"]] = encoded.ravel()
         projectiles = np.zeros((self.rows, self.bins, 3), dtype=np.int64)
         for p in obs.projectiles:
             projectiles[p.row, self.bin_index(p.x)] += (1, p.damage, int(p.icy))
@@ -108,7 +111,7 @@ class ObservationEncoder:
         ).ravel()
         counts = obs.counts
         values = [
-            obs.sun / (self.cost_scale if self.tactical else self.rules.game["sun_cap"]),
+            obs.sun / self.cost_scale,
             obs.elapsed_seconds / self.cfg["environment"]["cutoff_seconds"],
             obs.wave / self.cfg["encoding"]["wave_scale"],
             obs.total_waves / self.cfg["encoding"]["wave_scale"],
@@ -118,23 +121,13 @@ class ObservationEncoder:
             for x in (
                 counts.initial_total,
                 counts.spawned,
-                counts.alive,
                 counts.defeated,
-                counts.not_yet_spawned,
-                counts.remaining,
             )
         )
         cards = {c.plant_type: c for c in obs.cards}
         for kind in self.plants:
             card = cards[kind]
-            values.extend(
-                (
-                    card.cost / self.cost_scale,
-                    card.cooldown_ticks
-                    / (max(1, card.recharge_ticks) if self.tactical else self.timer_scale),
-                    card.recharge_ticks / self.timer_scale,
-                )
-            )
+            values.append(card.cooldown_ticks / max(1, card.recharge_ticks))
         for mower in sorted(obs.mowers, key=lambda m: m.row):
             values.extend(
                 (
@@ -143,43 +136,4 @@ class ObservationEncoder:
                 )
             )
         result[self.slices["globals"]] = values
-        if self.tactical:
-            result[self.slices["economy"]] = [
-                value
-                for kind in self.plants
-                for value in (
-                    float(cards[kind].cooldown_ticks == 0),
-                    max(0, cards[kind].cost - obs.sun) / max(1, cards[kind].cost),
-                )
-            ]
-            lanes = result[self.slices["lanes"]].reshape(self.rows, 4)
-            lanes[:, 0] = 1  # No visible zombie: full house-to-spawn distance.
-            for row in range(self.rows):
-                enemies = [z.x for z in obs.zombies if z.row == row]
-                if enemies:
-                    lanes[row, 0] = (
-                        min(enemies) - self.rules.game["house_x"]
-                    ) / self.position_scale
-                # Iterate types, then sum integer health/counts: permutation invariant.
-                for kind in ("peashooter", "snow_pea", "repeater"):
-                    rule = self.rules.plants[kind]
-                    count = sum(p.row == row and p.plant_type == kind for p in obs.plants)
-                    shots = 2 if kind == "repeater" else 1
-                    lanes[row, 1] += (
-                        count
-                        * shots
-                        * rule["damage"]
-                        * obs.tick_rate
-                        / rule["interval_ticks"]
-                        / self.cfg["encoding"]["firepower_scale"]
-                    )
-                lanes[row, 2] = (
-                    sum(p.health for p in obs.plants if p.row == row and p.plant_type == "wall_nut")
-                    / self.rules.plants["wall_nut"]["health"]
-                    / self.cfg["encoding"]["lane_count_scale"]
-                )
-                lanes[row, 3] = (
-                    sum(p.row == row and p.plant_type == "sunflower" for p in obs.plants)
-                    / self.cfg["encoding"]["lane_count_scale"]
-                )
         return result

@@ -16,7 +16,6 @@ from .budget import budget_target
 from .config import lesson_settings
 from .cuda_features import METRIC_INDICES, CudaFeatures
 from .curriculum import LESSONS, stage_distribution, teaching_enabled
-from .plant_rewards import enabled as plant_rewards_enabled
 from .rewards import REWARD_METRICS
 from .scenarios import difficulty_weights, scenario
 
@@ -100,7 +99,7 @@ class CudaVecEnv(VecEnv):
             cfg["training"]["n_envs"],
             zombie_capacity=max(1, *counts),
             max_step_ticks=1,
-            diagnostic=plant_rewards_enabled(cfg),
+            diagnostic=False,
         )
         self.cp = self.batch.cp
         with self.device_context():
@@ -230,7 +229,7 @@ class CudaVecEnv(VecEnv):
             plant_usage=usage,
             plant_spending={k: v * self.batch.rules.plants[k]["cost"] for k, v in usage.items()},
             **{k: float(t[j]) for k, j in zip(REWARD_METRICS, METRIC_INDICES, strict=True)},
-            mowers_used=int(t[28]),
+            mowers_used=int(t[24]),
             defeated=int(h[5]),
             total_zombies=int(h[8]),
             failure_category="house_breach"

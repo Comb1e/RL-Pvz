@@ -7,12 +7,10 @@ configured exploration bonus can replace joint-entropy regularization.
 
 import torch
 from sb3_contrib import MaskablePPO
-from stable_baselines3 import PPO
 from torch.nn import functional as F
 
 from .cuda_buffer import TensorRolloutBuffer
 from .exploration import exploration_loss
-from .optimization import actor_weights, policy_advantages, weighted_mean
 
 
 class TensorPPO:
@@ -23,7 +21,6 @@ class TensorPPO:
         self.policy.set_training_mode(False)
         rollout_buffer.reset()
         callback.on_rollout_start()
-        masked = isinstance(self, MaskablePPO)
         self._last_obs = torch.as_tensor(self._last_obs, device=self.device)
         self._last_episode_starts = torch.as_tensor(self._last_episode_starts, device=self.device)
         with env.device_context():
@@ -31,9 +28,9 @@ class TensorPPO:
                 # The environment exposes reusable zero-copy views; save the
                 # prior observation/mask before its next in-place device step.
                 obs = self._last_obs.clone()
-                masks = env.action_masks().clone() if masked else None
+                masks = env.action_masks().clone()
                 with torch.no_grad(), env.features.profiler.track("inference"):
-                    kwargs = {"action_masks": masks} if masked else {}
+                    kwargs = {"action_masks": masks}
                     actions, values, log_probs = self.policy(obs, **kwargs)
                 new_obs, rewards, dones, timeouts, terminal, infos = env.step_tensors(actions)
                 self.num_timesteps += env.num_envs
@@ -68,33 +65,26 @@ class TensorPPO:
             if self.clip_range_vf is not None
             else None
         )
-        masked = isinstance(self, MaskablePPO)
         metrics, last_kls = [], []
         continue_training = True
+        optimizer_steps = 0
         for epoch in range(self.n_epochs):
             last_kls = []
             for data in self.rollout_buffer.get(self.batch_size):
-                kwargs = {"action_masks": data.action_masks} if masked else {}
+                kwargs = {"action_masks": data.action_masks}
                 values, log_prob, entropy = self.policy.evaluate_actions(
                     data.observations, data.actions.long().flatten(), **kwargs
                 )
                 values = values.flatten()
                 advantages = data.advantages
-                objective = getattr(self, "actor_objective", "all_steps")
-                weights = actor_weights(
-                    data.action_masks if masked else None, advantages, objective
-                )
-                if objective == "choice_points_v1":
-                    advantages = policy_advantages(advantages, weights, self.normalize_advantage)
-                elif self.normalize_advantage and (masked or len(advantages) > 1):
+                if self.normalize_advantage and len(advantages) > 1:
                     advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
                 ratio = torch.exp(log_prob - data.old_log_prob)
-                policy_loss = -weighted_mean(
+                policy_loss = -torch.mean(
                     torch.min(
                         advantages * ratio,
                         advantages * torch.clamp(ratio, 1 - clip_range, 1 + clip_range),
                     ),
-                    weights,
                 )
                 clipped_fraction = ((ratio - 1).abs() > clip_range).float().mean()
                 predicted = (
@@ -108,13 +98,11 @@ class TensorPPO:
                     self.policy,
                     entropy,
                     log_prob,
-                    self.ent_coef,
-                    weights if objective == "choice_points_v1" else None,
                 )
                 loss = policy_loss + regularizer + self.vf_coef * value_loss
                 with torch.no_grad():
                     log_ratio = log_prob - data.old_log_prob
-                    kl = weighted_mean((torch.exp(log_ratio) - 1) - log_ratio, weights)
+                    kl = ((torch.exp(log_ratio) - 1) - log_ratio).mean()
                     last_kls.append(kl)
                     metrics.append(
                         torch.stack(
@@ -125,7 +113,7 @@ class TensorPPO:
                                 clipped_fraction,
                                 exploration_metrics["joint_entropy"],
                                 exploration_metrics["exploration_bonus"],
-                                weights.mean(),
+                                (data.action_masks.sum(-1) > 1).float().mean(),
                             )
                         )
                     )
@@ -136,12 +124,10 @@ class TensorPPO:
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(self.policy.parameters(), self.max_grad_norm)
                 self.policy.optimizer.step()
-            if not masked:
-                self._n_updates += 1
+                optimizer_steps += 1
             if not continue_training:
                 break
-        if masked:
-            self._n_updates += self.n_epochs
+        self._n_updates += self.n_epochs
         returns = torch.as_tensor(self.rollout_buffer.returns, device=self.device)
         old_values = torch.as_tensor(self.rollout_buffer.values, device=self.device)
         var_y = returns.flatten().var(unbiased=False)
@@ -167,13 +153,16 @@ class TensorPPO:
             "clip_fraction",
             "joint_entropy",
             "exploration_bonus",
-            "actor_sample_fraction",
+            "choice_fraction",
             "approx_kl",
             "loss",
             "explained_variance",
         )
         for key, value in zip(keys, numbers):
             self.logger.record(f"train/{key}", value)
+        self.logger.record("train/optimizer_steps", optimizer_steps)
+        self.logger.record("train/epochs_completed", epoch + int(continue_training))
+        self.logger.record("train/kl_stopped", float(not continue_training))
         self.logger.record("train/n_updates", self._n_updates, exclude="tensorboard")
         self.logger.record("train/clip_range", clip_range)
         if clip_vf is not None:
@@ -187,13 +176,9 @@ class CudaMaskablePPO(TensorPPO, MaskablePPO):
     pass
 
 
-class CudaPPO(TensorPPO, PPO):
-    pass
-
-
-def configure_tensor_buffer(model, masked):
+def configure_tensor_buffer(model):
     model.rollout_buffer_class = TensorRolloutBuffer
-    model.rollout_buffer_kwargs = {"masked": masked}
+    model.rollout_buffer_kwargs = {}
     model.rollout_buffer = TensorRolloutBuffer(
         model.n_steps,
         model.observation_space,
@@ -202,5 +187,4 @@ def configure_tensor_buffer(model, masked):
         gamma=model.gamma,
         gae_lambda=model.gae_lambda,
         n_envs=model.n_envs,
-        masked=masked,
     )
