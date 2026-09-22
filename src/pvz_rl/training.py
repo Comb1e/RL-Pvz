@@ -11,8 +11,6 @@ from pathlib import Path
 from time import perf_counter
 
 import torch
-from sb3_contrib import MaskablePPO
-from stable_baselines3 import PPO
 from stable_baselines3.common.callbacks import BaseCallback
 
 from .budget import budget_target, evaluation_interval, progress_value, uses_games
@@ -35,14 +33,19 @@ from .curriculum import (
 from .deadline import BudgetExpired, RunBudget
 from .evaluation import evaluate, summarize
 from .exploration import configure_exploration
-from .grouped_policy import GroupedPolicy
 from .progress import Phase, ProgressReporter, duration
 from .provenance import append_jsonl, file_hash, metadata, verify_engine, write_json
 from .rewards import REWARD_METRICS
 from .scenarios import difficulty_weights
 from .spatial_policy import SpatialFeatures, SpatialGroupedPolicy
 from .timing import TrainingTimings
-from .training_requirements import require_cuda_training, resume_protocol, transfer_protocol
+from .training_requirements import (
+    parameter_changes,
+    require_cuda_training,
+    require_supported_policy,
+    resume_protocol,
+    transfer_protocol,
+)
 
 
 def vector_env(cfg, condition, learner_seed, family="preset"):
@@ -54,42 +57,19 @@ def vector_env(cfg, condition, learner_seed, family="preset"):
 
 def build_model(cfg, condition, env, seed, log_dir=None):
     from .cuda_env import CudaVecEnv
-    from .cuda_ppo import CudaMaskablePPO, CudaPPO, configure_tensor_buffer
+    from .cuda_ppo import CudaMaskablePPO, configure_tensor_buffer
 
     require_cuda_training(cfg, condition)
     if not isinstance(env, CudaVecEnv):
         raise ValueError("Training requires the CUDA tensor environment")
     t = cfg["training"]
-    if (
-        t.get("actor_objective") == "choice_points_v1"
-        and not cfg["conditions"][condition]["masked"]
-    ):
-        raise ValueError("choice_points_v1 requires a masked PPO condition")
-    kind = cfg.get("policy", {}).get("kind", "flat")
-    grouped = kind in ("grouped_v1", "spatial_grouped_v2")
-    if grouped and (
-        not cfg["conditions"][condition]["masked"] or cfg["conditions"][condition]["hybrid"]
-    ):
-        raise ValueError(
-            "Grouped profiles require direct masked PPO; use the baseline config for other conditions"
-        )
-    if teaching_enabled(cfg) and (
-        not cfg["conditions"][condition]["curriculum"]
-        or cfg["conditions"][condition]["hybrid"]
-        or not cfg["conditions"][condition]["masked"]
-    ):
-        raise ValueError("Teaching curriculum requires a direct masked curriculum condition")
-    algorithm = CudaMaskablePPO if cfg["conditions"][condition]["masked"] else CudaPPO
-    policy_kwargs = {"net_arch": {"pi": t["hidden_sizes"], "vf": t["hidden_sizes"]}}
-    policy = GroupedPolicy if grouped else "MlpPolicy"
-    if kind == "spatial_grouped_v2":
-        policy = SpatialGroupedPolicy
-        policy_kwargs.update(
-            features_extractor_class=SpatialFeatures,
-            features_extractor_kwargs={"layout_cfg": cfg, "channels": cfg["policy"]["channels"]},
-        )
-    model = algorithm(
-        policy,
+    policy_kwargs = {
+        "net_arch": {"pi": t["hidden_sizes"], "vf": t["hidden_sizes"]},
+        "features_extractor_class": SpatialFeatures,
+        "features_extractor_kwargs": {"layout_cfg": cfg},
+    }
+    model = CudaMaskablePPO(
+        SpatialGroupedPolicy,
         env,
         learning_rate=t["learning_rate"],
         n_steps=t["rollout_size"] // t["n_envs"],
@@ -98,14 +78,18 @@ def build_model(cfg, condition, env, seed, log_dir=None):
         gamma=cfg["reward"]["gamma"],
         gae_lambda=t["gae_lambda"],
         clip_range=t["clip_range"],
-        ent_coef=t["ent_coef"],
+        ent_coef=0.0,
+        vf_coef=t["vf_coef"],
+        max_grad_norm=t["max_grad_norm"],
+        normalize_advantage=t["normalize_advantage"],
+        target_kl=t["target_kl"] or None,
         policy_kwargs=policy_kwargs,
         seed=seed,
         device=t["device"],
         verbose=0,
         tensorboard_log=str(log_dir) if log_dir else None,
     )
-    configure_tensor_buffer(model, cfg["conditions"][condition]["masked"])
+    configure_tensor_buffer(model)
     configure_exploration(model, cfg)
     if "initial_dig_logit" in cfg.get("policy", {}):
         model.policy.initialize_dig_logit(cfg["policy"]["initial_dig_logit"])
@@ -186,6 +170,7 @@ class ResearchCallback(BaseCallback):
         budget_rate = game_rate if uses_games(self.cfg) else rate
         rows = list(self.recent)
         decisions = sum(r["decisions"] for r in rows)
+        purchases = sum(sum(r.get("plant_usage", {}).values()) for r in rows)
         weights = difficulty_weights(
             self.cfg,
             progress,
@@ -265,6 +250,11 @@ class ResearchCallback(BaseCallback):
             / len(rows)
             if rows
             else None,
+            "early_digs_per_planting": (
+                sum(r.get("early_voluntary_digs", 0) for r in rows) / purchases
+                if purchases
+                else None
+            ),
             "time_budget": self.wall_budget.state() if self.wall_budget else None,
             "validation_pending": self.validation_pending,
             "rolling_maximum_sun": sum(r.get("maximum_sun", 0) for r in rows) / len(rows)
@@ -292,12 +282,7 @@ class ResearchCallback(BaseCallback):
         kills = (
             f"; plant/mower kills per game {row['rolling_plant_kills']:.2f}/{row['rolling_mower_kills']:.2f}"
             f"; attackers/game {row['rolling_attacker_purchases']:.2f}, early digs/game {row['rolling_early_voluntary_digs']:.2f}"
-            f"; damage reward {row['rolling_damage_reward']:.3f}"
-            f"; empty mowers {row['rolling_empty_mower_activations']:.1f}"
-            f"; mower sun penalty {row['rolling_mower_sun_penalty']:.3f}"
-            f"; wall-nut reward {row['rolling_wall_nut_reward']:.3f}"
-            f"; empty blasts {row['rolling_empty_explosions']:.1f}"
-            f"; offense shaping {row['rolling_offensive_shaping']:.3f}, eaten penalty {row['rolling_plant_eaten_penalty']:.3f}"
+            f"; mower cost {row['rolling_mower_activation_penalty']:.3f}"
             if self.recent
             else ""
         )
@@ -331,7 +316,10 @@ class ResearchCallback(BaseCallback):
             "entropy_loss",
             "joint_entropy",
             "exploration_bonus",
-            "actor_sample_fraction",
+            "choice_fraction",
+            "optimizer_steps",
+            "epochs_completed",
+            "kl_stopped",
             "approx_kl",
             "clip_fraction",
             "explained_variance",
@@ -340,7 +328,7 @@ class ResearchCallback(BaseCallback):
             "loss",
         )
         metrics = {}
-        if isinstance(self.model.policy, GroupedPolicy):
+        if isinstance(self.model.policy, SpatialGroupedPolicy):
             for key, value in self.model.policy.pop_entropy_metrics().items():
                 self.model.logger.record(f"train/{key}", value)
                 metrics[key] = value
@@ -699,52 +687,18 @@ def load_policy(checkpoint, device="cpu"):
     cfg, condition = data["config"], data["condition"]
     validate_config(cfg)
     verify_engine(cfg)
-    algorithm = MaskablePPO if cfg["conditions"][condition]["masked"] else PPO
-    if simulator(cfg) == "cuda":
-        from .cuda_ppo import CudaMaskablePPO, CudaPPO
-
-        algorithm = CudaMaskablePPO if cfg["conditions"][condition]["masked"] else CudaPPO
-    torch.set_num_threads(cfg["training"]["torch_threads"])
-    # Archived CPU checkpoints can name the retired transport buffer classes.
-    # Replace only storage during deserialization; retain policy/optimizer weights.
-    from sb3_contrib.common.maskable.buffers import MaskableRolloutBuffer
-    from stable_baselines3.common.buffers import RolloutBuffer
-
+    require_supported_policy(cfg, condition)
     from .cuda_buffer import TensorRolloutBuffer
+    from .cuda_ppo import CudaMaskablePPO
 
-    masked = cfg["conditions"][condition]["masked"]
-    buffer = (
-        TensorRolloutBuffer
-        if simulator(cfg) == "cuda"
-        else (MaskableRolloutBuffer if masked else RolloutBuffer)
-    )
-    model = algorithm.load(
+    torch.set_num_threads(cfg["training"]["torch_threads"])
+    model = CudaMaskablePPO.load(
         checkpoint,
         device=device,
-        custom_objects={
-            "rollout_buffer_class": buffer,
-            "rollout_buffer_kwargs": {"masked": masked} if simulator(cfg) == "cuda" else {},
-        },
+        custom_objects={"rollout_buffer_class": TensorRolloutBuffer, "rollout_buffer_kwargs": {}},
     )
     configure_exploration(model, cfg)
     return model, data
-
-
-def initialize_stage(model, cfg, learner_seed):
-    """Keep learned parameters/Adam moments; start new stage-local scheduling."""
-    source = {
-        "steps": model.num_timesteps,
-        "games": getattr(model, "training_games", 0),
-        "updates": model._n_updates,
-        "curriculum": getattr(model, "curriculum_state", None),
-    }
-    model.num_timesteps = 0
-    model.training_games = 0
-    model.research_schedule = {}
-    model.wall_budget_state = {}
-    model.curriculum_state = initial_state(cfg).to_dict()
-    model.set_random_seed(learner_seed)
-    return source
 
 
 def train(
@@ -770,28 +724,28 @@ def train(
         raise ValueError("Stage training uses family=preset and the stage's configured task mix")
     initialized_model, initialization = None, None
     if init_from:
-        if not selected_stage(cfg):
-            raise ValueError("init_from requires curriculum.run_stage (--stage)")
         source_path = Path(init_from).resolve()
         saved = json.loads((source_path.parent / "metadata.json").read_text("utf-8"))
-        require_cuda_training(saved["config"], saved["condition"])
-        if (
-            saved["condition"] != condition
-            or saved["family"] != "preset"
-            or transfer_protocol(saved["config"], condition) != transfer_protocol(cfg, condition)
-        ):
+        require_supported_policy(saved["config"], saved["condition"])
+        if transfer_protocol(saved["config"]) != transfer_protocol(cfg):
             raise ValueError(
-                "Stage initialization requires matching engine, policy, rewards, PPO and "
-                "teaching tasks; only the selected stage, budgets, mastery criteria and "
-                "validation schedule may change"
+                "Weights-only initialization requires matching engine, observation and network structure; start fresh for changed dimensions"
             )
-        initialized_model, _ = load_policy(source_path, cfg["training"]["device"])
+        source_model, _ = load_policy(source_path, "cpu")
+        initialized_model = {
+            k: v.detach().clone() for k, v in source_model.policy.state_dict().items()
+        }
         initialization = {
+            "mode": "weights_only",
             "checkpoint": str(source_path),
             "checkpoint_sha256": file_hash(source_path),
             "source_learner_seed": saved["learner_seed"],
-            **initialize_stage(initialized_model, cfg, learner_seed),
+            "steps": source_model.num_timesteps,
+            "games": getattr(source_model, "training_games", 0),
+            "updates": source_model._n_updates,
+            "parameter_changes": parameter_changes(saved["config"], cfg),
         }
+        del source_model
     if resume:
         saved = json.loads((Path(resume).resolve().parent / "metadata.json").read_text("utf-8"))
         require_cuda_training(saved["config"], saved["condition"])
@@ -824,6 +778,7 @@ def train(
         validation_limit=validation_limit,
         resume=str(Path(resume).resolve()) if resume else None,
         initialization=initialization,
+        structural_signature=transfer_protocol(cfg),
     )
     write_json(output / "metadata.json", details)
     write_json(output / "config.json", cfg)
@@ -843,7 +798,7 @@ def train(
     progress.emit(f"Data transport: {runtime_settings(cfg)}", force=True)
     progress.emit(
         f"Policy: {cfg.get('policy', {'kind': 'flat'})}; "
-        f"actor objective {cfg['training'].get('actor_objective', 'all_steps')}; "
+        "standard PPO minibatch reduction; "
         f"GAE lambda {cfg['training']['gae_lambda']}; minibatch {cfg['training']['batch_size']}",
         force=True,
     )
@@ -880,7 +835,7 @@ def train(
             model.set_env(env)
             from .cuda_ppo import configure_tensor_buffer
 
-            configure_tensor_buffer(model, cfg["conditions"][condition]["masked"])
+            configure_tensor_buffer(model)
             model.tensorboard_log = str(output / "tensorboard")
             details["resume_steps"] = model.num_timesteps
             details["resume_games"] = getattr(model, "training_games", 0)
@@ -889,20 +844,14 @@ def train(
                 f"Resumed shared policy and optimizer at {progress_value(cfg, model):,} {'games' if game_budget else 'decisions'}",
                 force=True,
             )
-        elif initialized_model is not None:
-            model = initialized_model
-            model.set_env(env)
-            from .cuda_ppo import configure_tensor_buffer
-
-            configure_tensor_buffer(model, cfg["conditions"][condition]["masked"])
-            model.tensorboard_log = str(output / "tensorboard")
-            progress.emit(
-                f"Initialized policy and optimizer from {initialization['checkpoint']}; "
-                "fresh stage progress and game/time budget",
-                force=True,
-            )
         else:
             model = build_model(cfg, condition, env, learner_seed, output / "tensorboard")
+            if initialized_model is not None:
+                model.policy.load_state_dict(initialized_model, strict=True)
+                progress.emit(
+                    f"Initialized weights from {initialization['checkpoint']}; fresh optimizer, counters and budget",
+                    force=True,
+                )
             if teaching_enabled(cfg) and family == "preset":
                 model.curriculum_state = initial_state(cfg).to_dict()
         remaining = (

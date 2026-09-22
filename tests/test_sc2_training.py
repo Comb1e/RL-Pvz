@@ -6,17 +6,17 @@ import numpy as np
 import pytest
 import torch
 
+from pvz_rl.config import load_config
 from pvz_rl.curriculum import CurriculumState
 from pvz_rl.deadline import BudgetExpired
 from pvz_rl.env import PvZEnv
 from pvz_rl.evaluation import evaluate
-from pvz_rl.sc2_experiments import sc2_profile
 from pvz_rl.training import ResearchCallback, load_policy, train
 from pvz_rl.visualization import read_json, read_series
 
 
 def small_cfg(device="cuda", backend="cuda", profile="E"):
-    cfg = sc2_profile(profile)
+    cfg = load_config()
     cfg["simulation"]["backend"] = backend
     cfg["environment"]["cutoff_seconds"] = 1
     cfg["visualization"].update(enabled=False, demos=False)
@@ -36,7 +36,7 @@ def small_cfg(device="cuda", backend="cuda", profile="E"):
 def test_validation_cache_and_incomplete_results_cannot_select_checkpoint(tmp_path, monkeypatch):
     from types import SimpleNamespace
 
-    cfg = sc2_profile("E")
+    cfg = load_config()
     callback = ResearchCallback(cfg, "masked", 101, tmp_path)
     callback.model = SimpleNamespace(num_timesteps=100, training_games=1000)
     calls = []
@@ -168,7 +168,7 @@ def test_validation_crossed_thresholds_and_final_tie_keep_earlier_weights(tmp_pa
 
 
 def test_finished_old_config_does_not_acquire_new_defaults():
-    cfg = sc2_profile("A")
+    cfg = load_config()
     cfg["training"].pop("max_minutes")
     cfg["training"]["eval_interval_games"] = 250
     from pvz_rl.config import validate_config
@@ -246,7 +246,7 @@ def test_cuda_long_horizon_reward_and_early_dig_boundaries(wait_ticks):
 
     from pvz_rl.cuda_features import CudaFeatures
 
-    cfg = sc2_profile("F")
+    cfg = load_config()
     level = LevelSpec("ledger-boundary", (Spawn(20000, "basic", 0),), initial_sun=200)
     cpu = PvZEnv(cfg)
     cpu.reset(seed=9, options={"scenario": level})

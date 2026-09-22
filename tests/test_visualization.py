@@ -62,7 +62,7 @@ def test_shared_checkpoint_reports_and_videos(smoke_cfg, tmp_path, monkeypatch):
 
     def inspect(self):
         identities.append((id(self.model), id(self.model.policy.optimizer)))
-        stages.add(tuple(self.snapshot()["next_episode_difficulty_weights"]))
+        stages.add(tuple(self.snapshot()["next_episode_tasks"][0]))
         original(self)
 
     monkeypatch.setattr(ResearchCallback, "_on_rollout_start", inspect)
@@ -75,7 +75,7 @@ def test_shared_checkpoint_reports_and_videos(smoke_cfg, tmp_path, monkeypatch):
 
     monkeypatch.setattr(training, "load_policy", tracked_load)
     run = train(smoke_cfg, "masked", 101, tmp_path / "shared", validation_limit=1)
-    assert len(set(identities)) == 1 and len(stages) == 2
+    assert len(set(identities)) == 1 and stages == {("placement",)}
     assert loads == ["best.zip"]
     metrics = read_series(run / "training-metrics.jsonl")
     assert [m["training_steps"] for m in metrics] == [64, 128]
@@ -165,12 +165,14 @@ def test_video_outcomes_and_bad_replay_preserve_existing_video(cfg, tmp_path, ou
 
 
 def test_empty_old_report_and_resume_segments(cfg, tmp_path):
+    cfg["profile"] = "baseline"  # Labels must not hide current-method diagnostics.
     old, new = tmp_path / "old", tmp_path / "new"
     old.mkdir()
     new.mkdir()
     write_json(old / "metadata.json", {"config": research_config(cfg)})
     page = build_run_report(old)
     assert "No validated checkpoint yet" in page.read_text("utf-8")
+    assert (old / "visualizations/learning-diagnostics.png").is_file()
     for run, steps in ((old, [64, 128]), (new, [128, 192])):
         (run / "training-metrics.jsonl").write_text(
             "\n".join(json.dumps({"training_steps": n}) for n in steps), encoding="utf-8"

@@ -5,9 +5,31 @@ Dates and results belong to their recorded version. Current behavior lives in
 artifact locations and learning outcomes live in [validation](validation.md).
 The longer pre-consolidation notes remain in `git show b642c9c:docs/iteration.md`.
 
+## 0.9.0 — 2026-09-22
+
+- Problems: too many recipes and reward terms; destructive digging, unstable saving
+  mastery and large PPO divergence. Choice-only reduction amplified a small subset
+  of transitions; the old representation duplicated several signals.
+- Changes: one 500-value categorical observation, one 118,611-parameter spatial
+  grouped policy, one TOML recipe, three reward components and standard PPO means
+  with configurable KL stopping. Remove old policies, recipes, comparison commands,
+  event rewards and the unused early-dig penalty proposal. Keep digging legal.
+- Checkpoint behavior: structural signatures gate weights-only initialization;
+  new optimizer/counters/schedules allow explicit reward/PPO/curriculum changes.
+  Resume preserves the saved experiment. Retired weights cannot load; reports and
+  recordings remain independent. Obsolete local checkpoints were deleted at the
+  user's request, preserving their recorded evidence.
+- Verification: complete research/game regression, CPU/CUDA math and gameplay
+  controls, reload/transfer/stage/report/replay tests, packaging and bounded fresh
+  comparisons. Exact counts and results are in validation.md.
+- Results/limits: both compact pilots scored 0/20 deterministic placement wins,
+  versus 20/20 for both references; the improvement criterion failed. The method
+  remains experimental. Regional compression is partial observation, resume resets
+  active episodes, and the short comparison cannot isolate individual changes.
+
 ## 0.8.1 — 2026-09-22
 
-- Follow-up: Leafy requested perfect 100-game mastery and less frequent validation.
+- Follow-up: The user requested perfect 100-game mastery and less frequent validation.
   Replace the permissive 20-case gates with 100/100 per required task, including
   final shared-stage mastery. Probe every 500 training games; validate checkpoints
   every 2,000 with the original 50 cases/difficulty. A separate 100-case curriculum

@@ -144,22 +144,18 @@ def build_run_report(run, cfg=None):
         ("end_to_end_decisions_per_second", "Training decisions / wall second"),
         ("rolling_plant_kills", "Plant kills / training episode"),
         ("rolling_mower_kills", "Mower kills / training episode"),
-        ("rolling_damage_reward", "Nonlethal damage reward / training episode"),
+        ("rolling_nonlethal_health_damage", "Nonlethal damage / training episode"),
         ("rolling_empty_mower_activations", "Empty mower activations / training episode"),
-        ("rolling_mower_sun_penalty", "Sun-weighted mower penalty / training episode"),
-        ("rolling_wall_nut_reward", "Wall-nut absorption reward / training episode"),
+        ("rolling_mower_activation_penalty", "Mower activation cost / game"),
+        ("rolling_wall_nut_damage", "Wall-nut damage / training episode"),
         ("rolling_empty_explosions", "Empty explosions / training episode"),
-        ("rolling_empty_explosion_penalty", "Empty explosion penalty / training episode"),
         ("simulation_ticks_per_second", "Simulation ticks / training second"),
         ("instant_action_fraction", "Fraction of decisions without advancing time"),
-        ("rolling_early_voluntary_digs", "Voluntary digs within five seconds / game"),
+        ("rolling_early_voluntary_digs", "Early voluntary digs / game (configured window)"),
+        ("early_digs_per_planting", "Early voluntary digs / accepted planting"),
         ("rolling_attacker_purchases", "Sustained attackers purchased / game"),
         ("rolling_maximum_sun", "Maximum sun / game"),
         ("rolling_first_attacker_seconds", "First sustained attacker (seconds; purchasing games)"),
-        ("rolling_offensive_plantings", "Offensive plants purchased / game"),
-        ("rolling_plants_eaten", "Non-wall-nut plants eaten / game"),
-        ("rolling_offensive_shaping", "Offensive potential shaping / game"),
-        ("rolling_plant_eaten_penalty", "Eaten-plant penalty / game"),
     ]
     fig, axes = plt.subplots((len(panels) + 1) // 2, 2, figsize=(12, 3 * ((len(panels) + 1) // 2)))
     for ax, (key, title) in zip(axes.flat, panels):
@@ -237,41 +233,40 @@ def build_run_report(run, cfg=None):
     _save(fig, output, "optimization-curves")
     images.append(("PPO optimization", "optimization-curves.png"))
 
-    if cfg.get("profile", "baseline") != "baseline":
-        fig, axes = plt.subplots(2, 2, figsize=(12, 7))
-        for ax, key, title in zip(
-            axes.flat,
-            (
-                "rolling_attacker_purchases",
-                "rolling_maximum_sun",
-                "type_entropy",
-                "conditional_tile_entropy",
-            ),
-            (
-                "Sustained attackers purchased / episode",
-                "Maximum sun / episode",
-                "Action-type entropy",
-                "Type-weighted tile entropy",
-            ),
-        ):
-            plotted = False
-            for label, series in segments:
-                points = [
-                    (r.get(progress_key), r.get(key, r.get("optimization", {}).get(key)))
-                    for r in series["training-metrics"]
-                ]
-                points = [(x, y) for x, y in points if x is not None and y is not None]
-                if points:
-                    x, y = zip(*points)
-                    ax.plot(x, y, marker="o", markersize=3, label=label)
-                    plotted = True
-            ax.set(title=title, xlabel=progress_label)
-            if plotted:
-                ax.legend(fontsize=7)
-            else:
-                _empty(ax)
-        _save(fig, output, "learning-diagnostics")
-        images.append(("Economy and exploration", "learning-diagnostics.png"))
+    fig, axes = plt.subplots(2, 2, figsize=(12, 7))
+    for ax, key, title in zip(
+        axes.flat,
+        (
+            "rolling_attacker_purchases",
+            "rolling_maximum_sun",
+            "type_entropy",
+            "conditional_tile_entropy",
+        ),
+        (
+            "Sustained attackers purchased / episode",
+            "Maximum sun / episode",
+            "Action-type entropy",
+            "Type-weighted tile entropy",
+        ),
+    ):
+        plotted = False
+        for label, series in segments:
+            points = [
+                (r.get(progress_key), r.get(key, r.get("optimization", {}).get(key)))
+                for r in series["training-metrics"]
+            ]
+            points = [(x, y) for x, y in points if x is not None and y is not None]
+            if points:
+                x, y = zip(*points)
+                ax.plot(x, y, marker="o", markersize=3, label=label)
+                plotted = True
+        ax.set(title=title, xlabel=progress_label)
+        if plotted:
+            ax.legend(fontsize=7)
+        else:
+            _empty(ax)
+    _save(fig, output, "learning-diagnostics")
+    images.append(("Economy and exploration", "learning-diagnostics.png"))
 
     status = read_json(run / "status.json", {})
     best = read_json(run / "best.json", {})
@@ -373,6 +368,7 @@ Diagnostic runs show only the diagnostic task. A short smoke run may end at its 
 
 def create_demonstrations(run, cfg, progress, deadline=None):
     from .training import load_policy
+    from .training_requirements import current_model_config
 
     run = Path(run).resolve()
     output = run / "visualizations"
@@ -383,7 +379,7 @@ def create_demonstrations(run, cfg, progress, deadline=None):
     if best.get("checkpoint_hash") != checkpoint_hash:
         raise ValueError("Selected checkpoint hash does not match best.json")
     meta = read_json(run / "metadata.json")
-    archive = not current_engine_config(meta["config"])
+    archive = not current_engine_config(meta["config"]) or not current_model_config(meta["config"])
     levels = (
         ["easy"]
         if meta["family"] in ("diagnostic", "placement", "saving")
@@ -488,6 +484,8 @@ def export_demonstrations(run, demos, cfg, progress, deadline=None):
 
 def visualize_run(run, *, cfg=None, videos=None, progress=None, deadline=None):
     """Rebuild derived artifacts. Failures are recorded separately from training."""
+    from .training_requirements import current_model_config
+
     run = Path(run).resolve()
     cfg = cfg or read_json(run / "metadata.json")["config"]
     settings = output_settings(cfg)
@@ -505,7 +503,8 @@ def visualize_run(run, *, cfg=None, videos=None, progress=None, deadline=None):
         progress.phase(Phase.EXPORTING, "Generating training report")
         check_deadline(deadline)
         build_run_report(run, cfg)
-        archived = not current_engine_config(read_json(run / "metadata.json")["config"])
+        original = read_json(run / "metadata.json")["config"]
+        archived = not current_engine_config(original) or not current_model_config(original)
         demos = []
         if archived:
             best = read_json(run / "best.json", {})

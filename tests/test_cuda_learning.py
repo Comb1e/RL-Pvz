@@ -11,7 +11,7 @@ from pvz_game.config import PLANT_TYPES, ZOMBIE_TYPES, InitialPlant
 from stable_baselines3.common.buffers import RolloutBuffer
 from stable_baselines3.common.logger import configure
 
-from pvz_rl.config import learning_profile, load_config
+from pvz_rl.config import load_config
 from pvz_rl.cuda_buffer import TensorRolloutBuffer
 from pvz_rl.env import PvZEnv
 from pvz_rl.training import build_model, vector_env
@@ -24,19 +24,25 @@ def gpu_cfg():
         pytest.skip("CUDA unavailable")
     cfg = load_config()
     cfg["simulation"] = {"backend": "cuda"}
-    cfg["training"].update(n_envs=2, rollout_size=256, device="cuda", rollout_steps_per_env=128)
+    cfg["training"].update(
+        n_envs=2,
+        rollout_size=256,
+        device="cuda",
+        rollout_steps_per_env=128,
+        batch_size=64,
+        target_kl=0,
+    )
     cfg["visualization"].update(enabled=False, demos=False, videos=False)
     return cfg
 
 
-@pytest.mark.parametrize("profile", ["baseline", "tactical"])
-@pytest.mark.parametrize("condition", ["masked", "sparse"])
-def test_observations_rewards_and_metrics_against_cpu(gpu_cfg, profile, condition):
+@pytest.mark.parametrize("condition", ["masked"])
+def test_observations_rewards_and_metrics_against_cpu(gpu_cfg, condition):
     from pvz_game.cuda import CudaBatch
 
     from pvz_rl.cuda_features import REWARD_FIELDS, CudaFeatures
 
-    cfg = learning_profile(profile, gpu_cfg)
+    cfg = copy.deepcopy(gpu_cfg)
     scenario = LevelSpec(
         "mixed",
         tuple(Spawn(1 + (j % 3), kind, j % 5, x=2800) for j, kind in enumerate(ZOMBIE_TYPES * 3)),
@@ -74,7 +80,7 @@ def test_gae_and_shuffle_match_sb3(device, gamma):
     action = spaces.Discrete(4)
     reference = RolloutBuffer(8, obs, action, n_envs=3, gamma=gamma, gae_lambda=0.98, device=device)
     tensor = TensorRolloutBuffer(
-        8, obs, action, n_envs=3, gamma=gamma, gae_lambda=0.98, device=device, masked=False
+        8, obs, action, n_envs=3, gamma=gamma, gae_lambda=0.98, device=device
     )
     rng = np.random.default_rng(15)
     for _ in range(8):
@@ -86,7 +92,12 @@ def test_gae_and_shuffle_match_sb3(device, gamma):
             torch.tensor(rng.normal(size=3), device=device, dtype=torch.float32) for _ in range(2)
         ]
         reference.add(o, a, r, starts, v, lp)
-        tensor.add(*(torch.as_tensor(x, device=device) for x in (o, a, r, starts)), v, lp)
+        tensor.add(
+            *(torch.as_tensor(x, device=device) for x in (o, a, r, starts)),
+            v,
+            lp,
+            torch.ones(3, 4, dtype=torch.bool, device=device),
+        )
     last = torch.tensor([0.5, 0.1, 0.2], device=device)
     done = np.array([False, True, False])
     reference.compute_returns_and_advantage(last, done)
@@ -102,7 +113,7 @@ def test_gae_and_shuffle_match_sb3(device, gamma):
             torch.testing.assert_close(a, b, atol=2e-6, rtol=1e-6)
 
 
-@pytest.mark.parametrize("condition", ["masked", "unmasked", "sparse", "mixed"])
+@pytest.mark.parametrize("condition", ["masked"])
 def test_cuda_collect_update_and_timeout(gpu_cfg, condition):
     cfg = copy.deepcopy(gpu_cfg)
     cfg["environment"]["cutoff_seconds"] = 1
@@ -120,7 +131,7 @@ def test_cuda_collect_update_and_timeout(gpu_cfg, condition):
         env.close()
 
 
-@pytest.mark.parametrize("condition", ["masked", "unmasked"])
+@pytest.mark.parametrize("condition", ["masked"])
 def test_fixed_rollout_losses_and_optimizer_match_stock(gpu_cfg, condition):
     configs = [copy.deepcopy(gpu_cfg), copy.deepcopy(gpu_cfg)]
     configs[0]["training"]["n_envs"] = 1
@@ -128,13 +139,15 @@ def test_fixed_rollout_losses_and_optimizer_match_stock(gpu_cfg, condition):
     envs = [vector_env(c, condition, 12) for c in configs]
     try:
         from sb3_contrib import MaskablePPO
-        from stable_baselines3 import PPO
+
+        from pvz_rl.spatial_policy import SpatialFeatures, SpatialGroupedPolicy
 
         # Independent upstream optimizer on supplied data; no CPU collection/training run.
         t = configs[0]["training"]
-        algorithm = MaskablePPO if condition == "masked" else PPO
-        reference = algorithm(
-            "MlpPolicy",
+        for c in configs:
+            c["training"]["exploration"].update(type_coef=0, tile_coef=0)
+        reference = MaskablePPO(
+            SpatialGroupedPolicy,
             PvZEnv(configs[0]),
             device="cuda",
             seed=12,
@@ -145,19 +158,23 @@ def test_fixed_rollout_losses_and_optimizer_match_stock(gpu_cfg, condition):
             gamma=configs[0]["reward"]["gamma"],
             gae_lambda=t["gae_lambda"],
             clip_range=t["clip_range"],
-            ent_coef=t["ent_coef"],
-            policy_kwargs={"net_arch": {"pi": t["hidden_sizes"], "vf": t["hidden_sizes"]}},
+            ent_coef=0,
+            policy_kwargs={
+                "net_arch": {"pi": t["hidden_sizes"], "vf": t["hidden_sizes"]},
+                "features_extractor_class": SpatialFeatures,
+                "features_extractor_kwargs": {"layout_cfg": configs[0]},
+            },
         )
+        reference.policy.initialize_dig_logit(configs[0]["policy"]["initial_dig_logit"])
         models = [reference, build_model(configs[1], condition, envs[1], 12)]
         for m in models:
             m.set_logger(configure(format_strings=[]))
             m._current_progress_remaining = 1.0
         # Fill flattened env-major data identically even though vector shapes differ.
         rng = np.random.default_rng(14)
+        observation, _ = PvZEnv(configs[0]).reset(seed=4)
         fields = {
-            "observations": rng.normal(size=(256, models[0].observation_space.shape[0])).astype(
-                np.float32
-            ),
+            "observations": np.repeat(observation[None], 256, axis=0),
             "actions": rng.integers(0, 406, size=(256, 1)).astype(np.float32),
         }
         for key in ("values", "log_probs", "advantages", "returns"):
@@ -206,7 +223,7 @@ def test_fixed_rollout_losses_and_optimizer_match_stock(gpu_cfg, condition):
 def test_grouped_shared_policy_identity_and_reload(gpu_cfg, tmp_path):
     from pvz_rl.cuda_ppo import CudaMaskablePPO
 
-    cfg = learning_profile("pure-rl", gpu_cfg)
+    cfg = gpu_cfg
     cfg["environment"]["cutoff_seconds"] = 1
     env = vector_env(cfg, "masked", 23)
     try:
@@ -285,15 +302,14 @@ def test_rollout_configuration_and_legacy_cpu_defaults(gpu_cfg):
             resolve_rollout(cfg, per_env=128, total=count * 128 + 1)
 
 
-@pytest.mark.parametrize("profile", ["baseline", "tactical"])
-def test_gpu_lesson_and_changed_scenarios_match_public_encodings(gpu_cfg, profile):
+def test_gpu_lesson_and_changed_scenarios_match_public_encodings(gpu_cfg):
     from pvz_game import Game, Rules
     from pvz_game.cuda import CudaBatch
 
     from pvz_rl.cuda_features import CudaFeatures
     from pvz_rl.scenarios import scenario
 
-    cfg = learning_profile(profile, gpu_cfg)
+    cfg = copy.deepcopy(gpu_cfg)
     families = ["placement", "saving", "redistributed", "faster", "concentrated"]
     # Development seeds only; formal test/changed-distribution seeds stay untouched.
     levels = [scenario("standard", family, 9, Rules(), cfg) for family in families]
@@ -310,14 +326,13 @@ def test_gpu_lesson_and_changed_scenarios_match_public_encodings(gpu_cfg, profil
         np.testing.assert_allclose(features.observations.get(), expected, atol=1e-7, rtol=1e-6)
 
 
-@pytest.mark.parametrize("profile", ["baseline", "tactical"])
-def test_gpu_encoding_crowds_order_and_private_schedule(gpu_cfg, profile):
+def test_gpu_encoding_crowds_order_and_private_schedule(gpu_cfg):
     from pvz_game import Game
     from pvz_game.cuda import CudaBatch
 
     from pvz_rl.cuda_features import CudaFeatures
 
-    cfg = learning_profile(profile, gpu_cfg)
+    cfg = copy.deepcopy(gpu_cfg)
     games = []
     for seed in (8, 9):
         game = Game()

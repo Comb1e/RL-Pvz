@@ -12,6 +12,7 @@ from importlib.resources import files
 from pathlib import Path
 
 from pvz_game.config import PLANT_TYPES, ZOMBIE_TYPES
+from pvz_game.cuda.schema import MOWER_STATES, PLANT_STATES, ZOMBIE_STATES
 
 from .budget import uses_games
 
@@ -100,24 +101,6 @@ def lesson_settings(cfg=None):
     return (cfg or {}).get("curriculum", {}).get("lessons", _teaching_defaults()["lessons"])
 
 
-def learning_profile(name, base=None):
-    """Versioned recipes also available in installed wheels without a checkout."""
-    if name not in ("baseline", "tactical", "grouped", "pure-rl"):
-        raise ValueError("Unknown learning profile")
-    cfg = copy.deepcopy(base or load_config())
-    cfg["profile"] = name
-    if name != "baseline":
-        cfg["encoding"].update(
-            version="tactical_v2", local_count_scale=5, firepower_scale=20, lane_count_scale=9
-        )
-    if name in ("grouped", "pure-rl"):
-        cfg["policy"] = {"kind": "grouped_v1"}
-    if name == "pure-rl":
-        cfg["curriculum"].update(copy.deepcopy(_teaching_defaults()))
-    validate_config(cfg)
-    return cfg
-
-
 def validate_config(cfg: dict) -> None:
     if simulator(cfg) not in ("cpu", "cuda"):
         raise ValueError("simulation.backend must be cpu or cuda")
@@ -129,98 +112,69 @@ def validate_config(cfg: dict) -> None:
             or steps * cfg["training"]["n_envs"] != cfg["training"]["rollout_size"]
         ):
             raise ValueError("rollout_size must equal n_envs * rollout_steps_per_env")
-    for key in (
-        "plant_kill_weight",
-        "mower_kill_weight",
-        "damage_weight",
-        "empty_mower_activation_penalty",
+    if (
+        cfg["encoding"].get("version") != "compact_v3"
+        or cfg.get("policy", {}).get("kind") != "spatial_grouped_v3"
+    ):
+        raise ValueError(
+            "Retired observation/policy format. Start fresh with configs/train.toml; archived reports and recordings remain readable."
+        )
+    if cfg["reward"].get("version") != "potential_mower_v1":
+        raise ValueError("Retired reward format; start fresh with configs/train.toml")
+    reward_keys = {
+        "version",
         "win_reward",
         "loss_penalty",
-        "mower_sun_weight",
-        "wall_nut_damage_weight",
-        "empty_explosion_penalty",
-        "offensive_plant_weight",
-        "eaten_plant_penalty",
+        "mower_activation_cost",
+        "gamma",
+        "defeated_weight",
+        "economy_weight",
+        "economy_scale",
+    }
+    if set(cfg["reward"]) != reward_keys:
+        raise ValueError("reward must contain only the outcome, mower and potential settings")
+    if "actor_objective" in cfg["training"] or "ent_coef" in cfg["training"]:
+        raise ValueError("Retired PPO objective; use standard PPO and training.exploration")
+    if cfg["training"]["exploration"].get("objective") != "balanced_heads_v1":
+        raise ValueError("Only balanced action-head exploration is supported")
+    for key in (
+        "win_reward",
+        "loss_penalty",
+        "mower_activation_cost",
+        "defeated_weight",
+        "economy_weight",
     ):
-        value = cfg["reward"].get(key, 0.0)
+        value = cfg["reward"][key]
         if type(value) not in (int, float) or not math.isfinite(value) or value < 0:
             raise ValueError(f"reward.{key} must be finite and nonnegative")
-    offensive = cfg["reward"].get("offensive_plants", [])
-    if (
-        not isinstance(offensive, list)
-        or any(p not in PLANT_TYPES or p in ("sunflower", "wall_nut") for p in offensive)
-        or len(set(offensive)) != len(offensive)
-        or cfg["reward"].get("offensive_plant_weight", 0) > 0
-        and not offensive
+    for group, keys in (
+        ("reward", ("economy_scale",)),
+        ("encoding", ("local_count_scale",)),
+        ("training", ("max_grad_norm",)),
     ):
-        raise ValueError("reward.offensive_plants must list distinct damaging plants")
-    scale = cfg["reward"].get("mower_sun_scale", 300.0)
-    if type(scale) not in (int, float) or not math.isfinite(scale) or scale <= 0:
-        raise ValueError("reward.mower_sun_scale must be finite and positive")
-    if type(cfg["reward"].get("normalize_kills", True)) is not bool:
-        raise ValueError("reward.normalize_kills must be a boolean")
-    potential_mode = cfg["reward"].get("potential_mode", "legacy")
-    if potential_mode not in ("legacy", "plant_value"):
-        raise ValueError("Unsupported reward.potential_mode")
-    targets = (
-        ("economy_scale",) if potential_mode == "plant_value" else ("sun_target", "flower_target")
-    )
-    weights = (
-        ("economy_weight",) if potential_mode == "plant_value" else ("sun_weight", "flower_weight")
-    )
-    for key in targets + ("defeated_weight",) + weights:
-        value = cfg["reward"].get(key)
-        if (
-            type(value) not in (int, float)
-            or not math.isfinite(value)
-            or value < 0
-            or key in targets
-            and value == 0
-        ):
-            raise ValueError(
-                f"Invalid reward.{key}: expected finite {'positive' if key in targets else 'nonnegative'} value"
-            )
-    encoding = cfg["encoding"]
-    if encoding["version"] not in (1, "tactical_v2"):
-        raise ValueError("Unsupported observation version; start a fresh compatible profile")
-    if encoding["version"] == "tactical_v2":
-        for key in ("local_count_scale", "firepower_scale", "lane_count_scale"):
-            if not math.isfinite(encoding[key]) or encoding[key] <= 0:
-                raise ValueError(f"encoding.{key} must be finite and positive")
-    if cfg.get("policy", {}).get("kind", "flat") not in (
-        "flat",
-        "grouped_v1",
-        "spatial_grouped_v2",
-    ):
-        raise ValueError("Unsupported policy kind")
-    policy = cfg.get("policy", {})
-    if "initial_dig_logit" in policy:
-        value = policy["initial_dig_logit"]
-        if (
-            policy.get("kind") not in ("grouped_v1", "spatial_grouped_v2")
-            or type(value) not in (int, float)
-            or not math.isfinite(value)
-        ):
-            raise ValueError("policy.initial_dig_logit requires a grouped policy and finite value")
-    if policy.get("kind") == "spatial_grouped_v2":
-        if (
-            encoding["version"] != "tactical_v2"
-            or type(policy.get("channels")) is not int
-            or policy["channels"] < 1
-        ):
-            raise ValueError("Spatial policy requires tactical_v2 and positive channels")
-    exploration = cfg["training"].get("exploration", {"objective": "joint"})
-    if cfg["training"].get("actor_objective", "all_steps") not in ("all_steps", "choice_points_v1"):
-        raise ValueError("Unsupported training.actor_objective")
-    if exploration.get("objective") not in ("joint", "balanced_heads_v1"):
-        raise ValueError("Unsupported exploration objective")
-    if exploration["objective"] == "balanced_heads_v1":
-        if policy.get("kind") not in ("grouped_v1", "spatial_grouped_v2"):
-            raise ValueError("Balanced exploration requires a grouped policy")
-        for key in ("type_coef", "tile_coef"):
-            value = exploration.get(key)
-            if type(value) not in (int, float) or not math.isfinite(value) or value < 0:
-                raise ValueError(f"Invalid exploration.{key}")
+        for key in keys:
+            value = cfg[group][key]
+            if type(value) not in (int, float) or not math.isfinite(value) or value <= 0:
+                raise ValueError(f"{group}.{key} must be finite and positive")
+    policy = cfg["policy"]
+    for key in ("plant_embedding", "state_embedding"):
+        if type(policy[key]) is not int or policy[key] < 1:
+            raise ValueError(f"policy.{key} must be a positive integer")
+    for key in ("scalar_sizes", "channels"):
+        if not policy[key] or any(type(n) is not int or n < 1 for n in policy[key]):
+            raise ValueError(f"policy.{key} must contain positive integers")
+    if not math.isfinite(policy["initial_dig_logit"]):
+        raise ValueError("initial_dig_logit must be finite")
+    for key in ("vf_coef", "target_kl"):
+        value = cfg["training"][key]
+        if type(value) not in (int, float) or not math.isfinite(value) or value < 0:
+            raise ValueError(f"training.{key} must be finite and nonnegative")
+    if type(cfg["training"]["normalize_advantage"]) is not bool:
+        raise ValueError("normalize_advantage must be a boolean")
+    for key in ("type_coef", "tile_coef"):
+        value = cfg["training"]["exploration"][key]
+        if type(value) not in (int, float) or not math.isfinite(value) or value < 0:
+            raise ValueError(f"exploration.{key} must be finite and nonnegative")
     minutes = cfg["training"].get("max_minutes")
     reserve = cfg["training"].get("finalization_minutes", 15)
     if minutes is not None and (
@@ -303,10 +257,17 @@ def validate_config(cfg: dict) -> None:
         raise ValueError("Unsupported environment.action_timing")
     if env.get("action_timing") == "per_tick" and env["decision_ticks"] != 1:
         raise ValueError("per_tick action timing requires decision_ticks = 1")
-    if cfg["schema_version"] != 1 or (env["rows"], env["cols"], env["bins"]) != (5, 9, 20):
+    if cfg["schema_version"] != 1 or (env["rows"], env["cols"], env["bins"]) != (5, 9, 3):
         raise ValueError("Unsupported research schema/board")
     if tuple(env["plants"]) != PLANT_TYPES or tuple(env["zombies"]) != ZOMBIE_TYPES:
         raise ValueError("Plant/zombie order is fixed by observation and action schema version 1")
+    for key, expected in (
+        ("plant_states", PLANT_STATES),
+        ("zombie_states", ZOMBIE_STATES),
+        ("mower_states", MOWER_STATES),
+    ):
+        if tuple(env[key]) != tuple(expected):
+            raise ValueError(f"{key} must match the pinned categorical encoding order")
     for key in ("decision_ticks", "cutoff_seconds"):
         if type(env[key]) is not int or env[key] <= 0:
             raise ValueError(f"{key} must be a positive integer")
@@ -323,7 +284,13 @@ def validate_config(cfg: dict) -> None:
             raise ValueError(f"{key} must be a positive integer")
     if train["rollout_size"] % train["n_envs"] or train["rollout_size"] % train["batch_size"]:
         raise ValueError("Rollout size must divide into complete workers and minibatches")
-    if train["rollout_size"] < 2 or not 0 < cfg["reward"]["gamma"] <= 1:
+    gamma = cfg["reward"]["gamma"]
+    if (
+        train["rollout_size"] < 2
+        or type(gamma) not in (int, float)
+        or not math.isfinite(gamma)
+        or not 0 <= gamma <= 1
+    ):
         raise ValueError("Invalid rollout size or discount")
     if train["device"] not in ("cpu", "cuda"):
         raise ValueError("Training device must be cpu or cuda")
@@ -340,13 +307,17 @@ def validate_config(cfg: dict) -> None:
         raise ValueError("Hidden layer sizes must be positive integers")
     for group, keys in (
         ("encoding", ("count_scale", "wave_scale")),
-        ("training", ("learning_rate", "gae_lambda", "clip_range")),
+        ("training", ("learning_rate", "clip_range")),
     ):
         for key in keys:
             if not math.isfinite(cfg[group][key]) or cfg[group][key] <= 0:
                 raise ValueError(f"{group}.{key} must be finite and positive")
-    if train["gae_lambda"] > 1 or not math.isfinite(train["ent_coef"]) or train["ent_coef"] < 0:
-        raise ValueError("Invalid GAE or entropy coefficient")
+    if (
+        type(train["gae_lambda"]) not in (int, float)
+        or not math.isfinite(train["gae_lambda"])
+        or not 0 <= train["gae_lambda"] <= 1
+    ):
+        raise ValueError("Invalid GAE lambda")
     if (
         cfg["evaluation"]["bootstrap_replicates"] < 1
         or cfg["evaluation"]["replays_per_outcome"] < 0

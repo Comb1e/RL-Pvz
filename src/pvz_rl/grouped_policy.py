@@ -2,7 +2,6 @@
 
 import torch
 from sb3_contrib.common.maskable.distributions import MaskableCategorical, MaskableDistribution
-from sb3_contrib.common.maskable.policies import MaskableActorCriticPolicy
 from torch import nn
 
 
@@ -83,30 +82,3 @@ class GroupedDistribution(MaskableDistribution):
     def log_prob_from_params(self, action_logits):
         actions = self.actions_from_params(action_logits)
         return actions, self.log_prob(actions)
-
-
-class GroupedPolicy(MaskableActorCriticPolicy):
-    def initialize_dig_logit(self, value):
-        """Fresh-model exploration prior; no mask or inference-time rule."""
-        with torch.no_grad():
-            self.action_net.bias[self.action_dist.groups - 1] = value
-
-    def _build(self, lr_schedule):
-        if self.action_space.n != GroupedDistribution.action_dim:
-            raise ValueError("Grouped policy requires direct Discrete(406) actions")
-        self.action_dist = GroupedDistribution()
-        super()._build(lr_schedule)
-
-    def evaluate_actions(self, obs, actions, action_masks=None):
-        result = super().evaluate_actions(obs, actions, action_masks)
-        parts = torch.stack(self.action_dist.entropy_parts()).detach().sum(dim=1)
-        self._entropy_totals = getattr(self, "_entropy_totals", 0) + parts
-        self._entropy_count = getattr(self, "_entropy_count", 0) + len(actions)
-        return result
-
-    def pop_entropy_metrics(self):
-        if not getattr(self, "_entropy_count", 0):
-            return {}
-        types, tiles = (self._entropy_totals / self._entropy_count).cpu().tolist()
-        self._entropy_totals, self._entropy_count = 0, 0
-        return {"type_entropy": types, "conditional_tile_entropy": tiles}

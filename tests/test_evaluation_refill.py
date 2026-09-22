@@ -33,7 +33,9 @@ def test_refill_matches_fixed_batches_and_cpu(record, monkeypatch):
         pytest.skip("CUDA unavailable")
     cfg = load_config()
     cfg["simulation"] = {"backend": "cuda"}
-    cfg["training"].update(n_envs=2, device="cuda", rollout_size=256, rollout_steps_per_env=128)
+    cfg["training"].update(
+        n_envs=2, device="cuda", rollout_size=256, rollout_steps_per_env=128, batch_size=128
+    )
     cfg["environment"]["cutoff_seconds"] = 3
 
     def scenario(level, family, seed, *args):
@@ -86,7 +88,9 @@ def test_plant_and_mower_kills_survive_cuda_episode_reset(monkeypatch):
 
     cfg = load_config()
     cfg["simulation"] = {"backend": "cuda"}
-    cfg["training"].update(n_envs=1, device="cuda", rollout_size=128, rollout_steps_per_env=128)
+    cfg["training"].update(
+        n_envs=1, device="cuda", rollout_size=128, rollout_steps_per_env=128, batch_size=128
+    )
 
     def scenario(*args):
         return LevelSpec(
@@ -106,4 +110,4 @@ def test_plant_and_mower_kills_survive_cuda_episode_reset(monkeypatch):
         assert row["status"] == "won"
         assert row["plant_kills"] == row["mower_kills"] == 1
         assert row["defeated"] == 2
-        assert row["plant_kill_reward"] == 0.5 and row["mower_kill_penalty"] == -1
+        assert row["mower_activation_penalty"] == -0.2

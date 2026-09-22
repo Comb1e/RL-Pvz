@@ -19,7 +19,7 @@ def test_installed_engine_matches_recorded_commit(cfg):
 
 
 @pytest.mark.learning
-@pytest.mark.parametrize("condition", ["masked", "unmasked", "sparse", "mixed"])
+@pytest.mark.parametrize("condition", ["masked"])
 def test_real_training_serialization_and_replay(smoke_cfg, tmp_path, condition):
     output = tmp_path / condition
     train(smoke_cfg, condition, 101, output, validation_limit=1)
@@ -36,11 +36,11 @@ def test_real_training_serialization_and_replay(smoke_cfg, tmp_path, condition):
         all(
             key in row
             for key in (
-                "damage_reward",
+                "nonlethal_health_damage",
                 "mower_activation_penalty",
-                "mower_sun_penalty",
-                "wall_nut_reward",
-                "empty_explosion_penalty",
+                "mower_activations",
+                "wall_nut_damage",
+                "empty_explosions",
             )
         )
         for row in episodes
@@ -49,10 +49,10 @@ def test_real_training_serialization_and_replay(smoke_cfg, tmp_path, condition):
         json.loads(line) for line in (output / "training-metrics.jsonl").read_text().splitlines()
     ]
     assert all(
-        "rolling_damage_reward" in row and "rolling_empty_mower_activations" in row
+        "rolling_nonlethal_health_damage" in row and "rolling_empty_mower_activations" in row
         for row in updates
     )
-    assert all(row["simulation_ticks"] > 0 and "rolling_wall_nut_reward" in row for row in updates)
+    assert all(row["simulation_ticks"] > 0 and "rolling_wall_nut_damage" in row for row in updates)
     model.save(output / "roundtrip.zip")
     reloaded, _ = load_policy(output / "roundtrip.zip")
     env = PvZEnv(smoke_cfg, condition=condition, record=True)
@@ -103,21 +103,13 @@ def test_interrupt_resume_preserves_best_and_finishes_budget(smoke_cfg, tmp_path
 
 
 @pytest.mark.learning
-def test_legacy_rewards_reload_but_cannot_resume_into_new_objective(smoke_cfg, tmp_path):
+def test_reward_changes_load_for_inference_but_require_weights_only_initialization(
+    smoke_cfg, tmp_path
+):
     import copy
 
     legacy = copy.deepcopy(smoke_cfg)
-    legacy["reward"] = dict(
-        gamma=0.999,
-        defeated_weight=0.5,
-        sun_weight=0.3,
-        flower_weight=0.2,
-        sun_target=300,
-        flower_target=8,
-        plant_kill_weight=1.0,
-        mower_kill_weight=1.0,
-        normalize_kills=True,
-    )
+    legacy["reward"]["mower_activation_cost"] = 0.7
     run = train(legacy, "masked", 101, tmp_path / "legacy", validation_limit=1)
     _, data = load_policy(run / "final.zip")
     assert data["config"]["reward"] == legacy["reward"]
@@ -133,7 +125,7 @@ def test_legacy_rewards_reload_but_cannot_resume_into_new_objective(smoke_cfg, t
 
 
 @pytest.mark.learning
-def test_windows_cuda_cli(tmp_path):
+def test_windows_cuda_cli(tmp_path, tiny_cli_config):
     output = tmp_path / "spawn"
     device = "cuda"
     result = subprocess.run(
@@ -142,6 +134,8 @@ def test_windows_cuda_cli(tmp_path):
             "-m",
             "pvz_rl",
             "train",
+            "--config",
+            str(tiny_cli_config),
             "--condition",
             "masked",
             "--steps",
@@ -183,11 +177,14 @@ def test_whole_suite_on_tiny_protocol_and_idempotent_resume(smoke_cfg, tmp_path)
     smoke_cfg["conditions"]["hybrid"] = dict(masked=True, shaped=True, curriculum=True, hybrid=True)
     for split, (lo, _) in smoke_cfg["splits"].items():
         smoke_cfg["splits"][split] = [lo, lo + 1]
+    smoke_cfg["curriculum"]["probe_cases"] = 2
+    for stage in smoke_cfg["curriculum"]["stages"].values():
+        stage["requirements"] = {task: 2 for task in stage["requirements"]}
     smoke_cfg["evaluation"].update(replays_per_outcome=1, bootstrap_replicates=50)
     root = tmp_path / "suite"
     result = run_suite(smoke_cfg, root)
-    assert result["state"] == "complete" and len(result["jobs"]) == 4
-    assert len(result["evaluations"]) == 8 * 4
+    assert result["state"] == "complete" and len(result["jobs"]) == 1
+    assert len(result["evaluations"]) == 5 * 4
     assert (root / "report-1" / "report.md").exists()
     assert (root / "report-1" / "win-rates.png").stat().st_size > 1000
     assert run_suite(smoke_cfg, root, resume=True) == result

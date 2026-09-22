@@ -1,12 +1,12 @@
 from types import SimpleNamespace
 
+from pvz_rl.config import load_config
 from pvz_rl.curriculum import CurriculumState
-from pvz_rl.sc2_experiments import sc2_profile
 from pvz_rl.training import ResearchCallback
 
 
 def test_progress_identifies_mower_free_lessons_and_does_not_round_rare_kills(tmp_path, capsys):
-    cfg = sc2_profile("E")
+    cfg = load_config()
     callback = ResearchCallback(cfg, "masked", 101, tmp_path)
     callback.model = SimpleNamespace(num_timesteps=1000, training_games=100)
     callback.curriculum = CurriculumState()

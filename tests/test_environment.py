@@ -174,14 +174,15 @@ def test_encoder_preserves_crowds_and_is_order_invariant(cfg):
         )
     )
     np.testing.assert_array_equal(a, b)
-    grid = a[env.encoder.slices["zombies"]].reshape(5, 20, env.encoder.zombie_width)
-    assert grid[:, :, :5].sum() * cfg["encoding"]["count_scale"] == pytest.approx(120)
+    grid = a[env.encoder.slices["zombies"]].reshape(5, 3, env.encoder.zombie_width)
+    assert grid[:, :, :5].sum() * cfg["encoding"]["local_count_scale"] == pytest.approx(120)
     assert np.isfinite(a).all() and env.observation_space.contains(a)
     assert env.encoder.bin_index(-500) == 0
-    assert env.encoder.bin_index(9499) == 19 and env.encoder.bin_index(9500) == 19
+    assert env.encoder.bin_index(9499) == 2 and env.encoder.bin_index(9500) == 2
 
 
 def test_hybrid_only_proposes_legal_single_actions(cfg):
+    cfg["conditions"]["hybrid"] = dict(masked=True, shaped=True, curriculum=False, hybrid=True)
     env = PvZEnv(cfg, condition="hybrid")
     env.reset(seed=42)
     assert env.action_space.n == 5
