@@ -19,10 +19,14 @@ def stage_game(repo, output):
     def git(*args):
         return subprocess.check_output(["git", "-C", str(repo), *args])
 
-    if git("rev-parse", "HEAD").decode().strip() != expected["commit"]:
-        raise ValueError(f"Game checkout must be at {expected['commit']}; it will not be modified")
-    if git("status", "--porcelain", "--untracked-files=no").strip():
-        raise ValueError("Game has tracked changes; use a clean pinned checkout")
+    try:
+        resolved = git("rev-parse", "--verify", expected["commit"] + "^{commit}").decode().strip()
+    except subprocess.CalledProcessError as exc:
+        raise ValueError(
+            f"Game repository does not contain pinned commit {expected['commit']}"
+        ) from exc
+    if resolved != expected["commit"]:
+        raise ValueError("Pinned game commit did not resolve exactly")
     archive = git("archive", "--format=zip", expected["commit"])
     with zipfile.ZipFile(io.BytesIO(archive)) as source:
         manifest = {

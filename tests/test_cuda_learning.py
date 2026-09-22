@@ -123,12 +123,32 @@ def test_cuda_collect_update_and_timeout(gpu_cfg, condition):
 @pytest.mark.parametrize("condition", ["masked", "unmasked"])
 def test_fixed_rollout_losses_and_optimizer_match_stock(gpu_cfg, condition):
     configs = [copy.deepcopy(gpu_cfg), copy.deepcopy(gpu_cfg)]
-    configs[0]["simulation"]["backend"] = "cpu"
     configs[0]["training"]["n_envs"] = 1
     configs[0]["training"]["rollout_steps_per_env"] = 256
     envs = [vector_env(c, condition, 12) for c in configs]
     try:
-        models = [build_model(c, condition, e, 12) for c, e in zip(configs, envs)]
+        from sb3_contrib import MaskablePPO
+        from stable_baselines3 import PPO
+
+        # Independent upstream optimizer on supplied data; no CPU collection/training run.
+        t = configs[0]["training"]
+        algorithm = MaskablePPO if condition == "masked" else PPO
+        reference = algorithm(
+            "MlpPolicy",
+            PvZEnv(configs[0]),
+            device="cuda",
+            seed=12,
+            n_steps=256,
+            batch_size=t["batch_size"],
+            n_epochs=t["n_epochs"],
+            learning_rate=t["learning_rate"],
+            gamma=configs[0]["reward"]["gamma"],
+            gae_lambda=t["gae_lambda"],
+            clip_range=t["clip_range"],
+            ent_coef=t["ent_coef"],
+            policy_kwargs={"net_arch": {"pi": t["hidden_sizes"], "vf": t["hidden_sizes"]}},
+        )
+        models = [reference, build_model(configs[1], condition, envs[1], 12)]
         for m in models:
             m.set_logger(configure(format_strings=[]))
             m._current_progress_remaining = 1.0
@@ -252,6 +272,8 @@ def test_rollout_configuration_and_legacy_cpu_defaults(gpu_cfg):
     from pvz_rl.config import resolve_rollout, simulator, validate_config
 
     legacy = load_config()
+    assert simulator(legacy) == "cuda"
+    legacy.pop("simulation")
     assert simulator(legacy) == "cpu"
     for count in (32, 64, 128):
         cfg = copy.deepcopy(gpu_cfg)

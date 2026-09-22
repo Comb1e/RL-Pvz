@@ -9,8 +9,6 @@ backend = "cuda"
 
 [runtime]
 cache_legal_actions = true
-coalesce_masks = true
-cache_rollout_on_device = true
 refill_evaluation = true
 
 [logging]
@@ -127,11 +125,6 @@ shaped = true
 curriculum = false
 hybrid = false
 
-[conditions.hybrid]
-masked = true
-shaped = true
-curriculum = true
-hybrid = true
 
 [diagnostics]
 early_dig_seconds = 5

@@ -6,8 +6,6 @@ engine_package_version = "1.3.0"
 
 [runtime]
 cache_legal_actions = true
-coalesce_masks = true
-cache_rollout_on_device = true
 refill_evaluation = true
 
 [logging]
@@ -139,11 +137,6 @@ shaped = true
 curriculum = false
 hybrid = false
 
-[conditions.hybrid]
-masked = true
-shaped = true
-curriculum = true
-hybrid = true
 
 [policy]
 kind = "spatial_grouped_v2"

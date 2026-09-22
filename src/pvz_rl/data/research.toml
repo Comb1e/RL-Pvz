@@ -1,12 +1,14 @@
+# Explicit CUDA profile. Same learning settings; 128 decisions per parallel game.
 schema_version = 1
 engine_commit = "8861824df6893a34c2cd4df7f9b68613376d7964"
 engine_version = "1.0.0"
 engine_package_version = "1.3.0"
 
+[simulation]
+backend = "cuda"
+
 [runtime]
 cache_legal_actions = true
-coalesce_masks = true
-cache_rollout_on_device = true
 refill_evaluation = true
 
 [logging]
@@ -64,9 +66,10 @@ total_games = 10000
 eval_interval_games = 1000
 total_steps = 3000000 # Inactive unless budget_unit = "decisions" (legacy).
 learner_seeds = [101, 102, 103, 104, 105]
-n_envs = 8
+n_envs = 128
 device = "cuda"
-rollout_size = 4096
+rollout_steps_per_env = 128
+rollout_size = 16384
 batch_size = 256
 n_epochs = 4
 learning_rate = 0.0003
@@ -122,11 +125,6 @@ shaped = true
 curriculum = false
 hybrid = false
 
-[conditions.hybrid]
-masked = true
-shaped = true
-curriculum = true
-hybrid = true
 
 [diagnostics]
 early_dig_seconds = 5

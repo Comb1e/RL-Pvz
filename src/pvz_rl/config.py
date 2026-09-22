@@ -261,14 +261,14 @@ def validate_config(cfg: dict) -> None:
             ):
                 raise ValueError("Invalid teaching distribution or probe threshold")
     runtime = runtime_settings(cfg)
-    if set(runtime) != {
+    if not set(runtime) <= {
         "cache_legal_actions",
         "coalesce_masks",
         "cache_rollout_on_device",
         "refill_evaluation",
     } or any(type(value) is not bool for value in runtime.values()):
         raise ValueError(
-            "Runtime settings must be cache_legal_actions/coalesce_masks/cache_rollout_on_device/refill_evaluation booleans"
+            "Runtime settings must be known booleans (legacy transport flags are read-only compatibility settings)"
         )
     output = output_settings(cfg)
     log, visual = output["logging"], output["visualization"]

@@ -19,7 +19,7 @@ def test_installed_engine_matches_recorded_commit(cfg):
 
 
 @pytest.mark.learning
-@pytest.mark.parametrize("condition", ["masked", "unmasked", "sparse", "mixed", "hybrid"])
+@pytest.mark.parametrize("condition", ["masked", "unmasked", "sparse", "mixed"])
 def test_real_training_serialization_and_replay(smoke_cfg, tmp_path, condition):
     output = tmp_path / condition
     train(smoke_cfg, condition, 101, output, validation_limit=1)
@@ -85,6 +85,7 @@ def test_interrupt_resume_preserves_best_and_finishes_budget(smoke_cfg, tmp_path
     first = tmp_path / "first"
     # An old configuration and stock buffer remain resumable on the same engine pin.
     smoke_cfg["runtime"] = {key: False for key in smoke_cfg["runtime"]}
+    smoke_cfg["conditions"]["hybrid"] = dict(masked=True, shaped=True, curriculum=True, hybrid=True)
     with pytest.raises(KeyboardInterrupt):
         train(smoke_cfg, "masked", 101, first, validation_limit=1)
     previous_hash = file_hash(first / "best.zip")
@@ -92,6 +93,7 @@ def test_interrupt_resume_preserves_best_and_finishes_budget(smoke_cfg, tmp_path
     monkeypatch.setattr(ResearchCallback, "_on_rollout_start", original)
     resumed = tmp_path / "resumed"
     smoke_cfg.pop("runtime")  # Missing runtime section gets current defaults on resume.
+    smoke_cfg["conditions"].pop("hybrid")  # Dormant definitions do not change this policy.
     train(smoke_cfg, "masked", 101, resumed, validation_limit=1, resume=first / "interrupted.zip")
     model, _ = load_policy(resumed / "final.zip")
     assert model.num_timesteps == 128 and model._n_updates == 2
@@ -131,30 +133,9 @@ def test_legacy_rewards_reload_but_cannot_resume_into_new_objective(smoke_cfg, t
 
 
 @pytest.mark.learning
-def test_legacy_timing_reload_cannot_resume_into_per_tick(smoke_cfg, tmp_path):
-    import copy
-
-    legacy = copy.deepcopy(smoke_cfg)
-    legacy["environment"].pop("action_timing")
-    legacy["environment"]["decision_ticks"] = 10
-    run = train(legacy, "masked", 101, tmp_path / "fixed", validation_limit=1)
-    _, data = load_policy(run / "final.zip")
-    assert "action_timing" not in data["config"]["environment"]
-    with pytest.raises(ValueError, match="start a fresh run"):
-        train(
-            smoke_cfg,
-            "masked",
-            101,
-            tmp_path / "changed",
-            resume=run / "final.zip",
-            validation_limit=1,
-        )
-
-
-@pytest.mark.learning
-def test_windows_spawn_and_cuda_when_available(tmp_path):
+def test_windows_cuda_cli(tmp_path):
     output = tmp_path / "spawn"
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+    device = "cuda"
     result = subprocess.run(
         [
             sys.executable,
@@ -167,8 +148,8 @@ def test_windows_spawn_and_cuda_when_available(tmp_path):
             "64",
             "--n-envs",
             "2",
-            "--rollout-size",
-            "64",
+            "--rollout-steps-per-env",
+            "32",
             "--batch-size",
             "32",
             "--eval-interval",
@@ -199,13 +180,14 @@ def test_whole_suite_on_tiny_protocol_and_idempotent_resume(smoke_cfg, tmp_path)
     from pvz_rl.suite import run_suite
 
     smoke_cfg["training"].update(total_steps=64, learner_seeds=[101])
+    smoke_cfg["conditions"]["hybrid"] = dict(masked=True, shaped=True, curriculum=True, hybrid=True)
     for split, (lo, _) in smoke_cfg["splits"].items():
         smoke_cfg["splits"][split] = [lo, lo + 1]
     smoke_cfg["evaluation"].update(replays_per_outcome=1, bootstrap_replicates=50)
     root = tmp_path / "suite"
     result = run_suite(smoke_cfg, root)
-    assert result["state"] == "complete" and len(result["jobs"]) == 5
-    assert len(result["evaluations"]) == 9 * 4
+    assert result["state"] == "complete" and len(result["jobs"]) == 4
+    assert len(result["evaluations"]) == 8 * 4
     assert (root / "report-1" / "report.md").exists()
     assert (root / "report-1" / "win-rates.png").stat().st_size > 1000
     assert run_suite(smoke_cfg, root, resume=True) == result

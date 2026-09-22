@@ -1,6 +1,6 @@
 # Research design
 
-Current research version: **0.7.1**. This is the specification for learning and
+Current research version: **0.8.0**. This is the specification for learning and
 evaluation; [README](../README.md) contains daily commands, [architecture](architecture.md)
 describes implementation, and [validation](validation.md) records measured results.
 Earlier results remain attached to their original profile, timing, reward and
@@ -10,8 +10,9 @@ engine pin. No candidate has demonstrated reliable shared-policy performance yet
 
 Learn when, which and where to plant using one policy across easy, standard and
 hard. Direct-placement candidates use pure RL: no human demonstrations, scripted
-warm start or scripted placement during learning. The hybrid is an explicitly
-separate baseline. Winning this daytime clone does not establish human-like
+warm start or scripted placement during learning. Scripted strategies remain
+non-learning controls; hybrid training is retired. Winning this daytime clone does
+not establish human-like
 behavior or performance in commercial PvZ.
 
 The literature informed these choices; full citations, revisions and inspection
@@ -149,11 +150,11 @@ exploration bonus = 0.01*H(type)
 
 The tile term is not weighted by type probability; it is zero with no available
 non-wait type. True joint entropy, type/conditional entropy and this bonus are
-logged separately. The same exploration interface serves CPU and CUDA.
+logged separately. The same exploration interface serves all CUDA profiles.
 
 The spatial policy uses shared 64-unit lane/global MLPs, two 64-channel 3×3
 convolutions on the 5×9 plant grid, nine 1×1 tile maps and separate 256×256 type/value
-heads after mean/max pooling. See the [network diagram](architecture.md#policy).
+heads after mean/max pooling. See the [network diagram](architecture.md#policy-and-learning).
 
 | Profile | Actor reduction | GAE lambda | Minibatch | Gamma | Initial dig bias |
 |---|---|---:|---:|---:|---:|
@@ -223,10 +224,10 @@ Keep every case. Standard and hard share openings, so their presets alone do not
 test strong structural generalization.
 
 Non-learning baselines: `wait`, `random_legal`, frozen `heuristic`, and
-`random_strategy`. The hybrid chooses wait/economy/attack/defense/emergency;
-deterministic scripts produce at most one legal action. Compare against random
-selection of those same strategies. Use CPU for hybrid. Conditions are masked,
-unmasked, sparse, mixed and hybrid; the unmasked comparison adds no invalid penalty.
+`random_strategy`. Random strategy selection uses the archived hybrid routines
+for wait/economy/attack/defense/emergency; each produces at most one legal action.
+Hybrid learning is retired. Trainable conditions are masked, unmasked, sparse and
+mixed; the unmasked comparison adds no invalid penalty.
 
 Run these only after freezing settings; checkpoint evaluation restores its config:
 
@@ -249,16 +250,14 @@ Explicit development commands:
 
 ```powershell
 .\.venv\Scripts\python.exe tools\check_sc2_learning.py --output artifacts\sc2-check
-.\.venv\Scripts\python.exe -m pvz_rl pilot --output runs\paper-pilot --minutes 30
 .\.venv\Scripts\python.exe -m pvz_rl compare-sc2 --diagnostics-only --output runs\sc2-diagnostics
 .\.venv\Scripts\python.exe -m pvz_rl compare-sc2 --max-minutes 120 --games 10000 --output runs\sc2-comparison
 .\.venv\Scripts\python.exe -m pvz_rl compare-sc2 --report-only --output runs\sc2-comparison
 ```
 
 `check_sc2_learning.py` defaults to four five-minute baseline/reward checks, seeds
-101/102 with reversed order; combined allowances cannot exceed 30 minutes. `pilot`
-retains its 30-minute four-profile scope, with game-based matched budgets and
-explicit missing comparisons. `compare-sc2` runs diagnostics then cumulative
+101/102 with reversed order; combined allowances cannot exceed 30 minutes.
+`compare-sc2` runs diagnostics then cumulative
 A: flat, B: tactical/grouped, C: balanced exploration, D: mastery, E: spatial,
 F: longer gamma, reversing A–F for the second learner seed. Its two-hour cap is
 **per run**: the matrix can take roughly 24 hours plus diagnostics. It does not
@@ -270,7 +269,7 @@ Show actual games/decisions/time and incomplete comparisons; do not interpolate
 scores or reinterpret a partial evaluation as zero. Two seeds are development
 screening, not strong statistical evidence. Final-test seeds stay out of pilots.
 
-The separate formal suite runs five conditions × five learner seeds and then
+The separate formal suite runs four conditions × configured learner seeds and then
 held-out/OOD evaluation and reporting. It is long-running and user initiated:
 
 ```powershell
@@ -280,6 +279,9 @@ held-out/OOD evaluation and reporting. It is long-running and user initiated:
 ```
 
 Completed jobs remain; attempts use new directories. `--max-minutes` caps each
-training run, not the whole suite's later evaluations. The suite's CPU hybrid
-uses at most eight workers under the promoted GPU profile, recorded separately.
-No formal matrix or held-out study was launched by implementation checks.
+training run, not the whole suite's later evaluations. No formal matrix or held-out
+study was launched by implementation checks.
+
+Training requires CUDA simulation and learning. Standalone baseline/tactical/grouped/
+pure-RL recipes and the old pilot runner are retired; CUDA SC2 A–F ablations remain
+constructed internally. Archived results retain their original CPU/GPU provenance.

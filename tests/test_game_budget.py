@@ -99,7 +99,7 @@ def test_invalid_game_settings(per_tick_cfg, key, value):
 
 
 @pytest.mark.learning
-@pytest.mark.parametrize("condition", ["masked", "unmasked", "sparse", "mixed", "hybrid"])
+@pytest.mark.parametrize("condition", ["masked", "unmasked", "sparse", "mixed"])
 def test_completed_games_stop_after_optimization_and_validation_does_not_count(
     smoke_cfg, tmp_path, condition
 ):
@@ -124,13 +124,13 @@ def test_completed_games_stop_after_optimization_and_validation_does_not_count(
 
 
 @pytest.mark.learning
-def test_global_games_across_windows_workers_cuda_and_shared_demos(smoke_cfg, tmp_path):
+def test_global_games_across_cuda_slots_and_shared_demos(smoke_cfg, tmp_path):
     cfg = game_config(smoke_cfg)
     cfg["training"].update(
         n_envs=2,
         rollout_size=128,
         total_games=2,
-        device="cuda" if torch.cuda.is_available() else "cpu",
+        device="cuda",
     )
     cfg["visualization"].update(enabled=True, videos=False)
     run = train(cfg, "masked", 101, tmp_path / "game-smoke", validation_limit=1)
@@ -146,7 +146,7 @@ def test_global_games_across_windows_workers_cuda_and_shared_demos(smoke_cfg, tm
 
 
 @pytest.mark.learning
-@pytest.mark.parametrize("backend", ["cpu", "cuda"])
+@pytest.mark.parametrize("backend", ["cuda"])
 def test_interrupt_resume_preserves_games_and_schedule(smoke_cfg, tmp_path, monkeypatch, backend):
     cfg = game_config(smoke_cfg)
     cfg["training"]["total_games"] = 6

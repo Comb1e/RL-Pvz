@@ -10,16 +10,11 @@ import pytest
 import torch
 from pvz_game import Dig, LevelSpec, Place, Spawn
 
-from pvz_rl.config import learning_profile, load_config
+from pvz_rl.config import learning_profile
 from pvz_rl.curriculum import CurriculumState, stage_distribution
 from pvz_rl.env import PvZEnv
 from pvz_rl.grouped_policy import GroupedDistribution
 from pvz_rl.training import ResearchCallback, load_policy, train
-
-
-@pytest.mark.parametrize("profile", ["baseline", "tactical", "grouped", "pure-rl"])
-def test_shipped_recipes_equal_installed_profiles(profile):
-    assert load_config(f"configs/{profile}.toml") == learning_profile(profile)
 
 
 def test_tactical_dimensions_regions_scales_crowds_and_no_leaks():
@@ -216,7 +211,7 @@ def test_curriculum_pass_fail_minimum_and_rehearsal(cfg):
 
 
 @pytest.mark.learning
-@pytest.mark.parametrize("device", ["cpu", "cuda"])
+@pytest.mark.parametrize("device", ["cuda"])
 def test_grouped_learning_save_reload_metrics_and_complete_update_deadline(
     smoke_cfg, tmp_path, device
 ):
@@ -297,53 +292,6 @@ def test_curriculum_probe_uses_same_policy_optimizer_and_persists_resume(
     assert any(r["family"] == "saving" for r in rows)
 
 
-def test_profile_comparison_requires_both_seeds_matched_budget_and_game_pin(tmp_path):
-    from pvz_rl.pilot import PROFILES, SEEDS, comparison_summary
-
-    assert comparison_summary(tmp_path, True)["matched_steps"] is None
-    for seed in SEEDS:
-        for profile in PROFILES:
-            run = tmp_path / f"{profile}-{seed}"
-            run.mkdir()
-            rows = [{"training_steps": 32768, "macro_win_rate": 0.2 if profile == "pure-rl" else 0}]
-            if profile == "pure-rl":
-                rows.append({"training_steps": 65536, "macro_win_rate": 0})
-            (run / "learning-curve.jsonl").write_text("\n".join(json.dumps(r) for r in rows))
-            target = run / "validation/32768/episodes.jsonl"
-            target.parent.mkdir(parents=True)
-            episodes = [
-                {
-                    "game_protocol_hash": "pin-a",
-                    "split": "validation",
-                    "family": "preset",
-                    "level": level,
-                    "scenario_seed": case,
-                    "learner_seed": seed,
-                    "profile": profile,
-                    "training_steps": 32768,
-                    "win": int(profile == "pure-rl" and case == 100000),
-                }
-                for level in ("easy", "standard", "hard")
-                for case in range(100000, 100005)
-            ]
-            target.write_text("\n".join(json.dumps(r) for r in episodes))
-    result = comparison_summary(tmp_path, True)
-    assert result["matched_steps"] == 32768
-    assert result["state"] == "recommended_for_larger_development_study"
-    assert comparison_summary(tmp_path, False)["state"] == "experimental_inconclusive"
-    target = tmp_path / "pure-rl-102/validation/32768/episodes.jsonl"
-    original = target.read_text()
-    target.write_text(original.replace('"scenario_seed": 100000', '"scenario_seed": 200000'))
-    with pytest.raises(ValueError, match="validation cases"):
-        comparison_summary(tmp_path, True)
-    target.write_text(original)
-    (tmp_path / "pure-rl-102/validation/32768/episodes.jsonl").write_text(
-        '{"game_protocol_hash":"pin-b"}'
-    )
-    with pytest.raises(ValueError, match="protocol"):
-        comparison_summary(tmp_path, True)
-
-
 @pytest.mark.parametrize("family", ["placement", "saving"])
 def test_lesson_checkpoints_cannot_enter_normal_or_final_evaluation(
     cfg, tmp_path, monkeypatch, family
@@ -394,13 +342,13 @@ def test_grouped_spawn_and_same_checkpoint_demos(tmp_path):
             "pvz_rl",
             "train",
             "--config",
-            "configs/pure-rl.toml",
+            "configs/sc2-inspired.toml",
             "--steps",
             "64",
             "--n-envs",
             "2",
-            "--rollout-size",
-            "64",
+            "--rollout-steps-per-env",
+            "32",
             "--batch-size",
             "32",
             "--eval-interval",
@@ -409,7 +357,7 @@ def test_grouped_spawn_and_same_checkpoint_demos(tmp_path):
             "1",
             "--no-videos",
             "--device",
-            "cuda" if torch.cuda.is_available() else "cpu",
+            "cuda",
             "--output",
             str(output),
         ],

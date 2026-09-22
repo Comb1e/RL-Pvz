@@ -10,6 +10,7 @@ from pathlib import Path
 
 from pvz_rl.config import load_config
 from pvz_rl.training import train
+from pvz_rl.training_requirements import require_cuda_training
 
 
 def main():
@@ -28,6 +29,7 @@ def main():
         parser.error(
             "Learning checks must have a positive combined allowance of at most 30 minutes"
         )
+    require_cuda_training(load_config(Path("configs") / f"{args.configs[0]}.toml"))
     output = args.output
     for index, seed in enumerate(args.seeds):
         names = list(args.configs)

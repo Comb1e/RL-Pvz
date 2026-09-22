@@ -71,12 +71,12 @@ class CudaVecEnv(VecEnv):
 
     def __init__(self, cfg, condition, learner_seed, family="preset", *, training=True, cases=None):
         if cfg["conditions"][condition]["hybrid"]:
-            raise ValueError("Hybrid/scripted placement requires --simulator cpu")
+            raise ValueError("Hybrid training is no longer supported; use direct CUDA training")
         if cfg["training"]["device"] != "cuda":
             raise ValueError("CUDA simulation requires --device cuda")
         if cfg["environment"].get("action_timing") != "per_tick":
             raise ValueError(
-                "CUDA training requires per_tick actions; legacy timing uses --simulator cpu"
+                "CUDA training requires per_tick actions; legacy timing is inference-only"
             )
         self.cfg, self.condition, self.family, self.training = cfg, condition, family, training
         self.queue = ScenarioQueue(cfg, condition, learner_seed, family, cfg["training"]["n_envs"])
