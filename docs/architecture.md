@@ -146,6 +146,32 @@ An episode's start-stage tag is scheduling metadata only. Budget exhaustion neve
 forces promotion; unfinished teaching is labeled explicitly. Fixed-schedule and
 mixed-difficulty comparison conditions use their configured distributions instead.
 
+A single-stage run fixes the selected stage before the first environment reset.
+Probes retain the same thresholds, passing streak and residency rules, but mark
+mastery instead of advancing. Mastery or the budget ends learning after a complete
+update; the shared stage ends only on budget. Final validation and demonstrations
+still use normal easy/standard/hard cases. Stage progress is saved after probes.
+
+```mermaid
+stateDiagram-v2
+    [*] --> StageRun: select stage, optionally load compatible checkpoint
+    StageRun --> Probe: probe due after update
+    Probe --> StageRun: mastery not reached
+    Probe --> Finalize: mastery reached
+    StageRun --> Finalize: budget ends
+    Finalize --> Saved: final.zip and metadata
+    Saved --> StageRun: explicit init-from and next stage, fresh budget
+    StageRun --> Interrupted: checkpoint on interruption
+    Interrupted --> StageRun: resume saved stage and remaining allowance
+```
+
+Stage initialization preserves policy parameters and optimizer moments, resets
+local counters and schedules, and records the parent checksum and progress. It
+accepts changed budgets and validation schedules while requiring matching engine,
+learning rules and task definitions. Existing models need no weight conversion.
+Resume requires the identical selected stage and preserves its mastery state.
+Neither operation supplies demonstrations or scripted training actions.
+
 ## Validation, stopping, and recovery
 
 Normal validation defaults to every 1,000 completed games, after the PPO update
@@ -198,6 +224,10 @@ training JSONL, validation curves/cases, TensorBoard events, and checkpoints.
 Teaching runs additionally store curriculum state and probe results. A 15-second
 progress log summarizes the latest 100 episodes without printing every episode.
 Research and engine revisions, rule/configuration hashes, and seeds identify results.
+Stage handoffs also record source checkpoint identity in run metadata. They start
+separate chart segments with local budgets; parent statistics are not pooled into
+the new stage. The report distinguishes selected-stage mastery from completing
+the whole curriculum.
 
 Offline reports contain relative chart/demo links. Missing metrics and resumed
 segments are explicit; results from different profiles or engine pins are not

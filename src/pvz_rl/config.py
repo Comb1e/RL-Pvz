@@ -232,6 +232,11 @@ def validate_config(cfg: dict) -> None:
     c = cfg["curriculum"]
     if c.get("mode", "fixed") not in ("fixed", "teaching"):
         raise ValueError("Unsupported curriculum mode")
+    if c.get("run_stage") is not None:
+        from .curriculum import STAGES
+
+        if c.get("mode") != "teaching" or c["run_stage"] not in STAGES:
+            raise ValueError("curriculum.run_stage requires a teaching recipe and a valid stage")
     if c.get("mode") == "teaching":
         from .curriculum import STAGES
 

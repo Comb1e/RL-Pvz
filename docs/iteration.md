@@ -5,6 +5,21 @@ Dates and results belong to their recorded version. Current behavior lives in
 artifact locations and learning outcomes live in [validation](validation.md).
 The longer pre-consolidation notes remain in `git show b642c9c:docs/iteration.md`.
 
+## 0.8.1 — 2026-09-22
+
+- Problem/cause: teaching stages advanced within one run; strict resume restored
+  the same budget and offered no explicit checkpoint handoff to another stage.
+- Change: select one stage, retain its rehearsal mix, stop on mastery or budget,
+  and save probe/final checkpoints. Initialize a chosen stage from compatible
+  weights and optimizer state with fresh local schedules and parent provenance.
+  Existing automatic curriculum and same-stage resume remain available.
+- Verification: stage/state boundaries, CUDA handoffs through all five stages,
+  exact restored weights/Adam moments, interrupted resume, mismatch rejection,
+  normal-game checkpoint selection, CLI/report smoke and regression suites;
+  recorded results are in validation.md.
+- Remaining limits: inherited learning settings must match; stage budgets do not
+  certify mastery. Short checks establish integration, not improved win rates.
+
 ## 0.8.0 — 2026-09-22
 
 - Problem/cause: CPU collectors, hybrid jobs, and old recipes remained reachable;

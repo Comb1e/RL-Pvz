@@ -207,6 +207,16 @@ count and nominal milestone. Matching probes reuse same-weight/case results.
 The equal-weight mean over easy/standard/hard chooses one `best.zip`; earlier ties
 win. Partial evaluations cannot select it. Final validation avoids duplicate weights.
 
+Teaching stages can also be run individually with `train --stage`. The original
+task mixtures and mastery gates apply without automatic promotion. `--init-from`
+continues learned weights and optimizer state in a chosen stage with fresh local
+budgets; `--resume` retains the original stage and remaining allowance. Use the
+final checkpoint for a stage handoff; normal validation still selects `best.zip`.
+Stage budgets are separate experiments with recorded parent hashes, so include
+all upstream training costs when comparing a chain against an automatic run.
+An explicit handoff before mastery is allowed and must not be reported as passing
+the curriculum. These controls change orchestration, not the learning objective.
+
 ## Evaluation protocol and commands
 
 | Split | Scenario seeds | Use |

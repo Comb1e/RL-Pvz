@@ -314,6 +314,7 @@ def build_run_report(run, cfg=None):
         "family": meta.get("family"),
         "training_settings": cfg["training"],
         "curriculum": cfg["curriculum"],
+        "initialization": meta.get("initialization"),
         "progress": status,
         "selected_shared_checkpoint": best or "No validated checkpoint yet",
         "visualization_status": visual_status,
@@ -336,6 +337,12 @@ def build_run_report(run, cfg=None):
         f"Stop reason: {escape(status.get('stop_reason') or 'not recorded / in progress')}. "
         f"Game target reached: {escape(status.get('budget_complete', 'in progress'))}.</p>"
     )
+    if status.get("selected_stage"):
+        run_progress += (
+            f"<p>Single stage: {escape(status['selected_stage'])}. "
+            f"Mastery reached: {escape(status.get('stage_mastered', False))}. "
+            "Use final.zip to initialize another stage with a fresh budget.</p>"
+        )
     page = f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width">
 <title>PVZ training — {escape(run.name)}</title>

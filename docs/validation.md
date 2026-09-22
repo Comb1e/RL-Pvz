@@ -3,6 +3,46 @@
 Evidence is versioned below. Learning outcomes, simulation correctness and runtime
 speed are separate measures; [research design](research.md) defines the protocol.
 
+## 0.8.1 stage checkpoints — 2026-09-22
+
+Stage training and explicit checkpoint handoffs keep the existing learning rules.
+New controls cover all five stages, unchanged rehearsal mixes, residency/pass
+boundaries, failure resets, mastery stopping without promotion, first-episode
+selection, fresh local budgets and schedules, and same-stage interruption/resume.
+Independent checks compare every restored policy parameter and Adam moment before
+the next stage's first update. Incompatible learning settings and ambiguous
+resume/initialization requests fail before creating a run directory.
+
+| Verification | Result |
+|---|---|
+| Complete research regression | 383 passed, 1 upstream PPO advisory in 334.71 s |
+| Native CPU-game regression | 207 passed in 13.36 s |
+| Native CUDA-game regression | 222 passed in 55.73 s |
+| Focused stage/CUDA checks | 43 passed; metadata compatibility follow-up: 8 passed |
+| CLI stage chain | Placement → saving, 2 games / 64 decisions each; 16.49 s and 13.57 s including outputs |
+| Reports and recordings | Two offline reports; three CPU-verified demos per run sharing that run's best checkpoint identity |
+| Lint, formatting, dependencies, packaging | Passed; 0.8.1 wheel/sdist and existing-environment editable installation |
+| Documentation | 32 local links checked, 11 PowerShell blocks parsed; train help exposes stage and handoff options |
+
+The CLI smoke uses one-second cutoffs, two CUDA environments, one optimization
+epoch and one validation case per difficulty. Both stages ended at their budgets;
+neither achieved mastery. All six normal-game demos accurately show truncation.
+Saving inherited learner seed 102, source weights and optimizer history, while
+its counters restarted at zero. The normal evaluation cases still use all plant
+cards. Curves and a final replay frame were inspected; all 11 relative report
+assets per run resolve offline. These are availability tests, not win-rate evidence.
+The mastery-stop integration test uses injected passing probe results only to
+verify scheduling; its results do not certify a learned policy.
+
+Local evidence: `artifacts/stage-release-tests.txt`, `stage-game-tests.txt`,
+`stage-cuda-game-tests.txt`, `stage-targeted-tests.txt`, `stage-cli-evidence.json`,
+and `stage-cli/{placement,saving}/visualizations/index.html`.
+Game-test caches and temporary files remain in the research artifacts directory.
+No formal training or comparison matrix was launched.
+The advisory is from the stock PPO implementation used as an independent optimizer
+control. The initial full run caught missing optional metadata in the CLI reader;
+after correcting it, the complete final rerun above passed.
+
 ## 0.8.0 CUDA-only release — 2026-09-22
 
 Training now requires CUDA simulation and optimization. Historical CPU metadata
