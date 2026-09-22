@@ -5,16 +5,8 @@ import torch
 from .optimization import weighted_mean
 
 
-def uses_research_optimizer(cfg):
-    settings = cfg["training"]
-    return (
-        settings.get("exploration", {}).get("objective") == "balanced_heads_v1"
-        or settings.get("actor_objective") == "choice_points_v1"
-    )
-
-
 def exploration_loss(policy, entropy, log_prob, ent_coef, weights=None):
-    """Return a loss and detached metrics for either CPU or CUDA PPO."""
+    """Return a loss and detached metrics for CUDA PPO."""
     settings = getattr(policy, "exploration_settings", {})
     joint_values = -log_prob if entropy is None else entropy
     joint = joint_values.mean()

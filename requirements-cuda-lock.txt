@@ -1,4 +1,4 @@
-# Optional simulator runtime; PyTorch is pinned/installed by bootstrap separately.
+# Required training simulator runtime; bootstrap installs CUDA PyTorch separately.
 cupy-cuda12x==13.6.0
 fastrlock==0.8.3
 nvidia-cuda-runtime-cu12==12.8.90

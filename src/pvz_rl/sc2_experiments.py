@@ -254,6 +254,9 @@ def comparison_report(output):
 
 def run_comparison(output, *, minutes=120, games=10000, diagnostics_only=False):
     from .training import train
+    from .training_requirements import require_cuda_training
+
+    require_cuda_training(sc2_profile("E"))
 
     if not math.isfinite(minutes) or not 0 < minutes <= 120 or games < 1:
         raise ValueError("Use positive games and at most 120 minutes per run")

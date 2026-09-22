@@ -91,16 +91,15 @@ def test_bonus_matches_independent_entropy_and_single_choice_boundaries(counts):
 
 def test_spatial_policy_shapes_gradients_and_board_dependence():
     cfg = sc2_profile("E")
-    cfg["simulation"]["backend"] = "cpu"
-    cfg["training"].update(n_envs=1, device="cpu", rollout_size=128, batch_size=128)
+    cfg["training"].update(n_envs=1, device="cuda", rollout_size=128, batch_size=128)
     env = vector_env(cfg, "masked", 101)
     try:
         model = build_model(cfg, "masked", env, 101)
         raw = PvZEnv(cfg)
         obs, _ = raw.reset(seed=3)
-        data = torch.tensor(np.stack([obs, obs]))
+        data = torch.tensor(np.stack([obs, obs]), device="cuda")
         data[1, raw.encoder.slices["plants"].start] = 1
-        masks = torch.tensor(np.stack([raw.action_masks()] * 2))
+        masks = torch.tensor(np.stack([raw.action_masks()] * 2), device="cuda")
         features = model.policy.extract_features(data)
         assert features.shape == (2, 64 * 46)
         assert not torch.equal(features[0], features[1])

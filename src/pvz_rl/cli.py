@@ -7,7 +7,6 @@ import json
 from pathlib import Path
 
 from .config import (
-    gpu_defaults,
     load_config,
     research_config,
     resolve_rollout,
@@ -15,6 +14,7 @@ from .config import (
     validate_config,
 )
 from .provenance import file_hash, metadata, write_json
+from .training_requirements import TRAINING_CONDITIONS, require_cuda_training
 
 
 def common(parser):
@@ -48,9 +48,9 @@ def training_options(parser):
         "--steps", type=int, help="legacy decision-budget mode; for archived protocols only"
     )
     parser.add_argument("--n-envs", type=int)
-    parser.add_argument("--device", choices=("cpu", "cuda"))
+    parser.add_argument("--device", choices=("cuda",))
     parser.add_argument("--rollout-size", type=int)
-    parser.add_argument("--simulator", choices=("cpu", "cuda"))
+    parser.add_argument("--simulator", choices=("cuda",))
     parser.add_argument(
         "--rollout-steps-per-env", type=int, help="decisions per parallel game; CUDA default 128"
     )
@@ -71,25 +71,6 @@ def training_options(parser):
 
 def configured(args):
     cfg = load_config(args.config)
-    # New unconstrained runs use the measured GPU profile. Explicit CPU, legacy
-    # decision/rollout settings and saved configurations keep their old behavior.
-    promote = (
-        args.command in ("train", "suite")
-        and not args.config
-        and not getattr(args, "hardware", None)
-        and not getattr(args, "resume", None)
-        and getattr(args, "steps", None) is None
-        and getattr(args, "rollout_size", None) is None
-        and getattr(args, "simulator", None) != "cpu"
-        and getattr(args, "device", None) != "cpu"
-        and getattr(args, "condition", None) != "hybrid"
-    )
-    if promote:
-        defaults = gpu_defaults()
-        cfg["simulation"] = {"backend": defaults["simulator"]}
-        cfg["training"].update(
-            {k: defaults[k] for k in ("n_envs", "device", "rollout_steps_per_env")}
-        )
     if getattr(args, "resume", None) and not args.config:
         run = args.output if args.command == "suite" else args.resume.parent
         cfg = json.loads((run / "metadata.json").read_text("utf-8"))["config"]
@@ -144,17 +125,14 @@ def configured(args):
     if getattr(args, "videos", None) is not None:
         cfg.setdefault("visualization", {})["videos"] = args.videos
     validate_config(cfg)
+    if args.command in ("train", "suite", "benchmark-gpu"):
+        require_cuda_training(cfg, getattr(args, "condition", "masked"), runtime=False)
     return cfg
 
 
 def main(argv=None):
     parser = argparse.ArgumentParser(prog="pvz-rl", description=__doc__)
     subs = parser.add_subparsers(dest="command", required=True)
-    pilot = subs.add_parser(
-        "pilot", help="pure-RL diagnostics and matched comparisons, capped at 30 minutes"
-    )
-    pilot.add_argument("--output", type=Path, required=True)
-    pilot.add_argument("--minutes", type=float, default=30)
     sc2 = subs.add_parser(
         "compare-sc2", help="explicit A-F development comparisons; no final-test cases"
     )
@@ -168,9 +146,7 @@ def main(argv=None):
     doctor.add_argument("--output", type=Path)
     training = subs.add_parser("train", help="train one shared policy across all difficulties")
     training_options(training)
-    training.add_argument(
-        "--condition", default="masked", choices=("masked", "unmasked", "sparse", "mixed", "hybrid")
-    )
+    training.add_argument("--condition", default="masked", choices=TRAINING_CONDITIONS)
     training.add_argument("--seed", type=int, default=101, help="learner seed")
     training.add_argument("--output", required=True, type=Path)
     training.add_argument("--validation-count", type=int, help="pilot-only reduced validation set")
@@ -203,27 +179,15 @@ def main(argv=None):
     )
     evaluation.add_argument("--output", type=Path, required=True)
     evaluation.add_argument("--record", action="store_true")
-    bench = subs.add_parser("benchmark", help="compare complete collection/update throughput")
-    common(bench)
-    bench.add_argument("--output", type=Path, required=True)
-    bench.add_argument("--steps", type=int, default=16384)
-    bench.add_argument("--workers", type=int, nargs="+", default=[1, 4, 8])
-    bench.add_argument("--devices", nargs="+", choices=("cpu", "cuda"), default=["cpu", "cuda"])
-    bench.add_argument("--repeats", type=int, default=3)
     gpu_bench = subs.add_parser(
-        "benchmark-gpu", help="bounded CPU/CUDA backend comparison at 32/64/128 games"
+        "benchmark-gpu", help="bounded CUDA throughput comparison at 32/64/128 games"
     )
     common(gpu_bench)
     gpu_bench.add_argument("--output", type=Path, required=True)
     gpu_bench.add_argument("--minutes", type=float, default=15)
     gpu_bench.add_argument("--steps", type=int, default=16384)
-    bench.add_argument(
-        "--compare-runtime",
-        action="store_true",
-        help="pair current data transport with stock SB3 using identical training settings",
-    )
     suite = subs.add_parser(
-        "suite", help="run all 25 training jobs, held-out evaluation, and report"
+        "suite", help="run four CUDA conditions across learner seeds, then evaluate and report"
     )
     training_options(suite)
     suite.add_argument("--output", type=Path, required=True)
@@ -262,12 +226,6 @@ def main(argv=None):
         )
         print(json.dumps(result, indent=2))
         return
-    if args.command == "pilot":
-        from .pilot import run_pilot
-
-        print(json.dumps(run_pilot(args.output, args.minutes), indent=2))
-        return
-
     if args.command == "replay":
         from pvz_game.replay import validate_speed
 
@@ -330,7 +288,7 @@ def main(argv=None):
             env = PvZEnv(cfg, condition=condition)
             check_env(env, skip_render_check=True)
             env.close()
-        details["gymnasium_checks"] = "passed: all five conditions"
+        details["gymnasium_checks"] = f"passed: {len(cfg['conditions'])} reference conditions"
         from tempfile import TemporaryDirectory
 
         from pvz_game import Place
@@ -368,6 +326,7 @@ def main(argv=None):
             details["video"] = {"available": True, **ffmpeg_info(cfg)}
         except Exception as exc:
             details["video"] = {"available": False, "error": str(exc)}
+        details["training_ready"] = details["cuda_simulator"]["available"]
         details["cuda_available"] = torch.cuda.is_available()
         if details["cuda_available"]:
             value = (torch.ones(2, device="cuda") + 1).sum().item()
@@ -382,6 +341,7 @@ def main(argv=None):
                         "engine",
                         "gymnasium_checks",
                         "cuda_available",
+                        "training_ready",
                         "cuda_simulator",
                         "rendering",
                         "video",
@@ -391,6 +351,8 @@ def main(argv=None):
                 indent=2,
             )
         )
+        if not details["training_ready"]:
+            raise SystemExit(1)
     elif args.command == "train":
         from .training import train
 
@@ -475,23 +437,6 @@ def main(argv=None):
         print(
             json.dumps(
                 benchmark_gpu(cfg, args.output, minutes=args.minutes, steps=args.steps), indent=2
-            )
-        )
-    elif args.command == "benchmark":
-        from .benchmark import benchmark
-
-        print(
-            json.dumps(
-                benchmark(
-                    cfg,
-                    args.output,
-                    steps=args.steps,
-                    workers=args.workers,
-                    devices=args.devices,
-                    repeats=args.repeats,
-                    compare_runtime=args.compare_runtime,
-                ),
-                indent=2,
             )
         )
     elif args.command == "suite":

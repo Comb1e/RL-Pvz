@@ -7,7 +7,6 @@ import json
 import math
 import shutil
 from collections import Counter, deque
-from functools import partial
 from pathlib import Path
 from time import perf_counter
 
@@ -15,13 +14,10 @@ import torch
 from sb3_contrib import MaskablePPO
 from stable_baselines3 import PPO
 from stable_baselines3.common.callbacks import BaseCallback
-from stable_baselines3.common.monitor import Monitor
-from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv
 
 from .budget import budget_target, evaluation_interval, progress_value, uses_games
 from .config import (
     output_settings,
-    research_config,
     runtime_settings,
     seed_values,
     simulator,
@@ -29,51 +25,32 @@ from .config import (
 )
 from .curriculum import LESSONS, CurriculumState, stage_distribution, teaching_enabled
 from .deadline import BudgetExpired, RunBudget
-from .env import PvZEnv
 from .evaluation import evaluate, summarize
-from .exploration import configure_exploration, uses_research_optimizer
+from .exploration import configure_exploration
 from .grouped_policy import GroupedPolicy
 from .progress import Phase, ProgressReporter, duration
 from .provenance import append_jsonl, file_hash, metadata, verify_engine, write_json
 from .rewards import REWARD_METRICS
-from .runtime import (
-    CachedMaskVecEnv,
-    MaskTransport,
-    configure_rollout_buffer,
-    rollout_buffer_class,
-)
 from .scenarios import difficulty_weights
 from .spatial_policy import SpatialFeatures, SpatialGroupedPolicy
 from .timing import TrainingTimings
-
-
-def make_env(cfg, condition, worker_seed, family):
-    env = PvZEnv(cfg, condition=condition, training=True, worker_seed=worker_seed, family=family)
-    if cfg["conditions"][condition]["masked"] and runtime_settings(cfg)["coalesce_masks"]:
-        env = MaskTransport(env)
-    return Monitor(env)
+from .training_requirements import require_cuda_training, resume_protocol
 
 
 def vector_env(cfg, condition, learner_seed, family="preset"):
-    if simulator(cfg) == "cuda":
-        from .cuda_env import CudaVecEnv
+    from .cuda_env import CudaVecEnv
 
-        return CudaVecEnv(cfg, condition, learner_seed, family)
-    factories = [
-        partial(make_env, cfg, condition, learner_seed * 1000 + i, family)
-        for i in range(cfg["training"]["n_envs"])
-    ]
-    env = (
-        DummyVecEnv(factories)
-        if len(factories) == 1
-        else SubprocVecEnv(factories, start_method="spawn")
-    )
-    if cfg["conditions"][condition]["masked"] and runtime_settings(cfg)["coalesce_masks"]:
-        env = CachedMaskVecEnv(env)
-    return env
+    require_cuda_training(cfg, condition)
+    return CudaVecEnv(cfg, condition, learner_seed, family)
 
 
 def build_model(cfg, condition, env, seed, log_dir=None):
+    from .cuda_env import CudaVecEnv
+    from .cuda_ppo import CudaMaskablePPO, CudaPPO, configure_tensor_buffer
+
+    require_cuda_training(cfg, condition)
+    if not isinstance(env, CudaVecEnv):
+        raise ValueError("Training requires the CUDA tensor environment")
     t = cfg["training"]
     if (
         t.get("actor_objective") == "choice_points_v1"
@@ -94,15 +71,7 @@ def build_model(cfg, condition, env, seed, log_dir=None):
         or not cfg["conditions"][condition]["masked"]
     ):
         raise ValueError("Teaching curriculum requires a direct masked curriculum condition")
-    algorithm = MaskablePPO if cfg["conditions"][condition]["masked"] else PPO
-    if simulator(cfg) == "cuda":
-        from .cuda_ppo import CudaMaskablePPO, CudaPPO
-
-        algorithm = CudaMaskablePPO if cfg["conditions"][condition]["masked"] else CudaPPO
-    if simulator(cfg) == "cpu" and uses_research_optimizer(cfg):
-        from .cuda_ppo import ResearchMaskablePPO
-
-        algorithm = ResearchMaskablePPO
+    algorithm = CudaMaskablePPO if cfg["conditions"][condition]["masked"] else CudaPPO
     policy_kwargs = {"net_arch": {"pi": t["hidden_sizes"], "vf": t["hidden_sizes"]}}
     policy = GroupedPolicy if grouped else "MlpPolicy"
     if kind == "spatial_grouped_v2":
@@ -127,15 +96,8 @@ def build_model(cfg, condition, env, seed, log_dir=None):
         device=t["device"],
         verbose=0,
         tensorboard_log=str(log_dir) if log_dir else None,
-        rollout_buffer_class=rollout_buffer_class(
-            cfg["conditions"][condition]["masked"],
-            runtime_settings(cfg)["cache_rollout_on_device"],
-        ),
     )
-    if simulator(cfg) == "cuda":
-        from .cuda_ppo import configure_tensor_buffer
-
-        configure_tensor_buffer(model, cfg["conditions"][condition]["masked"])
+    configure_tensor_buffer(model, cfg["conditions"][condition]["masked"])
     configure_exploration(model, cfg)
     if "initial_dig_logit" in cfg.get("policy", {}):
         model.policy.initialize_dig_logit(cfg["policy"]["initial_dig_logit"])
@@ -704,11 +666,27 @@ def load_policy(checkpoint, device="cpu"):
 
         algorithm = CudaMaskablePPO if cfg["conditions"][condition]["masked"] else CudaPPO
     torch.set_num_threads(cfg["training"]["torch_threads"])
-    if simulator(cfg) == "cpu" and uses_research_optimizer(cfg):
-        from .cuda_ppo import ResearchMaskablePPO
+    # Archived CPU checkpoints can name the retired transport buffer classes.
+    # Replace only storage during deserialization; retain policy/optimizer weights.
+    from sb3_contrib.common.maskable.buffers import MaskableRolloutBuffer
+    from stable_baselines3.common.buffers import RolloutBuffer
 
-        algorithm = ResearchMaskablePPO
-    model = algorithm.load(checkpoint, device=device)
+    from .cuda_buffer import TensorRolloutBuffer
+
+    masked = cfg["conditions"][condition]["masked"]
+    buffer = (
+        TensorRolloutBuffer
+        if simulator(cfg) == "cuda"
+        else (MaskableRolloutBuffer if masked else RolloutBuffer)
+    )
+    model = algorithm.load(
+        checkpoint,
+        device=device,
+        custom_objects={
+            "rollout_buffer_class": buffer,
+            "rollout_buffer_kwargs": {"masked": masked} if simulator(cfg) == "cuda" else {},
+        },
+    )
     configure_exploration(model, cfg)
     return model, data
 
@@ -728,10 +706,20 @@ def train(
     cfg = copy.deepcopy(cfg)
     validate_config(cfg)
     output = Path(output)
-    if condition not in cfg["conditions"]:
-        raise ValueError("Unknown training condition")
-    if cfg["training"]["device"] == "cuda" and not torch.cuda.is_available():
-        raise RuntimeError("CUDA requested but unavailable; use --device cpu")
+    require_cuda_training(cfg, condition)
+    if resume:
+        saved = json.loads((Path(resume).resolve().parent / "metadata.json").read_text("utf-8"))
+        require_cuda_training(saved["config"], saved["condition"])
+        if (
+            saved["condition"] != condition
+            or resume_protocol(saved["config"], condition) != resume_protocol(cfg, condition)
+            or saved["family"] != family
+        ):
+            raise ValueError(
+                "Resume requires identical condition, family and configuration; start a fresh run for a changed profile"
+            )
+        if saved["learner_seed"] != learner_seed or saved["validation_limit"] != validation_limit:
+            raise ValueError("Resume learner seed or validation limit differs")
     torch.set_num_threads(cfg["training"]["torch_threads"])
     # Complete PPO rollouts are counted explicitly; no discarded partial optimization batch.
     game_budget = uses_games(cfg)
@@ -793,31 +781,14 @@ def train(
         env = vector_env(cfg, condition, learner_seed, family)
         if resume:
             model, old = load_policy(resume, cfg["training"]["device"])
-            if (
-                old["condition"] != condition
-                or research_config(old["config"]) != research_config(cfg)
-                or old["family"] != family
-            ):
-                raise ValueError(
-                    "Resume requires identical condition, family and configuration; start a fresh run for a new observation, policy, curriculum or reward profile"
-                )
-            if old["learner_seed"] != learner_seed or old["validation_limit"] != validation_limit:
-                raise ValueError("Resume learner seed differs")
             wall_budget.prior_elapsed = max(
                 wall_budget.prior_elapsed,
                 getattr(model, "wall_budget_state", {}).get("elapsed_seconds", 0.0),
             )
             model.set_env(env)
-            if simulator(cfg) == "cuda":
-                from .cuda_ppo import configure_tensor_buffer
+            from .cuda_ppo import configure_tensor_buffer
 
-                configure_tensor_buffer(model, cfg["conditions"][condition]["masked"])
-            else:
-                configure_rollout_buffer(
-                    model,
-                    cfg["conditions"][condition]["masked"],
-                    runtime_settings(cfg)["cache_rollout_on_device"],
-                )
+            configure_tensor_buffer(model, cfg["conditions"][condition]["masked"])
             model.tensorboard_log = str(output / "tensorboard")
             details["resume_steps"] = model.num_timesteps
             details["resume_games"] = getattr(model, "training_games", 0)

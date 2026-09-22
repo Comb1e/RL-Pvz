@@ -39,7 +39,7 @@ def test_legacy_default_retains_all_steps_and_invalid_objective_fails():
 
 @pytest.mark.learning
 def test_flat_choice_objective_reloads_custom_optimizer(smoke_cfg, tmp_path):
-    from pvz_rl.cuda_ppo import ResearchMaskablePPO
+    from pvz_rl.cuda_ppo import CudaMaskablePPO
     from pvz_rl.training import load_policy, train
 
     smoke_cfg["training"]["actor_objective"] = "choice_points_v1"
@@ -47,25 +47,27 @@ def test_flat_choice_objective_reloads_custom_optimizer(smoke_cfg, tmp_path):
         smoke_cfg, "masked", 101, tmp_path / "flat", family="diagnostic", validation_limit=1
     )
     model, _ = load_policy(run / "final.zip", "cpu")
-    assert isinstance(model, ResearchMaskablePPO)
+    assert isinstance(model, CudaMaskablePPO)
     assert model.actor_objective == "choice_points_v1"
 
 
 @pytest.mark.parametrize("spatial", [False, True])
 def test_dig_initialization_is_trainable_and_checkpointed(spatial, tmp_path):
     from pvz_rl.config import load_config
-    from pvz_rl.cuda_ppo import ResearchMaskablePPO
+    from pvz_rl.cuda_ppo import CudaMaskablePPO
     from pvz_rl.env import PvZEnv
-    from pvz_rl.training import build_model
+    from pvz_rl.training import build_model, vector_env
 
     torch.set_num_threads(1)
     cfg = load_config("configs/sc2-plant-rewards.toml")
-    cfg["simulation"]["backend"] = "cpu"
-    cfg["training"].update(device="cpu", n_envs=1, rollout_size=128, batch_size=128)
+    cfg["training"].update(device="cuda", n_envs=1, rollout_size=128, batch_size=128)
     if not spatial:
         cfg["policy"]["kind"] = "grouped_v1"
+    gpu = vector_env(cfg, "masked", 101)
+    model = build_model(cfg, "masked", gpu, 101)
+    gpu.close()
+    model.policy.to("cpu")
     env = PvZEnv(cfg)
-    model = build_model(cfg, "masked", env, 101)
     obs, _ = env.reset(seed=0)
     x = torch.as_tensor(obs).unsqueeze(0)
     mask = torch.zeros(1, 406, dtype=torch.bool)
@@ -82,7 +84,7 @@ def test_dig_initialization_is_trainable_and_checkpointed(spatial, tmp_path):
     assert model.policy.get_distribution(x, action_masks=mask).mode().item() == 361
     path = tmp_path / "policy.zip"
     model.save(path)
-    loaded = ResearchMaskablePPO.load(path, device="cpu")
+    loaded = CudaMaskablePPO.load(path, device="cpu")
     actual = loaded.policy.get_distribution(x, action_masks=mask).probs
     expected = model.policy.get_distribution(x, action_masks=mask).probs
     torch.testing.assert_close(actual, expected, atol=0, rtol=0)

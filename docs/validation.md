@@ -3,6 +3,57 @@
 Evidence is versioned below. Learning outcomes, simulation correctness and runtime
 speed are separate measures; [research design](research.md) defines the protocol.
 
+## 0.8.0 CUDA-only release — 2026-09-22
+
+Training now requires CUDA simulation and optimization. Historical CPU metadata
+and model inference remain readable; CPU/hybrid training is deliberately rejected.
+Tests for removed worker/transport/pilot implementations were replaced by CUDA
+learning and explicit rejection/compatibility controls. Independent CPU reward,
+observation, probability, optimizer, and game controls remain.
+
+| Verification | Result |
+|---|---|
+| Complete research regression | **363 passed, 1 upstream advisory in 429.55 s** |
+| Complete native CPU-game regression | **207 passed in 10.25 s** |
+| Complete native CUDA-game regression | **222 passed in 45.45 s** |
+| CUDA availability | PyTorch, NVRTC compilation, shared CuPy tensors, simulation hash parity, compact replay and renderer passed |
+| Lint / format / dependencies | Passed; 72 Python files formatted; no broken requirements |
+| Packaging | 0.8.0 wheel and sdist built; removed modules absent |
+| Documentation | 33 local file/anchor links, 10 CLI examples, 9 PowerShell blocks and installer parsed |
+| Source staging | Actual pinned game archive matches every manifest entry with newer source HEAD; neither game checkout modified |
+
+The complete suite covers masked/unmasked/sparse/mixed learning, grouped and
+spatial policies, exact reward/observation controls, PPO loss/gradient/Adam controls,
+timeout bootstrap, curriculum transitions, validation ties, interruption/resume,
+report recovery, videos, and native replay hashes. Added controls reject missing
+CUDA/compiler, CPU configurations and recommendations before creating a run;
+load historical inference despite retired buffer metadata; resume CUDA with dormant
+hybrid fields; and run a four-condition miniature suite with idempotent resume.
+Staging tests include dirty/newer source HEAD, missing commit, and bad manifest.
+
+Both existing shared-policy checkpoints were loaded through the original native
+loader and the new compatibility loader. All weights, 128 deterministic decisions
+per difficulty, and corresponding game hashes matched for both models. Retained
+recipes have unchanged learning-protocol settings after ignoring retired runtime
+flags and inactive conditions. Original checkpoints and recordings were preserved.
+
+The README diagnostic smoke command completed **2 games / 2,240 decisions in
+22.16 seconds**, including an offline report and one verified `.pvzdemo`, without
+MP4 encoding. Its loss at tick 1099 is reported honestly; this is an integration
+check, not learning evidence. Curves and the final outcome frame were inspected.
+Separate integration checks produced three normal-game demos with identical
+checkpoint identity and exact CPU replay verification. No formal research run or
+comparison matrix was launched.
+
+Evidence: `artifacts/v080-release-tests.txt`, `v080-native-game-tests.txt`,
+`v080-cuda-game-tests.txt`, `v080-availability.json`, `v080-doc-checks.json`,
+`v080-checkpoint-compatibility.json`, `v080-package-final.txt`, and
+`artifacts/cuda-smoke-v080/visualizations/index.html`. The only research warning
+is the upstream stock-PPO advisory in the independent optimizer control. Game
+caches and temporary output remained outside the game checkouts. The existing
+Windows environment was updated in place; a clean-machine reinstall was not run.
+No convergence or throughput improvement is claimed by this maintenance release.
+
 ## Documentation checks — 2026-09-22
 
 Consolidation checked 30 local file/section links, parsed all 13 PowerShell blocks,
@@ -224,7 +275,7 @@ a sustained thermal-soak experiment.
 
 Encoding and policy launches, synchronization and small PPO minibatches now
 dominate much more than ordered combat. Filling all VRAM would not establish
-useful acceleration. See [architecture](architecture.md#game-boundary-and-gpu-implementation) for the
+useful acceleration. See [architecture](architecture.md#important-constraints) for the
 remaining synchronization and profiling targets.
 
 
@@ -352,11 +403,10 @@ consolidation; it does not turn old evidence into current-version results.
 
 ## Running checks
 
-Research checks are listed in the [README](../README.md#evaluate-and-develop).
+Research checks are listed in the [README](../README.md#evaluate-and-verify).
 For game source suites, set `PYTHONPATH` to the chosen checkout's `src`, disable
 bytecode, and put pytest/Hypothesis caches and temporary output inside research
 `artifacts/`; restore environment variables afterward. Do not substitute a newer
 reader package for the pinned training simulator. Complete test runs include short
-learning checks but never formal training. A fresh CPU-only installation and
-non-Windows operation have not been exercised; CPU execution was tested with the
-installed CUDA-capable Torch distribution.
+learning checks but never formal training. Training requires CUDA. Reference CPU controls run with the installed CUDA-capable
+Torch distribution. Non-Windows installation has not been exercised.

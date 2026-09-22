@@ -4,4 +4,3 @@ simulator = "cuda"
 device = "cuda"
 n_envs = 128
 rollout_steps_per_env = 128
-hybrid_cpu_envs = 8

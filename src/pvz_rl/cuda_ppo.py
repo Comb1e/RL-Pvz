@@ -183,12 +183,6 @@ class TensorPPO:
         return super()._excluded_save_params()
 
 
-class ResearchMaskablePPO(MaskablePPO):
-    """CPU collector with the same tested optimization objective as CUDA."""
-
-    train = TensorPPO.train
-
-
 class CudaMaskablePPO(TensorPPO, MaskablePPO):
     pass
 

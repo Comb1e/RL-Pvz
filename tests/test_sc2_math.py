@@ -16,14 +16,13 @@ from pvz_rl.training import build_model, vector_env
 def test_balanced_ppo_update_matches_joint_probability_reference(objective):
     torch.set_num_threads(1)
     cfg = sc2_profile("C")
-    cfg["simulation"]["backend"] = "cpu"
     cfg["runtime"]["cache_rollout_on_device"] = False
     cfg["training"].update(
         n_envs=1,
         rollout_steps_per_env=32,
         rollout_size=32,
         batch_size=32,
-        device="cpu",
+        device="cuda",
         n_epochs=1,
         hidden_sizes=[16, 16],
         actor_objective=objective,
@@ -32,7 +31,7 @@ def test_balanced_ppo_update_matches_joint_probability_reference(objective):
     try:
         model = build_model(cfg, "masked", env, 102)
         model.set_logger(configure(format_strings=[]))
-        reference = copy.deepcopy(model.policy)
+        reference = copy.deepcopy(model.policy).to("cpu")
         rng = np.random.default_rng(44)
         raw = PvZEnv(cfg)
         observation, _ = raw.reset(seed=7)
@@ -60,7 +59,11 @@ def test_balanced_ppo_update_matches_joint_probability_reference(objective):
             "returns": returns.numpy(),
             "action_masks": mask,
         }.items():
-            getattr(buffer, key)[:] = np.asarray(value).reshape(getattr(buffer, key).shape)
+            getattr(buffer, key).copy_(
+                torch.as_tensor(
+                    np.asarray(value).reshape(getattr(buffer, key).shape), device="cuda"
+                )
+            )
         buffer.full = True
         values, _, _ = reference.evaluate_actions(
             torch.tensor(obs), torch.tensor(actions), action_masks=mask
@@ -98,8 +101,8 @@ def test_balanced_ppo_update_matches_joint_probability_reference(objective):
             bonus[selected].mean().item(), abs=1e-7
         )
         for actual, expected in zip(model.policy.parameters(), reference.parameters()):
-            torch.testing.assert_close(actual, expected, atol=2e-7, rtol=2e-6)
-            torch.testing.assert_close(actual.grad, expected.grad, atol=2e-7, rtol=2e-6)
+            torch.testing.assert_close(actual.cpu(), expected, atol=2e-7, rtol=2e-6)
+            torch.testing.assert_close(actual.grad.cpu(), expected.grad, atol=2e-7, rtol=2e-6)
     finally:
         env.close()
 

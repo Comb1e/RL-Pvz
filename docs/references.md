@@ -100,3 +100,10 @@ claims. Some online SB3/PyTorch retrievals failed, so those entries explicitly u
 installed versioned source. Revisiting remains abstract-only. Repository claims,
 published findings, proposed adaptations and local results are distinct. No paper
 establishes these reward weights, human similarity or a two-hour win-rate gain.
+
+For 0.8.0 (2026-09-22), inspected installed SB3 2.7.1 `common/base_class.py`
+loading and `common/save_util.py` custom-object deserialization. Replace retired
+buffer-class metadata during historical inference while retaining policy and
+optimizer state. Inspected the local Git archive/staging implementation to stage
+the pinned tree independently of the game checkout HEAD. This maintenance change
+adopts no new learning method or performance claim.

@@ -15,7 +15,7 @@ from pvz_rl.training import ResearchCallback, load_policy, train
 from pvz_rl.visualization import read_json, read_series
 
 
-def small_cfg(device="cpu", backend="cpu", profile="E"):
+def small_cfg(device="cuda", backend="cuda", profile="E"):
     cfg = sc2_profile(profile)
     cfg["simulation"]["backend"] = backend
     cfg["environment"]["cutoff_seconds"] = 1
@@ -88,7 +88,7 @@ def test_expired_evaluation_records_pending_not_a_win(smoke_cfg, tmp_path):
 
 
 @pytest.mark.learning
-@pytest.mark.parametrize("backend,device", [("cpu", "cpu"), ("cpu", "cuda"), ("cuda", "cuda")])
+@pytest.mark.parametrize("backend,device", [("cuda", "cuda")])
 def test_spatial_training_reload_and_preserved_model_across_stages(
     tmp_path, backend, device, monkeypatch
 ):

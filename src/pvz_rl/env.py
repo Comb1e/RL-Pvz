@@ -52,7 +52,11 @@ class PvZEnv(gym.Env):
         self.cfg = copy.deepcopy(cfg or load_config())
         validate_config(self.cfg)
         self.condition = condition
-        self.options = self.cfg["conditions"][condition]
+        self.options = (
+            {"masked": True, "shaped": True, "curriculum": True, "hybrid": True}
+            if condition == "hybrid"
+            else self.cfg["conditions"][condition]
+        )
         self.level, self.family, self.training = level, family, training
         self.record, self.render_mode = record, render_mode
         self.replay_metadata = copy.deepcopy(replay_metadata or {})

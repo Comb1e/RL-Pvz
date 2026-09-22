@@ -25,19 +25,17 @@ def test_new_shared_run_defaults_and_explicit_parallelism():
 
 
 @pytest.mark.parametrize(
-    "options",
-    [
-        {"simulator": "cpu"},
-        {"device": "cpu"},
-        {"condition": "hybrid"},
-        {"steps": 4096},
-        {"rollout_size": 4096},
-    ],
+    "options", [{"simulator": "cpu"}, {"device": "cpu"}, {"condition": "hybrid"}]
 )
-def test_explicit_cpu_and_legacy_requests_keep_cpu_simulator(options):
-    cfg = configured(args(**options))
-    assert simulator(cfg) == "cpu"
-    assert cfg["training"]["n_envs"] == 8
+def test_cpu_and_hybrid_requests_are_rejected(options):
+    with pytest.raises(ValueError, match="removed"):
+        configured(args(**options))
+
+
+def test_explicit_legacy_decision_budget_still_uses_cuda():
+    cfg = configured(args(steps=4096))
+    assert simulator(cfg) == "cuda"
+    assert cfg["training"]["budget_unit"] == "decisions"
 
 
 def test_hardware_recommendations_and_override_conflicts(tmp_path):
@@ -61,9 +59,9 @@ def test_resume_uses_saved_protocol_and_instrumentation_is_optional(tmp_path):
     (tmp_path / "metadata.json").write_text(json.dumps({"config": saved}))
     cfg = configured(args(resume=tmp_path / "latest.zip"))
     assert research_config(cfg) == research_config(saved)
-    cfg["simulation"] = {"backend": "cpu", "profile": True}
+    cfg["simulation"] = {"backend": "cuda", "profile": True}
     assert research_config(cfg) == research_config(saved)
-    cfg["simulation"]["backend"] = "cuda"
+    cfg["simulation"]["backend"] = "cpu"
     assert research_config(cfg) != research_config(saved)
 
 
@@ -71,7 +69,6 @@ def test_promotion_requires_complete_stable_trials_and_correctness():
     rows = [
         dict(profile=name, state="complete", decisions_per_second=rate)
         for name, rates in {
-            "cpu-current": [100, 100, 100],
             "cuda-32": [150, 151, 152],
             "cuda-64": [155, 156, 157],
             "cuda-128": [100, 300, 500],

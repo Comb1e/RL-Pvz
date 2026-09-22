@@ -5,6 +5,25 @@ Dates and results belong to their recorded version. Current behavior lives in
 artifact locations and learning outcomes live in [validation](validation.md).
 The longer pre-consolidation notes remain in `git show b642c9c:docs/iteration.md`.
 
+## 0.8.0 — 2026-09-22
+
+- Problem/cause: CPU collectors, hybrid jobs, and old recipes remained reachable;
+  installer HEAD requirements and README examples did not match the current folders.
+- Change: CUDA-only training preflight; remove CPU collectors/transport, hybrid
+  training, four standalone recipes, and legacy pilot/benchmark commands. Keep
+  four direct conditions, CUDA SC2 comparisons, and CPU verification/inference.
+  Archive the pinned game commit without switching its source checkout. README
+  now maps the actual folders and uses consistent fresh output names.
+- Compatibility: CUDA weights, optimizer state, learning settings and engine pin
+  remain compatible. Ignore dormant conditions for individual resume; replace
+  retired buffer metadata for historical inference. CPU/hybrid resume is rejected.
+- Verification: full research and both game suites, CUDA smoke/report/replay,
+  checkpoint action/hash controls, pinned source staging, documentation examples,
+  lint, dependency checks and packaging; exact results are in validation.md.
+- Remaining limits: CUDA hardware is required for training. The plant-reward
+  candidate remains experimental; this cleanup establishes no learning improvement.
+  The CPU simulator remains necessary for correctness checks and replay verification.
+
 ## Documentation consolidation — 2026-09-22 (0.7.1 unchanged)
 
 - Problem/cause: release notes accumulated into repeated installation, reward,

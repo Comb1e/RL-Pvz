@@ -1,4 +1,4 @@
-"""Explicit, restartable orchestration for the five-condition research protocol.
+"""Explicit, restartable orchestration for the four-condition research protocol.
 
 This module never starts automatically. Every attempt uses a fresh directory, and
 the journal keeps previous attempts and their evidence intact.
@@ -8,17 +8,25 @@ import copy
 import json
 from pathlib import Path
 
-from .config import digest, gpu_defaults, research_config, resolve_rollout, seed_values, simulator
+from .config import digest, research_config, seed_values
 from .evaluation import BASELINES, evaluate
 from .provenance import file_hash, metadata, write_json
 from .reporting import make_report
 from .training import load_policy, train
+from .training_requirements import TRAINING_CONDITIONS, require_cuda_training
 
 
 def run_suite(cfg, output, *, resume=False):
+    cfg = copy.deepcopy(cfg)
+    # New suites have four jobs per learner even if a caller supplies an archived
+    # configuration containing an unused hybrid definition.
+    cfg["conditions"] = {
+        name: cfg["conditions"][name] for name in TRAINING_CONDITIONS if name in cfg["conditions"]
+    }
+    require_cuda_training(cfg)
     if cfg.get("policy", {}).get("kind", "flat") != "flat":
         raise ValueError(
-            "The five-condition suite requires the baseline flat policy. "
+            "The four-condition suite requires the baseline flat policy. "
             "Use train or compare-sc2 for grouped/teaching profiles."
         )
     output = Path(output)
@@ -26,6 +34,13 @@ def run_suite(cfg, output, *, resume=False):
     if resume:
         journal = json.loads(journal_path.read_text("utf-8"))
         original = json.loads((output / "metadata.json").read_text("utf-8"))["config"]
+        require_cuda_training(original)
+        if "hybrid" in original["conditions"] or any(
+            k.startswith("hybrid-") for k in journal["jobs"]
+        ):
+            raise ValueError(
+                "This archived suite includes retired hybrid training; start a new CUDA suite."
+            )
         if research_config(original) != research_config(cfg):
             raise ValueError("Suite resume requires its original configuration")
     else:
@@ -36,15 +51,10 @@ def run_suite(cfg, output, *, resume=False):
     if journal["state"] == "complete":
         return journal
     try:
-        for condition in cfg["conditions"]:
+        for condition in TRAINING_CONDITIONS:
+            if condition not in cfg["conditions"]:
+                continue
             job_cfg = copy.deepcopy(cfg)
-            if cfg["conditions"][condition]["hybrid"]:
-                job_cfg["simulation"] = {"backend": "cpu"}
-                if simulator(cfg) == "cuda":
-                    job_cfg["training"]["n_envs"] = min(
-                        cfg["training"]["n_envs"], gpu_defaults()["hybrid_cpu_envs"]
-                    )
-                    resolve_rollout(job_cfg)
             for seed in cfg["training"]["learner_seeds"]:
                 key = f"{condition}-{seed}"
                 attempts = journal["jobs"].setdefault(key, [])

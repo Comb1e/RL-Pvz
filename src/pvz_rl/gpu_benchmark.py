@@ -1,4 +1,4 @@
-"""Bounded, repeated CPU/CUDA collection+optimization comparisons."""
+"""Bounded, repeated CUDA collection+optimization comparisons."""
 
 import copy
 import ctypes
@@ -107,8 +107,6 @@ def recommend(rows, *, parity_passed=False, provisional=True):
         (n for n, rate in candidates.items() if rate >= 0.95 * max(candidates.values())),
         default=None,
     )
-    baseline = aggregates.get("cpu-current")
-    speedup = candidates[selected] / baseline if selected is not None and baseline else None
     return {
         "n_envs": selected,
         "device": "cuda",
@@ -117,17 +115,17 @@ def recommend(rows, *, parity_passed=False, provisional=True):
         "median_decisions_per_second": aggregates,
         "coefficient_of_variation": variation,
         "stability_limit": 0.10,
-        "speedup_over_current": speedup,
         "parity_passed": parity_passed,
         "provisional": provisional,
-        "promote_default": bool(
-            parity_passed and not provisional and speedup is not None and speedup >= 1.2
-        ),
+        "promote_default": bool(parity_passed and not provisional and selected is not None),
         "note": "Complete collection+PPO updates; setup, warmup, validation and export reported separately. No promotion from utilization alone.",
     }
 
 
 def benchmark_gpu(cfg, output, *, minutes=15, steps=16384):
+    from .training_requirements import require_cuda_training
+
+    require_cuda_training(cfg)
     if not 0 < minutes <= 30 or steps < 1:
         raise ValueError("GPU benchmark must be bounded to 0 < minutes <= 30 and positive steps")
     output = Path(output)
@@ -141,9 +139,6 @@ def benchmark_gpu(cfg, output, *, minutes=15, steps=16384):
     deadline = perf_counter() + minutes * 60
     torch.set_num_threads(cfg["training"]["torch_threads"])
     profiles = [
-        ("cpu-current", "cpu", 8, 512),
-        ("cpu-equivalent", "cpu", 8, 128),
-        ("cuda-equivalent", "cuda", 8, 128),
         *((f"cuda-{n}", "cuda", n, 128) for n in (32, 64, 128)),
     ]
     try:
