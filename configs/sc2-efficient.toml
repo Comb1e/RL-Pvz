@@ -63,7 +63,7 @@ economy_scale = 300
 [training]
 budget_unit = "games"
 total_games = 10000
-eval_interval_games = 1000
+eval_interval_games = 2000
 total_steps = 3000000 # Inactive unless budget_unit = "decisions" (legacy).
 learner_seeds = [101, 102]
 n_envs = 128
@@ -87,11 +87,11 @@ torch_threads = 1
 [curriculum]
 mode = "teaching"
 residency = "episode_start_stage"
-probe_interval_games = 100
+probe_interval_games = 500
 minimum_stage_games = 100
 probe_interval = 16384
-probe_cases = 20
-consecutive_passes = 2
+probe_cases = 100
+consecutive_passes = 1
 minimum_stage_steps = 16384
 
 boundaries = [0.1, 0.4]
@@ -102,6 +102,7 @@ final_weights = [0.2, 0.4, 0.4]
 [splits]
 train = [1000, 99999]
 validation = [100000, 100049]
+curriculum = [100050, 100149] # Separate mastery cases; never final-test seeds.
 test = [200000, 200299]
 ood = [300000, 300099]
 
@@ -156,27 +157,27 @@ allowed_plants = ["sunflower", "peashooter"]
 [curriculum.stages.placement]
 tasks = ["placement"]
 weights = [1.0]
-requirements = {placement = 18}
+requirements = {placement = 100}
 
 [curriculum.stages.saving]
 tasks = ["saving", "placement"]
 weights = [0.8, 0.2]
-requirements = {saving = 18}
+requirements = {saving = 100}
 
 [curriculum.stages.easy]
 tasks = ["easy", "placement", "saving"]
 weights = [0.8, 0.1, 0.1]
-requirements = {easy = 16}
+requirements = {easy = 100}
 
 [curriculum.stages.standard]
 tasks = ["easy", "standard", "saving"]
 weights = [0.45, 0.45, 0.1]
-requirements = {easy = 16, standard = 12}
+requirements = {easy = 100, standard = 100}
 
 [curriculum.stages.shared]
 tasks = ["easy", "standard", "hard"]
 weights = [0.2, 0.4, 0.4]
-requirements = {}
+requirements = {easy = 100, standard = 100, hard = 100}
 
 [simulation]
 backend = "cuda"

@@ -1,9 +1,10 @@
 mode = "teaching"
-probe_interval_games = 100
+residency = "episode_start_stage"
+probe_interval_games = 500
 minimum_stage_games = 100
 probe_interval = 16384
-probe_cases = 20
-consecutive_passes = 2
+probe_cases = 100
+consecutive_passes = 1
 minimum_stage_steps = 16384
 
 [lessons.placement]
@@ -19,24 +20,24 @@ allowed_plants = ["sunflower", "peashooter"]
 [stages.placement]
 tasks = ["placement"]
 weights = [1.0]
-requirements = {placement = 18}
+requirements = {placement = 100}
 
 [stages.saving]
 tasks = ["saving", "placement"]
 weights = [0.8, 0.2]
-requirements = {saving = 18}
+requirements = {saving = 100}
 
 [stages.easy]
 tasks = ["easy", "placement", "saving"]
 weights = [0.8, 0.1, 0.1]
-requirements = {easy = 16}
+requirements = {easy = 100}
 
 [stages.standard]
 tasks = ["easy", "standard", "saving"]
 weights = [0.45, 0.45, 0.1]
-requirements = {easy = 16, standard = 12}
+requirements = {easy = 100, standard = 100}
 
 [stages.shared]
 tasks = ["easy", "standard", "hard"]
 weights = [0.2, 0.4, 0.4]
-requirements = {}
+requirements = {easy = 100, standard = 100, hard = 100}

@@ -17,6 +17,7 @@ from stable_baselines3.common.callbacks import BaseCallback
 
 from .budget import budget_target, evaluation_interval, progress_value, uses_games
 from .config import (
+    curriculum_probe_seeds,
     output_settings,
     runtime_settings,
     seed_values,
@@ -219,7 +220,9 @@ class ResearchCallback(BaseCallback):
             "curriculum_stage": self.curriculum.name if self.curriculum else "fixed",
             "selected_stage": selected_stage(self.cfg),
             "stage_mastered": bool(self.curriculum and self.curriculum.mastered),
-            "curriculum_incomplete": bool(self.curriculum and self.curriculum.name != "shared"),
+            "curriculum_incomplete": bool(
+                self.curriculum and not self.curriculum.complete(self.cfg)
+            ),
             "next_episode_tasks": stage_distribution(self.cfg, self.curriculum.stage)
             if self.curriculum
             else None,
@@ -468,7 +471,7 @@ class ResearchCallback(BaseCallback):
         self.timings.begin_collection()
 
     def check_stage_complete(self):
-        if selected_stage(self.cfg) and self.curriculum and self.curriculum.mastered:
+        if self.curriculum and self.curriculum.mastered:
             raise TrainingStageComplete()
 
     def check_deadline(self):
@@ -542,7 +545,7 @@ class ResearchCallback(BaseCallback):
         for task in self.curriculum.requirements(self.cfg):
             try:
                 rows = self.cached_evaluation(
-                    seed_values(self.cfg, "validation", self.cfg["curriculum"]["probe_cases"]),
+                    curriculum_probe_seeds(self.cfg),
                     ["easy" if task in LESSONS else task],
                     task if task in LESSONS else "preset",
                     self.output / "curriculum-probes" / str(self.model.num_timesteps) / task,
@@ -553,7 +556,9 @@ class ResearchCallback(BaseCallback):
                 self.progress.emit("Curriculum probe pending: time allowance exhausted", force=True)
                 self.eval_seconds += perf_counter() - started
                 return
-            wins[task] = sum(row["win"] for row in rows)
+            if len(rows) != self.cfg["curriculum"]["probe_cases"]:
+                raise ValueError("Incomplete curriculum probe cannot certify mastery")
+            wins[task] = sum(bool(row["win"]) for row in rows)
         advanced = self.curriculum.observe(
             wins, progress, self.cfg, advance=selected_stage(self.cfg) is None
         )
@@ -668,7 +673,9 @@ class ResearchCallback(BaseCallback):
             and self.wall_budget.limit is not None
         ):
             self.validate(final=True)
-        if selected_stage(self.cfg) and not self.budget_stopped:
+        if not self.budget_stopped and (
+            selected_stage(self.cfg) or "curriculum" in self.cfg["splits"]
+        ):
             self.probe_curriculum(final=True)
         elif (
             not self.budget_stopped
@@ -775,7 +782,8 @@ def train(
         ):
             raise ValueError(
                 "Stage initialization requires matching engine, policy, rewards, PPO and "
-                "teaching tasks; only the selected stage, budgets and validation schedule may change"
+                "teaching tasks; only the selected stage, budgets, mastery criteria and "
+                "validation schedule may change"
             )
         initialized_model, _ = load_policy(source_path, cfg["training"]["device"])
         initialization = {
@@ -942,7 +950,7 @@ def train(
                 progress.emit("Game target reached; final PPO update completed", force=True)
                 callback._on_training_end()
             except TrainingStageComplete:
-                progress.emit("Selected stage mastered; finalizing its checkpoint", force=True)
+                progress.emit("Mastery reached; finalizing its checkpoint", force=True)
                 callback._on_training_end()
             except TrainingDeadline:
                 progress.emit(
@@ -967,6 +975,8 @@ def train(
             "budget_stopped": callback.budget_stopped,
             "stop_reason": "stage_mastered"
             if selected_stage(cfg) and callback.curriculum and callback.curriculum.mastered
+            else "curriculum_mastered"
+            if callback.curriculum and callback.curriculum.mastered
             else "time_budget"
             if callback.budget_stopped
             else "game_budget"

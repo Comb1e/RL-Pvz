@@ -116,3 +116,10 @@ and optimizer state, while resetting timestep counters alone does not reset the
 project's curriculum, game count or wall allowance. This informed explicit stage
 initialization separate from resume. No new paper-derived algorithm or performance
 claim is introduced; the existing curriculum evidence remains as recorded above.
+
+For the 0.8.1 mastery follow-up (2026-09-22), re-inspected this project's curriculum
+state machine, post-update validation callback, checkpoint compatibility checks,
+and existing curriculum/seed-separation references above. The 100/100 pass gate
+is Leafy's requested acceptance rule; the 500/2,000-game intervals are local
+configuration choices, not paper-derived optima. No new learning method or
+performance claim is introduced.

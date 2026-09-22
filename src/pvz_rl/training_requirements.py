@@ -66,6 +66,19 @@ def transfer_protocol(cfg, condition):
     result = copy.deepcopy(resume_protocol(cfg, condition))
     result["curriculum"].pop("run_stage", None)
     for key in (
+        "probe_interval_games",
+        "probe_interval",
+        "probe_cases",
+        "consecutive_passes",
+        "minimum_stage_games",
+        "minimum_stage_steps",
+        "residency",
+    ):
+        result["curriculum"].pop(key, None)
+    for stage in result["curriculum"].get("stages", {}).values():
+        stage.pop("requirements", None)
+    result["splits"].pop("curriculum", None)
+    for key in (
         "total_games",
         "total_steps",
         "budget_unit",

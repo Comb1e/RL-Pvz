@@ -248,8 +248,7 @@ def validate_config(cfg: dict) -> None:
         for key in (*schedule, "probe_cases", "consecutive_passes"):
             if type(c[key]) is not int or c[key] < 1:
                 raise ValueError(f"curriculum.{key} must be a positive integer")
-        if c["probe_cases"] > cfg["splits"]["validation"][1] - cfg["splits"]["validation"][0] + 1:
-            raise ValueError("Curriculum probes must fit the validation split")
+        curriculum_probe_seeds(cfg)
         for name in STAGES:
             stage = c["stages"][name]
             if (
@@ -263,6 +262,7 @@ def validate_config(cfg: dict) -> None:
                     type(n) is not int or not 1 <= n <= c["probe_cases"]
                     for n in stage["requirements"].values()
                 )
+                or not set(stage["requirements"]) <= set(stage["tasks"])
             ):
                 raise ValueError("Invalid teaching distribution or probe threshold")
     runtime = runtime_settings(cfg)
@@ -372,3 +372,9 @@ def seed_values(cfg: dict, split: str, limit: int | None = None) -> list[int]:
     if limit is not None and not 1 <= limit <= hi - lo + 1:
         raise ValueError("Seed count lies outside split")
     return list(range(lo, hi + 1 if limit is None else lo + limit))
+
+
+def curriculum_probe_seeds(cfg: dict) -> list[int]:
+    """New mastery cases are separate; saved recipes retain their original seeds."""
+    split = "curriculum" if "curriculum" in cfg["splits"] else "validation"
+    return seed_values(cfg, split, cfg["curriculum"]["probe_cases"])

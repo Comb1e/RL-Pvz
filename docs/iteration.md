@@ -7,6 +7,13 @@ The longer pre-consolidation notes remain in `git show b642c9c:docs/iteration.md
 
 ## 0.8.1 — 2026-09-22
 
+- Follow-up: Leafy requested perfect 100-game mastery and less frequent validation.
+  Replace the permissive 20-case gates with 100/100 per required task, including
+  final shared-stage mastery. Probe every 500 training games; validate checkpoints
+  every 2,000 with the original 50 cases/difficulty. A separate 100-case curriculum
+  seed range avoids enlarging normal validation or touching held-out seeds.
+  Resume preserves saved gates; explicit stage handoff can select the new protocol.
+  README now lists every stage's pass criteria and the two schedules.
 - Problem/cause: teaching stages advanced within one run; strict resume restored
   the same budget and offered no explicit checkpoint handoff to another stage.
 - Change: select one stage, retain its rehearsal mix, stop on mastery or budget,

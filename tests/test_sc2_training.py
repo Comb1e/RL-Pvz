@@ -151,7 +151,7 @@ def test_resume_keeps_cumulative_time_schedule_and_optimizer(tmp_path, monkeypat
     assert status["training_games"] >= 24
     model, _ = load_policy(resumed / "final.zip")
     assert model._n_updates > interrupted._n_updates
-    assert model.research_schedule["next_eval"] == 1000
+    assert model.research_schedule["next_eval"] == 2000
 
 
 @pytest.mark.learning

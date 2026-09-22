@@ -33,7 +33,7 @@ def game_config(smoke_cfg):
 
 def test_default_config_and_cli_use_games(per_tick_cfg):
     assert uses_games(per_tick_cfg)
-    assert budget_target(per_tick_cfg) == 10000 and evaluation_interval(per_tick_cfg) == 1000
+    assert budget_target(per_tick_cfg) == 10000 and evaluation_interval(per_tick_cfg) == 2000
     args = argparse.Namespace(config=None, command="train", games=20, eval_games=5)
     cfg = configured(args)
     assert budget_target(cfg) == 20 and evaluation_interval(cfg) == 5
@@ -66,8 +66,8 @@ def test_fixed_curriculum_changes_only_on_reset_and_ignores_decisions(per_tick_c
     assert set(levels) == {"easy", "standard", "hard"}
 
 
-def test_teaching_gates_use_games_and_resume_counters(per_tick_cfg):
-    cfg = learning_profile("pure-rl", per_tick_cfg)
+def test_teaching_gates_use_games_and_resume_counters(per_tick_cfg, legacy_teaching):
+    cfg = legacy_teaching(learning_profile("pure-rl", per_tick_cfg))
     state = CurriculumState(entered_steps=999999, last_probe=999999)
     assert not state.due(99, cfg) and state.due(100, cfg)
     assert not state.observe({"placement": 18}, 100, cfg)
@@ -197,8 +197,10 @@ def test_interrupt_resume_preserves_games_and_schedule(smoke_cfg, tmp_path, monk
 
 
 @pytest.mark.learning
-def test_game_mastery_probes_keep_policy_and_optimizer(smoke_cfg, tmp_path, monkeypatch):
-    cfg = learning_profile("pure-rl", game_config(smoke_cfg))
+def test_game_mastery_probes_keep_policy_and_optimizer(
+    smoke_cfg, tmp_path, monkeypatch, legacy_teaching
+):
+    cfg = legacy_teaching(learning_profile("pure-rl", game_config(smoke_cfg)))
     cfg["training"].update(total_games=7, eval_interval_games=3)
     cfg["curriculum"].update(probe_interval_games=2, minimum_stage_games=2)
     identities = []

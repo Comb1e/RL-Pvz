@@ -48,12 +48,16 @@ class CurriculumState:
         key = "probe_interval_games" if uses_games(cfg) else "probe_interval"
         return (
             not self.mastered
-            and self.stage < len(STAGES) - 1
+            and bool(self.requirements(cfg))
             and steps - last >= cfg["curriculum"][key]
         )
 
     def requirements(self, cfg):
         return cfg["curriculum"]["stages"][self.name]["requirements"]
+
+    def complete(self, cfg):
+        # Archived recipes ended their curriculum upon entering the shared stage.
+        return self.stage == len(STAGES) - 1 and (self.mastered or not self.requirements(cfg))
 
     def observe(self, wins, steps, cfg, *, advance=True):
         games = uses_games(cfg)
@@ -62,6 +66,10 @@ class CurriculumState:
         if steps < last:
             raise ValueError("Curriculum progress cannot move backwards")
         c = cfg["curriculum"]
+        if self.mastered:
+            return False
+        if any(type(n) is not int or not 0 <= n <= c["probe_cases"] for n in wins.values()):
+            raise ValueError("Probe wins must be integer counts within probe_cases")
         if games:
             self.last_probe_games = steps
         else:
@@ -72,8 +80,7 @@ class CurriculumState:
         )
         self.consecutive_passes = self.consecutive_passes + 1 if passed else 0
         if (
-            self.stage < len(STAGES) - 1
-            and self.consecutive_passes >= c["consecutive_passes"]
+            self.consecutive_passes >= c["consecutive_passes"]
             and (
                 self.completed_stage_games
                 if games and c.get("residency") == "episode_start_stage"
@@ -81,7 +88,7 @@ class CurriculumState:
             )
             >= c["minimum_stage_games" if games else "minimum_stage_steps"]
         ):
-            if not advance:
+            if not advance or self.stage == len(STAGES) - 1:
                 self.mastered = True
                 return False
             self.stage += 1

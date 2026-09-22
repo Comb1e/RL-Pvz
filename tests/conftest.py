@@ -4,6 +4,28 @@ from pvz_rl.config import load_config
 
 
 @pytest.fixture
+def legacy_teaching():
+    """Explicit archived protocol, independent of current recipe defaults."""
+
+    def restore(cfg):
+        c = cfg["curriculum"]
+        c.update(probe_interval_games=100, probe_cases=20, consecutive_passes=2)
+        c.pop("residency", None)
+        cfg["splits"].pop("curriculum", None)
+        for stage, requirements in {
+            "placement": {"placement": 18},
+            "saving": {"saving": 18},
+            "easy": {"easy": 16},
+            "standard": {"easy": 16, "standard": 12},
+            "shared": {},
+        }.items():
+            c["stages"][stage]["requirements"] = requirements
+        return cfg
+
+    return restore
+
+
+@pytest.fixture
 def cfg():
     cfg = load_config()
     # Preserve established 10-tick controls as legacy regression cases.

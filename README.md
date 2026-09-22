@@ -90,7 +90,10 @@ rollout**. Games control budgets, curriculum progress, and validation schedules.
 Legal planting/digging is immediate; waiting or rejection advances one tick.
 The same policy and optimizer continue across difficulties and curriculum stages.
 
-Normal validation runs every 1,000 completed games with 50 seeds per difficulty.
+Normal checkpoint validation runs every **2,000 completed training games**, with
+50 seeds per difficulty. Mastery checks run separately every **500 training games**
+using 100 fixed cases per required task. These intervals apply after a complete
+PPO update; a rollout crossing several intervals triggers one check.
 `best.zip` maximizes the equal-weight easy/standard/hard win rate; earlier ties
 win. The 120-minute allowance includes validation and presentation, reserving
 15 minutes for finalization. Training stops between complete PPO updates, so the
@@ -160,12 +163,29 @@ inherit its exact learning settings. Weights and optimizer state carry forward;
 game/decision counts, mastery probes, validation selection, and time allowance
 start fresh for each stage. The source checkpoint hash is recorded in metadata.
 
-`--stage` keeps that stage's task mix, including earlier-lesson rehearsal. It stops
-at mastery (the usual two passing probes plus minimum stage residency) or the
-game/time limit, after a complete PPO update. It never promotes automatically.
-`shared` has no mastery gate and runs to its budget. `status.json` and the report
-show `stage_mastered` and the stopping reason; reaching a budget does not certify
-mastery. You may explicitly initialize the next stage even if mastery was not met.
+`--stage` keeps that stage's task mix, including earlier-lesson rehearsal. **Passing
+requires a 100% win rate over 100 evaluation games for every required task:**
+
+| Stage | Required result in one mastery check |
+|---|---|
+| `placement` | 100/100 placement-lesson wins |
+| `saving` | 100/100 saving-lesson wins |
+| `easy` | 100/100 normal easy wins |
+| `standard` | 100/100 easy **and** 100/100 standard wins |
+| `shared` | 100/100 each on easy, standard, and hard |
+
+One complete passing check is sufficient, provided at least 100 training games
+started in that stage have completed. Any loss, truncation, or incomplete check
+blocks mastery. The 500-game probe interval counts training games, not evaluation
+games. Checks use seeds 100050–100149; checkpoint validation retains seeds
+100000–100049. `--validation-count` changes checkpoint validation only.
+
+A single-stage run stops at mastery or its game/time limit after a complete PPO
+update. It never promotes automatically. Automatic curriculum runs advance only
+after passing and finish when the shared stage passes. `status.json` and the report
+show `stage_mastered`, `curriculum_incomplete`, and the stopping reason. Reaching
+a budget does not certify mastery. Explicitly initializing another stage before
+mastery is still possible; it is not a recorded pass.
 
 `latest.zip` is saved after completed mastery probes and normal validation;
 `final.zip` contains the final learned state for the next stage. `best.zip` remains
@@ -180,9 +200,17 @@ To continue an interrupted stage with its remaining original allowance, use
 ```
 
 Omitting `--stage` on a fresh run keeps the automatic curriculum. Stage handoffs
-require matching policy, rewards, PPO settings, teaching tasks and engine pin;
-changing learning methods requires a fresh model. CPU/hybrid training remains
-unsupported.
+require matching policy, rewards, PPO settings, task definitions/mixes and engine
+pin. Budgets, mastery criteria and evaluation schedules may change explicitly.
+For a checkpoint created with older gates, add the current matching `--config`
+to `--init-from` to adopt the new criteria. Without `--config`, handoff inherits the
+saved rules; `--resume` always preserves the saved criteria and schedule.
+CPU/hybrid training remains unsupported.
+
+To change frequency for a new run, use `--eval-games` for checkpoint validation
+or edit `curriculum.probe_interval_games` in a copy of the recipe for mastery checks.
+Lower frequency does not remove the final checkpoint validation. Short runs ending
+before their first scheduled mastery check remain unmastered.
 
 ## Logs, reports, and demonstrations
 

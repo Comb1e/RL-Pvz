@@ -7,7 +7,7 @@ early_dig_seconds = 5
 [training]
 budget_unit = "games"
 total_games = 10000
-eval_interval_games = 1000
+eval_interval_games = 2000
 n_envs = 128
 rollout_steps_per_env = 128
 rollout_size = 16384
