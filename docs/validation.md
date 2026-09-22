@@ -3,6 +3,80 @@
 Evidence is versioned below. Learning outcomes, simulation correctness and runtime
 speed are separate measures; [research design](research.md) defines the protocol.
 
+## 0.8.1 strict mastery follow-up — 2026-09-22
+
+New teaching recipes require 100/100 wins on every required task, including all
+three normal difficulties in the shared stage. Probes run every 500 training
+games; checkpoint validation runs every 2,000 with the original 50 seeds per
+difficulty. Tests cover 99/100 failures for every task, 100/100 passes, stage-start
+residency, invalid/partial counts, truncations, final-stage completion, saved-state
+resume, and explicit handoff from older gates. Archived gate controls remain.
+
+| Verification | Result |
+|---|---|
+| Complete research regression | **400 passed**, one upstream stock-PPO advisory, 315.38 s |
+| Native CPU-game regression | **207 passed**, 9.58 s |
+| Native CUDA-game regression | **222 passed**, 46.15 s |
+| CUDA CLI handoff | Older placement checkpoint → saving with new gates; 2 games / 64 decisions, 18.02 s including outputs |
+| Actual mastery evaluation | Exactly 100 distinct curriculum cases, separate from normal validation; all correctly marked truncated and no mastery awarded |
+| Presentation | Three verified demos share the selected checkpoint; all 11 relative report assets resolve; training curves inspected |
+| Static and packaging checks | Lint, 73-file formatting check, dependencies, wheel/sdist and bundled-default checks passed |
+| Documentation | 32 local links checked and 11 README PowerShell blocks parsed |
+
+The CLI smoke intentionally uses one-second cutoffs, two CUDA environments,
+one optimization epoch, and a one-game probe interval to exercise 100-case
+evaluation quickly. It keeps the 100-case pass requirement and uses one normal
+validation seed per difficulty. These are integration results, not evidence of
+learning quality. Passing probes in mastery-stop tests are injected scheduling
+controls; the actual smoke earned no passing result.
+
+Evidence: `artifacts/mastery-full-tests.txt`, `mastery-game-tests.txt`,
+`mastery-cuda-game-tests.txt`, `mastery-cli-evidence.json`, `mastery-cli/`,
+`mastery-package-build.txt`, and `mastery-doc-links.json`. The initial targeted
+run found three outdated default expectations; the complete rerun above passed
+after updating those controls. Both game checkouts remain unchanged, with test
+caches outside them. No formal training or comparison matrix was launched.
+
+## 0.8.1 stage checkpoints — 2026-09-22
+
+Stage training and explicit checkpoint handoffs keep the existing learning rules.
+New controls cover all five stages, unchanged rehearsal mixes, residency/pass
+boundaries, failure resets, mastery stopping without promotion, first-episode
+selection, fresh local budgets and schedules, and same-stage interruption/resume.
+Independent checks compare every restored policy parameter and Adam moment before
+the next stage's first update. Incompatible learning settings and ambiguous
+resume/initialization requests fail before creating a run directory.
+
+| Verification | Result |
+|---|---|
+| Complete research regression | 383 passed, 1 upstream PPO advisory in 334.71 s |
+| Native CPU-game regression | 207 passed in 13.36 s |
+| Native CUDA-game regression | 222 passed in 55.73 s |
+| Focused stage/CUDA checks | 43 passed; metadata compatibility follow-up: 8 passed |
+| CLI stage chain | Placement → saving, 2 games / 64 decisions each; 16.49 s and 13.57 s including outputs |
+| Reports and recordings | Two offline reports; three CPU-verified demos per run sharing that run's best checkpoint identity |
+| Lint, formatting, dependencies, packaging | Passed; 0.8.1 wheel/sdist and existing-environment editable installation |
+| Documentation | 32 local links checked, 11 PowerShell blocks parsed; train help exposes stage and handoff options |
+
+The CLI smoke uses one-second cutoffs, two CUDA environments, one optimization
+epoch and one validation case per difficulty. Both stages ended at their budgets;
+neither achieved mastery. All six normal-game demos accurately show truncation.
+Saving inherited learner seed 102, source weights and optimizer history, while
+its counters restarted at zero. The normal evaluation cases still use all plant
+cards. Curves and a final replay frame were inspected; all 11 relative report
+assets per run resolve offline. These are availability tests, not win-rate evidence.
+The mastery-stop integration test uses injected passing probe results only to
+verify scheduling; its results do not certify a learned policy.
+
+Local evidence: `artifacts/stage-release-tests.txt`, `stage-game-tests.txt`,
+`stage-cuda-game-tests.txt`, `stage-targeted-tests.txt`, `stage-cli-evidence.json`,
+and `stage-cli/{placement,saving}/visualizations/index.html`.
+Game-test caches and temporary files remain in the research artifacts directory.
+No formal training or comparison matrix was launched.
+The advisory is from the stock PPO implementation used as an independent optimizer
+control. The initial full run caught missing optional metadata in the CLI reader;
+after correcting it, the complete final rerun above passed.
+
 ## 0.8.0 CUDA-only release — 2026-09-22
 
 Training now requires CUDA simulation and optimization. Historical CPU metadata

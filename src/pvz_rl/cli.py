@@ -71,9 +71,26 @@ def training_options(parser):
 
 def configured(args):
     cfg = load_config(args.config)
-    if getattr(args, "resume", None) and not args.config:
-        run = args.output if args.command == "suite" else args.resume.parent
-        cfg = json.loads((run / "metadata.json").read_text("utf-8"))["config"]
+    checkpoint = getattr(args, "resume", None) or getattr(args, "init_from", None)
+    if checkpoint and not args.config:
+        run = args.output if args.command == "suite" else checkpoint.parent
+        saved = json.loads((run / "metadata.json").read_text("utf-8"))
+        cfg = saved["config"]
+        if args.command == "train":
+            for name, field in (
+                ("seed", "learner_seed"),
+                ("condition", "condition"),
+                ("validation_count", "validation_limit"),
+            ):
+                if getattr(args, name, None) is None:
+                    setattr(args, name, saved.get(field))
+    if args.command == "train":
+        args.seed = 101 if getattr(args, "seed", None) is None else args.seed
+        args.condition = getattr(args, "condition", None) or "masked"
+        if getattr(args, "init_from", None) and getattr(args, "stage", None) is None:
+            raise ValueError("--init-from requires --stage; use --resume to continue the same run")
+        if getattr(args, "stage", None) is not None:
+            cfg["curriculum"]["run_stage"] = args.stage
     if getattr(args, "hardware", None):
         hardware = json.loads(args.hardware.read_text("utf-8"))
         if type(hardware.get("n_envs")) is not int or hardware["n_envs"] < 1:
@@ -146,12 +163,21 @@ def main(argv=None):
     doctor.add_argument("--output", type=Path)
     training = subs.add_parser("train", help="train one shared policy across all difficulties")
     training_options(training)
-    training.add_argument("--condition", default="masked", choices=TRAINING_CONDITIONS)
-    training.add_argument("--seed", type=int, default=101, help="learner seed")
+    training.add_argument("--condition", choices=TRAINING_CONDITIONS, help="default: masked")
+    training.add_argument("--seed", type=int, help="learner seed; default: saved seed or 101")
     training.add_argument("--output", required=True, type=Path)
     training.add_argument("--validation-count", type=int, help="pilot-only reduced validation set")
     training.add_argument("--family", choices=("preset", "diagnostic"), default="preset")
-    training.add_argument("--resume", type=Path, help="checkpoint from an interrupted run")
+    from .curriculum import STAGES
+
+    training.add_argument(
+        "--stage", choices=STAGES, help="train only this teaching stage; stop at mastery or budget"
+    )
+    continuation = training.add_mutually_exclusive_group()
+    continuation.add_argument("--resume", type=Path, help="continue with saved budget and progress")
+    continuation.add_argument(
+        "--init-from", type=Path, help="carry policy and optimizer into --stage with a fresh budget"
+    )
     evaluation = subs.add_parser("evaluate", help="evaluate a checkpoint or non-learning baseline")
     common(evaluation)
     source = evaluation.add_mutually_exclusive_group(required=True)
@@ -364,6 +390,7 @@ def main(argv=None):
             validation_limit=args.validation_count,
             family=args.family,
             resume=args.resume,
+            init_from=args.init_from,
         )
         print(f"Training artifacts: {args.output.resolve()}")
     elif args.command == "evaluate":

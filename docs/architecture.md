@@ -1,7 +1,7 @@
 # Current architecture
 
 PVZ research learns one shared plant-placement policy for easy, standard, and
-hard. Research 0.8.0 uses game package 1.3.0, simulation 1.0.0, pinned to commit
+hard. Research 0.8.1 uses game package 1.3.0, simulation 1.0.0, pinned to commit
 `8861824df6893a34c2cd4df7f9b68613376d7964`. CUDA runs training simulation and
 optimization. The Python engine verifies recordings and supplies independent
 correctness controls and non-learning baselines.
@@ -128,17 +128,20 @@ The teaching curriculum is a mastery state machine:
 ```mermaid
 stateDiagram-v2
     [*] --> Placement
-    Placement --> Saving: two probes with 18 of 20 wins
-    Saving --> Easy: two probes with 18 of 20 saving wins
-    Easy --> Standard: two probes with 16 of 20 easy wins
-    Standard --> Shared: two probes with easy 16 and standard 12 wins
-    Shared --> [*]: budget ends
+    Placement --> Saving: 100 of 100 placement wins
+    Saving --> Easy: 100 of 100 saving wins
+    Easy --> Standard: 100 of 100 easy wins
+    Standard --> Shared: 100 of 100 each on easy and standard
+    Shared --> Mastered: 100 of 100 each on easy, standard, hard
+    Mastered --> [*]
 ```
 
-SC2 mastery probes run every 100 completed games. Promotion also requires 100
-completions from games started in that stage. A failed probe resets the passing
-streak. Lessons retain the full board, limited plant sets, and legal digging;
-normal games permit all eight plants. Rehearsal retains earlier tasks until the
+SC2 mastery probes run every 500 completed training games. One perfect probe
+per required task passes the stage; promotion also requires 100 completions from
+games started in that stage. A loss, truncation or incomplete probe cannot pass.
+Each task uses 100 fixed seeds from the separate curriculum split; checkpoint
+validation keeps its 50 seeds. Lessons retain the full board, limited plant sets,
+and legal digging; normal games permit all eight plants. Rehearsal retains earlier tasks until the
 shared stage uses 20% easy, 40% standard, and 40% hard.
 
 Stage changes affect future resets, preserving the same policy and optimizer.
@@ -146,12 +149,42 @@ An episode's start-stage tag is scheduling metadata only. Budget exhaustion neve
 forces promotion; unfinished teaching is labeled explicitly. Fixed-schedule and
 mixed-difficulty comparison conditions use their configured distributions instead.
 
+A single-stage run fixes the selected stage before the first environment reset.
+Probes retain the same thresholds, passing streak and residency rules, but mark
+mastery instead of advancing. Mastery or the budget ends learning after a complete
+update; shared mastery completes the whole curriculum. Final validation and
+demonstrations still use normal easy/standard/hard cases. Stage progress is saved
+after probes.
+
+```mermaid
+stateDiagram-v2
+    [*] --> StageRun: select stage, optionally load compatible checkpoint
+    StageRun --> Probe: probe due after update
+    Probe --> StageRun: mastery not reached
+    Probe --> Finalize: mastery reached
+    StageRun --> Finalize: budget ends
+    Finalize --> Saved: final.zip and metadata
+    Saved --> StageRun: explicit init-from and next stage, fresh budget
+    StageRun --> Interrupted: checkpoint on interruption
+    Interrupted --> StageRun: resume saved stage and remaining allowance
+```
+
+Stage initialization preserves policy parameters and optimizer moments, resets
+local counters and schedules, and records the parent checksum and progress. It
+accepts explicitly changed budgets, mastery criteria and validation schedules while
+requiring matching engine, learning rules, task definitions and sampling mixtures.
+Existing models need no weight conversion.
+Resume requires the identical selected stage and preserves its mastery state.
+Neither operation supplies demonstrations or scripted training actions.
+
 ## Validation, stopping, and recovery
 
-Normal validation defaults to every 1,000 completed games, after the PPO update
+Normal validation defaults to every 2,000 completed games, after the PPO update
 that crosses a threshold. Multiple crossed thresholds produce one evaluation;
 actual game counts and nominal milestones are both recorded. Matching mastery
-probes can reuse same-weight, same-case evaluation results.
+probes in archived protocols can reuse same-weight, same-case evaluation results.
+New mastery cases are disjoint from normal checkpoint validation, training, and
+held-out cases. Probe results never select the best checkpoint.
 
 The equal-weight mean win rate over easy/standard/hard selects one checkpoint,
 using 50 fixed seeds per difficulty. Earlier ties win. Lesson scores and shaped
@@ -187,8 +220,10 @@ survive interruptions and presentation failures.
 Checkpoints retain optimizer state, curriculum, game counters, validation schedule,
 and consumed time. Resume restores these into a new run folder, using the greater
 recorded elapsed total. Active episodes restart, so continuation is not bit-for-bit.
-Learning settings and engine pin must match; dormant historical conditions do not
-change individual-run compatibility. CPU/hybrid checkpoints are inference-only.
+Saved mastery gates and intervals remain unchanged on resume, including legacy
+recipes with no shared-stage gate. Learning settings and engine pin must match;
+dormant historical conditions do not change individual-run compatibility.
+CPU/hybrid checkpoints are inference-only.
 Retired buffer metadata is replaced during loading without changing policy weights.
 
 ## Storage and presentation
@@ -198,6 +233,10 @@ training JSONL, validation curves/cases, TensorBoard events, and checkpoints.
 Teaching runs additionally store curriculum state and probe results. A 15-second
 progress log summarizes the latest 100 episodes without printing every episode.
 Research and engine revisions, rule/configuration hashes, and seeds identify results.
+Stage handoffs also record source checkpoint identity in run metadata. They start
+separate chart segments with local budgets; parent statistics are not pooled into
+the new stage. The report distinguishes selected-stage mastery from completing
+the whole curriculum.
 
 Offline reports contain relative chart/demo links. Missing metrics and resumed
 segments are explicit; results from different profiles or engine pins are not

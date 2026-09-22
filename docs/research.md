@@ -1,6 +1,6 @@
 # Research design
 
-Current research version: **0.8.0**. This is the specification for learning and
+Current research version: **0.8.1**. This is the specification for learning and
 evaluation; [README](../README.md) contains daily commands, [architecture](architecture.md)
 describes implementation, and [validation](validation.md) records measured results.
 Earlier results remain attached to their original profile, timing, reward and
@@ -186,26 +186,41 @@ sunflower and peashooter plus wait/dig, no mowers. Both retain the full board.
 Independent shooting controls win and wait-only controls lose; those trajectories
 are tests, never training data.
 
-| Stage | Episode distribution | Required wins per 20-case probe |
+| Stage | Episode distribution | Required wins per 100-case task probe |
 |---|---|---|
-| Placement | Placement lesson | Placement ≥18 |
-| Saving | 80% saving, 20% placement | Saving ≥18 |
-| Easy | 80% easy, 10% each lesson | Easy ≥16 |
-| Standard introduction | 45% easy, 45% standard, 10% saving | Easy ≥16 and standard ≥12 |
-| Shared | 20% easy, 40% standard, 40% hard | Continue to budget |
+| Placement | Placement lesson | Placement 100/100 |
+| Saving | 80% saving, 20% placement | Saving 100/100 |
+| Easy | 80% easy, 10% each lesson | Easy 100/100 |
+| Standard introduction | 45% easy, 45% standard, 10% saving | Easy 100/100 and standard 100/100 |
+| Shared | 20% easy, 40% standard, 40% hard | Easy, standard and hard each 100/100 |
 
-SC2 profiles probe every 100 completed training games, require two consecutive
-passes and 100 completions from games started in that stage. A failed probe resets
-the streak. Transitions affect future resets only; policy and optimizer persist.
+SC2 profiles probe every 500 completed training games, require one perfect probe
+on every required task and 100 completions from games started in that stage.
+Probes use 100 fixed seeds, 100050–100149, separate from normal checkpoint
+validation. Any failure or truncation blocks a pass; partial probes do not count.
+Transitions affect future resets only; policy and optimizer persist. Shared-stage
+mastery completes the curriculum. Perfect validation performance is a gate on
+these fixed cases, not proof of 100% success on unseen games.
 Budget exhaustion never forces promotion. Older saved residency/schedules remain
 loadable. Fixed-schedule controls use easy for 10% of the budget, equal easy/standard
 for 30%, then 20/40/40 for 60%; mixed conditions use the final mixture throughout.
 
-Normal validation uses all plants, every 1,000 completed games by default.
+Normal validation uses all plants, every 2,000 completed games by default, retaining
+50 seeds per difficulty (100000–100049).
 After an update crosses several thresholds, one evaluation records the actual
-count and nominal milestone. Matching probes reuse same-weight/case results.
+count and nominal milestone. Archived matching probes reuse same-weight/case results.
 The equal-weight mean over easy/standard/hard chooses one `best.zip`; earlier ties
 win. Partial evaluations cannot select it. Final validation avoids duplicate weights.
+
+Teaching stages can also be run individually with `train --stage`. The configured
+task mixtures and mastery gates apply without automatic promotion. `--init-from`
+continues learned weights and optimizer state in a chosen stage with fresh local
+budgets; `--resume` retains the original stage and remaining allowance. Use the
+final checkpoint for a stage handoff; normal validation still selects `best.zip`.
+Stage budgets are separate experiments with recorded parent hashes, so include
+all upstream training costs when comparing a chain against an automatic run.
+An explicit handoff before mastery is allowed and must not be reported as passing
+the curriculum. These controls change orchestration, not the learning objective.
 
 ## Evaluation protocol and commands
 
@@ -214,6 +229,7 @@ win. Partial evaluations cannot select it. Final validation avoids duplicate wei
 | Development | 0–9, plus regression seed 42 | Debugging and known controls |
 | Training | 1,000–99,999 | Sampled training scenarios |
 | Validation | 100,000–100,049 | Selection and development comparisons |
+| Curriculum | 100,050–100,149 | 100-case mastery checks per required task |
 | Final test | 200,000–200,299 | Frozen-policy familiar-distribution evaluation |
 | Changed scenarios | 300,000–300,099 per family | Standard/hard generalization |
 

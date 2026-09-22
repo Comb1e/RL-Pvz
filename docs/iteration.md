@@ -5,6 +5,28 @@ Dates and results belong to their recorded version. Current behavior lives in
 artifact locations and learning outcomes live in [validation](validation.md).
 The longer pre-consolidation notes remain in `git show b642c9c:docs/iteration.md`.
 
+## 0.8.1 — 2026-09-22
+
+- Follow-up: Leafy requested perfect 100-game mastery and less frequent validation.
+  Replace the permissive 20-case gates with 100/100 per required task, including
+  final shared-stage mastery. Probe every 500 training games; validate checkpoints
+  every 2,000 with the original 50 cases/difficulty. A separate 100-case curriculum
+  seed range avoids enlarging normal validation or touching held-out seeds.
+  Resume preserves saved gates; explicit stage handoff can select the new protocol.
+  README now lists every stage's pass criteria and the two schedules.
+- Problem/cause: teaching stages advanced within one run; strict resume restored
+  the same budget and offered no explicit checkpoint handoff to another stage.
+- Change: select one stage, retain its rehearsal mix, stop on mastery or budget,
+  and save probe/final checkpoints. Initialize a chosen stage from compatible
+  weights and optimizer state with fresh local schedules and parent provenance.
+  Existing automatic curriculum and same-stage resume remain available.
+- Verification: stage/state boundaries, CUDA handoffs through all five stages,
+  exact restored weights/Adam moments, interrupted resume, mismatch rejection,
+  normal-game checkpoint selection, CLI/report smoke and regression suites;
+  recorded results are in validation.md.
+- Remaining limits: inherited learning settings must match; stage budgets do not
+  certify mastery. Short checks establish integration, not improved win rates.
+
 ## 0.8.0 — 2026-09-22
 
 - Problem/cause: CPU collectors, hybrid jobs, and old recipes remained reachable;

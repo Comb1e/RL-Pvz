@@ -17,13 +17,21 @@ from stable_baselines3.common.callbacks import BaseCallback
 
 from .budget import budget_target, evaluation_interval, progress_value, uses_games
 from .config import (
+    curriculum_probe_seeds,
     output_settings,
     runtime_settings,
     seed_values,
     simulator,
     validate_config,
 )
-from .curriculum import LESSONS, CurriculumState, stage_distribution, teaching_enabled
+from .curriculum import (
+    LESSONS,
+    CurriculumState,
+    initial_state,
+    selected_stage,
+    stage_distribution,
+    teaching_enabled,
+)
 from .deadline import BudgetExpired, RunBudget
 from .evaluation import evaluate, summarize
 from .exploration import configure_exploration
@@ -34,7 +42,7 @@ from .rewards import REWARD_METRICS
 from .scenarios import difficulty_weights
 from .spatial_policy import SpatialFeatures, SpatialGroupedPolicy
 from .timing import TrainingTimings
-from .training_requirements import require_cuda_training, resume_protocol
+from .training_requirements import require_cuda_training, resume_protocol, transfer_protocol
 
 
 def vector_env(cfg, condition, learner_seed, family="preset"):
@@ -110,6 +118,10 @@ class TrainingDeadline(Exception):
 
 class TrainingGamesComplete(Exception):
     """The requested game count was reached; the last rollout has been optimized."""
+
+
+class TrainingStageComplete(Exception):
+    """The selected stage passed its mastery gates after a complete PPO update."""
 
 
 class ResearchCallback(BaseCallback):
@@ -206,7 +218,11 @@ class ResearchCallback(BaseCallback):
             "next_episode_difficulty_weights": None if self.curriculum else weights,
             "curriculum": self.curriculum.to_dict() if self.curriculum else None,
             "curriculum_stage": self.curriculum.name if self.curriculum else "fixed",
-            "curriculum_incomplete": bool(self.curriculum and self.curriculum.name != "shared"),
+            "selected_stage": selected_stage(self.cfg),
+            "stage_mastered": bool(self.curriculum and self.curriculum.mastered),
+            "curriculum_incomplete": bool(
+                self.curriculum and not self.curriculum.complete(self.cfg)
+            ),
             "next_episode_tasks": stage_distribution(self.cfg, self.curriculum.stage)
             if self.curriculum
             else None,
@@ -378,7 +394,9 @@ class ResearchCallback(BaseCallback):
         self.metrics_stream = (self.output / "training-metrics.jsonl").open("w", encoding="utf-8")
         self.last_updates = self.model._n_updates
         if teaching_enabled(self.cfg) and self.family == "preset":
-            self.curriculum = CurriculumState(**getattr(self.model, "curriculum_state", {}))
+            self.curriculum = CurriculumState(
+                **getattr(self.model, "curriculum_state", initial_state(self.cfg).to_dict())
+            )
             self.training_env.env_method("set_curriculum_stage", self.curriculum.stage)
             self.sync_curriculum()
         self.progress.phase(Phase.COLLECTING)
@@ -436,6 +454,7 @@ class ResearchCallback(BaseCallback):
         # save pre-update weights while labeling them with the newly collected steps.
         self.timings.end_update()
         self.capture_update()
+        self.check_stage_complete()
         if uses_games(self.cfg) and progress_value(self.cfg, self.model) >= self.target:
             raise TrainingGamesComplete()
         self.check_deadline()
@@ -446,9 +465,14 @@ class ResearchCallback(BaseCallback):
             self.validate(nominal_games=nominal)
         self.check_deadline()
         self.probe_curriculum()
+        self.check_stage_complete()
         self.check_deadline()
         self.progress.phase(Phase.COLLECTING)
         self.timings.begin_collection()
+
+    def check_stage_complete(self):
+        if self.curriculum and self.curriculum.mastered:
+            raise TrainingStageComplete()
 
     def check_deadline(self):
         estimated = (self.timings.last_collection_seconds or 0) + (
@@ -510,7 +534,7 @@ class ResearchCallback(BaseCallback):
             self.model.curriculum_state = self.curriculum.to_dict()
             write_json(self.output / "curriculum.json", self.model.curriculum_state)
 
-    def probe_curriculum(self):
+    def probe_curriculum(self, *, final=False):
         progress = progress_value(self.cfg, self.model)
         if not self.curriculum or not self.curriculum.due(progress, self.cfg):
             return
@@ -521,18 +545,23 @@ class ResearchCallback(BaseCallback):
         for task in self.curriculum.requirements(self.cfg):
             try:
                 rows = self.cached_evaluation(
-                    seed_values(self.cfg, "validation", self.cfg["curriculum"]["probe_cases"]),
+                    curriculum_probe_seeds(self.cfg),
                     ["easy" if task in LESSONS else task],
                     task if task in LESSONS else "preset",
                     self.output / "curriculum-probes" / str(self.model.num_timesteps) / task,
                     "curriculum_validation",
+                    final=final,
                 )
             except BudgetExpired:
                 self.progress.emit("Curriculum probe pending: time allowance exhausted", force=True)
                 self.eval_seconds += perf_counter() - started
                 return
-            wins[task] = sum(row["win"] for row in rows)
-        advanced = self.curriculum.observe(wins, progress, self.cfg)
+            if len(rows) != self.cfg["curriculum"]["probe_cases"]:
+                raise ValueError("Incomplete curriculum probe cannot certify mastery")
+            wins[task] = sum(bool(row["win"]) for row in rows)
+        advanced = self.curriculum.observe(
+            wins, progress, self.cfg, advance=selected_stage(self.cfg) is None
+        )
         self.sync_curriculum()
         if advanced:
             self.training_env.env_method("set_curriculum_stage", self.curriculum.stage)
@@ -545,13 +574,19 @@ class ResearchCallback(BaseCallback):
                     "stage": previous,
                     "wins": wins,
                     "advanced": advanced,
+                    "stage_mastered": self.curriculum.mastered,
                     "state": self.curriculum.to_dict(),
                 },
             )
         self.progress.emit(
-            f"Curriculum {previous}: {wins}; next-reset stage {self.curriculum.name}; consecutive passes {self.curriculum.consecutive_passes}",
+            f"Curriculum {previous}: {wins}; next-reset stage {self.curriculum.name}; "
+            f"consecutive passes {self.curriculum.consecutive_passes}; "
+            f"stage mastered {self.curriculum.mastered}",
             force=True,
         )
+        if selected_stage(self.cfg):
+            self.save_checkpoint("latest.zip")
+            self.progress.emit("Saved stage progress to latest.zip", force=True)
         self.eval_seconds += perf_counter() - started
 
     def _on_rollout_end(self):
@@ -638,7 +673,11 @@ class ResearchCallback(BaseCallback):
             and self.wall_budget.limit is not None
         ):
             self.validate(final=True)
-        if (
+        if not self.budget_stopped and (
+            selected_stage(self.cfg) or "curriculum" in self.cfg["splits"]
+        ):
+            self.probe_curriculum(final=True)
+        elif (
             not self.budget_stopped
             and self.cfg["curriculum"].get("residency") != "episode_start_stage"
         ):
@@ -691,6 +730,23 @@ def load_policy(checkpoint, device="cpu"):
     return model, data
 
 
+def initialize_stage(model, cfg, learner_seed):
+    """Keep learned parameters/Adam moments; start new stage-local scheduling."""
+    source = {
+        "steps": model.num_timesteps,
+        "games": getattr(model, "training_games", 0),
+        "updates": model._n_updates,
+        "curriculum": getattr(model, "curriculum_state", None),
+    }
+    model.num_timesteps = 0
+    model.training_games = 0
+    model.research_schedule = {}
+    model.wall_budget_state = {}
+    model.curriculum_state = initial_state(cfg).to_dict()
+    model.set_random_seed(learner_seed)
+    return source
+
+
 def train(
     cfg,
     condition,
@@ -700,6 +756,7 @@ def train(
     validation_limit=None,
     family="preset",
     resume=None,
+    init_from=None,
     deadline=None,
 ):
     started = perf_counter()
@@ -707,6 +764,34 @@ def train(
     validate_config(cfg)
     output = Path(output)
     require_cuda_training(cfg, condition)
+    if resume and init_from:
+        raise ValueError("Use either resume or init_from, not both")
+    if selected_stage(cfg) and family != "preset":
+        raise ValueError("Stage training uses family=preset and the stage's configured task mix")
+    initialized_model, initialization = None, None
+    if init_from:
+        if not selected_stage(cfg):
+            raise ValueError("init_from requires curriculum.run_stage (--stage)")
+        source_path = Path(init_from).resolve()
+        saved = json.loads((source_path.parent / "metadata.json").read_text("utf-8"))
+        require_cuda_training(saved["config"], saved["condition"])
+        if (
+            saved["condition"] != condition
+            or saved["family"] != "preset"
+            or transfer_protocol(saved["config"], condition) != transfer_protocol(cfg, condition)
+        ):
+            raise ValueError(
+                "Stage initialization requires matching engine, policy, rewards, PPO and "
+                "teaching tasks; only the selected stage, budgets, mastery criteria and "
+                "validation schedule may change"
+            )
+        initialized_model, _ = load_policy(source_path, cfg["training"]["device"])
+        initialization = {
+            "checkpoint": str(source_path),
+            "checkpoint_sha256": file_hash(source_path),
+            "source_learner_seed": saved["learner_seed"],
+            **initialize_stage(initialized_model, cfg, learner_seed),
+        }
     if resume:
         saved = json.loads((Path(resume).resolve().parent / "metadata.json").read_text("utf-8"))
         require_cuda_training(saved["config"], saved["condition"])
@@ -738,6 +823,7 @@ def train(
         budget_unit="games" if game_budget else "decisions",
         validation_limit=validation_limit,
         resume=str(Path(resume).resolve()) if resume else None,
+        initialization=initialization,
     )
     write_json(output / "metadata.json", details)
     write_json(output / "config.json", cfg)
@@ -762,6 +848,12 @@ def train(
         force=True,
     )
     progress.emit(f"Reward settings: {cfg['reward']}", force=True)
+    if selected_stage(cfg):
+        progress.emit(
+            f"Single stage: {selected_stage(cfg)}; no automatic promotion; "
+            "stop at mastery or budget, save final.zip for the next stage",
+            force=True,
+        )
     progress.emit(
         f"Action timing: {cfg['environment'].get('action_timing', 'fixed')}; "
         f"{cfg['environment']['decision_ticks']} ticks per wait; "
@@ -797,8 +889,22 @@ def train(
                 f"Resumed shared policy and optimizer at {progress_value(cfg, model):,} {'games' if game_budget else 'decisions'}",
                 force=True,
             )
+        elif initialized_model is not None:
+            model = initialized_model
+            model.set_env(env)
+            from .cuda_ppo import configure_tensor_buffer
+
+            configure_tensor_buffer(model, cfg["conditions"][condition]["masked"])
+            model.tensorboard_log = str(output / "tensorboard")
+            progress.emit(
+                f"Initialized policy and optimizer from {initialization['checkpoint']}; "
+                "fresh stage progress and game/time budget",
+                force=True,
+            )
         else:
             model = build_model(cfg, condition, env, learner_seed, output / "tensorboard")
+            if teaching_enabled(cfg) and family == "preset":
+                model.curriculum_state = initial_state(cfg).to_dict()
         remaining = (
             budget_target(cfg) - progress_value(cfg, model)
             if game_budget
@@ -843,6 +949,9 @@ def train(
             except TrainingGamesComplete:
                 progress.emit("Game target reached; final PPO update completed", force=True)
                 callback._on_training_end()
+            except TrainingStageComplete:
+                progress.emit("Mastery reached; finalizing its checkpoint", force=True)
+                callback._on_training_end()
             except TrainingDeadline:
                 progress.emit(
                     "Time allowance reached at a completed PPO update; finalizing available results",
@@ -864,7 +973,11 @@ def train(
             "steps": model.num_timesteps,
             "wall_seconds": perf_counter() - started,
             "budget_stopped": callback.budget_stopped,
-            "stop_reason": "time_budget"
+            "stop_reason": "stage_mastered"
+            if selected_stage(cfg) and callback.curriculum and callback.curriculum.mastered
+            else "curriculum_mastered"
+            if callback.curriculum and callback.curriculum.mastered
+            else "time_budget"
             if callback.budget_stopped
             else "game_budget"
             if game_budget

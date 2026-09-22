@@ -187,8 +187,8 @@ def test_task_restrictions_dig_cooldown_and_reset_boundaries():
     assert truncated and not terminated
 
 
-def test_curriculum_pass_fail_minimum_and_rehearsal(cfg):
-    cfg = learning_profile("pure-rl", cfg)
+def test_curriculum_pass_fail_minimum_and_rehearsal(cfg, legacy_teaching):
+    cfg = legacy_teaching(learning_profile("pure-rl", cfg))
     state = CurriculumState()
     assert not state.due(16383, cfg) and state.due(16384, cfg)
     assert not state.observe({"placement": 18}, 16384, cfg)
@@ -222,7 +222,10 @@ def test_grouped_learning_save_reload_metrics_and_complete_update_deadline(
     run = tmp_path / device
     train(cfg, "masked", 101, run, validation_limit=1)
     model, _ = load_policy(run / "final.zip", device)
-    assert model.curriculum_state == CurriculumState().to_dict()
+    assert (
+        model.curriculum_state
+        == CurriculumState(completed_stage_games=model.training_games).to_dict()
+    )
     status = json.loads((run / "status.json").read_text())
     assert status["curriculum_incomplete"]
     metrics = [
@@ -245,9 +248,9 @@ def test_grouped_learning_save_reload_metrics_and_complete_update_deadline(
 
 @pytest.mark.learning
 def test_curriculum_probe_uses_same_policy_optimizer_and_persists_resume(
-    smoke_cfg, tmp_path, monkeypatch
+    smoke_cfg, tmp_path, monkeypatch, legacy_teaching
 ):
-    cfg = learning_profile("pure-rl", smoke_cfg)
+    cfg = legacy_teaching(learning_profile("pure-rl", smoke_cfg))
     cfg["training"].update(total_steps=192)
     cfg["curriculum"].update(probe_interval=64, minimum_stage_steps=64)
     identities = []

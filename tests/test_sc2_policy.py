@@ -124,14 +124,14 @@ def test_stage_residency_counts_only_matching_episode_starts():
     state = CurriculumState(stage=1)
     for _ in range(100):
         state.completed_episode(0)
-    assert not state.observe({"saving": 20}, 100, cfg)
-    assert not state.observe({"saving": 20}, 200, cfg)
+    assert not state.observe({"saving": 100}, 500, cfg)
+    assert not state.observe({"saving": 100}, 1000, cfg)
     for _ in range(99):
         state.completed_episode(1)
     restored = CurriculumState(**state.to_dict())
-    assert not restored.observe({"saving": 20}, 300, cfg)
+    assert not restored.observe({"saving": 100}, 1500, cfg)
     restored.completed_episode(1)
-    assert restored.observe({"saving": 20}, 400, cfg)
+    assert restored.observe({"saving": 100}, 2000, cfg)
     assert restored.name == "easy" and restored.completed_stage_games == 0
 
 
@@ -154,7 +154,7 @@ def test_profiles_share_controls_but_keep_gamma_ablation_explicit():
     assert len({comparison_protocol(c) for c in configs}) == 1
     assert configs[-1]["reward"]["gamma"] == 0.9999
     assert all(c["reward"]["gamma"] == 0.999 for c in configs[:-1])
-    assert all(c["training"]["eval_interval_games"] == 1000 for c in configs)
+    assert all(c["training"]["eval_interval_games"] == 2000 for c in configs)
     for letter, path in [
         ("E", "configs/sc2-inspired.toml"),
         ("F", "configs/sc2-long-horizon.toml"),

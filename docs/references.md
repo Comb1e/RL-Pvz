@@ -107,3 +107,19 @@ buffer-class metadata during historical inference while retaining policy and
 optimizer state. Inspected the local Git archive/staging implementation to stage
 the pinned tree independently of the game checkout HEAD. This maintenance change
 adopts no new learning method or performance claim.
+
+For stage checkpoints (0.8.1, 2026-09-22), inspected the installed
+[Stable-Baselines3 2.7.1](https://github.com/DLR-RM/stable-baselines3/tree/v2.7.1)
+`common/base_class.py` load, parameter restoration and learning setup, alongside
+the project's tensor PPO collector and mastery state machine. SB3 restores policy
+and optimizer state, while resetting timestep counters alone does not reset the
+project's curriculum, game count or wall allowance. This informed explicit stage
+initialization separate from resume. No new paper-derived algorithm or performance
+claim is introduced; the existing curriculum evidence remains as recorded above.
+
+For the 0.8.1 mastery follow-up (2026-09-22), re-inspected this project's curriculum
+state machine, post-update validation callback, checkpoint compatibility checks,
+and existing curriculum/seed-separation references above. The 100/100 pass gate
+is Leafy's requested acceptance rule; the 500/2,000-game intervals are local
+configuration choices, not paper-derived optima. No new learning method or
+performance claim is introduced.
