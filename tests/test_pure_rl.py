@@ -135,6 +135,9 @@ def test_deterministic_selection_is_greedy_type_then_tile():
 def test_lesson_independent_shooting_and_wait_controls(cfg, family, win_tick, loss_tick, lane):
     cfg = cfg
     settings = cfg["curriculum"]["lessons"][family]
+    if family == "saving":
+        # Preserve the original successful/failing scenario as a historical control.
+        settings.update(spawn_ticks=[1200, 1280, 1360], lanes_per_spawn=1)
     spec = LevelSpec(
         family,
         tuple(Spawn(t, "basic", lane) for t in settings["spawn_ticks"]),

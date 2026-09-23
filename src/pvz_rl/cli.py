@@ -201,12 +201,15 @@ def main(argv=None):
     evaluation.add_argument("--output", type=Path, required=True)
     evaluation.add_argument("--record", action="store_true")
     gpu_bench = subs.add_parser(
-        "benchmark-gpu", help="bounded CUDA throughput comparison at 32/64/128 games"
+        "benchmark-gpu", help="bounded CUDA throughput comparison at configurable parallelism"
     )
     common(gpu_bench)
     gpu_bench.add_argument("--output", type=Path, required=True)
     gpu_bench.add_argument("--minutes", type=float, default=15)
     gpu_bench.add_argument("--steps", type=int, default=16384)
+    gpu_bench.add_argument(
+        "--env-counts", type=int, nargs="+", help="parallel-game counts (default: 128 256 512 1024)"
+    )
     suite = subs.add_parser(
         "suite",
         help="train the shared spatial policy across learner seeds, then evaluate and report",
@@ -444,7 +447,14 @@ def main(argv=None):
 
         print(
             json.dumps(
-                benchmark_gpu(cfg, args.output, minutes=args.minutes, steps=args.steps), indent=2
+                benchmark_gpu(
+                    cfg,
+                    args.output,
+                    minutes=args.minutes,
+                    steps=args.steps,
+                    env_counts=args.env_counts,
+                ),
+                indent=2,
             )
         )
     elif args.command == "suite":

@@ -3,6 +3,122 @@
 Evidence is versioned below. Learning outcomes, simulation correctness and runtime
 speed are separate measures; [research design](research.md) defines the protocol.
 
+## 0.10.1 saving economy and CUDA parallelism — 2026-09-23
+
+The changed lesson has a necessary resource investment under the pinned rules:
+three distinct attacked lanes require at least three 100-sun plants, while a
+sunflower-free policy has at most 275 sun before one unblocked lane loses at
+tick 1999. This is a budget/pigeonhole proof covering any legal sequence, not
+an inference from a losing heuristic. Its derivation and feasible witness are in
+[research](research.md#saving-lesson). All ten lane combinations are checked with
+the two-sunflower winning control (tick 1831) and no-sunflower losing control
+(tick 1999). The original single-lane placement/saving cases retain explicit
+regression fixtures.
+
+Economic shaping defaults to 0.1 instead of 0.5; all other reward coefficients,
+network widths, PPO settings and game rules are unchanged. Tests retain purchase/
+dig telescoping, income/death, terminal/truncation and CPU/CUDA reward agreement.
+Resume preserves old configurations; explicit current-config weights-only
+initialization adopts the new experiment. Old saving scores do not certify this
+new task. No learned win-rate or early-dig improvement is claimed.
+
+### Hardware measurement protocol
+
+Measured 128, 256, 512 and 1024 parallel games, three times each, with seed
+800/801/802 and reversed count order in the middle repetition. Each measurement
+uses one excluded warmup rollout and 16 measured rollouts, with 128 decisions
+per game, batch size 1024, four configured epochs and the current independent
+actor/critic. The shared normal-game mixture is 20/40/40. CUDA synchronizes at
+measurement boundaries; setup/warmup, collection, optimization and device/host
+phases are separate. These short windows contain no completed games, so a
+longer baseline/selected comparison additionally checks completion/reset costs.
+Validation, report/video export and disk episode logging are excluded. This is
+throughput evidence, not a comparison of policy quality.
+
+The selection rule is the smallest count within 5% of the fastest stable median
+(sample coefficient of variation at most 10%, all three repetitions complete).
+VRAM utilization alone never selects a default. System/GPU load is sampled each
+second; no other training process was running. Ordinary desktop/editing activity
+remains. Larger batches change PPO rollout size and can change sample efficiency.
+
+| Parallel games | Median decisions/s | Variation (CV) | Sampled peak total GPU memory |
+|---:|---:|---:|---:|
+| 128 | 10,435 | 2.00% | 897 MiB |
+| 256 | 12,368 | 0.72% | 969 MiB |
+| 512 | 13,672 | 4.67% | 1,133 MiB |
+| **1024** | **14,804** | **7.39%** | **1,427 MiB** |
+
+All twelve trials completed. 1024 is the smallest candidate within 5% of the
+fastest median; it improves on 128 by **41.87%**. The repeated measurement took
+15m31s including setup and warmup. The 8,188-MiB RTX 4070 Laptop GPU had ample
+memory headroom. Sampled system CPU load averaged 16–19%; updating-phase GPU
+utilization averaged about 65% at 1024. At that size the median 16-rollout
+collection took 14.78s and optimization 127.17s, so optimization now dominates.
+The 1-second load sampler can straddle phase boundaries and is not a profiler.
+
+A separate seed-803 confirmation used **32** measured rollouts at 128 and 1024,
+with identical settings and no warmup in the timing. At 128 it took 50.99s,
+completed 118 games and reached **10,282 decisions/s** (138.85 games/min). At
+1024 it took 286.47s, completed 1024 games and reached **14,641 decisions/s**
+(214.47 games/min), a **42.40%** decisions/s gain including resets. Different
+learned actions/episode lengths mean games/min is descriptive, not a win-rate
+comparison. Setup plus warmup took 3.36s and 12.49s respectively. The unchanged
+minibatch size is 1024; only parallelism/total rollout changes between profiles.
+
+New runs therefore default to **1024 × 128 = 131,072 transitions per rollout**.
+The recorded CLI recommendation is intentionally provisional until reviewed
+alongside correctness and the longer check; this release records that review.
+Saved configurations retain their original parallelism, rewards and lessons.
+
+![Three repeated throughput measurements per batch size](evidence/saving-economy-v0101/throughput.png)
+
+Committed [measurements and provenance](evidence/saving-economy-v0101/benchmark.json)
+include the original development metadata, raw per-run timings, load summaries
+and confirmation. The benchmark began before the package version bump; its
+original version/revision and dirty-tree flag are preserved. Local raw logs and
+1-second samples are in `artifacts/saving-economy-benchmark/` and
+`artifacts/saving-economy-confirmation/`.
+
+### Regression verification
+
+| Check | Result |
+|---|---|
+| Complete research suite | **376 passed**, 269.66s |
+| Focused lesson/reward/compatibility/benchmark controls | **99 passed**, 18.03s |
+| Final benchmark compatibility controls after ignoring historical nonnumeric profile names | **9 passed** |
+| Native CPU game (`a95524e`, package 1.2.2) | **207 passed**, 9.49s |
+| Native CUDA game (`314528a`, package 1.3.1) | **222 passed**, 39.56s |
+| 1024-environment training/report/demo check | **Passed**, 34.67s total |
+
+The complete suite covers CPU/CUDA observation, reward and canonical state
+agreement for both winning and losing new saving cases, legal masks including
+purchase/cooldown boundaries, archived lesson cases, telescoping, truncation,
+checkpoint transfer/resume, curriculum and shared-checkpoint demonstrations.
+The last benchmark-only guard is also tested against historical `cuda-equivalent`
+records. No simulator or learning-loop code changed after the measurements.
+Ruff lint/format, dependency checks, editable installation, wheel/sdist build,
+wheel contents, README links, matching bundled configuration and all ten
+PowerShell examples pass. The throughput chart was visually inspected.
+CUDA doctor verifies the unchanged installed 1.3.0 source/rules pin, compilation,
+simulation, rendering and compact replay support.
+
+The final smoke uses a deliberately **two-second** simulation cutoff, the new
+reward/lesson and production 1024×128 rollout. Its two-game target overshoots to
+3072 completed truncated games in one full update, as the existing budget contract
+requires; this is an integration test, not 3072 full learning games or mastery
+evidence. The 100-case saving probe correctly fails under that cutoff. An offline
+report and three verified truncated demonstrations are generated from one
+checkpoint, SHA-256
+`409e4caa0e589097d309b40410a4af61972a1ab9d4630e93c23d2e5426922463`.
+Relative HTML assets resolve, and the single-point training curves were visually
+inspected. Outputs are under `artifacts/v0101-cuda-smoke/`; no formal training ran.
+
+Logs: `artifacts/v0101-full.log`, `v0101-targeted.log`,
+`v0101-final-benchmark-controls.log`, `v0101-game-cpu.log`,
+`v0101-game-cuda.log`, `v0101-packaging.log`, `v0101-install.log`,
+`v0101-smoke.log` and `v0101-doctor.log`.
+Game caches, bytecode and test output stay outside both unchanged game checkouts.
+
 ## 0.10.0 independent policy/value learning — 2026-09-22–23
 
 The bounded comparison improves easy validation for both learner seeds, but

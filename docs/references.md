@@ -159,3 +159,18 @@ and existing curriculum/seed-separation references above. The 100/100 pass gate
 is the user's requested acceptance rule; the 500/2,000-game intervals are local
 configuration choices, not paper-derived optima. No new learning method or
 performance claim is introduced.
+
+For 0.10.1 (2026-09-23), inspected the installed pinned game's integer movement,
+sky-income, sunflower timer, card cooldown and purchase/dig implementation, plus
+the research scenario generator. These supply the saving-task necessity proof
+and independent feasible/failing controls; the numeric lesson is a local design,
+not a paper result. Reused the potential-difference formulation above when
+reducing the economy coefficient, without introducing a purchase bonus.
+
+Inspected installed **SB3 2.7.1** `ppo/ppo.py` (rollout size is `n_steps * n_envs`,
+minibatch divisibility) and **PyTorch 2.8.0**
+`torch/utils/benchmark/utils/timer.py` (warmup, CUDA synchronization, repeated
+measurements and medians). These support the parallelism benchmark protocol,
+not a claim that larger batches improve learning. Online retrieval of SB3's
+versioned PPO page, PyTorch's benchmark recipe and Narvekar et al.'s curriculum
+survey failed in this session; no newly read online findings are claimed.
