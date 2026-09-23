@@ -13,7 +13,7 @@ from stable_baselines3.common.vec_env import VecEnv
 
 from .budget import budget_target
 from .config import lesson_settings
-from .cuda_features import METRIC_INDICES, CudaFeatures
+from .cuda_features import LEDGER_INDICES, METRIC_INDICES, CudaFeatures
 from .cuda_lessons import LessonCudaBatch
 from .curriculum import LESSONS, stage_distribution, teaching_enabled
 from .lesson_rules import natural_sun
@@ -116,6 +116,7 @@ class CudaVecEnv(VecEnv):
         self.render_mode = None
         super().__init__(self.batch.n, self.features.encoder.space, spaces.Discrete(406))
         self._closed = False
+        self.transition_ticks = torch.zeros(self.num_envs, dtype=torch.int64, device="cuda")
 
     @contextmanager
     def device_context(self):
@@ -186,6 +187,7 @@ class CudaVecEnv(VecEnv):
             obs, reward = self.features.step(self.cp.from_dlpack(actions.detach().contiguous()))
             self.phases["simulation_features"] += perf_counter() - started
             h = self.header_tensor
+            self.transition_ticks.copy_(h[:, 14])
             done = (
                 (h[:, 1] != 0) | (h[:, 0] >= self.cfg["environment"]["cutoff_seconds"] * 20)
             ) & (h[:, 17] != 0)
@@ -261,6 +263,7 @@ class CudaVecEnv(VecEnv):
             plant_usage=usage,
             plant_spending={k: v * self.batch.rules.plants[k]["cost"] for k, v in usage.items()},
             **{k: float(t[j]) for k, j in zip(REWARD_METRICS, METRIC_INDICES, strict=True)},
+            **{k: float(t[j]) for k, j in LEDGER_INDICES.items()},
             mowers_used=int(t[24]),
             defeated=int(h[5]),
             total_zombies=int(h[8]),

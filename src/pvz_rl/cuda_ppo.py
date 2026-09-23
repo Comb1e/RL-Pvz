@@ -44,7 +44,14 @@ class TensorPPO:
                     indices = torch.nonzero(timeouts, as_tuple=True)[0]
                     rollout_buffer.add_timeouts(indices, terminal[indices])
                 rollout_buffer.add(
-                    obs, actions, rewards, self._last_episode_starts, None, log_probs, masks
+                    obs,
+                    actions,
+                    rewards,
+                    self._last_episode_starts,
+                    None,
+                    log_probs,
+                    masks,
+                    durations=env.transition_ticks,
                 )
                 self._last_obs, self._last_episode_starts = new_obs, dones
             with env.features.profiler.track("critic_inference"):

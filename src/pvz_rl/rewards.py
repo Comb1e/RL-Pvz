@@ -1,10 +1,10 @@
-"""Terminal, potential, and public-event combat rewards, reported separately."""
+"""Net realized value from public assets and events, in sun-equivalent units."""
 
 from functools import lru_cache
 
 from pvz_game import Observation, Rules, Status
 
-# Combat events remain diagnostics; only mower_activation_penalty affects reward.
+# Combat diagnostics and additive accounting components share one reporting schema.
 REWARD_METRICS = (
     "plant_kills",
     "mower_kills",
@@ -15,6 +15,22 @@ REWARD_METRICS = (
     "wall_nut_damage",
     "empty_explosions",
     "mower_activation_penalty",
+    "sky_income",
+    "produced_sun",
+    "effective_damage",
+    "plant_value_loss",
+    "combat_value",
+    "mower_expenditure",
+    "net_value",
+    "development",
+    "terminal",
+)
+
+LEDGER_METRICS = (
+    "discounted_return",
+    "cumulative_net_value",
+    "maximum_net_value",
+    "value_drawdown",
 )
 
 
@@ -23,14 +39,14 @@ def _default_rules():
     return Rules()
 
 
-def potential(obs: Observation, cfg: dict) -> float:
-    if obs.status != Status.RUNNING:
-        return 0.0
-    r = cfg["reward"]
-    progress = r["defeated_weight"] * obs.counts.defeated / max(1, obs.counts.initial_total)
+def plant_value(obs: Observation) -> float:
+    """Remaining asset value; natural termination never clears physical assets."""
     costs = {card.plant_type: card.cost for card in obs.cards}
-    plant_value = sum(costs[p.plant_type] for p in obs.plants)
-    return progress + r["economy_weight"] * (obs.sun + plant_value) / r["economy_scale"]
+    return sum(costs[p.plant_type] * p.health / p.max_health for p in obs.plants)
+
+
+def asset_value(obs: Observation) -> float:
+    return obs.sun + plant_value(obs)
 
 
 def _attribute_events(events):
@@ -149,24 +165,50 @@ def defense_metrics(before: Observation, events, rules: Rules) -> dict:
 
 
 def reward_parts(
-    before: Observation, after: Observation, cfg: dict, shaped: bool, *, events=(), rules=None
+    before: Observation, after: Observation, cfg: dict, *, events=(), rules=None
 ) -> dict:
+    """Count actual gains/losses once, independent of action names and difficulty."""
+    rules = rules if rules is not None else _default_rules()
+    events = tuple(events)
+    settings = cfg["reward"]
     terminal = (
-        cfg["reward"].get("win_reward", 1.0)
+        settings["win_reward"]
         if after.status == Status.WON
-        else -cfg["reward"].get("loss_penalty", 1.0)
+        else -settings["loss_penalty"]
         if after.status == Status.LOST
         else 0.0
     )
-    shaping = (
-        cfg["reward"]["gamma"] * potential(after, cfg) - potential(before, cfg) if shaped else 0.0
-    )
     combat = combat_metrics(before, events, rules)
-    mower_penalty = -cfg["reward"]["mower_activation_cost"] * combat["mower_activations"]
+    sky = sum(
+        e.get("amount", 0) for e in events if e.kind == "SunProduced" and e.get("source") == "sky"
+    )
+    produced = sum(
+        e.get("amount", 0) for e in events if e.kind == "SunProduced" and e.get("source") != "sky"
+    )
+    damage = sum(
+        e.get("health_damage", 0) + e.get("armor_damage", 0)
+        for e in events
+        if e.kind == "DamageApplied" and e.get("source", 0) > 0
+    )
+    resource_delta = asset_value(after) - asset_value(before) - sky
+    lost_value = produced - resource_delta
+    combat_value = settings["basic_zombie_value"] * damage / rules.zombies["basic"]["health"]
+    mower_cost = settings["mower_value"] * combat["mower_activations"]
+    net = resource_delta + combat_value - mower_cost
+    scale = settings["progress_weight"] / settings["value_scale"]
+    development = scale * net
     return {
-        "terminal": terminal,
-        "shaping": shaping,
         **combat,
-        "mower_activation_penalty": mower_penalty,
-        "total": terminal + shaping + mower_penalty,
+        "terminal": terminal,
+        "development": development,
+        "sky_income": sky,
+        "produced_sun": produced,
+        "effective_damage": damage,
+        "plant_value_loss": lost_value,
+        "combat_value": combat_value,
+        "mower_expenditure": mower_cost,
+        "net_value": net,
+        # A reported component of development, never added a second time.
+        "mower_activation_penalty": -scale * mower_cost,
+        "total": terminal + development,
     }

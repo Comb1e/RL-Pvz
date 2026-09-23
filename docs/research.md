@@ -2,11 +2,11 @@
 
 ## Current method and hypothesis
 
-Research 0.10.4 exposes one configurable CUDA MaskablePPO method, one compact
+Research 0.11.0 exposes one configurable CUDA MaskablePPO method, one compact
 observation and one spatial grouped policy. The question is whether this shared
 policy can learn plant selection, timing and placement across easy, standard and
 hard within a practical laptop budget. Smaller input/network size, ordinary PPO
-reductions and potential shaping are hypotheses to test, not established PVZ gains.
+reductions and net-value accounting are hypotheses to test, not established PVZ gains.
 
 An earlier hypothesis was that shared actor/critic features contributed to rapid
 forgetting after saving-to-easy transfer. In the inspected `compact-stages-101`
@@ -30,38 +30,58 @@ batches before GAE; no stale-policy experience is introduced.
 |---|---|---|
 | Implementation Matters; What Matters in On-Policy RL | Audit PPO numerically; expose ordinary hyperparameters; use a smaller configurable network | Their benchmarks are not this discrete strategy game |
 | SC2LE categorical/spatial preprocessing | Embed plant categories; combine spatial and scalar inputs | No imitation, league, privileged critic or recurrent architecture is copied |
-| Potential-based shaping theorem | Use one discounted potential difference with correct terminal handling | Function approximation and finite training do not guarantee learned invariance or success |
+| Potential-based shaping theorem; semi-MDP duration returns | Distinguish deliberate reward redesign from invariant shaping; discount by simulation duration | Neither theory establishes these PVZ valuations as optimal |
 | CleanRL and SB3-Contrib PPO | Standard full-minibatch reduction; optional KL stopping before optimizer steps | Correct PPO arithmetic alone does not establish good exploration |
 | Local easy-stage regression; What Matters §3.2; DeepSeek DSpark gradient isolation | Separate learned actor/value features and optimizer states, retaining the existing reward | Interference remains a hypothesis; learning must improve on paired development checks |
 | DeepSeek phase-specific execution and task-quality/length-bias discussion | Batch critic inference, audit task-level data composition, preserve successful and failing controls | No LLM architecture or reported speedup is copied |
 
 Actual inspected versions and sections are in [references](references.md).
-Alternative algorithms, recipes and policy factories are removed. A narrow tensor
-conversion accepts only 0.9.0 compact weights for initialization; it does not restore
-shared-encoder training or resume. CPU reference controls and non-learning baselines remain. The older
-committed implementation is used only as temporary comparison evidence.
+Alternative algorithms, recipes and policy factories are removed. Pre-0.11 weights
+and conversion paths are retired. CPU controls and non-learning baselines remain.
+The previous committed method is used only as temporary comparison evidence.
 
 ## Reward objective
 
-Only terminal outcome, mower activation cost and potential shaping contribute:
+`net_value_v1` expresses production, combat and asset loss in sun-equivalent units:
 
-`reward = outcome - mower_activation_cost * new_activations + gamma * Phi(next) - Phi(current)`.
+- Living asset value: `sum(cost * HP / max_HP)`.
+- Net value change: `delta(sun + assets) - actual_sky_income + k_z * effective_plant_damage - mower_value * new_activations`.
+- Reward: terminal outcome plus `progress_weight * net_value_change / value_scale`.
 
-Defaults are +1 for victory, −2 for defeat and −0.2 once per activated mower.
-`Phi = 0.5 * defeated / max(1, initial_zombies) + 0.1 * (sun + living_plant_costs) / 300`.
-Sun above 300 is retained; that denominator scales units. Full purchase value is
-retained while a plant lives, including at low health. Buying preserves resource
-value, and digging/death removes it. Damage, source of kills, wall-nut bites and
-failed explosions have no extra coefficients. Early digging is measured, not
-forbidden or directly penalized.
+Defaults are win +1, defeat −2, basic-zombie value 50, mower value 600, progress
+weight 0.1 and scale 300. The pinned basic has 200 HP, so `k_z = 0.25`, constant
+across difficulties and episode sizes. Damage includes real armor and HP removed,
+lethal hits, explosions and chomper consumption. Overkill and mower damage earn
+no combat value. Sunflower credit is actual income; sky income is excluded even
+when the cap clips it. Assets are not zeroed at termination.
 
-For T transitions, discounted shaping telescopes to
-`-Phi(initial) + gamma^T * Phi(final)`. Natural terminal potential is zero;
-external truncation keeps potential and bootstraps the value. Buying and immediately
-digging cannot create positive shaping profit. The mower activation cost intentionally
-changes the task objective; shaping provides feedback for that objective. Discounting
-remains per decision, including zero-time actions. The resource potential can exceed
-terminal rewards in magnitude, so value scale and gamma still matter.
+A purchase swaps cash for an equally valued asset. Damage reduces asset value
+continuously; digging/death loses only the remainder. No separate planting,
+digging, death, empty-explosion or proximity coefficients are needed. Cherry-bomb
+investment 150 breaks even against three basics (600 HP) or one conehead
+(200 HP + 400 armor). A buckethead (200 HP + 1,100 armor) gives net +175. An
+empty bomb gives −150. One-basic bomb net −100 can beat spending a −600 mower.
+These are local, experimental preferences, not measured optimal tradeoffs.
+
+Historical maximum and drawdown remain diagnostics. Peak-gating would punish
+useful damage arriving after a firing plant dies: losing a 100-sun plant then
+doing 150-sun-equivalent damage must net +50, just as the reverse order does.
+The ungated account preserves that identity. This reward is **not** a discounted
+potential difference and deliberately changes the objective. The shaping theorem
+does not promise preservation of optimal terminal-win behavior.
+
+Gamma and GAE lambda move to a simulation-time clock: a transition lasting `k`
+ticks uses bootstrap factor `gamma^k` and trace factor `(gamma * lambda)^k`.
+Both default to 0.999. Zero-time actions have factor 1; inserting such actions
+cannot reduce the discounted cost of a later loss. Reward at transition index `i`
+is weighted by `gamma` raised to the ticks elapsed **before** that transition.
+Natural outcomes stop bootstrapping; timeouts use their terminal observation before
+reset. Duration tensors remain on CUDA. The semi-MDP literature motivates the
+clock; the chosen duration-aware GAE trace is an explicit project estimator.
+
+There is no guarantee this repairs exploration or value approximation. Compare
+competence, early digs per planting, attacker purchases and throughput together.
+Fewer digs without stronger task performance do not establish a fix.
 
 ## Learning and curriculum
 
@@ -115,19 +135,11 @@ its reward/value information. This changes execution cost without changing choic
 its GPU indexing overhead needs measurement. Do not wait for 128 plant/dig actions
 before updating: an agent can legitimately finish a game with far fewer actions.
 
-The larger alternative is temporal abstraction: combine waits into a transition
-with duration `k`, discounted reward `sum(gamma**j * reward[j])` and bootstrap
-discount `gamma**k`. The corresponding potential difference is
-`gamma**k * Phi(next) - Phi(current)`. Sutton, Precup and Singh supply that return
-formulation, not a PPO speed or PVZ win-rate guarantee. Dense GAE with lambda below
-one is not automatically reproduced by substituting a duration discount; it needs
-an explicit estimator and independent controls. Repeating voluntary waits also
-removes intermediate action opportunities. Ordinary fixed frame skipping is
-therefore not a drop-in optimization under the current per-tick controls.
-
-Neither sample thinning nor temporal abstraction is enabled in this release.
-Compare learning and wall time before adoption: normal-game/lesson wins, attacker
-purchases and early digs per planting matter alongside optimizer throughput.
+Duration-aware discounting is implemented in 0.11.0 without skipping decisions.
+Wait compression and optimization-sample thinning remain unimplemented. Combining
+waits would require discounted within-transition rewards and careful GAE treatment;
+repeating voluntary waits also removes intermediate action opportunities. Neither
+is implied by changing the discount clock.
 
 The curriculum is placement → saving → easy → standard → shared. It keeps the
 full board and lessons' configured plant restrictions. Rehearsal and final
@@ -142,8 +154,8 @@ promotion preserves both current optimizers. All these numeric settings are adju
 
 ### Lesson pressure trial
 
-Version 0.10.4 tests whether scarce income and tighter waves discourage wasteful
-digging. This changes training tasks, not PPO or rewards. Both lessons disable
+The lesson definitions introduced in 0.10.4 test whether scarce income and
+tighter waves discourage wasteful digging. Version 0.11.0 retains these tasks. Both lessons disable
 sky income and mowers. Sunflower production, costs, combat and per-tick actions
 retain pinned rules. Normal games retain sky income. There is one configurable
 lesson definition, with no extra stage or legacy training mode.
@@ -199,8 +211,8 @@ and optimizers when adopting this trial.
 harder or overfit the lessons; removing sky income increases their difference
 from daytime games. Assess digs per accepted planting together with attacker
 purchases, lesson retention and easy wins. Improvement requires measured learning
-evidence; this trial makes no such claim yet. The economy coefficient stays 0.1:
-buying preserves potential value and digging reduces it without a purchase bonus.
+evidence; this trial makes no such claim yet. The net-value progress coefficient is 0.1:
+buying conserves assets and digging destroys their remaining value without a purchase bonus.
 
 ## Evaluation and evidence
 
@@ -221,6 +233,27 @@ and conditional on passing stages; an absent point is not a zero win rate. This
 scheduling change saves evaluation work but delays detection of normal-game
 regressions within a stage. It does not establish better learning or measured
 wall-time savings. Archived runs retain their recorded schedules.
+
+The 0.11.0 comparison uses fresh saving-stage starts, learner seeds 101/102 and
+an equal five-minute allowance per run (including startup and completed-update
+stopping). Order is baseline101, candidate101, candidate102, baseline102. The
+baseline is committed 0.10.4; no previous weights or demonstrations are reused.
+Both use 256×128 collection, 1,024 minibatches, four epochs and the same 80/20
+saving/placement distribution. Endpoint evaluations use the same 20 development
+seeds per lesson. Learning and comparison evaluation together are capped at 30
+minutes, including short integration checks. Actual games, transitions, wall
+seconds, lesson wins, attacker purchases and digs per planting are reported in
+[validation](validation.md). This compares the accounting/discount package, not
+the causal contribution of either change in isolation. No alternate recipe ships.
+
+The 0.11.0 comparison did not meet acceptance: both candidates scored 0/20 on
+saving and placement. Aggregate saving digs/plant rose from 5.45% to 6.88% for
+seed 101 and fell from 61.10% to 0.97% for seed 102. Each still bought only one
+sustained attacker per saving game. The accounting identities passed, but learning
+competence did not improve. The requested configuration remains experimental.
+
+Historical comparison evidence follows; its removed models are not needed to read
+these findings.
 
 The 0.10.0 comparison starts both methods from the same mastered saving checkpoint
 (SHA-256 `3bc3d252e3107c34c26c0f5623ddaf57eb3bac0d62fb74f54d5362e4b9d364ab`),

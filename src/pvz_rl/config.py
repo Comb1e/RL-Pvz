@@ -118,26 +118,26 @@ def validate_config(cfg: dict) -> None:
         ):
             raise ValueError("rollout_size must equal n_envs * rollout_steps_per_env")
     if cfg["encoding"].get("version") != "compact_v3" or cfg.get("policy", {}).get("kind") not in (
-        "spatial_grouped_v3",
         "spatial_grouped_v4",
     ):
         raise ValueError(
             "Retired observation/policy format. Start fresh with configs/train.toml; archived reports and recordings remain readable."
         )
-    if cfg["reward"].get("version") != "potential_mower_v1":
-        raise ValueError("Retired reward format; start fresh with configs/train.toml")
+    if cfg["reward"].get("version") != "net_value_v1":
+        raise ValueError(
+            "Retired reward format; 0.11.0 requires fresh training with configs/train.toml"
+        )
     reward_keys = {
         "version",
         "win_reward",
         "loss_penalty",
-        "mower_activation_cost",
-        "gamma",
-        "defeated_weight",
-        "economy_weight",
-        "economy_scale",
+        "mower_value",
+        "basic_zombie_value",
+        "progress_weight",
+        "value_scale",
     }
     if set(cfg["reward"]) != reward_keys:
-        raise ValueError("reward must contain only the outcome, mower and potential settings")
+        raise ValueError("reward must contain only the outcome and net-value settings")
     if "actor_objective" in cfg["training"] or "ent_coef" in cfg["training"]:
         raise ValueError("Retired PPO objective; use standard PPO and training.exploration")
     if cfg["training"]["exploration"].get("objective") != "balanced_heads_v1":
@@ -145,15 +145,15 @@ def validate_config(cfg: dict) -> None:
     for key in (
         "win_reward",
         "loss_penalty",
-        "mower_activation_cost",
-        "defeated_weight",
-        "economy_weight",
+        "mower_value",
+        "basic_zombie_value",
+        "progress_weight",
     ):
         value = cfg["reward"][key]
         if type(value) not in (int, float) or not math.isfinite(value) or value < 0:
             raise ValueError(f"reward.{key} must be finite and nonnegative")
     for group, keys in (
-        ("reward", ("economy_scale",)),
+        ("reward", ("value_scale",)),
         ("encoding", ("local_count_scale",)),
         ("training", ("max_grad_norm",)),
     ):
@@ -315,7 +315,9 @@ def validate_config(cfg: dict) -> None:
             raise ValueError(f"{key} must be a positive integer")
     if train["rollout_size"] % train["n_envs"] or train["rollout_size"] % train["batch_size"]:
         raise ValueError("Rollout size must divide into complete workers and minibatches")
-    gamma = cfg["reward"]["gamma"]
+    if train.get("discount_clock") != "simulation_ticks":
+        raise ValueError("Training requires simulation_ticks discounting; start a fresh run")
+    gamma = train["gamma"]
     if (
         train["rollout_size"] < 2
         or type(gamma) not in (int, float)

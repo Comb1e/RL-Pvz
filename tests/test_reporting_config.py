@@ -10,11 +10,11 @@ from pvz_rl.reporting import make_report
     "group,key,value",
     [
         ("encoding", "count_scale", 0),
-        ("reward", "economy_scale", 0),
+        ("reward", "value_scale", 0),
         ("training", "learner_seeds", [101, 101]),
         ("training", "hidden_sizes", [0]),
         ("training", "learning_rate", float("nan")),
-        ("reward", "gamma", float("nan")),
+        ("training", "gamma", float("nan")),
     ],
 )
 def test_invalid_research_config_rejected(cfg, group, key, value):

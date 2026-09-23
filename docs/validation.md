@@ -3,6 +3,151 @@
 Evidence is versioned below. Learning outcomes, simulation correctness and runtime
 speed are separate measures; [research design](research.md) defines the protocol.
 
+## 0.11.0 net realized value — 2026-09-23
+
+This release changes the reward objective and discount clock, requiring fresh
+models. It retains the 500 inputs, independent actor/critic, pinned combat rules,
+curriculum and 256×128 / batch-1,024 / four-epoch PPO settings. Historical peak
+and drawdown are diagnostic only. Full configuration, source hashes, engine pin
+and endpoint outcomes are in [the comparison evidence](evidence/net-value-v0110.json).
+
+### Independent accounting and duration controls
+
+Purchases conserve value; healthy/damaged removal costs only remaining assets.
+Damage followed by death cannot charge the same HP twice. Real cherry-bomb cases
+net −100 for one basic, 0 for three basics or one conehead, +175 for one buckethead
+and −150 for an empty explosion. Effective damage caps at actual HP/armor removed;
+mower damage earns none, and activation costs 600 once. A projectile fired before
+a plant is dug retains its damage credit. Loss then repayment and repayment then
+loss give equal undiscounted accounting; historical-maximum gates are absent.
+
+All ten saving lane pairs retain the test-only investment win at tick 2101,
+net +525 sun-equivalents and discounted return +0.177951. Always-wait loses at
+1859 with −0.311679; immediate sunflower/shooter purchase-and-dig loses with
+−0.361679. Sunflower-only controls across all pairs lose and rank below the
+winning control. All five placement lanes retain the successful, failing and
+exact timing-boundary controls. None supplies learner demonstrations.
+
+CPU/CUDA comparisons cover complete lesson games, mixed resets, sky/flower income
+at the cap, armor, overkill, explosions and late projectiles. Public observations
+use `atol=1e-7, rtol=1e-6`; scalar float32 reward checks use up to `atol=2e-7,
+rtol=1e-6`; component comparisons use double intermediates with `atol=1e-9`.
+Independent duration-aware GAE/timeout controls use `atol=2e-6, rtol=2e-6`, including
+zero-duration actions, durations 1/2/7/9, reset boundaries and gamma/lambda 0/1.
+No discount-clock advantage arises from inserted zero-time actions.
+
+### Bounded fresh-saving comparison
+
+Reference commit: `c2e01839c79cae096f92714507e38a8324601ae3` (0.10.4).
+Each run receives five minutes including startup; collection stops before the
+next complete update would exceed the allowance. The game ceiling is 100,000 so
+time controls termination. Runs start fresh at saving with its ordinary 80/20
+saving/placement mix. Order is reference101, candidate101, candidate102,
+reference102. Evaluation uses the same 20 development cases per lesson
+(100050–100069), outside final-test seeds. Neither method masters the stage, so
+scheduled normal-game checkpoint validation correctly does not run. The separate
+endpoint lesson checks are comparison evidence, not mastery certification.
+
+| Method / seed | Games | Transitions | Training wall seconds | Transitions/s | Saving wins | Placement wins |
+|---|---:|---:|---:|---:|---:|---:|
+| Previous / 101 | 1,817 | 3,309,568 | 296.97 | 11,144 | 0/20 | 5/20 |
+| Net value / 101 | 1,817 | 3,309,568 | 298.93 | 11,072 | 0/20 | 0/20 |
+| Previous / 102 | 1,900 | 3,375,104 | 298.92 | 11,291 | 0/20 | 0/20 |
+| Net value / 102 | 1,820 | 3,342,336 | 297.75 | 11,225 | 0/20 | 0/20 |
+
+| Seed | Saving early digs / planting, previous → candidate | Last 100 saving games, previous → candidate |
+|---|---:|---:|
+| 101 | 5.45% → 6.88% | 33.48% → 0.14% |
+| 102 | 61.10% → 0.97% | 100% → 0% |
+
+Every method/seed purchased exactly one sustained attacker per completed saving
+game, insufficient to cover its two lanes. Candidate endpoint policies bought
+sunflowers (151 total plants for seed 101; 110 for seed 102), but still bought
+only one attacker per game. Deterministic endpoint early digging was zero for
+both candidates; this did not establish competence. Placement checks measure
+rehearsal learning from a fresh start, not retention from mastered weights.
+
+**Acceptance not met.** No saving wins improved; seed 101's placement result
+regressed and aggregate digging increased. The late digging reduction is useful
+diagnostic evidence, not a solved collapse. Keep the requested method experimental;
+no coefficients were tuned after these results. Twenty cases and two short runs
+cannot establish generalization. This tests the combined accounting/time-clock
+change, not either factor independently. Observed throughput is similar, roughly
+0.6% lower for the candidate in each pair; these are ordinary desktop runs, not a
+controlled hardware benchmark. Other GPU tests were idle during comparison.
+A single RTX 4070 Laptop snapshot showed 67% utilization and 770 MiB used, which
+is not a time-averaged performance measurement.
+
+Training plus endpoint evaluation took **1,252.96 seconds (20m53s)**. Final-test
+performance was not measured and no formal training was launched. Complete-suite
+integration checks and final verification totals are recorded below.
+
+### Release verification and retained outputs
+
+| Check | Result |
+|---|---|
+| Complete research suite | **474 passed**, 389.60 s |
+| Net-value controls after replacing a deprecated pytest iterator with an equivalent list | **44 passed**, 6.01 s, warnings treated as errors |
+| Complete pinned game 1.3.0 suite (`8861824`) | **214 passed**, 42.40 s |
+| Complete CPU viewer checkout 1.2.2 suite (`a95524e`) | **207 passed**, 10.03 s |
+| Complete CUDA viewer checkout 1.3.1 suite (`314528a`) | **222 passed**, 41.20 s |
+| Ruff lint/format, dependency check, CUDA doctor | Passed |
+| Editable installation, 0.11.0 wheel and sdist, required packaged resources | Passed |
+| README local links and nine PowerShell command blocks | Passed |
+| Offline report assets, replay hashes, shared checkpoint and H.264 decode | Passed |
+
+The complete suite covers independent PPO loss/gradient/optimizer controls,
+KL stopping, source staging, old-model rejection, archived report regeneration,
+weights-only handoffs, exact saved optimizer/schedule reload, interruption,
+CPU/CUDA observations/rewards, validation tie handling and presentation failures.
+The single initial warning was the new test's iterable parametrization, corrected
+without changing test cases; all 44 net-value tests then passed under `-W error`.
+
+A conservative total counting the **entire** research suite, focused checks and
+comparison wall time (including non-learning tests) is under 29 minutes; actual
+learning plus comparison evaluation is therefore within the 30-minute cap.
+No additional training followed the comparisons. Upstream suites and caches ran
+outside the game checkouts; their HEADs and working trees are unchanged.
+
+Retained smoke output: `artifacts/v0110/smoke`, copied from the full suite's
+128-transition CUDA integration. Its report, three verified compact demos and
+three decoded MP4s share checkpoint SHA-256
+`652fcce88fbb7e558eeb68b2e320864e466ff321f6e8e629eb2744b2757c0e02`.
+Each ends at a deliberate two-second cutoff: 41 frames at 20 fps, 1280×820.
+These confirm integration, not playing competence. Accounting/task curves from
+`candidate-101/visualizations` and representative replay frames were visually
+inspected: labels are readable, outcome is visible, and lesson sky/mower curves
+are correctly zero. Relative report assets resolve without a server or CDN.
+Report regeneration does not update weights.
+
+Full logs and checksums are under `artifacts/v0110`: `research-full.txt`,
+`game-pinned.txt`, `game-cpu.txt`, `game-cuda.txt`, `net-final.txt`,
+`verification-progress.json`, `availability.json`, `artifact-inspection.json`,
+`packages/`, and `comparison-*.json`. Candidate source hashes differ only by a
+retired-model/report eligibility guard; numerical learning code and settings did
+not change between their runs.
+
+Before cleanup, the archived `compact-stages-101/saving` diagnosis was retained
+in concise form: 11,159 completed games, including 8,897 saving losses and 2,262
+placement rehearsals (1,184 wins); all five saving probes were 0/100. The frozen
+interrupted model scored 0/100 with both sampling and deterministic selection.
+Sampling dug 200/200 plantings early; deterministic play dug none of 623, but
+still failed. Digging had negative immediate reward. Potential telescoping,
+repeated stochastic digging opportunities and decision-clock discounting supplied
+plausible mechanisms, not proof of a single cause.
+
+Cleanup is **blocked locally**: automatic approval review rejected both the bounded
+inventory cleanup and a smaller deletion using explicit temporary-baseline paths.
+Its only stated reason was "blocked by policy". No deletion ran. The 337 inspected
+pre-existing artifact entries and temporary baseline files remain ignored by Git;
+`runs` is absent. Their concise historical findings have been preserved above.
+The reviewed cleanup script is `artifacts/v0110/cleanup-old-outputs.ps1`, for manual
+execution. It preserves all new release evidence and checks every old path stays
+a direct child of the artifact directory before deleting anything.
+Current verification outputs live under `artifacts/v0110`. The installed game pin
+and both game checkouts remain unchanged. None of the local baseline code, models
+or generated outputs is included in the release commit.
+
 ## 0.10.4 sunless lesson pressure trial — 2026-09-23
 
 Placement now starts with 100 sun and basics at ticks 1/21/41. Saving starts with

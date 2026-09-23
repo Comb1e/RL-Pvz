@@ -37,12 +37,15 @@ def cuda_doctor():
     """Compile, run a game, verify hash parity, and test bidirectional sharing."""
     import torch
     from pvz_game import Game, LevelSpec
-    from pvz_game.cuda import CudaBatch
+
+    from .config import load_config
+    from .cuda_features import CudaFeatures
+    from .cuda_lessons import LessonCudaBatch
 
     if not torch.cuda.is_available():
         return {"available": False, "error": "PyTorch CUDA is unavailable"}
     try:
-        batch = CudaBatch(1, zombie_capacity=1, max_step_ticks=1)
+        batch = LessonCudaBatch(1, zombie_capacity=1, max_step_ticks=1)
         cp = batch.cp
         stream = torch.cuda.current_stream()
         with cp.cuda.ExternalStream(stream.cuda_stream, device_id=stream.device_index):
@@ -50,7 +53,11 @@ def cuda_doctor():
             tensor = torch.from_dlpack(batch.header)
             assert tensor.data_ptr() == batch.header.data.ptr
             action = torch.zeros(1, device="cuda", dtype=torch.long)
-            batch.step_device(cp.from_dlpack(action))
+            features = CudaFeatures(batch, load_config(), "masked")
+            features.encode()
+            features.step(cp.from_dlpack(action))
+            assert features.rewards.get().tolist() == [1.0]
+            assert batch.accounting.get().tolist() == [[0, 0, 0]]
             oracle = Game()
             oracle.reset(LevelSpec("cuda-doctor"), 0)
             oracle.step()
@@ -64,6 +71,7 @@ def cuda_doctor():
             "available": True,
             "cupy": cp.__version__,
             "kernel_compilation": "passed",
+            "research_accounting": "passed",
             "dlpack_shared_stream": "passed",
             "simulation_hash": oracle.state_hash(),
             "device": torch.cuda.get_device_name(),

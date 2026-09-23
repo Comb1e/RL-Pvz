@@ -216,3 +216,32 @@ income-before-plant processing. Reference controls and committed independent
 tests establish feasibility and specific delay counterexamples. The research
 adapter preserves the installed source pin and records effective snapshot rules.
 Numeric trial choices are local design, not published performance claims.
+
+
+For **0.11.0 net realized value** (2026-09-23), reused the inspected Ng, Harada
+and Russell (1999) shaping theorem and Sutton, Precup and Singh (1999)
+semi-MDP return formulations cited above. The former distinguishes an invariant
+potential difference from this deliberately changed accounting objective; the
+latter motivates discounting continuation by elapsed duration. The implementation
+uses `gamma^ticks` in TD targets and `(gamma * lambda)^ticks` in GAE. This trace
+choice is project-specific; the options paper does not validate it as a PPO
+performance improvement. Inspected installed SB3 2.7.1 rollout-buffer GAE and
+SB3-Contrib timeout handling as the unit-duration numerical reference.
+
+Inspected pinned game **1.3.0**, commit
+`8861824df6893a34c2cd4df7f9b68613376d7964`, `engine.py` damage/income processing,
+public `DamageApplied` / `SunProduced` events, and `cuda/simulation.cu` damage,
+income, explosion, chomper and mower processing. Damage events expose actual
+health/armor removed; positive sources identify plants/projectiles, negative
+sources identify mowers. Income exposes actual capped amounts and sky/sunflower
+sources. The basic's 200 HP supplies the common damage denominator. Read-only
+counters are added through the existing research adapter, with no engine-file,
+installed-package or state-order change. Source assertions intentionally fail if
+the pinned kernel hook changes.
+
+The 50-sun basic value, 600-sun mower cost, health-weighted assets and ungated
+account are a **project-specific experimental hypothesis**. No paper supplies
+these coefficients or establishes an early-digging cure. Historical peak/drawdown
+is diagnostic because ordered loss/repayment controls invalidate peak gating.
+The inspected RUDDER abstract (arXiv:1806.07857) motivates examining delayed credit;
+its redistribution algorithm is not adopted and no performance claim is borrowed.

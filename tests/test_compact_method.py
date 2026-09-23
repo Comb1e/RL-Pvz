@@ -11,32 +11,26 @@ from pvz_game.types import Event
 
 from pvz_rl.config import load_config, validate_config
 from pvz_rl.env import PvZEnv
-from pvz_rl.rewards import potential, reward_parts
+from pvz_rl.rewards import asset_value, reward_parts
 from pvz_rl.spatial_policy import SpatialFeatures
 
 
 @pytest.mark.parametrize("kind", PLANT_TYPES)
-def test_purchase_full_value_then_dig_no_shaping_profit(kind):
+def test_purchase_conserves_assets_and_dig_removes_remaining_value(kind):
     cfg = load_config()
     env = PvZEnv(cfg)
     env.reset(
         seed=4, options={"scenario": LevelSpec("value", (Spawn(999, "basic", 0),), initial_sun=900)}
     )
-    start = potential(env.public, cfg)
     _, buy, _, _, _ = env.step(env.codec.encode(Place(kind, 2, 3)))
-    assert env.public.tick == 0
-    assert potential(env.public, cfg) == start
+    assert env.public.tick == 0 and asset_value(env.public) == 900 and buy == 0
     _, dig, _, _, _ = env.step(env.codec.encode(Dig(2, 3)))
     cost = env.rules.plants[kind]["cost"]
-    expected_end = 0.1 * (900 - cost) / 300
-    assert potential(env.public, cfg) == expected_end
-    assert buy + cfg["reward"]["gamma"] * dig == pytest.approx(
-        -start + cfg["reward"]["gamma"] ** 2 * expected_end
-    )
-    assert buy + cfg["reward"]["gamma"] * dig < 0
+    assert asset_value(env.public) == 900 - cost
+    assert dig == pytest.approx(-cost / 3000)
 
 
-def test_independent_income_death_terminal_and_timeout_formula():
+def test_independent_damage_death_terminal_and_timeout_formula():
     cfg = load_config()
     env = PvZEnv(cfg)
     env.reset(
@@ -51,24 +45,19 @@ def test_independent_income_death_terminal_and_timeout_formula():
         },
     )
     before = env.public
-    # Purchase value survives damage; death or voluntary removal loses full value.
-    assert potential(before, cfg) == pytest.approx(0.1 * 700 / 300)
-    damaged = replace(before, plants=(replace(before.plants[0], health=1),))
-    assert potential(damaged, cfg) == potential(before, cfg)
-    after = replace(before, sun=625, plants=(), counts=replace(before.counts, defeated=1))
-    expected = 0.5 + 0.1 * 625 / 300
-    assert potential(after, cfg) == pytest.approx(expected)
-    assert reward_parts(before, after, cfg, True)["total"] == pytest.approx(
-        cfg["reward"]["gamma"] * expected - 0.1 * 700 / 300
+    assert asset_value(before) == 700
+    damaged = replace(
+        before, plants=(replace(before.plants[0], health=before.plants[0].max_health // 2),)
     )
-    # External truncation keeps RUNNING in public state and must retain Phi.
-    assert potential(after, cfg) > 0
+    assert asset_value(damaged) == 650
+    assert reward_parts(before, damaged, cfg)["total"] == pytest.approx(-50 / 3000)
+    after = replace(damaged, plants=())
+    assert reward_parts(damaged, after, cfg)["total"] == pytest.approx(-50 / 3000)
+    assert asset_value(after) == 600
     for status, terminal in ((Status.WON, 1), (Status.LOST, -2)):
         end = replace(after, status=status)
-        assert potential(end, cfg) == 0
-        assert reward_parts(before, end, cfg, True)["total"] == pytest.approx(
-            terminal - 0.1 * 700 / 300
-        )
+        assert asset_value(end) == 600
+        assert reward_parts(damaged, end, cfg)["total"] == pytest.approx(terminal - 50 / 3000)
 
 
 @pytest.mark.parametrize("sun", [0, 50, 300, 600, 9990])
@@ -83,11 +72,11 @@ def test_mower_cost_once_independent_of_sun_and_kills(sun, kills):
         events.extend(
             (Event("DamageApplied", 1, i, (("source", -1),)), Event("ZombieDefeated", 1, i))
         )
-    parts = reward_parts(before, before, cfg, True, events=events)
-    assert parts["mower_activation_penalty"] == -0.2
+    parts = reward_parts(before, before, cfg, events=events)
+    assert parts["mower_activation_penalty"] == pytest.approx(-0.2)
     assert parts["mower_kills"] == kills
-    assert parts["total"] == pytest.approx(-0.2 + (cfg["reward"]["gamma"] - 1) * (0.1 * sun / 300))
-    assert reward_parts(before, before, cfg, True)["mower_activation_penalty"] == 0
+    assert parts["total"] == pytest.approx(-0.2)
+    assert reward_parts(before, before, cfg)["mower_activation_penalty"] == 0
 
 
 def test_empty_explosion_and_nut_bite_are_only_diagnostics():
@@ -106,9 +95,9 @@ def test_empty_explosion_and_nut_bite_are_only_diagnostics():
         Event("PlantDamaged", 1, before.plants[0].id, (("damage", 25),)),
         Event("PlantExploded", 1, 99),
     )
-    part = reward_parts(before, before, cfg, True, events=events)
+    part = reward_parts(before, before, cfg, events=events)
     assert part["wall_nut_damage"] == 25 and part["empty_explosions"] == 1
-    assert part["total"] == part["shaping"]
+    assert part["total"] == 0
 
 
 def test_categorical_boundaries_and_empty_embeddings():
@@ -151,7 +140,8 @@ def test_profile_is_label_and_numeric_controls_are_flexible():
         vf_coef=0.8,
         normalize_advantage=False,
     )
-    cfg["reward"].update(gamma=0.9, mower_activation_cost=3, economy_weight=0)
+    cfg["reward"].update(mower_value=3, progress_weight=0)
+    cfg["training"]["gamma"] = 0.9
     cfg["policy"].update(plant_embedding=3, state_embedding=2, channels=[16, 24], scalar_sizes=[24])
     validate_config(cfg)
 
@@ -162,7 +152,7 @@ def test_discount_and_gae_endpoints_are_valid(discount, gae_lambda):
     from pvz_rl.training_requirements import require_cuda_training
 
     cfg = load_config()
-    cfg["reward"]["gamma"] = discount
+    cfg["training"]["gamma"] = discount
     cfg["training"]["gae_lambda"] = gae_lambda
     require_cuda_training(cfg, runtime=False)
 
@@ -194,14 +184,21 @@ def test_retired_weights_fail_before_deserialization(tmp_path, version):
         load_policy(tmp_path / "absent.zip")
 
 
-def test_retired_network_report_rebuild_never_loads_model(tmp_path, monkeypatch):
+@pytest.mark.parametrize("retired", ["network", "reward", "clock"])
+def test_retired_report_rebuild_never_loads_model(tmp_path, monkeypatch, retired):
     from pvz_rl.provenance import write_json
     from pvz_rl.visualization import visualize_run
 
     cfg = load_config()
-    cfg["policy"]["kind"] = "spatial_grouped_v2"
-    cfg["encoding"]["version"] = "tactical_v2"
-    # Same game pin, no checkpoint files: statistics still have value.
+    if retired == "network":
+        cfg["policy"]["kind"] = "spatial_grouped_v2"
+        cfg["encoding"]["version"] = "tactical_v2"
+    elif retired == "reward":
+        cfg["reward"]["version"] = "potential_mower_v1"
+    else:
+        cfg["training"].pop("discount_clock")
+    # A file exists, but archived reporting must never deserialize its weights.
+    (tmp_path / "best.zip").write_bytes(b"not a model")
     write_json(tmp_path / "metadata.json", {"config": cfg, "family": "preset"})
     write_json(tmp_path / "best.json", {"checkpoint_hash": "deleted-model"})
 

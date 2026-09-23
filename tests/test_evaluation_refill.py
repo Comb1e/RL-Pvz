@@ -110,4 +110,4 @@ def test_plant_and_mower_kills_survive_cuda_episode_reset(monkeypatch):
         assert row["status"] == "won"
         assert row["plant_kills"] == row["mower_kills"] == 1
         assert row["defeated"] == 2
-        assert row["mower_activation_penalty"] == -0.2
+        assert row["mower_activation_penalty"] == pytest.approx(-0.2)

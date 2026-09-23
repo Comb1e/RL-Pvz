@@ -1,13 +1,10 @@
 // Uses the game's integer structs/rule constants. Only documented public fields
 // contribute to the policy vector. Schedules, IDs and task names are never
 // read.
-__device__ double phi(Header &h, Plant *p) {
-  if (h.status)
-    return 0;
-  double progress = R_defeated_weight * h.defeated / hi(1, h.total_spawns);
-  I value = 0;
-  for (I j = 0; j < h.np; j++) value += PC[p[j].kind];
-  return progress + R_economy_weight * (h.sun + value) / R_economy_scale;
+__device__ double asset_value(Header &h, Plant *p) {
+  double value = h.sun;
+  for (I j = 0; j < h.np; j++) value += (double)PC[p[j].kind] * p[j].health / PH[p[j].kind];
+  return value;
 }
 __device__ I bin_x(I x) {
   return hi(0, lo(BINS - 1, (x - G_house_x) * BINS / (G_spawn_x - G_house_x)));
@@ -15,7 +12,7 @@ __device__ I bin_x(I x) {
 extern "C" __global__ void encode_state(const I *headers, const I *plants,
                                         const I *zombies, const I *shots,
                                         const I *mowers, const I *cooldowns,
-                                        float *output, double *potential, I n) {
+                                        float *output, double *assets, I n) {
   I i = blockIdx.x;
   if (threadIdx.x || i >= n)
     return;
@@ -100,14 +97,14 @@ extern "C" __global__ void encode_state(const I *headers, const I *plants,
     for (I j = 0; j < 3; j++)
       o[k++] = m[r].state == j;
   }
-  potential[i] = phi(h, p);
+  assets[i] = asset_value(h, p);
 }
 // Reward order mirrors reward_parts, using double intermediates before casting
 // the scalar reward to the same float32 rollout storage used by SB3.
 extern "C" __global__ void
 reward_metrics(const I *headers, const I *old_headers, const I *old_cd,
-               const I *actions, const double *facts, const double *before_phi,
-               const double *after_phi, float *rewards, double *parts,
+               const I *actions, const double *facts, const I *accounting, const double *before_assets,
+               const double *after_assets, float *rewards, double *parts,
                double *totals, I n) {
   I i = blockIdx.x * blockDim.x + threadIdx.x;
   if (i >= n)
@@ -123,15 +120,26 @@ reward_metrics(const I *headers, const I *old_headers, const I *old_cd,
     rewards[i] = 0;
     return;
   }
-  v[0] = h.status == 1 ? R_win_reward : h.status == 2 ? -R_loss_penalty : 0.;
-  v[1] = SHAPED ? R_gamma * after_phi[i] - before_phi[i] : 0.;
-  v[2] = f[0]; v[3] = f[1]; v[4] = f[2]; v[5] = f[4];
-  v[6] = f[5]; v[7] = f[6]; v[8] = f[7]; v[9] = f[8];
-  v[10] = -R_mower_activation_cost * f[5];
-  double total = v[0] + v[1] + v[10];
-  v[REWARD_SIZE - 1] = total;
+  const I *a = accounting + i * 3;
+  v[F_terminal] = h.status == 1 ? R_win_reward : h.status == 2 ? -R_loss_penalty : 0.;
+  v[F_plant_kills] = f[0]; v[F_mower_kills] = f[1];
+  v[F_nonlethal_health_damage] = f[2]; v[F_empty_mower_activations] = f[4];
+  v[F_mower_activations] = f[5]; v[F_mower_activation_sun] = f[6];
+  v[F_wall_nut_damage] = f[7]; v[F_empty_explosions] = f[8];
+  v[F_effective_damage] = a[0]; v[F_sky_income] = a[1]; v[F_produced_sun] = a[2];
+  double resources = after_assets[i] - before_assets[i] - a[1];
+  v[F_plant_value_loss] = a[2] - resources;
+  v[F_combat_value] = R_basic_zombie_value * a[0] / BASIC_HP;
+  v[F_mower_expenditure] = R_mower_value * f[5];
+  v[F_net_value] = resources + v[F_combat_value] - v[F_mower_expenditure];
+  double scale = R_progress_weight / R_value_scale;
+  v[F_development] = scale * v[F_net_value];
+  v[F_mower_activation_penalty] = -scale * v[F_mower_expenditure];
+  double total = v[F_terminal] + v[F_development];
+  v[F_total] = total;
   rewards[i] = (float)total;
   t[0] += total;
+  t[T_discounted_return] += pow(GAMMA, t[2]) * total;
   t[1]++;
   t[2] += h.advanced;
   t[3] += h.advanced == 0;
@@ -168,5 +176,9 @@ reward_metrics(const I *headers, const I *old_headers, const I *old_cd,
     t[35] += planted > 0 && b.tick - (planted - 1) <= EARLY_DIG_TICKS;
     t[36 + tile] = 0;
   }
-  for (I j = 0; j < 9; j++) t[20 + j] += v[2 + j];
+  // Named indices come from the shared Python reporting schema.
+  METRIC_ACCUMULATION
+  t[T_cumulative_net_value] = t[T_net_value];
+  t[T_maximum_net_value] = fmax(t[T_maximum_net_value], t[T_cumulative_net_value]);
+  t[T_value_drawdown] = t[T_maximum_net_value] - t[T_cumulative_net_value];
 }

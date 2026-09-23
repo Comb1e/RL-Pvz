@@ -8,49 +8,31 @@ from pvz_game.config import resolve_level
 
 from pvz_rl.config import validate_config
 from pvz_rl.env import PvZEnv
-from pvz_rl.rewards import potential, reward_parts
+from pvz_rl.rewards import reward_parts
 from pvz_rl.scenarios import difficulty_weights, scenario
 
 
-def test_discounted_shaping_telescopes_and_plant_dig_is_not_free_reward(cfg):
+def test_legacy_tick_batch_discounts_at_elapsed_simulation_time(cfg):
     env = PvZEnv(cfg)
     env.reset(seed=10)
-    phi0 = potential(env.public, cfg)
-    gamma = cfg["reward"]["gamma"]
-    total = 0
-    actions = [env.codec.encode(Place("sunflower", 0, 0)), 361, 0, 0, 0]
-    for t, action in enumerate(actions):
-        _, reward, _, _, _ = env.step(action)
-        total += gamma**t * reward
-    expected = -phi0 + gamma ** len(actions) * potential(env.public, cfg)
-    assert total == pytest.approx(expected, abs=1e-12)
-    assert total < 0
+    rewards = []
+    for action in [env.codec.encode(Place("sunflower", 0, 0)), 361, 0, 0, 0]:
+        rewards.append(env.step(action)[1])
+    assert rewards == pytest.approx([0, -50 / 3000, 0, 0, 0])
+    assert env.episode_metrics()["discounted_return"] == pytest.approx(-50 / 3000 * 0.999**10)
 
 
-def test_shaping_true_terminal_independent_algebra(cfg):
+def test_terminal_accounting_does_not_destroy_assets(cfg):
     obs = Game().reset("easy", 1)
-    phi = potential(obs, cfg)
     for status, terminal in ((Status.WON, 1), (Status.LOST, -2)):
-        end = replace(obs, status=status, sun=9990)
-        parts = reward_parts(obs, end, cfg, True)
-        assert parts["shaping"] == pytest.approx(-phi)
-        assert parts["total"] == pytest.approx(terminal - phi)
-        assert reward_parts(obs, end, cfg, False)["total"] == terminal
+        end = replace(obs, status=status)
+        assert reward_parts(obs, end, cfg)["total"] == terminal
 
 
-def test_concurrent_spawn_and_defeat_uses_explicit_count(cfg):
+def test_defeat_count_without_effective_damage_does_not_earn_credit(cfg):
     before = Game().reset("easy", 1)
-    before = replace(
-        before, counts=replace(before.counts, spawned=1, alive=1, remaining=15, not_yet_spawned=14)
-    )
-    after = replace(
-        before,
-        counts=replace(
-            before.counts, spawned=2, alive=1, defeated=1, remaining=14, not_yet_spawned=13
-        ),
-    )
-    assert after.counts.alive - before.counts.alive == 0
-    assert potential(after, cfg) - potential(before, cfg) == pytest.approx(0.5 / 15)
+    after = replace(before, counts=replace(before.counts, spawned=2, alive=1, defeated=1))
+    assert reward_parts(before, after, cfg)["total"] == 0
 
 
 @pytest.mark.parametrize("level", ["standard", "hard"])

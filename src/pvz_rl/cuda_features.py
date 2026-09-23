@@ -7,11 +7,14 @@ from pvz_game.cuda.backend import kernel_source
 
 from .cuda_diagnostics import DeviceProfiler
 from .encoding import ObservationEncoder
-from .rewards import REWARD_METRICS
+from .rewards import LEDGER_METRICS, REWARD_METRICS
 
-REWARD_FIELDS = ("terminal", "shaping", *REWARD_METRICS, "total")
-METRIC_INDICES = tuple(range(20, 29))
-METRIC_SIZE = 81  # Preserve original totals, early digs and planting timestamps.
+REWARD_FIELDS = (*REWARD_METRICS, "total")
+METRIC_INDICES = (*range(20, 29), *range(81, 81 + len(REWARD_METRICS) - 9))
+LEDGER_INDICES = dict(zip(LEDGER_METRICS, range(max(METRIC_INDICES) + 1, max(METRIC_INDICES) + 5)))
+METRIC_SIZE = (
+    max(LEDGER_INDICES.values()) + 1
+)  # Preserve original totals, early digs and planting timestamps.
 
 
 class CudaFeatures:
@@ -36,28 +39,33 @@ class CudaFeatures:
             "COUNT_SCALE": encoder.count_scale,
             "PROJECTILE_OFFSET": encoder.slices["projectiles"].start,
             "GLOBAL_OFFSET": encoder.slices["globals"].start,
-            "SHAPED": int(cfg["conditions"][condition]["shaped"]),
+            "GAMMA": cfg["training"]["gamma"],
+            "BASIC_HP": batch.rules.zombies["basic"]["health"],
             "REWARD_SIZE": len(REWARD_FIELDS),
             "METRIC_SIZE": METRIC_SIZE,
         }
         reward_keys = (
             "win_reward",
             "loss_penalty",
-            "gamma",
-            "defeated_weight",
-            "economy_weight",
-            "economy_scale",
-            "mower_activation_cost",
+            "basic_zombie_value",
+            "mower_value",
+            "progress_weight",
+            "value_scale",
         )
         params.update({f"R_{k}": float(cfg["reward"][k]) for k in reward_keys})
+        params.update({f"F_{k}": i for i, k in enumerate(REWARD_FIELDS)})
+        params.update({f"T_{k}": i for k, i in zip(REWARD_METRICS, METRIC_INDICES)})
+        params.update({f"T_{k}": i for k, i in LEDGER_INDICES.items()})
         source = kernel_source(batch.rules, batch.zcap, batch.qcap, batch.ecap, batch.diagnostic)
         source += "\n" + "\n".join(f"#define {k} {v}" for k, v in params.items())
-        source += "\n" + files("pvz_rl").joinpath("cuda_features.cu").read_text("utf-8")
+        source += "\n" + files("pvz_rl").joinpath("cuda_features.cu").read_text("utf-8").replace(
+            "METRIC_ACCUMULATION", "\n".join(f"t[T_{k}] += v[F_{k}];" for k in REWARD_METRICS)
+        )
         self.module = cp.RawModule(code=source, options=("--std=c++11", "--fmad=false"))
         self.encode_kernel = self.module.get_function("encode_state")
         self.reward_kernel = self.module.get_function("reward_metrics")
         self.observations = cp.zeros((batch.n, encoder.size), cp.float32)
-        self.potential = cp.zeros(batch.n, cp.float64)
+        self.assets = cp.zeros(batch.n, cp.float64)
         self.rewards = cp.zeros(batch.n, cp.float32)
         self.parts = cp.zeros((batch.n, len(REWARD_FIELDS)), cp.float64)
         self.totals = cp.zeros((batch.n, METRIC_SIZE), cp.float64)
@@ -79,7 +87,7 @@ class CudaFeatures:
                 b.mowers,
                 b.cooldowns,
                 self.observations,
-                self.potential,
+                self.assets,
                 b.n,
             ),
         )
@@ -88,7 +96,7 @@ class CudaFeatures:
 
     def step(self, actions, *, ticks=1, per_tick=True):
         b = self.batch
-        before_phi = self.potential.copy()
+        before_assets = self.assets.copy()
         before_header, before_cd = b.header.copy(), b.cooldowns.copy()
         with self.profiler.track("simulation"):
             b.step_device(actions, ticks=ticks, per_tick=per_tick)
@@ -104,8 +112,9 @@ class CudaFeatures:
                     before_cd,
                     actions,
                     b.facts,
-                    before_phi,
-                    self.potential,
+                    b.accounting,
+                    before_assets,
+                    self.assets,
                     self.rewards,
                     self.parts,
                     self.totals,

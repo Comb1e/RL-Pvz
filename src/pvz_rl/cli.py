@@ -78,11 +78,6 @@ def configured(args):
         run = args.output if args.command == "suite" else checkpoint.parent
         saved = json.loads((run / "metadata.json").read_text("utf-8"))
         cfg = saved["config"]
-        if (
-            getattr(args, "init_from", None)
-            and cfg.get("policy", {}).get("kind") == "spatial_grouped_v3"
-        ):
-            cfg["policy"]["kind"] = "spatial_grouped_v4"
         if args.command == "train":
             for name, field in (
                 ("seed", "learner_seed"),

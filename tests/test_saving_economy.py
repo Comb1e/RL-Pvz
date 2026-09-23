@@ -11,7 +11,7 @@ from pvz_game import Dig, LevelSpec, Place, Rules, Spawn
 from pvz_rl.config import load_config, validate_config
 from pvz_rl.env import PvZEnv
 from pvz_rl.recordings import open_playback, verify_replay
-from pvz_rl.rewards import potential
+from pvz_rl.rewards import asset_value
 from pvz_rl.scenarios import scenario
 from pvz_rl.training_requirements import resume_protocol, transfer_protocol
 
@@ -104,6 +104,10 @@ def test_saving_success_and_necessary_income(lanes, mode):
     if mode == "invest":
         assert [t for t, _ in purchases] == [0, 150, 860, 1230]
         assert len(env.public.plants) == 4  # No sacrificial blockers/replacements.
+        assert env.episode_metrics()["net_value"] == 525
+        assert env.episode_metrics()["discounted_return"] == pytest.approx(0.177951, abs=1e-6)
+    elif mode == "wait":
+        assert env.episode_metrics()["discounted_return"] == pytest.approx(-0.311679, abs=1e-6)
     env.close()
 
 
@@ -183,19 +187,15 @@ def test_explicit_natural_sun_boolean_required(value):
         validate_config(cfg)
 
 
-def test_economy_shaping_unchanged_and_no_free_sun():
-    cfg = load_config()
-    env = PvZEnv(cfg, family="saving")
+def test_saving_conserves_purchase_and_credits_only_actual_production():
+    env = PvZEnv(load_config(), family="saving")
     env.reset(seed=0)
-    initial = potential(env.public, cfg)
-    assert initial == pytest.approx(0.1 * 150 / 300)
-    _, reward, _, _, _ = env.step(env.codec.encode(Place("sunflower", 0, 0)))
-    assert potential(env.public, cfg) == initial
-    assert reward == pytest.approx(-0.001 * initial)
-    for _ in range(200):
-        env.step(0)
-    assert env.public.sun == 125  # One flower payment, no tick-200 sky payment.
-    assert potential(env.public, cfg) == pytest.approx(0.1 * 175 / 300)
+    assert asset_value(env.public) == 150
+    assert env.step(env.codec.encode(Place("sunflower", 0, 0)))[1] == 0
+    assert asset_value(env.public) == 150
+    reward = sum(env.step(0)[1] for _ in range(200))
+    assert env.public.sun == 125 and asset_value(env.public) == 175
+    assert reward == pytest.approx(25 / 3000)
 
 
 @pytest.mark.parametrize("invest", [False, True])
@@ -284,6 +284,24 @@ def test_cuda_mixed_income_events_cap_restore_and_atomic_failure():
         batch.step_device(cp.zeros(2, cp.int64), ticks=10)
         for i, result in enumerate(expected):
             assert tuple(batch.events(i)) == result.events
+            expected = [
+                sum(
+                    e.get("health_damage", 0) + e.get("armor_damage", 0)
+                    for e in result.events
+                    if e.kind == "DamageApplied" and e.get("source", 0) > 0
+                ),
+                sum(
+                    e.get("amount", 0)
+                    for e in result.events
+                    if e.kind == "SunProduced" and e.get("source") == "sky"
+                ),
+                sum(
+                    e.get("amount", 0)
+                    for e in result.events
+                    if e.kind == "SunProduced" and e.get("source") == "sunflower"
+                ),
+            ]
+            assert batch.accounting[i].get().tolist() == expected
             assert batch.state_hash(i) == games[i].state_hash()
     assert [g.observe().sun for g in games] == [9965, 9990]
     snapshots = [batch.snapshot(i) for i in range(2)]

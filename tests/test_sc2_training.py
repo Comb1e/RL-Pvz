@@ -243,9 +243,9 @@ def test_cuda_long_horizon_reward_and_early_dig_boundaries(wait_ticks):
     if not torch.cuda.is_available():
         pytest.skip("CUDA unavailable")
     from pvz_game import Dig, LevelSpec, Place, Spawn
-    from pvz_game.cuda import CudaBatch
 
     from pvz_rl.cuda_features import CudaFeatures
+    from pvz_rl.cuda_lessons import LessonCudaBatch as CudaBatch
 
     cfg = load_config()
     level = LevelSpec("ledger-boundary", (Spawn(20000, "basic", 0),), initial_sun=200)
