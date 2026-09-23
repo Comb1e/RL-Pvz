@@ -10,7 +10,7 @@ TRAINING_CONDITIONS = ("masked",)
 
 def current_model_config(cfg):
     return (
-        cfg.get("policy", {}).get("kind") == "spatial_grouped_v3"
+        cfg.get("policy", {}).get("kind") == "spatial_grouped_v4"
         and cfg.get("encoding", {}).get("version") == "compact_v3"
     )
 
@@ -24,7 +24,7 @@ def require_supported_policy(cfg, condition="masked"):
         or not current_model_config(cfg)
     ):
         raise ValueError(
-            "Retired policy. Only compact spatial MaskablePPO is supported; start fresh with configs/train.toml. Archived reports and recordings remain readable."
+            "Retired policy. Training/resume require independent spatial encoders. Use --init-from for weights-only conversion of a 0.9.0 compact checkpoint, or start fresh with configs/train.toml. Archived reports and recordings remain readable."
         )
 
 

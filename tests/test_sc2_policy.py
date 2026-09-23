@@ -99,9 +99,10 @@ def test_spatial_policy_shapes_gradients_and_board_dependence():
         data = torch.tensor(np.stack([obs, obs]), device="cuda")
         data[1, raw.encoder.slices["plants"].start] = 1
         masks = torch.tensor(np.stack([raw.action_masks()] * 2), device="cuda")
-        features = model.policy.extract_features(data)
-        assert features.shape == (2, 64 + 32 * 45)
-        assert not torch.equal(features[0], features[1])
+        actor_features, critic_features = model.policy.extract_features(data)
+        for features in (actor_features, critic_features):
+            assert features.shape == (2, 64 + 32 * 45)
+            assert not torch.equal(features[0], features[1])
         actions, values, logs = model.policy(data, action_masks=masks)
         assert actions.shape == logs.shape == (2,)
         assert values.shape == (2, 1)
@@ -112,7 +113,11 @@ def test_spatial_policy_shapes_gradients_and_board_dependence():
             torch.isfinite(p.grad).all() for p in model.policy.parameters() if p.grad is not None
         )
         optimizer_ids = {id(p) for g in model.policy.optimizer.param_groups for p in g["params"]}
-        assert optimizer_ids == {id(p) for p in model.policy.parameters()}
+        critic_ids = {
+            id(p) for g in model.policy.critic_optimizer.param_groups for p in g["params"]
+        }
+        assert optimizer_ids.isdisjoint(critic_ids)
+        assert optimizer_ids | critic_ids == {id(p) for p in model.policy.parameters()}
         assert sum(p.numel() for p in model.policy.parameters()) < 1_000_000
     finally:
         env.close()

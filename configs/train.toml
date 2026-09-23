@@ -65,7 +65,8 @@ finalization_minutes = 15
 exploration = {objective = "balanced_heads_v1", type_coef = 0.01, tile_coef = 0.001}
 batch_size = 1024
 n_epochs = 4
-learning_rate = 0.0003
+learning_rate = 0.0003 # Actor rate; critic uses this unless critic_learning_rate is set.
+value_batch_size = 1024 # Frozen critic inference after collection.
 gae_lambda = 0.999
 clip_range = 0.2
 vf_coef = 0.5
@@ -114,7 +115,7 @@ curriculum = true
 hybrid = false
 
 [policy]
-kind = "spatial_grouped_v3"
+kind = "spatial_grouped_v4"
 initial_dig_logit = -6.0
 plant_embedding = 8
 state_embedding = 4

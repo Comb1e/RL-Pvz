@@ -1,6 +1,6 @@
 """Tensor vector environment; only compact completion information crosses to CPU."""
 
-from collections import deque
+from collections import Counter, deque
 from contextlib import contextmanager
 from time import perf_counter
 
@@ -16,6 +16,7 @@ from .budget import budget_target
 from .config import lesson_settings
 from .cuda_features import METRIC_INDICES, CudaFeatures
 from .curriculum import LESSONS, stage_distribution, teaching_enabled
+from .metrics import task_name
 from .rewards import REWARD_METRICS
 from .scenarios import difficulty_weights, scenario
 
@@ -84,6 +85,12 @@ class CudaVecEnv(VecEnv):
         self.cases = cases
         self._episode = [None] * cfg["training"]["n_envs"]
         self._episode_stages = [0] * cfg["training"]["n_envs"]
+        self.task_started, self.task_transitions, self.task_completed = (
+            Counter(),
+            Counter(),
+            Counter(),
+        )
+        self.active_tasks, self._tasks = Counter(), {}
         # All shipped scenario families preserve roster size. Lessons use smaller
         # rosters. Custom batches derive their capacity from the supplied cases.
         game = Game()
@@ -128,6 +135,12 @@ class CudaVecEnv(VecEnv):
             ]
         allowed, digging = [], []
         for index, level, family, seed, _ in staged:
+            task = task_name(level, family)
+            if index in self._tasks:
+                self.active_tasks[self._tasks[index]] -= 1
+            self._tasks[index] = task
+            self.active_tasks[task] += 1
+            self.task_started[task] += 1
             self._episode[index] = (level, family, seed)
             self._episode_stages[index] = self.queue.stage
             types = PLANT_TYPES
@@ -165,6 +178,8 @@ class CudaVecEnv(VecEnv):
 
     def step_tensors(self, actions, *, autoreset=True):
         with self.device_context():
+            if self.training:
+                self.task_transitions.update(self.active_tasks)
             started = perf_counter()
             obs, reward = self.features.step(self.cp.from_dlpack(actions.detach().contiguous()))
             self.phases["simulation_features"] += perf_counter() - started
@@ -186,6 +201,7 @@ class CudaVecEnv(VecEnv):
                 headers = self.batch.header[self.cp.asarray(indices)].get()
                 totals = self.features.totals[self.cp.asarray(indices)].get()
                 for index, header, total in zip(indices, headers, totals):
+                    self.task_completed[self._tasks[index]] += 1
                     infos[index].update(
                         episode_metrics=self.episode_metrics(index, header, total),
                         **{"TimeLimit.truncated": bool(compact[index, 1])},
@@ -195,6 +211,17 @@ class CudaVecEnv(VecEnv):
                 else:
                     self.batch.header[self.cp.asarray(indices), 17] = 0
             return obs, reward, done, timed_out, terminal_observations, infos
+
+    def task_counts(self):
+        return {
+            task: {
+                "started_games": self.task_started[task],
+                "active_games": self.active_tasks[task],
+                "completed_games": self.task_completed[task],
+                "transitions": self.task_transitions[task],
+            }
+            for task in sorted(self.task_started)
+        }
 
     def episode_metrics(self, index, h=None, t=None):
         if h is None:

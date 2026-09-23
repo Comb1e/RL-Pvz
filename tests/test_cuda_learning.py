@@ -132,7 +132,7 @@ def test_cuda_collect_update_and_timeout(gpu_cfg, condition):
 
 
 @pytest.mark.parametrize("condition", ["masked"])
-def test_fixed_rollout_losses_and_optimizer_match_stock(gpu_cfg, condition):
+def test_fixed_rollout_losses_and_optimizer_match_stock(gpu_cfg, condition, monkeypatch):
     configs = [copy.deepcopy(gpu_cfg), copy.deepcopy(gpu_cfg)]
     configs[0]["training"]["n_envs"] = 1
     configs[0]["training"]["rollout_steps_per_env"] = 256
@@ -196,9 +196,37 @@ def test_fixed_rollout_losses_and_optimizer_match_stock(gpu_cfg, condition):
                 else:
                     buffer.action_masks[:] = True
             buffer.full = True
-        for model in models:
-            np.random.seed(92)
-            model.train()
+        # Keep upstream PPO's loss, reduction, shuffle and Adam calculations.
+        # Only adapt its optimizer/clipping interface to two disjoint groups.
+        actor_optimizer = reference.policy.optimizer
+        critic_optimizer = reference.policy.critic_optimizer
+
+        class IndependentOptimizers:
+            param_groups = actor_optimizer.param_groups + critic_optimizer.param_groups
+
+            def zero_grad(self):
+                actor_optimizer.zero_grad()
+                critic_optimizer.zero_grad()
+
+            def step(self):
+                actor_optimizer.step()
+                critic_optimizer.step()
+
+        clip = torch.nn.utils.clip_grad_norm_
+
+        def independent_clip(parameters, limit):
+            assert {id(p) for p in parameters} == {id(p) for p in reference.policy.parameters()}
+            a = clip(reference.policy.actor_parameters(), limit)
+            b = clip(reference.policy.critic_parameters(), limit)
+            return torch.maximum(a, b)
+
+        reference.policy.optimizer = IndependentOptimizers()
+        np.random.seed(92)
+        with monkeypatch.context() as patch:
+            patch.setattr(torch.nn.utils, "clip_grad_norm_", independent_clip)
+            reference.train()
+        np.random.seed(92)
+        models[1].train()
         for key, value in models[0].policy.state_dict().items():
             torch.testing.assert_close(
                 value, models[1].policy.state_dict()[key], atol=2e-7, rtol=2e-6
@@ -207,7 +235,6 @@ def test_fixed_rollout_losses_and_optimizer_match_stock(gpu_cfg, condition):
             "train/policy_gradient_loss",
             "train/value_loss",
             "train/entropy_loss",
-            "train/approx_kl",
             "train/explained_variance",
         ):
             assert float(models[0].logger.name_to_value[name]) == pytest.approx(
@@ -215,6 +242,18 @@ def test_fixed_rollout_losses_and_optimizer_match_stock(gpu_cfg, condition):
             )
         for a, b in zip(models[0].policy.parameters(), models[1].policy.parameters()):
             torch.testing.assert_close(a.grad, b.grad, atol=2e-7, rtol=2e-6)
+        for expected, actual in (
+            (actor_optimizer, models[1].policy.optimizer),
+            (critic_optimizer, models[1].policy.critic_optimizer),
+        ):
+            left, right = expected.state_dict(), actual.state_dict()
+            assert left["param_groups"] == right["param_groups"]
+            assert left["state"].keys() == right["state"].keys()
+            for index, state in left["state"].items():
+                for name, value in state.items():
+                    torch.testing.assert_close(
+                        value, right["state"][index][name], atol=2e-7, rtol=2e-6
+                    )
     finally:
         for env in envs:
             env.close()
@@ -230,10 +269,12 @@ def test_grouped_shared_policy_identity_and_reload(gpu_cfg, tmp_path):
         model = build_model(cfg, "masked", env, 23)
         model.set_logger(configure(format_strings=[]))
         policy_id, optimizer_id = id(model.policy), id(model.policy.optimizer)
+        critic_id = id(model.policy.critic_optimizer)
         model.learn(256)
         env.env_method("set_curriculum_stage", 4)
         model.learn(256, reset_num_timesteps=False)
         assert (id(model.policy), id(model.policy.optimizer)) == (policy_id, optimizer_id)
+        assert id(model.policy.critic_optimizer) == critic_id
         checkpoint = tmp_path / "model.zip"
         model.training_games = 7
         model.curriculum_state = {"stage": 4}

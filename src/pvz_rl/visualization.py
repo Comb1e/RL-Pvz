@@ -205,8 +205,16 @@ def build_run_report(run, cfg=None):
         ("explained_variance", "Explained variance"),
         ("joint_entropy", "True joint action entropy"),
         ("exploration_bonus", "Exploration bonus in optimizer objective"),
+        ("actor_grad_norm", "Actor gradient norm before clipping"),
+        ("critic_grad_norm", "Critic gradient norm before clipping"),
+        ("actor_optimizer_steps", "Actual actor steps per update"),
+        ("critic_optimizer_steps", "Actual critic steps per update"),
+        ("post_update_approx_kl", "Post-update sampled joint KL"),
+        ("post_update_type_kl", "Post-update exact type KL"),
+        ("dig_probability_when_legal", "Dig probability where digging is legal"),
+        ("kl_stopped", "Actor stopped by KL limit"),
     ]
-    fig, axes = plt.subplots(4, 2, figsize=(12, 12))
+    fig, axes = plt.subplots(8, 2, figsize=(12, 24))
     for ax, (key, title) in zip(axes.flat, optimizer_panels):
         plotted = False
         for label, series in segments:
@@ -275,6 +283,39 @@ def build_run_report(run, cfg=None):
     # Never display stale videos as demonstrations of a newly selected checkpoint.
     demos = [d for d in demos if d.get("checkpoint_hash") == best.get("checkpoint_hash")]
 
+    task_panels = (
+        ("win_rate", "Training win rate by task"),
+        ("early_digs_per_game", "Early digs per game by task"),
+        ("early_digs_per_planting", "Early digs / accepted planting by task"),
+        ("attacker_purchases_per_game", "Attacker purchases per game by task"),
+        ("simulated_seconds", "Episode seconds by task"),
+        ("completed_games", "Games in each task's rolling window"),
+    )
+    fig, axes = plt.subplots(3, 2, figsize=(12, 10))
+    for ax, (key, title) in zip(axes.flat, task_panels):
+        plotted = False
+        for label, series in segments:
+            records = series["training-metrics"]
+            tasks = sorted({task for row in records for task in row.get("rolling_by_task", {})})
+            for task in tasks:
+                points = [
+                    (row.get(progress_key), row.get("rolling_by_task", {}).get(task, {}).get(key))
+                    for row in records
+                ]
+                points = [(x, y) for x, y in points if x is not None and y is not None]
+                if points:
+                    x, y = zip(*points)
+                    ax.plot(x, y, label=f"{label}: {task}")
+                    plotted = True
+        ax.set(title=title, xlabel=progress_label)
+        ax.grid(alpha=0.2)
+        if plotted:
+            ax.legend(fontsize=7)
+        else:
+            _empty(ax, "Task-specific metrics unavailable")
+    _save(fig, output, "task-curves")
+    images.append(("Task-specific training diagnostics", "task-curves.png"))
+
     def escape(value):
         return html.escape(str(value), quote=True)
 
@@ -338,6 +379,33 @@ def build_run_report(run, cfg=None):
             f"Mastery reached: {escape(status.get('stage_mastered', False))}. "
             "Use final.zip to initialize another stage with a fresh budget.</p>"
         )
+    counts = status.get("task_counts", {})
+    task_table = ""
+    if counts:
+        task_table = "<h2>Training data composition</h2><table><tr><th>Task</th><th>Started</th><th>Active</th><th>Completed</th><th>Transitions</th></tr>"
+        for task, counts in sorted(counts.items()):
+            task_table += (
+                f"<tr><td>{escape(task)}</td>"
+                + "".join(
+                    f"<td>{escape(counts.get(key, 'unavailable'))}</td>"
+                    for key in ("started_games", "active_games", "completed_games", "transitions")
+                )
+                + "</tr>"
+            )
+        task_table += "</table><p>Task curves use a separate completed-game window for each task. Configured mixtures select episodes, not equal numbers of transitions. Restarts add new starts.</p>"
+        task_table += (
+            "<details><summary>Accepted plant purchases within task windows</summary><pre>"
+            + escape(
+                json.dumps(
+                    {
+                        k: v.get("plant_usage", {})
+                        for k, v in status.get("rolling_by_task", {}).items()
+                    },
+                    indent=2,
+                )
+            )
+            + "</pre></details>"
+        )
     page = f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width">
 <title>PVZ training — {escape(run.name)}</title>
@@ -349,6 +417,7 @@ height:auto;border-radius:6px}}pre{{white-space:pre-wrap;overflow-wrap:anywhere;
 </style></head><body><header><h1>PVZ / {escape(run.name)}</h1>
 <p>{policy_description}. Training: <b>{escape(status.get("state", "unknown"))}</b>.</p>
 {run_progress}
+{task_table}
 <p>Checkpoint selection uses equal-weight validation win rates. These development curves and
 fixed validation demonstrations do not establish held-out performance.</p>
 <p>Training curves use up to {output_settings(cfg)["logging"]["rolling_window"]} completed episodes;

@@ -33,6 +33,7 @@ from .curriculum import (
 from .deadline import BudgetExpired, RunBudget
 from .evaluation import evaluate, summarize
 from .exploration import configure_exploration
+from .metrics import episode_task, task_statistics
 from .progress import Phase, ProgressReporter, duration
 from .provenance import append_jsonl, file_hash, metadata, verify_engine, write_json
 from .rewards import REWARD_METRICS
@@ -67,6 +68,7 @@ def build_model(cfg, condition, env, seed, log_dir=None):
         "net_arch": {"pi": t["hidden_sizes"], "vf": t["hidden_sizes"]},
         "features_extractor_class": SpatialFeatures,
         "features_extractor_kwargs": {"layout_cfg": cfg},
+        "critic_learning_rate": t.get("critic_learning_rate"),
     }
     model = CudaMaskablePPO(
         SpatialGroupedPolicy,
@@ -90,6 +92,7 @@ def build_model(cfg, condition, env, seed, log_dir=None):
         tensorboard_log=str(log_dir) if log_dir else None,
     )
     configure_tensor_buffer(model)
+    model.value_batch_size = t.get("value_batch_size", 1024)
     configure_exploration(model, cfg)
     if "initial_dig_logit" in cfg.get("policy", {}):
         model.policy.initialize_dig_logit(cfg["policy"]["initial_dig_logit"])
@@ -138,6 +141,8 @@ class ResearchCallback(BaseCallback):
             self.output / "train.log", self.settings["logging"]["progress_seconds"]
         )
         self.recent = deque(maxlen=self.settings["logging"]["rolling_window"])
+        self.recent_by_task = {}
+        self.initial_task_counts = {}
         self.metrics_stream = None
         self.report_seconds = 0.0
         self.last_updates = 0
@@ -159,6 +164,19 @@ class ResearchCallback(BaseCallback):
             else math.ceil(t["total_steps"] / t["rollout_size"]) * t["rollout_size"]
         )
 
+    def task_counts(self):
+        env = getattr(self.model, "env", None)
+        current = getattr(env, "task_counts", lambda: {})()
+        combined = {}
+        for task in set(current) | set(self.initial_task_counts):
+            now, before = current.get(task, {}), self.initial_task_counts.get(task, {})
+            combined[task] = {
+                key: now.get(key, 0) + (0 if key == "active_games" else before.get(key, 0))
+                for key in ("started_games", "active_games", "completed_games", "transitions")
+            }
+        self.model.training_task_counts = combined
+        return combined
+
     def snapshot(self):
         elapsed = perf_counter() - self.started
         active = max(elapsed - self.eval_seconds - self.report_seconds, 1e-9)
@@ -178,6 +196,10 @@ class ResearchCallback(BaseCallback):
             self.cfg["conditions"][self.condition]["curriculum"],
         )
         return {
+            "task_counts": self.task_counts(),
+            "rolling_by_task": {
+                task: task_statistics(rows) for task, rows in sorted(self.recent_by_task.items())
+            },
             **self.timings.snapshot(),
             "state": self.progress.state.value,
             "steps": self.model.num_timesteps,
@@ -291,6 +313,12 @@ class ResearchCallback(BaseCallback):
             context += "; tasks " + ", ".join(f"{k}={v}" for k, v in row["rolling_tasks"].items())
             if row["rolling_mower_free_lessons"] == len(self.recent):
                 context += "; mowers disabled in these lessons"
+        for task, metrics in row["rolling_by_task"].items():
+            ratio = metrics["early_digs_per_planting"]
+            context += (
+                f"; {task} last {metrics['completed_games']}: win {metrics['win_rate']:.1%}"
+                f", digs/plant {'pending' if ratio is None else f'{ratio:.1%}'}"
+            )
         self.progress.emit(
             f"{row['budget_progress']:,}/{self.target:,} {row['budget_unit']} ({row['budget_progress'] / self.target:.1%}); "
             f"{row['games_per_second'] * 60:.2f} games/min; "
@@ -318,6 +346,16 @@ class ResearchCallback(BaseCallback):
             "exploration_bonus",
             "choice_fraction",
             "optimizer_steps",
+            "actor_optimizer_steps",
+            "critic_optimizer_steps",
+            "actor_grad_norm",
+            "critic_grad_norm",
+            "critic_learning_rate",
+            "critic_epochs_completed",
+            "post_update_approx_kl",
+            "post_update_type_kl",
+            "dig_probability_when_legal",
+            "dig_legal_observations",
             "epochs_completed",
             "kl_stopped",
             "approx_kl",
@@ -370,6 +408,7 @@ class ResearchCallback(BaseCallback):
             self.report_seconds += perf_counter() - started
 
     def _on_training_start(self):
+        self.initial_task_counts = copy.deepcopy(getattr(self.model, "training_task_counts", {}))
         self.initial_steps = self.model.num_timesteps
         self.initial_games = getattr(self.model, "training_games", 0)
         interval = evaluation_interval(self.cfg)
@@ -406,6 +445,10 @@ class ResearchCallback(BaseCallback):
                         info["episode_metrics"].get("episode_start_stage")
                     )
                 self.recent.append(info["episode_metrics"])
+                task = episode_task(info["episode_metrics"])
+                self.recent_by_task.setdefault(
+                    task, deque(maxlen=self.settings["logging"]["rolling_window"])
+                ).append(info["episode_metrics"])
                 append_jsonl(
                     self.stream,
                     {
@@ -480,6 +523,7 @@ class ResearchCallback(BaseCallback):
         return self.wall_budget.deadline if final else self.wall_budget.learning_deadline
 
     def save_checkpoint(self, name):
+        self.task_counts()
         if self.wall_budget:
             self.model.wall_budget_state = self.wall_budget.state()
         self.model.research_schedule = {"next_eval": self.next_eval, "last_eval": self.last_eval}
@@ -680,6 +724,52 @@ class ResearchCallback(BaseCallback):
             self.progress.close()
 
 
+def initial_weights(checkpoint, cfg):
+    """Read tensors only; the retired shared architecture is never instantiated."""
+    from stable_baselines3.common.save_util import load_from_zip_file
+
+    checkpoint = Path(checkpoint).resolve()
+    saved = json.loads((checkpoint.parent / "metadata.json").read_text("utf-8"))
+    source_cfg = saved["config"]
+    validate_config(source_cfg)
+    verify_engine(source_cfg)
+    compatible = copy.deepcopy(source_cfg)
+    shared = compatible["policy"]["kind"] == "spatial_grouped_v3"
+    if shared:
+        compatible["policy"]["kind"] = "spatial_grouped_v4"
+    require_supported_policy(compatible, saved["condition"])
+    if transfer_protocol(compatible) != transfer_protocol(cfg):
+        raise ValueError(
+            "Weights-only initialization requires matching engine, observation and network structure; start fresh for changed dimensions"
+        )
+    data, parameters, _ = load_from_zip_file(checkpoint, device="cpu")
+    weights = {key: value.detach().clone() for key, value in parameters["policy"].items()}
+    if shared:
+        # SB3's shared module has three registered names in the saved state dict.
+        # Reject contradictory aliases instead of silently choosing one set of weights.
+        for key, value in list(weights.items()):
+            if key.startswith("features_extractor."):
+                suffix = key.removeprefix("features_extractor.")
+                for prefix in ("pi_features_extractor.", "vf_features_extractor."):
+                    if prefix + suffix not in weights or not torch.equal(
+                        weights[prefix + suffix], value
+                    ):
+                        raise ValueError("Shared checkpoint contains inconsistent encoder tensors")
+                    weights[prefix + suffix] = value.clone()
+    return weights, {
+        "mode": "weights_only",
+        "conversion": "shared_to_independent" if shared else "none",
+        "checkpoint": str(checkpoint),
+        "checkpoint_sha256": file_hash(checkpoint),
+        "source_learner_seed": saved["learner_seed"],
+        "steps": data["num_timesteps"],
+        "games": data.get("training_games", 0),
+        "updates": data["_n_updates"],
+        "source_structural_signature": transfer_protocol(source_cfg),
+        "parameter_changes": parameter_changes(source_cfg, cfg),
+    }
+
+
 def load_policy(checkpoint, device="cpu"):
     checkpoint = Path(checkpoint).resolve()
     run = checkpoint.parent
@@ -724,28 +814,7 @@ def train(
         raise ValueError("Stage training uses family=preset and the stage's configured task mix")
     initialized_model, initialization = None, None
     if init_from:
-        source_path = Path(init_from).resolve()
-        saved = json.loads((source_path.parent / "metadata.json").read_text("utf-8"))
-        require_supported_policy(saved["config"], saved["condition"])
-        if transfer_protocol(saved["config"]) != transfer_protocol(cfg):
-            raise ValueError(
-                "Weights-only initialization requires matching engine, observation and network structure; start fresh for changed dimensions"
-            )
-        source_model, _ = load_policy(source_path, "cpu")
-        initialized_model = {
-            k: v.detach().clone() for k, v in source_model.policy.state_dict().items()
-        }
-        initialization = {
-            "mode": "weights_only",
-            "checkpoint": str(source_path),
-            "checkpoint_sha256": file_hash(source_path),
-            "source_learner_seed": saved["learner_seed"],
-            "steps": source_model.num_timesteps,
-            "games": getattr(source_model, "training_games", 0),
-            "updates": source_model._n_updates,
-            "parameter_changes": parameter_changes(saved["config"], cfg),
-        }
-        del source_model
+        initialized_model, initialization = initial_weights(init_from, cfg)
     if resume:
         saved = json.loads((Path(resume).resolve().parent / "metadata.json").read_text("utf-8"))
         require_cuda_training(saved["config"], saved["condition"])
@@ -779,6 +848,13 @@ def train(
         resume=str(Path(resume).resolve()) if resume else None,
         initialization=initialization,
         structural_signature=transfer_protocol(cfg),
+        optimizer_settings={
+            "actor_learning_rate": cfg["training"]["learning_rate"],
+            "critic_learning_rate": cfg["training"].get("critic_learning_rate")
+            or cfg["training"]["learning_rate"],
+            "value_batch_size": cfg["training"].get("value_batch_size", 1024),
+            "independent_encoders": True,
+        },
     )
     write_json(output / "metadata.json", details)
     write_json(output / "config.json", cfg)
@@ -841,7 +917,7 @@ def train(
             details["resume_games"] = getattr(model, "training_games", 0)
             write_json(output / "metadata.json", details)
             progress.emit(
-                f"Resumed shared policy and optimizer at {progress_value(cfg, model):,} {'games' if game_budget else 'decisions'}",
+                f"Resumed shared policy and both optimizers at {progress_value(cfg, model):,} {'games' if game_budget else 'decisions'}",
                 force=True,
             )
         else:
@@ -849,7 +925,7 @@ def train(
             if initialized_model is not None:
                 model.policy.load_state_dict(initialized_model, strict=True)
                 progress.emit(
-                    f"Initialized weights from {initialization['checkpoint']}; fresh optimizer, counters and budget",
+                    f"Initialized weights from {initialization['checkpoint']}; fresh optimizers, counters and budget",
                     force=True,
                 )
             if teaching_enabled(cfg) and family == "preset":

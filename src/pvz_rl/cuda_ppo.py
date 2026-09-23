@@ -7,6 +7,7 @@ configured exploration bonus can replace joint-entropy regularization.
 
 import torch
 from sb3_contrib import MaskablePPO
+from stable_baselines3.common.utils import update_learning_rate
 from torch.nn import functional as F
 
 from .cuda_buffer import TensorRolloutBuffer
@@ -30,8 +31,7 @@ class TensorPPO:
                 obs = self._last_obs.clone()
                 masks = env.action_masks().clone()
                 with torch.no_grad(), env.features.profiler.track("inference"):
-                    kwargs = {"action_masks": masks}
-                    actions, values, log_probs = self.policy(obs, **kwargs)
+                    actions, log_probs = self.policy.sample_actions(obs, masks)
                 new_obs, rewards, dones, timeouts, terminal, infos = env.step_tensors(actions)
                 self.num_timesteps += env.num_envs
                 callback.update_locals(locals())
@@ -41,106 +41,175 @@ class TensorPPO:
                 if terminal is not None and any(
                     info.get("TimeLimit.truncated", False) for info in infos
                 ):
-                    with torch.no_grad():
-                        terminal_values = self.policy.predict_values(terminal).flatten()
-                    rewards = rewards + self.gamma * terminal_values * timeouts.float()
+                    indices = torch.nonzero(timeouts, as_tuple=True)[0]
+                    rollout_buffer.add_timeouts(indices, terminal[indices])
                 rollout_buffer.add(
-                    obs, actions, rewards, self._last_episode_starts, values, log_probs, masks
+                    obs, actions, rewards, self._last_episode_starts, None, log_probs, masks
                 )
                 self._last_obs, self._last_episode_starts = new_obs, dones
-            with torch.no_grad():
-                values = self.policy.predict_values(self._last_obs)
+            with env.features.profiler.track("critic_inference"):
+                values = rollout_buffer.evaluate_values(
+                    self.policy, self._last_obs, getattr(self, "value_batch_size", 1024)
+                )
             with env.features.profiler.track("gae"):
                 rollout_buffer.compute_returns_and_advantage(values, dones)
         callback.on_rollout_end()
         env.features.profiler.flush()
         return True
 
+    @torch.no_grad()
+    def _type_probabilities(self):
+        buffer = self.rollout_buffer
+        observations = buffer.observations.flatten(0, 1)
+        masks = buffer.action_masks.flatten(0, 1)
+        size = getattr(self, "value_batch_size", 1024)
+        return torch.cat(
+            [
+                self.policy.get_distribution(
+                    observations[i : i + size], masks[i : i + size]
+                ).types.probs
+                for i in range(0, len(observations), size)
+            ]
+        )
+
+    @torch.no_grad()
+    def _post_update_metrics(self, old_types):
+        buffer = self.rollout_buffer
+        observations = buffer.observations.flatten(0, 1)
+        masks = buffer.action_masks.flatten(0, 1)
+        actions = buffer.actions.flatten().long()
+        old_logs = buffer.log_probs.flatten()
+        totals = torch.zeros(4, device=self.device)
+        size = getattr(self, "value_batch_size", 1024)
+        for i in range(0, len(observations), size):
+            ix = slice(i, i + size)
+            distribution = self.policy.get_distribution(observations[ix], masks[ix])
+            log_ratio = distribution.log_prob(actions[ix]) - old_logs[ix]
+            previous, current = old_types[ix], distribution.types.probs
+            kl = (
+                previous * (previous.clamp_min(1e-30).log() - current.clamp_min(1e-30).log())
+            ).sum(-1)
+            legal_dig = masks[ix, 361:].any(-1)
+            totals += torch.stack(
+                (
+                    (log_ratio.exp() - 1 - log_ratio).sum(),
+                    kl.sum(),
+                    (current[:, -1] * legal_dig).sum(),
+                    legal_dig.sum(),
+                )
+            )
+        approx, types, dig, count = totals.cpu().tolist()
+        return {
+            "post_update_approx_kl": approx / len(observations),
+            "post_update_type_kl": types / len(observations),
+            "dig_probability_when_legal": dig / count if count else float("nan"),
+            "dig_legal_observations": count,
+        }
+
     def train(self):
         self.policy.set_training_mode(True)
         self._update_learning_rate(self.policy.optimizer)
+        critic_lr = self.policy.critic_learning_rate
+        if critic_lr is None:
+            critic_lr = self.lr_schedule(self._current_progress_remaining)
+        update_learning_rate(self.policy.critic_optimizer, critic_lr)
         clip_range = self.clip_range(self._current_progress_remaining)
         clip_vf = (
-            self.clip_range_vf(self._current_progress_remaining)
-            if self.clip_range_vf is not None
-            else None
+            self.clip_range_vf(self._current_progress_remaining) if self.clip_range_vf else None
         )
-        metrics, last_kls = [], []
-        continue_training = True
-        optimizer_steps = 0
+        old_types = self._type_probabilities()
+        actor_metrics, value_losses, actor_norms, critic_norms = [], [], [], []
+        actor_active, actor_steps, critic_steps = True, 0, 0
+        actor_epochs = 0
         for epoch in range(self.n_epochs):
-            last_kls = []
             for data in self.rollout_buffer.get(self.batch_size):
-                kwargs = {"action_masks": data.action_masks}
-                values, log_prob, entropy = self.policy.evaluate_actions(
-                    data.observations, data.actions.long().flatten(), **kwargs
-                )
-                values = values.flatten()
-                advantages = data.advantages
-                if self.normalize_advantage and len(advantages) > 1:
-                    advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
-                ratio = torch.exp(log_prob - data.old_log_prob)
-                policy_loss = -torch.mean(
-                    torch.min(
+                if actor_active:
+                    log_prob, entropy = self.policy.evaluate_actor(
+                        data.observations, data.actions.long().flatten(), data.action_masks
+                    )
+                    advantages = data.advantages
+                    if self.normalize_advantage and len(advantages) > 1:
+                        advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
+                    ratio = torch.exp(log_prob - data.old_log_prob)
+                    policy_loss = -torch.minimum(
                         advantages * ratio,
-                        advantages * torch.clamp(ratio, 1 - clip_range, 1 + clip_range),
-                    ),
-                )
-                clipped_fraction = ((ratio - 1).abs() > clip_range).float().mean()
+                        advantages * ratio.clamp(1 - clip_range, 1 + clip_range),
+                    ).mean()
+                    regularizer, exploration_metrics = exploration_loss(
+                        self.policy, entropy, log_prob
+                    )
+                    actor_loss = policy_loss + regularizer
+                    with torch.no_grad():
+                        log_ratio = log_prob - data.old_log_prob
+                        kl = (log_ratio.exp() - 1 - log_ratio).mean()
+                        actor_metrics.append(
+                            torch.stack(
+                                (
+                                    policy_loss.detach(),
+                                    -entropy.mean().detach(),
+                                    ((ratio - 1).abs() > clip_range).float().mean(),
+                                    exploration_metrics["joint_entropy"],
+                                    exploration_metrics["exploration_bonus"],
+                                    (data.action_masks.sum(-1) > 1).float().mean(),
+                                    kl,
+                                    actor_loss.detach(),
+                                )
+                            )
+                        )
+                    if self.target_kl is not None and float(kl) > 1.5 * self.target_kl:
+                        actor_active = False
+                    else:
+                        self.policy.optimizer.zero_grad(set_to_none=True)
+                        actor_loss.backward()
+                        actor_norms.append(
+                            torch.nn.utils.clip_grad_norm_(
+                                self.policy.actor_parameters(), self.max_grad_norm
+                            ).detach()
+                        )
+                        self.policy.optimizer.step()
+                        actor_steps += 1
+                # Critic updates cannot change the actor and continue after actor KL stopping.
+                values = self.policy.predict_values(data.observations).flatten()
                 predicted = (
                     values
                     if clip_vf is None
-                    else data.old_values + torch.clamp(values - data.old_values, -clip_vf, clip_vf)
+                    else data.old_values + (values - data.old_values).clamp(-clip_vf, clip_vf)
                 )
                 value_loss = F.mse_loss(data.returns, predicted)
-                entropy_loss = -(-log_prob).mean() if entropy is None else -entropy.mean()
-                regularizer, exploration_metrics = exploration_loss(
-                    self.policy,
-                    entropy,
-                    log_prob,
+                value_losses.append(value_loss.detach())
+                self.policy.critic_optimizer.zero_grad(set_to_none=True)
+                (self.vf_coef * value_loss).backward()
+                critic_norms.append(
+                    torch.nn.utils.clip_grad_norm_(
+                        self.policy.critic_parameters(), self.max_grad_norm
+                    ).detach()
                 )
-                loss = policy_loss + regularizer + self.vf_coef * value_loss
-                with torch.no_grad():
-                    log_ratio = log_prob - data.old_log_prob
-                    kl = ((torch.exp(log_ratio) - 1) - log_ratio).mean()
-                    last_kls.append(kl)
-                    metrics.append(
-                        torch.stack(
-                            (
-                                policy_loss.detach(),
-                                value_loss.detach(),
-                                entropy_loss.detach(),
-                                clipped_fraction,
-                                exploration_metrics["joint_entropy"],
-                                exploration_metrics["exploration_bonus"],
-                                (data.action_masks.sum(-1) > 1).float().mean(),
-                            )
-                        )
-                    )
-                if self.target_kl is not None and float(kl) > 1.5 * self.target_kl:
-                    continue_training = False
-                    break
-                self.policy.optimizer.zero_grad()
-                loss.backward()
-                torch.nn.utils.clip_grad_norm_(self.policy.parameters(), self.max_grad_norm)
-                self.policy.optimizer.step()
-                optimizer_steps += 1
-            if not continue_training:
-                break
+                self.policy.critic_optimizer.step()
+                critic_steps += 1
+            actor_epochs += int(actor_active)
         self._n_updates += self.n_epochs
-        returns = torch.as_tensor(self.rollout_buffer.returns, device=self.device)
-        old_values = torch.as_tensor(self.rollout_buffer.values, device=self.device)
-        var_y = returns.flatten().var(unbiased=False)
-        explained = 1 - (returns - old_values).flatten().var(unbiased=False) / var_y
-        explained = torch.where(var_y == 0, torch.full_like(explained, float("nan")), explained)
-        # One transfer after all optimizer updates, including the final update.
+        returns, old_values = self.rollout_buffer.returns, self.rollout_buffer.values
+        variance = returns.flatten().var(unbiased=False)
+        explained = 1 - (returns - old_values).flatten().var(unbiased=False) / variance
+        explained = torch.where(variance == 0, torch.full_like(explained, float("nan")), explained)
+        actor = torch.stack(actor_metrics).mean(0)
+        value_mean = torch.stack(value_losses).mean()
+
+        def mean_norm(norms):
+            return torch.stack(norms).mean() if norms else torch.zeros((), device=self.device)
+
         numbers = (
             torch.cat(
                 (
-                    torch.stack(metrics).mean(0),
-                    torch.stack(last_kls).mean()[None],
-                    loss.detach()[None],
-                    explained[None],
+                    actor,
+                    torch.stack(
+                        (
+                            value_mean,
+                            explained,
+                            mean_norm(actor_norms),
+                            mean_norm(critic_norms),
+                        )
+                    ),
                 )
             )
             .cpu()
@@ -148,28 +217,40 @@ class TensorPPO:
         )
         keys = (
             "policy_gradient_loss",
-            "value_loss",
             "entropy_loss",
             "clip_fraction",
             "joint_entropy",
             "exploration_bonus",
             "choice_fraction",
             "approx_kl",
-            "loss",
+            "actor_loss",
+            "value_loss",
             "explained_variance",
+            "actor_grad_norm",
+            "critic_grad_norm",
         )
-        for key, value in zip(keys, numbers):
+        metrics = dict(zip(keys, numbers))
+        metrics.update(
+            loss=metrics["actor_loss"] + self.vf_coef * metrics["value_loss"],
+            optimizer_steps=actor_steps,
+            actor_optimizer_steps=actor_steps,
+            critic_optimizer_steps=critic_steps,
+            epochs_completed=actor_epochs,
+            critic_epochs_completed=self.n_epochs,
+            kl_stopped=float(not actor_active),
+            critic_learning_rate=critic_lr,
+            **self._post_update_metrics(old_types),
+        )
+        for key, value in metrics.items():
             self.logger.record(f"train/{key}", value)
-        self.logger.record("train/optimizer_steps", optimizer_steps)
-        self.logger.record("train/epochs_completed", epoch + int(continue_training))
-        self.logger.record("train/kl_stopped", float(not continue_training))
         self.logger.record("train/n_updates", self._n_updates, exclude="tensorboard")
         self.logger.record("train/clip_range", clip_range)
         if clip_vf is not None:
             self.logger.record("train/clip_range_vf", clip_vf)
 
-    def _excluded_save_params(self):
-        return super()._excluded_save_params()
+    def _get_torch_save_params(self):
+        state_dicts, variables = super()._get_torch_save_params()
+        return [*state_dicts, "policy.critic_optimizer"], variables
 
 
 class CudaMaskablePPO(TensorPPO, MaskablePPO):

@@ -104,6 +104,22 @@ class SpatialLogits(nn.Module):
 
 
 class SpatialGroupedPolicy(MaskableActorCriticPolicy):
+    def __init__(self, *args, critic_learning_rate=None, **kwargs):
+        if kwargs.pop("share_features_extractor", False):
+            raise ValueError("Shared encoders require weights-only conversion with --init-from")
+        self.critic_learning_rate = critic_learning_rate
+        super().__init__(*args, share_features_extractor=False, **kwargs)
+
+    def actor_parameters(self):
+        return (*self.pi_features_extractor.parameters(), *self.action_net.parameters())
+
+    def critic_parameters(self):
+        return (
+            *self.vf_features_extractor.parameters(),
+            *self.mlp_extractor.critic.parameters(),
+            *self.value_net.parameters(),
+        )
+
     def initialize_dig_logit(self, value):
         with torch.no_grad():
             self.action_net.type_head[-1].bias[self.action_dist.groups - 1] = value
@@ -132,14 +148,32 @@ class SpatialGroupedPolicy(MaskableActorCriticPolicy):
             self.init_weights(self.action_net.tiles, gain=0.01)
         # Include the replacement spatial head, never the discarded linear head.
         self.optimizer = self.optimizer_class(
-            self.parameters(), lr=lr_schedule(1), **self.optimizer_kwargs
+            self.actor_parameters(), lr=lr_schedule(1), **self.optimizer_kwargs
         )
+        self.critic_optimizer = self.optimizer_class(
+            self.critic_parameters(),
+            lr=self.critic_learning_rate or lr_schedule(1),
+            **self.optimizer_kwargs,
+        )
+
+    def sample_actions(self, obs, action_masks, deterministic=False):
+        distribution = self.get_distribution(obs, action_masks=action_masks)
+        actions = distribution.get_actions(deterministic=deterministic)
+        return actions, distribution.log_prob(actions)
+
+    def evaluate_actor(self, obs, actions, action_masks):
+        distribution = self.get_distribution(obs, action_masks=action_masks)
+        self._record_entropy()
+        return distribution.log_prob(actions), distribution.entropy()
+
+    def _record_entropy(self):
+        parts = torch.stack(self.action_dist.entropy_parts()).detach().sum(dim=1)
+        self._entropy_totals = getattr(self, "_entropy_totals", 0) + parts
+        self._entropy_count = getattr(self, "_entropy_count", 0) + len(self.action_dist.logits)
 
     def evaluate_actions(self, obs, actions, action_masks=None):
         result = super().evaluate_actions(obs, actions, action_masks)
-        parts = torch.stack(self.action_dist.entropy_parts()).detach().sum(dim=1)
-        self._entropy_totals = getattr(self, "_entropy_totals", 0) + parts
-        self._entropy_count = getattr(self, "_entropy_count", 0) + len(actions)
+        self._record_entropy()
         return result
 
     def pop_entropy_metrics(self):

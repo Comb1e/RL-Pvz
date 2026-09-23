@@ -1,6 +1,6 @@
 # Current architecture
 
-Research 0.9.0 learns one shared policy for easy, standard and hard. Training
+Research 0.10.0 learns one shared policy for easy, standard and hard. Training
 simulation and optimization require CUDA. Game package 1.3.0 / simulation 1.0.0
 is pinned to `8861824df6893a34c2cd4df7f9b68613376d7964`. The Python simulator
 is the reference for non-learning baselines, tests and replay verification.
@@ -19,7 +19,10 @@ flowchart LR
     Games --> Reward[Outcome, mower cost, potential difference]
     Public --> Buffer[GPU rollout buffer]
     Reward --> Buffer
-    Buffer --> PPO[Standard clipped PPO and balanced exploration]
+    Buffer --> Critic[Independent value encoder, batched before updates]
+    Critic --> GAE[Timeout bootstrap and GAE]
+    GAE --> PPO[Clipped actor PPO and separate critic MSE]
+    PPO --> Critic
     PPO --> Policy
     Games --> Counts[Completed games and diagnostic summaries]
     Counts --> Schedule[Mastery and validation state machines]
@@ -60,23 +63,22 @@ emptiness. This compression loses exact enemy positions and is not a full state.
 
 ```mermaid
 flowchart LR
-    Plants[Plant types and states] --> Embed[8 / 4 dimensional category embeddings]
-    Embed --> Grid[5 by 9 spatial grid]
-    Health[Health and timers] --> Grid
-    Regions[Raw regional features per lane] --> Grid
-    Global[35 globals] --> Scalar[64-unit scalar encoder]
-    Scalar --> Grid
-    Columns[Normalized column coordinates] --> Grid
-    Grid --> Conv[Two 3 by 3 convolutions, 32 channels, ReLU]
-    Conv --> Tiles[Nine 1 by 1 conditional tile maps]
-    Conv --> Pool[Mean and maximum spatial pooling]
-    Scalar --> Pool
-    Pool --> Type[128 by 128 type-policy head]
-    Pool --> Value[128 by 128 value head]
+    Obs[500 public values] --> Actor[Actor embeddings, scalar MLP, spatial convolutions]
+    Obs --> Critic[Independent critic embeddings, scalar MLP, spatial convolutions]
+    Actor --> Tiles[Nine conditional tile maps]
+    Actor --> Pool[Mean/max pooling and globals]
+    Pool --> Type[128 by 128 type head]
+    Critic --> Value[Mean/max pooling and 128 by 128 value head]
+    Type --> Action[Legal type then tile]
+    Tiles --> Action
+    Value --> Estimate[Expected remaining discounted reward]
 ```
 
-Empty plant/state categories have zero embeddings; category IDs are never ordinal
-inputs. Widths and embedding dimensions are configurable. The default has 118,611
+Each branch uses 8/4-dimensional plant/state embeddings and a 64-unit global
+encoder. Regional lane features and global features are broadcast onto the 5×9
+plant grid with column coordinates. Two 3×3 convolutions with 32 channels preserve
+its resolution. Empty categories have zero embeddings; category IDs are never
+ordinal inputs. Widths and embedding dimensions are configurable. The default has 169,467
 parameters. Conditional map biases are omitted because they cancel under tile
 softmax. There is no separate lane MLP, recurrence, attention or alternative policy.
 
@@ -105,8 +107,19 @@ The collector stores 128 decisions per game by default, across 128 parallel game
 GAE and masked PPO use the configured gamma/lambda, standard all-transition
 minibatch normalization and mean losses, four epochs and batches of 1,024.
 Singleton minibatches skip advantage normalization. Approximate KL is checked
-before each optimizer step; a value above 1.5×`target_kl` stops that update. Zero
-disables the check. Logs distinguish scheduled epochs from actual optimizer steps.
+before each actor optimizer step; a value above 1.5×`target_kl` stops actor updates
+for that rollout. The independent critic completes its configured epochs. Zero
+disables the check. Each parameter group owns an Adam state and clips its own
+gradients; no learned tensors are shared. Critic loss cannot alter action outputs.
+
+Collection invokes only the actor. Both networks remain frozen until the complete
+rollout is stored. The critic then evaluates observations in batches (default 1,024),
+including pre-reset timeout states and the final rollout state. Natural terminals
+have no bootstrap. Timeout corrections are applied once, then GAE runs. Unfinished
+games continue across updates; optimized rollouts are discarded. This schedule
+changes the timing of value inference, not the policy that generated the samples.
+Evaluation uses the actor without computing values. Post-update drift and dig
+probability on legal-dig states are diagnostics, not additional loss terms.
 
 ## Curriculum, checkpoints and failure paths
 
@@ -130,7 +143,7 @@ Default mastery requires 100/100 cases for each required task, at least 100
 completed games that started in the current stage, and one passing probe. Probes
 run every 500 completed games using a separate 100-case validation pool. Promotion
 changes future resets only; active games keep their starting stage and restrictions.
-Policy and optimizer identity stay unchanged. A selected standalone stage never
+Actor, critic and both optimizer identities stay unchanged. A selected standalone stage never
 promotes; it saves a checkpoint and stops on mastery or budget.
 
 Normal validation runs every 2,000 completed games after optimization, with 50
@@ -141,12 +154,15 @@ Time allowances include finalization; expired evaluations and exports remain
 explicitly pending. Exhausted game/time budgets do not imply mastery.
 
 `--init-from` compares engine, observation layout and network structural signatures,
-then copies weights into a fresh model and optimizer. Counts, schedules and time
+then copies weights into a fresh model and two optimizers. Counts, schedules and time
 allowance restart; reward/PPO/curriculum parameters may change. Metadata records
 source hash and parameter differences. `--resume` requires the saved experiment
-settings and restores weights, Adam state, counts, mastery and schedules. Active
+settings and restores weights, both Adam states, counts, mastery and schedules. Active
 episodes restart; it does not promise bitwise trajectory continuation.
-Pre-0.9.0 networks are not loadable. Reports and recordings are independent of model
+The sole conversion accepts 0.9.0 compact shared-encoder tensors for weights-only
+initialization. Identical encoder aliases are checked, then copied into independent
+encoders. Their shapes and the engine must match. Shared checkpoints cannot resume;
+no retired training implementation is loaded. Pre-0.9.0 networks are not loadable. Reports and recordings are independent of model
 loading and remain usable after obsolete weights are removed.
 
 ## Storage and presentation
@@ -155,7 +171,11 @@ Every run owns a new directory. Metadata records resolved configuration, structu
 signature, source hashes, engine/rules pin, learner seed and initialization origin.
 JSONL records separate training episodes, post-update metrics, normal validation
 and mastery probes. Checkpoints store optimizer and scheduling state; logs and
-TensorBoard provide progress without printing every game.
+TensorBoard provide progress without printing every game. Per-task windows each
+retain the latest 100 completed games; empty ratios are missing, never zero.
+Cumulative starts, completions and transitions survive resume; active counts describe
+the current environments. Restarting unfinished episodes creates additional starts.
+Task labels remain diagnostics only and never enter observations or rewards.
 
 The selected model is loaded once for three demos using seed 100000. GPU traces
 must reproduce CPU outcome and canonical state hash before `.pvzdemo` files are

@@ -252,7 +252,10 @@ def test_kl_stops_before_update_and_singleton_forced_states_stay_finite(target_k
         if target_kl:
             assert not model.policy.optimizer.state
             for k, v in model.policy.state_dict().items():
-                torch.testing.assert_close(v, before[k], rtol=0, atol=0)
+                if k.startswith(("features_extractor.", "pi_features_extractor.", "action_net.")):
+                    torch.testing.assert_close(v, before[k], rtol=0, atol=0)
+            assert model.policy.critic_optimizer.state
+            assert metrics["train/critic_optimizer_steps"] == 2
         else:
             assert any(not torch.equal(v, before[k]) for k, v in model.policy.state_dict().items())
     finally:
