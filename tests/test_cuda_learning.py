@@ -162,6 +162,7 @@ def test_fixed_rollout_losses_and_optimizer_match_stock(gpu_cfg, condition, monk
                 "net_arch": {"pi": t["hidden_sizes"], "vf": t["hidden_sizes"]},
                 "features_extractor_class": SpatialFeatures,
                 "features_extractor_kwargs": {"layout_cfg": configs[0]},
+                "exploration_epsilon": t["exploration"]["epsilon"],
             },
         )
         reference.policy.initialize_dig_logit(configs[0]["policy"]["initial_dig_logit"])

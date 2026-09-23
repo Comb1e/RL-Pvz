@@ -1,13 +1,14 @@
 # PVZ plant-placement research
 
-Research **0.11.0** trains **one shared CUDA MaskablePPO policy** for easy, standard,
+Research **0.11.1** trains **one shared CUDA MaskablePPO policy** for easy, standard,
 and hard. There is one recipe, [configs/train.toml](configs/train.toml), also used
 when `--config` is omitted. Policy and value learning use independent encoders and
 Adam states. Rewards account for net realized value in sun-equivalent units, and
-discounting advances with simulation time. **Start fresh models for 0.11.0**;
+discounting advances with simulation time. **Pre-0.11 models require fresh training**;
 older weights cannot initialize, resume or evaluate under this method. The method
-remains experimental: the two-seed five-minute comparison produced no saving
-wins and did not meet its learning acceptance criterion.
+remains experimental. The 0.11.0 five-minute comparison produced no saving wins;
+0.11.1 adds decaying exploration and an initial critic adaptation period. Short
+checks retained placement but still produced no saving wins and mixed critic errors.
 See [validation](docs/validation.md).
 
 ## Project layout
@@ -110,6 +111,34 @@ over **all transitions**, including forced waits. `training.learning_rate` contr
 the actor; optional `critic_learning_rate` defaults to the same rate. Gradient
 clipping applies independently to both parameter groups.
 
+Exploration starts at `training.exploration.epsilon = 0.1` (10%), held during
+critic adaptation, then decreases exponentially to `epsilon_target = 0.001`
+(0.1%) at `epsilon_target_games = 3000` completed games in that stage. It continues
+toward zero afterward; the target is a milestone, not a floor. With the default
+1,024-game adaptation period, game 2,012 uses 1% and game 4,976 uses 0.001%.
+Each new curriculum stage restarts the schedule; resume preserves progress.
+Rates change only between rollouts so collection and PPO use the same distribution.
+
+The random component mixes uniformly over available wait/plant types into training
+actions. Tile selection still follows the policy, and all legality checks apply.
+Dig remains legal and learned, without an added random-dig floor. PPO uses the
+actual mixed probabilities; deterministic validation and demos use the learned
+greedy choice. Setting `epsilon` to zero disables added exploration; setting
+`epsilon_target_games` to zero keeps a constant rate. A scheduled target must be
+positive, no larger than the starting rate, and occur after critic adaptation.
+The rate is per learning transition: waits occur 20 times per simulated second.
+The 10% start is an experimental, aggressive setting: large rates can repeatedly
+spend resources before the agent saves enough sun. Decay is driven by completed
+games, not proof of mastery. The learned policy's own sampling and entropy
+regularization remain even as the added random component approaches zero.
+
+`training.critic_warmup_games = 1024` initially freezes the actor at each curriculum
+stage while the critic learns from that stage's sampled experience. Both networks
+then learn normally. Only completed games started in that stage count, including
+its rehearsals; the switch occurs between complete rollout updates. It consumes
+the existing game/time allowance. Zero disables warm-up. This is a short adaptation
+period, not a guarantee that the critic is calibrated or the stage can be solved.
+
 The 500 inputs use categorical plant/state embeddings, three enemy/projectile
 regions per lane and global state. Defaults are 8/4 embedding dimensions, a
 64-unit scalar encoder, two 32-channel convolutions and 128×128 policy/value heads.
@@ -166,7 +195,7 @@ A short pipeline check is:
 .\.venv\Scripts\python.exe -m pvz_rl train --family diagnostic `
   --games 2 --n-envs 2 --rollout-steps-per-env 32 --batch-size 32 `
   --eval-games 1 --validation-count 1 --max-minutes 2 `
-  --output artifacts\cuda-smoke-v0110
+  --output artifacts\cuda-smoke-v0111
 ```
 
 This tests integration, not game-playing competence. `suite` repeats this same
@@ -241,6 +270,11 @@ checkpoint selection and time allowance start fresh. It also works without
 the source settings; specify an edited TOML to change rewards, PPO or curriculum.
 Network dimensions, categorical layout and engine must match. Metadata records
 the source checkpoint hash, structural signature and parameter changes.
+Existing 0.11.0 checkpoints remain compatible. To enable the new exploration and
+warm-up, use `--init-from` with `--config configs\train.toml`, as in the stage example.
+Use a successful placement checkpoint for saving; a fully collapsed actor is a
+poor starting point. Resume and initialization without an explicit config preserve
+the source settings, including zero extra exploration/warm-up when absent.
 Only checkpoints created with `net_value_v1` and simulation-tick discounting can
 transfer or resume. Architecture changes require new weights. Parameter changes
 within this method use `--init-from`; they never restore the old optimizer.
@@ -276,6 +310,9 @@ steps for each optimizer, gradient norms, entropy, actor KL stopping and policy
 drift measured after the update. Task-specific rolling windows report easy,
 placement and saving separately, including accepted plant usage. Started, active,
 completed-game and transition counts show the actual data mixture.
+Logs identify critic warm-up and record value-target errors separately at wait,
+plant and dig decisions. These errors use bootstrapped training targets; they are
+not measured full-game calibration errors. No observations or rewards are added.
 Accounting curves separate actual income, effective damage, plant-value loss,
 mower expenditure, development reward and outcome reward. Logs/report records show
 both undiscounted reward and simulation-time-discounted return. Cumulative net
@@ -338,7 +375,7 @@ does not load retired weights or regenerate their gameplay.
 .\.venv\Scripts\python.exe -m pvz_rl evaluate `
   --checkpoint runs\net-value-101\best.zip `
   --split validation --count 10 --record --output artifacts\net-value-validation
-.\.venv\Scripts\python.exe -m pvz_rl benchmark-gpu --minutes 15 --output artifacts\cuda-benchmark-v0110
+.\.venv\Scripts\python.exe -m pvz_rl benchmark-gpu --minutes 15 --output artifacts\cuda-benchmark-v0111
 .\.venv\Scripts\python.exe -m pytest -q
 .\.venv\Scripts\ruff.exe check src tests tools
 .\.venv\Scripts\python.exe -m pip check

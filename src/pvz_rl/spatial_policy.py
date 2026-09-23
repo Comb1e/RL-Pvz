@@ -104,10 +104,11 @@ class SpatialLogits(nn.Module):
 
 
 class SpatialGroupedPolicy(MaskableActorCriticPolicy):
-    def __init__(self, *args, critic_learning_rate=None, **kwargs):
+    def __init__(self, *args, critic_learning_rate=None, exploration_epsilon=0.0, **kwargs):
         if kwargs.pop("share_features_extractor", False):
             raise ValueError("Shared encoders require weights-only conversion with --init-from")
         self.critic_learning_rate = critic_learning_rate
+        self.exploration_epsilon = exploration_epsilon
         super().__init__(*args, share_features_extractor=False, **kwargs)
 
     def actor_parameters(self):
@@ -135,7 +136,7 @@ class SpatialGroupedPolicy(MaskableActorCriticPolicy):
     def _build(self, lr_schedule):
         if self.action_space.n != GroupedDistribution.action_dim:
             raise ValueError("Spatial policy requires direct Discrete(406) actions")
-        self.action_dist = GroupedDistribution()
+        self.action_dist = GroupedDistribution(self.exploration_epsilon)
         super()._build(lr_schedule)
         self.action_net = SpatialLogits(
             self.features_extractor.channels,

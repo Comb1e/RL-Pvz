@@ -28,6 +28,7 @@ def small_cfg(device="cuda", backend="cuda", profile="E"):
         rollout_size=64,
         batch_size=32,
         n_epochs=1,
+        critic_warmup_games=0,  # This control exercises restoration of both Adam states.
         total_games=12,
         max_minutes=2,
     )

@@ -5,6 +5,22 @@ Dates and results belong to their recorded version. Current behavior lives in
 artifact locations and learning outcomes live in [validation](validation.md).
 The longer pre-consolidation notes remain in `git show b642c9c:docs/iteration.md`.
 
+## 0.11.1 — 2026-09-23
+
+- Problem: saving collapsed into waiting; the transferred critic was optimistic
+  about saving and the final critic undervalued rarely visited planting states.
+- Change: configurable wait/plant exploration starts at 10%, holds during 1,024-game
+  critic-only adaptation, then exponentially reaches 0.1% at stage game 3,000 and
+  continues toward zero. Ordinary masked PPO uses the actual mixed probabilities.
+  Digging remains legal and trainable. No reward or network changes.
+- Compatibility: 0.11.0 weights still load. Explicit current configuration enables
+  the new settings on weights-only transfer; resume retains the saved experiment.
+  Warm-up and decay reuse saved stage residency and preserve optimizer identities.
+- Verification and bounded learning findings: see [validation](validation.md).
+  The initial 256-game adaptation was insufficient; 1,024 games retained placement
+  in short checks, but saving still failed and critic errors remained mixed.
+  Only three actor-updating rollouts fit each final check. Remains experimental.
+
 ## 0.11.0 — 2026-09-23
 
 - Problem: saving-stage destructive digging remained despite tighter lessons.

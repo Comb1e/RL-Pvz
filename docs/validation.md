@@ -3,6 +3,108 @@
 Evidence is versioned below. Learning outcomes, simulation correctness and runtime
 speed are separate measures; [research design](research.md) defines the protocol.
 
+## 0.11.1 exploration and critic adaptation — 2026-09-23
+
+The saving diagnosis found 7,039 completed saving games with zero wins, followed
+by no planting. The source placement actor waited with probability 0.998508 on
+the initial saving board. Its critic predicted +0.559 versus a frozen sampled
+return of −0.281. The later waiting policy's critic was accurate after a wait
+(−0.320 versus −0.312) but pessimistic after a supplied sunflower purchase
+(−0.541 versus −0.296). These are own-policy continuation checks, not optimal
+controller targets. Local diagnostic artifacts remain under `artifacts/v0110/`.
+
+The implementation adds a configurable wait/plant mixture, exponential decay
+and an initial critic-only period at each stage. The final settings hold 10% for
+1,024 completed stage games, reach 0.1% at game 3,000, then approach zero. Resume
+preserves residency and the last-used rate. Digging remains learned and legal;
+rewards, network, game pin and ordinary PPO coefficients are unchanged.
+
+### Bounded development checks
+
+[Machine-readable evidence](evidence/exploration-v0111.json) records all six short
+runs, source/config/engine hashes, endpoint checks and calibration measurements.
+Each run starts from the same mastered placement checkpoint, with fresh optimizer
+states and saving-stage counters. The control disables the two new features in
+the current implementation; it is not an old-source performance benchmark.
+Each gets a 120-second learning deadline, finishing a complete update, followed
+by 20 development cases per lesson (100050–100069). Final-test seeds are untouched.
+No competing GPU test job ran during these comparisons.
+
+The initial 256-game adaptation trial still lost all endpoint saving and placement
+cases. Critic mean absolute error improved for seed 101 (0.199 → 0.063) but worsened
+for seed 102 (0.030 → 0.130); seed 102's last 100 saving games dug early after 70%
+of accepted plantings. The one subsequent adjustment increased adaptation to
+1,024 games. This is post-hoc development evidence, not held-out confirmation.
+
+| Method / seed | Games | Transitions | Training seconds | Actor-updating rollouts | Saving wins | Placement wins |
+|---|---:|---:|---:|---:|---:|---:|
+| Control / 101 | 662 | 1,409,024 | 120.63 | 43 | 0/20 | 0/20 |
+| Adaptation / 101 | 1,111 | 2,031,616 | 121.04 | 3 | 0/20 | 20/20 |
+| Control / 102 | 774 | 1,441,792 | 120.62 | 44 | 0/20 | 0/20 |
+| Adaptation / 102 | 1,111 | 2,031,616 | 120.96 | 3 | 0/20 | 20/20 |
+
+In the last 100 saving games, seed 101's accepted plantings increased from 116 to
+663 and idle games fell from 65 to zero. Seed 102's plantings increased from 211
+to 650; neither run had idle games. Both candidates bought exactly one attacker
+per saving game and recorded zero early digs. One attacker is insufficient for
+the two-lane saving task. Deterministic saving checks still failed; increased
+activity is not competence. The actor was frozen for most of these short runs,
+which explains both greater collection throughput and a substantial part of the
+placement retention. This does not establish improved steady-state PPO speed or
+retention after prolonged actor learning. Neither candidate reached game 3,000.
+
+Critic checks supply one legal wait, rear sunflower or rear peashooter action,
+then follow the frozen sampled actor at its saved exploration rate. Remaining
+returns remove that first action's reward and elapsed-time discount. The final
+mean absolute errors across these three sets were **0.199 → 0.093** for seed 101
+and **0.030 → 0.130** for seed 102. The latter still predicted −0.554 after a
+peashooter where measured continuation averaged −0.274. Stage adaptation reduces
+the transferred critic's initial optimism but does not uniformly fix its errors.
+Training value-target residuals are bootstrapped diagnostics, not these complete
+continuation measurements.
+
+**Experimental, acceptance not established.** Saving wins did not improve, critic
+calibration remains mixed, and the checks contain only three actor-updating
+rollouts per final candidate. The requested 10% start is aggressive; it is not a
+demonstrated optimal rate. A separate successful-control sensitivity check scored
+10/10 without injected actions, 5/10 at 0.1%, 5/10 at 0.5%, and 0/10 at 5%. Its
+uniform legal tiles differ from the actual learned tile head, so it cannot measure
+candidate performance. No additional coefficient tuning followed the six runs.
+Training plus comparison evaluation took **931.04 seconds (15m31s)**. No formal
+training was launched.
+
+### Correctness and release verification
+
+Independent controls enumerate mixture probabilities, joint entropy and analytic
+gradients; illegal actions, forced wait/dig and learned greedy selection retain
+their contracts. Schedule checks cover exact milestones, exponential ratios,
+underflow, disabled/constant rates, stage resets and interruption/resume. A rate
+cannot change between rollout collection and PPO updates. Critic-only updates
+leave actor weights and Adam state unchanged; raw checkpoint reload preserves
+the saved rate. Numerical PPO/GAE, CPU/CUDA accounting, shared-checkpoint demos,
+archived reports and failure recovery passed with the final implementation.
+
+| Check | Result |
+|---|---|
+| Complete research suite | **498 passed**, 385.12 s |
+| Complete pinned game 1.3.0 suite (`8861824`) | **214 passed**, 49.20 s |
+| Ruff lint/format and dependency check | Passed |
+| CUDA doctor: NVRTC, tensor sharing, accounting and reference rendering | Passed; RTX 4070 Laptop, 0.11.1 / game 1.3.0 |
+| Wheel/sdist and packaged default configuration/kernel | Passed |
+| Documentation relative links and nine PowerShell blocks | Passed |
+| Report regeneration, offline assets, shared checkpoint and H.264 decode | Passed |
+
+The final suite's marked integration checks, including report/export time, took
+276.02 seconds. The game checkouts and dependency pin are unchanged. Local logs
+and packages are in `artifacts/v0111/`. The retained `artifacts/v0111/smoke`
+contains three verified demos and 1280×820 videos from checkpoint SHA-256
+`e40f97cf40a1ab99ff3387e9c7a550f5dfce85ae8e5816ee8eb83b8e7b55bb4e`.
+These two-second smoke games correctly show truncation, not victories. Task and
+optimizer curves from the longer check were visually inspected, including zero
+actor steps during adaptation; the native replay's final frame visibly shows its
+truncation outcome. Regenerating `adapted-101`'s report required no model loading
+or additional training because that run has no validated best checkpoint.
+
 ## 0.11.0 net realized value — 2026-09-23
 
 This release changes the reward objective and discount clock, requiring fresh

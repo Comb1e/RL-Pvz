@@ -308,5 +308,10 @@ def test_normalization_and_reward_defaults():
         value_scale=300.0,
     )
     assert cfg["training"]["exploration"] == dict(
-        objective="balanced_heads_v1", type_coef=0.01, tile_coef=0.001
+        objective="balanced_heads_v1",
+        type_coef=0.01,
+        tile_coef=0.001,
+        epsilon=0.1,
+        epsilon_target=0.001,
+        epsilon_target_games=3000,
     )

@@ -1,0 +1,835 @@
+{
+  "version": "0.11.1",
+  "date": "2026-09-23",
+  "protocol": {
+    "baseline": "Current implementation with added epsilon and critic warm-up disabled; not an old-source benchmark.",
+    "candidate": "10% held for 1024 stage games, exponential to 0.1% at game 3000 then toward zero; critic-only warm-up.",
+    "development_adjustment": "The initial 256-game warm-up trial left large calibration errors and no lesson retention. Increased this one parameter to 1024 and reran both candidate seeds. These are post-hoc development checks, not held-out confirmation.",
+    "start": "Same mastered placement weights, fresh optimizers and counters; saving stage with placement rehearsal.",
+    "budget": "120-second training deadline per run, finish complete PPO update; evaluation afterward. No GPU test jobs overlap.",
+    "endpoint_cases": "20 development cases per lesson, seeds 100050..100069; deterministic actor, injected exploration off.",
+    "calibration": "20 cases each after wait/sunflower/peashooter supplied actions; frozen sampled continuation at saved epsilon, RNG 101. Remaining returns remove initial reward and its discount.",
+    "warmup_control": "At adaptation completion, exact actor parameter equality with source and empty actor Adam state asserted.",
+    "limits": "Combined-change, two-minute pilot; no isolated component effect, mastery or full decay-horizon claim. Final-test seeds untouched."
+  },
+  "training_and_evaluation_seconds": 931.040899700005,
+  "runs": [
+    {
+      "variant": "baseline",
+      "seed": 101,
+      "source_checkpoint_sha256": "1bdd87bfb6d450f9d804c2e7c80ae533b919bffd94d2a4e6ddbcb9ee634c2eff",
+      "research_source_hash": "63797e6d78ba1e79adf83b7177f927e19b2d4eabf564a251c4f8eb202d13f04b",
+      "training_seconds": 120.62957310000638,
+      "training_and_evaluation_seconds": 143.25440970000636,
+      "steps": 1409024,
+      "games": 662,
+      "endpoint": {
+        "saving": {
+          "cases": 20,
+          "wins": 0,
+          "attackers": 0,
+          "flowers": 0,
+          "digs": 0
+        },
+        "placement": {
+          "cases": 20,
+          "wins": 0,
+          "attackers": 0,
+          "flowers": 0,
+          "digs": 0
+        }
+      },
+      "calibration": {
+        "final": {
+          "wait": {
+            "cases": 20,
+            "prediction": -0.017125196754932404,
+            "return": -0.3119906876465858,
+            "mae": 0.29486549089165337,
+            "wins": 0
+          },
+          "flower": {
+            "cases": 20,
+            "prediction": -0.21608677506446838,
+            "return": -0.2964016947505403,
+            "mae": 0.08031491968607193,
+            "wins": 0
+          },
+          "shooter": {
+            "cases": 20,
+            "prediction": -0.5262792110443115,
+            "return": -0.30537410663903375,
+            "mae": 0.22090510440527777,
+            "wins": 0
+          }
+        }
+      },
+      "training": {
+        "saving": {
+          "all": {
+            "games": 487,
+            "wins": 0,
+            "plantings": 1586,
+            "attackers": 402,
+            "early_digs_per_plant": 0.0,
+            "idle_games": 65
+          },
+          "last100": {
+            "games": 100,
+            "wins": 0,
+            "plantings": 116,
+            "attackers": 26,
+            "early_digs_per_plant": 0.0,
+            "idle_games": 65
+          }
+        },
+        "placement": {
+          "all": {
+            "games": 175,
+            "wins": 138,
+            "plantings": 146,
+            "attackers": 146,
+            "early_digs_per_plant": 0.0,
+            "idle_games": 29
+          },
+          "last100": {
+            "games": 100,
+            "wins": 63,
+            "plantings": 71,
+            "attackers": 71,
+            "early_digs_per_plant": 0.0,
+            "idle_games": 29
+          }
+        }
+      },
+      "exploration": {
+        "epsilon": 0.0,
+        "epsilon_half_life_games": 0,
+        "objective": "balanced_heads_v1",
+        "tile_coef": 0.001,
+        "type_coef": 0.01
+      },
+      "critic_warmup_games": 0,
+      "last_exploration_rate": 0.0,
+      "engine": {
+        "commit": "8861824df6893a34c2cd4df7f9b68613376d7964",
+        "cuda_backend_source_hash": "98c7859a1804c63af8dd9f3e5cc7d40952933bab6b2133f1e5433d6e5ccbdc34",
+        "package_version": "1.3.0",
+        "rules_hash": "a7486688fa43a9b50193f82715fa519bd27cfebc7ed054bebe4f7990f9c268de",
+        "source_hash": "5c4b358043b8253e7876aa68a46bcf272f0264d80c7de86f9e67c7c8bc6993e2",
+        "version": "1.0.0"
+      },
+      "config_hash": "2076e9716246f4ce0f56d469aad4372f8f7e33f5f6c5f5bf23a871b4b999c6e2",
+      "mean_calibration_mae": 0.19869517166100104,
+      "transitions_per_training_second": 11680.585148319036,
+      "warmup_updates": 0,
+      "actor_learning_updates": 43,
+      "actor_optimizer_steps": 4873.0,
+      "critic_optimizer_steps": 5504.0
+    },
+    {
+      "variant": "baseline",
+      "seed": 102,
+      "source_checkpoint_sha256": "1bdd87bfb6d450f9d804c2e7c80ae533b919bffd94d2a4e6ddbcb9ee634c2eff",
+      "research_source_hash": "415144059e1327c04ac04134d65ec2fc1328bd7ecded5e8523e30d899cf7496d",
+      "training_seconds": 120.61548250000487,
+      "training_and_evaluation_seconds": 143.41008359999978,
+      "steps": 1441792,
+      "games": 774,
+      "endpoint": {
+        "saving": {
+          "cases": 20,
+          "wins": 0,
+          "attackers": 1,
+          "flowers": 4.5,
+          "digs": 0.35
+        },
+        "placement": {
+          "cases": 20,
+          "wins": 0,
+          "attackers": 1,
+          "flowers": 0,
+          "digs": 1
+        }
+      },
+      "calibration": {
+        "final": {
+          "wait": {
+            "cases": 20,
+            "prediction": -0.32373714447021484,
+            "return": -0.33182896666593586,
+            "mae": 0.010080002585764816,
+            "wins": 0
+          },
+          "flower": {
+            "cases": 20,
+            "prediction": -0.2924917936325073,
+            "return": -0.3324635815200884,
+            "mae": 0.03997178788758108,
+            "wins": 0
+          },
+          "shooter": {
+            "cases": 20,
+            "prediction": -0.28934445977211,
+            "return": -0.32973405843852055,
+            "mae": 0.04038959866641057,
+            "wins": 0
+          }
+        }
+      },
+      "training": {
+        "saving": {
+          "all": {
+            "games": 591,
+            "wins": 0,
+            "plantings": 1613,
+            "attackers": 566,
+            "early_digs_per_plant": 0.06509609423434594,
+            "idle_games": 0
+          },
+          "last100": {
+            "games": 100,
+            "wins": 0,
+            "plantings": 211,
+            "attackers": 100,
+            "early_digs_per_plant": 0.21800947867298578,
+            "idle_games": 0
+          }
+        },
+        "placement": {
+          "all": {
+            "games": 183,
+            "wins": 98,
+            "plantings": 183,
+            "attackers": 183,
+            "early_digs_per_plant": 0.3825136612021858,
+            "idle_games": 0
+          },
+          "last100": {
+            "games": 100,
+            "wins": 15,
+            "plantings": 100,
+            "attackers": 100,
+            "early_digs_per_plant": 0.7,
+            "idle_games": 0
+          }
+        }
+      },
+      "exploration": {
+        "epsilon": 0.0,
+        "epsilon_target": 0.001,
+        "epsilon_target_games": 0,
+        "objective": "balanced_heads_v1",
+        "tile_coef": 0.001,
+        "type_coef": 0.01
+      },
+      "critic_warmup_games": 0,
+      "last_exploration_rate": 0.0,
+      "engine": {
+        "commit": "8861824df6893a34c2cd4df7f9b68613376d7964",
+        "cuda_backend_source_hash": "98c7859a1804c63af8dd9f3e5cc7d40952933bab6b2133f1e5433d6e5ccbdc34",
+        "package_version": "1.3.0",
+        "rules_hash": "a7486688fa43a9b50193f82715fa519bd27cfebc7ed054bebe4f7990f9c268de",
+        "source_hash": "5c4b358043b8253e7876aa68a46bcf272f0264d80c7de86f9e67c7c8bc6993e2",
+        "version": "1.0.0"
+      },
+      "config_hash": "d47ca60d6600d8e8772bd1a6cf2e6328d142d1d8b54059ffe4dec3344e13daa0",
+      "mean_calibration_mae": 0.030147129713252157,
+      "transitions_per_training_second": 11953.622952177318,
+      "warmup_updates": 0,
+      "actor_learning_updates": 44,
+      "actor_optimizer_steps": 4841.0,
+      "critic_optimizer_steps": 5632.0
+    },
+    {
+      "variant": "adapted",
+      "seed": 101,
+      "source_checkpoint_sha256": "1bdd87bfb6d450f9d804c2e7c80ae533b919bffd94d2a4e6ddbcb9ee634c2eff",
+      "research_source_hash": "1d08ca7c25a8d4bd822d9404e40cb779696fb39a979dd6624a3a351a4140aa4a",
+      "training_seconds": 121.04151730000012,
+      "training_and_evaluation_seconds": 160.14070619999984,
+      "steps": 2031616,
+      "games": 1111,
+      "endpoint": {
+        "saving": {
+          "cases": 20,
+          "wins": 0,
+          "attackers": 1,
+          "flowers": 1.15,
+          "digs": 0
+        },
+        "placement": {
+          "cases": 20,
+          "wins": 20,
+          "attackers": 1,
+          "flowers": 0,
+          "digs": 0
+        }
+      },
+      "calibration": {
+        "final": {
+          "wait": {
+            "cases": 20,
+            "prediction": -0.3980133831501007,
+            "return": -0.27438030548637893,
+            "mae": 0.12363307766372177,
+            "wins": 0
+          },
+          "flower": {
+            "cases": 20,
+            "prediction": -0.3474903702735901,
+            "return": -0.27005936684426896,
+            "mae": 0.07743100342932113,
+            "wins": 0
+          },
+          "shooter": {
+            "cases": 20,
+            "prediction": -0.3476908206939697,
+            "return": -0.27048277101200263,
+            "mae": 0.0772080496819671,
+            "wins": 0
+          }
+        },
+        "after_warmup": {
+          "wait": {
+            "cases": 20,
+            "prediction": -0.33866962790489197,
+            "return": -0.27299449638024736,
+            "mae": 0.06567513152464459,
+            "wins": 0
+          },
+          "flower": {
+            "cases": 20,
+            "prediction": -0.3471492528915405,
+            "return": -0.2710895200601149,
+            "mae": 0.07605973283142561,
+            "wins": 0
+          },
+          "shooter": {
+            "cases": 20,
+            "prediction": -0.3238268792629242,
+            "return": -0.2709880235371166,
+            "mae": 0.05283885572580758,
+            "wins": 0
+          }
+        }
+      },
+      "training": {
+        "saving": {
+          "all": {
+            "games": 851,
+            "wins": 0,
+            "plantings": 5551,
+            "attackers": 851,
+            "early_digs_per_plant": 0.0,
+            "idle_games": 0
+          },
+          "last100": {
+            "games": 100,
+            "wins": 0,
+            "plantings": 663,
+            "attackers": 100,
+            "early_digs_per_plant": 0.0,
+            "idle_games": 0
+          }
+        },
+        "placement": {
+          "all": {
+            "games": 260,
+            "wins": 221,
+            "plantings": 260,
+            "attackers": 260,
+            "early_digs_per_plant": 0.0,
+            "idle_games": 0
+          },
+          "last100": {
+            "games": 100,
+            "wins": 79,
+            "plantings": 100,
+            "attackers": 100,
+            "early_digs_per_plant": 0.0,
+            "idle_games": 0
+          }
+        }
+      },
+      "exploration": {
+        "epsilon": 0.1,
+        "epsilon_target": 0.001,
+        "epsilon_target_games": 3000,
+        "objective": "balanced_heads_v1",
+        "tile_coef": 0.001,
+        "type_coef": 0.01
+      },
+      "critic_warmup_games": 1024,
+      "last_exploration_rate": 0.0818380863559219,
+      "engine": {
+        "commit": "8861824df6893a34c2cd4df7f9b68613376d7964",
+        "cuda_backend_source_hash": "98c7859a1804c63af8dd9f3e5cc7d40952933bab6b2133f1e5433d6e5ccbdc34",
+        "package_version": "1.3.0",
+        "rules_hash": "a7486688fa43a9b50193f82715fa519bd27cfebc7ed054bebe4f7990f9c268de",
+        "source_hash": "5c4b358043b8253e7876aa68a46bcf272f0264d80c7de86f9e67c7c8bc6993e2",
+        "version": "1.0.0"
+      },
+      "config_hash": "ecf648a90ad46340b1794430617eb63e9aa3042c578e69f93c0c0710b6297787",
+      "mean_calibration_mae": 0.09275737692500333,
+      "transitions_per_training_second": 16784.455824067878,
+      "warmup_updates": 59,
+      "actor_learning_updates": 3,
+      "actor_optimizer_steps": 384.0,
+      "critic_optimizer_steps": 7936.0
+    },
+    {
+      "variant": "adapted",
+      "seed": 102,
+      "source_checkpoint_sha256": "1bdd87bfb6d450f9d804c2e7c80ae533b919bffd94d2a4e6ddbcb9ee634c2eff",
+      "research_source_hash": "1d08ca7c25a8d4bd822d9404e40cb779696fb39a979dd6624a3a351a4140aa4a",
+      "training_seconds": 120.95985500000097,
+      "training_and_evaluation_seconds": 161.71637190000183,
+      "steps": 2031616,
+      "games": 1111,
+      "endpoint": {
+        "saving": {
+          "cases": 20,
+          "wins": 0,
+          "attackers": 0.6,
+          "flowers": 0.6,
+          "digs": 0
+        },
+        "placement": {
+          "cases": 20,
+          "wins": 20,
+          "attackers": 1,
+          "flowers": 0,
+          "digs": 0
+        }
+      },
+      "calibration": {
+        "final": {
+          "wait": {
+            "cases": 20,
+            "prediction": -0.3392293453216553,
+            "return": -0.2737401264661675,
+            "mae": 0.06548921885548777,
+            "wins": 0
+          },
+          "flower": {
+            "cases": 20,
+            "prediction": -0.31687605381011963,
+            "return": -0.2704560317580379,
+            "mae": 0.04642002205208174,
+            "wins": 0
+          },
+          "shooter": {
+            "cases": 20,
+            "prediction": -0.553604245185852,
+            "return": -0.27445370263137775,
+            "mae": 0.2791505425544743,
+            "wins": 0
+          }
+        },
+        "after_warmup": {
+          "wait": {
+            "cases": 20,
+            "prediction": -0.29976895451545715,
+            "return": -0.27299449638024736,
+            "mae": 0.02677445813520977,
+            "wins": 0
+          },
+          "flower": {
+            "cases": 20,
+            "prediction": -0.2573145925998688,
+            "return": -0.27034077283254315,
+            "mae": 0.018406244350726315,
+            "wins": 0
+          },
+          "shooter": {
+            "cases": 20,
+            "prediction": -0.5977370142936707,
+            "return": -0.2709880235371166,
+            "mae": 0.32674899075655406,
+            "wins": 0
+          }
+        }
+      },
+      "training": {
+        "saving": {
+          "all": {
+            "games": 851,
+            "wins": 0,
+            "plantings": 5524,
+            "attackers": 851,
+            "early_digs_per_plant": 0.0,
+            "idle_games": 0
+          },
+          "last100": {
+            "games": 100,
+            "wins": 0,
+            "plantings": 650,
+            "attackers": 100,
+            "early_digs_per_plant": 0.0,
+            "idle_games": 0
+          }
+        },
+        "placement": {
+          "all": {
+            "games": 260,
+            "wins": 227,
+            "plantings": 260,
+            "attackers": 260,
+            "early_digs_per_plant": 0.0,
+            "idle_games": 0
+          },
+          "last100": {
+            "games": 100,
+            "wins": 82,
+            "plantings": 100,
+            "attackers": 100,
+            "early_digs_per_plant": 0.0,
+            "idle_games": 0
+          }
+        }
+      },
+      "exploration": {
+        "epsilon": 0.1,
+        "epsilon_target": 0.001,
+        "epsilon_target_games": 3000,
+        "objective": "balanced_heads_v1",
+        "tile_coef": 0.001,
+        "type_coef": 0.01
+      },
+      "critic_warmup_games": 1024,
+      "last_exploration_rate": 0.08164758054158416,
+      "engine": {
+        "commit": "8861824df6893a34c2cd4df7f9b68613376d7964",
+        "cuda_backend_source_hash": "98c7859a1804c63af8dd9f3e5cc7d40952933bab6b2133f1e5433d6e5ccbdc34",
+        "package_version": "1.3.0",
+        "rules_hash": "a7486688fa43a9b50193f82715fa519bd27cfebc7ed054bebe4f7990f9c268de",
+        "source_hash": "5c4b358043b8253e7876aa68a46bcf272f0264d80c7de86f9e67c7c8bc6993e2",
+        "version": "1.0.0"
+      },
+      "config_hash": "ecf648a90ad46340b1794430617eb63e9aa3042c578e69f93c0c0710b6297787",
+      "mean_calibration_mae": 0.1303532611540146,
+      "transitions_per_training_second": 16795.78732960604,
+      "warmup_updates": 59,
+      "actor_learning_updates": 3,
+      "actor_optimizer_steps": 384.0,
+      "critic_optimizer_steps": 7936.0
+    }
+  ],
+  "initial_256_game_trial": [
+    {
+      "variant": "candidate",
+      "seed": 101,
+      "source_checkpoint_sha256": "1bdd87bfb6d450f9d804c2e7c80ae533b919bffd94d2a4e6ddbcb9ee634c2eff",
+      "research_source_hash": "5db45f0738e791bc8fcb7cfbdc6dc7599107485ec2087c14aa7eac7c905d698f",
+      "training_seconds": 121.31496889999835,
+      "training_and_evaluation_seconds": 161.61474869999802,
+      "steps": 1441792,
+      "games": 732,
+      "endpoint": {
+        "saving": {
+          "cases": 20,
+          "wins": 0,
+          "attackers": 0,
+          "flowers": 0,
+          "digs": 0
+        },
+        "placement": {
+          "cases": 20,
+          "wins": 0,
+          "attackers": 0,
+          "flowers": 0,
+          "digs": 0
+        }
+      },
+      "calibration": {
+        "final": {
+          "wait": {
+            "cases": 20,
+            "prediction": -0.3424178659915924,
+            "return": -0.2736763509565397,
+            "mae": 0.06874151503505273,
+            "wins": 0
+          },
+          "flower": {
+            "cases": 20,
+            "prediction": -0.35519713163375854,
+            "return": -0.26316252813290747,
+            "mae": 0.09203460350085108,
+            "wins": 0
+          },
+          "shooter": {
+            "cases": 20,
+            "prediction": -0.24477653205394745,
+            "return": -0.2699569539333471,
+            "mae": 0.02749300255077676,
+            "wins": 0
+          }
+        },
+        "after_warmup": {
+          "wait": {
+            "cases": 20,
+            "prediction": -0.12422134727239609,
+            "return": -0.27299449638024736,
+            "mae": 0.1487731491078513,
+            "wins": 0
+          },
+          "flower": {
+            "cases": 20,
+            "prediction": -0.13715362548828125,
+            "return": -0.2710895200601149,
+            "mae": 0.13393589457183366,
+            "wins": 0
+          },
+          "shooter": {
+            "cases": 20,
+            "prediction": -0.17356231808662415,
+            "return": -0.27074709261921603,
+            "mae": 0.09718477453259186,
+            "wins": 0
+          }
+        }
+      },
+      "training": {
+        "saving": {
+          "all": {
+            "games": 536,
+            "wins": 0,
+            "plantings": 3241,
+            "attackers": 537,
+            "early_digs_per_plant": 0.017278617710583154,
+            "idle_games": 0
+          },
+          "last100": {
+            "games": 100,
+            "wins": 0,
+            "plantings": 652,
+            "attackers": 100,
+            "early_digs_per_plant": 0.0,
+            "idle_games": 0
+          }
+        },
+        "placement": {
+          "all": {
+            "games": 196,
+            "wins": 169,
+            "plantings": 196,
+            "attackers": 196,
+            "early_digs_per_plant": 0.01020408163265306,
+            "idle_games": 0
+          },
+          "last100": {
+            "games": 100,
+            "wins": 83,
+            "plantings": 100,
+            "attackers": 100,
+            "early_digs_per_plant": 0.02,
+            "idle_games": 0
+          }
+        }
+      },
+      "exploration": {
+        "epsilon": 0.1,
+        "epsilon_target": 0.001,
+        "epsilon_target_games": 3000,
+        "objective": "balanced_heads_v1",
+        "tile_coef": 0.001,
+        "type_coef": 0.01
+      },
+      "critic_warmup_games": 256,
+      "last_exploration_rate": 0.05076207408491456,
+      "engine": {
+        "commit": "8861824df6893a34c2cd4df7f9b68613376d7964",
+        "cuda_backend_source_hash": "98c7859a1804c63af8dd9f3e5cc7d40952933bab6b2133f1e5433d6e5ccbdc34",
+        "package_version": "1.3.0",
+        "rules_hash": "a7486688fa43a9b50193f82715fa519bd27cfebc7ed054bebe4f7990f9c268de",
+        "source_hash": "5c4b358043b8253e7876aa68a46bcf272f0264d80c7de86f9e67c7c8bc6993e2",
+        "version": "1.0.0"
+      },
+      "config_hash": "5f9f82e56287f543cfff71413e122f774f40a319d95a5ccf704e970e7c534804",
+      "mean_calibration_mae": 0.06275637369556018,
+      "transitions_per_training_second": 11884.699910268202,
+      "warmup_updates": 16,
+      "actor_learning_updates": 28,
+      "actor_optimizer_steps": 3341.0,
+      "critic_optimizer_steps": 5632.0
+    },
+    {
+      "variant": "candidate",
+      "seed": 102,
+      "source_checkpoint_sha256": "1bdd87bfb6d450f9d804c2e7c80ae533b919bffd94d2a4e6ddbcb9ee634c2eff",
+      "research_source_hash": "415144059e1327c04ac04134d65ec2fc1328bd7ecded5e8523e30d899cf7496d",
+      "training_seconds": 120.87176709999767,
+      "training_and_evaluation_seconds": 160.90457959999912,
+      "steps": 1441792,
+      "games": 753,
+      "endpoint": {
+        "saving": {
+          "cases": 20,
+          "wins": 0,
+          "attackers": 1,
+          "flowers": 2.55,
+          "digs": 0.55
+        },
+        "placement": {
+          "cases": 20,
+          "wins": 0,
+          "attackers": 1,
+          "flowers": 0,
+          "digs": 1
+        }
+      },
+      "calibration": {
+        "final": {
+          "wait": {
+            "cases": 20,
+            "prediction": -0.272445410490036,
+            "return": -0.36179085251781407,
+            "mae": 0.08934544202777808,
+            "wins": 0
+          },
+          "flower": {
+            "cases": 20,
+            "prediction": -0.29092472791671753,
+            "return": -0.36151661805833546,
+            "mae": 0.07059189014161792,
+            "wins": 0
+          },
+          "shooter": {
+            "cases": 20,
+            "prediction": -0.5917996168136597,
+            "return": -0.36102182063606897,
+            "mae": 0.23077779617759073,
+            "wins": 0
+          }
+        },
+        "after_warmup": {
+          "wait": {
+            "cases": 20,
+            "prediction": -0.11904611438512802,
+            "return": -0.27299449638024736,
+            "mae": 0.15394838199511937,
+            "wins": 0
+          },
+          "flower": {
+            "cases": 20,
+            "prediction": -0.07383407652378082,
+            "return": -0.2710895200601149,
+            "mae": 0.1972554435363341,
+            "wins": 0
+          },
+          "shooter": {
+            "cases": 20,
+            "prediction": -0.45029425621032715,
+            "return": -0.27074709261921603,
+            "mae": 0.17954716359111114,
+            "wins": 0
+          }
+        }
+      },
+      "training": {
+        "saving": {
+          "all": {
+            "games": 568,
+            "wins": 0,
+            "plantings": 2433,
+            "attackers": 568,
+            "early_digs_per_plant": 0.08713522400328812,
+            "idle_games": 0
+          },
+          "last100": {
+            "games": 100,
+            "wins": 0,
+            "plantings": 207,
+            "attackers": 100,
+            "early_digs_per_plant": 0.7004830917874396,
+            "idle_games": 0
+          }
+        },
+        "placement": {
+          "all": {
+            "games": 185,
+            "wins": 97,
+            "plantings": 185,
+            "attackers": 185,
+            "early_digs_per_plant": 0.3891891891891892,
+            "idle_games": 0
+          },
+          "last100": {
+            "games": 100,
+            "wins": 19,
+            "plantings": 100,
+            "attackers": 100,
+            "early_digs_per_plant": 0.72,
+            "idle_games": 0
+          }
+        }
+      },
+      "exploration": {
+        "epsilon": 0.1,
+        "epsilon_target": 0.001,
+        "epsilon_target_games": 3000,
+        "objective": "balanced_heads_v1",
+        "tile_coef": 0.001,
+        "type_coef": 0.01
+      },
+      "critic_warmup_games": 256,
+      "last_exploration_rate": 0.05076207408491456,
+      "engine": {
+        "commit": "8861824df6893a34c2cd4df7f9b68613376d7964",
+        "cuda_backend_source_hash": "98c7859a1804c63af8dd9f3e5cc7d40952933bab6b2133f1e5433d6e5ccbdc34",
+        "package_version": "1.3.0",
+        "rules_hash": "a7486688fa43a9b50193f82715fa519bd27cfebc7ed054bebe4f7990f9c268de",
+        "source_hash": "5c4b358043b8253e7876aa68a46bcf272f0264d80c7de86f9e67c7c8bc6993e2",
+        "version": "1.0.0"
+      },
+      "config_hash": "5f9f82e56287f543cfff71413e122f774f40a319d95a5ccf704e970e7c534804",
+      "mean_calibration_mae": 0.13023837611566225,
+      "transitions_per_training_second": 11928.277666423128,
+      "warmup_updates": 16,
+      "actor_learning_updates": 28,
+      "actor_optimizer_steps": 3359.0,
+      "critic_optimizer_steps": 5632.0
+    }
+  ],
+  "noise_sensitivity": [
+    {
+      "epsilon": 0,
+      "wins": 10,
+      "cases": 10
+    },
+    {
+      "epsilon": 0.001,
+      "wins": 5,
+      "cases": 10
+    },
+    {
+      "epsilon": 0.005,
+      "wins": 5,
+      "cases": 10
+    },
+    {
+      "epsilon": 0.05,
+      "wins": 0,
+      "cases": 10
+    }
+  ],
+  "noise_control_limit": "Uniform legal tiles around a successful controller differ from the learned tile head; a sensitivity check, not training evidence.",
+  "verification": {
+    "research_tests": {
+      "passed": 498,
+      "seconds": 385.12
+    },
+    "pinned_game_tests": {
+      "passed": 214,
+      "seconds": 49.2
+    },
+    "marked_integration_wall_seconds": 276.02,
+    "lint_format_dependencies_packaging_doctor": "passed",
+    "readme_powershell_blocks": 9,
+    "offline_reports": "passed; curves inspected",
+    "shared_demo_checkpoint_sha256": "e40f97cf40a1ab99ff3387e9c7a550f5dfce85ae8e5816ee8eb83b8e7b55bb4e",
+    "video": "3 H.264 files decoded at 1280x820, 20 fps; two-second truncation shown",
+    "final_source_hash": "6d2a6b4c65de9dc8db87df5c969d12f66c83078c1ecaf605e1fa70a5f3309ff9"
+  }
+}
