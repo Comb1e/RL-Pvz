@@ -58,6 +58,7 @@ def smoke_cfg(per_tick_cfg):
         rollout_size=64,
         batch_size=32,
         n_epochs=1,
+        critic_warmup_games=0,  # Warm-up has dedicated stage/resume controls.
         target_kl=0,
         n_envs=1,
         hidden_sizes=[32, 32],

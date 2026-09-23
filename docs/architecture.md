@@ -86,7 +86,18 @@ softmax. There is no separate lane MLP, recurrence, attention or alternative pol
 Action indices remain wait=0, eight plants ×45 tiles, then 45 digs. Group masks
 and conditional tile masks derive from those 406 legal flags. Sampling first
 chooses a type, then a legal tile. Deterministic inference takes the most likely
-type followed by its best tile. PPO uses the true joint log probability for ratios.
+type followed by its best tile. Training mixes a configurable exploration rate
+(initially 10%) uniformly over available wait/plant types, retaining conditional tile
+probabilities. Dig remains in the learned component without a random floor. PPO
+uses the resulting mixed joint log probability for ratios and entropy. Greedy
+evaluation uses the learned type logits without injected exploration. The rate is
+saved in policy construction settings so direct checkpoint reload preserves it.
+It is held during critic adaptation, then decays exponentially to 0.1% at stage
+game 3,000 and continues toward zero. Stage-start residency, including rehearsals,
+drives the schedule; a new stage restarts it and resume restores its progress.
+The rate changes only before a new rollout, never between collection and its
+optimization. The target milestone and initial rate are configurable; zero target
+games selects a constant rate. No validation score controls the schedule.
 Balanced exploration regularizes type entropy and the unweighted mean normalized
 tile entropy of available groups. The trainable initial dig bias is −6. Digging
 stays legal; lessons configure plant availability, sky income and mowers.
@@ -136,6 +147,27 @@ before each actor optimizer step; a value above 1.5×`target_kl` stops actor upd
 for that rollout. The independent critic completes its configured epochs. Zero
 disables the check. Each parameter group owns an Adam state and clips its own
 gradients; no learned tensors are shared. Critic loss cannot alter action outputs.
+
+At each stage's start, the actor stays fixed for `critic_warmup_games` completed
+games (default 1,024). Collection still samples the exploratory policy and the critic
+continues its ordinary four epochs. Once stage residency reaches the threshold,
+actor updates resume on the next collected rollout. Both optimizer identities are
+preserved; no data is replayed. Saved curriculum residency supplies the warm-up
+state, so resume continues it and old-stage episodes cannot end it prematurely.
+Non-curriculum diagnostics have no stage warm-up; their exploration decays from
+the first completed game using total completed games. Missing archived settings mean
+zero warm-up and zero added exploration. Training target residuals are logged
+separately for wait/plant/dig decisions; they do not certify value calibration.
+
+```mermaid
+stateDiagram-v2
+    [*] --> CriticAdaptation: enter stage
+    CriticAdaptation --> CriticAdaptation: collect and fit critic, actor fixed
+    CriticAdaptation --> JointLearning: residency threshold, next rollout
+    JointLearning --> CriticAdaptation: next curriculum stage
+    JointLearning --> Finished: mastery or budget
+    CriticAdaptation --> Finished: budget
+```
 
 Collection invokes only the actor. Both networks remain frozen until the complete
 rollout is stored. The critic then evaluates observations in batches (default 1,024),

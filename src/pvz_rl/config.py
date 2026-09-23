@@ -181,6 +181,28 @@ def validate_config(cfg: dict) -> None:
         type(critic_lr) not in (int, float) or not math.isfinite(critic_lr) or critic_lr <= 0
     ):
         raise ValueError("critic_learning_rate must be finite and positive")
+    warmup = cfg["training"].get("critic_warmup_games", 0)
+    if type(warmup) is not int or warmup < 0:
+        raise ValueError("critic_warmup_games must be a nonnegative integer")
+    epsilon = cfg["training"]["exploration"].get("epsilon", 0.0)
+    if type(epsilon) not in (int, float) or not math.isfinite(epsilon) or not 0 <= epsilon < 1:
+        raise ValueError("exploration.epsilon must be finite and in [0, 1)")
+    target_games = cfg["training"]["exploration"].get("epsilon_target_games", 0)
+    if type(target_games) is not int or target_games < 0 or 0 < target_games <= warmup:
+        raise ValueError(
+            "exploration.epsilon_target_games must be zero or an integer greater than critic_warmup_games"
+        )
+    target = cfg["training"]["exploration"].get("epsilon_target")
+    if target_games and (
+        type(target) not in (int, float)
+        or not math.isfinite(target)
+        or not 0 < target < 1
+        or epsilon > 0
+        and target > epsilon
+    ):
+        raise ValueError(
+            "exploration.epsilon_target must be finite, positive and no greater than epsilon"
+        )
     value_batch = cfg["training"].get("value_batch_size", 1024)
     if type(value_batch) is not int or value_batch < 1:
         raise ValueError("value_batch_size must be a positive integer")

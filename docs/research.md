@@ -2,7 +2,7 @@
 
 ## Current method and hypothesis
 
-Research 0.11.0 exposes one configurable CUDA MaskablePPO method, one compact
+Research 0.11.1 exposes one configurable CUDA MaskablePPO method, one compact
 observation and one spatial grouped policy. The question is whether this shared
 policy can learn plant selection, timing and placement across easy, standard and
 hard within a practical laptop budget. Smaller input/network size, ordinary PPO
@@ -23,6 +23,40 @@ clipping and actor-only KL stopping accompany the split; the critic continues
 its epochs. Thus the comparison tests this optimization package, not encoder
 separation in perfect isolation. Critic predictions are deferred to larger frozen
 batches before GAE; no stale-policy experience is introduced.
+
+The subsequent 0.11.0 saving run completed 7,039 saving games without a win and
+eventually stopped planting. Its placement source predicted +0.559 initial value
+but averaged -0.281 in 100 frozen sampled saving games. The final critic predicted
+roughly -0.54 after a sunflower purchase where its own continuation averaged
+-0.296. It was accurate on the frequently visited waiting trajectory (-0.320
+predicted versus -0.312 measured). This supports a calibration/coverage problem;
+it does not prove the critic alone caused the collapse.
+
+The 0.11.1 correction adds two configurable controls. An initial 10% mixture explores legal
+wait/plant types while ordinary PPO trains on the actual behavior probabilities.
+Digging remains learned and legal; a uniform random dig floor would repeatedly
+destroy assets during long waits. At each stage, the actor is frozen for the first
+1,024 completed games while the critic fits the new task distribution. Exploration
+then decreases exponentially to 0.1% at stage game 3,000, continuing toward zero
+afterward. Game 2,012 has 1%; game 4,976 has 0.001%. The existing stage-residency
+counter handles automatic transitions and resume; each new stage restarts the
+schedule. A rollout and all its PPO epochs share one rate. Rewards, network,
+rollout size and ordinary optimization epochs are unchanged. Both changes are
+local hypotheses, not published PVZ improvements. Evaluation stays greedy, and
+warm-up consumes the same resource allowance. Missing archived fields retain the
+previous behavior. Learning evidence and limitations are in [validation](validation.md).
+The requested 10% start is aggressive: an independent successful control won 10/10 without
+injected actions, 5/10 at 0.1%, 5/10 at 0.5% and 0/10 at 5%. This sensitivity check used uniform
+legal tiles, unlike the learned tile head, so it does not measure the candidate's
+win rate or establish an optimal coefficient. High per-tick noise can prevent
+saving enough sun. Exponential decay removes persistent injected noise but does
+not detect an optimal policy; competence remains an independent measurement.
+
+Short development checks led to increasing critic adaptation from 256 to 1,024
+games. The final candidates retained placement and avoided idle saving games,
+but still won no saving cases and produced mixed critic errors. Only three
+actor-updating rollouts fit each short final check. These results do not establish
+a stronger playing policy; the method remains experimental.
 
 ## Research choices
 

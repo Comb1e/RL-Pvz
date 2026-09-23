@@ -26,6 +26,7 @@ def stage_cfg():
         rollout_size=64,
         batch_size=32,
         n_epochs=1,
+        critic_warmup_games=2,
         total_games=6,
         max_minutes=2,
     )

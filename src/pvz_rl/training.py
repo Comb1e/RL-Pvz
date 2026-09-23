@@ -33,7 +33,7 @@ from .curriculum import (
 )
 from .deadline import BudgetExpired, RunBudget
 from .evaluation import evaluate, summarize
-from .exploration import configure_exploration
+from .exploration import configure_exploration, exploration_rate, set_exploration_rate
 from .metrics import episode_task, mean_agent_actions, task_statistics
 from .progress import Phase, ProgressReporter, duration
 from .provenance import append_jsonl, file_hash, metadata, verify_engine, write_json
@@ -70,6 +70,7 @@ def build_model(cfg, condition, env, seed, log_dir=None):
         "features_extractor_class": SpatialFeatures,
         "features_extractor_kwargs": {"layout_cfg": cfg},
         "critic_learning_rate": t.get("critic_learning_rate"),
+        "exploration_epsilon": t["exploration"].get("epsilon", 0.0),
     }
     model = CudaMaskablePPO(
         SpatialGroupedPolicy,
@@ -94,6 +95,7 @@ def build_model(cfg, condition, env, seed, log_dir=None):
     )
     configure_tensor_buffer(model)
     model.value_batch_size = t.get("value_batch_size", 1024)
+    model.critic_warmup_active = False
     configure_exploration(model, cfg)
     if "initial_dig_logit" in cfg.get("policy", {}):
         model.policy.initialize_dig_logit(cfg["policy"]["initial_dig_logit"])
@@ -227,6 +229,8 @@ class ResearchCallback(BaseCallback):
             "next_episode_difficulty_weights": None if self.curriculum else weights,
             "curriculum": self.curriculum.to_dict() if self.curriculum else None,
             "curriculum_stage": self.curriculum.name if self.curriculum else "fixed",
+            "critic_warmup": getattr(self.model, "critic_warmup_active", False),
+            "exploration_rate": getattr(self.model, "exploration_rate", 0.0),
             "selected_stage": selected_stage(self.cfg),
             "stage_mastered": bool(self.curriculum and self.curriculum.mastered),
             "curriculum_incomplete": bool(
@@ -315,6 +319,9 @@ class ResearchCallback(BaseCallback):
             else ""
         )
         context = f"; stage {row['curriculum_stage']}"
+        if row["critic_warmup"]:
+            context += "; critic warm-up (actor frozen)"
+        context += f"; exploration {row['exploration_rate']:.3%}"
         if row["rolling_agent_actions"] is not None:
             context += f"; plant+dig/game {row['rolling_agent_actions']:.2f}"
         if self.recent:
@@ -360,6 +367,10 @@ class ResearchCallback(BaseCallback):
             "critic_grad_norm",
             "critic_learning_rate",
             "critic_epochs_completed",
+            "critic_warmup",
+            "value_target_error_wait",
+            "value_target_error_plant",
+            "value_target_error_dig",
             "post_update_approx_kl",
             "post_update_type_kl",
             "dig_probability_when_legal",
@@ -442,9 +453,10 @@ class ResearchCallback(BaseCallback):
             if "episode_metrics" in info:
                 self.model.training_games = getattr(self.model, "training_games", 0) + 1
                 completed += 1
-                if (
-                    self.curriculum
-                    and self.cfg["curriculum"].get("residency") == "episode_start_stage"
+                if self.curriculum and (
+                    self.cfg["curriculum"].get("residency") == "episode_start_stage"
+                    or self.cfg["training"].get("critic_warmup_games", 0) > 0
+                    or self.cfg["training"]["exploration"].get("epsilon_target_games", 0) > 0
                 ):
                     self.curriculum.completed_episode(
                         info["episode_metrics"].get("episode_start_stage")
@@ -505,6 +517,30 @@ class ResearchCallback(BaseCallback):
         self.finish_stage_validation()
         self.check_stage_complete()
         self.check_deadline()
+        warming = bool(
+            self.curriculum
+            and self.curriculum.critic_warming_up(
+                self.cfg["training"].get("critic_warmup_games", 0)
+            )
+        )
+        if warming != getattr(self.model, "critic_warmup_active", False):
+            self.progress.emit(
+                "Critic warm-up: actor frozen; collecting exploration experience"
+                if warming
+                else "Critic warm-up complete; actor and critic learning",
+                force=True,
+            )
+        self.model.critic_warmup_active = warming
+        # Change only before collecting a new rollout; all its PPO ratios use
+        # the same mixture. Stage residency and the last used rate are saved.
+        stage_games = (
+            self.curriculum.completed_stage_games
+            if self.curriculum
+            else getattr(self.model, "training_games", 0)
+        )
+        set_exploration_rate(
+            self.model, exploration_rate(self.cfg, stage_games, staged=self.curriculum is not None)
+        )
         self.progress.phase(Phase.COLLECTING)
         self.timings.begin_collection()
 
@@ -662,6 +698,7 @@ class ResearchCallback(BaseCallback):
 
     def _on_rollout_end(self):
         self.timings.end_collection()
+        self.sync_curriculum()
         self.progress.phase(Phase.UPDATING)
         write_json(self.output / "status.json", self.snapshot())
         self.log_progress()
@@ -928,6 +965,11 @@ def train(
         force=True,
     )
     progress.emit(f"Reward settings: {cfg['reward']}", force=True)
+    progress.emit(
+        f"Exploration {cfg['training']['exploration']}; legal wait/plant types, learned digging; "
+        f"critic warm-up {cfg['training'].get('critic_warmup_games', 0)} completed games per stage",
+        force=True,
+    )
     if validation_after_stage(cfg, family):
         probe_key = "probe_interval_games" if game_budget else "probe_interval"
         progress.emit(

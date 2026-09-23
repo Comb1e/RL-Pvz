@@ -86,7 +86,7 @@ class TensorPPO:
         masks = buffer.action_masks.flatten(0, 1)
         actions = buffer.actions.flatten().long()
         old_logs = buffer.log_probs.flatten()
-        totals = torch.zeros(4, device=self.device)
+        totals = torch.zeros(8, device=self.device)
         size = getattr(self, "value_batch_size", 1024)
         for i in range(0, len(observations), size):
             ix = slice(i, i + size)
@@ -97,15 +97,29 @@ class TensorPPO:
                 previous * (previous.clamp_min(1e-30).log() - current.clamp_min(1e-30).log())
             ).sum(-1)
             legal_dig = masks[ix, 361:].any(-1)
+            type_entropy, tile_entropy = distribution.entropy_parts()
+            _, exploration = exploration_loss(self.policy, distribution.entropy(), log_ratio)
             totals += torch.stack(
                 (
                     (log_ratio.exp() - 1 - log_ratio).sum(),
                     kl.sum(),
                     (current[:, -1] * legal_dig).sum(),
                     legal_dig.sum(),
+                    type_entropy.sum(),
+                    tile_entropy.sum(),
+                    exploration["exploration_bonus"] * len(log_ratio),
+                    (masks[ix].sum(-1) > 1).sum(),
                 )
             )
-        approx, types, dig, count = totals.cpu().tolist()
+        approx, types, dig, count, type_entropy, tile_entropy, bonus, choice = totals.cpu().tolist()
+        if getattr(self, "critic_warmup_active", False):
+            n = len(observations)
+            self.policy._entropy_totals = totals[4:6].clone()
+            self.policy._entropy_count = n
+            self.logger.record("train/joint_entropy", (type_entropy + tile_entropy) / n)
+            self.logger.record("train/entropy_loss", -(type_entropy + tile_entropy) / n)
+            self.logger.record("train/exploration_bonus", bonus / n)
+            self.logger.record("train/choice_fraction", choice / n)
         return {
             "post_update_approx_kl": approx / len(observations),
             "post_update_type_kl": types / len(observations),
@@ -126,7 +140,9 @@ class TensorPPO:
         )
         old_types = self._type_probabilities()
         actor_metrics, value_losses, actor_norms, critic_norms = [], [], [], []
-        actor_active, actor_steps, critic_steps = True, 0, 0
+        warming = getattr(self, "critic_warmup_active", False)
+        actor_active, actor_steps, critic_steps = not warming, 0, 0
+        kl_stopped = False
         actor_epochs = 0
         for epoch in range(self.n_epochs):
             for data in self.rollout_buffer.get(self.batch_size):
@@ -165,6 +181,7 @@ class TensorPPO:
                         )
                     if self.target_kl is not None and float(kl) > 1.5 * self.target_kl:
                         actor_active = False
+                        kl_stopped = True
                     else:
                         self.policy.optimizer.zero_grad(set_to_none=True)
                         actor_loss.backward()
@@ -199,7 +216,11 @@ class TensorPPO:
         variance = returns.flatten().var(unbiased=False)
         explained = 1 - (returns - old_values).flatten().var(unbiased=False) / variance
         explained = torch.where(variance == 0, torch.full_like(explained, float("nan")), explained)
-        actor = torch.stack(actor_metrics).mean(0)
+        actor = (
+            torch.stack(actor_metrics).mean(0)
+            if actor_metrics
+            else torch.zeros(8, device=self.device)
+        )
         value_mean = torch.stack(value_losses).mean()
 
         def mean_norm(norms):
@@ -244,11 +265,33 @@ class TensorPPO:
             critic_optimizer_steps=critic_steps,
             epochs_completed=actor_epochs,
             critic_epochs_completed=self.n_epochs,
-            kl_stopped=float(not actor_active),
+            kl_stopped=float(kl_stopped),
+            critic_warmup=float(warming),
             critic_learning_rate=critic_lr,
-            **self._post_update_metrics(old_types),
+        )
+        # Target residuals by decision type expose rare investment states hidden
+        # by the aggregate fit. These are bootstrapped targets, not Monte Carlo truth.
+        actions = self.rollout_buffer.actions.flatten()
+        error = (returns - old_values).abs().flatten()
+        errors = (
+            torch.stack(
+                [
+                    error[mask].mean()
+                    for mask in (actions == 0, (actions > 0) & (actions < 361), actions >= 361)
+                ]
+            )
+            .cpu()
+            .tolist()
+        )
+        metrics.update(
+            zip(
+                ("value_target_error_wait", "value_target_error_plant", "value_target_error_dig"),
+                errors,
+            )
         )
         for key, value in metrics.items():
+            self.logger.record(f"train/{key}", value)
+        for key, value in self._post_update_metrics(old_types).items():
             self.logger.record(f"train/{key}", value)
         self.logger.record("train/n_updates", self._n_updates, exclude="tensorboard")
         self.logger.record("train/clip_range", clip_range)

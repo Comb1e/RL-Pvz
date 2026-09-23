@@ -64,11 +64,13 @@ rollout_size = 32768
 rollout_steps_per_env = 128 # Learning transitions per environment per update, not a game limit.
 max_minutes = 120
 finalization_minutes = 15
-exploration = {objective = "balanced_heads_v1", type_coef = 0.01, tile_coef = 0.001}
+# Hold epsilon during critic warm-up, then decay exponentially; the target is not a floor.
+exploration = {objective = "balanced_heads_v1", type_coef = 0.01, tile_coef = 0.001, epsilon = 0.1, epsilon_target = 0.001, epsilon_target_games = 3000}
 batch_size = 1024
 n_epochs = 4
 learning_rate = 0.0003 # Actor rate; critic uses this unless critic_learning_rate is set.
 value_batch_size = 1024 # Frozen critic inference after collection.
+critic_warmup_games = 1024 # Freeze actor at each new stage; zero disables warm-up.
 gae_lambda = 0.999
 clip_range = 0.2
 vf_coef = 0.5

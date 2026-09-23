@@ -10,6 +10,10 @@ class GroupedDistribution(MaskableDistribution):
     groups, tiles = 10, 45
     action_dim, logit_dim = 406, 415
 
+    def __init__(self, epsilon=0.0):
+        super().__init__()
+        self.epsilon = epsilon
+
     def proba_distribution_net(self, latent_dim):
         return nn.Linear(latent_dim, self.logit_dim)
 
@@ -34,7 +38,24 @@ class GroupedDistribution(MaskableDistribution):
         group_mask = torch.cat((mask[:, :1], available), dim=1)
         if not group_mask.any(-1).all():
             raise ValueError("Grouped policy requires at least one legal action per observation")
-        self.types = MaskableCategorical(logits=self.logits[:, : self.groups], masks=group_mask)
+        self.learned_types = MaskableCategorical(
+            logits=self.logits[:, : self.groups], masks=group_mask
+        )
+        self.types = self.learned_types
+        if self.epsilon:
+            # Explore wait/plant choices. Dig remains a learned legal action;
+            # an unconditional random dig floor would repeatedly destroy assets.
+            exploratory = group_mask.clone()
+            exploratory[:, -1] = False
+            count = exploratory.sum(-1, keepdim=True)
+            prior = exploratory.float() / count.clamp_min(1)
+            epsilon = self.epsilon * (count > 0)
+            probs = (1 - epsilon) * self.learned_types.probs + epsilon * prior
+            # A masked categorical built from log probabilities retains exact
+            # zero mass for illegal groups and finite gradients for extreme logits.
+            self.types = MaskableCategorical(
+                logits=probs.clamp_min(torch.finfo(probs.dtype).tiny).log(), masks=group_mask
+            )
         # Unavailable groups have zero type mass. A dummy tile makes their
         # conditional distribution well-defined without contributing joint mass.
         safe_mask = tile_mask.clone()
@@ -65,7 +86,8 @@ class GroupedDistribution(MaskableDistribution):
         return types + tiles
 
     def _actions(self, deterministic):
-        groups = self.types.probs.argmax(-1) if deterministic else self.types.sample()
+        # Greedy evaluation tests the learned policy without injected exploration.
+        groups = self.learned_types.probs.argmax(-1) if deterministic else self.types.sample()
         locations = self.locations.probs.argmax(-1) if deterministic else self.locations.sample()
         tiles = locations.gather(1, (groups - 1).clamp_min(0)[:, None]).flatten()
         return torch.where(groups == 0, 0, 1 + (groups - 1) * self.tiles + tiles)

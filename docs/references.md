@@ -3,6 +3,19 @@
 Methods and adopted/rejected ideas are in [research design](research.md). This
 catalog retains source revisions and the extent of the evidence inspected.
 
+## Exploration and critic adaptation (2026-09-23)
+
+- [Spinning Up PyTorch PPO](https://github.com/openai/spinningup/blob/master/spinup/algos/pytorch/ppo/ppo.py): inspected separate Adam optimizers, squared value loss, independent value iterations and actor-only KL stopping. This supports a simple independent critic schedule; it does **not** prescribe a stage warm-up or its duration.
+- [CleanRL PPO](https://github.com/vwxyzjn/cleanrl/blob/master/cleanrl/ppo.py): inspected categorical sampling/log probabilities and PPO ratio/value updates. The exploratory mixture must be the distribution used for both collection and loss calculations.
+- [PPO](https://arxiv.org/abs/1707.06347) and [Curriculum Learning for RL Domains](https://arxiv.org/abs/2003.04960): abstracts inspected to contextualize on-policy updates and task transfer. No paper result establishes PVZ improvement or the selected exploration rate.
+- [PyTorch DQN tutorial](https://pytorch.org/tutorials/intermediate/reinforcement_q_learning.html), exponential epsilon schedule and action selection: a smooth rate approaching its endpoint is useful here. Only the schedule principle is adopted; PPO still trains on the actual mixed distribution, with no replay buffer or DQN loss. Source fetched 2026-09-23 has SHA-256 `d0513808527578cf77596c79a3b0df234e0994fbff9b583726d1831c76e4ccb8`; no unverified Git revision is claimed.
+- Local source-checkpoint evaluation and legal one-action counterfactuals identified transferred-critic optimism, pessimism on planting states and action-type collapse. These motivate a wait/plant mixture and brief critic adaptation without extra reward terms, replay buffers or networks. The requested 10% initial rate, 0.1% milestone at stage game 3,000 and stage restarts are project-specific experimental choices, not established by these sources.
+
+Fetched project source on this date. GitHub commit-API lookup was rate-limited and Git ref retrieval failed; no unverified revision is claimed. Inspected source SHA-256 values:
+Spinning Up `4522d149d54d7d759c613775ab787eb7fa754fcbfd103f28d7c4003ee815c264`;
+CleanRL `d8dfbb7ac0b21e747b77d6e6673e566db4d6cdacc83bcebcd19cf87ad0e459ae`.
+Local copies are verification artifacts under `artifacts/v0111/sources/`.
+
 ## Independent policy/value learning (2026-09-22)
 
 | Source inspected | Evidence used | Application and limits |
