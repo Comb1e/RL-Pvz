@@ -1,0 +1,693 @@
+{
+  "protocol": {
+    "baseline_commit": "c2e01839c79cae096f92714507e38a8324601ae3",
+    "engine_commit": "8861824df6893a34c2cd4df7f9b68613376d7964",
+    "method": "fresh saving-stage starts; no demonstrations",
+    "seeds": [
+      101,
+      102
+    ],
+    "order": [
+      "baseline101",
+      "candidate101",
+      "candidate102",
+      "baseline102"
+    ],
+    "training_allowance_seconds": 300,
+    "finalization_reserve_seconds": 0,
+    "envs": 256,
+    "transitions_per_env": 128,
+    "minibatch": 1024,
+    "epochs": 4,
+    "endpoint_cases_per_task": 20,
+    "endpoint_tasks": [
+      "saving",
+      "placement"
+    ],
+    "endpoint_seeds": [
+      100050,
+      100069
+    ],
+    "endpoint_deadline_seconds_per_run": 90,
+    "scope": "development only; no final-test or formal training",
+    "notes": "Measured startup and completed-update stopping are included in the five-minute allowance. Other GPU tests are idle during comparisons."
+  },
+  "runs": [
+    {
+      "method": "baseline",
+      "seed": 101,
+      "learning_wall_seconds": 296.9725122000018,
+      "evaluation_wall_seconds": 15.208716100001766,
+      "steps": 3309568,
+      "games": 1817,
+      "training": {
+        "placement": {
+          "agent_actions_per_game": 1.326241134751773,
+          "attacker_purchases_per_game": 1.0,
+          "completed_games": 423,
+          "early_digs_per_game": 0.05200945626477541,
+          "early_digs_per_planting": 0.05200945626477541,
+          "plant_usage": {
+            "peashooter": 423
+          },
+          "simulated_seconds": 50.50508274231679,
+          "win_rate": 0.002364066193853428
+        },
+        "saving": {
+          "agent_actions_per_game": 6.439024390243903,
+          "attacker_purchases_per_game": 1.0,
+          "completed_games": 1394,
+          "early_digs_per_game": 0.2776183644189383,
+          "early_digs_per_planting": 0.05452240067624683,
+          "plant_usage": {
+            "peashooter": 1394,
+            "sunflower": 5704
+          },
+          "simulated_seconds": 93.48188665710187,
+          "win_rate": 0.0
+        }
+      },
+      "validation": {
+        "placement": {
+          "agent_actions_per_game": 1.0,
+          "attacker_purchases_per_game": 1.0,
+          "completed_games": 20,
+          "early_digs_per_game": 0.0,
+          "early_digs_per_planting": 0.0,
+          "plant_usage": {
+            "peashooter": 20
+          },
+          "simulated_seconds": 48.3875,
+          "win_rate": 0.25
+        },
+        "saving": {
+          "agent_actions_per_game": 1.0,
+          "attacker_purchases_per_game": 1.0,
+          "completed_games": 20,
+          "early_digs_per_game": 0.0,
+          "early_digs_per_planting": 0.0,
+          "plant_usage": {
+            "peashooter": 20
+          },
+          "simulated_seconds": 92.95,
+          "win_rate": 0.0
+        }
+      },
+      "research_source_hash": "5732f8348f0affac91d18d5d5ab99cfb4bc71ddfbe4940afb091150832fbb24e",
+      "engine": {
+        "commit": "8861824df6893a34c2cd4df7f9b68613376d7964",
+        "cuda_backend_source_hash": "98c7859a1804c63af8dd9f3e5cc7d40952933bab6b2133f1e5433d6e5ccbdc34",
+        "package_version": "1.3.0",
+        "rules_hash": "a7486688fa43a9b50193f82715fa519bd27cfebc7ed054bebe4f7990f9c268de",
+        "source_hash": "5c4b358043b8253e7876aa68a46bcf272f0264d80c7de86f9e67c7c8bc6993e2",
+        "version": "1.0.0"
+      },
+      "transitions_per_wall_second": 11144.35802654728,
+      "first_200": {
+        "saving": {
+          "completed_games": 144,
+          "agent_actions_per_game": 5.111111111111111,
+          "win_rate": 0.0,
+          "simulated_seconds": 92.95,
+          "early_digs_per_game": 0.25,
+          "early_digs_per_planting": 0.06174957118353345,
+          "attacker_purchases_per_game": 1.0,
+          "plant_usage": {
+            "peashooter": 144,
+            "sunflower": 439
+          }
+        },
+        "placement": {
+          "completed_games": 56,
+          "agent_actions_per_game": 1.625,
+          "win_rate": 0.017857142857142856,
+          "simulated_seconds": 50.02589285714286,
+          "early_digs_per_game": 0.25,
+          "early_digs_per_planting": 0.25,
+          "attacker_purchases_per_game": 1.0,
+          "plant_usage": {
+            "peashooter": 56
+          }
+        }
+      },
+      "last_100_by_task": {
+        "saving": {
+          "completed_games": 100,
+          "agent_actions_per_game": 4.45,
+          "win_rate": 0.0,
+          "simulated_seconds": 92.95,
+          "early_digs_per_game": 0.77,
+          "early_digs_per_planting": 0.3347826086956522,
+          "attacker_purchases_per_game": 1.0,
+          "plant_usage": {
+            "peashooter": 100,
+            "sunflower": 130
+          }
+        },
+        "placement": {
+          "completed_games": 100,
+          "agent_actions_per_game": 1.37,
+          "win_rate": 0.0,
+          "simulated_seconds": 50.512,
+          "early_digs_per_game": 0.0,
+          "early_digs_per_planting": 0.0,
+          "attacker_purchases_per_game": 1.0,
+          "plant_usage": {
+            "peashooter": 100
+          }
+        }
+      },
+      "endpoint_winning_seeds": {
+        "saving": [],
+        "placement": [
+          100050,
+          100051,
+          100054,
+          100068,
+          100069
+        ]
+      },
+      "config_hash": "dca688369b73ed50567c2ade3f489c4d9b5e81043e707486712ba79e5abaca19"
+    },
+    {
+      "method": "candidate",
+      "seed": 101,
+      "learning_wall_seconds": 298.92644129999826,
+      "evaluation_wall_seconds": 15.185875499999383,
+      "steps": 3309568,
+      "games": 1817,
+      "training": {
+        "placement": {
+          "agent_actions_per_game": 1.3806146572104019,
+          "attacker_purchases_per_game": 1.0,
+          "completed_games": 423,
+          "early_digs_per_game": 0.22458628841607564,
+          "early_digs_per_planting": 0.22458628841607564,
+          "plant_usage": {
+            "peashooter": 423
+          },
+          "simulated_seconds": 50.32612293144208,
+          "win_rate": 0.009456264775413711
+        },
+        "saving": {
+          "agent_actions_per_game": 6.190100430416069,
+          "attacker_purchases_per_game": 1.0,
+          "completed_games": 1394,
+          "early_digs_per_game": 0.35437589670014347,
+          "early_digs_per_planting": 0.06880222841225626,
+          "plant_usage": {
+            "peashooter": 1394,
+            "sunflower": 5786
+          },
+          "simulated_seconds": 93.78956241032999,
+          "win_rate": 0.0
+        }
+      },
+      "validation": {
+        "placement": {
+          "agent_actions_per_game": 1.0,
+          "attacker_purchases_per_game": 1.0,
+          "completed_games": 20,
+          "early_digs_per_game": 0.0,
+          "early_digs_per_planting": 0.0,
+          "plant_usage": {
+            "peashooter": 20
+          },
+          "simulated_seconds": 50.195,
+          "win_rate": 0.0
+        },
+        "saving": {
+          "agent_actions_per_game": 7.55,
+          "attacker_purchases_per_game": 1.0,
+          "completed_games": 20,
+          "early_digs_per_game": 0.0,
+          "early_digs_per_planting": 0.0,
+          "plant_usage": {
+            "peashooter": 20,
+            "sunflower": 131
+          },
+          "simulated_seconds": 95.015,
+          "win_rate": 0.0
+        }
+      },
+      "research_source_hash": "fbbe778c9e256f7785178fbeebb99ac9fad23d32f46538197386388cc375f559",
+      "engine": {
+        "commit": "8861824df6893a34c2cd4df7f9b68613376d7964",
+        "cuda_backend_source_hash": "98c7859a1804c63af8dd9f3e5cc7d40952933bab6b2133f1e5433d6e5ccbdc34",
+        "package_version": "1.3.0",
+        "rules_hash": "a7486688fa43a9b50193f82715fa519bd27cfebc7ed054bebe4f7990f9c268de",
+        "source_hash": "5c4b358043b8253e7876aa68a46bcf272f0264d80c7de86f9e67c7c8bc6993e2",
+        "version": "1.0.0"
+      },
+      "transitions_per_wall_second": 11071.513063906466,
+      "first_200": {
+        "saving": {
+          "completed_games": 144,
+          "agent_actions_per_game": 5.097222222222222,
+          "win_rate": 0.0,
+          "simulated_seconds": 92.95,
+          "early_digs_per_game": 0.2361111111111111,
+          "early_digs_per_planting": 0.05782312925170068,
+          "attacker_purchases_per_game": 1.0,
+          "plant_usage": {
+            "peashooter": 144,
+            "sunflower": 444
+          }
+        },
+        "placement": {
+          "completed_games": 56,
+          "agent_actions_per_game": 1.6071428571428572,
+          "win_rate": 0.017857142857142856,
+          "simulated_seconds": 50.02589285714286,
+          "early_digs_per_game": 0.25,
+          "early_digs_per_planting": 0.25,
+          "attacker_purchases_per_game": 1.0,
+          "plant_usage": {
+            "peashooter": 56
+          }
+        }
+      },
+      "last_100_by_task": {
+        "saving": {
+          "completed_games": 100,
+          "agent_actions_per_game": 7.05,
+          "win_rate": 0.0,
+          "simulated_seconds": 94.8675,
+          "early_digs_per_game": 0.01,
+          "early_digs_per_planting": 0.001447178002894356,
+          "attacker_purchases_per_game": 1.0,
+          "plant_usage": {
+            "peashooter": 100,
+            "sunflower": 591
+          }
+        },
+        "placement": {
+          "completed_games": 100,
+          "agent_actions_per_game": 1.06,
+          "win_rate": 0.01,
+          "simulated_seconds": 50.419,
+          "early_digs_per_game": 0.01,
+          "early_digs_per_planting": 0.01,
+          "attacker_purchases_per_game": 1.0,
+          "plant_usage": {
+            "peashooter": 100
+          }
+        }
+      },
+      "endpoint_winning_seeds": {
+        "saving": [],
+        "placement": []
+      },
+      "config_hash": "db2c7a419d3d01006294cbfd17636945d47c632c02991593e8c17af0d7870fac"
+    },
+    {
+      "method": "baseline",
+      "seed": 102,
+      "learning_wall_seconds": 298.91563419999875,
+      "evaluation_wall_seconds": 14.966855599996052,
+      "steps": 3375104,
+      "games": 1900,
+      "training": {
+        "placement": {
+          "agent_actions_per_game": 1.9303944315545243,
+          "attacker_purchases_per_game": 1.0,
+          "completed_games": 431,
+          "early_digs_per_game": 0.7679814385150812,
+          "early_digs_per_planting": 0.7679814385150812,
+          "plant_usage": {
+            "peashooter": 431
+          },
+          "simulated_seconds": 50.0754060324826,
+          "win_rate": 0.0
+        },
+        "saving": {
+          "agent_actions_per_game": 4.509870660313138,
+          "attacker_purchases_per_game": 1.0,
+          "completed_games": 1469,
+          "early_digs_per_game": 1.4805990469707284,
+          "early_digs_per_planting": 0.6109550561797753,
+          "plant_usage": {
+            "peashooter": 1469,
+            "sunflower": 2091
+          },
+          "simulated_seconds": 92.99234172906739,
+          "win_rate": 0.0
+        }
+      },
+      "validation": {
+        "placement": {
+          "agent_actions_per_game": 1.0,
+          "attacker_purchases_per_game": 1.0,
+          "completed_games": 20,
+          "early_digs_per_game": 0.0,
+          "early_digs_per_planting": 0.0,
+          "plant_usage": {
+            "peashooter": 20
+          },
+          "simulated_seconds": 50.495,
+          "win_rate": 0.0
+        },
+        "saving": {
+          "agent_actions_per_game": 1.0,
+          "attacker_purchases_per_game": 1.0,
+          "completed_games": 20,
+          "early_digs_per_game": 0.0,
+          "early_digs_per_planting": 0.0,
+          "plant_usage": {
+            "peashooter": 20
+          },
+          "simulated_seconds": 92.95,
+          "win_rate": 0.0
+        }
+      },
+      "research_source_hash": "5732f8348f0affac91d18d5d5ab99cfb4bc71ddfbe4940afb091150832fbb24e",
+      "engine": {
+        "commit": "8861824df6893a34c2cd4df7f9b68613376d7964",
+        "cuda_backend_source_hash": "98c7859a1804c63af8dd9f3e5cc7d40952933bab6b2133f1e5433d6e5ccbdc34",
+        "package_version": "1.3.0",
+        "rules_hash": "a7486688fa43a9b50193f82715fa519bd27cfebc7ed054bebe4f7990f9c268de",
+        "source_hash": "5c4b358043b8253e7876aa68a46bcf272f0264d80c7de86f9e67c7c8bc6993e2",
+        "version": "1.0.0"
+      },
+      "transitions_per_wall_second": 11291.159156104168,
+      "first_200": {
+        "saving": {
+          "completed_games": 144,
+          "agent_actions_per_game": 4.569444444444445,
+          "win_rate": 0.0,
+          "simulated_seconds": 92.95,
+          "early_digs_per_game": 0.24305555555555555,
+          "early_digs_per_planting": 0.0875,
+          "attacker_purchases_per_game": 1.0,
+          "plant_usage": {
+            "peashooter": 144,
+            "sunflower": 256
+          }
+        },
+        "placement": {
+          "completed_games": 56,
+          "agent_actions_per_game": 1.6785714285714286,
+          "win_rate": 0.0,
+          "simulated_seconds": 50.19375,
+          "early_digs_per_game": 0.14285714285714285,
+          "early_digs_per_planting": 0.14285714285714285,
+          "attacker_purchases_per_game": 1.0,
+          "plant_usage": {
+            "peashooter": 56
+          }
+        }
+      },
+      "last_100_by_task": {
+        "saving": {
+          "completed_games": 100,
+          "agent_actions_per_game": 4.0,
+          "win_rate": 0.0,
+          "simulated_seconds": 92.95,
+          "early_digs_per_game": 2.0,
+          "early_digs_per_planting": 1.0,
+          "attacker_purchases_per_game": 1.0,
+          "plant_usage": {
+            "peashooter": 100,
+            "sunflower": 100
+          }
+        },
+        "placement": {
+          "completed_games": 100,
+          "agent_actions_per_game": 2.0,
+          "win_rate": 0.0,
+          "simulated_seconds": 50.0,
+          "early_digs_per_game": 1.0,
+          "early_digs_per_planting": 1.0,
+          "attacker_purchases_per_game": 1.0,
+          "plant_usage": {
+            "peashooter": 100
+          }
+        }
+      },
+      "endpoint_winning_seeds": {
+        "saving": [],
+        "placement": []
+      },
+      "config_hash": "dca688369b73ed50567c2ade3f489c4d9b5e81043e707486712ba79e5abaca19"
+    },
+    {
+      "method": "candidate",
+      "seed": 102,
+      "learning_wall_seconds": 297.7492770999961,
+      "evaluation_wall_seconds": 15.038961999998719,
+      "steps": 3342336,
+      "games": 1820,
+      "training": {
+        "placement": {
+          "agent_actions_per_game": 1.1421800947867298,
+          "attacker_purchases_per_game": 1.0,
+          "completed_games": 422,
+          "early_digs_per_game": 0.023696682464454975,
+          "early_digs_per_planting": 0.023696682464454975,
+          "plant_usage": {
+            "peashooter": 422
+          },
+          "simulated_seconds": 50.440995260663506,
+          "win_rate": 0.002369668246445498
+        },
+        "saving": {
+          "agent_actions_per_game": 6.11516452074392,
+          "attacker_purchases_per_game": 1.0,
+          "completed_games": 1398,
+          "early_digs_per_game": 0.055793991416309016,
+          "early_digs_per_planting": 0.009726898615787506,
+          "plant_usage": {
+            "peashooter": 1398,
+            "sunflower": 6621
+          },
+          "simulated_seconds": 93.7903791130186,
+          "win_rate": 0.0
+        }
+      },
+      "validation": {
+        "placement": {
+          "agent_actions_per_game": 1.0,
+          "attacker_purchases_per_game": 1.0,
+          "completed_games": 20,
+          "early_digs_per_game": 0.0,
+          "early_digs_per_planting": 0.0,
+          "plant_usage": {
+            "peashooter": 20
+          },
+          "simulated_seconds": 50.295,
+          "win_rate": 0.0
+        },
+        "saving": {
+          "agent_actions_per_game": 5.5,
+          "attacker_purchases_per_game": 1.0,
+          "completed_games": 20,
+          "early_digs_per_game": 0.0,
+          "early_digs_per_planting": 0.0,
+          "plant_usage": {
+            "peashooter": 20,
+            "sunflower": 90
+          },
+          "simulated_seconds": 93.83500000000001,
+          "win_rate": 0.0
+        }
+      },
+      "research_source_hash": "b5a048774d1d68471ddcd2214f6440eb516d1ab05bc9aee9ff3ed65ebabeb4f7",
+      "engine": {
+        "commit": "8861824df6893a34c2cd4df7f9b68613376d7964",
+        "cuda_backend_source_hash": "98c7859a1804c63af8dd9f3e5cc7d40952933bab6b2133f1e5433d6e5ccbdc34",
+        "package_version": "1.3.0",
+        "rules_hash": "a7486688fa43a9b50193f82715fa519bd27cfebc7ed054bebe4f7990f9c268de",
+        "source_hash": "5c4b358043b8253e7876aa68a46bcf272f0264d80c7de86f9e67c7c8bc6993e2",
+        "version": "1.0.0"
+      },
+      "transitions_per_wall_second": 11225.337077401233,
+      "first_200": {
+        "saving": {
+          "completed_games": 144,
+          "agent_actions_per_game": 4.527777777777778,
+          "win_rate": 0.0,
+          "simulated_seconds": 92.95,
+          "early_digs_per_game": 0.22916666666666666,
+          "early_digs_per_planting": 0.08009708737864078,
+          "attacker_purchases_per_game": 1.0,
+          "plant_usage": {
+            "peashooter": 144,
+            "sunflower": 268
+          }
+        },
+        "placement": {
+          "completed_games": 56,
+          "agent_actions_per_game": 1.6428571428571428,
+          "win_rate": 0.0,
+          "simulated_seconds": 50.19375,
+          "early_digs_per_game": 0.14285714285714285,
+          "early_digs_per_planting": 0.14285714285714285,
+          "attacker_purchases_per_game": 1.0,
+          "plant_usage": {
+            "peashooter": 56
+          }
+        }
+      },
+      "last_100_by_task": {
+        "saving": {
+          "completed_games": 100,
+          "agent_actions_per_game": 6.11,
+          "win_rate": 0.0,
+          "simulated_seconds": 93.77600000000001,
+          "early_digs_per_game": 0.0,
+          "early_digs_per_planting": 0.0,
+          "attacker_purchases_per_game": 1.0,
+          "plant_usage": {
+            "peashooter": 100,
+            "sunflower": 508
+          }
+        },
+        "placement": {
+          "completed_games": 100,
+          "agent_actions_per_game": 1.01,
+          "win_rate": 0.0,
+          "simulated_seconds": 50.431999999999995,
+          "early_digs_per_game": 0.0,
+          "early_digs_per_planting": 0.0,
+          "attacker_purchases_per_game": 1.0,
+          "plant_usage": {
+            "peashooter": 100
+          }
+        }
+      },
+      "endpoint_winning_seeds": {
+        "saving": [],
+        "placement": []
+      },
+      "config_hash": "db2c7a419d3d01006294cbfd17636945d47c632c02991593e8c17af0d7870fac"
+    }
+  ],
+  "total_training_and_endpoint_seconds": 1252.9642739999908,
+  "acceptance": "not_met",
+  "interpretation": "No saving wins for either method/seed. Candidate early digging improved for seed 102, worsened for seed 101; placement endpoint competence did not improve. Experimental, not a resolved collapse.",
+  "verification": [
+    {
+      "check": "research-full",
+      "exit_code": 0,
+      "seconds": 390.78275929999654
+    },
+    {
+      "check": "game-pinned",
+      "exit_code": 0,
+      "seconds": 42.896832000005816
+    },
+    {
+      "check": "game-cpu",
+      "exit_code": 0,
+      "seconds": 10.417157099996984
+    },
+    {
+      "check": "game-cuda",
+      "exit_code": 0,
+      "seconds": 41.614659600003506
+    },
+    {
+      "check": "lint",
+      "exit_code": 0,
+      "seconds": 0.02587179999682121
+    },
+    {
+      "check": "format",
+      "exit_code": 0,
+      "seconds": 0.023435400005837437
+    },
+    {
+      "check": "dependencies",
+      "exit_code": 0,
+      "seconds": 0.7522319999989122
+    },
+    {
+      "check": "doctor",
+      "exit_code": 0,
+      "seconds": 2.5140300000057323
+    },
+    {
+      "check": "build",
+      "exit_code": 0,
+      "seconds": 4.724825999997847
+    }
+  ],
+  "artifact_inspection": {
+    "shared_checkpoint_sha256": "652fcce88fbb7e558eeb68b2e320864e466ff321f6e8e629eb2744b2757c0e02",
+    "demos": [
+      {
+        "level": "easy",
+        "outcome": "truncated",
+        "state_hash": "69c2aeda7bc19c17b7a88723ab089ce499915b2931bfeb1c3ea3f8498408c44e",
+        "replay_hash": "0ef7b9a8c72c8f1123521683969880d62debbee9fce61cd63580fa0cfe138589"
+      },
+      {
+        "level": "standard",
+        "outcome": "truncated",
+        "state_hash": "9a09bb1b8c4b53e7041ee91120edd198b18ddd4774f27ba8577fbeaae2991092",
+        "replay_hash": "d6713a60812826e24a9d5772f5adce5568c828342914455f452bdc7ea5a7d60e"
+      },
+      {
+        "level": "hard",
+        "outcome": "truncated",
+        "state_hash": "3768709bf2cc764962c86c2420d72711ed3fae0627d3baed63f57fc2f9a77a8d",
+        "replay_hash": "5f34610cb4adf72d8958ce7b39dbd21f1b72467d1ba7c47ad99da9e210b47ad6"
+      }
+    ],
+    "frames": [
+      "replay-easy.png",
+      "replay-standard.png",
+      "replay-hard.png"
+    ],
+    "offline_assets": "passed",
+    "wheel": "pvz_plant_research-0.11.0-py3-none-any.whl",
+    "source_distribution": "pvz_plant_research-0.11.0.tar.gz"
+  },
+  "source_note": "Candidate source hashes differ only by retired-model/report eligibility guard; numerical training code and configuration were unchanged between candidate runs.",
+  "cleanup": {
+    "state": "blocked",
+    "reason": "Automatic approval review: blocked by policy",
+    "deleted": [],
+    "preexisting_entries": 337,
+    "runs_present": false,
+    "script": "cleanup-old-outputs.ps1"
+  },
+  "configuration_basis": {
+    "baseline": "configs/train.toml at c2e01839c79cae096f92714507e38a8324601ae3",
+    "candidate": "configs/train.toml in research 0.11.0",
+    "common_overrides": {
+      "curriculum.run_stage": "saving",
+      "training.max_minutes": 5,
+      "training.finalization_minutes": 0,
+      "training.total_games": 100000,
+      "visualization.enabled": false,
+      "visualization.demos": false,
+      "visualization.videos": false
+    },
+    "reward": {
+      "baseline": {
+        "defeated_weight": 0.5,
+        "economy_scale": 300.0,
+        "economy_weight": 0.1,
+        "gamma": 0.999,
+        "loss_penalty": 2.0,
+        "mower_activation_cost": 0.2,
+        "version": "potential_mower_v1",
+        "win_reward": 1.0
+      },
+      "candidate": {
+        "basic_zombie_value": 50.0,
+        "loss_penalty": 2.0,
+        "mower_value": 600.0,
+        "progress_weight": 0.1,
+        "value_scale": 300.0,
+        "version": "net_value_v1",
+        "win_reward": 1.0
+      }
+    },
+    "candidate_discount_clock": "simulation_ticks",
+    "baseline_discount_clock": "policy_decisions",
+    "gamma": 0.999,
+    "gae_lambda": 0.999
+  }
+}

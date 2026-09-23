@@ -38,9 +38,8 @@ def gpu_cfg():
 
 @pytest.mark.parametrize("condition", ["masked"])
 def test_observations_rewards_and_metrics_against_cpu(gpu_cfg, condition):
-    from pvz_game.cuda import CudaBatch
-
     from pvz_rl.cuda_features import REWARD_FIELDS, CudaFeatures
+    from pvz_rl.cuda_lessons import LessonCudaBatch as CudaBatch
 
     cfg = copy.deepcopy(gpu_cfg)
     scenario = LevelSpec(
@@ -155,7 +154,7 @@ def test_fixed_rollout_losses_and_optimizer_match_stock(gpu_cfg, condition, monk
             batch_size=t["batch_size"],
             n_epochs=t["n_epochs"],
             learning_rate=t["learning_rate"],
-            gamma=configs[0]["reward"]["gamma"],
+            gamma=configs[0]["training"]["gamma"],
             gae_lambda=t["gae_lambda"],
             clip_range=t["clip_range"],
             ent_coef=0,
@@ -345,9 +344,9 @@ def test_rollout_configuration_and_legacy_cpu_defaults(gpu_cfg):
 
 def test_gpu_lesson_and_changed_scenarios_match_public_encodings(gpu_cfg):
     from pvz_game import Game, Rules
-    from pvz_game.cuda import CudaBatch
 
     from pvz_rl.cuda_features import CudaFeatures
+    from pvz_rl.cuda_lessons import LessonCudaBatch as CudaBatch
     from pvz_rl.scenarios import scenario
 
     cfg = copy.deepcopy(gpu_cfg)
@@ -369,9 +368,9 @@ def test_gpu_lesson_and_changed_scenarios_match_public_encodings(gpu_cfg):
 
 def test_gpu_encoding_crowds_order_and_private_schedule(gpu_cfg):
     from pvz_game import Game
-    from pvz_game.cuda import CudaBatch
 
     from pvz_rl.cuda_features import CudaFeatures
+    from pvz_rl.cuda_lessons import LessonCudaBatch as CudaBatch
 
     cfg = copy.deepcopy(gpu_cfg)
     games = []

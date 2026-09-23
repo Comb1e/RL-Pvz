@@ -11,7 +11,7 @@ from pvz_rl.action_timing import ActionPhaseGame
 from pvz_rl.config import validate_config
 from pvz_rl.env import PvZEnv
 from pvz_rl.recordings import ActionPhasePlayback, open_playback, verify_replay, watch_recording
-from pvz_rl.rewards import potential, reward_parts
+from pvz_rl.rewards import asset_value, reward_parts
 
 
 def ready(cfg, *, record=False):
@@ -104,17 +104,14 @@ def test_exact_cost_cooldown_and_many_operations_without_an_artificial_cap(per_t
 
 
 @pytest.mark.parametrize("terminal,expected", [(Status.WON, 1), (Status.LOST, -2)])
-def test_configured_terminal_rewards_and_legacy_default(per_tick_cfg, terminal, expected):
+def test_configured_terminal_rewards_preserve_physical_assets(per_tick_cfg, terminal, expected):
     from dataclasses import replace
 
     before = Game().reset("easy", 2)
     after = replace(before, status=terminal)
-    parts = reward_parts(before, after, per_tick_cfg, True)
-    assert parts["terminal"] == expected
-    assert parts["total"] == pytest.approx(expected - potential(before, per_tick_cfg))
-    per_tick_cfg["reward"].pop("loss_penalty")
-    if terminal == Status.LOST:
-        assert reward_parts(before, after, per_tick_cfg, False)["total"] == -1
+    parts = reward_parts(before, after, per_tick_cfg)
+    assert parts["terminal"] == expected and parts["total"] == expected
+    assert asset_value(after) == asset_value(before)
 
 
 def test_wait_cutoff_terminal_precedence_and_restricted_request(per_tick_cfg):
@@ -124,7 +121,7 @@ def test_wait_cutoff_terminal_precedence_and_restricted_request(per_tick_cfg):
         assert env.step(0)[2:4] == (False, False)
     _, _, terminated, truncated, info = env.step(0)
     assert not terminated and truncated and info["ticks_advanced"] == 1
-    assert info["reward_parts"]["terminal"] == 0 and potential(env.public, per_tick_cfg) > 0
+    assert info["reward_parts"]["terminal"] == 0 and asset_value(env.public) > 0
     env.reset(options={"scenario": LevelSpec("empty")})
     assert env.step(0)[2:4] == (True, False)
     env.reset(options={"scenario": LevelSpec("last-tick-win", (Spawn(20, "basic", 0, x=0),))})
@@ -144,16 +141,15 @@ def test_wait_cutoff_terminal_precedence_and_restricted_request(per_tick_cfg):
     assert not info["accepted"] and info["ticks_advanced"] == 1
 
 
-def test_zero_time_shaping_telescopes_and_purchase_dig_has_no_free_reward(per_tick_cfg):
+def test_zero_time_purchase_dig_has_no_free_reward(per_tick_cfg):
     env = ready(per_tick_cfg)
-    first = potential(env.public, per_tick_cfg)
-    gamma = per_tick_cfg["reward"]["gamma"]
-    total = 0
-    for i, action in enumerate((Place("peashooter", 0, 0), Dig(0, 0), Wait())):
-        total += gamma**i * env.step(env.codec.encode(action))[1]
+    total = sum(
+        env.step(env.codec.encode(action))[1]
+        for action in (Place("peashooter", 0, 0), Dig(0, 0), Wait())
+    )
     assert env.public.tick == 1
-    assert total == pytest.approx(-first + gamma**3 * potential(env.public, per_tick_cfg))
-    assert total < 0
+    assert total == pytest.approx(-100 / 3000)
+    assert env.episode_metrics()["discounted_return"] == pytest.approx(total)
 
 
 def recorded_actions(cfg, path, *, trailing=False):

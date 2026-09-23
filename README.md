@@ -1,12 +1,14 @@
 # PVZ plant-placement research
 
-Research **0.10.4** trains **one shared CUDA MaskablePPO policy** for easy, standard,
+Research **0.11.0** trains **one shared CUDA MaskablePPO policy** for easy, standard,
 and hard. There is one recipe, [configs/train.toml](configs/train.toml), also used
 when `--config` is omitted. Policy and value learning use independent encoders and
-Adam states. In the 0.10.0 saving-to-easy comparison, easy validation improved
-for both seeds, but saving skill was not reliably retained and throughput fell.
-The method remains experimental; the collapse is not resolved. See
-[validation](docs/validation.md).
+Adam states. Rewards account for net realized value in sun-equivalent units, and
+discounting advances with simulation time. **Start fresh models for 0.11.0**;
+older weights cannot initialize, resume or evaluate under this method. The method
+remains experimental: the two-seed five-minute comparison produced no saving
+wins and did not meet its learning acceptance criterion.
+See [validation](docs/validation.md).
 
 ## Project layout
 
@@ -67,10 +69,10 @@ Start with a fresh directory:
 
 ```powershell
 .\.venv\Scripts\python.exe -m pvz_rl train --config configs\train.toml `
-  --seed 101 --games 10000 --max-minutes 120 --output runs\sunless-trial-101
+  --seed 101 --games 10000 --max-minutes 120 --output runs\net-value-101
 ```
 
-`runs/sunless-trial-101` is created by this command. It is not shipped. If it already
+`runs/net-value-101` is created by this command. It is not shipped. If it already
 exists, choose another name and use it in the examples below. Training never
 overwrites a run.
 
@@ -121,26 +123,37 @@ Evaluation and demonstrations use the actor alone.
 The initial dig-logit bias is −6 and remains trainable. There are no plant-retention
 rules, savings rules, early-dig penalties or action delays.
 
-Only outcome, mower cost and potential shaping contribute to reward:
+The reward uses one net-value account:
 
 \[
-r = r_{outcome} - 0.2\,newMowerActivations + \gamma\Phi(next)-\Phi(current)
+V_{plants}=\sum_p C_p\frac{HP_p}{HP_{p,max}},\quad
+\Delta U=\Delta(sun+V_{plants})-skyIncome+0.25\,plantDamage-600\,newMowers
 \]
 
 \[
-\Phi(o)=0.5\frac{defeated}{\max(1,initialZombies)}
- +0.1\frac{sun+livingPlantPurchaseValue}{300}.
+r=r_{outcome}+0.1\frac{\Delta U}{300}.
 \]
 
-Victory gives +1 and defeat −2. Natural terminal potential is zero; time-limit
-truncation retains potential and bootstraps the critic. **300 is a scale, not a
-sun cap**. Purchase value is preserved when planting and lost when digging or a
-plant dies. Damage, kills and early digs remain diagnostics without separate rewards.
-The economy weight is reduced from 0.5 to 0.1: resource income and living-plant
-value contribute one fifth as much potential. There is no direct planting bonus.
-Buying preserves total resource value; buying and immediately digging loses value.
-This also weakens the shaping loss from digging or plant death; it is not an
-additional anti-digging rule or a demonstrated learning improvement.
+Victory gives +1 and defeat −2. Effective plant damage is actual HP **and armor**
+removed, including lethal damage and chomper consumption; overkill and mower
+damage earn none. The conversion is 50 sun-equivalents per 200-HP basic zombie,
+identical across difficulties. The 600-sun mower expenditure is charged once and
+is already inside the formula; no additional mower penalty is added.
+
+Buying exchanges sun for an equally valued healthy plant and earns zero. Damage
+reduces a plant's remaining asset value; digging/death removes only what remains.
+Actual sunflower production earns credit. Actual sky income is subtracted,
+including at the engine's sun cap. A cherry bomb breaks even on three healthy
+basics or one conehead; an empty explosion loses its investment. Physical assets
+are retained in the calculation even on winning/losing transitions. **300 is a
+scale, not a sun cap**. These are experimental valuations, not calibrated optima.
+
+`training.gamma = 0.999` and `gae_lambda = 0.999` are per **simulation tick**.
+A transition lasting `k` ticks bootstraps with `gamma^k`; GAE propagates with
+`(gamma * lambda)^k`. Immediate actions have factor 1, so extra zero-time actions
+cannot postpone a loss in the discount clock. Natural endings have no bootstrap;
+timeouts use their terminal observation before reset. Waiting remains a transition.
+The reward is an intentional objective change, not policy-invariant shaping.
 
 CLI overrides include `--n-envs`, `--rollout-steps-per-env`, `--batch-size`,
 `--games` and `--max-minutes`. Total rollout size is `n_envs × rollout_steps_per_env`;
@@ -153,7 +166,7 @@ A short pipeline check is:
 .\.venv\Scripts\python.exe -m pvz_rl train --family diagnostic `
   --games 2 --n-envs 2 --rollout-steps-per-env 32 --batch-size 32 `
   --eval-games 1 --validation-count 1 --max-minutes 2 `
-  --output artifacts\cuda-smoke-v0104
+  --output artifacts\cuda-smoke-v0110
 ```
 
 This tests integration, not game-playing competence. `suite` repeats this same
@@ -194,8 +207,8 @@ delaying both sunflower investments by 67 ticks wins; 68 ticks loses. These are
 See [the calculations and limitations](docs/research.md#lesson-pressure-trial).
 Edit `natural_sun`, `initial_sun`, `spawn_ticks`, and `lanes_per_spawn` under
 `curriculum.lessons` to adjust the trial. Normal games retain ordinary sky income.
-Rewards, legal digging, policy and PPO settings are unchanged. Reduced early
-digging and stronger easy performance are not yet demonstrated.
+The lessons retain their existing restrictions; legal digging remains available.
+Reduced early digging and stronger game performance require learning evidence.
 
 Mastery probes run every **2,000 training games** (previously 500), using seeds 100050–100149,
 separate from normal checkpoint validation (100000–100049). At least 100 games
@@ -214,12 +227,12 @@ promotes itself. For example:
 
 ```powershell
 .\.venv\Scripts\python.exe -m pvz_rl train --stage placement --seed 101 `
-  --games 10000 --max-minutes 30 --output runs\sunless-stages-101\placement
+  --games 10000 --max-minutes 30 --output runs\net-value-stages-101\placement
 
 # Run after the placement checkpoint exists:
 .\.venv\Scripts\python.exe -m pvz_rl train --config configs\train.toml --stage saving `
-  --init-from runs\sunless-stages-101\placement\final.zip `
-  --games 10000 --max-minutes 30 --output runs\sunless-stages-101\saving
+  --init-from runs\net-value-stages-101\placement\final.zip `
+  --games 10000 --max-minutes 30 --output runs\net-value-stages-101\saving
 ```
 
 `--init-from` copies **weights only**. Both optimizers, counters, mastery,
@@ -228,12 +241,9 @@ checkpoint selection and time allowance start fresh. It also works without
 the source settings; specify an edited TOML to change rewards, PPO or curriculum.
 Network dimensions, categorical layout and engine must match. Metadata records
 the source checkpoint hash, structural signature and parameter changes.
-Use `--config configs\train.toml --init-from ...` to try these lessons with
-compatible weights and fresh optimizer/mastery state. Previous lesson scores do
-not establish mastery of these tasks. There is one current recipe and no legacy
-lesson mode; saved configurations missing the explicit `natural_sun` setting
-cannot resume under this release. Use Git for the previous implementation.
-New runs made with this release can resume normally.
+Only checkpoints created with `net_value_v1` and simulation-tick discounting can
+transfer or resume. Architecture changes require new weights. Parameter changes
+within this method use `--init-from`; they never restore the old optimizer.
 
 `--resume` restores the saved actor, critic, both Adam states, configuration, counts, mastery
 and validation schedule with the remaining cumulative budget. It cannot change
@@ -241,8 +251,8 @@ research parameters. Use a fresh output directory:
 
 ```powershell
 .\.venv\Scripts\python.exe -m pvz_rl train `
-  --resume runs\sunless-trial-101\latest.zip `
-  --output runs\sunless-trial-101-resumed
+  --resume runs\net-value-101\latest.zip `
+  --output runs\net-value-101-resumed
 ```
 
 The checkpoint must remain beside `metadata.json`. Interrupted episodes restart;
@@ -254,23 +264,8 @@ still saves `final.zip` and its report, but has no `best.zip` or normal-game dem
 `latest.zip` is saved after mastery probes as well as completed validation; before
 the first probe use `final.zip` or an available `interrupted.zip` for recovery.
 
-A **0.9.0 shared-encoder checkpoint** can initialize this version through
-`--init-from`: its encoder weights are copied into the independent actor and critic,
-preserving starting predictions. This conversion starts fresh Adam states and is
-recorded in metadata. Shared-encoder checkpoints cannot be resumed or directly
-loaded for new evaluation. Earlier architectures remain unsupported. Existing
-reports and recordings can still be regenerated without loading their models.
-
-To recover from the easy-stage collapse, initialize from a mastered saving-stage
-checkpoint and choose a fresh output directory:
-
-```powershell
-.\.venv\Scripts\python.exe -m pvz_rl train --config configs\train.toml --stage easy `
-  --init-from runs\sunless-stages-101\saving\final.zip `
-  --games 10000 --max-minutes 120 --output runs\separated-easy-101
-```
-
-This example requires that saving checkpoint to exist beside its metadata.
+Pre-0.11 checkpoints and their conversion paths are retired. Reports and recordings
+remain readable without loading models. Concise historical findings remain in the documentation.
 
 ## Logs, curves and replay demos
 
@@ -281,6 +276,11 @@ steps for each optimizer, gradient norms, entropy, actor KL stopping and policy
 drift measured after the update. Task-specific rolling windows report easy,
 placement and saving separately, including accepted plant usage. Started, active,
 completed-game and transition counts show the actual data mixture.
+Accounting curves separate actual income, effective damage, plant-value loss,
+mower expenditure, development reward and outcome reward. Logs/report records show
+both undiscounted reward and simulation-time-discounted return. Cumulative net
+value, its historical maximum and drawdown are diagnostics, never reward gates
+or policy inputs.
 
 An **early dig** is an accepted voluntary dig within five simulated seconds
 (100 ticks, inclusive) of that plant's placement, including the same tick. The
@@ -290,9 +290,9 @@ Overall rolling win rate mixes tasks and can change when short lessons finish
 before normal games. Use task-specific curves and normal validation to assess it.
 
 ```powershell
-Get-Content runs\sunless-trial-101\train.log -Wait
+Get-Content runs\net-value-101\train.log -Wait
 # Open after the report exists:
-Start-Process runs\sunless-trial-101\visualizations\index.html
+Start-Process runs\net-value-101\visualizations\index.html
 .\.venv\Scripts\tensorboard.exe --logdir runs
 ```
 
@@ -314,11 +314,11 @@ builds a report without gameplay or model loading. Replay examples require
 `visualizations/demos.json` to exist. Rebuild or optionally export videos:
 
 ```powershell
-.\.venv\Scripts\python.exe -m pvz_rl visualize --run runs\sunless-trial-101
-.\.venv\Scripts\python.exe -m pvz_rl visualize --run runs\sunless-trial-101 --videos
+.\.venv\Scripts\python.exe -m pvz_rl visualize --run runs\net-value-101
+.\.venv\Scripts\python.exe -m pvz_rl visualize --run runs\net-value-101 --videos
 
 # Resolve the first recording from the generated manifest:
-$run = Resolve-Path runs\sunless-trial-101
+$run = Resolve-Path runs\net-value-101
 $demo = (Get-Content "$run\visualizations\demos.json" -Raw | ConvertFrom-Json).demos[0]
 $recording = Join-Path "$run\visualizations" $demo.replay
 .\.venv\Scripts\python.exe -m pvz_rl replay $recording --watch --speed 2
@@ -336,9 +336,9 @@ does not load retired weights or regenerate their gameplay.
 
 ```powershell
 .\.venv\Scripts\python.exe -m pvz_rl evaluate `
-  --checkpoint runs\sunless-trial-101\best.zip `
-  --split validation --count 10 --record --output artifacts\saving-economy-validation
-.\.venv\Scripts\python.exe -m pvz_rl benchmark-gpu --minutes 15 --output artifacts\cuda-benchmark-v0101
+  --checkpoint runs\net-value-101\best.zip `
+  --split validation --count 10 --record --output artifacts\net-value-validation
+.\.venv\Scripts\python.exe -m pvz_rl benchmark-gpu --minutes 15 --output artifacts\cuda-benchmark-v0110
 .\.venv\Scripts\python.exe -m pytest -q
 .\.venv\Scripts\ruff.exe check src tests tools
 .\.venv\Scripts\python.exe -m pip check

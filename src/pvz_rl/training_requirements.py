@@ -12,6 +12,8 @@ def current_model_config(cfg):
     return (
         cfg.get("policy", {}).get("kind") == "spatial_grouped_v4"
         and cfg.get("encoding", {}).get("version") == "compact_v3"
+        and cfg.get("reward", {}).get("version") == "net_value_v1"
+        and cfg.get("training", {}).get("discount_clock") == "simulation_ticks"
     )
 
 
@@ -24,7 +26,7 @@ def require_supported_policy(cfg, condition="masked"):
         or not current_model_config(cfg)
     ):
         raise ValueError(
-            "Retired policy. Training/resume require independent spatial encoders. Use --init-from for weights-only conversion of a 0.9.0 compact checkpoint, or start fresh with configs/train.toml. Archived reports and recordings remain readable."
+            "Retired policy. Training/resume require independent spatial encoders. Start fresh with configs/train.toml. Archived reports and recordings remain readable."
         )
 
 

@@ -5,6 +5,27 @@ Dates and results belong to their recorded version. Current behavior lives in
 artifact locations and learning outcomes live in [validation](validation.md).
 The longer pre-consolidation notes remain in `git show b642c9c:docs/iteration.md`.
 
+## 0.11.0 — 2026-09-23
+
+- Problem: saving-stage destructive digging remained despite tighter lessons.
+  Prior logs showed zero saving wins and a late window of 200 digs per 200 plants.
+  Digging itself was negatively rewarded, but potential shaping telescoped and
+  zero-time actions advanced decision discounting. These are mechanisms to test,
+  not a proven sole explanation of the learned behavior.
+- Change: one `net_value_v1` account values actual production, effective plant
+  damage, health-weighted assets and mower expenditure. Purchases conserve value;
+  losses and damage are charged/credited once. Historical maximum/drawdown is
+  diagnostic. Gamma and lambda now advance with simulation ticks.
+- Implementation: shared CPU/CUDA metric schema, research-local integer event
+  counters, duration tensors, terminal-observation timeout targets and physical-time
+  GAE. Actor/critic, input, curriculum, PPO settings and game pin remain unchanged.
+- Compatibility: fresh 0.11 models required; retired reward and checkpoint
+  conversion removed. New-method stage initialization and resume remain supported.
+  Old generated outputs are retired; one recipe remains.
+- Verification: independent ledger/time controls, complete regressions and the
+  bounded two-seed fresh-saving comparison are recorded in [validation](validation.md).
+  No formal training or final-test evaluation is launched. Learning remains experimental.
+
 ## 0.10.4 — 2026-09-23
 
 - Problem/hypothesis: early digging recurred. Free lesson income and spare time

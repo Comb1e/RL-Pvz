@@ -16,7 +16,6 @@ from pvz_rl.env import PvZEnv
 from pvz_rl.metrics import task_statistics
 from pvz_rl.spatial_policy import SpatialFeatures, SpatialGroupedPolicy
 from pvz_rl.training import initial_weights
-from pvz_rl.training_requirements import require_supported_policy
 
 
 def policy_and_state():
@@ -137,30 +136,16 @@ def test_deferred_critic_timeout_values_and_gae_match_independent_control(device
     np.testing.assert_allclose(buffer.returns.cpu(), reference.returns, rtol=2e-6, atol=2e-6)
 
 
-def test_v090_conversion_is_weights_only_and_preserves_both_outputs(tmp_path):
+def test_current_weights_only_transfer_preserves_outputs_and_rejects_old_reward(tmp_path):
     original, obs, mask, cfg = policy_and_state()
-    weights = original.state_dict()
-    for key in list(weights):
-        if key.startswith("vf_features_extractor."):
-            weights[key] = weights[
-                key.replace("vf_features_extractor.", "pi_features_extractor.")
-            ].clone()
-    original.load_state_dict(weights)
     old = copy.deepcopy(cfg)
-    old["policy"]["kind"] = "spatial_grouped_v3"
-    for lesson in old["curriculum"]["lessons"].values():
-        del lesson["natural_sun"]
-    # These are source weights, not a supported executable lesson configuration.
-    with pytest.raises(ValueError, match="natural_sun"):
-        validate_config(old)
-    (tmp_path / "metadata.json").write_text(
-        json.dumps({"config": old, "condition": "masked", "learner_seed": 101})
-    )
+    metadata = {"config": old, "condition": "masked", "learner_seed": 101}
+    (tmp_path / "metadata.json").write_text(json.dumps(metadata))
     checkpoint = tmp_path / "source.zip"
     save_to_zip_file(
         checkpoint,
         data={"num_timesteps": 123, "training_games": 6, "_n_updates": 4},
-        params={"policy": weights},
+        params={"policy": original.state_dict()},
     )
     converted, meta = initial_weights(checkpoint, cfg)
     target, _, _, _ = policy_and_state()
@@ -176,14 +161,10 @@ def test_v090_conversion_is_weights_only_and_preserves_both_outputs(tmp_path):
             target.predict_values(obs), original.predict_values(obs), rtol=0, atol=0
         )
     assert not target.optimizer.state and not target.critic_optimizer.state
-    assert meta["conversion"] == "shared_to_independent" and meta["steps"] == 123
-    with pytest.raises(ValueError, match="--init-from"):
-        require_supported_policy(old)
-    weights["vf_features_extractor.board.0.weight"] += 1
-    save_to_zip_file(
-        checkpoint, data={"num_timesteps": 123, "_n_updates": 4}, params={"policy": weights}
-    )
-    with pytest.raises(ValueError, match="inconsistent"):
+    assert meta["conversion"] == "none" and meta["steps"] == 123
+    old["reward"]["version"] = "potential_mower_v1"
+    (tmp_path / "metadata.json").write_text(json.dumps(metadata))
+    with pytest.raises(ValueError, match="fresh"):
         initial_weights(checkpoint, cfg)
 
 
@@ -318,14 +299,13 @@ def test_normalization_and_reward_defaults():
     cfg = load_config()
     assert cfg["training"]["learning_rate"] == 3e-4
     assert cfg["reward"] == dict(
-        version="potential_mower_v1",
+        version="net_value_v1",
         win_reward=1.0,
         loss_penalty=2.0,
-        mower_activation_cost=0.2,
-        gamma=0.999,
-        defeated_weight=0.5,
-        economy_weight=0.1,
-        economy_scale=300.0,
+        mower_value=600.0,
+        basic_zombie_value=50.0,
+        progress_weight=0.1,
+        value_scale=300.0,
     )
     assert cfg["training"]["exploration"] == dict(
         objective="balanced_heads_v1", type_coef=0.01, tile_coef=0.001

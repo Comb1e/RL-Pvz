@@ -126,13 +126,11 @@ def test_balanced_ppo_update_matches_joint_probability_reference(forced, device)
 
 
 @pytest.mark.parametrize("gamma", [0.999, 0.9999])
-def test_long_horizon_shaping_telescopes_for_cycles_terminal_and_timeout(gamma):
-    potentials = np.array([0.3, 0.3, 0.5, 0.2, 0.4], dtype=float)
-    terms = gamma * potentials[1:] - potentials[:-1]
-    discount = gamma ** np.arange(len(terms))
-    assert np.dot(terms, discount) == pytest.approx(-potentials[0] + gamma**4 * potentials[-1])
-    # A genuine terminal has zero potential; timeout retains the final value.
-    terminal_terms = terms.copy()
-    terminal_terms[-1] -= gamma * potentials[-1]
-    assert np.dot(terminal_terms, discount) == pytest.approx(-potentials[0])
-    assert np.dot(terminal_terms, discount) != pytest.approx(np.dot(terms, discount))
+def test_physical_time_discount_has_no_zero_time_action_advantage(gamma):
+    rewards = np.array([0.1, -0.3, 1.0])
+    times = np.array([0, 50, 99])
+    original = np.dot(rewards, gamma**times)
+    inserted_rewards = np.array([0, 0.1, 0, -0.3, 0, 0, 1.0])
+    inserted_times = np.array([0, 0, 50, 50, 99, 99, 99])
+    assert np.dot(inserted_rewards, gamma**inserted_times) == pytest.approx(original)
+    assert np.dot(rewards, gamma ** (times + 10)) == pytest.approx(original * gamma**10)

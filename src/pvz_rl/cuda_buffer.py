@@ -26,6 +26,7 @@ class TensorRolloutBuffer(BaseBuffer):
         )
         for key in ("values", "log_probs", "rewards", "episode_starts", "advantages", "returns"):
             setattr(self, key, torch.empty((buffer_size, n_envs), device=self.device))
+        self.durations = torch.ones((buffer_size, n_envs), dtype=torch.int64, device=self.device)
         self.reset()
 
     def reset(self):
@@ -33,7 +34,18 @@ class TensorRolloutBuffer(BaseBuffer):
         self._flat = None
         self._timeouts = []
 
-    def add(self, obs, action, reward, episode_start, value, log_prob, action_masks=None):
+    def add(
+        self,
+        obs,
+        action,
+        reward,
+        episode_start,
+        value,
+        log_prob,
+        action_masks=None,
+        *,
+        durations=None,
+    ):
         for key, value in (
             ("observations", obs),
             ("actions", action.reshape(-1, self.action_dim)),
@@ -44,6 +56,10 @@ class TensorRolloutBuffer(BaseBuffer):
         ):
             if value is not None:
                 getattr(self, key)[self.pos].copy_(value)
+        if durations is None:
+            self.durations[self.pos].fill_(1)
+        else:
+            self.durations[self.pos].copy_(durations)
         self.action_masks[self.pos].copy_(action_masks)
         self.pos += 1
         self.full = self.pos == self.buffer_size
@@ -70,7 +86,10 @@ class TensorRolloutBuffer(BaseBuffer):
             offset = 0
             for step, indices, obs in self._timeouts:
                 size = len(obs)
-                self.rewards[step, indices] += self.gamma * terminal_values[offset : offset + size]
+                self.rewards[step, indices] += (
+                    self.gamma ** self.durations[step, indices]
+                    * terminal_values[offset : offset + size]
+                )
                 offset += size
             self._timeouts.clear()
         return evaluate(last_observations)
@@ -93,6 +112,7 @@ class TensorRolloutBuffer(BaseBuffer):
                     self.rewards,
                     self.values,
                     self.episode_starts,
+                    self.durations,
                     last_values.flatten().contiguous(),
                     dones.float(),
                     self.advantages,
@@ -119,8 +139,10 @@ class TensorRolloutBuffer(BaseBuffer):
             next_value = (
                 last_values.flatten() if step == self.buffer_size - 1 else self.values[step + 1]
             )
-            delta = self.rewards[step] + self.gamma * next_value * nonterminal - self.values[step]
-            last = delta + self.gamma * self.gae_lambda * nonterminal * last
+            discount = self.gamma ** self.durations[step]
+            trace = (self.gamma * self.gae_lambda) ** self.durations[step]
+            delta = self.rewards[step] + discount * next_value * nonterminal - self.values[step]
+            last = delta + trace * nonterminal * last
             self.advantages[step].copy_(last)
         torch.add(self.advantages, self.values, out=self.returns)
 

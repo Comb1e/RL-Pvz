@@ -6,7 +6,7 @@ from pvz_game import Dig, Game, LevelSpec, Place, Spawn, Status, Wait
 
 from pvz_rl.actions import ActionCodec
 from pvz_rl.env import EpisodeState, PvZEnv
-from pvz_rl.rewards import potential
+from pvz_rl.rewards import asset_value
 
 
 def test_all_406_actions_have_independent_expected_indices(cfg):
@@ -90,7 +90,7 @@ def test_empty_scenario_true_terminal_and_reset(cfg):
     _, _, terminated, truncated, info = env.step(0)
     assert terminated and not truncated and info["ticks_advanced"] == 1
     assert env.state == EpisodeState.WON
-    assert potential(env.public, cfg) == 0
+    assert asset_value(env.public) == env.public.sun
     assert not env.action_masks().any()
     with pytest.raises(RuntimeError):
         env.step(0)
@@ -113,7 +113,7 @@ def test_house_breach_is_loss_not_truncation(cfg):
     assert reward < 0 and info["episode_metrics"]["win"] == 0
 
 
-def test_time_cutoff_keeps_final_observation_and_potential(cfg):
+def test_time_cutoff_keeps_final_observation_and_assets(cfg):
     cfg["environment"].update(cutoff_seconds=1, decision_ticks=13)
     env = PvZEnv(cfg)
     env.reset(seed=4)
@@ -121,8 +121,8 @@ def test_time_cutoff_keeps_final_observation_and_potential(cfg):
     _, reward, terminated, truncated, info = env.step(0)
     assert not terminated and truncated and info["ticks_advanced"] == 7
     assert env.public.tick == 20 and env.public.status == Status.RUNNING
-    assert potential(env.public, cfg) > 0
-    assert reward == pytest.approx((cfg["reward"]["gamma"] - 1) * potential(env.public, cfg))
+    assert asset_value(env.public) > 0
+    assert reward == 0
     assert info["episode_metrics"]["win"] == 0
 
 

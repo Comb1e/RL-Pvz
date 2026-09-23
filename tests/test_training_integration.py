@@ -109,7 +109,7 @@ def test_reward_changes_load_for_inference_but_require_weights_only_initializati
     import copy
 
     legacy = copy.deepcopy(smoke_cfg)
-    legacy["reward"]["mower_activation_cost"] = 0.7
+    legacy["reward"]["mower_value"] = 0.7
     run = train(legacy, "masked", 101, tmp_path / "legacy", validation_limit=1)
     _, data = load_policy(run / "final.zip")
     assert data["config"]["reward"] == legacy["reward"]

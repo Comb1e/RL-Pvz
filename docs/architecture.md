@@ -1,6 +1,6 @@
 # Current architecture
 
-Research 0.10.4 learns one shared policy for easy, standard and hard. Training
+Research 0.11.0 learns one shared policy for easy, standard and hard. Training
 simulation and optimization require CUDA. Game package 1.3.0 / simulation 1.0.0
 is pinned to `8861824df6893a34c2cd4df7f9b68613376d7964`. The Python simulator
 is the reference for non-learning baselines, tests and replay verification.
@@ -16,7 +16,7 @@ flowchart LR
     Public --> Policy[Shared spatial grouped policy]
     Policy --> Action[Wait, plant or dig]
     Action --> Games
-    Games --> Reward[Outcome, mower cost, potential difference]
+    Games --> Reward[Assets, damage, income and mower accounting]
     Public --> Buffer[GPU rollout buffer]
     Reward --> Buffer
     Buffer --> Critic[Independent value encoder, batched before updates]
@@ -92,17 +92,30 @@ tile entropy of available groups. The trainable initial dig bias is −6. Diggin
 stays legal; lessons configure plant availability, sky income and mowers.
 
 Accepted plant/dig actions consume no simulated ticks. A wait or rejected request
-advances one tick. Discounting is per decision, including immediate actions.
+advances one tick. Discounting advances only with elapsed simulation ticks.
 
 ## Reward and update
 
-Reward is outcome (+1 win, −2 loss), minus 0.2 per new mower activation, plus
-`gamma * Phi(next) - Phi(current)`. Potential is half the defeated fraction plus
-0.1 times `(sun + full purchase value of living plants) / 300`. All coefficients are
-configurable. The denominator does not cap sunlight. Natural terminal potential
-is zero; truncation retains potential and adds the correctly discounted terminal
-value before GAE. No separate damage, kill, planting, eating, biting, explosion or
-early-dig reward exists. Combat events and early digs remain diagnostics.
+Reward is outcome (+1 win, −2 loss) plus `progress_weight * net_value / value_scale`.
+Living plants are assets worth purchase cost multiplied by remaining HP fraction.
+Net value is the change in sun plus plant assets, less actual sky income, plus
+actual plant-caused HP/armor removal valued at 50 sun per 200-HP basic, less 600
+sun per newly activated mower. Defaults are weight 0.1 and scale 300. The scale
+does not cap sunlight. Physical assets are evaluated normally at natural endings.
+
+The CPU reference reads public damage/income events. A checked research-local
+adapter adds three integer counters to the pinned CUDA kernel: effective plant
+damage, actual sky income and actual produced sun. Counters reset per operation,
+including zero-time actions; source-positive damage excludes mowers and includes
+projectiles after their plant dies. Counters cannot change simulation state,
+processing order, snapshots or observations. The installed game remains untouched.
+Shared metric names drive CUDA field indexing and report aggregation.
+
+Purchases conserve assets. Plant damage and final removal charge each unit of
+asset loss once; production and effective damage earn credit once. Mower cost is
+part of net value, never an additional penalty. Historical maximum/drawdown track
+the account without gating reward. The objective deliberately changes preferences;
+there is no policy-invariance claim or special plant/dig/explosion rule.
 
 The collector stores 128 learning transitions per environment per update by default,
 across 256 parallel environments (32,768 transitions per rollout). This bounds the
@@ -110,7 +123,13 @@ learning buffer, not the game. Unfinished games retain their state across update
 only natural outcomes and the simulated-time cutoff end episodes. Waits and rejected
 requests remain learning transitions. The separate `agent_actions` diagnostic counts
 only accepted planting/digging, with no per-game action count cap.
-GAE and masked PPO use the configured gamma/lambda, standard all-transition
+Each transition stores an integer duration on CUDA before any automatic reset.
+Value bootstrapping uses `gamma^duration`; GAE propagation uses
+`(gamma * lambda)^duration`. Duration zero gives both factors 1, even at gamma or
+lambda zero. Natural endings mask bootstrap and traces; truncations use the
+preserved terminal observation, followed by a reset boundary. Gamma/lambda default
+to 0.999 per tick. Undiscounted episode reward and discounted return are both saved.
+Masked PPO uses standard all-transition
 minibatch normalization and mean losses, four epochs and batches of 1,024.
 Singleton minibatches skip advantage normalization. Approximate KL is checked
 before each actor optimizer step; a value above 1.5×`target_kl` stops actor updates
@@ -204,11 +223,9 @@ allowance restart; reward/PPO/curriculum parameters may change. Metadata records
 source hash and parameter differences. `--resume` requires the saved experiment
 settings and restores weights, both Adam states, counts, mastery and schedules. Active
 episodes restart; it does not promise bitwise trajectory continuation.
-The sole conversion accepts 0.9.0 compact shared-encoder tensors for weights-only
-initialization. Identical encoder aliases are checked, then copied into independent
-encoders. Their shapes and the engine must match. Shared checkpoints cannot resume;
-no retired training implementation is loaded. Pre-0.9.0 networks are not loadable. Reports and recordings are independent of model
-loading and remain usable after obsolete weights are removed.
+Only the `net_value_v1` reward and `simulation_ticks` clock are eligible for model
+loading. Pre-0.11 weights require fresh training; no conversion path remains.
+Reports and recordings are independent of model loading and remain usable.
 
 ## Storage and presentation
 

@@ -75,14 +75,18 @@ def test_mastery_holds_stage_requires_residency_and_consecutive_passes(stage_cfg
     assert not shared.mastered and not shared.due(2000, stage_cfg)
 
 
-@pytest.mark.parametrize("change", ["stage", "reward", "policy", "tasks", "optimizer", "engine"])
+@pytest.mark.parametrize(
+    "change", ["stage", "reward", "discount", "policy", "tasks", "optimizer", "engine"]
+)
 def test_transfer_compatibility_preserves_learning_contract(stage_cfg, change):
     altered = copy.deepcopy(stage_cfg)
     altered["training"].update(total_games=1200, max_minutes=60, eval_interval_games=500)
     if change == "stage":
         altered["curriculum"]["run_stage"] = "saving"
     elif change == "reward":
-        altered["reward"]["gamma"] = 0.9999
+        altered["reward"]["basic_zombie_value"] = 25
+    elif change == "discount":
+        altered["training"]["gamma"] = 0.9999
     elif change == "policy":
         altered["policy"]["channels"] = [48, 48]
     elif change == "tasks":
@@ -332,19 +336,17 @@ def test_existing_profiles_remain_valid_without_stage():
     assert "run_stage" not in cfg["curriculum"]
 
 
-def test_cli_shared_weights_conversion_does_not_reinterpret_resume(stage_cfg, tmp_path):
+def test_cli_retired_architecture_rejected_for_init_and_resume(stage_cfg, tmp_path):
     stage_cfg["policy"]["kind"] = "spatial_grouped_v3"
     write_json(
         tmp_path / "metadata.json",
         {"config": stage_cfg, "learner_seed": 101, "condition": "masked"},
     )
-    initialized = configured(
-        argparse.Namespace(command="train", config=None, init_from=tmp_path / "final.zip")
-    )
-    assert initialized["policy"]["kind"] == "spatial_grouped_v4"
-    require_cuda_training(initialized, runtime=False)
-    with pytest.raises(ValueError, match="--init-from"):
-        configured(argparse.Namespace(command="train", config=None, resume=tmp_path / "final.zip"))
+    for mode in ("init_from", "resume"):
+        with pytest.raises(ValueError, match="Retired"):
+            configured(
+                argparse.Namespace(command="train", config=None, **{mode: tmp_path / "final.zip"})
+            )
     assert read_json(tmp_path / "metadata.json")["config"]["policy"]["kind"] == "spatial_grouped_v3"
 
 

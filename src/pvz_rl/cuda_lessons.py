@@ -1,6 +1,7 @@
 """Pinned-kernel adapter for per-episode sky income in mixed CUDA batches.
 
-Only the sky payment becomes a per-game input. Snapshot rules carry the effective
+Sky income is per-game; three read-only accounting counters track actual plant
+damage, sky income and produced sun. Snapshot rules carry the effective
 amount so CPU verification and recordings are self-contained. No upstream file
 is edited, and arbitrary combat-rule changes remain unsupported.
 """
@@ -15,15 +16,18 @@ from .lesson_rules import sky_rules
 
 def lesson_kernel_source(source):
     replacements = {
-        "double *f;": "double *f;\n  I sky_sun_amount;",
+        "double *f;": "double *f;\n  I sky_sun_amount;\n  I *accounting;",
         "income(G_sky_sun_amount, 0);": "income(sky_sun_amount, 0);",
-        "I ticks, I per_tick) {": "I ticks, I per_tick, const I *sky_amounts) {",
-        "facts + i * 9};": "facts + i * 9, sky_amounts[i]};",
+        "I ticks, I per_tick) {": "I ticks, I per_tick, const I *sky_amounts, I *accounting) {",
+        "facts + i * 9};": "facts + i * 9, sky_amounts[i], accounting + i * 3};",
+        "    emit(5, a.id, source, dh, da);": "    if (source > 0) accounting[0] += dh + da;\n    emit(5, a.id, source, dh, da);",
+        "    emit(4, id, source, h->sun - before, amount);": "    accounting[source == 0 ? 1 : 2] += h->sun - before;\n    emit(4, id, source, h->sun - before, amount);",
+        "    *ne = 0;": "    *ne = 0;\n    for (I j = 0; j < 3; j++) accounting[j] = 0;",
     }
     for before, after in replacements.items():
         if source.count(before) != 1:
             raise RuntimeError(
-                "Pinned CUDA sky-income hook changed; verify the engine installation"
+                "Pinned CUDA accounting/sky-income hook changed; verify the engine installation"
             )
         source = source.replace(before, after)
     return source
@@ -35,6 +39,7 @@ class LessonCudaBatch(CudaBatch):
         self._episode_rules = [self.rules] * self.n
         self._sunless_rules = sky_rules(self.rules, False)
         self._sky_amounts = self.cp.full(self.n, self.rules.game["sky_sun_amount"], self.cp.int64)
+        self.accounting = self.cp.zeros((self.n, 3), self.cp.int64)
         self.source = lesson_kernel_source(self.source)
         self.module = self.cp.RawModule(code=self.source, options=("--std=c++11", "--fmad=false"))
         self._step_kernel = self.module.get_function("step_games")
@@ -42,7 +47,7 @@ class LessonCudaBatch(CudaBatch):
         self._step = self._step_with_income
 
     def _step_with_income(self, grid, block, args):
-        self._step_kernel(grid, block, (*args, self._sky_amounts))
+        self._step_kernel(grid, block, (*args, self._sky_amounts, self.accounting))
 
     def reset(self, levels, seeds, *, indices=None, allowed=None, digging=None, natural_sun=None):
         indices = self._indices(indices)

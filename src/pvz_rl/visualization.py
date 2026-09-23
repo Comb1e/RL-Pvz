@@ -137,7 +137,8 @@ def build_run_report(run, cfg=None):
 
     panels = [
         ("rolling_win_rate", "Rolling training win rate"),
-        ("rolling_return", "Rolling episode reward"),
+        ("rolling_return", "Undiscounted episode reward"),
+        ("rolling_discounted_return", "Simulation-time-discounted episode return"),
         ("rolling_seconds", "Rolling episode duration (simulated seconds)"),
         ("invalid_action_rate", "Rolling invalid-action rate"),
         (
@@ -199,6 +200,45 @@ def build_run_report(run, cfg=None):
             )
     _save(fig, output, "training-curves")
     images.append(("Training behavior and throughput", "training-curves.png"))
+
+    accounting_panels = [
+        ("produced_sun", "Actual sunflower income (sun)"),
+        ("sky_income", "Actual sky income (excluded from reward)"),
+        ("effective_damage", "Plant-caused HP + armor removed"),
+        ("plant_value_loss", "Lost plant value (sun equivalents)"),
+        ("combat_value", "Damage value (sun equivalents)"),
+        ("mower_expenditure", "Mower expenditure (sun equivalents)"),
+        ("development", "Net development reward"),
+        ("terminal", "Outcome reward"),
+        ("cumulative_net_value", "Cumulative net value per game"),
+        ("maximum_net_value", "Historical maximum net value per game"),
+        ("value_drawdown", "Drawdown from maximum (diagnostic only)"),
+    ]
+    fig, axes = plt.subplots(6, 2, figsize=(12, 18))
+    for ax, (key, title) in zip(axes.flat, accounting_panels):
+        plotted = False
+        for label, series in segments:
+            rows = [
+                r
+                for r in series["training-metrics"]
+                if r.get("rolling_" + key) is not None and r.get(progress_key) is not None
+            ]
+            if rows:
+                ax.plot(
+                    [r[progress_key] for r in rows],
+                    [r["rolling_" + key] for r in rows],
+                    label=label,
+                )
+                plotted = True
+        ax.set(title=title, xlabel=progress_label)
+        ax.grid(alpha=0.2)
+        if plotted:
+            ax.legend(fontsize=7)
+        else:
+            _empty(ax, "Accounting unavailable in this run")
+    axes.flat[-1].set_visible(False)
+    _save(fig, output, "accounting-curves")
+    images.append(("Net realized value accounting", "accounting-curves.png"))
 
     optimizer_panels = [
         ("policy_gradient_loss", "Policy loss"),

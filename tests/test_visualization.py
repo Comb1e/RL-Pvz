@@ -95,6 +95,9 @@ def test_shared_checkpoint_reports_and_videos(smoke_cfg, tmp_path, monkeypatch):
     page = (run / "visualizations/index.html").read_text("utf-8")
     assert page.count("<video controls") == 3 and "autoplay" not in page
     assert "Task-specific training diagnostics" in page and "task-curves.png" in page
+    assert "Net realized value accounting" in page and "accounting-curves.png" in page
+    assert metrics[-1]["rolling_discounted_return"] is not None
+    assert metrics[-1]["rolling_development"] is not None
     assert "https://" not in page
     for path in re.findall(r'(?:src|href)="([^"]+)"', page):
         assert (run / "visualizations" / path).exists()

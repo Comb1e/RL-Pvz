@@ -20,7 +20,7 @@ from .curriculum import LESSONS, stage_distribution, teaching_enabled
 from .encoding import ObservationEncoder
 from .lesson_rules import natural_sun, sky_rules
 from .recordings import ActionPhaseRecorder
-from .rewards import REWARD_METRICS, reward_parts
+from .rewards import LEDGER_METRICS, REWARD_METRICS, reward_parts
 from .scenarios import difficulty_weights, scenario
 
 
@@ -277,13 +277,22 @@ class PvZEnv(gym.Env):
             before,
             self.public,
             self.cfg,
-            self.options["shaped"],
             events=result.events,
             rules=self.rules,
         )
         for key in REWARD_METRICS:
             self.metrics[key] += parts[key]
         self.episode_reward += parts["total"]
+        self.metrics["discounted_return"] += (
+            self.cfg["training"]["gamma"] ** self.metrics["simulation_ticks"] * parts["total"]
+        )
+        self.metrics["cumulative_net_value"] = self.metrics["net_value"]
+        self.metrics["maximum_net_value"] = max(
+            self.metrics["maximum_net_value"], self.metrics["net_value"]
+        )
+        self.metrics["value_drawdown"] = (
+            self.metrics["maximum_net_value"] - self.metrics["net_value"]
+        )
         self.metrics["decisions"] += 1
         self.metrics["simulation_ticks"] += result.ticks_advanced
         self.metrics["instant_actions"] += int(result.ticks_advanced == 0)
@@ -361,7 +370,7 @@ class PvZEnv(gym.Env):
             "max_actions_per_tick": self.metrics["max_actions_per_tick"],
             "action_timing": "per_tick" if self.per_tick else "fixed",
             "attacker_purchases": self.metrics["attacker_purchases"],
-            **{key: self.metrics[key] for key in REWARD_METRICS},
+            **{key: self.metrics[key] for key in (*REWARD_METRICS, *LEDGER_METRICS)},
             "first_attacker_seconds": None
             if self.first_attacker_tick is None
             else self.first_attacker_tick / obs.tick_rate,

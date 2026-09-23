@@ -37,7 +37,7 @@ from .exploration import configure_exploration
 from .metrics import episode_task, mean_agent_actions, task_statistics
 from .progress import Phase, ProgressReporter, duration
 from .provenance import append_jsonl, file_hash, metadata, verify_engine, write_json
-from .rewards import REWARD_METRICS
+from .rewards import LEDGER_METRICS, REWARD_METRICS
 from .scenarios import difficulty_weights
 from .spatial_policy import SpatialFeatures, SpatialGroupedPolicy
 from .timing import TrainingTimings
@@ -78,7 +78,7 @@ def build_model(cfg, condition, env, seed, log_dir=None):
         n_steps=t["rollout_size"] // t["n_envs"],
         batch_size=t["batch_size"],
         n_epochs=t["n_epochs"],
-        gamma=cfg["reward"]["gamma"],
+        gamma=t["gamma"],
         gae_lambda=t["gae_lambda"],
         clip_range=t["clip_range"],
         ent_coef=0.0,
@@ -259,7 +259,7 @@ class ResearchCallback(BaseCallback):
             else None,
             **{
                 f"rolling_{key}": sum(r.get(key, 0) for r in rows) / len(rows) if rows else None
-                for key in REWARD_METRICS
+                for key in (*REWARD_METRICS, *LEDGER_METRICS)
             },
             "rolling_first_attacker_seconds": (
                 sum(
@@ -310,7 +310,7 @@ class ResearchCallback(BaseCallback):
         kills = (
             f"; plant/mower kills per game {row['rolling_plant_kills']:.2f}/{row['rolling_mower_kills']:.2f}"
             f"; attackers/game {row['rolling_attacker_purchases']:.2f}, early digs/game {row['rolling_early_voluntary_digs']:.2f}"
-            f"; mower cost {row['rolling_mower_activation_penalty']:.3f}"
+            f"; net value {row['rolling_net_value']:.1f}, discounted return {row['rolling_discounted_return']:.3f}"
             if self.recent
             else ""
         )
@@ -783,7 +783,7 @@ class ResearchCallback(BaseCallback):
 
 
 def initial_weights(checkpoint, cfg):
-    """Read tensors only; the retired shared architecture is never instantiated."""
+    """Load current-method weights without restoring optimizers or experiment settings."""
     from stable_baselines3.common.save_util import load_from_zip_file
 
     checkpoint = Path(checkpoint).resolve()
@@ -793,32 +793,21 @@ def initial_weights(checkpoint, cfg):
     # structural; weights-only transfer never restores old lesson parameters.
     validate_config(cfg)
     verify_engine(source_cfg)
-    compatible = copy.deepcopy(source_cfg)
-    shared = compatible["policy"]["kind"] == "spatial_grouped_v3"
-    if shared:
-        compatible["policy"]["kind"] = "spatial_grouped_v4"
-    require_supported_policy(compatible, saved["condition"])
-    if transfer_protocol(compatible) != transfer_protocol(cfg):
+    if (
+        source_cfg.get("reward", {}).get("version") != "net_value_v1"
+        or source_cfg.get("training", {}).get("discount_clock") != "simulation_ticks"
+    ):
+        raise ValueError("Retired checkpoint; 0.11.0 requires fresh training")
+    require_supported_policy(source_cfg, saved["condition"])
+    if transfer_protocol(source_cfg) != transfer_protocol(cfg):
         raise ValueError(
             "Weights-only initialization requires matching engine, observation and network structure; start fresh for changed dimensions"
         )
     data, parameters, _ = load_from_zip_file(checkpoint, device="cpu")
     weights = {key: value.detach().clone() for key, value in parameters["policy"].items()}
-    if shared:
-        # SB3's shared module has three registered names in the saved state dict.
-        # Reject contradictory aliases instead of silently choosing one set of weights.
-        for key, value in list(weights.items()):
-            if key.startswith("features_extractor."):
-                suffix = key.removeprefix("features_extractor.")
-                for prefix in ("pi_features_extractor.", "vf_features_extractor."):
-                    if prefix + suffix not in weights or not torch.equal(
-                        weights[prefix + suffix], value
-                    ):
-                        raise ValueError("Shared checkpoint contains inconsistent encoder tensors")
-                    weights[prefix + suffix] = value.clone()
     return weights, {
         "mode": "weights_only",
-        "conversion": "shared_to_independent" if shared else "none",
+        "conversion": "none",
         "checkpoint": str(checkpoint),
         "checkpoint_sha256": file_hash(checkpoint),
         "source_learner_seed": saved["learner_seed"],
@@ -956,7 +945,7 @@ def train(
     progress.emit(
         f"Action timing: {cfg['environment'].get('action_timing', 'fixed')}; "
         f"{cfg['environment']['decision_ticks']} ticks per wait; "
-        f"discount {cfg['reward']['gamma']} per policy decision",
+        f"discount {cfg['training']['gamma']} per simulation tick",
         force=True,
     )
     training_complete = False
