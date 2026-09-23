@@ -148,6 +148,11 @@ def test_v090_conversion_is_weights_only_and_preserves_both_outputs(tmp_path):
     original.load_state_dict(weights)
     old = copy.deepcopy(cfg)
     old["policy"]["kind"] = "spatial_grouped_v3"
+    for lesson in old["curriculum"]["lessons"].values():
+        del lesson["natural_sun"]
+    # These are source weights, not a supported executable lesson configuration.
+    with pytest.raises(ValueError, match="natural_sun"):
+        validate_config(old)
     (tmp_path / "metadata.json").write_text(
         json.dumps({"config": old, "condition": "masked", "learner_seed": 101})
     )

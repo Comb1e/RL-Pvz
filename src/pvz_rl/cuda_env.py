@@ -9,13 +9,14 @@ import torch
 from gymnasium import spaces
 from pvz_game import Game, Rules
 from pvz_game.config import PLANT_TYPES
-from pvz_game.cuda import CudaBatch
 from stable_baselines3.common.vec_env import VecEnv
 
 from .budget import budget_target
 from .config import lesson_settings
 from .cuda_features import METRIC_INDICES, CudaFeatures
+from .cuda_lessons import LessonCudaBatch
 from .curriculum import LESSONS, stage_distribution, teaching_enabled
+from .lesson_rules import natural_sun
 from .metrics import task_name
 from .rewards import REWARD_METRICS
 from .scenarios import difficulty_weights, scenario
@@ -102,7 +103,7 @@ class CudaVecEnv(VecEnv):
             for level, fam, seed in cases:
                 game.reset(scenario(level, fam, seed, self.queue.rules, cfg), seed)
                 counts.append(game.observe().counts.initial_total)
-        self.batch = CudaBatch(
+        self.batch = LessonCudaBatch(
             cfg["training"]["n_envs"],
             zombie_capacity=max(1, *counts),
             max_step_ticks=1,
@@ -156,6 +157,7 @@ class CudaVecEnv(VecEnv):
             indices=indices,
             allowed=allowed,
             digging=digging,
+            natural_sun=[natural_sun(self.cfg, s[2]) for s in staged],
         )
         ix = self.cp.asarray(indices)
         self.features.totals[ix] = 0

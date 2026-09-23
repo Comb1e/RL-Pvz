@@ -789,7 +789,9 @@ def initial_weights(checkpoint, cfg):
     checkpoint = Path(checkpoint).resolve()
     saved = json.loads((checkpoint.parent / "metadata.json").read_text("utf-8"))
     source_cfg = saved["config"]
-    validate_config(source_cfg)
+    # Only target experiment settings execute. Source compatibility below is
+    # structural; weights-only transfer never restores old lesson parameters.
+    validate_config(cfg)
     verify_engine(source_cfg)
     compatible = copy.deepcopy(source_cfg)
     shared = compatible["policy"]["kind"] == "spatial_grouped_v3"

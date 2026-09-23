@@ -3,6 +3,57 @@
 Evidence is versioned below. Learning outcomes, simulation correctness and runtime
 speed are separate measures; [research design](research.md) defines the protocol.
 
+## 0.10.4 sunless lesson pressure trial — 2026-09-23
+
+Placement now starts with 100 sun and basics at ticks 1/21/41. Saving starts with
+150 sun and six basics in two distinct lanes at ticks 860/1100/1340. Both disable
+sky income. These are configurable experimental tasks; normal-game rules, PPO,
+reward coefficients and 256×128 collection remain unchanged.
+
+Independent calculations prove saving cannot be won without sunflower income:
+150 sun cannot buy a shooter in both lanes. The public-state investment control
+wins all ten lane pairs at tick 2101; always-wait and no-flower controls lose at
+1859. Every placement lane wins with the prompt shooting control at 872. Exact
+control-specific boundaries are 98/99 ticks for placement and 67/68 ticks of
+delayed investment for saving. Immediate plant/dig counterexamples lose. These
+are feasibility controls, not learning demonstrations or universal timing optima.
+
+CPU/CUDA differential tests cover complete winning/failing saving games across
+all pairs, exact state hashes and masks, observations (`atol=1e-7`, `rtol=1e-6`)
+and rewards (`atol=2e-7`, `rtol=1e-6`). Mixed normal/lesson batches retain income
+across partial resets. Detailed event equality covers simultaneous sky/flower
+payments and the sun cap. Snapshot restore, invalid-rule rejection without
+partial mutation, kernel-hook failure, native replay verification and seeking
+are covered. Existing literal successful/failing scenarios retain their expected
+ticks as independent regression fixtures, not a shipped legacy training mode.
+
+| Check | Result |
+|---|---|
+| Complete research suite | **427 passed**, 308.60 seconds |
+| Follow-up weight-transfer/stage/math controls after source-settings validation cleanup | **78 passed**, 43.16 seconds |
+| Complete CPU game suite | **207 passed**, 9.55 seconds |
+| Complete CUDA game suite | **222 passed**, 40.49 seconds |
+| Real CUDA saving-stage smoke | 2 completed games, 3,840 transitions, checkpoint and offline report; 13.35 seconds total |
+| Ruff lint/format, dependency check, CUDA doctor | Passed |
+| Editable install, wheel and source distribution | Passed for 0.10.4 |
+| README links, ten PowerShell blocks, bundled lesson settings | Passed |
+
+The smoke correctly reports `curriculum_incomplete` and does not trigger normal
+validation or demos without mastery. Existing regression checks cover those
+successful-stage exports, one checkpoint identity, resume and final metrics.
+Weights-only transfer checks validate the new target configuration and structural
+source compatibility; obsolete source lesson settings are not restored. Current
+runs remain resumable. Older configurations missing explicit sky availability
+are rejected instead of silently replaying different lessons.
+
+Logs are `artifacts/v0104-full.log`, `v0104-transfer.log`, `v0104-game-cpu.log`,
+`v0104-game-cuda.log`, `v0104-smoke.log`, `v0104-doctor.log`, `v0104-install.log`
+and `v0104-build.log`; the smoke report/checkpoint is under
+`artifacts/v0104-saving-smoke`. No formal training or performance comparison was
+launched. Upstream caches/temp output stayed outside both game checkouts. The
+installed pin and game checkouts remain unchanged. Stronger easy performance and
+less destructive digging remain unverified research outcomes.
+
 ## 0.10.3 parallelism and rollout accounting — 2026-09-23
 
 Default parallelism is 256, with 128 transitions per environment and 32,768 per

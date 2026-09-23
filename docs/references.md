@@ -198,3 +198,21 @@ options. Used to assess waiting compression and explain why dropping elapsed
 discounting is incorrect; no options algorithm is added. The weighted-sampling
 proposal in research.md is a local estimator design, not a result from this paper.
 The archived 0.10.0 seed-101/102 comparison logs supply the waiting diagnosis.
+
+For 0.10.4 (2026-09-23), retrieved and inspected the **abstract** of Narvekar et al.
+(2020), [Curriculum Learning for Reinforcement Learning Domains: A Framework and Survey](https://jmlr.org/papers/v21/20-212.html).
+It frames task sequencing and transfer as separate design questions. No full-text
+claim or timing recommendation is attributed to it. Also inspected Farama
+[MiniGrid 2.3.1 DynamicObstaclesEnv](https://github.com/Farama-Foundation/Minigrid/blob/v2.3.1/minigrid/envs/dynamicobstacles.py),
+its constructor, configurable obstacle count/size and task limits. This supports
+explicit challenge parameters in a small task definition; its rewards, action
+restrictions and timeout formula are not copied. Neither source establishes that
+tighter PVZ lessons cure early digging.
+
+Actual timings derive from installed game 1.3.0's `config.py`, `engine.py`,
+`cuda/backend.py` and `cuda/simulation.cu`: 120/480-tick sunflower payments,
+150-tick recharge, 30-tick firing, 200-HP basics, movement on spawn ticks and
+income-before-plant processing. Reference controls and committed independent
+tests establish feasibility and specific delay counterexamples. The research
+adapter preserves the installed source pin and records effective snapshot rules.
+Numeric trial choices are local design, not published performance claims.

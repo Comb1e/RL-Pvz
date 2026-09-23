@@ -1,6 +1,6 @@
 # PVZ plant-placement research
 
-Research **0.10.3** trains **one shared CUDA MaskablePPO policy** for easy, standard,
+Research **0.10.4** trains **one shared CUDA MaskablePPO policy** for easy, standard,
 and hard. There is one recipe, [configs/train.toml](configs/train.toml), also used
 when `--config` is omitted. Policy and value learning use independent encoders and
 Adam states. In the 0.10.0 saving-to-easy comparison, easy validation improved
@@ -67,10 +67,10 @@ Start with a fresh directory:
 
 ```powershell
 .\.venv\Scripts\python.exe -m pvz_rl train --config configs\train.toml `
-  --seed 101 --games 10000 --max-minutes 120 --output runs\saving-economy-101
+  --seed 101 --games 10000 --max-minutes 120 --output runs\sunless-trial-101
 ```
 
-`runs/saving-economy-101` is created by this command. It is not shipped. If it already
+`runs/sunless-trial-101` is created by this command. It is not shipped. If it already
 exists, choose another name and use it in the examples below. Training never
 overwrites a run.
 
@@ -153,7 +153,7 @@ A short pipeline check is:
 .\.venv\Scripts\python.exe -m pvz_rl train --family diagnostic `
   --games 2 --n-envs 2 --rollout-steps-per-env 32 --batch-size 32 `
   --eval-games 1 --validation-count 1 --max-minutes 2 `
-  --output artifacts\cuda-smoke-v0103
+  --output artifacts\cuda-smoke-v0104
 ```
 
 This tests integration, not game-playing competence. `suite` repeats this same
@@ -173,16 +173,29 @@ and `compare-sc2` were removed.
 | `standard` | 45% easy, 45% standard, 10% saving | 100/100 each on easy and standard |
 | `shared` | 20% easy, 40% standard, 40% hard | 100/100 on each difficulty |
 
-The saving lesson starts with **50 sun**, permits sunflower/peashooter and legal
-digging, disables mowers, and spawns **one basic zombie in each of three randomly
-chosen lanes at 50 seconds**. Sky sun remains 25 every 10 seconds. An undefended
-lane loses at tick 1999 (99.95 seconds), before the tenth sky payment. Without
-sunflowers there can be only `50 + 9 × 25 = 275` sun, less than the 300 required
-to place even one peashooter in all three lanes. Sunflowers are therefore necessary.
-A verification control with two sunflowers wins all ten lane combinations; it
-never supplies learner actions. See [the calculation](docs/research.md#saving-lesson).
-Placement remains the original one-lane lesson. All lesson quantities, including
-`lanes_per_spawn`, are configured in the TOML.
+The current lessons are an **experimental pressure trial**. Both have **no natural
+sky sun** and no mowers; sunflower production still works normally.
+
+| Lesson | Starting sun | Zombies |
+|---|---:|---|
+| Placement | 100 | Three basics in one random lane at ticks 1, 21, 41 (one second apart) |
+| Saving | 150 | One basic in each of two random lanes at ticks 860, 1100, 1340 (43, 55, 67 seconds); six total |
+
+Placement funds exactly one shooter; digging it leaves no replacement income.
+Saving permits sunflower/peashooter: without sunflowers, 150 sun cannot buy the
+two 100-sun shooters needed to cover both lanes. Two lanes and 150 starting sun
+let the economy lesson start earlier despite removing free income. Repeated
+arrivals add pressure throughout the lesson. All ten lane pairs have a verified
+winning control; these controls never supply learning actions.
+
+For the tested control, placement at tick 98 wins and tick 99 loses. In saving,
+delaying both sunflower investments by 67 ticks wins; 68 ticks loses. These are
+**control-specific boundaries**, not universal limits on legal strategies.
+See [the calculations and limitations](docs/research.md#lesson-pressure-trial).
+Edit `natural_sun`, `initial_sun`, `spawn_ticks`, and `lanes_per_spawn` under
+`curriculum.lessons` to adjust the trial. Normal games retain ordinary sky income.
+Rewards, legal digging, policy and PPO settings are unchanged. Reduced early
+digging and stronger easy performance are not yet demonstrated.
 
 Mastery probes run every **2,000 training games** (previously 500), using seeds 100050–100149,
 separate from normal checkpoint validation (100000–100049). At least 100 games
@@ -201,12 +214,12 @@ promotes itself. For example:
 
 ```powershell
 .\.venv\Scripts\python.exe -m pvz_rl train --stage placement --seed 101 `
-  --games 10000 --max-minutes 30 --output runs\compact-stages-101\placement
+  --games 10000 --max-minutes 30 --output runs\sunless-stages-101\placement
 
 # Run after the placement checkpoint exists:
 .\.venv\Scripts\python.exe -m pvz_rl train --config configs\train.toml --stage saving `
-  --init-from runs\compact-stages-101\placement\final.zip `
-  --games 10000 --max-minutes 30 --output runs\compact-stages-101\saving
+  --init-from runs\sunless-stages-101\placement\final.zip `
+  --games 10000 --max-minutes 30 --output runs\sunless-stages-101\saving
 ```
 
 `--init-from` copies **weights only**. Both optimizers, counters, mastery,
@@ -215,12 +228,12 @@ checkpoint selection and time allowance start fresh. It also works without
 the source settings; specify an edited TOML to change rewards, PPO or curriculum.
 Network dimensions, categorical layout and engine must match. Metadata records
 the source checkpoint hash, structural signature and parameter changes.
-Use `--config configs\train.toml --init-from ...` to adopt the new saving lesson,
-reward weight and parallelism with compatible old weights. `--resume` deliberately
-keeps the saved lesson, reward and environment count. Earlier saving mastery is
-not evidence of passing the new lesson.
-The same explicit-config initialization adopts the new evaluation schedule;
-resuming an older run preserves its recorded intervals and periodic evaluations.
+Use `--config configs\train.toml --init-from ...` to try these lessons with
+compatible weights and fresh optimizer/mastery state. Previous lesson scores do
+not establish mastery of these tasks. There is one current recipe and no legacy
+lesson mode; saved configurations missing the explicit `natural_sun` setting
+cannot resume under this release. Use Git for the previous implementation.
+New runs made with this release can resume normally.
 
 `--resume` restores the saved actor, critic, both Adam states, configuration, counts, mastery
 and validation schedule with the remaining cumulative budget. It cannot change
@@ -228,8 +241,8 @@ research parameters. Use a fresh output directory:
 
 ```powershell
 .\.venv\Scripts\python.exe -m pvz_rl train `
-  --resume runs\saving-economy-101\latest.zip `
-  --output runs\saving-economy-101-resumed
+  --resume runs\sunless-trial-101\latest.zip `
+  --output runs\sunless-trial-101-resumed
 ```
 
 The checkpoint must remain beside `metadata.json`. Interrupted episodes restart;
@@ -253,7 +266,7 @@ checkpoint and choose a fresh output directory:
 
 ```powershell
 .\.venv\Scripts\python.exe -m pvz_rl train --config configs\train.toml --stage easy `
-  --init-from runs\compact-stages-101\saving\final.zip `
+  --init-from runs\sunless-stages-101\saving\final.zip `
   --games 10000 --max-minutes 120 --output runs\separated-easy-101
 ```
 
@@ -277,9 +290,9 @@ Overall rolling win rate mixes tasks and can change when short lessons finish
 before normal games. Use task-specific curves and normal validation to assess it.
 
 ```powershell
-Get-Content runs\saving-economy-101\train.log -Wait
+Get-Content runs\sunless-trial-101\train.log -Wait
 # Open after the report exists:
-Start-Process runs\saving-economy-101\visualizations\index.html
+Start-Process runs\sunless-trial-101\visualizations\index.html
 .\.venv\Scripts\tensorboard.exe --logdir runs
 ```
 
@@ -301,11 +314,11 @@ builds a report without gameplay or model loading. Replay examples require
 `visualizations/demos.json` to exist. Rebuild or optionally export videos:
 
 ```powershell
-.\.venv\Scripts\python.exe -m pvz_rl visualize --run runs\saving-economy-101
-.\.venv\Scripts\python.exe -m pvz_rl visualize --run runs\saving-economy-101 --videos
+.\.venv\Scripts\python.exe -m pvz_rl visualize --run runs\sunless-trial-101
+.\.venv\Scripts\python.exe -m pvz_rl visualize --run runs\sunless-trial-101 --videos
 
 # Resolve the first recording from the generated manifest:
-$run = Resolve-Path runs\saving-economy-101
+$run = Resolve-Path runs\sunless-trial-101
 $demo = (Get-Content "$run\visualizations\demos.json" -Raw | ConvertFrom-Json).demos[0]
 $recording = Join-Path "$run\visualizations" $demo.replay
 .\.venv\Scripts\python.exe -m pvz_rl replay $recording --watch --speed 2
@@ -323,7 +336,7 @@ does not load retired weights or regenerate their gameplay.
 
 ```powershell
 .\.venv\Scripts\python.exe -m pvz_rl evaluate `
-  --checkpoint runs\saving-economy-101\best.zip `
+  --checkpoint runs\sunless-trial-101\best.zip `
   --split validation --count 10 --record --output artifacts\saving-economy-validation
 .\.venv\Scripts\python.exe -m pvz_rl benchmark-gpu --minutes 15 --output artifacts\cuda-benchmark-v0101
 .\.venv\Scripts\python.exe -m pytest -q

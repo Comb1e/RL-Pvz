@@ -2,13 +2,13 @@
 
 ## Current method and hypothesis
 
-Research 0.10.3 exposes one configurable CUDA MaskablePPO method, one compact
+Research 0.10.4 exposes one configurable CUDA MaskablePPO method, one compact
 observation and one spatial grouped policy. The question is whether this shared
 policy can learn plant selection, timing and placement across easy, standard and
 hard within a practical laptop budget. Smaller input/network size, ordinary PPO
 reductions and potential shaping are hypotheses to test, not established PVZ gains.
 
-The current hypothesis is that shared actor/critic features contributed to rapid
+An earlier hypothesis was that shared actor/critic features contributed to rapid
 forgetting after saving-to-easy transfer. In the inspected `compact-stages-101`
 run, normal easy validation fell from 26% to 2% on the same 50 seeds. Across stage
 games 101–200, easy games won 18/74 with 14.2% early digs per accepted planting;
@@ -140,48 +140,67 @@ trigger unrelated normal-game evaluation. The 100/100 requirement and separate
 Standalone stage handoffs copy compatible weights into fresh optimizers; automatic
 promotion preserves both current optimizers. All these numeric settings are adjustable.
 
-### Saving lesson
+### Lesson pressure trial
 
-The task requires income investment by construction, using unchanged engine
-rules. Start with 50 sun; allow sunflower and peashooter, ordinary waiting and
-digging, but no mowers. Three basic zombies spawn simultaneously at tick 1000
-in three distinct seeded lanes. There are ten lane combinations. The 100 mastery
-seeds cover all ten, so this remains a small introductory task rather than broad
-economic generalization evidence.
+Version 0.10.4 tests whether scarce income and tighter waves discourage wasteful
+digging. This changes training tasks, not PPO or rewards. Both lessons disable
+sky income and mowers. Sunflower production, costs, combat and per-tick actions
+retain pinned rules. Normal games retain sky income. There is one configurable
+lesson definition, with no extra stage or legacy training mode.
 
-**Necessity proof without sunflowers.** The only remaining plant is a 100-sun
-peashooter, which shoots and blocks in its own lane. Digging neither moves a plant
-nor refunds its cost. Zombies start at integer x=9500 and reach the house at
-x=-500. Basic speed is 200 units/s at 20 ticks/s, exactly 10 units per tick.
-Movement occurs on the spawning tick. An entirely unblocked lane therefore
-loses at `1000 + (9500 - (-500))/10 - 1 = 1999` ticks (99.95 seconds).
-Sky income is 25 at multiples of 200 ticks. Before this loss, at most
-`50 + floor(1999/200) × 25 = 275` sun is available: fewer than three purchases.
-With three threatened lanes and at most two plants ever purchased, at least one
-lane is entirely unblocked, proving the loss regardless of placement or digging.
-The tenth sky payment would give 300 at tick 2000, one tick too late. Spending
-zero-time actions forever cannot produce a victory or additional income.
+**Placement.** Start with 100 sun; allow peashooters, wait and digging. Three
+basics enter one random lane at ticks 1, 21 and 41, reducing inter-arrival spacing
+from four seconds to one. One shooter costs 100. Digging or wasting that purchase
+cannot be repaired without income. A public-state control observes the lane at
+tick 1, plants in column 0 and wins at 872. For this column/control, planting at
+98 wins at 969; planting at 99 loses at 1099, in all five lanes. Extra loss time
+comes from plant blocking, not a timeout penalty. Always waiting loses at 1000.
+Other columns and strategies can have different margins.
 
-**Feasibility witness, used only in tests.** Plant sunflowers at ticks 0 and 200
-in rows 0 and 1, column 1. Each costs 50, first produces 25 after 120 ticks, then
-every 480 ticks. At tick 1000 their four total payments plus five sky payments,
-minus purchase costs, leave `50 + 100 + 125 - 100 = 175` sun. Observe the spawned
-lanes and buy peashooters at column 0 in those lanes, in ascending row order, at
-ticks 1000, 1150 and 1560. A flower pays at 1080, funding the second purchase.
-The first two spend 200; sky at 1200/1400 and flower
-payments at 1280/1560 supply another 100. The shared 150-tick card cooldown is
-respected. The reference engine wins at tick **1831 (91.55 seconds)** in every
-lane combination. The sky-only control loses at **1999** in every combination.
-The analytical proof establishes necessity; these controls establish feasibility,
-not that PPO will learn the strategy. No control is used for learning.
+**Saving: necessity.** Start with 150 sun; allow sunflower/peashooter, wait and
+digging. Select two distinct lanes and spawn one basic in each at ticks 860,
+1100 and 1340: first arrival at 43 seconds, then every 12 seconds, six zombies
+total. The 100 mastery seeds cover all ten lane pairs. Without sunflowers,
+lifetime funds are 150, below two shooters' 200-sun cost. Shooters act only in
+their own lane; digging neither refunds nor relocates them. At least one lane
+therefore stays entirely unblocked. Basic speed is 200 integer units/s, or 10
+per tick. Its route is x=9500 to x=−500. That lane loses at
+`860 + (9500 − (−500))/10 − 1 = 1859` ticks (92.95 seconds). Movement occurs on
+the spawning tick. This proves sunflower necessity for finite action policies;
+infinite zero-time actions cannot produce victory.
 
-Version 0.10.1 also reduces `economy_weight` from 0.5 to 0.1. A living 100-sun
-plant contributes 0.03333 potential instead of 0.16667; 25 new sun contributes
-0.00833 instead of 0.04167 before discounting. Purchasing transfers equal value
-from sun to plants and never creates a positive purchase bonus. Defeated weight,
-terminal rewards and mower cost are unchanged. Reduced economic shaping also
-reduces the shaping loss from destruction or digging; its learning effect requires
-future measurement. Archived results use their recorded weights and lesson.
+**Saving: feasible income and pressure.** A test-only control buys sunflowers at
+ticks 0 and 150 in rows 0/1, column 0. Their first payments arrive after 120 ticks,
+then every 480 ticks: 120, 270, 600, 750, 1080, 1230. Each pays 25 sun. After
+buying both, cash is `150 − 2×50 = 50`. By tick 860, four payments supply another
+100. The control observes the threatened lanes, buys a column-1 shooter in the
+lower-numbered lane at 860, then the other at 1230:
+`150 − 100 + 6×25 = 200` total available for shooters. The 370-tick purchase gap
+respects the 150-tick recharge. Both flowers survive. All ten lane pairs win at
+**2101 (105.05 seconds)**; always-wait and no-flower controls lose at 1859.
+
+A basic needs ten 20-damage peas. With a 30-tick firing interval, a shooter's
+sustained capacity is one basic per 300 ticks (15 seconds). The 240-tick arrivals
+exceed that rate during a finite burst: delaying the second shooter creates a
+backlog. For lanes 2/4 and this same control, delaying both investments by 67
+ticks wins at 2168; 68 ticks loses at 2398. These exact boundaries come from
+reference simulation, including projectile travel, collision order and bites.
+They are not a proof that no other policy can recover from that delay. An
+immediate plant/dig counterexample loses both lessons. No control trains the agent.
+
+Extra initial sun and two lanes keep saving shorter than retaining 50 sun with
+no sky production, which would require longer income accumulation. There are no
+scripted actions, planting deadlines, retention rules, extra rewards or early-dig
+penalties. Git contains the previous implementation. Current configurations
+explicitly state sky availability; weights-only initialization resets mastery
+and optimizers when adopting this trial.
+
+**Limits.** Feasibility is not learned success. Tight timing may make exploration
+harder or overfit the lessons; removing sky income increases their difference
+from daytime games. Assess digs per accepted planting together with attacker
+purchases, lesson retention and easy wins. Improvement requires measured learning
+evidence; this trial makes no such claim yet. The economy coefficient stays 0.1:
+buying preserves potential value and digging reduces it without a purchase bonus.
 
 ## Evaluation and evidence
 
