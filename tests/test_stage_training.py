@@ -170,6 +170,7 @@ def test_all_stage_handoffs_preserve_only_weights_and_reset_optimizer_schedules(
         if expected is not None:
             assert_tensor_tree_equal(expected.policy.state_dict(), self.model.policy.state_dict())
             assert not self.model.policy.optimizer.state
+            assert not self.model.policy.critic_optimizer.state
             assert self.model._n_updates == 0
         original(self)
         starts.append(
@@ -212,6 +213,7 @@ def test_all_stage_handoffs_preserve_only_weights_and_reset_optimizer_schedules(
             assert meta["initialization"] is None
         expected, previous = model, run / "final.zip"
         assert model.policy.optimizer.state
+        assert model.policy.critic_optimizer.state
     assert starts == [(0, 0)] * 5
     build_run_report(tmp_path / "shared", stage_cfg)
     page = (tmp_path / "shared/visualizations/index.html").read_text("utf-8")
@@ -252,6 +254,9 @@ def test_mastered_stage_saves_without_collecting_next_stage(stage_cfg, tmp_path,
     assert restored.num_timesteps == model.num_timesteps
     assert_tensor_tree_equal(
         model.policy.optimizer.state_dict(), restored.policy.optimizer.state_dict()
+    )
+    assert_tensor_tree_equal(
+        model.policy.critic_optimizer.state_dict(), restored.policy.critic_optimizer.state_dict()
     )
 
 
@@ -311,6 +316,22 @@ def test_existing_profiles_remain_valid_without_stage():
     validate_config(cfg)
     require_cuda_training(cfg, runtime=False)
     assert "run_stage" not in cfg["curriculum"]
+
+
+def test_cli_shared_weights_conversion_does_not_reinterpret_resume(stage_cfg, tmp_path):
+    stage_cfg["policy"]["kind"] = "spatial_grouped_v3"
+    write_json(
+        tmp_path / "metadata.json",
+        {"config": stage_cfg, "learner_seed": 101, "condition": "masked"},
+    )
+    initialized = configured(
+        argparse.Namespace(command="train", config=None, init_from=tmp_path / "final.zip")
+    )
+    assert initialized["policy"]["kind"] == "spatial_grouped_v4"
+    require_cuda_training(initialized, runtime=False)
+    with pytest.raises(ValueError, match="--init-from"):
+        configured(argparse.Namespace(command="train", config=None, resume=tmp_path / "final.zip"))
+    assert read_json(tmp_path / "metadata.json")["config"]["policy"]["kind"] == "spatial_grouped_v3"
 
 
 @pytest.mark.parametrize("stage", STAGES)
@@ -469,4 +490,7 @@ def test_shared_mastery_stops_after_update_and_is_resumable(
     assert model.num_timesteps == restored.num_timesteps
     assert_tensor_tree_equal(
         model.policy.optimizer.state_dict(), restored.policy.optimizer.state_dict()
+    )
+    assert_tensor_tree_equal(
+        model.policy.critic_optimizer.state_dict(), restored.policy.critic_optimizer.state_dict()
     )

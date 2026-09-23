@@ -2,17 +2,27 @@
 
 ## Current method and hypothesis
 
-Research 0.9.0 exposes one configurable CUDA MaskablePPO method, one compact
+Research 0.10.0 exposes one configurable CUDA MaskablePPO method, one compact
 observation and one spatial grouped policy. The question is whether this shared
 policy can learn plant selection, timing and placement across easy, standard and
 hard within a practical laptop budget. Smaller input/network size, ordinary PPO
 reductions and potential shaping are hypotheses to test, not established PVZ gains.
 
-Local historical records motivated the change: a saving-stage run fell from 78/100
-to 0/100 mastery, early digging increased and some updates had large approximate
-KL (maximum about 0.575). Its last choice-only actor fractions were roughly 3–6%.
-The two similarly named archived folders both actually used learner seed 101;
-they are not evidence from two independent seeds.
+The current hypothesis is that shared actor/critic features contributed to rapid
+forgetting after saving-to-easy transfer. In the inspected `compact-stages-101`
+run, normal easy validation fell from 26% to 2% on the same 50 seeds. Across stage
+games 101–200, easy games won 18/74 with 14.2% early digs per accepted planting;
+games 201–300 won 6/85 with 25.3%. Placement and saving rehearsals later collapsed
+too. The initial 100% rolling win rate contained only completed placement lessons.
+These observations establish regression, not its sole cause.
+
+The actor and critic now own independent copies of the compact encoder and
+separate Adam states. The first comparison changes no reward, exploration,
+learning-rate, discount, curriculum or rollout defaults. Independent gradient
+clipping and actor-only KL stopping accompany the split; the critic continues
+its epochs. Thus the comparison tests this optimization package, not encoder
+separation in perfect isolation. Critic predictions are deferred to larger frozen
+batches before GAE; no stale-policy experience is introduced.
 
 ## Research choices
 
@@ -22,11 +32,13 @@ they are not evidence from two independent seeds.
 | SC2LE categorical/spatial preprocessing | Embed plant categories; combine spatial and scalar inputs | No imitation, league, privileged critic or recurrent architecture is copied |
 | Potential-based shaping theorem | Use one discounted potential difference with correct terminal handling | Function approximation and finite training do not guarantee learned invariance or success |
 | CleanRL and SB3-Contrib PPO | Standard full-minibatch reduction; optional KL stopping before optimizer steps | Correct PPO arithmetic alone does not establish good exploration |
-| Local digging/instability observations | Remove event-reward complexity and choice-only reweighting; retain trainable initial dig bias | Several changes occur together, so the short comparison cannot isolate causes |
+| Local easy-stage regression; What Matters §3.2; DeepSeek DSpark gradient isolation | Separate learned actor/value features and optimizer states, retaining the existing reward | Interference remains a hypothesis; learning must improve on paired development checks |
+| DeepSeek phase-specific execution and task-quality/length-bias discussion | Batch critic inference, audit task-level data composition, preserve successful and failing controls | No LLM architecture or reported speedup is copied |
 
 Actual inspected versions and sections are in [references](references.md).
-Alternative algorithms, recipes, policy factories and legacy model loaders are
-removed. CPU reference controls and non-learning baselines remain. The older
+Alternative algorithms, recipes and policy factories are removed. A narrow tensor
+conversion accepts only 0.9.0 compact weights for initialization; it does not restore
+shared-encoder training or resume. CPU reference controls and non-learning baselines remain. The older
 committed implementation is used only as temporary comparison evidence.
 
 ## Reward objective
@@ -75,8 +87,8 @@ full board and lessons' configured plant restrictions. Rehearsal and final
 20/40/40 distribution remain. Mastery defaults to 100/100 per required task, at
 least 100 completed games started under that stage, one passing check and probes
 every 500 games. Normal validation every 2,000 games alone selects `best.zip`.
-Standalone stage handoffs copy compatible weights into a fresh optimizer; automatic
-promotion preserves the current optimizer. All these numeric settings are adjustable.
+Standalone stage handoffs copy compatible weights into fresh optimizers; automatic
+promotion preserves both current optimizers. All these numeric settings are adjustable.
 
 ## Evaluation and evidence
 
@@ -93,23 +105,31 @@ truncation and throughput. Zero planting makes the digging ratio unavailable.
 Fewer digs alone do not establish progress. Interpret lessons separately from
 normal-game ability, and development validation separately from held-out evidence.
 
-The release comparison uses fresh starts from previous commit `0dbe95e` and the
-compact method, learner seeds 101/102 and equal five-minute allowances. Method order
-reverses for the second seed. Game pin, default task distributions, mastery gates,
-parallelism and evaluation cases match. Report actual games, decisions and elapsed
-time; do not fabricate interpolation across rollout overshoot. This compares bundles
-of changes, not isolated ablations. No previous trained weights are reused.
+The 0.10.0 comparison starts both methods from the same mastered saving checkpoint
+(SHA-256 `3bc3d252e3107c34c26c0f5623ddaf57eb3bac0d62fb74f54d5362e4b9d364ab`),
+with fresh optimizers/counters and learner seeds 101/102. The reference is commit
+`1ab8c59`; the candidate uses independent encoders. Five-minute learning windows
+include startup and scheduled probes; normal and lesson endpoint evaluations are
+bounded separately, with total learning/comparison evaluation below 30 minutes.
+Order is reference101, separated101, separated102, reference102. All use the same
+engine, reward, curriculum distributions/gates, parallelism and evaluation cases.
+Actual game and decision counts are reported, including the first 200 completed
+games, without interpolation. This tests continuation from one upstream trained
+model, not two independent full curriculum training runs.
 
-Keep the new method experimental unless both seeds reduce destructive digging
-without worse lesson performance. Stronger normal-game claims need independent
-runs, paired scenario comparisons and uncertainty intervals. Bootstrap reporting
-resamples learner runs and common seeds; two short pilots cannot establish robust
-performance. Formal suites and comparison matrices are never started automatically.
-Results, including missing evaluations and negative outcomes, live in
-[validation](validation.md).
+Claim the collapse resolved only if both seeds improve normal easy validation,
+reduce early digs per planting and retain lesson competence. Fewer digs without
+planting/attacker activity are not progress. Stronger generalization claims require
+independent runs, paired scenario differences and uncertainty. Two short transfer
+pilots are development evidence. Final-test seeds remain untouched. Results and
+missing evaluations are recorded in [validation](validation.md).
 
-The release comparison failed that adoption criterion: both compact runs lost all
-20 deterministic placement cases, while both reference runs won all 20. Normal
-validation also provides no evidence of improvement. The compact implementation
-remains experimental; the stochastic-training/deterministic-evaluation gap needs
-diagnosis. Reduced late digging alone is insufficient.
+The bounded test improved easy validation from 2% to 66% and from 0% to 28%,
+with fewer aggregate early digs per planting for both seeds. However, saving
+retention was 65/100 and 0/100, and seed 102 regressed after roughly 500 games.
+The acceptance condition fails. This is an experimental implementation of the
+requested separation, not evidence that feature interference was the sole cause
+or that the collapse is fixed. No reward or optimizer tuning followed these results.
+
+The earlier 0.9.0 fresh-start comparison failed its adoption criterion; those
+historical results remain in validation and do not describe the new transfer test.

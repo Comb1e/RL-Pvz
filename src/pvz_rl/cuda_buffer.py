@@ -31,6 +31,7 @@ class TensorRolloutBuffer(BaseBuffer):
     def reset(self):
         super().reset()
         self._flat = None
+        self._timeouts = []
 
     def add(self, obs, action, reward, episode_start, value, log_prob, action_masks=None):
         for key, value in (
@@ -38,13 +39,41 @@ class TensorRolloutBuffer(BaseBuffer):
             ("actions", action.reshape(-1, self.action_dim)),
             ("rewards", reward),
             ("episode_starts", episode_start),
-            ("values", value.flatten()),
+            ("values", None if value is None else value.flatten()),
             ("log_probs", log_prob.flatten()),
         ):
-            getattr(self, key)[self.pos].copy_(value)
+            if value is not None:
+                getattr(self, key)[self.pos].copy_(value)
         self.action_masks[self.pos].copy_(action_masks)
         self.pos += 1
         self.full = self.pos == self.buffer_size
+
+    def add_timeouts(self, indices, terminal_observations):
+        # Only timeout states need storage, never reset observations or natural terminals.
+        self._timeouts.append((self.pos, indices.clone(), terminal_observations.clone()))
+
+    @torch.no_grad()
+    def evaluate_values(self, policy, last_observations, batch_size):
+        if not self.full:
+            raise RuntimeError("Evaluate values only for a completed rollout")
+
+        def evaluate(observations):
+            return torch.cat(
+                [policy.predict_values(chunk).flatten() for chunk in observations.split(batch_size)]
+            )
+
+        observations = self.observations.flatten(0, 1)
+        self.values.copy_(evaluate(observations).reshape_as(self.values))
+        if self._timeouts:
+            terminals = torch.cat([obs for _, _, obs in self._timeouts])
+            terminal_values = evaluate(terminals)
+            offset = 0
+            for step, indices, obs in self._timeouts:
+                size = len(obs)
+                self.rewards[step, indices] += self.gamma * terminal_values[offset : offset + size]
+                offset += size
+            self._timeouts.clear()
+        return evaluate(last_observations)
 
     def compute_returns_and_advantage(self, last_values, dones):
         if self.device.type == "cuda":

@@ -112,9 +112,9 @@ def validate_config(cfg: dict) -> None:
             or steps * cfg["training"]["n_envs"] != cfg["training"]["rollout_size"]
         ):
             raise ValueError("rollout_size must equal n_envs * rollout_steps_per_env")
-    if (
-        cfg["encoding"].get("version") != "compact_v3"
-        or cfg.get("policy", {}).get("kind") != "spatial_grouped_v3"
+    if cfg["encoding"].get("version") != "compact_v3" or cfg.get("policy", {}).get("kind") not in (
+        "spatial_grouped_v3",
+        "spatial_grouped_v4",
     ):
         raise ValueError(
             "Retired observation/policy format. Start fresh with configs/train.toml; archived reports and recordings remain readable."
@@ -171,6 +171,14 @@ def validate_config(cfg: dict) -> None:
             raise ValueError(f"training.{key} must be finite and nonnegative")
     if type(cfg["training"]["normalize_advantage"]) is not bool:
         raise ValueError("normalize_advantage must be a boolean")
+    critic_lr = cfg["training"].get("critic_learning_rate")
+    if critic_lr is not None and (
+        type(critic_lr) not in (int, float) or not math.isfinite(critic_lr) or critic_lr <= 0
+    ):
+        raise ValueError("critic_learning_rate must be finite and positive")
+    value_batch = cfg["training"].get("value_batch_size", 1024)
+    if type(value_batch) is not int or value_batch < 1:
+        raise ValueError("value_batch_size must be a positive integer")
     for key in ("type_coef", "tile_coef"):
         value = cfg["training"]["exploration"][key]
         if type(value) not in (int, float) or not math.isfinite(value) or value < 0:

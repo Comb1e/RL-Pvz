@@ -81,6 +81,10 @@ def test_shared_checkpoint_reports_and_videos(smoke_cfg, tmp_path, monkeypatch):
     assert [m["training_steps"] for m in metrics] == [64, 128]
     assert [m["completed_updates"] for m in metrics] == [1, 2]
     assert all(m["optimization"]["value_loss"] is not None for m in metrics)
+    assert all(m["optimization"]["critic_optimizer_steps"] > 0 for m in metrics)
+    assert all(m["optimization"]["post_update_type_kl"] is not None for m in metrics)
+    assert metrics[-1]["rolling_by_task"]["placement"]["completed_games"] > 0
+    assert sum(t["transitions"] for t in metrics[-1]["task_counts"].values()) == 128
     assert (run / "tensorboard").exists()
     demo_data = json.loads((run / "visualizations/demos.json").read_text())
     demos = demo_data["demos"]
@@ -90,6 +94,7 @@ def test_shared_checkpoint_reports_and_videos(smoke_cfg, tmp_path, monkeypatch):
     assert all(r["outcome"] == "truncated" for r in demos)
     page = (run / "visualizations/index.html").read_text("utf-8")
     assert page.count("<video controls") == 3 and "autoplay" not in page
+    assert "Task-specific training diagnostics" in page and "task-curves.png" in page
     assert "https://" not in page
     for path in re.findall(r'(?:src|href)="([^"]+)"', page):
         assert (run / "visualizations" / path).exists()

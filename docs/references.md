@@ -3,6 +3,25 @@
 Methods and adopted/rejected ideas are in [research design](research.md). This
 catalog retains source revisions and the extent of the evidence inspected.
 
+## Independent policy/value learning (2026-09-22)
+
+| Source inspected | Evidence used | Application and limits |
+|---|---|---|
+| [DeepSeek-V4.1-Flash report](https://huggingface.co/deepseek-ai/DeepSeek-V4.1-Flash/blob/dba1be0a40aa45a94ad051997016db3960a90277/DeepSeek_V41_Tech_Report.pdf), repository revision `dba1be0a40aa45a94ad051997016db3960a90277` | Architecture/optimization and post-training sections; pages 9, 14, 30 and 31 visually inspected; benchmark/appendix overview | DSpark blocks auxiliary gradients into the backbone (§2.4.3); CED avoids unnecessary phase-specific work (§2.2); task verification (§5.1); length bias and staleness (§5.2). These inspire gradient isolation, deferred critic batches and task-specific diagnostics. It contains no PPO actor-critic separation experiment. |
+| Andrychowicz et al., [What Matters in On-Policy RL?](https://arxiv.org/html/2006.05990), §3.2 and Appendix B.7 | HTML architecture results and shared-objective discussion | Independent actor/value encoders. Their reported benefit on four of five continuous-control environments is not evidence of a PVZ gain. |
+| [SB3-Contrib 2.7.1 policy source](https://github.com/Stable-Baselines-Team/stable-baselines3-contrib/blob/v2.7.1/sb3_contrib/common/maskable/policies.py), installed source | Separate feature extractors, actor-only distribution and critic prediction paths; SB3 save/load and PPO code | Reuse one policy interface; independent optimizer ownership and checkpoint states; tensor-only conversion of the current shared checkpoint. |
+| [The 37 Implementation Details of PPO](https://iclr-blog-track.github.io/2022/03/25/ppo-implementation-details/), 2022; [Spinning Up PPO](https://spinningup.openai.com/en/latest/algorithms/ppo.html) | Shared/separate networks, clipping, bootstrap and KL stopping descriptions | Independent optimization controls and actor early stopping; no new algorithm or performance claim. |
+| Cobbe et al., [Phasic Policy Gradient](https://arxiv.org/abs/2009.04416), abstract only | Shared-representation interference motivation | Context for the hypothesis; PPG's phases/distillation are not implemented. |
+
+The downloaded 51-page DeepSeek PDF has SHA-256
+`ba68e2e40408125ae6d2f63a9a241b61c73910691c74ec1a2a7023c851eac08d`.
+Its speed and quality claims concern large language models. No published speedup
+is transferred to this laptop. KV caches, MoE, FP4, speculative actions, Muon,
+Sinkhorn optimization, teacher distillation and stale asynchronous samples are
+not adopted. The §5.2 completed-trajectory length bias does not directly describe
+our buffer: PVZ already trains on partial-game transitions. It does explain why
+completed-game logs and actual rollout composition must be distinguished.
+
 ## Sources used for the compact method (2026-09-22)
 
 | Source and inspected version | Evidence used | Decision |

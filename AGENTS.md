@@ -1,6 +1,6 @@
 # Project instructions
 
-- User: Leafy. Search relevant research and projects when establishing solutions;
+- Search relevant research and projects when establishing solutions;
   record the sources actually used in `docs/references.md`.
 - Use Git, feature/fix branches, and Conventional Commits. Never push directly to
   main. Use PRs, rebase before merging, and prefer squash merges.

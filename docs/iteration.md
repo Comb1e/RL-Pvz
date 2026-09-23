@@ -5,6 +5,28 @@ Dates and results belong to their recorded version. Current behavior lives in
 artifact locations and learning outcomes live in [validation](validation.md).
 The longer pre-consolidation notes remain in `git show b642c9c:docs/iteration.md`.
 
+## 0.10.0 — 2026-09-22–23
+
+- Problem: easy-stage training rapidly increased early digs and lost lesson skill.
+  Mixed completed-game logs initially showed 100% wins from short rehearsals alone.
+  Shared learned features let value-loss updates directly alter action probabilities;
+  their causal contribution to collapse requires comparison evidence.
+- Change: independent actor/value encoders (169,467 total parameters), separate Adam
+  states and clipping, critic epochs continuing after actor KL stop. Frozen critic
+  inference is batched after action collection. Rewards and exploration are unchanged.
+- Diagnostics: separate task windows, plant usage, episode/transition composition,
+  legal-dig probabilities, gradient norms, optimizer steps and post-update drift.
+- Compatibility: tensor-only 0.9.0 weights conversion duplicates the shared encoder;
+  current checkpoints resume both optimizers. Preserve runs and the game pin.
+- Sources: inspected DeepSeek report, What Matters architecture findings and SB3
+  interfaces; adopted gradient isolation and phase-specific work, not LLM algorithms.
+- Verification/results: independent controls, full regressions and paired five-minute
+  transfer comparisons are recorded in [validation](validation.md). The first 200
+  games are examined separately. No formal training is launched.
+- Remaining problem: easy validation improved for both transfer seeds, but saving
+  retention failed and seed 102 developed destructive digging later. Throughput
+  was lower. The method remains experimental; separation alone is not a fix.
+
 ## 0.9.0 — 2026-09-22
 
 - Problems: too many recipes and reward terms; destructive digging, unstable saving

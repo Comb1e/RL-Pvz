@@ -3,6 +3,136 @@
 Evidence is versioned below. Learning outcomes, simulation correctness and runtime
 speed are separate measures; [research design](research.md) defines the protocol.
 
+## 0.10.0 independent policy/value learning — 2026-09-22–23
+
+The bounded comparison improves easy validation for both learner seeds, but
+**does not resolve the collapse**: saving competence was lost and seed 102
+developed destructive digging later. The implementation remains experimental.
+Rewards, exploration coefficients, action rules and the game dependency are unchanged.
+
+### Verification
+
+| Verification | Result |
+|---|---|
+| Complete research regression after final test updates | **345 passed**, 319.50 s |
+| Targeted separation/conversion/numerical controls | **24 passed**, 5.15 s |
+| Native CPU game (`a95524e`, package 1.2.2) | **207 passed**, 10.57 s |
+| Native CUDA game (`314528a`, package 1.3.1) | **222 passed**, 44.09 s |
+| Installed simulator contract | Remains package 1.3.0, simulation 1.0.0, pin `8861824`; source/rule checks and CPU/CUDA observation/reward/replay controls pass |
+| Static and packaging checks | Ruff lint/format, dependency check, editable installation, wheel/sdist, wheel contents, README links, matching bundled default and all ten PowerShell examples pass |
+
+Independent controls cover actor/critic parameter and Adam ownership, updates
+that leave the other network unchanged, PPO losses/gradients/Adam states against
+upstream calculations, forced actions, singleton batches and actor KL stop with
+continued critic updates. Deferred values, timeout correction and GAE match an
+independent per-step control with batch sizes 1, 4 and 1,024 on CPU/CUDA. Neural
+critic batching agrees within `rtol=atol=2e-6`; fixed optimizer comparisons use
+`atol=2e-7, rtol=2e-6`. Timeout correction is applied exactly once.
+
+The real saving checkpoint's action probabilities and values were **bitwise
+identical on CPU across 75 public states** before and after tensor conversion,
+with one Torch thread for both implementations. Tests verify changed-parameter
+weights-only initialization, both fresh Adam states, incompatible structure and
+shared-checkpoint resume rejection, complete new-checkpoint reload/resume,
+curriculum identity and counters, final-update metrics and legal-dig diagnostics.
+Early-dig controls include same-tick, exactly 100-tick and 101-tick removals.
+
+The first complete run exposed one obsolete test that expected a shared feature
+tensor and a single optimizer; it was updated to assert both encoders and disjoint
+optimizer coverage. The final complete rerun above has no failures. No learning
+code or hyperparameters changed in response to pilot results.
+
+Offline assets resolve locally. Task curves for both candidate seeds and native
+winning/losing outcome frames were visually inspected. The short pipeline tests
+produce three verified compact demos and decodable H.264 videos (1280×820, 20 fps,
+41 frames), including truncation, failure/recovery and archived-report cases.
+The full-game seed-101 demonstrations use seed 100000 and one selected checkpoint,
+SHA-256 `5bd849ae27eef775b56771bab40a2da83df45e9b4ac3eb49912f671cce34470d`:
+easy wins, standard and hard lose. Each GPU trace matches the CPU replay state hash.
+Report/demo generation took 42.06 seconds after the comparison and did not train.
+
+Logs: `artifacts/v010-final-full.log`, `v010-final-targeted.log`,
+`v010-game-cpu.log`, `v010-game-cuda.log`, `v010-packaging.log`,
+`v010-install.log`, `v010-doctor.log` and `v010-presentation.log`.
+All game-test caches/output are under research `artifacts/`; both game checkouts
+remain clean and unchanged. No formal training was launched.
+
+### Matched saving-to-easy comparison
+
+All four runs start from the same mastered saving checkpoint, SHA-256
+`3bc3d252e3107c34c26c0f5623ddaf57eb3bac0d62fb74f54d5362e4b9d364ab`.
+Its saving probe was 100/100; normal easy validation was 13/50. The reference
+is committed implementation `1ab8c59`. Encoder separation, separate clipping/Adam
+states and actor-only KL stopping form the tested optimization change; this does
+not isolate one of those mechanisms as the cause of any improvement.
+
+Order was reference-101, separated-101, separated-102, reference-102. Each had a
+300-second learning window including startup and scheduled probes, stopping at
+an update boundary. Endpoint evaluation could finish afterward, with a 420-second
+per-run limit. Total learning/comparison evaluation was **1,436.61 seconds
+(23 minutes 57 seconds)**. Settings were not tuned after seeing results.
+
+| Method / seed | Training games | Decisions | Easy wins / 50 | Placement / 100 | Saving / 100 | Early digs / accepted plantings | Sustained attackers purchased |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| Reference / 101 | 994 | 2,916,352 | 1 | 100 | 77 | 5,966 / 12,091 (49.34%) | 571 |
+| Separated / 101 | 719 | 2,473,984 | 33 | 100 | 65 | 45 / 17,180 (0.26%) | 1,928 |
+| Separated / 102 | 854 | 2,637,824 | 14 | 100 | 0 | 3,125 / 14,551 (21.48%) | 1,333 |
+| Reference / 102 | 1,011 | 2,949,120 | 0 | 87 | 0 | 6,712 / 11,469 (58.52%) | 493 |
+
+Standard and hard were **0/50 for every run**. Normal validation uses the same
+50 seeds, 100000–100049, per difficulty. Lesson retention uses the same 100 cases,
+100050–100149. All endpoint evaluations completed. These results use `final.zip`;
+it also supplies `best.zip` because there was only one complete normal validation
+per run. Curriculum probes remain separate from checkpoint selection.
+
+Digging ratios above include all completed training games. More planting and
+attacker purchases accompany the lower ratios, so they are not explained by
+simply ceasing to plant. Nevertheless, the separated seed-102 last-100-game ratio
+reached **99.89%**, versus 0% for separated seed 101. Aggregate ratios alone hide
+that late failure. Stochastic training outcomes and deterministic evaluation
+are distinct: seed 102 could have zero recent stochastic wins yet 14/50 easy
+deterministic wins.
+
+The first **200 completed stage games**, including rehearsals, were inspected
+without interpolating rollout milestones. The easy subset was:
+
+| Method / seed | Easy wins / completed easy games | Early digs / accepted plantings in those easy games |
+|---|---:|---:|
+| Reference / 101 | 26/140 | 288/2,890 (9.97%) |
+| Separated / 101 | 52/136 | 8/3,674 (0.22%) |
+| Separated / 102 | 48/137 | 1/3,573 (0.03%) |
+| Reference / 102 | 32/142 | 290/3,119 (9.30%) |
+
+Task-specific windows avoid mistaking fast placement completions for early-game
+mastery. Candidate seed 102 subsequently regressed after roughly 500 stage games.
+The evidence JSON includes the first 100, games 101–200, first 200, all and last
+100 windows, each separated by task, plus actual transition composition.
+
+Paired case-resampling within each fixed learner gives easy-win improvements of
+64 percentage points (95% interval 50–76) and 28 points (16–40). These intervals
+condition on these two trained policies; they do not measure uncertainty across
+independent full training runs. Both runs reuse one saving model and all cases
+are development validation. Final-test seeds remain untouched.
+
+Elapsed time including endpoint diagnostics was 349.22, 368.48, 357.33 and 361.58
+seconds in execution order. Complete-pipeline throughput was 8,351, 6,714, 7,382
+and 8,156 decisions/s. Collection-plus-update rates were 10,587, 9,305, 9,672 and
+11,102 decisions/s. Deferred value inference reduces per-decision work, but the
+additional encoder, independent updates and drift diagnostics cost more overall
+here. This is not a controlled speed benchmark: desktop/thermal load and game
+lengths vary. No speed improvement is claimed.
+
+The acceptance criterion fails because saving skill was not retained. The next
+research question remains how to preserve learned economy behavior during easy
+training; these results do not justify claiming shared-feature interference as
+the sole cause. No additional behavioral rules or post-comparison tuning were added.
+
+Committed [comparison evidence](evidence/separated-v010/comparison.json) includes
+resolved configurations, source/engine hashes, checkpoint identities, paired
+case outcomes, update metrics, timings and task-level statistics. Local raw files
+are under `artifacts/v010-comparison/`; the temporary reference source is test
+evidence only, not a shipped training mode. Existing user runs are preserved.
+
 ## 0.9.0 compact method — 2026-09-22
 
 The implementation passes correctness checks, but the five-minute learning

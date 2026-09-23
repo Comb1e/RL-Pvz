@@ -1,10 +1,12 @@
 # PVZ plant-placement research
 
-Research **0.9.0** trains **one shared CUDA MaskablePPO policy** for easy, standard,
+Research **0.10.0** trains **one shared CUDA MaskablePPO policy** for easy, standard,
 and hard. There is one recipe, [configs/train.toml](configs/train.toml), also used
-when `--config` is omitted. The compact method is experimental: five-minute checks
-regressed deterministic lesson performance. See the measured results and limitations
-in [validation](docs/validation.md) before committing a long training budget.
+when `--config` is omitted. Policy and value learning use independent encoders and
+Adam states. In the bounded saving-to-easy comparison, easy validation improved
+for both seeds, but saving skill was not reliably retained and throughput fell.
+The method remains experimental; the collapse is not resolved. See
+[validation](docs/validation.md).
 
 ## Project layout
 
@@ -65,17 +67,17 @@ Start with a fresh directory:
 
 ```powershell
 .\.venv\Scripts\python.exe -m pvz_rl train --config configs\train.toml `
-  --seed 101 --games 10000 --max-minutes 120 --output runs\compact-v090-101
+  --seed 101 --games 10000 --max-minutes 120 --output runs\separated-v010-101
 ```
 
-`runs/compact-v090-101` is created by this command. It is not shipped. If it already
+`runs/separated-v010-101` is created by this command. It is not shipped. If it already
 exists, choose another name and use it in the examples below. Training never
 overwrites a run.
 
 Defaults are **128 parallel GPU games × 128 decisions per game per rollout**,
 minibatches of 1,024 and four PPO epochs. Completed games drive budgets, curriculum
 and validation. Planting/digging is immediate; waiting or rejection advances one
-tick. A single policy and optimizer continue through all five curriculum stages.
+tick. The same actor, critic and their optimizers continue through all five curriculum stages.
 
 Normal checkpoint validation runs every **2,000 training games**, on 50 seeds per
 difficulty. `best.zip` maximizes the equally weighted win rate across the three
@@ -88,13 +90,22 @@ counts can overshoot. Unfinished validation, exports and mastery are explicit.
 Edit a copy of the TOML to change rewards, learning rate, discount, GAE lambda,
 clipping, epochs, batch size, value coefficient, gradient clipping, advantage
 normalization, exploration coefficients or architecture widths. `profile` is just
-a label. `target_kl = 0.01` stops an update when approximate KL exceeds 0.015;
-zero disables it. PPO averages over **all transitions**, including forced waits.
+a label. `target_kl = 0.01` stops actor updates when approximate KL exceeds 0.015;
+the independent critic finishes its epochs. Zero disables the check. PPO averages
+over **all transitions**, including forced waits. `training.learning_rate` controls
+the actor; optional `critic_learning_rate` defaults to the same rate. Gradient
+clipping applies independently to both parameter groups.
 
 The 500 inputs use categorical plant/state embeddings, three enemy/projectile
 regions per lane and global state. Defaults are 8/4 embedding dimensions, a
 64-unit scalar encoder, two 32-channel convolutions and 128×128 policy/value heads.
-The policy selects a legal action type, then a tile, retaining all 406 actions.
+Each learned encoder has its own embeddings, scalar MLP and convolutions. The actor
+selects a legal action type, then a tile, retaining all 406 actions. The critic
+estimates remaining discounted reward and has no gradient path into the actor.
+The default training model has 169,467 parameters. During collection only the
+actor runs per action; the frozen critic evaluates stored observations afterward
+in `training.value_batch_size = 1024` chunks, before timeout bootstrapping and GAE.
+Evaluation and demonstrations use the actor alone.
 The initial dig-logit bias is −6 and remains trainable. There are no plant-retention
 rules, savings rules, early-dig penalties or action delays.
 
@@ -123,7 +134,7 @@ accepted. A short pipeline check is:
 .\.venv\Scripts\python.exe -m pvz_rl train --family diagnostic `
   --games 2 --n-envs 2 --rollout-steps-per-env 32 --batch-size 32 `
   --eval-games 1 --validation-count 1 --max-minutes 2 `
-  --output artifacts\cuda-smoke-v090
+  --output artifacts\cuda-smoke-v010
 ```
 
 This tests integration, not game-playing competence. `suite` repeats this same
@@ -162,21 +173,21 @@ promotes itself. For example:
   --games 1000 --max-minutes 30 --output runs\compact-stages-101\saving
 ```
 
-`--init-from` copies **weights only**. The optimizer, counters, mastery,
+`--init-from` copies **weights only**. Both optimizers, counters, mastery,
 checkpoint selection and time allowance start fresh. It also works without
 `--stage` for a new automatic-curriculum experiment. Without `--config`, it inherits
 the source settings; specify an edited TOML to change rewards, PPO or curriculum.
 Network dimensions, categorical layout and engine must match. Metadata records
 the source checkpoint hash, structural signature and parameter changes.
 
-`--resume` restores the saved policy, optimizer, configuration, counts, mastery
+`--resume` restores the saved actor, critic, both Adam states, configuration, counts, mastery
 and validation schedule with the remaining cumulative budget. It cannot change
 research parameters. Use a fresh output directory:
 
 ```powershell
 .\.venv\Scripts\python.exe -m pvz_rl train `
-  --resume runs\compact-v090-101\latest.zip `
-  --output runs\compact-v090-101-resumed
+  --resume runs\separated-v010-101\latest.zip `
+  --output runs\separated-v010-101-resumed
 ```
 
 The checkpoint must remain beside `metadata.json`. Interrupted episodes restart;
@@ -185,22 +196,45 @@ additional allowance. `final.zip` is suitable for stage handoffs; `best.zip` is
 selected exclusively by normal-game validation and supplies demonstrations.
 A budget-limited stage is not certified as mastered.
 
-**Pre-0.9.0 weights are unsupported and require fresh training.** Their model
-implementations have been removed. Existing reports, statistics and recordings
-remain readable even after obsolete checkpoint files are deleted.
+A **0.9.0 shared-encoder checkpoint** can initialize this version through
+`--init-from`: its encoder weights are copied into the independent actor and critic,
+preserving starting predictions. This conversion starts fresh Adam states and is
+recorded in metadata. Shared-encoder checkpoints cannot be resumed or directly
+loaded for new evaluation. Earlier architectures remain unsupported. Existing
+reports and recordings can still be regenerated without loading their models.
+
+To recover from the easy-stage collapse, initialize from a mastered saving-stage
+checkpoint and choose a fresh output directory:
+
+```powershell
+.\.venv\Scripts\python.exe -m pvz_rl train --stage easy `
+  --init-from runs\compact-stages-101\saving\final.zip `
+  --games 10000 --max-minutes 120 --output runs\separated-easy-101
+```
+
+This example requires that saving checkpoint to exist beside its metadata.
 
 ## Logs, curves and replay demos
 
 Every 15 seconds, `train.log` and the terminal show phase, games, throughput,
 elapsed time, rolling performance, stage and kills. Episode records are saved
 without printing every episode. Optimization metrics include KL, actual optimizer
-steps, entropy and early stopping. Early digs per accepted planting is a diagnostic;
-no purchases produces a missing ratio rather than a misleading zero.
+steps for each optimizer, gradient norms, entropy, actor KL stopping and policy
+drift measured after the update. Task-specific rolling windows report easy,
+placement and saving separately, including accepted plant usage. Started, active,
+completed-game and transition counts show the actual data mixture.
+
+An **early dig** is an accepted voluntary dig within five simulated seconds
+(100 ticks, inclusive) of that plant's placement, including the same tick. The
+window is configurable. Digs per game and digs per accepted planting are both
+diagnostics; no purchases produces a missing ratio rather than a misleading zero.
+Overall rolling win rate mixes tasks and can change when short lessons finish
+before normal games. Use task-specific curves and normal validation to assess it.
 
 ```powershell
-Get-Content runs\compact-v090-101\train.log -Wait
+Get-Content runs\separated-v010-101\train.log -Wait
 # Open after the report exists:
-Start-Process runs\compact-v090-101\visualizations\index.html
+Start-Process runs\separated-v010-101\visualizations\index.html
 .\.venv\Scripts\tensorboard.exe --logdir runs
 ```
 
@@ -220,11 +254,11 @@ actual outcomes. Diagnostic runs produce only a diagnostic demo. Reports refresh
 after validation and at completion. Rebuild or optionally export videos:
 
 ```powershell
-.\.venv\Scripts\python.exe -m pvz_rl visualize --run runs\compact-v090-101
-.\.venv\Scripts\python.exe -m pvz_rl visualize --run runs\compact-v090-101 --videos
+.\.venv\Scripts\python.exe -m pvz_rl visualize --run runs\separated-v010-101
+.\.venv\Scripts\python.exe -m pvz_rl visualize --run runs\separated-v010-101 --videos
 
 # Resolve the first recording from the generated manifest:
-$run = Resolve-Path runs\compact-v090-101
+$run = Resolve-Path runs\separated-v010-101
 $demo = (Get-Content "$run\visualizations\demos.json" -Raw | ConvertFrom-Json).demos[0]
 $recording = Join-Path "$run\visualizations" $demo.replay
 .\.venv\Scripts\python.exe -m pvz_rl replay $recording --watch --speed 2
@@ -242,9 +276,9 @@ does not load retired weights or regenerate their gameplay.
 
 ```powershell
 .\.venv\Scripts\python.exe -m pvz_rl evaluate `
-  --checkpoint runs\compact-v090-101\best.zip `
-  --split validation --count 10 --record --output artifacts\compact-v090-validation
-.\.venv\Scripts\python.exe -m pvz_rl benchmark-gpu --minutes 15 --output artifacts\cuda-benchmark-v090
+  --checkpoint runs\separated-v010-101\best.zip `
+  --split validation --count 10 --record --output artifacts\separated-v010-validation
+.\.venv\Scripts\python.exe -m pvz_rl benchmark-gpu --minutes 15 --output artifacts\cuda-benchmark-v010
 .\.venv\Scripts\python.exe -m pytest -q
 .\.venv\Scripts\ruff.exe check src tests tools
 .\.venv\Scripts\python.exe -m pip check
