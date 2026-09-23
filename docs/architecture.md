@@ -1,6 +1,6 @@
 # Current architecture
 
-Research 0.10.2 learns one shared policy for easy, standard and hard. Training
+Research 0.10.3 learns one shared policy for easy, standard and hard. Training
 simulation and optimization require CUDA. Game package 1.3.0 / simulation 1.0.0
 is pinned to `8861824df6893a34c2cd4df7f9b68613376d7964`. The Python simulator
 is the reference for non-learning baselines, tests and replay verification.
@@ -104,8 +104,12 @@ is zero; truncation retains potential and adds the correctly discounted terminal
 value before GAE. No separate damage, kill, planting, eating, biting, explosion or
 early-dig reward exists. Combat events and early digs remain diagnostics.
 
-The collector stores 128 decisions per game by default, across 1,024 parallel games
-(131,072 transitions per rollout).
+The collector stores 128 learning transitions per environment per update by default,
+across 256 parallel environments (32,768 transitions per rollout). This bounds the
+learning buffer, not the game. Unfinished games retain their state across updates;
+only natural outcomes and the simulated-time cutoff end episodes. Waits and rejected
+requests remain learning transitions. The separate `agent_actions` diagnostic counts
+only accepted planting/digging, with no per-game action count cap.
 GAE and masked PPO use the configured gamma/lambda, standard all-transition
 minibatch normalization and mean losses, four epochs and batches of 1,024.
 Singleton minibatches skip advantage normalization. Approximate KL is checked

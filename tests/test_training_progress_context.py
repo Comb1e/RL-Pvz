@@ -31,11 +31,16 @@ def test_progress_identifies_mower_free_lessons_and_does_not_round_rare_kills(tm
         assert "stage placement; tasks placement=100; mowers disabled in these lessons" in output
         assert "plant/mower kills per game 0.01/0.00" in output
         assert "early digs/game 3.00" in output
+        assert "plant+dig/game" not in output  # Missing archived metrics stay missing.
+        for row in callback.recent:
+            row["agent_actions"] = 6
         callback.recent[-1].update(family="preset", level="easy", mower_kills=2)
         callback.log_progress(force=True)
         output = capsys.readouterr().out
         assert "mowers disabled" not in output
         assert "plant/mower kills per game 0.01/0.02" in output
+        assert "plant+dig/game 6.00" in output
+        assert "transitions/s" in output
         callback.recent.clear()
         callback.log_progress(force=True)
         output = capsys.readouterr().out

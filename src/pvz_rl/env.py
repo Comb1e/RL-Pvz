@@ -284,6 +284,7 @@ class PvZEnv(gym.Env):
         self.metrics["simulation_ticks"] += result.ticks_advanced
         self.metrics["instant_actions"] += int(result.ticks_advanced == 0)
         if result.action_result.accepted and not isinstance(concrete, Wait):
+            self.metrics["agent_actions"] += 1
             self.actions_this_tick += 1
             self.metrics["max_actions_per_tick"] = max(
                 self.metrics["max_actions_per_tick"], self.actions_this_tick
@@ -350,6 +351,7 @@ class PvZEnv(gym.Env):
             "simulated_seconds": obs.elapsed_seconds,
             "return": self.episode_reward,
             "decisions": self.metrics["decisions"],
+            "agent_actions": self.metrics["agent_actions"],
             "simulation_ticks": self.metrics["simulation_ticks"],
             "instant_actions": self.metrics["instant_actions"],
             "max_actions_per_tick": self.metrics["max_actions_per_tick"],

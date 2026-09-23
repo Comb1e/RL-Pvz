@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pvz-plant-research"
-version = "0.10.2"
+version = "0.10.3"
 description = "Reproducible plant-placement reinforcement learning for Lawn Lab"
 readme = "README.md"
 requires-python = ">=3.12"

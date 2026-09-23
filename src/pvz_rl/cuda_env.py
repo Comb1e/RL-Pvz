@@ -243,6 +243,9 @@ class CudaVecEnv(VecEnv):
             simulated_seconds=float(h[0] / 20),
             **{"return": float(t[0])},
             decisions=int(t[1]),
+            # In the required per-tick mode, only accepted plant/dig actions
+            # advance zero ticks. Waits and rejected actions always advance one.
+            agent_actions=int(t[3]),
             simulation_ticks=int(t[2]),
             instant_actions=int(t[3]),
             max_actions_per_tick=int(t[5]),

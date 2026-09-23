@@ -52,7 +52,9 @@ def training_options(parser):
     parser.add_argument("--rollout-size", type=int)
     parser.add_argument("--simulator", choices=("cuda",))
     parser.add_argument(
-        "--rollout-steps-per-env", type=int, help="decisions per parallel game; CUDA default 128"
+        "--rollout-steps-per-env",
+        type=int,
+        help="learning transitions per environment per PPO update, including waits; not a game limit (default 128)",
     )
     parser.add_argument("--batch-size", type=int)
     parser.add_argument(

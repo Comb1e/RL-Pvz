@@ -3,6 +3,46 @@
 Evidence is versioned below. Learning outcomes, simulation correctness and runtime
 speed are separate measures; [research design](research.md) defines the protocol.
 
+## 0.10.3 parallelism and rollout accounting — 2026-09-23
+
+Default parallelism is 256, with 128 transitions per environment and 32,768 per
+rollout. This is a user-selected configuration, not a newly benchmarked optimum.
+The minibatch size, epochs, per-tick controls, rewards and game-based schedules
+remain unchanged. Waiting still contributes to learning; only accepted plant/dig
+actions increment the new `agent_actions` diagnostic.
+
+Independent controls cover 129 consecutive waits without an episode ending,
+accepted planting/digging, cooldown and empty-tile rejections, reset accounting,
+CPU fixed/per-tick execution and CUDA execution. A short two-update CUDA control
+checks that the entire simulator header is unchanged across the update boundary,
+unfinished episodes are not reset, and each environment reaches 256 transitions.
+Saved 1,024-environment configurations still retain their own values on resume.
+Missing archived action counts remain missing instead of becoming false zeros.
+
+| Check | Result |
+|---|---|
+| Complete research suite | **393 passed**, 318.34 seconds |
+| Focused rollout/configuration/log controls | **15 passed**, 5.13 seconds |
+| Complete CPU game suite | **207 passed**, 10.25 seconds |
+| Complete CUDA game suite | **222 passed**, 43.09 seconds |
+| Default 256-environment availability | CUDA reset, actor inference and step passed; finite 256×500 observations |
+| Ruff lint/format, dependency check, CUDA doctor | Passed |
+| Editable install, wheel and source distribution | Passed for 0.10.3 |
+| README links, ten PowerShell blocks, bundled configuration equality | Passed |
+
+The report's new accepted plant/dig plot and transition labels were visually
+inspected on the integration run. Regression coverage includes checkpoint/resume,
+stage validation, verified compact demos, reports and timeout handling. Game
+checkouts and the installed game pin are unchanged; upstream caches and temporary
+files stayed inside research artifacts. No formal training was launched.
+
+Logs: `artifacts/v0103-full.log`, `v0103-focused.log`, `v0103-game-cpu.log`,
+`v0103-game-cuda.log`, `v0103-default-availability.log`, `v0103-doctor.log`,
+`v0103-install.log` and `v0103-build.log`. Read-only archived waiting counts are in
+`artifacts/v0103-wait-audit.json`; their limitations and proposed follow-up are
+recorded in [research design](research.md). Waiting subsampling/compression was
+not implemented, benchmarked or claimed to improve learning in this change.
+
 ## 0.10.2 validation after stage success — 2026-09-23
 
 New teaching runs probe mastery every 2,000 completed games instead of 500.

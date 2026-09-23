@@ -57,10 +57,10 @@ validation_schedule = "stage_success" # Normal-game evaluation only after each s
 eval_interval_games = 2000 # Used by diagnostic/fixed training or archived periodic schedules.
 total_steps = 3000000 # Inactive unless budget_unit = "decisions" (legacy).
 learner_seeds = [101, 102]
-n_envs = 1024
+n_envs = 256
 device = "cuda"
-rollout_size = 131072
-rollout_steps_per_env = 128
+rollout_size = 32768
+rollout_steps_per_env = 128 # Learning transitions per environment per update, not a game limit.
 max_minutes = 120
 finalization_minutes = 15
 exploration = {objective = "balanced_heads_v1", type_coef = 0.01, tile_coef = 0.001}
