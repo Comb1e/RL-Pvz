@@ -16,6 +16,15 @@ def selected_stage(cfg):
     return cfg["curriculum"].get("run_stage")
 
 
+def validation_after_stage(cfg, family="preset"):
+    """Archived recipes retain periodic validation; lessons need no full-game gate."""
+    return (
+        teaching_enabled(cfg)
+        and family == "preset"
+        and cfg["training"].get("validation_schedule", "periodic") == "stage_success"
+    )
+
+
 def initial_state(cfg):
     stage = selected_stage(cfg)
     return CurriculumState(stage=STAGES.index(stage) if stage else 0)

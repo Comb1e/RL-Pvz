@@ -51,6 +51,7 @@ def smoke_cfg(per_tick_cfg):
     cfg["visualization"].update(enabled=False, videos=False)
     cfg["environment"]["cutoff_seconds"] = 2
     cfg["training"].update(
+        validation_schedule="periodic",  # Retain independent archived scheduling controls.
         budget_unit="decisions",  # Archived decision-budget regression controls.
         device="cuda",  # Every production learning path now requires CUDA.
         total_steps=128,

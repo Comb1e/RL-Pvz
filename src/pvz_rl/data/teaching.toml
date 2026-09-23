@@ -1,6 +1,6 @@
 mode = "teaching"
 residency = "episode_start_stage"
-probe_interval_games = 500
+probe_interval_games = 2000
 minimum_stage_games = 100
 probe_interval = 16384
 probe_cases = 100

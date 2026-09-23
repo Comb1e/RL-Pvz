@@ -5,6 +5,25 @@ Dates and results belong to their recorded version. Current behavior lives in
 artifact locations and learning outcomes live in [validation](validation.md).
 The longer pre-consolidation notes remain in `git show b642c9c:docs/iteration.md`.
 
+## 0.10.2 — 2026-09-23
+
+- Problem/cause: normal easy/standard/hard evaluation ran periodically and at
+  completion even while the current curriculum stage had not passed; 500-game
+  probes added frequent evaluation work.
+- Change: mastery probes every 2,000 completed games; normal validation only
+  after each individual stage succeeds. Keep 100/100 mastery and all evaluation
+  cases. Save pending stage-success evaluations so resume can finish them before
+  further learning; avoid duplicate final evaluation. Reports/checkpoints remain
+  available without a validated model, and suites label missing evaluations.
+- Compatibility: saved periodic recipes keep their schedules. Explicit current
+  config with weights-only initialization adopts the change. Game pin, policy,
+  rewards and optimizer settings are unchanged.
+- Verification: 388 research, 207 CPU game and 222 CUDA game tests passed;
+  scheduling, deadlines, checkpoint/resume, verified demos, reports, packaging
+  and documentation checks are recorded in [validation](validation.md).
+- Limit: fewer normal validation points delay detection of within-stage
+  regressions. No formal training or learned-performance claim.
+
 ## 0.10.1 — 2026-09-23
 
 - Problem: free sky sun let the single-lane saving lesson pass without any

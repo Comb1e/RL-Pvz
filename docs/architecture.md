@@ -1,6 +1,6 @@
 # Current architecture
 
-Research 0.10.1 learns one shared policy for easy, standard and hard. Training
+Research 0.10.2 learns one shared policy for easy, standard and hard. Training
 simulation and optimization require CUDA. Game package 1.3.0 / simulation 1.0.0
 is pinned to `8861824df6893a34c2cd4df7f9b68613376d7964`. The Python simulator
 is the reference for non-learning baselines, tests and replay verification.
@@ -27,7 +27,8 @@ flowchart LR
     Games --> Counts[Completed games and diagnostic summaries]
     Counts --> Schedule[Mastery and validation state machines]
     Schedule --> Queue
-    PPO --> Validation[Normal-game validation]
+    PPO --> Gate[Post-update mastery probe when due]
+    Gate -->|Stage passes| Validation[Normal-game validation]
     Validation --> Best[Single best checkpoint]
     Best --> Trace[Deterministic action traces]
     Trace --> Verify[Replay through Python reference]
@@ -150,15 +151,35 @@ game state and rules; there is no special reward or action constraint enforcing
 sunflower purchases. Placement keeps one lane and its original timings.
 Default mastery requires 100/100 cases for each required task, at least 100
 completed games that started in the current stage, and one passing probe. Probes
-run every 500 completed games using a separate 100-case validation pool. Promotion
+run every 2,000 completed games using a separate 100-case validation pool. Promotion
 changes future resets only; active games keep their starting stage and restrictions.
 Actor, critic and both optimizer identities stay unchanged. A selected standalone stage never
 promotes; it saves a checkpoint and stops on mastery or budget.
 
-Normal validation runs every 2,000 completed games after optimization, with 50
-seeds per difficulty. Crossed thresholds coalesce; cached results reuse only the
-same weights and cases. The highest equal-weight macro win rate selects one
-`best.zip`, with earlier ties retained. Lesson mastery never selects that model.
+Normal validation runs once after each individual stage passes, with 50 seeds per
+difficulty. A failed probe or budget exhaustion does not trigger it. Probe intervals
+coalesce after complete updates; cached results reuse only the same weights/cases.
+The highest equal-weight macro win rate selects one `best.zip`, with earlier ties
+retained. Mastery triggers evaluation but never supplies its checkpoint score.
+The stage-success event and its game/decision counts are saved in `latest.zip`
+before evaluation. A timeout stops further learning, preserving those weights;
+finalization or resume retries the pending evaluation. Completion consumes the
+event, preventing duplicate evaluation at training end or on resume.
+
+```mermaid
+stateDiagram-v2
+    [*] --> AwaitingMastery
+    AwaitingMastery --> AwaitingMastery: failed probe or interval not reached
+    AwaitingMastery --> EvaluationPending: stage passes, save checkpoint
+    EvaluationPending --> EvaluationPending: timeout or interruption, preserve weights
+    EvaluationPending --> AwaitingMastery: evaluation complete, resume next stage
+    EvaluationPending --> Finished: evaluation complete, standalone or shared mastered
+    AwaitingMastery --> Finished: budget exhausted, save final and report
+```
+
+Diagnostic/fixed training and saved recipes without `validation_schedule` retain
+periodic validation. Resume restores the saved schedule; weights-only initialization
+with an explicit current recipe starts the new schedule.
 Time allowances include finalization; expired evaluations and exports remain
 explicitly pending. Exhausted game/time budgets do not imply mastery.
 
@@ -193,3 +214,6 @@ uses native `BoardRenderer`/`RenderContext`, never changes simulation state, and
 optional MP4 streams RGB frames at 20 ticks/second to H.264 FFmpeg. Reports use
 relative local assets and label missing metrics, interruptions and resumed segments.
 Export failure preserves checkpoints; `visualize` can regenerate derived outputs.
+Without any validated checkpoint, completion and regeneration still produce a report,
+but no normal-game demos. Suites record jobs lacking `best.zip` as skipped during
+evaluation, instead of loading an unvalidated model or failing on a missing file.

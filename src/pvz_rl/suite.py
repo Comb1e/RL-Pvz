@@ -84,6 +84,12 @@ def run_suite(cfg, output, *, resume=False):
                 )
             else:
                 run = Path(journal["jobs"][policy][-1])
+                if not (run / "best.zip").exists():
+                    journal.setdefault("skipped_evaluations", {})[policy] = (
+                        "No validated checkpoint: no stage passed or its evaluation is pending."
+                    )
+                    write_json(journal_path, journal)
+                    continue
                 model, data = load_policy(run / "best.zip")
                 evaluation_cfg = data["config"]
                 condition, learner_seed, baseline = data["condition"], data["learner_seed"], None
@@ -131,7 +137,9 @@ def run_suite(cfg, output, *, resume=False):
                 )
         paths = [Path(attempts[-1]) / "episodes.jsonl" for attempts in evaluations.values()]
         curves = [
-            Path(attempts[-1]) / "learning-curve.jsonl" for attempts in journal["jobs"].values()
+            Path(attempts[-1]) / "learning-curve.jsonl"
+            for attempts in journal["jobs"].values()
+            if (Path(attempts[-1]) / "learning-curve.jsonl").exists()
         ]
         reports = journal.setdefault("reports", [])
         report_dir = output / f"report-{len(reports) + 1}"

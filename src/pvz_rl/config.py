@@ -102,6 +102,11 @@ def lesson_settings(cfg=None):
 
 
 def validate_config(cfg: dict) -> None:
+    if cfg["training"].get("validation_schedule", "periodic") not in (
+        "periodic",
+        "stage_success",
+    ):
+        raise ValueError("training.validation_schedule must be periodic or stage_success")
     if simulator(cfg) not in ("cpu", "cuda"):
         raise ValueError("simulation.backend must be cpu or cuda")
     if "rollout_steps_per_env" in cfg["training"]:

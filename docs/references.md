@@ -174,3 +174,11 @@ measurements and medians). These support the parallelism benchmark protocol,
 not a claim that larger batches improve learning. Online retrieval of SB3's
 versioned PPO page, PyTorch's benchmark recipe and Narvekar et al.'s curriculum
 survey failed in this session; no newly read online findings are claimed.
+
+For 0.10.2 (2026-09-23), searched and inspected installed **SB3 2.7.1**
+`common/callbacks.py`, specifically `EventCallback` and `EvalCallback` event
+handling, deterministic evaluation and strict best-score improvement, alongside
+this project's post-update callback and curriculum state machine. This informs
+an explicit stage-success evaluation event with resumable pending state. The
+2,000-game mastery interval and evaluation-after-each-stage rule are user-directed
+scheduling choices, not paper-derived optima or a new learning algorithm.
