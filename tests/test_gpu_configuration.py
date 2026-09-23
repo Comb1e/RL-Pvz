@@ -17,8 +17,8 @@ def args(**kwargs):
 def test_new_shared_run_defaults_and_explicit_parallelism():
     cfg = configured(args())
     assert simulator(cfg) == "cuda"
-    assert cfg["training"]["n_envs"] == 1024
-    assert cfg["training"]["rollout_size"] == 131072
+    assert cfg["training"]["n_envs"] == 256
+    assert cfg["training"]["rollout_size"] == 32768
     for count in (32, 64, 128, 256, 512, 1024):
         cfg = configured(args(n_envs=count))
         assert cfg["training"]["rollout_size"] == count * 128
@@ -56,6 +56,7 @@ def test_hardware_recommendations_and_override_conflicts(tmp_path):
 
 def test_resume_uses_saved_protocol_and_instrumentation_is_optional(tmp_path):
     saved = load_config()
+    saved["training"].update(n_envs=1024, rollout_size=131072)
     (tmp_path / "metadata.json").write_text(json.dumps({"config": saved}))
     cfg = configured(args(resume=tmp_path / "latest.zip"))
     assert research_config(cfg) == research_config(saved)

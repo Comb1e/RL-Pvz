@@ -182,3 +182,19 @@ this project's post-update callback and curriculum state machine. This informs
 an explicit stage-success evaluation event with resumable pending state. The
 2,000-game mastery interval and evaluation-after-each-stage rule are user-directed
 scheduling choices, not paper-derived optima or a new learning algorithm.
+
+For 0.10.3 (2026-09-23), searched and inspected installed **SB3-Contrib 2.7.1**
+`ppo_mask/ppo_mask.py` (`n_steps` and rollout collection), confirming that the
+128-step setting bounds collection per update rather than an episode. Also read
+the versioned [SB3 MaxAndSkipEnv implementation](https://github.com/DLR-RM/stable-baselines3/blob/v2.7.1/stable_baselines3/common/atari_wrappers.py):
+it repeats actions and sums rewards until termination/truncation, which would
+change per-tick PVZ choices if copied directly.
+
+Read Sutton, Precup and Singh (1999), [Between MDPs and semi-MDPs](https://doi.org/10.1016/S0004-3702(99)00052-1),
+especially pp. 189–191, equations 6–12, and the interruption discussion on pp.
+196–197. The inspected author PDF (`http://incompleteideas.net/papers/SPS-aij.pdf`)
+defines discounted cumulative rewards and duration-dependent bootstrapping for
+options. Used to assess waiting compression and explain why dropping elapsed
+discounting is incorrect; no options algorithm is added. The weighted-sampling
+proposal in research.md is a local estimator design, not a result from this paper.
+The archived 0.10.0 seed-101/102 comparison logs supply the waiting diagnosis.

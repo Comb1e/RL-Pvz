@@ -5,6 +5,22 @@ Dates and results belong to their recorded version. Current behavior lives in
 artifact locations and learning outcomes live in [validation](validation.md).
 The longer pre-consolidation notes remain in `git show b642c9c:docs/iteration.md`.
 
+## 0.10.3 — 2026-09-23
+
+- Problem/cause: rollout wording suggested a 128-action game cap, and the requested
+  default parallelism is now 256. The actual collector continues unfinished games
+  across updates; waiting was included in the ambiguous decision count.
+- Change: 256 environments, 32,768 transitions per rollout; explicit CLI/startup
+  wording and separate accepted plant/dig diagnostics in episode records, progress
+  and reports. Waits/rejections do not increment that diagnostic. Existing saved
+  configurations retain their own parallelism on resume.
+- Investigation: archived comparisons contain about 99.2% waiting transitions,
+  often with alternatives still legal. Record weighted waiting-sample optimization
+  and temporal-abstraction tradeoffs in the existing research/reference documents.
+  Neither proposal is enabled; rewards, per-tick choices and PPO losses are unchanged.
+- Verification: see [validation](validation.md) for regression and continuation
+  controls. No formal training or stronger-learning claim.
+
 ## 0.10.2 — 2026-09-23
 
 - Problem/cause: normal easy/standard/hard evaluation ran periodically and at

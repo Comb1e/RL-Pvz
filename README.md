@@ -1,6 +1,6 @@
 # PVZ plant-placement research
 
-Research **0.10.2** trains **one shared CUDA MaskablePPO policy** for easy, standard,
+Research **0.10.3** trains **one shared CUDA MaskablePPO policy** for easy, standard,
 and hard. There is one recipe, [configs/train.toml](configs/train.toml), also used
 when `--config` is omitted. Policy and value learning use independent encoders and
 Adam states. In the 0.10.0 saving-to-easy comparison, easy validation improved
@@ -74,14 +74,20 @@ Start with a fresh directory:
 exists, choose another name and use it in the examples below. Training never
 overwrites a run.
 
-Defaults are **1,024 parallel GPU games × 128 decisions per game per rollout**,
-minibatches of 1,024 and four PPO epochs. Completed games drive budgets, curriculum
-and validation. Planting/digging is immediate; waiting or rejection advances one
-tick. The same actor, critic and their optimizers continue through all five curriculum stages.
-This collects 131,072 transitions per rollout. On the measured RTX 4070 laptop,
-collection plus PPO updates were about **42% faster** than 128 environments,
-using about 1.4 GB of GPU memory. Validation/export are outside that measurement;
-larger rollouts are not evidence of better learning. See [measurements](docs/validation.md).
+Defaults are **256 parallel GPU environments × 128 learning transitions per
+environment per PPO update**, totaling **32,768 transitions per rollout**.
+Minibatches remain 1,024 with four PPO epochs. **128 is not a per-game limit**:
+unfinished games continue through subsequent updates without resetting. A game
+ends on victory, defeat or the configured simulated-time cutoff (1,200 seconds).
+Completed games drive budgets, curriculum and validation.
+
+Waiting counts as a learning transition, so its combat and income consequences
+remain in rewards and GAE. Only accepted planting/digging counts toward the
+`agent_actions` diagnostic, shown as `plant+dig/game`; waits and rejections do not.
+There is no planting/digging count cap. Planting/digging is immediate; a wait or
+rejection advances one tick. The same actor, critic and optimizers continue through
+all five curriculum stages. See [measurements](docs/validation.md) for historical
+parallelism benchmarks; they do not establish stronger learning at larger rollouts.
 
 Normal checkpoint validation runs **once after each individual curriculum stage
 passes**, on 50 seeds per difficulty. It does not run periodically while learning
@@ -147,7 +153,7 @@ A short pipeline check is:
 .\.venv\Scripts\python.exe -m pvz_rl train --family diagnostic `
   --games 2 --n-envs 2 --rollout-steps-per-env 32 --batch-size 32 `
   --eval-games 1 --validation-count 1 --max-minutes 2 `
-  --output artifacts\cuda-smoke-v0102
+  --output artifacts\cuda-smoke-v0103
 ```
 
 This tests integration, not game-playing competence. `suite` repeats this same

@@ -34,7 +34,7 @@ from .curriculum import (
 from .deadline import BudgetExpired, RunBudget
 from .evaluation import evaluate, summarize
 from .exploration import configure_exploration
-from .metrics import episode_task, task_statistics
+from .metrics import episode_task, mean_agent_actions, task_statistics
 from .progress import Phase, ProgressReporter, duration
 from .provenance import append_jsonl, file_hash, metadata, verify_engine, write_json
 from .rewards import REWARD_METRICS
@@ -236,6 +236,7 @@ class ResearchCallback(BaseCallback):
             if self.curriculum
             else None,
             "rolling_episodes": len(rows),
+            "rolling_agent_actions": mean_agent_actions(rows),
             "rolling_tasks": dict(
                 Counter(
                     r.get("level", "unknown")
@@ -314,6 +315,8 @@ class ResearchCallback(BaseCallback):
             else ""
         )
         context = f"; stage {row['curriculum_stage']}"
+        if row["rolling_agent_actions"] is not None:
+            context += f"; plant+dig/game {row['rolling_agent_actions']:.2f}"
         if self.recent:
             context += "; tasks " + ", ".join(f"{k}={v}" for k, v in row["rolling_tasks"].items())
             if row["rolling_mower_free_lessons"] == len(self.recent):
@@ -327,7 +330,7 @@ class ResearchCallback(BaseCallback):
         self.progress.emit(
             f"{row['budget_progress']:,}/{self.target:,} {row['budget_unit']} ({row['budget_progress'] / self.target:.1%}); "
             f"{row['games_per_second'] * 60:.2f} games/min; "
-            f"{row['decisions_per_second']:.0f} decisions/s; elapsed {duration(row['wall_seconds'])}; "
+            f"{row['decisions_per_second']:.0f} transitions/s; elapsed {duration(row['wall_seconds'])}; "
             f"{row['simulation_ticks_per_second']:.0f} simulation ticks/s; "
             f"training ETA {duration(row['estimated_remaining_training_seconds'])}; "
             f"last {len(self.recent)} games win {win}, reward {reward}; best validation {best}"
@@ -920,8 +923,8 @@ def train(
     progress.emit(
         f"Shared {condition} policy; learner seed {learner_seed}; {cfg['training']['device']}; "
         f"{cfg['training']['n_envs']} parallel games; simulator {simulator(cfg)}; "
-        f"{cfg['training']['rollout_size'] // cfg['training']['n_envs']} decisions/game/rollout; "
-        f"{cfg['training']['rollout_size']} total rollout decisions; "
+        f"{cfg['training']['rollout_size'] // cfg['training']['n_envs']} transitions/env/update (includes waits, no game action cap); "
+        f"{cfg['training']['rollout_size']} total rollout transitions; "
         f"{budget_target(cfg) if game_budget else effective_steps:,} {'games' if game_budget else 'decisions'}; "
         f"family {family}; output {output.resolve()}",
         force=True,

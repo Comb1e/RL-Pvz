@@ -2,7 +2,7 @@
 
 ## Current method and hypothesis
 
-Research 0.10.2 exposes one configurable CUDA MaskablePPO method, one compact
+Research 0.10.3 exposes one configurable CUDA MaskablePPO method, one compact
 observation and one spatial grouped policy. The question is whether this shared
 policy can learn plant selection, timing and placement across easy, standard and
 hard within a practical laptop budget. Smaller input/network size, ordinary PPO
@@ -77,10 +77,57 @@ Tile entropy is not weighted by group probability. This avoids the joint-entropy
 incentive to prefer types with many possible tiles. The type/tile coefficients,
 trainable initial dig bias and architecture widths are configurable.
 
-Defaults: 1,024 games ×128 decisions per rollout, minibatches 1,024, four epochs,
+Defaults: 256 environments ×128 transitions per update, minibatches 1,024, four epochs,
 learning rate 3e-4, gamma 0.999, lambda 0.999, clipping 0.2, value coefficient 0.5,
 gradient norm 0.5 and target KL 0.01. Advantages normalize over all transitions;
 singletons skip normalization. No choice-only reweighting remains.
+
+### Waiting efficiency: investigated, not yet adopted
+
+The 128-transition rollout horizon is an update interval, not a per-game action
+limit. A learning transition includes waiting; the separate `agent_actions`
+diagnostic includes only accepted planting/digging. Waiting cannot simply be
+discarded: income, damage, mower activation and outcomes often occur during waits.
+
+A read-only audit on 2026-09-23 of the archived 0.10.0 separated-method comparisons
+found 2,256,780 waits in 2,274,354 transitions for seed 101 (99.23%), and 2,449,913
+in 2,469,404 for seed 102 (99.21%), across 719 and 854 completed games respectively.
+These are older easy-stage transfer experiments with the earlier saving lesson,
+not measurements of current 256-environment training. Their mean recorded
+per-update legal-choice fractions were 99.78% and 62.22%; that metric is computed
+over executed actor minibatches, not a census of completed episodes. It nevertheless
+shows that many waiting states allow alternatives, often digging. Skipping only
+forced waits cannot be assumed to remove most redundant work.
+
+The recommended first experiment preserves every-tick decisions and dense reward,
+timeout and GAE calculations. Keep every planting/digging sample for optimization,
+but uniformly sample a configurable fraction of waiting samples. If there are
+`N` total samples, `W` waits and `K` sampled waits, estimate each full-rollout loss as
+`(sum(nonwait losses) + (W/K) * sum(sampled wait losses)) / N`. Handle `W=0`
+explicitly and require `K>=1` when `W>0`. Normalize advantages from the full
+rollout before sampling; correct actor, exploration and critic losses consistently.
+Retain a representative full-rollout KL audit. This estimates the existing
+objective without deliberately rewarding busier behavior. Finite-sample variance,
+gradient clipping and Adam still mean optimizer trajectories will differ.
+
+Separately, skip actor inference where waiting is the only legal action, retaining
+its reward/value information. This changes execution cost without changing choices;
+its GPU indexing overhead needs measurement. Do not wait for 128 plant/dig actions
+before updating: an agent can legitimately finish a game with far fewer actions.
+
+The larger alternative is temporal abstraction: combine waits into a transition
+with duration `k`, discounted reward `sum(gamma**j * reward[j])` and bootstrap
+discount `gamma**k`. The corresponding potential difference is
+`gamma**k * Phi(next) - Phi(current)`. Sutton, Precup and Singh supply that return
+formulation, not a PPO speed or PVZ win-rate guarantee. Dense GAE with lambda below
+one is not automatically reproduced by substituting a duration discount; it needs
+an explicit estimator and independent controls. Repeating voluntary waits also
+removes intermediate action opportunities. Ordinary fixed frame skipping is
+therefore not a drop-in optimization under the current per-tick controls.
+
+Neither sample thinning nor temporal abstraction is enabled in this release.
+Compare learning and wall time before adoption: normal-game/lesson wins, attacker
+purchases and early digs per planting matter alongside optimizer throughput.
 
 The curriculum is placement → saving → easy → standard → shared. It keeps the
 full board and lessons' configured plant restrictions. Rehearsal and final
