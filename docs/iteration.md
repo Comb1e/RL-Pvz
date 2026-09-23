@@ -5,6 +5,31 @@ Dates and results belong to their recorded version. Current behavior lives in
 artifact locations and learning outcomes live in [validation](validation.md).
 The longer pre-consolidation notes remain in `git show b642c9c:docs/iteration.md`.
 
+## 0.10.1 — 2026-09-23
+
+- Problem: free sky sun let the single-lane saving lesson pass without any
+  sunflower. Mastery mainly repeated placement; living-resource shaping was
+  stronger than requested, and hardware comparisons stopped at 128 games.
+- Change: three simultaneous basic zombies in three distinct lanes at tick 1000,
+  still 50 starting sun and ordinary rules. The 275-sun pre-breach budget cannot
+  buy three shooters; a two-sunflower control supplies a feasible win in every
+  lane combination. Lane count is configurable; omitted counts retain old cases.
+- Reward: reduce economy weight from 0.5 to 0.1 without adding reward terms,
+  planting restrictions or a direct purchase bonus. Death/digging shaping also
+  becomes weaker; no win-rate improvement is claimed from this change alone.
+- Runtime: configurable CUDA benchmark sizes through 1024 games, three repetitions,
+  failed/incomplete-profile exclusion, warmup separation and load/memory records.
+  New default is 1024×128 after a 41.87% median throughput gain and a longer
+  completion/reset confirmation of 42.40%; peak sampled GPU memory is 1427 MiB.
+  Verification: 376 research, 207 CPU game and 222 CUDA game tests pass, plus
+  focused controls and a 1024-game batch smoke with three verified demos.
+  Full measurements and limits are recorded in [validation](validation.md).
+- Compatibility: unchanged network and game pin. Explicit current-config
+  weights-only initialization adopts new settings; resume retains saved settings.
+- Remaining limits: task feasibility is not learned mastery; the old saving
+  scores are not comparable to the new task. Larger rollouts may change learning
+  behavior. No formal training or new learning-performance comparison is launched.
+
 ## 0.10.0 — 2026-09-22–23
 
 - Problem: easy-stage training rapidly increased early digs and lost lesson skill.

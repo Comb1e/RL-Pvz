@@ -2,7 +2,7 @@
 
 ## Current method and hypothesis
 
-Research 0.10.0 exposes one configurable CUDA MaskablePPO method, one compact
+Research 0.10.1 exposes one configurable CUDA MaskablePPO method, one compact
 observation and one spatial grouped policy. The question is whether this shared
 policy can learn plant selection, timing and placement across easy, standard and
 hard within a practical laptop budget. Smaller input/network size, ordinary PPO
@@ -17,7 +17,7 @@ too. The initial 100% rolling win rate contained only completed placement lesson
 These observations establish regression, not its sole cause.
 
 The actor and critic now own independent copies of the compact encoder and
-separate Adam states. The first comparison changes no reward, exploration,
+separate Adam states. The 0.10.0 comparison changed no reward, exploration,
 learning-rate, discount, curriculum or rollout defaults. Independent gradient
 clipping and actor-only KL stopping accompany the split; the critic continues
 its epochs. Thus the comparison tests this optimization package, not encoder
@@ -48,7 +48,7 @@ Only terminal outcome, mower activation cost and potential shaping contribute:
 `reward = outcome - mower_activation_cost * new_activations + gamma * Phi(next) - Phi(current)`.
 
 Defaults are +1 for victory, −2 for defeat and −0.2 once per activated mower.
-`Phi = 0.5 * defeated / max(1, initial_zombies) + 0.5 * (sun + living_plant_costs) / 300`.
+`Phi = 0.5 * defeated / max(1, initial_zombies) + 0.1 * (sun + living_plant_costs) / 300`.
 Sun above 300 is retained; that denominator scales units. Full purchase value is
 retained while a plant lives, including at low health. Buying preserves resource
 value, and digging/death removes it. Damage, source of kills, wall-nut bites and
@@ -77,7 +77,7 @@ Tile entropy is not weighted by group probability. This avoids the joint-entropy
 incentive to prefer types with many possible tiles. The type/tile coefficients,
 trainable initial dig bias and architecture widths are configurable.
 
-Defaults: 128 games ×128 decisions per rollout, minibatches 1,024, four epochs,
+Defaults: 1,024 games ×128 decisions per rollout, minibatches 1,024, four epochs,
 learning rate 3e-4, gamma 0.999, lambda 0.999, clipping 0.2, value coefficient 0.5,
 gradient norm 0.5 and target KL 0.01. Advantages normalize over all transitions;
 singletons skip normalization. No choice-only reweighting remains.
@@ -89,6 +89,49 @@ least 100 completed games started under that stage, one passing check and probes
 every 500 games. Normal validation every 2,000 games alone selects `best.zip`.
 Standalone stage handoffs copy compatible weights into fresh optimizers; automatic
 promotion preserves both current optimizers. All these numeric settings are adjustable.
+
+### Saving lesson
+
+The task requires income investment by construction, using unchanged engine
+rules. Start with 50 sun; allow sunflower and peashooter, ordinary waiting and
+digging, but no mowers. Three basic zombies spawn simultaneously at tick 1000
+in three distinct seeded lanes. There are ten lane combinations. The 100 mastery
+seeds cover all ten, so this remains a small introductory task rather than broad
+economic generalization evidence.
+
+**Necessity proof without sunflowers.** The only remaining plant is a 100-sun
+peashooter, which shoots and blocks in its own lane. Digging neither moves a plant
+nor refunds its cost. Zombies start at integer x=9500 and reach the house at
+x=-500. Basic speed is 200 units/s at 20 ticks/s, exactly 10 units per tick.
+Movement occurs on the spawning tick. An entirely unblocked lane therefore
+loses at `1000 + (9500 - (-500))/10 - 1 = 1999` ticks (99.95 seconds).
+Sky income is 25 at multiples of 200 ticks. Before this loss, at most
+`50 + floor(1999/200) × 25 = 275` sun is available: fewer than three purchases.
+With three threatened lanes and at most two plants ever purchased, at least one
+lane is entirely unblocked, proving the loss regardless of placement or digging.
+The tenth sky payment would give 300 at tick 2000, one tick too late. Spending
+zero-time actions forever cannot produce a victory or additional income.
+
+**Feasibility witness, used only in tests.** Plant sunflowers at ticks 0 and 200
+in rows 0 and 1, column 1. Each costs 50, first produces 25 after 120 ticks, then
+every 480 ticks. At tick 1000 their four total payments plus five sky payments,
+minus purchase costs, leave `50 + 100 + 125 - 100 = 175` sun. Observe the spawned
+lanes and buy peashooters at column 0 in those lanes, in ascending row order, at
+ticks 1000, 1150 and 1560. A flower pays at 1080, funding the second purchase.
+The first two spend 200; sky at 1200/1400 and flower
+payments at 1280/1560 supply another 100. The shared 150-tick card cooldown is
+respected. The reference engine wins at tick **1831 (91.55 seconds)** in every
+lane combination. The sky-only control loses at **1999** in every combination.
+The analytical proof establishes necessity; these controls establish feasibility,
+not that PPO will learn the strategy. No control is used for learning.
+
+Version 0.10.1 also reduces `economy_weight` from 0.5 to 0.1. A living 100-sun
+plant contributes 0.03333 potential instead of 0.16667; 25 new sun contributes
+0.00833 instead of 0.04167 before discounting. Purchasing transfers equal value
+from sun to plants and never creates a positive purchase bonus. Defeated weight,
+terminal rewards and mower cost are unchanged. Reduced economic shaping also
+reduces the shaping loss from destruction or digging; its learning effect requires
+future measurement. Archived results use their recorded weights and lesson.
 
 ## Evaluation and evidence
 

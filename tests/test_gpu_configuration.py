@@ -17,9 +17,9 @@ def args(**kwargs):
 def test_new_shared_run_defaults_and_explicit_parallelism():
     cfg = configured(args())
     assert simulator(cfg) == "cuda"
-    assert cfg["training"]["n_envs"] == 128
-    assert cfg["training"]["rollout_size"] == 16384
-    for count in (32, 64, 128):
+    assert cfg["training"]["n_envs"] == 1024
+    assert cfg["training"]["rollout_size"] == 131072
+    for count in (32, 64, 128, 256, 512, 1024):
         cfg = configured(args(n_envs=count))
         assert cfg["training"]["rollout_size"] == count * 128
 
@@ -81,3 +81,25 @@ def test_promotion_requires_complete_stable_trials_and_correctness():
     assert not recommend(rows)["promote_default"]
     assert not recommend(rows[:-1], parity_passed=True)["promote_default"]
     assert recommend([])["n_envs"] is None
+
+
+def test_recommendation_handles_larger_batches_and_failed_trials():
+    rows = [
+        dict(profile=f"cuda-{n}", state="complete", decisions_per_second=rate)
+        for n, rates in {
+            128: [100, 102, 101],
+            256: [149, 150, 151],
+            512: [151, 154, 153],
+            1024: [200, 201],
+        }.items()
+        for rate in rates
+    ]
+    rows.append(dict(profile="cuda-1024", state="failed", decisions_per_second=0))
+    rows.extend(
+        dict(profile="cuda-equivalent", state="complete", decisions_per_second=100)
+        for _ in range(3)
+    )
+    # Incomplete fastest batch cannot win; 256 is within 5% of stable 512.
+    result = recommend(rows)
+    assert result["n_envs"] == 256
+    assert "cuda-1024" not in result["median_decisions_per_second"]

@@ -13,22 +13,20 @@ import matplotlib.pyplot as plt
 
 def plot(source, output):
     rows = json.loads(Path(source).read_text("utf-8"))
-    profiles = [
-        "cpu-current",
-        "cpu-equivalent",
-        "cuda-equivalent",
-        "cuda-32",
-        "cuda-64",
-        "cuda-128",
-    ]
-    labels = [
-        "CPU · 8 × 512",
-        "CPU · 8 × 128",
-        "CUDA · 8 × 128",
-        "CUDA · 32 × 128",
-        "CUDA · 64 × 128",
-        "CUDA · 128 × 128",
-    ]
+    profiles = list(dict.fromkeys(r["profile"] for r in rows))
+    historical_labels = {
+        "cpu-current": "CPU · 8 × 512",
+        "cpu-equivalent": "CPU · 8 × 128",
+        "cuda-equivalent": "CUDA · 8 × 128",
+    }
+    labels = []
+    for name in profiles:
+        row = next(r for r in rows if r["profile"] == name)
+        labels.append(
+            f"{row['simulator'].upper()} · {row['n_envs']} × {row['rollout_steps_per_env']}"
+            if all(k in row for k in ("simulator", "n_envs", "rollout_steps_per_env"))
+            else historical_labels.get(name, name)
+        )
     groups = [
         [r["decisions_per_second"] for r in rows if r["profile"] == p and r["state"] == "complete"]
         for p in profiles
@@ -37,7 +35,7 @@ def plot(source, output):
         raise ValueError("This comparison needs three complete repetitions per profile")
     fig, ax = plt.subplots(figsize=(10, 4.8), layout="constrained")
     medians = [statistics.median(g) for g in groups]
-    ax.barh(labels, medians, color=["#8b99a7"] * 2 + ["#4c8ec1"] * 3 + ["#257454"], height=0.64)
+    ax.barh(labels, medians, color="#4c8ec1", height=0.64)
     for i, values in enumerate(groups):
         ax.scatter(
             values,
@@ -50,7 +48,7 @@ def plot(source, output):
         ax.text(max(values) + 190, i, f"{medians[i]:,.0f}", va="center", fontsize=10)
     ax.invert_yaxis()
     ax.set_xlim(0, max(medians) * 1.2)
-    ax.set_xlabel("Training decisions per second · collection + four PPO epochs")
+    ax.set_xlabel("Training decisions per second · collection + optimization")
     ax.set_title(
         "PVZ training throughput on RTX 4070 Laptop GPU", loc="left", weight="bold", pad=15
     )

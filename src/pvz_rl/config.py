@@ -202,6 +202,19 @@ def validate_config(cfg: dict) -> None:
     if c.get("mode") == "teaching":
         from .curriculum import STAGES
 
+        for lesson in lesson_settings(cfg).values():
+            lanes = lesson.get("lanes_per_spawn", 1)
+            if type(lanes) is not int or not 1 <= lanes <= cfg["environment"]["rows"]:
+                raise ValueError("lesson.lanes_per_spawn must be an integer within the board")
+            if (
+                type(lesson["initial_sun"]) is not int
+                or lesson["initial_sun"] < 0
+                or not lesson["spawn_ticks"]
+                or any(type(t) is not int or t < 1 for t in lesson["spawn_ticks"])
+                or not lesson["allowed_plants"]
+                or not set(lesson["allowed_plants"]) <= set(PLANT_TYPES)
+            ):
+                raise ValueError("Invalid lesson sun, spawn ticks or allowed plants")
         schedule = (
             ("probe_interval_games", "minimum_stage_games")
             if uses_games(cfg)

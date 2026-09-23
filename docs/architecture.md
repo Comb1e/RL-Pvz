@@ -1,6 +1,6 @@
 # Current architecture
 
-Research 0.10.0 learns one shared policy for easy, standard and hard. Training
+Research 0.10.1 learns one shared policy for easy, standard and hard. Training
 simulation and optimization require CUDA. Game package 1.3.0 / simulation 1.0.0
 is pinned to `8861824df6893a34c2cd4df7f9b68613376d7964`. The Python simulator
 is the reference for non-learning baselines, tests and replay verification.
@@ -97,13 +97,14 @@ advances one tick. Discounting is per decision, including immediate actions.
 
 Reward is outcome (+1 win, −2 loss), minus 0.2 per new mower activation, plus
 `gamma * Phi(next) - Phi(current)`. Potential is half the defeated fraction plus
-half `(sun + full purchase value of living plants) / 300`. All coefficients are
+0.1 times `(sun + full purchase value of living plants) / 300`. All coefficients are
 configurable. The denominator does not cap sunlight. Natural terminal potential
 is zero; truncation retains potential and adds the correctly discounted terminal
 value before GAE. No separate damage, kill, planting, eating, biting, explosion or
 early-dig reward exists. Combat events and early digs remain diagnostics.
 
-The collector stores 128 decisions per game by default, across 128 parallel games.
+The collector stores 128 decisions per game by default, across 1,024 parallel games
+(131,072 transitions per rollout).
 GAE and masked PPO use the configured gamma/lambda, standard all-transition
 minibatch normalization and mean losses, four epochs and batches of 1,024.
 Singleton minibatches skip advantage normalization. Approximate KL is checked
@@ -139,6 +140,14 @@ stateDiagram-v2
 ```
 
 The five task mixtures and per-task mastery counts live in the configuration.
+Scenario preparation samples `lanes_per_spawn` distinct lanes per lesson and
+spawns one basic zombie in each sampled lane at each configured tick. Omitted
+lane counts preserve the archived single-lane seed mapping. Saving uses three
+lanes, 50 starting sun and a simultaneous tick-1000 arrival with no mowers. Its
+free-sun budget before an unblocked breach is below the three-shooter cost;
+sunflower production is necessary. The simulator and policy receive ordinary
+game state and rules; there is no special reward or action constraint enforcing
+sunflower purchases. Placement keeps one lane and its original timings.
 Default mastery requires 100/100 cases for each required task, at least 100
 completed games that started in the current stage, and one passing probe. Probes
 run every 500 completed games using a separate 100-case validation pool. Promotion

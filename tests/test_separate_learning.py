@@ -309,7 +309,7 @@ def test_neural_critic_batching_preserves_predictions(device):
     torch.testing.assert_close(batched, per_step, rtol=2e-6, atol=2e-6)
 
 
-def test_normalization_and_pure_reward_config_remain_unchanged():
+def test_normalization_and_reward_defaults():
     cfg = load_config()
     assert cfg["training"]["learning_rate"] == 3e-4
     assert cfg["reward"] == dict(
@@ -319,7 +319,7 @@ def test_normalization_and_pure_reward_config_remain_unchanged():
         mower_activation_cost=0.2,
         gamma=0.999,
         defeated_weight=0.5,
-        economy_weight=0.5,
+        economy_weight=0.1,
         economy_scale=300.0,
     )
     assert cfg["training"]["exploration"] == dict(

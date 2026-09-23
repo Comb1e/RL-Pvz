@@ -1,6 +1,8 @@
 # Promoted after differential tests and three repeated collection/update measurements.
-# See docs/validation.md#gpu-performance. Existing explicit configurations retain their defaults.
+# See the 0.10.1 measurements in docs/validation.md. Saved configurations retain their values.
 simulator = "cuda"
 device = "cuda"
-n_envs = 128
+n_envs = 1024
 rollout_steps_per_env = 128
+benchmark_env_counts = [128, 256, 512, 1024]
+benchmark_min_rollouts = 16

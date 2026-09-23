@@ -1,9 +1,9 @@
 # PVZ plant-placement research
 
-Research **0.10.0** trains **one shared CUDA MaskablePPO policy** for easy, standard,
+Research **0.10.1** trains **one shared CUDA MaskablePPO policy** for easy, standard,
 and hard. There is one recipe, [configs/train.toml](configs/train.toml), also used
 when `--config` is omitted. Policy and value learning use independent encoders and
-Adam states. In the bounded saving-to-easy comparison, easy validation improved
+Adam states. In the 0.10.0 saving-to-easy comparison, easy validation improved
 for both seeds, but saving skill was not reliably retained and throughput fell.
 The method remains experimental; the collapse is not resolved. See
 [validation](docs/validation.md).
@@ -67,17 +67,21 @@ Start with a fresh directory:
 
 ```powershell
 .\.venv\Scripts\python.exe -m pvz_rl train --config configs\train.toml `
-  --seed 101 --games 10000 --max-minutes 120 --output runs\separated-v010-101
+  --seed 101 --games 10000 --max-minutes 120 --output runs\saving-economy-101
 ```
 
-`runs/separated-v010-101` is created by this command. It is not shipped. If it already
+`runs/saving-economy-101` is created by this command. It is not shipped. If it already
 exists, choose another name and use it in the examples below. Training never
 overwrites a run.
 
-Defaults are **128 parallel GPU games × 128 decisions per game per rollout**,
+Defaults are **1,024 parallel GPU games × 128 decisions per game per rollout**,
 minibatches of 1,024 and four PPO epochs. Completed games drive budgets, curriculum
 and validation. Planting/digging is immediate; waiting or rejection advances one
 tick. The same actor, critic and their optimizers continue through all five curriculum stages.
+This collects 131,072 transitions per rollout. On the measured RTX 4070 laptop,
+collection plus PPO updates were about **42% faster** than 128 environments,
+using about 1.4 GB of GPU memory. Validation/export are outside that measurement;
+larger rollouts are not evidence of better learning. See [measurements](docs/validation.md).
 
 Normal checkpoint validation runs every **2,000 training games**, on 50 seeds per
 difficulty. `best.zip` maximizes the equally weighted win rate across the three
@@ -117,13 +121,18 @@ r = r_{outcome} - 0.2\,newMowerActivations + \gamma\Phi(next)-\Phi(current)
 
 \[
 \Phi(o)=0.5\frac{defeated}{\max(1,initialZombies)}
- +0.5\frac{sun+livingPlantPurchaseValue}{300}.
+ +0.1\frac{sun+livingPlantPurchaseValue}{300}.
 \]
 
 Victory gives +1 and defeat −2. Natural terminal potential is zero; time-limit
 truncation retains potential and bootstraps the critic. **300 is a scale, not a
 sun cap**. Purchase value is preserved when planting and lost when digging or a
 plant dies. Damage, kills and early digs remain diagnostics without separate rewards.
+The economy weight is reduced from 0.5 to 0.1: resource income and living-plant
+value contribute one fifth as much potential. There is no direct planting bonus.
+Buying preserves total resource value; buying and immediately digging loses value.
+This also weakens the shaping loss from digging or plant death; it is not an
+additional anti-digging rule or a demonstrated learning improvement.
 
 CLI overrides include `--n-envs`, `--rollout-steps-per-env`, `--batch-size`,
 `--games`, `--eval-games` and `--max-minutes`. Total rollout size is their product;
@@ -134,7 +143,7 @@ accepted. A short pipeline check is:
 .\.venv\Scripts\python.exe -m pvz_rl train --family diagnostic `
   --games 2 --n-envs 2 --rollout-steps-per-env 32 --batch-size 32 `
   --eval-games 1 --validation-count 1 --max-minutes 2 `
-  --output artifacts\cuda-smoke-v010
+  --output artifacts\cuda-smoke-v0101
 ```
 
 This tests integration, not game-playing competence. `suite` repeats this same
@@ -153,6 +162,17 @@ and `compare-sc2` were removed.
 | `standard` | 45% easy, 45% standard, 10% saving | 100/100 each on easy and standard |
 | `shared` | 20% easy, 40% standard, 40% hard | 100/100 on each difficulty |
 
+The saving lesson starts with **50 sun**, permits sunflower/peashooter and legal
+digging, disables mowers, and spawns **one basic zombie in each of three randomly
+chosen lanes at 50 seconds**. Sky sun remains 25 every 10 seconds. An undefended
+lane loses at tick 1999 (99.95 seconds), before the tenth sky payment. Without
+sunflowers there can be only `50 + 9 × 25 = 275` sun, less than the 300 required
+to place even one peashooter in all three lanes. Sunflowers are therefore necessary.
+A verification control with two sunflowers wins all ten lane combinations; it
+never supplies learner actions. See [the calculation](docs/research.md#saving-lesson).
+Placement remains the original one-lane lesson. All lesson quantities, including
+`lanes_per_spawn`, are configured in the TOML.
+
 Mastery probes run every **500 training games**, using seeds 100050–100149,
 separate from normal checkpoint validation (100000–100049). At least 100 games
 started in the current stage must finish before it can pass. One passing probe
@@ -168,7 +188,7 @@ promotes itself. For example:
   --games 1000 --max-minutes 30 --output runs\compact-stages-101\placement
 
 # Run after the placement checkpoint exists:
-.\.venv\Scripts\python.exe -m pvz_rl train --stage saving `
+.\.venv\Scripts\python.exe -m pvz_rl train --config configs\train.toml --stage saving `
   --init-from runs\compact-stages-101\placement\final.zip `
   --games 1000 --max-minutes 30 --output runs\compact-stages-101\saving
 ```
@@ -179,6 +199,10 @@ checkpoint selection and time allowance start fresh. It also works without
 the source settings; specify an edited TOML to change rewards, PPO or curriculum.
 Network dimensions, categorical layout and engine must match. Metadata records
 the source checkpoint hash, structural signature and parameter changes.
+Use `--config configs\train.toml --init-from ...` to adopt the new saving lesson,
+reward weight and parallelism with compatible old weights. `--resume` deliberately
+keeps the saved lesson, reward and environment count. Earlier saving mastery is
+not evidence of passing the new lesson.
 
 `--resume` restores the saved actor, critic, both Adam states, configuration, counts, mastery
 and validation schedule with the remaining cumulative budget. It cannot change
@@ -186,8 +210,8 @@ research parameters. Use a fresh output directory:
 
 ```powershell
 .\.venv\Scripts\python.exe -m pvz_rl train `
-  --resume runs\separated-v010-101\latest.zip `
-  --output runs\separated-v010-101-resumed
+  --resume runs\saving-economy-101\latest.zip `
+  --output runs\saving-economy-101-resumed
 ```
 
 The checkpoint must remain beside `metadata.json`. Interrupted episodes restart;
@@ -207,7 +231,7 @@ To recover from the easy-stage collapse, initialize from a mastered saving-stage
 checkpoint and choose a fresh output directory:
 
 ```powershell
-.\.venv\Scripts\python.exe -m pvz_rl train --stage easy `
+.\.venv\Scripts\python.exe -m pvz_rl train --config configs\train.toml --stage easy `
   --init-from runs\compact-stages-101\saving\final.zip `
   --games 10000 --max-minutes 120 --output runs\separated-easy-101
 ```
@@ -232,9 +256,9 @@ Overall rolling win rate mixes tasks and can change when short lessons finish
 before normal games. Use task-specific curves and normal validation to assess it.
 
 ```powershell
-Get-Content runs\separated-v010-101\train.log -Wait
+Get-Content runs\saving-economy-101\train.log -Wait
 # Open after the report exists:
-Start-Process runs\separated-v010-101\visualizations\index.html
+Start-Process runs\saving-economy-101\visualizations\index.html
 .\.venv\Scripts\tensorboard.exe --logdir runs
 ```
 
@@ -254,11 +278,11 @@ actual outcomes. Diagnostic runs produce only a diagnostic demo. Reports refresh
 after validation and at completion. Rebuild or optionally export videos:
 
 ```powershell
-.\.venv\Scripts\python.exe -m pvz_rl visualize --run runs\separated-v010-101
-.\.venv\Scripts\python.exe -m pvz_rl visualize --run runs\separated-v010-101 --videos
+.\.venv\Scripts\python.exe -m pvz_rl visualize --run runs\saving-economy-101
+.\.venv\Scripts\python.exe -m pvz_rl visualize --run runs\saving-economy-101 --videos
 
 # Resolve the first recording from the generated manifest:
-$run = Resolve-Path runs\separated-v010-101
+$run = Resolve-Path runs\saving-economy-101
 $demo = (Get-Content "$run\visualizations\demos.json" -Raw | ConvertFrom-Json).demos[0]
 $recording = Join-Path "$run\visualizations" $demo.replay
 .\.venv\Scripts\python.exe -m pvz_rl replay $recording --watch --speed 2
@@ -276,17 +300,21 @@ does not load retired weights or regenerate their gameplay.
 
 ```powershell
 .\.venv\Scripts\python.exe -m pvz_rl evaluate `
-  --checkpoint runs\separated-v010-101\best.zip `
-  --split validation --count 10 --record --output artifacts\separated-v010-validation
-.\.venv\Scripts\python.exe -m pvz_rl benchmark-gpu --minutes 15 --output artifacts\cuda-benchmark-v010
+  --checkpoint runs\saving-economy-101\best.zip `
+  --split validation --count 10 --record --output artifacts\saving-economy-validation
+.\.venv\Scripts\python.exe -m pvz_rl benchmark-gpu --minutes 15 --output artifacts\cuda-benchmark-v0101
 .\.venv\Scripts\python.exe -m pytest -q
 .\.venv\Scripts\ruff.exe check src tests tools
 .\.venv\Scripts\python.exe -m pip check
 .\.venv\Scripts\python.exe -m build --no-isolation
 ```
 
-Benchmarking tests 32/64/128 parallel games with three repetitions and separates
-warmup from steady-state speed. Tests include short CUDA updates and independent
+Benchmarking tests 128/256/512/1024 parallel games with three repetitions; override
+the candidates with `--env-counts 128 256 512`. It measures collection **and PPO
+updates**, separates setup/warmup, and selects the smallest stable count within
+5% of the fastest median. Failed or incomplete profiles cannot be selected.
+Larger environment counts also enlarge the rollout and can change learning
+dynamics; throughput is not win-rate evidence. Tests include short CUDA updates and independent
 CPU mathematical/game controls. They do not launch formal research training.
 
 Details: [architecture](docs/architecture.md), [research](docs/research.md),

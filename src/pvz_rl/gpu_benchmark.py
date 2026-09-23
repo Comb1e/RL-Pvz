@@ -12,7 +12,7 @@ from time import perf_counter, process_time
 import torch
 
 from .benchmark import measure
-from .config import resolve_rollout
+from .config import gpu_defaults, resolve_rollout
 from .progress import Phase, ProgressReporter
 from .provenance import metadata, write_json
 
@@ -99,9 +99,11 @@ def recommend(rows, *, parity_passed=False, provisional=True):
             aggregates[name] = statistics.median(rates)
             variation[name] = statistics.stdev(rates) / statistics.mean(rates)
     candidates = {
-        n: aggregates[f"cuda-{n}"]
-        for n in (32, 64, 128)
-        if f"cuda-{n}" in aggregates and variation[f"cuda-{n}"] <= 0.10
+        int(name.removeprefix("cuda-")): rate
+        for name, rate in aggregates.items()
+        if name.startswith("cuda-")
+        and name.removeprefix("cuda-").isdigit()
+        and variation[name] <= 0.10
     }
     selected = min(
         (n for n, rate in candidates.items() if rate >= 0.95 * max(candidates.values())),
@@ -122,24 +124,43 @@ def recommend(rows, *, parity_passed=False, provisional=True):
     }
 
 
-def benchmark_gpu(cfg, output, *, minutes=15, steps=16384):
+def benchmark_gpu(cfg, output, *, minutes=15, steps=16384, env_counts=None):
     from .training_requirements import require_cuda_training
 
     require_cuda_training(cfg)
     if not 0 < minutes <= 30 or steps < 1:
         raise ValueError("GPU benchmark must be bounded to 0 < minutes <= 30 and positive steps")
+    defaults = gpu_defaults()
+    counts = defaults["benchmark_env_counts"] if env_counts is None else env_counts
+    if (
+        not counts
+        or any(type(n) is not int or n < 1 for n in counts)
+        or len(set(counts)) != len(counts)
+        or any(n * 128 % cfg["training"]["batch_size"] for n in counts)
+    ):
+        raise ValueError(
+            "Benchmark env counts must be unique positive integers compatible with batch_size"
+        )
     output = Path(output)
     output.mkdir(parents=True, exist_ok=False)
     write_json(
         output / "metadata.json",
-        metadata(cfg, kind="gpu-backend-benchmark", minutes=minutes, steps=steps, repeats=3),
+        metadata(
+            cfg,
+            kind="gpu-backend-benchmark",
+            minutes=minutes,
+            steps=steps,
+            repeats=3,
+            env_counts=list(counts),
+            minimum_rollouts=defaults["benchmark_min_rollouts"],
+        ),
     )
     rows = []
     progress = ProgressReporter(output / "benchmark.log", 15)
     deadline = perf_counter() + minutes * 60
     torch.set_num_threads(cfg["training"]["torch_threads"])
     profiles = [
-        *((f"cuda-{n}", "cuda", n, 128) for n in (32, 64, 128)),
+        *((f"cuda-{n}", "cuda", n, 128) for n in counts),
     ]
     try:
         progress.phase(
@@ -161,14 +182,22 @@ def benchmark_gpu(cfg, output, *, minutes=15, steps=16384):
                     monitor.phase = f"{name}/repeat-{repeat + 1}"
                     progress.emit(monitor.phase, force=True)
                     cpu_start = process_time()
-                    result = measure(
-                        local,
-                        800 + repeat,
-                        max(steps, n * 4096),
-                        output,
-                        deadline=deadline,
-                        load_monitor=monitor,
-                    )
+                    try:
+                        result = measure(
+                            local,
+                            800 + repeat,
+                            max(steps, n * rollout_steps * defaults["benchmark_min_rollouts"]),
+                            output,
+                            deadline=deadline,
+                            load_monitor=monitor,
+                        )
+                    except (MemoryError, RuntimeError) as exc:
+                        result = dict(
+                            state="failed",
+                            error=repr(exc),
+                            decisions_per_second=0,
+                            games_per_minute=0,
+                        )
                     row = {
                         "profile": name,
                         "simulator": backend,

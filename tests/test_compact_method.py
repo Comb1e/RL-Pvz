@@ -28,7 +28,7 @@ def test_purchase_full_value_then_dig_no_shaping_profit(kind):
     assert potential(env.public, cfg) == start
     _, dig, _, _, _ = env.step(env.codec.encode(Dig(2, 3)))
     cost = env.rules.plants[kind]["cost"]
-    expected_end = 0.5 * (900 - cost) / 300
+    expected_end = 0.1 * (900 - cost) / 300
     assert potential(env.public, cfg) == expected_end
     assert buy + cfg["reward"]["gamma"] * dig == pytest.approx(
         -start + cfg["reward"]["gamma"] ** 2 * expected_end
@@ -52,14 +52,14 @@ def test_independent_income_death_terminal_and_timeout_formula():
     )
     before = env.public
     # Purchase value survives damage; death or voluntary removal loses full value.
-    assert potential(before, cfg) == pytest.approx(0.5 * 700 / 300)
+    assert potential(before, cfg) == pytest.approx(0.1 * 700 / 300)
     damaged = replace(before, plants=(replace(before.plants[0], health=1),))
     assert potential(damaged, cfg) == potential(before, cfg)
     after = replace(before, sun=625, plants=(), counts=replace(before.counts, defeated=1))
-    expected = 0.5 + 0.5 * 625 / 300
+    expected = 0.5 + 0.1 * 625 / 300
     assert potential(after, cfg) == pytest.approx(expected)
     assert reward_parts(before, after, cfg, True)["total"] == pytest.approx(
-        cfg["reward"]["gamma"] * expected - 0.5 * 700 / 300
+        cfg["reward"]["gamma"] * expected - 0.1 * 700 / 300
     )
     # External truncation keeps RUNNING in public state and must retain Phi.
     assert potential(after, cfg) > 0
@@ -67,7 +67,7 @@ def test_independent_income_death_terminal_and_timeout_formula():
         end = replace(after, status=status)
         assert potential(end, cfg) == 0
         assert reward_parts(before, end, cfg, True)["total"] == pytest.approx(
-            terminal - 0.5 * 700 / 300
+            terminal - 0.1 * 700 / 300
         )
 
 
@@ -86,7 +86,7 @@ def test_mower_cost_once_independent_of_sun_and_kills(sun, kills):
     parts = reward_parts(before, before, cfg, True, events=events)
     assert parts["mower_activation_penalty"] == -0.2
     assert parts["mower_kills"] == kills
-    assert parts["total"] == pytest.approx(-0.2 + (cfg["reward"]["gamma"] - 1) * (0.5 * sun / 300))
+    assert parts["total"] == pytest.approx(-0.2 + (cfg["reward"]["gamma"] - 1) * (0.1 * sun / 300))
     assert reward_parts(before, before, cfg, True)["mower_activation_penalty"] == 0
 
 

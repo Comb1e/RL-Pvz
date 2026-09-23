@@ -159,7 +159,7 @@ def test_only_one_recipe_is_shipped():
         require_cuda_training(load_config(root / "configs" / f"{name}.toml"), runtime=False)
 
 
-def test_benchmark_schedules_only_three_cuda_sizes(smoke_cfg, tmp_path, monkeypatch):
+def test_benchmark_schedules_configurable_cuda_sizes(smoke_cfg, tmp_path, monkeypatch):
     import pvz_rl.gpu_benchmark as benchmark
 
     seen = []
@@ -181,11 +181,31 @@ def test_benchmark_schedules_only_three_cuda_sizes(smoke_cfg, tmp_path, monkeypa
     monkeypatch.setattr(benchmark, "LoadMonitor", Monitor)
     monkeypatch.setattr(benchmark, "measure", measure)
     result = benchmark.benchmark_gpu(smoke_cfg, tmp_path / "benchmark", minutes=1, steps=128)
-    assert len(seen) == 9
-    assert {(n, steps) for n, steps, _ in seen} == {(32, 128), (64, 128), (128, 128)}
+    assert len(seen) == 12
+    assert {(n, steps) for n, steps, _ in seen} == {(128, 128), (256, 128), (512, 128), (1024, 128)}
     assert {seed for _, _, seed in seen} == {800, 801, 802}
-    assert result["n_envs"] == 32
+    assert result["n_envs"] == 128
     assert "speedup_over_current" not in result
+    seen.clear()
+
+    def limited(cfg, seed, steps, output, **kwargs):
+        if cfg["training"]["n_envs"] == 512:
+            raise MemoryError("test device memory exhausted")
+        return measure(cfg, seed, steps, output, **kwargs)
+
+    monkeypatch.setattr(benchmark, "measure", limited)
+    result = benchmark.benchmark_gpu(
+        smoke_cfg, tmp_path / "custom", minutes=1, steps=128, env_counts=[64, 512]
+    )
+    assert result["n_envs"] == 64
+    assert len(seen) == 3
+    rows = json.loads((tmp_path / "custom" / "measurements.json").read_text())
+    assert sum(row["state"] == "failed" for row in rows) == 3
+    assert all("memory exhausted" in row["error"] for row in rows if row["state"] == "failed")
+    for counts in ([], [128, 128], [0], [1.5]):
+        with pytest.raises(ValueError, match="env counts"):
+            benchmark.benchmark_gpu(smoke_cfg, tmp_path / "bad", env_counts=counts)
+    assert not (tmp_path / "bad").exists()
 
 
 def test_compiler_failure_is_actionable_and_creates_no_run(smoke_cfg, tmp_path, monkeypatch):

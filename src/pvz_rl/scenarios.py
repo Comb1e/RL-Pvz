@@ -22,10 +22,17 @@ def scenario(level: str, family: str, seed: int, rules: Rules, cfg=None):
         from .config import lesson_settings
 
         lesson = lesson_settings(cfg)[family]
-        lane = random.Random(namespace_seed(family, seed)).randrange(rules.game["rows"])
+        rng = random.Random(namespace_seed(family, seed))
+        count = lesson.get("lanes_per_spawn", 1)
+        # Preserve archived single-lane seed mappings exactly.
+        lanes = (
+            [rng.randrange(rules.game["rows"])]
+            if count == 1
+            else sorted(rng.sample(range(rules.game["rows"]), count))
+        )
         return LevelSpec(
             family,
-            tuple(Spawn(tick, "basic", lane) for tick in lesson["spawn_ticks"]),
+            tuple(Spawn(tick, "basic", lane) for tick in lesson["spawn_ticks"] for lane in lanes),
             initial_sun=lesson["initial_sun"],
             mowers=False,
         )
