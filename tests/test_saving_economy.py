@@ -1,114 +1,170 @@
-"""Economy necessity proof plus independent feasible and failing controls.
+"""Independent lesson controls; never used as learner actions or demonstrations."""
 
-These controls only verify tasks; they never supply learner actions or examples.
-"""
-
-import argparse
 import copy
-import random
 from itertools import combinations
 
 import numpy as np
 import pytest
 import torch
-from pvz_game import LevelSpec, Place, Rules, Spawn
+from pvz_game import Dig, LevelSpec, Place, Rules, Spawn
 
-from pvz_rl.cli import configured
 from pvz_rl.config import load_config, validate_config
 from pvz_rl.env import PvZEnv
-from pvz_rl.provenance import write_json
+from pvz_rl.recordings import open_playback, verify_replay
 from pvz_rl.rewards import potential
-from pvz_rl.scenarios import namespace_seed, scenario
+from pvz_rl.scenarios import scenario
 from pvz_rl.training_requirements import resume_protocol, transfer_protocol
 
-LANE_TRIPLES = list(combinations(range(5), 3))
+LANE_PAIRS = list(combinations(range(5), 2))
 
 
 def saving_case(lanes):
-    # Independent literal fixture: assert shipped configuration agrees separately.
     return LevelSpec(
         "saving",
-        tuple(Spawn(1000, "basic", lane) for lane in lanes),
-        initial_sun=50,
+        tuple(Spawn(t, "basic", r) for t in (860, 1100, 1340) for r in lanes),
+        initial_sun=150,
         mowers=False,
     )
 
 
-def control_action(env, flowers, invest):
+def control_action(env, flowers, invest=True, delay=0):
     obs = env.public
+    if obs.tick < delay:
+        return 0, flowers
     if invest and flowers < 2:
-        candidate = Place("sunflower", flowers, 1)
+        candidate = Place("sunflower", flowers, 0)
     else:
         defended = {p.row for p in obs.plants if p.plant_type == "peashooter"}
         exposed = sorted({z.row for z in obs.zombies} - defended)
         if not exposed:
             return 0, flowers
-        candidate = Place("peashooter", exposed[0], 0)
+        candidate = Place("peashooter", exposed[0], 1)
     action = env.codec.encode(candidate)
     if not env.action_masks()[action]:
         return 0, flowers
     return action, flowers + int(candidate.plant_type == "sunflower")
 
 
-def test_free_sun_cannot_fund_all_threatened_lanes_before_first_breach():
-    cfg, rules = load_config(), Rules()
-    lesson = cfg["curriculum"]["lessons"]["saving"]
-    assert lesson == dict(
-        spawn_ticks=[1000],
-        initial_sun=50,
-        lanes_per_spawn=3,
-        allowed_plants=["sunflower", "peashooter"],
-    )
-    g = rules.game
-    # Integer displacement is 10 units/tick. Spawning precedes movement, so
-    # the first move is at tick 1000 and move 1000 reaches the house at 1999.
-    distance = g["spawn_x"] - g["house_x"]
-    speed = rules.zombies["basic"]["speed"]
-    assert speed % g["tick_rate"] == 0
-    travel_ticks = distance // (speed // g["tick_rate"])
-    assert travel_ticks == 1000
-    breach_tick = 1000 + travel_ticks - 1
-    free_budget = 50 + (breach_tick // g["sky_sun_ticks"]) * g["sky_sun_amount"]
-    assert breach_tick == 1999 and free_budget == 275
-    assert rules.plants["peashooter"]["cost"] == 100
-    assert free_budget < 3 * rules.plants["peashooter"]["cost"]
-    # With no sunflowers, peas are the only allowed purchasable plant. Each
-    # purchase acts in one lane; digging has no refund or relocation. At most
-    # two lanes can ever receive a plant, leaving one entirely unblocked.
-    assert (50 + 10 * g["sky_sun_amount"]) == 300  # tick 2000 is already too late.
-
-
-@pytest.mark.parametrize("lanes", LANE_TRIPLES)
-@pytest.mark.parametrize("invest", [False, True])
-def test_economy_control_and_no_sunflower_failure(lanes, invest):
-    env = PvZEnv(load_config(), family="saving")
-    env.reset(seed=4, options={"scenario": saving_case(lanes)})
+def run_control(env, *, invest=True, delay=0, wait=False):
     flowers, purchases = 0, []
     while env.state == "running":
-        action, flowers = control_action(env, flowers, invest)
+        action, flowers = (0, flowers) if wait else control_action(env, flowers, invest, delay)
         if action:
             purchases.append((env.public.tick, env.codec.decode(action)))
         env.step(action)
-    assert env.state == ("won" if invest else "lost")
-    assert env.public.tick == (1831 if invest else 1999)
-    assert env.episode_metrics()["attacker_purchases"] == (3 if invest else 2)
-    if invest:
-        assert [t for t, _ in purchases] == [0, 200, 1000, 1150, 1560]
+    return purchases
+
+
+def test_lesson_economics_and_pressure_independent_calculations():
+    cfg, rules = load_config(), Rules()
+    placement, saving = (cfg["curriculum"]["lessons"][k] for k in ("placement", "saving"))
+    assert placement == dict(
+        spawn_ticks=[1, 21, 41], initial_sun=100, natural_sun=False, allowed_plants=["peashooter"]
+    )
+    assert saving == dict(
+        spawn_ticks=[860, 1100, 1340],
+        initial_sun=150,
+        natural_sun=False,
+        lanes_per_spawn=2,
+        allowed_plants=["sunflower", "peashooter"],
+    )
+    g, pea, flower = rules.game, rules.plants["peashooter"], rules.plants["sunflower"]
+    assert pea["cost"] == 100 and flower["cost"] == 50
+    # No income without flowers: at most one shooter can ever be purchased.
+    # No refunds/relocation/cross-lane shots; at least one lane stays unblocked.
+    assert saving["initial_sun"] < saving["lanes_per_spawn"] * pea["cost"]
+    travel = (g["spawn_x"] - g["house_x"]) // (rules.zombies["basic"]["speed"] // 20)
+    assert travel == 1000 and 860 + travel - 1 == 1859
+    assert rules.zombies["basic"]["health"] // pea["damage"] == 10
+    assert pea["interval_ticks"] == 30
+    # One shooter needs 300 ticks of sustained fire per basic zombie; saving
+    # arrivals every 240 ticks exceed this rate for a finite burst.
+    assert 10 * 30 > saving["spawn_ticks"][1] - saving["spawn_ticks"][0] == 240
+    assert flower["first_ticks"] == 120 and flower["interval_ticks"] == 480
+    assert flower["recharge_ticks"] == 150
+    # Flowers at 0/150 make six 25-sun payments. After buying both flowers and
+    # the first shooter, the second shooter becomes affordable at tick 1230.
+    incomes = sorted(t + 120 + k * 480 for t in (0, 150) for k in range(3))
+    assert incomes == [120, 270, 600, 750, 1080, 1230]
+    assert 150 - 2 * 50 + len(incomes) * 25 == 2 * 100
+
+
+@pytest.mark.parametrize("lanes", LANE_PAIRS)
+@pytest.mark.parametrize("mode", ["invest", "no_flowers", "wait"])
+def test_saving_success_and_necessary_income(lanes, mode):
+    env = PvZEnv(load_config(), family="saving")
+    env.reset(seed=4, options={"scenario": saving_case(lanes)})
+    purchases = run_control(env, invest=mode == "invest", wait=mode == "wait")
+    assert env.state == ("won" if mode == "invest" else "lost")
+    assert env.public.tick == (2101 if mode == "invest" else 1859)
+    assert (
+        env.episode_metrics()["attacker_purchases"]
+        == {"invest": 2, "no_flowers": 1, "wait": 0}[mode]
+    )
+    if mode == "invest":
+        assert [t for t, _ in purchases] == [0, 150, 860, 1230]
+        assert len(env.public.plants) == 4  # No sacrificial blockers/replacements.
     env.close()
 
 
-def test_seeded_cases_cover_all_lane_triples_and_preserve_archived_single_lane():
+@pytest.mark.parametrize("delay,outcome,tick", [(67, "won", 2168), (68, "lost", 2398)])
+def test_saving_witness_timing_boundary(delay, outcome, tick):
+    env = PvZEnv(load_config(), family="saving")
+    env.reset(options={"scenario": saving_case((2, 4))})
+    run_control(env, delay=delay)
+    assert env.state == outcome and env.public.tick == tick
+
+
+@pytest.mark.parametrize("lane", range(5))
+@pytest.mark.parametrize(
+    "delay,outcome,tick", [(1, "won", 872), (98, "won", 969), (99, "lost", 1099)]
+)
+def test_placement_timing_boundary(lane, delay, outcome, tick):
+    env = PvZEnv(load_config(), family="placement")
+    env.reset(
+        options={
+            "scenario": LevelSpec(
+                "placement",
+                tuple(Spawn(t, "basic", lane) for t in (1, 21, 41)),
+                initial_sun=100,
+                mowers=False,
+            )
+        }
+    )
+    for _ in range(delay):
+        env.step(0)
+    assert env.step(env.codec.encode(Place("peashooter", lane, 0)))[4]["accepted"]
+    while env.state == "running":
+        env.step(0)
+    assert env.state == outcome and env.public.tick == tick
+
+
+@pytest.mark.parametrize("family", ["placement", "saving"])
+def test_early_dig_discards_irreplaceable_budget(family):
+    env = PvZEnv(load_config(), family=family)
+    env.reset(seed=4)
+    kind = "peashooter" if family == "placement" else "sunflower"
+    env.step(env.codec.encode(Place(kind, 0, 0)))
+    assert env.step(env.codec.encode(Dig(0, 0)))[4]["accepted"]
+    assert env.episode_metrics()["early_voluntary_digs"] == 1
+    if family == "saving":
+        run_control(env)
+    else:
+        while env.state == "running":
+            env.step(0)
+    assert env.state == "lost"
+
+
+def test_seeded_cases_cover_all_pairs_and_one_current_definition():
     cfg, rules = load_config(), Rules()
     cases = [scenario("easy", "saving", s, rules, cfg) for s in range(100050, 100150)]
-    assert {tuple(s.row for s in case.spawns) for case in cases} == set(LANE_TRIPLES)
-    assert all(len(case.spawns) == 3 and not case.mowers and not case.plants for case in cases)
-    old = copy.deepcopy(cfg)
-    old["curriculum"]["lessons"]["saving"].update(spawn_ticks=[1200, 1280, 1360])
-    del old["curriculum"]["lessons"]["saving"]["lanes_per_spawn"]
-    for seed in (0, 42, 100050):
-        case = scenario("easy", "saving", seed, rules, old)
-        expected = random.Random(namespace_seed("saving", seed)).randrange(5)
-        assert [(s.tick, s.row) for s in case.spawns] == [(t, expected) for t in [1200, 1280, 1360]]
+    assert {tuple(sorted({s.row for s in case.spawns})) for case in cases} == set(LANE_PAIRS)
+    assert all(len(case.spawns) == 6 and not case.mowers and not case.plants for case in cases)
+    assert cfg == load_config("configs/train.toml")
+    changed = copy.deepcopy(cfg)
+    changed["curriculum"]["lessons"]["saving"]["spawn_ticks"] = [1000]
+    assert transfer_protocol(changed) == transfer_protocol(cfg)
+    assert resume_protocol(changed, "masked") != resume_protocol(cfg, "masked")
 
 
 @pytest.mark.parametrize("count", [0, 6, 1.5, True])
@@ -119,73 +175,48 @@ def test_invalid_lane_count_rejected(count):
         validate_config(cfg)
 
 
-def test_archived_resume_preserves_economy_and_lesson_and_explicit_transfer_changes_them(tmp_path):
-    old = load_config()
-    old["reward"]["economy_weight"] = 0.5
-    old["training"].update(n_envs=128, rollout_size=16384)
-    old["curriculum"]["lessons"]["saving"].update(spawn_ticks=[1200, 1280, 1360])
-    del old["curriculum"]["lessons"]["saving"]["lanes_per_spawn"]
-    write_json(tmp_path / "metadata.json", {"config": old})
-    resumed = configured(
-        argparse.Namespace(
-            command="train",
-            config=None,
-            resume=tmp_path / "final.zip",
-        )
-    )
-    assert resumed == old
-    transferred = configured(
-        argparse.Namespace(
-            command="train",
-            config="configs/train.toml",
-            init_from=tmp_path / "final.zip",
-            stage="saving",
-        )
-    )
-    assert transferred["reward"]["economy_weight"] == 0.1
-    assert transferred["curriculum"]["lessons"]["saving"]["lanes_per_spawn"] == 3
-    assert transfer_protocol(transferred) == transfer_protocol(old)
-    assert resume_protocol(transferred, "masked") != resume_protocol(old, "masked")
-
-
-def test_economy_shaping_reduced_fivefold_without_purchase_bonus():
+@pytest.mark.parametrize("value", [None, 0, "false"])
+def test_explicit_natural_sun_boolean_required(value):
     cfg = load_config()
-    old = copy.deepcopy(cfg)
-    old["reward"]["economy_weight"] = 0.5
+    cfg["curriculum"]["lessons"]["saving"]["natural_sun"] = value
+    with pytest.raises(ValueError, match="natural_sun"):
+        validate_config(cfg)
+
+
+def test_economy_shaping_unchanged_and_no_free_sun():
+    cfg = load_config()
     env = PvZEnv(cfg, family="saving")
     env.reset(seed=0)
     initial = potential(env.public, cfg)
-    assert cfg["reward"]["economy_weight"] == 0.1
-    assert initial == pytest.approx(0.1 * 50 / 300)
-    assert potential(env.public, old) == pytest.approx(5 * initial)
+    assert initial == pytest.approx(0.1 * 150 / 300)
     _, reward, _, _, _ = env.step(env.codec.encode(Place("sunflower", 0, 0)))
     assert potential(env.public, cfg) == initial
     assert reward == pytest.approx(-0.001 * initial)
-    for _ in range(120):
+    for _ in range(200):
         env.step(0)
-    assert env.public.sun == 25
-    assert potential(env.public, cfg) == pytest.approx(0.1 * 75 / 300)
-    env.close()
+    assert env.public.sun == 125  # One flower payment, no tick-200 sky payment.
+    assert potential(env.public, cfg) == pytest.approx(0.1 * 175 / 300)
 
 
 @pytest.mark.parametrize("invest", [False, True])
-def test_new_saving_cuda_states_observations_rewards_match_reference(invest):
+def test_saving_cuda_states_observations_rewards_match_reference(invest):
     if not torch.cuda.is_available():
         pytest.skip("CUDA unavailable")
-    from pvz_game.cuda import CudaBatch
-
     from pvz_rl.cuda_features import CudaFeatures
+    from pvz_rl.cuda_lessons import LessonCudaBatch
 
     cfg = load_config()
-    envs = [PvZEnv(cfg, family="saving") for _ in LANE_TRIPLES]
-    cases = [saving_case(lanes) for lanes in LANE_TRIPLES]
+    envs = [PvZEnv(cfg, family="saving") for _ in LANE_PAIRS]
+    cases = [saving_case(lanes) for lanes in LANE_PAIRS]
     for env, case in zip(envs, cases):
         env.reset(seed=4, options={"scenario": case})
-    batch = CudaBatch(len(cases), zombie_capacity=3, max_step_ticks=1)
-    batch.reset(cases, [4] * len(cases), allowed=[3] * len(cases))  # sunflower + pea
+    batch = LessonCudaBatch(len(cases), zombie_capacity=6, max_step_ticks=1)
     cp = batch.cp
     flowers = [0] * len(cases)
     with cp.cuda.ExternalStream(torch.cuda.current_stream().cuda_stream):
+        batch.reset(
+            cases, [4] * len(cases), allowed=[3] * len(cases), natural_sun=[False] * len(cases)
+        )
         features = CudaFeatures(batch, cfg, "masked")
         features.encode()
         while envs[0].state == "running":
@@ -196,16 +227,113 @@ def test_new_saving_cuda_states_observations_rewards_match_reference(invest):
                 rewards.append(env.step(action)[1])
             features.step(cp.asarray(actions, cp.int64))
             np.testing.assert_allclose(features.rewards.get(), rewards, atol=2e-7, rtol=1e-6)
-            if any(actions) or envs[0].public.tick % 200 == 0 or envs[0].state != "running":
-                expected = np.stack([e.encoder.encode(e.public) for e in envs])
+            if any(actions) or envs[0].public.tick % 120 == 0 or envs[0].state != "running":
                 np.testing.assert_allclose(
-                    features.observations.get(), expected, atol=1e-7, rtol=1e-6
+                    features.observations.get(),
+                    np.stack([e.encoder.encode(e.public) for e in envs]),
+                    atol=1e-7,
+                    rtol=1e-6,
                 )
                 np.testing.assert_array_equal(
                     batch.masks.get(), np.stack([e.action_masks() for e in envs])
                 )
                 for i, env in enumerate(envs):
                     assert batch.state_hash(i) == env.game.state_hash()
+                    assert batch.observe(i) == env.public
     assert all(e.state == ("won" if invest else "lost") for e in envs)
-    for env in envs:
+
+
+def test_sunless_recordings_verify_and_seek_without_external_settings(tmp_path):
+    env = PvZEnv(load_config(), family="saving", record=True)
+    env.reset(seed=4, options={"scenario": saving_case((2, 4))})
+    run_control(env)
+    path = tmp_path / "saving.pvzdemo"
+    env.recorder.save(path)
+    assert verify_replay(path).state_hash() == env.game.state_hash()
+    playback = open_playback(path)
+    assert playback.game.rules.game["sky_sun_amount"] == 0
+    playback.seek(200)
+    assert playback.game.observe().sun == 75
+    playback.seek(playback.end_tick)
+    assert playback.game.state_hash() == env.game.state_hash()
+
+
+def test_cuda_mixed_income_events_cap_restore_and_atomic_failure():
+    from pvz_rl.action_timing import ActionPhaseGame
+    from pvz_rl.cuda_lessons import LessonCudaBatch, lesson_kernel_source
+    from pvz_rl.lesson_rules import sky_rules
+
+    if not torch.cuda.is_available():
+        pytest.skip("CUDA unavailable")
+    case = LevelSpec("cap", (Spawn(2000, "basic", 4),), initial_sun=9990)
+    games = [ActionPhaseGame(sky_rules(Rules(), flag)) for flag in (False, True)]
+    for game in games:
+        game.reset(case, 4)
+    batch = LessonCudaBatch(2, zombie_capacity=1, diagnostic=True, max_step_ticks=10)
+    batch.reset([case] * 2, [4] * 2, natural_sun=[False, True])
+    cp = batch.cp
+    for _ in range(20):
+        # A sunflower first pays at the same tick as sky sun, including at cap.
+        action = Place("sunflower", 0, 0) if games[0].observe().tick == 80 else None
+        if action:
+            expected = [g.step(action, ticks=0) for g in games]
+            batch.step_device(cp.ones(2, cp.int64))
+            for i, result in enumerate(expected):
+                assert tuple(batch.events(i)) == result.events
+        expected = [g.step(ticks=10) for g in games]
+        batch.step_device(cp.zeros(2, cp.int64), ticks=10)
+        for i, result in enumerate(expected):
+            assert tuple(batch.events(i)) == result.events
+            assert batch.state_hash(i) == games[i].state_hash()
+    assert [g.observe().sun for g in games] == [9965, 9990]
+    snapshots = [batch.snapshot(i) for i in range(2)]
+    batch.reset([case] * 2, [4] * 2, natural_sun=[True, False])
+    batch.restore(snapshots)
+    assert [batch.state_hash(i) for i in range(2)] == [g.state_hash() for g in games]
+    altered = copy.deepcopy(snapshots)
+    altered[1]["rules"]["game"]["sky_sun_amount"] = 1
+    with pytest.raises(ValueError, match="only disable sky sun"):
+        batch.restore(altered)
+    assert [batch.state_hash(i) for i in range(2)] == [g.state_hash() for g in games]
+    with pytest.raises(ValueError, match="natural_sun boolean"):
+        batch.reset([case] * 2, [4] * 2, natural_sun=[False, 1])
+    assert [batch.state_hash(i) for i in range(2)] == [g.state_hash() for g in games]
+    with pytest.raises(RuntimeError, match="hook changed"):
+        lesson_kernel_source("unexpected engine source")
+
+
+def test_mixed_vector_reset_uses_episode_family_and_leaves_normal_rules_unchanged():
+    from pvz_rl.cuda_env import CudaVecEnv
+
+    if not torch.cuda.is_available():
+        pytest.skip("CUDA unavailable")
+    cfg = load_config()
+    cfg["training"].update(n_envs=3, rollout_size=384, batch_size=128)
+    cases = [("easy", family, 4) for family in ("placement", "saving", "preset")]
+    env = CudaVecEnv(cfg, "masked", 101, training=False, cases=cases)
+    references = [PvZEnv(cfg, level=level, family=family) for level, family, _ in cases]
+    try:
+        env.reset()
+        for ref, (_, _, seed) in zip(references, cases):
+            ref.reset(seed=seed)
+        for _ in range(200):
+            env.step_tensors(torch.zeros(3, dtype=torch.long, device="cuda"), autoreset=False)
+            for ref in references:
+                ref.step(0)
+        assert [ref.public.sun for ref in references] == [100, 150, 75]
+        for i, ref in enumerate(references):
+            assert env.batch.state_hash(i) == ref.game.state_hash()
+        untouched = env.batch.state_hash(1)
+        with env.device_context():
+            env.reset_indices([0, 2], [cases[2], cases[0]])
+        references[0].reset(seed=4, options={"family": "preset"})
+        references[2].reset(seed=4, options={"family": "placement"})
+        assert env.batch.state_hash(1) == untouched
+        for _ in range(200):
+            env.step_tensors(torch.zeros(3, dtype=torch.long, device="cuda"), autoreset=False)
+            for ref in references:
+                ref.step(0)
+        for i, ref in enumerate(references):
+            assert env.batch.state_hash(i) == ref.game.state_hash()
+    finally:
         env.close()

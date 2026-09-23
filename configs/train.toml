@@ -124,14 +124,16 @@ scalar_sizes = [64]
 channels = [32, 32]
 
 [curriculum.lessons.placement]
-spawn_ticks = [1, 81, 161]
-initial_sun = 200
+spawn_ticks = [1, 21, 41]
+initial_sun = 100
+natural_sun = false
 allowed_plants = ["peashooter"]
 
 [curriculum.lessons.saving]
-spawn_ticks = [1000] # 50 seconds; an undefended lane loses at tick 1999.
-initial_sun = 50
-lanes_per_spawn = 3 # 275 free sun before defeat cannot buy three 100-sun shooters.
+spawn_ticks = [860, 1100, 1340] # 43 seconds, then every 12 seconds in both lanes.
+initial_sun = 150
+natural_sun = false
+lanes_per_spawn = 2 # 150 sun alone cannot buy two shooters; income investment is necessary.
 allowed_plants = ["sunflower", "peashooter"]
 
 [curriculum.stages.placement]

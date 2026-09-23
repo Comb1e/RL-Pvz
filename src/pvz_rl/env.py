@@ -18,6 +18,7 @@ from .config import lesson_settings, load_config, runtime_settings, validate_con
 from .controllers import PublicBoard, strategy_candidates
 from .curriculum import LESSONS, stage_distribution, teaching_enabled
 from .encoding import ObservationEncoder
+from .lesson_rules import natural_sun, sky_rules
 from .recordings import ActionPhaseRecorder
 from .rewards import REWARD_METRICS, reward_parts
 from .scenarios import difficulty_weights, scenario
@@ -123,6 +124,9 @@ class PvZEnv(gym.Env):
             resolved = scenario(level, family, game_seed, self.rules, self.cfg)
         if not isinstance(resolved, (str, LevelSpec, WaveSpec)):
             raise TypeError("Scenario must be a preset, LevelSpec or WaveSpec")
+        rules = sky_rules(self.rules, natural_sun(self.cfg, family))
+        if self.game.rules.digest != rules.digest:
+            self.game = ActionPhaseGame(rules) if self.per_tick else Game(rules)
         self.public = self.game.reset(resolved, game_seed)
         self.episode_level, self.episode_family, self.episode_seed = level, family, game_seed
         self.episode_stage = self.curriculum_stage

@@ -283,9 +283,13 @@ def test_per_tick_lessons_match_independent_engine_control(
 
     cfg = per_tick_cfg
     lesson = cfg["curriculum"]["lessons"][family]
-    if family == "saving":
-        # Explicit archived single-lane case; the new economy lesson has its own controls.
-        lesson.update(spawn_ticks=[1200, 1280, 1360], lanes_per_spawn=1)
+    # Literal historical control, independent of the current lesson defaults.
+    lesson.update(
+        natural_sun=True,
+        initial_sun=200 if family == "placement" else 50,
+        spawn_ticks=[1, 81, 161] if family == "placement" else [1200, 1280, 1360],
+        lanes_per_spawn=1,
+    )
     spec = LevelSpec(
         family,
         tuple(Spawn(t, "basic", lane) for t in lesson["spawn_ticks"]),

@@ -135,9 +135,13 @@ def test_deterministic_selection_is_greedy_type_then_tile():
 def test_lesson_independent_shooting_and_wait_controls(cfg, family, win_tick, loss_tick, lane):
     cfg = cfg
     settings = cfg["curriculum"]["lessons"][family]
-    if family == "saving":
-        # Preserve the original successful/failing scenario as a historical control.
-        settings.update(spawn_ticks=[1200, 1280, 1360], lanes_per_spawn=1)
+    # Literal historical control, independent of the current lesson defaults.
+    settings.update(
+        natural_sun=True,
+        initial_sun=200 if family == "placement" else 50,
+        spawn_ticks=[1, 81, 161] if family == "placement" else [1200, 1280, 1360],
+        lanes_per_spawn=1,
+    )
     spec = LevelSpec(
         family,
         tuple(Spawn(t, "basic", lane) for t in settings["spawn_ticks"]),
@@ -165,10 +169,10 @@ def test_task_restrictions_dig_cooldown_and_reset_boundaries():
     assert env.episode_family == "placement"
     flower = env.codec.encode(Place("sunflower", 0, 0))
     _, _, _, _, info = env.step(flower)
-    assert not info["accepted"] and env.public.sun == 200
+    assert not info["accepted"] and env.public.sun == 100
     shooter = env.codec.encode(Place("peashooter", 0, 0))
     env.step(shooter)
-    assert env.public.sun == 100
+    assert env.public.sun == 0
     assert not env.action_masks()[env.codec.encode(Place("peashooter", 1, 0))]
     assert env.action_masks()[env.codec.encode(Dig(0, 0))]
     before = env.action_masks()

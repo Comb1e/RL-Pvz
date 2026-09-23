@@ -208,6 +208,11 @@ def validate_config(cfg: dict) -> None:
         from .curriculum import STAGES
 
         for lesson in lesson_settings(cfg).values():
+            if type(lesson.get("natural_sun")) is not bool:
+                raise ValueError(
+                    "lesson.natural_sun must be an explicit boolean; use configs/train.toml "
+                    "with --init-from to adopt the current lesson trial"
+                )
             lanes = lesson.get("lanes_per_spawn", 1)
             if type(lanes) is not int or not 1 <= lanes <= cfg["environment"]["rows"]:
                 raise ValueError("lesson.lanes_per_spawn must be an integer within the board")

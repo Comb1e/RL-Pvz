@@ -1,6 +1,6 @@
 # Current architecture
 
-Research 0.10.3 learns one shared policy for easy, standard and hard. Training
+Research 0.10.4 learns one shared policy for easy, standard and hard. Training
 simulation and optimization require CUDA. Game package 1.3.0 / simulation 1.0.0
 is pinned to `8861824df6893a34c2cd4df7f9b68613376d7964`. The Python simulator
 is the reference for non-learning baselines, tests and replay verification.
@@ -89,7 +89,7 @@ chooses a type, then a legal tile. Deterministic inference takes the most likely
 type followed by its best tile. PPO uses the true joint log probability for ratios.
 Balanced exploration regularizes type entropy and the unweighted mean normalized
 tile entropy of available groups. The trainable initial dig bias is −6. Digging
-stays legal; lessons only restrict plant types and mower availability as configured.
+stays legal; lessons configure plant availability, sky income and mowers.
 
 Accepted plant/dig actions consume no simulated ticks. A wait or rejected request
 advances one tick. Discounting is per decision, including immediate actions.
@@ -145,14 +145,25 @@ stateDiagram-v2
 ```
 
 The five task mixtures and per-task mastery counts live in the configuration.
-Scenario preparation samples `lanes_per_spawn` distinct lanes per lesson and
-spawns one basic zombie in each sampled lane at each configured tick. Omitted
-lane counts preserve the archived single-lane seed mapping. Saving uses three
-lanes, 50 starting sun and a simultaneous tick-1000 arrival with no mowers. Its
-free-sun budget before an unblocked breach is below the three-shooter cost;
-sunflower production is necessary. The simulator and policy receive ordinary
-game state and rules; there is no special reward or action constraint enforcing
-sunflower purchases. Placement keeps one lane and its original timings.
+Scenario preparation samples `lanes_per_spawn` distinct lanes and spawns one
+basic zombie per lane at each configured tick. Placement has 100 sun, one lane
+and ticks 1/21/41; saving has 150 sun, two lanes and ticks 860/1100/1340. Both lack
+mowers and sky income; sunflowers still produce normally. Scarce funds and wave
+pressure define the tasks without changing rewards or restricting legal digging.
+
+Episode reset resolves `natural_sun` from the lesson configuration. CPU reference
+games use a detached rules object with only sky-payment amount set to zero. The
+research CUDA adapter supplies that same amount per game to the pinned kernel;
+its four checked source hooks fail closed if the engine contract changes. It
+supports mixed normal/lesson batches and updates only reset slots. All other
+combat rules and installed game files remain pinned. Effective rules/checksums
+are embedded in diagnostic snapshots and recordings, so CPU verification needs
+no lesson sidecar. Income is applied before plants at the original point in tick
+processing, never subtracted afterward. Observations gain no task label, income
+flag, seed or future schedule. Configurations must explicitly specify sky
+availability. No legacy lesson mode is maintained; compatible weights can
+initialize the current configuration.
+
 Default mastery requires 100/100 cases for each required task, at least 100
 completed games that started in the current stage, and one passing probe. Probes
 run every 2,000 completed games using a separate 100-case validation pool. Promotion

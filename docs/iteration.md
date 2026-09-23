@@ -5,6 +5,25 @@ Dates and results belong to their recorded version. Current behavior lives in
 artifact locations and learning outcomes live in [validation](validation.md).
 The longer pre-consolidation notes remain in `git show b642c9c:docs/iteration.md`.
 
+## 0.10.4 — 2026-09-23
+
+- Problem/hypothesis: early digging recurred. Free lesson income and spare time
+  may make wasted purchases too recoverable; this is a curriculum trial, not a
+  proven explanation of the easy-stage collapse.
+- Change: the current recipe disables sky income in placement/saving. Placement
+  has 100 sun and ticks 1/21/41; saving has 150 sun, two lanes and repeated waves
+  at ticks 860/1100/1340. All quantities remain configurable. No legacy lesson
+  mode, behavioral restriction, extra reward or alternative policy is added.
+- Implementation: detached CPU episode rules and a narrow checked CUDA adapter
+  supply per-game sky amounts, preserving mixed batches, reset boundaries,
+  recording hashes and the installed game pin. No game checkout changes.
+- Verification: income/rate calculations, all lane cases, exact delay boundaries,
+  plant/dig failures, mixed income/cap events, CPU/CUDA agreement, recordings
+  and regressions are recorded in [validation](validation.md).
+- Limit: verified feasibility does not demonstrate improved learning. Tight
+  lessons can hurt exploration and transfer; normal wins and planting must be
+  measured alongside digs. No formal training launched.
+
 ## 0.10.3 — 2026-09-23
 
 - Problem/cause: rollout wording suggested a 128-action game cap, and the requested
