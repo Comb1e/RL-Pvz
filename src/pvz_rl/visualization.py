@@ -379,6 +379,18 @@ def build_run_report(run, cfg=None):
             f"Mastery reached: {escape(status.get('stage_mastered', False))}. "
             "Use final.zip to initialize another stage with a fresh budget.</p>"
         )
+    if status.get("validation_schedule") == "stage_success":
+        run_progress += (
+            "<p>Normal-game checkpoint evaluation runs only after each curriculum stage passes. "
+            "A game/time limit does not trigger an extra evaluation. "
+            "Mastery probes remain separate; final.zip is saved even without a validated best.zip.</p>"
+        )
+        if status.get("pending_stage_validation"):
+            run_progress += (
+                "<p>Stage-success evaluation pending: "
+                + escape(status["pending_stage_validation"]["stage"])
+                + ". Resume its checkpoint to finish evaluation.</p>"
+            )
     counts = status.get("task_counts", {})
     task_table = ""
     if counts:

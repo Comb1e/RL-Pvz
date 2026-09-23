@@ -64,7 +64,7 @@ def training_options(parser):
     parser.add_argument(
         "--eval-games",
         type=int,
-        help="validate after this many additional completed training games",
+        help="periodic validation interval for diagnostic/fixed or archived runs; teaching uses stage success",
     )
     video_options(parser)
 

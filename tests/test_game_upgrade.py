@@ -181,6 +181,8 @@ from pvz_rl.config import load_config
 from pvz_rl.training import train
 cfg = load_config()
 assert cfg['visualization']['demos'] and not cfg['visualization']['videos']
+# Retain the archived periodic-export control independently of mastery scheduling.
+cfg['training']['validation_schedule'] = 'periodic'
 cfg['environment']['cutoff_seconds'] = 1
 cfg['training'].update(budget_unit='decisions', device='cuda', total_steps=64, rollout_steps_per_env=64, rollout_size=64, batch_size=32, n_envs=1, n_epochs=1, hidden_sizes=[32,32], eval_interval=64)
 cfg['visualization']['ffmpeg'] = 'missing-ffmpeg'

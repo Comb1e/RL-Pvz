@@ -21,6 +21,7 @@ def small_cfg(device="cuda", backend="cuda", profile="E"):
     cfg["environment"]["cutoff_seconds"] = 1
     cfg["visualization"].update(enabled=False, demos=False)
     cfg["training"].update(
+        validation_schedule="periodic",  # Original periodic-validation regression protocol.
         device=device,
         n_envs=2,
         rollout_steps_per_env=32,

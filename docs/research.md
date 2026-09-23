@@ -2,7 +2,7 @@
 
 ## Current method and hypothesis
 
-Research 0.10.1 exposes one configurable CUDA MaskablePPO method, one compact
+Research 0.10.2 exposes one configurable CUDA MaskablePPO method, one compact
 observation and one spatial grouped policy. The question is whether this shared
 policy can learn plant selection, timing and placement across easy, standard and
 hard within a practical laptop budget. Smaller input/network size, ordinary PPO
@@ -86,7 +86,10 @@ The curriculum is placement → saving → easy → standard → shared. It keep
 full board and lessons' configured plant restrictions. Rehearsal and final
 20/40/40 distribution remain. Mastery defaults to 100/100 per required task, at
 least 100 completed games started under that stage, one passing check and probes
-every 500 games. Normal validation every 2,000 games alone selects `best.zip`.
+every 2,000 games. Normal validation runs once after each individual stage passes,
+and alone selects `best.zip`. Failed/incomplete stages and game/time limits do not
+trigger unrelated normal-game evaluation. The 100/100 requirement and separate
+100-case mastery / 50-case-per-difficulty normal validation pools are unchanged.
 Standalone stage handoffs copy compatible weights into fresh optimizers; automatic
 promotion preserves both current optimizers. All these numeric settings are adjustable.
 
@@ -147,6 +150,11 @@ accepted planting, sustained attackers, first-attacker time, sun, mower use,
 truncation and throughput. Zero planting makes the digging ratio unavailable.
 Fewer digs alone do not establish progress. Interpret lessons separately from
 normal-game ability, and development validation separately from held-out evidence.
+Normal validation now samples stage-success checkpoints, so its curve is sparse
+and conditional on passing stages; an absent point is not a zero win rate. This
+scheduling change saves evaluation work but delays detection of normal-game
+regressions within a stage. It does not establish better learning or measured
+wall-time savings. Archived runs retain their recorded schedules.
 
 The 0.10.0 comparison starts both methods from the same mastered saving checkpoint
 (SHA-256 `3bc3d252e3107c34c26c0f5623ddaf57eb3bac0d62fb74f54d5362e4b9d364ab`),

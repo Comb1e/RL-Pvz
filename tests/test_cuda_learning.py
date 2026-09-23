@@ -300,7 +300,7 @@ def test_cuda_game_budget_report_demos_and_resume(gpu_cfg, tmp_path):
     from pvz_rl.training import load_policy, train
 
     cfg = copy.deepcopy(gpu_cfg)
-    cfg["training"].update(total_games=2, eval_interval_games=2)
+    cfg["training"].update(total_games=2, eval_interval_games=2, validation_schedule="periodic")
     cfg["environment"]["cutoff_seconds"] = 1
     cfg["visualization"].update(enabled=True, demos=True, videos=False)
     run = train(cfg, "masked", 101, tmp_path / "gpu-run", validation_limit=1)

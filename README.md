@@ -1,6 +1,6 @@
 # PVZ plant-placement research
 
-Research **0.10.1** trains **one shared CUDA MaskablePPO policy** for easy, standard,
+Research **0.10.2** trains **one shared CUDA MaskablePPO policy** for easy, standard,
 and hard. There is one recipe, [configs/train.toml](configs/train.toml), also used
 when `--config` is omitted. Policy and value learning use independent encoders and
 Adam states. In the 0.10.0 saving-to-easy comparison, easy validation improved
@@ -83,10 +83,12 @@ collection plus PPO updates were about **42% faster** than 128 environments,
 using about 1.4 GB of GPU memory. Validation/export are outside that measurement;
 larger rollouts are not evidence of better learning. See [measurements](docs/validation.md).
 
-Normal checkpoint validation runs every **2,000 training games**, on 50 seeds per
-difficulty. `best.zip` maximizes the equally weighted win rate across the three
-difficulties; earlier checkpoints win ties. Checks happen after optimization and
-coalesce crossed thresholds. A final validation is attempted within the allowance.
+Normal checkpoint validation runs **once after each individual curriculum stage
+passes**, on 50 seeds per difficulty. It does not run periodically while learning
+that stage or merely because the game/time budget ends. `best.zip` maximizes the
+equally weighted win rate across the three difficulties; earlier checkpoints win
+ties. Checks use the same post-update weights that passed the mastery probe.
+Interrupted evaluations retain a pending checkpoint for resume before more learning.
 The 120-minute budget includes startup, validation and presentation, reserving
 15 minutes for finalization. Stops occur after complete PPO updates, so game
 counts can overshoot. Unfinished validation, exports and mastery are explicit.
@@ -135,20 +137,23 @@ This also weakens the shaping loss from digging or plant death; it is not an
 additional anti-digging rule or a demonstrated learning improvement.
 
 CLI overrides include `--n-envs`, `--rollout-steps-per-env`, `--batch-size`,
-`--games`, `--eval-games` and `--max-minutes`. Total rollout size is their product;
+`--games` and `--max-minutes`. Total rollout size is `n_envs × rollout_steps_per_env`;
 conflicting explicit totals fail. `--device cuda` and `--simulator cuda` remain
-accepted. A short pipeline check is:
+accepted. `--eval-games` controls periodic validation for diagnostic/fixed runs and
+archived periodic configurations; it does not trigger teaching-stage evaluation.
+A short pipeline check is:
 
 ```powershell
 .\.venv\Scripts\python.exe -m pvz_rl train --family diagnostic `
   --games 2 --n-envs 2 --rollout-steps-per-env 32 --batch-size 32 `
   --eval-games 1 --validation-count 1 --max-minutes 2 `
-  --output artifacts\cuda-smoke-v0101
+  --output artifacts\cuda-smoke-v0102
 ```
 
 This tests integration, not game-playing competence. `suite` repeats this same
 method for the configured learner seeds and performs the configured evaluations;
-it can be expensive and is user initiated. `benchmark-gpu` changes parallelism
+jobs without a validated checkpoint are explicitly skipped in suite evaluation.
+The suite can be expensive and is user initiated. `benchmark-gpu` changes parallelism
 only. Old recipes, alternate policies, CPU/hybrid training, `pilot`, `benchmark`
 and `compare-sc2` were removed.
 
@@ -173,24 +178,29 @@ never supplies learner actions. See [the calculation](docs/research.md#saving-le
 Placement remains the original one-lane lesson. All lesson quantities, including
 `lanes_per_spawn`, are configured in the TOML.
 
-Mastery probes run every **500 training games**, using seeds 100050–100149,
+Mastery probes run every **2,000 training games** (previously 500), using seeds 100050–100149,
 separate from normal checkpoint validation (100000–100049). At least 100 games
 started in the current stage must finish before it can pass. One passing probe
 is required by default. Counts, intervals, consecutive passes and thresholds are
 configurable. A loss, truncation or incomplete probe prevents mastery.
 `--validation-count` never shrinks mastery probes.
+Change `curriculum.probe_interval_games` to adjust this frequency. Crossed intervals
+coalesce into one probe after a complete PPO update; no extra probe is forced
+before its interval when training stops. `training.validation_schedule = "stage_success"`
+controls normal checkpoint validation. Saved recipes without this setting retain
+their original periodic schedule on resume.
 
 Use `--stage` to train a stage alone. It stops on mastery or budget and never
 promotes itself. For example:
 
 ```powershell
 .\.venv\Scripts\python.exe -m pvz_rl train --stage placement --seed 101 `
-  --games 1000 --max-minutes 30 --output runs\compact-stages-101\placement
+  --games 10000 --max-minutes 30 --output runs\compact-stages-101\placement
 
 # Run after the placement checkpoint exists:
 .\.venv\Scripts\python.exe -m pvz_rl train --config configs\train.toml --stage saving `
   --init-from runs\compact-stages-101\placement\final.zip `
-  --games 1000 --max-minutes 30 --output runs\compact-stages-101\saving
+  --games 10000 --max-minutes 30 --output runs\compact-stages-101\saving
 ```
 
 `--init-from` copies **weights only**. Both optimizers, counters, mastery,
@@ -203,6 +213,8 @@ Use `--config configs\train.toml --init-from ...` to adopt the new saving lesson
 reward weight and parallelism with compatible old weights. `--resume` deliberately
 keeps the saved lesson, reward and environment count. Earlier saving mastery is
 not evidence of passing the new lesson.
+The same explicit-config initialization adopts the new evaluation schedule;
+resuming an older run preserves its recorded intervals and periodic evaluations.
 
 `--resume` restores the saved actor, critic, both Adam states, configuration, counts, mastery
 and validation schedule with the remaining cumulative budget. It cannot change
@@ -218,7 +230,10 @@ The checkpoint must remain beside `metadata.json`. Interrupted episodes restart;
 continuation is not bit-for-bit. Use `--init-from` for changed experiments or an
 additional allowance. `final.zip` is suitable for stage handoffs; `best.zip` is
 selected exclusively by normal-game validation and supplies demonstrations.
-A budget-limited stage is not certified as mastered.
+A budget-limited stage is not certified as mastered. If no stage passes, training
+still saves `final.zip` and its report, but has no `best.zip` or normal-game demos.
+`latest.zip` is saved after mastery probes as well as completed validation; before
+the first probe use `final.zip` or an available `interrupted.zip` for recovery.
 
 A **0.9.0 shared-encoder checkpoint** can initialize this version through
 `--init-from`: its encoder weights are copied into the independent actor and critic,
@@ -266,16 +281,18 @@ Start-Process runs\saving-economy-101\visualizations\index.html
 |---|---|
 | `metadata.json`, `config.json`, `status.json` | Source pins, resolved settings, provenance and current state |
 | `training-episodes.jsonl`, `training-metrics.jsonl` | Episodes, rolling behavior and completed-update PPO metrics |
-| `learning-curve.jsonl`, `validation/` | Normal-game validation results |
+| `learning-curve.jsonl`, `validation/` | Normal-game results after stage success; absent before the first success |
 | `curriculum.json`, `curriculum-probes.jsonl`, `curriculum-probes/` | Mastery state and probe evidence |
-| `best.zip`, `best.json`, `latest.zip`, `final.zip` | Selected, latest validated/probed and final checkpoints |
+| `best.zip`, `best.json`, `latest.zip`, `final.zip` | Best requires completed validation; latest requires a probe/validation; final is always saved on completion |
 | `visualizations/index.html`, `visualizations/*.png` | Offline report and curves |
 | `visualizations/demos.json`, `visualizations/games/` | Three CPU-verified compact recordings sharing one checkpoint |
 | `visualizations/videos/` | Optional MP4 exports |
 
 All three normal-game demos use the same `best.zip` and seed 100000, showing
 actual outcomes. Diagnostic runs produce only a diagnostic demo. Reports refresh
-after validation and at completion. Rebuild or optionally export videos:
+after validation and at completion. With no validated checkpoint, regeneration
+builds a report without gameplay or model loading. Replay examples require
+`visualizations/demos.json` to exist. Rebuild or optionally export videos:
 
 ```powershell
 .\.venv\Scripts\python.exe -m pvz_rl visualize --run runs\saving-economy-101

@@ -337,6 +337,12 @@ def test_deadline_saves_only_completed_update(smoke_cfg, tmp_path, monkeypatch):
 
 @pytest.mark.learning
 def test_grouped_spawn_and_same_checkpoint_demos(tmp_path, tiny_cli_config):
+    # Original Windows periodic-evaluation/export protocol, still loadable.
+    tiny_cli_config.write_text(
+        tiny_cli_config.read_text().replace(
+            'validation_schedule = "stage_success"', 'validation_schedule = "periodic"'
+        )
+    )
     output = tmp_path / "grouped-spawn"
     result = subprocess.run(
         [

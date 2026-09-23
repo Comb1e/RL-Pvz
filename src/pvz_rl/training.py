@@ -29,6 +29,7 @@ from .curriculum import (
     selected_stage,
     stage_distribution,
     teaching_enabled,
+    validation_after_stage,
 )
 from .deadline import BudgetExpired, RunBudget
 from .evaluation import evaluate, summarize
@@ -151,6 +152,7 @@ class ResearchCallback(BaseCallback):
         self.deadline = deadline
         self.wall_budget = wall_budget
         self.validation_pending = False
+        self.pending_stage_validation = None
         self.evaluation_cache = {}
         self.cache_steps = -1
         self.budget_stopped = False
@@ -279,6 +281,9 @@ class ResearchCallback(BaseCallback):
             ),
             "time_budget": self.wall_budget.state() if self.wall_budget else None,
             "validation_pending": self.validation_pending,
+            "validation_schedule": "stage_success" if self.stage_validation else "periodic",
+            "pending_stage_validation": self.pending_stage_validation,
+            "validation_deferred": self.stage_validation and not self.pending_stage_validation,
             "rolling_maximum_sun": sum(r.get("maximum_sun", 0) for r in rows) / len(rows)
             if rows
             else None,
@@ -411,11 +416,8 @@ class ResearchCallback(BaseCallback):
         self.initial_task_counts = copy.deepcopy(getattr(self.model, "training_task_counts", {}))
         self.initial_steps = self.model.num_timesteps
         self.initial_games = getattr(self.model, "training_games", 0)
-        interval = evaluation_interval(self.cfg)
         progress = progress_value(self.cfg, self.model)
-        schedule = getattr(self.model, "research_schedule", {})
-        self.next_eval = schedule.get("next_eval", ((progress // interval) + 1) * interval)
-        self.last_eval = schedule.get("last_eval", -1)
+        self.restore_schedule()
         self.training_env.env_method("set_progress", progress)
         self.stream = (self.output / "training-episodes.jsonl").open("w", encoding="utf-8")
         self.metrics_stream = (self.output / "training-metrics.jsonl").open("w", encoding="utf-8")
@@ -485,21 +487,44 @@ class ResearchCallback(BaseCallback):
         # save pre-update weights while labeling them with the newly collected steps.
         self.timings.end_update()
         self.capture_update()
+        self.finish_stage_validation()
         self.check_stage_complete()
         if uses_games(self.cfg) and progress_value(self.cfg, self.model) >= self.target:
             raise TrainingGamesComplete()
         self.check_deadline()
-        if progress_value(self.cfg, self.model) >= self.next_eval:
+        if not self.stage_validation and progress_value(self.cfg, self.model) >= self.next_eval:
             nominal = self.next_eval
             while self.next_eval <= progress_value(self.cfg, self.model):
                 self.next_eval += evaluation_interval(self.cfg)
             self.validate(nominal_games=nominal)
         self.check_deadline()
         self.probe_curriculum()
+        self.finish_stage_validation()
         self.check_stage_complete()
         self.check_deadline()
         self.progress.phase(Phase.COLLECTING)
         self.timings.begin_collection()
+
+    @property
+    def stage_validation(self):
+        return validation_after_stage(self.cfg, self.family)
+
+    def restore_schedule(self):
+        interval = evaluation_interval(self.cfg)
+        progress = progress_value(self.cfg, self.model)
+        schedule = getattr(self.model, "research_schedule", {})
+        self.next_eval = schedule.get("next_eval", ((progress // interval) + 1) * interval)
+        self.last_eval = schedule.get("last_eval", -1)
+        self.pending_stage_validation = copy.deepcopy(schedule.get("pending_stage_validation"))
+        self.validation_pending = self.pending_stage_validation is not None
+
+    def finish_stage_validation(self):
+        if self.stage_validation and self.pending_stage_validation:
+            if self.validate() is False:
+                # Do not update past an unevaluated mastery checkpoint. Finalization
+                # can retry with its reserved time, or resume can retry these weights.
+                self.budget_stopped = True
+                raise TrainingDeadline()
 
     def check_stage_complete(self):
         if self.curriculum and self.curriculum.mastered:
@@ -526,7 +551,11 @@ class ResearchCallback(BaseCallback):
         self.task_counts()
         if self.wall_budget:
             self.model.wall_budget_state = self.wall_budget.state()
-        self.model.research_schedule = {"next_eval": self.next_eval, "last_eval": self.last_eval}
+        self.model.research_schedule = {
+            "next_eval": self.next_eval,
+            "last_eval": self.last_eval,
+            "pending_stage_validation": copy.deepcopy(self.pending_stage_validation),
+        }
         self.sync_curriculum()
         self.model.save(self.output / name)
 
@@ -597,6 +626,13 @@ class ResearchCallback(BaseCallback):
         self.sync_curriculum()
         if advanced:
             self.training_env.env_method("set_curriculum_stage", self.curriculum.stage)
+        if self.stage_validation and (advanced or self.curriculum.mastered):
+            self.pending_stage_validation = {
+                "stage": previous,
+                "training_steps": self.model.num_timesteps,
+                "training_games": getattr(self.model, "training_games", 0),
+            }
+            self.validation_pending = True
         with (self.output / "curriculum-probes.jsonl").open("a", encoding="utf-8") as stream:
             append_jsonl(
                 stream,
@@ -616,7 +652,7 @@ class ResearchCallback(BaseCallback):
             f"stage mastered {self.curriculum.mastered}",
             force=True,
         )
-        if selected_stage(self.cfg):
+        if selected_stage(self.cfg) or self.stage_validation:
             self.save_checkpoint("latest.zip")
             self.progress.emit("Saved stage progress to latest.zip", force=True)
         self.eval_seconds += perf_counter() - started
@@ -628,10 +664,14 @@ class ResearchCallback(BaseCallback):
         self.log_progress()
 
     def validate(self, *, nominal_games=None, final=False):
+        if self.stage_validation and not self.pending_stage_validation:
+            return False
+        milestone = self.pending_stage_validation
         started = perf_counter()
         self.progress.phase(
             Phase.VALIDATING,
-            f"Validation at {progress_value(self.cfg, self.model):,} {'games' if uses_games(self.cfg) else 'decisions'}",
+            f"Validation at {progress_value(self.cfg, self.model):,} {'games' if uses_games(self.cfg) else 'decisions'}"
+            + (f" after {milestone['stage']} mastery" if milestone else ""),
         )
         write_json(self.output / "status.json", self.snapshot())
         try:
@@ -652,10 +692,11 @@ class ResearchCallback(BaseCallback):
                 "Validation pending; partial results cannot select best.zip", force=True
             )
             return False
-        self.validation_pending = False
-        self.last_eval = self.model.num_timesteps
         scores = summarize(rows)
         score = sum(r["win_rate"] for r in scores.values()) / len(scores)
+        self.validation_pending = False
+        self.pending_stage_validation = None
+        self.last_eval = self.model.num_timesteps
         self.progress.emit(
             "Validation "
             + ", ".join(f"{key}: {value['win_rate']:.1%}" for key, value in scores.items())
@@ -672,6 +713,7 @@ class ResearchCallback(BaseCallback):
                     "games": getattr(self.model, "training_games", 0),
                     "macro_win_rate": score,
                     "checkpoint_hash": file_hash(self.output / "best.zip"),
+                    "stage_success": milestone,
                 },
             )
             self.progress.emit(f"Saved shared best.zip at {score:.1%}", force=True)
@@ -688,6 +730,7 @@ class ResearchCallback(BaseCallback):
                     "budget_unit": "games" if uses_games(self.cfg) else "decisions",
                     "nominal_games": nominal_games,
                     "final": final,
+                    "stage_success": milestone,
                     "wall_seconds": perf_counter() - self.started,
                     "macro_win_rate": score,
                     "levels": scores,
@@ -699,6 +742,18 @@ class ResearchCallback(BaseCallback):
     def _on_training_end(self):
         self.timings.end_update()
         self.capture_update()
+        if self.stage_validation:
+            if not self.budget_stopped and not self.pending_stage_validation:
+                self.probe_curriculum(final=True)
+            if self.pending_stage_validation:
+                self.validate(final=True)
+            else:
+                self.progress.emit(
+                    "No additional normal-game validation without a new stage success; "
+                    "checkpoints and reports are still saved",
+                    force=True,
+                )
+            return
         if self.last_eval != self.model.num_timesteps and (
             not self.budget_stopped
             or self.wall_budget is not None
@@ -879,6 +934,14 @@ def train(
         force=True,
     )
     progress.emit(f"Reward settings: {cfg['reward']}", force=True)
+    if validation_after_stage(cfg, family):
+        probe_key = "probe_interval_games" if game_budget else "probe_interval"
+        progress.emit(
+            f"Mastery probes every {cfg['curriculum'][probe_key]:,} "
+            f"{'completed games' if game_budget else 'decisions'}; "
+            "normal easy/standard/hard validation only after each stage passes",
+            force=True,
+        )
     if selected_stage(cfg):
         progress.emit(
             f"Single stage: {selected_stage(cfg)}; no automatic promotion; "
@@ -988,9 +1051,14 @@ def train(
             callback.init_callback(model)
             callback.initial_steps = model.num_timesteps
             callback.initial_games = getattr(model, "training_games", 0)
+            callback.restore_schedule()
             if teaching_enabled(cfg) and family == "preset":
                 callback.curriculum = CurriculumState(**getattr(model, "curriculum_state", {}))
-            callback.validate(final=True)
+            if callback.stage_validation:
+                if callback.pending_stage_validation:
+                    callback.validate(final=True)
+            else:
+                callback.validate(final=True)
         callback.save_checkpoint("final.zip")
         final_status = {
             **callback.snapshot(),

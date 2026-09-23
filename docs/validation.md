@@ -3,6 +3,60 @@
 Evidence is versioned below. Learning outcomes, simulation correctness and runtime
 speed are separate measures; [research design](research.md) defines the protocol.
 
+## 0.10.2 validation after stage success — 2026-09-23
+
+New teaching runs probe mastery every 2,000 completed games instead of 500.
+Normal easy/standard/hard validation runs once after each individual stage passes,
+including standalone stages. All 100 mastery cases, 100/100 thresholds and 50
+normal validation cases per difficulty are retained. Normal validation neither
+runs periodically during an unpassed stage nor runs merely because its budget ends.
+This is 75% fewer scheduled mastery probes, not a measured wall-time speedup.
+
+Independent scheduling controls cover every stage, failed/truncated/incomplete
+probes, insufficient stage residency, interval boundaries and crossed thresholds.
+They verify one evaluation per successful stage, earliest ties, saving before
+evaluation, deadline recovery and no duplicate evaluation on finalization/resume.
+Short CUDA controls check both recovery paths: remaining training budget and an
+already exhausted budget. Pending evaluation finishes with unchanged update and
+decision counts. Stage handoffs still reset both optimizers and preserve weights.
+
+A successful-stage integration control supplies synthetic probe passes solely to
+exercise scheduling; it is **not learned mastery evidence**. Its normal evaluation
+and three compact demonstrations use the actual CUDA policy. Every demonstration
+is verified through the CPU engine and has the same selected checkpoint hash.
+An independent incomplete-stage run saves its report/final model, never invokes
+normal evaluation or demo generation, and resumes without extra learning or
+evaluation. Suite jobs without validated weights are recorded as skipped, with
+missing learning curves excluded from report inputs.
+
+Archived periodic protocols remain explicit regression controls, including CLI
+exports without pygame/FFmpeg. New behavior has separate positive/negative tests;
+old expected outputs are not silently used as evidence for the new schedule.
+The empty validation curve and report were inspected: missing performance is
+shown explicitly, and the report explains the stage-success requirement.
+
+| Check | Result |
+|---|---|
+| Complete research regression suite | **388 passed**, 342.93 seconds |
+| Focused stage/schedule/SC2 controls | **59 passed**, 48.99 seconds; final suite includes the added suite-skip control |
+| Independent schedule unit controls | **9 passed**, 2.51 seconds |
+| CPU game regression suite | **207 passed**, 13.43 seconds |
+| CUDA game regression suite | **222 passed**, 55.31 seconds |
+| Ruff lint/format, dependency check and CUDA doctor | Passed |
+| Editable install, wheel and source distribution | Passed for 0.10.2 |
+| Bundled-recipe equality, Markdown links and README PowerShell syntax | Passed; all ten command blocks parsed |
+
+Logs: `artifacts/v0102-final.log`, `v0102-schedule.log`, `v0102-game-cpu.log`,
+`v0102-game-cuda.log`, `v0102-doctor.log`, `v0102-install.log` and
+`v0102-packaging-final.log`. Game test bytecode, pytest and Hypothesis caches all
+stay outside the game checkouts. The verified stage-success demo check is under
+`artifacts/v0102-final-temp/test_mastered_stage_saves_with0/mastered/`; its
+normal outcomes are truncations under a one-second test cutoff. Synthetic mastery
+results are test inputs, never training examples or evidence of competence.
+
+No formal training, comparison matrix or claim of stronger playing performance
+is included. Both game checkouts and the installed dependency pin remain unchanged.
+
 ## 0.10.1 saving economy and CUDA parallelism — 2026-09-23
 
 The changed lesson has a necessary resource investment under the pinned rules:

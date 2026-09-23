@@ -203,7 +203,8 @@ def test_all_stage_handoffs_preserve_only_weights_and_reset_optimizer_schedules(
             for row in episodes
         )
         curves = read_series(run / "learning-curve.jsonl")
-        assert len(curves) == 1 and len(curves[0]["levels"]) == 3
+        assert not curves and not (run / "best.zip").exists()
+        assert status["validation_deferred"]
         model, meta = load_policy(run / "final.zip", "cuda")
         if previous:
             assert meta["initialization"]["checkpoint_sha256"] == file_hash(previous)
@@ -222,7 +223,10 @@ def test_all_stage_handoffs_preserve_only_weights_and_reset_optimizer_schedules(
 
 @pytest.mark.learning
 def test_mastered_stage_saves_without_collecting_next_stage(stage_cfg, tmp_path, monkeypatch):
+    from pvz_rl.recordings import open_playback
+
     stage_cfg["training"]["total_games"] = 1000
+    stage_cfg["visualization"].update(enabled=True, demos=True)
     stage_cfg["curriculum"].update(probe_interval_games=1, minimum_stage_games=1)
     original = ResearchCallback.cached_evaluation
 
@@ -239,6 +243,15 @@ def test_mastered_stage_saves_without_collecting_next_stage(stage_cfg, tmp_path,
     assert not status["budget_complete"]
     assert {r["episode_start_stage"] for r in read_series(run / "training-episodes.jsonl")} == {0}
     assert len(read_series(run / "curriculum-probes.jsonl")) == 1
+    curves = read_series(run / "learning-curve.jsonl")
+    assert len(curves) == 1 and curves[0]["stage_success"]["stage"] == "placement"
+    demos = read_json(run / "visualizations/demos.json")["demos"]
+    assert {d["level"] for d in demos} == {"easy", "standard", "hard"}
+    assert {d["checkpoint_hash"] for d in demos} == {file_hash(run / "best.zip")}
+    for demo in demos:
+        playback = open_playback(run / "visualizations" / demo["replay"])
+        playback.verify()
+        assert playback.game.state_hash() == demo["state_hash"]
     model, _ = load_policy(run / "latest.zip")
     assert model.curriculum_state["mastered"] and model.curriculum_state["stage"] == 0
     assert read_series(run / "training-metrics.jsonl")[-1]["training_steps"] == status["steps"]
@@ -251,6 +264,7 @@ def test_mastered_stage_saves_without_collecting_next_stage(stage_cfg, tmp_path,
         resume=run / "final.zip",
     )
     restored, _ = load_policy(again / "final.zip")
+    assert not read_series(again / "learning-curve.jsonl")
     assert restored.num_timesteps == model.num_timesteps
     assert_tensor_tree_equal(
         model.policy.optimizer.state_dict(), restored.policy.optimizer.state_dict()
@@ -338,7 +352,7 @@ def test_cli_shared_weights_conversion_does_not_reinterpret_resume(stage_cfg, tm
 def test_new_mastery_needs_every_case_and_correct_stage_residency(stage_cfg, stage):
     state = CurriculumState(stage=STAGES.index(stage), completed_stage_games=99)
     wins = {task: 100 for task in state.requirements(stage_cfg)}
-    assert not state.due(499, stage_cfg) and state.due(500, stage_cfg)
+    assert not state.due(1999, stage_cfg) and state.due(2000, stage_cfg)
     state.observe(wins, 500, stage_cfg, advance=False)
     assert not state.mastered  # Even perfect probes cannot replace training residency.
     state.completed_episode((state.stage + 1) % len(STAGES))
@@ -378,7 +392,8 @@ def test_mastery_seed_pool_and_retained_recipe_defaults():
         assert seed_values(cfg, "validation") == list(range(100000, 100050))
         if cfg["curriculum"].get("mode") != "teaching":
             continue
-        assert cfg["curriculum"]["probe_interval_games"] == 500
+        assert cfg["curriculum"]["probe_interval_games"] == 2000
+        assert cfg["training"]["validation_schedule"] == "stage_success"
         assert cfg["curriculum"]["consecutive_passes"] == 1
         cases = curriculum_probe_seeds(cfg)
         assert cases == list(range(100050, 100150))
@@ -420,8 +435,8 @@ def test_probe_failure_does_not_certify_mastery(stage_cfg, tmp_path, monkeypatch
     from types import SimpleNamespace
 
     cb = ResearchCallback(stage_cfg, "masked", 101, tmp_path, validation_limit=1)
-    cb.model = SimpleNamespace(num_timesteps=64, training_games=500, save=lambda p: None)
-    cb.curriculum = CurriculumState(completed_stage_games=500)
+    cb.model = SimpleNamespace(num_timesteps=64, training_games=2000, save=lambda p: None)
+    cb.curriculum = CurriculumState(completed_stage_games=2000)
     seen = []
 
     def results(seeds, *args, **kwargs):

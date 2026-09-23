@@ -53,7 +53,8 @@ economy_scale = 300.0
 [training]
 budget_unit = "games"
 total_games = 10000
-eval_interval_games = 2000
+validation_schedule = "stage_success" # Normal-game evaluation only after each stage passes.
+eval_interval_games = 2000 # Used by diagnostic/fixed training or archived periodic schedules.
 total_steps = 3000000 # Inactive unless budget_unit = "decisions" (legacy).
 learner_seeds = [101, 102]
 n_envs = 1024
@@ -74,13 +75,13 @@ max_grad_norm = 0.5
 normalize_advantage = true
 target_kl = 0.01 # Zero disables KL stopping.
 hidden_sizes = [128, 128]
-eval_interval = 250000 # Legacy decision interval; new runs use eval_interval_games.
+eval_interval = 250000 # Periodic decision interval for archived/diagnostic protocols.
 torch_threads = 1
 
 [curriculum]
 mode = "teaching"
 residency = "episode_start_stage"
-probe_interval_games = 500
+probe_interval_games = 2000
 minimum_stage_games = 100
 probe_interval = 16384
 probe_cases = 100
