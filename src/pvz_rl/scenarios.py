@@ -68,6 +68,9 @@ def scenario(level: str, family: str, seed: int, rules: Rules, cfg=None):
 
 def difficulty_weights(cfg: dict, decisions: int, total: int, curriculum: bool) -> list[float]:
     c = cfg["curriculum"]
+    if total is None:
+        # Teaching selects its explicit task mix independently of a budget fraction.
+        return c["final_weights"]
     progress = decisions / max(1, total)
     if not curriculum or progress >= c["boundaries"][1]:
         return c["final_weights"]

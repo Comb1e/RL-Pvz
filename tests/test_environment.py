@@ -10,6 +10,10 @@ from pvz_rl.rewards import asset_value
 
 
 def test_all_406_actions_have_independent_expected_indices(cfg):
+    import torch
+
+    from pvz_rl.actions import ActionSchema
+
     codec = ActionCodec(cfg)
     assert codec.size == 406 and isinstance(codec.decode(0), Wait)
     for p, kind in enumerate(cfg["environment"]["plants"]):
@@ -22,6 +26,12 @@ def test_all_406_actions_have_independent_expected_indices(cfg):
         for col in range(9):
             assert codec.decode(361 + row * 9 + col) == Dig(row, col)
     assert [codec.encode(codec.decode(i)) for i in range(406)] == list(range(406))
+    for device in ("cpu", "cuda"):
+        ids = torch.arange(406, device=device)
+        kinds, plants, tiles = ActionSchema.unpack(ids)
+        torch.testing.assert_close(ActionSchema.pack(kinds, plants, tiles), ids, rtol=0, atol=0)
+        assert kinds[0] == 0 and (kinds[1:361] == 2).all() and (kinds[361:] == 1).all()
+        assert (plants[361:] == 0).all() and tiles[0] == 0
 
 
 @pytest.mark.parametrize("action", [-1, 406, 1.5, True, "0"])

@@ -204,7 +204,7 @@ def test_real_mine_histories_affect_tile_preferences_without_countdown_inputs():
         logits = policy.get_distribution(observations, masks, context).logits
         # Temporal information reaches conditional tile preferences, not only
         # a uniform tile-map offset that would cancel under softmax.
-        difference = logits[0, 10:].reshape(9, 45) - logits[1, 10:].reshape(9, 45)
+        difference = logits[0, 11:].reshape(9, 45) - logits[1, 11:].reshape(9, 45)
         assert difference.std(-1).max() > 1e-7
         isolated = EventMemory(cfg, rules, 2, "cpu")
         reset = isolated.observe(
@@ -214,7 +214,15 @@ def test_real_mine_histories_affect_tile_preferences_without_countdown_inputs():
             torch.ones(2, dtype=torch.bool),
             torch.full((2,), 1000),
         )
-        reset_logits = policy.get_distribution(observations, masks, reset).logits
+        torch.testing.assert_close(reset.tokens[0], reset.tokens[1], atol=0, rtol=0)
+        # Compare identical batch positions: CPU GEMM can round a three-wide
+        # output differently across rows even when their inputs are identical.
+        reset_logits = [
+            policy.get_distribution(
+                observations[i : i + 1], masks[i : i + 1], reset.select(torch.tensor([i]))
+            ).logits.clone()
+            for i in range(2)
+        ]
         torch.testing.assert_close(reset_logits[0], reset_logits[1], atol=0, rtol=0)
 
 

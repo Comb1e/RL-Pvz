@@ -30,8 +30,12 @@ legality. Seeds, schedules, entity IDs and task names are excluded.
 
 Each independent actor/critic uses embeddings 8/4, scalar encoder 64, two
 32-channel convolutions, two gated attention blocks (128 width, four heads,
-feed-forward width 256), and 128×128 heads. Together they have 1,127,931 parameters.
-Nine spatial maps retain all 406 type-then-tile actions.
+feed-forward width 256), and 128×128 heads. Together they have 1,128,060 parameters.
+A shared actor head outputs three kind logits (wait/dig/plant) and eight conditional
+species logits. Nine spatial maps supply legal tiles. Planting selects species before
+tile; digging only selects tile. The simulator and rollout buffer carry the executed
+command as one compact integer. All 406 possible commands remain available through
+legal masks; they are not 406 independent top-level policy choices.
 
 Eight local tokens, 32 event tokens and eight summaries bound history. Public
 plant health/state, zombie counts/health/armor, sun/wave, mower-spent
@@ -88,12 +92,14 @@ isolate actor/critic. Target KL 0.01 stops actor updates above 0.015 approximate
 KL; critic epochs continue. Zero disables this gate. Optional critic rate defaults
 to actor rate.
 
-PPO uses actual joint type/tile probabilities. Balanced entropy coefficients are
-0.01 for types and 0.001 for mean normalized conditional tiles, without type
-probability weighting. Initial dig bias −12 is trainable. Sampling differs from greedy
+PPO uses actual joint kind/species/tile probabilities. Balanced entropy coefficients are
+0.01 for action-kind entropy, 0.001 for normalized conditional species entropy,
+and 0.001 for mean normalized tile entropy. Conditional exploration terms are not
+weighted by how often their parent kind is chosen; unavailable branches contribute zero.
+Initial dig bias −12 is trainable. Sampling differs from greedy
 evaluation: with equal other logits and 10% added noise, wait/dig-only states initially
 give dig probability 0.00000553 per choice. Over 500 choices the illustrative chance
-of any dig is 0.28%, versus 67% for bias −6. This is not a probability cap; positive
+of any dig is 0.28%. This is not a probability cap; positive
 advantages can increase digging. The 1,024-game warm-up remains unchanged.
 
 Plant/state embeddings use equivalent one-hot matrix products during backpropagation
@@ -120,7 +126,20 @@ second; no improvement is assumed.
 Probes run every 2,000 completed games by default, with at least 100 stage-resident
 completions and one consecutive pass. Cases are 100050–100149. Stage changes affect
 future resets, preserving optimizer identity. Parameters are configurable.
-The stage option trains one stage until mastery or budget; incomplete mastery is explicit.
+The stage option normally stops at mastery or its configured budget. Add
+`--until-stage-complete` with `--stage` (or set `training.until_stage_complete = true`
+and `curriculum.run_stage`) to continue until that stage passes. Both training time
+and game ceilings are inactive in this mode. Probes, minimum residency, per-game
+cutoffs, warm-up and exploration clocks remain active. Failed probes continue the
+same stage; a passing probe stops after a complete update without automatic promotion.
+Explicit `--games`, `--steps` and `--max-minutes` conflict with this mode.
+
+Ctrl+C saves an interruption checkpoint with both optimizers and schedules. Resume
+keeps the stopping mode, cumulative elapsed time and mastery progress; use a fresh
+output directory. The mastered `final.zip` can initialize the next stage with fresh
+optimizers through `--init-from`. An already mastered resume finalizes pending outputs
+without collecting another rollout. Missing targets and ETA are reported as null,
+not as a synthetic large training budget.
 
 Lessons have no sky income or mowers. Placement starts with 100 sun and basics in
 one lane at ticks 5/105/205. Saving starts with 150 sun and basics in two lanes at
@@ -144,8 +163,9 @@ Matching checkpoint/case results are reused; final-test seeds stay untouched.
 
 One recipe ships. Weights-only initialization requires compatible architecture and
 starts fresh optimizers, counters and memories. Resume restores the experiment and
-remaining allowance but restarts interrupted games with empty history. Older
-observation signatures, including event_v4, and 20 Hz pins cannot load. No conversion paths ship.
+remaining allowance but restarts interrupted games with empty history. Switching
+stopping modes uses compatible weights with `--init-from`, rather than changing a resumed experiment. Older
+observation or action-head signatures and 20 Hz pins cannot load. No conversion paths ship.
 
 The default 120 minutes reserves 15 for finalization. Stops occur at complete
 updates; evaluation/export checks preserve incomplete status. Suites repeat this

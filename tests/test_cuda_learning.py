@@ -144,7 +144,7 @@ def test_fixed_rollout_losses_and_optimizer_match_stock(gpu_cfg, condition, monk
         # Independent upstream optimizer on supplied data; no CPU collection/training run.
         t = configs[0]["training"]
         for c in configs:
-            c["training"]["exploration"].update(type_coef=0, tile_coef=0)
+            c["training"]["exploration"].update(type_coef=0, plant_coef=0, tile_coef=0)
         reference = MaskablePPO(
             SpatialGroupedPolicy,
             PvZEnv(configs[0]),

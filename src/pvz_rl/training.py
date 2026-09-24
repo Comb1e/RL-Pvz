@@ -13,7 +13,14 @@ from time import perf_counter
 import torch
 from stable_baselines3.common.callbacks import BaseCallback
 
-from .budget import budget_target, evaluation_interval, progress_value, uses_games
+from .budget import (
+    budget_target,
+    effective_limits,
+    evaluation_interval,
+    progress_value,
+    until_stage_complete,
+    uses_games,
+)
 from .config import (
     curriculum_probe_seeds,
     output_settings,
@@ -225,8 +232,11 @@ class ResearchCallback(BaseCallback):
             "instant_action_fraction": self.instant_actions / max(1, collected),
             "end_to_end_decisions_per_second": collected / max(elapsed, 1e-9),
             "estimated_remaining_training_seconds": (
-                max(0, self.target - progress) / budget_rate if budget_rate > 0 else None
+                max(0, self.target - progress) / budget_rate
+                if self.target is not None and budget_rate > 0
+                else None
             ),
+            "until_stage_complete": until_stage_complete(self.cfg),
             "next_episode_difficulty_weights": None if self.curriculum else weights,
             "curriculum": self.curriculum.to_dict() if self.curriculum else None,
             "curriculum_stage": self.curriculum.name if self.curriculum else "fixed",
@@ -335,13 +345,22 @@ class ResearchCallback(BaseCallback):
                 f"; {task} last {metrics['completed_games']}: win {metrics['win_rate']:.1%}"
                 f", digs/plant {'pending' if ratio is None else f'{ratio:.1%}'}"
             )
+        progress_label = (
+            f"{row['budget_progress']:,} games; until {row['curriculum_stage']} mastery; "
+            if self.target is None
+            else f"{row['budget_progress']:,}/{self.target:,} {row['budget_unit']} ({row['budget_progress'] / self.target:.1%}); "
+        )
+        eta = (
+            ""
+            if self.target is None
+            else f"training ETA {duration(row['estimated_remaining_training_seconds'])}; "
+        )
         self.progress.emit(
-            f"{row['budget_progress']:,}/{self.target:,} {row['budget_unit']} ({row['budget_progress'] / self.target:.1%}); "
-            f"{row['games_per_second'] * 60:.2f} games/min; "
+            progress_label + f"{row['games_per_second'] * 60:.2f} games/min; "
             f"{row['decisions_per_second']:.0f} transitions/s; elapsed {duration(row['wall_seconds'])}; "
             f"{row['simulation_ticks_per_second']:.0f} simulation ticks/s; "
-            f"training ETA {duration(row['estimated_remaining_training_seconds'])}; "
-            f"last {len(self.recent)} games win {win}, reward {reward}; best validation {best}"
+            + eta
+            + f"last {len(self.recent)} games win {win}, reward {reward}; best validation {best}"
             + timing
             + context
             + kills,
@@ -360,6 +379,9 @@ class ResearchCallback(BaseCallback):
             "entropy_loss",
             "joint_entropy",
             "exploration_bonus",
+            "kind_exploration_bonus",
+            "plant_exploration_bonus",
+            "tile_exploration_bonus",
             "choice_fraction",
             "memory_compression_ratio",
             "memory_event_fraction",
@@ -510,7 +532,11 @@ class ResearchCallback(BaseCallback):
         self.capture_update()
         self.finish_stage_validation()
         self.check_stage_complete()
-        if uses_games(self.cfg) and progress_value(self.cfg, self.model) >= self.target:
+        if (
+            uses_games(self.cfg)
+            and self.target is not None
+            and progress_value(self.cfg, self.model) >= self.target
+        ):
             raise TrainingGamesComplete()
         self.check_deadline()
         if not self.stage_validation and progress_value(self.cfg, self.model) >= self.next_eval:
@@ -904,6 +930,10 @@ def train(
         raise ValueError("Use either resume or init_from, not both")
     if selected_stage(cfg) and family != "preset":
         raise ValueError("Stage training uses family=preset and the stage's configured task mix")
+    if until_stage_complete(cfg) and deadline is not None:
+        raise ValueError(
+            "until_stage_complete cannot be combined with an explicit training deadline"
+        )
     initialized_model, initialization = None, None
     if init_from:
         initialized_model, initialization = initial_weights(init_from, cfg)
@@ -923,6 +953,7 @@ def train(
     torch.set_num_threads(cfg["training"]["torch_threads"])
     # Complete PPO rollouts are counted explicitly; no discarded partial optimization batch.
     game_budget = uses_games(cfg)
+    unlimited = until_stage_complete(cfg)
     nominal_steps = None if game_budget else cfg["training"]["total_steps"]
     rollout = cfg["training"]["rollout_size"]
     effective_steps = None if game_budget else math.ceil(nominal_steps / rollout) * rollout
@@ -935,6 +966,8 @@ def train(
         nominal_steps=nominal_steps,
         effective_steps=effective_steps,
         target_games=budget_target(cfg) if game_budget else None,
+        until_stage_complete=unlimited,
+        effective_limits=effective_limits(cfg),
         budget_unit="games" if game_budget else "decisions",
         validation_limit=validation_limit,
         resume=str(Path(resume).resolve()) if resume else None,
@@ -954,12 +987,17 @@ def train(
     env, model, callback = None, None, None
     settings = output_settings(cfg)
     progress = ProgressReporter(output / "train.log", settings["logging"]["progress_seconds"])
+    budget_label = (
+        "until stage mastery; no time or game ceiling"
+        if unlimited
+        else f"{budget_target(cfg) if game_budget else effective_steps:,} {'games' if game_budget else 'decisions'}"
+    )
     progress.emit(
         f"Shared {condition} policy; learner seed {learner_seed}; {cfg['training']['device']}; "
         f"{cfg['training']['n_envs']} parallel games; simulator {simulator(cfg)}; "
         f"{cfg['training']['rollout_size'] // cfg['training']['n_envs']} transitions/env/update (includes waits, no game action cap); "
         f"{cfg['training']['rollout_size']} total rollout transitions; "
-        f"{budget_target(cfg) if game_budget else effective_steps:,} {'games' if game_budget else 'decisions'}; "
+        f"{budget_label}; "
         f"family {family}; output {output.resolve()}",
         force=True,
     )
@@ -987,7 +1025,8 @@ def train(
     if selected_stage(cfg):
         progress.emit(
             f"Single stage: {selected_stage(cfg)}; no automatic promotion; "
-            "stop at mastery or budget, save final.zip for the next stage",
+            + ("stop only at mastery" if unlimited else "stop at mastery or budget")
+            + ", save final.zip for the next stage",
             force=True,
         )
     progress.emit(
@@ -1036,11 +1075,15 @@ def train(
             if teaching_enabled(cfg) and family == "preset":
                 model.curriculum_state = initial_state(cfg).to_dict()
         remaining = (
-            budget_target(cfg) - progress_value(cfg, model)
-            if game_budget
-            else effective_steps - model.num_timesteps
+            None
+            if unlimited
+            else (
+                budget_target(cfg) - progress_value(cfg, model)
+                if game_budget
+                else effective_steps - model.num_timesteps
+            )
         )
-        if remaining < 0 and not game_budget:
+        if remaining is not None and remaining < 0 and not game_budget:
             raise ValueError("Checkpoint exceeds this run's training budget")
         callback = ResearchCallback(
             cfg,
@@ -1066,7 +1109,7 @@ def train(
             env.env_method(
                 "set_curriculum_stage", getattr(model, "curriculum_state", {}).get("stage", 0)
             )
-        if remaining > 0:
+        if remaining is None or remaining > 0:
             try:
                 model.learn(
                     # Game count is the stopping criterion. SB3 requires a numeric
@@ -1117,9 +1160,11 @@ def train(
             else "game_budget"
             if game_budget
             else "decision_budget",
-            "budget_complete": progress_value(cfg, model) >= budget_target(cfg),
+            "budget_complete": None
+            if unlimited
+            else progress_value(cfg, model) >= budget_target(cfg),
             "extra_games_in_final_rollout": max(0, progress_value(cfg, model) - budget_target(cfg))
-            if game_budget
+            if game_budget and not unlimited
             else 0,
         }
         training_complete = True

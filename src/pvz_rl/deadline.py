@@ -2,6 +2,8 @@
 
 from time import perf_counter
 
+from .budget import effective_limits
+
 
 class BudgetExpired(Exception):
     """An operation can be regenerated without collecting additional experience."""
@@ -17,7 +19,7 @@ class RunBudget:
         self.clock = clock
         self.started = clock() if started is None else started
         self.prior_elapsed = elapsed
-        minutes = cfg["training"].get("max_minutes")
+        minutes = effective_limits(cfg)["minutes"]
         self.limit = None if minutes is None else minutes * 60
         # Short availability runs reserve the same fraction rather than spending
         # their entire allowance on a fixed fifteen-minute reserve.

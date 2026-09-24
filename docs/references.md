@@ -1,5 +1,16 @@
 # Sources actually used
 
+## Hierarchical action arguments and stopping modes — 2026-09-24
+
+- [PySC2 action interface](https://github.com/google-deepmind/pysc2/blob/master/pysc2/lib/actions.py): inspected `ArgumentType` and `FunctionCall(function, arguments)` validation. Used as a reference for separating a command from its arguments, while retaining a compact engine transport. Retrieved source SHA-256: `c6ea590816349b18b2946d8d11068a8780a3c32946daba456617d37b27aebe62`; no unverified commit is claimed.
+- Huang and Ontanon, [A Closer Look at Invalid Action Masking](https://arxiv.org/html/2006.14171v3), masking-gradient discussion and naive-masking counterexample: sampling and optimization must use the same legal distribution. The inspected HTML has SHA-256 `30e735c2330ef0607a16f63f5801e1c9d071c7fb31cc46b82e0aa98bc06c2d4b`. This does not validate the project's exploration coefficients or predict a PVZ win-rate gain.
+- Installed **SB3-Contrib 2.7.1** maskable distributions and PPO learning loop: inspected categorical masking, entropy, joint log probabilities and callback/update boundaries. The project uses conditional arguments rather than independent MultiDiscrete probabilities. Stage-only stopping extends the existing mastery state machine and completed-update callbacks.
+
+The SC2LE HTML URL attempted during planning returned 404; no new full-text
+findings are attributed to that attempt. The previous SC2LE inspection remains
+recorded below. Numeric action labels do not themselves create a large classifier;
+the factorized history experiment is a separate representation hypothesis.
+
 ## Smaller observations and update throughput — 2026-09-24
 
 - Andrychowicz et al., [What Matters in On-Policy RL?](https://arxiv.org/html/2006.05990v1),

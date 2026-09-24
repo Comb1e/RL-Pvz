@@ -10,6 +10,8 @@ import math
 import torch
 from torch import nn
 
+from .actions import ActionSchema as A
+
 
 class GatedMemoryBlock(nn.Module):
     def __init__(self, spec):
@@ -53,7 +55,7 @@ class TemporalEncoder(nn.Module):
         width = 45 * (plant_dim + state_dim + 1) + layout.size - 135
         d = spec["model_width"]
         self.observation = nn.Linear(width, d)
-        self.action = nn.Embedding(406, d)
+        self.action = nn.Embedding(A.size, d)
         self.reset = nn.Linear(1, d, bias=False)
         # Relative time, covered time span and number of represented observations.
         self.time = nn.Sequential(nn.Linear(3, d), nn.Tanh())

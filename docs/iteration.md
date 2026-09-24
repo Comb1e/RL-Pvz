@@ -5,6 +5,27 @@ Dates and results belong to their recorded version. Current behavior lives in
 artifact locations and learning outcomes live in [validation](validation.md).
 The longer pre-consolidation notes remain in `git show b642c9c:docs/iteration.md`.
 
+## 0.15.0 — 2026-09-24
+
+- Problem: plant species competed directly with waiting and digging, and stage runs
+  could exhaust their time/game allowance before meeting mastery.
+- Changes: a three-way wait/dig/plant head, conditional species head and nine tile
+  maps use one forward pass with consistent masked mixture probabilities and PPO
+  ratios. The initial dig bias stays -12. Conditional species entropy is explicit.
+- Stage execution: optional `--until-stage-complete` disables both training ceilings,
+  keeps completed-game probes and episode cutoffs, and stops only after the selected
+  stage passes. Interruption/resume retains both optimizers, counters and pending
+  validation; ordinary bounded runs remain the default.
+- Representation: centralized command dimensions preserve compact simulator IDs.
+  The factorized history trial was 4–5% slower and its bounded competence checks
+  were inconclusive, so the existing history embedding remains. Temporary comparison
+  code is removed; measurements are in [validation](validation.md).
+- Compatibility: event_transformer_v2 requires fresh weights; one policy/recipe,
+  281 observations, 128 environments, game checkout and dependency pin remain unchanged.
+- Verification: independent probability/gradient/PPO controls, stage state-machine
+  tests, current regression suites and bounded CUDA checks are recorded in validation.
+  Neither the hierarchy nor unlimited stopping establishes improved playing strength.
+
 ## 0.14.0 — 2026-09-24
 
 - Problem: placement frequently dug its single shooter during actor warm-up; training

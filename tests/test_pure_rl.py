@@ -61,14 +61,14 @@ def test_grouped_equal_logits_and_wait_exploration():
     env.reset(seed=4)
     mask = env.action_masks()
     assert mask.sum() == 136
-    dist = GroupedDistribution().proba_distribution(torch.zeros(1, 415))
+    dist = GroupedDistribution().proba_distribution(torch.zeros(1, 416))
     dist.apply_masking(mask)
     assert dist.probs.sum() == pytest.approx(1)
-    assert dist.probs[0, 0] == pytest.approx(0.25)
+    assert dist.probs[0, 0] == pytest.approx(0.5)
     assert torch.count_nonzero(dist.probs[0, ~torch.tensor(mask)]) == 0
     for group in (0, 2, 4):  # sunflower, wall-nut, potato mine
-        assert dist.probs[0, 1 + group * 45 : 1 + (group + 1) * 45].sum() == pytest.approx(0.25)
-    assert dist.entropy().item() == pytest.approx(math.log(4) + 0.75 * math.log(45))
+        assert dist.probs[0, 1 + group * 45 : 1 + (group + 1) * 45].sum() == pytest.approx(1 / 6)
+    assert dist.entropy().item() == pytest.approx(math.log(2) + 0.5 * math.log(135))
 
 
 @pytest.mark.parametrize("device", ["cpu", "cuda"])
@@ -76,7 +76,7 @@ def test_joint_distribution_against_independent_numpy_control(device):
     if device == "cuda" and not torch.cuda.is_available():
         pytest.skip("CUDA unavailable")
     rng = np.random.default_rng(8)
-    raw = rng.normal(size=(3, 415))
+    raw = rng.normal(size=(3, 416))
     mask = rng.random((3, 406)) > 0.5
     mask[:, 0] = True
     mask[1, 46:91] = False
@@ -87,15 +87,22 @@ def test_joint_distribution_against_independent_numpy_control(device):
     dist.apply_masking(mask)
     expected = np.zeros((3, 406))
     for row in range(3):
-        groups = [0] + [g for g in range(1, 10) if mask[row, 1 + (g - 1) * 45 : 1 + g * 45].any()]
-        weights = np.exp(raw[row, groups] - raw[row, groups].max())
-        weights /= weights.sum()
-        expected[row, 0] = weights[0]
-        for g, weight in zip(groups[1:], weights[1:]):
-            indices = np.arange(1 + (g - 1) * 45, 1 + g * 45)
+        active = [g for g in range(9) if mask[row, 1 + g * 45 : 1 + (g + 1) * 45].any()]
+        species = [g for g in active if g < 8]
+        kinds = [0] + ([1] if 8 in active else []) + ([2] if species else [])
+
+        def softmax(values):
+            w = np.exp(values - values.max())
+            return w / w.sum()
+
+        kp = dict(zip(kinds, softmax(raw[row, kinds])))
+        pp = dict(zip(species, softmax(raw[row, 3 + np.array(species)]))) if species else {}
+        expected[row, 0] = kp[0]
+        for g in active:
+            indices = np.arange(1 + g * 45, 1 + (g + 1) * 45)
             indices = indices[mask[row, indices]]
-            local = np.exp(raw[row, indices + 9] - raw[row, indices + 9].max())
-            expected[row, indices] = weight * local / local.sum()
+            mass = kp[1] if g == 8 else kp[2] * pp[g]
+            expected[row, indices] = mass * softmax(raw[row, indices + 10])
     np.testing.assert_allclose(dist.probs.detach().cpu(), expected, atol=1e-12)
     expected_entropy = -(expected * np.log(np.maximum(expected, 1e-300))).sum(1)
     np.testing.assert_allclose(dist.entropy().detach().cpu(), expected_entropy, atol=1e-12)
@@ -112,9 +119,10 @@ def test_joint_distribution_against_independent_numpy_control(device):
 
 
 def test_deterministic_selection_is_greedy_type_then_tile():
-    raw = torch.zeros(1, 415)
-    raw[0, 1] = 2
-    raw[0, 10 + 7] = 0.1
+    raw = torch.zeros(1, 416)
+    raw[0, 2] = 2
+    raw[0, 3] = 0.5
+    raw[0, 11 + 7] = 0.1
     dist = GroupedDistribution().proba_distribution(raw)
     # Wait has greater joint mass than any individual sunflower tile, but the
     # sunflower type has greatest type mass. Deterministic evaluation chooses it.

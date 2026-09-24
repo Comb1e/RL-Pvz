@@ -136,18 +136,18 @@ reward_metrics(const I *headers, const I *old_headers, const I *old_cd,
       opportunity = true;
   }
   t[9] += opportunity;
-  if (action >= 1 && action <= 360 && h.accepted) {
-    I kind = (action - 1) / 45;
+  if (action >= 1 && action < ACTION_DIG_START && h.accepted) {
+    I kind = (action - 1) / ACTION_TILES;
     t[12 + kind]++;
-    t[36 + (action - 1) % 45] = b.tick + 1;
+    t[36 + (action - 1) % ACTION_TILES] = b.tick + 1;
     if (kind == 1 || kind == 5 || kind == 7) {
       t[10]++;
       if (t[11] < 0)
         t[11] = b.tick;
     }
   }
-  if (action >= 361 && action <= 405 && h.accepted) {
-    I tile = action - 361;
+  if (action >= ACTION_DIG_START && action < ACTION_COUNT && h.accepted) {
+    I tile = action - ACTION_DIG_START;
     double planted = t[36 + tile];
     t[35] += planted > 0 && b.tick - (planted - 1) <= EARLY_DIG_TICKS;
     t[36 + tile] = 0;

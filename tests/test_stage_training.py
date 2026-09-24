@@ -2,6 +2,7 @@
 
 import argparse
 import copy
+from pathlib import Path
 
 import pytest
 import torch
@@ -227,10 +228,15 @@ def test_all_stage_handoffs_preserve_only_weights_and_reset_optimizer_schedules(
 
 
 @pytest.mark.learning
-def test_mastered_stage_saves_without_collecting_next_stage(stage_cfg, tmp_path, monkeypatch):
+@pytest.mark.parametrize("unlimited", [False, True])
+def test_mastered_stage_saves_without_collecting_next_stage(
+    stage_cfg, tmp_path, monkeypatch, unlimited
+):
     from pvz_rl.recordings import open_playback
 
     stage_cfg["training"]["total_games"] = 1000
+    if unlimited:
+        stage_cfg["training"].update(until_stage_complete=True, total_games=1, max_minutes=1e-9)
     stage_cfg["visualization"].update(enabled=True, demos=True)
     stage_cfg["curriculum"].update(probe_interval_games=1, minimum_stage_games=1)
     original = ResearchCallback.cached_evaluation
@@ -238,7 +244,11 @@ def test_mastered_stage_saves_without_collecting_next_stage(stage_cfg, tmp_path,
     def passing_probe(self, seeds, levels, family, destination, split, final=False):
         if split == "curriculum_validation":
             # Scheduling control only; this is not evidence of learned mastery.
-            return [{"win": True} for _ in seeds]
+            # The first unlimited probe fails; neither former ceiling may stop learning.
+            return [
+                {"win": not (unlimited and self.curriculum.last_probe_games == 0 and i == 0)}
+                for i, _ in enumerate(seeds)
+            ]
         return original(self, seeds, levels, family, destination, split, final)
 
     monkeypatch.setattr(ResearchCallback, "cached_evaluation", passing_probe)
@@ -247,7 +257,16 @@ def test_mastered_stage_saves_without_collecting_next_stage(stage_cfg, tmp_path,
     assert status["stage_mastered"] and status["stop_reason"] == "stage_mastered"
     assert not status["budget_complete"]
     assert {r["episode_start_stage"] for r in read_series(run / "training-episodes.jsonl")} == {0}
-    assert len(read_series(run / "curriculum-probes.jsonl")) == 1
+    assert len(read_series(run / "curriculum-probes.jsonl")) == (2 if unlimited else 1)
+    if unlimited:
+        assert (
+            status["target_games"] is status["budget_target"] is status["budget_complete"] is None
+        )
+        assert status["estimated_remaining_training_seconds"] is None
+        assert status["time_budget"]["limit_seconds"] is None
+        assert status["training_games"] > 1
+        log = (run / "train.log").read_text()
+        assert "until placement mastery" in log and "training ETA" not in log
     curves = read_series(run / "learning-curve.jsonl")
     assert len(curves) == 1 and curves[0]["stage_success"]["stage"] == "placement"
     demos = read_json(run / "visualizations/demos.json")["demos"]
@@ -280,9 +299,23 @@ def test_mastered_stage_saves_without_collecting_next_stage(stage_cfg, tmp_path,
 
 
 @pytest.mark.learning
-def test_stage_interrupt_resume_retains_stage_and_budget(stage_cfg, tmp_path, monkeypatch):
+@pytest.mark.parametrize("unlimited", [False, True])
+def test_stage_interrupt_resume_retains_stage_and_budget(
+    stage_cfg, tmp_path, monkeypatch, unlimited
+):
     stage_cfg["curriculum"]["run_stage"] = "saving"
     stage_cfg["training"]["total_games"] = 24
+    if unlimited:
+        stage_cfg["training"].update(until_stage_complete=True, total_games=1, max_minutes=1e-9)
+        stage_cfg["curriculum"].update(probe_interval_games=2, minimum_stage_games=1)
+        original_eval = ResearchCallback.cached_evaluation
+
+        def mastery_control(self, seeds, levels, family, destination, split, final=False):
+            if split == "curriculum_validation":
+                return [{"win": self.model.training_games >= 24} for _ in seeds]
+            return original_eval(self, seeds, levels, family, destination, split, final)
+
+        monkeypatch.setattr(ResearchCallback, "cached_evaluation", mastery_control)
     original = ResearchCallback._on_rollout_start
 
     def interrupt(self):
@@ -307,6 +340,12 @@ def test_stage_interrupt_resume_retains_stage_and_budget(stage_cfg, tmp_path, mo
     )
     model, meta = load_policy(second / "final.zip")
     assert model.training_games >= 24
+    if unlimited:
+        status = read_json(second / "status.json")
+        assert (
+            status["stop_reason"] == "stage_mastered"
+            and status["time_budget"]["limit_seconds"] is None
+        )
     assert meta["resume_games"] == checkpoint.training_games
     assert model.curriculum_state["stage"] == 1
     assert (
@@ -518,3 +557,96 @@ def test_shared_mastery_stops_after_update_and_is_resumable(
     assert_tensor_tree_equal(
         model.policy.critic_optimizer.state_dict(), restored.policy.critic_optimizer.state_dict()
     )
+
+
+@pytest.mark.parametrize("option", ["games", "steps", "max_minutes"])
+def test_until_mastery_cli_rejects_explicit_ceilings_before_output(tmp_path, option):
+    output = tmp_path / "absent"
+    with pytest.raises(ValueError, match="cannot be combined"):
+        configured(
+            argparse.Namespace(
+                command="train",
+                config=None,
+                stage="placement",
+                until_stage_complete=True,
+                output=output,
+                **{option: 1},
+            )
+        )
+    assert not output.exists()
+
+
+@pytest.mark.parametrize("change", ["stage", "schedule", "mode", "requirements", "boolean"])
+def test_until_mastery_invalid_configuration_leaves_no_output(stage_cfg, tmp_path, change):
+    stage_cfg["training"]["until_stage_complete"] = True
+    if change == "stage":
+        stage_cfg["curriculum"].pop("run_stage")
+    elif change == "schedule":
+        stage_cfg["training"]["budget_unit"] = "decisions"
+    elif change == "mode":
+        stage_cfg["curriculum"]["mode"] = "fixed"
+    elif change == "boolean":
+        stage_cfg["training"]["until_stage_complete"] = 1
+    else:
+        stage_cfg["curriculum"]["stages"]["placement"]["requirements"] = {}
+    with pytest.raises(ValueError, match="until_stage_complete"):
+        train(stage_cfg, "masked", 101, tmp_path / "absent")
+    assert not (tmp_path / "absent").exists()
+
+
+def test_until_mastery_cli_saved_resume_and_unbounded_clock(stage_cfg, tmp_path):
+    from pvz_rl.budget import budget_target, effective_limits
+    from pvz_rl.deadline import RunBudget
+
+    cfg = configured(
+        argparse.Namespace(command="train", config=None, stage="saving", until_stage_complete=True)
+    )
+    assert budget_target(cfg) is None
+    assert effective_limits(cfg) == {"games": None, "decisions": None, "minutes": None}
+    assert cfg["training"]["total_games"] == 10000  # inactive defaults remain explicit
+    clock = [100.0]
+    budget = RunBudget(cfg, elapsed=10**10, clock=lambda: clock[0])
+    clock[0] += 10**10
+    assert budget.can_collect(10**12) and budget.deadline is None
+    assert budget.state()["limit_seconds"] is budget.state()["remaining_seconds"] is None
+    assert budget.state()["reserve_seconds"] == 0
+    assert budget.state()["elapsed_seconds"] == 2 * 10**10
+    write_json(
+        tmp_path / "metadata.json",
+        {"config": cfg, "learner_seed": 101, "condition": "masked", "validation_limit": None},
+    )
+    restored = configured(
+        argparse.Namespace(command="train", config=None, resume=tmp_path / "latest.zip")
+    )
+    assert restored == cfg
+    assert transfer_protocol(cfg) == transfer_protocol(stage_cfg)
+    with pytest.raises(ValueError, match="explicit training deadline"):
+        train(cfg, "masked", 101, tmp_path / "absent", deadline=1)
+    assert not (tmp_path / "absent").exists()
+
+
+@pytest.mark.parametrize("mode", ["resume", "init_from"])
+def test_previous_action_head_rejected_before_loading(stage_cfg, tmp_path, mode):
+    stage_cfg["policy"]["kind"] = "event_transformer_v1"
+    write_json(
+        tmp_path / "metadata.json",
+        {"config": stage_cfg, "learner_seed": 101, "condition": "masked"},
+    )
+    with pytest.raises(ValueError, match="Retired"):
+        configured(
+            argparse.Namespace(command="train", config=None, **{mode: tmp_path / "absent.zip"})
+        )
+
+
+def test_until_stage_config_does_not_disable_benchmark_window(tmp_path):
+    source = (
+        Path("configs/train.toml")
+        .read_text()
+        .replace("until_stage_complete = false", "until_stage_complete = true")
+    )
+    source = source.replace("[curriculum]", '[curriculum]\nrun_stage = "placement"')
+    path = tmp_path / "stage.toml"
+    path.write_text(source)
+    cfg = configured(argparse.Namespace(command="benchmark-gpu", config=path, steps=16384))
+    assert cfg["training"]["until_stage_complete"]
+    assert cfg["training"]["total_steps"] == 16384
