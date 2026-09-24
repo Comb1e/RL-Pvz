@@ -142,8 +142,9 @@ def test_resume_keeps_cumulative_time_schedule_and_optimizer(tmp_path, monkeypat
     with pytest.raises(KeyboardInterrupt):
         train(cfg, "masked", 101, first, validation_limit=1)
     interrupted, _ = load_policy(first / "interrupted.zip")
-    assert interrupted.num_timesteps == 64
-    assert interrupted.policy.optimizer.state
+    assert interrupted.num_timesteps == 2 * cfg["training"]["rollout_size"]
+    assert interrupted.pipeline_version == 1
+    assert interrupted.policy.optimizer.state and interrupted.policy.critic_optimizer.state
     elapsed = read_json(first / "status.json")["time_budget"]["elapsed_seconds"]
     monkeypatch.setattr(ResearchCallback, "_on_rollout_start", original)
     resumed = tmp_path / "resumed"

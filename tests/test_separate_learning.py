@@ -259,7 +259,23 @@ def test_deferred_collection_never_calls_critic_per_action(tmp_path):
                 return True
 
         _, cb = model._setup_learn(64, Callback())
-        assert model.collect_rollouts(env, cb, model.rollout_buffer, 32)
+        original_sample = model.policy.sample_actions
+
+        def sample(*args, **kwargs):
+            assert not calls  # Critic inference is deferred until collection ends.
+            return original_sample(*args, **kwargs)
+
+        model.policy.sample_actions = sample
+        model.collect_slot(
+            env,
+            model.policy,
+            model.rollout_buffer,
+            model._last_obs,
+            model._last_episode_starts,
+            None,
+            0,
+            "control",
+        )
         assert calls and max(calls) <= 16
         assert not model.policy.optimizer.state and not model.policy.critic_optimizer.state
     finally:

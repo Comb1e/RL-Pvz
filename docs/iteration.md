@@ -5,6 +5,24 @@ Dates and results belong to their recorded version. Current behavior lives in
 artifact locations and learning outcomes live in [validation](validation.md).
 The longer pre-consolidation notes remain in `git show b642c9c:docs/iteration.md`.
 
+## 0.16.0 — 2026-09-24
+
+- Problem: the synchronous scheduler left the CUDA simulator idle during PPO updates
+  and the learner idle during rollout collection; live traces showed roughly 1.7 s
+  collection followed by 2.7–2.8 s updates.
+- Change: periodic two-slot on-policy collection is now the only training scheduler.
+  A frozen behavior snapshot fills both slots while the learner consumes the first;
+  policy-version hashes, CUDA-stream events, queue waits and overlap are recorded.
+- Compatibility: checkpoints require the periodic pipeline signature and fresh models
+  are required. Files under `runs/` are preserved for the next session; historical
+  generated artifacts outside `runs/` are cleanup candidates.
+- Verification: compact-policy regression, CUDA smoke, checkpoint reload and periodic
+  resume passed. Three short warmed measurements improved median throughput by
+  5.8% (2,570 vs 2,430 transitions/s) at 46% more allocated VRAM. No games completed;
+  learning effects remain unmeasured. Final review also replaced estimated overlap
+  with interval measurements, made slots reusable, and deferred Ctrl+C until both
+  updates and the episode ledger are committed.
+
 ## 0.15.0 — 2026-09-24
 
 - Problem: plant species competed directly with waiting and digging, and stage runs

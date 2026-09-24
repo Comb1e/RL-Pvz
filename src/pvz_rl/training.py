@@ -307,6 +307,22 @@ class ResearchCallback(BaseCallback):
                 sum(r["invalid_actions"] for r in rows) / max(1, decisions) if rows else None
             ),
             "best_validation_win_rate": None if self.best_score == -math.inf else self.best_score,
+            "pipeline": getattr(
+                self.model,
+                "pipeline_metrics",
+                {
+                    "mode": "periodic_on_policy",
+                    "depth": self.cfg["training"]["pipeline"]["depth"],
+                    "policy_version": None,
+                    "behavior_hash": None,
+                    "slot_collection_seconds": [],
+                    "slot_optimization_seconds": [],
+                    "window_seconds": None,
+                    "overlap_seconds": 0.0,
+                    "queue_wait_seconds": 0.0,
+                    "transitions_per_second": None,
+                },
+            ),
         }
 
     def log_progress(self, *, force=False):
@@ -319,8 +335,10 @@ class ResearchCallback(BaseCallback):
         timing = ""
         if row["last_optimization_seconds"] is not None:
             timing = (
-                f"; last rollout {row['last_collection_seconds']:.2f}s collect / "
-                f"{row['last_optimization_seconds']:.2f}s update"
+                f"; last window {row['last_window_seconds']:.2f}s: "
+                f"{row['last_collection_seconds']:.2f}s collect / "
+                f"{row['last_optimization_seconds']:.2f}s update, "
+                f"{row['pipeline']['overlap_seconds']:.2f}s overlap"
             )
         kills = (
             f"; plant/mower kills per game {row['rolling_plant_kills']:.2f}/{row['rolling_mower_kills']:.2f}"
@@ -528,7 +546,6 @@ class ResearchCallback(BaseCallback):
     def _on_rollout_start(self):
         # This hook runs after the preceding PPO update. A step callback would
         # save pre-update weights while labeling them with the newly collected steps.
-        self.timings.end_update()
         self.capture_update()
         self.finish_stage_validation()
         self.check_stage_complete()
@@ -574,7 +591,6 @@ class ResearchCallback(BaseCallback):
             self.model, exploration_rate(self.cfg, stage_games, staged=self.curriculum is not None)
         )
         self.progress.phase(Phase.COLLECTING)
-        self.timings.begin_collection()
 
     @property
     def stage_validation(self):
@@ -602,9 +618,9 @@ class ResearchCallback(BaseCallback):
             raise TrainingStageComplete()
 
     def check_deadline(self):
-        estimated = (self.timings.last_collection_seconds or 0) + (
-            self.timings.last_optimization_seconds or 0
-        )
+        estimated = self.timings.last_window_seconds or (
+            self.timings.last_collection_seconds or 0
+        ) + (self.timings.last_optimization_seconds or 0)
         if (
             (self.deadline is not None and perf_counter() >= self.deadline)
             or self.wall_budget is not None
@@ -729,7 +745,7 @@ class ResearchCallback(BaseCallback):
         self.eval_seconds += perf_counter() - started
 
     def _on_rollout_end(self):
-        self.timings.end_collection()
+        self.timings.record_window(self.model.pipeline_metrics)
         self.sync_curriculum()
         self.progress.phase(Phase.UPDATING)
         write_json(self.output / "status.json", self.snapshot())
@@ -812,7 +828,6 @@ class ResearchCallback(BaseCallback):
         self.refresh_report()
 
     def _on_training_end(self):
-        self.timings.end_update()
         self.capture_update()
         if self.stage_validation:
             if not self.budget_stopped and not self.pending_stage_validation:
@@ -980,6 +995,7 @@ def train(
             "value_batch_size": cfg["training"].get("value_batch_size", 1024),
             "independent_encoders": True,
         },
+        pipeline=copy.deepcopy(cfg["training"]["pipeline"]),
     )
     write_json(output / "metadata.json", details)
     write_json(output / "config.json", cfg)
@@ -1006,6 +1022,13 @@ def train(
         f"Policy: {cfg.get('policy', {'kind': 'flat'})}; "
         "standard PPO minibatch reduction; "
         f"GAE lambda {cfg['training']['gae_lambda']}; minibatch {cfg['training']['batch_size']}",
+        force=True,
+    )
+    progress.emit(
+        "Pipeline: periodic on-policy; "
+        f"{cfg['training']['pipeline']['depth']}-rollout synchronization window; "
+        f"queue capacity {cfg['training']['pipeline']['queue_size']}; "
+        "collector and learner streams",
         force=True,
     )
     progress.emit(f"Reward settings: {cfg['reward']}", force=True)
@@ -1210,7 +1233,12 @@ def train(
             )
             progress.emit(f"Training is complete; artifact generation stopped: {exc}", force=True)
             raise
-        if model is not None:
+        from .periodic import WindowState
+
+        if (
+            model is not None
+            and getattr(model, "pipeline_state", WindowState.IDLE) == WindowState.IDLE
+        ):
             model.wall_budget_state = wall_budget.state()
             if callback:
                 callback.save_checkpoint("interrupted.zip")

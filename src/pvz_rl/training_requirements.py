@@ -15,6 +15,9 @@ def current_model_config(cfg):
         and cfg.get("encoding", {}).get("version") == "event_v6"
         and cfg.get("reward", {}).get("version") == "net_value_v1"
         and cfg.get("training", {}).get("discount_clock") == "simulation_ticks"
+        and cfg.get("training", {}).get("pipeline", {}).get("mode")
+        == "periodic_on_policy"
+        and cfg.get("training", {}).get("pipeline", {}).get("depth") == 2
     )
 
 
@@ -27,7 +30,7 @@ def require_supported_policy(cfg, condition="masked"):
         or not current_model_config(cfg)
     ):
         raise ValueError(
-            "Retired policy. Training/resume require event_transformer_v2 with hierarchical actions and event_v6 observations. Start fresh with configs/train.toml. Archived reports and recordings remain readable."
+            "Retired policy or scheduler. Training/resume require event_transformer_v2, event_v6, net_value_v1, and the two-rollout periodic-on-policy pipeline. Start fresh with configs/train.toml."
         )
 
 
@@ -58,8 +61,8 @@ def require_cuda_training(cfg, condition="masked", *, runtime=True):
     if simulator(cfg) != "cuda" or cfg["training"]["device"] != "cuda":
         raise ValueError(
             "Training and resume require simulation.backend=cuda and training.device=cuda. "
-            "CPU training was removed in 0.8.0; start a fresh run with a retained CUDA recipe. "
-            "Historical reports, recordings and compatible inference remain available."
+            "CPU training was removed; the synchronous scheduler was also removed. "
+            "Start a fresh periodic CUDA run with configs/train.toml."
         )
     if cfg["environment"].get("action_timing") != "per_tick":
         raise ValueError(
@@ -126,6 +129,11 @@ def transfer_protocol(cfg, condition="masked"):
             )
         },
         "heads": cfg["training"]["hidden_sizes"],
+        "pipeline": {
+            "mode": cfg["training"]["pipeline"]["mode"],
+            "depth": cfg["training"]["pipeline"]["depth"],
+            "queue_size": cfg["training"]["pipeline"]["queue_size"],
+        },
     }
 
 

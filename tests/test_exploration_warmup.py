@@ -1,6 +1,5 @@
 """Independent mixture probabilities and stage-specific critic adaptation controls."""
 
-import copy
 import io
 from types import SimpleNamespace
 
@@ -282,9 +281,9 @@ def test_stage_warmup_interrupt_resume_and_actor_release(tmp_path, monkeypatch):
         batch_size=32,
         n_epochs=1,
         total_games=12,
-        critic_warmup_games=4,
+        critic_warmup_games=6,
     )
-    cfg["training"]["exploration"]["epsilon_target_games"] = 8
+    cfg["training"]["exploration"]["epsilon_target_games"] = 12
     original = ResearchCallback._on_rollout_start
 
     def interrupt(self):
@@ -296,7 +295,7 @@ def test_stage_warmup_interrupt_resume_and_actor_release(tmp_path, monkeypatch):
     with pytest.raises(KeyboardInterrupt):
         train(cfg, "masked", 101, tmp_path / "first", validation_limit=1)
     first, _ = load_policy(tmp_path / "first/interrupted.zip", "cuda")
-    assert first.curriculum_state["completed_stage_games"] == 2
+    assert first.curriculum_state["completed_stage_games"] == 4
     assert not first.policy.optimizer.state and first.policy.critic_optimizer.state
     monkeypatch.setattr(ResearchCallback, "_on_rollout_start", original)
     result = train(
@@ -315,9 +314,3 @@ def test_stage_warmup_interrupt_resume_and_actor_release(tmp_path, monkeypatch):
     last_rate = next(r["exploration_rate"] for r in reversed(records) if r.get("optimization"))
     assert 0 < last_rate < cfg["training"]["exploration"]["epsilon"]
     assert final.policy.action_dist.epsilon == last_rate
-    # Old archived configurations retain their original sampling and update schedule.
-    archived = copy.deepcopy(cfg)
-    for key in ("epsilon", "epsilon_target", "epsilon_target_games"):
-        archived["training"]["exploration"].pop(key)
-    archived["training"].pop("critic_warmup_games")
-    validate_config(archived)

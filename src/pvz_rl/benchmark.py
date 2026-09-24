@@ -21,7 +21,7 @@ def policy_digest(model):
 
 
 def measure(cfg, seed, steps, output, *, deadline=None, load_monitor=None):
-    """One warmup rollout, then timed learning; setup and warmup are separate."""
+    """One warmup window, then timed learning; setup and warmup are separate."""
     require_cuda_training(cfg)
     # SB3 callbacks retain cyclic references to models. Reclaim the previous
     # measurement before reporting this run's CUDA memory, then warm up afresh.
@@ -42,7 +42,7 @@ def measure(cfg, seed, steps, output, *, deadline=None, load_monitor=None):
         model.set_logger(configure(str(output), []))
         setup_seconds = perf_counter() - started
         started = perf_counter()
-        model.learn(cfg["training"]["rollout_size"])
+        model.learn(cfg["training"]["pipeline"]["depth"] * cfg["training"]["rollout_size"])
         cuda = model.device.type == "cuda"
         if cuda:
             torch.cuda.synchronize(model.device)
@@ -63,7 +63,6 @@ def measure(cfg, seed, steps, output, *, deadline=None, load_monitor=None):
             model.learn(steps, callback=timing, reset_num_timesteps=False)
         except TrainingDeadline:
             stopped = True
-            timing.timings.end_update()
         if cuda:
             torch.cuda.synchronize(model.device)
         seconds = perf_counter() - started
@@ -78,6 +77,7 @@ def measure(cfg, seed, steps, output, *, deadline=None, load_monitor=None):
             "games_per_minute": timing.games / seconds * 60,
             "simulation_ticks_per_second": timing.ticks / seconds,
             "completed_games": timing.games,
+            "pipeline": model.pipeline_metrics,
             "device_phase_seconds": env.features.profiler.flush()
             if hasattr(env, "features")
             else None,

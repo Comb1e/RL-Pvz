@@ -125,28 +125,6 @@ def test_completed_games_stop_after_optimization_and_validation_does_not_count(
 
 
 @pytest.mark.learning
-def test_global_games_across_cuda_slots_and_shared_demos(smoke_cfg, tmp_path):
-    cfg = game_config(smoke_cfg)
-    cfg["training"].update(
-        n_envs=3,
-        rollout_size=384,
-        total_games=2,
-        device="cuda",
-    )
-    cfg["visualization"].update(enabled=True, videos=False)
-    run = train(cfg, "masked", 101, tmp_path / "game-smoke", validation_limit=1)
-    model, _ = load_policy(run / "final.zip")
-    episodes = read_series(run / "training-episodes.jsonl")
-    assert model.training_games == len(episodes) > 2
-    assert model.num_timesteps == 384 and model._n_updates == 1
-    demos = json.loads((run / "visualizations/demos.json").read_text())["demos"]
-    assert {d["level"] for d in demos} == {"easy", "standard", "hard"}
-    assert len({d["checkpoint_hash"] for d in demos}) == 1
-    assert {d["training_games"] for d in demos} == {model.training_games}
-    assert not list((run / "visualizations").rglob("*.mp4"))
-
-
-@pytest.mark.learning
 @pytest.mark.parametrize("backend", ["cuda"])
 def test_interrupt_resume_preserves_games_and_schedule(smoke_cfg, tmp_path, monkeypatch, backend):
     cfg = game_config(smoke_cfg)

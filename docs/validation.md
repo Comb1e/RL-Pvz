@@ -3,6 +3,73 @@
 Evidence is versioned below. Learning outcomes, simulation correctness and runtime
 speed are separate measures; [research design](research.md) defines the protocol.
 
+## 0.16.0 periodic on-policy verification — 2026-09-24
+
+The only scheduler uses two reusable slots, bounded queues, separate CUDA streams,
+and a frozen actor/critic snapshot per window. Controls cover identical behavior
+weights and collection probabilities, frozen-critic values, slot/archive reuse,
+unfinished-game memory, timeout contexts, actual overlap, version mismatch rejection,
+collector/learner failure, deferred Ctrl+C, both-optimizer resume and a one-slot final
+window. Curriculum, exploration and deadline controls now observe complete windows.
+Metrics have one row per window, with optimizer-step counts summed across both slots.
+
+### Short runtime measurement
+
+Three warmed repetitions used 128 environments × 128 transitions, batch 1,024,
+four PPO epochs, actor and critic updates enabled, and seeds 101/102/103. Each
+repetition warmed for two rollouts and measured four more (65,536 transitions).
+The baseline was temporary detached commit `dcd3e65`; only its benchmark warm-up
+length was adjusted to match. It was removed afterward. No alternate scheduler or
+baseline models are shipped. The engine pin and existing environment were unchanged.
+
+| Median over three repetitions | Periodic | Previous commit |
+|---|---:|---:|
+| Complete measured transitions/s | 2,570 | 2,430 |
+| Measured wall seconds | 25.50 | 26.97 |
+| Collection seconds, summed | 10.65 | 6.46 |
+| Update seconds, summed | 22.18 | 20.46 |
+| Collection/update overlap seconds | 7.31 | 0 |
+| Learner ready-queue wait seconds | 3.20 | — |
+| Peak allocated GPU memory, MiB | 1,363.57 | 935.44 |
+
+The measured median gain was **5.8%**, with **46% more peak allocated memory**.
+Concurrent phases individually took longer; overlap only partly offset contention.
+Phase sums overlap and cannot be added as wall time. Overlap means intersecting
+host intervals bounded by completed CUDA work, not a GPU kernel concurrency trace.
+Setup and warm-up are reported separately in the artifacts; validation/export are
+not included in these runtime measurements.
+
+One-second samples during measured phases averaged 74.8% GPU / 13.8% system CPU
+for periodic and 71.6% GPU / 11.3% CPU for the baseline. GPU samples still ranged
+22–100% and 29–100%, respectively. These are whole-system samples. Trials ran
+sequentially, with periodic first, without thermal or background-load controls.
+No game completed in these small windows, so they provide **no win-rate or learning
+quality evidence**. No formal training or long comparison was launched.
+
+Raw measurements and utilization samples are in
+`artifacts/periodic-v016-measurement/{measurement,baseline}.json`. These generated
+files are local verification output. All 16 files under the pre-existing `runs/`
+were preserved, including the previous placement checkpoint, logs and report.
+Fresh training is required; preserving files does not enable old-model resume.
+
+The final report/demo smoke produced all three verified difficulty recordings from
+checkpoint SHA-256 `afa81a6ae77da2e6f3ea8504f71fe72e9e7f06643a8d34344350f4003f22ed75`
+under `artifacts/periodic-v016-regression/test_spatial_cuda_report_and_t0/spatial-report/`.
+Doctor passed with the RTX 4070 Laptop and the unchanged 1.4.0 game pin; pip dependency
+checks, Ruff, wheel/sdist builds, README links and PowerShell parsing passed. The
+pinned game's earlier complete regression run passed 224 tests.
+The complete research run exercised 574 cases: 573 passed, and an old resume
+assertion expected a half-window checkpoint at 64 rather than 128 transitions.
+It now checks the complete window, its version and both optimizer states. That
+case and all 11 pipeline controls passed together on rerun (12 passed). No
+implementation change or weakened simulation/math assertion was needed for this fix.
+Logs: `artifacts/periodic-v016-regression.log` and
+`artifacts/periodic-v016-boundaries.log`.
+
+The temporary baseline worktree was removed. Five old generated test/cache folders
+under `.test-tmp/` and `.test-cache/` remain because automatic approval review blocked
+their deletion. No file under `runs/` was deleted or rewritten.
+
 ## 0.15.0 hierarchical actions and stage mastery — 2026-09-24
 
 The selected `event_transformer_v2` has **1,128,060 parameters**, the same 281 public
@@ -1554,7 +1621,7 @@ consolidation; it does not turn old evidence into current-version results.
 
 ## Running checks
 
-Research checks are listed in the [README](../README.md#evaluate-and-verify).
+Research checks are listed in the [README](../README.md#common-checks).
 For game source suites, set `PYTHONPATH` to the chosen checkout's `src`, disable
 bytecode, and put pytest/Hypothesis caches and temporary output inside research
 `artifacts/`; restore environment variables afterward. Do not substitute a newer

@@ -1,16 +1,13 @@
 """Rollout length is not an episode limit; action diagnostics exclude waiting."""
 
-import numpy as np
 import pytest
 import torch
 from pvz_game import Dig, LevelSpec, Place, Spawn
-from stable_baselines3.common.callbacks import BaseCallback
-from stable_baselines3.common.logger import configure
 
 from pvz_rl.config import gpu_defaults, load_config
 from pvz_rl.env import PvZEnv
 from pvz_rl.metrics import agent_action_count, mean_agent_actions
-from pvz_rl.training import build_model, vector_env
+from pvz_rl.training import vector_env
 
 
 def test_defaults_and_archived_action_counts():
@@ -73,44 +70,5 @@ def test_cuda_counts_and_games_survive_128_waits():
         assert row["tick"] == 131
         env.reset()
         assert env.episode_metrics(0)["agent_actions"] == 0
-    finally:
-        env.close()
-
-
-@pytest.mark.learning
-def test_rollout_update_preserves_unfinished_games():
-    if not torch.cuda.is_available():
-        pytest.skip("CUDA unavailable")
-    cfg = load_config()
-    cfg["training"].update(n_envs=2, rollout_size=256, batch_size=128, n_epochs=1)
-    env = vector_env(cfg, "masked", 101, family="placement")
-
-    class Boundaries(BaseCallback):
-        def __init__(self):
-            super().__init__()
-            self.states = []
-
-        def _on_step(self):
-            assert not any("episode_metrics" in info for info in self.locals["infos"])
-            return True
-
-        def _on_rollout_start(self):
-            if self.states:
-                np.testing.assert_array_equal(env.batch.header.get(), self.states[-1])
-                assert env.task_counts()["placement"]["started_games"] == 2
-
-        def _on_rollout_end(self):
-            self.states.append(env.batch.header.get().copy())
-
-    try:
-        torch.set_num_threads(1)
-        model = build_model(cfg, "masked", env, 101)
-        model.set_logger(configure(format_strings=[]))
-        callback = Boundaries()
-        model.learn(512, callback=callback)
-        assert len(callback.states) == 2
-        assert model._n_updates == 2
-        assert all(env.episode_metrics(i)["decisions"] == 256 for i in range(2))
-        assert env.task_counts()["placement"]["completed_games"] == 0
     finally:
         env.close()

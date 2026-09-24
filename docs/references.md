@@ -1,5 +1,32 @@
 # Sources actually used
 
+## Periodic pipeline and accelerator overlap — 2026-09-24
+
+- Espeholt et al., [IMPALA](https://arxiv.org/abs/1802.01561): inspected the
+  actor–learner queue and V-trace discussion. Decoupling motivates bounded producer–
+  consumer scheduling; V-trace is rejected because this project keeps standard PPO.
+- Espeholt et al., [SEED RL](https://arxiv.org/abs/1910.06591): inspected centralized
+  accelerator inference and trajectory batching. The project adopts frozen batched
+  inference snapshots without RPC or a distributed service.
+- Petrenko et al., [Sample Factory](https://arxiv.org/abs/2006.11751) and its
+  [synchronous/asynchronous design notes](https://github.com/alex-petrenko/sample-factory/blob/master/docs/07-advanced-topics/sync-async.md):
+  inspected double buffering, queue ownership and policy-lag tradeoffs. Its warning
+  that asynchronous mode often gives little benefit for GPU-resident environments
+  is retained as a limitation.
+- Lu and Luo, [Periodic Asynchrony](https://arxiv.org/abs/2511.18871): inspected the
+  producer–consumer mechanism and periodic weight-consistency argument. The fixed
+  two-rollout window and boundary synchronization are adapted here; its LLM/NPU
+  speed claims are not transferred.
+- PyTorch 2.8, [CUDA Graphs and stream semantics](https://github.com/pytorch/pytorch/blob/v2.8.0/docs/source/notes/cuda.rst):
+  inspected stream events, static-address requirements and CPU-synchronization
+  constraints. Rechecked the v2.8.0 stream-synchronization examples during implementation:
+  side-stream consumers must wait for producers, and allocations cannot be recycled
+  before consumer work completes. Explicit completion events and stream synchronization
+  enforce those rules here. CUDA Graph capture is not implemented.
+- Weng et al., [EnvPool](https://arxiv.org/abs/2206.10558): reviewed the CPU
+  environment execution bottleneck; it is not adopted because PVZ already runs its
+  simulator on CUDA.
+
 ## Hierarchical action arguments and stopping modes — 2026-09-24
 
 - [PySC2 action interface](https://github.com/google-deepmind/pysc2/blob/master/pysc2/lib/actions.py): inspected `ArgumentType` and `FunctionCall(function, arguments)` validation. Used as a reference for separating a command from its arguments, while retaining a compact engine transport. Retrieved source SHA-256: `c6ea590816349b18b2946d8d11068a8780a3c32946daba456617d37b27aebe62`; no unverified commit is claimed.

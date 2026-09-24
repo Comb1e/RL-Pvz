@@ -76,20 +76,23 @@ class TensorRolloutBuffer(BaseBuffer):
         """Archive each raw token once; store small per-transition lookup tables."""
         capacity, width = memory.capacity, memory.width
         initial = self.n_envs * capacity
-        self.memory_archive = torch.empty(
-            (initial + self.buffer_size * self.n_envs, width), device=self.device
-        )
+        if not hasattr(self, "_memory_storage"):
+            self._memory_storage = torch.empty(
+                (initial + self.buffer_size * self.n_envs, width), device=self.device
+            )
+        self.memory_archive = self._memory_storage
         self.memory_archive[:initial].copy_(memory.tokens.flatten(0, 1))
         memory.ids.copy_(torch.arange(initial, device=self.device).reshape_as(memory.ids))
         self.archive_offset = initial
         shape = (self.buffer_size, self.n_envs, capacity)
-        self.context_ids = torch.empty(shape, dtype=torch.long, device=self.device)
-        self.context_valid = torch.empty(shape, dtype=torch.bool, device=self.device)
-        self.context_counts = torch.empty(shape, device=self.device)
-        self.context_starts = torch.empty(shape, device=self.device)
-        self.context_events = torch.empty(
-            (*shape[:2], memory.local), dtype=torch.bool, device=self.device
-        )
+        if not hasattr(self, "context_ids"):
+            self.context_ids = torch.empty(shape, dtype=torch.long, device=self.device)
+            self.context_valid = torch.empty(shape, dtype=torch.bool, device=self.device)
+            self.context_counts = torch.empty(shape, device=self.device)
+            self.context_starts = torch.empty(shape, device=self.device)
+            self.context_events = torch.empty(
+                (*shape[:2], memory.local), dtype=torch.bool, device=self.device
+            )
         self.memory_cfg, self.memory_rules = memory.cfg, memory.layout.rules
 
     def capture_context(self, memory):

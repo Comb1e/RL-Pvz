@@ -5,6 +5,13 @@ transport and metric transfers stay on-device where possible. An explicitly
 configured exploration bonus can replace joint-entropy regularization.
 """
 
+import hashlib
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
+from queue import Empty, Queue
+from threading import Event
+from time import perf_counter
+
 import torch
 from sb3_contrib import MaskablePPO
 from stable_baselines3.common.utils import update_learning_rate
@@ -14,6 +21,27 @@ from .actions import ActionSchema as A
 from .cuda_buffer import TensorRolloutBuffer
 from .event_memory import EventMemory
 from .exploration import exploration_loss
+from .periodic import WindowState, finish_window_on_interrupt, interval_overlap
+
+
+@dataclass
+class RolloutSlotResult:
+    """A complete on-policy buffer and the collector state for the next slot."""
+
+    buffer: TensorRolloutBuffer
+    observations: torch.Tensor
+    episode_starts: torch.Tensor
+    memory: EventMemory
+    infos: list[list[dict]]
+    transitions: int
+    collection_interval: tuple[float, float]
+    memory_metrics: dict[str, float]
+    policy_version: int
+    behavior_hash: str
+
+
+class PeriodicPipelineError(RuntimeError):
+    """Raised when a periodic collector or learner slot fails."""
 
 
 class TensorPPO:
@@ -34,42 +62,64 @@ class TensorPPO:
     def _maybe_recommend_cpu(self, mlp_policy_class_name="ActorCriticPolicy"):
         """The upstream warning assumes CPU observations; this path requires CUDA."""
 
-    def collect_rollouts(self, env, callback, rollout_buffer, n_rollout_steps, use_masking=True):
-        self.policy.set_training_mode(False)
+    def _new_rollout_buffer(self):
+        """Allocate one independent slot for the periodic producer/consumer loop."""
+        return TensorRolloutBuffer(
+            self.n_steps,
+            self.observation_space,
+            self.action_space,
+            device=self.device,
+            gamma=self.gamma,
+            gae_lambda=self.gae_lambda,
+            n_envs=self.n_envs,
+            memory_spec=self.rollout_buffer.memory_spec,
+        )
+
+    def collect_slot(
+        self,
+        env,
+        policy,
+        rollout_buffer,
+        observations,
+        episode_starts,
+        memory,
+        policy_version,
+        behavior_hash,
+        stop_event=None,
+    ):
+        """Collect one full rollout using an immutable behavior-policy snapshot.
+
+        The collector owns the environment and memory for the duration of this
+        call. No callback or live learner state is touched, which lets the
+        learner optimize the previous slot concurrently.
+        """
+        started = perf_counter()
+        infos_by_step = []
+        policy.set_training_mode(False)
         rollout_buffer.reset()
-        callback.on_rollout_start()
-        self._last_obs = torch.as_tensor(self._last_obs, device=self.device)
-        self._last_episode_starts = torch.as_tensor(self._last_episode_starts, device=self.device)
+        observations = torch.as_tensor(observations, device=self.device)
+        episode_starts = torch.as_tensor(episode_starts, device=self.device)
         with env.device_context():
-            if not hasattr(self, "_episode_memory"):
-                self._episode_memory = EventMemory(
-                    env.cfg, env.batch.rules, env.num_envs, self.device
-                )
-                self._episode_memory.observe(
-                    self._last_obs,
+            if memory is None:
+                memory = EventMemory(env.cfg, env.batch.rules, env.num_envs, self.device)
+                memory.observe(
+                    observations,
                     env.action_masks(),
                     torch.zeros(env.num_envs, device=self.device),
-                    self._last_episode_starts,
+                    episode_starts,
                     env.header_tensor[:, 0],
                 )
-            memory = self._episode_memory
             rollout_buffer.start_memory(memory)
-            for _ in range(n_rollout_steps):
-                # The environment exposes reusable zero-copy views; save the
-                # prior observation/mask before its next in-place device step.
-                obs = self._last_obs.clone()
+            for _ in range(self.n_steps):
+                if stop_event is not None and stop_event.is_set():
+                    raise PeriodicPipelineError("periodic collector cancelled")
+                obs = observations.clone()
                 masks = env.action_masks().clone()
                 rollout_buffer.capture_context(memory)
                 with torch.no_grad(), env.features.profiler.track("inference"):
-                    actions, log_probs = self.policy.sample_actions(
-                        obs, masks, context=memory.context()
-                    )
+                    actions, log_probs = policy.sample_actions(obs, masks, context=memory.context())
                 new_obs, rewards, dones, timeouts, terminal, infos = env.step_tensors(actions)
-                self.num_timesteps += env.num_envs
-                callback.update_locals(locals())
-                if not callback.on_step():
-                    return False
-                self._update_info_buffer(infos)
+                infos_by_step.append(infos)
                 if terminal is not None and any(
                     info.get("TimeLimit.truncated", False) for info in infos
                 ):
@@ -89,7 +139,7 @@ class TensorPPO:
                     obs,
                     actions,
                     rewards,
-                    self._last_episode_starts,
+                    episode_starts,
                     None,
                     log_probs,
                     masks,
@@ -102,35 +152,301 @@ class TensorPPO:
                     dones,
                     env.header_tensor[:, 0],
                 )
-                self._last_obs, self._last_episode_starts = new_obs, dones
+                observations, episode_starts = new_obs, dones
             with env.features.profiler.track("critic_inference"):
                 values = rollout_buffer.evaluate_values(
-                    self.policy,
-                    self._last_obs,
+                    policy,
+                    observations,
                     getattr(self, "value_batch_size", 1024),
                     memory.context(),
                 )
             with env.features.profiler.track("gae"):
-                rollout_buffer.compute_returns_and_advantage(values, dones)
-            retained = memory.valid.sum().clamp_min(1)
-            self.logger.record(
-                "train/memory_compression_ratio", float(memory.counts.sum() / retained)
-            )
-            self.logger.record(
-                "train/memory_event_fraction", float(memory.admitted) / max(1, memory.observed)
-            )
-            weights = self.policy.pi_features_extractor.temporal.last_attention
+                rollout_buffer.compute_returns_and_advantage(values, episode_starts)
+            metrics = {
+                "memory_compression_ratio": float(
+                    memory.counts.sum() / memory.valid.sum().clamp_min(1)
+                ),
+                "memory_event_fraction": float(memory.admitted) / max(1, memory.observed),
+            }
+            weights = policy.pi_features_extractor.temporal.last_attention
             for name, lo, hi in (
                 ("local", 0, memory.local),
                 ("events", memory.local, memory.local + memory.events),
                 ("summaries", memory.local + memory.events, memory.capacity),
             ):
-                self.logger.record(
-                    f"train/attention_{name}", float(weights[:, lo:hi].sum(-1).mean())
-                )
-        callback.on_rollout_end()
+                metrics[f"attention_{name}"] = float(weights[:, lo:hi].sum(-1).mean())
+            # The ready queue transfers only completed tensors to the learner.
+            completed = torch.cuda.Event()
+            completed.record(env.stream)
+            completed.synchronize()
         env.features.profiler.flush()
-        return True
+        return RolloutSlotResult(
+            buffer=rollout_buffer,
+            observations=observations,
+            episode_starts=episode_starts,
+            memory=memory,
+            infos=infos_by_step,
+            transitions=self.n_steps * env.num_envs,
+            collection_interval=(started, perf_counter()),
+            memory_metrics=metrics,
+            policy_version=policy_version,
+            behavior_hash=behavior_hash,
+        )
+
+    def _clone_behavior_policy(self):
+        """Clone actor and critic weights for one immutable policy window."""
+        torch.cuda.current_stream(self.device).synchronize()
+        source = self.policy
+        policy = type(source)(
+            source.observation_space,
+            source.action_space,
+            lambda _: 0.0,
+            net_arch=source.net_arch,
+            activation_fn=source.activation_fn,
+            ortho_init=False,
+            features_extractor_class=type(source.pi_features_extractor),
+            features_extractor_kwargs={"layout_cfg": source.pi_features_extractor.cfg},
+            share_features_extractor=False,
+            normalize_images=source.normalize_images,
+            optimizer_class=source.optimizer_class,
+            optimizer_kwargs=dict(source.optimizer_kwargs),
+            critic_learning_rate=source.critic_learning_rate,
+            exploration_epsilon=source.exploration_epsilon,
+        ).to(self.device)
+        policy.load_state_dict(
+            {key: value.detach().clone() for key, value in source.state_dict().items()},
+            strict=True,
+        )
+        policy.set_training_mode(False)
+        for parameter in policy.parameters():
+            parameter.requires_grad_(False)
+        policy.optimizer = None
+        policy.critic_optimizer = None
+        return policy
+
+    @staticmethod
+    def _behavior_hash(policy):
+        digest = hashlib.sha256()
+        digest.update(repr(policy.exploration_epsilon).encode("utf-8"))
+        for name, value in sorted(policy.state_dict().items()):
+            digest.update(name.encode("utf-8"))
+            digest.update(value.detach().cpu().numpy().tobytes())
+        return digest.hexdigest()
+
+    def _periodic_learn(self, total_timesteps, callback, log_interval=1):
+        """Two reusable slots, one frozen snapshot, and one empty-window boundary."""
+        assert self.env is not None
+        env = self.env
+        self.pipeline_state = WindowState.IDLE
+        callback.on_training_start(locals(), globals())
+        learner_stream = torch.cuda.current_stream(self.device)
+        previous_stream = env.stream
+        collector_stream = torch.cuda.Stream(device=self.device)
+        stop_event = Event()
+        observations = torch.as_tensor(self._last_obs, device=self.device)
+        episode_starts = torch.as_tensor(self._last_episode_starts, device=self.device)
+        memory = getattr(self, "_episode_memory", None)
+        settings = self.policy.pi_features_extractor.cfg["training"]["pipeline"]
+        free, ready = Queue(maxsize=settings["depth"]), Queue(maxsize=settings["queue_size"])
+        for slot in (self.rollout_buffer, self._new_rollout_buffer()):
+            free.put(slot)
+        behavior = self._clone_behavior_policy()
+        executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="pvz-collector")
+        pending = None
+        window = 0
+        env.stream = collector_stream
+
+        def produce(depth, version, digest):
+            nonlocal observations, episode_starts, memory
+            for _ in range(depth):
+                if stop_event.is_set():
+                    return
+                slot = free.get()
+                with torch.cuda.stream(collector_stream):
+                    result = self.collect_slot(
+                        env,
+                        behavior,
+                        slot,
+                        observations,
+                        episode_starts,
+                        memory,
+                        version,
+                        digest,
+                        stop_event,
+                    )
+                observations, episode_starts, memory = (
+                    result.observations,
+                    result.episode_starts,
+                    result.memory,
+                )
+                ready.put(result)
+
+        try:
+            while self.num_timesteps < total_timesteps:
+                # All policy/schedule changes, probes and saves occur here, with
+                # no collector active and no unconsumed rollout.
+                callback.on_rollout_start()
+                with finish_window_on_interrupt():
+                    window_started = perf_counter()
+                    self.pipeline_state = WindowState.COLLECTING
+                    behavior.load_state_dict(self.policy.state_dict(), strict=True)
+                    behavior.exploration_epsilon = self.policy.exploration_epsilon
+                    behavior.action_dist.epsilon = self.policy.exploration_epsilon
+                    digest = self._behavior_hash(behavior)
+                    version = getattr(self, "pipeline_version", 0)
+                    collector_stream.wait_stream(learner_stream)
+                    slot_steps = self.n_steps * self.n_envs
+                    depth = min(
+                        settings["depth"],
+                        max(
+                            1, (total_timesteps - self.num_timesteps + slot_steps - 1) // slot_steps
+                        ),
+                    )
+                    first_step = self.num_timesteps
+                    pending = executor.submit(produce, depth, version, digest)
+                    results, updates, update_metrics = [], [], []
+                    queue_wait = 0.0
+                    for index in range(depth):
+                        waiting = perf_counter()
+                        while True:
+                            try:
+                                result = ready.get(timeout=0.05)
+                                break
+                            except Empty:
+                                if pending.done():
+                                    pending.result()  # Surface collector failures; never deadlock.
+                                    raise PeriodicPipelineError("collector returned no rollout")
+                        queue_wait += perf_counter() - waiting
+                        if result.policy_version != version or result.behavior_hash != digest:
+                            raise PeriodicPipelineError("collector returned a mixed policy window")
+                        self.pipeline_state = (
+                            WindowState.OVERLAPPING if index + 1 < depth else WindowState.DRAINING
+                        )
+                        self.rollout_buffer = result.buffer
+                        self.num_timesteps += result.transitions
+                        self._update_current_progress_remaining(self.num_timesteps, total_timesteps)
+                        update_started = perf_counter()
+                        self.train()
+                        learner_stream.synchronize()
+                        updates.append((update_started, perf_counter()))
+                        results.append(result)
+                        update_metrics.append(
+                            {
+                                key: value
+                                for key, value in self.logger.name_to_value.items()
+                                if key.startswith("train/")
+                            }
+                        )
+                        free.put(result.buffer)
+                    pending.result()
+                    pending = None
+                    if self._behavior_hash(behavior) != digest:
+                        raise PeriodicPipelineError("behavior policy changed during collection")
+                    if not ready.empty() or free.qsize() != settings["depth"]:
+                        raise PeriodicPipelineError("pipeline did not drain at window boundary")
+                    self._last_obs, self._last_episode_starts = observations, episode_starts
+                    self._episode_memory = memory
+                    self.pipeline_version = version + 1
+                    window_seconds = perf_counter() - window_started
+                    collections = [r.collection_interval for r in results]
+                    self.pipeline_metrics = {
+                        "mode": "periodic_on_policy",
+                        "policy_version": version,
+                        "behavior_hash": digest,
+                        "depth": depth,
+                        "slot_collection_seconds": [end - start for start, end in collections],
+                        "slot_optimization_seconds": [end - start for start, end in updates],
+                        "window_seconds": window_seconds,
+                        "overlap_seconds": sum(
+                            interval_overlap(c, u) for c in collections for u in updates
+                        ),
+                        "queue_wait_seconds": queue_wait,
+                        "transitions_per_second": depth * slot_steps / max(window_seconds, 1e-9),
+                    }
+                    # Commit every episode exactly once, with its real transition
+                    # count. Callbacks cannot observe or checkpoint a half-window.
+                    keep_going = True
+                    self.num_timesteps = first_step
+                    for result in results:
+                        for infos in result.infos:
+                            self.num_timesteps += self.n_envs
+                            self._update_info_buffer(infos)
+                            callback.update_locals({"infos": infos})
+                            keep_going = callback.on_step() and keep_going
+                    totals = {
+                        "optimizer_steps",
+                        "actor_optimizer_steps",
+                        "critic_optimizer_steps",
+                        "epochs_completed",
+                        "critic_epochs_completed",
+                        "dig_legal_observations",
+                    }
+                    for key in update_metrics[-1]:
+                        values = [metrics[key] for metrics in update_metrics]
+                        name = key.removeprefix("train/")
+                        value = (
+                            sum(values)
+                            if name in totals
+                            else max(values)
+                            if name == "kl_stopped"
+                            else values[-1]
+                            if name == "n_updates"
+                            else sum(values) / depth
+                        )
+                        self.logger.record(key, value)
+                    for key in results[-1].memory_metrics:
+                        self.logger.record(
+                            f"train/{key}", sum(r.memory_metrics[key] for r in results) / depth
+                        )
+                    self.pipeline_state = WindowState.IDLE
+                    callback.on_rollout_end()
+                    if hasattr(callback, "capture_update"):
+                        callback.capture_update()
+                    window += 1
+                    if log_interval is not None and window % log_interval == 0:
+                        self.dump_logs(window)
+                if not keep_going:
+                    break
+        except BaseException:
+            if self.pipeline_state != WindowState.IDLE:
+                self.pipeline_state = WindowState.FAILED
+            raise
+        finally:
+            stop_event.set()
+            if pending is not None:
+                # A producer can be waiting to publish its final slot after a
+                # learner failure. Drain its bounded queue until it exits.
+                while not pending.done():
+                    try:
+                        ready.get(timeout=0.05)
+                    except Empty:
+                        pass
+            executor.shutdown(wait=True, cancel_futures=True)
+            collector_stream.synchronize()
+            env.stream = previous_stream
+        callback.on_training_end()
+        return self
+
+    def learn(
+        self,
+        total_timesteps,
+        callback=None,
+        log_interval=1,
+        tb_log_name="OnPolicyAlgorithm",
+        reset_num_timesteps=True,
+        progress_bar=False,
+    ):
+        """Use the periodic pipeline as the only learner scheduler."""
+        if getattr(self, "pipeline_state", WindowState.IDLE) != WindowState.IDLE:
+            raise PeriodicPipelineError("Reload a completed-window checkpoint after pipeline failure")
+        total_timesteps, callback = self._setup_learn(
+            total_timesteps,
+            callback,
+            reset_num_timesteps,
+            tb_log_name,
+            progress_bar,
+        )
+        return self._periodic_learn(total_timesteps, callback, log_interval)
 
     @torch.no_grad()
     def _type_probabilities(self):
@@ -408,6 +724,11 @@ class TensorPPO:
         self.logger.record("train/clip_range", clip_range)
         if clip_vf is not None:
             self.logger.record("train/clip_range_vf", clip_vf)
+
+    def save(self, *args, **kwargs):
+        if getattr(self, "pipeline_state", WindowState.IDLE) != WindowState.IDLE:
+            raise PeriodicPipelineError("Cannot save an in-flight or failed pipeline window")
+        return super().save(*args, **kwargs)
 
     def _excluded_save_params(self):
         return [*super()._excluded_save_params(), "_episode_memory"]

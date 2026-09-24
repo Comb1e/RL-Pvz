@@ -78,8 +78,8 @@ def test_shared_checkpoint_reports_and_videos(smoke_cfg, tmp_path, monkeypatch):
     assert len(set(identities)) == 1 and stages == {("placement",)}
     assert loads == ["best.zip"]
     metrics = read_series(run / "training-metrics.jsonl")
-    assert [m["training_steps"] for m in metrics] == [64, 128]
-    assert [m["completed_updates"] for m in metrics] == [1, 2]
+    assert [m["training_steps"] for m in metrics] == [128]
+    assert [m["completed_updates"] for m in metrics] == [2]
     assert all(m["optimization"]["value_loss"] is not None for m in metrics)
     assert all(m["optimization"]["critic_optimizer_steps"] > 0 for m in metrics)
     assert all(m["optimization"]["post_update_type_kl"] is not None for m in metrics)
@@ -220,52 +220,3 @@ def test_encoder_failure_cleans_up_and_keeps_previous_output(cfg, tmp_path, monk
         export_replay(replay, destination, cfg)
     assert destination.read_bytes() == b"previous successful artifact"
     assert not list(tmp_path.glob("*.tmp.mp4"))
-
-
-@pytest.mark.learning
-def test_interrupted_reports_old_metadata_resume_and_completed_recovery(
-    smoke_cfg, tmp_path, monkeypatch
-):
-    smoke_cfg["visualization"].update(enabled=True, videos=False)
-    original = ResearchCallback._on_rollout_start
-
-    def interrupt(self):
-        original(self)
-        if self.model.num_timesteps == 64:
-            raise KeyboardInterrupt("controlled interruption")
-
-    first = tmp_path / "first"
-    monkeypatch.setattr(ResearchCallback, "_on_rollout_start", interrupt)
-    with pytest.raises(KeyboardInterrupt):
-        train(smoke_cfg, "masked", 101, first, validation_limit=1)
-    page = (first / "visualizations/index.html").read_text("utf-8")
-    assert "<b>interrupted</b>" in page
-    best = file_hash(first / "best.zip")
-    monkeypatch.setattr(ResearchCallback, "_on_rollout_start", original)
-    meta = json.loads((first / "metadata.json").read_text())
-    meta["config"].pop("logging")
-    meta["config"].pop("visualization")
-    write_json(first / "metadata.json", meta)
-    smoke_cfg["logging"]["progress_seconds"] = 1
-    resumed = train(
-        smoke_cfg,
-        "masked",
-        101,
-        tmp_path / "resumed",
-        validation_limit=1,
-        resume=first / "interrupted.zip",
-    )
-    assert file_hash(resumed / "best.zip") == best
-    assert len(run_segments(resumed)) == 2
-    assert json.loads((resumed / "metadata.json").read_text())["resume_steps"] == 64
-    recovered = train(
-        smoke_cfg,
-        "masked",
-        101,
-        tmp_path / "recovered",
-        validation_limit=1,
-        resume=resumed / "final.zip",
-    )
-    status = json.loads((recovered / "status.json").read_text())
-    assert status["state"] == "complete" and status["steps"] == 128
-    assert status["decisions_per_second"] == 0

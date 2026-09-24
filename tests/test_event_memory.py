@@ -255,8 +255,17 @@ def test_cuda_history_rollover_timeout_ppo_and_checkpoint(tmp_path):
         model = build_model(cfg, "masked", env, 101)
         model.set_logger(configure(format_strings=[]))
         _, callback = model._setup_learn(256, Callback())
-        assert model.collect_rollouts(env, callback, model.rollout_buffer, 128)
-        buffer = model.rollout_buffer
+        result = model.collect_slot(
+            env,
+            model.policy,
+            model.rollout_buffer,
+            model._last_obs,
+            model._last_episode_starts,
+            None,
+            0,
+            "control",
+        )
+        buffer = result.buffer
         with torch.no_grad():
             for start in range(0, 256, 32):
                 ix = slice(start, start + 32)
@@ -290,19 +299,28 @@ def test_cuda_history_rollover_timeout_ppo_and_checkpoint(tmp_path):
         for data in buffer.get(64):
             assert data.context is not None and len(data.observations) <= 64
         model.train()
-        retained = model._episode_memory.context().clone()
+        retained = result.memory.context().clone()
         model.save(tmp_path / "temporal")
         loaded = CudaMaskablePPO.load(tmp_path / "temporal", device="cuda")
         assert not hasattr(loaded, "_episode_memory")
         with torch.no_grad():
             original = model.policy.get_distribution(
-                model._last_obs, env.action_masks(), retained
+                result.observations, env.action_masks(), retained
             ).logits.clone()
             restored = loaded.policy.get_distribution(
-                model._last_obs, env.action_masks(), retained
+                result.observations, env.action_masks(), retained
             ).logits
             torch.testing.assert_close(original, restored, atol=0, rtol=0)
-        assert model.collect_rollouts(env, callback, buffer, 128)
+        model.collect_slot(
+            env,
+            model.policy,
+            buffer,
+            result.observations,
+            result.episode_starts,
+            result.memory,
+            1,
+            "control",
+        )
         assert not buffer._burn_contexts  # No prior-rollout history survives in the cache.
         # Initial current token is not inserted twice at the next rollout.
         torch.testing.assert_close(buffer.context(slice(0, 2)).tokens, retained.tokens)
