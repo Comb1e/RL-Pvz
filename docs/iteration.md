@@ -5,6 +5,22 @@ Dates and results belong to their recorded version. Current behavior lives in
 artifact locations and learning outcomes live in [validation](validation.md).
 The longer pre-consolidation notes remain in `git show b642c9c:docs/iteration.md`.
 
+## 0.14.0 — 2026-09-24
+
+- Problem: placement frequently dug its single shooter during actor warm-up; training
+  throughput was dominated by PPO updates rather than simulation.
+- Cause/evidence: repeated stochastic choices accumulated a substantial dig hazard at
+  100 Hz. Small categorical embedding backward sorted many repeated history indices.
+  These findings do not establish the sole cause of poor lesson success.
+- Changes: event_v6 has 281 public inputs, omitting projectiles, spawned counts and all
+  mower details except spent. Small trainable tables use equivalent matrix products
+  during backpropagation. Distribution construction applies masking once. Initial dig
+  bias is -12; the user reduced parallelism to 128, with 128 transitions each.
+- Compatibility: fresh models; one architecture/recipe, existing runs and reports preserved,
+  game checkout and pin unchanged. Warm-up, rewards, learning rates and PPO remain unchanged.
+- Verification and limitations: measured checks and bounded comparison results are recorded
+  in [validation](validation.md). No formal training or claim of solved lesson learning.
+
 ## 0.13.0 — 2026-09-24
 
 - Problem: each region duplicated zombie state/pole counts alongside threat composition.

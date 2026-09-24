@@ -8,7 +8,7 @@ training and optimization run on CUDA. Model inputs contain public information o
 flowchart LR
     Config[Single resolved TOML] --> Scenarios[Seeded CPU scenario queue]
     Scenarios --> Sim[100 Hz ordered CUDA simulator]
-    Sim --> Public[342 public values and legal masks]
+    Sim --> Public[281 public values and legal masks]
     Public --> Memory[Bounded causal public history]
     Memory --> Actor[Independent actor Transformer]
     Actor --> Action[Type then tile: 406 actions]
@@ -35,8 +35,8 @@ CUDA. Accepted plant/dig operations take zero ticks; waits/rejections take one.
 Scenario names, seeds, entity IDs, private schedules and snapshots never enter a
 policy token. Snapshots and hashes remain available only for verification.
 
-The `event_v5` observation has 342 values: 135 plant values (type, health, behavior
-per tile), 135 regional zombie values, 45 regional projectile values and 27 globals.
+The `event_v6` observation has 281 values: 135 plant values (type, health, behavior
+per tile), 135 regional zombie values and 11 globals.
 Each of five lanes has three regions. Each region contains five zombie-type counts,
 total health, total armor, nearest zombie distance and nearest unused-pole distance.
 Both distances use `(x - house_x) / (spawn_x - house_x)`; absence is -1, distinct
@@ -44,9 +44,14 @@ from a carrier at either endpoint. Counts and asset totals are scaled but not cl
 Zombie behavior labels and pole counts are absent. `has_pole` supplies the unused-pole
 distance; it becomes false when vaulting begins. The schema defines feature offsets
 once for CPU encoding, CUDA constants and memory admission. Globals contain sun,
-elapsed time, waves/counts and mower state.
+elapsed time, current/total waves, initial/defeated zombie counts and five mower-spent flags.
+Projectiles and spawned counts are absent. Ready and moving mowers are indistinguishable
+from mower input alone; only spent differs. The simulator and accounting retain full state.
 No plant, zombie or card countdown is encoded. Legal masks still reveal immediate
 action legality. Plant/state category embeddings have zero padding for empty tiles.
+During gradient calculation, small one-hot matrix products accumulate their gradients without repeated
+index sorting; inference uses ordinary lookups. The learned tables and optimizer semantics
+are identical. Previous-action embeddings keep the ordinary implementation.
 
 ## Episode memory
 
@@ -56,12 +61,13 @@ tokens, 32 retained event tokens, and eight compressed summaries. Tokens contain
 the observation, previous accepted action, reset marker and public tick. Rejected
 actions have wait as their executed-action marker. No activations cross game boundaries.
 
-Plant health/behavior changes, zombie counts/health/armor, projectile-region changes,
-sun/wave changes, mower state and legal-mask changes admit events. A region gaining
+Plant health/behavior changes, zombie counts/health/armor,
+sun/wave changes, mower-spent flags and legal-mask changes admit events. A region gaining
 its first or losing its last unused pole also admits an event, determined from the
-distance sentinel alone. Changes to the clock, either nearest distance within a
-region, or mower position alone do not admit events. Removed zombie states never
-supply hidden event flags. Every decision still sees the current public state.
+distance sentinel alone. Changes to the clock or either nearest distance within a
+region alone do not admit events. Removed projectiles, spawned counts, mower
+positions/ready/moving states and zombie behaviors never supply hidden event flags.
+Every decision still sees the current public state.
 Local eviction sends events to a FIFO, and quiet tokens
 or older events to summaries. A summary keeps the latest public state, earliest
 represented tick and count; it never averages category identifiers. Summary stride
@@ -76,6 +82,7 @@ This is a project-specific bounded Transformer, not a reproduction of GTrXL.
 
 ## Learning data and transitions
 
+Each rollout contains 128 environments × 128 transitions (16,384 total).
 Collection freezes actor and critic weights. Actor-only inference supplies actions
 and true mixed type/tile log probabilities. The buffer archives each raw token once
 and stores compact context references. Terminal contexts are captured before resets;
@@ -134,4 +141,4 @@ Demos replay GPU actions through the CPU engine and require identical final outc
 decisions and hash before publication. Native 100 Hz recordings remain model-free.
 Video rendering samples a configurable lower rate while stepping/verifying every
 tick. Offline reports read stored metrics, not models. Historical reports survive;
-20 Hz recordings and pre-0.13 models are not accepted by the current engine/policy.
+20 Hz recordings and pre-0.14 models are not accepted by the current engine/policy.

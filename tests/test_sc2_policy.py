@@ -1,5 +1,6 @@
 """Independent controls for structured exploration and spatial placement."""
 
+import math
 from types import SimpleNamespace
 
 import numpy as np
@@ -118,7 +119,7 @@ def test_spatial_policy_shapes_gradients_and_board_dependence():
         }
         assert optimizer_ids.isdisjoint(critic_ids)
         assert optimizer_ids | critic_ids == {id(p) for p in model.policy.parameters()}
-        assert sum(p.numel() for p in model.policy.parameters()) == 1_150_779
+        assert sum(p.numel() for p in model.policy.parameters()) == 1_127_931
     finally:
         env.close()
 
@@ -182,7 +183,8 @@ def test_dig_initialization_is_trainable_and_checkpointed(tmp_path):
     mask = torch.zeros(1, 406, dtype=torch.bool)
     mask[:, 0] = mask[:, 361] = True
     distribution = model.policy.get_distribution(x, action_masks=mask)
-    assert 0 < distribution.probs[0, 361] < 0.004
+    assert cfg["policy"]["initial_dig_logit"] == -12
+    assert 0 < distribution.probs[0, 361] < 0.00001
     assert distribution.probs[0, 1:361].sum() == 0
     (-distribution.log_prob(torch.tensor([361]))).backward()
     bias = model.policy.action_net.type_head[-1].bias
@@ -197,3 +199,64 @@ def test_dig_initialization_is_trainable_and_checkpointed(tmp_path):
     actual = loaded.policy.get_distribution(x, action_masks=mask).probs
     expected = model.policy.get_distribution(x, action_masks=mask).probs
     torch.testing.assert_close(actual, expected, atol=0, rtol=0)
+
+
+@pytest.mark.parametrize("device", ["cpu", "cuda"])
+@pytest.mark.parametrize("categories,width", [(9, 8), (8, 4)])
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
+def test_categorical_embedding_matches_lookup_gradients_and_adam(device, categories, width, dtype):
+    from pvz_rl.spatial_policy import CategoricalEmbedding
+
+    torch.manual_seed(102)
+    actual = CategoricalEmbedding(categories, width, padding_idx=0).to(device=device, dtype=dtype)
+    reference = torch.nn.Embedding(categories, width, padding_idx=0).to(device=device, dtype=dtype)
+    reference.load_state_dict(actual.state_dict())
+    optimizers = [torch.optim.Adam(m.parameters(), lr=3e-4, eps=1e-5) for m in (actual, reference)]
+    indices = torch.randint(categories, (7, 48, 45), device=device)
+    indices[:, :, :30] = 0  # Repeated empty tiles dominate real placement histories.
+    targets = torch.randn(*indices.shape, width, device=device, dtype=dtype)
+    atol, rtol = (2e-7, 2e-6) if dtype == torch.float32 else (1e-12, 1e-10)
+    for _ in range(3):
+        outputs = []
+        for module, optimizer in zip((actual, reference), optimizers):
+            optimizer.zero_grad(set_to_none=True)
+            output = module(indices)
+            outputs.append(output)
+            (output - targets).square().mean().backward()
+        torch.testing.assert_close(*outputs, atol=atol, rtol=rtol)
+        torch.testing.assert_close(actual.weight.grad, reference.weight.grad, atol=atol, rtol=rtol)
+        assert torch.count_nonzero(actual.weight.grad[0]) == 0
+        for optimizer in optimizers:
+            optimizer.step()
+        torch.testing.assert_close(actual.weight, reference.weight, atol=atol, rtol=rtol)
+        with torch.no_grad():
+            torch.testing.assert_close(actual(indices), reference(indices), atol=atol, rtol=rtol)
+        assert torch.count_nonzero(actual.weight[0]) == 0
+    if device == "cpu":
+        with pytest.raises((RuntimeError, IndexError)):
+            actual(torch.tensor([categories]))
+
+
+def test_masked_distribution_single_pass_preserves_probabilities_and_dig_hazard():
+    from pvz_rl.grouped_policy import GroupedDistribution
+
+    logits = torch.zeros(1, 415, dtype=torch.float64, requires_grad=True)
+    with torch.no_grad():
+        logits[0, 9] = -12
+    mask = torch.zeros(1, 406, dtype=torch.bool)
+    mask[0, 0] = mask[0, 361] = True
+    direct = GroupedDistribution(0.1).proba_distribution(logits, masks=mask)
+    previous = GroupedDistribution(0.1).proba_distribution(logits)
+    previous.apply_masking(mask)
+    torch.testing.assert_close(direct.probs, previous.probs, atol=0, rtol=0)
+    probability = float(direct.probs[0, 361].detach())
+    assert probability == pytest.approx(0.9 / (1 + math.exp(12)), rel=1e-12)
+    # The mixture rate is a float32 tensor even for this float64 control.
+    assert 1 - (1 - probability) ** 500 == pytest.approx(0.002761067438, abs=1e-10)
+    grads = [
+        torch.autograd.grad(d.entropy().sum(), logits, retain_graph=True)[0]
+        for d in (direct, previous)
+    ]
+    torch.testing.assert_close(*grads, atol=0, rtol=0)
+    with pytest.raises(ValueError, match="at least one legal action"):
+        GroupedDistribution().proba_distribution(logits, masks=torch.zeros_like(mask))

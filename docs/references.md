@@ -1,5 +1,33 @@
 # Sources actually used
 
+## Smaller observations and update throughput — 2026-09-24
+
+- Andrychowicz et al., [What Matters in On-Policy RL?](https://arxiv.org/html/2006.05990v1),
+  §§3.2 and 3.8: inspected initialization and regularization results. Their continuous-control
+  evidence motivates testing initialization; it does not establish a PVZ dig bias or guarantee
+  that less entropy improves play. The -12 bias is a project-specific 100 Hz experiment.
+- Huang and Ontañón, [A Closer Look at Invalid Action Masking in Policy Gradient
+  Algorithms](https://arxiv.org/html/2006.14171v3), masking justification and experimental setup:
+  retain consistent legality at sampling and optimization. Legal but unproductive digging
+  is not classified as invalid. Grouped probabilities already separate type mass from tile count.
+- Inspected [PyTorch 2.8.0 Embedding source](https://github.com/pytorch/pytorch/blob/v2.8.0/torch/nn/modules/sparse.py):
+  lookup weights, padding-gradient behavior, and default unscaled dense gradients. Small
+  categorical one-hot multiplication supplies the same operation and zero padding gradients;
+  independent output/gradient/Adam controls verify this project-specific implementation.
+- Inspected PyTorch's [performance tuning guide](https://github.com/pytorch/tutorials/blob/main/recipes_source/recipes/tuning_guide.py),
+  [SDPA tutorial](https://github.com/pytorch/tutorials/blob/main/intermediate_source/scaled_dot_product_attention_tutorial.py),
+  and [2.8.0 Adam source](https://github.com/pytorch/pytorch/blob/v2.8.0/torch/optim/adam.py).
+  The guide informed phase profiling; attention replacement, fused Adam, mixed precision
+  and compilation were not adopted. The documentation website returned 403, so repository
+  sources were inspected. No published speedup is assigned to this laptop.
+
+Read-only placement evidence: `runs/compact-stages-101/placement` recorded 696 early digs
+in its first 1,024 completed games, with the actor frozen. Its final recorded phase totals
+were 419.23 seconds collection and 2,336.83 seconds optimization. A constant 0.2225% dig
+probability gives 67.17% cumulative probability over 500 choices; real states change, so
+this is an explanatory control, not an exact prediction for each episode. Observation
+removal is user-directed information reduction, not a paper-proven sufficient statistic.
+
 ## Regional simplification — 2026-09-24
 
 - Inspected the pinned [PVZ engine](https://github.com/Comb1e/pvz-cuda-work/tree/1fc80386859087b9d715c4706b3f7875844430cc), public `ZombieView`, CPU vault transition, and CUDA storage schema. `has_pole` clears at vault start; behavior labels and countdowns need not be exposed by the research encoder.

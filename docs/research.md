@@ -7,8 +7,8 @@ stronger play. See [validation](validation.md) and [sources](references.md).
 
 ## Observation and memory
 
-The `event_v5` layout has 342 values: 135 plant values (type, health, behavior per
-tile), 135 regional zombie values, 45 projectile values and 27 globals. Each of
+The `event_v6` layout has 281 values: 135 plant values (type, health, behavior per
+tile), 135 regional zombie values and 11 globals. Each of
 three regions per lane stores five type counts, total health, total armor, nearest
 zombie distance and nearest unused-pole distance. Counts retain crowds without
 clipping. With the default local scale of five, health is divided by five times
@@ -21,16 +21,20 @@ count, are removed. `has_pole` identifies unused poles and clears at vault start
 Plant HP/history can reveal damage but cannot perfectly reconstruct active biting;
 nearest-pole distance cannot recover how many unused poles remain. This intentional
 information loss is an experimental simplification, not proof of redundancy.
+The 11 globals are sun, elapsed time, current/total waves, initial/defeated zombie
+counts and five mower-spent flags. Projectile inputs, spawned count and mower
+position/ready/moving flags are absent; ready and moving mowers therefore alias.
+These reductions deliberately lose information. Full simulator/accounting data remains.
 All plant, zombie and card countdowns remain absent. Legal masks reveal current
 legality. Seeds, schedules, entity IDs and task names are excluded.
 
 Each independent actor/critic uses embeddings 8/4, scalar encoder 64, two
 32-channel convolutions, two gated attention blocks (128 width, four heads,
-feed-forward width 256), and 128×128 heads. Together they have 1,150,779 parameters.
+feed-forward width 256), and 128×128 heads. Together they have 1,127,931 parameters.
 Nine spatial maps retain all 406 type-then-tile actions.
 
 Eight local tokens, 32 event tokens and eight summaries bound history. Public
-plant health/state, zombie counts/health/armor, projectile-region, sun/wave, mower
+plant health/state, zombie counts/health/armor, sun/wave, mower-spent
 and mask changes retain events. A region gaining/losing unused-pole presence also
 retains an event. Movement of either nearest distance alone does not; the latest
 distance is still visible for action selection. Zombie state changes alone supply
@@ -77,7 +81,7 @@ in the discount clock.
 
 ## Optimization and exploration
 
-Defaults: 256 environments ×128 transitions, batch 1,024, four epochs, learning
+Defaults: 128 environments ×128 transitions, batch 1,024, four epochs, learning
 rate 3e-4, clip 0.2, value coefficient 0.5 and gradient norm 0.5. Waiting remains
 a transition; games continue across updates. Separate Adam states and clipping
 isolate actor/critic. Target KL 0.01 stops actor updates above 0.015 approximate
@@ -86,7 +90,16 @@ to actor rate.
 
 PPO uses actual joint type/tile probabilities. Balanced entropy coefficients are
 0.01 for types and 0.001 for mean normalized conditional tiles, without type
-probability weighting. Initial dig bias −6 is trainable.
+probability weighting. Initial dig bias −12 is trainable. Sampling differs from greedy
+evaluation: with equal other logits and 10% added noise, wait/dig-only states initially
+give dig probability 0.00000553 per choice. Over 500 choices the illustrative chance
+of any dig is 0.28%, versus 67% for bias −6. This is not a probability cap; positive
+advantages can increase digging. The 1,024-game warm-up remains unchanged.
+
+Plant/state embeddings use equivalent one-hot matrix products during backpropagation
+and ordinary lookups during inference. The optimization avoids sorting repeated
+category indices across raw history banks. No network width, precision, PPO reduction
+or action timing changes are used to obtain speed.
 
 Added wait/plant-type noise starts at 10%, held during 1,024 stage-resident games
 of critic adaptation, then decays exponentially to 0.1% at stage game 3,000 and

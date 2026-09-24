@@ -1,0 +1,283 @@
+{
+  "version": "0.14.0",
+  "observation": "event_v6",
+  "baseline_commit": "4adfb245139d5ba92474cd5bb2bd0506c905f108",
+  "engine_commit": "1fc80386859087b9d715c4706b3f7875844430cc",
+  "protocol": {
+    "n_envs": 128,
+    "rollout_steps_per_env": 128,
+    "batch_size": 1024,
+    "epochs": 4,
+    "benchmark_repetitions": 3,
+    "warmup_rollouts": 1,
+    "measured_rollouts": 2,
+    "learning_seeds": [
+      101,
+      102
+    ],
+    "learning_allowance_seconds": 180,
+    "placement_validation_seeds": [
+      100050,
+      100051,
+      100052,
+      100053,
+      100054,
+      100055,
+      100056,
+      100057
+    ],
+    "evaluation_allowance_seconds": 60
+  },
+  "benchmark": {
+    "baseline": {
+      "warmup": {
+        "median_transitions_per_second": 2608.195831951982,
+        "median_collection_seconds": 1.4836757999983092,
+        "median_update_seconds": 4.756865899998957,
+        "maximum_allocated_mib": 862.79345703125,
+        "median_setup_seconds": 0.057129699998768046,
+        "median_warmup_seconds": 6.945695499998692,
+        "median_device_phase_seconds": {
+          "inference": 1.633120065212251,
+          "simulation": 0.012374816015362751,
+          "encoding_masks": 0.039622016265988325,
+          "rewards_metrics": 0.0035558400088921307,
+          "critic_inference": 0.4805792236328125,
+          "gae": 0.00026009599864482884
+        },
+        "repetitions": 3,
+        "coefficient_of_variation": 0.0023534451504831338
+      },
+      "actor_learning": {
+        "median_transitions_per_second": 1522.867617724091,
+        "median_collection_seconds": 1.5554957000022114,
+        "median_update_seconds": 9.195364800001698,
+        "maximum_allocated_mib": 870.916015625,
+        "median_setup_seconds": 0.05638809999800287,
+        "median_warmup_seconds": 11.291069099999731,
+        "median_device_phase_seconds": {
+          "inference": 1.6823079700469967,
+          "simulation": 0.012986816018819817,
+          "encoding_masks": 0.039843008100986455,
+          "rewards_metrics": 0.0035977600170299527,
+          "critic_inference": 0.5007749938964844,
+          "gae": 0.00025600000470876695
+        },
+        "repetitions": 3,
+        "coefficient_of_variation": 0.002416995105095301
+      },
+      "measured_wall_seconds": 159.9967918000002,
+      "median_load": {
+        "system_cpu_percent": 12.408444635932792,
+        "gpu_percent": 92.0,
+        "gpu_memory_mib": 1277.0
+      }
+    },
+    "candidate": {
+      "warmup": {
+        "median_transitions_per_second": 4152.687927630891,
+        "median_collection_seconds": 1.3712156000001414,
+        "median_update_seconds": 2.5889549999992596,
+        "maximum_allocated_mib": 928.6650390625,
+        "median_setup_seconds": 0.05663450000065495,
+        "median_warmup_seconds": 4.584902299997339,
+        "median_device_phase_seconds": {
+          "inference": 1.3266039662361144,
+          "simulation": 0.013252096023410582,
+          "encoding_masks": 0.03108441647142169,
+          "rewards_metrics": 0.003539072007872174,
+          "critic_inference": 0.4632880554199219,
+          "gae": 0.0002411840036511421
+        },
+        "repetitions": 3,
+        "coefficient_of_variation": 0.013041906427775926,
+        "throughput_gain": 0.5921687615469449
+      },
+      "actor_learning": {
+        "median_transitions_per_second": 2674.020004065802,
+        "median_collection_seconds": 1.2722708000001148,
+        "median_update_seconds": 4.7952159000014944,
+        "maximum_allocated_mib": 934.4072265625,
+        "median_setup_seconds": 0.05785190000096918,
+        "median_warmup_seconds": 6.857212899998558,
+        "median_device_phase_seconds": {
+          "inference": 1.2822071018218997,
+          "simulation": 0.012882624004036183,
+          "encoding_masks": 0.03102844846993692,
+          "rewards_metrics": 0.003547296003438546,
+          "critic_inference": 0.46257003784179684,
+          "gae": 0.00026630400121212006
+        },
+        "repetitions": 3,
+        "coefficient_of_variation": 0.006315937682113466,
+        "throughput_gain": 0.75591100168122
+      },
+      "measured_wall_seconds": 97.9258192999987,
+      "median_load": {
+        "system_cpu_percent": 13.220462251887199,
+        "gpu_percent": 87.0,
+        "gpu_memory_mib": 1447.0
+      }
+    }
+  },
+  "status": "verified; learning benefit remains experimental",
+  "learning_checks": [
+    {
+      "variant": "baseline",
+      "learner_seed": 101,
+      "training_seconds": 174.32066289999784,
+      "training_steps": 442368,
+      "completed": {
+        "games": 0,
+        "wins": 0,
+        "plantings": 0,
+        "early_digs": 0,
+        "early_digs_per_planting": null,
+        "attacker_purchases": 0
+      },
+      "unfinished": {
+        "games": 128,
+        "wins": 0,
+        "plantings": 128,
+        "early_digs": 84,
+        "early_digs_per_planting": 0.65625,
+        "attacker_purchases": 128
+      },
+      "validation_cases": 8,
+      "actor_warmup_games": 1024,
+      "evaluation_seconds": 49.1726122,
+      "total_seconds": 223.6035093999999,
+      "evaluation_summary": {
+        "completed_cases": 8,
+        "wins": 0,
+        "early_digs": 0,
+        "attacker_purchases": 8
+      },
+      "actor_optimizer_steps": 0.0,
+      "last_throughput": 2573.033206842386,
+      "interpretation": "Actor frozen throughout warm-up; incomplete training games are not scored as failures."
+    },
+    {
+      "variant": "candidate",
+      "learner_seed": 101,
+      "training_seconds": 177.4918809999981,
+      "training_steps": 720896,
+      "completed": {
+        "games": 128,
+        "wins": 2,
+        "plantings": 128,
+        "early_digs": 1,
+        "early_digs_per_planting": 0.0078125,
+        "attacker_purchases": 128
+      },
+      "unfinished": {
+        "games": 128,
+        "wins": 0,
+        "plantings": 128,
+        "early_digs": 0,
+        "early_digs_per_planting": 0.0,
+        "attacker_purchases": 128
+      },
+      "validation_cases": 8,
+      "actor_warmup_games": 1024,
+      "evaluation_seconds": 43.9455775000024,
+      "total_seconds": 221.55428059999758,
+      "evaluation_summary": {
+        "completed_cases": 8,
+        "wins": 0,
+        "early_digs": 0,
+        "attacker_purchases": 8
+      },
+      "actor_optimizer_steps": 0.0,
+      "last_throughput": 4115.703777495884,
+      "interpretation": "Actor frozen throughout warm-up; incomplete training games are not scored as failures."
+    },
+    {
+      "variant": "candidate",
+      "learner_seed": 102,
+      "training_seconds": 176.45747660000052,
+      "training_steps": 720896,
+      "completed": {
+        "games": 128,
+        "wins": 2,
+        "plantings": 128,
+        "early_digs": 1,
+        "early_digs_per_planting": 0.0078125,
+        "attacker_purchases": 128
+      },
+      "unfinished": {
+        "games": 128,
+        "wins": 0,
+        "plantings": 128,
+        "early_digs": 0,
+        "early_digs_per_planting": 0.0,
+        "attacker_purchases": 128
+      },
+      "validation_cases": 8,
+      "actor_warmup_games": 1024,
+      "evaluation_seconds": 39.18494009999995,
+      "total_seconds": 215.76498510000238,
+      "evaluation_summary": {
+        "completed_cases": 8,
+        "wins": 0,
+        "early_digs": 0,
+        "attacker_purchases": 0
+      },
+      "actor_optimizer_steps": 0.0,
+      "last_throughput": 4138.929237437153,
+      "interpretation": "Actor frozen throughout warm-up; incomplete training games are not scored as failures."
+    },
+    {
+      "variant": "baseline",
+      "learner_seed": 102,
+      "training_seconds": 173.68742230000134,
+      "training_steps": 442368,
+      "completed": {
+        "games": 0,
+        "wins": 0,
+        "plantings": 0,
+        "early_digs": 0,
+        "early_digs_per_planting": null,
+        "attacker_purchases": 0
+      },
+      "unfinished": {
+        "games": 128,
+        "wins": 0,
+        "plantings": 128,
+        "early_digs": 82,
+        "early_digs_per_planting": 0.640625,
+        "attacker_purchases": 128
+      },
+      "validation_cases": 8,
+      "actor_warmup_games": 1024,
+      "evaluation_seconds": 48.631196700000146,
+      "total_seconds": 222.42899740000212,
+      "evaluation_summary": {
+        "completed_cases": 8,
+        "wins": 0,
+        "early_digs": 0,
+        "attacker_purchases": 8
+      },
+      "actor_optimizer_steps": 0.0,
+      "last_throughput": 2579.8002265099717,
+      "interpretation": "Actor frozen throughout warm-up; incomplete training games are not scored as failures."
+    }
+  ],
+  "bounded_measurement_seconds": 1141.2743836000009,
+  "learning_status": "inconclusive: less early digging, no placement validation wins, no actor updates in retained warm-up",
+  "verification": {
+    "research_tests": 530,
+    "research_seconds": 805.3,
+    "learning_integration_tests": 33,
+    "learning_integration_seconds": 584.838,
+    "preceding_focused_check_seconds": 41.35,
+    "smoke_checkpoint": "c9e85972a69737b4078caf1c9fade953bdcc722146eec8c09e9b99290a2b45b2",
+    "upstream_game_tests": 224,
+    "upstream_game_seconds": 187.82,
+    "doctor": "passed",
+    "lint": "passed",
+    "dependency_check": "passed",
+    "packaging": "wheel and sdist passed"
+  },
+  "total_bounded_learning_and_evaluation_seconds": 1767.4623836000007
+}

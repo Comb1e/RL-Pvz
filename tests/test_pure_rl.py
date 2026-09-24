@@ -17,14 +17,14 @@ from pvz_rl.grouped_policy import GroupedDistribution
 from pvz_rl.training import ResearchCallback, load_policy, train
 
 
-def test_event_v5_dimensions_regions_scales_crowds_and_no_leaks():
+def test_event_v6_dimensions_regions_scales_crowds_and_no_leaks():
     cfg = load_config()
     env = PvZEnv(cfg)
     a, _ = env.reset(seed=5, options={"scenario": LevelSpec("hidden", (Spawn(800, "basic", 1),))})
     b, _ = env.reset(
         seed=700, options={"scenario": LevelSpec("other", (Spawn(1800, "buckethead", 4),))}
     )
-    assert a.shape == (342,)
+    assert a.shape == (281,)
     np.testing.assert_array_equal(a, b)
     encoder = env.encoder
     assert a[encoder.slices["globals"]][0] == pytest.approx(50 / 200)
@@ -53,12 +53,6 @@ def test_event_v5_dimensions_regions_scales_crowds_and_no_leaks():
     np.testing.assert_array_equal(original, encoder.encode(altered))
     zombies = original[encoder.slices["zombies"]].reshape(5, 3, 9)
     assert zombies[:, :, :5].sum() * 5 == pytest.approx(120)
-    shots = original[encoder.slices["projectiles"]].reshape(5, 3, 3)
-    assert shots[:, :, 0].sum() * 5 == pytest.approx(len(env.public.projectiles))
-    assert shots[:, :, 1].sum() * 100 == pytest.approx(
-        sum(p.damage for p in env.public.projectiles)
-    )
-
     assert np.isfinite(original).all()
 
 
