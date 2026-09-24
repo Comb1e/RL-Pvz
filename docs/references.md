@@ -1,5 +1,10 @@
 # Sources actually used
 
+## Regional simplification — 2026-09-24
+
+- Inspected the pinned [PVZ engine](https://github.com/Comb1e/pvz-cuda-work/tree/1fc80386859087b9d715c4706b3f7875844430cc), public `ZombieView`, CPU vault transition, and CUDA storage schema. `has_pole` clears at vault start; behavior labels and countdowns need not be exposed by the research encoder.
+- Reused the regional representation and bounded public-history basis recorded below. Removing explicit zombie behaviors and replacing pole counts with nearest unused-pole distance is a user-directed project hypothesis. No cited paper establishes that plant HP/history fully replaces biting or that this simplification improves learning.
+
 ## Event-memory Transformer — 2026-09-23
 
 | Source inspected | Used here | Limitation |

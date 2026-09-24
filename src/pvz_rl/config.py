@@ -117,7 +117,7 @@ def validate_config(cfg: dict) -> None:
             or steps * cfg["training"]["n_envs"] != cfg["training"]["rollout_size"]
         ):
             raise ValueError("rollout_size must equal n_envs * rollout_steps_per_env")
-    if cfg["encoding"].get("version") != "event_v4" or cfg.get("policy", {}).get("kind") not in (
+    if cfg["encoding"].get("version") != "event_v5" or cfg.get("policy", {}).get("kind") not in (
         "event_transformer_v1",
     ):
         raise ValueError(

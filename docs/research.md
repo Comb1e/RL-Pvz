@@ -7,21 +7,35 @@ stronger play. See [validation](validation.md) and [sources](references.md).
 
 ## Observation and memory
 
-The 417 values comprise 135 plant values (type, health, behavior per tile), 210
-regional zombie values, 45 projectile values and 27 globals. Three regions per
-lane retain crowd counts without clipping. All plant, zombie and card countdowns
-are absent. Legal masks reveal current legality. Seeds, schedules, entity IDs and
-task names are excluded.
+The `event_v5` layout has 342 values: 135 plant values (type, health, behavior per
+tile), 135 regional zombie values, 45 projectile values and 27 globals. Each of
+three regions per lane stores five type counts, total health, total armor, nearest
+zombie distance and nearest unused-pole distance. Counts retain crowds without
+clipping. With the default local scale of five, health is divided by five times
+maximum zombie HP, armor by five times maximum armor, and counts by five.
+Distances use the full house-to-spawn interval;
+-1 means absent, including when zombies exist but none has an unused pole.
+
+Walking, carrying-pole, vaulting, biting and dead counts, plus the separate pole
+count, are removed. `has_pole` identifies unused poles and clears at vault start.
+Plant HP/history can reveal damage but cannot perfectly reconstruct active biting;
+nearest-pole distance cannot recover how many unused poles remain. This intentional
+information loss is an experimental simplification, not proof of redundancy.
+All plant, zombie and card countdowns remain absent. Legal masks reveal current
+legality. Seeds, schedules, entity IDs and task names are excluded.
 
 Each independent actor/critic uses embeddings 8/4, scalar encoder 64, two
 32-channel convolutions, two gated attention blocks (128 width, four heads,
-feed-forward width 256), and 128×128 heads. Together they have 1,178,619 parameters.
+feed-forward width 256), and 128×128 heads. Together they have 1,150,779 parameters.
 Nine spatial maps retain all 406 type-then-tile actions.
 
 Eight local tokens, 32 event tokens and eight summaries bound history. Public
-health/state, spawn/defeat, projectile-region, sun/wave, mower and mask changes
-retain events. Within-region movement alone does not. Every decision sees current
-state. Summaries retain latest public state, span and count; categories are never
+plant health/state, zombie counts/health/armor, projectile-region, sun/wave, mower
+and mask changes retain events. A region gaining/losing unused-pole presence also
+retains an event. Movement of either nearest distance alone does not; the latest
+distance is still visible for action selection. Zombie state changes alone supply
+no event signals. Every decision sees current state. Summaries retain latest
+public state, span and count; categories are never
 averaged. Memory clears at every game boundary. Compression can lose timing.
 
 Current queries attend only to present/past tokens. Relative elapsed distances
@@ -118,7 +132,7 @@ Matching checkpoint/case results are reused; final-test seeds stay untouched.
 One recipe ships. Weights-only initialization requires compatible architecture and
 starts fresh optimizers, counters and memories. Resume restores the experiment and
 remaining allowance but restarts interrupted games with empty history. Older
-architectures and 20 Hz pins cannot load. No conversion paths ship.
+observation signatures, including event_v4, and 20 Hz pins cannot load. No conversion paths ship.
 
 The default 120 minutes reserves 15 for finalization. Stops occur at complete
 updates; evaluation/export checks preserve incomplete status. Suites repeat this

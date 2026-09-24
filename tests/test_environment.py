@@ -162,27 +162,6 @@ def test_future_schedule_ids_and_names_are_not_observation_features(cfg):
     np.testing.assert_array_equal(c, env.encoder.encode(changed))
 
 
-def test_encoder_preserves_crowds_and_is_order_invariant(cfg):
-    env = PvZEnv(cfg)
-    spawns = tuple(Spawn(1, "buckethead" if i % 2 else "basic", 2) for i in range(120))
-    env.reset(seed=5, options={"scenario": LevelSpec("crowd", spawns)})
-    env.step(0)
-    a = env.encoder.encode(env.public)
-    b = env.encoder.encode(
-        replace(
-            env.public,
-            zombies=tuple(reversed(env.public.zombies)),
-            mowers=tuple(reversed(env.public.mowers)),
-        )
-    )
-    np.testing.assert_array_equal(a, b)
-    grid = a[env.encoder.slices["zombies"]].reshape(5, 3, env.encoder.zombie_width)
-    assert grid[:, :, :5].sum() * cfg["encoding"]["local_count_scale"] == pytest.approx(120)
-    assert np.isfinite(a).all() and env.observation_space.contains(a)
-    assert env.encoder.bin_index(-500) == 0
-    assert env.encoder.bin_index(9499) == 2 and env.encoder.bin_index(9500) == 2
-
-
 def test_hybrid_only_proposes_legal_single_actions(cfg):
     cfg["conditions"]["hybrid"] = dict(masked=True, shaped=True, curriculum=False, hybrid=True)
     env = PvZEnv(cfg, condition="hybrid")

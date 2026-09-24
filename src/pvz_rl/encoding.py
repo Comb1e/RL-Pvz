@@ -16,13 +16,19 @@ class ObservationEncoder:
         self.plants = {kind: i for i, kind in enumerate(env["plants"])}
         self.zombies = {kind: i for i, kind in enumerate(env["zombies"])}
         self.plant_states = {state: i for i, state in enumerate(env["plant_states"])}
-        self.zombie_states = {state: i for i, state in enumerate(env["zombie_states"])}
         self.mower_states = {state: i for i, state in enumerate(env["mower_states"])}
         self.rows, self.cols, self.bins = env["rows"], env["cols"], env["bins"]
-        if cfg["encoding"]["version"] != "event_v4":
-            raise ValueError("Only event_v4 observations are supported")
+        if cfg["encoding"]["version"] != "event_v5":
+            raise ValueError("Only event_v5 observations are supported")
         self.plant_width = 3
-        self.zombie_width = len(self.zombies) + 4 + len(self.zombie_states)
+        # Per lane-region: one count per zombie type, aggregate health and armor,
+        # nearest zombie distance, and nearest carrier of an unused pole.
+        self.zombie_fields = {
+            name: i
+            for i, name in enumerate((*self.zombies, "health", "armor", "nearest", "nearest_pole"))
+        }
+        self.zombie_width = len(self.zombie_fields)
+        self.empty_distance = -1.0
         self.global_width = 7 + self.rows * 4
         sizes = [
             self.rows * self.cols * self.plant_width,
@@ -57,7 +63,6 @@ class ObservationEncoder:
     def encode(self, obs: Observation) -> np.ndarray:
         result = np.zeros(self.size, dtype=np.float32)
         plant = result[self.slices["plants"]].reshape(self.rows, self.cols, self.plant_width)
-        nzombies = len(self.zombies)
         for p in obs.plants:
             tile = plant[p.row, p.col]
             tile[:] = (
@@ -67,31 +72,27 @@ class ObservationEncoder:
             )
 
         # All sums are exact integer operations; IDs and tuple order are never features.
-        zombies = np.zeros((self.rows, self.bins, self.zombie_width), dtype=np.int64)
-        nearest = np.full((self.rows, self.bins), np.iinfo(np.int64).max, dtype=np.int64)
+        shape = (self.rows, self.bins)
+        zombies = np.zeros((*shape, self.zombie_width), dtype=np.int64)
+        nearest = np.full((*shape, 2), np.iinfo(np.int64).max, dtype=np.int64)
+        fields = self.zombie_fields
         for z in obs.zombies:
             r, b = z.row, self.bin_index(z.x)
-            nearest[r, b] = min(nearest[r, b], z.x)
-            cell = zombies[z.row, self.bin_index(z.x)]
+            nearest[r, b, 0] = min(nearest[r, b, 0], z.x)
+            cell = zombies[r, b]
             cell[self.zombies[z.zombie_type]] += 1
-            cell[nzombies : nzombies + 4] += (
-                z.health,
-                z.armor,
-                0,
-                int(z.has_pole),
-            )
-            cell[nzombies + 4 + self.zombie_states[z.state]] += 1
+            cell[fields["health"]] += z.health
+            cell[fields["armor"]] += z.armor
+            if z.has_pole:
+                nearest[r, b, 1] = min(nearest[r, b, 1], z.x)
         zscale = np.full(self.zombie_width, self.local_count_scale, dtype=np.float32)
-        zscale[nzombies : nzombies + 4] *= (
-            self.hp_scale,
-            max(1, self.armor_scale),
-            self.position_scale,
-            1,
-        )
+        zscale[fields["health"]] *= self.hp_scale
+        zscale[fields["armor"]] *= max(1, self.armor_scale)
         encoded = zombies / zscale
-        encoded[:, :, nzombies + 2] = np.where(
+        # The negative sentinel distinguishes absence from a carrier at spawn_x.
+        encoded[:, :, fields["nearest"] : fields["nearest_pole"] + 1] = np.where(
             nearest == np.iinfo(np.int64).max,
-            1.0,
+            self.empty_distance,
             (nearest.astype(np.float64) - self.rules.game["house_x"]) / self.position_scale,
         )
         result[self.slices["zombies"]] = encoded.ravel()

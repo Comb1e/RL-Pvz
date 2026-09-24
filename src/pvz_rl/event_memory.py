@@ -49,7 +49,15 @@ class EventMemory:
         # Ignore continuous clock/movement for history admission, never for decisions.
         relevant = torch.ones(self.layout.size, dtype=torch.bool, device=device)
         zs, gs = self.layout.slices["zombies"], self.layout.slices["globals"]
-        relevant[zs.start + 7 : zs.stop : self.layout.zombie_width] = False
+        nearest_zombie_offsets = torch.arange(
+            zs.start + self.layout.zombie_fields["nearest"],
+            zs.stop,
+            self.layout.zombie_width,
+            device=device,
+        )
+        self.nearest_pole_offsets = nearest_zombie_offsets + 1
+        relevant[nearest_zombie_offsets] = False
+        relevant[self.nearest_pole_offsets] = False
         relevant[gs.start + 1] = False
         relevant[gs.start + 7 : gs.stop : 4] = False
         self.relevant = relevant
@@ -97,6 +105,13 @@ class EventMemory:
             | (previous_actions > 0)
             | ~self.have_previous
         )
+        # Distance changes caused by ordinary movement stay quiet, but a region
+        # entering or leaving the active-pole set is a meaningful public event.
+        pole_presence_changed = self.have_previous & (
+            (obs[:, self.nearest_pole_offsets] != self.layout.empty_distance)
+            != (self.last_obs[:, self.nearest_pole_offsets] != self.layout.empty_distance)
+        ).any(-1)
+        changed |= pole_presence_changed
         token = torch.cat(
             (
                 obs,

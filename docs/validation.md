@@ -3,6 +3,51 @@
 Evidence is versioned below. Learning outcomes, simulation correctness and runtime
 speed are separate measures; [research design](research.md) defines the protocol.
 
+## 0.13.0 compact regional zombies — 2026-09-24
+
+`event_v5` has 342 values and nine features per lane-region. The default independent
+actor/critic model has 1,150,779 parameters. The game remains package 1.4.0,
+simulation 1.1.0, pinned at `1fc80386859087b9d715c4706b3f7875844430cc`.
+The installed source/rules/CUDA hashes still match the preceding release.
+
+Independent controls cover literal regional sums and distances, all five lanes,
+region edges, empty distance -1 versus a carrier at distance 0 or 1, crowd sums,
+entity permutation, multiple carriers, nearer spent poles, and an actual vault.
+CPU/CUDA comparisons use 1e-7 absolute / 1e-6 relative tolerance, with exact final
+simulation hashes. Synthetic changes to all five zombie behavior labels and all
+removed countdowns leave observations unchanged. Presence transitions retain an
+event; movement alone does not. Memory resets, causal reconstruction, PPO math,
+reload/resume and rejection of event_v4 remain covered.
+
+Verification passed: **518 research tests** (831.30 seconds), **224 upstream game
+tests** (167.41 seconds), and the preceding **132-test focused pass**. Doctor passed
+CUDA compilation, DLPack/shared-stream access,
+simulation/accounting checks, rendering and compact replay. Ruff, dependency checks,
+package builds, shipped-config equality, wheel contents and README links passed.
+Upstream tests run from an archive under `artifacts/v0130/game-source`; no game
+checkout or engine pin was changed. Duplicate historical lesson/countdown/crowd
+tests were removed, and the standalone dig-bias script was folded into policy tests.
+Current lesson success/failure/timing and independent numerical controls remain.
+
+The bounded one-second-cutoff integration generated an offline report and three
+100 Hz demos, all CPU-verified from checkpoint
+`8c1e350641e2e1dc5a31aff166a0a2fc727702af225e93baec3f5f176352ddf3`.
+All three episodes are correctly labeled truncated. Training curves were visually
+inspected; their near-empty combat statistics are expected in a one-second check.
+
+One separate CLI smoke used two environments and a two-minute allowance. It
+collected 3,840 transitions and completed one training game, then validated 0/1 on
+the diagnostic case. Collection/optimization took 37.47 seconds and validation
+63.82 seconds under concurrent regression load. At its deadline it saved
+checkpoints/report and marked presentation pending. This checks recovery, not
+learning quality. The README quick check now uses the bounded integration test
+so three-demo verification does not depend on finishing a full-length game.
+No comparisons or formal training were launched. Reduced biting/pole information
+and any speed or learning benefit remain experimental and unmeasured.
+
+Logs, JUnit records, doctor output, packages and smoke artifacts are under
+`artifacts/v0130/`.
+
 ## 0.12.0 timer-free history and 100 Hz — 2026-09-24
 
 The single method now uses 417 public inputs, bounded local/event/summary history,

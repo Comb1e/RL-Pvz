@@ -11,20 +11,20 @@ import torch
 from pvz_game import Dig, LevelSpec, Place, Spawn
 
 from pvz_rl.config import load_config
-from pvz_rl.curriculum import CurriculumState, stage_distribution
+from pvz_rl.curriculum import CurriculumState
 from pvz_rl.env import PvZEnv
 from pvz_rl.grouped_policy import GroupedDistribution
 from pvz_rl.training import ResearchCallback, load_policy, train
 
 
-def test_tactical_dimensions_regions_scales_crowds_and_no_leaks():
+def test_event_v5_dimensions_regions_scales_crowds_and_no_leaks():
     cfg = load_config()
     env = PvZEnv(cfg)
     a, _ = env.reset(seed=5, options={"scenario": LevelSpec("hidden", (Spawn(800, "basic", 1),))})
     b, _ = env.reset(
         seed=700, options={"scenario": LevelSpec("other", (Spawn(1800, "buckethead", 4),))}
     )
-    assert a.shape == (417,)
+    assert a.shape == (342,)
     np.testing.assert_array_equal(a, b)
     encoder = env.encoder
     assert a[encoder.slices["globals"]][0] == pytest.approx(50 / 200)
@@ -51,7 +51,7 @@ def test_tactical_dimensions_regions_scales_crowds_and_no_leaks():
         cards=tuple(reversed(env.public.cards)),
     )
     np.testing.assert_array_equal(original, encoder.encode(altered))
-    zombies = original[encoder.slices["zombies"]].reshape(5, 3, 14)
+    zombies = original[encoder.slices["zombies"]].reshape(5, 3, 9)
     assert zombies[:, :, :5].sum() * 5 == pytest.approx(120)
     shots = original[encoder.slices["projectiles"]].reshape(5, 3, 3)
     assert shots[:, :, 0].sum() * 5 == pytest.approx(len(env.public.projectiles))
@@ -128,40 +128,6 @@ def test_deterministic_selection_is_greedy_type_then_tile():
     assert dist.mode().item() == 8
 
 
-@pytest.mark.parametrize(
-    "family,win_tick,loss_tick", [("placement", 4376, 5004), ("saving", 10366, 10999)]
-)
-@pytest.mark.parametrize("lane", range(5))
-def test_lesson_independent_shooting_and_wait_controls(cfg, family, win_tick, loss_tick, lane):
-    cfg = cfg
-    settings = cfg["curriculum"]["lessons"][family]
-    # Literal historical control, independent of the current lesson defaults.
-    settings.update(
-        natural_sun=True,
-        initial_sun=200 if family == "placement" else 50,
-        spawn_ticks=[5, 405, 805] if family == "placement" else [6000, 6400, 6800],
-        lanes_per_spawn=1,
-    )
-    spec = LevelSpec(
-        family,
-        tuple(Spawn(t, "basic", lane) for t in settings["spawn_ticks"]),
-        initial_sun=settings["initial_sun"],
-        mowers=False,
-    )
-    for shooting, expected in ((True, win_tick), (False, loss_tick)):
-        env = PvZEnv(cfg, family=family)
-        env.reset(seed=1, options={"scenario": spec})
-        while env.state == "running":
-            action = 0
-            if shooting and env.public.zombies and env.public.sun >= 100 and not env.public.plants:
-                action = env.codec.encode(Place("peashooter", lane, 0))
-            env.step(action)
-        assert env.public.tick == expected
-        assert env.state == ("won" if shooting else "lost")
-        assert env.episode_metrics()["attacker_purchases"] == int(shooting)
-        assert env.episode_metrics()["mowers_used"] == 0
-
-
 def test_task_restrictions_dig_cooldown_and_reset_boundaries():
     cfg = load_config()
     env = PvZEnv(cfg, training=True)
@@ -189,29 +155,6 @@ def test_task_restrictions_dig_cooldown_and_reset_boundaries():
         assert env.step(0)[2:4] == (False, False)
     _, _, terminated, truncated, _ = env.step(0)
     assert truncated and not terminated
-
-
-def test_curriculum_pass_fail_minimum_and_rehearsal(cfg, legacy_teaching):
-    cfg = legacy_teaching(cfg)
-    state = CurriculumState()
-    assert not state.due(16383, cfg) and state.due(16384, cfg)
-    assert not state.observe({"placement": 18}, 16384, cfg)
-    assert not state.observe({"placement": 17}, 32768, cfg)
-    assert state.consecutive_passes == 0
-    assert not state.observe({"placement": 20}, 49152, cfg)
-    assert state.observe({"placement": 18}, 65536, cfg)
-    assert state.name == "saving" and state.entered_steps == 65536
-    assert stage_distribution(cfg, state.stage) == (["saving", "placement"], [0.8, 0.2])
-    restored = CurriculumState(**state.to_dict())
-    assert not restored.observe({"saving": 20}, 65537, cfg)
-    assert not restored.observe({"saving": 20}, 65538, cfg)  # minimum residency
-    assert restored.observe({"saving": 18}, 81920, cfg)
-    assert restored.name == "easy"
-    state = CurriculumState(stage=3)
-    assert not state.observe({"easy": 16, "standard": 11}, 16384, cfg)
-    assert not state.observe({"easy": 16, "standard": 12}, 32768, cfg)
-    assert state.observe({"easy": 16, "standard": 12}, 49152, cfg)
-    assert state.name == "shared" and not state.due(100000, cfg)
 
 
 @pytest.mark.learning

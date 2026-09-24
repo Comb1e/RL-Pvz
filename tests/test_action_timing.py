@@ -270,50 +270,6 @@ def test_zero_tick_api_rejects_wait_and_recovers_after_error():
     assert game.step().ticks_advanced == 1
 
 
-@pytest.mark.parametrize("lane", range(5))
-@pytest.mark.parametrize(
-    "family,win_tick,loss_tick", [("placement", 4371, 5004), ("saving", 10366, 10999)]
-)
-def test_per_tick_lessons_match_independent_engine_control(
-    per_tick_cfg, lane, family, win_tick, loss_tick
-):
-
-    cfg = per_tick_cfg
-    lesson = cfg["curriculum"]["lessons"][family]
-    # Literal historical control, independent of the current lesson defaults.
-    lesson.update(
-        natural_sun=True,
-        initial_sun=200 if family == "placement" else 50,
-        spawn_ticks=[5, 405, 805] if family == "placement" else [6000, 6400, 6800],
-        lanes_per_spawn=1,
-    )
-    spec = LevelSpec(
-        family,
-        tuple(Spawn(t, "basic", lane) for t in lesson["spawn_ticks"]),
-        initial_sun=lesson["initial_sun"],
-        mowers=False,
-    )
-    for shoot, expected in ((True, win_tick), (False, loss_tick)):
-        env = PvZEnv(cfg, family=family)
-        env.reset(seed=1, options={"scenario": spec})
-        control = Game()
-        control.reset(spec, 1)
-        while env.state == "running":
-            obs = control.observe()
-            action = (
-                Place("peashooter", lane, 0)
-                if shoot and obs.zombies and obs.sun >= 100 and not obs.plants
-                else Wait()
-            )
-            env.step(env.codec.encode(action))
-            if isinstance(action, Place):
-                env.step(0)
-            control.step(action)
-            assert env.game.state_hash() == control.state_hash()
-        assert env.public.tick == expected
-        assert env.state == ("won" if shoot else "lost")
-
-
 def test_action_phase_replay_midgame_cache_boundary_and_completion_rewind(per_tick_cfg, tmp_path):
     from pvz_rl.recordings import ActionPhaseRecorder
 

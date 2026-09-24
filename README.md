@@ -1,9 +1,11 @@
 # PVZ plant-placement research
 
-Research **0.12.0** trains one shared CUDA PPO policy across easy, standard and hard.
-The policy uses a **417-value timer-free observation** and independent actor/critic
+Research **0.13.0** trains one shared CUDA PPO policy across easy, standard and hard.
+The policy uses a **342-value timer-free observation** and independent actor/critic
 Transformers with bounded event memory. Simulation runs at **100 Hz**. Learning
-results are experimental; **all earlier models require fresh training**.
+results are experimental; **all earlier models, including 0.12 checkpoints, require
+fresh training**. Regional inputs retain zombie type counts, health, armor and
+nearest zombie/unused-pole distances; explicit zombie behavior labels are absent.
 
 ## Requirements
 
@@ -75,13 +77,13 @@ actual file path reported by training. Old 20 Hz recordings are incompatible and
 have been removed locally. MP4 export is optional and samples 25 frames/second
 without changing 100 Hz simulation or replay verification.
 
-For a small CUDA pipeline check, use a fresh artifact directory:
+For a small CUDA pipeline check with a one-second simulation cutoff and three
+verified demos, use a fresh artifact directory:
 
 ```powershell
-.\.venv\Scripts\python.exe -m pvz_rl train --family diagnostic `
-  --games 2 --n-envs 2 --rollout-steps-per-env 32 --batch-size 32 `
-  --eval-games 1 --validation-count 1 --max-minutes 2 `
-  --output artifacts\cuda-smoke-v0120
+.\.venv\Scripts\python.exe -m pytest -q `
+  tests/test_sc2_training.py::test_spatial_cuda_report_and_three_verified_shared_demos `
+  --basetemp artifacts\cuda-smoke-v0130
 ```
 
 `src/pvz_rl/` contains implementation; `configs/` the single recipe; `tools/` installation

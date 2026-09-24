@@ -32,11 +32,11 @@ bins = 3
 plants = ["sunflower", "peashooter", "wall_nut", "cherry_bomb", "potato_mine", "snow_pea", "chomper", "repeater"]
 zombies = ["basic", "flag", "conehead", "buckethead", "pole_vaulting"]
 plant_states = ["ready", "arming", "armed", "fusing", "digesting", "exploding", "detonating"]
-zombie_states = ["walking", "carrying_pole", "vaulting", "biting", "dead"]
+zombie_states = ["walking", "carrying_pole", "vaulting", "biting", "dead"] # Engine schema only; not policy inputs.
 mower_states = ["ready", "moving", "spent"]
 
 [encoding]
-version = "event_v4"
+version = "event_v5"
 local_count_scale = 5
 count_scale = 75
 wave_scale = 15

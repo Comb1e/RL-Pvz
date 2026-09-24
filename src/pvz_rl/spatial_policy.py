@@ -1,4 +1,4 @@
-"""Small resolution-preserving placement policy using only event_v4 inputs."""
+"""Small resolution-preserving placement policy using only event_v5 inputs."""
 
 import torch
 from pvz_game import Rules
@@ -25,7 +25,7 @@ class SpatialFeatures(BaseFeaturesExtractor):
     def __init__(self, observation_space, layout_cfg):
         layout = ObservationEncoder(layout_cfg, Rules())
         if observation_space.shape != (layout.size,):
-            raise ValueError("Spatial policy requires the event_v4 observation layout")
+            raise ValueError("Spatial policy requires the event_v5 observation layout")
         spec = layout_cfg["policy"]
         self.channels, self.scalar_channels = spec["channels"][-1], spec["scalar_sizes"][-1]
         super().__init__(
