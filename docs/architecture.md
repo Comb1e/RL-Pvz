@@ -1,283 +1,127 @@
-# Current architecture
+# Architecture
 
-Research 0.11.0 learns one shared policy for easy, standard and hard. Training
-simulation and optimization require CUDA. Game package 1.3.0 / simulation 1.0.0
-is pinned to `8861824df6893a34c2cd4df7f9b68613376d7964`. The Python simulator
-is the reference for non-learning baselines, tests and replay verification.
-
-## Responsibilities and flow
+One CUDA MaskablePPO learner controls one shared playing policy. The separately
+pinned game package owns combat rules. Its Python simulator verifies GPU traces;
+training and optimization run on CUDA. Model inputs contain public information only.
 
 ```mermaid
 flowchart LR
-    Config[Resolved train.toml and engine pin] --> Check[Validate structure, ranges and CUDA]
-    Check --> Queue[CPU seeded scenario preparation]
-    Queue --> Games[Parallel GPU games]
-    Games --> Public[500 public features and 406 legal flags]
-    Public --> Policy[Shared spatial grouped policy]
-    Policy --> Action[Wait, plant or dig]
-    Action --> Games
-    Games --> Reward[Assets, damage, income and mower accounting]
-    Public --> Buffer[GPU rollout buffer]
+    Config[Single resolved TOML] --> Scenarios[Seeded CPU scenario queue]
+    Scenarios --> Sim[100 Hz ordered CUDA simulator]
+    Sim --> Public[417 public values and legal masks]
+    Public --> Memory[Bounded causal public history]
+    Memory --> Actor[Independent actor Transformer]
+    Actor --> Action[Type then tile: 406 actions]
+    Action --> Sim
+    Sim --> Reward[Net realized value and elapsed ticks]
+    Memory --> Buffer[CUDA token archive and rollout sequences]
     Reward --> Buffer
-    Buffer --> Critic[Independent value encoder, batched before updates]
-    Critic --> GAE[Timeout bootstrap and GAE]
-    GAE --> PPO[Clipped actor PPO and separate critic MSE]
+    Buffer --> Critic[Independent critic Transformer]
+    Critic --> GAE[Timeout bootstrap and duration-aware GAE]
+    GAE --> PPO[Contiguous chunks with public-history burn-in]
+    PPO --> Actor
     PPO --> Critic
-    PPO --> Policy
-    Games --> Counts[Completed games and diagnostic summaries]
-    Counts --> Schedule[Mastery and validation state machines]
-    Schedule --> Queue
-    PPO --> Gate[Post-update mastery probe when due]
-    Gate -->|Stage passes| Validation[Normal-game validation]
-    Validation --> Best[Single best checkpoint]
-    Best --> Trace[Deterministic action traces]
-    Trace --> Verify[Replay through Python reference]
-    Verify --> Recordings[Verified compact demos]
-    Counts --> Report[Logs, TensorBoard and offline report]
-    Validation --> Report
-    Recordings --> Report
+    PPO --> Schedule[Completed-game curriculum and validation]
+    Schedule --> Save[Checkpoints and run records]
+    Save --> Replay[GPU action traces verified by CPU]
+    Replay --> Output[Compact demos and offline HTML]
 ```
 
-The external engine owns seeded waves, integer combat rules, entity storage,
-recording and rendering. Research owns task selection, public-state encoding,
-action grouping, rewards, learning, scheduling and artifacts. Scenario queues
-stay on the CPU; observation, mask, rollout and optimizer tensors stay on the GPU
-through shared CuPy/PyTorch views and one CUDA stream. Completion summaries cross
-to CPU in batches. No policy input contains seeds, schedules, entity IDs, task
-labels or private snapshots.
+## Game and observations
 
-Startup validates the installed package version, source manifest, simulation
-version and rule hash. CUDA compilation and tensor-sharing checks fail before a
-training directory is created. Installation stages a Git archive of the pinned
-commit under research `build/`; it never changes the game checkout or depends on
-its current branch. A single `.venv` contains the common and CUDA dependency locks.
+Package 1.4.0 / simulation 1.1.0 advances 100 ticks/second. Durations originate in
+seconds; integer positions, remainders and processing order are shared by CPU and
+CUDA. Accepted plant/dig operations take zero ticks; waits/rejections take one.
+Scenario names, seeds, entity IDs, private schedules and snapshots never enter a
+policy token. Snapshots and hashes remain available only for verification.
 
-## Observation and policy
+The 417 values contain 135 plant values (type, health, behavior per tile), 210
+regional zombie values, 45 regional projectile values and 27 global values. Counts
+are not clipped. Globals include sun, elapsed time, waves/counts and mower state.
+No plant, zombie or card countdown is encoded. Legal masks still reveal immediate
+action legality. Plant/state category embeddings have zero padding for empty tiles.
 
-The observation contains 180 plant values (45 tiles × category, health fraction,
-timer and behavior category), 240 regional zombie values, 45 regional projectile
-values and 35 globals. Each lane has three distance regions. Globals include sun,
-elapsed time, waves, initial/spawned/defeated counts, eight cooldowns and mower
-states/positions. Integer sums are scaled after aggregation, without crowd
-clipping. Regional nearest distance uses 1 for empty regions; type counts distinguish
-emptiness. This compression loses exact enemy positions and is not a full state.
+## Episode memory
 
-```mermaid
-flowchart LR
-    Obs[500 public values] --> Actor[Actor embeddings, scalar MLP, spatial convolutions]
-    Obs --> Critic[Independent critic embeddings, scalar MLP, spatial convolutions]
-    Actor --> Tiles[Nine conditional tile maps]
-    Actor --> Pool[Mean/max pooling and globals]
-    Pool --> Type[128 by 128 type head]
-    Critic --> Value[Mean/max pooling and 128 by 128 value head]
-    Type --> Action[Legal type then tile]
-    Tiles --> Action
-    Value --> Estimate[Expected remaining discounted reward]
-```
+Both encoders consume the same deterministic public history, with independent
+learned representations and Adam states. A bank contains eight recent decision
+tokens, 32 retained event tokens, and eight compressed summaries. Tokens contain
+the observation, previous accepted action, reset marker and public tick. Rejected
+actions have wait as their executed-action marker. No activations cross game boundaries.
 
-Each branch uses 8/4-dimensional plant/state embeddings and a 64-unit global
-encoder. Regional lane features and global features are broadcast onto the 5×9
-plant grid with column coordinates. Two 3×3 convolutions with 32 channels preserve
-its resolution. Empty categories have zero embeddings; category IDs are never
-ordinal inputs. Widths and embedding dimensions are configurable. The default has 169,467
-parameters. Conditional map biases are omitted because they cancel under tile
-softmax. There is no separate lane MLP, recurrence, attention or alternative policy.
+Public health/state changes, spawns/defeats, damage, projectile-region changes,
+sun/wave changes, mower state and legal-mask changes admit events. Continuous clock,
+within-region movement and mower position alone do not. Every decision still sees
+the current public state. Local eviction sends events to a FIFO, and quiet tokens
+or older events to summaries. A summary keeps the latest public state, earliest
+represented tick and count; it never averages category identifiers. Summary stride
+and all capacities are configurable. Finite history can lose timing information.
 
-Action indices remain wait=0, eight plants ×45 tiles, then 45 digs. Group masks
-and conditional tile masks derive from those 406 legal flags. Sampling first
-chooses a type, then a legal tile. Deterministic inference takes the most likely
-type followed by its best tile. Training mixes a configurable exploration rate
-(initially 10%) uniformly over available wait/plant types, retaining conditional tile
-probabilities. Dig remains in the learned component without a random floor. PPO
-uses the resulting mixed joint log probability for ratios and entropy. Greedy
-evaluation uses the learned type logits without injected exploration. The rate is
-saved in policy construction settings so direct checkpoint reload preserves it.
-It is held during critic adaptation, then decays exponentially to 0.1% at stage
-game 3,000 and continues toward zero. Stage-start residency, including rehearsals,
-drives the schedule; a new stage restarts it and resume restores its progress.
-The rate changes only before a new rollout, never between collection and its
-optimization. The target milestone and initial rate are configurable; zero target
-games selects a constant rate. No validation score controls the schedule.
-Balanced exploration regularizes type entropy and the unweighted mean normalized
-tile entropy of available groups. The trainable initial dig bias is −6. Digging
-stays legal; lessons configure plant availability, sky income and mowers.
+The current query attends to valid retained tokens at or before its own time.
+Relative elapsed time, summary span and count describe temporal context; no hidden
+entity countdown is reconstructed from engine fields. Two gated pre-normalized
+attention blocks default to width 128, four heads and feed-forward width 256.
+History is re-encoded using current weights, avoiding stale learned key/value caches.
+This is a project-specific bounded Transformer, not a reproduction of GTrXL.
 
-Accepted plant/dig actions consume no simulated ticks. A wait or rejected request
-advances one tick. Discounting advances only with elapsed simulation ticks.
+## Learning data and transitions
 
-## Reward and update
+Collection freezes actor and critic weights. Actor-only inference supplies actions
+and true mixed type/tile log probabilities. The buffer archives each raw token once
+and stores compact context references. Terminal contexts are captured before resets;
+truncated games bootstrap from these, natural outcomes do not. The unchanged critic
+evaluates stored causal contexts in batches before duration-based GAE.
 
-Reward is outcome (+1 win, −2 loss) plus `progress_weight * net_value / value_scale`.
-Living plants are assets worth purchase cost multiplied by remaining HP fraction.
-Net value is the change in sun plus plant assets, less actual sky income, plus
-actual plant-caused HP/armor removal valued at 50 sun per 200-HP basic, less 600
-sun per newly activated mower. Defaults are weight 0.1 and scale 300. The scale
-does not cap sunlight. Physical assets are evaluated normally at natural endings.
-
-The CPU reference reads public damage/income events. A checked research-local
-adapter adds three integer counters to the pinned CUDA kernel: effective plant
-damage, actual sky income and actual produced sun. Counters reset per operation,
-including zero-time actions; source-positive damage excludes mowers and includes
-projectiles after their plant dies. Counters cannot change simulation state,
-processing order, snapshots or observations. The installed game remains untouched.
-Shared metric names drive CUDA field indexing and report aggregation.
-
-Purchases conserve assets. Plant damage and final removal charge each unit of
-asset loss once; production and effective damage earn credit once. Mower cost is
-part of net value, never an additional penalty. Historical maximum/drawdown track
-the account without gating reward. The objective deliberately changes preferences;
-there is no policy-invariance claim or special plant/dig/explosion rule.
-
-The collector stores 128 learning transitions per environment per update by default,
-across 256 parallel environments (32,768 transitions per rollout). This bounds the
-learning buffer, not the game. Unfinished games retain their state across updates;
-only natural outcomes and the simulated-time cutoff end episodes. Waits and rejected
-requests remain learning transitions. The separate `agent_actions` diagnostic counts
-only accepted planting/digging, with no per-game action count cap.
-Each transition stores an integer duration on CUDA before any automatic reset.
-Value bootstrapping uses `gamma^duration`; GAE propagation uses
-`(gamma * lambda)^duration`. Duration zero gives both factors 1, even at gamma or
-lambda zero. Natural endings mask bootstrap and traces; truncations use the
-preserved terminal observation, followed by a reset boundary. Gamma/lambda default
-to 0.999 per tick. Undiscounted episode reward and discounted return are both saved.
-Masked PPO uses standard all-transition
-minibatch normalization and mean losses, four epochs and batches of 1,024.
-Singleton minibatches skip advantage normalization. Approximate KL is checked
-before each actor optimizer step; a value above 1.5×`target_kl` stops actor updates
-for that rollout. The independent critic completes its configured epochs. Zero
-disables the check. Each parameter group owns an Adam state and clips its own
-gradients; no learned tensors are shared. Critic loss cannot alter action outputs.
-
-At each stage's start, the actor stays fixed for `critic_warmup_games` completed
-games (default 1,024). Collection still samples the exploratory policy and the critic
-continues its ordinary four epochs. Once stage residency reaches the threshold,
-actor updates resume on the next collected rollout. Both optimizer identities are
-preserved; no data is replayed. Saved curriculum residency supplies the warm-up
-state, so resume continues it and old-stage episodes cannot end it prematurely.
-Non-curriculum diagnostics have no stage warm-up; their exploration decays from
-the first completed game using total completed games. Missing archived settings mean
-zero warm-up and zero added exploration. Training target residuals are logged
-separately for wait/plant/dig decisions; they do not certify value calibration.
+Optimization shuffles contiguous per-environment chunks (default 16 transitions),
+never the transitions within them. At each chunk boundary it restores retained
+public history and replays up to eight prefix transitions without loss. The prefix
+reconstructs event admission/compression, not learned hidden state. Both encoders
+then re-encode this history; the remaining chunk contexts use the exact archive.
+Deterministic boundary banks are reconstructed once per rollout and reused across
+epochs and shuffled environment groups. Learned features are never cached across updates.
+No old rollout is reused after optimization. All tensors stay on CUDA apart from
+batched diagnostics and completed-game records.
 
 ```mermaid
 stateDiagram-v2
-    [*] --> CriticAdaptation: enter stage
-    CriticAdaptation --> CriticAdaptation: collect and fit critic, actor fixed
-    CriticAdaptation --> JointLearning: residency threshold, next rollout
-    JointLearning --> CriticAdaptation: next curriculum stage
-    JointLearning --> Finished: mastery or budget
-    CriticAdaptation --> Finished: budget
+    [*] --> Reset
+    Reset --> Collect: new episode and empty history
+    Collect --> Collect: accepted operation or tick
+    Collect --> Terminal: natural end or cutoff
+    Terminal --> Reset: save metrics and timeout context
+    Collect --> Update: 128 transitions per environment
+    Update --> Probe: completed-game threshold crossed
+    Update --> Collect: same unfinished games and history
+    Probe --> UpdateStage: mastery passed
+    Probe --> Collect: failed or incomplete
+    UpdateStage --> Validate: same post-update weights
+    Validate --> Collect: future resets use new stage
+    Update --> Save: budget or selected-stage completion
+    Save --> [*]
 ```
 
-Collection invokes only the actor. Both networks remain frozen until the complete
-rollout is stored. The critic then evaluates observations in batches (default 1,024),
-including pre-reset timeout states and the final rollout state. Natural terminals
-have no bootstrap. Timeout corrections are applied once, then GAE runs. Unfinished
-games continue across updates; optimized rollouts are discarded. This schedule
-changes the timing of value inference, not the policy that generated the samples.
-Evaluation uses the actor without computing values. Post-update drift and dig
-probability on legal-dig states are diagnostics, not additional loss terms.
+Independent clipping and optimizers isolate policy and value learning. Actor KL
+stopping leaves critic epochs active. Exploratory noise is fixed within a rollout,
+held during stage critic adaptation and decays by completed games. Evaluation uses
+greedy actor inference with its own episode banks, so it cannot alter collection memory.
 
-## Curriculum, checkpoints and failure paths
+## Storage, compatibility and failure paths
 
-```mermaid
-stateDiagram-v2
-    [*] --> Placement
-    Placement --> Saving: mastery
-    Saving --> Easy: mastery
-    Easy --> Standard: mastery
-    Standard --> Shared: mastery
-    Shared --> Mastered: all three tasks pass
-    Placement --> Placement: failed or incomplete probe
-    Saving --> Saving: failed or incomplete probe
-    Easy --> Easy: failed or incomplete probe
-    Standard --> Standard: failed or incomplete probe
-    Shared --> Shared: failed or incomplete probe
-```
+Each run records resolved settings, source and structural signatures, reward and
+discount settings, seeds, elapsed allowance, curriculum state, episodes and optimizer
+metrics. Checkpoints include both optimizers. Stage transfers copy compatible weights
+only; resume restores the saved experiment, starts fresh games and empty memory,
+and preserves cumulative schedules. Resume is not a bitwise continuation of partial games.
+All earlier observation/policy signatures are rejected before model loading.
 
-The five task mixtures and per-task mastery counts live in the configuration.
-Scenario preparation samples `lanes_per_spawn` distinct lanes and spawns one
-basic zombie per lane at each configured tick. Placement has 100 sun, one lane
-and ticks 1/21/41; saving has 150 sun, two lanes and ticks 860/1100/1340. Both lack
-mowers and sky income; sunflowers still produce normally. Scarce funds and wave
-pressure define the tasks without changing rewards or restricting legal digging.
+The engine is installed non-editably from a commit-verified archive and complete
+source manifest. Missing CUDA, changed pins, unsupported settings and incompatible
+weights fail before a new run is created. Capacity exhaustion fails rather than
+clipping entities. Deadline checks stop at completed updates and preserve explicitly
+incomplete evaluation/export state. Validation alone selects best checkpoints.
 
-Episode reset resolves `natural_sun` from the lesson configuration. CPU reference
-games use a detached rules object with only sky-payment amount set to zero. The
-research CUDA adapter supplies that same amount per game to the pinned kernel;
-its four checked source hooks fail closed if the engine contract changes. It
-supports mixed normal/lesson batches and updates only reset slots. All other
-combat rules and installed game files remain pinned. Effective rules/checksums
-are embedded in diagnostic snapshots and recordings, so CPU verification needs
-no lesson sidecar. Income is applied before plants at the original point in tick
-processing, never subtracted afterward. Observations gain no task label, income
-flag, seed or future schedule. Configurations must explicitly specify sky
-availability. No legacy lesson mode is maintained; compatible weights can
-initialize the current configuration.
-
-Default mastery requires 100/100 cases for each required task, at least 100
-completed games that started in the current stage, and one passing probe. Probes
-run every 2,000 completed games using a separate 100-case validation pool. Promotion
-changes future resets only; active games keep their starting stage and restrictions.
-Actor, critic and both optimizer identities stay unchanged. A selected standalone stage never
-promotes; it saves a checkpoint and stops on mastery or budget.
-
-Normal validation runs once after each individual stage passes, with 50 seeds per
-difficulty. A failed probe or budget exhaustion does not trigger it. Probe intervals
-coalesce after complete updates; cached results reuse only the same weights/cases.
-The highest equal-weight macro win rate selects one `best.zip`, with earlier ties
-retained. Mastery triggers evaluation but never supplies its checkpoint score.
-The stage-success event and its game/decision counts are saved in `latest.zip`
-before evaluation. A timeout stops further learning, preserving those weights;
-finalization or resume retries the pending evaluation. Completion consumes the
-event, preventing duplicate evaluation at training end or on resume.
-
-```mermaid
-stateDiagram-v2
-    [*] --> AwaitingMastery
-    AwaitingMastery --> AwaitingMastery: failed probe or interval not reached
-    AwaitingMastery --> EvaluationPending: stage passes, save checkpoint
-    EvaluationPending --> EvaluationPending: timeout or interruption, preserve weights
-    EvaluationPending --> AwaitingMastery: evaluation complete, resume next stage
-    EvaluationPending --> Finished: evaluation complete, standalone or shared mastered
-    AwaitingMastery --> Finished: budget exhausted, save final and report
-```
-
-Diagnostic/fixed training and saved recipes without `validation_schedule` retain
-periodic validation. Resume restores the saved schedule; weights-only initialization
-with an explicit current recipe starts the new schedule.
-Time allowances include finalization; expired evaluations and exports remain
-explicitly pending. Exhausted game/time budgets do not imply mastery.
-
-`--init-from` compares engine, observation layout and network structural signatures,
-then copies weights into a fresh model and two optimizers. Counts, schedules and time
-allowance restart; reward/PPO/curriculum parameters may change. Metadata records
-source hash and parameter differences. `--resume` requires the saved experiment
-settings and restores weights, both Adam states, counts, mastery and schedules. Active
-episodes restart; it does not promise bitwise trajectory continuation.
-Only the `net_value_v1` reward and `simulation_ticks` clock are eligible for model
-loading. Pre-0.11 weights require fresh training; no conversion path remains.
-Reports and recordings are independent of model loading and remain usable.
-
-## Storage and presentation
-
-Every run owns a new directory. Metadata records resolved configuration, structural
-signature, source hashes, engine/rules pin, learner seed and initialization origin.
-JSONL records separate training episodes, post-update metrics, normal validation
-and mastery probes. Checkpoints store optimizer and scheduling state; logs and
-TensorBoard provide progress without printing every game. Per-task windows each
-retain the latest 100 completed games; empty ratios are missing, never zero.
-Cumulative starts, completions and transitions survive resume; active counts describe
-the current environments. Restarting unfinished episodes creates additional starts.
-Task labels remain diagnostics only and never enter observations or rewards.
-
-The selected model is loaded once for three demos using seed 100000. GPU traces
-must reproduce CPU outcome and canonical state hash before `.pvzdemo` files are
-saved. Embedded metadata identifies the shared checkpoint and provenance. Rendering
-uses native `BoardRenderer`/`RenderContext`, never changes simulation state, and
-optional MP4 streams RGB frames at 20 ticks/second to H.264 FFmpeg. Reports use
-relative local assets and label missing metrics, interruptions and resumed segments.
-Export failure preserves checkpoints; `visualize` can regenerate derived outputs.
-Without any validated checkpoint, completion and regeneration still produce a report,
-but no normal-game demos. Suites record jobs lacking `best.zip` as skipped during
-evaluation, instead of loading an unvalidated model or failing on a missing file.
+Demos replay GPU actions through the CPU engine and require identical final outcome,
+decisions and hash before publication. Native 100 Hz recordings remain model-free.
+Video rendering samples a configurable lower rate while stepping/verifying every
+tick. Offline reports read stored metrics, not models. Historical reports survive;
+20 Hz recordings and pre-0.12 models are not accepted by the current engine/policy.

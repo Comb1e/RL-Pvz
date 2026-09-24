@@ -41,7 +41,7 @@ def test_complete_disjoint_parameter_and_optimizer_ownership():
     critic = {id(p) for p in policy.critic_parameters()}
     assert actor.isdisjoint(critic)
     assert actor | critic == {id(p) for p in policy.parameters()}
-    assert sum(p.numel() for p in policy.parameters()) == 169467
+    assert sum(p.numel() for p in policy.parameters()) == 1178619
     assert {id(p) for g in policy.optimizer.param_groups for p in g["params"]} == actor
     assert {id(p) for g in policy.critic_optimizer.param_groups for p in g["params"]} == critic
 
@@ -212,13 +212,13 @@ def test_task_counts_track_partial_games_and_reset_at_episode_boundaries():
     env = vector_env(cfg, "masked", 101)
     try:
         env.reset()
-        for _ in range(21):
+        for _ in range(101):
             env.step_tensors(torch.zeros(3, device="cuda", dtype=torch.long))
         counts = env.task_counts()
         assert sum(v["started_games"] for v in counts.values()) == 6
         assert sum(v["active_games"] for v in counts.values()) == 3
         assert sum(v["completed_games"] for v in counts.values()) == 3
-        assert sum(v["transitions"] for v in counts.values()) == 63
+        assert sum(v["transitions"] for v in counts.values()) == 303
         env.env_method("set_curriculum_stage", 2)
         before = env.task_counts()
         assert env.task_counts() == before
@@ -247,9 +247,9 @@ def test_deferred_collection_never_calls_critic_per_action(tmp_path):
         calls = []
         original = model.policy.predict_values
 
-        def predict(obs):
+        def predict(obs, **kwargs):
             calls.append(len(obs))
-            return original(obs)
+            return original(obs, **kwargs)
 
         model.policy.predict_values = predict
 

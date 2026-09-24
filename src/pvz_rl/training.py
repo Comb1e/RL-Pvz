@@ -96,6 +96,7 @@ def build_model(cfg, condition, env, seed, log_dir=None):
     configure_tensor_buffer(model)
     model.value_batch_size = t.get("value_batch_size", 1024)
     model.critic_warmup_active = False
+    model.training_games = 0
     configure_exploration(model, cfg)
     if "initial_dig_logit" in cfg.get("policy", {}):
         model.policy.initialize_dig_logit(cfg["policy"]["initial_dig_logit"])
@@ -360,6 +361,11 @@ class ResearchCallback(BaseCallback):
             "joint_entropy",
             "exploration_bonus",
             "choice_fraction",
+            "memory_compression_ratio",
+            "memory_event_fraction",
+            "attention_local",
+            "attention_events",
+            "attention_summaries",
             "optimizer_steps",
             "actor_optimizer_steps",
             "critic_optimizer_steps",

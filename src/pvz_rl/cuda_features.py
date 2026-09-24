@@ -26,7 +26,6 @@ class CudaFeatures:
         params = {
             "BINS": encoder.bins,
             "OBS_SIZE": encoder.size,
-            "TIMER_SCALE": encoder.timer_scale,
             "LOCAL_COUNT": encoder.local_count_scale,
             "HP_SCALE": encoder.hp_scale,
             "ARMOR_SCALE": max(1, encoder.armor_scale),
@@ -34,7 +33,8 @@ class CudaFeatures:
             "DAMAGE_SCALE": encoder.damage_scale,
             "COST_SCALE": encoder.cost_scale,
             "CUTOFF_SECONDS": cfg["environment"]["cutoff_seconds"],
-            "EARLY_DIG_TICKS": cfg.get("diagnostics", {}).get("early_dig_seconds", 5) * 20,
+            "EARLY_DIG_TICKS": cfg.get("diagnostics", {}).get("early_dig_seconds", 5)
+            * batch.rules.game["tick_rate"],
             "WAVE_SCALE": cfg["encoding"]["wave_scale"],
             "COUNT_SCALE": encoder.count_scale,
             "PROJECTILE_OFFSET": encoder.slices["projectiles"].start,
@@ -85,7 +85,6 @@ class CudaFeatures:
                 b.zombies,
                 b.projectiles,
                 b.mowers,
-                b.cooldowns,
                 self.observations,
                 self.assets,
                 b.n,

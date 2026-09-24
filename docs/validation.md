@@ -3,6 +3,116 @@
 Evidence is versioned below. Learning outcomes, simulation correctness and runtime
 speed are separate measures; [research design](research.md) defines the protocol.
 
+## 0.12.0 timer-free history and 100 Hz — 2026-09-24
+
+The single method now uses 417 public inputs, bounded local/event/summary history,
+independent actor/critic Transformers and contiguous PPO chunks. The default model
+has 1,178,619 parameters. This release requires fresh models. Its raw public-history
+recurrence is project-specific; it is not a reproduction of GTrXL or learned
+Transformer-XL hidden-state recurrence.
+
+Game package **1.4.0**, simulation **1.1.0**, is installed non-editably from merged
+commit `1fc80386859087b9d715c4706b3f7875844430cc` ([game PR #1](https://github.com/Comb1e/pvz-cuda-work/pull/1)).
+The full file manifest is in the engine lock. Normalized source hash:
+`58c5a4f089fe17325562feaf804f85be091cdd520223129b7c989ecf9bd6b2dd`;
+rules hash `d228ce2d09a58ace4b32d7b60bd9bd7510511fe4f9abde2007dd992e0d9f7754`;
+CUDA source hash `98c7859a1804c63af8dd9f3e5cc7d40952933bab6b2133f1e5433d6e5ccbdc34`.
+The original `E:/Projects/pvz` working tree remains unchanged.
+
+### Independent controls and physical time
+
+CPU/CUDA controls compare observations at 1e-7 absolute / 1e-6 relative tolerance,
+float32 rewards at 2e-6 absolute, and ledger components at 1e-10 absolute. Integer
+simulation snapshots and hashes must match exactly. Both encoders exclude all
+plant, zombie and card countdowns. Crowds, categories and ordering checks remain.
+
+History controls cover admission, categorical summaries, event FIFO order,
+compression, future masking, mixed resets, rollout carryover, exact collected log
+probabilities, prefix reconstruction, terminal context, timeout GAE, gradients and
+reload. Cached boundary histories must match direct reconstruction, including
+shuffled environment groups; cache contents are discarded with each rollout.
+
+A real-game mine-age probe reaches identical current observations and legal masks
+through different placement times. Actor tile preferences differ with these
+histories and become identical after reset. This demonstrates usable history and
+isolation, **not learned phase-age competence**. Finite memory may still lose useful
+timing information. Independent PPO/Adam tests retain exact actor/critic isolation.
+A one-state local-descent test uses a small explicit critic rate; Adam is not
+assumed to reduce every minibatch loss at the production rate.
+
+The three reference fixtures use identical physical spawn schedules and non-wait
+actions. All remain victories, with normalized completion times below. Additional
+trailing waits allow completion at the new resolution. Collision/attack rounding
+can accumulate; identical hashes or seeded-generator outcomes across rates are not
+claimed. Seeded integer jitter and the old ten-tick controller cadence also change
+when expressed in seconds.
+
+| Fixture | 20 Hz seconds | 100 Hz seconds |
+|---|---:|---:|
+| easy | 161.05 | 161.08 |
+| standard | 305.25 | 305.29 |
+| hard | 426.30 | 428.43 |
+
+Independent movement, sunflower production, mine arming and shot-interval controls
+assert real-time units. The 100 Hz saving control wins at tick 10501; waiting loses
+at 9299. Its discounted return is 0.00761094, versus −0.000182364 for waiting.
+Keeping the requested gamma/lambda 0.999 per tick changes gamma's real-time
+half-life from 34.6 to 6.93 seconds. Noise also has five times as many per-second
+opportunities. These are substantial learning confounds, not corrected coefficients.
+
+### Presentation and cleanup
+
+The short CUDA report/replay integration check creates three 100 Hz compact demos
+from one checkpoint (`0c48f2efb6c2b46b4a7f17b417eb650285de04fcb0139e5e05aeb17bf9f793e5`).
+CPU replay verifies every final hash. Explicit video export produces decodable
+H.264 at 25 FPS while verifying every 100 Hz tick. This one-second cutoff test is
+a pipeline check, not a normal-game success result. Its curves and native replay
+frame were visually inspected; the throughput title was wrapped to avoid clipping.
+
+Metadata inspection removed 4,122 verified 20 Hz recordings from generated/test
+locations and the designated game checkout. Unknown/corrupt test payloads were
+left intact. The removal manifest, source PDFs, physical controls, suite logs and
+new verification outputs are under `artifacts/v0120/`. No formal training was run.
+
+Automatic approval review rejected removal of generated game `.hypothesis`,
+`.pytest_cache` and three `__pycache__` directories, reporting only “blocked by
+policy”; those untracked caches remain. The complete game suite used external
+caches and passed **224 tests in 192.30 seconds**.
+
+### Bounded learning comparison
+
+Two five-minute-equivalent development checks were run sequentially on seeds 101
+and 102, using the same saving initialization protocol and three non-final cases
+per task. The previous method used the archived 20 Hz research source; the
+candidate used the current 100 Hz engine and timer-free event memory. Because the
+engine pins differ, this is diagnostic evidence rather than a matched acceptance
+experiment. The candidate's 100 Hz gamma is also five times faster in simulation
+time, as described above.
+
+| Method / seed | Learning seconds | Transitions | Completed games | Decisions/s | Easy wins | Saving wins |
+|---|---:|---:|---:|---:|---:|---:|
+| Previous / 101 | 112.6 | 983,040 | 490 | 8,729 | 2/3 | 0/3 |
+| Previous / 102 | 118.8 | 1,179,648 | 545 | 9,932 | 0/3 | 0/3 |
+| Candidate / 101 | 103.5 | 163,840 | 0 | 1,584 | 1/3 | 0/3 |
+| Candidate / 102 | 104.6 | 163,840 | 0 | 1,566 | 0/3 | 0/3 |
+
+The candidate used 256 environments and 128 transitions per environment. Its
+peak PyTorch allocation was 1,102 MiB. Collection was about two seconds per
+update; the four-epoch temporal optimization took about 19 seconds per update.
+The previous feed-forward run completed many short games because its 20 Hz
+episodes and policy path were much cheaper. Candidate validation still completed
+all 15 cases per seed within the five-minute evaluation allowance, but the
+candidate failed all saving cases and did not improve the easy macro result for
+both seeds. It therefore does not meet the improvement criterion and remains
+experimental. The result also exposes a practical issue: long games dominate a
+game-count comparison when the candidate has not yet completed any games.
+
+Candidate training diagnostics reported memory compression ratios near 32 retained
+decisions per token, event admission near 0.8%, and final-batch attention split
+approximately 19% local, 59% retained events and 22% summaries. These describe
+the untrained policy's computation, not evidence that it learned useful event
+selection. No formal training was launched.
+
 ## 0.11.1 exploration and critic adaptation — 2026-09-23
 
 The saving diagnosis found 7,039 completed saving games with zero wins, followed

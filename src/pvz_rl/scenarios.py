@@ -17,7 +17,12 @@ def scenario(level: str, family: str, seed: int, rules: Rules, cfg=None):
         return level
     if family == "diagnostic":
         # A peashooter anywhere in row 2 can kill this basic zombie; no mower rescue.
-        return LevelSpec("diagnostic", (Spawn(100, "basic", 2),), initial_sun=100, mowers=False)
+        return LevelSpec(
+            "diagnostic",
+            (Spawn(5 * rules.game["tick_rate"], "basic", 2),),
+            initial_sun=100,
+            mowers=False,
+        )
     if family in ("placement", "saving"):
         from .config import lesson_settings
 

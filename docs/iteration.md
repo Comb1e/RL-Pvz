@@ -5,6 +5,23 @@ Dates and results belong to their recorded version. Current behavior lives in
 artifact locations and learning outcomes live in [validation](validation.md).
 The longer pre-consolidation notes remain in `git show b642c9c:docs/iteration.md`.
 
+## 0.12.0 — 2026-09-24
+
+- Problem: explicit countdowns bypass temporal inference, while dense tick history
+  would grow excessively at 100 Hz.
+- Change: 417 timer-free inputs, independent actor/critic event Transformers,
+  deduplicated raw history, contiguous chunks with public-prefix reconstruction,
+  actor-only evaluation and 25 FPS presentation independent of simulation.
+- Engine: game 1.4.0 / simulation 1.1.0 at 100 Hz. Fresh models are required.
+  Local 20 Hz recordings were removed by metadata; the other game checkout is untouched.
+- Checks and measurements: see validation. Retaining gamma/lambda 0.999 per tick
+  shortens physical credit; per-tick exploration also occurs more often per second.
+  Both are explicit confounds. Correctness is not a learning success claim.
+- The timer/history controls passed, but the bounded paired learning check did not:
+  the candidate reached about 1.6k transitions/s versus 8.7–9.9k for the archived
+  feed-forward source and completed no training games in either 120-second window.
+  Saving validation remained 0/3 for both seeds. Keep this method experimental.
+
 ## 0.11.1 — 2026-09-23
 
 - Problem: saving collapsed into waiting; the transferred critic was optimistic

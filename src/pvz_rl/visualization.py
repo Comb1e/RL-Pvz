@@ -143,7 +143,7 @@ def build_run_report(run, cfg=None):
         ("invalid_action_rate", "Rolling invalid-action rate"),
         (
             "decisions_per_second",
-            "Learning transitions / second (including waits; excludes evaluation)",
+            "Learning transitions / second\n(includes waits; excludes evaluation)",
         ),
         ("end_to_end_decisions_per_second", "Learning transitions / wall second (including waits)"),
         ("rolling_agent_actions", "Accepted plant + dig actions / game (excludes waits)"),
@@ -257,8 +257,14 @@ def build_run_report(run, cfg=None):
         ("post_update_type_kl", "Post-update exact type KL"),
         ("dig_probability_when_legal", "Dig probability where digging is legal"),
         ("kl_stopped", "Actor stopped by KL limit"),
+        ("memory_compression_ratio", "Represented decisions / retained memory token"),
+        ("memory_event_fraction", "Decisions admitted as public events"),
+        ("attention_local", "Attention allocated to local tokens"),
+        ("attention_events", "Attention allocated to retained events"),
+        ("attention_summaries", "Attention allocated to compressed summaries"),
     ]
-    fig, axes = plt.subplots(8, 2, figsize=(12, 24))
+    panel_rows = (len(optimizer_panels) + 1) // 2
+    fig, axes = plt.subplots(panel_rows, 2, figsize=(12, 3 * panel_rows))
     for ax, (key, title) in zip(axes.flat, optimizer_panels):
         plotted = False
         for label, series in segments:
@@ -282,6 +288,8 @@ def build_run_report(run, cfg=None):
             ax.legend(fontsize=7)
         else:
             _empty(ax, "Optimizer metrics unavailable")
+    for ax in list(axes.flat)[len(optimizer_panels) :]:
+        ax.set_visible(False)
     _save(fig, output, "optimization-curves")
     images.append(("PPO optimization", "optimization-curves.png"))
 

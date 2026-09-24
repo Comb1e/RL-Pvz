@@ -188,8 +188,16 @@ class CudaVecEnv(VecEnv):
             self.phases["simulation_features"] += perf_counter() - started
             h = self.header_tensor
             self.transition_ticks.copy_(h[:, 14])
+            self.executed_actions = torch.where(h[:, 14] == 0, actions, 0)
+            self.terminal_ticks = h[:, 0].clone()
+            self.terminal_masks = self.action_masks().clone()
             done = (
-                (h[:, 1] != 0) | (h[:, 0] >= self.cfg["environment"]["cutoff_seconds"] * 20)
+                (h[:, 1] != 0)
+                | (
+                    h[:, 0]
+                    >= self.cfg["environment"]["cutoff_seconds"]
+                    * self.batch.rules.game["tick_rate"]
+                )
             ) & (h[:, 17] != 0)
             timed_out = done & (h[:, 1] == 0)
             # One compact transfer per decision; no entity state/observations.
@@ -244,7 +252,7 @@ class CudaVecEnv(VecEnv):
             status=status,
             win=int(status == "won"),
             tick=int(h[0]),
-            simulated_seconds=float(h[0] / 20),
+            simulated_seconds=float(h[0] / self.batch.rules.game["tick_rate"]),
             **{"return": float(t[0])},
             decisions=int(t[1]),
             # In the required per-tick mode, only accepted plant/dig actions
@@ -259,7 +267,9 @@ class CudaVecEnv(VecEnv):
             maximum_sun=int(t[8]),
             affordable_attacker_opportunities=int(t[9]),
             attacker_purchases=int(t[10]),
-            first_attacker_seconds=None if t[11] < 0 else float(t[11] / 20),
+            first_attacker_seconds=None
+            if t[11] < 0
+            else float(t[11] / self.batch.rules.game["tick_rate"]),
             plant_usage=usage,
             plant_spending={k: v * self.batch.rules.plants[k]["cost"] for k, v in usage.items()},
             **{k: float(t[j]) for k, j in zip(REWARD_METRICS, METRIC_INDICES, strict=True)},

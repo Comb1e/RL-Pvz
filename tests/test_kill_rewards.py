@@ -60,7 +60,7 @@ def test_real_engine_credits_all_plant_damage_types(cfg, plant):
         seed=4,
         options={
             "scenario": LevelSpec(
-                "plant-kill", (Spawn(300, "basic", 2, x=spawn_x),), initial_sun=500, mowers=False
+                "plant-kill", (Spawn(1500, "basic", 2, x=spawn_x),), initial_sun=500, mowers=False
             )
         },
     )
@@ -70,7 +70,7 @@ def test_real_engine_credits_all_plant_damage_types(cfg, plant):
     while env.state == "running":
         action = 0
         # Bomb fuse must coincide with the spawn; other plants can wait for it.
-        if not placed and (plant != "cherry_bomb" or env.public.tick >= 290):
+        if not placed and (plant != "cherry_bomb" or env.public.tick >= 1390):
             action = env.codec.encode(Place(plant, 2, col))
             placed = True
         _, _, _, _, info = env.step(action)
@@ -108,12 +108,15 @@ def test_real_batched_mower_kills_count_each_zombie_once_and_terminal(cfg):
 
 
 def test_real_simultaneous_batch_keeps_both_sources(cfg):
+    cfg["environment"]["decision_ticks"] = 50
     env = PvZEnv(cfg)
     env.reset(
         seed=2,
         options={
             "scenario": LevelSpec(
-                "mixed", (Spawn(1, "basic", 1, x=1400), Spawn(25, "basic", 0, x=0)), initial_sun=500
+                "mixed",
+                (Spawn(1, "basic", 1, x=1400), Spawn(125, "basic", 0, x=0)),
+                initial_sun=500,
             )
         },
     )
@@ -136,7 +139,7 @@ def test_failed_close_threat_controls_do_not_earn_kill_credit(cfg, plant, col):
         seed=4,
         options={
             "scenario": LevelSpec(
-                "too-close", (Spawn(300, "basic", 2, x=1400),), initial_sun=500, mowers=False
+                "too-close", (Spawn(1500, "basic", 2, x=1400),), initial_sun=500, mowers=False
             )
         },
     )

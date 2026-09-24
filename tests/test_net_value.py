@@ -128,7 +128,7 @@ def test_real_explosions_break_even_and_empty_loss_on_cpu_and_cuda(kind, count, 
         batch.reset([case], [4])
         features = CudaFeatures(batch, cfg, "masked")
         features.encode()
-        actions = [env.codec.encode(Place("cherry_bomb", 2, 1))] + [0] * 25
+        actions = [env.codec.encode(Place("cherry_bomb", 2, 1))] + [0] * 125
         for action in actions:
             info = env.step(action)[4]
             features.step(cp.asarray([action], cp.int64))
@@ -236,7 +236,7 @@ def test_all_saving_pairs_rank_unproductive_controls_below_winner(lanes, mode):
         options={
             "scenario": LevelSpec(
                 "saving",
-                tuple(Spawn(t, "basic", r) for t in (860, 1100, 1340) for r in lanes),
+                tuple(Spawn(t, "basic", r) for t in (4300, 5500, 6700) for r in lanes),
                 initial_sun=150,
                 mowers=False,
             )
@@ -262,7 +262,9 @@ def test_all_saving_pairs_rank_unproductive_controls_below_winner(lanes, mode):
     if mode == "dig":
         assert metrics["net_value"] == -150
         assert metrics["early_voluntary_digs"] == 2
-        assert metrics["discounted_return"] == pytest.approx(-0.361679, abs=1e-6)
+        assert metrics["discounted_return"] == pytest.approx(
+            -0.05 - 2 * 0.999 ** (metrics["tick"] - 1), abs=1e-8
+        )
     else:
         assert metrics["produced_sun"] > 0
         assert metrics["attacker_purchases"] == 0

@@ -22,8 +22,8 @@ class WaitingPolicy(torch.nn.Module):
     def device(self):
         return self.anchor.device
 
-    def forward(self, obs, **kwargs):
-        return torch.zeros(len(obs), dtype=torch.long, device=self.device), None, None
+    def sample_actions(self, obs, masks=None, **kwargs):
+        return torch.zeros(len(obs), dtype=torch.long, device=self.device), None
 
 
 @pytest.mark.parametrize("record", [False, True])
@@ -40,7 +40,7 @@ def test_refill_matches_fixed_batches_and_cpu(record, monkeypatch):
 
     def scenario(level, family, seed, *args):
         # Slot 1 finishes first; later cases exercise reuse, loss, and cutoff.
-        ticks = {1: 18, 2: 1, 3: 3, 4: 100, 5: 1}
+        ticks = {1: 18, 2: 1, 3: 3, 4: 500, 5: 1}
         return LevelSpec(level, (Spawn(ticks[seed], "basic", 0, x=0),), mowers=seed != 5)
 
     monkeypatch.setattr("pvz_rl.cuda_env.scenario", scenario)

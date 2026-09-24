@@ -21,7 +21,7 @@ LANE_PAIRS = list(combinations(range(5), 2))
 def saving_case(lanes):
     return LevelSpec(
         "saving",
-        tuple(Spawn(t, "basic", r) for t in (860, 1100, 1340) for r in lanes),
+        tuple(Spawn(t, "basic", r) for t in (4300, 5500, 6700) for r in lanes),
         initial_sun=150,
         mowers=False,
     )
@@ -59,10 +59,10 @@ def test_lesson_economics_and_pressure_independent_calculations():
     cfg, rules = load_config(), Rules()
     placement, saving = (cfg["curriculum"]["lessons"][k] for k in ("placement", "saving"))
     assert placement == dict(
-        spawn_ticks=[1, 21, 41], initial_sun=100, natural_sun=False, allowed_plants=["peashooter"]
+        spawn_ticks=[5, 105, 205], initial_sun=100, natural_sun=False, allowed_plants=["peashooter"]
     )
     assert saving == dict(
-        spawn_ticks=[860, 1100, 1340],
+        spawn_ticks=[4300, 5500, 6700],
         initial_sun=150,
         natural_sun=False,
         lanes_per_spawn=2,
@@ -73,19 +73,19 @@ def test_lesson_economics_and_pressure_independent_calculations():
     # No income without flowers: at most one shooter can ever be purchased.
     # No refunds/relocation/cross-lane shots; at least one lane stays unblocked.
     assert saving["initial_sun"] < saving["lanes_per_spawn"] * pea["cost"]
-    travel = (g["spawn_x"] - g["house_x"]) // (rules.zombies["basic"]["speed"] // 20)
-    assert travel == 1000 and 860 + travel - 1 == 1859
+    travel = (g["spawn_x"] - g["house_x"]) // (rules.zombies["basic"]["speed"] // 100)
+    assert travel == 5000 and 4300 + travel - 1 == 9299
     assert rules.zombies["basic"]["health"] // pea["damage"] == 10
-    assert pea["interval_ticks"] == 30
-    # One shooter needs 300 ticks of sustained fire per basic zombie; saving
-    # arrivals every 240 ticks exceed this rate for a finite burst.
-    assert 10 * 30 > saving["spawn_ticks"][1] - saving["spawn_ticks"][0] == 240
-    assert flower["first_ticks"] == 120 and flower["interval_ticks"] == 480
-    assert flower["recharge_ticks"] == 150
-    # Flowers at 0/150 make six 25-sun payments. After buying both flowers and
-    # the first shooter, the second shooter becomes affordable at tick 1230.
-    incomes = sorted(t + 120 + k * 480 for t in (0, 150) for k in range(3))
-    assert incomes == [120, 270, 600, 750, 1080, 1230]
+    assert pea["interval_ticks"] == 150
+    # One shooter needs 1500 ticks of sustained fire per basic zombie; saving
+    # arrivals every 1200 ticks exceed this rate for a finite burst.
+    assert 10 * 150 > saving["spawn_ticks"][1] - saving["spawn_ticks"][0] == 1200
+    assert flower["first_ticks"] == 600 and flower["interval_ticks"] == 2400
+    assert flower["recharge_ticks"] == 750
+    # Flowers at 0/750 make six 25-sun payments. After buying both flowers and
+    # the first shooter, the second shooter becomes affordable at tick 6150.
+    incomes = sorted(t + 600 + k * 2400 for t in (0, 750) for k in range(3))
+    assert incomes == [600, 1350, 3000, 3750, 5400, 6150]
     assert 150 - 2 * 50 + len(incomes) * 25 == 2 * 100
 
 
@@ -96,22 +96,24 @@ def test_saving_success_and_necessary_income(lanes, mode):
     env.reset(seed=4, options={"scenario": saving_case(lanes)})
     purchases = run_control(env, invest=mode == "invest", wait=mode == "wait")
     assert env.state == ("won" if mode == "invest" else "lost")
-    assert env.public.tick == (2101 if mode == "invest" else 1859)
+    assert env.public.tick == (10501 if mode == "invest" else 9299)
     assert (
         env.episode_metrics()["attacker_purchases"]
         == {"invest": 2, "no_flowers": 1, "wait": 0}[mode]
     )
     if mode == "invest":
-        assert [t for t, _ in purchases] == [0, 150, 860, 1230]
+        assert [t for t, _ in purchases] == [0, 750, 4300, 6150]
         assert len(env.public.plants) == 4  # No sacrificial blockers/replacements.
         assert env.episode_metrics()["net_value"] == 525
-        assert env.episode_metrics()["discounted_return"] == pytest.approx(0.177951, abs=1e-6)
+        assert env.episode_metrics()["discounted_return"] == pytest.approx(0.0076109358, abs=1e-9)
     elif mode == "wait":
-        assert env.episode_metrics()["discounted_return"] == pytest.approx(-0.311679, abs=1e-6)
+        assert env.episode_metrics()["discounted_return"] == pytest.approx(
+            -2 * 0.999**9298, abs=1e-10
+        )
     env.close()
 
 
-@pytest.mark.parametrize("delay,outcome,tick", [(67, "won", 2168), (68, "lost", 2398)])
+@pytest.mark.parametrize("delay,outcome,tick", [(347, "won", 10848), (348, "lost", 11998)])
 def test_saving_witness_timing_boundary(delay, outcome, tick):
     env = PvZEnv(load_config(), family="saving")
     env.reset(options={"scenario": saving_case((2, 4))})
@@ -121,7 +123,7 @@ def test_saving_witness_timing_boundary(delay, outcome, tick):
 
 @pytest.mark.parametrize("lane", range(5))
 @pytest.mark.parametrize(
-    "delay,outcome,tick", [(1, "won", 872), (98, "won", 969), (99, "lost", 1099)]
+    "delay,outcome,tick", [(5, "won", 4359), (502, "won", 4853), (503, "lost", 5503)]
 )
 def test_placement_timing_boundary(lane, delay, outcome, tick):
     env = PvZEnv(load_config(), family="placement")
@@ -129,7 +131,7 @@ def test_placement_timing_boundary(lane, delay, outcome, tick):
         options={
             "scenario": LevelSpec(
                 "placement",
-                tuple(Spawn(t, "basic", lane) for t in (1, 21, 41)),
+                tuple(Spawn(t, "basic", lane) for t in (5, 105, 205)),
                 initial_sun=100,
                 mowers=False,
             )
@@ -193,7 +195,7 @@ def test_saving_conserves_purchase_and_credits_only_actual_production():
     assert asset_value(env.public) == 150
     assert env.step(env.codec.encode(Place("sunflower", 0, 0)))[1] == 0
     assert asset_value(env.public) == 150
-    reward = sum(env.step(0)[1] for _ in range(200))
+    reward = sum(env.step(0)[1] for _ in range(1000))
     assert env.public.sun == 125 and asset_value(env.public) == 175
     assert reward == pytest.approx(25 / 3000)
 
@@ -252,7 +254,7 @@ def test_sunless_recordings_verify_and_seek_without_external_settings(tmp_path):
     assert verify_replay(path).state_hash() == env.game.state_hash()
     playback = open_playback(path)
     assert playback.game.rules.game["sky_sun_amount"] == 0
-    playback.seek(200)
+    playback.seek(1000)
     assert playback.game.observe().sun == 75
     playback.seek(playback.end_tick)
     assert playback.game.state_hash() == env.game.state_hash()
@@ -272,9 +274,9 @@ def test_cuda_mixed_income_events_cap_restore_and_atomic_failure():
     batch = LessonCudaBatch(2, zombie_capacity=1, diagnostic=True, max_step_ticks=10)
     batch.reset([case] * 2, [4] * 2, natural_sun=[False, True])
     cp = batch.cp
-    for _ in range(20):
+    for _ in range(100):
         # A sunflower first pays at the same tick as sky sun, including at cap.
-        action = Place("sunflower", 0, 0) if games[0].observe().tick == 80 else None
+        action = Place("sunflower", 0, 0) if games[0].observe().tick == 400 else None
         if action:
             expected = [g.step(action, ticks=0) for g in games]
             batch.step_device(cp.ones(2, cp.int64))
@@ -334,7 +336,7 @@ def test_mixed_vector_reset_uses_episode_family_and_leaves_normal_rules_unchange
         env.reset()
         for ref, (_, _, seed) in zip(references, cases):
             ref.reset(seed=seed)
-        for _ in range(200):
+        for _ in range(1000):
             env.step_tensors(torch.zeros(3, dtype=torch.long, device="cuda"), autoreset=False)
             for ref in references:
                 ref.step(0)
@@ -347,7 +349,7 @@ def test_mixed_vector_reset_uses_episode_family_and_leaves_normal_rules_unchange
         references[0].reset(seed=4, options={"family": "preset"})
         references[2].reset(seed=4, options={"family": "placement"})
         assert env.batch.state_hash(1) == untouched
-        for _ in range(200):
+        for _ in range(1000):
             env.step_tensors(torch.zeros(3, dtype=torch.long, device="cuda"), autoreset=False)
             for ref in references:
                 ref.step(0)

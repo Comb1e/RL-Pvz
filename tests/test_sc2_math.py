@@ -30,24 +30,31 @@ def test_balanced_ppo_update_matches_joint_probability_reference(forced, device)
     try:
         model = build_model(cfg, "masked", env, 102)
         model.set_logger(configure(format_strings=[]))
-        model.policy.to(device)
+        model.policy.to(device=device, dtype=torch.float64)
         model.device = torch.device(device)
         for key, value in vars(model.rollout_buffer).items():
             if isinstance(value, torch.Tensor):
-                setattr(model.rollout_buffer, key, value.to(device))
+                setattr(
+                    model.rollout_buffer,
+                    key,
+                    value.to(
+                        device=device,
+                        dtype=torch.float64 if value.is_floating_point() else value.dtype,
+                    ),
+                )
         model.rollout_buffer.device = torch.device(device)
         reference = type(model.policy)(
             model.observation_space,
             model.action_space,
             lambda _: cfg["training"]["learning_rate"],
             **model.policy_kwargs,
-        ).to(device)
+        ).to(device=device, dtype=torch.float64)
         reference.load_state_dict(model.policy.state_dict())
         reference.action_dist.epsilon = cfg["training"]["exploration"]["epsilon"]
         rng = np.random.default_rng(44)
         raw = PvZEnv(cfg)
         observation, _ = raw.reset(seed=7)
-        obs = np.repeat(observation[None], 32, axis=0)
+        obs = np.repeat(observation[None], 32, axis=0).astype(np.float64)
         mask = np.repeat(raw.action_masks()[None], 32, axis=0)
         actions = rng.choice(np.flatnonzero(mask[0]), size=32)
         if forced:
@@ -61,8 +68,8 @@ def test_balanced_ppo_update_matches_joint_probability_reference(forced, device)
                 action_masks=mask,
             )
         old_logs = logs + torch.linspace(-0.7, 0.7, 32, device=device)
-        advantages = torch.tensor(rng.normal(size=32), dtype=torch.float32, device=device)
-        returns = torch.tensor(rng.normal(size=32), dtype=torch.float32, device=device)
+        advantages = torch.tensor(rng.normal(size=32), dtype=torch.float64, device=device)
+        returns = torch.tensor(rng.normal(size=32), dtype=torch.float64, device=device)
         buffer = model.rollout_buffer
         for key, value in {
             "observations": obs,

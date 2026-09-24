@@ -62,12 +62,12 @@ def test_mask_matches_every_engine_action_and_cooldown_boundary(cfg):
         options={"scenario": LevelSpec("mask", (Spawn(1000, "basic", 0),), initial_sun=500)},
     )
     env.step(env.codec.encode(Place("sunflower", 0, 0)))
-    for _ in range(14):
+    for _ in range(74):
         expected = [env.game.validate_action(action).accepted for action in env.codec.actions]
         np.testing.assert_array_equal(env.action_masks(), expected)
         assert not env.action_masks()[env.codec.encode(Place("sunflower", 1, 1))]
         env.step(0)
-    assert env.public.tick == 150
+    assert env.public.tick == 750
     assert env.action_masks()[env.codec.encode(Place("sunflower", 1, 1))]
 
 
@@ -104,7 +104,7 @@ def test_house_breach_is_loss_not_truncation(cfg):
         seed=3,
         options={"scenario": LevelSpec("breach", (Spawn(1, "basic", 0, x=0),), mowers=False)},
     )
-    for _ in range(20):
+    for _ in range(100):
         _, reward, terminated, truncated, info = env.step(0)
         if terminated:
             break
@@ -117,10 +117,11 @@ def test_time_cutoff_keeps_final_observation_and_assets(cfg):
     cfg["environment"].update(cutoff_seconds=1, decision_ticks=13)
     env = PvZEnv(cfg)
     env.reset(seed=4)
-    env.step(0)
+    for _ in range(7):
+        env.step(0)
     _, reward, terminated, truncated, info = env.step(0)
-    assert not terminated and truncated and info["ticks_advanced"] == 7
-    assert env.public.tick == 20 and env.public.status == Status.RUNNING
+    assert not terminated and truncated and info["ticks_advanced"] == 9
+    assert env.public.tick == 100 and env.public.status == Status.RUNNING
     assert asset_value(env.public) > 0
     assert reward == 0
     assert info["episode_metrics"]["win"] == 0
@@ -133,7 +134,8 @@ def test_vector_truncation_has_terminal_observation_for_bootstrapping(cfg):
     vec = DummyVecEnv([lambda: PvZEnv(cfg)])
     try:
         vec.reset()
-        vec.step([0])
+        for _ in range(9):
+            vec.step([0])
         reset_obs, _, dones, infos = vec.step([0])
         assert dones[0] and infos[0]["TimeLimit.truncated"]
         assert not np.array_equal(reset_obs[0], infos[0]["terminal_observation"])

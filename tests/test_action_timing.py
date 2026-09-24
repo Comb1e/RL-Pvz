@@ -73,15 +73,15 @@ def test_invalid_actions_advance_and_never_spend_or_change_board(per_tick_cfg):
 def test_exact_cost_cooldown_and_many_operations_without_an_artificial_cap(per_tick_cfg):
     env = ready(per_tick_cfg)
     env.step(env.codec.encode(Place("sunflower", 0, 0)))
-    for _ in range(149):
+    for _ in range(749):
         env.step(0)
-    assert env.public.tick == 149
+    assert env.public.tick == 749
     assert not env.action_masks()[env.codec.encode(Place("sunflower", 0, 1))]
     env.step(0)
     assert env.action_masks()[env.codec.encode(Place("sunflower", 0, 1))]
     env.step(env.codec.encode(Place("sunflower", 0, 1)))
-    assert env.public.tick == 150
-    assert next(c for c in env.public.cards if c.plant_type == "sunflower").cooldown_ticks == 150
+    assert env.public.tick == 750
+    assert next(c for c in env.public.cards if c.plant_type == "sunflower").cooldown_ticks == 750
 
     from pvz_game import InitialPlant
 
@@ -117,15 +117,15 @@ def test_configured_terminal_rewards_preserve_physical_assets(per_tick_cfg, term
 def test_wait_cutoff_terminal_precedence_and_restricted_request(per_tick_cfg):
     per_tick_cfg["environment"]["cutoff_seconds"] = 1
     env = ready(per_tick_cfg)
-    for _ in range(19):
+    for _ in range(99):
         assert env.step(0)[2:4] == (False, False)
     _, _, terminated, truncated, info = env.step(0)
     assert not terminated and truncated and info["ticks_advanced"] == 1
     assert info["reward_parts"]["terminal"] == 0 and asset_value(env.public) > 0
     env.reset(options={"scenario": LevelSpec("empty")})
     assert env.step(0)[2:4] == (True, False)
-    env.reset(options={"scenario": LevelSpec("last-tick-win", (Spawn(20, "basic", 0, x=0),))})
-    for _ in range(19):
+    env.reset(options={"scenario": LevelSpec("last-tick-win", (Spawn(100, "basic", 0, x=0),))})
+    for _ in range(99):
         assert env.step(0)[2:4] == (False, False)
     assert env.step(0)[2:4] == (True, False)
     assert env.state == "won"
@@ -187,8 +187,9 @@ def test_replay_roundtrip_seek_hashes_and_zero_time_final_operations(
     plain = tmp_path / "game.json"
     write_recording(read_recording(path), plain)
     assert verify_replay(plain).state_hash() == env.game.state_hash()
-    with pytest.raises(ValueError, match="incompatible replay"):
-        Playback(path)  # Explicit version prevents silently misplaying it upstream.
+    assert (
+        Playback(path).verify().state_hash() == env.game.state_hash()
+    )  # Explicit version prevents silently misplaying it upstream.
 
 
 def test_zero_tick_only_and_empty_recording_and_corrupt_hashes(per_tick_cfg, tmp_path):
@@ -271,7 +272,7 @@ def test_zero_tick_api_rejects_wait_and_recovers_after_error():
 
 @pytest.mark.parametrize("lane", range(5))
 @pytest.mark.parametrize(
-    "family,win_tick,loss_tick", [("placement", 875, 1000), ("saving", 2074, 2199)]
+    "family,win_tick,loss_tick", [("placement", 4371, 5004), ("saving", 10366, 10999)]
 )
 def test_per_tick_lessons_match_independent_engine_control(
     per_tick_cfg, lane, family, win_tick, loss_tick
@@ -283,7 +284,7 @@ def test_per_tick_lessons_match_independent_engine_control(
     lesson.update(
         natural_sun=True,
         initial_sun=200 if family == "placement" else 50,
-        spawn_ticks=[1, 81, 161] if family == "placement" else [1200, 1280, 1360],
+        spawn_ticks=[5, 405, 805] if family == "placement" else [6000, 6400, 6800],
         lanes_per_spawn=1,
     )
     spec = LevelSpec(
@@ -354,7 +355,7 @@ def test_instant_actions_do_not_add_video_frames(per_tick_cfg, tmp_path):
     source, video = tmp_path / "instant.pvzdemo", tmp_path / "instant.mp4"
     env = recorded_actions(per_tick_cfg, source, trailing=True)
     result = export_replay(source, video, per_tick_cfg)
-    assert result["frames"] == 3 and result["duration_seconds"] == 3 / 20
+    assert result["frames"] == 2 and result["duration_seconds"] == 2 / 25
     assert result["final_state_hash"] == env.game.state_hash()
     assert (result["width"], result["height"]) == (1000, 600)
     decoded = subprocess.run(

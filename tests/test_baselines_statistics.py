@@ -10,15 +10,15 @@ from pvz_rl.statistics import bootstrap_interval, paired_difference, result_matr
 @pytest.mark.parametrize(
     "level,seed,outcome,tick",
     [
-        ("easy", 0, "won", 3146),
-        ("standard", 0, "won", 6398),
-        ("standard", 1, "lost", 5395),
-        ("hard", 0, "lost", 6219),
-        ("hard", 4, "won", 9401),
-        ("hard", 6, "lost", 4463),
-        ("easy", 42, "won", 3221),
-        ("standard", 42, "won", 6105),
-        ("hard", 42, "won", 8526),
+        ("easy", 0, "won", 15930),
+        ("standard", 0, "lost", 23652),
+        ("standard", 1, "lost", 23110),
+        ("hard", 0, "lost", 23652),
+        ("hard", 4, "lost", 36511),
+        ("hard", 6, "lost", 38845),
+        ("easy", 42, "won", 15288),
+        ("standard", 42, "lost", 23791),
+        ("hard", 42, "lost", 23791),
     ],
 )
 def test_frozen_baseline_successes_and_failures(cfg, level, seed, outcome, tick):

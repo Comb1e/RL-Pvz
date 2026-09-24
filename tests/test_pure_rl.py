@@ -24,7 +24,7 @@ def test_tactical_dimensions_regions_scales_crowds_and_no_leaks():
     b, _ = env.reset(
         seed=700, options={"scenario": LevelSpec("other", (Spawn(1800, "buckethead", 4),))}
     )
-    assert a.shape == (500,)
+    assert a.shape == (417,)
     np.testing.assert_array_equal(a, b)
     encoder = env.encoder
     assert a[encoder.slices["globals"]][0] == pytest.approx(50 / 200)
@@ -51,7 +51,7 @@ def test_tactical_dimensions_regions_scales_crowds_and_no_leaks():
         cards=tuple(reversed(env.public.cards)),
     )
     np.testing.assert_array_equal(original, encoder.encode(altered))
-    zombies = original[encoder.slices["zombies"]].reshape(5, 3, 16)
+    zombies = original[encoder.slices["zombies"]].reshape(5, 3, 14)
     assert zombies[:, :, :5].sum() * 5 == pytest.approx(120)
     shots = original[encoder.slices["projectiles"]].reshape(5, 3, 3)
     assert shots[:, :, 0].sum() * 5 == pytest.approx(len(env.public.projectiles))
@@ -129,7 +129,7 @@ def test_deterministic_selection_is_greedy_type_then_tile():
 
 
 @pytest.mark.parametrize(
-    "family,win_tick,loss_tick", [("placement", 883, 1000), ("saving", 2074, 2199)]
+    "family,win_tick,loss_tick", [("placement", 4376, 5004), ("saving", 10366, 10999)]
 )
 @pytest.mark.parametrize("lane", range(5))
 def test_lesson_independent_shooting_and_wait_controls(cfg, family, win_tick, loss_tick, lane):
@@ -139,7 +139,7 @@ def test_lesson_independent_shooting_and_wait_controls(cfg, family, win_tick, lo
     settings.update(
         natural_sun=True,
         initial_sun=200 if family == "placement" else 50,
-        spawn_ticks=[1, 81, 161] if family == "placement" else [1200, 1280, 1360],
+        spawn_ticks=[5, 405, 805] if family == "placement" else [6000, 6400, 6800],
         lanes_per_spawn=1,
     )
     spec = LevelSpec(
@@ -185,7 +185,7 @@ def test_task_restrictions_dig_cooldown_and_reset_boundaries():
     cfg["environment"]["cutoff_seconds"] = 1
     env = PvZEnv(cfg, family="saving")
     env.reset(seed=3)
-    for _ in range(19):
+    for _ in range(99):
         assert env.step(0)[2:4] == (False, False)
     _, _, terminated, truncated, _ = env.step(0)
     assert truncated and not terminated
@@ -255,7 +255,7 @@ def test_curriculum_probe_uses_same_policy_optimizer_and_persists_resume(
     smoke_cfg, tmp_path, monkeypatch, legacy_teaching
 ):
     cfg = legacy_teaching(smoke_cfg)
-    cfg["training"].update(total_steps=192)
+    cfg["training"].update(total_steps=384)
     cfg["curriculum"].update(probe_interval=64, minimum_stage_steps=64)
     identities = []
     real_probe = ResearchCallback.probe_curriculum
@@ -290,9 +290,9 @@ def test_curriculum_probe_uses_same_policy_optimizer_and_persists_resume(
     second = tmp_path / "second"
     train(cfg, "masked", 101, second, validation_limit=1, resume=first / "interrupted.zip")
     resumed, _ = load_policy(second / "final.zip")
-    assert resumed.num_timesteps == 192
-    assert resumed.curriculum_state["stage"] == 1
-    assert resumed.curriculum_state["consecutive_passes"] == 1
+    assert resumed.num_timesteps == 384
+    assert resumed.curriculum_state["stage"] == 3
+    assert resumed.curriculum_state["consecutive_passes"] == 0
     rows = [
         json.loads(line) for line in (second / "training-episodes.jsonl").read_text().splitlines()
     ]

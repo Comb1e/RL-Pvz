@@ -1,6 +1,6 @@
 """Research-local action phase for the pinned engine; combat ticks are unchanged.
 
-The PVZ 1.3.0 Python API has no public zero-time action API. This subclass suppresses only the
+The PVZ Python API has no public zero-time action API. This subclass suppresses only the
 advance hook during a zero-tick call, reusing the engine's validator and complete
 action implementation. Installed source hashes are checked before experiments.
 """

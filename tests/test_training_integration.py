@@ -14,8 +14,8 @@ from pvz_rl.training import load_policy, train
 
 def test_installed_engine_matches_recorded_commit(cfg):
     result = verify_engine(cfg)
-    assert result["commit"] == "8861824df6893a34c2cd4df7f9b68613376d7964"
-    assert result["package_version"] == "1.3.0" and result["version"] == "1.0.0"
+    assert result["commit"] == cfg["engine_commit"]
+    assert result["package_version"] == "1.4.0" and result["version"] == "1.1.0"
 
 
 @pytest.mark.learning
@@ -57,10 +57,13 @@ def test_real_training_serialization_and_replay(smoke_cfg, tmp_path, condition):
     reloaded, _ = load_policy(output / "roundtrip.zip")
     env = PvZEnv(smoke_cfg, condition=condition, record=True)
     obs, _ = env.reset(seed=1)
+    state, reloaded_state = None, None
     while env.state == "running":
         kwargs = {"action_masks": env.action_masks()} if condition != "unmasked" else {}
-        action, _ = model.predict(obs, deterministic=True, **kwargs)
-        restored, _ = reloaded.predict(obs, deterministic=True, **kwargs)
+        action, state = model.predict(obs, state=state, deterministic=True, **kwargs)
+        restored, reloaded_state = reloaded.predict(
+            obs, state=reloaded_state, deterministic=True, **kwargs
+        )
         np.testing.assert_array_equal(action, restored)
         obs, _, _, _, info = env.step(int(action))
         if condition != "unmasked":

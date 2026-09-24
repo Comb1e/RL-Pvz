@@ -8,13 +8,13 @@ consecutive_passes = 1
 minimum_stage_steps = 16384
 
 [lessons.placement]
-spawn_ticks = [1, 21, 41]
+spawn_ticks = [5, 105, 205]
 initial_sun = 100
 natural_sun = false
 allowed_plants = ["peashooter"]
 
 [lessons.saving]
-spawn_ticks = [860, 1100, 1340]
+spawn_ticks = [4300, 5500, 6700]
 initial_sun = 150
 natural_sun = false
 lanes_per_spawn = 2
