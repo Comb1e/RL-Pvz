@@ -3,6 +3,103 @@
 Evidence is versioned below. Learning outcomes, simulation correctness and runtime
 speed are separate measures; [research design](research.md) defines the protocol.
 
+## 0.15.0 hierarchical actions and stage mastery — 2026-09-24
+
+The selected `event_transformer_v2` has **1,128,060 parameters**, the same 281 public
+inputs, and 128 environments ×128 transitions. Wait/dig/plant logits precede
+conditional species and tile probabilities. The compact engine IDs and the original
+406-entry previous-action embedding remain. Fresh models are required. Game package
+1.4.0 / simulation 1.1.0 and pin `1fc80386859087b9d715c4706b3f7875844430cc` are unchanged.
+
+### History representation gate
+
+Both variants used the new hierarchy. The temporary candidate summed kind/species/tile
+embeddings (three tables of 3/9/46 entries, width 128; zero absent-argument padding),
+normalizing by the square root of the active-component count. It reduced registered
+parameters to 1,038,972, but added lookup/matrix operations. Each of three repetitions
+used one warm-up and two measured rollouts, with 128 environments, batch 1,024 and
+four epochs. Trial order alternated; the GPU was an RTX 4070 Laptop.
+
+| Phase | Existing history: transitions/s | Factored history: transitions/s | Difference |
+|---|---:|---:|---:|
+| Actor and critic learning | 2,424 | 2,313 | -4.58% |
+| Critic warm-up | 3,832 | 3,671 | -4.20% |
+
+Median collection/update seconds per rollout were 1.64/5.12 versus 1.76/5.32 with
+actor updates, and 1.60/2.67 versus 1.67/2.78 during critic warm-up. Peak allocated
+VRAM was 936.66/944.57 MiB during actor learning and 926.58/936.50 MiB during warm-up.
+Throughput coefficients of variation were below 0.8%. Setup and warm-up are excluded
+from these rates; their costs and GPU/CPU samples are retained in `artifacts/v0150/`.
+Routine laptop activity and thermal conditions were not controlled. Configured actor
+KL stopping remains active, so optimizer work can vary with each policy.
+
+The candidate narrowly met the 5% runtime tolerance but showed no efficiency gain.
+Its adoption also required a conclusive learning check for both learner seeds.
+
+### Bounded learning evidence
+
+Checks gave each variant 120 seconds of learning and 30 seconds for eight fixed
+placement cases (100050–100057). Seed 101 ran existing/factored history; seed 102
+reversed that order. Both checks disabled the 1,024-game critic warm-up solely to
+exercise actor updates. The shipped warm-up and all other production settings remain.
+Stops account for the last measured cycle and occur between complete updates.
+
+| Seed / history | Actual learning seconds | Transitions | Actor / critic optimizer steps | Early digs / accepted plantings in active games |
+|---|---:|---:|---:|---:|
+| 101 / existing | 114.96 | 278,528 | 1,088 / 1,088 | 3 / 128 |
+| 101 / factored | 114.49 | 262,144 | 1,024 / 1,024 | 3 / 128 |
+| 102 / factored | 117.52 | 278,528 | 1,032 / 1,088 | 0 / 128 |
+| 102 / existing | 117.63 | 294,912 | 1,045 / 1,152 | 0 / 128 |
+
+Each of the 128 active games bought an attacker. No training episode completed in
+these windows, and all four evaluations reached their deadlines before finishing a
+case. **Placement win rates are unmeasured**, not zero. The comparison cannot certify
+preserved competence, and fewer/no digs cannot establish a learning improvement.
+The learning gate is inconclusive; retain the existing history embedding. Temporary
+comparison code was removed and no alternate history implementation is shipped.
+Final-test seeds were untouched; no formal or open-ended training was launched.
+
+### Correctness, recovery and packaging
+
+The **568 research tests passed**: 515 general regression cases in 702.59 seconds,
+46 stage/configuration controls in 2.73 seconds, and seven stage learning/recovery
+controls in 174.26 seconds. The two stage modes share the same tests. Controlled
+probe outcomes test scheduling only; they are not claims of learned mastery.
+An unlimited control ignored an inactive one-game/tiny-time ceiling, failed its first
+99/100 probe, then passed 100/100 and stopped after four completed games. Resume after
+mastery collected no further rollout. Interrupted stage learning retained counters,
+optimizer state, saved mode and pending validation. Effective limits and ETA are null.
+
+Independent controls cover conditional probability normalization, exploration mixtures,
+entropy, unused-argument gradients, forced choices, extreme logits, deterministic
+selection, PPO losses and Adam updates on CPU/CUDA. Float64 probability/analytic-gradient
+controls use 1e-12 absolute tolerance. FP32 optimizer controls retain 2e-7 absolute /
+2e-6 relative tolerance. A critic batching control now explicitly selects true FP32
+convolutions and checks an independent float64 reference: FP64 batching differed by
+1.89e-15; FP32 errors stayed below 7.2e-7. Default cuDNN TF32 kernel selection differed
+by batch shape and caused approximately 1.15e-4 error against FP64 in the inspected
+control. Production precision was not changed. The exact reset-memory control compares
+equal batch positions to exclude CPU GEMM row-rounding differences of 9.3e-10.
+
+Doctor, Ruff/formatting, dependency checks, README links and PowerShell parsing, and
+wheel/sdist packaging passed. The wheel contains the single updated recipe and no
+comparison implementation. The pinned upstream game suite passed **224 tests in 153.85 seconds**, using a
+manifest-verified Git archive and caches outside the game checkouts. The game checkout
+and installed source manifest are unchanged.
+
+The CUDA smoke generated an offline report and three CPU-verified 100 Hz demos,
+all sharing checkpoint `9d9155f5874a5183cf6cc678371a8ea0e48117c06ed78900dc29e3b51dee1823`.
+Their one-second simulation cutoff is correctly labeled truncated. The six-panel
+learning diagnostic plot was visually checked. The report lives under
+`artifacts/v0150/research-tests/test_spatial_cuda_report_and_t0/spatial-report/`.
+
+The marked learning integration cases consumed 686.16 seconds; benchmark wall time
+was 213.59 seconds and comparison/evaluation wall time 586.83 seconds. Combined:
+**1,486.57 seconds / 24.78 minutes**, within the 30-minute limit. Correctness-only
+simulation and fixed-data mathematical controls are separate. No further learning
+checks are needed. [Machine-readable evidence](evidence/runtime-v0150.json) retains
+phase timings, actual counts, selection gates, source identity and limitations.
+
 ## 0.14.0 smaller observations and faster updates — 2026-09-24
 
 `event_v6` has **281 inputs** (135 plants, 135 zombies, 11 globals), with **1,127,931

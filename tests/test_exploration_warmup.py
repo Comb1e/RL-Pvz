@@ -21,44 +21,49 @@ from pvz_rl.visualization import read_series
 @pytest.mark.parametrize("device", ["cpu", "cuda"])
 def test_mixture_joint_probabilities_entropy_and_gradient(epsilon, device):
     rng = np.random.default_rng(34)
-    raw = rng.normal(size=(1, 415))
+    raw = rng.normal(size=(1, 416))
     logits = torch.tensor(raw, device=device, dtype=torch.float64, requires_grad=True)
     masks = torch.zeros((1, 406), dtype=torch.bool, device=device)
     masks[:, [0, 1, 3, 46, 361, 365]] = True
     dist = GroupedDistribution(epsilon).proba_distribution(logits)
     dist.apply_masking(masks)
+
     # Enumerate this six-action case independently of the implementation.
-    active = [0, 1, 2, 9]
-    p = np.exp(raw[0, active] - raw[0, active].max())
-    p /= p.sum()
-    p = (1 - epsilon) * p + epsilon * np.array([1 / 3, 1 / 3, 1 / 3, 0])
+    def softmax(values):
+        w = np.exp(values - values.max())
+        return w / w.sum()
+
+    kinds = softmax(raw[0, :3])
+    species = softmax(raw[0, 3:5])
+    base = np.array([kinds[0], kinds[2] * species[0], kinds[2] * species[1], kinds[1]])
+    p = (1 - epsilon) * base + epsilon * np.array([1 / 3, 1 / 3, 1 / 3, 0])
     expected = np.zeros(406)
     expected[0] = p[0]
     for index, group, tiles in [(1, 0, [0, 2]), (2, 1, [0]), (3, 8, [0, 4])]:
-        tile_logits = raw[0, 10 + 45 * group + np.array(tiles)]
-        q = np.exp(tile_logits - tile_logits.max())
-        expected[1 + 45 * group + np.array(tiles)] = p[index] * q / q.sum()
-    np.testing.assert_allclose(dist.probs.detach().cpu()[0], expected, atol=2e-8)
+        tile_logits = raw[0, 11 + 45 * group + np.array(tiles)]
+        expected[1 + 45 * group + np.array(tiles)] = p[index] * softmax(tile_logits)
+    np.testing.assert_allclose(dist.probs.detach().cpu()[0], expected, atol=1e-12)
     assert dist.probs.sum().item() == pytest.approx(1)
     assert not dist.probs[~masks].any()
     for action in [0, 1, 3, 46, 361, 365]:
         assert dist.log_prob(torch.tensor([action], device=device)).item() == pytest.approx(
-            np.log(expected[action]), abs=2e-7
+            np.log(expected[action]), abs=1e-12
         )
     nonzero = expected[expected > 0]
-    assert dist.entropy().item() == pytest.approx(-(nonzero * np.log(nonzero)).sum(), abs=2e-7)
+    assert dist.entropy().item() == pytest.approx(-(nonzero * np.log(nonzero)).sum(), abs=1e-12)
     loss = -dist.log_prob(torch.tensor([1], device=device)).sum()
     loss.backward()
-    # Analytical derivative of -log((1-eps)*softmax(type)[flower] + eps/3).
-    base = np.exp(raw[0, active] - raw[0, active].max())
-    base /= base.sum()
-    gradient = (1 - epsilon) * base[1] / p[1] * (base - np.array([0, 1, 0, 0]))
-    np.testing.assert_allclose(logits.grad.detach().cpu()[0, active], gradient, atol=2e-7)
+    # Independent derivative of the mixture's selected planting probability.
+    scale = (1 - epsilon) * base[1] / p[1]
+    root_gradient = scale * (kinds - np.array([0, 0, 1]))
+    species_gradient = scale * (species - np.array([1, 0]))
+    np.testing.assert_allclose(logits.grad.detach().cpu()[0, :3], root_gradient, atol=1e-12)
+    np.testing.assert_allclose(logits.grad.detach().cpu()[0, 3:5], species_gradient, atol=1e-12)
     assert torch.isfinite(logits.grad).all()
 
 
 def test_collapse_floor_greedy_policy_and_forced_action_boundaries():
-    logits = torch.zeros((1, 415))
+    logits = torch.zeros((1, 416))
     logits[:, 0] = 100
     masks = torch.zeros((1, 406), dtype=torch.bool)
     masks[:, [0, 1, 46, 361]] = True
@@ -70,9 +75,9 @@ def test_collapse_floor_greedy_policy_and_forced_action_boundaries():
     assert dist.mode().item() == 0
     torch.manual_seed(7)
     samples = dist.types.sample((20000,)).flatten()
-    assert ((samples == 1).float().mean().item()) == pytest.approx(0.05 / 3, abs=0.003)
+    assert ((samples == 2).float().mean().item()) == pytest.approx(2 * 0.05 / 3, abs=0.003)
     # Dig can still be the learned greedy choice, regardless of injected exploration.
-    logits[:, 9], logits[:, 0] = 100, 99.999
+    logits[:, 1], logits[:, 0] = 100, 99.999
     dist.proba_distribution(logits).apply_masking(masks)
     assert dist.mode().item() == 361
     for only in [0, 1, 361]:
@@ -151,7 +156,11 @@ def test_exploration_decay_uses_stage_games_and_has_no_discontinuity():
     validate_config(cfg)
     assert exploration_rate(cfg, 9000) == 0
     cfg["training"]["exploration"] = dict(
-        objective="balanced_heads_v1", type_coef=0.01, tile_coef=0.001, epsilon=0.002
+        objective="balanced_heads_v2",
+        type_coef=0.01,
+        plant_coef=0.001,
+        tile_coef=0.001,
+        epsilon=0.002,
     )
     assert exploration_rate(cfg, 9000) == 0.002  # Archived constant rate.
 

@@ -91,6 +91,16 @@ def configured(args):
         args.condition = getattr(args, "condition", None) or "masked"
         if getattr(args, "stage", None) is not None:
             cfg["curriculum"]["run_stage"] = args.stage
+        if getattr(args, "until_stage_complete", False):
+            cfg["training"]["until_stage_complete"] = True
+    if (
+        args.command in ("train", "suite")
+        and cfg["training"].get("until_stage_complete", False)
+        and any(getattr(args, name, None) is not None for name in ("games", "steps", "max_minutes"))
+    ):
+        raise ValueError(
+            "--until-stage-complete cannot be combined with --games, --steps, or --max-minutes"
+        )
     if getattr(args, "hardware", None):
         hardware = json.loads(args.hardware.read_text("utf-8"))
         if type(hardware.get("n_envs")) is not int or hardware["n_envs"] < 1:
@@ -164,6 +174,11 @@ def main(argv=None):
 
     training.add_argument(
         "--stage", choices=STAGES, help="train only this teaching stage; stop at mastery or budget"
+    )
+    training.add_argument(
+        "--until-stage-complete",
+        action="store_true",
+        help="train the selected stage until mastery; disable configured time and game ceilings",
     )
     continuation = training.add_mutually_exclusive_group()
     continuation.add_argument("--resume", type=Path, help="continue with saved budget and progress")

@@ -5,6 +5,7 @@ from importlib.resources import files
 import torch
 from pvz_game.cuda.backend import kernel_source
 
+from .actions import ActionSchema
 from .cuda_diagnostics import DeviceProfiler
 from .encoding import ObservationEncoder
 from .rewards import LEDGER_METRICS, REWARD_METRICS
@@ -24,6 +25,9 @@ class CudaFeatures:
         self.profiler = DeviceProfiler(cp, cfg.get("simulation", {}).get("profile", False))
         encoder = self.encoder = ObservationEncoder(cfg, batch.rules)
         params = {
+            "ACTION_DIG_START": ActionSchema.dig_start,
+            "ACTION_COUNT": ActionSchema.size,
+            "ACTION_TILES": ActionSchema.tiles,
             "BINS": encoder.bins,
             "ZOMBIE_WIDTH": encoder.zombie_width,
             "ZOMBIE_OFFSET": encoder.slices["zombies"].start,

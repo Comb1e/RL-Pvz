@@ -10,6 +10,7 @@ from sb3_contrib import MaskablePPO
 from stable_baselines3.common.utils import update_learning_rate
 from torch.nn import functional as F
 
+from .actions import ActionSchema as A
 from .cuda_buffer import TensorRolloutBuffer
 from .event_memory import EventMemory
 from .exploration import exploration_loss
@@ -155,7 +156,7 @@ class TensorPPO:
         masks = buffer.action_masks.flatten(0, 1)
         actions = buffer.actions.flatten().long()
         old_logs = buffer.log_probs.flatten()
-        totals = torch.zeros(8, device=self.device)
+        totals = torch.zeros(12, device=self.device)
         size = getattr(self, "value_batch_size", 1024)
         for i in range(0, len(observations), size):
             ix = slice(i, i + size)
@@ -167,29 +168,52 @@ class TensorPPO:
             kl = (
                 previous * (previous.clamp_min(1e-30).log() - current.clamp_min(1e-30).log())
             ).sum(-1)
-            legal_dig = masks[ix, 361:].any(-1)
-            type_entropy, tile_entropy = distribution.entropy_parts()
+            legal_dig = masks[ix, A.dig_start :].any(-1)
+            type_entropy, plant_entropy, tile_entropy = distribution.entropy_parts()
             _, exploration = exploration_loss(self.policy, distribution.entropy(), log_ratio)
             totals += torch.stack(
                 (
                     (log_ratio.exp() - 1 - log_ratio).sum(),
                     kl.sum(),
-                    (current[:, -1] * legal_dig).sum(),
+                    (current[:, A.dig] * legal_dig).sum(),
                     legal_dig.sum(),
                     type_entropy.sum(),
+                    plant_entropy.sum(),
                     tile_entropy.sum(),
                     exploration["exploration_bonus"] * len(log_ratio),
+                    exploration["kind_exploration_bonus"] * len(log_ratio),
+                    exploration["plant_exploration_bonus"] * len(log_ratio),
+                    exploration["tile_exploration_bonus"] * len(log_ratio),
                     (masks[ix].sum(-1) > 1).sum(),
                 )
             )
-        approx, types, dig, count, type_entropy, tile_entropy, bonus, choice = totals.cpu().tolist()
+        (
+            approx,
+            types,
+            dig,
+            count,
+            type_entropy,
+            plant_entropy,
+            tile_entropy,
+            bonus,
+            kind_bonus,
+            plant_bonus,
+            tile_bonus,
+            choice,
+        ) = totals.cpu().tolist()
         if getattr(self, "critic_warmup_active", False):
             n = len(observations)
-            self.policy._entropy_totals = totals[4:6].clone()
+            self.policy._entropy_totals = totals[4:7].clone()
             self.policy._entropy_count = n
-            self.logger.record("train/joint_entropy", (type_entropy + tile_entropy) / n)
-            self.logger.record("train/entropy_loss", -(type_entropy + tile_entropy) / n)
+            self.logger.record(
+                "train/joint_entropy", (type_entropy + plant_entropy + tile_entropy) / n
+            )
+            self.logger.record(
+                "train/entropy_loss", -(type_entropy + plant_entropy + tile_entropy) / n
+            )
             self.logger.record("train/exploration_bonus", bonus / n)
+            for head, value in (("kind", kind_bonus), ("plant", plant_bonus), ("tile", tile_bonus)):
+                self.logger.record(f"train/{head}_exploration_bonus", value / n)
             self.logger.record("train/choice_fraction", choice / n)
         return {
             "post_update_approx_kl": approx / len(observations),
@@ -250,6 +274,9 @@ class TensorPPO:
                                     (data.action_masks.sum(-1) > 1).float().mean(),
                                     kl,
                                     actor_loss.detach(),
+                                    exploration_metrics["kind_exploration_bonus"],
+                                    exploration_metrics["plant_exploration_bonus"],
+                                    exploration_metrics["tile_exploration_bonus"],
                                 )
                             )
                         )
@@ -296,7 +323,7 @@ class TensorPPO:
         actor = (
             torch.stack(actor_metrics).mean(0)
             if actor_metrics
-            else torch.zeros(8, device=self.device)
+            else torch.zeros(11, device=self.device)
         )
         value_mean = torch.stack(value_losses).mean()
 
@@ -329,6 +356,9 @@ class TensorPPO:
             "choice_fraction",
             "approx_kl",
             "actor_loss",
+            "kind_exploration_bonus",
+            "plant_exploration_bonus",
+            "tile_exploration_bonus",
             "value_loss",
             "explained_variance",
             "actor_grad_norm",
@@ -354,7 +384,11 @@ class TensorPPO:
             torch.stack(
                 [
                     error[mask].mean()
-                    for mask in (actions == 0, (actions > 0) & (actions < 361), actions >= 361)
+                    for mask in (
+                        actions == 0,
+                        (actions > 0) & (actions < A.dig_start),
+                        actions >= A.dig_start,
+                    )
                 ]
             )
             .cpu()

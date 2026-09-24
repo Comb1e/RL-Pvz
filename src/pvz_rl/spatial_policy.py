@@ -6,6 +6,7 @@ from sb3_contrib.common.maskable.policies import MaskableActorCriticPolicy
 from stable_baselines3.common.torch_layers import BaseFeaturesExtractor
 from torch import nn
 
+from .actions import ActionSchema as A
 from .encoding import ObservationEncoder
 from .event_memory import MemoryContext
 from .exploration import pooled_spatial
@@ -140,16 +141,19 @@ class SpatialLogits(nn.Module):
     def __init__(self, channels, scalar_channels, hidden_sizes):
         super().__init__()
         self.channels, self.scalar_channels = channels, scalar_channels
-        self.type_head = nn.Sequential(
-            mlp(channels * 2 + scalar_channels, hidden_sizes), nn.Linear(hidden_sizes[-1], 10)
-        )
+        self.shared_head = mlp(channels * 2 + scalar_channels, hidden_sizes)
+        self.kind_head = nn.Linear(hidden_sizes[-1], A.kinds)
+        self.plant_head = nn.Linear(hidden_sizes[-1], A.plant_types)
         # A constant per-map bias cancels in each tile softmax. Omitting it
         # avoids optimizing an unidentifiable parameter on roundoff gradients.
-        self.tiles = nn.Conv2d(channels, 9, 1, bias=False)
+        self.tiles = nn.Conv2d(channels, A.tile_groups, 1, bias=False)
 
     def forward(self, features):
         board, pooled = pooled_spatial(features, self.channels, self.scalar_channels)
-        return torch.cat((self.type_head(pooled), self.tiles(board).flatten(1)), 1)
+        hidden = self.shared_head(pooled)
+        return torch.cat(
+            (self.kind_head(hidden), self.plant_head(hidden), self.tiles(board).flatten(1)), 1
+        )
 
 
 class SpatialGroupedPolicy(MaskableActorCriticPolicy):
@@ -172,7 +176,7 @@ class SpatialGroupedPolicy(MaskableActorCriticPolicy):
 
     def initialize_dig_logit(self, value):
         with torch.no_grad():
-            self.action_net.type_head[-1].bias[self.action_dist.groups - 1] = value
+            self.action_net.kind_head.bias[A.dig] = value
 
     def _build_mlp_extractor(self):
         self.mlp_extractor = SpatialLatents(
@@ -194,7 +198,8 @@ class SpatialGroupedPolicy(MaskableActorCriticPolicy):
         ).to(self.device)
         if self.ortho_init:
             self.action_net.apply(lambda module: self.init_weights(module, gain=2**0.5))
-            self.init_weights(self.action_net.type_head[-1], gain=0.01)
+            self.init_weights(self.action_net.kind_head, gain=0.01)
+            self.init_weights(self.action_net.plant_head, gain=0.01)
             self.init_weights(self.action_net.tiles, gain=0.01)
         # SB3 recursively initializes Linear modules. Restore identity-biased gates
         # and zero padding embeddings after that pass.
@@ -238,9 +243,9 @@ class SpatialGroupedPolicy(MaskableActorCriticPolicy):
         masks = (
             torch.as_tensor(action_masks, device=self.device, dtype=torch.bool)
             if action_masks is not None
-            else torch.ones(len(obs), 406, device=self.device, dtype=torch.bool)
+            else torch.ones(len(obs), A.size, device=self.device, dtype=torch.bool)
         )
-        masks = masks.reshape(len(obs), 406)
+        masks = masks.reshape(len(obs), A.size)
         new = state is None
         if new:
             state = EventMemory(cfg, self.features_extractor.layout.rules, len(obs), self.device)
@@ -294,6 +299,10 @@ class SpatialGroupedPolicy(MaskableActorCriticPolicy):
     def pop_entropy_metrics(self):
         if not getattr(self, "_entropy_count", 0):
             return {}
-        types, tiles = (self._entropy_totals / self._entropy_count).cpu().tolist()
+        types, plants, tiles = (self._entropy_totals / self._entropy_count).cpu().tolist()
         self._entropy_totals, self._entropy_count = 0, 0
-        return {"type_entropy": types, "conditional_tile_entropy": tiles}
+        return {
+            "type_entropy": types,
+            "conditional_plant_entropy": plants,
+            "conditional_tile_entropy": tiles,
+        }

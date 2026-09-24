@@ -118,7 +118,7 @@ def validate_config(cfg: dict) -> None:
         ):
             raise ValueError("rollout_size must equal n_envs * rollout_steps_per_env")
     if cfg["encoding"].get("version") != "event_v6" or cfg.get("policy", {}).get("kind") not in (
-        "event_transformer_v1",
+        "event_transformer_v2",
     ):
         raise ValueError(
             "Retired observation/policy format. Start fresh with configs/train.toml; archived reports remain readable; recordings must use the 100 Hz engine."
@@ -140,7 +140,7 @@ def validate_config(cfg: dict) -> None:
         raise ValueError("reward must contain only the outcome and net-value settings")
     if "actor_objective" in cfg["training"] or "ent_coef" in cfg["training"]:
         raise ValueError("Retired PPO objective; use standard PPO and training.exploration")
-    if cfg["training"]["exploration"].get("objective") != "balanced_heads_v1":
+    if cfg["training"]["exploration"].get("objective") != "balanced_heads_v2":
         raise ValueError("Only balanced action-head exploration is supported")
     for key in (
         "win_reward",
@@ -226,7 +226,7 @@ def validate_config(cfg: dict) -> None:
     value_batch = cfg["training"].get("value_batch_size", 1024)
     if type(value_batch) is not int or value_batch < 1:
         raise ValueError("value_batch_size must be a positive integer")
-    for key in ("type_coef", "tile_coef"):
+    for key in ("type_coef", "plant_coef", "tile_coef"):
         value = cfg["training"]["exploration"][key]
         if type(value) not in (int, float) or not math.isfinite(value) or value < 0:
             raise ValueError(f"exploration.{key} must be finite and nonnegative")
@@ -239,6 +239,15 @@ def validate_config(cfg: dict) -> None:
     if type(reserve) not in (int, float) or not math.isfinite(reserve) or reserve < 0:
         raise ValueError("finalization_minutes must be finite and nonnegative")
     c = cfg["curriculum"]
+    unlimited = cfg["training"].get("until_stage_complete", False)
+    if type(unlimited) is not bool:
+        raise ValueError("training.until_stage_complete must be a boolean")
+    if unlimited and (not uses_games(cfg) or c.get("mode") != "teaching" or not c.get("run_stage")):
+        raise ValueError(
+            "until_stage_complete requires a selected teaching stage and game-based scheduling"
+        )
+    if unlimited and not c.get("stages", {}).get(c.get("run_stage"), {}).get("requirements"):
+        raise ValueError("until_stage_complete requires a stage with mastery requirements")
     if c.get("mode", "fixed") not in ("fixed", "teaching"):
         raise ValueError("Unsupported curriculum mode")
     if c.get("run_stage") is not None:

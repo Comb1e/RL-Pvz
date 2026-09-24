@@ -23,31 +23,32 @@ def one_cpu_thread():
 
 
 def test_balanced_bonus_does_not_push_wait_toward_one_over_136():
-    logits = torch.zeros((1, 415), requires_grad=True)
+    logits = torch.zeros((1, 416), requires_grad=True)
     masks = torch.zeros((1, 406), dtype=torch.bool)
     masks[:, 0] = True
     for group in (0, 2, 4):
         masks[:, 1 + 45 * group : 1 + 45 * (group + 1)] = True
     dist = GroupedDistribution().proba_distribution(logits)
     dist.apply_masking(masks)
-    assert dist.probs[0, 0].item() == pytest.approx(0.25)
+    assert dist.probs[0, 0].item() == pytest.approx(0.5)
     np.testing.assert_allclose(dist.probs.detach().numpy().sum(), 1, atol=1e-7)
     assert torch.equal(dist.probs[~masks], torch.zeros_like(dist.probs[~masks]))
     true_gradient = torch.autograd.grad(dist.entropy().sum(), logits, retain_graph=True)[0]
-    assert true_gradient[0, 0].item() == pytest.approx(-3 * np.log(45) / 16)
+    assert true_gradient[0, 0].item() == pytest.approx(-np.log(135) / 4)
     policy = SimpleNamespace(
         action_dist=dist,
         exploration_settings={
-            "objective": "balanced_heads_v1",
+            "objective": "balanced_heads_v2",
             "type_coef": 0.01,
+            "plant_coef": 0.001,
             "tile_coef": 0.001,
         },
     )
     loss, metrics = exploration_loss(policy, dist.entropy(), dist.log_prob(torch.tensor([0])))
-    assert metrics["exploration_bonus"].item() == pytest.approx(0.01 * np.log(4) + 0.001)
+    assert metrics["exploration_bonus"].item() == pytest.approx(0.01 * np.log(2) + 0.002)
     gradient = torch.autograd.grad(loss, logits)[0]
     torch.testing.assert_close(
-        gradient[:, :10], torch.zeros_like(gradient[:, :10]), atol=1e-8, rtol=0
+        gradient[:, :11], torch.zeros_like(gradient[:, :11]), atol=1e-8, rtol=0
     )
     assert torch.isfinite(gradient).all()
 
@@ -55,7 +56,7 @@ def test_balanced_bonus_does_not_push_wait_toward_one_over_136():
 @pytest.mark.parametrize("counts", [[0] * 9, [1, 0, 45, 3, 0, 0, 0, 0, 0]])
 def test_bonus_matches_independent_entropy_and_single_choice_boundaries(counts):
     rng = np.random.default_rng(102)
-    logits = torch.tensor(rng.normal(size=(2, 415)), dtype=torch.float64, requires_grad=True)
+    logits = torch.tensor(rng.normal(size=(2, 416)), dtype=torch.float64, requires_grad=True)
     mask = torch.zeros((2, 406), dtype=torch.bool)
     mask[:, 0] = True
     for group, count in enumerate(counts):
@@ -65,8 +66,9 @@ def test_bonus_matches_independent_entropy_and_single_choice_boundaries(counts):
     policy = SimpleNamespace(
         action_dist=dist,
         exploration_settings={
-            "objective": "balanced_heads_v1",
+            "objective": "balanced_heads_v2",
             "type_coef": 0.01,
+            "plant_coef": 0.001,
             "tile_coef": 0.001,
         },
     )
@@ -78,7 +80,14 @@ def test_bonus_matches_independent_entropy_and_single_choice_boundaries(counts):
         if count:
             probs = dist.locations.probs[:, g, :count].detach().numpy()
             tile_h.append(-(probs * np.log(probs)).sum(1) / np.log(max(2, count)))
-    expected = 0.01 * type_h + 0.001 * (np.mean(tile_h, axis=0) if tile_h else 0)
+    species_count = sum(n > 0 for n in counts[:8])
+    q = dist.plants.probs.detach().numpy()
+    plant_h = -(q * np.log(np.maximum(q, 1e-300))).sum(-1) / np.log(max(2, species_count))
+    expected = (
+        0.01 * type_h
+        + 0.001 * plant_h * (species_count > 0)
+        + 0.001 * (np.mean(tile_h, axis=0) if tile_h else 0)
+    )
     assert -loss.item() == pytest.approx(expected.mean())
     loss.backward()
     assert torch.isfinite(logits.grad).all()
@@ -119,7 +128,7 @@ def test_spatial_policy_shapes_gradients_and_board_dependence():
         }
         assert optimizer_ids.isdisjoint(critic_ids)
         assert optimizer_ids | critic_ids == {id(p) for p in model.policy.parameters()}
-        assert sum(p.numel() for p in model.policy.parameters()) == 1_127_931
+        assert sum(p.numel() for p in model.policy.parameters()) == 1_128_060
     finally:
         env.close()
 
@@ -187,11 +196,11 @@ def test_dig_initialization_is_trainable_and_checkpointed(tmp_path):
     assert 0 < distribution.probs[0, 361] < 0.00001
     assert distribution.probs[0, 1:361].sum() == 0
     (-distribution.log_prob(torch.tensor([361]))).backward()
-    bias = model.policy.action_net.type_head[-1].bias
-    assert bias.grad[9].isfinite() and bias.grad[9].abs() > 0.9
+    bias = model.policy.action_net.kind_head.bias
+    assert bias.grad[1].isfinite() and bias.grad[1].abs() > 0.9
     # Learning may make digging preferable; it is not a permanent suppression rule.
     with torch.no_grad():
-        bias[9] = 6
+        bias[1] = 6
     assert model.policy.get_distribution(x, action_masks=mask).mode().item() == 361
     path = tmp_path / "policy.zip"
     model.save(path)
@@ -240,9 +249,9 @@ def test_categorical_embedding_matches_lookup_gradients_and_adam(device, categor
 def test_masked_distribution_single_pass_preserves_probabilities_and_dig_hazard():
     from pvz_rl.grouped_policy import GroupedDistribution
 
-    logits = torch.zeros(1, 415, dtype=torch.float64, requires_grad=True)
+    logits = torch.zeros(1, 416, dtype=torch.float64, requires_grad=True)
     with torch.no_grad():
-        logits[0, 9] = -12
+        logits[0, 1] = -12
     mask = torch.zeros(1, 406, dtype=torch.bool)
     mask[0, 0] = mask[0, 361] = True
     direct = GroupedDistribution(0.1).proba_distribution(logits, masks=mask)
@@ -251,7 +260,6 @@ def test_masked_distribution_single_pass_preserves_probabilities_and_dig_hazard(
     torch.testing.assert_close(direct.probs, previous.probs, atol=0, rtol=0)
     probability = float(direct.probs[0, 361].detach())
     assert probability == pytest.approx(0.9 / (1 + math.exp(12)), rel=1e-12)
-    # The mixture rate is a float32 tensor even for this float64 control.
     assert 1 - (1 - probability) ** 500 == pytest.approx(0.002761067438, abs=1e-10)
     grads = [
         torch.autograd.grad(d.entropy().sum(), logits, retain_graph=True)[0]
@@ -260,3 +268,51 @@ def test_masked_distribution_single_pass_preserves_probabilities_and_dig_hazard(
     torch.testing.assert_close(*grads, atol=0, rtol=0)
     with pytest.raises(ValueError, match="at least one legal action"):
         GroupedDistribution().proba_distribution(logits, masks=torch.zeros_like(mask))
+
+
+@pytest.mark.parametrize("device", ["cpu", "cuda"])
+@pytest.mark.parametrize("epsilon", [0.0, 0.1])
+@pytest.mark.parametrize("action", [0, 361, 46])
+def test_conditional_likelihood_updates_only_used_arguments(device, epsilon, action):
+    logits = torch.zeros(1, 416, device=device, dtype=torch.float64, requires_grad=True)
+    dist = GroupedDistribution(epsilon).proba_distribution(logits)
+    (-dist.log_prob(torch.tensor([action], device=device))).backward()
+    grad = logits.grad[0]
+    if action in (0, 361):
+        torch.testing.assert_close(grad[3:11], torch.zeros_like(grad[3:11]), rtol=0, atol=1e-14)
+    else:
+        assert grad[4] < 0
+    tile_grad = grad[11:].reshape(9, 45)
+    used = None if action == 0 else 8 if action == 361 else 1
+    for group in range(9):
+        if group == used:
+            assert tile_grad[group, 0] < 0
+        else:
+            assert torch.count_nonzero(tile_grad[group]) == 0
+
+
+@pytest.mark.parametrize("device", ["cpu", "cuda"])
+@pytest.mark.parametrize("only", [0, 1, 360, 361, 405])
+def test_single_legal_action_has_zero_entropy_and_likelihood_gradient(device, only):
+    x = torch.linspace(-1000, 1000, 416, device=device, dtype=torch.float64)[None].requires_grad_()
+    mask = torch.zeros(1, 406, device=device, dtype=torch.bool)
+    mask[0, only] = True
+    d = GroupedDistribution(0.1).proba_distribution(x, mask)
+    assert d.sample().item() == d.mode().item() == only
+    assert d.probs[0, only].item() == 1
+    assert abs(d.entropy().item()) < 1e-12
+    (-d.log_prob(torch.tensor([only], device=device)) + d.entropy()).sum().backward()
+    torch.testing.assert_close(x.grad, torch.zeros_like(x.grad), atol=1e-12, rtol=0)
+
+
+@pytest.mark.parametrize("device", ["cpu", "cuda"])
+def test_extreme_kind_logits_keep_species_exploration_and_finite_gradients(device):
+    x = torch.zeros(1, 416, device=device, dtype=torch.float64, requires_grad=True)
+    with torch.no_grad():
+        x[0, 0] = 1000
+        x[0, 3] = -1000
+    d = GroupedDistribution(0.1).proba_distribution(x)
+    assert d.probs[0, 1:46].sum().item() == pytest.approx(0.1 / 9)
+    assert d.mode().item() == 0
+    (-d.log_prob(torch.tensor([1], device=device))).backward()
+    assert torch.isfinite(x.grad).all()

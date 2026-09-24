@@ -9,6 +9,7 @@ from dataclasses import dataclass
 
 import torch
 
+from .actions import ActionSchema as A
 from .encoding import ObservationEncoder
 
 
@@ -44,7 +45,7 @@ class EventMemory:
         self.ids = torch.zeros(n, self.capacity, dtype=torch.long, device=device)
         self.event_flags = torch.zeros(n, self.local, dtype=torch.bool, device=device)
         self.last_obs = torch.zeros(n, self.layout.size, device=device)
-        self.last_mask = torch.zeros(n, 406, dtype=torch.bool, device=device)
+        self.last_mask = torch.zeros(n, A.size, dtype=torch.bool, device=device)
         self.have_previous = torch.zeros(n, dtype=torch.bool, device=device)
         # Ignore continuous clock/movement for history admission, never for decisions.
         relevant = torch.ones(self.layout.size, dtype=torch.bool, device=device)

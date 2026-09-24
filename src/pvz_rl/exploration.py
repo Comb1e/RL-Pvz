@@ -14,8 +14,23 @@ def exploration_loss(policy, entropy, log_prob):
     available = counts > 0
     normalized = distribution.locations.entropy() / counts.clamp_min(2).float().log()
     tiles = (normalized * available).sum(-1) / available.sum(-1).clamp_min(1)
-    bonus = torch.mean(settings["type_coef"] * type_entropy + settings["tile_coef"] * tiles)
-    return -bonus, {"joint_entropy": joint.detach(), "exploration_bonus": bonus.detach()}
+    plant_count = distribution.available_plants.sum(-1)
+    plants = distribution.plants.entropy() / plant_count.clamp_min(2).to(joint.dtype).log()
+    plants = plants * (plant_count > 0)
+    parts = {
+        name + "_exploration_bonus": coefficient * values.mean()
+        for name, coefficient, values in (
+            ("kind", settings["type_coef"], type_entropy),
+            ("plant", settings["plant_coef"], plants),
+            ("tile", settings["tile_coef"], tiles),
+        )
+    }
+    bonus = sum(parts.values())
+    return -bonus, {
+        "joint_entropy": joint.detach(),
+        "exploration_bonus": bonus.detach(),
+        **{name: value.detach() for name, value in parts.items()},
+    }
 
 
 def configure_exploration(model, cfg):

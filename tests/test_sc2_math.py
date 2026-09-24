@@ -93,7 +93,9 @@ def test_balanced_ppo_update_matches_joint_probability_reference(forced, device)
         )
         joint = reference.action_dist.probs
         group_mass = joint[:, 1:].reshape(32, 9, 45).sum(-1)
-        types = torch.cat((joint[:, :1], group_mass), 1)
+        plant_mass = group_mass[:, :8].sum(-1, keepdim=True)
+        types = torch.cat((joint[:, :1], group_mass[:, -1:], plant_mass), 1)
+        species = group_mass[:, :8] / plant_mass.clamp_min(1e-30)
         conditional = joint[:, 1:].reshape(32, 9, 45) / group_mass.clamp_min(1e-30).unsqueeze(-1)
 
         def h(p):
@@ -101,9 +103,14 @@ def test_balanced_ppo_update_matches_joint_probability_reference(forced, device)
 
         counts = torch.tensor(mask[:, 1:].reshape(32, 9, 45).sum(-1), device=device)
         available = counts > 0
-        bonus = 0.01 * h(types) + 0.001 * (
-            h(conditional) / counts.clamp_min(2).float().log() * available
-        ).sum(-1) / available.sum(-1).clamp_min(1)
+        species_count = available[:, :8].sum(-1)
+        bonus = (
+            0.01 * h(types)
+            + 0.001 * h(species) / species_count.clamp_min(2).double().log()
+            + 0.001
+            * (h(conditional) / counts.clamp_min(2).float().log() * available).sum(-1)
+            / available.sum(-1).clamp_min(1)
+        )
         logs = joint[torch.arange(32, device=device), torch.tensor(actions, device=device)].log()
         ratio = (logs - old_logs).exp()
         selected = slice(None)

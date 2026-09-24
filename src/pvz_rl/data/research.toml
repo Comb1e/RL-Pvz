@@ -54,6 +54,7 @@ value_scale = 300.0 # Unit conversion, never a sun cap.
 gamma = 0.999
 discount_clock = "simulation_ticks"
 budget_unit = "games"
+until_stage_complete = false # With --stage: stop only when its mastery gate passes.
 total_games = 10000
 validation_schedule = "stage_success" # Normal-game evaluation only after each stage passes.
 eval_interval_games = 2000 # Used by diagnostic/fixed training or archived periodic schedules.
@@ -66,7 +67,7 @@ rollout_steps_per_env = 128 # Learning transitions per environment per update, n
 max_minutes = 120
 finalization_minutes = 15
 # Hold epsilon during critic warm-up, then decay exponentially; the target is not a floor.
-exploration = {objective = "balanced_heads_v1", type_coef = 0.01, tile_coef = 0.001, epsilon = 0.1, epsilon_target = 0.001, epsilon_target_games = 3000}
+exploration = {objective = "balanced_heads_v2", type_coef = 0.01, plant_coef = 0.001, tile_coef = 0.001, epsilon = 0.1, epsilon_target = 0.001, epsilon_target_games = 3000}
 batch_size = 1024
 n_epochs = 4
 learning_rate = 0.0003 # Actor rate; critic uses this unless critic_learning_rate is set.
@@ -120,7 +121,7 @@ curriculum = true
 hybrid = false
 
 [policy]
-kind = "event_transformer_v1"
+kind = "event_transformer_v2"
 initial_dig_logit = -12.0
 plant_embedding = 8
 state_embedding = 4

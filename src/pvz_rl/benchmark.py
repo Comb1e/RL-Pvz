@@ -35,7 +35,7 @@ def measure(cfg, seed, steps, output, *, deadline=None, load_monitor=None):
             from .budget import budget_target
             from .curriculum import teaching_enabled
 
-            env.env_method("set_progress", budget_target(cfg))
+            env.env_method("set_progress", budget_target(cfg) or 0)
             if teaching_enabled(cfg):
                 env.env_method("set_curriculum_stage", 4)
         model = build_model(cfg, "masked", env, seed)

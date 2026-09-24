@@ -41,7 +41,7 @@ def test_complete_disjoint_parameter_and_optimizer_ownership():
     critic = {id(p) for p in policy.critic_parameters()}
     assert actor.isdisjoint(critic)
     assert actor | critic == {id(p) for p in policy.parameters()}
-    assert sum(p.numel() for p in policy.parameters()) == 1_127_931
+    assert sum(p.numel() for p in policy.parameters()) == 1_128_060
     assert {id(p) for g in policy.optimizer.param_groups for p in g["params"]} == actor
     assert {id(p) for g in policy.critic_optimizer.param_groups for p in g["params"]} == critic
 
@@ -289,9 +289,17 @@ def test_neural_critic_batching_preserves_predictions(device):
     # Distinct public sun inputs; category fields stay valid.
     sun_index = policy.vf_features_extractor.layout.slices["globals"].start
     batch[:, sun_index] = torch.linspace(0, 9, len(batch), device=device)
-    with torch.no_grad():
+    # Select true FP32 convolutions for this mathematical batching control.
+    # cuDNN's default TF32 kernels vary by batch shape; they are measured separately.
+    with torch.no_grad(), torch.backends.cudnn.flags(allow_tf32=False):
         per_step = torch.cat([policy.predict_values(row[None]) for row in batch])
         batched = policy.predict_values(batch)
+        policy.double()
+        reference = policy.predict_values(batch.double())
+        single_reference = torch.cat([policy.predict_values(row[None].double()) for row in batch])
+    torch.testing.assert_close(reference, single_reference, rtol=1e-11, atol=1e-11)
+    torch.testing.assert_close(batched.double(), reference, rtol=2e-6, atol=2e-6)
+    torch.testing.assert_close(per_step.double(), reference, rtol=2e-6, atol=2e-6)
     torch.testing.assert_close(batched, per_step, rtol=2e-6, atol=2e-6)
 
 
@@ -308,8 +316,9 @@ def test_normalization_and_reward_defaults():
         value_scale=300.0,
     )
     assert cfg["training"]["exploration"] == dict(
-        objective="balanced_heads_v1",
+        objective="balanced_heads_v2",
         type_coef=0.01,
+        plant_coef=0.001,
         tile_coef=0.001,
         epsilon=0.1,
         epsilon_target=0.001,

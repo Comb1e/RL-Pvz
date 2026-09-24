@@ -6,6 +6,48 @@ from pvz_game import Dig, Game, Place, Wait
 from .config import load_config
 
 
+class ActionSchema:
+    """Pinned engine transport and conditional policy dimensions in one place."""
+
+    version = "kind_plant_tile_v1"
+    wait, dig, plant = 0, 1, 2
+    kinds, plant_types, rows, cols = 3, 8, 5, 9
+    tiles = rows * cols
+    tile_groups = plant_types + 1
+    dig_start = 1 + plant_types * tiles
+    size = dig_start + tiles
+    tile_logits_start = kinds + plant_types
+    logit_size = tile_logits_start + tile_groups * tiles
+
+    @classmethod
+    def unpack(cls, actions):
+        """Decode device tensors; ignored plant/tile arguments use zero."""
+        import torch
+
+        actions = actions.long()
+        kinds = torch.where(
+            actions == 0, cls.wait, torch.where(actions < cls.dig_start, cls.plant, cls.dig)
+        )
+        plants = ((actions - 1) // cls.tiles).clamp(0, cls.plant_types - 1)
+        plants = torch.where(kinds == cls.plant, plants, 0)
+        tiles = torch.where(kinds == cls.wait, 0, (actions - 1) % cls.tiles)
+        return kinds, plants, tiles
+
+    @classmethod
+    def pack(cls, kinds, plants, tiles):
+        import torch
+
+        return torch.where(
+            kinds == cls.wait,
+            0,
+            torch.where(kinds == cls.dig, cls.dig_start + tiles, 1 + plants * cls.tiles + tiles),
+        ).long()
+
+    @classmethod
+    def tile_masks(cls, masks):
+        return masks[..., 1:].reshape(*masks.shape[:-1], cls.tile_groups, cls.tiles)
+
+
 class ActionCodec:
     def __init__(self, cfg: dict | None = None):
         cfg = cfg or load_config()

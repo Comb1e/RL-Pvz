@@ -293,20 +293,24 @@ def build_run_report(run, cfg=None):
     _save(fig, output, "optimization-curves")
     images.append(("PPO optimization", "optimization-curves.png"))
 
-    fig, axes = plt.subplots(2, 2, figsize=(12, 7))
+    fig, axes = plt.subplots(2, 3, figsize=(15, 7))
     for ax, key, title in zip(
         axes.flat,
         (
             "rolling_attacker_purchases",
             "rolling_maximum_sun",
             "type_entropy",
+            "conditional_plant_entropy",
             "conditional_tile_entropy",
+            "joint_entropy",
         ),
         (
             "Sustained attackers purchased / episode",
             "Maximum sun / episode",
-            "Action-type entropy",
-            "Type-weighted tile entropy",
+            "Top-level action entropy",
+            "Plant-kind-weighted species entropy",
+            "Branch-weighted tile entropy",
+            "Joint action entropy",
         ),
     ):
         plotted = False
@@ -423,7 +427,11 @@ def build_run_report(run, cfg=None):
         f"<p>Completed games: {escape(status.get('training_games', 'not recorded'))}. "
         f"{completion}: {escape(status.get('curriculum_stage', 'not recorded'))}. "
         f"Stop reason: {escape(status.get('stop_reason') or 'not recorded / in progress')}. "
-        f"Game target reached: {escape(status.get('budget_complete', 'in progress'))}.</p>"
+        + (
+            "Until selected-stage mastery; no training time or game ceiling.</p>"
+            if cfg["training"].get("until_stage_complete", False)
+            else f"Game target reached: {escape(status.get('budget_complete', 'in progress'))}.</p>"
+        )
     )
     if status.get("selected_stage"):
         run_progress += (

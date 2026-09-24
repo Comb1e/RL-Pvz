@@ -11,8 +11,10 @@ flowchart LR
     Sim --> Public[281 public values and legal masks]
     Public --> Memory[Bounded causal public history]
     Memory --> Actor[Independent actor Transformer]
-    Actor --> Action[Type then tile: 406 actions]
-    Action --> Sim
+    Actor --> Kind[Wait / dig / plant]
+    Kind --> Action[Conditional species and tile]
+    Action --> Transport[One integer command on CUDA]
+    Transport --> Sim
     Sim --> Reward[Net realized value and elapsed ticks]
     Memory --> Buffer[CUDA token archive and rollout sequences]
     Reward --> Buffer
@@ -53,6 +55,21 @@ During gradient calculation, small one-hot matrix products accumulate their grad
 index sorting; inference uses ordinary lookups. The learned tables and optimizer semantics
 are identical. Previous-action embeddings keep the ordinary implementation.
 
+## Actions and legality
+
+One shared 128×128 actor head feeds three action-kind logits and eight conditional
+plant-species logits. Nine board maps supply the planting and digging positions.
+Wait has no arguments; dig selects a tile; plant selects a legal species and then
+its tile. The three heads are produced in one forward pass. Masks exclude unavailable
+branches. Harmless dummy conditionals keep unavailable branches finite but contribute
+no joint mass or action-likelihood gradient. Deterministic evaluation selects each
+learned head greedily, without injected exploration.
+
+The existing simulator command remains one integer per game, with a centralized
+kind/species/tile codec. A 406-entry action-history embedding remembers the complete
+executed command. This compact transport does not require a 406-way classifier.
+The game package and replay API are unchanged.
+
 ## Episode memory
 
 Both encoders consume the same deterministic public history, with independent
@@ -84,7 +101,7 @@ This is a project-specific bounded Transformer, not a reproduction of GTrXL.
 
 Each rollout contains 128 environments × 128 transitions (16,384 total).
 Collection freezes actor and critic weights. Actor-only inference supplies actions
-and true mixed type/tile log probabilities. The buffer archives each raw token once
+and true mixed kind/species/tile log probabilities. The buffer archives each raw token once
 and stores compact context references. Terminal contexts are captured before resets;
 truncated games bootstrap from these, natural outcomes do not. The unchanged critic
 evaluates stored causal contexts in batches before duration-based GAE.
@@ -112,8 +129,11 @@ stateDiagram-v2
     Probe --> UpdateStage: mastery passed
     Probe --> Collect: failed or incomplete
     UpdateStage --> Validate: same post-update weights
-    Validate --> Collect: future resets use new stage
-    Update --> Save: budget or selected-stage completion
+    Validate --> Collect: automatic curriculum, future resets use new stage
+    Validate --> Save: selected stage mastered
+    Update --> Save: active budget reached
+    Collect --> Interrupted: user interruption or error
+    Interrupted --> Save: preserve optimizers and schedules
     Save --> [*]
 ```
 
@@ -121,6 +141,13 @@ Independent clipping and optimizers isolate policy and value learning. Actor KL
 stopping leaves critic epochs active. Exploratory noise is fixed within a rollout,
 held during stage critic adaptation and decays by completed games. Evaluation uses
 greedy actor inference with its own episode banks, so it cannot alter collection memory.
+
+Selected-stage runs can enable `until_stage_complete`. The game and wall-clock
+ceilings become inactive; elapsed time and completed games still drive diagnostics,
+exploration and probes. Failed probes continue the same stage. A complete passing
+probe marks mastery, saves its checkpoint and triggers normal-game validation before
+finalization. The selected stage never promotes automatically. Bounded training is
+the default; conflicting explicit ceilings fail before output creation.
 
 ## Storage, compatibility and failure paths
 
@@ -141,4 +168,4 @@ Demos replay GPU actions through the CPU engine and require identical final outc
 decisions and hash before publication. Native 100 Hz recordings remain model-free.
 Video rendering samples a configurable lower rate while stepping/verifying every
 tick. Offline reports read stored metrics, not models. Historical reports survive;
-20 Hz recordings and pre-0.14 models are not accepted by the current engine/policy.
+20 Hz recordings and incompatible models are not accepted by the current engine/policy.

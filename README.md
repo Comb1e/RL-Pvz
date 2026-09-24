@@ -1,9 +1,10 @@
 # PVZ plant-placement research
 
-Research **0.14.0** trains one shared CUDA PPO policy across easy, standard and hard.
+Research **0.15.0** trains one shared CUDA PPO policy across easy, standard and hard.
 The policy uses a **281-value timer-free observation** and independent actor/critic
-Transformers with bounded event memory. Simulation runs at **100 Hz**. Learning
-results are experimental; **all earlier models, including 0.13 checkpoints, require
+Transformers with bounded event memory. It chooses wait, dig or plant first, then
+the required plant type and tile. Simulation runs at **100 Hz**. Learning
+results are experimental; **all earlier models, including 0.14 checkpoints, require
 fresh training**. Regional inputs retain zombie type counts, health, armor and
 nearest zombie/unused-pole distances; explicit zombie behavior labels are absent.
 
@@ -55,6 +56,20 @@ counters and episode histories. `--resume CHECKPOINT` restores the experiment an
 remaining budget; interrupted games restart with empty memories. Both options need
 the source checkpoint beside its `metadata.json`. See [training details](docs/research.md).
 
+To train only placement until it passes, with no training time or game ceiling:
+
+```powershell
+.\.venv\Scripts\python.exe -m pvz_rl train --config configs\train.toml `
+  --stage placement --until-stage-complete --seed 101 --output runs\placement-101
+```
+
+This stops after mastery and saves `final.zip`; it does not advance automatically.
+Use that checkpoint with `--stage saving --init-from runs\placement-101\final.zip`
+and a fresh output directory for the next stage. Ctrl+C saves `interrupted.zip`;
+resume it with `--resume CHECKPOINT` and a fresh output directory. The saved mode and
+mastery progress are restored. Do not combine `--until-stage-complete` with explicit
+`--games`, `--steps` or `--max-minutes`; per-game cutoffs remain active.
+
 Mastery probes default to every **2,000 completed games**, requiring **100/100 wins**.
 Normal easy/standard/hard checkpoint validation runs after each stage passes.
 `best.zip` uses normal-game macro win rate with earliest-checkpoint ties. If no stage
@@ -83,7 +98,7 @@ verified demos, use a fresh artifact directory:
 ```powershell
 .\.venv\Scripts\python.exe -m pytest -q `
   tests/test_sc2_training.py::test_spatial_cuda_report_and_three_verified_shared_demos `
-  --basetemp artifacts\cuda-smoke-v0140
+  --basetemp artifacts\cuda-smoke-v0150
 ```
 
 `src/pvz_rl/` contains implementation; `configs/` the single recipe; `tools/` installation

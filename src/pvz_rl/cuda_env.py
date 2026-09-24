@@ -11,6 +11,7 @@ from pvz_game import Game, Rules
 from pvz_game.config import PLANT_TYPES
 from stable_baselines3.common.vec_env import VecEnv
 
+from .actions import ActionSchema as A
 from .budget import budget_target
 from .config import lesson_settings
 from .cuda_features import LEDGER_INDICES, METRIC_INDICES, CudaFeatures
@@ -114,7 +115,7 @@ class CudaVecEnv(VecEnv):
             self.features = CudaFeatures(self.batch, cfg, condition)
             self.header_tensor = torch.from_dlpack(self.batch.header)
         self.render_mode = None
-        super().__init__(self.batch.n, self.features.encoder.space, spaces.Discrete(406))
+        super().__init__(self.batch.n, self.features.encoder.space, spaces.Discrete(A.size))
         self._closed = False
         self.transition_ticks = torch.zeros(self.num_envs, dtype=torch.int64, device="cuda")
 
