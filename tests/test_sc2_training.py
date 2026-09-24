@@ -159,7 +159,9 @@ def test_resume_keeps_cumulative_time_schedule_and_optimizer(tmp_path, monkeypat
 @pytest.mark.learning
 def test_validation_crossed_thresholds_and_final_tie_keep_earlier_weights(tmp_path):
     cfg = small_cfg(profile="C")
-    cfg["training"].update(total_games=12, eval_interval_games=2)
+    cfg["training"].update(
+        total_games=12, eval_interval_games=2, rollout_steps_per_env=256, rollout_size=512
+    )
     run = tmp_path / "run"
     train(cfg, "masked", 101, run, validation_limit=1)
     curves = read_series(run / "learning-curve.jsonl")
@@ -239,7 +241,7 @@ def test_spatial_cuda_report_and_three_verified_shared_demos(tmp_path):
     assert read_json(run / "status.json")["visualization_state"] == "complete"
 
 
-@pytest.mark.parametrize("wait_ticks", [0, 100, 101])
+@pytest.mark.parametrize("wait_ticks", [0, 500, 501])
 def test_cuda_long_horizon_reward_and_early_dig_boundaries(wait_ticks):
     if not torch.cuda.is_available():
         pytest.skip("CUDA unavailable")
@@ -270,6 +272,6 @@ def test_cuda_long_horizon_reward_and_early_dig_boundaries(wait_ticks):
         assert (
             features.totals.get()[0, 35]
             == cpu.episode_metrics()["early_voluntary_digs"]
-            == int(wait_ticks <= 100)
+            == int(wait_ticks <= 500)
         )
         assert batch.state_hash(0) == cpu.game.state_hash()

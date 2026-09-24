@@ -11,10 +11,25 @@ from stable_baselines3.common.utils import update_learning_rate
 from torch.nn import functional as F
 
 from .cuda_buffer import TensorRolloutBuffer
+from .event_memory import EventMemory
 from .exploration import exploration_loss
 
 
 class TensorPPO:
+    def _setup_learn(
+        self,
+        total_timesteps,
+        callback=None,
+        reset_num_timesteps=True,
+        tb_log_name="run",
+        progress_bar=False,
+    ):
+        if reset_num_timesteps or self._last_obs is None:
+            self.__dict__.pop("_episode_memory", None)
+        return super()._setup_learn(
+            total_timesteps, callback, reset_num_timesteps, tb_log_name, progress_bar
+        )
+
     def _maybe_recommend_cpu(self, mlp_policy_class_name="ActorCriticPolicy"):
         """The upstream warning assumes CPU observations; this path requires CUDA."""
 
@@ -25,13 +40,29 @@ class TensorPPO:
         self._last_obs = torch.as_tensor(self._last_obs, device=self.device)
         self._last_episode_starts = torch.as_tensor(self._last_episode_starts, device=self.device)
         with env.device_context():
+            if not hasattr(self, "_episode_memory"):
+                self._episode_memory = EventMemory(
+                    env.cfg, env.batch.rules, env.num_envs, self.device
+                )
+                self._episode_memory.observe(
+                    self._last_obs,
+                    env.action_masks(),
+                    torch.zeros(env.num_envs, device=self.device),
+                    self._last_episode_starts,
+                    env.header_tensor[:, 0],
+                )
+            memory = self._episode_memory
+            rollout_buffer.start_memory(memory)
             for _ in range(n_rollout_steps):
                 # The environment exposes reusable zero-copy views; save the
                 # prior observation/mask before its next in-place device step.
                 obs = self._last_obs.clone()
                 masks = env.action_masks().clone()
+                rollout_buffer.capture_context(memory)
                 with torch.no_grad(), env.features.profiler.track("inference"):
-                    actions, log_probs = self.policy.sample_actions(obs, masks)
+                    actions, log_probs = self.policy.sample_actions(
+                        obs, masks, context=memory.context()
+                    )
                 new_obs, rewards, dones, timeouts, terminal, infos = env.step_tensors(actions)
                 self.num_timesteps += env.num_envs
                 callback.update_locals(locals())
@@ -42,7 +73,17 @@ class TensorPPO:
                     info.get("TimeLimit.truncated", False) for info in infos
                 ):
                     indices = torch.nonzero(timeouts, as_tuple=True)[0]
-                    rollout_buffer.add_timeouts(indices, terminal[indices])
+                    terminal_memory = memory.fork()
+                    terminal_memory.observe(
+                        terminal,
+                        env.terminal_masks,
+                        env.executed_actions,
+                        torch.zeros_like(dones),
+                        env.terminal_ticks,
+                    )
+                    rollout_buffer.add_timeouts(
+                        indices, terminal[indices], terminal_memory.context().select(indices)
+                    )
                 rollout_buffer.add(
                     obs,
                     actions,
@@ -53,13 +94,39 @@ class TensorPPO:
                     masks,
                     durations=env.transition_ticks,
                 )
+                memory.observe(
+                    new_obs,
+                    env.action_masks(),
+                    env.executed_actions * (~dones),
+                    dones,
+                    env.header_tensor[:, 0],
+                )
                 self._last_obs, self._last_episode_starts = new_obs, dones
             with env.features.profiler.track("critic_inference"):
                 values = rollout_buffer.evaluate_values(
-                    self.policy, self._last_obs, getattr(self, "value_batch_size", 1024)
+                    self.policy,
+                    self._last_obs,
+                    getattr(self, "value_batch_size", 1024),
+                    memory.context(),
                 )
             with env.features.profiler.track("gae"):
                 rollout_buffer.compute_returns_and_advantage(values, dones)
+            retained = memory.valid.sum().clamp_min(1)
+            self.logger.record(
+                "train/memory_compression_ratio", float(memory.counts.sum() / retained)
+            )
+            self.logger.record(
+                "train/memory_event_fraction", float(memory.admitted) / max(1, memory.observed)
+            )
+            weights = self.policy.pi_features_extractor.temporal.last_attention
+            for name, lo, hi in (
+                ("local", 0, memory.local),
+                ("events", memory.local, memory.local + memory.events),
+                ("summaries", memory.local + memory.events, memory.capacity),
+            ):
+                self.logger.record(
+                    f"train/attention_{name}", float(weights[:, lo:hi].sum(-1).mean())
+                )
         callback.on_rollout_end()
         env.features.profiler.flush()
         return True
@@ -73,7 +140,9 @@ class TensorPPO:
         return torch.cat(
             [
                 self.policy.get_distribution(
-                    observations[i : i + size], masks[i : i + size]
+                    observations[i : i + size],
+                    masks[i : i + size],
+                    context=buffer.context(slice(i, i + size)),
                 ).types.probs
                 for i in range(0, len(observations), size)
             ]
@@ -90,7 +159,9 @@ class TensorPPO:
         size = getattr(self, "value_batch_size", 1024)
         for i in range(0, len(observations), size):
             ix = slice(i, i + size)
-            distribution = self.policy.get_distribution(observations[ix], masks[ix])
+            distribution = self.policy.get_distribution(
+                observations[ix], masks[ix], context=buffer.context(ix)
+            )
             log_ratio = distribution.log_prob(actions[ix]) - old_logs[ix]
             previous, current = old_types[ix], distribution.types.probs
             kl = (
@@ -148,7 +219,10 @@ class TensorPPO:
             for data in self.rollout_buffer.get(self.batch_size):
                 if actor_active:
                     log_prob, entropy = self.policy.evaluate_actor(
-                        data.observations, data.actions.long().flatten(), data.action_masks
+                        data.observations,
+                        data.actions.long().flatten(),
+                        data.action_masks,
+                        **({"context": data.context} if hasattr(data, "context") else {}),
                     )
                     advantages = data.advantages
                     if self.normalize_advantage and len(advantages) > 1:
@@ -193,7 +267,10 @@ class TensorPPO:
                         self.policy.optimizer.step()
                         actor_steps += 1
                 # Critic updates cannot change the actor and continue after actor KL stopping.
-                values = self.policy.predict_values(data.observations).flatten()
+                values = self.policy.predict_values(
+                    data.observations,
+                    **({"context": data.context} if hasattr(data, "context") else {}),
+                ).flatten()
                 predicted = (
                     values
                     if clip_vf is None
@@ -298,6 +375,9 @@ class TensorPPO:
         if clip_vf is not None:
             self.logger.record("train/clip_range_vf", clip_vf)
 
+    def _excluded_save_params(self):
+        return [*super()._excluded_save_params(), "_episode_memory"]
+
     def _get_torch_save_params(self):
         state_dicts, variables = super()._get_torch_save_params()
         return [*state_dicts, "policy.critic_optimizer"], variables
@@ -309,7 +389,8 @@ class CudaMaskablePPO(TensorPPO, MaskablePPO):
 
 def configure_tensor_buffer(model):
     model.rollout_buffer_class = TensorRolloutBuffer
-    model.rollout_buffer_kwargs = {}
+    spec = model.policy.features_extractor.cfg["policy"]["memory"]
+    model.rollout_buffer_kwargs = {"memory_spec": spec}
     model.rollout_buffer = TensorRolloutBuffer(
         model.n_steps,
         model.observation_space,
@@ -318,4 +399,5 @@ def configure_tensor_buffer(model):
         gamma=model.gamma,
         gae_lambda=model.gae_lambda,
         n_envs=model.n_envs,
+        memory_spec=spec,
     )

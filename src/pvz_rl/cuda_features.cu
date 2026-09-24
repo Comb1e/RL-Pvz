@@ -11,7 +11,7 @@ __device__ I bin_x(I x) {
 }
 extern "C" __global__ void encode_state(const I *headers, const I *plants,
                                         const I *zombies, const I *shots,
-                                        const I *mowers, const I *cooldowns,
+                                        const I *mowers,
                                         float *output, double *assets, I n) {
   I i = blockIdx.x;
   if (threadIdx.x || i >= n)
@@ -21,44 +21,32 @@ extern "C" __global__ void encode_state(const I *headers, const I *plants,
   Zombie *z = (Zombie *)(zombies + i * ZCAP * 15);
   Shot *q = (Shot *)(shots + i * QCAP * 6);
   Mower *m = (Mower *)(mowers + i * 5 * 4);
-  const I *cd = cooldowns + i * 8;
   float *o = output + i * OBS_SIZE;
   for (I j = 0; j < OBS_SIZE; j++)
     o[j] = 0;
   for (I j = 0; j < h.np; j++) {
     Plant a = p[j];
-    I k = (a.row * 9 + a.col) * 4;
+    I k = (a.row * 9 + a.col) * 3;
     o[k] = a.kind + 1;
     o[k + 1] = (double)a.health / PH[a.kind];
-    o[k + 2] = (double)hi(0, a.due - h.tick) / TIMER_SCALE;
-    o[k + 3] = a.state + 1;
+    o[k + 2] = a.state + 1;
   }
-  I zs[5 * BINS * 16] = {0};
+  I zs[5 * BINS * 14] = {0};
   I nearest[5 * BINS];
   for (I j = 0; j < 5 * BINS; j++) nearest[j] = 9223372036854775807LL;
   for (I j = 0; j < h.nz; j++) {
     Zombie a = z[j];
-    I *cell = zs + (a.row * BINS + bin_x(a.x)) * 16;
+    I *cell = zs + (a.row * BINS + bin_x(a.x)) * 14;
     cell[a.kind]++;
     cell[5] += a.health;
     cell[6] += a.armor;
     I region = a.row * BINS + bin_x(a.x);
     nearest[region] = lo(nearest[region], a.x);
-    cell[8] += hi(0, a.slow_until - h.tick);
-    cell[9] += a.has_pole;
-    I timer = 0;
-    if (a.state == 2)
-      timer = hi(0, a.vault_until - h.tick);
-    else if (a.state == 3) {
-      bool slow = h.tick < a.slow_until;
-      timer = (hi(0, G_bite_ticks * 2 - a.bite_progress) + (slow ? 0 : 1)) /
-              (slow ? 1 : 2);
-    }
-    cell[10] += timer;
-    cell[11 + a.state]++;
+    cell[8] += a.has_pole;
+    cell[9 + a.state]++;
   }
-  for (I j = 0; j < 5 * BINS * 16; j++) {
-    I f = j % 16;
+  for (I j = 0; j < 5 * BINS * 14; j++) {
+    I f = j % 14;
     double scale = LOCAL_COUNT;
     if (f == 5)
       scale *= HP_SCALE;
@@ -66,10 +54,8 @@ extern "C" __global__ void encode_state(const I *headers, const I *plants,
       scale *= ARMOR_SCALE;
     else if (f == 7)
       scale *= POSITION_SCALE;
-    else if (f == 8 || f == 10)
-      scale *= TIMER_SCALE;
-    o[180 + j] = f == 7
-       ? (nearest[j / 16] == 9223372036854775807LL ? 1. : (double)(nearest[j / 16] - G_house_x) / POSITION_SCALE)
+    o[135 + j] = f == 7
+       ? (nearest[j / 14] == 9223372036854775807LL ? 1. : (double)(nearest[j / 14] - G_house_x) / POSITION_SCALE)
        : (double)zs[j] / scale;
   }
   I qs[5 * BINS * 3] = {0};
@@ -91,7 +77,6 @@ extern "C" __global__ void encode_state(const I *headers, const I *plants,
   o[k++] = (double)h.total_spawns / COUNT_SCALE;
   o[k++] = (double)h.spawn_index / COUNT_SCALE;
   o[k++] = (double)h.defeated / COUNT_SCALE;
-  for (I j = 0; j < 8; j++) o[k++] = (double)cd[j] / hi(1, PR[j]);
   for (I r = 0; r < 5; r++) {
     o[k++] = (double)m[r].x / POSITION_SCALE;
     for (I j = 0; j < 3; j++)

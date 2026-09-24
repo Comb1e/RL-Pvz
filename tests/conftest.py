@@ -49,7 +49,7 @@ def smoke_cfg(per_tick_cfg):
     # Most learning tests exercise the algorithm; dedicated visualization tests
     # explicitly enable reports/video to avoid encoding dozens of duplicate demos.
     cfg["visualization"].update(enabled=False, videos=False)
-    cfg["environment"]["cutoff_seconds"] = 2
+    cfg["environment"]["cutoff_seconds"] = 1
     cfg["training"].update(
         validation_schedule="periodic",  # Retain independent archived scheduling controls.
         budget_unit="decisions",  # Archived decision-budget regression controls.

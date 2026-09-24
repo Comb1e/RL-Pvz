@@ -1,319 +1,138 @@
-# Research design
+# Training method
 
-## Current method and hypothesis
+One CUDA MaskablePPO method learns a shared policy for easy, standard and hard.
+There is no imitation, scripted placement, savings rule or plant-retention rule.
+The timer-free Transformer is **experimental**. Correct memory does not establish
+stronger play. See [validation](validation.md) and [sources](references.md).
 
-Research 0.11.1 exposes one configurable CUDA MaskablePPO method, one compact
-observation and one spatial grouped policy. The question is whether this shared
-policy can learn plant selection, timing and placement across easy, standard and
-hard within a practical laptop budget. Smaller input/network size, ordinary PPO
-reductions and net-value accounting are hypotheses to test, not established PVZ gains.
+## Observation and memory
 
-An earlier hypothesis was that shared actor/critic features contributed to rapid
-forgetting after saving-to-easy transfer. In the inspected `compact-stages-101`
-run, normal easy validation fell from 26% to 2% on the same 50 seeds. Across stage
-games 101–200, easy games won 18/74 with 14.2% early digs per accepted planting;
-games 201–300 won 6/85 with 25.3%. Placement and saving rehearsals later collapsed
-too. The initial 100% rolling win rate contained only completed placement lessons.
-These observations establish regression, not its sole cause.
+The 417 values comprise 135 plant values (type, health, behavior per tile), 210
+regional zombie values, 45 projectile values and 27 globals. Three regions per
+lane retain crowd counts without clipping. All plant, zombie and card countdowns
+are absent. Legal masks reveal current legality. Seeds, schedules, entity IDs and
+task names are excluded.
 
-The actor and critic now own independent copies of the compact encoder and
-separate Adam states. The 0.10.0 comparison changed no reward, exploration,
-learning-rate, discount, curriculum or rollout defaults. Independent gradient
-clipping and actor-only KL stopping accompany the split; the critic continues
-its epochs. Thus the comparison tests this optimization package, not encoder
-separation in perfect isolation. Critic predictions are deferred to larger frozen
-batches before GAE; no stale-policy experience is introduced.
+Each independent actor/critic uses embeddings 8/4, scalar encoder 64, two
+32-channel convolutions, two gated attention blocks (128 width, four heads,
+feed-forward width 256), and 128×128 heads. Together they have 1,178,619 parameters.
+Nine spatial maps retain all 406 type-then-tile actions.
 
-The subsequent 0.11.0 saving run completed 7,039 saving games without a win and
-eventually stopped planting. Its placement source predicted +0.559 initial value
-but averaged -0.281 in 100 frozen sampled saving games. The final critic predicted
-roughly -0.54 after a sunflower purchase where its own continuation averaged
--0.296. It was accurate on the frequently visited waiting trajectory (-0.320
-predicted versus -0.312 measured). This supports a calibration/coverage problem;
-it does not prove the critic alone caused the collapse.
+Eight local tokens, 32 event tokens and eight summaries bound history. Public
+health/state, spawn/defeat, projectile-region, sun/wave, mower and mask changes
+retain events. Within-region movement alone does not. Every decision sees current
+state. Summaries retain latest public state, span and count; categories are never
+averaged. Memory clears at every game boundary. Compression can lose timing.
 
-The 0.11.1 correction adds two configurable controls. An initial 10% mixture explores legal
-wait/plant types while ordinary PPO trains on the actual behavior probabilities.
-Digging remains learned and legal; a uniform random dig floor would repeatedly
-destroy assets during long waits. At each stage, the actor is frozen for the first
-1,024 completed games while the critic fits the new task distribution. Exploration
-then decreases exponentially to 0.1% at stage game 3,000, continuing toward zero
-afterward. Game 2,012 has 1%; game 4,976 has 0.001%. The existing stage-residency
-counter handles automatic transitions and resume; each new stage restarts the
-schedule. A rollout and all its PPO epochs share one rate. Rewards, network,
-rollout size and ordinary optimization epochs are unchanged. Both changes are
-local hypotheses, not published PVZ improvements. Evaluation stays greedy, and
-warm-up consumes the same resource allowance. Missing archived fields retain the
-previous behavior. Learning evidence and limitations are in [validation](validation.md).
-The requested 10% start is aggressive: an independent successful control won 10/10 without
-injected actions, 5/10 at 0.1%, 5/10 at 0.5% and 0/10 at 5%. This sensitivity check used uniform
-legal tiles, unlike the learned tile head, so it does not measure the candidate's
-win rate or establish an optimal coefficient. High per-tick noise can prevent
-saving enough sun. Exponential decay removes persistent injected noise but does
-not detect an optimal policy; competence remains an independent measurement.
+Current queries attend only to present/past tokens. Relative elapsed distances
+are positional features, not entity timers. Raw histories are re-encoded with
+current weights. Sixteen-transition chunks use an eight-transition public-history
+burn-in prefix, excluded from losses. It reconstructs admission/compression, not
+learned hidden activations. Archived contexts supply the remainder of each chunk.
 
-Short development checks led to increasing critic adaptation from 256 to 1,024
-games. The final candidates retained placement and avoided idle saving games,
-but still won no saving cases and produced mixed critic errors. Only three
-actor-updating rollouts fit each short final check. These results do not establish
-a stronger playing policy; the method remains experimental.
+GTrXL motivates gated pre-normalization; Transformer-XL motivates recurrence and
+relative positions; Compressive Transformer motivates summaries; Longformer/BigBird
+motivate local plus selected global context. This project-specific combination
+does not reproduce their algorithms or performance. S4/Mamba are not adopted.
 
-## Research choices
+## Reward and time
 
-| Evidence | Adopted decision | Limits |
+Living plant value is cost multiplied by remaining health fraction. Net value is
+the change in sun plus living assets, minus actual sky income, plus **0.25 times
+effective plant damage**, minus **600 per new mower activation**. Reward is outcome
+plus **0.1 times net value divided by 300**. Victory gives +1, defeat −2. The
+denominator is a scale, never a sun cap.
+
+Purchases conserve value. Damage reduces asset value; digging/death loses only
+the remainder. Actual sunflower income earns credit. Overkill and mower damage
+earn none; plant damage includes HP, armor, explosions and consumption. Assets are
+not zeroed at termination. Peak/drawdown remain diagnostics. This changes the
+objective intentionally; it is not policy-invariant shaping.
+
+Game 1.4.0 / simulation 1.1.0 runs at **100 Hz**. Combat definitions retain seconds,
+but finer collision rounding changes exact outcomes and hashes. Accepted plant/dig
+operations are instantaneous; waits/rejections advance one tick. Videos sample
+25 FPS independently while replay verification checks every tick.
+
+Duration k uses gamma^k for bootstrap and (gamma*lambda)^k for GAE. Both remain
+**0.999 per tick**, as requested. Gamma's physical half-life changes from 34.6
+seconds at 20 Hz to **6.93 seconds** at 100 Hz. This materially shortens credit and
+confounds comparisons. Natural endings disable bootstrap; cutoffs use terminal
+observations and histories before reset. Zero-time actions cannot postpone a loss
+in the discount clock.
+
+## Optimization and exploration
+
+Defaults: 256 environments ×128 transitions, batch 1,024, four epochs, learning
+rate 3e-4, clip 0.2, value coefficient 0.5 and gradient norm 0.5. Waiting remains
+a transition; games continue across updates. Separate Adam states and clipping
+isolate actor/critic. Target KL 0.01 stops actor updates above 0.015 approximate
+KL; critic epochs continue. Zero disables this gate. Optional critic rate defaults
+to actor rate.
+
+PPO uses actual joint type/tile probabilities. Balanced entropy coefficients are
+0.01 for types and 0.001 for mean normalized conditional tiles, without type
+probability weighting. Initial dig bias −6 is trainable.
+
+Added wait/plant-type noise starts at 10%, held during 1,024 stage-resident games
+of critic adaptation, then decays exponentially to 0.1% at stage game 3,000 and
+toward zero afterward. Digging has no random floor. Rates change between rollouts.
+Validation is greedy. At 100 Hz this aggressive noise has more opportunities per
+second; no improvement is assumed.
+
+## Curriculum
+
+| Stage | Training mixture | Default mastery |
 |---|---|---|
-| Implementation Matters; What Matters in On-Policy RL | Audit PPO numerically; expose ordinary hyperparameters; use a smaller configurable network | Their benchmarks are not this discrete strategy game |
-| SC2LE categorical/spatial preprocessing | Embed plant categories; combine spatial and scalar inputs | No imitation, league, privileged critic or recurrent architecture is copied |
-| Potential-based shaping theorem; semi-MDP duration returns | Distinguish deliberate reward redesign from invariant shaping; discount by simulation duration | Neither theory establishes these PVZ valuations as optimal |
-| CleanRL and SB3-Contrib PPO | Standard full-minibatch reduction; optional KL stopping before optimizer steps | Correct PPO arithmetic alone does not establish good exploration |
-| Local easy-stage regression; What Matters §3.2; DeepSeek DSpark gradient isolation | Separate learned actor/value features and optimizer states, retaining the existing reward | Interference remains a hypothesis; learning must improve on paired development checks |
-| DeepSeek phase-specific execution and task-quality/length-bias discussion | Batch critic inference, audit task-level data composition, preserve successful and failing controls | No LLM architecture or reported speedup is copied |
+| placement | Placement | 100/100 placement |
+| saving | 80% saving, 20% placement | 100/100 saving |
+| easy | 80% easy, 10% each lesson | 100/100 easy |
+| standard | 45% easy, 45% standard, 10% saving | 100/100 each normal task |
+| shared | 20% easy, 40% standard, 40% hard | 100/100 each difficulty |
 
-Actual inspected versions and sections are in [references](references.md).
-Alternative algorithms, recipes and policy factories are removed. Pre-0.11 weights
-and conversion paths are retired. CPU controls and non-learning baselines remain.
-The previous committed method is used only as temporary comparison evidence.
+Probes run every 2,000 completed games by default, with at least 100 stage-resident
+completions and one consecutive pass. Cases are 100050–100149. Stage changes affect
+future resets, preserving optimizer identity. Parameters are configurable.
+The stage option trains one stage until mastery or budget; incomplete mastery is explicit.
 
-## Reward objective
-
-`net_value_v1` expresses production, combat and asset loss in sun-equivalent units:
-
-- Living asset value: `sum(cost * HP / max_HP)`.
-- Net value change: `delta(sun + assets) - actual_sky_income + k_z * effective_plant_damage - mower_value * new_activations`.
-- Reward: terminal outcome plus `progress_weight * net_value_change / value_scale`.
-
-Defaults are win +1, defeat −2, basic-zombie value 50, mower value 600, progress
-weight 0.1 and scale 300. The pinned basic has 200 HP, so `k_z = 0.25`, constant
-across difficulties and episode sizes. Damage includes real armor and HP removed,
-lethal hits, explosions and chomper consumption. Overkill and mower damage earn
-no combat value. Sunflower credit is actual income; sky income is excluded even
-when the cap clips it. Assets are not zeroed at termination.
-
-A purchase swaps cash for an equally valued asset. Damage reduces asset value
-continuously; digging/death loses only the remainder. No separate planting,
-digging, death, empty-explosion or proximity coefficients are needed. Cherry-bomb
-investment 150 breaks even against three basics (600 HP) or one conehead
-(200 HP + 400 armor). A buckethead (200 HP + 1,100 armor) gives net +175. An
-empty bomb gives −150. One-basic bomb net −100 can beat spending a −600 mower.
-These are local, experimental preferences, not measured optimal tradeoffs.
-
-Historical maximum and drawdown remain diagnostics. Peak-gating would punish
-useful damage arriving after a firing plant dies: losing a 100-sun plant then
-doing 150-sun-equivalent damage must net +50, just as the reverse order does.
-The ungated account preserves that identity. This reward is **not** a discounted
-potential difference and deliberately changes the objective. The shaping theorem
-does not promise preservation of optimal terminal-win behavior.
-
-Gamma and GAE lambda move to a simulation-time clock: a transition lasting `k`
-ticks uses bootstrap factor `gamma^k` and trace factor `(gamma * lambda)^k`.
-Both default to 0.999. Zero-time actions have factor 1; inserting such actions
-cannot reduce the discounted cost of a later loss. Reward at transition index `i`
-is weighted by `gamma` raised to the ticks elapsed **before** that transition.
-Natural outcomes stop bootstrapping; timeouts use their terminal observation before
-reset. Duration tensors remain on CUDA. The semi-MDP literature motivates the
-clock; the chosen duration-aware GAE trace is an explicit project estimator.
-
-There is no guarantee this repairs exploration or value approximation. Compare
-competence, early digs per planting, attacker purchases and throughput together.
-Fewer digs without stronger task performance do not establish a fix.
-
-## Learning and curriculum
-
-The 500 inputs retain exact plant coordinates and aggregate enemies/projectiles
-into three regions per lane. Counts are never clipped. IDs, seeds, task names and
-future schedules never reach the network. Aggregation loses exact positions and
-future information; partial observability remains a limitation.
-
-The grouped distribution selects wait, one of eight plants, or dig, then a tile.
-PPO ratios use the true joint probability. Exploration is
-`0.01 * H(type) + 0.001 * mean_available_groups(H(tile|group) / log(max(2, legal_tiles)))`.
-Tile entropy is not weighted by group probability. This avoids the joint-entropy
-incentive to prefer types with many possible tiles. The type/tile coefficients,
-trainable initial dig bias and architecture widths are configurable.
-
-Defaults: 256 environments ×128 transitions per update, minibatches 1,024, four epochs,
-learning rate 3e-4, gamma 0.999, lambda 0.999, clipping 0.2, value coefficient 0.5,
-gradient norm 0.5 and target KL 0.01. Advantages normalize over all transitions;
-singletons skip normalization. No choice-only reweighting remains.
-
-### Waiting efficiency: investigated, not yet adopted
-
-The 128-transition rollout horizon is an update interval, not a per-game action
-limit. A learning transition includes waiting; the separate `agent_actions`
-diagnostic includes only accepted planting/digging. Waiting cannot simply be
-discarded: income, damage, mower activation and outcomes often occur during waits.
-
-A read-only audit on 2026-09-23 of the archived 0.10.0 separated-method comparisons
-found 2,256,780 waits in 2,274,354 transitions for seed 101 (99.23%), and 2,449,913
-in 2,469,404 for seed 102 (99.21%), across 719 and 854 completed games respectively.
-These are older easy-stage transfer experiments with the earlier saving lesson,
-not measurements of current 256-environment training. Their mean recorded
-per-update legal-choice fractions were 99.78% and 62.22%; that metric is computed
-over executed actor minibatches, not a census of completed episodes. It nevertheless
-shows that many waiting states allow alternatives, often digging. Skipping only
-forced waits cannot be assumed to remove most redundant work.
-
-The recommended first experiment preserves every-tick decisions and dense reward,
-timeout and GAE calculations. Keep every planting/digging sample for optimization,
-but uniformly sample a configurable fraction of waiting samples. If there are
-`N` total samples, `W` waits and `K` sampled waits, estimate each full-rollout loss as
-`(sum(nonwait losses) + (W/K) * sum(sampled wait losses)) / N`. Handle `W=0`
-explicitly and require `K>=1` when `W>0`. Normalize advantages from the full
-rollout before sampling; correct actor, exploration and critic losses consistently.
-Retain a representative full-rollout KL audit. This estimates the existing
-objective without deliberately rewarding busier behavior. Finite-sample variance,
-gradient clipping and Adam still mean optimizer trajectories will differ.
-
-Separately, skip actor inference where waiting is the only legal action, retaining
-its reward/value information. This changes execution cost without changing choices;
-its GPU indexing overhead needs measurement. Do not wait for 128 plant/dig actions
-before updating: an agent can legitimately finish a game with far fewer actions.
-
-Duration-aware discounting is implemented in 0.11.0 without skipping decisions.
-Wait compression and optimization-sample thinning remain unimplemented. Combining
-waits would require discounted within-transition rewards and careful GAE treatment;
-repeating voluntary waits also removes intermediate action opportunities. Neither
-is implied by changing the discount clock.
-
-The curriculum is placement → saving → easy → standard → shared. It keeps the
-full board and lessons' configured plant restrictions. Rehearsal and final
-20/40/40 distribution remain. Mastery defaults to 100/100 per required task, at
-least 100 completed games started under that stage, one passing check and probes
-every 2,000 games. Normal validation runs once after each individual stage passes,
-and alone selects `best.zip`. Failed/incomplete stages and game/time limits do not
-trigger unrelated normal-game evaluation. The 100/100 requirement and separate
-100-case mastery / 50-case-per-difficulty normal validation pools are unchanged.
-Standalone stage handoffs copy compatible weights into fresh optimizers; automatic
-promotion preserves both current optimizers. All these numeric settings are adjustable.
+Lessons have no sky income or mowers. Placement starts with 100 sun and basics in
+one lane at ticks 5/105/205. Saving starts with 150 sun and basics in two lanes at
+4300/5500/6700. Placement permits peashooter; saving also permits sunflower. Full
+board and legal digging remain available.
 
 ### Lesson pressure trial
 
-The lesson definitions introduced in 0.10.4 test whether scarce income and
-tighter waves discourage wasteful digging. Version 0.11.0 retains these tasks. Both lessons disable
-sky income and mowers. Sunflower production, costs, combat and per-tick actions
-retain pinned rules. Normal games retain sky income. There is one configurable
-lesson definition, with no extra stage or legacy training mode.
+Without flower income, 150 sun cannot fund two 100-sun shooters. The tested saving
+control invests at ticks 0/750 and buys shooters at 4300/6150, winning at 10501.
+Flower first/interval payments are 600/2400 ticks. Waiting loses at 9299. Investment
+delay 347 wins and 348 loses; placement delay 502 wins and 503 loses. These are
+control-specific boundaries, not universal limits. Controls never supply learning actions.
 
-**Placement.** Start with 100 sun; allow peashooters, wait and digging. Three
-basics enter one random lane at ticks 1, 21 and 41, reducing inter-arrival spacing
-from four seconds to one. One shooter costs 100. Digging or wasting that purchase
-cannot be repaired without income. A public-state control observes the lane at
-tick 1, plants in column 0 and wins at 872. For this column/control, planting at
-98 wins at 969; planting at 99 loses at 1099, in all five lanes. Extra loss time
-comes from plant blocking, not a timeout penalty. Always waiting loses at 1000.
-Other columns and strategies can have different margins.
+Normal validation follows each passed stage on 50 seeds per difficulty,
+100000–100049. Macro win rate selects best; ties retain the earliest checkpoint.
+Mastery does not select best. Budget exhaustion alone does not force validation.
+Matching checkpoint/case results are reused; final-test seeds stay untouched.
 
-**Saving: necessity.** Start with 150 sun; allow sunflower/peashooter, wait and
-digging. Select two distinct lanes and spawn one basic in each at ticks 860,
-1100 and 1340: first arrival at 43 seconds, then every 12 seconds, six zombies
-total. The 100 mastery seeds cover all ten lane pairs. Without sunflowers,
-lifetime funds are 150, below two shooters' 200-sun cost. Shooters act only in
-their own lane; digging neither refunds nor relocates them. At least one lane
-therefore stays entirely unblocked. Basic speed is 200 integer units/s, or 10
-per tick. Its route is x=9500 to x=−500. That lane loses at
-`860 + (9500 − (−500))/10 − 1 = 1859` ticks (92.95 seconds). Movement occurs on
-the spawning tick. This proves sunflower necessity for finite action policies;
-infinite zero-time actions cannot produce victory.
+## Transfer, budgets and outputs
 
-**Saving: feasible income and pressure.** A test-only control buys sunflowers at
-ticks 0 and 150 in rows 0/1, column 0. Their first payments arrive after 120 ticks,
-then every 480 ticks: 120, 270, 600, 750, 1080, 1230. Each pays 25 sun. After
-buying both, cash is `150 − 2×50 = 50`. By tick 860, four payments supply another
-100. The control observes the threatened lanes, buys a column-1 shooter in the
-lower-numbered lane at 860, then the other at 1230:
-`150 − 100 + 6×25 = 200` total available for shooters. The 370-tick purchase gap
-respects the 150-tick recharge. Both flowers survive. All ten lane pairs win at
-**2101 (105.05 seconds)**; always-wait and no-flower controls lose at 1859.
+One recipe ships. Weights-only initialization requires compatible architecture and
+starts fresh optimizers, counters and memories. Resume restores the experiment and
+remaining allowance but restarts interrupted games with empty history. Older
+architectures and 20 Hz pins cannot load. No conversion paths ship.
 
-A basic needs ten 20-damage peas. With a 30-tick firing interval, a shooter's
-sustained capacity is one basic per 300 ticks (15 seconds). The 240-tick arrivals
-exceed that rate during a finite burst: delaying the second shooter creates a
-backlog. For lanes 2/4 and this same control, delaying both investments by 67
-ticks wins at 2168; 68 ticks loses at 2398. These exact boundaries come from
-reference simulation, including projectile travel, collision order and bites.
-They are not a proof that no other policy can recover from that delay. An
-immediate plant/dig counterexample loses both lessons. No control trains the agent.
+The default 120 minutes reserves 15 for finalization. Stops occur at complete
+updates; evaluation/export checks preserve incomplete status. Suites repeat this
+method; benchmarks change parallelism only. Formal training is user initiated.
 
-Extra initial sun and two lanes keep saving shorter than retaining 50 sun with
-no sky production, which would require longer income accumulation. There are no
-scripted actions, planting deadlines, retention rules, extra rewards or early-dig
-penalties. Git contains the previous implementation. Current configurations
-explicitly state sky availability; weights-only initialization resets mastery
-and optimizers when adopting this trial.
+Runs record settings, source/structural signatures, checkpoint identity, episode
+and optimizer diagnostics, compression and attention allocation. Diagnostics
+use the final collection batch for attention and the currently retained
+bank for compression; event-admission frequency accumulates over collection.
+Early digging means removal within **500 ticks/five seconds**, including same-tick removal.
+Track it per planting alongside attackers and wins; fewer digs alone does not
+establish improvement. Ledger metrics include discounted/undiscounted returns.
 
-**Limits.** Feasibility is not learned success. Tight timing may make exploration
-harder or overfit the lessons; removing sky income increases their difference
-from daytime games. Assess digs per accepted planting together with attacker
-purchases, lesson retention and easy wins. Improvement requires measured learning
-evidence; this trial makes no such claim yet. The net-value progress coefficient is 0.1:
-buying conserves assets and digging destroys their remaining value without a purchase bonus.
-
-## Evaluation and evidence
-
-Separate learner seeds from game seeds. Development includes 0–9 and 42; training
-uses 1,000–99,999; normal validation uses 100,000–100,049; mastery uses
-100,050–100,149. Final-test seeds 200,000–200,299 and changed-scenario seeds
-300,000–300,099 are reserved for user-initiated evaluation. The changed families
-redistribute later rosters, shorten wave spacing or concentrate lanes.
-
-Primary outcome is normal-game win rate per difficulty and the equally weighted
-macro average. Also measure lesson wins, accepted plant purchases, early digs per
-accepted planting, sustained attackers, first-attacker time, sun, mower use,
-truncation and throughput. Zero planting makes the digging ratio unavailable.
-Fewer digs alone do not establish progress. Interpret lessons separately from
-normal-game ability, and development validation separately from held-out evidence.
-Normal validation now samples stage-success checkpoints, so its curve is sparse
-and conditional on passing stages; an absent point is not a zero win rate. This
-scheduling change saves evaluation work but delays detection of normal-game
-regressions within a stage. It does not establish better learning or measured
-wall-time savings. Archived runs retain their recorded schedules.
-
-The 0.11.0 comparison uses fresh saving-stage starts, learner seeds 101/102 and
-an equal five-minute allowance per run (including startup and completed-update
-stopping). Order is baseline101, candidate101, candidate102, baseline102. The
-baseline is committed 0.10.4; no previous weights or demonstrations are reused.
-Both use 256×128 collection, 1,024 minibatches, four epochs and the same 80/20
-saving/placement distribution. Endpoint evaluations use the same 20 development
-seeds per lesson. Learning and comparison evaluation together are capped at 30
-minutes, including short integration checks. Actual games, transitions, wall
-seconds, lesson wins, attacker purchases and digs per planting are reported in
-[validation](validation.md). This compares the accounting/discount package, not
-the causal contribution of either change in isolation. No alternate recipe ships.
-
-The 0.11.0 comparison did not meet acceptance: both candidates scored 0/20 on
-saving and placement. Aggregate saving digs/plant rose from 5.45% to 6.88% for
-seed 101 and fell from 61.10% to 0.97% for seed 102. Each still bought only one
-sustained attacker per saving game. The accounting identities passed, but learning
-competence did not improve. The requested configuration remains experimental.
-
-Historical comparison evidence follows; its removed models are not needed to read
-these findings.
-
-The 0.10.0 comparison starts both methods from the same mastered saving checkpoint
-(SHA-256 `3bc3d252e3107c34c26c0f5623ddaf57eb3bac0d62fb74f54d5362e4b9d364ab`),
-with fresh optimizers/counters and learner seeds 101/102. The reference is commit
-`1ab8c59`; the candidate uses independent encoders. Five-minute learning windows
-include startup and scheduled probes; normal and lesson endpoint evaluations are
-bounded separately, with total learning/comparison evaluation below 30 minutes.
-Order is reference101, separated101, separated102, reference102. All use the same
-engine, reward, curriculum distributions/gates, parallelism and evaluation cases.
-Actual game and decision counts are reported, including the first 200 completed
-games, without interpolation. This tests continuation from one upstream trained
-model, not two independent full curriculum training runs.
-
-Claim the collapse resolved only if both seeds improve normal easy validation,
-reduce early digs per planting and retain lesson competence. Fewer digs without
-planting/attacker activity are not progress. Stronger generalization claims require
-independent runs, paired scenario differences and uncertainty. Two short transfer
-pilots are development evidence. Final-test seeds remain untouched. Results and
-missing evaluations are recorded in [validation](validation.md).
-
-The bounded test improved easy validation from 2% to 66% and from 0% to 28%,
-with fewer aggregate early digs per planting for both seeds. However, saving
-retention was 65/100 and 0/100, and seed 102 regressed after roughly 500 games.
-The acceptance condition fails. This is an experimental implementation of the
-requested separation, not evidence that feature interference was the sole cause
-or that the collapse is fixed. No reward or optimizer tuning followed these results.
-
-The earlier 0.9.0 fresh-start comparison failed its adoption criterion; those
-historical results remain in validation and do not describe the new transfer test.
+One selected actor supplies all three demos. CPU replay must match GPU outcome
+and hash before publication. Without validated best, final checkpoint/report still
+save but there are no selected-policy demos. Reports need no model. Old 20 Hz
+recordings were removed; historical report data remains preserved.

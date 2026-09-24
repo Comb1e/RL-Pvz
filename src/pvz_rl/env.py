@@ -68,7 +68,9 @@ class PvZEnv(gym.Env):
         self.game = ActionPhaseGame(self.rules) if self.per_tick else Game(self.rules)
         self.metadata = {
             **self.metadata,
-            "render_fps": 20 if self.per_tick else 20 / self.cfg["environment"]["decision_ticks"],
+            "render_fps": self.rules.game["tick_rate"]
+            if self.per_tick
+            else self.rules.game["tick_rate"] / self.cfg["environment"]["decision_ticks"],
         }
         self.codec = ActionCodec(self.cfg)
         self.encoder = ObservationEncoder(self.cfg, self.rules)

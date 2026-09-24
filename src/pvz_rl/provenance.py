@@ -63,7 +63,7 @@ def verify_engine(cfg: dict) -> dict:
         raise RuntimeError(
             "This configuration/checkpoint uses an older or different game source pin. "
             f"Start a fresh training run with the bundled PVZ {expected['package_version']} configuration. "
-            "Checkpoint migration is unsupported; archived reports and replays remain readable."
+            "Checkpoint migration is unsupported; archived reports remain readable; use 100 Hz recordings."
         )
     package_version = importlib.metadata.version("pvz-research-game")
     if (

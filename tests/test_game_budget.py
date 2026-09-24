@@ -128,8 +128,8 @@ def test_completed_games_stop_after_optimization_and_validation_does_not_count(
 def test_global_games_across_cuda_slots_and_shared_demos(smoke_cfg, tmp_path):
     cfg = game_config(smoke_cfg)
     cfg["training"].update(
-        n_envs=2,
-        rollout_size=128,
+        n_envs=3,
+        rollout_size=384,
         total_games=2,
         device="cuda",
     )
@@ -138,7 +138,7 @@ def test_global_games_across_cuda_slots_and_shared_demos(smoke_cfg, tmp_path):
     model, _ = load_policy(run / "final.zip")
     episodes = read_series(run / "training-episodes.jsonl")
     assert model.training_games == len(episodes) > 2
-    assert model.num_timesteps == 128 and model._n_updates == 1
+    assert model.num_timesteps == 384 and model._n_updates == 1
     demos = json.loads((run / "visualizations/demos.json").read_text())["demos"]
     assert {d["level"] for d in demos} == {"easy", "standard", "hard"}
     assert len({d["checkpoint_hash"] for d in demos}) == 1

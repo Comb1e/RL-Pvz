@@ -117,11 +117,11 @@ def validate_config(cfg: dict) -> None:
             or steps * cfg["training"]["n_envs"] != cfg["training"]["rollout_size"]
         ):
             raise ValueError("rollout_size must equal n_envs * rollout_steps_per_env")
-    if cfg["encoding"].get("version") != "compact_v3" or cfg.get("policy", {}).get("kind") not in (
-        "spatial_grouped_v4",
+    if cfg["encoding"].get("version") != "event_v4" or cfg.get("policy", {}).get("kind") not in (
+        "event_transformer_v1",
     ):
         raise ValueError(
-            "Retired observation/policy format. Start fresh with configs/train.toml; archived reports and recordings remain readable."
+            "Retired observation/policy format. Start fresh with configs/train.toml; archived reports remain readable; recordings must use the 100 Hz engine."
         )
     if cfg["reward"].get("version") != "net_value_v1":
         raise ValueError(
@@ -162,6 +162,26 @@ def validate_config(cfg: dict) -> None:
             if type(value) not in (int, float) or not math.isfinite(value) or value <= 0:
                 raise ValueError(f"{group}.{key} must be finite and positive")
     policy = cfg["policy"]
+    memory = policy.get("memory", {})
+    for key in (
+        "model_width",
+        "layers",
+        "heads",
+        "feedforward_width",
+        "local_tokens",
+        "event_tokens",
+        "summary_tokens",
+        "summary_stride",
+        "sequence_length",
+    ):
+        if type(memory.get(key)) is not int or memory[key] < 1:
+            raise ValueError(f"policy.memory.{key} must be a positive integer")
+    if memory["model_width"] % memory["heads"]:
+        raise ValueError("Memory model_width must be divisible by heads")
+    if type(memory.get("burn_in")) is not int or memory["burn_in"] < 0:
+        raise ValueError("Memory burn_in must be a nonnegative integer")
+    if not math.isfinite(memory.get("gate_bias", float("nan"))):
+        raise ValueError("Memory gate_bias must be finite")
     for key in ("plant_embedding", "state_embedding"):
         if type(policy[key]) is not int or policy[key] < 1:
             raise ValueError(f"policy.{key} must be a positive integer")
@@ -290,6 +310,8 @@ def validate_config(cfg: dict) -> None:
         raise ValueError("Logging rolling_window must be a positive integer")
     if any(type(visual[key]) is not bool for key in ("enabled", "demos", "videos")):
         raise ValueError("Visualization enabled/demos/videos must be booleans")
+    if type(visual["video_fps"]) is not int or not 1 <= visual["video_fps"] <= 100:
+        raise ValueError("video_fps must be an integer from 1 to 100")
     size = visual["video_size"]
     if (
         not isinstance(size, (tuple, list))

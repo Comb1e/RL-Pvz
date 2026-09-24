@@ -19,11 +19,11 @@ class ObservationEncoder:
         self.zombie_states = {state: i for i, state in enumerate(env["zombie_states"])}
         self.mower_states = {state: i for i, state in enumerate(env["mower_states"])}
         self.rows, self.cols, self.bins = env["rows"], env["cols"], env["bins"]
-        if cfg["encoding"]["version"] != "compact_v3":
-            raise ValueError("Only compact_v3 observations are supported")
-        self.plant_width = 4
-        self.zombie_width = len(self.zombies) + 6 + len(self.zombie_states)
-        self.global_width = 7 + len(self.plants) + self.rows * 4
+        if cfg["encoding"]["version"] != "event_v4":
+            raise ValueError("Only event_v4 observations are supported")
+        self.plant_width = 3
+        self.zombie_width = len(self.zombies) + 4 + len(self.zombie_states)
+        self.global_width = 7 + self.rows * 4
         sizes = [
             self.rows * self.cols * self.plant_width,
             self.rows * self.bins * self.zombie_width,
@@ -42,9 +42,6 @@ class ObservationEncoder:
         self.space = spaces.Box(-np.inf, np.inf, shape=(self.size,), dtype=np.float32)
         self.count_scale = cfg["encoding"]["count_scale"]
         self.local_count_scale = cfg["encoding"]["local_count_scale"]
-        self.timer_scale = max(
-            v for d in rules.plants.values() for k, v in d.items() if k.endswith("_ticks")
-        )
         self.hp_scale = max(z["health"] for z in rules.zombies.values())
         self.armor_scale = max(z["armor"] for z in rules.zombies.values())
         self.damage_scale = max(
@@ -66,7 +63,6 @@ class ObservationEncoder:
             tile[:] = (
                 self.plants[p.plant_type] + 1,
                 p.health / p.max_health,
-                p.timer_ticks / self.timer_scale,
                 self.plant_states[p.state] + 1,
             )
 
@@ -78,23 +74,19 @@ class ObservationEncoder:
             nearest[r, b] = min(nearest[r, b], z.x)
             cell = zombies[z.row, self.bin_index(z.x)]
             cell[self.zombies[z.zombie_type]] += 1
-            cell[nzombies : nzombies + 6] += (
+            cell[nzombies : nzombies + 4] += (
                 z.health,
                 z.armor,
                 0,
-                z.slow_ticks,
                 int(z.has_pole),
-                z.timer_ticks,
             )
-            cell[nzombies + 6 + self.zombie_states[z.state]] += 1
+            cell[nzombies + 4 + self.zombie_states[z.state]] += 1
         zscale = np.full(self.zombie_width, self.local_count_scale, dtype=np.float32)
-        zscale[nzombies : nzombies + 6] *= (
+        zscale[nzombies : nzombies + 4] *= (
             self.hp_scale,
             max(1, self.armor_scale),
             self.position_scale,
-            self.timer_scale,
             1,
-            self.timer_scale,
         )
         encoded = zombies / zscale
         encoded[:, :, nzombies + 2] = np.where(
@@ -124,10 +116,6 @@ class ObservationEncoder:
                 counts.defeated,
             )
         )
-        cards = {c.plant_type: c for c in obs.cards}
-        for kind in self.plants:
-            card = cards[kind]
-            values.append(card.cooldown_ticks / max(1, card.recharge_ticks))
         for mower in sorted(obs.mowers, key=lambda m: m.row):
             values.extend(
                 (

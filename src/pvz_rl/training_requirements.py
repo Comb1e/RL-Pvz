@@ -10,8 +10,8 @@ TRAINING_CONDITIONS = ("masked",)
 
 def current_model_config(cfg):
     return (
-        cfg.get("policy", {}).get("kind") == "spatial_grouped_v4"
-        and cfg.get("encoding", {}).get("version") == "compact_v3"
+        cfg.get("policy", {}).get("kind") == "event_transformer_v1"
+        and cfg.get("encoding", {}).get("version") == "event_v4"
         and cfg.get("reward", {}).get("version") == "net_value_v1"
         and cfg.get("training", {}).get("discount_clock") == "simulation_ticks"
     )
@@ -26,7 +26,7 @@ def require_supported_policy(cfg, condition="masked"):
         or not current_model_config(cfg)
     ):
         raise ValueError(
-            "Retired policy. Training/resume require independent spatial encoders. Start fresh with configs/train.toml. Archived reports and recordings remain readable."
+            "Retired policy. Training/resume require the timer-free event Transformer. Start fresh with configs/train.toml. Archived reports and recordings remain readable."
         )
 
 
@@ -113,7 +113,14 @@ def transfer_protocol(cfg, condition="masked"):
         },
         "policy": {
             k: p[k]
-            for k in ("kind", "plant_embedding", "state_embedding", "scalar_sizes", "channels")
+            for k in (
+                "kind",
+                "plant_embedding",
+                "state_embedding",
+                "scalar_sizes",
+                "channels",
+                "memory",
+            )
         },
         "heads": cfg["training"]["hidden_sizes"],
     }

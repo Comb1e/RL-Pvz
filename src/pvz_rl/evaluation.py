@@ -32,7 +32,8 @@ def select_action(env: PvZEnv, obs, *, policy=None, baseline=None, rng=None, mas
     if policy is None:
         raise ValueError("Specify a baseline or trained policy")
     kwargs = {"action_masks": env.action_masks()} if masked else {}
-    action, _ = policy.predict(obs, deterministic=True, **kwargs)
+    state = None if env.metrics["decisions"] == 0 else getattr(env, "_policy_memory", None)
+    action, env._policy_memory = policy.predict(obs, state=state, deterministic=True, **kwargs)
     return int(action)
 
 

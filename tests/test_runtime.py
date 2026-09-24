@@ -67,7 +67,7 @@ def test_legality_cache_requeries_only_after_relevant_public_change(cfg, monkeyp
     assert calls == [0]  # Time passes without changing legality.
     # Plant occupancy, sun thresholds, and cooldown change. Then the bomb destroys itself.
     env.step(env.codec.encode(Place("cherry_bomb", 2, 0)))
-    for _ in range(4):
+    for _ in range(14):
         expected = [env.game.validate_action(a).accepted for a in env.codec.actions]
         np.testing.assert_array_equal(env.action_masks(), expected)
         env.step(0)
@@ -94,4 +94,5 @@ def test_cached_and_reference_game_hashes_rewards_and_masks_match(cfg, level):
         right, r2, term2, trunc2, info2 = cached.step(action)
         assert (r1, term1, trunc1, info1) == (r2, term2, trunc2, info2)
         assert reference.game.state_hash() == cached.game.state_hash()
-    assert reference.state == "won"  # Independently known seed-42 control.
+    assert reference.state == ("won" if level == "easy" else "lost")
+    # The 100 Hz seeded schedules and 0.1-second control cadence are versioned.

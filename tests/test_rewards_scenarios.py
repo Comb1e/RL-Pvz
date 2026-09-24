@@ -49,7 +49,8 @@ def test_changed_scenarios_preserve_required_controls(level):
     # Compare by wave and original generation ordering: jitter and rows are unchanged.
     reference = sorted((s.wave, s.zombie_type, s.row, s.tick) for s in base.spawns)
     transformed = sorted(
-        (s.wave, s.zombie_type, s.row, s.tick + (s.wave - 1) * 100) for s in fast.spawns
+        (s.wave, s.zombie_type, s.row, s.tick + (s.wave - 1) * 5 * rules.game["tick_rate"])
+        for s in fast.spawns
     )
     assert transformed == reference
     concentrated = scenario(level, "concentrated", seed, rules)

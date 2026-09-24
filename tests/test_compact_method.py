@@ -114,13 +114,13 @@ def test_categorical_boundaries_and_empty_embeddings():
         },
     )
     obs = env.encoder.encode(env.public)
-    assert obs.shape == (500,)
-    grid = obs[:180].reshape(5, 9, 4)
+    assert obs.shape == (417,)
+    grid = obs[:135].reshape(5, 9, 3)
     np.testing.assert_array_equal(grid[0, :8, 0], np.arange(1, 9))
     assert not grid[1:].any()
     for state, index in env.encoder.plant_states.items():
         public = replace(env.public, plants=(replace(env.public.plants[0], state=state),))
-        assert env.encoder.encode(public)[3] == index + 1
+        assert env.encoder.encode(public)[2] == index + 1
     features = SpatialFeatures(env.observation_space, cfg)
     assert torch.count_nonzero(features.plant_types.weight[0]) == 0
     assert torch.count_nonzero(features.plant_states.weight[0]) == 0

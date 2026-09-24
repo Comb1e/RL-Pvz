@@ -118,7 +118,7 @@ def test_spatial_policy_shapes_gradients_and_board_dependence():
         }
         assert optimizer_ids.isdisjoint(critic_ids)
         assert optimizer_ids | critic_ids == {id(p) for p in model.policy.parameters()}
-        assert sum(p.numel() for p in model.policy.parameters()) < 1_000_000
+        assert sum(p.numel() for p in model.policy.parameters()) == 1_178_619
     finally:
         env.close()
 

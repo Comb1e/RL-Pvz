@@ -1,5 +1,30 @@
 # Sources actually used
 
+## Event-memory Transformer — 2026-09-23
+
+| Source inspected | Used here | Limitation |
+|---|---|---|
+| [GTrXL](https://arxiv.org/abs/1910.06764), methods pp. 3–5 | Gating, pre-normalization, identity-biased initialization | Its RL experiments use V-MPO; no PVZ performance claim |
+| [Transformer-XL](https://arxiv.org/abs/1901.02860), pp. 3–4 | Bounded past context and relative positions | Raw public banks here replace learned recurrent activations |
+| [Compressive Transformer](https://arxiv.org/abs/1911.05507), pp. 2–4 and RL memory experiment | Local/event/summary history | No learned compression or reconstruction objective copied |
+| [Longformer](https://arxiv.org/abs/2004.05150), §3 and Fig. 2 | Local plus selected global context | No language-model speedup transferred |
+| [BigBird](https://arxiv.org/abs/2007.14062), §2 | Bounded sparse context | No random attention or expressivity guarantee transferred |
+| [S4](https://arxiv.org/abs/2111.00396), [Mamba](https://arxiv.org/abs/2312.00752), abstracts | Reviewed linear-time alternatives | Not adopted; abstract-level review only |
+| [SB3-Contrib 2.7.1 recurrent PPO](https://github.com/Stable-Baselines-Team/stable-baselines3-contrib/tree/v2.7.1/sb3_contrib/ppo_recurrent), installed collector/timeout code | Reset masks, terminal bootstrap and on-policy boundaries | No LSTM implementation added |
+
+PDF SHA-256 values for GTrXL, Transformer-XL, Compressive, Longformer and BigBird:
+
+- `98b64dec5b94f8b122a136cc0bdc6536958daf28e881b5f9b794375385386636`
+- `6aa192b22820267309e8e7c501c514a3a3055256d9c8691b106c7f53f9098671`
+- `0c650936864a36739c8c34f4860e64fa01ab146c21494e0ebd3a701b4f608768`
+- `053756b54e2d3462d4690b3aed489c962f17df7c3531865e47374c4a651f526c`
+- `9dc448464532d61f084de6a224b84acf3b421142e05a40ebfb982b4eca5834a2`
+
+Admission, latest-state categorical summaries, raw-token deduplication and public
+burn-in are project-specific choices. These sources do not establish that removing
+PVZ timers improves learning. Engine source revisions and limits are in the lock
+and validation record. No extra runtime dependencies are introduced.
+
 Methods and adopted/rejected ideas are in [research design](research.md). This
 catalog retains source revisions and the extent of the evidence inspected.
 

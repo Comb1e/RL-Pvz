@@ -195,7 +195,14 @@ def test_stage_clock_advances_without_warmup_but_never_changes_rate_mid_rollout(
 def test_critic_only_update_preserves_actor_and_adam_state(tmp_path):
     cfg = load_config()
     cfg["training"].update(
-        n_envs=1, rollout_steps_per_env=16, rollout_size=16, batch_size=16, n_epochs=2
+        n_envs=1,
+        rollout_steps_per_env=16,
+        rollout_size=16,
+        batch_size=16,
+        n_epochs=2,
+        # A local descent control; Adam need not improve every minibatch at the
+        # production rate, especially after changing encoder capacity.
+        critic_learning_rate=1e-5,
     )
     env = vector_env(cfg, "masked", 101)
     try:
@@ -261,8 +268,8 @@ def test_stage_warmup_interrupt_resume_and_actor_release(tmp_path, monkeypatch):
     cfg["visualization"].update(enabled=False, demos=False)
     cfg["training"].update(
         n_envs=2,
-        rollout_steps_per_env=32,
-        rollout_size=64,
+        rollout_steps_per_env=128,
+        rollout_size=256,
         batch_size=32,
         n_epochs=1,
         total_games=12,

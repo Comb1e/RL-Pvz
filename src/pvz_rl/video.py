@@ -19,7 +19,7 @@ from .rendering import board_renderer, render_context
 
 def video_settings(cfg):
     visual = output_settings(cfg)["visualization"]
-    return {key: visual[key] for key in ("crf", "final_hold_seconds", "video_size")}
+    return {key: visual[key] for key in ("crf", "final_hold_seconds", "video_size", "video_fps")}
 
 
 def _process_options():
@@ -62,7 +62,8 @@ def export_replay(source, destination, cfg, *, context=None, progress=None, dead
     details = playback.metadata
     width, height = settings["visualization"]["video_size"]
     renderer = board_renderer((width, height))
-    fps = playback.game.observe().tick_rate
+    tick_rate = playback.game.observe().tick_rate
+    fps = settings["visualization"]["video_fps"]
     destination.parent.mkdir(parents=True, exist_ok=True)
     temporary = destination.with_name(destination.stem + ".tmp.mp4")
     owns_progress = progress is None
@@ -138,9 +139,15 @@ def export_replay(source, destination, cfg, *, context=None, progress=None, dead
 
             try:
                 write_frame()
+                start_tick = playback.game.observe().tick
+                next_frame = 1
                 while not playback.done:
-                    playback.step()  # Verifies intermediate and final hashes.
-                    write_frame()
+                    check_deadline(deadline)
+                    playback.step()  # Verify every tick; sample presentation independently.
+                    elapsed = playback.game.observe().tick - start_tick
+                    if elapsed * fps >= next_frame * tick_rate or playback.done:
+                        write_frame()
+                        next_frame += 1
                     progress.emit(
                         f"Encoding {destination.name}: game time "
                         f"{playback.game.observe().elapsed_seconds:.1f}s, {frames} frames"
