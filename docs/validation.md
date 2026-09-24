@@ -38,7 +38,7 @@ candidate, so longer thermal/order effects remain a limitation.
 Cached-kernel setup took approximately 0.057 seconds per trial; median unmeasured
 warm-up rollouts took 6.95/4.58 seconds for critic-only and 11.29/6.86 seconds for active
 learning. No cold compiler speed claim is made. Total benchmark wall allowance used
-was 257.93 seconds including setup and warm-up. Raw phase timings and system samples
+was 257.92 seconds including setup and warm-up. Raw phase timings and system samples
 are under `artifacts/v0140/{baseline,candidate}-benchmark/`.
 
 Independent categorical controls compare outputs, gradients and three Adam steps to
@@ -78,7 +78,7 @@ collapse. Lower early digging is observed for both seeds, but all greedy evaluat
 failed; candidate seed 102 waited through all eight greedy cases, while the other
 three policies bought one attacker per case. The method remains **experimental**.
 Checks plus evaluation used 883.35 seconds;
-including all warmed benchmarks, 1,141.28 seconds (19.02 minutes). The 33 marked
+including all warmed benchmarks, 1,141.27 seconds (19.02 minutes). The 33 marked
 learning integration tests used 584.84 seconds; conservatively adding the preceding
 41.35-second focused pass gives **29.46 minutes**, within the 30-minute cap.
 No additional learning checks or formal training were launched. Concise measurements are retained in
