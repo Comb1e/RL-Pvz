@@ -17,9 +17,9 @@ class GroupedDistribution(MaskableDistribution):
     def proba_distribution_net(self, latent_dim):
         return nn.Linear(latent_dim, self.logit_dim)
 
-    def proba_distribution(self, action_logits):
+    def proba_distribution(self, action_logits, masks=None):
         self.logits = action_logits.reshape(-1, self.logit_dim)
-        self.apply_masking(None)
+        self.apply_masking(masks)
         return self
 
     def apply_masking(self, masks):

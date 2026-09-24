@@ -58,8 +58,7 @@ class EventMemory:
         self.nearest_pole_offsets = nearest_zombie_offsets + 1
         relevant[nearest_zombie_offsets] = False
         relevant[self.nearest_pole_offsets] = False
-        relevant[gs.start + 1] = False
-        relevant[gs.start + 7 : gs.stop : 4] = False
+        relevant[gs.start + self.layout.global_fields["elapsed"]] = False
         self.relevant = relevant
         self.admitted = self.observed = 0
 

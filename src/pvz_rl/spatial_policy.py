@@ -1,4 +1,4 @@
-"""Small resolution-preserving placement policy using only event_v5 inputs."""
+"""Small resolution-preserving placement policy using only event_v6 inputs."""
 
 import torch
 from pvz_game import Rules
@@ -21,26 +21,44 @@ def mlp(input_size, widths):
     return nn.Sequential(*layers)
 
 
+class CategoricalEmbedding(nn.Embedding):
+    """Small categorical tables with dense gradient accumulation.
+
+    Repeated categories across history make CUDA embedding backward expensive.
+    One-hot multiplication has the same learned weights and gradients, without
+    sorting millions of repeated indices. Inference keeps the ordinary lookup.
+    """
+
+    def forward(self, indices):
+        if not torch.is_grad_enabled() or not self.weight.requires_grad:
+            return super().forward(indices)
+        categories = self.weight.new_zeros((*indices.shape, self.num_embeddings))
+        categories.scatter_(-1, indices.unsqueeze(-1), 1)
+        if self.padding_idx is not None:
+            categories[..., self.padding_idx] = 0
+        return categories @ self.weight
+
+
 class SpatialFeatures(BaseFeaturesExtractor):
     def __init__(self, observation_space, layout_cfg):
         layout = ObservationEncoder(layout_cfg, Rules())
         if observation_space.shape != (layout.size,):
-            raise ValueError("Spatial policy requires the event_v5 observation layout")
+            raise ValueError("Spatial policy requires the event_v6 observation layout")
         spec = layout_cfg["policy"]
         self.channels, self.scalar_channels = spec["channels"][-1], spec["scalar_sizes"][-1]
         super().__init__(
             observation_space, self.scalar_channels + self.channels * layout.rows * layout.cols
         )
         self.layout = layout
-        self.plant_types = nn.Embedding(
+        self.plant_types = CategoricalEmbedding(
             len(layout.plants) + 1, spec["plant_embedding"], padding_idx=0
         )
-        self.plant_states = nn.Embedding(
+        self.plant_states = CategoricalEmbedding(
             len(layout.plant_states) + 1, spec["state_embedding"], padding_idx=0
         )
         self.global_encoder = mlp(layout.global_width, spec["scalar_sizes"])
         width = spec["plant_embedding"] + spec["state_embedding"] + 1
-        width += layout.bins * (layout.zombie_width + 3) + self.scalar_channels + 1
+        width += layout.bins * layout.zombie_width + self.scalar_channels + 1
         layers = []
         for channels in spec["channels"]:
             layers.extend((nn.Conv2d(width, channels, 3, padding=1), nn.ReLU()))
@@ -66,9 +84,7 @@ class SpatialFeatures(BaseFeaturesExtractor):
             ),
             dim=-1,
         ).permute(0, 3, 1, 2)
-        lane = torch.cat(
-            [blocks[k].reshape(batch, layout.rows, -1) for k in ("zombies", "projectiles")], dim=-1
-        )
+        lane = blocks["zombies"].reshape(batch, layout.rows, -1)
         lane = lane.transpose(1, 2).unsqueeze(-1).expand(-1, -1, -1, layout.cols)
         scalars = self.global_encoder(blocks["globals"])
         grid = scalars[:, :, None, None].expand(-1, -1, layout.rows, layout.cols)
@@ -92,7 +108,9 @@ class SpatialFeatures(BaseFeaturesExtractor):
         tokens[:, ix, : self.layout.size] = observations
         tokens[:, ix, -2] = 1
         ticks = (
-            observations[:, self.layout.slices["globals"].start + 1]
+            observations[
+                :, self.layout.slices["globals"].start + self.layout.global_fields["elapsed"]
+            ]
             * self.cfg["environment"]["cutoff_seconds"]
             * self.layout.rules.game["tick_rate"]
         )
@@ -234,7 +252,7 @@ class SpatialGroupedPolicy(MaskableActorCriticPolicy):
         )
         layout = self.features_extractor.layout
         ticks = (
-            obs[:, layout.slices["globals"].start + 1]
+            obs[:, layout.slices["globals"].start + layout.global_fields["elapsed"]]
             * cfg["environment"]["cutoff_seconds"]
             * layout.rules.game["tick_rate"]
         ).round()
@@ -258,8 +276,7 @@ class SpatialGroupedPolicy(MaskableActorCriticPolicy):
 
     def get_distribution(self, obs, action_masks=None, context=None):
         features = self.pi_features_extractor(obs, context)
-        self.action_dist.proba_distribution(self.action_net(features))
-        self.action_dist.apply_masking(action_masks)
+        self.action_dist.proba_distribution(self.action_net(features), masks=action_masks)
         return self.action_dist
 
     def predict_values(self, obs, context=None):

@@ -16,8 +16,8 @@ from pvz_rl.training import build_model, vector_env
 def test_defaults_and_archived_action_counts():
     cfg = load_config()
     assert cfg == load_config("configs/train.toml")
-    assert cfg["training"]["n_envs"] == gpu_defaults()["n_envs"] == 256
-    assert cfg["training"]["rollout_size"] == 32768
+    assert cfg["training"]["n_envs"] == gpu_defaults()["n_envs"] == 128
+    assert cfg["training"]["rollout_size"] == 16384
     assert agent_action_count({"agent_actions": 2, "decisions": 1000}) == 2
     assert agent_action_count({"action_timing": "per_tick", "instant_actions": 3}) == 3
     assert agent_action_count({"decisions": 1000}) is None

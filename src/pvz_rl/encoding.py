@@ -16,10 +16,9 @@ class ObservationEncoder:
         self.plants = {kind: i for i, kind in enumerate(env["plants"])}
         self.zombies = {kind: i for i, kind in enumerate(env["zombies"])}
         self.plant_states = {state: i for i, state in enumerate(env["plant_states"])}
-        self.mower_states = {state: i for i, state in enumerate(env["mower_states"])}
         self.rows, self.cols, self.bins = env["rows"], env["cols"], env["bins"]
-        if cfg["encoding"]["version"] != "event_v5":
-            raise ValueError("Only event_v5 observations are supported")
+        if cfg["encoding"]["version"] != "event_v6":
+            raise ValueError("Only event_v6 observations are supported")
         self.plant_width = 3
         # Per lane-region: one count per zombie type, aggregate health and armor,
         # nearest zombie distance, and nearest carrier of an unused pole.
@@ -29,14 +28,20 @@ class ObservationEncoder:
         }
         self.zombie_width = len(self.zombie_fields)
         self.empty_distance = -1.0
-        self.global_width = 7 + self.rows * 4
+        self.global_fields = {
+            name: i
+            for i, name in enumerate(
+                ("sun", "elapsed", "wave", "total_waves", "initial", "defeated")
+                + tuple(f"mower_spent_{r}" for r in range(self.rows))
+            )
+        }
+        self.global_width = len(self.global_fields)
         sizes = [
             self.rows * self.cols * self.plant_width,
             self.rows * self.bins * self.zombie_width,
-            self.rows * self.bins * 3,
             self.global_width,
         ]
-        names = ["plants", "zombies", "projectiles", "globals"]
+        names = ["plants", "zombies", "globals"]
         offsets = np.cumsum([0, *sizes])
         self.slices = dict(
             zip(
@@ -50,9 +55,6 @@ class ObservationEncoder:
         self.local_count_scale = cfg["encoding"]["local_count_scale"]
         self.hp_scale = max(z["health"] for z in rules.zombies.values())
         self.armor_scale = max(z["armor"] for z in rules.zombies.values())
-        self.damage_scale = max(
-            rules.plants[k]["damage"] for k in ("peashooter", "snow_pea", "repeater")
-        )
         self.position_scale = rules.game["spawn_x"] - rules.game["house_x"]
         self.cost_scale = max(p["cost"] for p in rules.plants.values())
 
@@ -96,33 +98,17 @@ class ObservationEncoder:
             (nearest.astype(np.float64) - self.rules.game["house_x"]) / self.position_scale,
         )
         result[self.slices["zombies"]] = encoded.ravel()
-        projectiles = np.zeros((self.rows, self.bins, 3), dtype=np.int64)
-        for p in obs.projectiles:
-            projectiles[p.row, self.bin_index(p.x)] += (1, p.damage, int(p.icy))
-        result[self.slices["projectiles"]] = (
-            projectiles / (self.local_count_scale * np.array([1, self.damage_scale, 1]))
-        ).ravel()
         counts = obs.counts
-        values = [
-            obs.sun / self.cost_scale,
-            obs.elapsed_seconds / self.cfg["environment"]["cutoff_seconds"],
-            obs.wave / self.cfg["encoding"]["wave_scale"],
-            obs.total_waves / self.cfg["encoding"]["wave_scale"],
-        ]
-        values.extend(
-            x / self.count_scale
-            for x in (
-                counts.initial_total,
-                counts.spawned,
-                counts.defeated,
-            )
-        )
-        for mower in sorted(obs.mowers, key=lambda m: m.row):
-            values.extend(
-                (
-                    mower.x / self.position_scale,
-                    *(float(mower.state == state) for state in self.mower_states),
-                )
-            )
-        result[self.slices["globals"]] = values
+        values = {
+            "sun": obs.sun / self.cost_scale,
+            "elapsed": obs.elapsed_seconds / self.cfg["environment"]["cutoff_seconds"],
+            "wave": obs.wave / self.cfg["encoding"]["wave_scale"],
+            "total_waves": obs.total_waves / self.cfg["encoding"]["wave_scale"],
+            "initial": counts.initial_total / self.count_scale,
+            "defeated": counts.defeated / self.count_scale,
+        }
+        values.update({f"mower_spent_{m.row}": float(m.state == "spent") for m in obs.mowers})
+        globals_ = result[self.slices["globals"]]
+        for name, value in values.items():
+            globals_[self.global_fields[name]] = value
         return result

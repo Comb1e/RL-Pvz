@@ -114,7 +114,7 @@ def test_categorical_boundaries_and_empty_embeddings():
         },
     )
     obs = env.encoder.encode(env.public)
-    assert obs.shape == (342,)
+    assert obs.shape == (281,)
     grid = obs[:135].reshape(5, 9, 3)
     np.testing.assert_array_equal(grid[0, :8, 0], np.arange(1, 9))
     assert not grid[1:].any()
@@ -172,7 +172,7 @@ def test_retired_training_modes_fail_before_creating_output(tmp_path, setting):
     assert not output.exists()
 
 
-@pytest.mark.parametrize("version", ["event_v4"])
+@pytest.mark.parametrize("version", ["event_v4", "event_v5"])
 def test_retired_weights_fail_before_deserialization(tmp_path, version):
     from pvz_rl.provenance import write_json
     from pvz_rl.training import load_policy
@@ -194,7 +194,7 @@ def test_retired_report_rebuild_never_loads_model(tmp_path, monkeypatch, retired
         cfg["policy"]["kind"] = "spatial_grouped_v2"
         cfg["encoding"]["version"] = "tactical_v2"
     elif retired == "observation":
-        cfg["encoding"]["version"] = "event_v4"
+        cfg["encoding"]["version"] = "event_v5"
     elif retired == "reward":
         cfg["reward"]["version"] = "potential_mower_v1"
     else:

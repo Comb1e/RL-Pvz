@@ -3,6 +3,111 @@
 Evidence is versioned below. Learning outcomes, simulation correctness and runtime
 speed are separate measures; [research design](research.md) defines the protocol.
 
+## 0.14.0 smaller observations and faster updates — 2026-09-24
+
+`event_v6` has **281 inputs** (135 plants, 135 zombies, 11 globals), with **1,127,931
+parameters** across the independent actor/critic. Projectile features, spawned count
+and mower positions/ready/moving flags are absent from inputs and event admission.
+Fresh models are required; reports and 100 Hz recordings remain readable. The game
+pin remains `1fc80386859087b9d715c4706b3f7875844430cc`, package 1.4.0 / simulation 1.1.0.
+Defaults are now **128 environments ×128 transitions =16,384 per rollout** and dig
+initialization -12. Actor warm-up remains 1,024 completed games.
+
+### Complete-pipeline measurements
+
+Compared the preceding commit `4adfb245139d5ba92474cd5bb2bd0506c905f108` with the candidate
+on the RTX 4070 Laptop GPU, both at 128 environments, 128 transitions each, batch 1,024,
+four epochs, identical game/reward rules and learner seed 101. Each of three repetitions
+used one warm-up rollout followed by two measured rollouts. Actor-learning measurements
+explicitly enable actor updates; critic-warm-up measurements freeze them. These are
+short placement workloads, not full-game or mastery-throughput claims.
+
+| Phase | Baseline transitions/s | Candidate transitions/s | Median gain |
+|---|---:|---:|---:|
+| Critic warm-up | 2,608 | 4,153 | **59.2%** |
+| Actor and critic learning | 1,523 | 2,674 | **75.6%** |
+
+Active-learning median collection/update times per 16,384-transition rollout changed
+from 1.56/9.20 seconds to 1.27/4.80 seconds. Maximum allocated VRAM changed from
+870.92 to 934.41 MiB; driver-observed median usage was 1,277/1,447 MiB. Overall sampled
+median GPU utilization was 92%/87%, and system CPU utilization 12.4%/13.2%.
+Throughput coefficients of variation were at most 1.31%. No competing training job
+was running; routine host activity was not suppressed. Trial order was baseline then
+candidate, so longer thermal/order effects remain a limitation.
+
+Cached-kernel setup took approximately 0.057 seconds per trial; median unmeasured
+warm-up rollouts took 6.95/4.58 seconds for critic-only and 11.29/6.86 seconds for active
+learning. No cold compiler speed claim is made. Total benchmark wall allowance used
+was 257.93 seconds including setup and warm-up. Raw phase timings and system samples
+are under `artifacts/v0140/{baseline,candidate}-benchmark/`.
+
+Independent categorical controls compare outputs, gradients and three Adam steps to
+ordinary lookup tables in CPU/CUDA float64 (1e-12 absolute / 1e-10 relative tolerance)
+and production float32 (2e-7 absolute / 2e-6 relative tolerance).
+Padding stays zero with zero gradients. The masked single-pass distribution matches
+the previous two-pass construction exactly on fixed logits. CPU/CUDA observation
+controls retain 1e-7 absolute / 1e-6 relative tolerance and prove removed fields cannot
+silently enter memory. Existing PPO, causal sequence, reset, timeout and replay controls
+remain in the regression suite; no new benchmark command or training recipe was added.
+
+### Bounded placement checks
+
+Fresh starts used seeds 101/102 with a three-minute training allowance and up to one
+minute for eight fixed placement evaluation cases (100050–100057). The order was
+baseline/candidate for seed 101, reversed for 102. All used 128 environments and the
+unchanged 1,024-game actor freeze, reward, PPO and curriculum settings. Each stopped
+at a completed update; final-test cases were untouched.
+
+| Method / seed | Training seconds | Transitions | Completed training games / wins | Early digs / first 128 plantings | Greedy placement |
+|---|---:|---:|---:|---:|---:|
+| Baseline / 101 | 174.32 | 442,368 | 0 / — | 84 / 128 (unfinished games) | 0/8 |
+| Candidate / 101 | 177.49 | 720,896 | 128 / 2 | 1 / 128 | 0/8 |
+| Candidate / 102 | 176.46 | 720,896 | 128 / 2 | 1 / 128 | 0/8 |
+| Baseline / 102 | 173.69 | 442,368 | 0 / — | 82 / 128 (unfinished games) | 0/8 |
+
+Every observed training game bought one attacker. Each candidate also had 128
+unfinished second-cohort games with 128 attacker purchases and no early digs at the
+deadline. Baseline first-cohort games had not finished; their missing win rates are
+not zeros. Different completed-game counts are actual wall-budget outcomes, not
+interpolated or matched-sample win comparisons.
+
+The actor performed **zero optimizer steps** in all four checks because warm-up was
+preserved. These checks verify initialization, critic updates, game progression and
+deadline recovery; they do not demonstrate learned competence or resolve the broader
+collapse. Lower early digging is observed for both seeds, but all greedy evaluations
+failed; candidate seed 102 waited through all eight greedy cases, while the other
+three policies bought one attacker per case. The method remains **experimental**.
+Checks plus evaluation used 883.35 seconds;
+including all warmed benchmarks, 1,141.28 seconds (19.02 minutes). The 33 marked
+learning integration tests used 584.84 seconds; conservatively adding the preceding
+41.35-second focused pass gives **29.46 minutes**, within the 30-minute cap.
+No additional learning checks or formal training were launched. Concise measurements are retained in
+[runtime evidence](evidence/runtime-v0140.json); detailed outputs are under
+`artifacts/v0140/`. Temporary baseline implementation and models are removed after verification.
+
+### Regression and presentation
+
+The complete research suite passed **530 tests in 805.30 seconds**, including the
+current CPU/CUDA encoders and rewards, independent PPO losses/gradients/optimizer
+steps, forced-action and singleton cases, legal digging, causal history, timeout
+bootstrap, reload/resume/stage transfer, old-signature rejection, archived reports,
+CLI, deadline recovery and optional video export. New controls were consolidated
+into existing observation and policy tests; retired projectile-encoding assertions
+were removed. Ruff and formatting checks, dependency checks, README links and
+PowerShell syntax passed.
+
+The pinned upstream game suite passed **224 tests in 187.82 seconds**, using the
+verified archive under `artifacts/v0140/game-source` with external test caches.
+Doctor passed CUDA compilation, DLPack/stream sharing, simulation/accounting,
+rendering and replay checks. Wheel/sdist builds and their bundled event_v6 defaults
+were checked. The game checkout and engine lock remain unchanged.
+
+The bounded one-second-cutoff integration generated an offline report and three
+CPU-verified **100 Hz** demos with checkpoint
+`c9e85972a69737b4078caf1c9fade953bdcc722146eec8c09e9b99290a2b45b2`.
+All three are correctly labeled truncated. Training plots were visually inspected;
+their minimal combat activity is expected in this integration test.
+
 ## 0.13.0 compact regional zombies — 2026-09-24
 
 `event_v5` has 342 values and nine features per lane-region. The default independent

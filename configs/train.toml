@@ -36,7 +36,7 @@ zombie_states = ["walking", "carrying_pole", "vaulting", "biting", "dead"] # Eng
 mower_states = ["ready", "moving", "spent"]
 
 [encoding]
-version = "event_v5"
+version = "event_v6"
 local_count_scale = 5
 count_scale = 75
 wave_scale = 15
@@ -59,9 +59,9 @@ validation_schedule = "stage_success" # Normal-game evaluation only after each s
 eval_interval_games = 2000 # Used by diagnostic/fixed training or archived periodic schedules.
 total_steps = 3000000 # Inactive unless budget_unit = "decisions" (legacy).
 learner_seeds = [101, 102]
-n_envs = 256
+n_envs = 128
 device = "cuda"
-rollout_size = 32768
+rollout_size = 16384
 rollout_steps_per_env = 128 # Learning transitions per environment per update, not a game limit.
 max_minutes = 120
 finalization_minutes = 15
@@ -121,7 +121,7 @@ hybrid = false
 
 [policy]
 kind = "event_transformer_v1"
-initial_dig_logit = -6.0
+initial_dig_logit = -12.0
 plant_embedding = 8
 state_embedding = 4
 scalar_sizes = [64]

@@ -33,14 +33,12 @@ class CudaFeatures:
             "HP_SCALE": encoder.hp_scale,
             "ARMOR_SCALE": max(1, encoder.armor_scale),
             "POSITION_SCALE": encoder.position_scale,
-            "DAMAGE_SCALE": encoder.damage_scale,
             "COST_SCALE": encoder.cost_scale,
             "CUTOFF_SECONDS": cfg["environment"]["cutoff_seconds"],
             "EARLY_DIG_TICKS": cfg.get("diagnostics", {}).get("early_dig_seconds", 5)
             * batch.rules.game["tick_rate"],
             "WAVE_SCALE": cfg["encoding"]["wave_scale"],
             "COUNT_SCALE": encoder.count_scale,
-            "PROJECTILE_OFFSET": encoder.slices["projectiles"].start,
             "GLOBAL_OFFSET": encoder.slices["globals"].start,
             "GAMMA": cfg["training"]["gamma"],
             "BASIC_HP": batch.rules.zombies["basic"]["health"],
@@ -48,6 +46,7 @@ class CudaFeatures:
             "METRIC_SIZE": METRIC_SIZE,
         }
         params.update({f"Z_{k}": v for k, v in encoder.zombie_fields.items()})
+        params.update({f"O_{k}": v for k, v in encoder.global_fields.items()})
         reward_keys = (
             "win_reward",
             "loss_penalty",
@@ -87,7 +86,6 @@ class CudaFeatures:
                 b.header,
                 b.plants,
                 b.zombies,
-                b.projectiles,
                 b.mowers,
                 self.observations,
                 self.assets,

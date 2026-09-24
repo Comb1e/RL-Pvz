@@ -10,7 +10,7 @@ __device__ I bin_x(I x) {
   return hi(0, lo(BINS - 1, (x - G_house_x) * BINS / (G_spawn_x - G_house_x)));
 }
 extern "C" __global__ void encode_state(const I *headers, const I *plants,
-                                        const I *zombies, const I *shots,
+                                        const I *zombies,
                                         const I *mowers,
                                         float *output, double *assets, I n) {
   I i = blockIdx.x;
@@ -19,7 +19,6 @@ extern "C" __global__ void encode_state(const I *headers, const I *plants,
   Header h = ((Header *)headers)[i];
   Plant *p = (Plant *)(plants + i * 45 * 8);
   Zombie *z = (Zombie *)(zombies + i * ZCAP * 15);
-  Shot *q = (Shot *)(shots + i * QCAP * 6);
   Mower *m = (Mower *)(mowers + i * 5 * 4);
   float *o = output + i * OBS_SIZE;
   for (I j = 0; j < OBS_SIZE; j++)
@@ -65,30 +64,15 @@ extern "C" __global__ void encode_state(const I *headers, const I *plants,
     else
       o[ZOMBIE_OFFSET + j] = (double)zs[j] / scale;
   }
-  I qs[5 * BINS * 3] = {0};
-  for (I j = 0; j < h.nq; j++) {
-    Shot a = q[j];
-    I *cell = qs + (a.row * BINS + bin_x(a.x)) * 3;
-    cell[0]++;
-    cell[1] += a.damage;
-    cell[2] += a.icy;
-  }
-  for (I j = 0; j < 5 * BINS * 3; j++)
-    o[PROJECTILE_OFFSET + j] =
-        (double)qs[j] / (LOCAL_COUNT * (j % 3 == 1 ? DAMAGE_SCALE : 1.));
-  I k = GLOBAL_OFFSET;
-  o[k++] = (double)h.sun / COST_SCALE;
-  o[k++] = (double)h.tick / G_tick_rate / CUTOFF_SECONDS;
-  o[k++] = (double)h.wave / WAVE_SCALE;
-  o[k++] = (double)h.total_waves / WAVE_SCALE;
-  o[k++] = (double)h.total_spawns / COUNT_SCALE;
-  o[k++] = (double)h.spawn_index / COUNT_SCALE;
-  o[k++] = (double)h.defeated / COUNT_SCALE;
-  for (I r = 0; r < 5; r++) {
-    o[k++] = (double)m[r].x / POSITION_SCALE;
-    for (I j = 0; j < 3; j++)
-      o[k++] = m[r].state == j;
-  }
+  float *g = o + GLOBAL_OFFSET;
+  g[O_sun] = (double)h.sun / COST_SCALE;
+  g[O_elapsed] = (double)h.tick / G_tick_rate / CUTOFF_SECONDS;
+  g[O_wave] = (double)h.wave / WAVE_SCALE;
+  g[O_total_waves] = (double)h.total_waves / WAVE_SCALE;
+  g[O_initial] = (double)h.total_spawns / COUNT_SCALE;
+  g[O_defeated] = (double)h.defeated / COUNT_SCALE;
+  for (I r = 0; r < 5; r++)
+    g[O_mower_spent_0 + r] = m[r].state == 2;
   assets[i] = asset_value(h, p);
 }
 // Reward order mirrors reward_parts, using double intermediates before casting

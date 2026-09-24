@@ -1,4 +1,4 @@
-"""Independent controls for the single event_v5 public observation layout."""
+"""Independent controls for the single event_v6 public observation layout."""
 
 from dataclasses import replace
 
@@ -36,12 +36,11 @@ def zombie(kind="basic", row=0, x=1000, **changes):
 
 def test_layout_counts_assets_distances_and_empty_regions():
     encoder = ObservationEncoder(load_config(), Rules())
-    assert encoder.size == 342 and encoder.zombie_width == 9
+    assert encoder.size == 281 and encoder.zombie_width == 9
     assert [(s.start, s.stop) for s in encoder.slices.values()] == [
         (0, 135),
         (135, 270),
-        (270, 315),
-        (315, 342),
+        (270, 281),
     ]
     # Literal values use the pinned house/spawn positions -500/9500. A nearer
     # spent pole must not hide the next carrier whose pole is still unused.
@@ -75,6 +74,84 @@ def test_layout_counts_assets_distances_and_empty_regions():
     after = encoder.encode(replace(obs, zombies=spent))
     assert np.flatnonzero(encoded != after).tolist() == [143]
     assert after[143] == -1
+
+
+def test_globals_and_removed_fields_never_admit_events():
+    from pvz_game.types import ProjectileView
+
+    from pvz_rl.event_memory import EventMemory
+
+    cfg, rules = load_config(), Rules()
+    encoder = ObservationEncoder(cfg, rules)
+    base = public_board()
+    obs = replace(
+        base,
+        sun=600,
+        elapsed_seconds=120,
+        wave=3,
+        total_waves=6,
+        counts=replace(base.counts, initial_total=150, spawned=40, defeated=15),
+        mowers=tuple(
+            replace(m, state="spent" if m.row in (1, 4) else "ready") for m in base.mowers
+        ),
+    )
+    expected = encoder.encode(obs)
+    np.testing.assert_allclose(expected[270:], [3, 0.1, 0.2, 0.4, 2, 0.2, 0, 1, 0, 0, 1])
+    changed = replace(
+        obs,
+        counts=replace(obs.counts, spawned=100),
+        projectiles=(ProjectileView(999, 3, 4000, 1800, True),),
+        mowers=tuple(
+            replace(m, x=m.x + 2000, state="moving" if m.state == "ready" else m.state)
+            for m in reversed(obs.mowers)
+        ),
+    )
+    np.testing.assert_array_equal(encoder.encode(changed), expected)
+    memory = EventMemory(cfg, rules, 1, "cpu")
+    masks = torch.ones(1, 406, dtype=torch.bool)
+    for step, public in enumerate((obs, changed)):
+        memory.observe(
+            torch.tensor(encoder.encode(public)[None]),
+            masks,
+            torch.zeros(1),
+            torch.tensor([step == 0]),
+            torch.tensor([step]),
+        )
+    assert not memory.event_flags[0, -1]
+    changed = replace(changed, mowers=tuple(replace(m, state="spent") for m in changed.mowers))
+    memory.observe(
+        torch.tensor(encoder.encode(changed)[None]),
+        masks,
+        torch.zeros(1),
+        torch.tensor([False]),
+        torch.tensor([2]),
+    )
+    assert memory.event_flags[0, -1]
+
+
+def test_cuda_ignores_projectiles_spawned_and_unspent_mower_details():
+    from pvz_game.cuda.schema import HEADER, MOWER
+
+    from pvz_rl.cuda_features import CudaFeatures
+    from pvz_rl.cuda_lessons import LessonCudaBatch
+
+    batch = LessonCudaBatch(1, zombie_capacity=1, max_step_ticks=1)
+    batch.reset([LevelSpec("public", (Spawn(10000, "basic", 0),))], [0])
+    with batch.cp.cuda.ExternalStream(torch.cuda.current_stream().cuda_stream):
+        features = CudaFeatures(batch, load_config(), "masked")
+        features.encode()
+        expected = features.observations.get().copy()
+        batch.header[:, HEADER.index("spawn_index")] = 1
+        batch.header[:, HEADER.index("nq")] = 1
+        batch.projectiles[:, 0] = batch.cp.asarray([999, 3, 4000, 1800, 1, 0])
+        batch.mowers[:, :, MOWER.index("x")] += 2000
+        batch.mowers[:, :, MOWER.index("state")] = 1
+        features.encode()
+        np.testing.assert_array_equal(features.observations.get(), expected)
+        batch.mowers[:, 2, MOWER.index("state")] = 2
+        features.encode()
+        expected[0, 278] = 1
+        np.testing.assert_array_equal(features.observations.get(), expected)
 
 
 @pytest.mark.parametrize("row", range(5))
