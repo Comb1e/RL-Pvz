@@ -1,11 +1,11 @@
 # PVZ plant-placement research
 
-Research **0.15.0** trains one shared CUDA PPO policy across easy, standard and hard.
+Research **0.16.0** trains one shared CUDA PPO policy across easy, standard and hard.
 The policy uses a **281-value timer-free observation** and independent actor/critic
 Transformers with bounded event memory. It chooses wait, dig or plant first, then
 the required plant type and tile. Simulation runs at **100 Hz**. Learning
-results are experimental; **all earlier models, including 0.14 checkpoints, require
-fresh training**. Regional inputs retain zombie type counts, health, armor and
+results are experimental; **all earlier models require fresh training**. Regional
+inputs retain zombie type counts, health, armor and
 nearest zombie/unused-pole distances; explicit zombie behavior labels are absent.
 
 ## Requirements
@@ -45,8 +45,12 @@ Choose another unused name if it already exists. One recipe is shipped and is al
 the installed default. All settings, including memory sizes and PPO parameters,
 are configurable; alternate algorithms and legacy model conversions are absent.
 
-Defaults are **128 environments × 128 transitions each** (16,384 per update),
-batch size 1,024 and four epochs. Waiting remains a transition. **128 never limits game length**;
+Defaults are **128 environments × 128 transitions each** (16,384 per rollout),
+batch size 1,024 and four epochs. Training uses a two-rollout periodic on-policy
+window: one frozen policy snapshot collects both rollouts while the learner updates
+the first. Probes, validation, stopping and checkpoint saves run only after both
+updates complete. A final one-slot window handles a smaller remaining decision
+budget. Waiting remains a transition. **128 never limits game length**;
 unfinished episodes and their histories continue across updates. A wait/rejection
 advances one 0.01-second tick; accepted planting/digging is instantaneous.
 
@@ -65,8 +69,8 @@ To train only placement until it passes, with no training time or game ceiling:
 
 This stops after mastery and saves `final.zip`; it does not advance automatically.
 Use that checkpoint with `--stage saving --init-from runs\placement-101\final.zip`
-and a fresh output directory for the next stage. Ctrl+C saves `interrupted.zip`;
-resume it with `--resume CHECKPOINT` and a fresh output directory. The saved mode and
+and a fresh output directory for the next stage. Ctrl+C finishes the active two-rollout
+window, then saves `interrupted.zip`. Resume it with `--resume CHECKPOINT` and a fresh output directory. The saved mode and
 mastery progress are restored. Do not combine `--until-stage-complete` with explicit
 `--games`, `--steps` or `--max-minutes`; per-game cutoffs remain active.
 
@@ -98,7 +102,7 @@ verified demos, use a fresh artifact directory:
 ```powershell
 .\.venv\Scripts\python.exe -m pytest -q `
   tests/test_sc2_training.py::test_spatial_cuda_report_and_three_verified_shared_demos `
-  --basetemp artifacts\cuda-smoke-v0150
+  --basetemp artifacts\cuda-smoke-v0160
 ```
 
 `src/pvz_rl/` contains implementation; `configs/` the single recipe; `tools/` installation

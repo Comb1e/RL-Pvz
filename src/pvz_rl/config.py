@@ -335,6 +335,18 @@ def validate_config(cfg: dict) -> None:
     if not math.isfinite(visual["final_hold_seconds"]) or visual["final_hold_seconds"] < 0:
         raise ValueError("Visualization final_hold_seconds must be finite and nonnegative")
     env, train = cfg["environment"], cfg["training"]
+    pipeline = train.get("pipeline")
+    if not isinstance(pipeline, dict):
+        raise ValueError("training.pipeline is required; start a fresh periodic-on-policy run")
+    if pipeline.get("mode") != "periodic_on_policy":
+        raise ValueError("The synchronous training scheduler was removed; use periodic_on_policy")
+    if type(pipeline.get("depth")) is not int or pipeline["depth"] != 2:
+        raise ValueError("training.pipeline.depth must be exactly 2")
+    if (
+        type(pipeline.get("queue_size")) is not int
+        or not 1 <= pipeline["queue_size"] <= pipeline["depth"]
+    ):
+        raise ValueError("training.pipeline.queue_size must be between 1 and depth")
     if train.get("budget_unit", "decisions") not in ("games", "decisions"):
         raise ValueError("training.budget_unit must be games or decisions")
     if env.get("action_timing", "fixed") not in ("fixed", "per_tick"):

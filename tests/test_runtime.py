@@ -27,21 +27,33 @@ def test_legacy_runtime_defaults_and_compatibility(cfg):
 
 
 def test_phase_timing_excludes_validation_and_captures_final_update():
-    ticks = iter([1, 3, 6, 100, 104, 105])
-    timing = TrainingTimings(clock=lambda: next(ticks))
-    timing.end_update()  # No preceding update at startup.
-    timing.begin_collection()
-    timing.end_collection()
-    timing.end_update()
-    timing.begin_collection()  # Long validation gap must not enter either phase.
-    timing.end_collection()
-    timing.end_update()
-    timing.end_update()  # Idempotent.
+    timing = TrainingTimings()
+    for metrics in [
+        dict(
+            slot_collection_seconds=[2, 2],
+            slot_optimization_seconds=[3, 3],
+            window_seconds=8,
+            overlap_seconds=2,
+            queue_wait_seconds=2,
+        ),
+        dict(
+            slot_collection_seconds=[4],
+            slot_optimization_seconds=[1],
+            window_seconds=5,
+            overlap_seconds=0,
+            queue_wait_seconds=4,
+        ),
+    ]:
+        timing.record_window(metrics)
     assert timing.snapshot() == {
-        "collection_seconds": 6,
-        "optimization_seconds": 4,
+        "collection_seconds": 8,
+        "optimization_seconds": 7,
         "last_collection_seconds": 4,
         "last_optimization_seconds": 1,
+        "window_seconds": 13,
+        "last_window_seconds": 5,
+        "overlap_seconds": 2,
+        "queue_wait_seconds": 6,
     }
 
 

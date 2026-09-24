@@ -83,6 +83,11 @@ hidden_sizes = [128, 128]
 eval_interval = 250000 # Periodic decision interval for archived/diagnostic protocols.
 torch_threads = 1
 
+[training.pipeline]
+mode = "periodic_on_policy"
+depth = 2
+queue_size = 1
+
 [curriculum]
 mode = "teaching"
 residency = "episode_start_stage"

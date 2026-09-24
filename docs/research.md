@@ -1,5 +1,28 @@
 # Training method
 
+## Periodic on-policy execution
+
+Version 0.16.0 removes the synchronous rollout-then-update scheduler. A bounded
+two-slot producer–consumer window is the only training path. At its start, the
+collector receives frozen actor and critic copies. Both rollouts are generated with
+the same policy version; the learner updates the first slot while the second is
+collected. Live weights synchronize to the collector only after both slots are
+drained. A final partial window may contain one slot so decision budgets do not
+overshoot unnecessarily.
+
+The collector and learner use separate CUDA streams and explicit events. Each slot
+stores its own event-memory archive, terminal context, behavior log-probabilities,
+values, advantages and returns. Curriculum transitions, probes, validation and
+checkpoint writes wait for an empty window. Ctrl+C completes that window before
+saving; failed partial windows cannot be saved. Resume starts a fresh window with
+saved optimizers and counters.
+
+This is a scheduling change, not a new policy objective. It preserves PPO, rewards,
+temporal memory, masks, 128 environments, 128 transitions per environment and the
+two independent Adam optimizers. PPO uses the saved behavior log probabilities
+for its usual ratios, with no V-trace or additional policy-lag correction. Measured
+overlap and critical-path throughput are recorded in run metrics; published results from other systems are not transferred to this GPU.
+
 One CUDA MaskablePPO method learns a shared policy for easy, standard and hard.
 There is no imitation, scripted placement, savings rule or plant-retention rule.
 The timer-free Transformer is **experimental**. Correct memory does not establish
@@ -183,3 +206,11 @@ One selected actor supplies all three demos. CPU replay must match GPU outcome
 and hash before publication. Without validated best, final checkpoint/report still
 save but there are no selected-policy demos. Reports need no model. Old 20 Hz
 recordings were removed; historical report data remains preserved.
+
+Pipeline telemetry measures host collection/update intervals after their CUDA work
+completes. Overlap is the intersection of those intervals, not an estimate from
+phase totals and not proof that GPU kernels execute simultaneously. Window time
+includes weight synchronization and hashing; complete benchmark time also includes
+callbacks. Collection and update totals overlap and must not be added to estimate
+wall time. Deadline prediction uses the last completed window. Ctrl+C is deferred
+to that boundary; an unexpected failed window cannot produce a resume checkpoint.

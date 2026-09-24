@@ -18,7 +18,8 @@ flowchart LR
     Sim --> Reward[Net realized value and elapsed ticks]
     Memory --> Buffer[CUDA token archive and rollout sequences]
     Reward --> Buffer
-    Buffer --> Critic[Independent critic Transformer]
+    Buffer --> Window[Two-slot periodic on-policy window]
+    Window --> Critic[Independent critic Transformer]
     Critic --> GAE[Timeout bootstrap and duration-aware GAE]
     GAE --> PPO[Contiguous chunks with public-history burn-in]
     PPO --> Actor
@@ -100,8 +101,14 @@ This is a project-specific bounded Transformer, not a reproduction of GTrXL.
 ## Learning data and transitions
 
 Each rollout contains 128 environments × 128 transitions (16,384 total).
-Collection freezes actor and critic weights. Actor-only inference supplies actions
-and true mixed kind/species/tile log probabilities. The buffer archives each raw token once
+At a synchronization boundary, the collector receives frozen actor and critic copies
+and a policy-version hash. It fills two bounded rollout slots with that snapshot; the
+learner optimizes the first ready slot while the collector fills the second. The next
+snapshot is not created until both slots are drained, so all data in one window has
+one behavior-policy version. No V-trace, replay, policy-lag correction or asynchronous
+policy update is used.
+
+Actor-only inference supplies actions and true mixed kind/species/tile log probabilities. The buffer archives each raw token once
 and stores compact context references. Terminal contexts are captured before resets;
 truncated games bootstrap from these, natural outcomes do not. The unchanged critic
 evaluates stored causal contexts in batches before duration-based GAE.
@@ -113,32 +120,39 @@ reconstructs event admission/compression, not learned hidden state. Both encoder
 then re-encode this history; the remaining chunk contexts use the exact archive.
 Deterministic boundary banks are reconstructed once per rollout and reused across
 epochs and shuffled environment groups. Learned features are never cached across updates.
-No old rollout is reused after optimization. All tensors stay on CUDA apart from
-batched diagnostics and completed-game records.
+No old rollout is reused after optimization. Slot ownership is transferred with CUDA
+events, and allocations are reused only after the learner stream finishes. The
+ready queue defaults to one entry (configurable up to two); the free queue owns
+the two reusable slots. The collector blocks when the ready queue is full. All
+tensors stay on CUDA apart from batched diagnostics and completed-game records.
 
 ```mermaid
 stateDiagram-v2
-    [*] --> Reset
-    Reset --> Collect: new episode and empty history
-    Collect --> Collect: accepted operation or tick
-    Collect --> Terminal: natural end or cutoff
-    Terminal --> Reset: save metrics and timeout context
-    Collect --> Update: 128 transitions per environment
-    Update --> Probe: completed-game threshold crossed
-    Update --> Collect: same unfinished games and history
-    Probe --> UpdateStage: mastery passed
-    Probe --> Collect: failed or incomplete
-    UpdateStage --> Validate: same post-update weights
-    Validate --> Collect: automatic curriculum, future resets use new stage
-    Validate --> Save: selected stage mastered
-    Update --> Save: active budget reached
-    Collect --> Interrupted: user interruption or error
-    Interrupted --> Save: preserve optimizers and schedules
-    Save --> [*]
+    [*] --> Boundary
+    Boundary --> Collecting: freeze weights and exploration; start window
+    Collecting --> Overlapping: slot 1 ready; learn slot 1 and collect slot 2
+    Overlapping --> Draining: learn slot 2; collector idle
+    Collecting --> Draining: final one-slot decision budget
+    Draining --> Boundary: both updates complete; commit metrics and release slots
+    Boundary --> Probe: scheduled mastery/validation
+    Probe --> Boundary: save progress; stage affects future resets
+    Boundary --> Saved: budget, mastery or deferred Ctrl+C
+    Collecting --> Failed: collector error
+    Overlapping --> Failed: collector or learner error
+    Draining --> Failed: learner error
+    Failed --> [*]: drain worker; reject partial checkpoint
+    Saved --> [*]
 ```
 
+A game ending inside a slot saves its terminal context and resets only that game's
+history; unfinished games retain raw event memory across slots and windows. Ctrl+C
+is deferred through collection, both updates and metric commit, then saved at the
+empty boundary. Unexpected failures drain the worker and preserve previously saved
+checkpoints; incomplete-window weights are never serialized. Resume starts new games
+and an empty window, restoring both optimizers, schedules and policy-version count.
+
 Independent clipping and optimizers isolate policy and value learning. Actor KL
-stopping leaves critic epochs active. Exploratory noise is fixed within a rollout,
+stopping leaves critic epochs active. Exploratory noise is fixed within a two-rollout window,
 held during stage critic adaptation and decays by completed games. Evaluation uses
 greedy actor inference with its own episode banks, so it cannot alter collection memory.
 
@@ -151,7 +165,8 @@ the default; conflicting explicit ceilings fail before output creation.
 
 ## Storage, compatibility and failure paths
 
-Each run records resolved settings, source and structural signatures, reward and
+Each run records resolved settings, source and structural signatures, periodic
+pipeline depth, policy-version hashes, overlap timings, reward and
 discount settings, seeds, elapsed allowance, curriculum state, episodes and optimizer
 metrics. Checkpoints include both optimizers. Stage transfers copy compatible weights
 only; resume restores the saved experiment, starts fresh games and empty memory,

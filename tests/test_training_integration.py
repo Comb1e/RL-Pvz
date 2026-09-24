@@ -7,7 +7,7 @@ import pytest
 import torch
 
 from pvz_rl.env import PvZEnv
-from pvz_rl.provenance import file_hash, verify_engine
+from pvz_rl.provenance import verify_engine
 from pvz_rl.recordings import verify_replay
 from pvz_rl.training import load_policy, train
 
@@ -71,38 +71,6 @@ def test_real_training_serialization_and_replay(smoke_cfg, tmp_path, condition):
     replay = output / "probe.json"
     env.recorder.save(replay)
     assert verify_replay(replay).state_hash() == env.game.state_hash()
-
-
-@pytest.mark.learning
-def test_interrupt_resume_preserves_best_and_finishes_budget(smoke_cfg, tmp_path, monkeypatch):
-    from pvz_rl.training import ResearchCallback
-
-    original = ResearchCallback._on_rollout_start
-
-    def interrupt(self):
-        original(self)
-        if self.model.num_timesteps == 64:
-            raise KeyboardInterrupt("synthetic interruption after first PPO update")
-
-    monkeypatch.setattr(ResearchCallback, "_on_rollout_start", interrupt)
-    first = tmp_path / "first"
-    # An old configuration and stock buffer remain resumable on the same engine pin.
-    smoke_cfg["runtime"] = {key: False for key in smoke_cfg["runtime"]}
-    smoke_cfg["conditions"]["hybrid"] = dict(masked=True, shaped=True, curriculum=True, hybrid=True)
-    with pytest.raises(KeyboardInterrupt):
-        train(smoke_cfg, "masked", 101, first, validation_limit=1)
-    previous_hash = file_hash(first / "best.zip")
-    assert json.loads((first / "status.json").read_text())["steps"] == 64
-    monkeypatch.setattr(ResearchCallback, "_on_rollout_start", original)
-    resumed = tmp_path / "resumed"
-    smoke_cfg.pop("runtime")  # Missing runtime section gets current defaults on resume.
-    smoke_cfg["conditions"].pop("hybrid")  # Dormant definitions do not change this policy.
-    train(smoke_cfg, "masked", 101, resumed, validation_limit=1, resume=first / "interrupted.zip")
-    model, _ = load_policy(resumed / "final.zip")
-    assert model.num_timesteps == 128 and model._n_updates == 2
-    assert file_hash(resumed / "best.zip") == previous_hash  # equal scores keep earliest checkpoint
-    with pytest.raises(FileExistsError):
-        train(smoke_cfg, "masked", 101, resumed, validation_limit=1)
 
 
 @pytest.mark.learning

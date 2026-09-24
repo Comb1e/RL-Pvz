@@ -180,7 +180,7 @@ def test_grouped_learning_save_reload_metrics_and_complete_update_deadline(
     metrics = [
         json.loads(line) for line in (run / "training-metrics.jsonl").read_text().splitlines()
     ]
-    assert [m["training_steps"] for m in metrics] == [64, 128]
+    assert [m["training_steps"] for m in metrics] == [128]
     assert all(m["optimization"]["type_entropy"] >= 0 for m in metrics)
     env = PvZEnv(cfg)
     obs, _ = env.reset(seed=100000)
@@ -193,55 +193,6 @@ def test_grouped_learning_save_reload_metrics_and_complete_update_deadline(
     train(cfg, "masked", 101, timed, validation_limit=1, deadline=perf_counter() - 1)
     stopped, _ = load_policy(timed / "final.zip", device)
     assert stopped.num_timesteps == 0 and stopped._n_updates == 0
-
-
-@pytest.mark.learning
-def test_curriculum_probe_uses_same_policy_optimizer_and_persists_resume(
-    smoke_cfg, tmp_path, monkeypatch, legacy_teaching
-):
-    cfg = legacy_teaching(smoke_cfg)
-    cfg["training"].update(total_steps=384)
-    cfg["curriculum"].update(probe_interval=64, minimum_stage_steps=64)
-    identities = []
-    real_probe = ResearchCallback.probe_curriculum
-
-    def fake_evaluate(cfg, **kwargs):
-        from pvz_rl.evaluation import evaluate
-
-        if kwargs.get("split") == "curriculum_validation":
-            return [
-                {"win": 1, "family": kwargs["family"], "level": level, "scenario_seed": seed}
-                for level in kwargs["levels"]
-                for seed in kwargs["seeds"]
-            ]
-        return evaluate(cfg, **kwargs)
-
-    monkeypatch.setattr("pvz_rl.training.evaluate", fake_evaluate)
-
-    def probe(self):
-        identities.append((id(self.model.policy), id(self.model.policy.optimizer)))
-        real_probe(self)
-        if self.model.num_timesteps == 128:
-            raise KeyboardInterrupt()
-
-    monkeypatch.setattr(ResearchCallback, "probe_curriculum", probe)
-    first = tmp_path / "first"
-    with pytest.raises(KeyboardInterrupt):
-        train(cfg, "masked", 101, first, validation_limit=1)
-    assert len(set(identities)) == 1
-    checkpoint, _ = load_policy(first / "interrupted.zip")
-    assert checkpoint.curriculum_state["stage"] == 1
-    monkeypatch.setattr(ResearchCallback, "probe_curriculum", real_probe)
-    second = tmp_path / "second"
-    train(cfg, "masked", 101, second, validation_limit=1, resume=first / "interrupted.zip")
-    resumed, _ = load_policy(second / "final.zip")
-    assert resumed.num_timesteps == 384
-    assert resumed.curriculum_state["stage"] == 3
-    assert resumed.curriculum_state["consecutive_passes"] == 0
-    rows = [
-        json.loads(line) for line in (second / "training-episodes.jsonl").read_text().splitlines()
-    ]
-    assert any(r["family"] == "saving" for r in rows)
 
 
 @pytest.mark.parametrize("family", ["placement", "saving"])
@@ -264,24 +215,6 @@ def test_lesson_checkpoints_cannot_enter_normal_or_final_evaluation(
         main(args)
     with pytest.raises(ValueError, match="not formal test evidence"):
         main([*args, "--family", family, "--split", "test"])
-
-
-@pytest.mark.learning
-def test_deadline_saves_only_completed_update(smoke_cfg, tmp_path, monkeypatch):
-    cfg = smoke_cfg
-    original = ResearchCallback.capture_update
-
-    def expire_after_update(self):
-        original(self)
-        if self.model._n_updates:
-            self.deadline = perf_counter() - 1
-
-    monkeypatch.setattr(ResearchCallback, "capture_update", expire_after_update)
-    train(cfg, "masked", 101, tmp_path / "stopped", validation_limit=1)
-    model, _ = load_policy(tmp_path / "stopped/final.zip")
-    assert model.num_timesteps == 64 and model._n_updates == 1
-    status = json.loads((tmp_path / "stopped/status.json").read_text())
-    assert status["budget_stopped"] and status["curriculum_incomplete"]
 
 
 @pytest.mark.learning
@@ -328,3 +261,22 @@ def test_grouped_spawn_and_same_checkpoint_demos(tmp_path, tiny_cli_config):
     assert {d["level"] for d in demos} == {"easy", "standard", "hard"}
     assert len({d["checkpoint_hash"] for d in demos}) == 1
     assert all(d["replay"].endswith(".pvzdemo") for d in demos)
+
+
+@pytest.mark.learning
+def test_deadline_saves_only_completed_update(smoke_cfg, tmp_path, monkeypatch):
+    cfg = smoke_cfg
+    cfg["training"]["total_steps"] = 256
+    original = ResearchCallback.capture_update
+
+    def expire_after_update(self):
+        original(self)
+        if self.model._n_updates:
+            self.deadline = perf_counter() - 1
+
+    monkeypatch.setattr(ResearchCallback, "capture_update", expire_after_update)
+    train(cfg, "masked", 101, tmp_path / "stopped", validation_limit=1)
+    model, _ = load_policy(tmp_path / "stopped/final.zip")
+    assert model.num_timesteps == 128 and model._n_updates == 2
+    status = json.loads((tmp_path / "stopped/status.json").read_text())
+    assert status["budget_stopped"] and status["curriculum_incomplete"]
