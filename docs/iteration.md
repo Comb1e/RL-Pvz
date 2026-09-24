@@ -5,6 +5,18 @@ Dates and results belong to their recorded version. Current behavior lives in
 artifact locations and learning outcomes live in [validation](validation.md).
 The longer pre-consolidation notes remain in `git show b642c9c:docs/iteration.md`.
 
+## 0.13.0 — 2026-09-24
+
+- Problem: each region duplicated zombie state/pole counts alongside threat composition.
+- Change: nine regional values and 342 total inputs; nearest unused-pole distance
+  replaces the pole count and five state counts. Negative distance sentinels preserve
+  presence changes without retaining every movement tick. CPU/CUDA share layout offsets.
+- Compatibility: fresh event_v5 models; game 1.4.0, simulation 1.1.0 and source pin unchanged.
+- Maintenance: remove duplicate historical lesson/observation tests and consolidate
+  the standalone dig-bias test into policy controls. Current lesson and math controls remain.
+- Verification/results: see validation. Learning benefit and sufficiency of the
+  reduced behavior information remain unmeasured; no formal training or comparisons.
+
 ## 0.12.0 — 2026-09-24
 
 - Problem: explicit countdowns bypass temporal inference, while dense tick history

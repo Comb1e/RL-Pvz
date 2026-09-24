@@ -1,4 +1,4 @@
-"""Independent controls for encoder isolation, deferred values and weight conversion."""
+"""Independent controls for encoder isolation, deferred values and weight transfer."""
 
 import copy
 import json
@@ -41,7 +41,7 @@ def test_complete_disjoint_parameter_and_optimizer_ownership():
     critic = {id(p) for p in policy.critic_parameters()}
     assert actor.isdisjoint(critic)
     assert actor | critic == {id(p) for p in policy.parameters()}
-    assert sum(p.numel() for p in policy.parameters()) == 1178619
+    assert sum(p.numel() for p in policy.parameters()) == 1_150_779
     assert {id(p) for g in policy.optimizer.param_groups for p in g["params"]} == actor
     assert {id(p) for g in policy.critic_optimizer.param_groups for p in g["params"]} == critic
 

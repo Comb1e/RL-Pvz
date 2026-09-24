@@ -31,32 +31,39 @@ extern "C" __global__ void encode_state(const I *headers, const I *plants,
     o[k + 1] = (double)a.health / PH[a.kind];
     o[k + 2] = a.state + 1;
   }
-  I zs[5 * BINS * 14] = {0};
+  I zs[5 * BINS * ZOMBIE_WIDTH] = {0};
   I nearest[5 * BINS];
+  I nearest_pole[5 * BINS];
   for (I j = 0; j < 5 * BINS; j++) nearest[j] = 9223372036854775807LL;
+  for (I j = 0; j < 5 * BINS; j++) nearest_pole[j] = 9223372036854775807LL;
   for (I j = 0; j < h.nz; j++) {
     Zombie a = z[j];
-    I *cell = zs + (a.row * BINS + bin_x(a.x)) * 14;
-    cell[a.kind]++;
-    cell[5] += a.health;
-    cell[6] += a.armor;
     I region = a.row * BINS + bin_x(a.x);
+    I *cell = zs + region * ZOMBIE_WIDTH;
+    cell[a.kind]++;
+    cell[Z_health] += a.health;
+    cell[Z_armor] += a.armor;
     nearest[region] = lo(nearest[region], a.x);
-    cell[8] += a.has_pole;
-    cell[9 + a.state]++;
+    if (a.has_pole)
+      nearest_pole[region] = lo(nearest_pole[region], a.x);
   }
-  for (I j = 0; j < 5 * BINS * 14; j++) {
-    I f = j % 14;
+  for (I j = 0; j < 5 * BINS * ZOMBIE_WIDTH; j++) {
+    I f = j % ZOMBIE_WIDTH;
     double scale = LOCAL_COUNT;
-    if (f == 5)
+    if (f == Z_health)
       scale *= HP_SCALE;
-    else if (f == 6)
+    else if (f == Z_armor)
       scale *= ARMOR_SCALE;
-    else if (f == 7)
-      scale *= POSITION_SCALE;
-    o[135 + j] = f == 7
-       ? (nearest[j / 14] == 9223372036854775807LL ? 1. : (double)(nearest[j / 14] - G_house_x) / POSITION_SCALE)
-       : (double)zs[j] / scale;
+    if (f == Z_nearest)
+      o[ZOMBIE_OFFSET + j] = nearest[j / ZOMBIE_WIDTH] == 9223372036854775807LL
+          ? EMPTY_DISTANCE
+          : (double)(nearest[j / ZOMBIE_WIDTH] - G_house_x) / POSITION_SCALE;
+    else if (f == Z_nearest_pole)
+      o[ZOMBIE_OFFSET + j] = nearest_pole[j / ZOMBIE_WIDTH] == 9223372036854775807LL
+          ? EMPTY_DISTANCE
+          : (double)(nearest_pole[j / ZOMBIE_WIDTH] - G_house_x) / POSITION_SCALE;
+    else
+      o[ZOMBIE_OFFSET + j] = (double)zs[j] / scale;
   }
   I qs[5 * BINS * 3] = {0};
   for (I j = 0; j < h.nq; j++) {

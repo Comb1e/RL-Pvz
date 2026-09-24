@@ -1,7 +1,5 @@
 """Independent causal-history controls, including real CUDA rollout reconstruction."""
 
-from dataclasses import replace
-
 import numpy as np
 import pytest
 import torch
@@ -39,55 +37,37 @@ def observe(memory, obs, masks, tick, reset=False, action=0):
     )
 
 
-def test_countdowns_are_absent_and_categories_preserved():
-    _, encoder, game, _, _, _ = inputs()
-    obs = game.observe()
-    assert encoder.size == 417
-    changed = replace(
-        obs,
-        plants=tuple(replace(p, timer_ticks=p.timer_ticks + 321) for p in obs.plants),
-        cards=tuple(replace(c, cooldown_ticks=c.cooldown_ticks + 17) for c in obs.cards),
-    )
-    np.testing.assert_array_equal(encoder.encode(obs), encoder.encode(changed))
-    assert encoder.encode(obs)[(1 * 9 + 1) * 3 + 2] > 0
-    game.reset(LevelSpec("zombie-clocks", (Spawn(1, "pole_vaulting", 0),)))
-    game.step()
-    public = game.observe()
-    altered = replace(
-        public, zombies=tuple(replace(z, slow_ticks=123, timer_ticks=456) for z in public.zombies)
-    )
-    np.testing.assert_array_equal(encoder.encode(public), encoder.encode(altered))
-
-
-def test_cuda_encoder_ignores_all_private_countdowns():
-    from pvz_game.cuda.schema import PLANT, ZOMBIE
-
-    from pvz_rl.cuda_features import CudaFeatures
-    from pvz_rl.cuda_lessons import LessonCudaBatch
-
-    cfg = load_config()
-    batch = LessonCudaBatch(1, zombie_capacity=1, max_step_ticks=1)
-    batch.reset(
-        [
-            LevelSpec(
-                "hidden-clocks",
-                (Spawn(1, "pole_vaulting", 0),),
-                plants=(InitialPlant("potato_mine", 1, 1),),
-            )
-        ],
-        [0],
-    )
-    with batch.cp.cuda.ExternalStream(torch.cuda.current_stream().cuda_stream):
-        features = CudaFeatures(batch, cfg, "masked")
-        features.step(batch.cp.zeros(1, dtype=batch.cp.int64))
-        before = features.obs_tensor.clone()
-        for field in ("due", "burst_due"):
-            batch.plants[:, :, PLANT.index(field)] += 777
-        for field in ("slow_until", "vault_until", "bite_progress"):
-            batch.zombies[:, :, ZOMBIE.index(field)] += 777
-        batch.cooldowns[:] += 777
-        features.encode()
-        torch.testing.assert_close(features.obs_tensor, before, atol=0, rtol=0)
+@pytest.mark.parametrize("device", ["cpu", "cuda"])
+def test_pole_presence_events_ignore_movement_and_reset_history(device):
+    _, encoder, _, obs, masks, memory = inputs(2, device)
+    observe(memory, obs, masks, 0, reset=True)
+    # One pole zombie in a region, plus a second spent-pole zombie. The counts
+    # stay fixed when the unused pole disappears; only the new distance changes.
+    region = encoder.slices["zombies"].start
+    obs[:, region + 4] = 0.4
+    obs[:, region + 5] = 0.4
+    obs[:, region + 7] = 0.2
+    obs[:, region + 8] = 0.3
+    observe(memory, obs, masks, 1)
+    assert memory.event_flags[:, -1].all()
+    obs[:, region + 7 : region + 9] -= 0.01
+    observe(memory, obs, masks, 2)
+    assert not memory.event_flags[:, -1].any()
+    # Another active carrier becomes nearest without exhausting the region's
+    # active poles. This remains visible now, but is not a movement event.
+    obs[:, region + 8] = 0.32
+    observe(memory, obs, masks, 3)
+    assert not memory.event_flags[:, -1].any()
+    obs[0, region + 8] = -1
+    observe(memory, obs, masks, 4)
+    assert memory.event_flags[:, -1].tolist() == [True, False]
+    obs[0, region + 8] = 1  # A pole at the spawn boundary is present.
+    observe(memory, obs, masks, 5)
+    assert memory.event_flags[:, -1].tolist() == [True, False]
+    observe(memory, obs, masks, 0, reset=True)
+    assert memory.valid.sum(-1).tolist() == [1, 1]
+    observe(memory, obs, masks, 1)
+    assert not memory.event_flags[:, -1].any()
 
 
 @pytest.mark.parametrize("device", ["cpu", "cuda"])

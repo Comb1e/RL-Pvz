@@ -337,8 +337,14 @@ def test_existing_profiles_remain_valid_without_stage():
     assert "run_stage" not in cfg["curriculum"]
 
 
-def test_cli_retired_architecture_rejected_for_init_and_resume(stage_cfg, tmp_path):
-    stage_cfg["policy"]["kind"] = "spatial_grouped_v3"
+@pytest.mark.parametrize("retired", ["architecture", "observation"])
+def test_cli_retired_architecture_rejected_for_init_and_resume(stage_cfg, tmp_path, retired):
+    section, key, value = (
+        ("policy", "kind", "spatial_grouped_v3")
+        if retired == "architecture"
+        else ("encoding", "version", "event_v4")
+    )
+    stage_cfg[section][key] = value
     write_json(
         tmp_path / "metadata.json",
         {"config": stage_cfg, "learner_seed": 101, "condition": "masked"},
@@ -348,7 +354,7 @@ def test_cli_retired_architecture_rejected_for_init_and_resume(stage_cfg, tmp_pa
             configured(
                 argparse.Namespace(command="train", config=None, **{mode: tmp_path / "final.zip"})
             )
-    assert read_json(tmp_path / "metadata.json")["config"]["policy"]["kind"] == "spatial_grouped_v3"
+    assert read_json(tmp_path / "metadata.json")["config"][section][key] == value
 
 
 @pytest.mark.parametrize("stage", STAGES)

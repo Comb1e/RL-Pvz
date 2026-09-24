@@ -8,7 +8,7 @@ training and optimization run on CUDA. Model inputs contain public information o
 flowchart LR
     Config[Single resolved TOML] --> Scenarios[Seeded CPU scenario queue]
     Scenarios --> Sim[100 Hz ordered CUDA simulator]
-    Sim --> Public[417 public values and legal masks]
+    Sim --> Public[342 public values and legal masks]
     Public --> Memory[Bounded causal public history]
     Memory --> Actor[Independent actor Transformer]
     Actor --> Action[Type then tile: 406 actions]
@@ -35,9 +35,16 @@ CUDA. Accepted plant/dig operations take zero ticks; waits/rejections take one.
 Scenario names, seeds, entity IDs, private schedules and snapshots never enter a
 policy token. Snapshots and hashes remain available only for verification.
 
-The 417 values contain 135 plant values (type, health, behavior per tile), 210
-regional zombie values, 45 regional projectile values and 27 global values. Counts
-are not clipped. Globals include sun, elapsed time, waves/counts and mower state.
+The `event_v5` observation has 342 values: 135 plant values (type, health, behavior
+per tile), 135 regional zombie values, 45 regional projectile values and 27 globals.
+Each of five lanes has three regions. Each region contains five zombie-type counts,
+total health, total armor, nearest zombie distance and nearest unused-pole distance.
+Both distances use `(x - house_x) / (spawn_x - house_x)`; absence is -1, distinct
+from a carrier at either endpoint. Counts and asset totals are scaled but not clipped.
+Zombie behavior labels and pole counts are absent. `has_pole` supplies the unused-pole
+distance; it becomes false when vaulting begins. The schema defines feature offsets
+once for CPU encoding, CUDA constants and memory admission. Globals contain sun,
+elapsed time, waves/counts and mower state.
 No plant, zombie or card countdown is encoded. Legal masks still reveal immediate
 action legality. Plant/state category embeddings have zero padding for empty tiles.
 
@@ -49,10 +56,13 @@ tokens, 32 retained event tokens, and eight compressed summaries. Tokens contain
 the observation, previous accepted action, reset marker and public tick. Rejected
 actions have wait as their executed-action marker. No activations cross game boundaries.
 
-Public health/state changes, spawns/defeats, damage, projectile-region changes,
-sun/wave changes, mower state and legal-mask changes admit events. Continuous clock,
-within-region movement and mower position alone do not. Every decision still sees
-the current public state. Local eviction sends events to a FIFO, and quiet tokens
+Plant health/behavior changes, zombie counts/health/armor, projectile-region changes,
+sun/wave changes, mower state and legal-mask changes admit events. A region gaining
+its first or losing its last unused pole also admits an event, determined from the
+distance sentinel alone. Changes to the clock, either nearest distance within a
+region, or mower position alone do not admit events. Removed zombie states never
+supply hidden event flags. Every decision still sees the current public state.
+Local eviction sends events to a FIFO, and quiet tokens
 or older events to summaries. A summary keeps the latest public state, earliest
 represented tick and count; it never averages category identifiers. Summary stride
 and all capacities are configurable. Finite history can lose timing information.
@@ -124,4 +134,4 @@ Demos replay GPU actions through the CPU engine and require identical final outc
 decisions and hash before publication. Native 100 Hz recordings remain model-free.
 Video rendering samples a configurable lower rate while stepping/verifying every
 tick. Offline reports read stored metrics, not models. Historical reports survive;
-20 Hz recordings and pre-0.12 models are not accepted by the current engine/policy.
+20 Hz recordings and pre-0.13 models are not accepted by the current engine/policy.

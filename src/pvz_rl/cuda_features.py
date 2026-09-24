@@ -25,6 +25,9 @@ class CudaFeatures:
         encoder = self.encoder = ObservationEncoder(cfg, batch.rules)
         params = {
             "BINS": encoder.bins,
+            "ZOMBIE_WIDTH": encoder.zombie_width,
+            "ZOMBIE_OFFSET": encoder.slices["zombies"].start,
+            "EMPTY_DISTANCE": encoder.empty_distance,
             "OBS_SIZE": encoder.size,
             "LOCAL_COUNT": encoder.local_count_scale,
             "HP_SCALE": encoder.hp_scale,
@@ -44,6 +47,7 @@ class CudaFeatures:
             "REWARD_SIZE": len(REWARD_FIELDS),
             "METRIC_SIZE": METRIC_SIZE,
         }
+        params.update({f"Z_{k}": v for k, v in encoder.zombie_fields.items()})
         reward_keys = (
             "win_reward",
             "loss_penalty",
