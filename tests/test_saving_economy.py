@@ -6,8 +6,9 @@ from itertools import combinations
 import numpy as np
 import pytest
 import torch
-from pvz_game import Dig, LevelSpec, Place, Rules, Spawn
+from pvz_game import Dig, InitialPlant, LevelSpec, Place, Rules, Spawn
 
+from pvz_rl.action_timing import ActionPhaseGame
 from pvz_rl.config import load_config, validate_config
 from pvz_rl.env import PvZEnv
 from pvz_rl.recordings import open_playback, verify_replay
@@ -15,14 +16,14 @@ from pvz_rl.rewards import asset_value
 from pvz_rl.scenarios import scenario
 from pvz_rl.training_requirements import resume_protocol, transfer_protocol
 
-LANE_PAIRS = list(combinations(range(5), 2))
+LANE_TRIPLES = list(combinations(range(5), 3))
 
 
 def saving_case(lanes):
     return LevelSpec(
         "saving",
-        tuple(Spawn(t, "basic", r) for t in (4300, 5500, 6700) for r in lanes),
-        initial_sun=150,
+        tuple(Spawn(t, "basic", r) for t in (7500, 8700, 9900) for r in lanes),
+        initial_sun=100,
         mowers=False,
     )
 
@@ -31,7 +32,7 @@ def control_action(env, flowers, invest=True, delay=0):
     obs = env.public
     if obs.tick < delay:
         return 0, flowers
-    if invest and flowers < 2:
+    if invest and flowers < 5:
         candidate = Place("sunflower", flowers, 0)
     else:
         defended = {p.row for p in obs.plants if p.plant_type == "peashooter"}
@@ -57,40 +58,42 @@ def run_control(env, *, invest=True, delay=0, wait=False):
 
 def test_lesson_economics_and_pressure_independent_calculations():
     cfg, rules = load_config(), Rules()
-    placement, saving = (cfg["curriculum"]["lessons"][k] for k in ("placement", "saving"))
-    assert placement == dict(
-        spawn_ticks=[5, 105, 205], initial_sun=100, natural_sun=False, allowed_plants=["peashooter"]
+    saving = cfg["curriculum"]["lessons"]["saving"]
+    assert set(cfg["curriculum"]["lessons"]) == {"saving"}
+    assert saving["spawn_ticks"] == [7500, 8700, 9900]
+    assert saving["initial_sun"] == 100 and saving["lanes_per_spawn"] == 3
+    assert not saving["natural_sun"]
+    assert set(saving["allowed_plants"]) == set(rules.plants)
+    g, pea, flower, mine = (
+        rules.game,
+        rules.plants["peashooter"],
+        rules.plants["sunflower"],
+        rules.plants["potato_mine"],
     )
-    assert saving == dict(
-        spawn_ticks=[4300, 5500, 6700],
-        initial_sun=150,
-        natural_sun=False,
-        lanes_per_spawn=2,
-        allowed_plants=["sunflower", "peashooter"],
+    assert all(
+        rules.plants[k]["cost"] > 100 for k in ("cherry_bomb", "chomper", "snow_pea", "repeater")
     )
-    g, pea, flower = rules.game, rules.plants["peashooter"], rules.plants["sunflower"]
-    assert pea["cost"] == 100 and flower["cost"] == 50
-    # No income without flowers: at most one shooter can ever be purchased.
-    # No refunds/relocation/cross-lane shots; at least one lane stays unblocked.
-    assert saving["initial_sun"] < saving["lanes_per_spawn"] * pea["cost"]
-    travel = (g["spawn_x"] - g["house_x"]) // (rules.zombies["basic"]["speed"] // 100)
-    assert travel == 5000 and 4300 + travel - 1 == 9299
-    assert rules.zombies["basic"]["health"] // pea["damage"] == 10
-    assert pea["interval_ticks"] == 150
-    # One shooter needs 1500 ticks of sustained fire per basic zombie; saving
-    # arrivals every 1200 ticks exceed this rate for a finite burst.
-    assert 10 * 150 > saving["spawn_ticks"][1] - saving["spawn_ticks"][0] == 1200
+    assert pea["cost"] == 100 and flower["cost"] == rules.plants["wall_nut"]["cost"] == 50
+    assert mine["cost"] == 25 and 100 // mine["cost"] == 4
+    assert (100 - flower["cost"]) // mine["cost"] == 2 < 3
+    # A four-mine budget leaves one of three lanes with at most one mine.
+    # Even the conservative three-second eating delay cannot close the 2.4-tile gap
+    # into the mine's one-tile explosion interval.
+    spacing = (8700 - 7500) / g["tick_rate"] * rules.zombies["basic"]["speed"]
+    delay = mine["health"] / g["bite_damage"] * g["bite_ticks"] / g["tick_rate"]
+    assert spacing == 2400 and delay == 3
+    assert spacing - delay * rules.zombies["basic"]["speed"] > g["units_per_tile"]
     assert flower["first_ticks"] == 600 and flower["interval_ticks"] == 2400
     assert flower["recharge_ticks"] == 750
-    # Flowers at 0/750 make six 25-sun payments. After buying both flowers and
-    # the first shooter, the second shooter becomes affordable at tick 6150.
-    incomes = sorted(t + 600 + k * 2400 for t in (0, 750) for k in range(3))
-    assert incomes == [600, 1350, 3000, 3750, 5400, 6150]
-    assert 150 - 2 * 50 + len(incomes) * 25 == 2 * 100
+    # Five flowers can be bought at these times without external income.
+    purchases = [0, 750, 1500, 3000, 3750]
+    for i, tick in enumerate(purchases):
+        payments = sum(max(0, (tick - t - 600) // 2400 + 1) for t in purchases[:i])
+        assert 100 - i * 50 + payments * 25 >= 50
 
 
-@pytest.mark.parametrize("lanes", LANE_PAIRS)
-@pytest.mark.parametrize("mode", ["invest", "no_flowers", "wait", "flowers3", "flowers_all", "dig"])
+@pytest.mark.parametrize("lanes", LANE_TRIPLES)
+@pytest.mark.parametrize("mode", ["invest", "no_flowers", "wait", "dig", "mines"])
 def test_saving_success_and_necessary_income(lanes, mode):
     env = PvZEnv(load_config(), family="saving")
     env.reset(seed=4, options={"scenario": saving_case(lanes)})
@@ -101,16 +104,20 @@ def test_saving_success_and_necessary_income(lanes, mode):
         env.step(env.codec.encode(Dig(lanes[0], 0)))
         run_control(env, wait=True)
     else:
-        flowers = 0
+        purchases = 0
         while env.state == "running":
-            legal = [int(x) for x in np.flatnonzero(env.action_masks()) if 1 <= x <= 45]
-            action = legal[0] if legal and flowers < (3 if mode == "flowers3" else 45) else 0
-            flowers += bool(action)
+            candidate = env.codec.encode(
+                Place("potato_mine", lanes[purchases % 3], 1 + purchases // 3)
+            )
+            action = candidate if purchases < 4 and env.action_masks()[candidate] else 0
+            purchases += bool(action)
             env.step(action)
     result = env.episode_metrics()
-    # Derived independently from six basics and nine actual sunflower payments.
+    # Nine full basic HP pools, plus actual production; no plant loss in the witness.
     scale = env.cfg["reward"]["progress_weight"] / env.cfg["reward"]["value_scale"]
-    winning_return = env.cfg["reward"]["win_reward"] + scale * (225 + 6 * 50)
+    winning_return = env.cfg["reward"]["win_reward"] + scale * (
+        env.episode_metrics()["produced_sun"] + 9 * 50
+    )
     assert result["return"] == pytest.approx(result["discounted_return"])
     assert result["discounted_outcome_return"] + result[
         "discounted_development_return"
@@ -121,79 +128,62 @@ def test_saving_success_and_necessary_income(lanes, mode):
         if mode == "dig":
             assert result["net_value"] == -100 and result["early_voluntary_digs"] == 1
         else:
-            assert result["produced_sun"] > 0 and result["attacker_purchases"] == 0
+            assert result["produced_sun"] == 0 and result["plant_usage"] == {"potato_mine": 4}
         return
     assert env.state == ("won" if mode == "invest" else "lost")
-    assert env.public.tick == (10501 if mode == "invest" else 9299)
+    assert env.public.tick == (13652 if mode == "invest" else 12499)
     assert (
         env.episode_metrics()["attacker_purchases"]
-        == {"invest": 2, "no_flowers": 1, "wait": 0}[mode]
+        == {"invest": 3, "no_flowers": 1, "wait": 0}[mode]
     )
     if mode == "invest":
-        assert [t for t, _ in purchases] == [0, 750, 4300, 6150]
-        assert len(env.public.plants) == 4  # No sacrificial blockers/replacements.
-        assert env.episode_metrics()["net_value"] == 525
+        assert [t for t, _ in purchases] == [0, 750, 1500, 3000, 3750, 7500, 8250, 9300]
+        assert len(env.public.plants) == 8  # No sacrificial blockers/replacements.
+        assert result["produced_sun"] == 650  # 6 + 6 + 5 + 5 + 4 payments.
+        assert result["net_value"] == 1100
         assert env.episode_metrics()["discounted_return"] == pytest.approx(winning_return, abs=1e-9)
     elif mode == "wait":
         assert env.episode_metrics()["discounted_return"] == pytest.approx(
-            -2 * env.cfg["training"]["gamma"] ** 9298, abs=1e-10
+            -2 * env.cfg["training"]["gamma"] ** 12498, abs=1e-10
         )
     env.close()
 
 
-@pytest.mark.parametrize("delay,outcome,tick", [(347, "won", 10848), (348, "lost", 11998)])
-def test_saving_witness_timing_boundary(delay, outcome, tick):
+def test_all_species_legal_and_mine_arming_and_blast_boundaries():
     env = PvZEnv(load_config(), family="saving")
-    env.reset(options={"scenario": saving_case((2, 4))})
-    run_control(env, delay=delay)
-    assert env.state == outcome and env.public.tick == tick
-
-
-@pytest.mark.parametrize("lane", range(5))
-@pytest.mark.parametrize(
-    "delay,outcome,tick", [(5, "won", 4359), (502, "won", 4853), (503, "lost", 5503)]
-)
-def test_placement_timing_boundary(lane, delay, outcome, tick):
-    env = PvZEnv(load_config(), family="placement")
     env.reset(
         options={
             "scenario": LevelSpec(
-                "placement",
-                tuple(Spawn(t, "basic", lane) for t in (5, 105, 205)),
-                initial_sun=100,
-                mowers=False,
+                "affordable", (Spawn(5000, "basic", 0),), initial_sun=1000, mowers=False
             )
         }
     )
-    for _ in range(delay):
-        env.step(0)
-    assert env.step(env.codec.encode(Place("peashooter", lane, 0)))[4]["accepted"]
-    while env.state == "running":
-        env.step(0)
-    assert env.state == outcome and env.public.tick == tick
+    for kind in env.cfg["environment"]["plants"]:
+        assert env.action_masks()[env.codec.encode(Place(kind, 0, 0))]
+    case = LevelSpec(
+        "mine-boundary",
+        tuple(
+            Spawn(1401, "basic", r, x=x) for r, x in [(0, 1000), (0, 1999), (0, 2000), (1, 1500)]
+        ),
+        plants=(InitialPlant("potato_mine", 0, 1),),
+        mowers=False,
+    )
+    game = ActionPhaseGame()
+    game.reset(case, 4)
+    game.step(ticks=1399)
+    assert game.observe().plants[0].state == "arming"
+    game.step()
+    assert game.observe().plants[0].state == "armed"
+    result = game.step()
+    assert len([e for e in result.events if e.kind == "ZombieDefeated"]) == 2
+    assert {(z.row, z.health) for z in game.observe().zombies} == {(0, 200), (1, 200)}
 
 
-@pytest.mark.parametrize("family", ["placement", "saving"])
-def test_early_dig_discards_irreplaceable_budget(family):
-    env = PvZEnv(load_config(), family=family)
-    env.reset(seed=4)
-    kind = "peashooter" if family == "placement" else "sunflower"
-    env.step(env.codec.encode(Place(kind, 0, 0)))
-    assert env.step(env.codec.encode(Dig(0, 0)))[4]["accepted"]
-    assert env.episode_metrics()["early_voluntary_digs"] == 1
-    if family == "saving":
-        run_control(env)
-    else:
-        while env.state == "running":
-            env.step(0)
-    assert env.state == "lost"
-
-
-def test_seeded_cases_cover_all_pairs_and_one_current_definition():
+def test_seeded_cases_cover_all_triples_and_one_current_definition():
     cfg, rules = load_config(), Rules()
     cases = [scenario("easy", "saving", s, rules, cfg) for s in range(100050, 100150)]
-    assert {tuple(sorted({s.row for s in case.spawns})) for case in cases} == set(LANE_PAIRS)
-    assert all(len(case.spawns) == 6 and not case.mowers and not case.plants for case in cases)
+    assert {tuple(sorted({s.row for s in case.spawns})) for case in cases} == set(LANE_TRIPLES)
+    assert all(len(case.spawns) == 9 and not case.mowers and not case.plants for case in cases)
     assert cfg == load_config("configs/train.toml")
     changed = copy.deepcopy(cfg)
     changed["curriculum"]["lessons"]["saving"]["spawn_ticks"] = [1000]
@@ -220,11 +210,11 @@ def test_explicit_natural_sun_boolean_required(value):
 def test_saving_conserves_purchase_and_credits_only_actual_production():
     env = PvZEnv(load_config(), family="saving")
     env.reset(seed=0)
-    assert asset_value(env.public) == 150
+    assert asset_value(env.public) == 100
     assert env.step(env.codec.encode(Place("sunflower", 0, 0)))[1] == 0
-    assert asset_value(env.public) == 150
+    assert asset_value(env.public) == 100
     reward = sum(env.step(0)[1] for _ in range(1000))
-    assert env.public.sun == 125 and asset_value(env.public) == 175
+    assert env.public.sun == 75 and asset_value(env.public) == 125
     assert reward == pytest.approx(25 / 30000)
 
 
@@ -236,16 +226,16 @@ def test_saving_cuda_states_observations_rewards_match_reference(invest):
     from pvz_rl.cuda_lessons import LessonCudaBatch
 
     cfg = load_config()
-    envs = [PvZEnv(cfg, family="saving") for _ in LANE_PAIRS]
-    cases = [saving_case(lanes) for lanes in LANE_PAIRS]
+    envs = [PvZEnv(cfg, family="saving") for _ in LANE_TRIPLES]
+    cases = [saving_case(lanes) for lanes in LANE_TRIPLES]
     for env, case in zip(envs, cases):
         env.reset(seed=4, options={"scenario": case})
-    batch = LessonCudaBatch(len(cases), zombie_capacity=6, max_step_ticks=1)
+    batch = LessonCudaBatch(len(cases), zombie_capacity=9, max_step_ticks=1)
     cp = batch.cp
     flowers = [0] * len(cases)
     with cp.cuda.ExternalStream(torch.cuda.current_stream().cuda_stream):
         batch.reset(
-            cases, [4] * len(cases), allowed=[3] * len(cases), natural_sun=[False] * len(cases)
+            cases, [4] * len(cases), allowed=[255] * len(cases), natural_sun=[False] * len(cases)
         )
         features = CudaFeatures(batch, cfg, "masked")
         features.encode()
@@ -275,7 +265,7 @@ def test_saving_cuda_states_observations_rewards_match_reference(invest):
 
 def test_sunless_recordings_verify_and_seek_without_external_settings(tmp_path):
     env = PvZEnv(load_config(), family="saving", record=True)
-    env.reset(seed=4, options={"scenario": saving_case((2, 4))})
+    env.reset(seed=4, options={"scenario": saving_case((0, 2, 4))})
     run_control(env)
     path = tmp_path / "saving.pvzdemo"
     env.recorder.save(path)
@@ -283,7 +273,7 @@ def test_sunless_recordings_verify_and_seek_without_external_settings(tmp_path):
     playback = open_playback(path)
     assert playback.game.rules.game["sky_sun_amount"] == 0
     playback.seek(1000)
-    assert playback.game.observe().sun == 75
+    assert playback.game.observe().sun == 25
     playback.seek(playback.end_tick)
     assert playback.game.state_hash() == env.game.state_hash()
 
@@ -357,7 +347,7 @@ def test_mixed_vector_reset_uses_episode_family_and_leaves_normal_rules_unchange
         pytest.skip("CUDA unavailable")
     cfg = load_config()
     cfg["training"].update(n_envs=3, rollout_size=384, batch_size=128)
-    cases = [("easy", family, 4) for family in ("placement", "saving", "preset")]
+    cases = [("easy", family, 4) for family in ("saving", "saving", "preset")]
     env = CudaVecEnv(cfg, "masked", 101, training=False, cases=cases)
     references = [PvZEnv(cfg, level=level, family=family) for level, family, _ in cases]
     try:
@@ -368,14 +358,14 @@ def test_mixed_vector_reset_uses_episode_family_and_leaves_normal_rules_unchange
             env.step_tensors(torch.zeros(3, dtype=torch.long, device="cuda"), autoreset=False)
             for ref in references:
                 ref.step(0)
-        assert [ref.public.sun for ref in references] == [100, 150, 75]
+        assert [ref.public.sun for ref in references] == [100, 100, 75]
         for i, ref in enumerate(references):
             assert env.batch.state_hash(i) == ref.game.state_hash()
         untouched = env.batch.state_hash(1)
         with env.device_context():
             env.reset_indices([0, 2], [cases[2], cases[0]])
         references[0].reset(seed=4, options={"family": "preset"})
-        references[2].reset(seed=4, options={"family": "placement"})
+        references[2].reset(seed=4, options={"family": "saving"})
         assert env.batch.state_hash(1) == untouched
         for _ in range(1000):
             env.step_tensors(torch.zeros(3, dtype=torch.long, device="cuda"), autoreset=False)

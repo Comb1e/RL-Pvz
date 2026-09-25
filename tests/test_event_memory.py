@@ -201,6 +201,9 @@ def test_real_mine_histories_affect_tile_preferences_without_countdown_inputs():
         features_extractor_kwargs={"layout_cfg": cfg},
     )
     with torch.no_grad():
+        # Initialization intentionally has no learned tile preference. A nonzero
+        # readout tests whether temporal features can inform such preferences.
+        policy.action_net.tiles.weight.normal_(std=0.01)
         logits = policy.get_distribution(observations, masks, context).logits
         # Temporal information reaches conditional tile preferences, not only
         # a uniform tile-map offset that would cancel under softmax.

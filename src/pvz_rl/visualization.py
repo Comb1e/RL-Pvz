@@ -26,12 +26,22 @@ def read_json(path, default=None):
     return json.loads(path.read_text("utf-8")) if path.exists() else default
 
 
-def read_series(path):
+def read_series(path, *, tolerate_partial_tail=False):
     path = Path(path)
     if not path.exists():
         return []
     with path.open(encoding="utf-8") as stream:
-        return [json.loads(line) for line in stream if line.strip()]
+        lines = stream.readlines()
+    rows = []
+    for index, line in enumerate(lines):
+        if not line.strip():
+            continue
+        try:
+            rows.append(json.loads(line))
+        except json.JSONDecodeError:
+            if not (tolerate_partial_tail and index == len(lines) - 1 and not line.endswith("\n")):
+                raise
+    return rows
 
 
 def run_segments(run):
@@ -52,6 +62,11 @@ def run_segments(run):
                     if cutoff is None or row["training_steps"] <= cutoff
                 }.values()
             )
+        series["hardware"] = [
+            row
+            for row in read_series(current / "hardware-metrics.jsonl", tolerate_partial_tail=True)
+            if cutoff is None or row.get("training_steps", 0) <= cutoff
+        ]
         result.append((current.name, series))
         boundary = meta.get("resume_steps")
         if not meta.get("resume") or boundary is None:
@@ -77,6 +92,104 @@ def _empty(ax, message="Not recorded yet"):
     ax.text(0.5, 0.5, message, ha="center", va="center", transform=ax.transAxes)
 
 
+def hardware_panels(segments, output):
+    """Raw wall-time samples only; never infer hardware utilization from timings."""
+    rows = [
+        dict(row, session=f"{label}/{row.get('session', 'unknown')}")
+        for label, series in segments
+        for row in series["hardware"]
+    ]
+    fig, axes = plt.subplots(3, 2, figsize=(14, 11), sharex=True)
+    panels = (
+        (
+            "CPU load",
+            "% (process: one core = 100%)",
+            (
+                ("system_cpu_percent", "System"),
+                ("busiest_cpu_percent", "Busiest logical CPU"),
+                ("process_cpu_percent", "Training process"),
+            ),
+        ),
+        (
+            "Device-wide GPU activity",
+            "% of sampling period",
+            (("gpu_percent", "GPU busy"), ("gpu_memory_percent", "Memory-controller busy")),
+        ),
+        (
+            "Memory capacity used",
+            "MiB",
+            (("process_ram_mib", "Process RAM"), ("gpu_memory_mib", "Device VRAM")),
+        ),
+        (
+            "Device power / temperature",
+            "W / °C",
+            (("gpu_watts", "Power (W)"), ("gpu_temperature_c", "Temperature (°C)")),
+        ),
+        (
+            "Latest completed window",
+            "Transitions / second",
+            (("transitions_per_second", "Throughput"),),
+        ),
+        (
+            "Latest completed window timings",
+            "Seconds",
+            (
+                ("collection_seconds", "Collection"),
+                ("update_seconds", "Update"),
+                ("overlap_seconds", "Overlap"),
+                ("window_seconds", "Critical path"),
+            ),
+        ),
+    )
+    sessions = list(dict.fromkeys(r.get("session", "unknown") for r in rows))
+    for ax, (title, unit, fields) in zip(axes.flat, panels):
+        plotted = False
+        for session in sessions:
+            data = [r for r in rows if r.get("session", "unknown") == session]
+            x = [r["seconds"] / 60 for r in data]
+            for key, label in fields:
+                if any(r.get(key) is not None for r in data):
+                    ax.plot(
+                        x,
+                        [r.get(key) if r.get(key) is not None else float("nan") for r in data],
+                        label=label + (f" ({session[:6]})" if len(sessions) > 1 else ""),
+                        linewidth=1,
+                    )
+                    plotted = True
+            # Background spans identify training phases and evaluation periods.
+            spans = []
+            for i, row in enumerate(data):
+                phase = (
+                    row.get("activity") if row.get("activity") != "training" else row.get("phase")
+                )
+                if not spans or spans[-1][2] != phase:
+                    spans.append([x[i], x[i], phase])
+                spans[-1][1] = x[i + 1] if i + 1 < len(x) else x[i]
+            for start, end, phase in spans:
+                color = {
+                    "warmup": "#d8e8f6",
+                    "formal": "#e2f0df",
+                    "validation": "#ffe3a5",
+                    "reporting": "#eaddef",
+                }.get(phase)
+                if color:
+                    ax.axvspan(start, end, color=color, alpha=0.3, linewidth=0)
+        if plotted:
+            ax.legend(fontsize=8)
+        else:
+            _empty(
+                ax, "Hardware samples unavailable; historical utilization cannot be reconstructed"
+            )
+        ax.set(title=title, ylabel=unit, xlabel="Elapsed wall time within session (minutes)")
+        ax.grid(alpha=0.2)
+    fig.suptitle(
+        "Hardware telemetry • blue: warm-up • green: formal • amber: validation • purple: reporting",
+        fontsize=11,
+    )
+    _save(fig, output, "hardware")
+    return ("Hardware utilization (device-wide GPU)", "hardware.png")
+
+
 def build_run_report(run, cfg=None):
     run = Path(run).resolve()
     meta = read_json(run / "metadata.json", {})
@@ -85,7 +198,7 @@ def build_run_report(run, cfg=None):
     output.mkdir(parents=True, exist_ok=True)
     segments = run_segments(run)
     progress_key, progress_label = curve_axis(cfg)
-    images = []
+    images = [hardware_panels(segments, output)]
     fig, axes = plt.subplots(1, 2, figsize=(12, 4))
     colors = {"macro": "#233d37", "easy": "#399471", "standard": "#d69536", "hard": "#b54e59"}
     for ax, xkey, xlabel in zip(
@@ -633,7 +746,7 @@ def export_demonstrations(run, demos, cfg, progress, deadline=None):
     return demos
 
 
-def visualize_run(run, *, cfg=None, videos=None, progress=None, deadline=None):
+def visualize_run(run, *, cfg=None, videos=None, progress=None, deadline=None, report_only=False):
     """Rebuild derived artifacts. Failures are recorded separately from training."""
     from .training_requirements import current_model_config
 
@@ -657,7 +770,9 @@ def visualize_run(run, *, cfg=None, videos=None, progress=None, deadline=None):
         original = read_json(run / "metadata.json")["config"]
         archived = not current_engine_config(original) or not current_model_config(original)
         demos = []
-        if archived:
+        if report_only:
+            status["note"] = "Report only; checkpoints and demonstrations were not loaded"
+        elif archived:
             best = read_json(run / "best.json", {})
             demos = [
                 d

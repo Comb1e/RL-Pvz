@@ -25,7 +25,7 @@ from .actions import ActionSchema as A
 from .cuda_buffer import TensorRolloutBuffer
 from .event_memory import EventMemory, MemoryContext
 from .exploration import configure_exploration, exploration_loss
-from .grouped_policy import GroupedDistribution
+from .grouped_policy import ACTION_DISTRIBUTION, GroupedDistribution
 from .periodic import (
     OPTIMIZER_PROTOCOL,
     ActorUpdateState,
@@ -67,11 +67,18 @@ class PeriodicPipelineError(RuntimeError):
 class TensorPPO:
     def __init__(self, *args, **kwargs):
         self.optimizer_protocol = OPTIMIZER_PROTOCOL
+        self.action_distribution_protocol = ACTION_DISTRIBUTION
         super().__init__(*args, **kwargs)
 
     @classmethod
     def load(cls, path, *args, **kwargs):
         protocol = checkpoint_optimizer_protocol(path)
+        archive_path = path
+        if isinstance(path, (str, Path)) and not Path(path).exists():
+            archive_path = str(path) + ".zip"
+        with zipfile.ZipFile(archive_path) as archive:
+            if json.loads(archive.read("data")).get("action_distribution_protocol") != ACTION_DISTRIBUTION:
+                raise ValueError("Action distribution changed; fresh training is required")
         model = super().load(path, *args, **kwargs)
         model.optimizer_protocol = protocol
         configure_exploration(model, model.policy.features_extractor.cfg)
@@ -698,7 +705,9 @@ class TensorPPO:
             current = distribution.types.probs
             exact = current.new_zeros(len(current))
             if behavior[0] is not None:
-                old = GroupedDistribution(behavior_epsilon).proba_distribution(
+                old = GroupedDistribution(
+                    behavior_epsilon, wait_weight=self.policy.action_dist.wait_weight
+                ).proba_distribution(
                     torch.cat([piece[4] for piece in pieces], 0), batch_masks
                 )
                 previous = old.types.probs

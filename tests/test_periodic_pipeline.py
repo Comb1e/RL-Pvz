@@ -32,7 +32,7 @@ def pipeline_model(smoke_cfg):
     from pvz_rl.training import build_model, vector_env
 
     smoke_cfg["training"].update(rollout_size=4, batch_size=4)
-    env = vector_env(smoke_cfg, "masked", 101, family="placement")
+    env = vector_env(smoke_cfg, "masked", 101, family="saving")
     try:
         model = build_model(smoke_cfg, "masked", env, 101)
         model.set_logger(configure(format_strings=[]))

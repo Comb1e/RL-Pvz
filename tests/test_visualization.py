@@ -49,6 +49,59 @@ def test_old_config_and_output_only_compatibility(cfg):
     assert research_config(old) != research_config(cfg)
 
 
+def test_hardware_report_only_never_loads_checkpoint_and_respects_resume_cutoff(
+    tmp_path, monkeypatch
+):
+    from pvz_rl.config import load_config
+
+    cfg = load_config()
+    ancestor, run = tmp_path / "previous", tmp_path / "resumed"
+    ancestor.mkdir()
+    run.mkdir()
+    write_json(ancestor / "metadata.json", {"config": cfg})
+    write_json(
+        run / "metadata.json",
+        {"config": cfg, "resume": str(ancestor / "latest.zip"), "resume_steps": 128},
+    )
+    rows = [
+        dict(
+            session="one",
+            seconds=i,
+            training_steps=steps,
+            activity=activity,
+            phase="warmup",
+            gpu_percent=50,
+            gpu_memory_percent=None,
+            process_cpu_percent=150,
+            system_cpu_percent=20,
+            gpu_error="missing memory field",
+        )
+        for i, (steps, activity) in enumerate(
+            [(0, "training"), (128, "validation"), (256, "training")]
+        )
+    ]
+    (ancestor / "hardware-metrics.jsonl").write_text(
+        "\n".join(json.dumps(row) for row in rows) + "\n"
+    )
+    (run / "hardware-metrics.jsonl").write_text(
+        json.dumps(dict(rows[0], session="two", phase="formal")) + '\n{"partial":'
+    )
+    (run / "best.zip").write_bytes(b"not a checkpoint")
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("Report-only must not generate demonstrations")
+
+    monkeypatch.setattr("pvz_rl.visualization.create_demonstrations", forbidden)
+    assert len(run_segments(run)[0][1]["hardware"]) == 2
+    assert visualize_run(run, report_only=True)["state"] == "complete"
+    assert (run / "visualizations/hardware.png").stat().st_size > 1000
+    assert "device-wide GPU" in (run / "visualizations/index.html").read_text("utf-8")
+    # Only the partial tail is recoverable; corruption in the middle remains visible.
+    (run / "hardware-metrics.jsonl").write_text('{"bad":\n' + json.dumps(rows[0]))
+    with pytest.raises(json.JSONDecodeError):
+        run_segments(run)
+
+
 @pytest.mark.learning
 def test_shared_checkpoint_reports_and_videos(smoke_cfg, tmp_path, monkeypatch):
     import pvz_rl.training as training
@@ -75,7 +128,7 @@ def test_shared_checkpoint_reports_and_videos(smoke_cfg, tmp_path, monkeypatch):
 
     monkeypatch.setattr(training, "load_policy", tracked_load)
     run = train(smoke_cfg, "masked", 101, tmp_path / "shared", validation_limit=1)
-    assert len(set(identities)) == 1 and stages == {("placement",)}
+    assert len(set(identities)) == 1 and stages == {("saving",)}
     assert loads == ["best.zip"]
     metrics = read_series(run / "training-metrics.jsonl")
     assert [m["training_steps"] for m in metrics] == [128]
@@ -83,7 +136,7 @@ def test_shared_checkpoint_reports_and_videos(smoke_cfg, tmp_path, monkeypatch):
     assert all(m["optimization"]["value_loss"] is not None for m in metrics)
     assert all(m["optimization"]["critic_optimizer_steps"] > 0 for m in metrics)
     assert all(m["optimization"]["post_update_type_kl"] is not None for m in metrics)
-    assert metrics[-1]["rolling_by_task"]["placement"]["completed_games"] > 0
+    assert metrics[-1]["rolling_by_task"]["saving"]["completed_games"] > 0
     assert sum(t["transitions"] for t in metrics[-1]["task_counts"].values()) == 128
     assert (run / "tensorboard").exists()
     demo_data = json.loads((run / "visualizations/demos.json").read_text())

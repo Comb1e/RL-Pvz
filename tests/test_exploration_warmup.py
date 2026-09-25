@@ -16,7 +16,7 @@ from pvz_rl.training import ResearchCallback, build_model, load_policy, train, v
 from pvz_rl.visualization import read_series
 
 
-@pytest.mark.parametrize("epsilon", [0.0, 0.1, 0.9])
+@pytest.mark.parametrize("epsilon", [0.0, 0.1, 0.9, 1.0])
 @pytest.mark.parametrize("device", ["cpu", "cuda"])
 def test_mixture_joint_probabilities_entropy_and_gradient(epsilon, device):
     rng = np.random.default_rng(34)
@@ -32,19 +32,20 @@ def test_mixture_joint_probabilities_entropy_and_gradient(epsilon, device):
         w = np.exp(values - values.max())
         return w / w.sum()
 
-    kinds = softmax(raw[0, :3])
+    kinds = softmax(raw[0, :3] + np.array([0, 0, np.log(2)]))
     species = softmax(raw[0, 3:5])
     base = np.array([kinds[0], kinds[2] * species[0], kinds[2] * species[1], kinds[1]])
-    p = (1 - epsilon) * base + epsilon * np.array([1 / 3, 1 / 3, 1 / 3, 0])
+    p = (1 - epsilon) * base + epsilon * np.array([1.2 / 3.2, 1 / 3.2, 1 / 3.2, 0])
     expected = np.zeros(406)
     expected[0] = p[0]
     for index, group, tiles in [(1, 0, [0, 2]), (2, 1, [0]), (3, 8, [0, 4])]:
         tile_logits = raw[0, 11 + 45 * group + np.array(tiles)]
-        expected[1 + 45 * group + np.array(tiles)] = p[index] * softmax(tile_logits)
+        prior = (1 / 3.2 / len(tiles)) if group < 8 else 0
+        expected[1 + 45 * group + np.array(tiles)] = (1 - epsilon) * base[index] * softmax(tile_logits) + epsilon * prior
     np.testing.assert_allclose(dist.probs.detach().cpu()[0], expected, atol=1e-12)
     assert dist.probs.sum().item() == pytest.approx(1)
     assert not dist.probs[~masks].any()
-    for action in [0, 1, 3, 46, 361, 365]:
+    for action in np.flatnonzero(expected):
         assert dist.log_prob(torch.tensor([action], device=device)).item() == pytest.approx(
             np.log(expected[action]), abs=1e-12
         )
@@ -53,7 +54,7 @@ def test_mixture_joint_probabilities_entropy_and_gradient(epsilon, device):
     loss = -dist.log_prob(torch.tensor([1], device=device)).sum()
     loss.backward()
     # Independent derivative of the mixture's selected planting probability.
-    scale = (1 - epsilon) * base[1] / p[1]
+    scale = (1 - epsilon) * base[1] * softmax(raw[0, [11, 13]])[0] / expected[1]
     root_gradient = scale * (kinds - np.array([0, 0, 1]))
     species_gradient = scale * (species - np.array([1, 0]))
     np.testing.assert_allclose(logits.grad.detach().cpu()[0, :3], root_gradient, atol=1e-12)
@@ -68,13 +69,13 @@ def test_collapse_floor_greedy_policy_and_forced_action_boundaries():
     masks[:, [0, 1, 46, 361]] = True
     dist = GroupedDistribution(0.05).proba_distribution(logits)
     dist.apply_masking(masks)
-    assert dist.probs[0, 1].item() == pytest.approx(0.05 / 3)
-    assert dist.probs[0, 46].item() == pytest.approx(0.05 / 3)
+    assert dist.probs[0, 1].item() == pytest.approx(0.05 / 3.2)
+    assert dist.probs[0, 46].item() == pytest.approx(0.05 / 3.2)
     assert dist.probs[0, 361].item() < 1e-30  # No destructive random dig floor.
     assert dist.mode().item() == 0
     torch.manual_seed(7)
     samples = dist.types.sample((20000,)).flatten()
-    assert ((samples == 2).float().mean().item()) == pytest.approx(2 * 0.05 / 3, abs=0.003)
+    assert ((samples == 2).float().mean().item()) == pytest.approx(2 * 0.05 / 3.2, abs=0.003)
     # Dig can still be the learned greedy choice, regardless of injected exploration.
     logits[:, 1], logits[:, 0] = 100, 99.999
     dist.proba_distribution(logits).apply_masking(masks)
@@ -179,15 +180,15 @@ def test_exact_hierarchical_kl_matches_enumerated_actions_and_gradients(device, 
 
 
 def test_warmup_uses_persisted_stage_residency():
-    state = CurriculumState(stage=1, completed_stage_games=255)
-    state.completed_episode(0)
+    state = CurriculumState(stage=0, completed_stage_games=255)
+    state.completed_episode(1)
     assert state.critic_warming_up(256)
     state = CurriculumState(**state.to_dict())
-    state.completed_episode(1)
+    state.completed_episode(0)
     assert not state.critic_warming_up(256)
     cfg = load_config()
     assert state.observe({"saving": 100}, 2000, cfg)
-    assert state.stage == 2 and state.critic_warming_up(256)
+    assert state.stage == 1 and state.critic_warming_up(256)
     assert not state.critic_warming_up(0)
 
 

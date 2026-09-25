@@ -30,11 +30,11 @@ def test_balanced_bonus_does_not_push_wait_toward_one_over_136():
         masks[:, 1 + 45 * group : 1 + 45 * (group + 1)] = True
     dist = GroupedDistribution().proba_distribution(logits)
     dist.apply_masking(masks)
-    assert dist.probs[0, 0].item() == pytest.approx(0.5)
+    assert dist.probs[0, 0].item() == pytest.approx(0.25)
     np.testing.assert_allclose(dist.probs.detach().numpy().sum(), 1, atol=1e-7)
     assert torch.equal(dist.probs[~masks], torch.zeros_like(dist.probs[~masks]))
     true_gradient = torch.autograd.grad(dist.entropy().sum(), logits, retain_graph=True)[0]
-    assert true_gradient[0, 0].item() == pytest.approx(-np.log(135) / 4)
+    assert true_gradient[0, 0].item() == pytest.approx((3 / 16) * np.log(3 / 135))
     policy = SimpleNamespace(
         action_dist=dist,
         exploration_settings={
@@ -45,10 +45,17 @@ def test_balanced_bonus_does_not_push_wait_toward_one_over_136():
         },
     )
     loss, metrics = exploration_loss(policy, dist.entropy(), dist.log_prob(torch.tensor([0])))
-    assert metrics["exploration_bonus"].item() == pytest.approx(0.01 * np.log(2) + 0.002)
+    assert metrics["exploration_bonus"].item() == pytest.approx(
+        0.01 * (-0.25 * np.log(0.25) - 0.75 * np.log(0.75)) + 0.002
+    )
     gradient = torch.autograd.grad(loss, logits)[0]
     torch.testing.assert_close(
-        gradient[:, :11], torch.zeros_like(gradient[:, :11]), atol=1e-8, rtol=0
+        gradient[:, :3],
+        torch.tensor(
+            [[-0.01 * 3 / 16 * np.log(3), 0, 0.01 * 3 / 16 * np.log(3)]], dtype=gradient.dtype
+        ),
+        atol=1e-8,
+        rtol=0,
     )
     assert torch.isfinite(gradient).all()
 
@@ -138,15 +145,15 @@ def test_stage_residency_counts_only_matching_episode_starts():
     state = CurriculumState(stage=1)
     for _ in range(100):
         state.completed_episode(0)
-    assert not state.observe({"saving": 100}, 500, cfg)
-    assert not state.observe({"saving": 100}, 1000, cfg)
+    assert not state.observe({"easy": 100}, 500, cfg)
+    assert not state.observe({"easy": 100}, 1000, cfg)
     for _ in range(99):
         state.completed_episode(1)
     restored = CurriculumState(**state.to_dict())
-    assert not restored.observe({"saving": 100}, 1500, cfg)
+    assert not restored.observe({"easy": 100}, 1500, cfg)
     restored.completed_episode(1)
-    assert restored.observe({"saving": 100}, 2000, cfg)
-    assert restored.name == "easy" and restored.completed_stage_games == 0
+    assert restored.observe({"easy": 100}, 2000, cfg)
+    assert restored.name == "standard" and restored.completed_stage_games == 0
 
 
 def test_wall_budget_reserves_cleanup_and_restores_consumption():
@@ -312,7 +319,91 @@ def test_extreme_kind_logits_keep_species_exploration_and_finite_gradients(devic
         x[0, 0] = 1000
         x[0, 3] = -1000
     d = GroupedDistribution(0.1).proba_distribution(x)
-    assert d.probs[0, 1:46].sum().item() == pytest.approx(0.1 / 9)
+    assert d.probs[0, 1:46].sum().item() == pytest.approx(0.1 / 9.2)
     assert d.mode().item() == 0
     (-d.log_prob(torch.tensor([1], device=device))).backward()
     assert torch.isfinite(x.grad).all()
+
+
+@pytest.mark.parametrize("device", ["cpu", "cuda"])
+@pytest.mark.parametrize("epsilon", [0, 0.1, 1])
+def test_balanced_initialization_and_persistent_uniform_tile_exploration(device, epsilon):
+    from pvz_rl.spatial_policy import SpatialFeatures, SpatialGroupedPolicy
+
+    cfg = load_config()
+    env = PvZEnv(cfg, family="saving")
+    obs, _ = env.reset(seed=4)
+    policy = SpatialGroupedPolicy(
+        env.observation_space,
+        env.action_space,
+        lambda _: 1e-4,
+        features_extractor_class=SpatialFeatures,
+        features_extractor_kwargs={"layout_cfg": cfg},
+        net_arch={"pi": [128, 128], "vf": [128, 128]},
+        exploration_epsilon=epsilon,
+    ).to(device)
+    dist = policy.get_distribution(torch.tensor(obs[None], device=device), env.action_masks())
+    assert dist.probs[0, 0].item() == pytest.approx(1.2 / 5.2)
+    for group in (0, 1, 2, 4):
+        torch.testing.assert_close(
+            dist.probs[0, 1 + 45 * group : 1 + 45 * (group + 1)],
+            torch.full((45,), 1 / 5.2 / 45, device=device),
+        )
+    # Change affordable species, partial tiles and legal digging. Every species
+    # retains one branch weight independently of its number of available tiles.
+    logits = policy.action_net(policy.pi_features_extractor(torch.tensor(obs[None], device=device)))
+    masks = torch.zeros(1, 406, dtype=torch.bool, device=device)
+    masks[:, [0, 1, 3, 46, 361]] = True
+    dist.proba_distribution(logits, masks)
+    total = 3.2 + math.exp(-12)
+    expected = torch.zeros(406, device=device)
+    expected[0] = (1 - epsilon) * 1.2 / total + epsilon * 1.2 / 3.2
+    expected[[1, 3]] = ((1 - epsilon) / total + epsilon / 3.2) / 2
+    expected[46] = (1 - epsilon) / total + epsilon / 3.2
+    expected[361] = (1 - epsilon) * math.exp(-12) / total
+    torch.testing.assert_close(dist.probs[0], expected)
+    with torch.no_grad():
+        policy.action_net.tiles.weight.normal_()  # A learned location preference.
+    dist = policy.get_distribution(torch.tensor(obs[None], device=device), masks)
+    if epsilon:
+        assert dist.probs[0, 1].item() >= epsilon / 3.2 / 2 - 1e-7
+        assert dist.probs[0, 3].item() >= epsilon / 3.2 / 2 - 1e-7
+    if epsilon == 1:
+        assert dist.probs[0, 1].item() == pytest.approx(dist.probs[0, 3].item())
+
+
+def test_positive_planting_signal_can_increase_planting_and_digging_remains_trainable():
+    logits = torch.zeros(1, 416, requires_grad=True)
+    with torch.no_grad():
+        logits[0, 0], logits[0, 1] = math.log(1.2), -12
+    masks = torch.zeros(1, 406, dtype=torch.bool)
+    masks[:, [0, 1, 361]] = True
+    optimizer = torch.optim.Adam([logits], lr=0.01)
+    for action in (1, 361):
+        before = GroupedDistribution(0.1).proba_distribution(logits, masks).probs[0, action].item()
+        optimizer.zero_grad()
+        loss = (
+            -GroupedDistribution(0.1)
+            .proba_distribution(logits, masks)
+            .log_prob(torch.tensor([action]))
+        )
+        loss.backward()
+        optimizer.step()
+        assert (
+            GroupedDistribution(0.1).proba_distribution(logits, masks).probs[0, action].item()
+            > before
+        )
+
+
+def test_missing_cuda_compiler_backend_never_enters_tracing(monkeypatch):
+    from pvz_rl.spatial_policy import SpatialGroupedPolicy
+
+    monkeypatch.setattr("pvz_rl.spatial_policy.importlib.util.find_spec", lambda _: None)
+
+    def unexpected(*args, **kwargs):
+        raise AssertionError("Unavailable compiler must not trace beside the collector")
+
+    monkeypatch.setattr(torch, "compile", unexpected)
+    policy = SimpleNamespace(device=torch.device("cuda"))
+    SpatialGroupedPolicy.enable_compilation(policy)
+    assert policy.compilation_status == "unavailable" and "Triton" in policy.compilation_error

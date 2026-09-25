@@ -9,6 +9,8 @@ from torch.distributions import Categorical
 
 from .actions import ActionSchema as A
 
+ACTION_DISTRIBUTION = "balanced_species_tiles_v1"
+
 
 class FastMaskedCategorical(Categorical):
     """Tensor-only categorical distribution for the fixed CUDA hot path.
@@ -38,10 +40,13 @@ class FastMaskedCategorical(Categorical):
 class GroupedDistribution(MaskableDistribution):
     action_dim, logit_dim = A.size, A.logit_size
 
-    def __init__(self, epsilon=0.0, validate_args=True):
+    def __init__(self, epsilon=0.0, validate_args=True, wait_weight=1.2):
         super().__init__()
+        if not 0 <= epsilon <= 1 or not math.isfinite(wait_weight) or wait_weight <= 0:
+            raise ValueError("Exploration epsilon must be in [0, 1] and wait weight positive")
         self.epsilon = epsilon
         self.validate_args = validate_args
+        self.wait_weight = wait_weight
 
     def proba_distribution_net(self, latent_dim):
         return nn.Linear(latent_dim, self.logit_dim)
@@ -79,44 +84,66 @@ class GroupedDistribution(MaskableDistribution):
         # Dummy conditionals have no joint mass and no action-likelihood gradient.
         plant_mask = self.available_plants.clone()
         plant_mask[:, 0] |= ~plant_available
-        self.learned_types = FastMaskedCategorical(self.logits[:, : A.kinds], kind_mask)
+        # A species gets the same initial mass regardless of affordability of others.
+        kind_logits = self.logits[:, : A.kinds].clone()
+        kind_logits[:, A.plant] += (
+            self.available_plants.sum(-1).to(self.logits.dtype).clamp_min(1).log()
+        )
+        self.learned_types = FastMaskedCategorical(kind_logits, kind_mask)
         self.learned_plants = FastMaskedCategorical(
             logits=self.logits[:, A.kinds : A.tile_logits_start], masks=plant_mask
         )
-        self.types, self.plants = self.learned_types, self.learned_plants
-        if self.epsilon:
-            # Preserve uniform exploration over wait and available species, never dig.
-            # Factor the resulting joint mixture, rather than independently mixing heads.
-            leaf_mask = torch.cat((mask[:, :1], self.available_plants, available[:, -1:]), -1)
-            exploratory = leaf_mask.clone()
-            exploratory[:, -1] = False
-            count = exploratory.sum(-1, keepdim=True)
-            learned = torch.cat(
-                (
-                    self.learned_types.logits[:, A.wait : A.wait + 1],
-                    self.learned_types.logits[:, A.plant : A.plant + 1]
-                    + self.learned_plants.logits,
-                    self.learned_types.logits[:, A.dig : A.dig + 1],
-                ),
-                -1,
-            )
-            prior = torch.where(
-                exploratory, -count.clamp_min(1).to(self.logits.dtype).log(), -torch.inf
-            )
-            weight = torch.where(count > 0, self.logits.new_tensor(math.log1p(-self.epsilon)), 0)
-            mixed = torch.logaddexp(learned + weight, prior + math.log(self.epsilon))
-            kind_logits = torch.stack((mixed[:, 0], mixed[:, -1], mixed[:, 1:-1].logsumexp(-1)), -1)
-            self.types = FastMaskedCategorical(kind_logits, kind_mask)
-            self.plants = FastMaskedCategorical(mixed[:, 1:-1], plant_mask)
         safe_mask = tile_mask.clone()
         safe_mask[:, :, 0] |= ~available
-        location_logits = self.logits[:, A.tile_logits_start :].reshape(
-            -1, A.tile_groups, A.tiles
-        )
-        self.locations = FastMaskedCategorical(
+        location_logits = self.logits[:, A.tile_logits_start :].reshape(-1, A.tile_groups, A.tiles)
+        self.learned_locations = FastMaskedCategorical(
             location_logits,
             safe_mask,
         )
+        self.types, self.plants = self.learned_types, self.learned_plants
+        self.locations = self.learned_locations
+        if self.epsilon:
+            # Mix complete actions, including uniform exploratory tiles, then
+            # factor the same joint distribution for sampling and PPO/entropy/KL.
+            branch = self.branch_probs
+            learned_tiles = branch[:, :, None] * self.locations.probs
+            prior_branches = available.to(self.logits.dtype)
+            prior_branches[:, -1] = 0
+            prior_wait = mask[:, 0].to(self.logits.dtype) * self.wait_weight
+            total = prior_wait + prior_branches.sum(-1)
+            epsilon = (total > 0).to(self.logits.dtype) * self.epsilon
+            denominator = total.clamp_min(torch.finfo(total.dtype).tiny)
+            prior_tiles = (
+                prior_branches[:, :, None]
+                * tile_mask
+                / self.legal_tile_counts.clamp_min(1)[:, :, None]
+                / denominator[:, None, None]
+            )
+            mixed_tiles = (1 - epsilon[:, None, None]) * learned_tiles + epsilon[
+                :, None, None
+            ] * prior_tiles
+            mixed_wait = (1 - epsilon) * self.types.probs[
+                :, A.wait
+            ] + epsilon * prior_wait / denominator
+            mixed_branch = (1 - epsilon[:, None]) * branch + epsilon[
+                :, None
+            ] * prior_branches / denominator[:, None]
+
+            def logs(probabilities):
+                # Finite zeros keep entropy and the epsilon=1 boundary differentiable.
+                return torch.where(
+                    probabilities > 0,
+                    probabilities.clamp_min(torch.finfo(probabilities.dtype).tiny).log(),
+                    -1e8,
+                )
+
+            mixed_plant = (1 - epsilon) * self.types.probs[
+                :, A.plant
+            ] + epsilon * self.available_plants.sum(-1) / denominator
+            kind = torch.stack((mixed_wait, mixed_branch[:, -1], mixed_plant), -1)
+            self.types = FastMaskedCategorical(logs(kind), kind_mask)
+            self.plants = FastMaskedCategorical(logs(mixed_branch[:, :-1]), plant_mask)
+            self.locations = FastMaskedCategorical(logs(mixed_tiles), safe_mask)
 
     @property
     def branch_probs(self):
@@ -177,7 +204,8 @@ class GroupedDistribution(MaskableDistribution):
         groups = torch.where(kinds == A.dig, A.plant_types, plants)
         # Sample only the selected tile distribution, not all nine maps.
         batch = torch.arange(len(kinds), device=kinds.device)
-        probs = self.locations.probs[batch, groups]
+        locations = self.learned_locations if deterministic else self.locations
+        probs = locations.probs[batch, groups]
         tiles = probs.argmax(-1) if deterministic else torch.multinomial(probs, 1).squeeze(-1)
         return A.pack(kinds, plants, tiles)
 

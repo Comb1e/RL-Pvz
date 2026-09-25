@@ -135,9 +135,9 @@ def test_wait_cutoff_terminal_precedence_and_restricted_request(per_tick_cfg):
     while env.state == "running":
         _, _, _, _, info = env.step(0)
     assert info["reward_parts"]["terminal"] == -2
-    lesson = PvZEnv(per_tick_cfg, family="placement")
+    lesson = PvZEnv(per_tick_cfg, family="saving")
     lesson.reset(seed=42)
-    info = lesson.step(lesson.codec.encode(Place("sunflower", 0, 0)))[4]
+    info = lesson.step(lesson.codec.encode(Place("cherry_bomb", 0, 0)))[4]
     assert not info["accepted"] and info["ticks_advanced"] == 1
 
 

@@ -64,11 +64,11 @@ def test_grouped_equal_logits_and_wait_exploration():
     dist = GroupedDistribution().proba_distribution(torch.zeros(1, 416))
     dist.apply_masking(mask)
     assert dist.probs.sum() == pytest.approx(1)
-    assert dist.probs[0, 0] == pytest.approx(0.5)
+    assert dist.probs[0, 0] == pytest.approx(0.25)
     assert torch.count_nonzero(dist.probs[0, ~torch.tensor(mask)]) == 0
     for group in (0, 2, 4):  # sunflower, wall-nut, potato mine
-        assert dist.probs[0, 1 + group * 45 : 1 + (group + 1) * 45].sum() == pytest.approx(1 / 6)
-    assert dist.entropy().item() == pytest.approx(math.log(2) + 0.5 * math.log(135))
+        assert dist.probs[0, 1 + group * 45 : 1 + (group + 1) * 45].sum() == pytest.approx(1 / 4)
+    assert dist.entropy().item() == pytest.approx(math.log(4) + 0.75 * math.log(45))
 
 
 @pytest.mark.parametrize("device", ["cpu", "cuda"])
@@ -95,7 +95,10 @@ def test_joint_distribution_against_independent_numpy_control(device):
             w = np.exp(values - values.max())
             return w / w.sum()
 
-        kp = dict(zip(kinds, softmax(raw[row, kinds])))
+        kind_logits = raw[row, kinds].copy()
+        if species:
+            kind_logits[kinds.index(2)] += np.log(len(species))
+        kp = dict(zip(kinds, softmax(kind_logits)))
         pp = dict(zip(species, softmax(raw[row, 3 + np.array(species)]))) if species else {}
         expected[row, 0] = kp[0]
         for g in active:
@@ -134,19 +137,18 @@ def test_task_restrictions_dig_cooldown_and_reset_boundaries():
     cfg = load_config()
     env = PvZEnv(cfg, training=True)
     env.reset(seed=3)
-    assert env.episode_family == "placement"
+    assert env.episode_family == "saving"
     flower = env.codec.encode(Place("sunflower", 0, 0))
-    _, _, _, _, info = env.step(flower)
-    assert not info["accepted"] and env.public.sun == 100
+    assert env.action_masks()[flower] and env.public.sun == 100
     shooter = env.codec.encode(Place("peashooter", 0, 0))
     env.step(shooter)
     assert env.public.sun == 0
     assert not env.action_masks()[env.codec.encode(Place("peashooter", 1, 0))]
     assert env.action_masks()[env.codec.encode(Dig(0, 0))]
     before = env.action_masks()
-    env.set_curriculum_stage(4)
+    env.set_curriculum_stage(3)
     np.testing.assert_array_equal(before, env.action_masks())
-    assert env.episode_family == "placement"
+    assert env.episode_family == "saving"
     env.reset(seed=3)
     assert env.episode_family == "preset"
     assert env.action_masks()[flower]
@@ -195,7 +197,7 @@ def test_grouped_learning_save_reload_metrics_and_complete_update_deadline(
     assert stopped.num_timesteps == 0 and stopped._n_updates == 0
 
 
-@pytest.mark.parametrize("family", ["placement", "saving"])
+@pytest.mark.parametrize("family", ["saving"])
 def test_lesson_checkpoints_cannot_enter_normal_or_final_evaluation(
     cfg, tmp_path, monkeypatch, family
 ):

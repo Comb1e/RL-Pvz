@@ -167,6 +167,12 @@ def test_benchmark_schedules_configurable_cuda_sizes(smoke_cfg, tmp_path, monkey
     class Monitor:
         samples = []
 
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def update(self, **kwargs):
+            pass
+
         def __enter__(self):
             return self
 
@@ -178,7 +184,7 @@ def test_benchmark_schedules_configurable_cuda_sizes(smoke_cfg, tmp_path, monkey
         seen.append((cfg["training"]["n_envs"], cfg["training"]["rollout_steps_per_env"], seed))
         return dict(state="complete", decisions_per_second=100, games_per_minute=2)
 
-    monkeypatch.setattr(benchmark, "LoadMonitor", Monitor)
+    monkeypatch.setattr(benchmark, "HardwareMonitor", Monitor)
     monkeypatch.setattr(benchmark, "measure", measure)
     result = benchmark.benchmark_gpu(smoke_cfg, tmp_path / "benchmark", minutes=1, steps=128)
     assert len(seen) == 12

@@ -1,92 +1,18 @@
 """Bounded, repeated CUDA collection+optimization comparisons."""
 
 import copy
-import ctypes
-import os
 import statistics
-import subprocess
-import threading
+from contextlib import nullcontext
 from pathlib import Path
 from time import perf_counter, process_time
 
 import torch
 
 from .benchmark import measure
-from .config import gpu_defaults, resolve_rollout
+from .config import gpu_defaults, output_settings, resolve_rollout
+from .hardware import HardwareMonitor
 from .progress import Phase, ProgressReporter
 from .provenance import metadata, write_json
-
-
-def system_cpu_times():
-    if os.name != "nt":
-        fields = Path("/proc/stat").read_text().splitlines()[0].split()[1:]
-        values = list(map(int, fields))
-        return values[3] + values[4], sum(values)
-    from ctypes import wintypes
-
-    idle, kernel, user = wintypes.FILETIME(), wintypes.FILETIME(), wintypes.FILETIME()
-    if not ctypes.windll.kernel32.GetSystemTimes(
-        ctypes.byref(idle), ctypes.byref(kernel), ctypes.byref(user)
-    ):
-        return None
-
-    def number(t):
-        return t.dwLowDateTime + (t.dwHighDateTime << 32)
-
-    return number(idle), number(kernel) + number(user)
-
-
-class LoadMonitor:
-    """One low-frequency sampler; records system load without managing other jobs."""
-
-    def __init__(self):
-        self.samples, self.phase = [], "starting"
-        self.stop = threading.Event()
-        self.thread = threading.Thread(target=self._run, daemon=True)
-
-    def _run(self):
-        previous = system_cpu_times()
-        while not self.stop.is_set():
-            row = {"seconds": perf_counter() - self.started, "phase": self.phase}
-            current = system_cpu_times()
-            if previous and current and current[1] > previous[1]:
-                row["system_cpu_percent"] = 100 * (
-                    1 - (current[0] - previous[0]) / (current[1] - previous[1])
-                )
-            previous = current
-            try:
-                output = subprocess.run(
-                    [
-                        "nvidia-smi",
-                        "--query-gpu=utilization.gpu,utilization.memory,memory.used,power.draw",
-                        "--format=csv,noheader,nounits",
-                    ],
-                    capture_output=True,
-                    text=True,
-                    timeout=4,
-                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-                )
-                if output.returncode == 0:
-                    values = [float(x.strip()) for x in output.stdout.splitlines()[0].split(",")]
-                    row.update(
-                        zip(
-                            ("gpu_percent", "gpu_memory_percent", "gpu_memory_mib", "gpu_watts"),
-                            values,
-                        )
-                    )
-            except (OSError, ValueError, subprocess.SubprocessError) as exc:
-                row["error"] = repr(exc)
-            self.samples.append(row)
-            self.stop.wait(1.0)
-
-    def __enter__(self):
-        self.started = perf_counter()
-        self.thread.start()
-        return self
-
-    def __exit__(self, *_):
-        self.stop.set()
-        self.thread.join(timeout=5)
 
 
 def recommend(rows, *, parity_passed=False, provisional=True):
@@ -166,7 +92,15 @@ def benchmark_gpu(cfg, output, *, minutes=15, steps=16384, env_counts=None):
         progress.phase(
             Phase.COLLECTING, "GPU benchmark: three repetitions, setup/warmup reported separately"
         )
-        with LoadMonitor() as monitor:
+        monitor_context = (
+            HardwareMonitor(
+                output / "hardware-metrics.jsonl",
+                seconds=output_settings(cfg)["logging"]["hardware_sample_seconds"],
+            )
+            if cfg["training"].get("performance", {}).get("telemetry", False)
+            else nullcontext(None)
+        )
+        with monitor_context as monitor:
             for repeat in range(3):
                 for name, backend, n, rollout_steps in profiles[:: 1 if repeat % 2 == 0 else -1]:
                     if perf_counter() >= deadline:
@@ -179,8 +113,10 @@ def benchmark_gpu(cfg, output, *, minutes=15, steps=16384, env_counts=None):
                     }
                     local["training"].update(n_envs=n, device="cuda")
                     resolve_rollout(local, per_env=rollout_steps)
-                    monitor.phase = f"{name}/repeat-{repeat + 1}"
-                    progress.emit(monitor.phase, force=True)
+                    label = f"{name}/repeat-{repeat + 1}"
+                    if monitor:
+                        monitor.update(profile=label)
+                    progress.emit(label, force=True)
                     cpu_start = process_time()
                     try:
                         result = measure(
@@ -208,13 +144,14 @@ def benchmark_gpu(cfg, output, *, minutes=15, steps=16384, env_counts=None):
                         **result,
                     }
                     rows.append(row)
-                    write_json(output / "measurements.json", rows)
                     progress.emit(
                         f"{name}: {row['decisions_per_second']:.0f} decisions/s, {row['games_per_minute']:.2f} games/min; {row['state']}",
                         force=True,
                     )
-            write_json(output / "load-samples.json", monitor.samples)
+                    write_json(output / "measurements.json", rows)
         recommendation = recommend(rows)
+        if monitor:
+            write_json(output / "load-samples.json", list(monitor.samples))
         write_json(output / "recommendation.json", recommendation)
         progress.phase(
             Phase.COMPLETE,

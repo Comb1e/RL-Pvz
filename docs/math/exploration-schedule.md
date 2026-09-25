@@ -22,7 +22,7 @@ At (n=w), this gives (epsilon=0.05) and (h=1). At
 remain at their floors until the stage passes. The next stage starts a new
 warm-up clock.
 
-For a binary choice with learned probability (p), the injected prior changes
+For each legal complete action, the injected prior changes
 the executed distribution to
 
 [
@@ -31,7 +31,7 @@ the executed distribution to
 
 The prior contains legal wait and planting branches and excludes digging. Thus
 raising the injected rate explores productive alternatives without directly
-sampling digs. Entropy regularization remains applied to the learned joint
+sampling digs. Entropy regularization is calculated from the same mixed
 hierarchical distribution, so its floor can still preserve alternative legal
 tiles and action kinds.
 
@@ -44,3 +44,6 @@ The floor is deliberate: a stage that has not passed its mastery gate must not
 become effectively greedy solely because a fixed game-count deadline was reached.
 These values are project-specific hypotheses. They establish the implemented
 clock and probability calculation, not a guaranteed learning improvement.
+
+The prior includes uniform legal tiles within each species and a configurable wait
+weight. See [initialization and complete-action mixture](saving-and-actions.md).

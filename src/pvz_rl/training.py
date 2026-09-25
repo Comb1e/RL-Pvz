@@ -175,6 +175,8 @@ class ResearchCallback(BaseCallback):
         self.cache_steps = -1
         self.budget_stopped = False
         self.curriculum = None
+        self.hardware = None
+        self.hardware_activity = "training"
         self.simulation_ticks = 0
         self.instant_actions = 0
         t = cfg["training"]
@@ -183,6 +185,30 @@ class ResearchCallback(BaseCallback):
             if uses_games(cfg)
             else math.ceil(t["total_steps"] / t["rollout_size"]) * t["rollout_size"]
         )
+
+    def _init_callback(self):
+        if self.cfg["training"].get("performance", {}).get("telemetry", False):
+            from .hardware import HardwareMonitor
+
+            self.hardware = HardwareMonitor(
+                self.output / "hardware-metrics.jsonl",
+                seconds=self.settings["logging"]["hardware_sample_seconds"],
+                device=getattr(self.model, "device", None),
+            ).__enter__()
+
+    def hardware_context(self, activity=None):
+        if activity is not None:
+            self.hardware_activity = activity
+        if self.hardware:
+            pipeline = getattr(self.model, "pipeline_metrics", {})
+            self.hardware.update(
+                stage=self.curriculum.name if self.curriculum else self.family,
+                phase=getattr(self.model, "exploration_phase", "starting"),
+                activity=self.hardware_activity,
+                training_steps=self.model.num_timesteps,
+            )
+            if pipeline:
+                self.hardware.record_window(pipeline)
 
     def task_counts(self):
         env = getattr(self.model, "env", None)
@@ -216,6 +242,7 @@ class ResearchCallback(BaseCallback):
             self.cfg["conditions"][self.condition]["curriculum"],
         )
         return {
+            "hardware": self.hardware.latest if self.hardware else {},
             "task_counts": self.task_counts(),
             "rolling_by_task": {
                 task: task_statistics(rows) for task, rows in sorted(self.recent_by_task.items())
@@ -262,7 +289,9 @@ class ResearchCallback(BaseCallback):
             ),
             "compilation_error": (
                 type(error).__name__
-                if (error := getattr(getattr(self.model, "policy", None), "compilation_error", None))
+                if (
+                    error := getattr(getattr(self.model, "policy", None), "compilation_error", None)
+                )
                 else None
             ),
             "selected_stage": selected_stage(self.cfg),
@@ -291,6 +320,7 @@ class ResearchCallback(BaseCallback):
             "rolling_seconds": (
                 sum(r["simulated_seconds"] for r in rows) / len(rows) if rows else None
             ),
+            "rolling_plant_purchases": purchases / len(rows) if rows else None,
             "rolling_attacker_purchases": sum(r.get("attacker_purchases", 0) for r in rows)
             / len(rows)
             if rows
@@ -341,8 +371,8 @@ class ResearchCallback(BaseCallback):
                     "slot_collection_seconds": [],
                     "slot_optimization_seconds": [],
                     "window_seconds": None,
-                    "overlap_seconds": 0.0,
-                    "queue_wait_seconds": 0.0,
+                    "overlap_seconds": None,
+                    "queue_wait_seconds": None,
                     "transitions_per_second": None,
                 },
             ),
@@ -352,59 +382,37 @@ class ResearchCallback(BaseCallback):
         if not force and not self.progress.due():
             return
         row = self.snapshot()
-        win = "pending" if row["rolling_win_rate"] is None else f"{row['rolling_win_rate']:.1%}"
-        reward = "pending" if row["rolling_return"] is None else f"{row['rolling_return']:.3f}"
-        best = "pending" if self.best_score == -math.inf else f"{self.best_score:.1%}"
-        timing = ""
-        if row["last_optimization_seconds"] is not None:
-            timing = (
-                f"; last window {row['last_window_seconds']:.2f}s: "
-                f"{row['last_collection_seconds']:.2f}s collect / "
-                f"{row['last_optimization_seconds']:.2f}s update, "
-                f"{row['pipeline']['overlap_seconds']:.2f}s overlap"
-            )
-        kills = (
-            f"; plant/mower kills per game {row['rolling_plant_kills']:.2f}/{row['rolling_mower_kills']:.2f}"
-            f"; attackers/game {row['rolling_attacker_purchases']:.2f}, early digs/game {row['rolling_early_voluntary_digs']:.2f}"
-            f"; net value {row['rolling_net_value']:.1f}, discounted return {row['rolling_discounted_return']:.3f}"
-            if self.recent
-            else ""
+
+        def value(number, spec=".2f", suffix=""):
+            return "n/a" if number is None else f"{number:{spec}}{suffix}"
+
+        hardware, pipeline = row["hardware"], row["pipeline"]
+        progress = f"{row['budget_progress']:,} {row['budget_unit']}"
+        if self.target is not None:
+            progress += f" / {self.target:,}"
+        else:
+            progress += "; until stage mastery"
+        probe = (
+            self.curriculum.last_probe_games + self.cfg["curriculum"]["probe_interval_games"]
+            if self.curriculum and uses_games(self.cfg) and not self.curriculum.mastered
+            else None
         )
-        context = f"; stage {row['curriculum_stage']}"
-        if row["critic_warmup"]:
-            context += "; critic warm-up (actor frozen)"
-        context += f"; exploration {row['exploration_rate']:.3%}"
-        if row["rolling_agent_actions"] is not None:
-            context += f"; plant+dig/game {row['rolling_agent_actions']:.2f}"
-        if self.recent:
-            context += "; tasks " + ", ".join(f"{k}={v}" for k, v in row["rolling_tasks"].items())
-            if row["rolling_mower_free_lessons"] == len(self.recent):
-                context += "; mowers disabled in these lessons"
-        for task, metrics in row["rolling_by_task"].items():
-            ratio = metrics["early_digs_per_planting"]
-            context += (
-                f"; {task} last {metrics['completed_games']}: win {metrics['win_rate']:.1%}"
-                f", digs/plant {'pending' if ratio is None else f'{ratio:.1%}'}"
+        tasks = (
+            ", ".join(
+                f"{task} {metrics['win_rate']:.1%} ({metrics['completed_games']} games)"
+                for task, metrics in row["rolling_by_task"].items()
             )
-        progress_label = (
-            f"{row['budget_progress']:,} games; until {row['curriculum_stage']} mastery; "
-            if self.target is None
-            else f"{row['budget_progress']:,}/{self.target:,} {row['budget_unit']} ({row['budget_progress'] / self.target:.1%}); "
-        )
-        eta = (
-            ""
-            if self.target is None
-            else f"training ETA {duration(row['estimated_remaining_training_seconds'])}; "
+            or "n/a"
         )
         self.progress.emit(
-            progress_label + f"{row['games_per_second'] * 60:.2f} games/min; "
-            f"{row['decisions_per_second']:.0f} transitions/s; elapsed {duration(row['wall_seconds'])}; "
-            f"{row['simulation_ticks_per_second']:.0f} simulation ticks/s; "
-            + eta
-            + f"last {len(self.recent)} games win {win}, reward {reward}; best validation {best}"
-            + timing
-            + context
-            + kills,
+            f"Stage       {row['curriculum_stage']} | {row['exploration_phase'] or 'starting'} | {progress}\n"
+            f"Time        {duration(row['wall_seconds'])} elapsed | next mastery probe {value(probe, ',.0f')} games\n"
+            f"Recent task {tasks}\n"
+            f"Recent play return {value(row['rolling_return'], '.3f')} | plants/game {value(row['rolling_plant_purchases'])} | attackers/game {value(row['rolling_attacker_purchases'])} | early digs/plant {value(row['early_digs_per_planting'], '.2%')}\n"
+            f"Exploration {row['exploration_rate']:.3%} | entropy factor {row['entropy_factor']:.3f}\n"
+            f"Window      {value(pipeline.get('transitions_per_second'), '.0f')} transitions/s | collect {value(row['last_collection_seconds'], suffix='s')} | update {value(row['last_optimization_seconds'], suffix='s')} | overlap {value(pipeline.get('overlap_seconds'), suffix='s')}\n"
+            f"Hardware    GPU {value(hardware.get('gpu_percent'), '.0f', '%')} | VRAM {value(hardware.get('gpu_memory_mib'), '.0f', ' MiB')} | CPU {value(hardware.get('system_cpu_percent'), '.0f', '%')} | sample age {value(hardware.get('age_seconds'), '.1f', 's')}\n"
+            f"Run average {row['decisions_per_second']:.0f} transitions/s (training time)",
             force=force,
         )
         write_json(self.output / "status.json", row)
@@ -485,19 +493,17 @@ class ResearchCallback(BaseCallback):
     def refresh_report(self):
         if not self.settings["visualization"]["enabled"]:
             return
-        from .visualization import build_run_report, pending_report
-
-        if (
-            self.wall_budget is not None
-            and self.wall_budget.deadline is not None
-            and perf_counter() >= self.wall_budget.deadline
-        ):
-            pending_report(self.output, self.snapshot())
-            return
+        from .visualization import build_run_report
 
         started = perf_counter()
+        previous_activity = self.hardware_activity
         try:
-            build_run_report(self.output, self.cfg)
+            self.hardware_context("reporting")
+            for stream in (self.stream, self.metrics_stream):
+                if stream and not stream.closed:
+                    stream.flush()
+            report = build_run_report(self.output, self.cfg)
+            self.progress.emit(f"Report refreshed: {report}", force=True)
         except Exception as exc:
             write_json(
                 self.output / "visualizations" / "status.json",
@@ -509,6 +515,7 @@ class ResearchCallback(BaseCallback):
             self.progress.emit(f"Report refresh failed: {exc}", force=True)
         finally:
             self.report_seconds += perf_counter() - started
+            self.hardware_context(previous_activity)
 
     def _on_training_start(self):
         self.initial_task_counts = copy.deepcopy(getattr(self.model, "training_task_counts", {}))
@@ -625,10 +632,9 @@ class ResearchCallback(BaseCallback):
             if self.curriculum
             else getattr(self.model, "training_games", 0)
         )
-        state = exploration_state(
-            self.cfg, stage_games, staged=self.curriculum is not None
-        )
+        state = exploration_state(self.cfg, stage_games, staged=self.curriculum is not None)
         apply_exploration_state(self.model, self.cfg, state)
+        self.hardware_context("training")
         self.progress.phase(Phase.COLLECTING)
 
     @property
@@ -721,11 +727,28 @@ class ResearchCallback(BaseCallback):
             self.model.curriculum_state = self.curriculum.to_dict()
             write_json(self.output / "curriculum.json", self.model.curriculum_state)
 
+    def evaluation_event(self, operation, **kwargs):
+        previous_activity = self.hardware_activity
+        self.hardware_context("validation")
+        started = perf_counter()
+        try:
+            return operation(**kwargs)
+        finally:
+            self.eval_seconds += perf_counter() - started
+            self.refresh_report()
+            self.hardware_context(previous_activity)
+
     def probe_curriculum(self, *, final=False):
+        if not self.curriculum or not self.curriculum.due(
+            progress_value(self.cfg, self.model), self.cfg
+        ):
+            return
+        return self.evaluation_event(self._probe_curriculum, final=final)
+
+    def _probe_curriculum(self, *, final=False):
         progress = progress_value(self.cfg, self.model)
         if not self.curriculum or not self.curriculum.due(progress, self.cfg):
             return
-        started = perf_counter()
         previous = self.curriculum.name
         self.progress.phase(Phase.VALIDATING, f"Curriculum probe: {previous}")
         wins = {}
@@ -741,7 +764,6 @@ class ResearchCallback(BaseCallback):
                 )
             except BudgetExpired:
                 self.progress.emit("Curriculum probe pending: time allowance exhausted", force=True)
-                self.eval_seconds += perf_counter() - started
                 return
             if len(rows) != self.cfg["curriculum"]["probe_cases"]:
                 raise ValueError("Incomplete curriculum probe cannot certify mastery")
@@ -781,10 +803,10 @@ class ResearchCallback(BaseCallback):
         if selected_stage(self.cfg) or self.stage_validation:
             self.save_checkpoint("latest.zip")
             self.progress.emit("Saved stage progress to latest.zip", force=True)
-        self.eval_seconds += perf_counter() - started
 
     def _on_rollout_end(self):
         self.timings.record_window(self.model.pipeline_metrics)
+        self.hardware_context()
         self.sync_curriculum()
         self.progress.phase(Phase.UPDATING)
         write_json(self.output / "status.json", self.snapshot())
@@ -793,8 +815,12 @@ class ResearchCallback(BaseCallback):
     def validate(self, *, nominal_games=None, final=False):
         if self.stage_validation and not self.pending_stage_validation:
             return False
+        return self.evaluation_event(self._validate, nominal_games=nominal_games, final=final)
+
+    def _validate(self, *, nominal_games=None, final=False):
+        if self.stage_validation and not self.pending_stage_validation:
+            return False
         milestone = self.pending_stage_validation
-        started = perf_counter()
         self.progress.phase(
             Phase.VALIDATING,
             f"Validation at {progress_value(self.cfg, self.model):,} {'games' if uses_games(self.cfg) else 'decisions'}"
@@ -814,7 +840,6 @@ class ResearchCallback(BaseCallback):
             )
         except BudgetExpired:
             self.validation_pending = True
-            self.eval_seconds += perf_counter() - started
             self.progress.emit(
                 "Validation pending; partial results cannot select best.zip", force=True
             )
@@ -847,7 +872,6 @@ class ResearchCallback(BaseCallback):
         self.save_checkpoint("latest.zip")
         self.progress.emit("Saved latest.zip", force=True)
         self.last_eval = self.model.num_timesteps
-        self.eval_seconds += perf_counter() - started
         with (self.output / "learning-curve.jsonl").open("a", encoding="utf-8") as stream:
             append_jsonl(
                 stream,
@@ -864,7 +888,6 @@ class ResearchCallback(BaseCallback):
                 },
             )
         write_json(self.output / "status.json", self.snapshot())
-        self.refresh_report()
 
     def _on_training_end(self):
         self.capture_update()
@@ -897,6 +920,8 @@ class ResearchCallback(BaseCallback):
             self.probe_curriculum()
 
     def close(self):
+        if self.hardware:
+            self.hardware.close()
         if self.stream:
             self.stream.close()
         if self.metrics_stream:
@@ -908,6 +933,8 @@ class ResearchCallback(BaseCallback):
 def initial_weights(checkpoint, cfg):
     """Load current-method weights without restoring optimizers or experiment settings."""
     from stable_baselines3.common.save_util import load_from_zip_file
+
+    from .grouped_policy import ACTION_DISTRIBUTION
 
     checkpoint = Path(checkpoint).resolve()
     saved = json.loads((checkpoint.parent / "metadata.json").read_text("utf-8"))
@@ -927,10 +954,10 @@ def initial_weights(checkpoint, cfg):
             "Weights-only initialization requires matching engine, observation and network structure; start fresh for changed dimensions"
         )
     if saved.get("exploration_protocol") != EXPLORATION_PROTOCOL:
-        raise ValueError(
-            "Checkpoint uses the retired exploration schedule; start a fresh 0.18.0 run"
-        )
+        raise ValueError("Checkpoint uses the retired exploration schedule; start a fresh run")
     data, parameters, _ = load_from_zip_file(checkpoint, device="cpu")
+    if data.get("action_distribution_protocol") != ACTION_DISTRIBUTION:
+        raise ValueError("Action distribution changed; fresh training is required")
     weights = {key: value.detach().clone() for key, value in parameters["policy"].items()}
     return weights, {
         "mode": "weights_only",
@@ -1001,9 +1028,7 @@ def train(
         saved = json.loads((Path(resume).resolve().parent / "metadata.json").read_text("utf-8"))
         require_cuda_training(saved["config"], saved["condition"])
         if saved.get("exploration_protocol") != EXPLORATION_PROTOCOL:
-            raise ValueError(
-                "Checkpoint uses the retired exploration schedule; start a fresh 0.18.0 run"
-            )
+            raise ValueError("Checkpoint uses the retired exploration schedule; start a fresh run")
         if checkpoint_optimizer_protocol(resume) != OPTIMIZER_PROTOCOL:
             raise ValueError("Optimizer protocol changed; use fresh training or --init-from")
         if (
@@ -1041,6 +1066,13 @@ def train(
         exploration_protocol=EXPLORATION_PROTOCOL,
         structural_signature=transfer_protocol(cfg),
         optimizer_protocol=OPTIMIZER_PROTOCOL,
+        hardware_telemetry={
+            "enabled": cfg["training"].get("performance", {}).get("telemetry", False),
+            "sample_seconds": output_settings(cfg)["logging"]["hardware_sample_seconds"],
+            "samples": "hardware-metrics.jsonl",
+            "gpu_scope": "device-wide; memory percent is controller activity, not VRAM capacity",
+            "cpu_scope": "system and busiest logical core: 0..100%; process: one core = 100%",
+        },
         optimizer_settings={
             "actor_learning_rate": cfg["training"]["learning_rate"],
             "critic_learning_rate": cfg["training"].get("critic_learning_rate")
@@ -1247,6 +1279,7 @@ def train(
         }
         training_complete = True
         progress.emit("Saved final.zip; finalization status recorded", force=True)
+        callback.hardware_context("reporting")
         write_json(output / "status.json", final_status)
         # Release worker processes before rendering. Exports never update the policy.
         env.close()

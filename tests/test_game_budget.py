@@ -71,15 +71,15 @@ def test_teaching_gates_use_games_and_resume_counters(per_tick_cfg, legacy_teach
     cfg = legacy_teaching(per_tick_cfg)
     state = CurriculumState(entered_steps=999999, last_probe=999999)
     assert not state.due(99, cfg) and state.due(100, cfg)
-    assert not state.observe({"placement": 18}, 100, cfg)
-    assert not state.observe({"placement": 17}, 200, cfg)
+    assert not state.observe({"saving": 18}, 100, cfg)
+    assert not state.observe({"saving": 17}, 200, cfg)
     assert state.consecutive_passes == 0
-    assert not state.observe({"placement": 20}, 300, cfg)
-    assert state.observe({"placement": 18}, 400, cfg)
+    assert not state.observe({"saving": 20}, 300, cfg)
+    assert state.observe({"saving": 18}, 400, cfg)
     assert state.entered_games == state.last_probe_games == 400
     restored = CurriculumState(**state.to_dict())
     assert not restored.due(499, cfg) and restored.due(500, cfg)
-    assert restored.name == "saving"
+    assert restored.name == "easy"
     with pytest.raises(ValueError, match="backwards"):
         restored.observe({"saving": 20}, 399, cfg)
 
