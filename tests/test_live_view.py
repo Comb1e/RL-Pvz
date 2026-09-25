@@ -4,6 +4,7 @@ import copy
 import random
 from queue import Queue
 
+import numpy as np
 import pytest
 import torch
 
@@ -173,6 +174,34 @@ def test_capture_cpu_reference_terminals_actions_and_switches(per_tick_cfg):
         env.close()
 
 
+def test_paused_completion_can_be_selected_without_restart_or_duplicate_actions(per_tick_cfg):
+    from pvz_rl.envs.cuda_env import CudaVecEnv
+
+    cfg = copy.deepcopy(per_tick_cfg)
+    cfg["training"]["n_envs"] = 5
+    cfg["environment"]["cutoff_seconds"] = 0.01
+    env = CudaVecEnv(cfg, "masked", 101, family="saving")
+    try:
+        env.reset()
+        session = attach_capture(env)
+        action = torch.zeros(5, device="cuda", dtype=torch.long)
+        env.step_tensors(action, autoreset=False)
+        env.live_view.drain(wait=True)
+        hashes = [env.batch.state_hash(i) for i in range(5)]
+        assert not env.enabled_envs.any()
+        assert sum(x["active_games"] for x in env.task_counts().values()) == 0
+        session.commands.append((2, 0))
+        env.step_tensors(action, autoreset=False)
+        env.live_view.drain(wait=True)
+        p = session.selection.panels[2]
+        assert p.generation == 1 and p.state == PanelState.RESULT
+        assert p.frame["outcome"] == "truncated" and not p.frame["actions"]
+        assert [env.batch.state_hash(i) for i in range(5)] == hashes
+        assert sum(x["completed_games"] for x in env.task_counts().values()) == 5
+    finally:
+        env.close()
+
+
 @pytest.mark.parametrize("state", ["walking", "carrying_pole", "vaulting", "biting"])
 def test_public_decoder_all_entity_fields(state):
     from pvz_game import Game, LevelSpec, Rules, Spawn
@@ -223,14 +252,14 @@ def test_public_decoder_all_entity_fields(state):
     assert public_observation(arrays, game.rules, raw["level"]["name"]) == batch.observe(0)
 
 
-def test_fixed_training_windows_identical_with_viewer(smoke_cfg, tmp_path):
+def test_complete_training_cohorts_identical_with_viewer(smoke_cfg, tmp_path):
     from stable_baselines3.common.logger import configure
 
     from pvz_rl.learning.training import build_model, vector_env
     from pvz_rl.monitoring.benchmark import policy_digest
 
     cfg = copy.deepcopy(smoke_cfg)
-    cfg["training"].update(n_envs=2, rollout_size=16, batch_size=16)
+    cfg["training"].update(n_envs=2, batch_size=16)
     cfg["training"]["performance"]["compile_kernels"] = False
     results = []
     for enabled in (False, True):
@@ -240,15 +269,25 @@ def test_fixed_training_windows_identical_with_viewer(smoke_cfg, tmp_path):
             model.set_logger(configure(format_strings=[]))
             if enabled:
                 attach_capture(env)
-            model.learn(64)
-            buffer = model.rollout_buffer
+            captured = []
+            synchronize = model._synchronize
+
+            def capture(callback):
+                captured.append(model._buffer.take(np.arange(model._buffer.size)))
+                synchronize(callback)
+
+            model._synchronize = capture
+            model.learn(201)  # Waiting cohort, then planting with actor updates.
+            assert model.policy.optimizer.state
+            del model._synchronize
+            buffer = np.concatenate(captured)
             model.save(tmp_path / f"model-{enabled}.zip")
             results.append(
                 (
                     policy_digest(model),
-                    buffer.actions.clone(),
-                    buffer.rewards.clone(),
-                    buffer.observations.clone(),
+                    torch.from_numpy(buffer["action"].astype(np.int64)),
+                    torch.from_numpy(buffer["reward"].copy()),
+                    torch.from_numpy(buffer["observation"].copy()),
                     model.policy.optimizer.state_dict(),
                     torch.get_rng_state(),
                     torch.cuda.get_rng_state(),

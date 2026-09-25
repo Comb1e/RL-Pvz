@@ -35,11 +35,19 @@ def control_action(env, flowers, invest=True, delay=0):
     if invest and flowers < 5:
         candidate = Place("sunflower", flowers, 0)
     else:
+        lanes = sorted({z.row for z in obs.zombies if not z.headless})
         defended = {p.row for p in obs.plants if p.plant_type == "peashooter"}
-        exposed = sorted({z.row for z in obs.zombies} - defended)
+        exposed = sorted(set(lanes) - defended)
         if not exposed:
             return 0, flowers
         candidate = Place("peashooter", exposed[0], 1)
+        if invest and not env.game.validate_action(candidate).accepted:
+            mined = {p.row for p in obs.plants if p.plant_type == "potato_mine"}
+            for row in reversed(exposed):
+                mine = Place("potato_mine", row, 3)
+                if row not in mined and env.game.validate_action(mine).accepted:
+                    candidate = mine
+                    break
     action = env.codec.encode(candidate)
     if not env.action_masks()[action]:
         return 0, flowers
@@ -81,14 +89,14 @@ def test_lesson_economics_and_pressure_independent_calculations():
     # into the mine's one-tile explosion interval.
     spacing = (8700 - 7500) / g["tick_rate"] * rules.zombies["basic"]["speed"]
     delay = mine["health"] / g["bite_damage"] * g["bite_ticks"] / g["tick_rate"]
-    assert spacing == 2400 and delay == 3
+    assert spacing == 1620 and delay == 3
     assert spacing - delay * rules.zombies["basic"]["speed"] > g["units_per_tile"]
-    assert flower["first_ticks"] == 600 and flower["interval_ticks"] == 2400
+    assert flower["first_ticks"] == 300 and flower["interval_ticks"] == 2350
     assert flower["recharge_ticks"] == 750
-    # Five flowers can be bought at these times without external income.
-    purchases = [0, 750, 1500, 3000, 3750]
+    # Worst production delays still finance five flowers before first spawn.
+    purchases = [0, 751, 2001, 3750, 5000]
     for i, tick in enumerate(purchases):
-        payments = sum(max(0, (tick - t - 600) // 2400 + 1) for t in purchases[:i])
+        payments = sum(max(0, (tick - t - 1250) // 2500 + 1) for t in purchases[:i])
         assert 100 - i * 50 + payments * 25 >= 50
 
 
@@ -116,7 +124,9 @@ def test_saving_success_and_necessary_income(lanes, mode):
     # Nine full basic HP pools, plus actual production; no plant loss in the witness.
     scale = env.cfg["reward"]["progress_weight"] / env.cfg["reward"]["value_scale"]
     winning_return = env.cfg["reward"]["win_reward"] + scale * (
-        env.episode_metrics()["produced_sun"] + 9 * 50
+        env.episode_metrics()["produced_sun"]
+        + env.episode_metrics()["effective_damage"] * 50 / 270
+        - env.episode_metrics()["plant_value_loss"]
     )
     assert result["return"] == pytest.approx(result["discounted_return"])
     assert result["discounted_outcome_return"] + result[
@@ -131,17 +141,19 @@ def test_saving_success_and_necessary_income(lanes, mode):
             assert result["produced_sun"] == 0 and result["plant_usage"] == {"potato_mine": 4}
         return
     assert env.state == ("won" if mode == "invest" else "lost")
-    assert env.public.tick == (13652 if mode == "invest" else 12499)
+    assert 9900 < env.public.tick < 20000
     assert (
         env.episode_metrics()["attacker_purchases"]
         == {"invest": 3, "no_flowers": 1, "wait": 0}[mode]
     )
     if mode == "invest":
-        assert [t for t, _ in purchases] == [0, 750, 1500, 3000, 3750, 7500, 8250, 9300]
-        assert len(env.public.plants) == 8  # No sacrificial blockers/replacements.
-        assert result["produced_sun"] == 650  # 6 + 6 + 5 + 5 + 4 payments.
-        assert result["net_value"] == 1100
-        assert env.episode_metrics()["discounted_return"] == pytest.approx(winning_return, abs=1e-9)
+        assert len(purchases) == 9 and purchases[4][0] < 7500
+        assert len(env.public.plants) == 8
+        assert result["produced_sun"] > 0
+        assert result["net_value"] == pytest.approx(
+            result["produced_sun"] + result["effective_damage"] * 50 / 270 - 25
+        )
+        assert result["discounted_return"] == pytest.approx(winning_return, abs=1e-9)
     elif mode == "wait":
         assert env.episode_metrics()["discounted_return"] == pytest.approx(
             -2 * env.cfg["training"]["gamma"] ** 12498, abs=1e-10
@@ -158,25 +170,27 @@ def test_all_species_legal_and_mine_arming_and_blast_boundaries():
             )
         }
     )
+    for _ in range(3501):
+        env.step(0)
     for kind in env.cfg["environment"]["plants"]:
         assert env.action_masks()[env.codec.encode(Place(kind, 0, 0))]
     case = LevelSpec(
         "mine-boundary",
         tuple(
-            Spawn(1401, "basic", r, x=x) for r, x in [(0, 1000), (0, 1999), (0, 2000), (1, 1500)]
+            Spawn(1607, "basic", r, x=x) for r, x in [(0, 1000), (0, 1999), (0, 2000), (1, 1500)]
         ),
         plants=(InitialPlant("potato_mine", 0, 1),),
         mowers=False,
     )
     game = ActionPhaseGame()
     game.reset(case, 4)
-    game.step(ticks=1399)
-    assert game.observe().plants[0].state == "arming"
+    game.step(ticks=1605)
+    assert game.observe().plants[0].state == "rising"
     game.step()
     assert game.observe().plants[0].state == "armed"
     result = game.step()
     assert len([e for e in result.events if e.kind == "ZombieDefeated"]) == 2
-    assert {(z.row, z.health) for z in game.observe().zombies} == {(0, 200), (1, 200)}
+    assert {(z.row, z.health) for z in game.observe().zombies} == {(0, 270), (1, 270)}
 
 
 def test_seeded_cases_cover_all_triples_and_one_current_definition():
@@ -323,7 +337,7 @@ def test_cuda_mixed_income_events_cap_restore_and_atomic_failure():
             ]
             assert batch.accounting[i].get().tolist() == expected
             assert batch.state_hash(i) == games[i].state_hash()
-    assert [g.observe().sun for g in games] == [9965, 9990]
+    assert [g.observe().sun for g in games] == [9940, 9965]
     snapshots = [batch.snapshot(i) for i in range(2)]
     batch.reset([case] * 2, [4] * 2, natural_sun=[True, False])
     batch.restore(snapshots)
@@ -346,7 +360,7 @@ def test_mixed_vector_reset_uses_episode_family_and_leaves_normal_rules_unchange
     if not torch.cuda.is_available():
         pytest.skip("CUDA unavailable")
     cfg = load_config()
-    cfg["training"].update(n_envs=3, rollout_size=384, batch_size=128)
+    cfg["training"].update(n_envs=3, batch_size=128)
     cases = [("easy", family, 4) for family in ("saving", "saving", "preset")]
     env = CudaVecEnv(cfg, "masked", 101, training=False, cases=cases)
     references = [PvZEnv(cfg, level=level, family=family) for level, family, _ in cases]

@@ -1,7 +1,6 @@
-"""Small resolution-preserving policy using only event_v6 inputs."""
+"""Small resolution-preserving policy using only event_v7 inputs."""
 
 import importlib.util
-import math
 
 import torch
 from pvz_game import Rules
@@ -13,7 +12,11 @@ from pvz_rl.envs.actions import ActionSchema as A
 from pvz_rl.envs.encoding import ObservationEncoder
 from pvz_rl.learning.exploration import pooled_spatial
 from pvz_rl.policy.event_memory import MemoryContext
-from pvz_rl.policy.grouped_policy import GroupedDistribution
+from pvz_rl.policy.grouped_policy import (
+    GroupedDistribution,
+    controller_choice,
+    selected_value_indices,
+)
 from pvz_rl.policy.temporal import TemporalEncoder
 
 
@@ -47,7 +50,7 @@ class SpatialFeatures(BaseFeaturesExtractor):
     def __init__(self, observation_space, layout_cfg):
         layout = ObservationEncoder(layout_cfg, Rules())
         if observation_space.shape != (layout.size,):
-            raise ValueError("Spatial policy requires the event_v6 observation layout")
+            raise ValueError("Spatial policy requires the event_v7 observation layout")
         spec = layout_cfg["policy"]
         self.channels, self.scalar_channels = spec["channels"][-1], spec["scalar_sizes"][-1]
         super().__init__(
@@ -60,7 +63,7 @@ class SpatialFeatures(BaseFeaturesExtractor):
         self.plant_states = CategoricalEmbedding(
             len(layout.plant_states) + 1, spec["state_embedding"], padding_idx=0
         )
-        self.global_encoder = mlp(layout.global_width, spec["scalar_sizes"])
+        self.global_encoder = mlp(layout.global_width + layout.rows, spec["scalar_sizes"])
         width = spec["plant_embedding"] + spec["state_embedding"] + 1
         width += layout.bins * layout.zombie_width + self.scalar_channels + 1
         layers = []
@@ -90,7 +93,7 @@ class SpatialFeatures(BaseFeaturesExtractor):
         ).permute(0, 3, 1, 2)
         lane = blocks["zombies"].reshape(batch, layout.rows, -1)
         lane = lane.transpose(1, 2).unsqueeze(-1).expand(-1, -1, -1, layout.cols)
-        scalars = self.global_encoder(blocks["globals"])
+        scalars = self.global_encoder(torch.cat((blocks["globals"], blocks["headless"]), -1))
         grid = scalars[:, :, None, None].expand(-1, -1, layout.rows, layout.cols)
         board = self.board(
             torch.cat((plants, lane, grid, self.columns.expand(batch, 1, layout.rows, -1)), 1)
@@ -145,18 +148,15 @@ class SpatialLogits(nn.Module):
         super().__init__()
         self.channels, self.scalar_channels = channels, scalar_channels
         self.shared_head = mlp(channels * 2 + scalar_channels, hidden_sizes)
-        self.kind_head = nn.Linear(hidden_sizes[-1], A.kinds)
         self.plant_head = nn.Linear(hidden_sizes[-1], A.plant_types)
         # A constant per-map bias cancels in each tile softmax. Omitting it
         # avoids optimizing an unidentifiable parameter on roundoff gradients.
-        self.tiles = nn.Conv2d(channels, A.tile_groups, 1, bias=False)
+        self.tiles = nn.Conv2d(channels, A.plant_types, 1, bias=False)
 
     def forward(self, features):
         board, pooled = pooled_spatial(features, self.channels, self.scalar_channels)
         hidden = self.shared_head(pooled)
-        return torch.cat(
-            (self.kind_head(hidden), self.plant_head(hidden), self.tiles(board).flatten(1)), 1
-        )
+        return torch.cat((self.plant_head(hidden), self.tiles(board).flatten(1)), 1)
 
 
 class SpatialGroupedPolicy(MaskableActorCriticPolicy):
@@ -206,23 +206,15 @@ class SpatialGroupedPolicy(MaskableActorCriticPolicy):
             *self.value_net.parameters(),
         )
 
-    def initialize_dig_logit(self, value):
-        with torch.no_grad():
-            self.action_net.kind_head.bias[A.dig] = value
-
     def initialize_action_heads(self):
-        spec = self.features_extractor.cfg["policy"]
         with torch.no_grad():
-            for head in (
-                self.action_net.kind_head,
-                self.action_net.plant_head,
-                self.action_net.tiles,
-            ):
+            for head in (self.action_net.plant_head, self.action_net.tiles):
                 head.weight.zero_()
                 if head.bias is not None:
                     head.bias.zero_()
-            self.action_net.kind_head.bias[A.wait] = math.log(spec["initial_wait_weight"])
-            self.action_net.kind_head.bias[A.dig] = spec["initial_dig_logit"]
+            self.value_net.weight.zero_()
+            self.value_net.bias.zero_()
+            self.value_net.bias[2:] = -self.features_extractor.cfg["reward"]["loss_penalty"]
 
     def _build_mlp_extractor(self):
         self.mlp_extractor = SpatialLatents(
@@ -240,7 +232,6 @@ class SpatialGroupedPolicy(MaskableActorCriticPolicy):
         self.action_dist = GroupedDistribution(
             self.exploration_epsilon,
             validate_args=False,
-            wait_weight=self.features_extractor.cfg["policy"]["initial_wait_weight"],
         )
         super()._build(lr_schedule)
         self.action_net = SpatialLogits(
@@ -250,6 +241,7 @@ class SpatialGroupedPolicy(MaskableActorCriticPolicy):
         ).to(self.device)
         if self.ortho_init:
             self.action_net.apply(lambda module: self.init_weights(module, gain=2**0.5))
+        self.value_net = nn.Linear(self.mlp_extractor.latent_dim_vf, 2 + A.tiles).to(self.device)
         self.initialize_action_heads()
         # SB3 recursively initializes Linear modules. Restore identity-biased gates
         # and zero padding embeddings after that pass.
@@ -271,16 +263,32 @@ class SpatialGroupedPolicy(MaskableActorCriticPolicy):
             **self.optimizer_kwargs,
         )
 
+    def decide(self, obs, action_masks, deterministic=False, context=None):
+        values = self.predict_values(obs, context)
+        choices = controller_choice(values, action_masks)
+        actions = torch.where(choices >= 2, A.dig_start + choices - 2, 0).long()
+        logs = values.new_zeros(len(obs))
+        planting = (choices == 1).nonzero(as_tuple=True)[0]
+        if len(planting):
+            distribution = self.get_distribution(
+                obs[planting],
+                action_masks[planting],
+                None if context is None else context.select(planting),
+            )
+            selected = distribution.get_actions(deterministic=deterministic)
+            actions[planting] = selected
+            logs[planting] = distribution.log_prob(selected)
+        return actions, values.gather(1, choices[:, None]).flatten(), logs
+
     def sample_actions(self, obs, action_masks, deterministic=False, context=None):
-        distribution = self.get_distribution(obs, action_masks=action_masks, context=context)
-        actions = distribution.get_actions(deterministic=deterministic)
-        return actions, distribution.log_prob(actions)
+        actions, _, logs = self.decide(obs, action_masks, deterministic, context)
+        return actions, logs
 
     @torch.no_grad()
     def predict(
         self, observation, state=None, episode_start=None, deterministic=False, action_masks=None
     ):
-        """Explicit episode history for external actor-only inference.
+        """Explicit public history for actor and critic playing inference.
 
         Legal masked actions are executed as proposed. Callers that reject an
         action must set state.previous_actions to its executed action instead.
@@ -321,13 +329,7 @@ class SpatialGroupedPolicy(MaskableActorCriticPolicy):
 
     def evaluate_actor(self, obs, actions, action_masks, context=None):
         distribution = self.get_distribution(obs, action_masks=action_masks, context=context)
-        self._record_entropy()
         return distribution.log_prob(actions), distribution.entropy()
-
-    def _record_entropy(self):
-        parts = torch.stack(self.action_dist.entropy_parts()).detach().sum(dim=1)
-        self._entropy_totals = getattr(self, "_entropy_totals", 0) + parts
-        self._entropy_count = getattr(self, "_entropy_count", 0) + len(self.action_dist.logits)
 
     def get_distribution(self, obs, action_masks=None, context=None):
         extractor = self.__dict__.get("_compiled_pi", self.pi_features_extractor)
@@ -358,19 +360,9 @@ class SpatialGroupedPolicy(MaskableActorCriticPolicy):
 
     def evaluate_actions(self, obs, actions, action_masks=None, context=None):
         logs, entropy = self.evaluate_actor(obs, actions, action_masks, context)
-        return self.predict_values(obs, context), logs, entropy
+        indices = selected_value_indices(actions)
+        values = self.predict_values(obs, context).gather(1, indices[:, None]).flatten()
+        return values, logs, entropy
 
     def forward(self, obs, deterministic=False, action_masks=None, context=None):
-        actions, logs = self.sample_actions(obs, action_masks, deterministic, context)
-        return actions, self.predict_values(obs, context), logs
-
-    def pop_entropy_metrics(self):
-        if not getattr(self, "_entropy_count", 0):
-            return {}
-        types, plants, tiles = (self._entropy_totals / self._entropy_count).cpu().tolist()
-        self._entropy_totals, self._entropy_count = 0, 0
-        return {
-            "type_entropy": types,
-            "conditional_plant_entropy": plants,
-            "conditional_tile_entropy": tiles,
-        }
+        return self.decide(obs, action_masks, deterministic, context)

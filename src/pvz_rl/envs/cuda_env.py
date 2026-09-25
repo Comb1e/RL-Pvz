@@ -2,6 +2,7 @@
 
 from collections import Counter, deque
 from contextlib import contextmanager
+from copy import deepcopy
 from time import perf_counter
 
 import numpy as np
@@ -64,7 +65,7 @@ class ScenarioQueue:
 
 
 class CudaVecEnv(VecEnv):
-    """SB3 control interface plus device-native reset/step used by TensorPPO.
+    """SB3 control interface plus device-native complete-game collection.
 
     Completion flags (three integers/game) are the synchronization boundary.
     Detailed episode totals transfer only for completed games, as one batch.
@@ -89,6 +90,7 @@ class CudaVecEnv(VecEnv):
         self._episode_serial = [0] * cfg["training"]["n_envs"]
         self._level_names = [None] * cfg["training"]["n_envs"]
         self.live_view = None
+        self.finished_outcomes = {}
         self._episode_stages = [0] * cfg["training"]["n_envs"]
         self.task_started, self.task_transitions, self.task_completed = (
             Counter(),
@@ -96,6 +98,7 @@ class CudaVecEnv(VecEnv):
             Counter(),
         )
         self.active_tasks, self._tasks = Counter(), {}
+        self.enabled_envs = np.ones(cfg["training"]["n_envs"], dtype=bool)
         # All shipped scenario families preserve roster size. Lessons use smaller
         # rosters. Custom batches derive their capacity from the supplied cases.
         game = Game()
@@ -132,6 +135,7 @@ class CudaVecEnv(VecEnv):
 
     def reset_indices(self, indices, cases=None):
         started = perf_counter()
+        self.enabled_envs[indices] = True
         if cases is None:
             staged = self.queue.prepare(indices)
         else:
@@ -141,6 +145,7 @@ class CudaVecEnv(VecEnv):
             ]
         allowed, digging = [], []
         for index, level, family, seed, spec in staged:
+            self.finished_outcomes.pop(index, None)
             task = task_name(level, family)
             if index in self._tasks:
                 self.active_tasks[self._tasks[index]] -= 1
@@ -196,7 +201,9 @@ class CudaVecEnv(VecEnv):
                 if not viewer.enabled:
                     viewer = None
             if self.training:
-                self.task_transitions.update(self.active_tasks)
+                self.task_transitions.update(
+                    self._tasks[i] for i in np.flatnonzero(self.enabled_envs)
+                )
             started = perf_counter()
             obs, reward = self.features.step(self.cp.from_dlpack(actions.detach().contiguous()))
             self.phases["simulation_features"] += perf_counter() - started
@@ -219,9 +226,11 @@ class CudaVecEnv(VecEnv):
             compact_tensor = torch.stack((done.long(), timed_out.long(), h[:, 14]), dim=1)
             if viewer is not None:
                 try:
-                    packed = torch.cat((compact_tensor.flatten(), viewer.diagnostics())).cpu().numpy()
-                    compact = packed[:self.num_envs*3].reshape(self.num_envs,3)
-                    viewer.after_step(compact, packed[self.num_envs*3:].reshape(-1,2))
+                    packed = (
+                        torch.cat((compact_tensor.flatten(), viewer.diagnostics())).cpu().numpy()
+                    )
+                    compact = packed[: self.num_envs * 3].reshape(self.num_envs, 3)
+                    viewer.after_step(compact, packed[self.num_envs * 3 :].reshape(-1, 2))
                 except Exception as exc:
                     viewer.fail(exc)
                     compact = compact_tensor.cpu().numpy()
@@ -242,17 +251,64 @@ class CudaVecEnv(VecEnv):
                         episode_metrics=self.episode_metrics(index, header, total),
                         **{"TimeLimit.truncated": bool(compact[index, 1])},
                     )
+                    self.finished_outcomes[index] = infos[index]["episode_metrics"]["status"]
                 if autoreset:
                     self.reset_indices(indices)
                 else:
                     self.batch.header[self.cp.asarray(indices), 17] = 0
+                    self.enabled_envs[indices] = False
             return obs, reward, done, timed_out, terminal_observations, infos
 
+    def snapshot_training(self):
+        """Complete private simulator/queue state, never part of model inputs."""
+        header = self.batch.header.get()
+        return {
+            "games": [self.batch.snapshot(i) for i in range(self.num_envs)],
+            "allowed": header[:, 15].tolist(),
+            "digging": header[:, 16].astype(bool).tolist(),
+            "enabled": header[:, 17].tolist(),
+            "totals": self.features.totals.get(),
+            "queue_rng": [deepcopy(r.bit_generator.state) for r in self.queue.rngs],
+            "queue_progress": self.queue.progress,
+            "queue_stage": self.queue.stage,
+            "attributes": {
+                k: deepcopy(getattr(self, k))
+                for k in (
+                    "_episode",
+                    "_episode_serial",
+                    "_level_names",
+                    "_episode_stages",
+                    "_tasks",
+                    "task_started",
+                    "task_transitions",
+                    "task_completed",
+                    "active_tasks",
+                    "finished_outcomes",
+                )
+            },
+        }
+
+    def restore_training(self, state):
+        with self.device_context():
+            self.batch.restore(state["games"], allowed=state["allowed"], digging=state["digging"])
+            self.batch.header[:, 17] = self.cp.asarray(state["enabled"])
+            self.enabled_envs[:] = np.asarray(state["enabled"], dtype=bool)
+            self.features.totals[:] = self.cp.asarray(state["totals"])
+            self.features.encode()
+            for rng, saved in zip(self.queue.rngs, state["queue_rng"], strict=True):
+                rng.bit_generator.state = deepcopy(saved)
+            self.queue.progress, self.queue.stage = state["queue_progress"], state["queue_stage"]
+            for key, value in state["attributes"].items():
+                setattr(self, key, deepcopy(value))
+            self._reset_seeds()  # Saved per-worker RNG replaces constructor seed requests.
+        return self.features.obs_tensor
+
     def task_counts(self):
+        paused = Counter(self._tasks[i] for i in self._tasks if not self.enabled_envs[i])
         return {
             task: {
                 "started_games": self.task_started[task],
-                "active_games": self.active_tasks[task],
+                "active_games": self.active_tasks[task] - paused[task],
                 "completed_games": self.task_completed[task],
                 "transitions": self.task_transitions[task],
             }

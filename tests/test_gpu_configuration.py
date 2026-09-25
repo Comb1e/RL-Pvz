@@ -17,18 +17,18 @@ def args(**kwargs):
 def test_new_shared_run_defaults_and_explicit_parallelism():
     cfg = configured(args())
     assert simulator(cfg) == "cuda"
-    assert cfg["training"]["n_envs"] == 128
-    assert cfg["training"]["rollout_size"] == 16384
+    assert cfg["training"]["n_envs"] == 32
+    assert cfg["training"]["method"] == "complete_game_mc"
     for count in (32, 64, 128, 256, 512, 1024):
         cfg = configured(args(n_envs=count))
-        assert cfg["training"]["rollout_size"] == count * 128
+        assert cfg["training"]["n_envs"] == count
 
 
 @pytest.mark.parametrize(
     "options", [{"simulator": "cpu"}, {"device": "cpu"}, {"condition": "hybrid"}]
 )
 def test_cpu_and_hybrid_requests_are_rejected(options):
-    with pytest.raises(ValueError, match="removed"):
+    with pytest.raises(ValueError, match="removed|not supported"):
         configured(args(**options))
 
 
@@ -40,15 +40,11 @@ def test_explicit_legacy_decision_budget_still_uses_cuda():
 
 def test_hardware_recommendations_and_override_conflicts(tmp_path):
     path = tmp_path / "recommendation.json"
-    path.write_text(
-        json.dumps(dict(n_envs=64, device="cuda", simulator="cuda", rollout_steps_per_env=128))
-    )
+    path.write_text(json.dumps(dict(n_envs=64, device="cuda", simulator="cuda")))
     cfg = configured(args(hardware=path))
-    assert simulator(cfg) == "cuda" and cfg["training"]["rollout_size"] == 8192
+    assert simulator(cfg) == "cuda" and cfg["training"]["n_envs"] == 64
     cfg = configured(args(hardware=path, n_envs=32))
-    assert cfg["training"]["rollout_size"] == 4096
-    with pytest.raises(ValueError, match="conflict"):
-        configured(args(hardware=path, rollout_size=1234))
+    assert cfg["training"]["n_envs"] == 32
     path.write_text(json.dumps(dict(n_envs=None, device="cuda")))
     with pytest.raises(ValueError, match="no usable"):
         configured(args(hardware=path))
@@ -56,7 +52,7 @@ def test_hardware_recommendations_and_override_conflicts(tmp_path):
 
 def test_resume_uses_saved_protocol_and_instrumentation_is_optional(tmp_path):
     saved = load_config()
-    saved["training"].update(n_envs=1024, rollout_size=131072)
+    saved["training"].update(n_envs=1024)
     (tmp_path / "metadata.json").write_text(json.dumps({"config": saved}))
     cfg = configured(args(resume=tmp_path / "latest.zip"))
     assert research_config(cfg) == research_config(saved)

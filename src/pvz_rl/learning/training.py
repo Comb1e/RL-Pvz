@@ -32,6 +32,7 @@ from pvz_rl.learning.budget import (
     until_stage_complete,
     uses_games,
 )
+from pvz_rl.learning.cohort import OPTIMIZER_PROTOCOL
 from pvz_rl.learning.curriculum import (
     LESSONS,
     CurriculumState,
@@ -48,7 +49,6 @@ from pvz_rl.learning.exploration import (
     configure_exploration,
     exploration_state,
 )
-from pvz_rl.learning.periodic import OPTIMIZER_PROTOCOL
 from pvz_rl.learning.training_requirements import (
     parameter_changes,
     require_cuda_training,
@@ -72,7 +72,7 @@ def vector_env(cfg, condition, learner_seed, family="preset"):
 
 def build_model(cfg, condition, env, seed, log_dir=None):
     from pvz_rl.envs.cuda_env import CudaVecEnv
-    from pvz_rl.learning.cuda_ppo import CudaMaskablePPO, configure_tensor_buffer
+    from pvz_rl.learning.cuda_ppo import CudaCompleteGamePPO
 
     require_cuda_training(cfg, condition)
     if not isinstance(env, CudaVecEnv):
@@ -83,20 +83,15 @@ def build_model(cfg, condition, env, seed, log_dir=None):
         "features_extractor_class": SpatialFeatures,
         "features_extractor_kwargs": {"layout_cfg": cfg},
         "critic_learning_rate": t.get("critic_learning_rate"),
-        "exploration_epsilon": t["exploration"]["warmup_epsilon"],
+        "exploration_epsilon": t["exploration"]["epsilon_start"],
     }
-    model = CudaMaskablePPO(
+    model = CudaCompleteGamePPO(
         SpatialGroupedPolicy,
         env,
         learning_rate=t["learning_rate"],
-        n_steps=t["rollout_size"] // t["n_envs"],
         batch_size=t["batch_size"],
         n_epochs=t["n_epochs"],
-        gamma=t["gamma"],
-        gae_lambda=t["gae_lambda"],
         clip_range=t["clip_range"],
-        ent_coef=0.0,
-        vf_coef=t["vf_coef"],
         max_grad_norm=t["max_grad_norm"],
         normalize_advantage=t["normalize_advantage"],
         target_kl=t["target_kl"] or None,
@@ -106,15 +101,10 @@ def build_model(cfg, condition, env, seed, log_dir=None):
         verbose=0,
         tensorboard_log=str(log_dir) if log_dir else None,
     )
-    configure_tensor_buffer(model)
-    model.value_batch_size = t.get("value_batch_size", 1024)
-    model.critic_warmup_active = False
     model.training_games = 0
     if t.get("performance", {}).get("compile_kernels", False):
         model.policy.enable_compilation()
     configure_exploration(model, cfg)
-    if "initial_dig_logit" in cfg.get("policy", {}):
-        model.policy.initialize_dig_logit(cfg["policy"]["initial_dig_logit"])
     return model
 
 
@@ -180,11 +170,7 @@ class ResearchCallback(BaseCallback):
         self.simulation_ticks = 0
         self.instant_actions = 0
         t = cfg["training"]
-        self.target = (
-            budget_target(cfg)
-            if uses_games(cfg)
-            else math.ceil(t["total_steps"] / t["rollout_size"]) * t["rollout_size"]
-        )
+        self.target = budget_target(cfg) if uses_games(cfg) else t["total_steps"]
 
     def _init_callback(self):
         if self.cfg["training"].get("performance", {}).get("telemetry", False):
@@ -203,18 +189,28 @@ class ResearchCallback(BaseCallback):
         if viewer is not None:
             from pvz_rl.presentation.live_view import Activity
 
-            viewer.set_activity({"training": Activity.UPDATING, "validation": Activity.VALIDATING,
-                                 "reporting": Activity.REPORTING}[self.hardware_activity])
+            viewer.set_activity(
+                {
+                    "training": Activity.UPDATING,
+                    "validation": Activity.VALIDATING,
+                    "reporting": Activity.REPORTING,
+                    "collect": Activity.COLLECTING,
+                    "critic": Activity.UPDATING,
+                    "actor": Activity.UPDATING,
+                    "returns": Activity.UPDATING,
+                    "synchronize": Activity.UPDATING,
+                }[self.hardware_activity]
+            )
         if self.hardware:
-            pipeline = getattr(self.model, "pipeline_metrics", {})
+            cohort = getattr(self.model, "cohort_metrics", {})
             self.hardware.update(
                 stage=self.curriculum.name if self.curriculum else self.family,
-                phase=getattr(self.model, "exploration_phase", "starting"),
+                phase=getattr(self.model, "phase", "starting"),
                 activity=self.hardware_activity,
                 training_steps=self.model.num_timesteps,
             )
-            if pipeline:
-                self.hardware.record_window(pipeline)
+            if cohort:
+                self.hardware.record_window(cohort)
 
     def task_counts(self):
         env = getattr(self.model, "env", None)
@@ -249,7 +245,8 @@ class ResearchCallback(BaseCallback):
         )
         return {
             "live_view": dict(self.model.env.live_view.stats)
-            if getattr(getattr(self.model, "env", None), "live_view", None) else None,
+            if getattr(getattr(self.model, "env", None), "live_view", None)
+            else None,
             "hardware": self.hardware.latest if self.hardware else {},
             "task_counts": self.task_counts(),
             "rolling_by_task": {
@@ -283,7 +280,8 @@ class ResearchCallback(BaseCallback):
             "next_episode_difficulty_weights": None if self.curriculum else weights,
             "curriculum": self.curriculum.to_dict() if self.curriculum else None,
             "curriculum_stage": self.curriculum.name if self.curriculum else "fixed",
-            "critic_warmup": getattr(self.model, "critic_warmup_active", False),
+            "training_phase": str(getattr(self.model, "phase", "starting")),
+            "critic_prefit": getattr(self.model, "prefit_errors", {}),
             "exploration_rate": getattr(self.model, "exploration_rate", 0.0),
             "entropy_factor": getattr(self.model, "entropy_factor", 1.0),
             "exploration_phase": getattr(self.model, "exploration_phase", None),
@@ -369,22 +367,7 @@ class ResearchCallback(BaseCallback):
                 sum(r["invalid_actions"] for r in rows) / max(1, decisions) if rows else None
             ),
             "best_validation_win_rate": None if self.best_score == -math.inf else self.best_score,
-            "pipeline": getattr(
-                self.model,
-                "pipeline_metrics",
-                {
-                    "mode": "periodic_on_policy",
-                    "depth": self.cfg["training"]["pipeline"]["depth"],
-                    "policy_version": None,
-                    "behavior_hash": None,
-                    "slot_collection_seconds": [],
-                    "slot_optimization_seconds": [],
-                    "window_seconds": None,
-                    "overlap_seconds": None,
-                    "queue_wait_seconds": None,
-                    "transitions_per_second": None,
-                },
-            ),
+            "cohort": getattr(self.model, "cohort_metrics", {}),
         }
 
     def log_progress(self, *, force=False):
@@ -393,10 +376,15 @@ class ResearchCallback(BaseCallback):
         row = self.snapshot()
 
         def value(number, spec=".2f", suffix=""):
-            return "n/a" if number is None or not math.isfinite(number) else f"{number:{spec}}{suffix}"
+            return (
+                "n/a" if number is None or not math.isfinite(number) else f"{number:{spec}}{suffix}"
+            )
 
-        hardware, pipeline = row["hardware"], row["pipeline"]
-        optimizer = getattr(getattr(self.model, "logger", None), "name_to_value", {})
+        hardware, cohort = row["hardware"], row["cohort"]
+        optimizer = {
+            **getattr(self, "last_optimizer_metrics", {}),
+            **getattr(getattr(self.model, "logger", None), "name_to_value", {}),
+        }
         progress = f"{row['budget_progress']:,} {row['budget_unit']}"
         if self.target is not None:
             progress += f" / {self.target:,}"
@@ -415,17 +403,23 @@ class ResearchCallback(BaseCallback):
             or "n/a"
         )
         self.progress.emit(
-            f"Stage       {row['curriculum_stage']} | {row['exploration_phase'] or 'starting'} | {progress}\n"
+            f"Stage       {row['curriculum_stage']} | {row['training_phase']} | {progress}\n"
             f"Time        {duration(row['wall_seconds'])} elapsed | next mastery probe {value(probe, ',.0f')} games\n"
             f"Recent task {tasks}\n"
-            f"Game means  last {row['rolling_episodes']} finished games | {row['rolling_truncations']} cutoffs counted with partial returns\n"
+            f"Game means  last {row['rolling_episodes']} finished games | {row['rolling_truncations']} cutoff failures included\n"
             f"Reward      {value(row['rolling_return'], '+.5f')} | discounted return {value(row['rolling_discounted_return'], '+.5f')} | outcome {value(row['rolling_terminal'], '+.5f')} | development {value(row['rolling_development'], '+.5f')}\n"
             f"Net value   {value(row['rolling_cumulative_net_value'], '+.2f')} sun-equiv/game | peak {value(row['rolling_maximum_net_value'])} | drawdown {value(row['rolling_value_drawdown'])}\n"
             f"Economy     produced sun {value(row['rolling_produced_sun'])} | effective damage {value(row['rolling_effective_damage'])} HP | plant loss {value(row['rolling_plant_value_loss'])} | mower cost {value(row['rolling_mower_expenditure'])}\n"
             f"Recent play plants/game {value(row['rolling_plant_purchases'])} | attackers/game {value(row['rolling_attacker_purchases'])} | early digs/plant {value(row['early_digs_per_planting'], '.2%')} | game duration {value(row['rolling_seconds'], suffix='s')}\n"
             f"Exploration {row['exploration_rate']:.3%} | entropy factor {row['entropy_factor']:.3f}\n"
-            f"Window      {value(pipeline.get('transitions_per_second'), '.0f')} transitions/s | collect {value(row['last_collection_seconds'], suffix='s')} | update {value(row['last_optimization_seconds'], suffix='s')} | overlap {value(pipeline.get('overlap_seconds'), suffix='s')}\n"
+            f"Cohort      {value(cohort.get('transitions_per_second'), '.0f')} transitions/s | collect {value(row['last_collection_seconds'], suffix='s')} | update {value(row['last_optimization_seconds'], suffix='s')} | critic {value(cohort.get('critic_seconds'), suffix='s')} | actor {value(cohort.get('actor_seconds'), suffix='s')}\n"
             f"Learning    actor steps {value(optimizer.get('train/actor_retained_steps'), '.0f')} retained / {value(optimizer.get('train/actor_attempted_steps'), '.0f')} attempted | critic steps {value(optimizer.get('train/critic_optimizer_steps'), '.0f')} | exact KL {value(optimizer.get('train/exact_kl'), '.5f')} | value MSE {value(optimizer.get('train/value_loss'), '.5f')}\n"
+            "Critic prefit "
+            + " | ".join(
+                f"{name}: n={value(row['critic_prefit'].get(name, {}).get('count'), '.0f')} MSE={value(row['critic_prefit'].get(name, {}).get('mse'), '.4f')}"
+                for name in ("wait", "plant", "dig")
+            )
+            + "\n"
             f"Hardware    GPU {value(hardware.get('gpu_percent'), '.0f', '%')} | VRAM {value(hardware.get('gpu_memory_mib'), '.0f', ' MiB')} | CPU {value(hardware.get('system_cpu_percent'), '.0f', '%')} | sample age {value(hardware.get('age_seconds'), '.1f', 's')}\n"
             f"Run average {row['decisions_per_second']:.0f} transitions/s (training time)",
             force=force,
@@ -440,41 +434,20 @@ class ResearchCallback(BaseCallback):
         keys = (
             "policy_gradient_loss",
             "value_loss",
-            "entropy_loss",
             "joint_entropy",
             "exploration_bonus",
-            "kind_exploration_bonus",
             "plant_exploration_bonus",
             "tile_exploration_bonus",
-            "choice_fraction",
-            "memory_compression_ratio",
-            "memory_event_fraction",
-            "attention_local",
-            "attention_events",
-            "attention_summaries",
-            "optimizer_steps",
-            "actor_optimizer_steps",
             "critic_optimizer_steps",
             "actor_grad_norm",
             "critic_grad_norm",
             "critic_learning_rate",
-            "critic_epochs_completed",
-            "critic_warmup",
             "value_target_error_wait",
             "value_target_error_plant",
             "value_target_error_dig",
-            "post_update_approx_kl",
-            "post_update_type_kl",
-            "dig_probability_when_legal",
-            "dig_legal_observations",
-            "epochs_completed",
-            "kl_stopped",
             "approx_kl",
-            "clip_fraction",
-            "explained_variance",
             "learning_rate",
             "n_updates",
-            "loss",
         )
         keys += tuple(
             f"{metric}_{action}"
@@ -486,16 +459,10 @@ class ResearchCallback(BaseCallback):
             "actor_attempted_steps",
             "actor_retained_steps",
             "actor_window_rejected",
-            "rejected_windows",
-            "effective_kind_entropy_coef",
             "effective_plant_entropy_coef",
             "effective_tile_entropy_coef",
         )
         metrics = {}
-        if isinstance(self.model.policy, SpatialGroupedPolicy):
-            for key, value in self.model.policy.pop_entropy_metrics().items():
-                self.model.logger.record(f"train/{key}", value)
-                metrics[key] = value
         for key in keys:
             value = values.get(f"train/{key}")
             metrics[key] = (
@@ -504,6 +471,8 @@ class ResearchCallback(BaseCallback):
         row.update(optimization=metrics, completed_updates=self.model._n_updates)
         append_jsonl(self.metrics_stream, row)
         self.last_updates = self.model._n_updates
+        self.last_optimizer_metrics = dict(values)
+        self.model.logger.dump(step=self.model.num_timesteps)
 
     def refresh_report(self):
         if not self.settings["visualization"]["enabled"]:
@@ -533,14 +502,18 @@ class ResearchCallback(BaseCallback):
             self.hardware_context(previous_activity)
 
     def _on_training_start(self):
-        self.initial_task_counts = copy.deepcopy(getattr(self.model, "training_task_counts", {}))
+        self.initial_task_counts = (
+            {}
+            if getattr(self.model, "resumed_cohort", False)
+            else copy.deepcopy(getattr(self.model, "training_task_counts", {}))
+        )
         self.initial_steps = self.model.num_timesteps
         self.initial_games = getattr(self.model, "training_games", 0)
         progress = progress_value(self.cfg, self.model)
         self.restore_schedule()
         self.training_env.env_method("set_progress", progress)
-        self.stream = (self.output / "training-episodes.jsonl").open("w", encoding="utf-8")
-        self.metrics_stream = (self.output / "training-metrics.jsonl").open("w", encoding="utf-8")
+        self.stream = (self.output / "training-episodes.jsonl").open("a", encoding="utf-8")
+        self.metrics_stream = (self.output / "training-metrics.jsonl").open("a", encoding="utf-8")
         self.last_updates = self.model._n_updates
         if teaching_enabled(self.cfg) and self.family == "preset":
             self.curriculum = CurriculumState(
@@ -561,8 +534,7 @@ class ResearchCallback(BaseCallback):
                 completed += 1
                 if self.curriculum and (
                     self.cfg["curriculum"].get("residency") == "episode_start_stage"
-                    or self.cfg["training"].get("critic_warmup_games", 0) > 0
-                    or self.cfg["training"]["exploration"].get("formal_decay_games", 0) > 0
+                    or self.cfg["training"]["exploration"].get("decay_games", 0) > 0
                 ):
                     self.curriculum.completed_episode(
                         info["episode_metrics"].get("episode_start_stage")
@@ -583,9 +555,10 @@ class ResearchCallback(BaseCallback):
                     },
                 )
         progress = progress_value(self.cfg, self.model)
+        if hasattr(self, "progress"):
+            self.log_progress()
         if completed and uses_games(self.cfg):
-            # VecEnv has already reset completed workers. Broadcast the global
-            # count for subsequent resets; never alter any active episode.
+            # Finished workers pause. Update progress for the next cohort reset.
             self.training_env.env_method("set_progress", progress)
         weights = difficulty_weights(
             self.cfg,
@@ -600,9 +573,7 @@ class ResearchCallback(BaseCallback):
                 force=True,
             )
             self.last_weights = list(weights)
-        # Episode callbacks are replayed before the two slots' optimizer metrics
-        # are aggregated. Emit the console block at on_rollout_end, when both
-        # game counters and window statistics describe the completed window.
+        # Optimization metrics are finalized after both fitting phases.
         return True
 
     def _on_rollout_start(self):
@@ -628,22 +599,6 @@ class ResearchCallback(BaseCallback):
         self.finish_stage_validation()
         self.check_stage_complete()
         self.check_deadline()
-        warming = bool(
-            self.curriculum
-            and self.curriculum.critic_warming_up(
-                self.cfg["training"].get("critic_warmup_games", 0)
-            )
-        )
-        if warming != getattr(self.model, "critic_warmup_active", False):
-            self.progress.emit(
-                "Critic warm-up: actor frozen; collecting exploration experience"
-                if warming
-                else "Critic warm-up complete; actor and critic learning",
-                force=True,
-            )
-        self.model.critic_warmup_active = warming
-        # Change only before collecting a new rollout; all its PPO ratios use
-        # the same mixture. Stage residency and the last used rate are saved.
         stage_games = (
             self.curriculum.completed_stage_games
             if self.curriculum
@@ -822,7 +777,7 @@ class ResearchCallback(BaseCallback):
             self.progress.emit("Saved stage progress to latest.zip", force=True)
 
     def _on_rollout_end(self):
-        self.timings.record_window(self.model.pipeline_metrics)
+        self.timings.record_window(self.model.cohort_metrics)
         self.hardware_context()
         self.sync_curriculum()
         self.progress.phase(Phase.UPDATING)
@@ -951,10 +906,6 @@ def initial_weights(checkpoint, cfg):
     """Load current-method weights without restoring optimizers or experiment settings."""
     from stable_baselines3.common.save_util import load_from_zip_file
 
-    from pvz_rl.learning.checkpoints import register_checkpoint_imports
-
-    register_checkpoint_imports()
-
     from pvz_rl.policy.grouped_policy import ACTION_DISTRIBUTION
 
     checkpoint = Path(checkpoint).resolve()
@@ -999,17 +950,15 @@ def load_policy(checkpoint, device="cpu"):
     run = checkpoint.parent
     data = json.loads((run / "metadata.json").read_text("utf-8"))
     cfg, condition = data["config"], data["condition"]
-    validate_config(cfg, allow_legacy_exploration=True)
+    validate_config(cfg)
     verify_engine(cfg)
     require_supported_policy(cfg, condition)
-    from pvz_rl.learning.cuda_buffer import TensorRolloutBuffer
-    from pvz_rl.learning.cuda_ppo import CudaMaskablePPO
+    from pvz_rl.learning.cuda_ppo import CudaCompleteGamePPO
 
     torch.set_num_threads(cfg["training"]["torch_threads"])
-    model = CudaMaskablePPO.load(
+    model = CudaCompleteGamePPO.load(
         checkpoint,
         device=device,
-        custom_objects={"rollout_buffer_class": TensorRolloutBuffer, "rollout_buffer_kwargs": {}},
     )
     configure_exploration(model, cfg)
     return model, data
@@ -1067,8 +1016,7 @@ def train(
     game_budget = uses_games(cfg)
     unlimited = until_stage_complete(cfg)
     nominal_steps = None if game_budget else cfg["training"]["total_steps"]
-    rollout = cfg["training"]["rollout_size"]
-    effective_steps = None if game_budget else math.ceil(nominal_steps / rollout) * rollout
+    effective_steps = None if game_budget else nominal_steps
     output.mkdir(parents=True, exist_ok=False)
     details = metadata(
         cfg,
@@ -1101,7 +1049,7 @@ def train(
             "value_batch_size": cfg["training"].get("value_batch_size", 1024),
             "independent_encoders": True,
         },
-        pipeline=copy.deepcopy(cfg["training"]["pipeline"]),
+        collection_method=cfg["training"]["method"],
     )
     write_json(output / "metadata.json", details)
     write_json(output / "config.json", cfg)
@@ -1117,8 +1065,7 @@ def train(
     progress.emit(
         f"Shared {condition} policy; learner seed {learner_seed}; {cfg['training']['device']}; "
         f"{cfg['training']['n_envs']} parallel games; simulator {simulator(cfg)}; "
-        f"{cfg['training']['rollout_size'] // cfg['training']['n_envs']} transitions/env/update (includes waits, no game action cap); "
-        f"{cfg['training']['rollout_size']} total rollout transitions; "
+        "one complete game per environment per cohort; "
         f"{budget_label}; "
         f"family {family}; output {output.resolve()}",
         force=True,
@@ -1126,21 +1073,12 @@ def train(
     progress.emit(f"Data transport: {runtime_settings(cfg)}", force=True)
     progress.emit(
         f"Policy: {cfg.get('policy', {'kind': 'flat'})}; "
-        "standard PPO minibatch reduction; "
-        f"GAE lambda {cfg['training']['gae_lambda']}; minibatch {cfg['training']['batch_size']}",
-        force=True,
-    )
-    progress.emit(
-        "Pipeline: periodic on-policy; "
-        f"{cfg['training']['pipeline']['depth']}-rollout synchronization window; "
-        f"queue capacity {cfg['training']['pipeline']['queue_size']}; "
-        "collector and learner streams",
+        f"actual returns, separate critic/plant actor phases; minibatch {cfg['training']['batch_size']}",
         force=True,
     )
     progress.emit(f"Reward settings: {cfg['reward']}", force=True)
     progress.emit(
-        f"Exploration {cfg['training']['exploration']}; legal wait/plant types, learned digging; "
-        f"critic warm-up {cfg['training'].get('critic_warmup_games', 0)} completed games per stage",
+        f"Plant-only exploration {cfg['training']['exploration']}; greedy wait/plant/dig values",
         force=True,
     )
     if validation_after_stage(cfg, family):
@@ -1183,9 +1121,6 @@ def train(
                 getattr(model, "wall_budget_state", {}).get("elapsed_seconds", 0.0),
             )
             model.set_env(env)
-            from pvz_rl.learning.cuda_ppo import configure_tensor_buffer
-
-            configure_tensor_buffer(model)
             if cfg["training"].get("performance", {}).get("compile_kernels", False):
                 model.policy.enable_compilation()
             model.tensorboard_log = str(output / "tensorboard")
@@ -1215,8 +1150,7 @@ def train(
                 else effective_steps - model.num_timesteps
             )
         )
-        if remaining is not None and remaining < 0 and not game_budget:
-            raise ValueError("Checkpoint exceeds this run's training budget")
+        model.trajectory_root = output
         callback = ResearchCallback(
             cfg,
             condition,
@@ -1241,12 +1175,12 @@ def train(
             env.env_method(
                 "set_curriculum_stage", getattr(model, "curriculum_state", {}).get("stage", 0)
             )
-        if remaining is None or remaining > 0:
+        if remaining is None or remaining > 0 or model.phase != "idle":
             try:
                 model.learn(
                     # Game count is the stopping criterion. SB3 requires a numeric
                     # timesteps bound; this sentinel does not schedule learning.
-                    2**63 - 1 if game_budget else remaining,
+                    2**63 - 1 if game_budget else max(0, remaining),
                     callback=callback,
                     reset_num_timesteps=not bool(resume),
                     tb_log_name=condition,
@@ -1343,12 +1277,7 @@ def train(
             )
             progress.emit(f"Training is complete; artifact generation stopped: {exc}", force=True)
             raise
-        from pvz_rl.learning.periodic import WindowState
-
-        if (
-            model is not None
-            and getattr(model, "pipeline_state", WindowState.IDLE) == WindowState.IDLE
-        ):
+        if model is not None:
             model.wall_budget_state = wall_budget.state()
             if callback:
                 callback.save_checkpoint("interrupted.zip")
@@ -1373,6 +1302,8 @@ def train(
     finally:
         if callback:
             callback.close()
+        if model is not None and getattr(model, "_buffer", None) is not None:
+            model._buffer.close()
         if env:
             env.close()
         progress.close()

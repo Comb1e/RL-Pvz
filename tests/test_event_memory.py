@@ -173,10 +173,10 @@ def test_real_mine_histories_affect_tile_preferences_without_countdown_inputs():
         game.reset(LevelSpec("mine-age", (Spawn(10000, "basic", 0),), initial_sun=50))
     memory = EventMemory(cfg, rules, 2, "cpu")
     plant = Place("potato_mine", 1, 1)
-    for tick in range(1001):
+    for tick in range(3002):
         previous = []
         for index, game in enumerate(games):
-            action = plant if tick == (10, 900)[index] else Wait()
+            action = plant if tick == (2010, 2900)[index] else Wait()
             if tick:
                 game.step(action)
             previous.append(codec.encode(action))
@@ -207,7 +207,7 @@ def test_real_mine_histories_affect_tile_preferences_without_countdown_inputs():
         logits = policy.get_distribution(observations, masks, context).logits
         # Temporal information reaches conditional tile preferences, not only
         # a uniform tile-map offset that would cancel under softmax.
-        difference = logits[0, 11:].reshape(9, 45) - logits[1, 11:].reshape(9, 45)
+        difference = logits[0, 8:].reshape(8, 45) - logits[1, 8:].reshape(8, 45)
         assert difference.std(-1).max() > 1e-7
         isolated = EventMemory(cfg, rules, 2, "cpu")
         reset = isolated.observe(
@@ -215,7 +215,7 @@ def test_real_mine_histories_affect_tile_preferences_without_countdown_inputs():
             masks,
             torch.zeros(2),
             torch.ones(2, dtype=torch.bool),
-            torch.full((2,), 1000),
+            torch.full((2,), 3001),
         )
         torch.testing.assert_close(reset.tokens[0], reset.tokens[1], atol=0, rtol=0)
         # Compare identical batch positions: CPU GEMM can round a three-wide
@@ -227,105 +227,3 @@ def test_real_mine_histories_affect_tile_preferences_without_countdown_inputs():
             for i in range(2)
         ]
         torch.testing.assert_close(reset_logits[0], reset_logits[1], atol=0, rtol=0)
-
-
-@pytest.mark.learning
-def test_cuda_history_rollover_timeout_ppo_and_checkpoint(tmp_path):
-    from stable_baselines3.common.callbacks import BaseCallback
-    from stable_baselines3.common.logger import configure
-
-    from pvz_rl.learning.cuda_ppo import CudaMaskablePPO
-    from pvz_rl.learning.training import build_model, vector_env
-
-    cfg = load_config()
-    cfg["training"].update(
-        n_envs=2,
-        rollout_size=256,
-        rollout_steps_per_env=128,
-        batch_size=64,
-        n_epochs=1,
-        critic_warmup_games=0,
-        value_batch_size=32,
-    )
-    cfg["environment"]["cutoff_seconds"] = 1
-    env = vector_env(cfg, "masked", 101)
-
-    class Callback(BaseCallback):
-        def _on_step(self):
-            return True
-
-    try:
-        model = build_model(cfg, "masked", env, 101)
-        model.set_logger(configure(format_strings=[]))
-        _, callback = model._setup_learn(256, Callback())
-        result = model.collect_slot(
-            env,
-            model.policy,
-            model.rollout_buffer,
-            model._last_obs,
-            model._last_episode_starts,
-            None,
-            0,
-            "control",
-        )
-        buffer = result.buffer
-        with torch.no_grad():
-            for start in range(0, 256, 32):
-                ix = slice(start, start + 32)
-                dist = model.policy.get_distribution(
-                    buffer.observations.flatten(0, 1)[ix],
-                    buffer.action_masks.flatten(0, 1)[ix],
-                    buffer.context(ix),
-                )
-                torch.testing.assert_close(
-                    dist.log_prob(buffer.actions.flatten().long()[ix]),
-                    buffer.log_probs.flatten()[ix],
-                    atol=2e-6,
-                    rtol=2e-6,
-                )
-        assert torch.isfinite(buffer.advantages).all()
-        # The 1-second cutoff exercises terminal contexts before reset.
-        assert buffer.episode_starts[1:].sum() > 0
-        for start in (0, 16, 64, 112):
-            rebuilt = buffer.burn_context(torch.arange(2, device="cuda"), start)
-            expected = buffer.context(torch.arange(2, device="cuda") + start * 2)
-            for key in ("tokens", "valid", "counts", "starts"):
-                # Invalid bank slots intentionally hold unspecified old bytes.
-                a, b = getattr(rebuilt, key), getattr(expected, key)
-                active = (
-                    expected.valid if key != "tokens" else expected.valid[..., None].expand_as(a)
-                )
-                torch.testing.assert_close(a[active], b[active], atol=0, rtol=0)
-            # Cache reuse cannot depend on a later epoch's shuffled environment order.
-            reordered = buffer.burn_context(torch.tensor([1, 0], device="cuda"), start)
-            torch.testing.assert_close(reordered.tokens, rebuilt.tokens.flip(0), atol=0, rtol=0)
-        for data in buffer.get(64):
-            assert data.context is not None and len(data.observations) <= 64
-        model.train()
-        retained = result.memory.context().clone()
-        model.save(tmp_path / "temporal")
-        loaded = CudaMaskablePPO.load(tmp_path / "temporal", device="cuda")
-        assert not hasattr(loaded, "_episode_memory")
-        with torch.no_grad():
-            original = model.policy.get_distribution(
-                result.observations, env.action_masks(), retained
-            ).logits.clone()
-            restored = loaded.policy.get_distribution(
-                result.observations, env.action_masks(), retained
-            ).logits
-            torch.testing.assert_close(original, restored, atol=0, rtol=0)
-        model.collect_slot(
-            env,
-            model.policy,
-            buffer,
-            result.observations,
-            result.episode_starts,
-            result.memory,
-            1,
-            "control",
-        )
-        assert not buffer._burn_contexts  # No prior-rollout history survives in the cache.
-        # Initial current token is not inserted twice at the next rollout.
-        torch.testing.assert_close(buffer.context(slice(0, 2)).tokens, retained.tokens)
-    finally:
-        env.close()

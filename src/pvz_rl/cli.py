@@ -9,7 +9,6 @@ from pathlib import Path
 from pvz_rl.config import (
     load_config,
     research_config,
-    resolve_rollout,
     seed_values,
     validate_config,
 )
@@ -49,13 +48,7 @@ def training_options(parser):
     )
     parser.add_argument("--n-envs", type=int)
     parser.add_argument("--device", choices=("cuda",))
-    parser.add_argument("--rollout-size", type=int)
     parser.add_argument("--simulator", choices=("cuda",))
-    parser.add_argument(
-        "--rollout-steps-per-env",
-        type=int,
-        help="learning transitions per environment per PPO update, including waits; not a game limit (default 128)",
-    )
     parser.add_argument("--batch-size", type=int)
     parser.add_argument(
         "--max-minutes",
@@ -108,14 +101,11 @@ def configured(args):
         cfg["training"].update({k: hardware[k] for k in ("n_envs", "device")})
         if "simulator" in hardware:
             cfg["simulation"] = {"backend": hardware["simulator"]}
-        if "rollout_steps_per_env" in hardware:
-            cfg["training"]["rollout_steps_per_env"] = hardware["rollout_steps_per_env"]
     for arg, key in (
         ("steps", "total_steps"),
         ("games", "total_games"),
         ("n_envs", "n_envs"),
         ("device", "device"),
-        ("rollout_size", "rollout_size"),
         ("batch_size", "batch_size"),
         ("max_minutes", "max_minutes"),
         ("eval_interval", "eval_interval"),
@@ -131,12 +121,7 @@ def configured(args):
     selected_simulator = getattr(args, "simulator", None)
     if selected_simulator is not None:
         cfg["simulation"] = {"backend": selected_simulator}
-    resolve_rollout(
-        cfg,
-        per_env=getattr(args, "rollout_steps_per_env", None),
-        total=getattr(args, "rollout_size", None),
-        new_cuda=selected_simulator == "cuda",
-    )
+
     if (
         getattr(args, "eval_games", None) is not None
         and cfg["training"].get("budget_unit") != "games"
@@ -168,10 +153,18 @@ def main(argv=None):
     training = subs.add_parser("train", help="train one shared policy across all difficulties")
     training_options(training)
     live = training.add_mutually_exclusive_group()
-    live.add_argument("--live-view", action="store_true", default=None,
-                      help="show four actual training environments in a live window (default)")
-    live.add_argument("--no-live-view", dest="live_view", action="store_false",
-                      help="train headlessly without the live game window")
+    live.add_argument(
+        "--live-view",
+        action="store_true",
+        default=None,
+        help="show four actual training environments in a live window (default)",
+    )
+    live.add_argument(
+        "--no-live-view",
+        dest="live_view",
+        action="store_false",
+        help="train headlessly without the live game window",
+    )
     training.add_argument("--condition", choices=TRAINING_CONDITIONS, help="default: masked")
     training.add_argument("--seed", type=int, help="learner seed; default: saved seed or 101")
     training.add_argument("--output", required=True, type=Path)
@@ -226,7 +219,7 @@ def main(argv=None):
     gpu_bench.add_argument("--minutes", type=float, default=15)
     gpu_bench.add_argument("--steps", type=int, default=16384)
     gpu_bench.add_argument(
-        "--env-counts", type=int, nargs="+", help="parallel-game counts (default: 128 256 512 1024)"
+        "--env-counts", type=int, nargs="+", help="parallel-game counts (default: 32)"
     )
     suite = subs.add_parser(
         "suite",
@@ -251,7 +244,11 @@ def main(argv=None):
     )
     common(visual)
     visual.add_argument("--run", required=True, type=Path)
-    visual.add_argument("--report-only", action="store_true", help="rebuild curves without loading a model or producing demos")
+    visual.add_argument(
+        "--report-only",
+        action="store_true",
+        help="rebuild curves without loading a model or producing demos",
+    )
     video_options(visual)
     args = parser.parse_args(argv)
 
@@ -299,7 +296,12 @@ def main(argv=None):
             raise ValueError(
                 "Visualization config must preserve the checkpoint's research settings"
             )
-        result = visualize_run(args.run, cfg=cfg if args.config else original, videos=args.videos, report_only=args.report_only)
+        result = visualize_run(
+            args.run,
+            cfg=cfg if args.config else original,
+            videos=args.videos,
+            report_only=args.report_only,
+        )
         print(f"Report: {(args.run / 'visualizations' / 'index.html').resolve()}")
         if result["state"] != "complete":
             raise SystemExit(1)
@@ -410,10 +412,7 @@ def main(argv=None):
             cfg = cfg if args.config else data["config"]
             condition, learner_seed = data["condition"], data["learner_seed"]
             checkpoint_hash = file_hash(args.checkpoint)
-            if (
-                data["family"] in ("diagnostic", "saving")
-                and args.family != data["family"]
-            ):
+            if data["family"] in ("diagnostic", "saving") and args.family != data["family"]:
                 raise ValueError(
                     f"Diagnostic checkpoints must be evaluated with --family {data['family']}"
                 )

@@ -85,7 +85,6 @@ def refilled_games(
     count = min(len(cases), cfg["training"]["n_envs"])
     local = copy.deepcopy(cfg)
     local["training"]["n_envs"] = count
-    local["training"]["rollout_size"] = count * local["training"].get("rollout_steps_per_env", 128)
     original_device = policy.policy.device
     env = None
     policy.policy.to("cuda")
@@ -183,9 +182,7 @@ def fixed_batches(
             local = copy.deepcopy(cfg)
             local["training"]["n_envs"] = len(chunk)
             # Evaluation batch size does not change a saved training configuration.
-            local["training"]["rollout_size"] = len(chunk) * local["training"].get(
-                "rollout_steps_per_env", 128
-            )
+
             env = CudaVecEnv(local, condition, 0, family, training=False, cases=chunk)
             traces = [[] for _ in chunk]
             completed, buffered = {}, []

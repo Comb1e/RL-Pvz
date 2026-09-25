@@ -17,9 +17,9 @@ extern "C" __global__ void encode_state(const I *headers, const I *plants,
   if (threadIdx.x || i >= n)
     return;
   Header h = ((Header *)headers)[i];
-  Plant *p = (Plant *)(plants + i * 45 * 8);
-  Zombie *z = (Zombie *)(zombies + i * ZCAP * 15);
-  Mower *m = (Mower *)(mowers + i * 5 * 4);
+  Plant *p = (Plant *)(plants + i * 45 * GAME_PLANT_WIDTH);
+  Zombie *z = (Zombie *)(zombies + i * ZCAP * GAME_ZOMBIE_WIDTH);
+  Mower *m = (Mower *)(mowers + i * 5 * GAME_MOWER_WIDTH);
   float *o = output + i * OBS_SIZE;
   for (I j = 0; j < OBS_SIZE; j++)
     o[j] = 0;
@@ -28,7 +28,7 @@ extern "C" __global__ void encode_state(const I *headers, const I *plants,
     I k = (a.row * 9 + a.col) * 3;
     o[k] = a.kind + 1;
     o[k + 1] = (double)a.health / PH[a.kind];
-    o[k + 2] = a.state + 1;
+    o[k + 2] = BEHAVIOR[a.state];
   }
   I zs[5 * BINS * ZOMBIE_WIDTH] = {0};
   I nearest[5 * BINS];
@@ -43,7 +43,7 @@ extern "C" __global__ void encode_state(const I *headers, const I *plants,
     cell[Z_health] += a.health;
     cell[Z_armor] += a.armor;
     nearest[region] = lo(nearest[region], a.x);
-    if (a.has_pole)
+    if (a.has_pole && !a.headless)
       nearest_pole[region] = lo(nearest_pole[region], a.x);
   }
   for (I j = 0; j < 5 * BINS * ZOMBIE_WIDTH; j++) {
@@ -73,6 +73,15 @@ extern "C" __global__ void encode_state(const I *headers, const I *plants,
   g[O_defeated] = (double)h.defeated / COUNT_SCALE;
   for (I r = 0; r < 5; r++)
     g[O_mower_spent_0 + r] = m[r].state == 2;
+  for (I r = 0; r < 5; r++) {
+    I nearest = 9223372036854775807LL;
+    bool headless = false;
+    for (I j = 0; j < h.nz; j++) if (z[j].row == r) {
+      if (z[j].x < nearest) { nearest = z[j].x; headless = z[j].headless; }
+      else if (z[j].x == nearest && !z[j].headless) headless = false;
+    }
+    o[HEADLESS_OFFSET + r] = headless;
+  }
   assets[i] = asset_value(h, p);
 }
 // Reward order mirrors reward_parts, using double intermediates before casting
@@ -98,6 +107,8 @@ reward_metrics(const I *headers, const I *old_headers, const I *old_cd,
   }
   const I *a = accounting + i * 3;
   v[F_terminal] = h.status == 1 ? R_win_reward : h.status == 2 ? -R_loss_penalty : 0.;
+  if (h.status == 0 && h.tick >= CUTOFF_SECONDS * G_tick_rate)
+    v[F_terminal] = -R_loss_penalty;
   v[F_plant_kills] = f[0]; v[F_mower_kills] = f[1];
   v[F_nonlethal_health_damage] = f[2]; v[F_empty_mower_activations] = f[4];
   v[F_mower_activations] = f[5]; v[F_mower_activation_sun] = f[6];

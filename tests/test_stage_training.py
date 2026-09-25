@@ -23,11 +23,8 @@ def stage_cfg():
     cfg["environment"]["cutoff_seconds"] = 1
     cfg["training"].update(
         n_envs=2,
-        rollout_steps_per_env=32,
-        rollout_size=64,
         batch_size=32,
         n_epochs=1,
-        critic_warmup_games=2,
         total_games=6,
         max_minutes=2,
     )
@@ -219,7 +216,11 @@ def test_all_stage_handoffs_preserve_only_weights_and_reset_optimizer_schedules(
         else:
             assert meta["initialization"] is None
         expected, previous = model, run / "final.zip"
-        assert model.policy.optimizer.state
+        # A cohort with no planting or a rejected first PPO update correctly
+        # leaves the actor's Adam state empty; transfer must not fabricate it.
+        metrics = read_series(run / "training-metrics.jsonl")
+        if any(row["optimization"]["actor_retained_steps"] for row in metrics):
+            assert model.policy.optimizer.state
         assert model.policy.critic_optimizer.state
     assert starts == [(0, 0)] * len(STAGES)
     build_run_report(tmp_path / "shared", stage_cfg)
@@ -529,7 +530,9 @@ def test_shared_mastery_stops_after_update_and_is_resumable(
         return original(self, seeds, levels, family, destination, split, final)
 
     if not standalone:
-        original_build = __import__("pvz_rl.learning.training", fromlist=["build_model"]).build_model
+        original_build = __import__(
+            "pvz_rl.learning.training", fromlist=["build_model"]
+        ).build_model
 
         def build(*args, **kwargs):
             model = original_build(*args, **kwargs)
@@ -638,11 +641,13 @@ def test_previous_action_head_rejected_before_loading(stage_cfg, tmp_path, mode)
         )
 
 
-def test_previous_action_distribution_rejected_by_metadata_and_direct_loader(stage_cfg, tmp_path, monkeypatch):
+def test_previous_action_distribution_rejected_by_metadata_and_direct_loader(
+    stage_cfg, tmp_path, monkeypatch
+):
     import json
     import zipfile
 
-    from pvz_rl.learning.cuda_ppo import CudaMaskablePPO
+    from pvz_rl.learning.cuda_ppo import CudaCompleteGamePPO
     from pvz_rl.learning.training_requirements import current_model_config
 
     stage_cfg["policy"].pop("action_distribution")
@@ -653,16 +658,21 @@ def test_previous_action_distribution_rejected_by_metadata_and_direct_loader(sta
     checkpoint = tmp_path / "old.zip"
     with zipfile.ZipFile(checkpoint, "w") as archive:
         archive.writestr("data", json.dumps({"optimizer_protocol": "periodic_exact_kl_v1"}))
-    with pytest.raises(ValueError, match="Action distribution changed"):
-        CudaMaskablePPO.load(checkpoint)
+    with pytest.raises(ValueError, match="requires fresh models"):
+        CudaCompleteGamePPO.load(checkpoint)
     # A mismatched sidecar must not allow old archive weights into a new experiment.
     stage_cfg["policy"]["action_distribution"] = "balanced_species_tiles_v1"
-    write_json(tmp_path / "metadata.json", {"config": stage_cfg, "condition": "masked",
-               "exploration_protocol": "phase_floor_v1"})
-    monkeypatch.setattr("stable_baselines3.common.save_util.load_from_zip_file",
-                        lambda *args, **kwargs: ({}, {"policy": {}}, {}))
+    write_json(
+        tmp_path / "metadata.json",
+        {"config": stage_cfg, "condition": "masked", "exploration_protocol": "phase_floor_v1"},
+    )
+    monkeypatch.setattr(
+        "stable_baselines3.common.save_util.load_from_zip_file",
+        lambda *args, **kwargs: ({}, {"policy": {}}, {}),
+    )
     from pvz_rl.learning.training import initial_weights
-    with pytest.raises(ValueError, match="Action distribution changed"):
+
+    with pytest.raises(ValueError, match="Retired policy"):
         initial_weights(checkpoint, stage_cfg)
 
 

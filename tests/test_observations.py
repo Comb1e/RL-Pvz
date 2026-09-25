@@ -1,4 +1,4 @@
-"""Independent controls for the single event_v6 public observation layout."""
+"""Independent controls for the single event_v7 public observation layout."""
 
 from dataclasses import replace
 
@@ -36,11 +36,12 @@ def zombie(kind="basic", row=0, x=1000, **changes):
 
 def test_layout_counts_assets_distances_and_empty_regions():
     encoder = ObservationEncoder(load_config(), Rules())
-    assert encoder.size == 281 and encoder.zombie_width == 9
+    assert encoder.size == 286 and encoder.zombie_width == 9
     assert [(s.start, s.stop) for s in encoder.slices.values()] == [
         (0, 135),
         (135, 270),
         (270, 281),
+        (281, 286),
     ]
     # Literal values use the pinned house/spawn positions -500/9500. A nearer
     # spent pole must not hide the next carrier whose pole is still unused.
@@ -58,7 +59,7 @@ def test_layout_counts_assets_distances_and_empty_regions():
     grid = encoded[135:270].reshape(5, 3, 9)
     np.testing.assert_allclose(
         grid[0, 0],
-        [0.2, 0.2, 0.2, 0.2, 0.6, 1, 1500 / 5500, 0.15, 0.22],
+        [0.2, 0.2, 0.2, 0.2, 0.6, 0.8, 1500 / 5500, 0.15, 0.22],
         atol=1e-7,
     )
     np.testing.assert_array_equal(grid[1:, :, :7], 0)
@@ -96,7 +97,7 @@ def test_globals_and_removed_fields_never_admit_events():
         ),
     )
     expected = encoder.encode(obs)
-    np.testing.assert_allclose(expected[270:], [3, 0.1, 0.2, 0.4, 2, 0.2, 0, 1, 0, 0, 1])
+    np.testing.assert_allclose(expected[270:281], [3, 0.1, 0.2, 0.4, 2, 0.2, 0, 1, 0, 0, 1])
     changed = replace(
         obs,
         counts=replace(obs.counts, spawned=100),
@@ -257,3 +258,42 @@ def test_actual_vault_consumes_pole_in_cpu_and_cuda():
                 break
     assert {"carrying_pole", "vaulting", "walking"} <= seen
     assert batch.state_hash(0) == game.state_hash()
+
+
+@pytest.mark.parametrize("device", ["cpu", "cuda"])
+def test_headless_frontmost_ties_and_compact_phase_mapping(device):
+    cfg, rules = load_config(), Rules()
+    encoder = ObservationEncoder(cfg, rules)
+    obs = replace(
+        public_board(),
+        zombies=(
+            zombie(row=0, x=1000, headless=True, health=70),
+            zombie(row=0, x=1000, headless=False),
+            zombie(row=1, x=900, headless=True, health=50),
+            zombie(row=1, x=1200),
+            zombie(row=2, x=1000, headless=True),
+        ),
+    )
+    encoded = encoder.encode(obs)
+    np.testing.assert_array_equal(encoded[281:], [0, 1, 1, 0, 0])
+    np.testing.assert_array_equal(encoded, encoder.encode(replace(obs, zombies=obs.zombies[::-1])))
+    from pvz_rl.envs.encoding import PLANT_BEHAVIOR
+
+    assert PLANT_BEHAVIOR["rising"] == "arming"
+    assert all(PLANT_BEHAVIOR[s] == "digesting" for s in ("biting", "biting_got_one", "recovering"))
+    from pvz_rl.policy.event_memory import EventMemory
+
+    memory = EventMemory(cfg, rules, 1, device)
+    assert memory.width == 289
+    masks = torch.ones(1, 406, dtype=torch.bool, device=device)
+    for i, public in enumerate(
+        (obs, replace(obs, zombies=tuple(replace(z, headless=False) for z in obs.zombies)))
+    ):
+        memory.observe(
+            torch.tensor(encoder.encode(public)[None], device=device),
+            masks,
+            torch.zeros(1, device=device),
+            torch.tensor([i == 0], device=device),
+            torch.tensor([i], device=device),
+        )
+    assert memory.event_flags[0, -1]

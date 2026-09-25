@@ -12,7 +12,7 @@ from importlib.resources import files
 from pathlib import Path
 
 from pvz_game.config import PLANT_TYPES, ZOMBIE_TYPES
-from pvz_game.cuda.schema import MOWER_STATES, PLANT_STATES, ZOMBIE_STATES
+from pvz_game.cuda.schema import MOWER_STATES, ZOMBIE_STATES
 
 from pvz_rl.learning.budget import uses_games
 
@@ -68,23 +68,6 @@ def gpu_defaults():
     return tomllib.loads(files("pvz_rl").joinpath("data/gpu-defaults.toml").read_text("utf-8"))
 
 
-def resolve_rollout(cfg, *, per_env=None, total=None, new_cuda=False):
-    """Resolve one explicit rollout contract and reject ambiguous overrides."""
-    t = cfg["training"]
-    steps = per_env if per_env is not None else t.get("rollout_steps_per_env")
-    if new_cuda and steps is None:
-        steps = 128
-    if steps is not None:
-        if type(steps) is not int or steps < 1:
-            raise ValueError("rollout_steps_per_env must be a positive integer")
-        derived = steps * t["n_envs"]
-        if total is not None and total != derived:
-            raise ValueError("--rollout-size conflicts with n_envs * rollout_steps_per_env")
-        t.update(rollout_steps_per_env=steps, rollout_size=derived)
-    elif total is not None:
-        t["rollout_size"] = total
-
-
 def load_config(path: str | Path | None = None) -> dict:
     source = Path(path) if path else files("pvz_rl").joinpath("data/research.toml")
     cfg = tomllib.loads(source.read_text("utf-8"))
@@ -101,33 +84,7 @@ def lesson_settings(cfg=None):
     return (cfg or {}).get("curriculum", {}).get("lessons", _teaching_defaults()["lessons"])
 
 
-def _legacy_exploration_config(cfg: dict) -> dict:
-    """Map retired schedule fields only while reading historical metadata."""
-    result = copy.deepcopy(cfg)
-    settings = result.get("training", {}).get("exploration", {})
-    if "epsilon" not in settings:
-        return result
-    epsilon = settings.get("epsilon", 0.0)
-    target = settings.get("epsilon_target", epsilon)
-    result["training"]["exploration"] = {
-        "objective": settings.get("objective", "balanced_heads_v2"),
-        "type_coef": settings.get("type_coef", 0.0),
-        "plant_coef": settings.get("plant_coef", 0.0),
-        "tile_coef": settings.get("tile_coef", 0.0),
-        "warmup_epsilon": epsilon,
-        "formal_epsilon_start": epsilon,
-        "formal_epsilon_floor": target,
-        "warmup_entropy_fraction": 1.0,
-        "formal_entropy_start_fraction": 1.0,
-        "formal_entropy_floor_fraction": settings.get("entropy_target_fraction", 1.0),
-        "formal_decay_games": settings.get("epsilon_target_games", 0),
-    }
-    return result
-
-
-def validate_config(cfg: dict, *, allow_legacy_exploration=False) -> None:
-    if allow_legacy_exploration:
-        cfg = _legacy_exploration_config(cfg)
+def validate_config(cfg: dict) -> None:
     if cfg["training"].get("validation_schedule", "periodic") not in (
         "periodic",
         "stage_success",
@@ -135,16 +92,8 @@ def validate_config(cfg: dict, *, allow_legacy_exploration=False) -> None:
         raise ValueError("training.validation_schedule must be periodic or stage_success")
     if simulator(cfg) not in ("cpu", "cuda"):
         raise ValueError("simulation.backend must be cpu or cuda")
-    if "rollout_steps_per_env" in cfg["training"]:
-        steps = cfg["training"]["rollout_steps_per_env"]
-        if (
-            type(steps) is not int
-            or steps < 1
-            or steps * cfg["training"]["n_envs"] != cfg["training"]["rollout_size"]
-        ):
-            raise ValueError("rollout_size must equal n_envs * rollout_steps_per_env")
-    if cfg["encoding"].get("version") != "event_v6" or cfg.get("policy", {}).get("kind") not in (
-        "event_transformer_v2",
+    if cfg["encoding"].get("version") != "event_v7" or cfg.get("policy", {}).get("kind") not in (
+        "event_q_controller_v1",
     ):
         raise ValueError(
             "Retired observation/policy format. Start fresh with configs/train.toml; archived reports remain readable; recordings must use the 100 Hz engine."
@@ -166,8 +115,8 @@ def validate_config(cfg: dict, *, allow_legacy_exploration=False) -> None:
         raise ValueError("reward must contain only the outcome and net-value settings")
     if "actor_objective" in cfg["training"] or "ent_coef" in cfg["training"]:
         raise ValueError("Retired PPO objective; use standard PPO and training.exploration")
-    if cfg["training"]["exploration"].get("objective") != "balanced_heads_v2":
-        raise ValueError("Only balanced action-head exploration is supported")
+    if cfg["training"]["exploration"].get("objective") != "conditional_plant_v1":
+        raise ValueError("Only conditional planting exploration is supported")
     for key in (
         "win_reward",
         "loss_penalty",
@@ -198,14 +147,11 @@ def validate_config(cfg: dict, *, allow_legacy_exploration=False) -> None:
         "event_tokens",
         "summary_tokens",
         "summary_stride",
-        "sequence_length",
     ):
         if type(memory.get(key)) is not int or memory[key] < 1:
             raise ValueError(f"policy.memory.{key} must be a positive integer")
     if memory["model_width"] % memory["heads"]:
         raise ValueError("Memory model_width must be divisible by heads")
-    if type(memory.get("burn_in")) is not int or memory["burn_in"] < 0:
-        raise ValueError("Memory burn_in must be a nonnegative integer")
     if not math.isfinite(memory.get("gate_bias", float("nan"))):
         raise ValueError("Memory gate_bias must be finite")
     for key in ("plant_embedding", "state_embedding"):
@@ -214,15 +160,14 @@ def validate_config(cfg: dict, *, allow_legacy_exploration=False) -> None:
     for key in ("scalar_sizes", "channels"):
         if not policy[key] or any(type(n) is not int or n < 1 for n in policy[key]):
             raise ValueError(f"policy.{key} must contain positive integers")
-    if not math.isfinite(policy["initial_dig_logit"]):
-        raise ValueError("initial_dig_logit must be finite")
-    wait_weight = policy.get("initial_wait_weight", 1.2)
-    if type(wait_weight) not in (int, float) or not math.isfinite(wait_weight) or wait_weight <= 0:
-        raise ValueError("initial_wait_weight must be finite and positive")
     sample_seconds = output_settings(cfg)["logging"]["hardware_sample_seconds"]
-    if type(sample_seconds) not in (int, float) or not math.isfinite(sample_seconds) or sample_seconds < 0.1:
+    if (
+        type(sample_seconds) not in (int, float)
+        or not math.isfinite(sample_seconds)
+        or sample_seconds < 0.1
+    ):
         raise ValueError("hardware_sample_seconds must be finite and at least 0.1")
-    for key in ("vf_coef", "target_kl"):
+    for key in ("target_kl",):
         value = cfg["training"][key]
         if type(value) not in (int, float) or not math.isfinite(value) or value < 0:
             raise ValueError(f"training.{key} must be finite and nonnegative")
@@ -233,39 +178,17 @@ def validate_config(cfg: dict, *, allow_legacy_exploration=False) -> None:
         type(critic_lr) not in (int, float) or not math.isfinite(critic_lr) or critic_lr <= 0
     ):
         raise ValueError("critic_learning_rate must be finite and positive")
-    warmup = cfg["training"].get("critic_warmup_games", 0)
-    if type(warmup) is not int or warmup < 0:
-        raise ValueError("critic_warmup_games must be a nonnegative integer")
     exploration = cfg["training"]["exploration"]
-    schedule_fields = (
-        "warmup_epsilon",
-        "formal_epsilon_start",
-        "formal_epsilon_floor",
-        "warmup_entropy_fraction",
-        "formal_entropy_start_fraction",
-        "formal_entropy_floor_fraction",
-    )
-    for key in schedule_fields:
+    for key in ("epsilon_start", "epsilon_floor", "entropy_floor_fraction"):
         value = exploration.get(key)
         if type(value) not in (int, float) or not math.isfinite(value) or not 0 < value <= 1:
             raise ValueError(f"exploration.{key} must be finite and in (0, 1]")
-    if exploration["formal_epsilon_floor"] > exploration["formal_epsilon_start"]:
-        raise ValueError("exploration.formal_epsilon_floor cannot exceed formal_epsilon_start")
-    if exploration["formal_entropy_floor_fraction"] > exploration["formal_entropy_start_fraction"]:
-        raise ValueError(
-            "exploration.formal_entropy_floor_fraction cannot exceed formal_entropy_start_fraction"
-        )
-    decay_games = exploration.get("formal_decay_games")
-    if type(decay_games) is not int or decay_games < 0:
-        raise ValueError("exploration.formal_decay_games must be a nonnegative integer")
-    if any(key in exploration for key in ("epsilon", "epsilon_target", "epsilon_target_games", "entropy_target_fraction")):
-        raise ValueError("The old single exploration schedule was removed; use phase/floor fields")
-    value_batch = cfg["training"].get("value_batch_size", 1024)
-    if type(value_batch) is not int or value_batch < 1:
-        raise ValueError("value_batch_size must be a positive integer")
-    for key in ("type_coef", "plant_coef", "tile_coef"):
-        value = exploration[key]
-        if type(value) not in (int, float) or not math.isfinite(value) or value < 0:
+    if exploration["epsilon_floor"] > exploration["epsilon_start"]:
+        raise ValueError("exploration floor exceeds start")
+    if type(exploration.get("decay_games")) is not int or exploration["decay_games"] < 1:
+        raise ValueError("exploration.decay_games must be a positive integer")
+    for key in ("plant_coef", "tile_coef"):
+        if not math.isfinite(exploration[key]) or exploration[key] < 0:
             raise ValueError(f"exploration.{key} must be finite and nonnegative")
     minutes = cfg["training"].get("max_minutes")
     reserve = cfg["training"].get("finalization_minutes", 15)
@@ -359,8 +282,11 @@ def validate_config(cfg: dict, *, allow_legacy_exploration=False) -> None:
     if type(visual["live_fps"]) is not int or not 1 <= visual["live_fps"] <= 30:
         raise ValueError("live_fps must be an integer from 1 to 30")
     size = visual["live_window_size"]
-    if (not isinstance(size, (tuple, list)) or len(size) != 2
-            or any(type(n) is not int or n < lower for n,lower in zip(size,(640,480)))):
+    if (
+        not isinstance(size, (tuple, list))
+        or len(size) != 2
+        or any(type(n) is not int or n < lower for n, lower in zip(size, (640, 480)))
+    ):
         raise ValueError("live_window_size must be at least 640 by 480")
     if type(visual["video_fps"]) is not int or not 1 <= visual["video_fps"] <= 100:
         raise ValueError("video_fps must be an integer from 1 to 100")
@@ -378,18 +304,23 @@ def validate_config(cfg: dict, *, allow_legacy_exploration=False) -> None:
     if not math.isfinite(visual["final_hold_seconds"]) or visual["final_hold_seconds"] < 0:
         raise ValueError("Visualization final_hold_seconds must be finite and nonnegative")
     env, train = cfg["environment"], cfg["training"]
-    pipeline = train.get("pipeline")
-    if not isinstance(pipeline, dict):
-        raise ValueError("training.pipeline is required; start a fresh periodic-on-policy run")
-    if pipeline.get("mode") != "periodic_on_policy":
-        raise ValueError("The synchronous training scheduler was removed; use periodic_on_policy")
-    if type(pipeline.get("depth")) is not int or pipeline["depth"] != 2:
-        raise ValueError("training.pipeline.depth must be exactly 2")
-    if (
-        type(pipeline.get("queue_size")) is not int
-        or not 1 <= pipeline["queue_size"] <= pipeline["depth"]
+    if train.get("method") != "complete_game_mc":
+        raise ValueError("Training requires complete_game_mc and fresh models")
+    if any(
+        k in train
+        for k in (
+            "pipeline",
+            "rollout_size",
+            "rollout_steps_per_env",
+            "gae_lambda",
+            "critic_warmup_games",
+        )
     ):
-        raise ValueError("training.pipeline.queue_size must be between 1 and depth")
+        raise ValueError("Short rollouts, GAE, periodic scheduling and actor warm-up were removed")
+    storage = train.get("storage", {})
+    for key in ("ram_gib", "block_rows"):
+        if type(storage.get(key)) is not int or storage[key] < 1:
+            raise ValueError(f"training.storage.{key} must be a positive integer")
     performance = train.get("performance", {})
     for key in ("compile_kernels", "telemetry"):
         if type(performance.get(key, False)) is not bool:
@@ -405,7 +336,10 @@ def validate_config(cfg: dict, *, allow_legacy_exploration=False) -> None:
     if tuple(env["plants"]) != PLANT_TYPES or tuple(env["zombies"]) != ZOMBIE_TYPES:
         raise ValueError("Plant/zombie order is fixed by observation and action schema version 1")
     for key, expected in (
-        ("plant_states", PLANT_STATES),
+        (
+            "plant_states",
+            ("ready", "arming", "armed", "fusing", "digesting", "exploding", "detonating"),
+        ),
         ("zombie_states", ZOMBIE_STATES),
         ("mower_states", MOWER_STATES),
     ):
@@ -417,7 +351,6 @@ def validate_config(cfg: dict, *, allow_legacy_exploration=False) -> None:
     for key in (
         "total_games" if uses_games(cfg) else "total_steps",
         "n_envs",
-        "rollout_size",
         "batch_size",
         "n_epochs",
         "eval_interval_games" if uses_games(cfg) else "eval_interval",
@@ -425,18 +358,10 @@ def validate_config(cfg: dict, *, allow_legacy_exploration=False) -> None:
     ):
         if type(train[key]) is not int or train[key] <= 0:
             raise ValueError(f"{key} must be a positive integer")
-    if train["rollout_size"] % train["n_envs"] or train["rollout_size"] % train["batch_size"]:
-        raise ValueError("Rollout size must divide into complete workers and minibatches")
-    if train.get("discount_clock") != "simulation_ticks":
-        raise ValueError("Training requires simulation_ticks discounting; start a fresh run")
-    gamma = train["gamma"]
-    if (
-        train["rollout_size"] < 2
-        or type(gamma) not in (int, float)
-        or not math.isfinite(gamma)
-        or not 0 <= gamma <= 1
-    ):
-        raise ValueError("Invalid rollout size or discount")
+    if train.get("discount_clock") != "simulation_ticks" or train["gamma"] != 1:
+        raise ValueError("Complete actual returns require gamma 1; start fresh")
+    if train["batch_size"] > 1024:
+        raise ValueError("Bounded minibatches must not exceed 1024")
     if train["device"] not in ("cpu", "cuda"):
         raise ValueError("Training device must be cpu or cuda")
     seeds = train["learner_seeds"]
@@ -457,12 +382,6 @@ def validate_config(cfg: dict, *, allow_legacy_exploration=False) -> None:
         for key in keys:
             if not math.isfinite(cfg[group][key]) or cfg[group][key] <= 0:
                 raise ValueError(f"{group}.{key} must be finite and positive")
-    if (
-        type(train["gae_lambda"]) not in (int, float)
-        or not math.isfinite(train["gae_lambda"])
-        or not 0 <= train["gae_lambda"] <= 1
-    ):
-        raise ValueError("Invalid GAE lambda")
     if (
         cfg["evaluation"]["bootstrap_replicates"] < 1
         or cfg["evaluation"]["replays_per_outcome"] < 0

@@ -12,14 +12,12 @@ TRAINING_CONDITIONS = ("masked",)
 
 def current_model_config(cfg):
     return (
-        cfg.get("policy", {}).get("kind") == "event_transformer_v2"
+        cfg.get("policy", {}).get("kind") == "event_q_controller_v1"
         and cfg.get("policy", {}).get("action_distribution") == ACTION_DISTRIBUTION
-        and cfg.get("encoding", {}).get("version") == "event_v6"
+        and cfg.get("encoding", {}).get("version") == "event_v7"
         and cfg.get("reward", {}).get("version") == "net_value_v1"
         and cfg.get("training", {}).get("discount_clock") == "simulation_ticks"
-        and cfg.get("training", {}).get("pipeline", {}).get("mode")
-        == "periodic_on_policy"
-        and cfg.get("training", {}).get("pipeline", {}).get("depth") == 2
+        and cfg.get("training", {}).get("method") == "complete_game_mc"
     )
 
 
@@ -32,7 +30,7 @@ def require_supported_policy(cfg, condition="masked"):
         or not current_model_config(cfg)
     ):
         raise ValueError(
-            "Retired policy or scheduler. Models require event_transformer_v2, event_v6, net_value_v1, the balanced_species_tiles_v1 action distribution, and the two-rollout periodic-on-policy pipeline. Start fresh with configs/train.toml."
+            "Retired policy or scheduler. Models require event_q_controller_v1, event_v7, net_value_v1, the conditional_plant_v1 distribution and complete-game collection. Start fresh with configs/train.toml."
         )
 
 
@@ -63,8 +61,8 @@ def require_cuda_training(cfg, condition="masked", *, runtime=True):
     if simulator(cfg) != "cuda" or cfg["training"]["device"] != "cuda":
         raise ValueError(
             "Training and resume require simulation.backend=cuda and training.device=cuda. "
-            "CPU training was removed; the synchronous scheduler was also removed. "
-            "Start a fresh periodic CUDA run with configs/train.toml."
+            "CPU training is not supported. "
+            "Start a fresh complete-game CUDA run with configs/train.toml."
         )
     if cfg["environment"].get("action_timing") != "per_tick":
         raise ValueError(
@@ -106,7 +104,6 @@ def transfer_protocol(cfg, condition="masked"):
         "encoding": cfg["encoding"]["version"],
         "actions": ActionSchema.version,
         "action_distribution": p.get("action_distribution"),
-        "exploratory_wait_weight": p.get("initial_wait_weight"),
         "action_history": "joint_embedding_v1",
         "board": {
             k: env[k]
@@ -133,11 +130,7 @@ def transfer_protocol(cfg, condition="masked"):
             )
         },
         "heads": cfg["training"]["hidden_sizes"],
-        "pipeline": {
-            "mode": cfg["training"]["pipeline"]["mode"],
-            "depth": cfg["training"]["pipeline"]["depth"],
-            "queue_size": cfg["training"]["pipeline"]["queue_size"],
-        },
+        "method": cfg["training"]["method"],
     }
 
 

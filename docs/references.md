@@ -1,5 +1,19 @@
 # Sources actually used
 
+## Complete-game controller and PC mechanics — inspected 2026-09-25
+
+- [Q-PAMDP, full text](https://arxiv.org/html/1509.01644v4): alternating action-value and parameter-policy learning informed separate critic/controller and argument-policy roles. Its continuous arguments and convergence assumptions do not establish convergence of this greedy discrete MC/conditional-PPO adaptation.
+- [MP-DQN action/parameter implementation](https://github.com/cycraig/MP-DQN/blob/master/agents/pdqn.py): inspected value argmax and argument separation. Its replay, TD targets and discrete epsilon exploration are not adopted.
+- [Spinning Up reward-to-go example](https://github.com/openai/spinningup/blob/master/spinup/examples/pytorch/pg_math/2_rtg_pg.py): complete-episode return accumulation. The independent controls here additionally cover multiple paused games and instantaneous actions.
+- [SB3-Contrib 2.7.1 masked PPO](https://github.com/Stable-Baselines-Team/stable-baselines3-contrib/blob/v2.7.1/sb3_contrib/ppo_mask/ppo_mask.py): inspected consistent mask use in collection and optimization. The new method retains conditional PPO and its clipped objective, not the stock rollout/GAE scheduler.
+- [Patoke PC reconstruction](https://github.com/Patoke/re-plants-vs-zombies/tree/c4692036c5e11d227c8fb7c593b734dac96da028): inspected Plant.cpp, Zombie.cpp, Board.cpp, SeedPacket.cpp, LawnMower.cpp and TodCommon.cpp. Community reconstruction evidence for production ranges, head loss/decay, armor, initial recharge and combat phases; not official executable-equivalence evidence.
+- [Animation reference](https://github.com/Bamcane/re-plants-vs-zombies/tree/0f6bbd39302acf69484ba8b3e071724e35cfba17/pak/reanim): inspected mine, chomper, ordinary zombie and pole-vaulter frame markers. Frame counts inform discrete phase durations. No art is redistributed. The engine retains documented tile geometry and quantized animation-free motion.
+
+The GAE paper was previously inspected as an abstract; it motivates the historical
+variance/bias discussion, but GAE is not part of the current method. Earlier
+pipeline papers remain historical references only. No published convergence or
+throughput claim is transferred to this implementation.
+
 ## Live environment presentation — 2026-09-25
 
 - [Python packages tutorial](https://docs.python.org/3/tutorial/modules.html#packages),

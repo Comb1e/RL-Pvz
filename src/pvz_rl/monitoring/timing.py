@@ -17,14 +17,14 @@ class TrainingTimings:
         self.queue_wait_seconds = 0.0
 
     def record_window(self, metrics):
-        self.last_collection_seconds = sum(metrics["slot_collection_seconds"])
-        self.last_optimization_seconds = sum(metrics["slot_optimization_seconds"])
+        self.last_collection_seconds = metrics["collection_seconds"]
+        self.last_optimization_seconds = metrics["optimization_seconds"]
         self.collection_seconds += self.last_collection_seconds
         self.optimization_seconds += self.last_optimization_seconds
         self.last_window_seconds = metrics["window_seconds"]
         self.window_seconds += self.last_window_seconds
-        self.overlap_seconds += metrics["overlap_seconds"]
-        self.queue_wait_seconds += metrics["queue_wait_seconds"]
+        self.overlap_seconds += metrics.get("overlap_seconds", 0.0)
+        self.queue_wait_seconds += metrics.get("queue_wait_seconds", 0.0)
 
     def snapshot(self):
         return {
@@ -46,6 +46,10 @@ class TimingCallback(BaseCallback):
         self.games, self.ticks = 0, 0
         self.deadline, self.load_monitor = deadline, load_monitor
 
+    def hardware_context(self, phase):
+        if self.load_monitor:
+            self.load_monitor.update(activity="training", phase=phase)
+
     def _on_step(self):
         for info in self.locals.get("infos", []):
             self.games += "episode_metrics" in info
@@ -62,12 +66,12 @@ class TimingCallback(BaseCallback):
 
             self.load_monitor.update(
                 activity="training",
-                phase="warmup" if getattr(self.model, "critic_warmup_active", False) else "formal",
+                phase="collect",
                 stage=STAGES[getattr(getattr(self.model.env, "queue", None), "stage", 0)],
             )
 
     def _on_rollout_end(self):
-        self.timings.record_window(self.model.pipeline_metrics)
+        self.timings.record_window(self.model.cohort_metrics)
         if self.load_monitor:
-            self.load_monitor.record_window(self.model.pipeline_metrics)
+            self.load_monitor.record_window(self.model.cohort_metrics)
             self.load_monitor.update(training_steps=self.model.num_timesteps)

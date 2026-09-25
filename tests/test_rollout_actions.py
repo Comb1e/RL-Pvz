@@ -13,8 +13,8 @@ from pvz_rl.monitoring.metrics import agent_action_count, mean_agent_actions
 def test_defaults_and_archived_action_counts():
     cfg = load_config()
     assert cfg == load_config("configs/train.toml")
-    assert cfg["training"]["n_envs"] == gpu_defaults()["n_envs"] == 128
-    assert cfg["training"]["rollout_size"] == 16384
+    assert cfg["training"]["n_envs"] == gpu_defaults()["n_envs"] == 32
+    assert cfg["training"]["method"] == "complete_game_mc"
     assert agent_action_count({"agent_actions": 2, "decisions": 1000}) == 2
     assert agent_action_count({"action_timing": "per_tick", "instant_actions": 3}) == 3
     assert agent_action_count({"decisions": 1000}) is None
@@ -51,7 +51,7 @@ def test_cuda_counts_and_games_survive_128_waits():
     if not torch.cuda.is_available():
         pytest.skip("CUDA unavailable")
     cfg = load_config()
-    cfg["training"].update(n_envs=1, rollout_size=128, batch_size=128)
+    cfg["training"].update(n_envs=1, batch_size=128)
     env = vector_env(cfg, "masked", 101, family="saving")
     try:
         env.reset()

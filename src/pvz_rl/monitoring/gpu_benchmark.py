@@ -8,7 +8,7 @@ from time import perf_counter, process_time
 
 import torch
 
-from pvz_rl.config import gpu_defaults, output_settings, resolve_rollout
+from pvz_rl.config import gpu_defaults, output_settings
 from pvz_rl.monitoring.benchmark import measure
 from pvz_rl.monitoring.hardware import HardwareMonitor
 from pvz_rl.monitoring.progress import Phase, ProgressReporter
@@ -39,7 +39,6 @@ def recommend(rows, *, parity_passed=False, provisional=True):
         "n_envs": selected,
         "device": "cuda",
         "simulator": "cuda",
-        "rollout_steps_per_env": 128,
         "median_decisions_per_second": aggregates,
         "coefficient_of_variation": variation,
         "stability_limit": 0.10,
@@ -62,7 +61,6 @@ def benchmark_gpu(cfg, output, *, minutes=15, steps=16384, env_counts=None):
         not counts
         or any(type(n) is not int or n < 1 for n in counts)
         or len(set(counts)) != len(counts)
-        or any(n * 128 % cfg["training"]["batch_size"] for n in counts)
     ):
         raise ValueError(
             "Benchmark env counts must be unique positive integers compatible with batch_size"
@@ -78,7 +76,7 @@ def benchmark_gpu(cfg, output, *, minutes=15, steps=16384, env_counts=None):
             steps=steps,
             repeats=3,
             env_counts=list(counts),
-            minimum_rollouts=defaults["benchmark_min_rollouts"],
+            minimum_cohorts=defaults["benchmark_min_cohorts"],
         ),
     )
     rows = []
@@ -86,7 +84,7 @@ def benchmark_gpu(cfg, output, *, minutes=15, steps=16384, env_counts=None):
     deadline = perf_counter() + minutes * 60
     torch.set_num_threads(cfg["training"]["torch_threads"])
     profiles = [
-        *((f"cuda-{n}", "cuda", n, 128) for n in counts),
+        *((f"cuda-{n}", "cuda", n) for n in counts),
     ]
     try:
         progress.phase(
@@ -102,7 +100,7 @@ def benchmark_gpu(cfg, output, *, minutes=15, steps=16384, env_counts=None):
         )
         with monitor_context as monitor:
             for repeat in range(3):
-                for name, backend, n, rollout_steps in profiles[:: 1 if repeat % 2 == 0 else -1]:
+                for name, backend, n in profiles[:: 1 if repeat % 2 == 0 else -1]:
                     if perf_counter() >= deadline:
                         break
                     local = copy.deepcopy(cfg)
@@ -112,7 +110,6 @@ def benchmark_gpu(cfg, output, *, minutes=15, steps=16384, env_counts=None):
                         "benchmark_shared_mix": True,
                     }
                     local["training"].update(n_envs=n, device="cuda")
-                    resolve_rollout(local, per_env=rollout_steps)
                     label = f"{name}/repeat-{repeat + 1}"
                     if monitor:
                         monitor.update(profile=label)
@@ -122,7 +119,7 @@ def benchmark_gpu(cfg, output, *, minutes=15, steps=16384, env_counts=None):
                         result = measure(
                             local,
                             800 + repeat,
-                            max(steps, n * rollout_steps * defaults["benchmark_min_rollouts"]),
+                            steps,
                             output,
                             deadline=deadline,
                             load_monitor=monitor,
@@ -138,7 +135,6 @@ def benchmark_gpu(cfg, output, *, minutes=15, steps=16384, env_counts=None):
                         "profile": name,
                         "simulator": backend,
                         "n_envs": n,
-                        "rollout_steps_per_env": rollout_steps,
                         "repeat": repeat,
                         "main_process_cpu_seconds": process_time() - cpu_start,
                         **result,

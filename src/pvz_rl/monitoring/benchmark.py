@@ -44,7 +44,7 @@ def measure(cfg, seed, steps, output, *, deadline=None, load_monitor=None, live_
         model.set_logger(configure(str(output), []))
         setup_seconds = perf_counter() - started
         started = perf_counter()
-        model.learn(cfg["training"]["pipeline"]["depth"] * cfg["training"]["rollout_size"])
+        model.learn(1)
         cuda = model.device.type == "cuda"
         if cuda:
             torch.cuda.synchronize(model.device)
@@ -99,7 +99,7 @@ def measure(cfg, seed, steps, output, *, deadline=None, load_monitor=None, live_
             "games_per_minute": timing.games / seconds * 60,
             "simulation_ticks_per_second": timing.ticks / seconds,
             "completed_games": timing.games,
-            "pipeline": model.pipeline_metrics,
+            "cohort": model.cohort_metrics,
             "device_phase_seconds": env.features.profiler.flush()
             if hasattr(env, "features")
             else None,
@@ -113,7 +113,8 @@ def measure(cfg, seed, steps, output, *, deadline=None, load_monitor=None, live_
             ),
             "policy_sha256": policy_digest(model),
             "live_view": {**env.live_view.stats, **env.live_view.session.stats, **viewer_resources}
-            if env.live_view is not None else None,
+            if env.live_view is not None
+            else None,
             "state": "deadline" if stopped else "complete",
         }
     finally:

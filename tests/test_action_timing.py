@@ -30,20 +30,20 @@ def ready(cfg, *, record=False):
 
 def test_multiple_actions_at_tick_zero_update_legality_and_preserve_time(per_tick_cfg):
     env = ready(per_tick_cfg)
-    for i, kind in enumerate(("peashooter", "sunflower", "wall_nut")):
+    for i, kind in enumerate(("peashooter", "sunflower", "chomper")):
         _, _, ended, truncated, info = env.step(env.codec.encode(Place(kind, 0, i)))
         assert not ended and not truncated and info["accepted"]
         assert info["ticks_advanced"] == 0 and env.public.tick == 0
         assert not env.action_masks()[env.codec.encode(Place(kind, 1, 0))]
         assert not env.action_masks()[env.codec.encode(Place("potato_mine", 0, i))]
-    assert env.public.sun == 300 and len(env.public.plants) == 3
+    assert env.public.sun == 200 and len(env.public.plants) == 3
     assert all(
-        c.cooldown_ticks == c.recharge_ticks
+        c.cooldown_ticks == c.recharge_ticks + 1
         for c in env.public.cards
-        if c.plant_type in ("peashooter", "sunflower", "wall_nut")
+        if c.plant_type in ("peashooter", "sunflower", "chomper")
     )
     env.step(env.codec.encode(Dig(0, 1)))
-    assert env.public.tick == 0 and env.public.sun == 300
+    assert env.public.tick == 0 and env.public.sun == 200
     assert len(env.public.plants) == 2
     _, _, _, _, info = env.step(0)
     assert info["ticks_advanced"] == 1 and env.public.tick == 1
@@ -78,15 +78,15 @@ def test_invalid_actions_advance_and_never_spend_or_change_board(per_tick_cfg):
 def test_exact_cost_cooldown_and_many_operations_without_an_artificial_cap(per_tick_cfg):
     env = ready(per_tick_cfg)
     env.step(env.codec.encode(Place("sunflower", 0, 0)))
-    for _ in range(749):
+    for _ in range(750):
         env.step(0)
-    assert env.public.tick == 749
+    assert env.public.tick == 750
     assert not env.action_masks()[env.codec.encode(Place("sunflower", 0, 1))]
     env.step(0)
     assert env.action_masks()[env.codec.encode(Place("sunflower", 0, 1))]
     env.step(env.codec.encode(Place("sunflower", 0, 1)))
-    assert env.public.tick == 750
-    assert next(c for c in env.public.cards if c.plant_type == "sunflower").cooldown_ticks == 750
+    assert env.public.tick == 751
+    assert next(c for c in env.public.cards if c.plant_type == "sunflower").cooldown_ticks == 751
 
     from pvz_game import InitialPlant
 
@@ -126,7 +126,7 @@ def test_wait_cutoff_terminal_precedence_and_restricted_request(per_tick_cfg):
         assert env.step(0)[2:4] == (False, False)
     _, _, terminated, truncated, info = env.step(0)
     assert not terminated and truncated and info["ticks_advanced"] == 1
-    assert info["reward_parts"]["terminal"] == 0 and asset_value(env.public) > 0
+    assert info["reward_parts"]["terminal"] == -2 and asset_value(env.public) > 0
     env.reset(options={"scenario": LevelSpec("empty")})
     assert env.step(0)[2:4] == (True, False)
     env.reset(options={"scenario": LevelSpec("last-tick-win", (Spawn(100, "basic", 0, x=0),))})

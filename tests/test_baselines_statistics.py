@@ -10,18 +10,18 @@ from pvz_rl.evaluation.statistics import bootstrap_interval, paired_difference, 
 @pytest.mark.parametrize(
     "level,seed,outcome,tick",
     [
-        ("easy", 0, "won", 15930),
-        ("standard", 0, "lost", 23652),
-        ("standard", 1, "lost", 23110),
-        ("hard", 0, "lost", 23652),
-        ("hard", 4, "lost", 36511),
-        ("hard", 6, "lost", 38845),
-        ("easy", 42, "won", 15288),
-        ("standard", 42, "lost", 23791),
-        ("hard", 42, "lost", 23791),
+        ("easy", 0, "won", 15164),
+        ("standard", 0, "won", 29471),
+        ("standard", 1, "won", 28698),
+        ("hard", 0, "won", 42278),
+        ("hard", 4, "won", 42618),
+        ("hard", 6, "won", 46546),
+        ("easy", 42, "won", 14799),
+        ("standard", 42, "won", 29363),
+        ("hard", 42, "won", 47581),
     ],
 )
-def test_frozen_baseline_successes_and_failures(cfg, level, seed, outcome, tick):
+def test_frozen_baseline_versioned_outcomes(cfg, level, seed, outcome, tick):
     env = PvZEnv(cfg, level=level)
     env.reset(seed=seed)
     while env.state == "running":

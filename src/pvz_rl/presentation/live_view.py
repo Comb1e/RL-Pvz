@@ -38,7 +38,7 @@ class Activity(IntEnum):
 ACTIVITY_TEXT = {
     Activity.STARTING: "Starting training",
     Activity.COLLECTING: "Live training collection (sampled actions, including exploration)",
-    Activity.UPDATING: "Learner updating / preparing rollout - training boards unchanged",
+    Activity.UPDATING: "Learner updating / preparing cohort - training boards unchanged",
     Activity.VALIDATING: "Validation - training games paused",
     Activity.REPORTING: "Reporting - training games paused",
 }
@@ -203,7 +203,7 @@ class LiveSession:
             queue.close()
 
 
-def draw_view(surface, packets, activity, *, renderers, boards, pending=(), count=128):
+def draw_view(surface, packets, activity, *, renderers, boards, pending=(), count=32):
     """Draw through the pinned renderer; reusable in offscreen visual controls."""
     import pygame
     from pvz_game.rendering import BoardRenderer, RenderContext

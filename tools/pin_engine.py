@@ -45,6 +45,9 @@ def pin_engine(repo):
             path.read_text("utf-8")
             .replace(previous["commit"], commit)
             .replace(
+                f'engine_version = "{previous["version"]}"', f'engine_version = "{ENGINE_VERSION}"'
+            )
+            .replace(
                 f'engine_package_version = "{previous["package_version"]}"',
                 f'engine_package_version = "{PACKAGE_VERSION}"',
             )

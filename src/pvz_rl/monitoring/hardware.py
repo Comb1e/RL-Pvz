@@ -97,9 +97,10 @@ class HardwareMonitor:
     def record_window(self, metrics):
         self.update(
             transitions_per_second=metrics.get("transitions_per_second"),
-            collection_seconds=sum(metrics["slot_collection_seconds"]),
-            update_seconds=sum(metrics["slot_optimization_seconds"]),
-            overlap_seconds=metrics.get("overlap_seconds"),
+            collection_seconds=metrics["collection_seconds"],
+            update_seconds=metrics["optimization_seconds"],
+            critic_seconds=metrics.get("critic_seconds"),
+            actor_seconds=metrics.get("actor_seconds"),
             window_seconds=metrics.get("window_seconds"),
         )
 

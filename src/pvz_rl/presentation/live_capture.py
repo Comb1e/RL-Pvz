@@ -66,6 +66,7 @@ def public_observation(arrays, rules, level):
                 max(0, z["slow_until"] - tick),
                 bool(z["has_pole"]),
                 timer,
+                bool(z["headless"]),
             )
         )
     return Observation(
@@ -95,7 +96,7 @@ def public_observation(arrays, rules, level):
         ZombieCounts(
             h["total_spawns"],
             h["spawn_index"],
-            h["nz"],
+            h["spawn_index"] - h["defeated"],
             h["defeated"],
             h["total_spawns"] - h["spawn_index"],
             h["total_spawns"] - h["defeated"],
@@ -172,7 +173,7 @@ class CudaLiveCapture:
             if p.state == PanelState.RESULT:
                 continue
             action, tick = map(int, actions[i])
-            if action:
+            if action and self.env.enabled_envs[p.env]:
                 command = self.codec.decode(action)
                 label = (
                     "Dig"
@@ -183,7 +184,7 @@ class CudaLiveCapture:
                 p.actions.append(
                     f"{tick / self.env.batch.rules.game['tick_rate']:.2f}s: {label} at {tile}"
                 )
-            if compact[p.env, 0]:
+            if compact[p.env, 0] or not self.env.enabled_envs[p.env]:
                 terminal.append(i)
         now = perf_counter()
         if not terminal and now - self.last_capture < 1 / self.session.fps:
@@ -221,7 +222,7 @@ class CudaLiveCapture:
         pending = []
         for i in watched:
             p = panels[i]
-            outcome = "truncated" if compact[p.env, 1] else None
+            outcome = "truncated" if compact[p.env, 1] else self.env.finished_outcomes.get(p.env)
             pending.append(
                 (
                     i,
