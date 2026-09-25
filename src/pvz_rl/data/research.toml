@@ -66,8 +66,9 @@ rollout_size = 16384
 rollout_steps_per_env = 128 # Learning transitions per environment per update, not a game limit.
 max_minutes = 120
 finalization_minutes = 15
-# Hold epsilon during critic warm-up, then decay exponentially; the target is not a floor.
-exploration = {objective = "balanced_heads_v2", type_coef = 0.01, plant_coef = 0.001, tile_coef = 0.001, epsilon = 0.1, epsilon_target = 0.001, epsilon_target_games = 3000, entropy_target_fraction = 0.01}
+# Keep critic warm-up and actor learning exploration separate; hold formal floors
+# until stage mastery.
+exploration = {objective = "balanced_heads_v2", type_coef = 0.01, plant_coef = 0.001, tile_coef = 0.001, warmup_epsilon = 0.1, formal_epsilon_start = 0.05, formal_epsilon_floor = 0.001, warmup_entropy_fraction = 1.0, formal_entropy_start_fraction = 1.0, formal_entropy_floor_fraction = 0.1, formal_decay_games = 3000}
 batch_size = 1024
 n_epochs = 4
 learning_rate = 0.0001
@@ -88,6 +89,10 @@ torch_threads = 1
 mode = "periodic_on_policy"
 depth = 2
 queue_size = 1
+
+[training.performance]
+compile_kernels = true
+telemetry = true
 
 [curriculum]
 mode = "teaching"

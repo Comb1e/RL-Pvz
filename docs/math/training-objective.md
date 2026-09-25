@@ -130,12 +130,19 @@ For binary dig probability p and its logit z, dH/dz = p(1−p) log((1−p)/p).
 It is positive for p < 1/2: entropy encourages a rare legal dig without any
 positive game reward. The injected exploratory prior separately excludes digs.
 
-After warm-up w, define f = max(0, games−w)/(target_games−w). Injected epsilon
-is epsilon_start × (epsilon_target/epsilon_start)^f. Entropy coefficients use
-their own shared factor entropy_target_fraction^f. Hold both constant during
-each frozen window. Fraction 1 disables entropy decay; disabled scheduling holds
-both schedules constant. At defaults, game 3000 gives epsilon 0.001 and entropy
-coefficients 0.0001/0.00001/0.00001. These decay onward without a floor.
+After warm-up w, define q = min(1, max(0, (games−w)/D)), where D is the formal
+decay length. The shipped defaults use D=3,000, formal epsilon start/floor
+0.05/0.001, and formal entropy factor start/floor 1.0/0.1. Thus
+
+    epsilon = 0.05 × (0.001 / 0.05)^q
+    entropy_factor = 1.0 × (0.1 / 1.0)^q
+
+During warm-up epsilon is 0.1 and the entropy factor is 1.0. At q=1, both values
+are held at their floors until stage mastery; a stage transition starts a fresh
+warm-up clock. Resolve and freeze these values before each periodic window. The
+injected prior still excludes digging. Deterministic validation sets epsilon to
+zero and uses the greedy learned heads. These schedule values are project-specific
+stability hypotheses, not a learning guarantee.
 
 A negative immediate reward can have positive δ if V_next − V_current is large.
 This is an estimator claim, not actual profit. Full GAE can reverse a one-step

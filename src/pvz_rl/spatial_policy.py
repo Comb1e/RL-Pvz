@@ -162,7 +162,30 @@ class SpatialGroupedPolicy(MaskableActorCriticPolicy):
             raise ValueError("The event Transformer requires independent actor and critic encoders")
         self.critic_learning_rate = critic_learning_rate
         self.exploration_epsilon = exploration_epsilon
+        self.compilation_status = "disabled"
+        self.compilation_error = None
         super().__init__(*args, share_features_extractor=False, **kwargs)
+
+    def enable_compilation(self):
+        """Compile fixed-shape feature paths without changing module parameters."""
+        if self.device.type != "cuda" or not hasattr(torch, "compile"):
+            self.compilation_status = "unavailable"
+            return
+        try:
+            # Keep compiled wrappers out of the module tree so checkpoint keys and
+            # optimizer parameter ownership remain identical to eager execution.
+            self.__dict__["_compiled_pi"] = torch.compile(
+                self.pi_features_extractor, mode="reduce-overhead", dynamic=False
+            )
+            self.__dict__["_compiled_vf"] = torch.compile(
+                self.vf_features_extractor, mode="reduce-overhead", dynamic=False
+            )
+            self.compilation_status = "enabled"
+        except Exception as exc:  # pragma: no cover - depends on local compiler
+            self.__dict__.pop("_compiled_pi", None)
+            self.__dict__.pop("_compiled_vf", None)
+            self.compilation_status = "fallback"
+            self.compilation_error = repr(exc)
 
     def actor_parameters(self):
         return (*self.pi_features_extractor.parameters(), *self.action_net.parameters())
@@ -189,7 +212,9 @@ class SpatialGroupedPolicy(MaskableActorCriticPolicy):
     def _build(self, lr_schedule):
         if self.action_space.n != GroupedDistribution.action_dim:
             raise ValueError("Spatial policy requires direct Discrete(406) actions")
-        self.action_dist = GroupedDistribution(self.exploration_epsilon)
+        # Environment masks are validated at the CUDA environment boundary;
+        # avoid a device-to-host reduction on every policy forward.
+        self.action_dist = GroupedDistribution(self.exploration_epsilon, validate_args=False)
         super()._build(lr_schedule)
         self.action_net = SpatialLogits(
             self.features_extractor.channels,
@@ -280,12 +305,30 @@ class SpatialGroupedPolicy(MaskableActorCriticPolicy):
         self._entropy_count = getattr(self, "_entropy_count", 0) + len(self.action_dist.logits)
 
     def get_distribution(self, obs, action_masks=None, context=None):
-        features = self.pi_features_extractor(obs, context)
+        extractor = self.__dict__.get("_compiled_pi", self.pi_features_extractor)
+        try:
+            features = extractor(obs, context)
+        except Exception as exc:  # pragma: no cover - compiler/backend dependent
+            if extractor is self.pi_features_extractor:
+                raise
+            self.__dict__.pop("_compiled_pi", None)
+            self.compilation_status = "fallback"
+            self.compilation_error = repr(exc)
+            features = self.pi_features_extractor(obs, context)
         self.action_dist.proba_distribution(self.action_net(features), masks=action_masks)
         return self.action_dist
 
     def predict_values(self, obs, context=None):
-        features = self.vf_features_extractor(obs, context)
+        extractor = self.__dict__.get("_compiled_vf", self.vf_features_extractor)
+        try:
+            features = extractor(obs, context)
+        except Exception as exc:  # pragma: no cover - compiler/backend dependent
+            if extractor is self.vf_features_extractor:
+                raise
+            self.__dict__.pop("_compiled_vf", None)
+            self.compilation_status = "fallback"
+            self.compilation_error = repr(exc)
+            features = self.vf_features_extractor(obs, context)
         return self.value_net(self.mlp_extractor.forward_critic(features))
 
     def evaluate_actions(self, obs, actions, action_masks=None, context=None):

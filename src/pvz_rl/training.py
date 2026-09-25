@@ -41,11 +41,10 @@ from .curriculum import (
 from .deadline import BudgetExpired, RunBudget
 from .evaluation import evaluate, summarize
 from .exploration import (
+    EXPLORATION_PROTOCOL,
+    apply_exploration_state,
     configure_exploration,
-    entropy_factor,
-    exploration_rate,
-    set_entropy_factor,
-    set_exploration_rate,
+    exploration_state,
 )
 from .metrics import episode_task, mean_agent_actions, task_statistics
 from .periodic import OPTIMIZER_PROTOCOL
@@ -84,7 +83,7 @@ def build_model(cfg, condition, env, seed, log_dir=None):
         "features_extractor_class": SpatialFeatures,
         "features_extractor_kwargs": {"layout_cfg": cfg},
         "critic_learning_rate": t.get("critic_learning_rate"),
-        "exploration_epsilon": t["exploration"].get("epsilon", 0.0),
+        "exploration_epsilon": t["exploration"]["warmup_epsilon"],
     }
     model = CudaMaskablePPO(
         SpatialGroupedPolicy,
@@ -111,6 +110,8 @@ def build_model(cfg, condition, env, seed, log_dir=None):
     model.value_batch_size = t.get("value_batch_size", 1024)
     model.critic_warmup_active = False
     model.training_games = 0
+    if t.get("performance", {}).get("compile_kernels", False):
+        model.policy.enable_compilation()
     configure_exploration(model, cfg)
     if "initial_dig_logit" in cfg.get("policy", {}):
         model.policy.initialize_dig_logit(cfg["policy"]["initial_dig_logit"])
@@ -250,6 +251,20 @@ class ResearchCallback(BaseCallback):
             "critic_warmup": getattr(self.model, "critic_warmup_active", False),
             "exploration_rate": getattr(self.model, "exploration_rate", 0.0),
             "entropy_factor": getattr(self.model, "entropy_factor", 1.0),
+            "exploration_phase": getattr(self.model, "exploration_phase", None),
+            "exploration_progress": getattr(self.model, "exploration_progress", 0.0),
+            "exploration_at_floor": getattr(self.model, "exploration_at_floor", False),
+            # Small test doubles and legacy reports may not carry a policy object.
+            # Keep diagnostics optional so progress logging remains usable before
+            # model construction and never embeds compiler tracebacks in reports.
+            "compilation_status": getattr(
+                getattr(self.model, "policy", None), "compilation_status", "unknown"
+            ),
+            "compilation_error": (
+                type(error).__name__
+                if (error := getattr(getattr(self.model, "policy", None), "compilation_error", None))
+                else None
+            ),
             "selected_stage": selected_stage(self.cfg),
             "stage_mastered": bool(self.curriculum and self.curriculum.mastered),
             "curriculum_incomplete": bool(
@@ -525,7 +540,7 @@ class ResearchCallback(BaseCallback):
                 if self.curriculum and (
                     self.cfg["curriculum"].get("residency") == "episode_start_stage"
                     or self.cfg["training"].get("critic_warmup_games", 0) > 0
-                    or self.cfg["training"]["exploration"].get("epsilon_target_games", 0) > 0
+                    or self.cfg["training"]["exploration"].get("formal_decay_games", 0) > 0
                 ):
                     self.curriculum.completed_episode(
                         info["episode_metrics"].get("episode_start_stage")
@@ -610,14 +625,10 @@ class ResearchCallback(BaseCallback):
             if self.curriculum
             else getattr(self.model, "training_games", 0)
         )
-        set_exploration_rate(
-            self.model, exploration_rate(self.cfg, stage_games, staged=self.curriculum is not None)
+        state = exploration_state(
+            self.cfg, stage_games, staged=self.curriculum is not None
         )
-        set_entropy_factor(
-            self.model,
-            self.cfg,
-            entropy_factor(self.cfg, stage_games, staged=self.curriculum is not None),
-        )
+        apply_exploration_state(self.model, self.cfg, state)
         self.progress.phase(Phase.COLLECTING)
 
     @property
@@ -915,6 +926,10 @@ def initial_weights(checkpoint, cfg):
         raise ValueError(
             "Weights-only initialization requires matching engine, observation and network structure; start fresh for changed dimensions"
         )
+    if saved.get("exploration_protocol") != EXPLORATION_PROTOCOL:
+        raise ValueError(
+            "Checkpoint uses the retired exploration schedule; start a fresh 0.18.0 run"
+        )
     data, parameters, _ = load_from_zip_file(checkpoint, device="cpu")
     weights = {key: value.detach().clone() for key, value in parameters["policy"].items()}
     return weights, {
@@ -936,7 +951,7 @@ def load_policy(checkpoint, device="cpu"):
     run = checkpoint.parent
     data = json.loads((run / "metadata.json").read_text("utf-8"))
     cfg, condition = data["config"], data["condition"]
-    validate_config(cfg)
+    validate_config(cfg, allow_legacy_exploration=True)
     verify_engine(cfg)
     require_supported_policy(cfg, condition)
     from .cuda_buffer import TensorRolloutBuffer
@@ -985,6 +1000,10 @@ def train(
 
         saved = json.loads((Path(resume).resolve().parent / "metadata.json").read_text("utf-8"))
         require_cuda_training(saved["config"], saved["condition"])
+        if saved.get("exploration_protocol") != EXPLORATION_PROTOCOL:
+            raise ValueError(
+                "Checkpoint uses the retired exploration schedule; start a fresh 0.18.0 run"
+            )
         if checkpoint_optimizer_protocol(resume) != OPTIMIZER_PROTOCOL:
             raise ValueError("Optimizer protocol changed; use fresh training or --init-from")
         if (
@@ -1019,6 +1038,7 @@ def train(
         validation_limit=validation_limit,
         resume=str(Path(resume).resolve()) if resume else None,
         initialization=initialization,
+        exploration_protocol=EXPLORATION_PROTOCOL,
         structural_signature=transfer_protocol(cfg),
         optimizer_protocol=OPTIMIZER_PROTOCOL,
         optimizer_settings={
@@ -1112,6 +1132,8 @@ def train(
             from .cuda_ppo import configure_tensor_buffer
 
             configure_tensor_buffer(model)
+            if cfg["training"].get("performance", {}).get("compile_kernels", False):
+                model.policy.enable_compilation()
             model.tensorboard_log = str(output / "tensorboard")
             details["resume_steps"] = model.num_timesteps
             details["resume_games"] = getattr(model, "training_games", 0)

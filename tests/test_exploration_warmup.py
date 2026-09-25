@@ -89,53 +89,56 @@ def test_collapse_floor_greedy_policy_and_forced_action_boundaries():
 @pytest.mark.parametrize(
     "key,value",
     [
-        ("epsilon", -0.1),
-        ("epsilon", 1),
-        ("epsilon", float("nan")),
-        ("epsilon_target_games", -1),
-        ("epsilon_target_games", 1.5),
-        ("epsilon_target_games", float("inf")),
-        ("epsilon_target_games", 1024),
-        ("epsilon_target", 0),
-        ("epsilon_target", float("nan")),
-        ("epsilon_target", 0.2),
+        ("warmup_epsilon", 0),
+        ("warmup_epsilon", 1.1),
+        ("warmup_epsilon", float("nan")),
+        ("formal_epsilon_start", 0),
+        ("formal_epsilon_floor", 0),
+        ("formal_epsilon_floor", 0.2),
+        ("formal_entropy_start_fraction", 0),
+        ("formal_entropy_floor_fraction", 0),
+        ("formal_entropy_floor_fraction", 1.1),
+        ("formal_decay_games", -1),
+        ("formal_decay_games", 1.5),
         ("critic_warmup_games", -1),
         ("critic_warmup_games", 1.5),
     ],
 )
 def test_invalid_exploration_and_warmup(key, value):
     cfg = load_config()
-    target = cfg["training"]["exploration"] if key.startswith("epsilon") else cfg["training"]
+    target = cfg["training"]["exploration"] if key != "critic_warmup_games" else cfg["training"]
     target[key] = value
     with pytest.raises(ValueError, match=key):
         validate_config(cfg)
 
 
-@pytest.mark.parametrize(
-    "games,factor", [(0, 1), (1024, 1), (2012, 0.1), (3000, 0.01), (4976, 0.0001)]
-)
-def test_entropy_schedule_independent_of_injected_noise(games, factor):
+def test_exploration_schedule_has_separate_phases_and_floors():
+    from pvz_rl.exploration import exploration_state
+
+    cfg = load_config()
+    warm = exploration_state(cfg, 1023)
+    start = exploration_state(cfg, 1024)
+    middle = exploration_state(cfg, 2524)
+    floor = exploration_state(cfg, 4024)
+    assert (warm.phase, warm.epsilon, warm.entropy_factor) == ("warmup", 0.1, 1.0)
+    assert (start.phase, start.epsilon, start.entropy_factor) == ("formal", 0.05, 1.0)
+    assert 0.001 < middle.epsilon < 0.05
+    assert 0.1 < middle.entropy_factor < 1.0
+    assert floor.at_floor and floor.epsilon == pytest.approx(0.001)
+    assert floor.entropy_factor == pytest.approx(0.1)
+    assert exploration_state(cfg, 100000).epsilon == pytest.approx(floor.epsilon)
+    assert exploration_state(cfg, 200, staged=False).phase == "formal"
+
+
+def test_entropy_schedule_is_independent_of_injected_noise():
     from pvz_rl.exploration import entropy_factor, set_entropy_factor
 
     cfg = load_config()
-    assert entropy_factor(cfg, games) == pytest.approx(factor)
+    assert entropy_factor(cfg, 1024) == pytest.approx(1.0)
+    assert entropy_factor(cfg, 4024) == pytest.approx(0.1)
     model = SimpleNamespace(policy=SimpleNamespace())
-    set_entropy_factor(model, cfg, factor)
-    assert model.policy.exploration_settings["type_coef"] == pytest.approx(0.01 * factor)
-    cfg["training"]["exploration"]["epsilon"] = 0
-    assert entropy_factor(cfg, games) == pytest.approx(factor)
-    cfg["training"]["exploration"]["epsilon_target_games"] = 0
-    assert entropy_factor(cfg, games) == 1
-    cfg["training"]["exploration"].update(epsilon_target_games=3000, entropy_target_fraction=1)
-    assert entropy_factor(cfg, games) == 1
-
-
-@pytest.mark.parametrize("value", [0, -1, 2, float("nan"), True])
-def test_invalid_entropy_schedule_rejected(value):
-    cfg = load_config()
-    cfg["training"]["exploration"]["entropy_target_fraction"] = value
-    with pytest.raises(ValueError, match="entropy_target_fraction"):
-        validate_config(cfg)
+    set_entropy_factor(model, cfg, 0.1)
+    assert model.policy.exploration_settings["type_coef"] == pytest.approx(0.001)
 
 
 @pytest.mark.parametrize("device", ["cpu", "cuda"])
@@ -189,43 +192,16 @@ def test_warmup_uses_persisted_stage_residency():
 
 
 def test_exploration_decay_uses_stage_games_and_has_no_discontinuity():
+    from pvz_rl.exploration import exploration_state
+
     cfg = load_config()
-    for games, expected in [
-        (0, 0.1),
-        (1023, 0.1),
-        (1024, 0.1),
-        (2012, 0.01),
-        (3000, 0.001),
-        (4976, 0.00001),
-    ]:
-        assert exploration_rate(cfg, games) == pytest.approx(expected)
-    assert exploration_rate(cfg, 1025) < exploration_rate(cfg, 1024)
-    # Diagnostic/fixed-task runs have no critic adaptation period to hold through.
-    assert exploration_rate(cfg, 1, staged=False) < 0.1
-    assert exploration_rate(cfg, 1500, staged=False) == pytest.approx(0.01)
-    assert exploration_rate(cfg, 3000, staged=False) == pytest.approx(0.001)
-    state = CurriculumState(stage=1, completed_stage_games=2012)
-    restored = CurriculumState(**state.to_dict())
-    assert exploration_rate(cfg, restored.completed_stage_games) == pytest.approx(0.01)
-    assert exploration_rate(cfg, 1_000_000) == 0  # Harmless floating-point underflow.
-    # The same additional game count multiplies the rate by the same factor.
-    for games in (1024, 2048, 4096):
-        assert exploration_rate(cfg, games + 988) == pytest.approx(
-            exploration_rate(cfg, games) / 10, rel=1e-12
-        )
-    state.observe({"saving": 100}, 3000, cfg)
-    assert exploration_rate(cfg, state.completed_stage_games) == 0.1
-    cfg["training"]["exploration"]["epsilon"] = 0
-    validate_config(cfg)
-    assert exploration_rate(cfg, 9000) == 0
-    cfg["training"]["exploration"] = dict(
-        objective="balanced_heads_v2",
-        type_coef=0.01,
-        plant_coef=0.001,
-        tile_coef=0.001,
-        epsilon=0.002,
-    )
-    assert exploration_rate(cfg, 9000) == 0.002  # Archived constant rate.
+    assert exploration_rate(cfg, 0) == pytest.approx(0.1)
+    assert exploration_rate(cfg, 1023) == pytest.approx(0.1)
+    assert exploration_rate(cfg, 1024) == pytest.approx(0.05)
+    assert exploration_rate(cfg, 4024) == pytest.approx(0.001)
+    assert exploration_rate(cfg, 100000) == pytest.approx(0.001)
+    assert 0.001 < exploration_rate(cfg, 1, staged=False) < 0.05
+    assert exploration_state(cfg, 1024).phase == "formal"
 
 
 def test_stage_clock_advances_without_warmup_but_never_changes_rate_mid_rollout(tmp_path):
@@ -347,7 +323,7 @@ def test_stage_warmup_interrupt_resume_and_actor_release(tmp_path, monkeypatch):
         total_games=12,
         critic_warmup_games=6,
     )
-    cfg["training"]["exploration"]["epsilon_target_games"] = 12
+    cfg["training"]["exploration"]["formal_decay_games"] = 12
     original = ResearchCallback._on_rollout_start
 
     def interrupt(self):
@@ -376,5 +352,5 @@ def test_stage_warmup_interrupt_resume_and_actor_release(tmp_path, monkeypatch):
     assert any(r["critic_warmup"] == 0 and r["actor_optimizer_steps"] > 0 for r in rows)
     final, _ = load_policy(result / "final.zip", "cuda")
     last_rate = next(r["exploration_rate"] for r in reversed(records) if r.get("optimization"))
-    assert 0 < last_rate < cfg["training"]["exploration"]["epsilon"]
+    assert 0 < last_rate < cfg["training"]["exploration"]["warmup_epsilon"]
     assert final.policy.action_dist.epsilon == last_rate

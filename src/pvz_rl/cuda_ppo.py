@@ -23,7 +23,7 @@ from torch.nn import functional as F
 
 from .actions import ActionSchema as A
 from .cuda_buffer import TensorRolloutBuffer
-from .event_memory import EventMemory
+from .event_memory import EventMemory, MemoryContext
 from .exploration import configure_exploration, exploration_loss
 from .grouped_policy import GroupedDistribution
 from .periodic import (
@@ -130,6 +130,7 @@ class TensorPPO:
         learner optimize the previous slot concurrently.
         """
         started = perf_counter()
+        host_phase_before = dict(getattr(env, "phases", {}))
         infos_by_step = []
         policy.set_training_mode(False)
         rollout_buffer.reset()
@@ -152,7 +153,7 @@ class TensorPPO:
                 obs = observations.clone()
                 masks = env.action_masks().clone()
                 rollout_buffer.capture_context(memory)
-                with torch.no_grad(), env.features.profiler.track("inference"):
+                with torch.inference_mode(), env.features.profiler.track("inference"):
                     actions, log_probs = policy.sample_actions(obs, masks, context=memory.context())
                     rollout_buffer.capture_behavior(policy.action_dist)
                 new_obs, rewards, dones, timeouts, terminal, infos = env.step_tensors(actions)
@@ -212,11 +213,24 @@ class TensorPPO:
                 ("summaries", memory.local + memory.events, memory.capacity),
             ):
                 metrics[f"attention_{name}"] = float(weights[:, lo:hi].sum(-1).mean())
+            device_phases = env.features.profiler.flush()
+            env.features.profiler.seconds.clear()
+            metrics.update(
+                {
+                    f"device_{key}_seconds": value
+                    for key, value in device_phases.items()
+                }
+            )
+            metrics.update(
+                {
+                    f"host_{key}_seconds": value - host_phase_before.get(key, 0.0)
+                    for key, value in getattr(env, "phases", {}).items()
+                }
+            )
             # The ready queue transfers only completed tensors to the learner.
             completed = torch.cuda.Event()
             completed.record(env.stream)
             completed.synchronize()
-        env.features.profiler.flush()
         return RolloutSlotResult(
             buffer=rollout_buffer,
             observations=observations,
@@ -377,11 +391,16 @@ class TensorPPO:
                         self._checked_policy_metrics.clear()
                         self.train()
                         self._check_actor_window(available)
-                        for buffer in available:
-                            if id(buffer) not in self._checked_policy_metrics:
-                                self._checked_policy_metrics[id(buffer)] = (
-                                    self._post_update_metrics(None, buffer)
-                                )
+                        missing = [
+                            buffer
+                            for buffer in available
+                            if id(buffer) not in self._checked_policy_metrics
+                        ]
+                        if missing:
+                            for buffer, metrics in zip(
+                                missing, self._post_update_metrics_many(missing)
+                            ):
+                                self._checked_policy_metrics[id(buffer)] = metrics
                         post = self._checked_policy_metrics[id(result.buffer)]
                         for key, value in post.items():
                             self.logger.record(f"train/{key}", value)
@@ -449,11 +468,17 @@ class TensorPPO:
                         }
                     )
                     # Refresh current-policy statistics after any rollback.
-                    post = [
-                        self._checked_policy_metrics.get(id(r.buffer))
-                        or self._post_update_metrics(None, r.buffer)
+                    missing = [
+                        r.buffer
                         for r in results
+                        if id(r.buffer) not in self._checked_policy_metrics
                     ]
+                    if missing:
+                        for buffer, metrics in zip(
+                            missing, self._post_update_metrics_many(missing)
+                        ):
+                            self._checked_policy_metrics[id(buffer)] = metrics
+                    post = [self._checked_policy_metrics[id(r.buffer)] for r in results]
                     count = sum(x["dig_legal_observations"] for x in post)
                     merged["train/exact_kl"] = max(x["exact_kl"] for x in post)
                     merged["train/dig_probability_when_legal"] = (
@@ -558,7 +583,31 @@ class TensorPPO:
     def _check_actor_window(self, buffers):
         if not self.target_kl or getattr(self, "critic_warmup_active", False):
             return []
-        values = [self._exact_kl(buffer) for buffer in buffers]
+        # Keep the explicit single-buffer hook available for diagnostics and
+        # tests that inject a controlled KL outcome. Production uses the
+        # batched path below.
+        injected_exact_kl = self.__dict__.get("_exact_kl")
+        if injected_exact_kl is not None:
+            values = [injected_exact_kl(buffer) for buffer in buffers]
+            self._window_kl_max = (
+                max(self._window_kl_max, *values)
+                if all(math.isfinite(x) for x in values)
+                else float("inf")
+            )
+            previous = self._actor_window.state
+            self._actor_window.check(values)
+            if (
+                previous != ActorUpdateState.REJECTED
+                and self._actor_window.state == ActorUpdateState.REJECTED
+            ):
+                return values
+            return values
+        missing = [buffer for buffer in buffers if id(buffer) not in self._checked_policy_metrics]
+        if missing:
+            metrics = self._post_update_metrics_many(missing)
+            for buffer, values_for_buffer in zip(missing, metrics):
+                self._checked_policy_metrics[id(buffer)] = values_for_buffer
+        values = [self._checked_policy_metrics[id(buffer)]["exact_kl"] for buffer in buffers]
         self._window_kl_max = (
             max(self._window_kl_max, *values)
             if all(math.isfinite(x) for x in values)
@@ -570,94 +619,160 @@ class TensorPPO:
             previous != ActorUpdateState.REJECTED
             and self._actor_window.state == ActorUpdateState.REJECTED
         ):
-            return [self._exact_kl(buffer) for buffer in buffers]
+            return [self._checked_policy_metrics[id(buffer)]["exact_kl"] for buffer in buffers]
         return values
 
     @torch.no_grad()
     def _post_update_metrics(self, old_types, buffer=None):
         buffer = self.rollout_buffer if buffer is None else buffer
-        observations = buffer.observations.flatten(0, 1)
-        masks = buffer.action_masks.flatten(0, 1)
-        actions = buffer.actions.flatten().long()
-        old_logs = buffer.log_probs.flatten()
-        totals = torch.zeros(13, device=self.device)
+        return self._post_update_metrics_many([buffer], old_types=old_types)[0]
+
+    @torch.no_grad()
+    def _post_update_metrics_many(self, buffers, old_types=None):
+        """Evaluate post-update diagnostics in shared policy batches.
+
+        Slots retain independent memory archives, so their contexts are joined
+        only for each device batch and split again before aggregation. This
+        keeps the metric definitions and per-slot choice-state denominators
+        identical while avoiding one policy forward per rollout slot.
+        """
+        buffers = list(buffers)
+        if not buffers:
+            return []
+        observations = [buffer.observations.flatten(0, 1) for buffer in buffers]
+        masks = [buffer.action_masks.flatten(0, 1) for buffer in buffers]
+        actions = [buffer.actions.flatten().long() for buffer in buffers]
+        old_logs = [buffer.log_probs.flatten() for buffer in buffers]
+        behavior = [
+            buffer.behavior_logits.flatten(0, 1) if buffer.has_behavior_logits else None
+            for buffer in buffers
+        ]
+        if any(value is not None for value in behavior) and not all(
+            value is not None for value in behavior
+        ):
+            raise RuntimeError("Cannot batch post-update metrics with mixed behavior logits")
+        behavior_epsilon = (
+            buffers[0].behavior_epsilon
+            if all(value is not None for value in behavior)
+            else 0.0
+        )
+        totals = [torch.zeros(13, device=self.device) for _ in buffers]
         size = getattr(self, "value_batch_size", 1024)
-        for i in range(0, len(observations), size):
-            ix = slice(i, i + size)
+        maximum = max(map(len, observations))
+        for start in range(0, maximum, size):
+            pieces = []
+            lengths = []
+            contexts = []
+            for index, buffer in enumerate(buffers):
+                end = min(start + size, len(observations[index]))
+                if start >= end:
+                    continue
+                pieces.append(
+                    (
+                        observations[index][start:end],
+                        masks[index][start:end],
+                        actions[index][start:end],
+                        old_logs[index][start:end],
+                        behavior[index][start:end] if behavior[index] is not None else None,
+                    )
+                )
+                lengths.append((index, end - start))
+                contexts.append(buffer.context(slice(start, end)))
+            batch_observations = torch.cat([piece[0] for piece in pieces], 0)
+            batch_masks = torch.cat([piece[1] for piece in pieces], 0)
+            batch_actions = torch.cat([piece[2] for piece in pieces], 0)
+            batch_old_logs = torch.cat([piece[3] for piece in pieces], 0)
+            if all(context is None for context in contexts):
+                batch_context = None
+            elif any(context is None for context in contexts):
+                raise RuntimeError("Cannot batch post-update metrics with mixed memory contexts")
+            else:
+                batch_context = MemoryContext(
+                    *(torch.cat([getattr(context, name) for context in contexts], 0)
+                      for name in MemoryContext.__dataclass_fields__)
+                )
             distribution = self.policy.get_distribution(
-                observations[ix], masks[ix], context=buffer.context(ix)
+                batch_observations, batch_masks, context=batch_context
             )
-            log_ratio = distribution.log_prob(actions[ix]) - old_logs[ix]
+            batch_log_ratio = distribution.log_prob(batch_actions) - batch_old_logs
             current = distribution.types.probs
             exact = current.new_zeros(len(current))
-            if buffer.has_behavior_logits:
-                old = GroupedDistribution(buffer.behavior_epsilon).proba_distribution(
-                    buffer.behavior_logits.flatten(0, 1)[ix], masks[ix]
+            if behavior[0] is not None:
+                old = GroupedDistribution(behavior_epsilon).proba_distribution(
+                    torch.cat([piece[4] for piece in pieces], 0), batch_masks
                 )
                 previous = old.types.probs
                 exact = old.kl_divergence(distribution)
             else:
-                previous = current if old_types is None else old_types[ix]
+                previous = current if old_types is None else old_types[start : start + len(current)]
             kl = (
-                previous * (previous.clamp_min(1e-30).log() - current.clamp_min(1e-30).log())
+                previous
+                * (previous.clamp_min(1e-30).log() - current.clamp_min(1e-30).log())
             ).sum(-1)
-            legal_dig = masks[ix, A.dig_start :].any(-1)
+            legal_dig = batch_masks[:, A.dig_start :].any(-1)
             type_entropy, plant_entropy, tile_entropy = distribution.entropy_parts()
-            _, exploration = exploration_loss(self.policy, distribution.entropy(), log_ratio)
-            totals += torch.stack(
+            _, exploration = exploration_loss(self.policy, distribution.entropy(), batch_log_ratio)
+            sample_totals = torch.stack(
                 (
-                    (log_ratio.exp() - 1 - log_ratio).sum(),
-                    kl.sum(),
-                    (current[:, A.dig] * legal_dig).sum(),
-                    legal_dig.sum(),
-                    type_entropy.sum(),
-                    plant_entropy.sum(),
-                    tile_entropy.sum(),
-                    exploration["exploration_bonus"] * len(log_ratio),
-                    exploration["kind_exploration_bonus"] * len(log_ratio),
-                    exploration["plant_exploration_bonus"] * len(log_ratio),
-                    exploration["tile_exploration_bonus"] * len(log_ratio),
-                    (masks[ix].sum(-1) > 1).sum(),
-                    exact[masks[ix].sum(-1) > 1].sum(),
-                )
+                    batch_log_ratio.exp() - 1 - batch_log_ratio,
+                    kl,
+                    current[:, A.dig] * legal_dig,
+                    legal_dig,
+                    type_entropy,
+                    plant_entropy,
+                    tile_entropy,
+                    exploration["exploration_bonus"].expand(len(current)),
+                    exploration["kind_exploration_bonus"].expand(len(current)),
+                    exploration["plant_exploration_bonus"].expand(len(current)),
+                    exploration["tile_exploration_bonus"].expand(len(current)),
+                    (batch_masks.sum(-1) > 1),
+                    exact * (batch_masks.sum(-1) > 1),
+                ),
+                -1,
             )
-        (
-            approx,
-            types,
-            dig,
-            count,
-            type_entropy,
-            plant_entropy,
-            tile_entropy,
-            bonus,
-            kind_bonus,
-            plant_bonus,
-            tile_bonus,
-            choice,
-            exact,
-        ) = totals.cpu().tolist()
-        if getattr(self, "critic_warmup_active", False):
-            n = len(observations)
-            self.policy._entropy_totals = totals[4:7].clone()
-            self.policy._entropy_count = n
-            self.logger.record(
-                "train/joint_entropy", (type_entropy + plant_entropy + tile_entropy) / n
+            offset = 0
+            for index, length in lengths:
+                totals[index] += sample_totals[offset : offset + length].sum(0)
+                offset += length
+
+        results = []
+        for buffer, values in zip(buffers, totals):
+            (
+                approx,
+                types,
+                dig,
+                count,
+                type_entropy,
+                plant_entropy,
+                tile_entropy,
+                bonus,
+                kind_bonus,
+                plant_bonus,
+                tile_bonus,
+                choice,
+                exact,
+            ) = values.cpu().tolist()
+            if getattr(self, "critic_warmup_active", False):
+                n = buffer.observations.flatten(0, 1).shape[0]
+                self.policy._entropy_totals = values[4:7].clone()
+                self.policy._entropy_count = n
+                self.logger.record("train/joint_entropy", (type_entropy + plant_entropy + tile_entropy) / n)
+                self.logger.record("train/entropy_loss", -(type_entropy + plant_entropy + tile_entropy) / n)
+                self.logger.record("train/exploration_bonus", bonus / n)
+                for head, value in (("kind", kind_bonus), ("plant", plant_bonus), ("tile", tile_bonus)):
+                    self.logger.record(f"train/{head}_exploration_bonus", value / n)
+                self.logger.record("train/choice_fraction", choice / n)
+            results.append(
+                {
+                    "exact_kl": exact / choice if choice else 0.0,
+                    "post_update_approx_kl": approx / len(buffer.observations.flatten(0, 1)),
+                    "post_update_type_kl": types / len(buffer.observations.flatten(0, 1)),
+                    "dig_probability_when_legal": dig / count if count else float("nan"),
+                    "dig_legal_observations": count,
+                    "dig_probability_sum": dig,
+                }
             )
-            self.logger.record(
-                "train/entropy_loss", -(type_entropy + plant_entropy + tile_entropy) / n
-            )
-            self.logger.record("train/exploration_bonus", bonus / n)
-            for head, value in (("kind", kind_bonus), ("plant", plant_bonus), ("tile", tile_bonus)):
-                self.logger.record(f"train/{head}_exploration_bonus", value / n)
-            self.logger.record("train/choice_fraction", choice / n)
-        return {
-            "exact_kl": exact / choice if choice else 0.0,
-            "post_update_approx_kl": approx / len(observations),
-            "post_update_type_kl": types / len(observations),
-            "dig_probability_when_legal": dig / count if count else float("nan"),
-            "dig_legal_observations": count,
-            "dig_probability_sum": dig,
-        }
+        return results
 
     def train(self):
         self._require_optimizer_protocol()

@@ -51,7 +51,7 @@ def test_balanced_ppo_update_matches_joint_probability_reference(forced, device,
             **model.policy_kwargs,
         ).to(device=device, dtype=torch.float64)
         reference.load_state_dict(model.policy.state_dict())
-        reference.action_dist.epsilon = cfg["training"]["exploration"]["epsilon"]
+        reference.action_dist.epsilon = cfg["training"]["exploration"]["warmup_epsilon"]
         rng = np.random.default_rng(44)
         raw = PvZEnv(cfg)
         observation, _ = raw.reset(seed=7)
