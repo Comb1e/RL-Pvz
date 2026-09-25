@@ -6,8 +6,8 @@ import torch
 from stable_baselines3.common.logger import configure
 
 from pvz_rl.config import load_config
-from pvz_rl.env import PvZEnv
-from pvz_rl.training import build_model, vector_env
+from pvz_rl.envs.env import PvZEnv
+from pvz_rl.learning.training import build_model, vector_env
 
 
 @pytest.mark.parametrize("batch_size", [16, 32])

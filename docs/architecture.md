@@ -4,6 +4,42 @@ One CUDA MaskablePPO learner controls one shared playing policy. The separately
 pinned game package owns combat rules. Its Python simulator verifies GPU traces;
 training and optimization run on CUDA. Model inputs contain public information only.
 
+## Package responsibilities
+
+The package root contains only CLI entry points, shared configuration/provenance,
+and bundled data. Implementation is grouped by responsibility:
+
+| Package | Responsibility |
+|---|---|
+| `envs` | CPU reference environment, CUDA simulation adapters, actions, observations, scenarios and rewards; observation CUDA kernel |
+| `policy` | Hierarchical action distribution, spatial/temporal networks and event memory |
+| `learning` | PPO, rollout buffers/GAE kernel, periodic coordination, exploration, curriculum, budgets and checkpoint lifecycle |
+| `evaluation` | Deterministic validation, public controllers/baselines and statistical comparisons |
+| `monitoring` | Metrics, progress, hardware telemetry, timings, availability diagnostics and bounded benchmarks |
+| `presentation` | Live viewer/capture, pinned rendering adapter, recordings, videos and offline reports |
+
+Package initializers have no startup side effects. Cross-package imports use explicit
+qualified names; CUDA sources live with their owning package and are read through
+package resources. The viewer child imports only its presentation entry point.
+CLI commands and configuration locations are stable. Loading a compatible historical
+checkpoint registers just the two old policy/buffer import names in memory; there
+are no duplicate source modules, network conversions or weakened protocol checks.
+
+```mermaid
+flowchart TD
+    CLI[CLI / configuration / provenance] --> Learning[learning]
+    Learning --> Envs[envs]
+    Learning --> Policy[policy]
+    Learning --> Evaluation[evaluation]
+    Learning --> Monitoring[monitoring]
+    Learning --> Presentation[presentation]
+    Evaluation --> Envs
+    Evaluation --> Policy
+    Presentation --> Public[Public game state / logs / recordings]
+```
+
+## Runtime data flow
+
 ```mermaid
 flowchart LR
     Config[Single resolved TOML] --> Scenarios[Seeded CPU scenario queue]
@@ -16,6 +52,8 @@ flowchart LR
     Action --> Transport[One integer command on CUDA]
     Transport --> Sim
     Sim --> Reward[Net realized value and elapsed ticks]
+    Sim --> Capture[Selected present-state copies before reset]
+    Capture --> Viewer[Bounded CPU viewer / four boards]
     Memory --> Buffer[CUDA token archive and rollout sequences]
     Reward --> Buffer
     Buffer --> Window[Two-slot periodic on-policy window]
@@ -281,3 +319,63 @@ malformed middle records raise an error. `visualize --report-only` needs metadat
 logs, never a model or demonstration. No samples means historical utilization is unknown.
 The terminal emits aligned 15-second blocks and labels recent, window and run-average
 measurements separately; unavailable values are n/a.
+Console blocks are emitted at completed-window boundaries so both slots' optimizer
+counts and completed-game counters are fully aggregated, with the 15-second throttle
+preserved. Retained/attempted actor steps, critic steps, exact KL and value MSE
+describe that window rather than per-episode performance.
+
+## Live training viewer
+
+Ordinary training starts one optional spawned viewer process, which renders four
+actual collector environments using the pinned game's BoardRenderer. The viewer
+owns no simulator or policy and does no CUDA work. Window controls only change
+subscriptions: there is no action, reset, pause-training or playback control.
+
+The collector selects distinct environment IDs using a private RNG. At safe points
+it drains bounded switch requests and increments panel generations; delayed frames
+from older selections are discarded. When no undisplayed environment exists, manual
+Switch is disabled and automatic switching follows that environment's next game.
+Episode serial numbers distinguish games reusing the same environment ID.
+
+```mermaid
+stateDiagram-v2
+    [*] --> Selecting
+    Selecting --> Watching: first current-generation frame
+    Watching --> ShowingResult: terminal capture before reset
+    ShowingResult --> Selecting: displayed for one second
+    Watching --> Selecting: Switch button
+    ShowingResult --> Selecting: Switch button
+    Watching --> Closed: close viewer
+    ShowingResult --> Closed: close viewer
+    Selecting --> Closed: close viewer
+```
+
+At most five snapshots per wall-clock second are requested by default, with extra
+captures for termination/truncation. Selected present-state arrays are gathered on
+the collector stream into two reusable device buffers and copied to pinned host
+buffers. CUDA events protect host reads and buffer reuse. Existing compact host
+transfers carry the selected accepted action IDs/ticks; a bounded action history
+keeps instantaneous plant/dig sequences visible. Terminal snapshots precede resets;
+if both staging buffers are occupied, a terminal capture waits for the oldest copy
+rather than losing its final state. Ordinary frames may be skipped.
+
+Only immutable public rendering observations cross the one-packet frame queue;
+future spawn schedules, seeds and templates never enter the viewer. Rendering may
+show public fields omitted from the 281-value policy encoding, but this independent
+presentation path does not add model inputs. The sender retains each final board
+until a switch request, even when ordinary queue frames are replaced. Recent-frame
+sequence numbers also prevent regression within one selection.
+
+The window pumps events at 30 Hz, caches rendered boards, and redraws only for a
+new frame, changed status/control, resize or window exposure.
+Validation/reporting and learner-only phases label frozen boards explicitly.
+Window failures warn once and disable only presentation. Training teardown joins
+the child with a bounded wait and terminates a stuck viewer. Output-only settings
+and transient viewer buffers do not enter checkpoints or compatibility signatures.
+
+Terminal game means cover the latest completed episodes, explicitly counting
+cutoffs whose returns are partial. Reward, discounted return, outcome/development,
+cumulative net value (sun-equivalents), peak/drawdown, production, damage and asset
+expenditures are kept separate from window throughput and hardware measurements.
+With gamma one, the two episode-return columns agree; timeout value bootstrapping
+belongs to learning targets and is not fabricated into reported episode returns.

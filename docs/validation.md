@@ -1,5 +1,86 @@
 # Validation and measured results
 
+## 0.20.0 live viewer and terminal accounting — 2026-09-25
+
+The reorganized package passed the full **624-test research suite in 810.72 seconds**.
+Eight focused package/runtime checks also passed, including two new import controls,
+bringing the maintained suite to **626 controls**. Earlier focused integration runs
+passed 91 and 39 tests; three final UI lifecycle/import checks passed after avoiding
+unchanged-frame redraws. One pre-existing weights-transfer fixture was updated to
+include the current required action-distribution signature; validation was not weakened.
+The unchanged pinned game suite passed **224 tests in 153.05 seconds**, with caches
+outside the game checkout. Doctor, Ruff, dependency and local documentation-link
+checks passed. A clean wheel contains all six packages and both relocated CUDA
+kernels, matches workspace source/data, and contains only five root Python modules.
+
+Captured present-state observations agree exactly with the pinned public reference,
+including plant health, projectile fields, mowers and zombie walking/pole/vault/bite
+states. Controls cover immediate plant/dig labels, mixed wins/losses/running games,
+truncation before reset, stable unique selection, manual switching, one-second
+automatic result replacement, stale generations/sequences, small environment counts,
+bounded delivery, display failures and process cleanup. Four-panel rendering was
+visually inspected offscreen through the same drawing function used by the window.
+Native windows also rendered throughout the three overhead measurements.
+
+Identical fixed learning windows with and without capture produce equal actions,
+observations, rewards, actor/critic parameters, actor Adam state and CPU/CUDA RNG
+states. Existing interruption/resume, critic isolation, checkpoint and replay
+regressions remain passing. The preserved `artifacts/v0190/smoke/final.zip` loads
+successfully; output settings leave resume and transfer protocol signatures equal.
+Console controls distinguish empty data, positive accounting, warm-up/formal phases,
+unlimited budgets and cutoff counts. Game statistics are emitted only after both
+slots' counters and optimizer statistics have been aggregated.
+
+### Bounded viewer overhead
+
+The final structured package used six measurements at 128 environments × 128
+transitions, four PPO epochs, batch size 1,024 and actor learning enabled. Each
+warmed one two-rollout window and measured two more (65,536 transitions). Seeds
+were 101/102/101, with order reversed in repetition two. Telemetry stayed enabled
+in both arms. Setup, warm-up and measurement totaled **248.07 seconds**; the earlier
+pre-reorganization check took 235.31 seconds. No formal learning comparison or
+unlimited training was launched.
+
+| Repeat / seed | Headless transitions/s | Live transitions/s | Reduction |
+|---|---:|---:|---:|
+| 1 / 101 | 2,585.37 | 2,494.28 | 3.52% |
+| 2 / 102 | 2,386.89 | 2,452.34 | −2.74% |
+| 3 / 101 | 2,465.83 | 2,246.12 | 8.91% |
+| Median | **2,465.83** | **2,452.34** | **0.55%** |
+
+The specified median meets the **≤5%** target, but individual comparisons are noisy:
+this is not an overhead guarantee or evidence of acceleration. All three paired
+final policy hashes match, including across the package reorganization. The earlier
+check measured 4.35% median overhead. Raw records for both checks are preserved.
+Snapshots are sampled during collection; the window retains its boards during
+updates. Captures were 44/46/53 with no staging-buffer skips. Packet offers dropped
+2/2/0 ordinary updates; terminal records remain retained until a selection changes.
+
+| Median measurement | Headless | Live |
+|---|---:|---:|
+| Last window collection | 4.91 s | 5.42 s |
+| Last window update | 11.32 s | 11.63 s |
+| Last window critical path | 12.85 s | 13.50 s |
+| Last window overlap | 3.41 s | 3.58 s |
+| Queue wait, both measured windows | 3.23 s | 3.55 s |
+| PyTorch peak allocated CUDA memory | 1,464.26 MiB | 1,446.63 MiB |
+| System CPU, sample means | 16.25% | 15.56% |
+| Device-wide GPU activity, sample means | 71.28% | 72.30% |
+
+The viewer child used approximately **58 MiB RAM** and **3.3–4.2% of one CPU core**.
+Its event loop remains responsive at 30 Hz while unchanged frames are not redrawn.
+Hardware sample means include setup/warm-up; throughput excludes them. CUDA allocator
+peaks and device-wide utilization vary; a lower median is not a memory-optimization
+claim. The narrow host snapshot timer totaled 13.5–21.0 ms per measured run; complete
+viewer overhead is reflected in pipeline throughput, not that enqueue timer. No
+out-of-memory failure occurred. Final source metadata, raw timings and telemetry
+are in `artifacts/v0200/structured/`; the parent directory retains earlier controls,
+package/import compatibility, visual inspection, suite and doctor evidence.
+
+The engine pin and installed source remain unchanged. Existing runs, models, reports
+and recordings were preserved. Viewing only improves observability; no learning or
+policy-quality improvement is claimed.
+
 ## 0.19.0 saving, action balance and hardware recording — 2026-09-25
 
 The public-observation saving witness passes all ten lane triples on CPU and CUDA,

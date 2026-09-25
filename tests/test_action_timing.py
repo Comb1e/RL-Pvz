@@ -7,11 +7,16 @@ import pytest
 from pvz_game import Dig, Game, LevelSpec, Place, Spawn, Status, Wait
 from pvz_game.replay import Playback, read_recording, write_recording
 
-from pvz_rl.action_timing import ActionPhaseGame
 from pvz_rl.config import validate_config
-from pvz_rl.env import PvZEnv
-from pvz_rl.recordings import ActionPhasePlayback, open_playback, verify_replay, watch_recording
-from pvz_rl.rewards import asset_value, reward_parts
+from pvz_rl.envs.action_timing import ActionPhaseGame
+from pvz_rl.envs.env import PvZEnv
+from pvz_rl.envs.rewards import asset_value, reward_parts
+from pvz_rl.presentation.recordings import (
+    ActionPhasePlayback,
+    open_playback,
+    verify_replay,
+    watch_recording,
+)
 
 
 def ready(cfg, *, record=False):
@@ -271,7 +276,7 @@ def test_zero_tick_api_rejects_wait_and_recovers_after_error():
 
 
 def test_action_phase_replay_midgame_cache_boundary_and_completion_rewind(per_tick_cfg, tmp_path):
-    from pvz_rl.recordings import ActionPhaseRecorder
+    from pvz_rl.presentation.recordings import ActionPhaseRecorder
 
     env = ready(per_tick_cfg)
     for _ in range(7):
@@ -303,7 +308,7 @@ def test_instant_actions_do_not_add_video_frames(per_tick_cfg, tmp_path):
     import shutil
     import subprocess
 
-    from pvz_rl.video import export_replay
+    from pvz_rl.presentation.video import export_replay
 
     if not shutil.which("ffmpeg"):
         pytest.skip("FFmpeg unavailable")

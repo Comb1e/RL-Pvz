@@ -9,12 +9,12 @@ import torch
 from pvz_game import Dig, Place
 
 from pvz_rl.config import load_config
-from pvz_rl.curriculum import CurriculumState
-from pvz_rl.deadline import RunBudget
-from pvz_rl.env import PvZEnv
-from pvz_rl.exploration import exploration_loss
-from pvz_rl.grouped_policy import GroupedDistribution
-from pvz_rl.training import build_model, vector_env
+from pvz_rl.envs.env import PvZEnv
+from pvz_rl.learning.curriculum import CurriculumState
+from pvz_rl.learning.deadline import RunBudget
+from pvz_rl.learning.exploration import exploration_loss
+from pvz_rl.learning.training import build_model, vector_env
+from pvz_rl.policy.grouped_policy import GroupedDistribution
 
 
 @pytest.fixture(autouse=True)
@@ -182,9 +182,9 @@ def test_early_dig_metric_tracks_actual_accepted_actions(per_tick_cfg):
 
 def test_dig_initialization_is_trainable_and_checkpointed(tmp_path):
     from pvz_rl.config import load_config
-    from pvz_rl.cuda_ppo import CudaMaskablePPO
-    from pvz_rl.env import PvZEnv
-    from pvz_rl.training import build_model, vector_env
+    from pvz_rl.envs.env import PvZEnv
+    from pvz_rl.learning.cuda_ppo import CudaMaskablePPO
+    from pvz_rl.learning.training import build_model, vector_env
 
     torch.set_num_threads(1)
     cfg = load_config("configs/train.toml")
@@ -221,7 +221,7 @@ def test_dig_initialization_is_trainable_and_checkpointed(tmp_path):
 @pytest.mark.parametrize("categories,width", [(9, 8), (8, 4)])
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
 def test_categorical_embedding_matches_lookup_gradients_and_adam(device, categories, width, dtype):
-    from pvz_rl.spatial_policy import CategoricalEmbedding
+    from pvz_rl.policy.spatial_policy import CategoricalEmbedding
 
     torch.manual_seed(102)
     actual = CategoricalEmbedding(categories, width, padding_idx=0).to(device=device, dtype=dtype)
@@ -254,7 +254,7 @@ def test_categorical_embedding_matches_lookup_gradients_and_adam(device, categor
 
 
 def test_masked_distribution_single_pass_preserves_probabilities_and_dig_hazard():
-    from pvz_rl.grouped_policy import GroupedDistribution
+    from pvz_rl.policy.grouped_policy import GroupedDistribution
 
     logits = torch.zeros(1, 416, dtype=torch.float64, requires_grad=True)
     with torch.no_grad():
@@ -328,7 +328,7 @@ def test_extreme_kind_logits_keep_species_exploration_and_finite_gradients(devic
 @pytest.mark.parametrize("device", ["cpu", "cuda"])
 @pytest.mark.parametrize("epsilon", [0, 0.1, 1])
 def test_balanced_initialization_and_persistent_uniform_tile_exploration(device, epsilon):
-    from pvz_rl.spatial_policy import SpatialFeatures, SpatialGroupedPolicy
+    from pvz_rl.policy.spatial_policy import SpatialFeatures, SpatialGroupedPolicy
 
     cfg = load_config()
     env = PvZEnv(cfg, family="saving")
@@ -396,9 +396,9 @@ def test_positive_planting_signal_can_increase_planting_and_digging_remains_trai
 
 
 def test_missing_cuda_compiler_backend_never_enters_tracing(monkeypatch):
-    from pvz_rl.spatial_policy import SpatialGroupedPolicy
+    from pvz_rl.policy.spatial_policy import SpatialGroupedPolicy
 
-    monkeypatch.setattr("pvz_rl.spatial_policy.importlib.util.find_spec", lambda _: None)
+    monkeypatch.setattr("pvz_rl.policy.spatial_policy.importlib.util.find_spec", lambda _: None)
 
     def unexpected(*args, **kwargs):
         raise AssertionError("Unavailable compiler must not trace beside the collector")

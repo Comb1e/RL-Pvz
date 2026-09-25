@@ -10,9 +10,9 @@ from pvz_game.config import PLANT_TYPES, InitialPlant
 from pvz_game.types import Event
 
 from pvz_rl.config import load_config, validate_config
-from pvz_rl.env import PvZEnv
-from pvz_rl.rewards import asset_value, reward_parts
-from pvz_rl.spatial_policy import SpatialFeatures
+from pvz_rl.envs.env import PvZEnv
+from pvz_rl.envs.rewards import asset_value, reward_parts
+from pvz_rl.policy.spatial_policy import SpatialFeatures
 
 
 @pytest.mark.parametrize("kind", PLANT_TYPES)
@@ -149,7 +149,7 @@ def test_profile_is_label_and_numeric_controls_are_flexible():
 @pytest.mark.parametrize("discount", [0, 1])
 @pytest.mark.parametrize("gae_lambda", [0, 1])
 def test_discount_and_gae_endpoints_are_valid(discount, gae_lambda):
-    from pvz_rl.training_requirements import require_cuda_training
+    from pvz_rl.learning.training_requirements import require_cuda_training
 
     cfg = load_config()
     cfg["training"]["gamma"] = discount
@@ -159,7 +159,7 @@ def test_discount_and_gae_endpoints_are_valid(discount, gae_lambda):
 
 @pytest.mark.parametrize("setting", ["shaped", "curriculum", "masked", "fixed"])
 def test_retired_training_modes_fail_before_creating_output(tmp_path, setting):
-    from pvz_rl.training import train
+    from pvz_rl.learning.training import train
 
     cfg = load_config()
     if setting == "fixed":
@@ -174,8 +174,8 @@ def test_retired_training_modes_fail_before_creating_output(tmp_path, setting):
 
 @pytest.mark.parametrize("version", ["event_v4", "event_v5"])
 def test_retired_weights_fail_before_deserialization(tmp_path, version):
+    from pvz_rl.learning.training import load_policy
     from pvz_rl.provenance import write_json
-    from pvz_rl.training import load_policy
 
     cfg = load_config()
     cfg["encoding"]["version"] = version
@@ -186,8 +186,8 @@ def test_retired_weights_fail_before_deserialization(tmp_path, version):
 
 @pytest.mark.parametrize("retired", ["network", "observation", "reward", "clock"])
 def test_retired_report_rebuild_never_loads_model(tmp_path, monkeypatch, retired):
+    from pvz_rl.presentation.visualization import visualize_run
     from pvz_rl.provenance import write_json
-    from pvz_rl.visualization import visualize_run
 
     cfg = load_config()
     if retired == "network":
@@ -207,7 +207,7 @@ def test_retired_report_rebuild_never_loads_model(tmp_path, monkeypatch, retired
     def forbidden(*args, **kwargs):
         raise AssertionError("Archived report must not deserialize weights")
 
-    monkeypatch.setattr("pvz_rl.training.load_policy", forbidden)
+    monkeypatch.setattr("pvz_rl.learning.training.load_policy", forbidden)
     assert visualize_run(tmp_path, videos=False)["state"] == "complete"
     assert (tmp_path / "visualizations/index.html").is_file()
 
@@ -216,7 +216,7 @@ def test_retired_report_rebuild_never_loads_model(tmp_path, monkeypatch, retired
 def test_kl_stops_before_update_and_singleton_forced_states_stay_finite(target_kl):
     from stable_baselines3.common.logger import configure
 
-    from pvz_rl.training import build_model, vector_env
+    from pvz_rl.learning.training import build_model, vector_env
 
     cfg = load_config()
     cfg["training"].update(

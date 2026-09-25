@@ -7,7 +7,7 @@ import pytest
 
 from pvz_rl.cli import configured
 from pvz_rl.config import load_config, research_config, simulator
-from pvz_rl.gpu_benchmark import recommend
+from pvz_rl.monitoring.gpu_benchmark import recommend
 
 
 def args(**kwargs):

@@ -8,13 +8,13 @@ import pytest
 import torch
 from pvz_game import Dig, InitialPlant, LevelSpec, Place, Rules, Spawn
 
-from pvz_rl.action_timing import ActionPhaseGame
 from pvz_rl.config import load_config, validate_config
-from pvz_rl.env import PvZEnv
-from pvz_rl.recordings import open_playback, verify_replay
-from pvz_rl.rewards import asset_value
-from pvz_rl.scenarios import scenario
-from pvz_rl.training_requirements import resume_protocol, transfer_protocol
+from pvz_rl.envs.action_timing import ActionPhaseGame
+from pvz_rl.envs.env import PvZEnv
+from pvz_rl.envs.rewards import asset_value
+from pvz_rl.envs.scenarios import scenario
+from pvz_rl.learning.training_requirements import resume_protocol, transfer_protocol
+from pvz_rl.presentation.recordings import open_playback, verify_replay
 
 LANE_TRIPLES = list(combinations(range(5), 3))
 
@@ -222,8 +222,8 @@ def test_saving_conserves_purchase_and_credits_only_actual_production():
 def test_saving_cuda_states_observations_rewards_match_reference(invest):
     if not torch.cuda.is_available():
         pytest.skip("CUDA unavailable")
-    from pvz_rl.cuda_features import CudaFeatures
-    from pvz_rl.cuda_lessons import LessonCudaBatch
+    from pvz_rl.envs.cuda_features import CudaFeatures
+    from pvz_rl.envs.cuda_lessons import LessonCudaBatch
 
     cfg = load_config()
     envs = [PvZEnv(cfg, family="saving") for _ in LANE_TRIPLES]
@@ -279,9 +279,9 @@ def test_sunless_recordings_verify_and_seek_without_external_settings(tmp_path):
 
 
 def test_cuda_mixed_income_events_cap_restore_and_atomic_failure():
-    from pvz_rl.action_timing import ActionPhaseGame
-    from pvz_rl.cuda_lessons import LessonCudaBatch, lesson_kernel_source
-    from pvz_rl.lesson_rules import sky_rules
+    from pvz_rl.envs.action_timing import ActionPhaseGame
+    from pvz_rl.envs.cuda_lessons import LessonCudaBatch, lesson_kernel_source
+    from pvz_rl.envs.lesson_rules import sky_rules
 
     if not torch.cuda.is_available():
         pytest.skip("CUDA unavailable")
@@ -341,7 +341,7 @@ def test_cuda_mixed_income_events_cap_restore_and_atomic_failure():
 
 
 def test_mixed_vector_reset_uses_episode_family_and_leaves_normal_rules_unchanged():
-    from pvz_rl.cuda_env import CudaVecEnv
+    from pvz_rl.envs.cuda_env import CudaVecEnv
 
     if not torch.cuda.is_available():
         pytest.skip("CUDA unavailable")

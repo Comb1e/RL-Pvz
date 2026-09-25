@@ -10,9 +10,9 @@ from pvz_game import Dig, InitialPlant, LevelSpec, Place, Spawn
 from pvz_game.types import Event
 
 from pvz_rl.config import load_config
-from pvz_rl.cuda_buffer import TensorRolloutBuffer
-from pvz_rl.env import PvZEnv
-from pvz_rl.rewards import reward_parts
+from pvz_rl.envs.env import PvZEnv
+from pvz_rl.envs.rewards import reward_parts
+from pvz_rl.learning.cuda_buffer import TensorRolloutBuffer
 
 
 def test_shipped_objective_bounds_independent_of_reward_implementation():
@@ -158,8 +158,8 @@ def test_actual_capped_income_not_requested_income(sky, flower):
     ],
 )
 def test_real_explosions_break_even_and_empty_loss_on_cpu_and_cuda(kind, count, expected):
-    from pvz_rl.cuda_features import REWARD_FIELDS, CudaFeatures
-    from pvz_rl.cuda_lessons import LessonCudaBatch
+    from pvz_rl.envs.cuda_features import REWARD_FIELDS, CudaFeatures
+    from pvz_rl.envs.cuda_lessons import LessonCudaBatch
 
     cfg = load_config()
     # A remote future zombie keeps the control running after this detonation.
@@ -245,8 +245,8 @@ def test_variable_duration_gae_timeout_and_zero_time_boundaries(device, gamma, l
 
 
 def test_projectiles_keep_credit_after_voluntary_dig():
-    from pvz_rl.cuda_features import CudaFeatures
-    from pvz_rl.cuda_lessons import LessonCudaBatch
+    from pvz_rl.envs.cuda_features import CudaFeatures
+    from pvz_rl.envs.cuda_lessons import LessonCudaBatch
 
     case = LevelSpec(
         "late-shot",
@@ -278,8 +278,8 @@ def test_projectiles_keep_credit_after_voluntary_dig():
 
 
 def test_mixed_cuda_resets_preserve_duration_and_episode_ledgers():
-    from pvz_rl.cuda_env import CudaVecEnv
-    from pvz_rl.rewards import LEDGER_METRICS
+    from pvz_rl.envs.cuda_env import CudaVecEnv
+    from pvz_rl.envs.rewards import LEDGER_METRICS
 
     cfg = load_config()
     cfg["training"].update(n_envs=2, rollout_size=256, batch_size=128)
@@ -341,8 +341,8 @@ def test_partial_plant_damage_then_mower_credit_once():
 def test_retired_method_rejected_before_weights_are_read(tmp_path, retired):
     from copy import deepcopy
 
+    from pvz_rl.learning.training import initial_weights, load_policy
     from pvz_rl.provenance import write_json
-    from pvz_rl.training import initial_weights, load_policy
 
     cfg = load_config()
     old = deepcopy(cfg)

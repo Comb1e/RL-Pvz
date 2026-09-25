@@ -5,8 +5,45 @@ import pytest
 from pvz_game import LevelSpec, Place, Spawn
 
 from pvz_rl.config import research_config, runtime_settings, validate_config
-from pvz_rl.env import PvZEnv
-from pvz_rl.timing import TrainingTimings
+from pvz_rl.envs.env import PvZEnv
+from pvz_rl.monitoring.timing import TrainingTimings
+
+
+def test_historical_checkpoint_class_imports_resolve_without_duplicate_modules(monkeypatch):
+    import sys
+
+    import cloudpickle
+
+    from pvz_rl.learning.checkpoints import register_checkpoint_imports
+    from pvz_rl.learning.cuda_buffer import TensorRolloutBuffer
+    from pvz_rl.policy.spatial_policy import SpatialFeatures, SpatialGroupedPolicy
+
+    register_checkpoint_imports()
+    classes = (SpatialFeatures, SpatialGroupedPolicy, TensorRolloutBuffer)
+    with monkeypatch.context() as patch:
+        for cls in classes:
+            name = "cuda_buffer" if cls is TensorRolloutBuffer else "spatial_policy"
+            patch.setattr(cls, "__module__", f"pvz_rl.{name}")
+        payload = cloudpickle.dumps(classes)
+    monkeypatch.delitem(sys.modules,"pvz_rl.spatial_policy")
+    monkeypatch.delitem(sys.modules,"pvz_rl.cuda_buffer")
+    register_checkpoint_imports()
+    assert cloudpickle.loads(payload) == classes
+    assert SpatialGroupedPolicy.__module__ == "pvz_rl.policy.spatial_policy"
+    assert TensorRolloutBuffer.__module__ == "pvz_rl.learning.cuda_buffer"
+
+
+def test_viewer_entrypoint_import_does_not_load_learning_runtime():
+    import subprocess
+    import sys
+
+    result = subprocess.run(
+        [sys.executable,"-c", "import sys; import pvz_rl.presentation.live_view; "
+         "assert 'torch' not in sys.modules; assert 'cupy' not in sys.modules; "
+         "assert 'pygame' not in sys.modules"],
+        capture_output=True,text=True,timeout=10,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
 
 
 def plain(cfg):
@@ -93,7 +130,7 @@ def test_legality_cache_requeries_only_after_relevant_public_change(cfg, monkeyp
 
 @pytest.mark.parametrize("level", ["easy", "standard", "hard"])
 def test_cached_and_reference_game_hashes_rewards_and_masks_match(cfg, level):
-    from pvz_rl.frozen_baseline import choose_action
+    from pvz_rl.evaluation.frozen_baseline import choose_action
 
     reference, cached = PvZEnv(plain(cfg), level=level), PvZEnv(cfg, level=level)
     left, _ = reference.reset(seed=42)

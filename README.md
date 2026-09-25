@@ -1,9 +1,9 @@
 # PVZ plant-placement research
 
-Research **0.19.0** trains one shared CUDA PPO policy using a timer-free event-memory
+Research **0.20.0** trains one shared CUDA PPO policy using a timer-free event-memory
 Transformer. Training starts with saving, then easy, standard and shared difficulties.
-All eight plants are available in saving. Results remain experimental; this release
-requires fresh models because the action-distribution signature changed.
+All eight plants are available in saving. Results remain experimental. Compatible
+0.19.0 checkpoints can resume; this release adds presentation without changing learning.
 
 ## Requirements
 
@@ -43,10 +43,23 @@ use `--stage easy --init-from runs\saving-101\final.zip` and a new output direct
 New-protocol resume restores the experiment; stage transfer copies weights into a
 fresh experiment. Older checkpoints are rejected; existing runs and recordings are preserved.
 
+Training opens a resizable **four-game live window**. Each panel follows a randomly
+selected actual training game; **Switch** selects another environment without
+changing any game. Finished games show their result for one second before switching.
+Closing the window keeps training running. Add `--no-live-view` for headless training,
+or `--live-view` to override saved output settings when resuming. The viewer uses
+the optional `ui` dependency installed by bootstrap; unavailable displays disable
+only the viewer. Configure `visualization.live_enabled`, `live_fps` (default 5),
+and `live_window_size` independently of reports and video exports.
+
 Defaults remain 128 environments × 128 transitions per rollout, two rollouts per
 synchronization window. Waiting counts as a transition; 128 is not a game-length limit.
 Validation disables injected exploration and uses deterministic conditional choices.
 See [training and curriculum](docs/research.md) for schedules, gates and handoff details.
+The terminal prints 15-second blocks with completed-game means for reward,
+discounted return, net value and economy, alongside exploration and recent window
+throughput. Cutoff counts identify partial episode returns; current gamma = 1 makes
+discounted and undiscounted episode returns equal.
 
 ## Common checks and curves
 
@@ -71,7 +84,7 @@ Open a generated 100 Hz recording with `pvz-rl replay FILE --watch`; optional vi
 sample at 25 frames/second without changing simulation. No best checkpoint or demos
 are generated before the first successful stage's normal-game validation.
 
-- [Architecture and workflows](docs/architecture.md)
+- [Architecture, package layout and workflows](docs/architecture.md)
 - [Training, reward, curriculum and limitations](docs/research.md)
 - [Saving feasibility and action-probability calculations](docs/math/saving-and-actions.md)
 - [Objective and PPO derivations](docs/math/training-objective.md)

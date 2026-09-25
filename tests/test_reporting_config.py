@@ -6,12 +6,12 @@ from types import SimpleNamespace
 import pytest
 
 from pvz_rl.config import validate_config
-from pvz_rl.reporting import make_report
+from pvz_rl.presentation.reporting import make_report
 
 
 def test_hardware_sampler_flushes_sessions_and_keeps_null_measurements(tmp_path, monkeypatch):
-    from pvz_rl.hardware import HardwareMonitor
-    from pvz_rl.visualization import read_series
+    from pvz_rl.monitoring.hardware import HardwareMonitor
+    from pvz_rl.presentation.visualization import read_series
 
     sampled = threading.Event()
 
@@ -20,7 +20,7 @@ def test_hardware_sampler_flushes_sessions_and_keeps_null_measurements(tmp_path,
         sampled.set()
         return {"gpu_percent": None, "gpu_error": "Unavailable"}
 
-    monkeypatch.setattr("pvz_rl.hardware.gpu_sample", query)
+    monkeypatch.setattr("pvz_rl.monitoring.hardware.gpu_sample", query)
     path = tmp_path / "hardware-metrics.jsonl"
     for phase in ("warmup", "formal"):
         sampled.clear()
@@ -45,7 +45,7 @@ def test_hardware_sampler_flushes_sessions_and_keeps_null_measurements(tmp_path,
 
 @pytest.mark.parametrize("response", ["partial", "timeout", "exit"])
 def test_gpu_query_targets_uuid_and_exposes_missing_data(monkeypatch, response):
-    from pvz_rl.hardware import gpu_sample
+    from pvz_rl.monitoring.hardware import gpu_sample
 
     def run(command, **kwargs):
         assert "--id=GPU-selected" in command and kwargs["timeout"] == 0.1
@@ -58,7 +58,7 @@ def test_gpu_query_targets_uuid_and_exposes_missing_data(monkeypatch, response):
             stdout="40, N/A, 500, [Not Supported], 65",
         )
 
-    monkeypatch.setattr("pvz_rl.hardware.subprocess.run", run)
+    monkeypatch.setattr("pvz_rl.monitoring.hardware.subprocess.run", run)
     row = gpu_sample("GPU-selected", 0.1)
     assert row["gpu_error"] and row["gpu_memory_percent"] is None
     assert row["gpu_percent"] == (40 if response == "partial" else None)

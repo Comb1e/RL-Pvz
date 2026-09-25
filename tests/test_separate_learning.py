@@ -11,11 +11,11 @@ from stable_baselines3.common.buffers import RolloutBuffer
 from stable_baselines3.common.save_util import save_to_zip_file
 
 from pvz_rl.config import load_config, validate_config
-from pvz_rl.cuda_buffer import TensorRolloutBuffer
-from pvz_rl.env import PvZEnv
-from pvz_rl.metrics import task_statistics
-from pvz_rl.spatial_policy import SpatialFeatures, SpatialGroupedPolicy
-from pvz_rl.training import initial_weights
+from pvz_rl.envs.env import PvZEnv
+from pvz_rl.learning.cuda_buffer import TensorRolloutBuffer
+from pvz_rl.learning.training import initial_weights
+from pvz_rl.monitoring.metrics import task_statistics
+from pvz_rl.policy.spatial_policy import SpatialFeatures, SpatialGroupedPolicy
 
 
 def policy_and_state():
@@ -149,7 +149,8 @@ def test_current_weights_only_transfer_preserves_outputs_and_rejects_old_reward(
     checkpoint = tmp_path / "source.zip"
     save_to_zip_file(
         checkpoint,
-        data={"num_timesteps": 123, "training_games": 6, "_n_updates": 4},
+        data={"num_timesteps": 123, "training_games": 6, "_n_updates": 4,
+              "action_distribution_protocol": cfg["policy"]["action_distribution"]},
         params={"policy": original.state_dict()},
     )
     converted, meta = initial_weights(checkpoint, cfg)
@@ -209,7 +210,7 @@ def test_early_dig_ratios_do_not_confuse_more_planting_with_regression():
 
 
 def test_task_counts_track_partial_games_and_reset_at_episode_boundaries():
-    from pvz_rl.training import vector_env
+    from pvz_rl.learning.training import vector_env
 
     cfg = load_config()
     cfg["training"].update(n_envs=3, rollout_steps_per_env=128, rollout_size=384, batch_size=128)
@@ -238,7 +239,7 @@ def test_deferred_collection_never_calls_critic_per_action(tmp_path):
     from stable_baselines3.common.callbacks import BaseCallback
     from stable_baselines3.common.logger import configure
 
-    from pvz_rl.training import build_model, vector_env
+    from pvz_rl.learning.training import build_model, vector_env
 
     cfg = load_config()
     cfg["training"].update(

@@ -2,7 +2,7 @@ import pytest
 import torch
 
 from pvz_rl.config import load_config, validate_config
-from pvz_rl.training_requirements import current_model_config, transfer_protocol
+from pvz_rl.learning.training_requirements import current_model_config, transfer_protocol
 
 
 def test_periodic_pipeline_is_the_only_training_scheduler():
@@ -29,7 +29,7 @@ def test_periodic_pipeline_depth_and_queue_are_bounded(field, value):
 def pipeline_model(smoke_cfg):
     from stable_baselines3.common.logger import configure
 
-    from pvz_rl.training import build_model, vector_env
+    from pvz_rl.learning.training import build_model, vector_env
 
     smoke_cfg["training"].update(rollout_size=4, batch_size=4)
     env = vector_env(smoke_cfg, "masked", 101, family="saving")
@@ -44,7 +44,7 @@ def pipeline_model(smoke_cfg):
 def test_measured_overlap_and_interrupt_boundary():
     import signal
 
-    from pvz_rl.periodic import finish_window_on_interrupt, interval_overlap
+    from pvz_rl.learning.periodic import finish_window_on_interrupt, interval_overlap
 
     assert interval_overlap((1, 5), (3, 8)) == 2
     assert interval_overlap((1, 2), (3, 8)) == 0
@@ -64,7 +64,7 @@ def test_snapshot_slots_frozen_values_overlap_and_window_callbacks(
 
     from stable_baselines3.common.callbacks import BaseCallback
 
-    from pvz_rl.periodic import WindowState
+    from pvz_rl.learning.periodic import WindowState
 
     model, env = pipeline_model
     model.target_kl = target_kl or None
@@ -139,9 +139,9 @@ def test_snapshot_slots_frozen_values_overlap_and_window_callbacks(
 def test_ctrl_c_drains_window_then_checkpoint_resumes(pipeline_model, monkeypatch, tmp_path):
     import signal
 
-    from pvz_rl.cuda_ppo import CudaMaskablePPO
-    from pvz_rl.exploration import set_entropy_factor
-    from pvz_rl.periodic import WindowState
+    from pvz_rl.learning.cuda_ppo import CudaMaskablePPO
+    from pvz_rl.learning.exploration import set_entropy_factor
+    from pvz_rl.learning.periodic import WindowState
 
     model, env = pipeline_model
     train = model.train
@@ -176,8 +176,8 @@ def test_ctrl_c_drains_window_then_checkpoint_resumes(pipeline_model, monkeypatc
 def test_failure_drains_worker_and_forbids_partial_checkpoint(
     pipeline_model, monkeypatch, tmp_path, failure
 ):
-    from pvz_rl.cuda_ppo import PeriodicPipelineError
-    from pvz_rl.periodic import WindowState
+    from pvz_rl.learning.cuda_ppo import PeriodicPipelineError
+    from pvz_rl.learning.periodic import WindowState
 
     model, env = pipeline_model
     previous_stream = env.stream
@@ -232,7 +232,7 @@ def test_actor_transaction_restores_parameters_and_adam_only(value, initialized,
     from copy import deepcopy
     from types import SimpleNamespace
 
-    from pvz_rl.periodic import ActorUpdateState, ActorWindow
+    from pvz_rl.learning.periodic import ActorUpdateState, ActorWindow
 
     actor, critic = (torch.nn.Parameter(torch.tensor([1.0, 2.0], device=device)) for _ in range(2))
     optimizer = torch.optim.Adam([actor], lr=0.1)
@@ -267,7 +267,7 @@ def test_actor_transaction_restores_parameters_and_adam_only(value, initialized,
 def test_window_rejects_either_slot_without_reverting_critic(
     pipeline_model, monkeypatch, reject_slot
 ):
-    from pvz_rl.periodic import ActorUpdateState
+    from pvz_rl.learning.periodic import ActorUpdateState
 
     model, _ = pipeline_model
     model.target_kl = 0.01
@@ -303,7 +303,7 @@ def test_window_rejects_either_slot_without_reverting_critic(
 def test_exact_window_kl_excludes_forced_wait_and_detects_nonfinite(pipeline_model, monkeypatch):
     import math
 
-    from pvz_rl.grouped_policy import GroupedDistribution
+    from pvz_rl.policy.grouped_policy import GroupedDistribution
 
     model, env = pipeline_model
     buffer = model.rollout_buffer
@@ -333,7 +333,7 @@ def test_exact_window_kl_excludes_forced_wait_and_detects_nonfinite(pipeline_mod
 
 
 def test_sampled_stop_persists_and_clone_preserves_rng(pipeline_model, monkeypatch):
-    from pvz_rl.periodic import ActorUpdateState
+    from pvz_rl.learning.periodic import ActorUpdateState
 
     model, _ = pipeline_model
     cpu, gpu = torch.get_rng_state(), torch.cuda.get_rng_state()
@@ -357,7 +357,7 @@ def test_sampled_stop_persists_and_clone_preserves_rng(pipeline_model, monkeypat
 def test_old_optimizer_protocol_is_inference_and_weights_only(pipeline_model, tmp_path):
     import json
 
-    from pvz_rl.training import initial_weights, load_policy, train
+    from pvz_rl.learning.training import initial_weights, load_policy, train
 
     model, env = pipeline_model
     model.optimizer_protocol = "previous"
@@ -388,7 +388,7 @@ def test_old_optimizer_protocol_is_inference_and_weights_only(pipeline_model, tm
 
 
 def test_sparse_action_metrics_use_sums_and_counts():
-    from pvz_rl.periodic import aggregate_update_metrics
+    from pvz_rl.learning.periodic import aggregate_update_metrics
 
     slots = []
     for count in (0, 2):

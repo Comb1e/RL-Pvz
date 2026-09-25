@@ -12,12 +12,17 @@ import torch
 from pvz_game import LevelSpec, Spawn
 
 from pvz_rl.config import output_settings, research_config, validate_config
-from pvz_rl.env import PvZEnv
-from pvz_rl.progress import Phase, ProgressReporter
+from pvz_rl.envs.env import PvZEnv
+from pvz_rl.learning.training import ResearchCallback, load_policy, train
+from pvz_rl.monitoring.progress import Phase, ProgressReporter
+from pvz_rl.presentation.video import export_replay, ffmpeg_info
+from pvz_rl.presentation.visualization import (
+    build_run_report,
+    read_series,
+    run_segments,
+    visualize_run,
+)
 from pvz_rl.provenance import file_hash, write_json
-from pvz_rl.training import ResearchCallback, load_policy, train
-from pvz_rl.video import export_replay, ffmpeg_info
-from pvz_rl.visualization import build_run_report, read_series, run_segments, visualize_run
 
 
 def test_progress_throttle_phases_and_persistence(tmp_path, capsys):
@@ -91,7 +96,7 @@ def test_hardware_report_only_never_loads_checkpoint_and_respects_resume_cutoff(
     def forbidden(*args, **kwargs):
         raise AssertionError("Report-only must not generate demonstrations")
 
-    monkeypatch.setattr("pvz_rl.visualization.create_demonstrations", forbidden)
+    monkeypatch.setattr("pvz_rl.presentation.visualization.create_demonstrations", forbidden)
     assert len(run_segments(run)[0][1]["hardware"]) == 2
     assert visualize_run(run, report_only=True)["state"] == "complete"
     assert (run / "visualizations/hardware.png").stat().st_size > 1000
@@ -104,7 +109,7 @@ def test_hardware_report_only_never_loads_checkpoint_and_respects_resume_cutoff(
 
 @pytest.mark.learning
 def test_shared_checkpoint_reports_and_videos(smoke_cfg, tmp_path, monkeypatch):
-    import pvz_rl.training as training
+    import pvz_rl.learning.training as training
 
     if not shutil.which("ffmpeg"):
         pytest.skip("FFmpeg unavailable")
@@ -260,7 +265,7 @@ def test_missing_encoder_reports_actionable_error(cfg, monkeypatch):
 
 
 def test_encoder_failure_cleans_up_and_keeps_previous_output(cfg, tmp_path, monkeypatch):
-    import pvz_rl.video as video
+    import pvz_rl.presentation.video as video
 
     env = PvZEnv(cfg, record=True)
     env.reset(seed=2)

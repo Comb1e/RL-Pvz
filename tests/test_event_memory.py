@@ -6,8 +6,8 @@ import torch
 from pvz_game import Game, InitialPlant, LevelSpec, Rules, Spawn
 
 from pvz_rl.config import load_config
-from pvz_rl.encoding import ObservationEncoder
-from pvz_rl.event_memory import EventMemory
+from pvz_rl.envs.encoding import ObservationEncoder
+from pvz_rl.policy.event_memory import EventMemory
 
 
 def inputs(n=1, device="cpu"):
@@ -111,7 +111,7 @@ def test_event_fifo_retains_actions_and_never_reads_future():
 def test_timer_replacement_probe_same_current_state_different_history():
     from gymnasium.spaces import Discrete
 
-    from pvz_rl.spatial_policy import SpatialFeatures, SpatialGroupedPolicy
+    from pvz_rl.policy.spatial_policy import SpatialFeatures, SpatialGroupedPolicy
 
     torch.set_num_threads(1)
     torch.manual_seed(7)
@@ -159,9 +159,9 @@ def test_real_mine_histories_affect_tile_preferences_without_countdown_inputs():
     from gymnasium.spaces import Discrete
     from pvz_game import Place, Wait
 
-    from pvz_rl.actions import ActionCodec
-    from pvz_rl.lesson_rules import sky_rules
-    from pvz_rl.spatial_policy import SpatialFeatures, SpatialGroupedPolicy
+    from pvz_rl.envs.actions import ActionCodec
+    from pvz_rl.envs.lesson_rules import sky_rules
+    from pvz_rl.policy.spatial_policy import SpatialFeatures, SpatialGroupedPolicy
 
     torch.set_num_threads(1)
     torch.manual_seed(7)
@@ -234,8 +234,8 @@ def test_cuda_history_rollover_timeout_ppo_and_checkpoint(tmp_path):
     from stable_baselines3.common.callbacks import BaseCallback
     from stable_baselines3.common.logger import configure
 
-    from pvz_rl.cuda_ppo import CudaMaskablePPO
-    from pvz_rl.training import build_model, vector_env
+    from pvz_rl.learning.cuda_ppo import CudaMaskablePPO
+    from pvz_rl.learning.training import build_model, vector_env
 
     cfg = load_config()
     cfg["training"].update(

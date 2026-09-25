@@ -4,15 +4,15 @@ import numpy as np
 import pytest
 from pvz_game import Dig, Game, LevelSpec, Place, Spawn, Status, Wait
 
-from pvz_rl.actions import ActionCodec
-from pvz_rl.env import EpisodeState, PvZEnv
-from pvz_rl.rewards import asset_value
+from pvz_rl.envs.actions import ActionCodec
+from pvz_rl.envs.env import EpisodeState, PvZEnv
+from pvz_rl.envs.rewards import asset_value
 
 
 def test_all_406_actions_have_independent_expected_indices(cfg):
     import torch
 
-    from pvz_rl.actions import ActionSchema
+    from pvz_rl.envs.actions import ActionSchema
 
     codec = ActionCodec(cfg)
     assert codec.size == 406 and isinstance(codec.decode(0), Wait)

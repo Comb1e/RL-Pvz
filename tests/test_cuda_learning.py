@@ -12,9 +12,9 @@ from stable_baselines3.common.buffers import RolloutBuffer
 from stable_baselines3.common.logger import configure
 
 from pvz_rl.config import load_config
-from pvz_rl.cuda_buffer import TensorRolloutBuffer
-from pvz_rl.env import PvZEnv
-from pvz_rl.training import build_model, vector_env
+from pvz_rl.envs.env import PvZEnv
+from pvz_rl.learning.cuda_buffer import TensorRolloutBuffer
+from pvz_rl.learning.training import build_model, vector_env
 
 
 @pytest.fixture
@@ -38,8 +38,8 @@ def gpu_cfg():
 
 @pytest.mark.parametrize("condition", ["masked"])
 def test_observations_rewards_and_metrics_against_cpu(gpu_cfg, condition):
-    from pvz_rl.cuda_features import REWARD_FIELDS, CudaFeatures
-    from pvz_rl.cuda_lessons import LessonCudaBatch as CudaBatch
+    from pvz_rl.envs.cuda_features import REWARD_FIELDS, CudaFeatures
+    from pvz_rl.envs.cuda_lessons import LessonCudaBatch as CudaBatch
 
     cfg = copy.deepcopy(gpu_cfg)
     scenario = LevelSpec(
@@ -139,7 +139,7 @@ def test_fixed_rollout_losses_and_optimizer_match_stock(gpu_cfg, condition, monk
     try:
         from sb3_contrib import MaskablePPO
 
-        from pvz_rl.spatial_policy import SpatialFeatures, SpatialGroupedPolicy
+        from pvz_rl.policy.spatial_policy import SpatialFeatures, SpatialGroupedPolicy
 
         # Independent upstream optimizer on supplied data; no CPU collection/training run.
         t = configs[0]["training"]
@@ -266,7 +266,7 @@ def test_fixed_rollout_losses_and_optimizer_match_stock(gpu_cfg, condition, monk
 
 
 def test_grouped_shared_policy_identity_and_reload(gpu_cfg, tmp_path):
-    from pvz_rl.cuda_ppo import CudaMaskablePPO
+    from pvz_rl.learning.cuda_ppo import CudaMaskablePPO
 
     cfg = gpu_cfg
     cfg["environment"]["cutoff_seconds"] = 1
@@ -301,9 +301,9 @@ def test_grouped_shared_policy_identity_and_reload(gpu_cfg, tmp_path):
 def test_cuda_game_budget_report_demos_and_resume(gpu_cfg, tmp_path):
     import json
 
+    from pvz_rl.learning.training import load_policy, train
+    from pvz_rl.presentation.recordings import open_playback
     from pvz_rl.provenance import file_hash
-    from pvz_rl.recordings import open_playback
-    from pvz_rl.training import load_policy, train
 
     cfg = copy.deepcopy(gpu_cfg)
     cfg["training"].update(total_games=2, eval_interval_games=2, validation_schedule="periodic")
@@ -352,9 +352,9 @@ def test_rollout_configuration_and_legacy_cpu_defaults(gpu_cfg):
 def test_gpu_lesson_and_changed_scenarios_match_public_encodings(gpu_cfg):
     from pvz_game import Game, Rules
 
-    from pvz_rl.cuda_features import CudaFeatures
-    from pvz_rl.cuda_lessons import LessonCudaBatch as CudaBatch
-    from pvz_rl.scenarios import scenario
+    from pvz_rl.envs.cuda_features import CudaFeatures
+    from pvz_rl.envs.cuda_lessons import LessonCudaBatch as CudaBatch
+    from pvz_rl.envs.scenarios import scenario
 
     cfg = copy.deepcopy(gpu_cfg)
     families = ["saving", "redistributed", "faster", "concentrated"]
@@ -376,8 +376,8 @@ def test_gpu_lesson_and_changed_scenarios_match_public_encodings(gpu_cfg):
 def test_gpu_encoding_crowds_order_and_private_schedule(gpu_cfg):
     from pvz_game import Game
 
-    from pvz_rl.cuda_features import CudaFeatures
-    from pvz_rl.cuda_lessons import LessonCudaBatch as CudaBatch
+    from pvz_rl.envs.cuda_features import CudaFeatures
+    from pvz_rl.envs.cuda_lessons import LessonCudaBatch as CudaBatch
 
     cfg = copy.deepcopy(gpu_cfg)
     games = []

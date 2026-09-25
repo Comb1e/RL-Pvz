@@ -14,7 +14,7 @@ from pathlib import Path
 from pvz_game.config import PLANT_TYPES, ZOMBIE_TYPES
 from pvz_game.cuda.schema import MOWER_STATES, PLANT_STATES, ZOMBIE_STATES
 
-from .budget import uses_games
+from pvz_rl.learning.budget import uses_games
 
 
 def digest(value: object) -> str:
@@ -288,12 +288,12 @@ def validate_config(cfg: dict, *, allow_legacy_exploration=False) -> None:
     if c.get("mode", "fixed") not in ("fixed", "teaching"):
         raise ValueError("Unsupported curriculum mode")
     if c.get("run_stage") is not None:
-        from .curriculum import STAGES
+        from pvz_rl.learning.curriculum import STAGES
 
         if c.get("mode") != "teaching" or c["run_stage"] not in STAGES:
             raise ValueError("curriculum.run_stage requires a teaching recipe and a valid stage")
     if c.get("mode") == "teaching":
-        from .curriculum import STAGES
+        from pvz_rl.learning.curriculum import STAGES
 
         for lesson in lesson_settings(cfg).values():
             if type(lesson.get("natural_sun")) is not bool:
@@ -354,8 +354,14 @@ def validate_config(cfg: dict, *, allow_legacy_exploration=False) -> None:
         raise ValueError("Logging progress_seconds must be finite and positive")
     if type(log["rolling_window"]) is not int or log["rolling_window"] < 1:
         raise ValueError("Logging rolling_window must be a positive integer")
-    if any(type(visual[key]) is not bool for key in ("enabled", "demos", "videos")):
-        raise ValueError("Visualization enabled/demos/videos must be booleans")
+    if any(type(visual[key]) is not bool for key in ("enabled", "demos", "videos", "live_enabled")):
+        raise ValueError("Visualization enabled/demos/videos/live_enabled must be booleans")
+    if type(visual["live_fps"]) is not int or not 1 <= visual["live_fps"] <= 30:
+        raise ValueError("live_fps must be an integer from 1 to 30")
+    size = visual["live_window_size"]
+    if (not isinstance(size, (tuple, list)) or len(size) != 2
+            or any(type(n) is not int or n < lower for n,lower in zip(size,(640,480)))):
+        raise ValueError("live_window_size must be at least 640 by 480")
     if type(visual["video_fps"]) is not int or not 1 <= visual["video_fps"] <= 100:
         raise ValueError("video_fps must be an integer from 1 to 100")
     size = visual["video_size"]

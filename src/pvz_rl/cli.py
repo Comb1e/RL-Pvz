@@ -6,15 +6,15 @@ import argparse
 import json
 from pathlib import Path
 
-from .config import (
+from pvz_rl.config import (
     load_config,
     research_config,
     resolve_rollout,
     seed_values,
     validate_config,
 )
-from .provenance import file_hash, metadata, write_json
-from .training_requirements import TRAINING_CONDITIONS, require_cuda_training
+from pvz_rl.learning.training_requirements import TRAINING_CONDITIONS, require_cuda_training
+from pvz_rl.provenance import file_hash, metadata, write_json
 
 
 def common(parser):
@@ -151,6 +151,8 @@ def configured(args):
         )
     if getattr(args, "videos", None) is not None:
         cfg.setdefault("visualization", {})["videos"] = args.videos
+    if getattr(args, "live_view", None) is not None:
+        cfg.setdefault("visualization", {})["live_enabled"] = args.live_view
     validate_config(cfg)
     if args.command in ("train", "suite", "benchmark-gpu"):
         require_cuda_training(cfg, getattr(args, "condition", "masked"), runtime=False)
@@ -165,12 +167,17 @@ def main(argv=None):
     doctor.add_argument("--output", type=Path)
     training = subs.add_parser("train", help="train one shared policy across all difficulties")
     training_options(training)
+    live = training.add_mutually_exclusive_group()
+    live.add_argument("--live-view", action="store_true", default=None,
+                      help="show four actual training environments in a live window (default)")
+    live.add_argument("--no-live-view", dest="live_view", action="store_false",
+                      help="train headlessly without the live game window")
     training.add_argument("--condition", choices=TRAINING_CONDITIONS, help="default: masked")
     training.add_argument("--seed", type=int, help="learner seed; default: saved seed or 101")
     training.add_argument("--output", required=True, type=Path)
     training.add_argument("--validation-count", type=int, help="reduced validation set for checks")
     training.add_argument("--family", choices=("preset", "diagnostic"), default="preset")
-    from .curriculum import STAGES
+    from pvz_rl.learning.curriculum import STAGES
 
     training.add_argument(
         "--stage", choices=STAGES, help="train only this teaching stage; stop at mastery or budget"
@@ -251,7 +258,7 @@ def main(argv=None):
     if args.command == "replay":
         from pvz_game.replay import validate_speed
 
-        from .recordings import open_playback
+        from pvz_rl.presentation.recordings import open_playback
 
         if args.speed is not None and not args.watch:
             parser.error("--speed requires --watch")
@@ -273,19 +280,19 @@ def main(argv=None):
             )
         )
         if args.watch:
-            from .recordings import watch_recording
+            from pvz_rl.presentation.recordings import watch_recording
 
             # Pass the normalized payload so legacy sidecars retain their cutoff labels.
             watch_recording(args.path, speed=speed)
         if args.video:
-            from .video import export_replay
+            from pvz_rl.presentation.video import export_replay
 
             export_replay(args.path, args.video, load_config(args.config))
         return
 
     cfg = configured(args)
     if args.command == "visualize":
-        from .visualization import visualize_run
+        from pvz_rl.presentation.visualization import visualize_run
 
         original = json.loads((args.run / "metadata.json").read_text("utf-8"))["config"]
         if args.config and research_config(cfg) != research_config(original):
@@ -300,10 +307,10 @@ def main(argv=None):
         import torch
         from gymnasium.utils.env_checker import check_env
 
-        from .env import PvZEnv
+        from pvz_rl.envs.env import PvZEnv
 
         details = metadata(cfg, kind="availability-check")
-        from .cuda_diagnostics import cuda_doctor
+        from pvz_rl.monitoring.cuda_diagnostics import cuda_doctor
 
         details["cuda_simulator"] = cuda_doctor()
         for condition in cfg["conditions"]:
@@ -316,7 +323,7 @@ def main(argv=None):
         from pvz_game import Place
         from pvz_game.replay import read_recording
 
-        from .recordings import open_playback
+        from pvz_rl.presentation.recordings import open_playback
 
         with TemporaryDirectory(prefix="pvz-doctor-") as temporary:
             replay_path = Path(temporary) / "probe.pvzdemo"
@@ -336,14 +343,14 @@ def main(argv=None):
                 "instant_placement": info["ticks_advanced"] == 0,
             }
         try:
-            from .rendering import render_observation
+            from pvz_rl.presentation.rendering import render_observation
 
             frame = render_observation(env.public)
             details["rendering"] = {"available": True, "shape": list(frame.shape)}
         except Exception as exc:
             details["rendering"] = {"available": False, "error": str(exc)}
         try:
-            from .video import ffmpeg_info
+            from pvz_rl.presentation.video import ffmpeg_info
 
             details["video"] = {"available": True, **ffmpeg_info(cfg)}
         except Exception as exc:
@@ -376,7 +383,7 @@ def main(argv=None):
         if not details["training_ready"]:
             raise SystemExit(1)
     elif args.command == "train":
-        from .training import train
+        from pvz_rl.learning.training import train
 
         train(
             cfg,
@@ -390,8 +397,8 @@ def main(argv=None):
         )
         print(f"Training artifacts: {args.output.resolve()}")
     elif args.command == "evaluate":
-        from .evaluation import evaluate, summarize
-        from .training import load_policy
+        from pvz_rl.evaluation.runner import evaluate, summarize
+        from pvz_rl.learning.training import load_policy
 
         policy, condition, learner_seed, checkpoint_hash = None, "masked", None, None
         if args.checkpoint:
@@ -455,7 +462,7 @@ def main(argv=None):
         write_json(args.output / "metadata.json", details)
         print(json.dumps(summarize(rows), indent=2))
     elif args.command == "benchmark-gpu":
-        from .gpu_benchmark import benchmark_gpu
+        from pvz_rl.monitoring.gpu_benchmark import benchmark_gpu
 
         print(
             json.dumps(
@@ -470,12 +477,12 @@ def main(argv=None):
             )
         )
     elif args.command == "suite":
-        from .suite import run_suite
+        from pvz_rl.learning.suite import run_suite
 
         result = run_suite(cfg, args.output, resume=args.resume)
         print(json.dumps({"state": result["state"], "output": str(args.output.resolve())}))
     elif args.command == "report":
-        from .reporting import make_report
+        from pvz_rl.presentation.reporting import make_report
 
         make_report(args.episodes, args.output, cfg, args.curves)
         print(f"Report: {(args.output / 'report.md').resolve()}")

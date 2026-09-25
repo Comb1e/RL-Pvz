@@ -6,11 +6,11 @@ from types import SimpleNamespace
 import pytest
 
 from pvz_rl.config import load_config, validate_config
-from pvz_rl.curriculum import STAGES, CurriculumState, validation_after_stage
-from pvz_rl.deadline import BudgetExpired
+from pvz_rl.learning.curriculum import STAGES, CurriculumState, validation_after_stage
+from pvz_rl.learning.deadline import BudgetExpired
+from pvz_rl.learning.training import ResearchCallback, TrainingDeadline, load_policy, train
+from pvz_rl.presentation.visualization import read_json, read_series
 from pvz_rl.provenance import file_hash
-from pvz_rl.training import ResearchCallback, TrainingDeadline, load_policy, train
-from pvz_rl.visualization import read_json, read_series
 
 
 @pytest.fixture
@@ -206,7 +206,7 @@ def test_old_configuration_and_non_curriculum_runs_keep_periodic_schedule():
 
 
 def test_suite_marks_unvalidated_jobs_and_excludes_missing_curves(tmp_path, monkeypatch):
-    from pvz_rl import suite
+    from pvz_rl.learning import suite
     from pvz_rl.provenance import write_json
 
     cfg = load_config()
@@ -247,8 +247,8 @@ def test_incomplete_training_saves_checkpoint_report_and_never_evaluates(
     def unexpected(*a, **kw):
         pytest.fail("No mastery: normal validation/demos must not run")
 
-    monkeypatch.setattr("pvz_rl.training.evaluate", unexpected)
-    monkeypatch.setattr("pvz_rl.visualization.create_demonstrations", unexpected)
+    monkeypatch.setattr("pvz_rl.learning.training.evaluate", unexpected)
+    monkeypatch.setattr("pvz_rl.presentation.visualization.create_demonstrations", unexpected)
     run = train(cfg, "masked", 101, tmp_path / "incomplete", validation_limit=1)
     status = read_json(run / "status.json")
     assert status["curriculum_incomplete"] and status["validation_deferred"]
