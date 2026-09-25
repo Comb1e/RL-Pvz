@@ -9,11 +9,15 @@ import torch
 from stable_baselines3.common.logger import configure
 
 from pvz_rl.config import load_config, validate_config
-from pvz_rl.curriculum import CurriculumState
-from pvz_rl.exploration import configure_exploration, exploration_rate, set_exploration_rate
-from pvz_rl.grouped_policy import GroupedDistribution
-from pvz_rl.training import ResearchCallback, build_model, load_policy, train, vector_env
-from pvz_rl.visualization import read_series
+from pvz_rl.learning.curriculum import CurriculumState
+from pvz_rl.learning.exploration import (
+    configure_exploration,
+    exploration_rate,
+    set_exploration_rate,
+)
+from pvz_rl.learning.training import ResearchCallback, build_model, load_policy, train, vector_env
+from pvz_rl.policy.grouped_policy import GroupedDistribution
+from pvz_rl.presentation.visualization import read_series
 
 
 @pytest.mark.parametrize("epsilon", [0.0, 0.1, 0.9, 1.0])
@@ -114,7 +118,7 @@ def test_invalid_exploration_and_warmup(key, value):
 
 
 def test_exploration_schedule_has_separate_phases_and_floors():
-    from pvz_rl.exploration import exploration_state
+    from pvz_rl.learning.exploration import exploration_state
 
     cfg = load_config()
     warm = exploration_state(cfg, 1023)
@@ -132,7 +136,7 @@ def test_exploration_schedule_has_separate_phases_and_floors():
 
 
 def test_entropy_schedule_is_independent_of_injected_noise():
-    from pvz_rl.exploration import entropy_factor, set_entropy_factor
+    from pvz_rl.learning.exploration import entropy_factor, set_entropy_factor
 
     cfg = load_config()
     assert entropy_factor(cfg, 1024) == pytest.approx(1.0)
@@ -193,7 +197,7 @@ def test_warmup_uses_persisted_stage_residency():
 
 
 def test_exploration_decay_uses_stage_games_and_has_no_discontinuity():
-    from pvz_rl.exploration import exploration_state
+    from pvz_rl.learning.exploration import exploration_state
 
     cfg = load_config()
     assert exploration_rate(cfg, 0) == pytest.approx(0.1)
@@ -293,7 +297,7 @@ def test_critic_only_update_preserves_actor_and_adam_state(tmp_path):
         with torch.no_grad():
             assert (model.policy.predict_values(obs) + 0.3).square().mean().item() < old_error
         # Save partway through annealing; loading must not restore the initial rate.
-        from pvz_rl.cuda_ppo import CudaMaskablePPO
+        from pvz_rl.learning.cuda_ppo import CudaMaskablePPO
 
         set_exploration_rate(model, 0.003425)
         model.save(tmp_path / "mid-decay.zip")

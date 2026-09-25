@@ -1,5 +1,35 @@
 # Sources actually used
 
+## Live environment presentation — 2026-09-25
+
+- [Python packages tutorial](https://docs.python.org/3/tutorial/modules.html#packages),
+  package namespaces and subpackage sections inspected, alongside the installed SB3
+  package layout (`common`, `ppo`, and other algorithms). Responsibilities now have
+  separate namespaces; package initializers remain side-effect free. This is source
+  organization and has no learning-performance claim.
+
+- [Stable-Baselines3 2.7.1 VecEnv rendering source](https://github.com/DLR-RM/stable-baselines3/blob/v2.7.1/stable_baselines3/common/vec_env/base_vec_env.py):
+  installed `get_images`/`render` inspected. Tiling vector-environment images inspires
+  the four-board view; this project samples selected CUDA environments and renders
+  in a separate process instead of rendering the entire vector batch synchronously.
+- [Pinned game renderer](https://github.com/Comb1e/pvz-cuda-work/blob/1fc80386859087b9d715c4706b3f7875844430cc/src/pvz_game/rendering.py):
+  installed BoardRenderer, public Observation and CUDA present-state schema inspected.
+  Reuse the existing public renderer, with a checked diagnostic array adapter;
+  no engine modification or alternative board artwork.
+- [Pygame event documentation](https://www.pygame.org/docs/ref/event.html) and
+  [display documentation](https://www.pygame.org/docs/ref/display.html): relevant
+  event-queue limits, regular pumping, display-thread ownership and single-display
+  sections inspected. They motivate one UI-owning child process and a bounded queue.
+- [PyTorch pinned-memory/nonblocking transfer tutorial](https://docs.pytorch.org/tutorials/intermediate/pinmem_nonblock.html):
+  transfer direction, lifetime and GPU-to-CPU synchronization sections inspected.
+  Host data must not be read before completion; pinned memory is not itself a
+  correctness guarantee. The viewer uses reusable buffers with CUDA completion
+  events. Tutorial speed results are not transferred to this hardware.
+
+This is a presentation feature, not a new RL method. No paper establishes a
+learning improvement from watching four environments; parity and local overhead
+measurements are the relevant acceptance evidence.
+
 ## Saving, complete-action exploration and hardware telemetry — 2026-09-25
 
 - [Invalid Action Masking](https://arxiv.org/abs/2006.14171), abstract inspected:

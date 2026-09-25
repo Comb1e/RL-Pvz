@@ -5,9 +5,9 @@ import torch
 from pvz_game import Dig, LevelSpec, Place, Spawn
 
 from pvz_rl.config import gpu_defaults, load_config
-from pvz_rl.env import PvZEnv
-from pvz_rl.metrics import agent_action_count, mean_agent_actions
-from pvz_rl.training import vector_env
+from pvz_rl.envs.env import PvZEnv
+from pvz_rl.learning.training import vector_env
+from pvz_rl.monitoring.metrics import agent_action_count, mean_agent_actions
 
 
 def test_defaults_and_archived_action_counts():

@@ -6,10 +6,10 @@ import numpy as np
 import pytest
 import torch
 
-from pvz_rl.env import PvZEnv
+from pvz_rl.envs.env import PvZEnv
+from pvz_rl.learning.training import load_policy, train
+from pvz_rl.presentation.recordings import verify_replay
 from pvz_rl.provenance import verify_engine
-from pvz_rl.recordings import verify_replay
-from pvz_rl.training import load_policy, train
 
 
 def test_installed_engine_matches_recorded_commit(cfg):
@@ -142,7 +142,7 @@ def test_windows_cuda_cli(tmp_path, tiny_cli_config):
 
 @pytest.mark.learning
 def test_whole_suite_on_tiny_protocol_and_idempotent_resume(smoke_cfg, tmp_path):
-    from pvz_rl.suite import run_suite
+    from pvz_rl.learning.suite import run_suite
 
     smoke_cfg["training"].update(total_steps=64, learner_seeds=[101])
     smoke_cfg["conditions"]["hybrid"] = dict(masked=True, shaped=True, curriculum=True, hybrid=True)

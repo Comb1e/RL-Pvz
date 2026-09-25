@@ -7,12 +7,12 @@ import pytest
 import torch
 
 from pvz_rl.config import load_config
-from pvz_rl.curriculum import CurriculumState
-from pvz_rl.deadline import BudgetExpired
-from pvz_rl.env import PvZEnv
-from pvz_rl.evaluation import evaluate
-from pvz_rl.training import ResearchCallback, load_policy, train
-from pvz_rl.visualization import read_json, read_series
+from pvz_rl.envs.env import PvZEnv
+from pvz_rl.evaluation.runner import evaluate
+from pvz_rl.learning.curriculum import CurriculumState
+from pvz_rl.learning.deadline import BudgetExpired
+from pvz_rl.learning.training import ResearchCallback, load_policy, train
+from pvz_rl.presentation.visualization import read_json, read_series
 
 
 def small_cfg(device="cuda", backend="cuda", profile="E"):
@@ -51,7 +51,7 @@ def test_validation_cache_and_incomplete_results_cannot_select_checkpoint(tmp_pa
             for seed in kwargs["seeds"]
         ]
 
-    monkeypatch.setattr("pvz_rl.training.evaluate", fake_evaluate)
+    monkeypatch.setattr("pvz_rl.learning.training.evaluate", fake_evaluate)
     try:
         callback.cached_evaluation(
             list(range(100000, 100050)),
@@ -186,7 +186,7 @@ def test_finished_old_config_does_not_acquire_new_defaults():
 
 @pytest.mark.learning
 def test_interrupted_export_counts_time_spent_after_final_checkpoint(tmp_path, monkeypatch):
-    from pvz_rl.deadline import RunBudget
+    from pvz_rl.learning.deadline import RunBudget
 
     cfg = small_cfg()
     cfg["training"]["total_games"] = 2
@@ -196,17 +196,17 @@ def test_interrupted_export_counts_time_spent_after_final_checkpoint(tmp_path, m
     def clock():
         return perf_counter() + offset[0]
 
-    monkeypatch.setattr("pvz_rl.training.perf_counter", clock)
+    monkeypatch.setattr("pvz_rl.learning.training.perf_counter", clock)
     monkeypatch.setattr(
-        "pvz_rl.training.RunBudget", lambda *a, **kw: RunBudget(*a, **kw, clock=clock)
+        "pvz_rl.learning.training.RunBudget", lambda *a, **kw: RunBudget(*a, **kw, clock=clock)
     )
-    monkeypatch.setattr("pvz_rl.visualization.build_run_report", lambda *a, **kw: None)
+    monkeypatch.setattr("pvz_rl.presentation.visualization.build_run_report", lambda *a, **kw: None)
 
     def interrupted_export(*args, **kwargs):
         offset[0] += 125  # Simulate costly presentation, without sleeping.
         raise KeyboardInterrupt("controlled export interruption")
 
-    monkeypatch.setattr("pvz_rl.visualization.visualize_run", interrupted_export)
+    monkeypatch.setattr("pvz_rl.presentation.visualization.visualize_run", interrupted_export)
     run = tmp_path / "export"
     with pytest.raises(KeyboardInterrupt):
         train(cfg, "masked", 101, run, validation_limit=1)
@@ -223,8 +223,8 @@ def test_interrupted_export_counts_time_spent_after_final_checkpoint(tmp_path, m
 def test_spatial_cuda_report_and_three_verified_shared_demos(tmp_path):
     if not torch.cuda.is_available():
         pytest.skip("CUDA unavailable")
+    from pvz_rl.presentation.recordings import open_playback
     from pvz_rl.provenance import file_hash
-    from pvz_rl.recordings import open_playback
 
     cfg = small_cfg("cuda", "cuda")
     cfg["training"]["total_games"] = 2
@@ -248,8 +248,8 @@ def test_cuda_long_horizon_reward_and_early_dig_boundaries(wait_ticks):
         pytest.skip("CUDA unavailable")
     from pvz_game import Dig, LevelSpec, Place, Spawn
 
-    from pvz_rl.cuda_features import CudaFeatures
-    from pvz_rl.cuda_lessons import LessonCudaBatch as CudaBatch
+    from pvz_rl.envs.cuda_features import CudaFeatures
+    from pvz_rl.envs.cuda_lessons import LessonCudaBatch as CudaBatch
 
     cfg = load_config()
     level = LevelSpec("ledger-boundary", (Spawn(20000, "basic", 0),), initial_sun=200)

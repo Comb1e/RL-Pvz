@@ -5,8 +5,8 @@ from pvz_game import Game, LevelSpec, Place, Spawn, Status
 from pvz_game.types import Event
 
 from pvz_rl.config import validate_config
-from pvz_rl.env import PvZEnv
-from pvz_rl.rewards import defeat_counts, reward_parts
+from pvz_rl.envs.env import PvZEnv
+from pvz_rl.envs.rewards import defeat_counts, reward_parts
 
 
 def damage(zombie, source, tick=1):

@@ -5,6 +5,31 @@ Dates and results belong to their recorded version. Current behavior lives in
 artifact locations and learning outcomes live in [validation](validation.md).
 The longer pre-consolidation notes remain in `git show b642c9c:docs/iteration.md`.
 
+## 0.20.0 — 2026-09-25
+
+- Problem: training exposes numerical curves but no live games; users cannot see
+  sampled plant/dig behavior or follow individual games. The console also omitted
+  cumulative net value and discounted return despite recording them in JSONL.
+- Cause: full game state remains on CUDA and existing rendering serves offline
+  recordings; per-tick synchronous rendering would interfere with the collector.
+- Changes: one spawned four-panel renderer, private random subscriptions, manual
+  per-panel switching, final-board retention and automatic replacement. Two pinned
+  staging buffers sample selected present state before resets; bounded queues and
+  generation/sequence checks discard stale frames. Closing/failing the UI leaves
+  training active. The terminal adds explicitly scoped game reward/economy means.
+- Organization: replace the flat implementation directory with `envs`, `policy`,
+  `learning`, `evaluation`, `monitoring` and `presentation` packages. Update imports,
+  resource ownership, tests and package data. Narrow deserialization aliases keep
+  compatible 0.19.0 class references loadable without duplicate source files.
+- Compatibility: output-only settings preserve 0.19.0 resume/weight transfer and the
+  engine pin. Existing runs/artifacts remain intact. No formal training launched.
+- Verification and overhead results are recorded in [validation](validation.md).
+  The final median viewer overhead was 0.55% (2,466 → 2,452 transitions/s), with
+  matching final policy hashes in all three pairs. Individual comparisons ranged
+  from −2.74% to +8.91%; performance remains hardware/load dependent.
+  The viewer samples wall-clock frames, so it cannot display every intermediate
+  state and is not a statistical replacement for completed-game diagnostics.
+
 ## 0.19.0 — 2026-09-25
 
 - Problem: placement remained around 20% wins in the reported long run. Equal

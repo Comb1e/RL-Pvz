@@ -9,11 +9,11 @@ import torch
 
 from pvz_rl.cli import configured, main
 from pvz_rl.config import curriculum_probe_seeds, load_config, seed_values, validate_config
-from pvz_rl.curriculum import STAGES, CurriculumState, stage_distribution
+from pvz_rl.learning.curriculum import STAGES, CurriculumState, stage_distribution
+from pvz_rl.learning.training import ResearchCallback, load_policy, train
+from pvz_rl.learning.training_requirements import require_cuda_training, transfer_protocol
+from pvz_rl.presentation.visualization import build_run_report, read_json, read_series
 from pvz_rl.provenance import file_hash, write_json
-from pvz_rl.training import ResearchCallback, load_policy, train
-from pvz_rl.training_requirements import require_cuda_training, transfer_protocol
-from pvz_rl.visualization import build_run_report, read_json, read_series
 
 
 @pytest.fixture
@@ -232,7 +232,7 @@ def test_all_stage_handoffs_preserve_only_weights_and_reset_optimizer_schedules(
 def test_mastered_stage_saves_without_collecting_next_stage(
     stage_cfg, tmp_path, monkeypatch, unlimited
 ):
-    from pvz_rl.recordings import open_playback
+    from pvz_rl.presentation.recordings import open_playback
 
     stage_cfg["training"]["total_games"] = 1000
     if unlimited:
@@ -455,7 +455,7 @@ def test_mastery_seed_pool_and_retained_recipe_defaults():
 def test_old_gates_are_preserved_on_resume_but_can_change_on_handoff(
     stage_cfg, legacy_teaching, tmp_path
 ):
-    from pvz_rl.training_requirements import resume_protocol
+    from pvz_rl.learning.training_requirements import resume_protocol
 
     old = legacy_teaching(copy.deepcopy(stage_cfg))
     old["training"]["eval_interval_games"] = 1000
@@ -513,7 +513,7 @@ def test_probe_failure_does_not_certify_mastery(stage_cfg, tmp_path, monkeypatch
 def test_shared_mastery_stops_after_update_and_is_resumable(
     stage_cfg, tmp_path, monkeypatch, standalone
 ):
-    from pvz_rl.curriculum import initial_state
+    from pvz_rl.learning.curriculum import initial_state
 
     stage_cfg["training"]["total_games"] = 1000
     stage_cfg["curriculum"].update(
@@ -529,7 +529,7 @@ def test_shared_mastery_stops_after_update_and_is_resumable(
         return original(self, seeds, levels, family, destination, split, final)
 
     if not standalone:
-        original_build = __import__("pvz_rl.training", fromlist=["build_model"]).build_model
+        original_build = __import__("pvz_rl.learning.training", fromlist=["build_model"]).build_model
 
         def build(*args, **kwargs):
             model = original_build(*args, **kwargs)
@@ -538,7 +538,7 @@ def test_shared_mastery_stops_after_update_and_is_resumable(
             model.curriculum_state = state.to_dict()
             return model
 
-        monkeypatch.setattr("pvz_rl.training.build_model", build)
+        monkeypatch.setattr("pvz_rl.learning.training.build_model", build)
     monkeypatch.setattr(ResearchCallback, "cached_evaluation", passing_probe)
     run = train(stage_cfg, "masked", 101, tmp_path / "shared", validation_limit=1)
     status = read_json(run / "status.json")
@@ -595,8 +595,8 @@ def test_until_mastery_invalid_configuration_leaves_no_output(stage_cfg, tmp_pat
 
 
 def test_until_mastery_cli_saved_resume_and_unbounded_clock(stage_cfg, tmp_path):
-    from pvz_rl.budget import budget_target, effective_limits
-    from pvz_rl.deadline import RunBudget
+    from pvz_rl.learning.budget import budget_target, effective_limits
+    from pvz_rl.learning.deadline import RunBudget
 
     cfg = configured(
         argparse.Namespace(command="train", config=None, stage="saving", until_stage_complete=True)
@@ -642,8 +642,8 @@ def test_previous_action_distribution_rejected_by_metadata_and_direct_loader(sta
     import json
     import zipfile
 
-    from pvz_rl.cuda_ppo import CudaMaskablePPO
-    from pvz_rl.training_requirements import current_model_config
+    from pvz_rl.learning.cuda_ppo import CudaMaskablePPO
+    from pvz_rl.learning.training_requirements import current_model_config
 
     stage_cfg["policy"].pop("action_distribution")
     assert not current_model_config(stage_cfg)
@@ -661,7 +661,7 @@ def test_previous_action_distribution_rejected_by_metadata_and_direct_loader(sta
                "exploration_protocol": "phase_floor_v1"})
     monkeypatch.setattr("stable_baselines3.common.save_util.load_from_zip_file",
                         lambda *args, **kwargs: ({}, {"policy": {}}, {}))
-    from pvz_rl.training import initial_weights
+    from pvz_rl.learning.training import initial_weights
     with pytest.raises(ValueError, match="Action distribution changed"):
         initial_weights(checkpoint, stage_cfg)
 

@@ -11,10 +11,10 @@ import torch
 from pvz_game import Dig, LevelSpec, Place, Spawn
 
 from pvz_rl.config import load_config
-from pvz_rl.curriculum import CurriculumState
-from pvz_rl.env import PvZEnv
-from pvz_rl.grouped_policy import GroupedDistribution
-from pvz_rl.training import ResearchCallback, load_policy, train
+from pvz_rl.envs.env import PvZEnv
+from pvz_rl.learning.curriculum import CurriculumState
+from pvz_rl.learning.training import ResearchCallback, load_policy, train
+from pvz_rl.policy.grouped_policy import GroupedDistribution
 
 
 def test_event_v6_dimensions_regions_scales_crowds_and_no_leaks():
@@ -206,7 +206,7 @@ def test_lesson_checkpoints_cannot_enter_normal_or_final_evaluation(
     checkpoint = tmp_path / "model.zip"
     checkpoint.write_bytes(b"test")
     monkeypatch.setattr(
-        "pvz_rl.training.load_policy",
+        "pvz_rl.learning.training.load_policy",
         lambda p: (
             object(),
             {"config": cfg, "condition": "masked", "learner_seed": 101, "family": family},

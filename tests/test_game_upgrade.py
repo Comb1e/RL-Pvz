@@ -11,12 +11,12 @@ from pvz_game.replay import Playback, Recorder, read_recording, write_recording
 
 from pvz_rl.cli import main
 from pvz_rl.config import validate_config
-from pvz_rl.env import PvZEnv
-from pvz_rl.evaluation import evaluate
+from pvz_rl.envs.env import PvZEnv
+from pvz_rl.evaluation.runner import evaluate
+from pvz_rl.learning.training import load_policy
+from pvz_rl.presentation.recordings import open_playback
+from pvz_rl.presentation.visualization import visualize_run
 from pvz_rl.provenance import file_hash, verify_engine, write_json
-from pvz_rl.recordings import open_playback
-from pvz_rl.training import load_policy
-from pvz_rl.visualization import visualize_run
 
 
 @pytest.mark.parametrize("changed", ["package", "simulation", "source", "rules"])
@@ -58,7 +58,7 @@ def test_native_121_progress_counter_and_rendering_purity(cfg, monkeypatch, defe
 
     from pvz_game.rendering import _BoardCanvas
 
-    from pvz_rl.rendering import render_observation
+    from pvz_rl.presentation.rendering import render_observation
 
     env = PvZEnv(cfg)
     env.reset(seed=42)
@@ -178,8 +178,9 @@ def test_default_training_records_without_pygame_or_ffmpeg(tmp_path):
     script = r"""
 import builtins, sys
 from pvz_rl.config import load_config
-from pvz_rl.training import train
+from pvz_rl.learning.training import train
 cfg = load_config()
+cfg['visualization']['live_enabled'] = False
 assert cfg['visualization']['demos'] and not cfg['visualization']['videos']
 # Retain the archived periodic-export control independently of mastery scheduling.
 cfg['training']['validation_schedule'] = 'periodic'
@@ -209,7 +210,7 @@ train(cfg, 'masked', 101, sys.argv[1], validation_limit=1)
 
 
 def test_archived_report_and_video_never_load_old_model(cfg, tmp_path, monkeypatch):
-    import pvz_rl.training as training
+    import pvz_rl.learning.training as training
 
     def forbidden(*args, **kwargs):
         raise AssertionError("Old model must not be loaded")
@@ -251,7 +252,7 @@ def test_archived_report_and_video_never_load_old_model(cfg, tmp_path, monkeypat
 
 
 def test_video_options_respect_config_and_mutual_exclusion(cfg, tmp_path, monkeypatch):
-    import pvz_rl.training as training
+    import pvz_rl.learning.training as training
 
     received = []
     monkeypatch.setattr(

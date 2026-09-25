@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pvz-plant-research"
-version = "0.19.0"
+version = "0.20.0"
 description = "Reproducible plant-placement reinforcement learning for Lawn Lab"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -26,11 +26,13 @@ pvz-rl = "pvz_rl.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-pvz_rl = ["data/*.toml", "data/*.json", "*.cu"]
+pvz_rl = ["data/*.toml", "data/*.json"]
+"pvz_rl.envs" = ["*.cu"]
+"pvz_rl.learning" = ["*.cu"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-markers = ["learning: short real learning and checkpoint integration checks"]
+markers = ["learning: short real learning and checkpoint integration checks", "live_view: explicitly exercise live-view startup"]
 
 [tool.ruff]
 line-length = 100

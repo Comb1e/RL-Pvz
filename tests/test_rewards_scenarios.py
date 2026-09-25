@@ -7,9 +7,9 @@ from pvz_game import Game, Place, Rules, Status
 from pvz_game.config import resolve_level
 
 from pvz_rl.config import validate_config
-from pvz_rl.env import PvZEnv
-from pvz_rl.rewards import reward_parts
-from pvz_rl.scenarios import difficulty_weights, scenario
+from pvz_rl.envs.env import PvZEnv
+from pvz_rl.envs.rewards import reward_parts
+from pvz_rl.envs.scenarios import difficulty_weights, scenario
 
 
 def test_legacy_tick_batch_discounts_at_elapsed_simulation_time(cfg):

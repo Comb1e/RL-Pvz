@@ -1,5 +1,37 @@
 # Training method
 
+## Watching training and interpreting the terminal
+
+The optional four-panel live window follows actual CUDA training games, including
+stochastic exploration. It opens automatically; `train --no-live-view` disables it,
+and `--live-view` enables it when resuming with older output preferences. Closing
+the window does not interrupt training. Every panel has a Switch button; selection
+is uniform over environment IDs not currently displayed. A finished game remains
+visible for one second before replacement. Fewer than four environments are shown
+without duplicates. Selected games can already be in progress when first displayed.
+
+The default snapshot rate is five per wall-clock second, independently of the
+100 Hz simulation and 30 Hz UI event loop. Training is not throttled to playback
+speed: boards can freeze during updates or validation and can skip intermediate
+visual states. Recent accepted action labels reveal short plant/dig sequences.
+The viewer is an environment sample, not an unbiased sample of completed episodes;
+use the numerical logs for success-rate conclusions. Live frames are transient,
+not new replay files. The game package and 0.19.0 checkpoint protocols are unchanged.
+
+Every 15 seconds, aligned terminal blocks report rolling means over finished games
+for reward, discounted return, outcome reward, development reward, cumulative net
+value, historical peak/drawdown, sun production, effective damage, plant losses and
+mower expenditure. They also retain purchases, early digging, duration, exploration,
+window throughput and hardware utilization. A cutoff count flags partial returns.
+Net value uses sun-equivalent units; reward uses the configured conversion in the
+[objective derivation](math/training-objective.md). Gamma = 1 makes discounted return
+equal episode reward. Neither column includes the critic's timeout bootstrap.
+
+Viewer options live under `visualization`: `live_enabled = true`, `live_fps = 5`,
+`live_window_size = [1600, 1050]`. They are independent of offline reports/videos
+and may change on resume. Benchmarks remain headless unless the existing measurement
+interface is explicitly invoked with `live_view=True` for an overhead check.
+
 ## Periodic on-policy execution
 
 A bounded

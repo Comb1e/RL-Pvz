@@ -3,6 +3,15 @@ import pytest
 from pvz_rl.config import load_config
 
 
+@pytest.fixture(autouse=True)
+def headless_training(request, monkeypatch):
+    """Ordinary regression tests never open native windows."""
+    if not request.node.get_closest_marker("live_view"):
+        from pvz_rl.envs.cuda_env import CudaVecEnv
+
+        monkeypatch.setattr(CudaVecEnv, "start_live_view", lambda *args, **kwargs: None)
+
+
 @pytest.fixture
 def legacy_teaching():
     """Explicit archived protocol, independent of current recipe defaults."""
@@ -74,6 +83,7 @@ def tiny_cli_config(tmp_path):
     path.write_text(
         Path("configs/train.toml")
         .read_text()
+        .replace("live_enabled = true", "live_enabled = false")
         .replace("cutoff_seconds = 1200", "cutoff_seconds = 1")
     )
     return path

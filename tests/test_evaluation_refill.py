@@ -8,9 +8,9 @@ import torch
 from pvz_game import LevelSpec, Spawn
 
 from pvz_rl.config import load_config, research_config, validate_config
-from pvz_rl.cuda_evaluation import batched_games, deterministic_validation
-from pvz_rl.env import PvZEnv
-from pvz_rl.rewards import REWARD_METRICS
+from pvz_rl.envs.env import PvZEnv
+from pvz_rl.envs.rewards import REWARD_METRICS
+from pvz_rl.evaluation.cuda_evaluation import batched_games, deterministic_validation
 
 
 class WaitingPolicy(torch.nn.Module):
@@ -43,7 +43,7 @@ def test_refill_matches_fixed_batches_and_cpu(record, monkeypatch):
         ticks = {1: 18, 2: 1, 3: 3, 4: 500, 5: 1}
         return LevelSpec(level, (Spawn(ticks[seed], "basic", 0, x=0),), mowers=seed != 5)
 
-    monkeypatch.setattr("pvz_rl.cuda_env.scenario", scenario)
+    monkeypatch.setattr("pvz_rl.envs.cuda_env.scenario", scenario)
     policy = SimpleNamespace(policy=WaitingPolicy())
     results = []
     for refill in (False, True):
@@ -100,7 +100,7 @@ def test_plant_and_mower_kills_survive_cuda_episode_reset(monkeypatch):
             plants=(InitialPlant("cherry_bomb", 0, 1),),
         )
 
-    monkeypatch.setattr("pvz_rl.cuda_env.scenario", scenario)
+    monkeypatch.setattr("pvz_rl.envs.cuda_env.scenario", scenario)
     rows = list(
         batched_games(
             cfg, SimpleNamespace(policy=WaitingPolicy()), "masked", [1, 2], ["easy"], "preset"

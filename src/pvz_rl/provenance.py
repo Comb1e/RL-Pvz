@@ -16,7 +16,7 @@ from pathlib import Path
 import pvz_game
 from pvz_game import ENGINE_VERSION, Rules
 
-from .config import digest, runtime_settings
+from pvz_rl.config import digest, runtime_settings
 
 
 def write_json(path: str | Path, value: object):

@@ -1,10 +1,10 @@
 import numpy as np
 import pytest
 
-from pvz_rl.env import PvZEnv
-from pvz_rl.evaluation import evaluate
-from pvz_rl.frozen_baseline import choose_action
-from pvz_rl.statistics import bootstrap_interval, paired_difference, result_matrix
+from pvz_rl.envs.env import PvZEnv
+from pvz_rl.evaluation.frozen_baseline import choose_action
+from pvz_rl.evaluation.runner import evaluate
+from pvz_rl.evaluation.statistics import bootstrap_interval, paired_difference, result_matrix
 
 
 @pytest.mark.parametrize(

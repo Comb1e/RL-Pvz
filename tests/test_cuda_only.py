@@ -12,8 +12,8 @@ import torch
 
 from pvz_rl.cli import configured, main
 from pvz_rl.config import load_config
-from pvz_rl.training import train
-from pvz_rl.training_requirements import require_cuda_training, resume_protocol
+from pvz_rl.learning.training import train
+from pvz_rl.learning.training_requirements import require_cuda_training, resume_protocol
 
 
 @pytest.mark.parametrize("setting", ["device", "simulator", "hybrid", "timing"])
@@ -32,8 +32,8 @@ def test_unsupported_direct_training_leaves_no_output(smoke_cfg, tmp_path, setti
 
 @pytest.mark.parametrize("entry", ["train", "suite", "benchmark"])
 def test_missing_cuda_fails_before_creating_output(smoke_cfg, tmp_path, monkeypatch, entry):
-    from pvz_rl.gpu_benchmark import benchmark_gpu
-    from pvz_rl.suite import run_suite
+    from pvz_rl.learning.suite import run_suite
+    from pvz_rl.monitoring.gpu_benchmark import benchmark_gpu
 
     monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
     output = tmp_path / entry
@@ -160,7 +160,7 @@ def test_only_one_recipe_is_shipped():
 
 
 def test_benchmark_schedules_configurable_cuda_sizes(smoke_cfg, tmp_path, monkeypatch):
-    import pvz_rl.gpu_benchmark as benchmark
+    import pvz_rl.monitoring.gpu_benchmark as benchmark
 
     seen = []
 
@@ -215,12 +215,12 @@ def test_benchmark_schedules_configurable_cuda_sizes(smoke_cfg, tmp_path, monkey
 
 
 def test_compiler_failure_is_actionable_and_creates_no_run(smoke_cfg, tmp_path, monkeypatch):
-    from pvz_rl.training_requirements import _cuda_probe
+    from pvz_rl.learning.training_requirements import _cuda_probe
 
     _cuda_probe.cache_clear()
     monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
     monkeypatch.setattr(
-        "pvz_rl.cuda_diagnostics.cuda_doctor",
+        "pvz_rl.monitoring.cuda_diagnostics.cuda_doctor",
         lambda: {
             "available": False,
             "error": "NVRTC compilation failed",

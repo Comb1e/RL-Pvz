@@ -7,13 +7,13 @@ import json
 import pytest
 import torch
 
-from pvz_rl.budget import budget_target, evaluation_interval, uses_games
 from pvz_rl.cli import configured
 from pvz_rl.config import validate_config
-from pvz_rl.curriculum import CurriculumState
-from pvz_rl.env import PvZEnv
-from pvz_rl.training import ResearchCallback, load_policy, train
-from pvz_rl.visualization import read_series
+from pvz_rl.envs.env import PvZEnv
+from pvz_rl.learning.budget import budget_target, evaluation_interval, uses_games
+from pvz_rl.learning.curriculum import CurriculumState
+from pvz_rl.learning.training import ResearchCallback, load_policy, train
+from pvz_rl.presentation.visualization import read_series
 
 
 def game_config(smoke_cfg):
@@ -186,7 +186,7 @@ def test_game_mastery_probes_keep_policy_and_optimizer(
     original = ResearchCallback.probe_curriculum
 
     def evaluate_control(cfg, **kwargs):
-        from pvz_rl.evaluation import evaluate
+        from pvz_rl.evaluation.runner import evaluate
 
         if kwargs.get("split") == "curriculum_validation":
             return [
@@ -200,7 +200,7 @@ def test_game_mastery_probes_keep_policy_and_optimizer(
         identities.append((id(self.model.policy), id(self.model.policy.optimizer)))
         original(self)
 
-    monkeypatch.setattr("pvz_rl.training.evaluate", evaluate_control)
+    monkeypatch.setattr("pvz_rl.learning.training.evaluate", evaluate_control)
     monkeypatch.setattr(ResearchCallback, "probe_curriculum", probe)
     run = train(cfg, "masked", 101, tmp_path / "mastery", validation_limit=1)
     model, _ = load_policy(run / "final.zip")

@@ -14,6 +14,9 @@ hardware_sample_seconds = 1.0
 rolling_window = 100
 
 [visualization]
+live_enabled = true
+live_fps = 5
+live_window_size = [1600, 1050]
 enabled = true
 demos = true
 videos = false
