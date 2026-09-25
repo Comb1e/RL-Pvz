@@ -5,14 +5,12 @@ from dataclasses import replace
 import numpy as np
 import pytest
 import torch
-from gymnasium import spaces
 from pvz_game import Dig, InitialPlant, LevelSpec, Place, Spawn
 from pvz_game.types import Event
 
 from pvz_rl.config import load_config
 from pvz_rl.envs.env import PvZEnv
 from pvz_rl.envs.rewards import reward_parts
-from pvz_rl.learning.cuda_buffer import TensorRolloutBuffer
 
 
 def test_shipped_objective_bounds_independent_of_reward_implementation():
@@ -29,7 +27,11 @@ def test_shipped_objective_bounds_independent_of_reward_implementation():
     assert cfg["reward"]["basic_zombie_value"] == 50
     assert cfg["reward"]["win_reward"] == 1 and cfg["reward"]["loss_penalty"] == 2
     assets = rules.game["sun_cap"] + 45 * max(p["cost"] for p in rules.plants.values())
-    sky = 1200 * rules.game["tick_rate"] // rules.game["sky_sun_ticks"] * 25
+    tick, drops = 425, 0
+    while tick <= 120000:
+        drops += 1
+        tick += min(950, 425 + 10 * drops)
+    sky = drops * 25
     damage = []
     for level in ("easy", "standard", "hard"):
         counts = Counter(k for wave in bundled("levels.toml")[level]["waves"] for k in wave)
@@ -39,30 +41,13 @@ def test_shipped_objective_bounds_independent_of_reward_implementation():
                 for k, n in counts.items()
             )
         )
-    assert assets == 18990 and sky == 3000
-    assert damage == [3000, 14500, 33000]
-    lower, upper = -50 - sky - 5 * 200, assets - 50 + max(damage) / 4
-    assert (lower, upper) == (-4050, 27190)
-    assert 1 + lower / 30000 == pytest.approx(0.865)
-    assert -2 + upper / 30000 == pytest.approx(-1.0936666666666666)
+    assert assets == 18990 and sky == 3525
+    assert damage == [4050, 17240, 38130]
+    lower, upper = -50 - sky - 5 * 200, assets - 50 + max(damage) * 50 / 270
+    assert (lower, upper) == pytest.approx((-4575, 26001.111111111))
+    assert 1 + lower / 30000 == pytest.approx(0.8475)
+    assert -2 + upper / 30000 == pytest.approx(-1.1332962963)
     assert 1 + lower / 30000 > -2 + upper / 30000
-
-
-def test_discount_trace_and_rare_action_kl_derivations():
-    import math
-
-    assert (0.999**0.2) ** 38500 == pytest.approx(0.0004510859912875)
-    lam = 0.999**0.4
-    assert math.log(0.5) / math.log(lam) / 100 == pytest.approx(17.32001372946)
-    assert lam**128 == pytest.approx(0.9500642956183)
-    p, q = np.array([1 - 1e-6, 1e-6]), np.array([0.9, 0.1])
-    exact = np.dot(p, np.log(p / q))
-    ratio = q[0] / p[0]
-    sampled = ratio - 1 - np.log(ratio)
-    assert exact == pytest.approx(0.1053478973723457)
-    assert sampled == pytest.approx(0.0053604156582263)
-    assert sampled < 0.01 < exact
-    assert p[0] ** 32768 == pytest.approx(0.9677630387185)
 
 
 def event(kind, source=1, hp=0, armor=0, amount=0):
@@ -100,10 +85,12 @@ def test_independent_accounting_orders_and_late_projectile_credit():
         reward_parts(full, full, cfg, events=events)["net_value"]
         + reward_parts(full, gone, cfg)["net_value"]
     )
-    assert late == early == 50  # 150 damage value minus 100 lost asset.
+    assert (
+        late == early == pytest.approx(600 * 50 / 270 - 100)
+    )  # 150 damage value minus 100 lost asset.
     parts = reward_parts(full, gone, cfg, events=events)
     assert parts["effective_damage"] == 600 and parts["plant_value_loss"] == 100
-    assert parts["total"] == pytest.approx(50 / 30000)
+    assert parts["total"] == pytest.approx((600 * 50 / 270 - 100) / 30000)
 
 
 @pytest.mark.parametrize("health_fraction", [1, 0.5, 0.01])
@@ -152,8 +139,8 @@ def test_actual_capped_income_not_requested_income(sky, flower):
     [
         ("basic", 1, -100),
         ("basic", 3, 0),
-        ("conehead", 1, 0),
-        ("buckethead", 1, 175),
+        ("conehead", 1, 640 * 50 / 270 - 150),
+        ("buckethead", 1, 1370 * 50 / 270 - 150),
         ("basic", 0, -150),
     ],
 )
@@ -165,7 +152,7 @@ def test_real_explosions_break_even_and_empty_loss_on_cpu_and_cuda(kind, count, 
     # A remote future zombie keeps the control running after this detonation.
     case = LevelSpec(
         "bomb",
-        tuple([Spawn(1, kind, 2, x=1400)] * count + [Spawn(9999, "basic", 4)]),
+        tuple([Spawn(3502, kind, 2, x=1400)] * count + [Spawn(9999, "basic", 4)]),
         initial_sun=300,
         mowers=False,
     )
@@ -177,71 +164,19 @@ def test_real_explosions_break_even_and_empty_loss_on_cpu_and_cuda(kind, count, 
         batch.reset([case], [4])
         features = CudaFeatures(batch, cfg, "masked")
         features.encode()
-        actions = [env.codec.encode(Place("cherry_bomb", 2, 1))] + [0] * 125
+        actions = [0] * 3501 + [env.codec.encode(Place("cherry_bomb", 2, 1))] + [0] * 125
         for action in actions:
             info = env.step(action)[4]
             features.step(cp.asarray([action], cp.int64))
             for key, value in zip(REWARD_FIELDS, features.parts.get()[0]):
                 assert value == pytest.approx(info["reward_parts"][key], abs=1e-9), key
         assert batch.state_hash(0) == env.game.state_hash()
-    assert env.episode_metrics()["net_value"] == expected
+    assert env.episode_metrics()["net_value"] == pytest.approx(expected)
     assert (
         env.episode_metrics()["effective_damage"]
-        == {"basic": 200, "conehead": 600, "buckethead": 1300}[kind] * count
+        == {"basic": 270, "conehead": 640, "buckethead": 1370}[kind] * count
     )
     assert -100 > -200  # One-basic bomb costs less than consuming a mower.
-
-
-@pytest.mark.parametrize("device", ["cpu", "cuda"])
-@pytest.mark.parametrize("gamma,lam", [(0.999, 0.999), (0.0, 0.0), (1.0, 1.0)])
-def test_variable_duration_gae_timeout_and_zero_time_boundaries(device, gamma, lam):
-    buffer = TensorRolloutBuffer(
-        4,
-        spaces.Box(-100, 100, (1,), dtype=np.float32),
-        spaces.Discrete(2),
-        device=device,
-        n_envs=2,
-        gamma=gamma,
-        gae_lambda=lam,
-    )
-    duration = np.array([[0, 1], [1, 0], [7, 2], [0, 9]], dtype=np.int64)
-    values = np.array([[1, 2], [3, 4], [5, 6], [7, 8]], dtype=np.float32)
-    rewards = np.array([[0.1, 0.2], [0.3, 0.4], [0.5, 0.6], [0.7, 0.8]], dtype=np.float32)
-    starts = np.array([[1, 1], [0, 0], [1, 0], [0, 1]], dtype=np.float32)
-    for step in range(4):
-        if step == 1:
-            buffer.add_timeouts(
-                torch.tensor([0], device=device), torch.tensor([[10.0]], device=device)
-            )
-        buffer.add(
-            torch.tensor(values[step, :, None], device=device),
-            torch.zeros(2, device=device),
-            torch.tensor(rewards[step], device=device),
-            torch.tensor(starts[step], device=device),
-            None,
-            torch.zeros(2, device=device),
-            torch.ones(2, 2, dtype=torch.bool, device=device),
-            durations=torch.tensor(duration[step], device=device),
-        )
-
-    class Critic:
-        def predict_values(self, obs):
-            return obs
-
-    last = buffer.evaluate_values(Critic(), torch.tensor([[9.0], [10.0]], device=device), 3)
-    rewards[1, 0] += gamma ** duration[1, 0] * 10
-    done = torch.tensor([False, True], device=device)
-    buffer.compute_returns_and_advantage(last, done)
-    expected = np.zeros((4, 2))
-    carry = np.zeros(2)
-    for step in reversed(range(4)):
-        live = 1 - (done.cpu().numpy() if step == 3 else starts[step + 1])
-        next_values = np.array([9, 10]) if step == 3 else values[step + 1]
-        delta = rewards[step] + gamma ** duration[step] * next_values * live - values[step]
-        carry = delta + (gamma * lam) ** duration[step] * live * carry
-        expected[step] = carry
-    np.testing.assert_allclose(buffer.advantages.cpu(), expected, rtol=2e-6, atol=2e-6)
-    np.testing.assert_allclose(buffer.returns.cpu(), expected + values, rtol=2e-6, atol=2e-6)
 
 
 def test_projectiles_keep_credit_after_voluntary_dig():
@@ -263,18 +198,19 @@ def test_projectiles_keep_credit_after_voluntary_dig():
         batch.reset([case], [4])
         features = CudaFeatures(batch, cfg, "masked")
         features.encode()
-        actions = [env.codec.encode(Place("peashooter", 0, 0)), 0, env.codec.encode(Dig(0, 0))] + [
-            0
-        ] * 80
-        for step, action in enumerate(actions):
+        dug = False
+        for step in range(400):
+            action = env.codec.encode(Place("peashooter", 0, 0)) if step == 0 else 0
+            if env.public.projectiles and not dug:
+                action = env.codec.encode(Dig(0, 0))
+                dug = True
             reward = env.step(action)[1]
             features.step(cp.asarray([action], cp.int64))
             assert features.rewards.get()[0] == pytest.approx(reward, abs=1e-8)
-            if step == 1:
-                assert env.public.projectiles
+        assert dug
         assert batch.state_hash(0) == env.game.state_hash()
     assert env.episode_metrics()["effective_damage"] == 20
-    assert env.episode_metrics()["net_value"] == -95
+    assert env.episode_metrics()["net_value"] == pytest.approx(-100 + 20 * 50 / 270)
 
 
 def test_mixed_cuda_resets_preserve_duration_and_episode_ledgers():
@@ -282,7 +218,7 @@ def test_mixed_cuda_resets_preserve_duration_and_episode_ledgers():
     from pvz_rl.envs.rewards import LEDGER_METRICS
 
     cfg = load_config()
-    cfg["training"].update(n_envs=2, rollout_size=256, batch_size=128)
+    cfg["training"].update(n_envs=2, batch_size=128)
     cfg["environment"]["cutoff_seconds"] = 1
     cases = [("easy", "saving", 4), ("easy", "saving", 5)]
     gpu = CudaVecEnv(cfg, "masked", 0, training=False, cases=cases)
@@ -331,10 +267,10 @@ def test_partial_plant_damage_then_mower_credit_once():
         Event("ZombieDefeated", 1, 99),
     ]
     parts = reward_parts(env.public, env.public, cfg, events=events)
-    assert parts["effective_damage"] == 20 and parts["combat_value"] == 5
+    assert parts["effective_damage"] == 20 and parts["combat_value"] == pytest.approx(20 * 50 / 270)
     assert parts["mower_expenditure"] == 200 and parts["mower_kills"] == 1
-    assert parts["net_value"] == -195
-    assert parts["total"] == pytest.approx(-195 / 30000)
+    assert parts["net_value"] == pytest.approx(20 * 50 / 270 - 200)
+    assert parts["total"] == pytest.approx((20 * 50 / 270 - 200) / 30000)
 
 
 @pytest.mark.parametrize("retired", ["reward", "clock"])

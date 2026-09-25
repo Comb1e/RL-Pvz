@@ -1,8 +1,5 @@
-# CUDA passed differential and throughput gates; parallelism is user-selected.
-# Historical benchmarks remain in docs/validation.md. Saved configurations retain their values.
 simulator = "cuda"
 device = "cuda"
-n_envs = 128
-rollout_steps_per_env = 128
-benchmark_env_counts = [128, 256, 512, 1024]
-benchmark_min_rollouts = 16
+n_envs = 32
+benchmark_env_counts = [32]
+benchmark_min_cohorts = 1

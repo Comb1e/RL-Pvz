@@ -78,6 +78,8 @@ def test_mask_matches_every_engine_action_and_cooldown_boundary(cfg):
         assert not env.action_masks()[env.codec.encode(Place("sunflower", 1, 1))]
         env.step(0)
     assert env.public.tick == 750
+    assert not env.action_masks()[env.codec.encode(Place("sunflower", 1, 1))]
+    env.step(0)
     assert env.action_masks()[env.codec.encode(Place("sunflower", 1, 1))]
 
 
@@ -133,7 +135,7 @@ def test_time_cutoff_keeps_final_observation_and_assets(cfg):
     assert not terminated and truncated and info["ticks_advanced"] == 9
     assert env.public.tick == 100 and env.public.status == Status.RUNNING
     assert asset_value(env.public) > 0
-    assert reward == 0
+    assert reward == -cfg["reward"]["loss_penalty"]
     assert info["episode_metrics"]["win"] == 0
 
 

@@ -67,7 +67,7 @@ def test_retired_cli_options_are_not_executable(args, tmp_path):
 def test_cpu_hardware_recommendation_is_rejected(tmp_path):
     path = tmp_path / "recommendation.json"
     path.write_text(json.dumps({"n_envs": 8, "device": "cuda", "simulator": "cpu"}))
-    with pytest.raises(ValueError, match="removed"):
+    with pytest.raises(ValueError, match="removed|not supported"):
         configured(argparse.Namespace(command="train", config=None, hardware=path))
 
 
@@ -78,7 +78,7 @@ def test_cpu_resume_and_dormant_condition_compatibility(smoke_cfg, tmp_path):
     assert resume_protocol(cfg, "masked") == original
     cfg["simulation"]["backend"] = "cpu"
     (tmp_path / "metadata.json").write_text(json.dumps({"config": cfg, "condition": "masked"}))
-    with pytest.raises(ValueError, match="CPU training was removed"):
+    with pytest.raises(ValueError, match="CPU training is not supported"):
         train(smoke_cfg, "masked", 101, tmp_path / "new", resume=tmp_path / "old.zip")
     assert not (tmp_path / "new").exists()
 
@@ -181,16 +181,16 @@ def test_benchmark_schedules_configurable_cuda_sizes(smoke_cfg, tmp_path, monkey
 
     def measure(cfg, seed, steps, output, **kwargs):
         require_cuda_training(cfg, runtime=False)
-        seen.append((cfg["training"]["n_envs"], cfg["training"]["rollout_steps_per_env"], seed))
+        seen.append((cfg["training"]["n_envs"], cfg["training"]["method"], seed))
         return dict(state="complete", decisions_per_second=100, games_per_minute=2)
 
     monkeypatch.setattr(benchmark, "HardwareMonitor", Monitor)
     monkeypatch.setattr(benchmark, "measure", measure)
     result = benchmark.benchmark_gpu(smoke_cfg, tmp_path / "benchmark", minutes=1, steps=128)
-    assert len(seen) == 12
-    assert {(n, steps) for n, steps, _ in seen} == {(128, 128), (256, 128), (512, 128), (1024, 128)}
+    assert len(seen) == 3
+    assert {(n, steps) for n, steps, _ in seen} == {(32, "complete_game_mc")}
     assert {seed for _, _, seed in seen} == {800, 801, 802}
-    assert result["n_envs"] == 128
+    assert result["n_envs"] == 32
     assert "speedup_over_current" not in result
     seen.clear()
 

@@ -24,7 +24,6 @@ def game_config(smoke_cfg):
         eval_interval_games=1,
         total_steps=1,
         eval_interval=1,
-        rollout_size=32,
         batch_size=16,
     )
     cfg["environment"]["cutoff_seconds"] = 1
@@ -111,7 +110,8 @@ def test_completed_games_stop_after_optimization_and_validation_does_not_count(
     assert model.training_games == len(episodes) >= 3
     assert [r["training_games"] for r in episodes] == list(range(1, len(episodes) + 1))
     assert all(r["status"] == "truncated" for r in episodes)
-    assert model.num_timesteps == model._n_updates * 32
+    assert model._n_updates == len(episodes)  # One complete game in each test cohort.
+    assert model.num_timesteps == sum(r["decisions"] for r in episodes)
     status = json.loads((run / "status.json").read_text())
     assert status["budget_complete"] and status["budget_unit"] == "games"
     assert status["target_games"] == 3 and status["target_steps"] is None

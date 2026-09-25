@@ -45,10 +45,6 @@ class CurriculumState:
         if episode_stage == self.stage:
             self.completed_stage_games += 1
 
-    def critic_warming_up(self, target_games):
-        """Reuse persisted stage residency; old-stage completions cannot end warm-up."""
-        return not self.mastered and self.completed_stage_games < target_games
-
     @property
     def name(self):
         return STAGES[self.stage]

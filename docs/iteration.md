@@ -5,6 +5,27 @@ Dates and results belong to their recorded version. Current behavior lives in
 artifact locations and learning outcomes live in [validation](validation.md).
 The longer pre-consolidation notes remain in `git show b642c9c:docs/iteration.md`.
 
+## 0.21.0 — 2026-09-25
+
+The prior model sampled action kinds and fitted short-rollout values. The user
+requested greedy top-level decisions with conditional planting PPO and actual
+complete returns. The new controller has 47 critic outputs and an eight-species,
+eight-tile-map actor, each with independent temporal features and Adam state.
+Collection uses 32 complete games followed by separate critic and actor phases.
+Short-rollout GAE, periodic overlap and initial actor warm-up are removed.
+
+Game 1.5.0 corrects production/recharge/combat/headless mechanics and adds a
+portable per-game RNG. Research adds five frontmost headless flags and compact
+phase mapping, giving 286 observations and 289-value raw temporal tokens.
+Old files remain preserved; changed signatures require fresh models. The old
+five-flower/three-shooter saving control now loses; a revised public controller
+uses a mine while saving for defense without changing the lesson configuration.
+
+The architecture is rewritten around exact inputs and training responsibilities.
+Derivations and source limits are in docs/math; verification evidence is recorded
+in validation. Greedy untried values remain a coverage risk. No claim is made
+that learning collapse is resolved, and no formal learning run was launched.
+
 ## 0.20.0 — 2026-09-25
 
 - Problem: training exposes numerical curves but no live games; users cannot see

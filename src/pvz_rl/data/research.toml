@@ -1,8 +1,8 @@
-profile = "compact-ppo"
+profile = "complete-game"
 schema_version = 1
-engine_commit = "1fc80386859087b9d715c4706b3f7875844430cc"
-engine_version = "1.1.0"
-engine_package_version = "1.4.0"
+engine_commit = "092841aa0dc7dcb1f2c4e92bfbb1ba63e0adff8d"
+engine_version = "1.2.0"
+engine_package_version = "1.5.0"
 
 [runtime]
 cache_legal_actions = true
@@ -40,7 +40,7 @@ zombie_states = ["walking", "carrying_pole", "vaulting", "biting", "dead"] # Eng
 mower_states = ["ready", "moving", "spent"]
 
 [encoding]
-version = "event_v6"
+version = "event_v7"
 local_count_scale = 5
 count_scale = 75
 wave_scale = 15
@@ -57,6 +57,7 @@ value_scale = 300.0 # Unit conversion, never a sun cap.
 [training]
 gamma = 1.0
 discount_clock = "simulation_ticks"
+method = "complete_game_mc"
 budget_unit = "games"
 until_stage_complete = false # With --stage: stop only when its mastery gate passes.
 total_games = 10000
@@ -64,24 +65,17 @@ validation_schedule = "stage_success" # Normal-game evaluation only after each s
 eval_interval_games = 2000 # Used by diagnostic/fixed training or archived periodic schedules.
 total_steps = 3000000 # Inactive unless budget_unit = "decisions" (legacy).
 learner_seeds = [101, 102]
-n_envs = 128
+n_envs = 32
 device = "cuda"
-rollout_size = 16384
-rollout_steps_per_env = 128 # Learning transitions per environment per update, not a game limit.
 max_minutes = 120
 finalization_minutes = 15
-# Keep critic warm-up and actor learning exploration separate; hold formal floors
-# until stage mastery.
-exploration = {objective = "balanced_heads_v2", type_coef = 0.01, plant_coef = 0.001, tile_coef = 0.001, warmup_epsilon = 0.1, formal_epsilon_start = 0.05, formal_epsilon_floor = 0.001, warmup_entropy_fraction = 1.0, formal_entropy_start_fraction = 1.0, formal_entropy_floor_fraction = 0.1, formal_decay_games = 3000}
+# Plant-only exploration is fixed throughout each complete-game cohort.
+exploration = {objective = "conditional_plant_v1", plant_coef = 0.001, tile_coef = 0.001, epsilon_start = 0.1, epsilon_floor = 0.001, entropy_floor_fraction = 0.1, decay_games = 3000}
 batch_size = 1024
 n_epochs = 4
 learning_rate = 0.0001
 critic_learning_rate = 0.0003
-value_batch_size = 1024 # Frozen critic inference after collection.
-critic_warmup_games = 1024 # Freeze actor at each new stage; zero disables warm-up.
-gae_lambda = 0.9995998799359583
 clip_range = 0.2
-vf_coef = 0.5
 max_grad_norm = 0.5
 normalize_advantage = true
 target_kl = 0.01 # Zero disables KL stopping.
@@ -89,10 +83,9 @@ hidden_sizes = [128, 128]
 eval_interval = 250000 # Periodic decision interval for archived/diagnostic protocols.
 torch_threads = 1
 
-[training.pipeline]
-mode = "periodic_on_policy"
-depth = 2
-queue_size = 1
+[training.storage]
+ram_gib = 6
+block_rows = 32768
 
 [training.performance]
 compile_kernels = true
@@ -136,10 +129,8 @@ curriculum = true
 hybrid = false
 
 [policy]
-kind = "event_transformer_v2"
-initial_dig_logit = -12.0
-initial_wait_weight = 1.2
-action_distribution = "balanced_species_tiles_v1"
+kind = "event_q_controller_v1"
+action_distribution = "conditional_plant_v1"
 plant_embedding = 8
 state_embedding = 4
 scalar_sizes = [64]
@@ -187,6 +178,4 @@ local_tokens = 8
 event_tokens = 32
 summary_tokens = 8
 summary_stride = 100
-sequence_length = 16
-burn_in = 8
 gate_bias = 2.0

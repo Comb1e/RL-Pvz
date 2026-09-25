@@ -1,7 +1,7 @@
 from dataclasses import replace
 
 import pytest
-from pvz_game import Game, LevelSpec, Place, Spawn, Status
+from pvz_game import Game, InitialPlant, LevelSpec, Place, Spawn, Status
 from pvz_game.types import Event
 
 from pvz_rl.config import validate_config
@@ -45,7 +45,7 @@ def test_kills_are_diagnostics_not_extra_event_rewards(cfg):
     for source, key in ((1, "plant_kills"), (-1, "mower_kills")):
         parts = reward_parts(before, after, cfg, events=[damage(2, source), death(2)])
         assert parts[key] == 1
-        assert parts["total"] == pytest.approx(5 / 30000 if source > 0 else 0)
+        assert parts["total"] == pytest.approx((20 * 50 / 270) / 30000 if source > 0 else 0)
     empty = replace(before, counts=replace(before.counts, initial_total=0), status=Status.WON)
     assert reward_parts(before, empty, cfg)["total"] == 1
 
@@ -60,28 +60,27 @@ def test_real_engine_credits_all_plant_damage_types(cfg, plant):
         seed=4,
         options={
             "scenario": LevelSpec(
-                "plant-kill", (Spawn(1500, "basic", 2, x=spawn_x),), initial_sun=500, mowers=False
+                "plant-kill",
+                (Spawn(1 if plant == "cherry_bomb" else 2000, "basic", 2, x=spawn_x),),
+                initial_sun=500,
+                mowers=False,
+                plants=(InitialPlant(plant, 2, 1 if plant == "cherry_bomb" else 0),),
             )
         },
     )
-    col = 1 if plant == "cherry_bomb" else 0
-    placed = False
     parts = []
     while env.state == "running":
-        action = 0
-        # Bomb fuse must coincide with the spawn; other plants can wait for it.
-        if not placed and (plant != "cherry_bomb" or env.public.tick >= 1390):
-            action = env.codec.encode(Place(plant, 2, col))
-            placed = True
-        _, _, _, _, info = env.step(action)
+        _, _, _, _, info = env.step(0)
         parts.append(info["reward_parts"])
     assert env.state == "won"
     assert env.episode_metrics()["plant_kills"] == 1
     assert env.episode_metrics()["mower_kills"] == 0
     assert sum(p["plant_kills"] for p in parts) == 1
     assert env.episode_metrics()["defeated"] == 1
-    assert env.episode_metrics()["effective_damage"] == 200
-    assert env.episode_metrics()["combat_value"] == 50
+    # Ten peas neutralize at 70 remaining HP. Instant attacks consume all 270 HP.
+    expected = 200 if plant in ("peashooter", "snow_pea", "repeater") else 270
+    assert env.episode_metrics()["effective_damage"] == expected
+    assert env.episode_metrics()["combat_value"] == pytest.approx(expected * 50 / 270)
 
 
 def test_real_batched_mower_kills_count_each_zombie_once_and_terminal(cfg):
@@ -108,7 +107,7 @@ def test_real_batched_mower_kills_count_each_zombie_once_and_terminal(cfg):
 
 
 def test_real_simultaneous_batch_keeps_both_sources(cfg):
-    cfg["environment"]["decision_ticks"] = 50
+    cfg["environment"]["decision_ticks"] = 150
     env = PvZEnv(cfg)
     env.reset(
         seed=2,
@@ -117,11 +116,10 @@ def test_real_simultaneous_batch_keeps_both_sources(cfg):
                 "mixed",
                 (Spawn(1, "basic", 1, x=1400), Spawn(125, "basic", 0, x=0)),
                 initial_sun=500,
+                plants=(InitialPlant("cherry_bomb", 1, 1),),
             )
         },
     )
-    env.step(env.codec.encode(Place("cherry_bomb", 1, 1)))
-    env.step(0)
     _, _, terminated, _, info = env.step(0)
     assert terminated
     parts = info["reward_parts"]

@@ -9,39 +9,21 @@ from pvz_rl.envs.env import PvZEnv
 from pvz_rl.monitoring.timing import TrainingTimings
 
 
-def test_historical_checkpoint_class_imports_resolve_without_duplicate_modules(monkeypatch):
-    import sys
-
-    import cloudpickle
-
-    from pvz_rl.learning.checkpoints import register_checkpoint_imports
-    from pvz_rl.learning.cuda_buffer import TensorRolloutBuffer
-    from pvz_rl.policy.spatial_policy import SpatialFeatures, SpatialGroupedPolicy
-
-    register_checkpoint_imports()
-    classes = (SpatialFeatures, SpatialGroupedPolicy, TensorRolloutBuffer)
-    with monkeypatch.context() as patch:
-        for cls in classes:
-            name = "cuda_buffer" if cls is TensorRolloutBuffer else "spatial_policy"
-            patch.setattr(cls, "__module__", f"pvz_rl.{name}")
-        payload = cloudpickle.dumps(classes)
-    monkeypatch.delitem(sys.modules,"pvz_rl.spatial_policy")
-    monkeypatch.delitem(sys.modules,"pvz_rl.cuda_buffer")
-    register_checkpoint_imports()
-    assert cloudpickle.loads(payload) == classes
-    assert SpatialGroupedPolicy.__module__ == "pvz_rl.policy.spatial_policy"
-    assert TensorRolloutBuffer.__module__ == "pvz_rl.learning.cuda_buffer"
-
-
 def test_viewer_entrypoint_import_does_not_load_learning_runtime():
     import subprocess
     import sys
 
     result = subprocess.run(
-        [sys.executable,"-c", "import sys; import pvz_rl.presentation.live_view; "
-         "assert 'torch' not in sys.modules; assert 'cupy' not in sys.modules; "
-         "assert 'pygame' not in sys.modules"],
-        capture_output=True,text=True,timeout=10,
+        [
+            sys.executable,
+            "-c",
+            "import sys; import pvz_rl.presentation.live_view; "
+            "assert 'torch' not in sys.modules; assert 'cupy' not in sys.modules; "
+            "assert 'pygame' not in sys.modules",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=10,
     )
     assert result.returncode == 0, result.stdout + result.stderr
 
@@ -67,15 +49,15 @@ def test_phase_timing_excludes_validation_and_captures_final_update():
     timing = TrainingTimings()
     for metrics in [
         dict(
-            slot_collection_seconds=[2, 2],
-            slot_optimization_seconds=[3, 3],
+            collection_seconds=4,
+            optimization_seconds=6,
             window_seconds=8,
             overlap_seconds=2,
             queue_wait_seconds=2,
         ),
         dict(
-            slot_collection_seconds=[4],
-            slot_optimization_seconds=[1],
+            collection_seconds=4,
+            optimization_seconds=1,
             window_seconds=5,
             overlap_seconds=0,
             queue_wait_seconds=4,
@@ -114,6 +96,8 @@ def test_legality_cache_requeries_only_after_relevant_public_change(cfg, monkeyp
         env.step(0)
         np.testing.assert_array_equal(env.action_masks(), expected)
     assert calls == [0]  # Time passes without changing legality.
+    env.game.step(ticks=3501)
+    env.public = env.game.observe()
     # Plant occupancy, sun thresholds, and cooldown change. Then the bomb destroys itself.
     env.step(env.codec.encode(Place("cherry_bomb", 2, 0)))
     for _ in range(14):
@@ -143,5 +127,5 @@ def test_cached_and_reference_game_hashes_rewards_and_masks_match(cfg, level):
         right, r2, term2, trunc2, info2 = cached.step(action)
         assert (r1, term1, trunc1, info1) == (r2, term2, trunc2, info2)
         assert reference.game.state_hash() == cached.game.state_hash()
-    assert reference.state == ("won" if level == "easy" else "lost")
+    assert reference.state == "won"
     # The 100 Hz seeded schedules and 0.1-second control cadence are versioned.

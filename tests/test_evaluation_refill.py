@@ -33,10 +33,8 @@ def test_refill_matches_fixed_batches_and_cpu(record, monkeypatch):
         pytest.skip("CUDA unavailable")
     cfg = load_config()
     cfg["simulation"] = {"backend": "cuda"}
-    cfg["training"].update(
-        n_envs=2, device="cuda", rollout_size=256, rollout_steps_per_env=128, batch_size=128
-    )
-    cfg["environment"]["cutoff_seconds"] = 3
+    cfg["training"].update(n_envs=2, device="cuda", batch_size=128)
+    cfg["environment"]["cutoff_seconds"] = 4
 
     def scenario(level, family, seed, *args):
         # Slot 1 finishes first; later cases exercise reuse, loss, and cutoff.
@@ -88,9 +86,7 @@ def test_plant_and_mower_kills_survive_cuda_episode_reset(monkeypatch):
 
     cfg = load_config()
     cfg["simulation"] = {"backend": "cuda"}
-    cfg["training"].update(
-        n_envs=1, device="cuda", rollout_size=128, rollout_steps_per_env=128, batch_size=128
-    )
+    cfg["training"].update(n_envs=1, device="cuda", batch_size=128)
 
     def scenario(*args):
         return LevelSpec(
@@ -114,9 +110,7 @@ def test_plant_and_mower_kills_survive_cuda_episode_reset(monkeypatch):
 
 
 def test_validation_temporarily_disables_injected_exploration():
-    actor = SimpleNamespace(
-        action_dist=SimpleNamespace(epsilon=0.05), exploration_epsilon=0.05
-    )
+    actor = SimpleNamespace(action_dist=SimpleNamespace(epsilon=0.05), exploration_epsilon=0.05)
     policy = SimpleNamespace(
         policy=actor,
         exploration_rate=0.05,

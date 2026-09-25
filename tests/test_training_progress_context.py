@@ -11,20 +11,20 @@ def test_progress_has_aligned_recent_and_run_metrics_and_unlimited_has_no_eta(tm
     cfg["training"]["until_stage_complete"] = True
     callback = ResearchCallback(cfg, "masked", 101, tmp_path)
     callback.model = SimpleNamespace(
-        num_timesteps=1000, training_games=100, exploration_phase="warmup"
+        num_timesteps=1000, training_games=100, phase="collect", exploration_phase="formal"
     )
     callback.curriculum = CurriculumState()
     try:
         callback.log_progress(force=True)
         text = capsys.readouterr().out
-        assert "Stage       saving | warmup" in text
+        assert "Stage       saving | collect" in text
         assert "until stage mastery" in text and "ETA" not in text
         assert "Hardware    GPU n/a" in text
         assert "Run average" in text and "Recent play" in text
         assert "next mastery probe 2,000 games" in text
         assert "Reward      n/a | discounted return n/a" in text
         assert "Net value   n/a" in text
-        callback.model.exploration_phase = "formal"
+        callback.model.phase = "actor"
         callback.recent.append(
             dict(
                 family="saving",
@@ -45,7 +45,7 @@ def test_progress_has_aligned_recent_and_run_metrics_and_unlimited_has_no_eta(tm
         )
         callback.log_progress(force=True)
         text = capsys.readouterr().out
-        assert "| formal" in text and "early digs/plant 12.50%" in text
+        assert "| actor" in text and "early digs/plant 12.50%" in text
         assert "attackers/game 3.00" in text and "discounted return +1.10000" in text
         assert "Reward      +1.10000" in text and "Net value   +3000.00" in text
     finally:

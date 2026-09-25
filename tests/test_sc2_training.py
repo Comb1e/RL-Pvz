@@ -24,11 +24,8 @@ def small_cfg(device="cuda", backend="cuda", profile="E"):
         validation_schedule="periodic",  # Original periodic-validation regression protocol.
         device=device,
         n_envs=2,
-        rollout_steps_per_env=32,
-        rollout_size=64,
         batch_size=32,
         n_epochs=1,
-        critic_warmup_games=0,  # This control exercises restoration of both Adam states.
         total_games=12,
         max_minutes=2,
     )
@@ -142,9 +139,10 @@ def test_resume_keeps_cumulative_time_schedule_and_optimizer(tmp_path, monkeypat
     with pytest.raises(KeyboardInterrupt):
         train(cfg, "masked", 101, first, validation_limit=1)
     interrupted, _ = load_policy(first / "interrupted.zip")
-    assert interrupted.num_timesteps == 2 * cfg["training"]["rollout_size"]
-    assert interrupted.pipeline_version == 1
-    assert interrupted.policy.optimizer.state and interrupted.policy.critic_optimizer.state
+    assert interrupted.num_timesteps == 2 * 100  # Two complete one-second waiting games.
+    assert interrupted.optimizer_protocol == "complete_game_mc_conditional_ppo_v1"
+    assert not interrupted.policy.optimizer.state  # No planting likelihood in this cohort.
+    assert interrupted.policy.critic_optimizer.state
     elapsed = read_json(first / "status.json")["time_budget"]["elapsed_seconds"]
     monkeypatch.setattr(ResearchCallback, "_on_rollout_start", original)
     resumed = tmp_path / "resumed"
@@ -160,14 +158,12 @@ def test_resume_keeps_cumulative_time_schedule_and_optimizer(tmp_path, monkeypat
 @pytest.mark.learning
 def test_validation_crossed_thresholds_and_final_tie_keep_earlier_weights(tmp_path):
     cfg = small_cfg(profile="C")
-    cfg["training"].update(
-        total_games=12, eval_interval_games=2, rollout_steps_per_env=256, rollout_size=512
-    )
+    cfg["training"].update(total_games=12, eval_interval_games=2)
     run = tmp_path / "run"
     train(cfg, "masked", 101, run, validation_limit=1)
     curves = read_series(run / "learning-curve.jsonl")
     assert len({r["training_steps"] for r in curves}) == len(curves)
-    assert len(curves) < 6  # Many threshold crossings coalesce after full rollouts.
+    assert [r["training_games"] for r in curves] == [2, 4, 6, 8, 10, 12]
     assert read_json(run / "best.json")["steps"] == curves[0]["training_steps"]
     assert curves[-1]["final"]
 

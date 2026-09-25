@@ -6,6 +6,9 @@ from pvz_rl.config import load_config
 @pytest.fixture(autouse=True)
 def headless_training(request, monkeypatch):
     """Ordinary regression tests never open native windows."""
+    import torch
+
+    torch.set_num_threads(1)
     if not request.node.get_closest_marker("live_view"):
         from pvz_rl.envs.cuda_env import CudaVecEnv
 
@@ -63,10 +66,8 @@ def smoke_cfg(per_tick_cfg):
         budget_unit="decisions",  # Archived decision-budget regression controls.
         device="cuda",  # Every production learning path now requires CUDA.
         total_steps=128,
-        rollout_size=64,
         batch_size=32,
         n_epochs=1,
-        critic_warmup_games=0,  # Warm-up has dedicated stage/resume controls.
         target_kl=0,
         n_envs=1,
         hidden_sizes=[32, 32],

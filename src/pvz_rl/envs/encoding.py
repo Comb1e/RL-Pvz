@@ -8,6 +8,21 @@ import numpy as np
 from gymnasium import spaces
 from pvz_game import Observation, Rules
 
+# Internal animation phases share compact public behavior categories.
+PLANT_BEHAVIOR = {
+    "ready": "ready",
+    "arming": "arming",
+    "rising": "arming",
+    "armed": "armed",
+    "fusing": "fusing",
+    "digesting": "digesting",
+    "biting": "digesting",
+    "biting_got_one": "digesting",
+    "recovering": "digesting",
+    "exploding": "exploding",
+    "detonating": "detonating",
+}
+
 
 class ObservationEncoder:
     def __init__(self, cfg: dict, rules: Rules):
@@ -17,8 +32,8 @@ class ObservationEncoder:
         self.zombies = {kind: i for i, kind in enumerate(env["zombies"])}
         self.plant_states = {state: i for i, state in enumerate(env["plant_states"])}
         self.rows, self.cols, self.bins = env["rows"], env["cols"], env["bins"]
-        if cfg["encoding"]["version"] != "event_v6":
-            raise ValueError("Only event_v6 observations are supported")
+        if cfg["encoding"]["version"] != "event_v7":
+            raise ValueError("Only event_v7 observations are supported")
         self.plant_width = 3
         # Per lane-region: one count per zombie type, aggregate health and armor,
         # nearest zombie distance, and nearest carrier of an unused pole.
@@ -40,8 +55,9 @@ class ObservationEncoder:
             self.rows * self.cols * self.plant_width,
             self.rows * self.bins * self.zombie_width,
             self.global_width,
+            self.rows,
         ]
-        names = ["plants", "zombies", "globals"]
+        names = ["plants", "zombies", "globals", "headless"]
         offsets = np.cumsum([0, *sizes])
         self.slices = dict(
             zip(
@@ -70,7 +86,7 @@ class ObservationEncoder:
             tile[:] = (
                 self.plants[p.plant_type] + 1,
                 p.health / p.max_health,
-                self.plant_states[p.state] + 1,
+                self.plant_states[PLANT_BEHAVIOR[p.state]] + 1,
             )
 
         # All sums are exact integer operations; IDs and tuple order are never features.
@@ -85,7 +101,7 @@ class ObservationEncoder:
             cell[self.zombies[z.zombie_type]] += 1
             cell[fields["health"]] += z.health
             cell[fields["armor"]] += z.armor
-            if z.has_pole:
+            if z.has_pole and not z.headless:
                 nearest[r, b, 1] = min(nearest[r, b, 1], z.x)
         zscale = np.full(self.zombie_width, self.local_count_scale, dtype=np.float32)
         zscale[fields["health"]] *= self.hp_scale
@@ -111,4 +127,11 @@ class ObservationEncoder:
         globals_ = result[self.slices["globals"]]
         for name, value in values.items():
             globals_[self.global_fields[name]] = value
+        for row in range(self.rows):
+            front = min(
+                (z for z in obs.zombies if z.row == row),
+                key=lambda z: (z.x, z.headless),
+                default=None,
+            )
+            result[self.slices["headless"].start + row] = bool(front and front.headless)
         return result

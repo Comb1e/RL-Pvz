@@ -98,7 +98,7 @@ def test_compact_recording_metadata_and_input_isolation(cfg, tmp_path):
     native = Playback(path)
     assert native.display_outcome == "running"
     assert native.metadata["checkpoint_sha256"] == "a" * 64
-    assert native.metadata["experiment"]["engine"]["package_version"] == "1.4.0"
+    assert native.metadata["experiment"]["engine"]["package_version"] == "1.5.0"
     native.verify()
     assert native.display_outcome == "truncated"
     assert native.metadata["termination_reason"] == "time_limit"
@@ -185,7 +185,7 @@ assert cfg['visualization']['demos'] and not cfg['visualization']['videos']
 # Retain the archived periodic-export control independently of mastery scheduling.
 cfg['training']['validation_schedule'] = 'periodic'
 cfg['environment']['cutoff_seconds'] = 1
-cfg['training'].update(budget_unit='decisions', device='cuda', total_steps=64, rollout_steps_per_env=64, rollout_size=64, batch_size=32, n_envs=1, n_epochs=1, hidden_sizes=[32,32], eval_interval=64)
+cfg['training'].update(budget_unit='decisions', device='cuda', total_steps=64, batch_size=32, n_envs=1, n_epochs=1, hidden_sizes=[32,32], eval_interval=64)
 cfg['visualization']['ffmpeg'] = 'missing-ffmpeg'
 original = builtins.__import__
 def checked(name, *args, **kwargs):

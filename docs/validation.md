@@ -1,5 +1,91 @@
 # Validation and measured results
 
+## 0.21.0 complete games and corrected mechanics — 2026-09-25
+
+The game release is **1.5.0**, simulation **1.2.0**, at merged commit
+`092841aa0dc7dcb1f2c4e92bfbb1ba63e0adff8d` ([game PR #2](https://github.com/Comb1e/pvz-cuda-work/pull/2)).
+Its maintained 226 controls were verified: 225 passed in the original full run,
+then the corrected independent crowd-boundary control passed separately. Game
+source was archived, verified and installed non-editably. The designated game
+checkout has repaired standalone Git metadata; its original source was preserved.
+
+Research controls cover 286-value CPU/CUDA observations, exact slice boundaries,
+compact plant categories, frontmost headless ties, 289-value temporal tokens,
+causality and memory reset. Independent enumeration verifies planting mixtures,
+entropy, KL, PPO gradients and Adam updates. Separate group-mean calculations
+verify balanced critic gradients and Adam. Actual-return controls include
+instantaneous actions, terminal and cutoff outcomes, paused games, RAM and disk
+storage, and pre-fit errors/coverage. Autonomous headless decay earns no damage
+credit; neutralization is counted once.
+
+The complete maintained research suite passed **496 tests in 679.96 seconds**.
+Focused report checks also verify actual TensorBoard scalar events, alongside
+the JSONL metrics and refreshed report images. Obsolete short-rollout, GAE,
+stochastic-kind and periodic-scheduler tests were removed instead of retained
+as alternate training methods.
+
+Interruption tests reproduce weights and optimizer state exactly after collection,
+critic fitting, actor fitting and a completed-cohort boundary. They include the
+next scenario RNG state, pending fitting at an already-reached game ceiling,
+actor rollback, and failed atomic checkpoint writes preserving the prior archive.
+The archive contains runtime state and streamed trajectory blocks; missing runtime
+state fails explicitly. Viewer-on/off cohorts retain equal actions, rewards,
+observations, model parameters, Adam state and Torch RNG, including actor updates.
+Paused completed games remain selectable without resets or duplicate action labels.
+
+The revised public-observation saving control wins all ten lane triples on CPU
+and CUDA with matching observations, masks, rewards and game hashes. At seed 4
+it finishes at **137.18 seconds**, with five sunflowers, three shooters and one
+mine, net value **946.111111** and return **1.031537037**. The previous witness
+without that mine loses under the corrected mechanics. Wait, immediate digging,
+one-shooter and mine-only controls fail across all ten combinations. These are
+feasibility/counterexample controls, not an exhaustive impossibility proof or a
+learned policy. [Mathematical bounds](math/complete-game-learning.md) now give
+natural-win return at least **0.8475** and natural-loss return at most
+**−1.1332962963** for the pinned normal levels; custom levels are outside the bound.
+
+### Bounded hardware control
+
+On the RTX 4070 Laptop GPU, a deliberately shortened **one-second cutoff** used
+the shipped 32 environments, four epochs, 1,024 maximum minibatch and unchanged
+networks. One 3,200-transition cohort warmed the runtime; two measured cohorts
+completed 64 games and **6,496 transitions in 5.3543 seconds**, or **1,213.23
+transitions/s**. Setup took 0.8730 seconds and warming took 2.8857 seconds.
+This is not comparable to old 128-environment short-rollout timings or a forecast
+for normal saving games. No formal learning or learning comparison was launched.
+
+| Measured quantity | Value |
+|---|---:|
+| Two cohorts: collection / optimization | 1.5740 / 3.2894 s |
+| Last cohort: collection / critic / actor | 0.7466 / 1.4884 / 0.1319 s |
+| Last cohort: returns / phase critical path | 0.00075 / 2.3677 s |
+| Peak PyTorch allocated / reserved VRAM | 805.53 / 1,016.00 MiB |
+| Nine hardware samples: system CPU / process CPU | 16.50% / 94.81% |
+| Device-wide GPU busy / VRAM mean | 19.00% / 992.11 MiB |
+| Process RAM mean, including setup/warming | 1,677.68 MiB |
+
+Critic fitting dominated this small control. Process CPU uses one-core units;
+GPU activity is device-wide. Nine one-second samples cannot resolve the short
+actor phase. The raw telemetry and phase timers are preserved in
+`artifacts/v0210/hardware-smoke/`; its hardware report was regenerated without a
+checkpoint and visually inspected. There was no out-of-memory error. A trajectory
+row occupies 1,713 bytes before array/file overhead, so long cohorts still need
+substantial host storage despite bounded VRAM; the 6 GiB cap triggers disk overflow.
+
+Doctor verifies CUDA compilation, accounting, DLPack, rendering, video and replay.
+Ruff, dependency checks and local documentation links pass. Wheel contents match
+source/data and exclude the removed scheduler/GAE/compatibility files. Three
+demonstrations share a single selected checkpoint and replay exactly. Existing
+runs and artifacts are preserved. Learning quality and greedy-action coverage
+remain experimental.
+
+The exact engine source-manifest hash is
+`88f914b72f35ed1d2061785532aed882e225c852365a265711e16f0d96551fa3`;
+rules hash is `4d8bf373986ec6240441115bec6db6aa15dfa3ebbcbea293aed9bf7b3422ed33`.
+The default structural transfer signature hashes to
+`47a84e18bb342ad444b14e760004900439b9bec4508a60adefbec220d219c323`.
+Full compatibility details and packaging/doctor evidence are in `artifacts/v0210/`.
+
 ## 0.20.0 live viewer and terminal accounting — 2026-09-25
 
 The reorganized package passed the full **624-test research suite in 810.72 seconds**.

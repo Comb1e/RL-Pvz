@@ -282,6 +282,9 @@ class PvZEnv(gym.Env):
             events=result.events,
             rules=self.rules,
         )
+        if truncated:
+            parts["terminal"] = -self.cfg["reward"]["loss_penalty"]
+            parts["total"] += parts["terminal"]
         for key in REWARD_METRICS:
             self.metrics[key] += parts[key]
         self.episode_reward += parts["total"]

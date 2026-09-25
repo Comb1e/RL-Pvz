@@ -1,49 +1,16 @@
-# Phase-aware exploration schedule
+# Plant exploration
 
-The training policy uses two separate clocks within each teaching stage. Let
+At g completed games in the current teaching stage, let p=min(g/3000,1).
+Injected exploration is 0.1*(0.001/0.1)^p and the entropy factor is 0.1^p.
+The values at 0/1,500/3,000 games are 10%/1%/0.1% noise and
+1/sqrt(10)/0.1 entropy factors. Beyond 3,000 the floors remain active.
+Stage advancement resets g. There is no separate actor-freeze phase.
 
-- (w) be the critic warm-up length, 1,024 completed games;
-- (n) be completed games in the current stage;
-- (D) be the formal decay length, 3,000 games;
-- (q = min(1, max(0, (n-w)/D))) after warm-up.
+Resolve these values before collecting the complete cohort and preserve them
+through critic and actor fitting. Resume restores the same values and progress.
+Evaluation uses no injected exploration and greedy plant arguments.
 
-During warm-up, the injected exploration rate is 0.10 and the entropy factor is
-1.0. At actor unlock, formal exploration starts at 0.05 and formal entropy also
-starts at 1.0. During formal learning,
-
-[
-  epsilon(n) = 0.05(0.001/0.05)^q,
-  qquad
-  h(n) = 1.0(0.1/1.0)^q.
-]
-
-At (n=w), this gives (epsilon=0.05) and (h=1). At
-(n=w+D=4,024), it gives (epsilon=0.001) and (h=0.1). Both values then
-remain at their floors until the stage passes. The next stage starts a new
-warm-up clock.
-
-For each legal complete action, the injected prior changes
-the executed distribution to
-
-[
-  P(a)=(1-epsilon)P_\text{learned}(a)+epsilon P_\text{prior}(a).
-]
-
-The prior contains legal wait and planting branches and excludes digging. Thus
-raising the injected rate explores productive alternatives without directly
-sampling digs. Entropy regularization is calculated from the same mixed
-hierarchical distribution, so its floor can still preserve alternative legal
-tiles and action kinds.
-
-The schedule is resolved once before each periodic synchronization window. Every
-transition in that window therefore uses one epsilon, one entropy factor, and one
-collection/PPO distribution. Deterministic validation sets epsilon to zero and
-selects greedy learned heads; it never uses the training prior.
-
-The floor is deliberate: a stage that has not passed its mastery gate must not
-become effectively greedy solely because a fixed game-count deadline was reached.
-These values are project-specific hypotheses. They establish the implemented
-clock and probability calculation, not a guaranteed learning improvement.
-
-The prior includes uniform legal tiles within each species and a configurable wait
-weight. See [initialization and complete-action mixture](saving-and-actions.md).
+Only planting has a stochastic probability distribution. The complete
+species/tile mixture and conditional PPO derivation are in
+[complete-game learning](complete-game-learning.md). Wait, plant selection and
+digging tiles are greedy critic decisions; entropy does not apply to them.

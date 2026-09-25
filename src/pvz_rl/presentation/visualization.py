@@ -126,17 +126,18 @@ def hardware_panels(segments, output):
             (("gpu_watts", "Power (W)"), ("gpu_temperature_c", "Temperature (°C)")),
         ),
         (
-            "Latest completed window",
+            "Latest completed cohort",
             "Transitions / second",
             (("transitions_per_second", "Throughput"),),
         ),
         (
-            "Latest completed window timings",
+            "Latest completed cohort timings",
             "Seconds",
             (
                 ("collection_seconds", "Collection"),
                 ("update_seconds", "Update"),
-                ("overlap_seconds", "Overlap"),
+                ("critic_seconds", "Critic"),
+                ("actor_seconds", "Plant actor"),
                 ("window_seconds", "Critical path"),
             ),
         ),
@@ -168,6 +169,9 @@ def hardware_panels(segments, output):
             for start, end, phase in spans:
                 color = {
                     "warmup": "#d8e8f6",
+                    "collect": "#d8e8f6",
+                    "critic": "#e2f0df",
+                    "actor": "#eaddef",
                     "formal": "#e2f0df",
                     "validation": "#ffe3a5",
                     "reporting": "#eaddef",
@@ -183,7 +187,7 @@ def hardware_panels(segments, output):
         ax.set(title=title, ylabel=unit, xlabel="Elapsed wall time within session (minutes)")
         ax.grid(alpha=0.2)
     fig.suptitle(
-        "Hardware telemetry • blue: warm-up • green: formal • amber: validation • purple: reporting",
+        "Hardware telemetry • blue: collection • green: critic • purple: actor/reporting • amber: validation",
         fontsize=11,
     )
     _save(fig, output, "hardware")
@@ -354,31 +358,24 @@ def build_run_report(run, cfg=None):
     images.append(("Net realized value accounting", "accounting-curves.png"))
 
     optimizer_panels = [
-        ("policy_gradient_loss", "Policy loss"),
-        ("value_loss", "Value loss"),
-        ("entropy_loss", "Entropy loss (negative entropy)"),
-        ("approx_kl", "Approximate KL"),
-        ("clip_fraction", "Clipped fraction"),
-        ("explained_variance", "Explained variance"),
-        ("joint_entropy", "True joint action entropy"),
-        ("exploration_bonus", "Exploration bonus in optimizer objective"),
+        ("policy_gradient_loss", "Conditional planting PPO loss"),
+        ("value_loss", "Balanced critic MSE (last minibatch)"),
+        ("approx_kl", "Sampled conditional planting KL"),
+        ("exact_kl", "Retained actor: exact conditional planting KL"),
         ("actor_grad_norm", "Actor gradient norm before clipping"),
         ("critic_grad_norm", "Critic gradient norm before clipping"),
-        ("actor_optimizer_steps", "Actual actor steps per update"),
-        ("critic_optimizer_steps", "Actual critic steps per update"),
-        ("post_update_approx_kl", "Post-update sampled joint KL"),
-        ("post_update_type_kl", "Post-update exact type KL"),
-        ("exact_kl", "Current window: exact joint KL on choice states"),
-        ("actor_attempted_steps", "Actor steps attempted per window"),
-        ("actor_retained_steps", "Actor steps retained per window"),
-        ("actor_window_rejected", "Actor window rejected"),
-        ("dig_probability_when_legal", "Dig probability where digging is legal"),
-        ("kl_stopped", "Actor stopped by KL limit"),
-        ("memory_compression_ratio", "Represented decisions / retained memory token"),
-        ("memory_event_fraction", "Decisions admitted as public events"),
-        ("attention_local", "Attention allocated to local tokens"),
-        ("attention_events", "Attention allocated to retained events"),
-        ("attention_summaries", "Attention allocated to compressed summaries"),
+        ("actor_attempted_steps", "Actor steps attempted per cohort"),
+        ("critic_optimizer_steps", "Critic steps per cohort"),
+        ("actor_retained_steps", "Actor steps retained per cohort"),
+        ("actor_window_rejected", "Cohort actor update rejected"),
+        *(
+            (f"{key}_{group}", f"{group.title()}: {label}")
+            for group in ("wait", "plant", "dig")
+            for key, label in (
+                ("value_target_error", "pre-fit error against actual returns"),
+                ("action_count", "completed-cohort decisions"),
+            )
+        ),
     ]
     panel_rows = (len(optimizer_panels) + 1) // 2
     fig, axes = plt.subplots(panel_rows, 2, figsize=(12, 3 * panel_rows))
@@ -399,7 +396,7 @@ def build_run_report(run, cfg=None):
                     label=label,
                 )
                 plotted = True
-        ax.set(title=title, xlabel=progress_label + " at completed PPO update")
+        ax.set(title=title, xlabel=progress_label + " at completed cohort")
         ax.grid(alpha=0.2)
         if plotted:
             ax.legend(fontsize=7)
@@ -408,7 +405,7 @@ def build_run_report(run, cfg=None):
     for ax in list(axes.flat)[len(optimizer_panels) :]:
         ax.set_visible(False)
     _save(fig, output, "optimization-curves")
-    images.append(("PPO optimization", "optimization-curves.png"))
+    images.append(("Critic and conditional PPO optimization", "optimization-curves.png"))
 
     fig, axes = plt.subplots(2, 3, figsize=(15, 7))
     for ax, key, title in zip(
@@ -416,18 +413,18 @@ def build_run_report(run, cfg=None):
         (
             "rolling_attacker_purchases",
             "rolling_maximum_sun",
-            "type_entropy",
-            "conditional_plant_entropy",
-            "conditional_tile_entropy",
+            "exploration_rate",
+            "plant_exploration_bonus",
+            "tile_exploration_bonus",
             "joint_entropy",
         ),
         (
             "Sustained attackers purchased / episode",
             "Maximum sun / episode",
-            "Top-level action entropy",
-            "Plant-kind-weighted species entropy",
-            "Branch-weighted tile entropy",
-            "Joint action entropy",
+            "Injected planting exploration fraction",
+            "Normalized species entropy bonus",
+            "Normalized tile entropy bonus",
+            "Joint species-and-tile entropy",
         ),
     ):
         plotted = False
@@ -552,7 +549,7 @@ def build_run_report(run, cfg=None):
     )
     run_progress += (
         "<p>Episode curves summarize completed games and can lag behind the current policy. "
-        "Optimizer and action-probability measurements describe the current window. "
+        "Optimizer and conditional planting measurements describe the current cohort. "
         "Truncated episode returns are incomplete, not evidence of victory. "
         "With gamma=1, discounted and undiscounted episode rewards are equal.</p>"
     )

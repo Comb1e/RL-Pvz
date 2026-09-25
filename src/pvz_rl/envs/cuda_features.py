@@ -6,15 +6,13 @@ import torch
 from pvz_game.cuda.backend import kernel_source
 
 from pvz_rl.envs.actions import ActionSchema
-from pvz_rl.envs.encoding import ObservationEncoder
+from pvz_rl.envs.encoding import PLANT_BEHAVIOR, ObservationEncoder
 from pvz_rl.envs.rewards import LEDGER_METRICS, REWARD_METRICS
 from pvz_rl.monitoring.cuda_diagnostics import DeviceProfiler
 
 REWARD_FIELDS = (*REWARD_METRICS, "total")
 METRIC_INDICES = (*range(20, 29), *range(81, 81 + len(REWARD_METRICS) - 9))
-LEDGER_INDICES = {
-    name: max(METRIC_INDICES) + 1 + i for i, name in enumerate(LEDGER_METRICS)
-}
+LEDGER_INDICES = {name: max(METRIC_INDICES) + 1 + i for i, name in enumerate(LEDGER_METRICS)}
 METRIC_SIZE = (
     max(LEDGER_INDICES.values()) + 1
 )  # Preserve original totals, early digs and planting timestamps.
@@ -46,6 +44,7 @@ class CudaFeatures:
             "WAVE_SCALE": cfg["encoding"]["wave_scale"],
             "COUNT_SCALE": encoder.count_scale,
             "GLOBAL_OFFSET": encoder.slices["globals"].start,
+            "HEADLESS_OFFSET": encoder.slices["headless"].start,
             "GAMMA": cfg["training"]["gamma"],
             "BASIC_HP": batch.rules.zombies["basic"]["health"],
             "REWARD_SIZE": len(REWARD_FIELDS),
@@ -66,8 +65,16 @@ class CudaFeatures:
         params.update({f"T_{k}": i for k, i in zip(REWARD_METRICS, METRIC_INDICES)})
         params.update({f"T_{k}": i for k, i in LEDGER_INDICES.items()})
         source = kernel_source(batch.rules, batch.zcap, batch.qcap, batch.ecap, batch.diagnostic)
+        from pvz_game.cuda.schema import PLANT_STATES
+
+        categories = [encoder.plant_states[PLANT_BEHAVIOR[s]] + 1 for s in PLANT_STATES]
+        source += (
+            "\n__device__ __constant__ I BEHAVIOR[] = {" + ",".join(map(str, categories)) + "};"
+        )
         source += "\n" + "\n".join(f"#define {k} {v}" for k, v in params.items())
-        source += "\n" + files("pvz_rl.envs").joinpath("cuda_features.cu").read_text("utf-8").replace(
+        source += "\n" + files("pvz_rl.envs").joinpath("cuda_features.cu").read_text(
+            "utf-8"
+        ).replace(
             "METRIC_ACCUMULATION", "\n".join(f"t[T_{k}] += v[F_{k}];" for k in REWARD_METRICS)
         )
         self.module = cp.RawModule(code=source, options=("--std=c++11", "--fmad=false"))
