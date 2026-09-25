@@ -168,7 +168,7 @@ def main(argv=None):
     training.add_argument("--condition", choices=TRAINING_CONDITIONS, help="default: masked")
     training.add_argument("--seed", type=int, help="learner seed; default: saved seed or 101")
     training.add_argument("--output", required=True, type=Path)
-    training.add_argument("--validation-count", type=int, help="pilot-only reduced validation set")
+    training.add_argument("--validation-count", type=int, help="reduced validation set for checks")
     training.add_argument("--family", choices=("preset", "diagnostic"), default="preset")
     from .curriculum import STAGES
 

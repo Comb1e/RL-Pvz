@@ -27,7 +27,7 @@ def test_purchase_conserves_assets_and_dig_removes_remaining_value(kind):
     _, dig, _, _, _ = env.step(env.codec.encode(Dig(2, 3)))
     cost = env.rules.plants[kind]["cost"]
     assert asset_value(env.public) == 900 - cost
-    assert dig == pytest.approx(-cost / 3000)
+    assert dig == pytest.approx(-cost / 30000)
 
 
 def test_independent_damage_death_terminal_and_timeout_formula():
@@ -50,14 +50,14 @@ def test_independent_damage_death_terminal_and_timeout_formula():
         before, plants=(replace(before.plants[0], health=before.plants[0].max_health // 2),)
     )
     assert asset_value(damaged) == 650
-    assert reward_parts(before, damaged, cfg)["total"] == pytest.approx(-50 / 3000)
+    assert reward_parts(before, damaged, cfg)["total"] == pytest.approx(-50 / 30000)
     after = replace(damaged, plants=())
-    assert reward_parts(damaged, after, cfg)["total"] == pytest.approx(-50 / 3000)
+    assert reward_parts(damaged, after, cfg)["total"] == pytest.approx(-50 / 30000)
     assert asset_value(after) == 600
     for status, terminal in ((Status.WON, 1), (Status.LOST, -2)):
         end = replace(after, status=status)
         assert asset_value(end) == 600
-        assert reward_parts(damaged, end, cfg)["total"] == pytest.approx(terminal - 50 / 3000)
+        assert reward_parts(damaged, end, cfg)["total"] == pytest.approx(terminal - 50 / 30000)
 
 
 @pytest.mark.parametrize("sun", [0, 50, 300, 600, 9990])
@@ -73,9 +73,9 @@ def test_mower_cost_once_independent_of_sun_and_kills(sun, kills):
             (Event("DamageApplied", 1, i, (("source", -1),)), Event("ZombieDefeated", 1, i))
         )
     parts = reward_parts(before, before, cfg, events=events)
-    assert parts["mower_activation_penalty"] == pytest.approx(-0.2)
+    assert parts["mower_activation_penalty"] == pytest.approx(-200 / 30000)
     assert parts["mower_kills"] == kills
-    assert parts["total"] == pytest.approx(-0.2)
+    assert parts["total"] == pytest.approx(-200 / 30000)
     assert reward_parts(before, before, cfg)["mower_activation_penalty"] == 0
 
 

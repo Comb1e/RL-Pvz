@@ -12,7 +12,9 @@ from .rewards import LEDGER_METRICS, REWARD_METRICS
 
 REWARD_FIELDS = (*REWARD_METRICS, "total")
 METRIC_INDICES = (*range(20, 29), *range(81, 81 + len(REWARD_METRICS) - 9))
-LEDGER_INDICES = dict(zip(LEDGER_METRICS, range(max(METRIC_INDICES) + 1, max(METRIC_INDICES) + 5)))
+LEDGER_INDICES = {
+    name: max(METRIC_INDICES) + 1 + i for i, name in enumerate(LEDGER_METRICS)
+}
 METRIC_SIZE = (
     max(LEDGER_INDICES.values()) + 1
 )  # Preserve original totals, early digs and planting timestamps.

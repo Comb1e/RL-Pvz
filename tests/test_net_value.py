@@ -1,7 +1,6 @@
 """Independent net-value arithmetic and physical-time return controls."""
 
 from dataclasses import replace
-from itertools import combinations
 
 import numpy as np
 import pytest
@@ -14,6 +13,56 @@ from pvz_rl.config import load_config
 from pvz_rl.cuda_buffer import TensorRolloutBuffer
 from pvz_rl.env import PvZEnv
 from pvz_rl.rewards import reward_parts
+
+
+def test_shipped_objective_bounds_independent_of_reward_implementation():
+    from collections import Counter
+
+    from pvz_game import Rules
+    from pvz_game.config import bundled
+
+    rules = Rules()
+    cfg = load_config()
+    assert cfg["training"]["gamma"] == 1
+    assert cfg["reward"]["progress_weight"] / cfg["reward"]["value_scale"] == 1 / 30000
+    assert cfg["reward"]["mower_value"] == 200
+    assert cfg["reward"]["basic_zombie_value"] == 50
+    assert cfg["reward"]["win_reward"] == 1 and cfg["reward"]["loss_penalty"] == 2
+    assets = rules.game["sun_cap"] + 45 * max(p["cost"] for p in rules.plants.values())
+    sky = 1200 * rules.game["tick_rate"] // rules.game["sky_sun_ticks"] * 25
+    damage = []
+    for level in ("easy", "standard", "hard"):
+        counts = Counter(k for wave in bundled("levels.toml")[level]["waves"] for k in wave)
+        damage.append(
+            sum(
+                n * (rules.zombies[k]["health"] + rules.zombies[k]["armor"])
+                for k, n in counts.items()
+            )
+        )
+    assert assets == 18990 and sky == 3000
+    assert damage == [3000, 14500, 33000]
+    lower, upper = -50 - sky - 5 * 200, assets - 50 + max(damage) / 4
+    assert (lower, upper) == (-4050, 27190)
+    assert 1 + lower / 30000 == pytest.approx(0.865)
+    assert -2 + upper / 30000 == pytest.approx(-1.0936666666666666)
+    assert 1 + lower / 30000 > -2 + upper / 30000
+
+
+def test_discount_trace_and_rare_action_kl_derivations():
+    import math
+
+    assert (0.999**0.2) ** 38500 == pytest.approx(0.0004510859912875)
+    lam = 0.999**0.4
+    assert math.log(0.5) / math.log(lam) / 100 == pytest.approx(17.32001372946)
+    assert lam**128 == pytest.approx(0.9500642956183)
+    p, q = np.array([1 - 1e-6, 1e-6]), np.array([0.9, 0.1])
+    exact = np.dot(p, np.log(p / q))
+    ratio = q[0] / p[0]
+    sampled = ratio - 1 - np.log(ratio)
+    assert exact == pytest.approx(0.1053478973723457)
+    assert sampled == pytest.approx(0.0053604156582263)
+    assert sampled < 0.01 < exact
+    assert p[0] ** 32768 == pytest.approx(0.9677630387185)
 
 
 def event(kind, source=1, hp=0, armor=0, amount=0):
@@ -54,7 +103,7 @@ def test_independent_accounting_orders_and_late_projectile_credit():
     assert late == early == 50  # 150 damage value minus 100 lost asset.
     parts = reward_parts(full, gone, cfg, events=events)
     assert parts["effective_damage"] == 600 and parts["plant_value_loss"] == 100
-    assert parts["total"] == pytest.approx(50 / 3000)
+    assert parts["total"] == pytest.approx(50 / 30000)
 
 
 @pytest.mark.parametrize("health_fraction", [1, 0.5, 0.01])
@@ -140,7 +189,7 @@ def test_real_explosions_break_even_and_empty_loss_on_cpu_and_cuda(kind, count, 
         env.episode_metrics()["effective_damage"]
         == {"basic": 200, "conehead": 600, "buckethead": 1300}[kind] * count
     )
-    assert -100 > -600  # One-basic bomb costs less than consuming a mower.
+    assert -100 > -200  # One-basic bomb costs less than consuming a mower.
 
 
 @pytest.mark.parametrize("device", ["cpu", "cuda"])
@@ -228,48 +277,6 @@ def test_projectiles_keep_credit_after_voluntary_dig():
     assert env.episode_metrics()["net_value"] == -95
 
 
-@pytest.mark.parametrize("lanes", list(combinations(range(5), 2)))
-@pytest.mark.parametrize("mode", ["flowers", "dig"])
-def test_all_saving_pairs_rank_unproductive_controls_below_winner(lanes, mode):
-    env = PvZEnv(load_config(), family="saving")
-    env.reset(
-        options={
-            "scenario": LevelSpec(
-                "saving",
-                tuple(Spawn(t, "basic", r) for t in (4300, 5500, 6700) for r in lanes),
-                initial_sun=150,
-                mowers=False,
-            )
-        }
-    )
-    if mode == "dig":
-        for row, kind in enumerate(("sunflower", "peashooter")):
-            action = env.codec.encode(Place(kind, row, 0))
-            assert env.action_masks()[action]
-            env.step(action)
-            env.step(env.codec.encode(Dig(row, 0)))
-    else:
-        # Fixed two investments without attackers; no learner ever sees this control.
-        for row in range(2):
-            action = env.codec.encode(Place("sunflower", row, 0))
-            while not env.action_masks()[action]:
-                env.step(0)
-            env.step(action)
-    while env.state == "running":
-        env.step(0)
-    metrics = env.episode_metrics()
-    assert not metrics["win"] and metrics["discounted_return"] < 0.177950
-    if mode == "dig":
-        assert metrics["net_value"] == -150
-        assert metrics["early_voluntary_digs"] == 2
-        assert metrics["discounted_return"] == pytest.approx(
-            -0.05 - 2 * 0.999 ** (metrics["tick"] - 1), abs=1e-8
-        )
-    else:
-        assert metrics["produced_sun"] > 0
-        assert metrics["attacker_purchases"] == 0
-
-
 def test_mixed_cuda_resets_preserve_duration_and_episode_ledgers():
     from pvz_rl.cuda_env import CudaVecEnv
     from pvz_rl.rewards import LEDGER_METRICS
@@ -325,9 +332,9 @@ def test_partial_plant_damage_then_mower_credit_once():
     ]
     parts = reward_parts(env.public, env.public, cfg, events=events)
     assert parts["effective_damage"] == 20 and parts["combat_value"] == 5
-    assert parts["mower_expenditure"] == 600 and parts["mower_kills"] == 1
-    assert parts["net_value"] == -595
-    assert parts["total"] == pytest.approx(-595 / 3000)
+    assert parts["mower_expenditure"] == 200 and parts["mower_kills"] == 1
+    assert parts["net_value"] == -195
+    assert parts["total"] == pytest.approx(-195 / 30000)
 
 
 @pytest.mark.parametrize("retired", ["reward", "clock"])

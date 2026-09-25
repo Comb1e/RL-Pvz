@@ -1,5 +1,33 @@
 # Sources actually used
 
+## Objective and exact PPO guard — 2026-09-24
+
+- [Spinning Up: reward and return](https://spinningup.openai.com/en/latest/spinningup/rl_intro.html):
+  inspected finite-horizon undiscounted versus discounted objectives. Used to distinguish
+  the selected gamma=1 outcome objective from the GAE trace decay.
+- [Spinning Up: PPO](https://spinningup.openai.com/en/latest/algorithms/ppo.html):
+  inspected clipping limitations and KL early stopping. Clipping does not bound all
+  probability changes. Whole-window rollback and the hierarchical exact guard are
+  project-specific engineering choices, not claims made by this source.
+- [SB3-Contrib 2.7.1 MaskablePPO](https://github.com/Stable-Baselines-Team/stable-baselines3-contrib/blob/v2.7.1/sb3_contrib/ppo_mask/ppo_mask.py):
+  inspected normalization, clipping, approximate KL, stopping, and gradient clipping.
+  Independent numerical controls retain PPO likelihoods while explicitly changing
+  normalization scope and adding the transactional window guard.
+- [The 37 Implementation Details of PPO](https://iclr-blog-track.github.io/2022/03/25/ppo-implementation-details/):
+  re-inspected entropy and stopping discussion; [What Matters in On-Policy RL?](https://arxiv.org/html/2006.05990v1),
+  timestep handling and regularization sections, motivates checking discount and
+  entropy settings without importing continuous-control performance claims.
+- [Generalized Advantage Estimation](https://arxiv.org/abs/1506.02438): abstract
+  inspected for the estimator's bias/variance tradeoff. No new full-paper empirical
+  claim is made; duration-based numerical controls verify this implementation.
+- Pinned game 1.4.0 rules and shipped wave lists, source commit
+  `1fc80386859087b9d715c4706b3f7875844430cc`: inspected costs, HP/armor, sun cap,
+  sky timing and all three difficulty inventories to derive conservative bounds.
+
+All arithmetic, counterexamples and assumptions are in
+[the math record](math/training-objective.md). Learning rates and coefficient
+calibrations remain experimental, and no training-strength claim follows from them.
+
 ## Periodic pipeline and accelerator overlap — 2026-09-24
 
 - Espeholt et al., [IMPALA](https://arxiv.org/abs/1802.01561): inspected the

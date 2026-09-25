@@ -56,7 +56,10 @@ def test_measured_overlap_and_interrupt_boundary():
     assert completed == [True] and signal.getsignal(signal.SIGINT) == previous
 
 
-def test_snapshot_slots_frozen_values_overlap_and_window_callbacks(pipeline_model, monkeypatch):
+@pytest.mark.parametrize("target_kl", [0, 0.01])
+def test_snapshot_slots_frozen_values_overlap_and_window_callbacks(
+    pipeline_model, monkeypatch, target_kl
+):
     from threading import Event
 
     from stable_baselines3.common.callbacks import BaseCallback
@@ -64,6 +67,7 @@ def test_snapshot_slots_frozen_values_overlap_and_window_callbacks(pipeline_mode
     from pvz_rl.periodic import WindowState
 
     model, env = pipeline_model
+    model.target_kl = target_kl or None
     collect, train = model.collect_slot, model.train
     records, updates, boundaries, carried = [], [], [], []
     second_started = Event()
@@ -81,12 +85,15 @@ def test_snapshot_slots_frozen_values_overlap_and_window_callbacks(pipeline_mode
         assert model._behavior_hash(policy) == digest
         with torch.no_grad():
             distribution = policy.get_distribution(
-                buffer.observations.flatten(0, 1), buffer.action_masks.flatten(0, 1),
+                buffer.observations.flatten(0, 1),
+                buffer.action_masks.flatten(0, 1),
                 context=buffer.context(slice(None)),
             )
             torch.testing.assert_close(
                 distribution.log_prob(buffer.actions.flatten().long()),
-                buffer.log_probs.flatten(), rtol=2e-6, atol=2e-6,
+                buffer.log_probs.flatten(),
+                rtol=2e-6,
+                atol=2e-6,
             )
             expected = policy.predict_values(
                 buffer.observations.flatten(0, 1), context=buffer.context(slice(None))
@@ -115,6 +122,8 @@ def test_snapshot_slots_frozen_values_overlap_and_window_callbacks(pipeline_mode
         def _on_rollout_end(self):
             assert model.pipeline_state == WindowState.IDLE
             assert model.pipeline_metrics["depth"] == 2
+            if target_kl:
+                assert model.logger.name_to_value["train/exact_kl"] <= target_kl
 
     monkeypatch.setattr(model, "collect_slot", collect_control)
     monkeypatch.setattr(model, "train", update_control)
@@ -131,7 +140,7 @@ def test_ctrl_c_drains_window_then_checkpoint_resumes(pipeline_model, monkeypatc
     import signal
 
     from pvz_rl.cuda_ppo import CudaMaskablePPO
-    from pvz_rl.exploration import configure_exploration
+    from pvz_rl.exploration import set_entropy_factor
     from pvz_rl.periodic import WindowState
 
     model, env = pipeline_model
@@ -151,9 +160,11 @@ def test_ctrl_c_drains_window_then_checkpoint_resumes(pipeline_model, monkeypatc
     assert model.pipeline_state == WindowState.IDLE
     monkeypatch.undo()
     model.__dict__.pop("train", None)
+    set_entropy_factor(model, env.cfg, 0.2)
     model.save(tmp_path / "boundary.zip")
     restored = CudaMaskablePPO.load(tmp_path / "boundary.zip", env=env, device="cuda")
-    configure_exploration(restored, env.cfg)
+    assert restored.entropy_factor == 0.2
+    assert restored.policy.exploration_settings == model.policy.exploration_settings
     restored.set_logger(model.logger)
     assert restored.policy.optimizer.state and restored.policy.critic_optimizer.state
     assert restored.pipeline_version == 1 and not hasattr(restored, "_episode_memory")
@@ -188,13 +199,13 @@ def test_failure_drains_worker_and_forbids_partial_checkpoint(
     else:
         monkeypatch.setattr(model, "collect_slot", broken_collect)
     with pytest.raises((RuntimeError, PeriodicPipelineError)):
-        model.learn(8)
+        model.learn(8, log_interval=None)
     assert env.stream == previous_stream and model.pipeline_state == WindowState.FAILED
     with pytest.raises(PeriodicPipelineError, match="Cannot save"):
         model.save(tmp_path / "invalid.zip")
     assert not (tmp_path / "invalid.zip").exists()
     with pytest.raises(PeriodicPipelineError, match="Reload"):
-        model.learn(8)
+        model.learn(8, log_interval=None)
 
 
 def test_final_partial_window_and_callback_stop_are_complete(pipeline_model):
@@ -212,3 +223,205 @@ def test_final_partial_window_and_callback_stop_are_complete(pipeline_model):
     model.learn(100, callback=Stop(), reset_num_timesteps=False)
     assert model.num_timesteps == 20 and model._n_updates == 5
     assert model.pipeline_version == 3
+
+
+@pytest.mark.parametrize("value", [0.02, float("nan"), float("inf")])
+@pytest.mark.parametrize("initialized", [False, True])
+@pytest.mark.parametrize("device", ["cpu", "cuda"])
+def test_actor_transaction_restores_parameters_and_adam_only(value, initialized, device):
+    from copy import deepcopy
+    from types import SimpleNamespace
+
+    from pvz_rl.periodic import ActorUpdateState, ActorWindow
+
+    actor, critic = (torch.nn.Parameter(torch.tensor([1.0, 2.0], device=device)) for _ in range(2))
+    optimizer = torch.optim.Adam([actor], lr=0.1)
+    if initialized:
+        actor.square().sum().backward()
+        optimizer.step()
+    before, saved = actor.detach().clone(), deepcopy(optimizer.state_dict())
+    window = ActorWindow(
+        SimpleNamespace(actor_parameters=lambda: (actor,), optimizer=optimizer), 0.01
+    )
+    optimizer.zero_grad()
+    actor.square().sum().backward()
+    optimizer.step()
+    with torch.no_grad():
+        critic.add_(5)
+    window.stop()
+    window.check([value])
+    assert window.state == ActorUpdateState.REJECTED
+    torch.testing.assert_close(actor, before, rtol=0, atol=0)
+    torch.testing.assert_close(critic, torch.tensor([6.0, 7.0], device=device), rtol=0, atol=0)
+    assert optimizer.state_dict()["param_groups"] == saved["param_groups"]
+    for key, state in saved["state"].items():
+        for field, expected in state.items():
+            torch.testing.assert_close(
+                optimizer.state_dict()["state"][key][field], expected, rtol=0, atol=0
+            )
+    if not initialized:
+        assert not optimizer.state
+
+
+@pytest.mark.parametrize("reject_slot", [1, 2, "new_context"])
+def test_window_rejects_either_slot_without_reverting_critic(
+    pipeline_model, monkeypatch, reject_slot
+):
+    from pvz_rl.periodic import ActorUpdateState
+
+    model, _ = pipeline_model
+    model.target_kl = 0.01
+    before = [p.detach().clone() for p in model.policy.actor_parameters()]
+    original_train, calls, buffers = model.train, [], []
+
+    def train():
+        original_train()
+        calls.append(True)
+
+    def divergence(buffer):
+        if id(buffer) not in buffers:
+            buffers.append(id(buffer))
+        if model._actor_window.state == ActorUpdateState.REJECTED:
+            return 0.0
+        if reject_slot == "new_context":
+            return 0.02 if len(calls) == 1 and len(buffers) == 2 else 0.0
+        return 0.02 if len(calls) >= reject_slot else 0.0
+
+    monkeypatch.setattr(model, "train", train)
+    monkeypatch.setattr(model, "_exact_kl", divergence)
+    model.learn(8, log_interval=None)
+    assert len(calls) == 2 and model.num_timesteps == 8
+    for actual, expected in zip(model.policy.actor_parameters(), before):
+        torch.testing.assert_close(actual, expected, rtol=0, atol=0)
+    assert not model.policy.optimizer.state
+    assert model.policy.critic_optimizer.state
+    assert model.logger.name_to_value["train/actor_retained_steps"] == 0
+    assert model.logger.name_to_value["train/actor_window_rejected"] == 1
+    assert model.logger.name_to_value["train/critic_optimizer_steps"] == 2
+
+
+def test_exact_window_kl_excludes_forced_wait_and_detects_nonfinite(pipeline_model, monkeypatch):
+    import math
+
+    from pvz_rl.grouped_policy import GroupedDistribution
+
+    model, env = pipeline_model
+    buffer = model.rollout_buffer
+    buffer.observations.copy_(torch.as_tensor(env.reset(), device="cuda"))
+    buffer.action_masks.zero_()
+    buffer.action_masks[..., 0] = True
+    buffer.action_masks[-1, :, 361] = True
+    buffer.actions.zero_()
+    buffer.log_probs.zero_()
+    buffer.behavior_logits = torch.zeros(4, 1, 416, device="cuda")
+    buffer.behavior_logits[..., 1] = math.log(1e-6 / (1 - 1e-6))
+    buffer.has_behavior_logits, buffer.behavior_epsilon = True, 0.0
+    model._checked_policy_metrics = {}
+    new_logits = torch.zeros(1, 416, device="cuda")
+    new_logits[:, 1] = math.log(0.1 / 0.9)
+
+    def distribution(obs, masks, context=None):
+        model.policy.action_dist = GroupedDistribution().proba_distribution(
+            new_logits.expand(len(obs), -1), masks
+        )
+        return model.policy.action_dist
+
+    monkeypatch.setattr(model.policy, "get_distribution", distribution)
+    assert model._exact_kl(buffer) == pytest.approx(0.105347897, abs=2e-7)
+    new_logits.fill_(float("nan"))
+    assert not math.isfinite(model._exact_kl(buffer))
+
+
+def test_sampled_stop_persists_and_clone_preserves_rng(pipeline_model, monkeypatch):
+    from pvz_rl.periodic import ActorUpdateState
+
+    model, _ = pipeline_model
+    cpu, gpu = torch.get_rng_state(), torch.cuda.get_rng_state()
+    model._clone_behavior_policy()
+    assert torch.equal(cpu, torch.get_rng_state())
+    assert torch.equal(gpu, torch.cuda.get_rng_state())
+    train, steps = model.train, []
+
+    def stop_after_first():
+        train()
+        steps.append(model.logger.name_to_value["train/actor_optimizer_steps"])
+        model._actor_window.stop()
+        assert model._actor_window.state == ActorUpdateState.STOPPED
+
+    monkeypatch.setattr(model, "train", stop_after_first)
+    model.learn(8, log_interval=None)
+    assert steps == [1, 0]
+    assert model.logger.name_to_value["train/critic_optimizer_steps"] == 2
+
+
+def test_old_optimizer_protocol_is_inference_and_weights_only(pipeline_model, tmp_path):
+    import json
+
+    from pvz_rl.training import initial_weights, load_policy, train
+
+    model, env = pipeline_model
+    model.optimizer_protocol = "previous"
+    checkpoint = tmp_path / "previous.zip"
+    model.save(checkpoint)
+    (tmp_path / "metadata.json").write_text(
+        json.dumps(
+            {
+                "config": env.cfg,
+                "condition": "masked",
+                "learner_seed": 101,
+                "family": "preset",
+                "validation_limit": 1,
+            }
+        )
+    )
+    loaded, _ = load_policy(checkpoint, "cuda")
+    for actual, expected in zip(loaded.policy.parameters(), model.policy.parameters()):
+        torch.testing.assert_close(actual, expected, rtol=0, atol=0)
+    weights, _ = initial_weights(checkpoint, env.cfg)
+    assert weights
+    with pytest.raises(ValueError, match="Optimizer protocol"):
+        loaded.learn(8)
+    output = tmp_path / "unsupported"
+    with pytest.raises(ValueError, match="Optimizer protocol"):
+        train(env.cfg, "masked", 101, output, resume=checkpoint, validation_limit=1)
+    assert not output.exists()
+
+
+def test_sparse_action_metrics_use_sums_and_counts():
+    from pvz_rl.periodic import aggregate_update_metrics
+
+    slots = []
+    for count in (0, 2):
+        row = {"train/dig_legal_observations": count, "train/dig_probability_sum": count * 0.3}
+        # Two groups whose target means differ; averaging separate explained
+        # variances would give a different answer than the combined sample.
+        target = torch.tensor([0.0, 2.0]) + count
+        residual = torch.tensor([0.0, 1.0])
+        row.update(
+            {
+                "train/value_sample_count": 2,
+                "train/return_sum": float(target.sum()),
+                "train/return_squared_sum": float(target.square().sum()),
+                "train/residual_sum": float(residual.sum()),
+                "train/residual_squared_sum": float(residual.square().sum()),
+            }
+        )
+        for action in ("wait", "plant", "dig"):
+            row.update(
+                {
+                    f"train/action_count_{action}": count,
+                    f"train/value_target_error_sum_{action}": count * 0.4,
+                    f"train/raw_advantage_sum_{action}": -count * 0.2,
+                    f"train/positive_advantage_count_{action}": count / 2,
+                    f"train/value_target_error_{action}": 0.4 if count else float("nan"),
+                }
+            )
+        slots.append(row)
+    merged = aggregate_update_metrics(slots)
+    assert merged["train/action_count_dig"] == 2
+    assert merged["train/value_target_error_dig"] == pytest.approx(0.4)
+    assert merged["train/raw_advantage_mean_dig"] == pytest.approx(-0.2)
+    assert merged["train/positive_advantage_fraction_dig"] == 0.5
+    assert merged["train/dig_probability_when_legal"] == pytest.approx(0.3)
+    # Targets [0,2,2,4] have variance 2; residual variance is 1/4.
+    assert merged["train/explained_variance"] == pytest.approx(0.875)

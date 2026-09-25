@@ -31,6 +31,8 @@ LEDGER_METRICS = (
     "cumulative_net_value",
     "maximum_net_value",
     "value_drawdown",
+    "discounted_outcome_return",
+    "discounted_development_return",
 )
 
 

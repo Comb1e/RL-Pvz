@@ -40,8 +40,15 @@ from .curriculum import (
 )
 from .deadline import BudgetExpired, RunBudget
 from .evaluation import evaluate, summarize
-from .exploration import configure_exploration, exploration_rate, set_exploration_rate
+from .exploration import (
+    configure_exploration,
+    entropy_factor,
+    exploration_rate,
+    set_entropy_factor,
+    set_exploration_rate,
+)
 from .metrics import episode_task, mean_agent_actions, task_statistics
+from .periodic import OPTIMIZER_PROTOCOL
 from .progress import Phase, ProgressReporter, duration
 from .provenance import append_jsonl, file_hash, metadata, verify_engine, write_json
 from .rewards import LEDGER_METRICS, REWARD_METRICS
@@ -242,6 +249,7 @@ class ResearchCallback(BaseCallback):
             "curriculum_stage": self.curriculum.name if self.curriculum else "fixed",
             "critic_warmup": getattr(self.model, "critic_warmup_active", False),
             "exploration_rate": getattr(self.model, "exploration_rate", 0.0),
+            "entropy_factor": getattr(self.model, "entropy_factor", 1.0),
             "selected_stage": selected_stage(self.cfg),
             "stage_mastered": bool(self.curriculum and self.curriculum.mastered),
             "curriculum_incomplete": bool(
@@ -430,6 +438,21 @@ class ResearchCallback(BaseCallback):
             "n_updates",
             "loss",
         )
+        keys += tuple(
+            f"{metric}_{action}"
+            for action in ("wait", "plant", "dig")
+            for metric in ("action_count", "raw_advantage_mean", "positive_advantage_fraction")
+        ) + (
+            "exact_kl",
+            "exact_kl_attempted_max",
+            "actor_attempted_steps",
+            "actor_retained_steps",
+            "actor_window_rejected",
+            "rejected_windows",
+            "effective_kind_entropy_coef",
+            "effective_plant_entropy_coef",
+            "effective_tile_entropy_coef",
+        )
         metrics = {}
         if isinstance(self.model.policy, SpatialGroupedPolicy):
             for key, value in self.model.policy.pop_entropy_metrics().items():
@@ -589,6 +612,11 @@ class ResearchCallback(BaseCallback):
         )
         set_exploration_rate(
             self.model, exploration_rate(self.cfg, stage_games, staged=self.curriculum is not None)
+        )
+        set_entropy_factor(
+            self.model,
+            self.cfg,
+            entropy_factor(self.cfg, stage_games, staged=self.curriculum is not None),
         )
         self.progress.phase(Phase.COLLECTING)
 
@@ -953,8 +981,12 @@ def train(
     if init_from:
         initialized_model, initialization = initial_weights(init_from, cfg)
     if resume:
+        from .cuda_ppo import checkpoint_optimizer_protocol
+
         saved = json.loads((Path(resume).resolve().parent / "metadata.json").read_text("utf-8"))
         require_cuda_training(saved["config"], saved["condition"])
+        if checkpoint_optimizer_protocol(resume) != OPTIMIZER_PROTOCOL:
+            raise ValueError("Optimizer protocol changed; use fresh training or --init-from")
         if (
             saved["condition"] != condition
             or resume_protocol(saved["config"], condition) != resume_protocol(cfg, condition)
@@ -988,6 +1020,7 @@ def train(
         resume=str(Path(resume).resolve()) if resume else None,
         initialization=initialization,
         structural_signature=transfer_protocol(cfg),
+        optimizer_protocol=OPTIMIZER_PROTOCOL,
         optimizer_settings={
             "actor_learning_rate": cfg["training"]["learning_rate"],
             "critic_learning_rate": cfg["training"].get("critic_learning_rate")

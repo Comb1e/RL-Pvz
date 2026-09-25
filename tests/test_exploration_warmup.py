@@ -111,6 +111,70 @@ def test_invalid_exploration_and_warmup(key, value):
         validate_config(cfg)
 
 
+@pytest.mark.parametrize(
+    "games,factor", [(0, 1), (1024, 1), (2012, 0.1), (3000, 0.01), (4976, 0.0001)]
+)
+def test_entropy_schedule_independent_of_injected_noise(games, factor):
+    from pvz_rl.exploration import entropy_factor, set_entropy_factor
+
+    cfg = load_config()
+    assert entropy_factor(cfg, games) == pytest.approx(factor)
+    model = SimpleNamespace(policy=SimpleNamespace())
+    set_entropy_factor(model, cfg, factor)
+    assert model.policy.exploration_settings["type_coef"] == pytest.approx(0.01 * factor)
+    cfg["training"]["exploration"]["epsilon"] = 0
+    assert entropy_factor(cfg, games) == pytest.approx(factor)
+    cfg["training"]["exploration"]["epsilon_target_games"] = 0
+    assert entropy_factor(cfg, games) == 1
+    cfg["training"]["exploration"].update(epsilon_target_games=3000, entropy_target_fraction=1)
+    assert entropy_factor(cfg, games) == 1
+
+
+@pytest.mark.parametrize("value", [0, -1, 2, float("nan"), True])
+def test_invalid_entropy_schedule_rejected(value):
+    cfg = load_config()
+    cfg["training"]["exploration"]["entropy_target_fraction"] = value
+    with pytest.raises(ValueError, match="entropy_target_fraction"):
+        validate_config(cfg)
+
+
+@pytest.mark.parametrize("device", ["cpu", "cuda"])
+@pytest.mark.parametrize("epsilon", [0.0, 0.1])
+def test_exact_hierarchical_kl_matches_enumerated_actions_and_gradients(device, epsilon):
+    torch.manual_seed(101)
+    old_logits = torch.randn(5, 416, dtype=torch.float64, device=device)
+    new_logits = torch.randn(5, 416, dtype=torch.float64, device=device, requires_grad=True)
+    mask = torch.zeros(5, 406, dtype=torch.bool, device=device)
+    mask[0, 0] = True
+    mask[1, 361] = True
+    mask[2, [0, 1, 3, 46, 365]] = True
+    mask[3, [0, 361]] = True
+    mask[4, [1, 4, 49]] = True
+    old = GroupedDistribution(epsilon).proba_distribution(old_logits, mask)
+    new = GroupedDistribution(epsilon).proba_distribution(new_logits, mask)
+    p, q = old.probs, new.probs
+    expected = (p * (p.clamp_min(1e-300).log() - q.clamp_min(1e-300).log())).sum(-1)
+    actual = old.kl_divergence(new)
+    torch.testing.assert_close(actual, expected, atol=1e-12, rtol=1e-12)
+    assert actual[:2].tolist() == [0, 0]
+    actual_grad = torch.autograd.grad(actual.sum(), new_logits, retain_graph=True)[0]
+    expected_grad = torch.autograd.grad(expected.sum(), new_logits)[0]
+    torch.testing.assert_close(actual_grad, expected_grad, atol=1e-12, rtol=1e-12)
+    old_logits.zero_()
+    old_logits[3, 1] = np.log(1e-6 / (1 - 1e-6))
+    with torch.no_grad():
+        new_logits.zero_()
+        new_logits[3, 1] = np.log(0.1 / 0.9)
+    old = GroupedDistribution().proba_distribution(old_logits, mask)
+    new = GroupedDistribution().proba_distribution(new_logits, mask)
+    assert old.kl_divergence(new)[3].item() == pytest.approx(0.1053478973723457)
+    changed = mask.clone()
+    changed[0, 1] = True
+    new.apply_masking(changed)
+    with pytest.raises(ValueError, match="identical legal masks"):
+        old.kl_divergence(new)
+
+
 def test_warmup_uses_persisted_stage_residency():
     state = CurriculumState(stage=1, completed_stage_games=255)
     state.completed_episode(0)

@@ -163,6 +163,7 @@ def test_fixed_rollout_losses_and_optimizer_match_stock(gpu_cfg, condition, monk
                 "features_extractor_class": SpatialFeatures,
                 "features_extractor_kwargs": {"layout_cfg": configs[0]},
                 "exploration_epsilon": t["exploration"]["epsilon"],
+                "critic_learning_rate": t["critic_learning_rate"],
             },
         )
         reference.policy.initialize_dig_logit(configs[0]["policy"]["initial_dig_logit"])
@@ -196,13 +197,18 @@ def test_fixed_rollout_losses_and_optimizer_match_stock(gpu_cfg, condition, monk
                 else:
                     buffer.action_masks[:] = True
             buffer.full = True
-        # Keep upstream PPO's loss, reduction, shuffle and Adam calculations.
-        # Only adapt its optimizer/clipping interface to two disjoint groups.
+        # Independently normalize supplied data once; upstream then computes its
+        # unchanged loss/reduction/shuffle/Adam with minibatch normalization off.
+        reference.normalize_advantage = False
+        adv = reference.rollout_buffer.advantages
+        reference.rollout_buffer.advantages = (adv - adv.mean()) / (adv.std(ddof=1) + 1e-8)
+        # Adapt optimizer/clipping ownership; actor scheduling cannot overwrite
+        # the explicitly configured independent critic learning rate.
         actor_optimizer = reference.policy.optimizer
         critic_optimizer = reference.policy.critic_optimizer
 
         class IndependentOptimizers:
-            param_groups = actor_optimizer.param_groups + critic_optimizer.param_groups
+            param_groups = actor_optimizer.param_groups
 
             def zero_grad(self):
                 actor_optimizer.zero_grad()

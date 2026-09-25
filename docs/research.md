@@ -2,7 +2,7 @@
 
 ## Periodic on-policy execution
 
-Version 0.16.0 removes the synchronous rollout-then-update scheduler. A bounded
+A bounded
 two-slot producer–consumer window is the only training path. At its start, the
 collector receives frozen actor and critic copies. Both rollouts are generated with
 the same policy version; the learner updates the first slot while the second is
@@ -17,8 +17,7 @@ checkpoint writes wait for an empty window. Ctrl+C completes that window before
 saving; failed partial windows cannot be saved. Resume starts a fresh window with
 saved optimizers and counters.
 
-This is a scheduling change, not a new policy objective. It preserves PPO, rewards,
-temporal memory, masks, 128 environments, 128 transitions per environment and the
+The scheduler preserves temporal memory, masks, 128 environments, 128 transitions per environment and the
 two independent Adam optimizers. PPO uses the saved behavior log probabilities
 for its usual ratios, with no V-trace or additional policy-lag correction. Measured
 overlap and critical-path throughput are recorded in run metrics; published results from other systems are not transferred to this GPU.
@@ -84,8 +83,8 @@ does not reproduce their algorithms or performance. S4/Mamba are not adopted.
 
 Living plant value is cost multiplied by remaining health fraction. Net value is
 the change in sun plus living assets, minus actual sky income, plus **0.25 times
-effective plant damage**, minus **600 per new mower activation**. Reward is outcome
-plus **0.1 times net value divided by 300**. Victory gives +1, defeat −2. The
+effective plant damage**, minus **200 per new mower activation**. Reward is outcome
+plus **0.01 times net value divided by 300**. Victory gives +1, defeat −2. The
 denominator is a scale, never a sun cap.
 
 Purchases conserve value. Damage reduces asset value; digging/death loses only
@@ -99,21 +98,33 @@ but finer collision rounding changes exact outcomes and hashes. Accepted plant/d
 operations are instantaneous; waits/rejections advance one tick. Videos sample
 25 FPS independently while replay verification checks every tick.
 
-Duration k uses gamma^k for bootstrap and (gamma*lambda)^k for GAE. Both remain
-**0.999 per tick**, as requested. Gamma's physical half-life changes from 34.6
-seconds at 20 Hz to **6.93 seconds** at 100 Hz. This materially shortens credit and
-confounds comparisons. Natural endings disable bootstrap; cutoffs use terminal
-observations and histories before reset. Zero-time actions cannot postpone a loss
-in the discount clock.
+Gamma defaults to **1**: outcome rewards keep their value regardless of completion
+time. Duration k still uses gamma^k for bootstrap and (gamma*lambda)^k for GAE.
+Lambda defaults to **0.9995998799359583 per tick**, giving a 17.32-second trace
+half-life. Natural endings disable bootstrap; cutoffs use terminal observations
+and histories before reset. Truncated returns are incomplete. Discounted and
+undiscounted episode returns coincide with gamma 1; both fields remain available.
+
+The [checked derivations](math/training-objective.md) establish outcome separation
+for shipped normal levels completed naturally before the 1200-second cutoff.
+They do not establish learning improvement or apply to arbitrary custom settings.
 
 ## Optimization and exploration
 
-Defaults: 128 environments ×128 transitions, batch 1,024, four epochs, learning
-rate 3e-4, clip 0.2, value coefficient 0.5 and gradient norm 0.5. Waiting remains
-a transition; games continue across updates. Separate Adam states and clipping
-isolate actor/critic. Target KL 0.01 stops actor updates above 0.015 approximate
-KL; critic epochs continue. Zero disables this gate. Optional critic rate defaults
-to actor rate.
+Defaults: 128 environments ×128 transitions, batch 1,024, four epochs, actor rate
+1e-4, critic rate 3e-4, clip 0.2, value coefficient 0.5 and gradient norm 0.5.
+Normalize advantages once per rollout, not separately within each sequence minibatch.
+Targets and diagnostics retain unnormalized advantages. Separate Adam states and
+clipping isolate actor/critic learning.
+
+Target KL 0.01 combines sampled early stopping with an exact hierarchical KL check
+against the frozen window behavior. Check each available slot after updates and
+new slot-two observations before further updates. Only genuine-choice states enter
+the guard average. Either slot exceeding the target, or non-finite candidate KL,
+restores the window-start actor and its Adam state. Actor stopping persists across
+both slots; critic epochs and collection continue. Zero disables KL guarding.
+No retry, adaptive learning rate, action restriction or alternative scheduler is used.
+The guard bounds collected-state average movement, not all unseen behavior.
 
 PPO uses actual joint kind/species/tile probabilities. Balanced entropy coefficients are
 0.01 for action-kind entropy, 0.001 for normalized conditional species entropy,
@@ -132,7 +143,10 @@ or action timing changes are used to obtain speed.
 
 Added wait/plant-type noise starts at 10%, held during 1,024 stage-resident games
 of critic adaptation, then decays exponentially to 0.1% at stage game 3,000 and
-toward zero afterward. Digging has no random floor. Rates change between rollouts.
+toward zero afterward. Digging has no random floor. Entropy coefficients also decay exponentially to 1% of their starting values at
+stage game 3,000 (`entropy_target_fraction=0.01`), then onward. Fraction 1 disables
+entropy decay; disabling game-based scheduling holds both schedules constant.
+Rates change only between complete windows.
 Validation is greedy. At 100 Hz this aggressive noise has more opportunities per
 second; no improvement is assumed.
 
@@ -214,3 +228,18 @@ includes weight synchronization and hashing; complete benchmark time also includ
 callbacks. Collection and update totals overlap and must not be added to estimate
 wall time. Deadline prediction uses the last completed window. Ctrl+C is deferred
 to that boundary; an unexpected failed window cannot produce a resume checkpoint.
+
+## Optimizer compatibility and diagnostics
+
+Checkpoints identify optimizer protocol `periodic_exact_kl_v1`. Resume requires
+that protocol and identical experiment settings. Compatible architecture weights
+remain available for inference and weights-only initialization; start fresh to
+measure this release's objective. Snapshot construction preserves RNG state.
+
+Current-window diagnostics include exact KL, attempted and retained actor steps,
+rejected windows, effective entropy coefficients, and signed raw advantages,
+positive-advantage fractions and target errors by action category with counts.
+Sparse statistics combine sums/counts across slots; absence in one slot does not
+hide evidence in the other. Completed-game metrics describe earlier trajectories
+and must not be read as a fresh deterministic evaluation. All diagnostics remain
+outside policy inputs. No learning comparison is launched during implementation.

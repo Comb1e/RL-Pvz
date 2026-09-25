@@ -6,8 +6,12 @@ configured exploration bonus can replace joint-entropy regularization.
 """
 
 import hashlib
+import json
+import math
+import zipfile
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
+from pathlib import Path
 from queue import Empty, Queue
 from threading import Event
 from time import perf_counter
@@ -20,8 +24,24 @@ from torch.nn import functional as F
 from .actions import ActionSchema as A
 from .cuda_buffer import TensorRolloutBuffer
 from .event_memory import EventMemory
-from .exploration import exploration_loss
-from .periodic import WindowState, finish_window_on_interrupt, interval_overlap
+from .exploration import configure_exploration, exploration_loss
+from .grouped_policy import GroupedDistribution
+from .periodic import (
+    OPTIMIZER_PROTOCOL,
+    ActorUpdateState,
+    ActorWindow,
+    WindowState,
+    aggregate_update_metrics,
+    finish_window_on_interrupt,
+    interval_overlap,
+)
+
+
+def checkpoint_optimizer_protocol(path):
+    if isinstance(path, (str, Path)) and not Path(path).exists():
+        path = str(path) + ".zip"
+    with zipfile.ZipFile(path) as archive:
+        return json.loads(archive.read("data")).get("optimizer_protocol")
 
 
 @dataclass
@@ -45,6 +65,22 @@ class PeriodicPipelineError(RuntimeError):
 
 
 class TensorPPO:
+    def __init__(self, *args, **kwargs):
+        self.optimizer_protocol = OPTIMIZER_PROTOCOL
+        super().__init__(*args, **kwargs)
+
+    @classmethod
+    def load(cls, path, *args, **kwargs):
+        protocol = checkpoint_optimizer_protocol(path)
+        model = super().load(path, *args, **kwargs)
+        model.optimizer_protocol = protocol
+        configure_exploration(model, model.policy.features_extractor.cfg)
+        return model
+
+    def _require_optimizer_protocol(self):
+        if self.optimizer_protocol != OPTIMIZER_PROTOCOL:
+            raise ValueError("Optimizer protocol changed; use fresh training or --init-from")
+
     def _setup_learn(
         self,
         total_timesteps,
@@ -118,6 +154,7 @@ class TensorPPO:
                 rollout_buffer.capture_context(memory)
                 with torch.no_grad(), env.features.profiler.track("inference"):
                     actions, log_probs = policy.sample_actions(obs, masks, context=memory.context())
+                    rollout_buffer.capture_behavior(policy.action_dist)
                 new_obs, rewards, dones, timeouts, terminal, infos = env.step_tensors(actions)
                 infos_by_step.append(infos)
                 if terminal is not None and any(
@@ -196,6 +233,10 @@ class TensorPPO:
     def _clone_behavior_policy(self):
         """Clone actor and critic weights for one immutable policy window."""
         torch.cuda.current_stream(self.device).synchronize()
+        with torch.random.fork_rng(devices=[self.device]):
+            return self._construct_behavior_policy()
+
+    def _construct_behavior_policy(self):
         source = self.policy
         policy = type(source)(
             source.observation_space,
@@ -294,6 +335,9 @@ class TensorPPO:
                     behavior.action_dist.epsilon = self.policy.exploration_epsilon
                     digest = self._behavior_hash(behavior)
                     version = getattr(self, "pipeline_version", 0)
+                    self._actor_window = ActorWindow(self.policy, self.target_kl)
+                    self._window_kl_max = 0.0
+                    self._checked_policy_metrics = {}
                     collector_stream.wait_stream(learner_stream)
                     slot_steps = self.n_steps * self.n_envs
                     depth = min(
@@ -326,7 +370,21 @@ class TensorPPO:
                         self.num_timesteps += result.transitions
                         self._update_current_progress_remaining(self.num_timesteps, total_timesteps)
                         update_started = perf_counter()
+                        # New slot contexts can reveal movement missed by slot one.
+                        available = [r.buffer for r in results] + [result.buffer]
+                        if results:
+                            self._check_actor_window([result.buffer])
+                        self._checked_policy_metrics.clear()
                         self.train()
+                        self._check_actor_window(available)
+                        for buffer in available:
+                            if id(buffer) not in self._checked_policy_metrics:
+                                self._checked_policy_metrics[id(buffer)] = (
+                                    self._post_update_metrics(None, buffer)
+                                )
+                        post = self._checked_policy_metrics[id(result.buffer)]
+                        for key, value in post.items():
+                            self.logger.record(f"train/{key}", value)
                         learner_stream.synchronize()
                         updates.append((update_started, perf_counter()))
                         results.append(result)
@@ -362,6 +420,8 @@ class TensorPPO:
                         ),
                         "queue_wait_seconds": queue_wait,
                         "transitions_per_second": depth * slot_steps / max(window_seconds, 1e-9),
+                        "actor_update_state": self._actor_window.state.value,
+                        "actor_rejection_reason": self._actor_window.rejection_reason,
                     }
                     # Commit every episode exactly once, with its real transition
                     # count. Callbacks cannot observe or checkpoint a half-window.
@@ -373,32 +433,45 @@ class TensorPPO:
                             self._update_info_buffer(infos)
                             callback.update_locals({"infos": infos})
                             keep_going = callback.on_step() and keep_going
-                    totals = {
-                        "optimizer_steps",
-                        "actor_optimizer_steps",
-                        "critic_optimizer_steps",
-                        "epochs_completed",
-                        "critic_epochs_completed",
-                        "dig_legal_observations",
-                    }
-                    for key in update_metrics[-1]:
-                        values = [metrics[key] for metrics in update_metrics]
-                        name = key.removeprefix("train/")
-                        value = (
-                            sum(values)
-                            if name in totals
-                            else max(values)
-                            if name == "kl_stopped"
-                            else values[-1]
-                            if name == "n_updates"
-                            else sum(values) / depth
-                        )
+                    merged = aggregate_update_metrics(update_metrics)
+                    attempted = merged["train/actor_optimizer_steps"]
+                    rejected = self._actor_window.state == ActorUpdateState.REJECTED
+                    self.rejected_windows = getattr(self, "rejected_windows", 0) + int(rejected)
+                    merged.update(
+                        {
+                            "train/actor_attempted_steps": attempted,
+                            "train/actor_retained_steps": 0 if rejected else attempted,
+                            "train/actor_optimizer_steps": 0 if rejected else attempted,
+                            "train/optimizer_steps": 0 if rejected else attempted,
+                            "train/actor_window_rejected": float(rejected),
+                            "train/rejected_windows": self.rejected_windows,
+                            "train/exact_kl_attempted_max": self._window_kl_max,
+                        }
+                    )
+                    # Refresh current-policy statistics after any rollback.
+                    post = [
+                        self._checked_policy_metrics.get(id(r.buffer))
+                        or self._post_update_metrics(None, r.buffer)
+                        for r in results
+                    ]
+                    count = sum(x["dig_legal_observations"] for x in post)
+                    merged["train/exact_kl"] = max(x["exact_kl"] for x in post)
+                    merged["train/dig_probability_when_legal"] = (
+                        sum(x["dig_probability_sum"] for x in post) / count
+                        if count
+                        else float("nan")
+                    )
+                    for name in ("post_update_approx_kl", "post_update_type_kl"):
+                        merged["train/" + name] = sum(x[name] for x in post) / len(post)
+                    for key, value in merged.items():
                         self.logger.record(key, value)
                     for key in results[-1].memory_metrics:
                         self.logger.record(
                             f"train/{key}", sum(r.memory_metrics[key] for r in results) / depth
                         )
                     self.pipeline_state = WindowState.IDLE
+                    self.__dict__.pop("_actor_window", None)
+                    self.__dict__.pop("_checked_policy_metrics", None)
                     callback.on_rollout_end()
                     if hasattr(callback, "capture_update"):
                         callback.capture_update()
@@ -437,8 +510,11 @@ class TensorPPO:
         progress_bar=False,
     ):
         """Use the periodic pipeline as the only learner scheduler."""
+        self._require_optimizer_protocol()
         if getattr(self, "pipeline_state", WindowState.IDLE) != WindowState.IDLE:
-            raise PeriodicPipelineError("Reload a completed-window checkpoint after pipeline failure")
+            raise PeriodicPipelineError(
+                "Reload a completed-window checkpoint after pipeline failure"
+            )
         total_timesteps, callback = self._setup_learn(
             total_timesteps,
             callback,
@@ -466,13 +542,45 @@ class TensorPPO:
         )
 
     @torch.no_grad()
-    def _post_update_metrics(self, old_types):
-        buffer = self.rollout_buffer
+    def _exact_kl(self, buffer):
+        if not buffer.has_behavior_logits:
+            raise RuntimeError("Missing frozen behavior probabilities")
+        if not torch.stack([torch.isfinite(p).all() for p in self.policy.actor_parameters()]).all():
+            return float("inf")
+        try:
+            metrics = self._post_update_metrics(None, buffer)
+        except ValueError:
+            # A non-finite candidate can fail categorical validation before KL.
+            return float("inf")
+        self._checked_policy_metrics[id(buffer)] = metrics
+        return metrics["exact_kl"]
+
+    def _check_actor_window(self, buffers):
+        if not self.target_kl or getattr(self, "critic_warmup_active", False):
+            return []
+        values = [self._exact_kl(buffer) for buffer in buffers]
+        self._window_kl_max = (
+            max(self._window_kl_max, *values)
+            if all(math.isfinite(x) for x in values)
+            else float("inf")
+        )
+        previous = self._actor_window.state
+        self._actor_window.check(values)
+        if (
+            previous != ActorUpdateState.REJECTED
+            and self._actor_window.state == ActorUpdateState.REJECTED
+        ):
+            return [self._exact_kl(buffer) for buffer in buffers]
+        return values
+
+    @torch.no_grad()
+    def _post_update_metrics(self, old_types, buffer=None):
+        buffer = self.rollout_buffer if buffer is None else buffer
         observations = buffer.observations.flatten(0, 1)
         masks = buffer.action_masks.flatten(0, 1)
         actions = buffer.actions.flatten().long()
         old_logs = buffer.log_probs.flatten()
-        totals = torch.zeros(12, device=self.device)
+        totals = torch.zeros(13, device=self.device)
         size = getattr(self, "value_batch_size", 1024)
         for i in range(0, len(observations), size):
             ix = slice(i, i + size)
@@ -480,7 +588,16 @@ class TensorPPO:
                 observations[ix], masks[ix], context=buffer.context(ix)
             )
             log_ratio = distribution.log_prob(actions[ix]) - old_logs[ix]
-            previous, current = old_types[ix], distribution.types.probs
+            current = distribution.types.probs
+            exact = current.new_zeros(len(current))
+            if buffer.has_behavior_logits:
+                old = GroupedDistribution(buffer.behavior_epsilon).proba_distribution(
+                    buffer.behavior_logits.flatten(0, 1)[ix], masks[ix]
+                )
+                previous = old.types.probs
+                exact = old.kl_divergence(distribution)
+            else:
+                previous = current if old_types is None else old_types[ix]
             kl = (
                 previous * (previous.clamp_min(1e-30).log() - current.clamp_min(1e-30).log())
             ).sum(-1)
@@ -501,6 +618,7 @@ class TensorPPO:
                     exploration["plant_exploration_bonus"] * len(log_ratio),
                     exploration["tile_exploration_bonus"] * len(log_ratio),
                     (masks[ix].sum(-1) > 1).sum(),
+                    exact[masks[ix].sum(-1) > 1].sum(),
                 )
             )
         (
@@ -516,6 +634,7 @@ class TensorPPO:
             plant_bonus,
             tile_bonus,
             choice,
+            exact,
         ) = totals.cpu().tolist()
         if getattr(self, "critic_warmup_active", False):
             n = len(observations)
@@ -532,13 +651,16 @@ class TensorPPO:
                 self.logger.record(f"train/{head}_exploration_bonus", value / n)
             self.logger.record("train/choice_fraction", choice / n)
         return {
+            "exact_kl": exact / choice if choice else 0.0,
             "post_update_approx_kl": approx / len(observations),
             "post_update_type_kl": types / len(observations),
             "dig_probability_when_legal": dig / count if count else float("nan"),
             "dig_legal_observations": count,
+            "dig_probability_sum": dig,
         }
 
     def train(self):
+        self._require_optimizer_protocol()
         self.policy.set_training_mode(True)
         self._update_learning_rate(self.policy.optimizer)
         critic_lr = self.policy.critic_learning_rate
@@ -549,66 +671,81 @@ class TensorPPO:
         clip_vf = (
             self.clip_range_vf(self._current_progress_remaining) if self.clip_range_vf else None
         )
-        old_types = self._type_probabilities()
+        window = getattr(self, "_actor_window", None)
+        old_types = None if window else self._type_probabilities()
         actor_metrics, value_losses, actor_norms, critic_norms = [], [], [], []
         warming = getattr(self, "critic_warmup_active", False)
-        actor_active, actor_steps, critic_steps = not warming, 0, 0
+        actor_active = not warming and (window is None or window.state == ActorUpdateState.ACTIVE)
+        actor_steps, critic_steps = 0, 0
+        raw = self.rollout_buffer.advantages
+        normalize = self.normalize_advantage and raw.numel() > 1
+        center, scale = (raw.mean(), raw.std() + 1e-8) if normalize else (0, 1)
         kl_stopped = False
         actor_epochs = 0
         for epoch in range(self.n_epochs):
             for data in self.rollout_buffer.get(self.batch_size):
                 if actor_active:
-                    log_prob, entropy = self.policy.evaluate_actor(
-                        data.observations,
-                        data.actions.long().flatten(),
-                        data.action_masks,
-                        **({"context": data.context} if hasattr(data, "context") else {}),
-                    )
-                    advantages = data.advantages
-                    if self.normalize_advantage and len(advantages) > 1:
-                        advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
-                    ratio = torch.exp(log_prob - data.old_log_prob)
-                    policy_loss = -torch.minimum(
-                        advantages * ratio,
-                        advantages * ratio.clamp(1 - clip_range, 1 + clip_range),
-                    ).mean()
-                    regularizer, exploration_metrics = exploration_loss(
-                        self.policy, entropy, log_prob
-                    )
-                    actor_loss = policy_loss + regularizer
-                    with torch.no_grad():
-                        log_ratio = log_prob - data.old_log_prob
-                        kl = (log_ratio.exp() - 1 - log_ratio).mean()
-                        actor_metrics.append(
-                            torch.stack(
-                                (
-                                    policy_loss.detach(),
-                                    -entropy.mean().detach(),
-                                    ((ratio - 1).abs() > clip_range).float().mean(),
-                                    exploration_metrics["joint_entropy"],
-                                    exploration_metrics["exploration_bonus"],
-                                    (data.action_masks.sum(-1) > 1).float().mean(),
-                                    kl,
-                                    actor_loss.detach(),
-                                    exploration_metrics["kind_exploration_bonus"],
-                                    exploration_metrics["plant_exploration_bonus"],
-                                    exploration_metrics["tile_exploration_bonus"],
+                    try:
+                        log_prob, entropy = self.policy.evaluate_actor(
+                            data.observations,
+                            data.actions.long().flatten(),
+                            data.action_masks,
+                            **({"context": data.context} if hasattr(data, "context") else {}),
+                        )
+                    except ValueError:
+                        if window is None:
+                            raise
+                        window.reject()
+                        actor_active = False
+                    if actor_active:
+                        advantages = data.advantages
+                        advantages = (advantages - center) / scale
+                        ratio = torch.exp(log_prob - data.old_log_prob)
+                        policy_loss = -torch.minimum(
+                            advantages * ratio,
+                            advantages * ratio.clamp(1 - clip_range, 1 + clip_range),
+                        ).mean()
+                        regularizer, exploration_metrics = exploration_loss(
+                            self.policy, entropy, log_prob
+                        )
+                        actor_loss = policy_loss + regularizer
+                        with torch.no_grad():
+                            log_ratio = log_prob - data.old_log_prob
+                            kl = (log_ratio.exp() - 1 - log_ratio).mean()
+                            actor_metrics.append(
+                                torch.stack(
+                                    (
+                                        policy_loss.detach(),
+                                        -entropy.mean().detach(),
+                                        ((ratio - 1).abs() > clip_range).float().mean(),
+                                        exploration_metrics["joint_entropy"],
+                                        exploration_metrics["exploration_bonus"],
+                                        (data.action_masks.sum(-1) > 1).float().mean(),
+                                        kl,
+                                        actor_loss.detach(),
+                                        exploration_metrics["kind_exploration_bonus"],
+                                        exploration_metrics["plant_exploration_bonus"],
+                                        exploration_metrics["tile_exploration_bonus"],
+                                    )
                                 )
                             )
-                        )
-                    if self.target_kl is not None and float(kl) > 1.5 * self.target_kl:
-                        actor_active = False
-                        kl_stopped = True
-                    else:
-                        self.policy.optimizer.zero_grad(set_to_none=True)
-                        actor_loss.backward()
-                        actor_norms.append(
-                            torch.nn.utils.clip_grad_norm_(
-                                self.policy.actor_parameters(), self.max_grad_norm
-                            ).detach()
-                        )
-                        self.policy.optimizer.step()
-                        actor_steps += 1
+                        if self.target_kl and (
+                            not torch.isfinite(kl) or float(kl) > 1.5 * self.target_kl
+                        ):
+                            actor_active = False
+                            kl_stopped = True
+                            if window is not None:
+                                window.stop()
+                        else:
+                            self.policy.optimizer.zero_grad(set_to_none=True)
+                            actor_loss.backward()
+                            actor_norms.append(
+                                torch.nn.utils.clip_grad_norm_(
+                                    self.policy.actor_parameters(), self.max_grad_norm
+                                ).detach()
+                            )
+                            self.policy.optimizer.step()
+                            actor_steps += 1
                 # Critic updates cannot change the actor and continue after actor KL stopping.
                 values = self.policy.predict_values(
                     data.observations,
@@ -681,6 +818,26 @@ class TensorPPO:
             "critic_grad_norm",
         )
         metrics = dict(zip(keys, numbers))
+        targets = returns.double().flatten()
+        residuals = targets - old_values.double().flatten()
+        moments = (
+            torch.stack(
+                (
+                    targets.sum(),
+                    targets.square().sum(),
+                    residuals.sum(),
+                    residuals.square().sum(),
+                )
+            )
+            .cpu()
+            .tolist()
+        )
+        metrics.update(
+            zip(
+                ("return_sum", "return_squared_sum", "residual_sum", "residual_squared_sum"),
+                moments,
+            )
+        )
         metrics.update(
             loss=metrics["actor_loss"] + self.vf_coef * metrics["value_loss"],
             optimizer_steps=actor_steps,
@@ -691,35 +848,48 @@ class TensorPPO:
             kl_stopped=float(kl_stopped),
             critic_warmup=float(warming),
             critic_learning_rate=critic_lr,
+            actor_metric_samples=(raw.numel() if warming else len(actor_metrics) * self.batch_size),
+            critic_metric_samples=len(value_losses) * self.batch_size,
+            value_sample_count=targets.numel(),
         )
         # Target residuals by decision type expose rare investment states hidden
         # by the aggregate fit. These are bootstrapped targets, not Monte Carlo truth.
         actions = self.rollout_buffer.actions.flatten()
         error = (returns - old_values).abs().flatten()
-        errors = (
-            torch.stack(
-                [
-                    error[mask].mean()
-                    for mask in (
-                        actions == 0,
-                        (actions > 0) & (actions < A.dig_start),
-                        actions >= A.dig_start,
+        for name, mask in (
+            ("wait", actions == 0),
+            ("plant", (actions > 0) & (actions < A.dig_start)),
+            ("dig", actions >= A.dig_start),
+        ):
+            count, residual, advantage, positive = (
+                torch.stack(
+                    (
+                        mask.sum(),
+                        error[mask].sum(),
+                        raw.flatten()[mask].sum(),
+                        (raw.flatten()[mask] > 0).sum(),
                     )
-                ]
+                )
+                .cpu()
+                .tolist()
             )
-            .cpu()
-            .tolist()
-        )
-        metrics.update(
-            zip(
-                ("value_target_error_wait", "value_target_error_plant", "value_target_error_dig"),
-                errors,
-            )
-        )
+            for key, value in (
+                ("action_count", count),
+                ("value_target_error_sum", residual),
+                ("raw_advantage_sum", advantage),
+                ("positive_advantage_count", positive),
+                ("value_target_error", residual / count if count else float("nan")),
+                ("raw_advantage_mean", advantage / count if count else float("nan")),
+                ("positive_advantage_fraction", positive / count if count else float("nan")),
+            ):
+                metrics[f"{key}_{name}"] = value
+        for head, key in (("kind", "type_coef"), ("plant", "plant_coef"), ("tile", "tile_coef")):
+            metrics[f"effective_{head}_entropy_coef"] = self.policy.exploration_settings[key]
         for key, value in metrics.items():
             self.logger.record(f"train/{key}", value)
-        for key, value in self._post_update_metrics(old_types).items():
-            self.logger.record(f"train/{key}", value)
+        if window is None:
+            for key, value in self._post_update_metrics(old_types).items():
+                self.logger.record(f"train/{key}", value)
         self.logger.record("train/n_updates", self._n_updates, exclude="tensorboard")
         self.logger.record("train/clip_range", clip_range)
         if clip_vf is not None:
@@ -731,7 +901,12 @@ class TensorPPO:
         return super().save(*args, **kwargs)
 
     def _excluded_save_params(self):
-        return [*super()._excluded_save_params(), "_episode_memory"]
+        return [
+            *super()._excluded_save_params(),
+            "_episode_memory",
+            "_actor_window",
+            "_checked_policy_metrics",
+        ]
 
     def _get_torch_save_params(self):
         state_dicts, variables = super()._get_torch_save_params()

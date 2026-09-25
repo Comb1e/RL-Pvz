@@ -205,6 +205,13 @@ def validate_config(cfg: dict) -> None:
     if type(warmup) is not int or warmup < 0:
         raise ValueError("critic_warmup_games must be a nonnegative integer")
     epsilon = cfg["training"]["exploration"].get("epsilon", 0.0)
+    entropy_target = cfg["training"]["exploration"].get("entropy_target_fraction", 1.0)
+    if (
+        type(entropy_target) not in (int, float)
+        or not math.isfinite(entropy_target)
+        or not 0 < entropy_target <= 1
+    ):
+        raise ValueError("entropy_target_fraction must be finite and in (0, 1]")
     if type(epsilon) not in (int, float) or not math.isfinite(epsilon) or not 0 <= epsilon < 1:
         raise ValueError("exploration.epsilon must be finite and in [0, 1)")
     target_games = cfg["training"]["exploration"].get("epsilon_target_games", 0)

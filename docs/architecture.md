@@ -151,10 +151,34 @@ empty boundary. Unexpected failures drain the worker and preserve previously sav
 checkpoints; incomplete-window weights are never serialized. Resume starts new games
 and an empty window, restoring both optimizers, schedules and policy-version count.
 
-Independent clipping and optimizers isolate policy and value learning. Actor KL
-stopping leaves critic epochs active. Exploratory noise is fixed within a two-rollout window,
-held during stage critic adaptation and decays by completed games. Evaluation uses
-greedy actor inference with its own episode banks, so it cannot alter collection memory.
+Independent clipping and optimizers isolate policy and value learning. Rollout-wide
+advantage normalization uses fixed statistics for all minibatches. Frozen collector
+logits and epsilon are copied into each slot so the learner can calculate exact
+hierarchical KL without reading the collector's mutable distribution.
+
+```mermaid
+stateDiagram-v2
+    [*] --> Active: snapshot actor and Adam at window start
+    Active --> Stopped: sampled KL stop
+    Active --> Rejected: exact KL exceeds target or is non-finite
+    Stopped --> Rejected: exact check fails on either slot
+    Rejected --> Drained: restore actor and Adam; finish critic and collection
+    Stopped --> Drained: finish critic and collection
+    Active --> Drained: both slots pass exact checks
+    Drained --> [*]: commit counters and retain or reject actor steps
+```
+
+Checks average only genuine-choice observations and test each available slot;
+new second-slot observations are checked before more actor updates. Critic state,
+RNG progress and environment history never roll back. No automatic retries occur.
+Snapshot construction preserves CPU/CUDA RNG state. Injected noise and entropy
+coefficients decay by stage-resident games and stay fixed throughout each window.
+Evaluation uses greedy actor inference with separate episode banks.
+
+Reward is net realized value plus an outcome, with gamma 1 retaining late outcomes.
+GAE keeps a time-based trace decay. Income, effective damage and remaining asset
+losses share sun-equivalent units. Historical peaks/drawdown are diagnostics only.
+See [objective derivations and limits](math/training-objective.md).
 
 Selected-stage runs can enable `until_stage_complete`. The game and wall-clock
 ceilings become inactive; elapsed time and completed games still drive diagnostics,
@@ -168,7 +192,9 @@ the default; conflicting explicit ceilings fail before output creation.
 Each run records resolved settings, source and structural signatures, periodic
 pipeline depth, policy-version hashes, overlap timings, reward and
 discount settings, seeds, elapsed allowance, curriculum state, episodes and optimizer
-metrics. Checkpoints include both optimizers. Stage transfers copy compatible weights
+metrics. Checkpoints include both optimizers and optimizer protocol `periodic_exact_kl_v1`.
+Resume rejects an earlier protocol before creating output; compatible weights can
+still initialize a new experiment or be used for inference. Stage transfers copy compatible weights
 only; resume restores the saved experiment, starts fresh games and empty memory,
 and preserves cumulative schedules. Resume is not a bitwise continuation of partial games.
 All earlier observation/policy signatures are rejected before model loading.

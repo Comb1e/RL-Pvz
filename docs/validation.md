@@ -3,6 +3,59 @@
 Evidence is versioned below. Learning outcomes, simulation correctness and runtime
 speed are separate measures; [research design](research.md) defines the protocol.
 
+## 0.17.0 objective and periodic PPO stabilization — 2026-09-24
+
+The [math record](math/training-objective.md) was created first; its independent
+outcome-bound and rare-action KL controls passed before training behavior changed.
+The shipped objective uses gamma 1, progress weight 0.01 and mower value 200.
+Normal games naturally completed within the documented cutoff have conservative
+win/loss bounds +0.865 / −1.09367. Across all ten saving lane pairs, the successful
+public-state control returns +1.0175; waiting, insufficient attackers, sunflower
+farming and plant/dig controls all lose and have negative returns.
+
+The exact guard is checked against enumerated action probabilities and gradients
+on CPU/CUDA, including forced actions and a sampled-KL counterexample. Independent
+PPO loss, gradient and Adam controls cover one and multiple minibatches with global
+rollout normalization. Window controls exercise either-slot rejection, newly
+available second-slot contexts, Adam restoration, continued critic updates, frozen
+collection, stream overlap, sampled-stop persistence, RNG preservation, interruption,
+protocol rejection, weights-only transfer and entropy-factor restoration. Sparse
+category metrics and pooled explained variance have independent numerical checks.
+
+The complete pinned-game suite passed **224 tests** from a verified archive staged
+under `artifacts/stability-v017-game-source/`; caches and test output stayed outside
+the game checkouts. Source pin, installed game and simulation rules are unchanged.
+Ruff, dependency checks, wheel/sdist packaging, CUDA doctor, README links, bundled
+configuration equality and PowerShell syntax passed. The existing environment was
+updated to the research 0.17.0 package; no new environment was created.
+
+The final complete research run passed **618 tests** in 810.06 seconds. The final
+pooled-statistics adjustment and added populated-Adam CUDA rollback controls passed
+**42 focused numerical tests** afterward. All tolerances remain strict; historical
+reward assertions were updated to the new explicit units, and the independent SB3
+control now applies rollout-wide normalization and separate configured critic rates.
+An earlier complete run exposed a resume-validation ordering issue, now fixed and
+verified to reject CPU training before attempting to read unsupported checkpoint data.
+
+The one-second report/demo integration produced three CPU-verified compact recordings
+for easy, standard and hard from checkpoint SHA-256
+`2fec4c8187474035327d15edb44aa44a4d75624b444326a390a649c8cb7b0b57` under
+`artifacts/stability-v017-final-regression/test_spatial_cuda_report_and_t0/spatial-report/`.
+These truncated demonstration cases verify transport and identity, not game strength.
+The existing interrupted placement checkpoint still selects its recorded deterministic
+initial action (peashooter row 4, column 7) on the same public state. Its optimizer
+protocol correctly prevents full resume while inference remains supported.
+
+Logs: `artifacts/stability-v017-final-regression.log`,
+`artifacts/stability-v017-final-numerical.log`, `artifacts/stability-v017-game.log`,
+`artifacts/stability-v017-release-packaging.log` and
+`artifacts/stability-v017-final-doctor.json`. All 14 pre-existing run files are preserved;
+checkpoint and episode/metric hashes match the earlier diagnosis. The preservation
+manifest is `artifacts/stability-v017-preserved-runs.json`. Earlier reports and
+recordings remain intact.
+No learning comparison or formal training was launched. Short integration games use
+small artificial cutoffs and do not establish competence or a throughput gain.
+
 ## 0.16.0 periodic on-policy verification — 2026-09-24
 
 The only scheduler uses two reusable slots, bounded queues, separate CUDA streams,
