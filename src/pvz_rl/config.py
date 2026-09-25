@@ -216,6 +216,12 @@ def validate_config(cfg: dict, *, allow_legacy_exploration=False) -> None:
             raise ValueError(f"policy.{key} must contain positive integers")
     if not math.isfinite(policy["initial_dig_logit"]):
         raise ValueError("initial_dig_logit must be finite")
+    wait_weight = policy.get("initial_wait_weight", 1.2)
+    if type(wait_weight) not in (int, float) or not math.isfinite(wait_weight) or wait_weight <= 0:
+        raise ValueError("initial_wait_weight must be finite and positive")
+    sample_seconds = output_settings(cfg)["logging"]["hardware_sample_seconds"]
+    if type(sample_seconds) not in (int, float) or not math.isfinite(sample_seconds) or sample_seconds < 0.1:
+        raise ValueError("hardware_sample_seconds must be finite and at least 0.1")
     for key in ("vf_coef", "target_kl"):
         value = cfg["training"][key]
         if type(value) not in (int, float) or not math.isfinite(value) or value < 0:

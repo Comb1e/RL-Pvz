@@ -4,8 +4,8 @@ from dataclasses import asdict, dataclass
 
 from .budget import uses_games
 
-STAGES = ("placement", "saving", "easy", "standard", "shared")
-LESSONS = ("placement", "saving")
+STAGES = ("saving", "easy", "standard", "shared")
+LESSONS = ("saving",)
 
 
 def teaching_enabled(cfg):

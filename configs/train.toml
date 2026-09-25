@@ -10,6 +10,7 @@ refill_evaluation = true
 
 [logging]
 progress_seconds = 15
+hardware_sample_seconds = 1.0
 rolling_window = 100
 
 [visualization]
@@ -134,37 +135,28 @@ hybrid = false
 [policy]
 kind = "event_transformer_v2"
 initial_dig_logit = -12.0
+initial_wait_weight = 1.2
+action_distribution = "balanced_species_tiles_v1"
 plant_embedding = 8
 state_embedding = 4
 scalar_sizes = [64]
 channels = [32, 32]
 
-[curriculum.lessons.placement]
-spawn_ticks = [5, 105, 205]
+[curriculum.lessons.saving]
+spawn_ticks = [7500, 8700, 9900] # 75 seconds, then every 12 seconds in three lanes.
 initial_sun = 100
 natural_sun = false
-allowed_plants = ["peashooter"]
-
-[curriculum.lessons.saving]
-spawn_ticks = [4300, 5500, 6700] # 43 seconds, then every 12 seconds in both lanes.
-initial_sun = 150
-natural_sun = false
-lanes_per_spawn = 2 # 150 sun alone cannot buy two shooters; income investment is necessary.
-allowed_plants = ["sunflower", "peashooter"]
-
-[curriculum.stages.placement]
-tasks = ["placement"]
-weights = [1.0]
-requirements = {placement = 100}
+lanes_per_spawn = 3
+allowed_plants = ["sunflower", "peashooter", "wall_nut", "cherry_bomb", "potato_mine", "snow_pea", "chomper", "repeater"]
 
 [curriculum.stages.saving]
-tasks = ["saving", "placement"]
-weights = [0.8, 0.2]
+tasks = ["saving"]
+weights = [1.0]
 requirements = {saving = 100}
 
 [curriculum.stages.easy]
-tasks = ["easy", "placement", "saving"]
-weights = [0.8, 0.1, 0.1]
+tasks = ["easy", "saving"]
+weights = [0.8, 0.2]
 requirements = {easy = 100}
 
 [curriculum.stages.standard]

@@ -277,17 +277,17 @@ def test_grouped_shared_policy_identity_and_reload(gpu_cfg, tmp_path):
         policy_id, optimizer_id = id(model.policy), id(model.policy.optimizer)
         critic_id = id(model.policy.critic_optimizer)
         model.learn(256)
-        env.env_method("set_curriculum_stage", 4)
+        env.env_method("set_curriculum_stage", 3)
         model.learn(256, reset_num_timesteps=False)
         assert (id(model.policy), id(model.policy.optimizer)) == (policy_id, optimizer_id)
         assert id(model.policy.critic_optimizer) == critic_id
         checkpoint = tmp_path / "model.zip"
         model.training_games = 7
-        model.curriculum_state = {"stage": 4}
+        model.curriculum_state = {"stage": 3}
         model.save(checkpoint)
         loaded = CudaMaskablePPO.load(checkpoint, device="cuda")
         assert loaded.training_games == 7
-        assert loaded.curriculum_state == {"stage": 4}
+        assert loaded.curriculum_state == {"stage": 3}
         obs = env.reset().clone()
         with torch.no_grad():
             a = model.policy(obs, deterministic=True, action_masks=env.action_masks())[0]
@@ -357,7 +357,7 @@ def test_gpu_lesson_and_changed_scenarios_match_public_encodings(gpu_cfg):
     from pvz_rl.scenarios import scenario
 
     cfg = copy.deepcopy(gpu_cfg)
-    families = ["placement", "saving", "redistributed", "faster", "concentrated"]
+    families = ["saving", "redistributed", "faster", "concentrated"]
     # Development seeds only; formal test/changed-distribution seeds stay untouched.
     levels = [scenario("standard", family, 9, Rules(), cfg) for family in families]
     games = [Game() for _ in levels]

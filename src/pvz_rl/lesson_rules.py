@@ -6,7 +6,7 @@ from .config import lesson_settings
 
 
 def natural_sun(cfg, family):
-    return family not in ("placement", "saving") or lesson_settings(cfg)[family]["natural_sun"]
+    return family not in ("saving",) or lesson_settings(cfg)[family]["natural_sun"]
 
 
 def sky_rules(rules, enabled):

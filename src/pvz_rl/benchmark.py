@@ -33,11 +33,11 @@ def measure(cfg, seed, steps, output, *, deadline=None, load_monitor=None):
     try:
         if cfg.get("simulation", {}).get("benchmark_shared_mix"):
             from .budget import budget_target
-            from .curriculum import teaching_enabled
+            from .curriculum import STAGES, teaching_enabled
 
             env.env_method("set_progress", budget_target(cfg) or 0)
             if teaching_enabled(cfg):
-                env.env_method("set_curriculum_stage", 4)
+                env.env_method("set_curriculum_stage", len(STAGES) - 1)
         model = build_model(cfg, "masked", env, seed)
         model.set_logger(configure(str(output), []))
         setup_seconds = perf_counter() - started

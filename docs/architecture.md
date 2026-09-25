@@ -27,6 +27,10 @@ flowchart LR
     PPO --> Schedule[Completed-game curriculum and validation]
     Schedule --> Save[Checkpoints and run records]
     Save --> Replay[GPU action traces verified by CPU]
+    Hardware[Background CPU / GPU sampler] --> Samples[Flushed hardware JSONL]
+    Schedule --> Refresh[Probe / validation completion]
+    Samples --> Output
+    Refresh --> Output
     Replay --> Output[Compact demos and offline HTML]
 ```
 
@@ -70,6 +74,14 @@ The existing simulator command remains one integer per game, with a centralized
 kind/species/tile codec. A 406-entry action-history embedding remembers the complete
 executed command. This compact transport does not require a 406-way classifier.
 The game package and replay API are unchanged.
+
+Final action heads initialize to zero weights, with wait bias log(1.2) and dig bias
+−12. The plant-kind logit includes log(number of available species): each affordable
+species therefore has equal initial branch weight, independent of tile count.
+Initial tiles are uniform. Injected exploration mixes complete actions with a prior
+of wait weight 1.2, one weight per species and uniform legal tiles; it excludes dig.
+Factoring this joint mixture preserves collection, log probabilities, entropy and KL.
+All heads remain trainable. See [probability controls](math/saving-and-actions.md).
 
 ## Episode memory
 
@@ -184,11 +196,21 @@ frozen evaluation. Fixed-shape actor and critic feature paths may be compiled wi
 `torch.compile`; wrappers stay outside the module tree so checkpoint keys and
 optimizer ownership remain unchanged. Compiler failures fall back to eager execution
 and are recorded in window metrics.
+An absent Triton CUDA backend is detected before tracing begins, so unavailable
+compilation cannot enter global RNG restoration contexts beside the collector.
 
 Reward is net realized value plus an outcome, with gamma 1 retaining late outcomes.
 GAE keeps a time-based trace decay. Income, effective damage and remaining asset
 losses share sun-equivalent units. Historical peaks/drawdown are diagnostics only.
 See [objective derivations and limits](math/training-objective.md).
+
+The curriculum is saving → easy → standard → shared. Saving uses only saving;
+easy samples 80% easy and 20% saving. Standard is 45% easy, 45% standard and 10%
+saving; shared is 20% easy, 40% standard and 40% hard. Saving has 100 initial sun,
+all eight species, no sky or mowers, and three selected lanes each receiving a basic
+at 75, 87 and 99 seconds. Public-state feasibility and the no-income impossibility
+argument are [checked separately](math/saving-and-actions.md); they are not controllers
+used by the learner. Stage changes affect future episode resets only.
 
 Selected-stage runs can enable `until_stage_complete`. The game and wall-clock
 ceilings become inactive; elapsed time and completed games still drive diagnostics,
@@ -203,9 +225,10 @@ Each run records resolved settings, exploration phase/floor state, source and st
 signatures, periodic pipeline depth, policy-version hashes, overlap timings, reward and
 discount settings, seeds, elapsed allowance, curriculum state, episodes and optimizer
 metrics. Checkpoints include both optimizers, optimizer protocol
-`periodic_exact_kl_v1` and exploration protocol `phase_floor_v1`. Checkpoints from the
-retired schedule remain readable for inference but cannot resume or initialize new
-training. Same-protocol stage transfers copy compatible weights only; same-protocol
+`periodic_exact_kl_v1`, exploration protocol `phase_floor_v1`, and action-distribution
+signature `balanced_species_tiles_v1`. Older distribution checkpoints cannot load
+for inference, transfer or resume; their files and model-free reports remain available.
+Same-protocol stage transfers copy compatible weights only; same-protocol
 resume restores the saved experiment, starts fresh games and empty memory, and
 preserves cumulative schedules. Resume is not a bitwise continuation of partial games.
 All earlier observation/policy signatures are rejected before model loading.
@@ -221,3 +244,40 @@ decisions and hash before publication. Native 100 Hz recordings remain model-fre
 Video rendering samples a configurable lower rate while stepping/verifying every
 tick. Offline reports read stored metrics, not models. Historical reports survive;
 20 Hz recordings and incompatible models are not accepted by the current engine/policy.
+
+## Hardware observations and report lifecycle
+
+A shared background monitor serves ordinary training and benchmarks. It primes
+psutil's interval counters, samples CPU/RAM without blocking, and makes bounded,
+hidden nvidia-smi queries against the training GPU's CUDA UUID. It never issues
+CUDA work or synchronizes a transition. Sampler failure is a diagnostic, not a
+reason to reject a checkpoint. Missing fields stay null. GPU activity is device-wide;
+memory-controller busy percent differs from VRAM capacity used. Process CPU uses
+one-core percentage units and can exceed 100; system/core CPU remains 0–100.
+
+Each sample appends and flushes to `hardware-metrics.jsonl` with UTC, session and
+elapsed time, curriculum/exploration phase, activity, and latest complete-window
+timings. The in-memory cache is bounded to ten minutes. Probes and normal validation
+use one shared evaluation-event wrapper: enter validation, attempt evaluation, then
+refresh the report in a finally path. Completion and graceful interruption also
+refresh it. Plotting failures are recorded without invalidating saved models.
+
+```mermaid
+stateDiagram-v2
+    [*] --> Training: start sampler and prime CPU counters
+    Training --> Validation: complete window / evaluation due
+    Validation --> Reporting: attempt ends, succeeds or fails
+    Reporting --> Training: atomically replace plots
+    Training --> Reporting: complete or graceful interruption
+    Reporting --> Stopped: close sampler and logs
+    Stopped --> Reporting: offline report-only command
+```
+
+Report panels show CPU, GPU activity, RAM/VRAM, power/temperature and window
+throughput/timings on elapsed wall-time axes with phase backgrounds. Resume sessions
+have separate labeled axes/lines, and ancestor logs stop at the saved checkpoint
+boundary. Hardware logs tolerate only an incomplete final record after a hard stop;
+malformed middle records raise an error. `visualize --report-only` needs metadata and
+logs, never a model or demonstration. No samples means historical utilization is unknown.
+The terminal emits aligned 15-second blocks and labels recent, window and run-average
+measurements separately; unavailable values are n/a.

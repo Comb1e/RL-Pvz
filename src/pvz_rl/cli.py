@@ -203,7 +203,6 @@ def main(argv=None):
         choices=(
             "preset",
             "diagnostic",
-            "placement",
             "saving",
             "redistributed",
             "faster",
@@ -245,6 +244,7 @@ def main(argv=None):
     )
     common(visual)
     visual.add_argument("--run", required=True, type=Path)
+    visual.add_argument("--report-only", action="store_true", help="rebuild curves without loading a model or producing demos")
     video_options(visual)
     args = parser.parse_args(argv)
 
@@ -292,7 +292,7 @@ def main(argv=None):
             raise ValueError(
                 "Visualization config must preserve the checkpoint's research settings"
             )
-        result = visualize_run(args.run, cfg=cfg if args.config else original, videos=args.videos)
+        result = visualize_run(args.run, cfg=cfg if args.config else original, videos=args.videos, report_only=args.report_only)
         print(f"Report: {(args.run / 'visualizations' / 'index.html').resolve()}")
         if result["state"] != "complete":
             raise SystemExit(1)
@@ -404,7 +404,7 @@ def main(argv=None):
             condition, learner_seed = data["condition"], data["learner_seed"]
             checkpoint_hash = file_hash(args.checkpoint)
             if (
-                data["family"] in ("diagnostic", "placement", "saving")
+                data["family"] in ("diagnostic", "saving")
                 and args.family != data["family"]
             ):
                 raise ValueError(
@@ -414,7 +414,7 @@ def main(argv=None):
             raise ValueError("Changed scenario families must use --split ood")
         if args.split == "ood" and args.family not in cfg["evaluation"]["ood_families"]:
             raise ValueError("OOD split requires a changed scenario family")
-        if args.family in ("diagnostic", "placement", "saving") and args.split not in (
+        if args.family in ("diagnostic", "saving") and args.split not in (
             "development",
             "validation",
         ):

@@ -13,7 +13,6 @@ def legacy_teaching():
         c.pop("residency", None)
         cfg["splits"].pop("curriculum", None)
         for stage, requirements in {
-            "placement": {"placement": 18},
             "saving": {"saving": 18},
             "easy": {"easy": 16},
             "standard": {"easy": 16, "standard": 12},

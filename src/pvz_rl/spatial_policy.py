@@ -1,4 +1,7 @@
-"""Small resolution-preserving placement policy using only event_v6 inputs."""
+"""Small resolution-preserving policy using only event_v6 inputs."""
+
+import importlib.util
+import math
 
 import torch
 from pvz_game import Rules
@@ -171,6 +174,12 @@ class SpatialGroupedPolicy(MaskableActorCriticPolicy):
         if self.device.type != "cuda" or not hasattr(torch, "compile"):
             self.compilation_status = "unavailable"
             return
+        if importlib.util.find_spec("triton") is None:
+            # Avoid entering compiler tracing (and its RNG save/restore contexts)
+            # beside a sampling collector when this CUDA backend cannot execute.
+            self.compilation_status = "unavailable"
+            self.compilation_error = "CUDA compilation requires an installed Triton backend"
+            return
         try:
             # Keep compiled wrappers out of the module tree so checkpoint keys and
             # optimizer parameter ownership remain identical to eager execution.
@@ -201,6 +210,20 @@ class SpatialGroupedPolicy(MaskableActorCriticPolicy):
         with torch.no_grad():
             self.action_net.kind_head.bias[A.dig] = value
 
+    def initialize_action_heads(self):
+        spec = self.features_extractor.cfg["policy"]
+        with torch.no_grad():
+            for head in (
+                self.action_net.kind_head,
+                self.action_net.plant_head,
+                self.action_net.tiles,
+            ):
+                head.weight.zero_()
+                if head.bias is not None:
+                    head.bias.zero_()
+            self.action_net.kind_head.bias[A.wait] = math.log(spec["initial_wait_weight"])
+            self.action_net.kind_head.bias[A.dig] = spec["initial_dig_logit"]
+
     def _build_mlp_extractor(self):
         self.mlp_extractor = SpatialLatents(
             self.features_extractor.channels,
@@ -214,7 +237,11 @@ class SpatialGroupedPolicy(MaskableActorCriticPolicy):
             raise ValueError("Spatial policy requires direct Discrete(406) actions")
         # Environment masks are validated at the CUDA environment boundary;
         # avoid a device-to-host reduction on every policy forward.
-        self.action_dist = GroupedDistribution(self.exploration_epsilon, validate_args=False)
+        self.action_dist = GroupedDistribution(
+            self.exploration_epsilon,
+            validate_args=False,
+            wait_weight=self.features_extractor.cfg["policy"]["initial_wait_weight"],
+        )
         super()._build(lr_schedule)
         self.action_net = SpatialLogits(
             self.features_extractor.channels,
@@ -223,9 +250,7 @@ class SpatialGroupedPolicy(MaskableActorCriticPolicy):
         ).to(self.device)
         if self.ortho_init:
             self.action_net.apply(lambda module: self.init_weights(module, gain=2**0.5))
-            self.init_weights(self.action_net.kind_head, gain=0.01)
-            self.init_weights(self.action_net.plant_head, gain=0.01)
-            self.init_weights(self.action_net.tiles, gain=0.01)
+        self.initialize_action_heads()
         # SB3 recursively initializes Linear modules. Restore identity-biased gates
         # and zero padding embeddings after that pass.
         for extractor in (self.pi_features_extractor, self.vf_features_extractor):

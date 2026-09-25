@@ -1,5 +1,48 @@
 # Sources actually used
 
+## Saving, complete-action exploration and hardware telemetry — 2026-09-25
+
+- [Invalid Action Masking](https://arxiv.org/abs/2006.14171), abstract inspected:
+  supports consistent legal masking in policy gradients. It does not justify making
+  valid digging illegal or establish these initial PVZ weights. HTML SHA-256:
+  `7610f59abcc3971e49b5188d189659175c2d72960f586a6b23fe81a35a5aa4b3`.
+- [Curriculum Learning for Reinforcement Learning Domains: A Framework and Survey](https://jmlr.org/papers/v21/20-212.html),
+  abstract inspected: task sequencing and transfer motivate checking a prerequisite
+  task's value. The 100-sun saving design and removal of placement are local hypotheses,
+  not recommendations demonstrated by this abstract. HTML SHA-256:
+  `8101362af6763f61f7cbae0b887a2b492dcdd4abe425dae982a53ac96f6d4bc2`.
+- [SB3 v2.7.1 evaluation callback source](https://github.com/DLR-RM/stable-baselines3/blob/v2.7.1/stable_baselines3/common/callbacks.py):
+  inspected EvalCallback's deterministic evaluation and after-evaluation event.
+  The project extends event reporting to failed/partial attempts. Raw source SHA-256:
+  `1659f783e53c00ee0f50d0666135f1e0d8febe23deb958dffb4dd9fe5f3bd32c`.
+- [NVIDIA System Management Interface documentation](https://docs.nvidia.com/deploy/nvidia-smi/index.html):
+  inspected GPU selection, utilization and memory fields. GPU utilization measures
+  the fraction of its sampling period with kernels executing; memory utilization is
+  memory-controller activity, not allocated VRAM. Sampling periods depend on device
+  (roughly one sixth to one second); percent alone does not identify a bottleneck.
+  HTML SHA-256: `017647ae72b332a94e01e6d9672d1d82367e56de1d0685132eb91a972035b17e`.
+- [psutil 7.0.0 documentation source](https://github.com/giampaolo/psutil/blob/release-7.0.0/docs/index.rst):
+  inspected nonblocking system/per-core/process CPU and RSS APIs, first-reading
+  priming, minimum 0.1-second recommended spacing, and process CPU's one-core units.
+  The first nonblocking CPU reading is meaningless and ignored. Source SHA-256:
+  `6a4fdbf85348ebc983d809b2301e95ccb5cf8c04ff40f9f6cfd4dfe8fb972e08`.
+
+Re-inspected installed game 1.4.0, simulation 1.1.0, commit
+`1fc80386859087b9d715c4706b3f7875844430cc`: plant costs, sunflower payment/recharge,
+200-HP basic movement/bites, and engine `_detonate`'s half-open mine tile interval.
+The existing CPU/CUDA parity controls verify the unchanged dependency. The
+[saving and probability derivations](math/saving-and-actions.md) are project-specific;
+no published learning/speedup claim is transferred to this laptop.
+
+During reproducibility verification, also inspected installed **PyTorch 2.8.0**
+`torch/_dynamo/convert_frame.py`, `preserve_global_state` (lines 222–288).
+Tracing saves and restores the global CPU/CUDA RNG states, which can interact with
+a concurrent sampling thread even when compilation later fails. This environment
+has no Triton backend. Checking that prerequisite before entering tracing restored
+the strict same-seed output/no-output control here; this does not establish compiled
+execution correctness on other environments. Installed file SHA-256:
+`5890b891106ba8372c94e79a4f5d682587e07ae00850629cee96dba7bd8fac4a`.
+
 ## Exploration phases and CUDA throughput — 2026-09-25
 
 - [PyTorch 2.8 CUDA semantics and CUDA Graphs](https://github.com/pytorch/pytorch/blob/v2.8.0/docs/source/notes/cuda.rst):

@@ -5,6 +5,38 @@ Dates and results belong to their recorded version. Current behavior lives in
 artifact locations and learning outcomes live in [validation](validation.md).
 The longer pre-consolidation notes remain in `git show b642c9c:docs/iteration.md`.
 
+## 0.19.0 — 2026-09-25
+
+- Problem: placement remained around 20% wins in the reported long run. Equal
+  wait/plant-kind initialization did not give equal species probabilities, and
+  injected branch exploration retained learned tile preferences. Ordinary training
+  did not save hardware load samples, so stopping left no utilization history.
+- Changes: remove placement and start with unrestricted, three-lane saving at 100
+  sun. A checked no-income argument rules out winning without flower production;
+  five public-state flower investments and reactive shooters win all ten lane
+  combinations at 136.52 seconds on CPU and CUDA. These controls do not prove PPO
+  will learn the lesson.
+- Action initialization: wait weight 1.2, weight one per available species,
+  exp(−12) total digging weight, and uniform legal tiles. A complete-action injected
+  prior also explores uniform tiles. Joint likelihood, entropy and KL use that same
+  mixture. Reward, architecture, engine pin, environment count and phase schedules
+  are unchanged. New distribution signature requires fresh models.
+- Hardware: one bounded background monitor for training/benchmarks; flushed raw
+  JSONL, UUID-selected device metrics, session/activity labels, atomic hardware
+  panels after evaluation attempts and graceful stopping, and model-free report
+  regeneration. The terminal distinguishes recent task, window and run averages.
+- Verification discovered unavailable compiler tracing interfering with same-seed
+  reproducibility. The installed Torch compiler restores global CUDA RNG state;
+  entering it beside collection is unsafe when tracing is unnecessary. Missing
+  Triton is now detected before tracing. The strict output-enabled/disabled
+  parameter-equality control then passed without relaxing its assertion.
+- Current verification and telemetry overhead are recorded in
+  [validation](validation.md): 606 research regressions and 224 pinned game tests
+  passed. Three paired telemetry checks retained identical policy hashes, with a
+  2.16% median sampling cost. All existing runs and artifacts remain preserved.
+  No formal training or learning comparison was launched. Lesson mastery and
+  improved learned competence remain unmeasured.
+
 ## 0.18.0 — 2026-09-25
 
 - Problem: the stopped placement run reached 3,781 games without mastery. Injected

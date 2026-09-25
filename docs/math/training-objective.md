@@ -62,16 +62,10 @@ The development weight 0.01 is below both the negative-loss bound
 300 × 3 / (27190 + 4050) = 0.02880922. These are sufficient bounds, not optimal
 coefficient estimates. Mower cost 200 and the learning rates remain tuning choices.
 
-All ten saving lane pairs were checked with public-state scripted controls:
-
-| Control | Wins / 10 | Return range |
-|---|---:|---:|
-| Two flowers, two correctly placed shooters | 10 | +1.0175 |
-| Wait | 0 | −2 |
-| One shooter | 0 | −1.995 |
-| Three flowers | 0 | −1.99416667 to −1.99083333 |
-| Continue buying flowers | 0 | −1.9975 to −1.97583333 |
-| Immediate shooter purchase/removal | 0 | −2.00333333 |
+The current saving lesson has three lanes and allows every species. Its independent
+no-income proof, public-state winning control and returns are in
+[saving and action-distribution calculations](saving-and-actions.md). Historical
+lesson results belong to [iteration history](../iteration.md).
 
 ## Return clock and GAE
 

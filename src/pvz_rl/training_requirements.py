@@ -5,6 +5,7 @@ from functools import lru_cache
 from .actions import ActionSchema
 from .config import research_config, simulator, validate_config
 from .curriculum import selected_stage
+from .grouped_policy import ACTION_DISTRIBUTION
 
 TRAINING_CONDITIONS = ("masked",)
 
@@ -12,6 +13,7 @@ TRAINING_CONDITIONS = ("masked",)
 def current_model_config(cfg):
     return (
         cfg.get("policy", {}).get("kind") == "event_transformer_v2"
+        and cfg.get("policy", {}).get("action_distribution") == ACTION_DISTRIBUTION
         and cfg.get("encoding", {}).get("version") == "event_v6"
         and cfg.get("reward", {}).get("version") == "net_value_v1"
         and cfg.get("training", {}).get("discount_clock") == "simulation_ticks"
@@ -30,7 +32,7 @@ def require_supported_policy(cfg, condition="masked"):
         or not current_model_config(cfg)
     ):
         raise ValueError(
-            "Retired policy or scheduler. Training/resume require event_transformer_v2, event_v6, net_value_v1, and the two-rollout periodic-on-policy pipeline. Start fresh with configs/train.toml."
+            "Retired policy or scheduler. Models require event_transformer_v2, event_v6, net_value_v1, the balanced_species_tiles_v1 action distribution, and the two-rollout periodic-on-policy pipeline. Start fresh with configs/train.toml."
         )
 
 
@@ -103,6 +105,8 @@ def transfer_protocol(cfg, condition="masked"):
         "engine": [cfg[k] for k in ("engine_commit", "engine_version", "engine_package_version")],
         "encoding": cfg["encoding"]["version"],
         "actions": ActionSchema.version,
+        "action_distribution": p.get("action_distribution"),
+        "exploratory_wait_weight": p.get("initial_wait_weight"),
         "action_history": "joint_embedding_v1",
         "board": {
             k: env[k]

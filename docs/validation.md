@@ -1,5 +1,72 @@
 # Validation and measured results
 
+## 0.19.0 saving, action balance and hardware recording — 2026-09-25
+
+The public-observation saving witness passes all ten lane triples on CPU and CUDA,
+ending at tick **13652**, with five flowers, three shooters, **650** produced sun,
+**1100** cumulative net value and return **1.03666667**. CPU/CUDA observations,
+rewards, legal masks and state hashes agree. Wait, one-shooter, immediate-dig and
+mine-only controls lose. Mine arming and half-open blast boundaries are checked
+alongside the [independent affordability proof](math/saving-and-actions.md).
+
+Independent CPU/CUDA enumeration covers initial weights, changing affordability,
+partial tiles, epsilon zero/one, forced actions, entropy, exact KL and likelihood
+gradients. Positive planting and digging signals remain trainable. Old distribution
+signatures fail before loading; new stage handoff and same-experiment resume retain
+their controls. Sampling/report checks cover missing GPU fields, hidden query
+timeouts, flushed sessions, partial final records, resume boundaries and one refresh
+per evaluation attempt. Offline report-only generation requires no checkpoint.
+
+A strict output-on/off test initially found different learned parameters with the
+same seed. The installed Torch compiler enters global RNG save/restore contexts
+even before its missing-Triton failure. Skipping unavailable compilation before
+tracing restored exact parameter equality in that control. This machine validates
+the eager path; successful compiled execution on a Triton-equipped system is not
+established by these results.
+
+The full research regression passed **606 tests in 817.80 seconds**. A subsequent
+focused set passed **26 tests**, including the newly added direct-loader rejection
+control and evaluation-failure accounting. The pinned upstream game regression
+passed **224 tests in 186.20 seconds**. CUDA doctor, dependency checks, Ruff,
+local documentation links and wheel/sdist packaging passed. The built wheel's
+source and bundled data match the workspace. Three verified smoke demonstrations
+share checkpoint SHA-256
+`bc0063e3fd2f371a649abe973bf47a2c084ed0c8d029c2d8f7fd8407f228ab2a`;
+their one-second cutoffs test integration, not playing competence.
+
+Three paired, warmed repetitions used 128×128 rollouts, four epochs, actor learning
+enabled, one untimed two-rollout window and one measured two-rollout window per
+case. Each pair used identical seed/configuration except hardware sampling, with
+on/off order alternated. All three pairs produced **identical final policy hashes**.
+
+| Median measurement | Sampling off | Sampling every second |
+|---|---:|---:|
+| Complete transitions/s | 2619.72 | 2563.08 |
+| Collection time | 4.646 s | 4.839 s |
+| Update time | 11.008 s | 11.145 s |
+| Overlap | 3.166 s | 3.254 s |
+| Window critical path | 12.483 s | 12.759 s |
+| Peak allocated CUDA memory | 1450.85 MiB | 1427.48 MiB |
+
+The measured median throughput cost was **2.16%**. All 75 sampled GPU readings
+were available; maximum sample collection time was 87.3 ms. These short windows
+cover saving's initial sparse board, not sustained crowded combat or mastery.
+Median component times are computed independently and need not add to the median
+critical path. Memory peaks depend on overlap and allocation timing; no memory
+reduction or training acceleration is claimed from this comparison.
+
+Release evidence is retained under `artifacts/v0190/`, including raw telemetry,
+paired measurements, suite logs, availability, package and documentation checks.
+Default structural signature:
+`f8bf182f2c171127f5c770ba8991e337b4bee5f3f29cef9cf013bb137eeb1de6`.
+No formal training or competence comparison was performed.
+Historical runs and artifacts are preserved; the game pin and installed source
+manifest remain unchanged. The local game worktree's Git link is already broken;
+upstream regression uses the existing archive whose complete package manifest
+matches the pinned source. All 14 upstream test files also match the remote archive
+of that exact commit. Neither game checkout was modified; all test caches stayed
+outside them.
+
 ## 0.18.0 exploration and throughput stabilization — 2026-09-25
 
 Implementation is on a feature branch. The stopped run used as diagnosis reached 3,781

@@ -23,7 +23,7 @@ def scenario(level: str, family: str, seed: int, rules: Rules, cfg=None):
             initial_sun=100,
             mowers=False,
         )
-    if family in ("placement", "saving"):
+    if family in ("saving",):
         from .config import lesson_settings
 
         lesson = lesson_settings(cfg)[family]

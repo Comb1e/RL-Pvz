@@ -130,11 +130,17 @@ PPO uses actual joint kind/species/tile probabilities. Balanced entropy coeffici
 0.01 for action-kind entropy, 0.001 for normalized conditional species entropy,
 and 0.001 for mean normalized tile entropy. Conditional exploration terms are not
 weighted by how often their parent kind is chosen; unavailable branches contribute zero.
-Initial dig bias −12 is trainable. Sampling differs from greedy
-evaluation: with equal other logits and 10% added noise, wait/dig-only states initially
-give dig probability 0.00000553 per choice. Over 500 choices the illustrative chance
-of any dig is 0.28%. This is not a probability cap; positive
-advantages can increase digging. The 1,024-game warm-up remains unchanged.
+Initial heads have zero final weights. Wait has weight 1.2, each available species
+weight one, and legal digging weight exp(−12), shared across its tiles. A log(number
+of available species) correction to the plant-kind logit keeps initial species mass
+equal as affordability changes. Saving's initial board gives wait 23.08% and each
+of sunflower/peashooter/wall-nut/mine 19.23%. Initial legal tiles are uniform.
+The injected prior also uses wait weight 1.2 and uniform species/tiles, excluding dig.
+Mix complete action probabilities and refactor their conditional heads so collection,
+PPO, entropy and exact KL all describe the same distribution. Digging stays trainable.
+The [mathematical controls](math/saving-and-actions.md) cover empty, partial and forced
+masks, epsilon zero/one, and unused-argument gradients. Greedy conditional evaluation
+is distinct from choosing the most likely complete command.
 
 Plant/state embeddings use equivalent one-hot matrix products during backpropagation
 and ordinary lookups during inference. The optimization avoids sorting repeated
@@ -163,9 +169,8 @@ rollout, PPO, reward, observation or action semantics change.
 
 | Stage | Training mixture | Default mastery |
 |---|---|---|
-| placement | Placement | 100/100 placement |
-| saving | 80% saving, 20% placement | 100/100 saving |
-| easy | 80% easy, 10% each lesson | 100/100 easy |
+| saving | Saving only | 100/100 saving |
+| easy | 80% easy, 20% saving | 100/100 easy |
 | standard | 45% easy, 45% standard, 10% saving | 100/100 each normal task |
 | shared | 20% easy, 40% standard, 40% hard | 100/100 each difficulty |
 
@@ -187,18 +192,17 @@ optimizers through `--init-from`. An already mastered resume finalizes pending o
 without collecting another rollout. Missing targets and ETA are reported as null,
 not as a synthetic large training budget.
 
-Lessons have no sky income or mowers. Placement starts with 100 sun and basics in
-one lane at ticks 5/105/205. Saving starts with 150 sun and basics in two lanes at
-4300/5500/6700. Placement permits peashooter; saving also permits sunflower. Full
-board and legal digging remain available.
+Saving starts with 100 sun, no sky income or mowers, and all eight species subject
+to ordinary legality. Three randomly chosen lanes each receive basics at 75, 87 and
+99 seconds: nine zombies, covering all ten lane combinations. Saving has no rehearsal
+of another lesson. Easy retains 20% saving rehearsal; later mixtures are unchanged.
 
-### Lesson pressure trial
-
-Without flower income, 150 sun cannot fund two 100-sun shooters. The tested saving
-control invests at ticks 0/750 and buys shooters at 4300/6150, winning at 10501.
-Flower first/interval payments are 600/2400 ticks. Waiting loses at 9299. Investment
-delay 347 wins and 348 loses; placement delay 502 wins and 503 loses. These are
-control-specific boundaries, not universal limits. Controls never supply learning actions.
+The [no-income proof and feasibility witness](math/saving-and-actions.md) explain
+why a win requires actual sunflower production despite allowing mines and every
+other plant. Five sunflowers followed by shooters in publicly visible lanes win all
+ten combinations at 136.52 seconds in CPU and CUDA controls. Controls provide no
+learner actions. Configurable timings and budgets are experimental lesson design,
+not evidence of learnability or a cure for collapse.
 
 Normal validation follows each passed stage on 50 seeds per difficulty,
 100000–100049. Macro win rate selects best; ties retain the earliest checkpoint.
@@ -211,7 +215,7 @@ One recipe ships. Weights-only initialization requires compatible architecture a
 starts fresh optimizers, counters and memories. Resume restores the experiment and
 remaining allowance but restarts interrupted games with empty history. Switching
 stopping modes uses compatible weights with `--init-from`, rather than changing a resumed experiment. Older
-observation or action-head signatures and 20 Hz pins cannot load. No conversion paths ship.
+observation, action-head or action-distribution signatures and 20 Hz pins cannot load. No conversion paths ship.
 
 The default 120 minutes reserves 15 for finalization. Stops occur at complete
 updates; evaluation/export checks preserve incomplete status. Suites repeat this
@@ -242,8 +246,9 @@ to that boundary; an unexpected failed window cannot produce a resume checkpoint
 
 Checkpoints identify optimizer protocol `periodic_exact_kl_v1`. Resume requires
 that protocol and identical experiment settings. Compatible architecture weights
-remain available for inference and weights-only initialization; start fresh to
-measure this release's objective. Snapshot construction preserves RNG state.
+require the current `balanced_species_tiles_v1` action distribution for inference,
+transfer or resume. Previous distribution checkpoints require fresh training; files
+remain preserved. Same-protocol resume restores the experiment exactly. Snapshot construction preserves RNG state.
 
 Current-window diagnostics include exact KL, attempted and retained actor steps,
 rejected windows, effective entropy coefficients, and signed raw advantages,
@@ -252,3 +257,35 @@ Sparse statistics combine sums/counts across slots; absence in one slot does not
 hide evidence in the other. Completed-game metrics describe earlier trajectories
 and must not be read as a fresh deterministic evaluation. All diagnostics remain
 outside policy inputs. No learning comparison is launched during implementation.
+
+## Hardware telemetry and reporting
+
+Training and benchmarks share a background psutil/nvidia-smi sampler. It is enabled
+by `training.performance.telemetry`, with a one-second target interval configured by
+`logging.hardware_sample_seconds`. The sampler primes and ignores the first CPU
+reading, uses nonblocking CPU/RAM queries, and bounds hidden nvidia-smi calls. It
+selects CUDA's actual GPU UUID, respecting device remapping, and never synchronizes
+a training transition. Raw samples append and flush to `hardware-metrics.jsonl`;
+only ten minutes of recent readings are kept in memory.
+
+Samples record UTC, elapsed wall time, session, stage, warm-up/formal phase and
+training/validation/reporting activity, plus the latest complete-window throughput,
+collection/update/overlap and critical-path times. GPU measurements are device-wide,
+including other programs. Memory-controller busy percent is activity, whereas VRAM
+MiB is allocated capacity. System/busiest logical CPU percentages range 0–100;
+process CPU uses one-core units and can exceed 100. Missing readings are null with
+diagnostics, never manufactured zeros. GPU sampling windows are device-dependent.
+
+The report's hardware panels refresh after every probe and validation attempt,
+including interrupted/partial attempts, and on completion or graceful interruption.
+Images replace atomically; plotting failure leaves checkpoints valid. A forced kill
+cannot run plotting but flushed raw samples survive. `visualize --report-only` loads
+no model and generates no demonstrations. A partial final hardware-log record is
+ignored; malformed earlier records remain an error. Resume ancestry is limited to
+the recorded checkpoint boundary, with separately labeled session time axes.
+Historical utilization cannot be reconstructed where it was never recorded.
+
+The 15-second terminal block distinguishes recent task statistics, latest-window
+throughput, sampled hardware and whole-run averages. Checkpoints, mastery results
+and report paths appear as separate events. Missing values show n/a; until-mastery
+runs have no fabricated percentage or ETA.

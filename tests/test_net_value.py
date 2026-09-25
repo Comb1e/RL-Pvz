@@ -284,7 +284,7 @@ def test_mixed_cuda_resets_preserve_duration_and_episode_ledgers():
     cfg = load_config()
     cfg["training"].update(n_envs=2, rollout_size=256, batch_size=128)
     cfg["environment"]["cutoff_seconds"] = 1
-    cases = [("easy", "saving", 4), ("easy", "placement", 5)]
+    cases = [("easy", "saving", 4), ("easy", "saving", 5)]
     gpu = CudaVecEnv(cfg, "masked", 0, training=False, cases=cases)
     cpus = [PvZEnv(cfg, family=family, level=level) for level, family, _ in cases]
     for env, (_, _, seed) in zip(cpus, cases):

@@ -58,9 +58,16 @@ class TimingCallback(BaseCallback):
 
             raise TrainingDeadline()
         if self.load_monitor:
-            self.load_monitor.phase = (
-                self.load_monitor.phase.split("/phase-")[0] + "/phase-pipeline"
+            from .curriculum import STAGES
+
+            self.load_monitor.update(
+                activity="training",
+                phase="warmup" if getattr(self.model, "critic_warmup_active", False) else "formal",
+                stage=STAGES[getattr(getattr(self.model.env, "queue", None), "stage", 0)],
             )
 
     def _on_rollout_end(self):
         self.timings.record_window(self.model.pipeline_metrics)
+        if self.load_monitor:
+            self.load_monitor.record_window(self.model.pipeline_metrics)
+            self.load_monitor.update(training_steps=self.model.num_timesteps)
