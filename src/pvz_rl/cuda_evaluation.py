@@ -1,6 +1,7 @@
 """Batched deterministic evaluation and traces verified by the CPU replay path."""
 
 import copy
+from contextlib import contextmanager
 from time import perf_counter
 
 import torch
@@ -12,11 +13,55 @@ from .deadline import check_deadline
 from .event_memory import EventMemory
 
 
+@contextmanager
+def deterministic_validation(policy):
+    """Validation never uses injected training exploration."""
+    actor = policy.policy
+    action_dist = getattr(actor, "action_dist", None)
+    if action_dist is None:
+        yield
+        return
+    old_epsilon = getattr(action_dist, "epsilon", 0.0)
+    old_policy_epsilon = getattr(actor, "exploration_epsilon", old_epsilon)
+    old_model_epsilon = getattr(policy, "exploration_rate", None)
+    policy_kwargs = getattr(policy, "policy_kwargs", {})
+    had_policy_kw_epsilon = "exploration_epsilon" in policy_kwargs
+    old_policy_kw_epsilon = policy_kwargs.get("exploration_epsilon")
+    action_dist.epsilon = 0.0
+    actor.exploration_epsilon = 0.0
+    if old_model_epsilon is not None:
+        policy.exploration_rate = 0.0
+    if had_policy_kw_epsilon:
+        policy.policy_kwargs["exploration_epsilon"] = 0.0
+    try:
+        yield
+    finally:
+        action_dist.epsilon = old_epsilon
+        actor.exploration_epsilon = old_policy_epsilon
+        if old_model_epsilon is not None:
+            policy.exploration_rate = old_model_epsilon
+        if had_policy_kw_epsilon:
+            policy.policy_kwargs["exploration_epsilon"] = old_policy_kw_epsilon
+
+
 def batched_games(
     cfg, policy, condition, seeds, levels, family, *, record=False, progress=None, deadline=None
 ):
-    if runtime_settings(cfg)["refill_evaluation"]:
-        yield from refilled_games(
+    with deterministic_validation(policy):
+        if runtime_settings(cfg)["refill_evaluation"]:
+            yield from refilled_games(
+                cfg,
+                policy,
+                condition,
+                seeds,
+                levels,
+                family,
+                record=record,
+                progress=progress,
+                deadline=deadline,
+            )
+            return
+        yield from fixed_batches(
             cfg,
             policy,
             condition,
@@ -27,18 +72,6 @@ def batched_games(
             progress=progress,
             deadline=deadline,
         )
-        return
-    yield from fixed_batches(
-        cfg,
-        policy,
-        condition,
-        seeds,
-        levels,
-        family,
-        record=record,
-        progress=progress,
-        deadline=deadline,
-    )
 
 
 def refilled_games(
@@ -71,7 +104,7 @@ def refilled_games(
         with env.device_context():
             while finished < len(cases):
                 check_deadline(deadline)
-                with torch.no_grad():
+                with torch.inference_mode():
                     kwargs = {}
                     context = memory.observe(
                         obs, env.action_masks(), previous, resets, env.header_tensor[:, 0]
@@ -166,7 +199,7 @@ def fixed_batches(
                 with env.device_context():
                     while len(completed) < len(chunk):
                         check_deadline(deadline)
-                        with torch.no_grad():
+                        with torch.inference_mode():
                             kwargs = {}
                             context = memory.observe(
                                 obs, env.action_masks(), previous, resets, env.header_tensor[:, 0]

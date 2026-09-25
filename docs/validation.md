@@ -1,5 +1,34 @@
 # Validation and measured results
 
+## 0.18.0 exploration and throughput stabilization — 2026-09-25
+
+Implementation is on a feature branch. The stopped run used as diagnosis reached 3,781
+placement games without mastery; recent wins were 8–10%, injected exploration was about
+0.016%, and live throughput was about 2,680 transitions/s. The adjacent warm-up/actor
+comparison was observational evidence, not a controlled learning result.
+
+The new schedule has independent warm-up/formal phases, formal floors, stage resets and
+explicit zero-noise deterministic validation. The fixed CUDA path adds device sequence
+index templates, inference-mode frozen evaluation, tensor-only masked categorical hot
+operations, optional fixed-shape `torch.compile`, and per-slot phase diagnostics.
+Retired-schedule checkpoints remain inference-readable and are rejected for new training.
+
+Focused schedule, policy, CUDA-mask, periodic-window and evaluation controls pass during
+implementation. Cross-slot post-update metrics now share policy batches while preserving
+per-slot choice-state denominators and injected-KL hooks for controlled tests. The existing GPU benchmark completed three warmed eager repetitions at
+128 environments × 128 transitions: median **2,608 decisions/s**, coefficient of
+variation 0.61%, and approximately 1.41 GiB peak allocated VRAM. The compiled path
+completed two repetitions at about **2,643 decisions/s** before its bounded four-minute
+window expired; its third repetition was incomplete. The stopped-run observation was
+about 2,680 decisions/s, so the required 20% improvement was not demonstrated. The
+result is inconclusive; compilation remains available but is not claimed as a speedup.
+The final research regression passed **618 tests**. CUDA doctor, dependency checks,
+wheel/sdist packaging and Ruff also passed. No formal training or comparison was
+launched, so learning effects remain unmeasured. Existing run files and artifacts
+remain preserved.
+
+
+
 Evidence is versioned below. Learning outcomes, simulation correctness and runtime
 speed are separate measures; [research design](research.md) defines the protocol.
 

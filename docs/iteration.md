@@ -5,6 +5,30 @@ Dates and results belong to their recorded version. Current behavior lives in
 artifact locations and learning outcomes live in [validation](validation.md).
 The longer pre-consolidation notes remain in `git show b642c9c:docs/iteration.md`.
 
+## 0.18.0 — 2026-09-25
+
+- Problem: the stopped placement run reached 3,781 games without mastery. Injected
+  exploration fell from 10% during critic warm-up to about 0.016%, while recent wins
+  declined to 8–10%. Actor learning also reduced the observed rate from about 4,068
+  to 2,680 transitions/s.
+- Exploration change: separate warm-up and formal schedules. Formal exploration starts
+  at 5%, entropy starts at full strength, both decay over 3,000 actor-learning games,
+  and floors of 0.1% injected noise and 10% entropy remain until mastery. Stage entry
+  resets the clock. Validation explicitly disables injected exploration.
+- Runtime change: CUDA sequence index templates avoid rebuilding full Python index
+  lists; frozen evaluation uses inference mode; masked categorical hot paths use
+  tensor-only operations; fixed-shape feature paths can use `torch.compile` without
+  changing checkpoint keys. Host/device phase telemetry is recorded per rollout slot.
+- Compatibility: retired-schedule checkpoints remain readable for inference but cannot
+  resume or initialize new training. Same-protocol resume and stage handoff remain
+  available. Existing `runs/` and artifacts are preserved.
+- Verification: the final research regression passed 618 tests; CUDA doctor,
+  dependency checks, packaging and Ruff passed. Three warmed eager benchmark
+  repetitions reached a median 2,608 transitions/s, while the compiled path did not
+  complete its bounded third repetition. The required 20% throughput gain was not
+  demonstrated, so the result is inconclusive. No formal training comparison was
+  launched by this change.
+
 ## 0.17.0 — 2026-09-24
 
 - Problem: rare digging probabilities could rise abruptly despite sampled KL

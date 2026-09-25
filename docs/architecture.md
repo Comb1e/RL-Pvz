@@ -114,7 +114,9 @@ truncated games bootstrap from these, natural outcomes do not. The unchanged cri
 evaluates stored causal contexts in batches before duration-based GAE.
 
 Optimization shuffles contiguous per-environment chunks (default 16 transitions),
-never the transitions within them. At each chunk boundary it restores retained
+never the transitions within them. CUDA index templates preserve environment-major
+ordering without rebuilding full Python index lists for every chunk. At each chunk
+boundary it restores retained
 public history and replays up to eight prefix transitions without loss. The prefix
 reconstructs event admission/compression, not learned hidden state. Both encoders
 then re-encode this history; the remaining chunk contexts use the exact archive.
@@ -171,9 +173,17 @@ stateDiagram-v2
 Checks average only genuine-choice observations and test each available slot;
 new second-slot observations are checked before more actor updates. Critic state,
 RNG progress and environment history never roll back. No automatic retries occur.
-Snapshot construction preserves CPU/CUDA RNG state. Injected noise and entropy
-coefficients decay by stage-resident games and stay fixed throughout each window.
-Evaluation uses greedy actor inference with separate episode banks.
+Snapshot construction preserves CPU/CUDA RNG state. Warm-up and formal injected
+noise are separate: formal exploration decays to floors by stage-resident games,
+resets at a stage boundary, and stays fixed throughout each window. Evaluation
+temporarily sets injected epsilon to zero and uses greedy actor inference with
+separate episode banks.
+
+The CUDA learner uses a tensor-only masked categorical fast path and inference-mode
+frozen evaluation. Fixed-shape actor and critic feature paths may be compiled with
+`torch.compile`; wrappers stay outside the module tree so checkpoint keys and
+optimizer ownership remain unchanged. Compiler failures fall back to eager execution
+and are recorded in window metrics.
 
 Reward is net realized value plus an outcome, with gamma 1 retaining late outcomes.
 GAE keeps a time-based trace decay. Income, effective damage and remaining asset
@@ -189,14 +199,15 @@ the default; conflicting explicit ceilings fail before output creation.
 
 ## Storage, compatibility and failure paths
 
-Each run records resolved settings, source and structural signatures, periodic
-pipeline depth, policy-version hashes, overlap timings, reward and
+Each run records resolved settings, exploration phase/floor state, source and structural
+signatures, periodic pipeline depth, policy-version hashes, overlap timings, reward and
 discount settings, seeds, elapsed allowance, curriculum state, episodes and optimizer
-metrics. Checkpoints include both optimizers and optimizer protocol `periodic_exact_kl_v1`.
-Resume rejects an earlier protocol before creating output; compatible weights can
-still initialize a new experiment or be used for inference. Stage transfers copy compatible weights
-only; resume restores the saved experiment, starts fresh games and empty memory,
-and preserves cumulative schedules. Resume is not a bitwise continuation of partial games.
+metrics. Checkpoints include both optimizers, optimizer protocol
+`periodic_exact_kl_v1` and exploration protocol `phase_floor_v1`. Checkpoints from the
+retired schedule remain readable for inference but cannot resume or initialize new
+training. Same-protocol stage transfers copy compatible weights only; same-protocol
+resume restores the saved experiment, starts fresh games and empty memory, and
+preserves cumulative schedules. Resume is not a bitwise continuation of partial games.
 All earlier observation/policy signatures are rejected before model loading.
 
 The engine is installed non-editably from a commit-verified archive and complete

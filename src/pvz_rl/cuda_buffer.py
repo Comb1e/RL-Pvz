@@ -41,6 +41,7 @@ class TensorRolloutBuffer(BaseBuffer):
         self._timeouts = []
         self.memory_archive = None
         self._burn_contexts = {}
+        self._step_index_templates = {}
         self.has_behavior_logits = False
 
     def capture_behavior(self, distribution):
@@ -185,7 +186,7 @@ class TensorRolloutBuffer(BaseBuffer):
             )
         )
 
-    @torch.no_grad()
+    @torch.inference_mode()
     def evaluate_values(self, policy, last_observations, batch_size, last_context=None):
         if not self.full:
             raise RuntimeError("Evaluate values only for a completed rollout")
@@ -312,10 +313,26 @@ class TensorRolloutBuffer(BaseBuffer):
         for chunk in order:
             start, environments = chunks[chunk]
             end = min(start + length, self.buffer_size)
-            ids = [t * self.n_envs + env for env in environments for t in range(start, end)]
-            selection = torch.tensor(ids, device=self.device)
+            length = end - start
+            key = (start, length)
+            offsets = self._step_index_templates.get(key)
+            if offsets is None:
+                offsets = torch.arange(
+                    start * self.n_envs,
+                    end * self.n_envs,
+                    self.n_envs,
+                    device=self.device,
+                    dtype=torch.long,
+                )
+                self._step_index_templates[key] = offsets
+            environment_ids = torch.as_tensor(
+                environments, device=self.device, dtype=torch.long
+            )
+            # Preserve the existing environment-major ordering while avoiding a
+            # Python list and a full host-to-device index transfer per chunk.
+            selection = (environment_ids[:, None] + offsets[None, :]).flatten()
             context = self.context(selection)
-            prefix = self.burn_context(torch.tensor(environments, device=self.device), start)
+            prefix = self.burn_context(environment_ids, start)
             for key in ("tokens", "valid", "counts", "starts"):
                 getattr(context, key)[:: end - start].copy_(getattr(prefix, key))
             yield SimpleNamespace(**dict(zip(names, (x[selection] for x in flat))), context=context)

@@ -101,7 +101,33 @@ def lesson_settings(cfg=None):
     return (cfg or {}).get("curriculum", {}).get("lessons", _teaching_defaults()["lessons"])
 
 
-def validate_config(cfg: dict) -> None:
+def _legacy_exploration_config(cfg: dict) -> dict:
+    """Map retired schedule fields only while reading historical metadata."""
+    result = copy.deepcopy(cfg)
+    settings = result.get("training", {}).get("exploration", {})
+    if "epsilon" not in settings:
+        return result
+    epsilon = settings.get("epsilon", 0.0)
+    target = settings.get("epsilon_target", epsilon)
+    result["training"]["exploration"] = {
+        "objective": settings.get("objective", "balanced_heads_v2"),
+        "type_coef": settings.get("type_coef", 0.0),
+        "plant_coef": settings.get("plant_coef", 0.0),
+        "tile_coef": settings.get("tile_coef", 0.0),
+        "warmup_epsilon": epsilon,
+        "formal_epsilon_start": epsilon,
+        "formal_epsilon_floor": target,
+        "warmup_entropy_fraction": 1.0,
+        "formal_entropy_start_fraction": 1.0,
+        "formal_entropy_floor_fraction": settings.get("entropy_target_fraction", 1.0),
+        "formal_decay_games": settings.get("epsilon_target_games", 0),
+    }
+    return result
+
+
+def validate_config(cfg: dict, *, allow_legacy_exploration=False) -> None:
+    if allow_legacy_exploration:
+        cfg = _legacy_exploration_config(cfg)
     if cfg["training"].get("validation_schedule", "periodic") not in (
         "periodic",
         "stage_success",
@@ -204,37 +230,35 @@ def validate_config(cfg: dict) -> None:
     warmup = cfg["training"].get("critic_warmup_games", 0)
     if type(warmup) is not int or warmup < 0:
         raise ValueError("critic_warmup_games must be a nonnegative integer")
-    epsilon = cfg["training"]["exploration"].get("epsilon", 0.0)
-    entropy_target = cfg["training"]["exploration"].get("entropy_target_fraction", 1.0)
-    if (
-        type(entropy_target) not in (int, float)
-        or not math.isfinite(entropy_target)
-        or not 0 < entropy_target <= 1
-    ):
-        raise ValueError("entropy_target_fraction must be finite and in (0, 1]")
-    if type(epsilon) not in (int, float) or not math.isfinite(epsilon) or not 0 <= epsilon < 1:
-        raise ValueError("exploration.epsilon must be finite and in [0, 1)")
-    target_games = cfg["training"]["exploration"].get("epsilon_target_games", 0)
-    if type(target_games) is not int or target_games < 0 or 0 < target_games <= warmup:
+    exploration = cfg["training"]["exploration"]
+    schedule_fields = (
+        "warmup_epsilon",
+        "formal_epsilon_start",
+        "formal_epsilon_floor",
+        "warmup_entropy_fraction",
+        "formal_entropy_start_fraction",
+        "formal_entropy_floor_fraction",
+    )
+    for key in schedule_fields:
+        value = exploration.get(key)
+        if type(value) not in (int, float) or not math.isfinite(value) or not 0 < value <= 1:
+            raise ValueError(f"exploration.{key} must be finite and in (0, 1]")
+    if exploration["formal_epsilon_floor"] > exploration["formal_epsilon_start"]:
+        raise ValueError("exploration.formal_epsilon_floor cannot exceed formal_epsilon_start")
+    if exploration["formal_entropy_floor_fraction"] > exploration["formal_entropy_start_fraction"]:
         raise ValueError(
-            "exploration.epsilon_target_games must be zero or an integer greater than critic_warmup_games"
+            "exploration.formal_entropy_floor_fraction cannot exceed formal_entropy_start_fraction"
         )
-    target = cfg["training"]["exploration"].get("epsilon_target")
-    if target_games and (
-        type(target) not in (int, float)
-        or not math.isfinite(target)
-        or not 0 < target < 1
-        or epsilon > 0
-        and target > epsilon
-    ):
-        raise ValueError(
-            "exploration.epsilon_target must be finite, positive and no greater than epsilon"
-        )
+    decay_games = exploration.get("formal_decay_games")
+    if type(decay_games) is not int or decay_games < 0:
+        raise ValueError("exploration.formal_decay_games must be a nonnegative integer")
+    if any(key in exploration for key in ("epsilon", "epsilon_target", "epsilon_target_games", "entropy_target_fraction")):
+        raise ValueError("The old single exploration schedule was removed; use phase/floor fields")
     value_batch = cfg["training"].get("value_batch_size", 1024)
     if type(value_batch) is not int or value_batch < 1:
         raise ValueError("value_batch_size must be a positive integer")
     for key in ("type_coef", "plant_coef", "tile_coef"):
-        value = cfg["training"]["exploration"][key]
+        value = exploration[key]
         if type(value) not in (int, float) or not math.isfinite(value) or value < 0:
             raise ValueError(f"exploration.{key} must be finite and nonnegative")
     minutes = cfg["training"].get("max_minutes")
@@ -354,6 +378,10 @@ def validate_config(cfg: dict) -> None:
         or not 1 <= pipeline["queue_size"] <= pipeline["depth"]
     ):
         raise ValueError("training.pipeline.queue_size must be between 1 and depth")
+    performance = train.get("performance", {})
+    for key in ("compile_kernels", "telemetry"):
+        if type(performance.get(key, False)) is not bool:
+            raise ValueError(f"training.performance.{key} must be a boolean")
     if train.get("budget_unit", "decisions") not in ("games", "decisions"):
         raise ValueError("training.budget_unit must be games or decisions")
     if env.get("action_timing", "fixed") not in ("fixed", "per_tick"):

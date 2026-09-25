@@ -139,7 +139,12 @@ def test_deferred_critic_timeout_values_and_gae_match_independent_control(device
 def test_current_weights_only_transfer_preserves_outputs_and_rejects_old_reward(tmp_path):
     original, obs, mask, cfg = policy_and_state()
     old = copy.deepcopy(cfg)
-    metadata = {"config": old, "condition": "masked", "learner_seed": 101}
+    metadata = {
+        "config": old,
+        "condition": "masked",
+        "learner_seed": 101,
+        "exploration_protocol": "phase_floor_v1",
+    }
     (tmp_path / "metadata.json").write_text(json.dumps(metadata))
     checkpoint = tmp_path / "source.zip"
     save_to_zip_file(
@@ -339,8 +344,11 @@ def test_normalization_and_reward_defaults():
         type_coef=0.01,
         plant_coef=0.001,
         tile_coef=0.001,
-        epsilon=0.1,
-        epsilon_target=0.001,
-        epsilon_target_games=3000,
-        entropy_target_fraction=0.01,
+        warmup_epsilon=0.1,
+        formal_epsilon_start=0.05,
+        formal_epsilon_floor=0.001,
+        warmup_entropy_fraction=1.0,
+        formal_entropy_start_fraction=1.0,
+        formal_entropy_floor_fraction=0.1,
+        formal_decay_games=3000,
     )

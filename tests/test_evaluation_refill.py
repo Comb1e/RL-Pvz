@@ -8,7 +8,7 @@ import torch
 from pvz_game import LevelSpec, Spawn
 
 from pvz_rl.config import load_config, research_config, validate_config
-from pvz_rl.cuda_evaluation import batched_games
+from pvz_rl.cuda_evaluation import batched_games, deterministic_validation
 from pvz_rl.env import PvZEnv
 from pvz_rl.rewards import REWARD_METRICS
 
@@ -111,3 +111,23 @@ def test_plant_and_mower_kills_survive_cuda_episode_reset(monkeypatch):
         assert row["plant_kills"] == row["mower_kills"] == 1
         assert row["defeated"] == 2
         assert row["mower_activation_penalty"] == pytest.approx(-200 / 30000)
+
+
+def test_validation_temporarily_disables_injected_exploration():
+    actor = SimpleNamespace(
+        action_dist=SimpleNamespace(epsilon=0.05), exploration_epsilon=0.05
+    )
+    policy = SimpleNamespace(
+        policy=actor,
+        exploration_rate=0.05,
+        policy_kwargs={"exploration_epsilon": 0.05},
+    )
+    with deterministic_validation(policy):
+        assert actor.action_dist.epsilon == 0
+        assert actor.exploration_epsilon == 0
+        assert policy.exploration_rate == 0
+        assert policy.policy_kwargs["exploration_epsilon"] == 0
+    assert actor.action_dist.epsilon == 0.05
+    assert actor.exploration_epsilon == 0.05
+    assert policy.exploration_rate == 0.05
+    assert policy.policy_kwargs["exploration_epsilon"] == 0.05

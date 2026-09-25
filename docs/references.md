@@ -1,5 +1,30 @@
 # Sources actually used
 
+## Exploration phases and CUDA throughput — 2026-09-25
+
+- [PyTorch 2.8 CUDA semantics and CUDA Graphs](https://github.com/pytorch/pytorch/blob/v2.8.0/docs/source/notes/cuda.rst):
+  rechecked stream ownership, static-address requirements, graph replay's CPU
+  dispatch benefit and restrictions from dynamic control flow. The compiled and
+  tensor-only paths preserve eager fallback and do not change the periodic PPO
+  scheduler.
+- [Sample Factory synchronous/asynchronous design notes](https://github.com/alex-petrenko/sample-factory/blob/master/docs/07-advanced-topics/sync-async.md):
+  rechecked the warning that overlap often gives little benefit for GPU-resident
+  environments. This supports keeping two slots and measuring contention instead
+  of increasing pipeline depth.
+- Installed **SB3-Contrib 2.7.1** masked distributions and PPO update code:
+  rechecked legal-mask consistency, joint log probabilities and deterministic
+  evaluation. The fast categorical path retains those equations while removing
+  repeated device-dependent validation in hot minibatches.
+- [CleanRL PPO](https://github.com/vwxyzjn/cleanrl/blob/e421c2e50b81febf639fced51a69e2602593d50d/cleanrl/ppo.py):
+  rechecked explicit entropy, likelihood-ratio and optimizer ordering used by the
+  fixed-shape compiled learner kernels.
+
+The separate warm-up/formal schedule, floors and deterministic validation rule are
+project-specific responses to the stopped placement run. The run fell from 4,068
+warm-up transitions/s to roughly 2,680 transitions/s during actor learning and
+reached only 8–10% recent placement wins by game 3,781. These observations do not
+establish that the schedule or compiled path improves later learning.
+
 ## Objective and exact PPO guard — 2026-09-24
 
 - [Spinning Up: reward and return](https://spinningup.openai.com/en/latest/spinningup/rl_intro.html):

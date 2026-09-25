@@ -141,14 +141,23 @@ and ordinary lookups during inference. The optimization avoids sorting repeated
 category indices across raw history banks. No network width, precision, PPO reduction
 or action timing changes are used to obtain speed.
 
-Added wait/plant-type noise starts at 10%, held during 1,024 stage-resident games
-of critic adaptation, then decays exponentially to 0.1% at stage game 3,000 and
-toward zero afterward. Digging has no random floor. Entropy coefficients also decay exponentially to 1% of their starting values at
-stage game 3,000 (`entropy_target_fraction=0.01`), then onward. Fraction 1 disables
-entropy decay; disabling game-based scheduling holds both schedules constant.
-Rates change only between complete windows.
-Validation is greedy. At 100 Hz this aggressive noise has more opportunities per
-second; no improvement is assumed.
+Exploration now has separate warm-up and formal phases. It is 10% injected
+wait/plant-type noise with full entropy during the first 1,024 stage-resident games.
+Actor learning starts at 5% injected noise and full entropy, then decays over the
+next 3,000 stage games to a 0.1% injected floor and 10% entropy floor. Both floors
+remain until mastery and reset when a new stage begins. Digging remains legal and
+has no injected random prior. The schedule is a project-specific stability
+hypothesis; it does not guarantee a win-rate improvement. Rates change only between
+complete windows and are recorded with phase/progress/floor diagnostics.
+Validation is explicitly deterministic: injected epsilon is set to zero and greedy
+learned heads are used, regardless of the training schedule.
+
+The current CUDA path uses device-resident sequence index templates, inference-mode
+frozen evaluation, a tensor-only masked categorical fast path, and optional fixed-shape
+`torch.compile` wrappers that do not alter checkpoint parameter keys. The compiled
+path falls back to eager execution if the local compiler rejects a graph. Window
+records expose compilation status and host/device phase timings; no environment,
+rollout, PPO, reward, observation or action semantics change.
 
 ## Curriculum
 

@@ -1,6 +1,60 @@
-"""Exploration regularization, separate from the policy's true joint entropy."""
+"""Exploration regularization and the stage-aware phase/floor schedule."""
+
+from dataclasses import dataclass
 
 import torch
+
+EXPLORATION_PROTOCOL = "phase_floor_v1"
+
+
+@dataclass(frozen=True)
+class ExplorationState:
+    """Resolved exploration values frozen for one rollout window."""
+
+    phase: str
+    progress: float
+    epsilon: float
+    entropy_factor: float
+    at_floor: bool
+
+
+def exploration_state(cfg, stage_games, *, staged=True):
+    """Resolve warm-up or formal exploration without hidden schedule state."""
+    settings = cfg["training"]["exploration"]
+    warmup_games = cfg["training"].get("critic_warmup_games", 0) if staged else 0
+    if staged and stage_games < warmup_games:
+        return ExplorationState(
+            phase="warmup",
+            progress=0.0,
+            epsilon=float(settings["warmup_epsilon"]),
+            entropy_factor=float(settings["warmup_entropy_fraction"]),
+            at_floor=False,
+        )
+
+    elapsed = max(0, int(stage_games) - warmup_games)
+    decay_games = int(settings["formal_decay_games"])
+    progress = min(1.0, elapsed / decay_games) if decay_games else 1.0
+    epsilon_start = float(settings["formal_epsilon_start"])
+    epsilon_floor = float(settings["formal_epsilon_floor"])
+    entropy_start = float(settings["formal_entropy_start_fraction"])
+    entropy_floor = float(settings["formal_entropy_floor_fraction"])
+    epsilon = epsilon_start * (epsilon_floor / epsilon_start) ** progress
+    entropy = entropy_start * (entropy_floor / entropy_start) ** progress
+    return ExplorationState(
+        phase="formal",
+        progress=progress,
+        epsilon=epsilon,
+        entropy_factor=entropy,
+        at_floor=progress >= 1.0,
+    )
+
+
+def exploration_rate(cfg, stage_games, *, staged=True):
+    return exploration_state(cfg, stage_games, staged=staged).epsilon
+
+
+def entropy_factor(cfg, stage_games, *, staged=True):
+    return exploration_state(cfg, stage_games, staged=staged).entropy_factor
 
 
 def exploration_loss(policy, entropy, log_prob):
@@ -35,9 +89,12 @@ def exploration_loss(policy, entropy, log_prob):
 
 def configure_exploration(model, cfg):
     settings = cfg["training"]["exploration"]
-    model.policy.exploration_settings = dict(settings)
-    # Checkpoints retain the rate that actually collected their last rollout.
-    set_exploration_rate(model, getattr(model, "exploration_rate", settings.get("epsilon", 0.0)))
+    model.exploration_settings = dict(settings)
+    warmup_epsilon = settings.get("warmup_epsilon", settings.get("epsilon", 0.0))
+    set_exploration_rate(
+        model,
+        getattr(model, "exploration_rate", warmup_epsilon),
+    )
     set_entropy_factor(model, cfg, getattr(model, "entropy_factor", 1.0))
 
 
@@ -48,37 +105,21 @@ def set_entropy_factor(model, cfg, factor):
         model.policy.exploration_settings[key] *= factor
 
 
-def decay_progress(cfg, stage_games, staged):
-    target = cfg["training"]["exploration"].get("epsilon_target_games", 0)
-    if not target:
-        return 0.0
-    warmup = cfg["training"].get("critic_warmup_games", 0) if staged else 0
-    return max(0, stage_games - warmup) / (target - warmup)
-
-
-def entropy_factor(cfg, stage_games, *, staged=True):
-    # Historical inference metadata has no entropy schedule; it remains readable.
-    target = cfg["training"]["exploration"].get("entropy_target_fraction", 1.0)
-    return target ** decay_progress(cfg, stage_games, staged)
-
-
 def set_exploration_rate(model, rate):
-    """Keep collection, PPO ratios and both checkpoint-loading interfaces aligned."""
-    model.exploration_rate = rate
-    model.policy.action_dist.epsilon = rate
-    model.policy.exploration_epsilon = rate
-    model.policy_kwargs["exploration_epsilon"] = rate
+    """Keep collection, PPO ratios and checkpoint interfaces aligned."""
+    model.exploration_rate = float(rate)
+    model.policy.action_dist.epsilon = float(rate)
+    model.policy.exploration_epsilon = float(rate)
+    model.policy_kwargs["exploration_epsilon"] = float(rate)
 
 
-def exploration_rate(cfg, stage_games, *, staged=True):
-    """Hold during critic adaptation, then exponentially approach zero by stage games."""
-    settings = cfg["training"]["exploration"]
-    start = settings.get("epsilon", 0.0)
-    target_games = settings.get("epsilon_target_games", 0)
-    if not start or not target_games:
-        return start
-    fraction = decay_progress(cfg, stage_games, staged)
-    return start * (settings["epsilon_target"] / start) ** fraction
+def apply_exploration_state(model, cfg, state):
+    """Apply one resolved state immediately before a new rollout window."""
+    set_exploration_rate(model, state.epsilon)
+    set_entropy_factor(model, cfg, state.entropy_factor)
+    model.exploration_phase = state.phase
+    model.exploration_progress = state.progress
+    model.exploration_at_floor = state.at_floor
 
 
 def pooled_spatial(features, channels, scalar_channels, rows=5, cols=9):

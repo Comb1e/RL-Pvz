@@ -1,6 +1,6 @@
 # PVZ plant-placement research
 
-Research **0.17.0** trains one shared CUDA PPO policy across easy, standard and hard.
+Research **0.18.0** trains one shared CUDA PPO policy across easy, standard and hard.
 The policy uses a **281-value timer-free observation** and independent actor/critic
 Transformers with bounded event memory. It chooses wait, dig or plant first, then
 the required plant type and tile. Simulation runs at **100 Hz**. Learning
@@ -56,12 +56,19 @@ restores the window-start actor and Adam state while critic updates continue. A 
 advances one 0.01-second tick; accepted planting/digging is instantaneous.
 
 Use `--stage placement`, `saving`, `easy`, `standard` or `shared` to train one stage.
-A compatible `--init-from CHECKPOINT` copies weights and starts fresh optimizers,
-counters and episode histories. `--resume CHECKPOINT` restores the experiment and
-remaining budget; interrupted games restart with empty memories. Both options need
-the source checkpoint beside its `metadata.json`. Full resume requires the same
-optimizer protocol; earlier compatible weights remain usable for inference or
-`--init-from`. Existing run files are preserved. See [training details](docs/research.md).
+A compatible new-protocol `--init-from CHECKPOINT` copies weights and starts fresh
+optimizers, counters and episode histories. `--resume CHECKPOINT` restores the
+experiment and remaining budget; interrupted games restart with empty memories. Both
+options need the source checkpoint beside its `metadata.json`. The stopped 0.17.0
+checkpoint and other retired-schedule models remain usable for inference, but cannot
+resume or initialize 0.18.0 training. Existing run files are preserved. See
+[training details](docs/research.md).
+
+Training exploration has separate stage phases: 10% injected wait/plant noise during
+the 1,024-game critic warm-up, then 5% formal noise decaying to a 0.1% floor over
+3,000 actor-learning games. Entropy decays from 100% to a 10% floor over the same
+clock. Floors remain until mastery and reset at the next stage. Validation always
+sets injected exploration to zero and selects greedy learned actions.
 
 To train only placement until it passes, with no training time or game ceiling:
 
@@ -115,6 +122,7 @@ and diagnostics; `tests/` independent controls; `docs/` technical records. `.ven
 - [Architecture and workflows](docs/architecture.md)
 - [Training, reward, curriculum and limitations](docs/research.md)
 - [Reward and PPO derivations with checked bounds](docs/math/training-objective.md)
+- [Exploration schedule derivation](docs/math/exploration-schedule.md)
 - [Inspected research sources](docs/references.md)
 - [Measured verification and learning results](docs/validation.md)
 - [Iteration history](docs/iteration.md)

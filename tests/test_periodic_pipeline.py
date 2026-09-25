@@ -377,12 +377,12 @@ def test_old_optimizer_protocol_is_inference_and_weights_only(pipeline_model, tm
     loaded, _ = load_policy(checkpoint, "cuda")
     for actual, expected in zip(loaded.policy.parameters(), model.policy.parameters()):
         torch.testing.assert_close(actual, expected, rtol=0, atol=0)
-    weights, _ = initial_weights(checkpoint, env.cfg)
-    assert weights
+    with pytest.raises(ValueError, match="retired exploration schedule"):
+        initial_weights(checkpoint, env.cfg)
     with pytest.raises(ValueError, match="Optimizer protocol"):
         loaded.learn(8)
     output = tmp_path / "unsupported"
-    with pytest.raises(ValueError, match="Optimizer protocol"):
+    with pytest.raises(ValueError, match="retired exploration schedule"):
         train(env.cfg, "masked", 101, output, resume=checkpoint, validation_limit=1)
     assert not output.exists()
 
