@@ -255,6 +255,10 @@ def build_run_report(run, cfg=None):
         ("critic_optimizer_steps", "Actual critic steps per update"),
         ("post_update_approx_kl", "Post-update sampled joint KL"),
         ("post_update_type_kl", "Post-update exact type KL"),
+        ("exact_kl", "Current window: exact joint KL on choice states"),
+        ("actor_attempted_steps", "Actor steps attempted per window"),
+        ("actor_retained_steps", "Actor steps retained per window"),
+        ("actor_window_rejected", "Actor window rejected"),
         ("dig_probability_when_legal", "Dig probability where digging is legal"),
         ("kl_stopped", "Actor stopped by KL limit"),
         ("memory_compression_ratio", "Represented decisions / retained memory token"),
@@ -432,6 +436,12 @@ def build_run_report(run, cfg=None):
             if cfg["training"].get("until_stage_complete", False)
             else f"Game target reached: {escape(status.get('budget_complete', 'in progress'))}.</p>"
         )
+    )
+    run_progress += (
+        "<p>Episode curves summarize completed games and can lag behind the current policy. "
+        "Optimizer and action-probability measurements describe the current window. "
+        "Truncated episode returns are incomplete, not evidence of victory. "
+        "With gamma=1, discounted and undiscounted episode rewards are equal.</p>"
     )
     if status.get("selected_stage"):
         run_progress += (

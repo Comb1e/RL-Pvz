@@ -321,14 +321,17 @@ def test_neural_critic_batching_preserves_predictions(device):
 
 def test_normalization_and_reward_defaults():
     cfg = load_config()
-    assert cfg["training"]["learning_rate"] == 3e-4
+    assert cfg["training"]["learning_rate"] == 1e-4
+    assert cfg["training"]["critic_learning_rate"] == 3e-4
+    assert cfg["training"]["gamma"] == 1
+    assert cfg["training"]["gae_lambda"] == pytest.approx(0.999**0.4)
     assert cfg["reward"] == dict(
         version="net_value_v1",
         win_reward=1.0,
         loss_penalty=2.0,
-        mower_value=600.0,
+        mower_value=200.0,
         basic_zombie_value=50.0,
-        progress_weight=0.1,
+        progress_weight=0.01,
         value_scale=300.0,
     )
     assert cfg["training"]["exploration"] == dict(
@@ -339,4 +342,5 @@ def test_normalization_and_reward_defaults():
         epsilon=0.1,
         epsilon_target=0.001,
         epsilon_target_games=3000,
+        entropy_target_fraction=0.01,
     )

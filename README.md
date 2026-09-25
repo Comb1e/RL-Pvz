@@ -1,10 +1,10 @@
 # PVZ plant-placement research
 
-Research **0.16.0** trains one shared CUDA PPO policy across easy, standard and hard.
+Research **0.17.0** trains one shared CUDA PPO policy across easy, standard and hard.
 The policy uses a **281-value timer-free observation** and independent actor/critic
 Transformers with bounded event memory. It chooses wait, dig or plant first, then
 the required plant type and tile. Simulation runs at **100 Hz**. Learning
-results are experimental; **all earlier models require fresh training**. Regional
+results are experimental. **Start fresh to assess the revised reward objective**. Regional
 inputs retain zombie type counts, health, armor and
 nearest zombie/unused-pole distances; explicit zombie behavior labels are absent.
 
@@ -51,14 +51,17 @@ window: one frozen policy snapshot collects both rollouts while the learner upda
 the first. Probes, validation, stopping and checkpoint saves run only after both
 updates complete. A final one-slot window handles a smaller remaining decision
 budget. Waiting remains a transition. **128 never limits game length**;
-unfinished episodes and their histories continue across updates. A wait/rejection
+unfinished episodes and their histories continue across updates. Excessive exact KL
+restores the window-start actor and Adam state while critic updates continue. A wait/rejection
 advances one 0.01-second tick; accepted planting/digging is instantaneous.
 
 Use `--stage placement`, `saving`, `easy`, `standard` or `shared` to train one stage.
 A compatible `--init-from CHECKPOINT` copies weights and starts fresh optimizers,
 counters and episode histories. `--resume CHECKPOINT` restores the experiment and
 remaining budget; interrupted games restart with empty memories. Both options need
-the source checkpoint beside its `metadata.json`. See [training details](docs/research.md).
+the source checkpoint beside its `metadata.json`. Full resume requires the same
+optimizer protocol; earlier compatible weights remain usable for inference or
+`--init-from`. Existing run files are preserved. See [training details](docs/research.md).
 
 To train only placement until it passes, with no training time or game ceiling:
 
@@ -102,7 +105,7 @@ verified demos, use a fresh artifact directory:
 ```powershell
 .\.venv\Scripts\python.exe -m pytest -q `
   tests/test_sc2_training.py::test_spatial_cuda_report_and_three_verified_shared_demos `
-  --basetemp artifacts\cuda-smoke-v0160
+  --basetemp artifacts\cuda-smoke-v0170
 ```
 
 `src/pvz_rl/` contains implementation; `configs/` the single recipe; `tools/` installation
@@ -111,6 +114,7 @@ and diagnostics; `tests/` independent controls; `docs/` technical records. `.ven
 
 - [Architecture and workflows](docs/architecture.md)
 - [Training, reward, curriculum and limitations](docs/research.md)
+- [Reward and PPO derivations with checked bounds](docs/math/training-objective.md)
 - [Inspected research sources](docs/references.md)
 - [Measured verification and learning results](docs/validation.md)
 - [Iteration history](docs/iteration.md)

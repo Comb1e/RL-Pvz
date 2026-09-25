@@ -90,11 +90,39 @@ def test_lesson_economics_and_pressure_independent_calculations():
 
 
 @pytest.mark.parametrize("lanes", LANE_PAIRS)
-@pytest.mark.parametrize("mode", ["invest", "no_flowers", "wait"])
+@pytest.mark.parametrize("mode", ["invest", "no_flowers", "wait", "flowers3", "flowers_all", "dig"])
 def test_saving_success_and_necessary_income(lanes, mode):
     env = PvZEnv(load_config(), family="saving")
     env.reset(seed=4, options={"scenario": saving_case(lanes)})
-    purchases = run_control(env, invest=mode == "invest", wait=mode == "wait")
+    if mode in ("invest", "no_flowers", "wait"):
+        purchases = run_control(env, invest=mode == "invest", wait=mode == "wait")
+    elif mode == "dig":
+        env.step(env.codec.encode(Place("peashooter", lanes[0], 0)))
+        env.step(env.codec.encode(Dig(lanes[0], 0)))
+        run_control(env, wait=True)
+    else:
+        flowers = 0
+        while env.state == "running":
+            legal = [int(x) for x in np.flatnonzero(env.action_masks()) if 1 <= x <= 45]
+            action = legal[0] if legal and flowers < (3 if mode == "flowers3" else 45) else 0
+            flowers += bool(action)
+            env.step(action)
+    result = env.episode_metrics()
+    # Derived independently from six basics and nine actual sunflower payments.
+    scale = env.cfg["reward"]["progress_weight"] / env.cfg["reward"]["value_scale"]
+    winning_return = env.cfg["reward"]["win_reward"] + scale * (225 + 6 * 50)
+    assert result["return"] == pytest.approx(result["discounted_return"])
+    assert result["discounted_outcome_return"] + result[
+        "discounted_development_return"
+    ] == pytest.approx(result["return"])
+    if mode not in ("invest", "no_flowers", "wait"):
+        assert not result["win"] and result["return"] < winning_return
+        assert result["return"] == pytest.approx(-2 + scale * result["net_value"])
+        if mode == "dig":
+            assert result["net_value"] == -100 and result["early_voluntary_digs"] == 1
+        else:
+            assert result["produced_sun"] > 0 and result["attacker_purchases"] == 0
+        return
     assert env.state == ("won" if mode == "invest" else "lost")
     assert env.public.tick == (10501 if mode == "invest" else 9299)
     assert (
@@ -105,10 +133,10 @@ def test_saving_success_and_necessary_income(lanes, mode):
         assert [t for t, _ in purchases] == [0, 750, 4300, 6150]
         assert len(env.public.plants) == 4  # No sacrificial blockers/replacements.
         assert env.episode_metrics()["net_value"] == 525
-        assert env.episode_metrics()["discounted_return"] == pytest.approx(0.0076109358, abs=1e-9)
+        assert env.episode_metrics()["discounted_return"] == pytest.approx(winning_return, abs=1e-9)
     elif mode == "wait":
         assert env.episode_metrics()["discounted_return"] == pytest.approx(
-            -2 * 0.999**9298, abs=1e-10
+            -2 * env.cfg["training"]["gamma"] ** 9298, abs=1e-10
         )
     env.close()
 
@@ -197,7 +225,7 @@ def test_saving_conserves_purchase_and_credits_only_actual_production():
     assert asset_value(env.public) == 150
     reward = sum(env.step(0)[1] for _ in range(1000))
     assert env.public.sun == 125 and asset_value(env.public) == 175
-    assert reward == pytest.approx(25 / 3000)
+    assert reward == pytest.approx(25 / 30000)
 
 
 @pytest.mark.parametrize("invest", [False, True])

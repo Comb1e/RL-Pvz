@@ -18,8 +18,10 @@ def test_legacy_tick_batch_discounts_at_elapsed_simulation_time(cfg):
     rewards = []
     for action in [env.codec.encode(Place("sunflower", 0, 0)), 361, 0, 0, 0]:
         rewards.append(env.step(action)[1])
-    assert rewards == pytest.approx([0, -50 / 3000, 0, 0, 0])
-    assert env.episode_metrics()["discounted_return"] == pytest.approx(-50 / 3000 * 0.999**10)
+    assert rewards == pytest.approx([0, -50 / 30000, 0, 0, 0])
+    assert env.episode_metrics()["discounted_return"] == pytest.approx(
+        -50 / 30000 * cfg["training"]["gamma"] ** 10
+    )
 
 
 def test_terminal_accounting_does_not_destroy_assets(cfg):

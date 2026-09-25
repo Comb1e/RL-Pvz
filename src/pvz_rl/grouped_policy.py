@@ -33,6 +33,7 @@ class GroupedDistribution(MaskableDistribution):
             )
         )
         tile_mask = A.tile_masks(mask)
+        self.action_mask = mask
         self.legal_tile_counts = tile_mask.sum(-1)
         available = tile_mask.any(-1)
         self.available_plants = available[:, : A.plant_types]
@@ -114,6 +115,22 @@ class GroupedDistribution(MaskableDistribution):
 
     def entropy(self):
         return sum(self.entropy_parts())
+
+    def kl_divergence(self, other):
+        """Exact KL(self || other) of the masked, mixed hierarchical policy."""
+        if not torch.equal(self.action_mask, other.action_mask):
+            raise ValueError("Exact hierarchical KL requires identical legal masks")
+
+        def categorical(first, second):
+            return torch.where(
+                first.probs > 0, first.probs * (first.logits - second.logits), 0
+            ).sum(-1)
+
+        return (
+            categorical(self.types, other.types)
+            + self.types.probs[:, A.plant] * categorical(self.plants, other.plants)
+            + (self.branch_probs * categorical(self.locations, other.locations)).sum(-1)
+        ).clamp_min(0)
 
     def _actions(self, deterministic):
         # Deterministic evaluation excludes the injected exploration mixture.

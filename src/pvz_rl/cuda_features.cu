@@ -116,6 +116,8 @@ reward_metrics(const I *headers, const I *old_headers, const I *old_cd,
   rewards[i] = (float)total;
   t[0] += total;
   t[T_discounted_return] += pow(GAMMA, t[2]) * total;
+  t[T_discounted_outcome_return] += pow(GAMMA, t[2]) * v[F_terminal];
+  t[T_discounted_development_return] += pow(GAMMA, t[2]) * v[F_development];
   t[1]++;
   t[2] += h.advanced;
   t[3] += h.advanced == 0;

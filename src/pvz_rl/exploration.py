@@ -38,6 +38,28 @@ def configure_exploration(model, cfg):
     model.policy.exploration_settings = dict(settings)
     # Checkpoints retain the rate that actually collected their last rollout.
     set_exploration_rate(model, getattr(model, "exploration_rate", settings.get("epsilon", 0.0)))
+    set_entropy_factor(model, cfg, getattr(model, "entropy_factor", 1.0))
+
+
+def set_entropy_factor(model, cfg, factor):
+    model.entropy_factor = factor
+    model.policy.exploration_settings = dict(cfg["training"]["exploration"])
+    for key in ("type_coef", "plant_coef", "tile_coef"):
+        model.policy.exploration_settings[key] *= factor
+
+
+def decay_progress(cfg, stage_games, staged):
+    target = cfg["training"]["exploration"].get("epsilon_target_games", 0)
+    if not target:
+        return 0.0
+    warmup = cfg["training"].get("critic_warmup_games", 0) if staged else 0
+    return max(0, stage_games - warmup) / (target - warmup)
+
+
+def entropy_factor(cfg, stage_games, *, staged=True):
+    # Historical inference metadata has no entropy schedule; it remains readable.
+    target = cfg["training"]["exploration"].get("entropy_target_fraction", 1.0)
+    return target ** decay_progress(cfg, stage_games, staged)
 
 
 def set_exploration_rate(model, rate):
@@ -55,8 +77,7 @@ def exploration_rate(cfg, stage_games, *, staged=True):
     target_games = settings.get("epsilon_target_games", 0)
     if not start or not target_games:
         return start
-    warmup = cfg["training"].get("critic_warmup_games", 0) if staged else 0
-    fraction = max(0, stage_games - warmup) / (target_games - warmup)
+    fraction = decay_progress(cfg, stage_games, staged)
     return start * (settings["epsilon_target"] / start) ** fraction
 
 

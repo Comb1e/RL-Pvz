@@ -41,6 +41,17 @@ class TensorRolloutBuffer(BaseBuffer):
         self._timeouts = []
         self.memory_archive = None
         self._burn_contexts = {}
+        self.has_behavior_logits = False
+
+    def capture_behavior(self, distribution):
+        """Copy frozen collector logits; never share its mutable distribution."""
+        if not hasattr(self, "behavior_logits"):
+            self.behavior_logits = distribution.logits.new_empty(
+                self.buffer_size, self.n_envs, distribution.logit_dim
+            )
+        self.behavior_logits[self.pos].copy_(distribution.logits)
+        self.behavior_epsilon = distribution.epsilon
+        self.has_behavior_logits = True
 
     def add(
         self,

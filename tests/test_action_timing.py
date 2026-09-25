@@ -148,7 +148,7 @@ def test_zero_time_purchase_dig_has_no_free_reward(per_tick_cfg):
         for action in (Place("peashooter", 0, 0), Dig(0, 0), Wait())
     )
     assert env.public.tick == 1
-    assert total == pytest.approx(-100 / 3000)
+    assert total == pytest.approx(-100 / 30000)
     assert env.episode_metrics()["discounted_return"] == pytest.approx(total)
 
 

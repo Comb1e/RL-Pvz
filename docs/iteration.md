@@ -5,6 +5,34 @@ Dates and results belong to their recorded version. Current behavior lives in
 artifact locations and learning outcomes live in [validation](validation.md).
 The longer pre-consolidation notes remain in `git show b642c9c:docs/iteration.md`.
 
+## 0.17.0 — 2026-09-24
+
+- Problem: rare digging probabilities could rise abruptly despite sampled KL
+  stopping; the 100 Hz discount weakened late outcomes enough for failed saving
+  controls to outrank a successful control. Completed-game curves lagged policy
+  changes and sparse action statistics could disappear during slot aggregation.
+- Math first: documented and independently checked accounting, finite-game outcome
+  bounds, GAE timing, exact hierarchical KL and a rare-action counterexample in
+  [the math record](math/training-objective.md) before changing training behavior.
+- Objective: gamma 1 preserves late outcomes; smaller development weight and mower
+  expenditure prioritize natural wins under the documented default bounds. GAE
+  retains a calibrated time-based trace. Values remain configurable, and no
+  plant-retention rule or special digging reward is added.
+- Updates: exact KL checks each available slot against frozen behavior. Excessive
+  or non-finite movement restores actor weights and Adam state for the whole window;
+  critic updates and collection continue. Sampled stopping persists across slots,
+  advantages normalize once per rollout, and entropy decays with stage progress.
+- Diagnostics: action-category sums/counts and pooled explained variance preserve
+  sparse evidence; attempted/retained actor steps, rejection reasons, effective
+  entropy and discounted reward components separate policy updates from past games.
+- Compatibility: one architecture, one recipe, 128×128 collection and the same game
+  pin. Existing runs are preserved. Earlier compatible weights support inference
+  and initialization; full resume requires the new optimizer protocol.
+- Verification: mathematical controls, CUDA integration, independent PPO/Adam,
+  checkpoint/replay checks and complete regressions are recorded in validation.
+  No learning comparison or formal training was launched; collapse resolution and
+  throughput effects remain unmeasured. The user will run learning experiments.
+
 ## 0.16.0 — 2026-09-24
 
 - Problem: the synchronous scheduler left the CUDA simulator idle during PPO updates

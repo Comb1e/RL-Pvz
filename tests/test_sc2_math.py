@@ -10,9 +10,10 @@ from pvz_rl.env import PvZEnv
 from pvz_rl.training import build_model, vector_env
 
 
+@pytest.mark.parametrize("batch_size", [16, 32])
 @pytest.mark.parametrize("forced", [False, True])
 @pytest.mark.parametrize("device", ["cpu", "cuda"])
-def test_balanced_ppo_update_matches_joint_probability_reference(forced, device):
+def test_balanced_ppo_update_matches_joint_probability_reference(forced, device, batch_size):
     torch.set_num_threads(1)
     cfg = load_config()
     cfg["runtime"]["cache_rollout_on_device"] = False
@@ -20,7 +21,7 @@ def test_balanced_ppo_update_matches_joint_probability_reference(forced, device)
         n_envs=1,
         rollout_steps_per_env=32,
         rollout_size=32,
-        batch_size=32,
+        batch_size=batch_size,
         device="cuda",
         n_epochs=1,
         hidden_sizes=[16, 16],
@@ -86,52 +87,67 @@ def test_balanced_ppo_update_matches_joint_probability_reference(forced, device)
                 )
             )
         buffer.full = True
-        values, _, _ = reference.evaluate_actions(
-            torch.tensor(obs, device=device),
-            torch.tensor(actions, device=device),
-            action_masks=mask,
-        )
-        joint = reference.action_dist.probs
-        group_mass = joint[:, 1:].reshape(32, 9, 45).sum(-1)
-        plant_mass = group_mass[:, :8].sum(-1, keepdim=True)
-        types = torch.cat((joint[:, :1], group_mass[:, -1:], plant_mass), 1)
-        species = group_mass[:, :8] / plant_mass.clamp_min(1e-30)
-        conditional = joint[:, 1:].reshape(32, 9, 45) / group_mass.clamp_min(1e-30).unsqueeze(-1)
+        np.random.seed(44)
+        order = np.random.permutation(32)
+        losses, bonuses = [], []
+        for start in range(0, 32, batch_size):
+            selected = torch.tensor(order[start : start + batch_size], device=device)
+            values, _, _ = reference.evaluate_actions(
+                torch.tensor(obs, device=device),
+                torch.tensor(actions, device=device),
+                action_masks=mask,
+            )
+            joint = reference.action_dist.probs
+            group_mass = joint[:, 1:].reshape(32, 9, 45).sum(-1)
+            plant_mass = group_mass[:, :8].sum(-1, keepdim=True)
+            types = torch.cat((joint[:, :1], group_mass[:, -1:], plant_mass), 1)
+            species = group_mass[:, :8] / plant_mass.clamp_min(1e-30)
+            conditional = joint[:, 1:].reshape(32, 9, 45) / group_mass.clamp_min(1e-30).unsqueeze(
+                -1
+            )
 
-        def h(p):
-            return -(p * p.clamp_min(1e-30).log()).sum(-1)
+            def h(p):
+                return -(p * p.clamp_min(1e-30).log()).sum(-1)
 
-        counts = torch.tensor(mask[:, 1:].reshape(32, 9, 45).sum(-1), device=device)
-        available = counts > 0
-        species_count = available[:, :8].sum(-1)
-        bonus = (
-            0.01 * h(types)
-            + 0.001 * h(species) / species_count.clamp_min(2).double().log()
-            + 0.001
-            * (h(conditional) / counts.clamp_min(2).float().log() * available).sum(-1)
-            / available.sum(-1).clamp_min(1)
-        )
-        logs = joint[torch.arange(32, device=device), torch.tensor(actions, device=device)].log()
-        ratio = (logs - old_logs).exp()
-        selected = slice(None)
-        chosen = advantages[selected]
-        normalized = (chosen - chosen.mean()) / (chosen.std() + 1e-8)
-        pg = -torch.minimum(
-            ratio[selected] * normalized, ratio[selected].clamp(0.8, 1.2) * normalized
-        ).mean()
-        loss = pg - bonus[selected].mean() + 0.5 * (values.flatten() - returns).square().mean()
-        reference.optimizer.zero_grad()
-        reference.critic_optimizer.zero_grad()
-        loss.backward()
-        torch.nn.utils.clip_grad_norm_(reference.actor_parameters(), 0.5)
-        torch.nn.utils.clip_grad_norm_(reference.critic_parameters(), 0.5)
-        reference.optimizer.step()
-        reference.critic_optimizer.step()
+            counts = torch.tensor(mask[:, 1:].reshape(32, 9, 45).sum(-1), device=device)
+            available = counts > 0
+            species_count = available[:, :8].sum(-1)
+            bonus = (
+                0.01 * h(types)
+                + 0.001 * h(species) / species_count.clamp_min(2).double().log()
+                + 0.001
+                * (h(conditional) / counts.clamp_min(2).float().log() * available).sum(-1)
+                / available.sum(-1).clamp_min(1)
+            )
+            logs = joint[
+                torch.arange(32, device=device), torch.tensor(actions, device=device)
+            ].log()
+            ratio = (logs - old_logs).exp()
+            chosen = advantages
+            normalized = (chosen - chosen.mean()) / (chosen.std() + 1e-8)
+            pg = -torch.minimum(
+                ratio[selected] * normalized[selected],
+                ratio[selected].clamp(0.8, 1.2) * normalized[selected],
+            ).mean()
+            loss = (
+                pg
+                - bonus[selected].mean()
+                + 0.5 * (values.flatten()[selected] - returns[selected]).square().mean()
+            )
+            reference.optimizer.zero_grad()
+            reference.critic_optimizer.zero_grad()
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(reference.actor_parameters(), 0.5)
+            torch.nn.utils.clip_grad_norm_(reference.critic_parameters(), 0.5)
+            reference.optimizer.step()
+            reference.critic_optimizer.step()
+            losses.append(loss.item())
+            bonuses.append(bonus[selected].mean().item())
         np.random.seed(44)
         model.train()
-        assert model.logger.name_to_value["train/loss"] == pytest.approx(loss.item(), abs=2e-6)
+        assert model.logger.name_to_value["train/loss"] == pytest.approx(np.mean(losses), abs=2e-6)
         assert model.logger.name_to_value["train/exploration_bonus"] == pytest.approx(
-            bonus[selected].mean().item(), abs=1e-7
+            np.mean(bonuses), abs=1e-7
         )
         for actual, expected in zip(model.policy.parameters(), reference.parameters()):
             torch.testing.assert_close(actual, expected, atol=2e-7, rtol=2e-6)

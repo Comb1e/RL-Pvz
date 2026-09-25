@@ -288,6 +288,10 @@ class PvZEnv(gym.Env):
         self.metrics["discounted_return"] += (
             self.cfg["training"]["gamma"] ** self.metrics["simulation_ticks"] * parts["total"]
         )
+        for name, part in (("outcome", "terminal"), ("development", "development")):
+            self.metrics[f"discounted_{name}_return"] += (
+                self.cfg["training"]["gamma"] ** self.metrics["simulation_ticks"] * parts[part]
+            )
         self.metrics["cumulative_net_value"] = self.metrics["net_value"]
         self.metrics["maximum_net_value"] = max(
             self.metrics["maximum_net_value"], self.metrics["net_value"]
