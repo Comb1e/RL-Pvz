@@ -14,6 +14,18 @@ A negative all-wait episode supplies a negative wait target while leaving the
 unobserved plant output without a direct regression target. This allows, but
 does not guarantee, subsequent planting; shared features can affect both.
 
+The viewer compares those same legal values at the recorded decision time.
+Let q_wait = Q(wait), q_plant = Q(plant), and q_dig = max Q(dig tile) over legal
+digging tiles. Exclude unavailable kinds. For the chosen kind k and at least one
+alternative, its displayed lead is q_k - max(q_j for legal j != k). A zero lead
+means a tie, resolved in the order above; one legal kind is a forced choice.
+For (-0.4, +0.1, -0.9), planting leads waiting by +0.5. For (-0.2, -0.8, -1),
+waiting leads planting by +0.6 even though every estimate is negative.
+These are remaining reward estimates in reward units, not action probabilities
+or win probabilities. The lead describes the greedy ranking, not its accuracy;
+the critic may be wrong. Unavailable kinds never enter the comparison. Viewer
+controls check these examples, exact ties, tiny positive gaps and forced choices.
+
 For each populated action group g (wait, plant, dig), compute its mean squared
 selected-value error. Average these group means. Thus 10,000 waiting decisions
 and 10 planting decisions each receive half the aggregate critic weight when

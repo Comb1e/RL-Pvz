@@ -1,5 +1,13 @@
 # Sources actually used
 
+## Live decision explanation — inspected 2026-09-25
+
+Inspected installed [Stable-Baselines3 2.7.1 QNetwork prediction](https://github.com/DLR-RM/stable-baselines3/blob/v2.7.1/stable_baselines3/dqn/policies.py),
+`forward` and `_predict`: estimated action values are followed by greedy argmax.
+Rechecked this project's masked controller and collection-time viewer diagnostics.
+This supports displaying legal Q comparisons directly; no DQN training method,
+probability conversion, learning improvement or new paper result is adopted.
+
 ## Alternating roles and transfers — inspected 2026-09-25
 
 - [Q-PAMDP full text](https://arxiv.org/html/1509.01644v4), Algorithm 1 and Theorem 4.1: inspected alternating parameter-policy updates and value fitting to convergence. The 256-game phases here are a user-selected finite schedule; this discrete MC/PPO adaptation does not satisfy or inherit that convergence result.

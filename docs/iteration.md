@@ -7,6 +7,14 @@ The longer pre-consolidation notes remain in `git show b642c9c:docs/iteration.md
 
 ## 0.22.0 — 2026-09-25
 
+Viewer follow-up: the Q row did not explain the comparison and could show a
+planting value even when planting was unavailable. The controller and diagnostics
+now share legal-value masking. Panels show the selected kind's lead over the next
+legal kind, deterministic ties or a forced choice, with more precise Q values.
+Independent arithmetic, legality/RNG controls and resized renders verify this
+presentation change. Values can still be inaccurate; training and coverage are
+unchanged. Existing checkpoints and runs remain compatible and preserved.
+
 - Problem: the previous scheduler fitted both networks after every complete-game
   cohort, unlike the requested 256-game alternation. Long cohorts spent most time
   gathering full structured history and creating pinned buffers before critic work.

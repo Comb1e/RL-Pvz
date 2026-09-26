@@ -145,12 +145,17 @@ class GroupedDistribution(MaskableDistribution):
         return actions, self.log_prob(actions)
 
 
-def controller_choice(values, masks):
-    """Q columns: wait, plant, 45 row-major dig tiles; argmax breaks ties."""
+def masked_controller_values(values, masks):
+    """Q columns: wait, plant, 45 row-major dig tiles; exclude illegal choices."""
     legal = torch.cat(
         (masks[:, :1], masks[:, 1 : A.dig_start].any(-1, keepdim=True), masks[:, A.dig_start :]), -1
     )
-    return values.masked_fill(~legal, -torch.inf).argmax(-1)
+    return values.masked_fill(~legal, -torch.inf)
+
+
+def controller_choice(values, masks):
+    """Argmax breaks ties in wait, plant, row-major dig order."""
+    return masked_controller_values(values, masks).argmax(-1)
 
 
 def selected_value_indices(actions):
