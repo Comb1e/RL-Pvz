@@ -48,6 +48,41 @@ Greedy decisions provide no general coverage guarantee. A poorly estimated,
 untried action may remain untried. Report pre-fit errors and sample counts for
 each selected action group; reduced digging alone is not evidence of learning.
 
+## Alternating roles and atomic cohort credit — 0.22.0
+
+Let N be the environment count and H the role-phase game count. Require positive
+integers with H mod N = 0. Defaults give H/N = 256/32 = 8 cohorts per role phase.
+For c completed **and optimized** stage cohorts, role is critic when
+floor(c/8) mod 2 = 0, actor otherwise; within-role progress is 32*(c mod 8).
+The pending collection/fitting cohort is not yet credited. Credit and any role
+switch are one atomic synchronization transition, saved with the phase/cursor.
+Validation adds zero to c; stage advancement sets c to zero. A zero-plant actor
+cohort still adds one to c after recording its skipped optimization.
+
+During critic roles, actor parameters and Adam state are constant; during actor
+roles, critic parameters and Adam state are constant. Both are constant during
+collection. Returns and plant advantages retain the definitions above. Alternation
+changes which cohorts train which network, not the objective or controller.
+Q-PAMDP inspires role separation but does not prove this finite 256-game choice
+converges. An always-wait controller gives zero actor coverage even in actor roles.
+
+A 289-value float32 raw token occupies 1,156 bytes. The 2 GiB default cache budget
+can contain at most floor(2 GiB / (32,768*1,156)) = 56 full blocks, or 1,835,008
+raw tokens (2,121,269,248 bytes). Allocation may stop earlier to retain 2 GiB of
+free VRAM. A batch of 1,024 with 48 memory entries contains 56,819,712 token bytes
+(54.1875 MiB), versus 84,197,376 bytes (80.296875 MiB) if all 1,713-byte records
+are gathered. Mixing uint32 ticks into NumPy concatenation previously also made
+an unnecessary float64 temporary. Direct field assignment produces float32;
+integer references are used as integers, including beyond float32 exact-ID range.
+
+Cache hits and misses reconstruct the same causal raw tokens; prefetch preserves
+the permutation and performs no RNG draws or parameter work. Transfer-stream
+elapsed time includes device gathers and host submission gaps; preparation time
+and transfer-stream time overlap and must not be summed as independent costs.
+Device-computation spans and host wait time are recorded separately. Aggregate
+simulation speed sums all advanced game ticks divided by tick rate and collection
+wall time; it is not a single game's speed or the viewer frame rate.
+
 ## Mechanics and accounting checks
 
 The supported reconstruction gives ordinary body HP 270, pole body HP 500,

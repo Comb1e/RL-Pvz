@@ -13,11 +13,13 @@ import torch
 from stable_baselines3.common.base_class import BaseAlgorithm
 from stable_baselines3.common.save_util import load_from_zip_file
 
+from pvz_rl.config import role_phase_games
 from pvz_rl.envs.actions import ActionSchema as A
 from pvz_rl.learning.cohort import (
     OPTIMIZER_PROTOCOL,
     ActorTransaction,
     CohortPhase,
+    RoleSchedule,
     atomic_transition,
 )
 from pvz_rl.learning.cuda_buffer import CompleteGameBuffer
@@ -68,6 +70,7 @@ class CudaCompleteGamePPO(BaseAlgorithm):
         self.optimizer_protocol = OPTIMIZER_PROTOCOL
         self.action_distribution_protocol = ACTION_DISTRIBUTION
         self.phase = CohortPhase.IDLE
+        self.roles = RoleSchedule()
         self.training_games = self._n_updates = 0
         self.cohort_metrics = {}
         self.runtime_state = None
@@ -75,6 +78,8 @@ class CudaCompleteGamePPO(BaseAlgorithm):
         self._fit_order = None
         self._fit_epoch = self._fit_cursor = 0
         self._cohort_elapsed = 0.0
+        self._prefetch = None
+        self._collection_host = None
         if _init_setup_model:
             self._setup_model()
 
@@ -89,10 +94,7 @@ class CudaCompleteGamePPO(BaseAlgorithm):
     @classmethod
     def load(cls, path, *args, **kwargs):
         data, _, _ = load_from_zip_file(path, device="cpu")
-        if (
-            data.get("optimizer_protocol") != OPTIMIZER_PROTOCOL
-            or data.get("action_distribution_protocol") != ACTION_DISTRIBUTION
-        ):
+        if data.get("action_distribution_protocol") != ACTION_DISTRIBUTION:
             raise ValueError("Complete-game controller requires fresh models")
         model = super().load(path, *args, **kwargs)
         model.phase = CohortPhase(model.phase)
@@ -135,7 +137,7 @@ class CudaCompleteGamePPO(BaseAlgorithm):
         root = Path(getattr(self, "trajectory_root", tempfile.gettempdir()))
         path = Path(tempfile.mkdtemp(prefix="cohort-", dir=root))
         spec = self.cfg["training"]["storage"]
-        return CompleteGameBuffer(
+        buffer = CompleteGameBuffer(
             path,
             self.observation_space.shape[0],
             self._memory.capacity,
@@ -143,6 +145,15 @@ class CudaCompleteGamePPO(BaseAlgorithm):
             ram_bytes=spec["ram_gib"] * 1024**3,
             block_rows=spec["block_rows"],
         )
+        buffer.configure_cache(
+            self.device, self.env.cfg["training"].get("performance", {}).get("token_cache_gib", 2)
+        )
+        return buffer
+
+    def _drain_transfers(self):
+        if self._prefetch is not None:
+            self._prefetch.close()
+            self._prefetch = None
 
     def _phase(self, phase, callback):
         self.phase = phase
@@ -158,6 +169,8 @@ class CudaCompleteGamePPO(BaseAlgorithm):
 
     def _begin(self, callback):
         callback.on_rollout_start()
+        curriculum = getattr(callback, "curriculum", None)
+        self.roles.enter_stage(curriculum.name if curriculum else "fixed")
         self._last_obs = self.env.reset()
         self._memory = EventMemory(self.cfg, self.env.batch.rules, self.n_envs, self.device)
         self._previous = torch.zeros(self.n_envs, device=self.device, dtype=torch.long)
@@ -167,6 +180,9 @@ class CudaCompleteGamePPO(BaseAlgorithm):
         self._fit_order = None
         self._cohort_elapsed = 0.0
         self._phase_times = {"collect": 0.0, "returns": 0.0, "critic": 0.0, "actor": 0.0}
+        self._device_seconds = 0.0
+        self._simulation_ticks = 0
+        self._planting_samples = 0
         for key in (
             "policy_gradient_loss",
             "joint_entropy",
@@ -175,6 +191,8 @@ class CudaCompleteGamePPO(BaseAlgorithm):
             "tile_exploration_bonus",
             "actor_grad_norm",
             "approx_kl",
+            "value_loss",
+            "critic_grad_norm",
         ):
             self.logger.record("train/" + key, None)
         self._stats = {
@@ -184,6 +202,7 @@ class CudaCompleteGamePPO(BaseAlgorithm):
             "exact_kl": 0.0,
             "actor_window_rejected": 0,
             "exact_kl_attempted_max": 0.0,
+            "actor_skip_reason": None,
         }
         self._behavior = self._snapshot_policy()
         self._behavior.set_training_mode(False)
@@ -220,7 +239,21 @@ class CudaCompleteGamePPO(BaseAlgorithm):
                 self._buffer.size, self._buffer.size + self.n_envs, device=self.device
             )
             context = self._memory.observe(obs, masks, self._previous, resets, ticks, token_ids=ids)
-            actions, values, logs = self.policy.decide(obs, masks, context=context)
+            viewer = env.live_view
+            watched = None
+            if viewer is not None and viewer.enabled:
+                try:
+                    viewer.role = self.roles.role
+                    watched = viewer.decision_indices()
+                except Exception as exc:
+                    viewer.fail(exc)
+            result = self.policy.decide(obs, masks, context=context, diagnostic_indices=watched)
+            actions, values, logs = result[:3]
+            if watched is not None:
+                try:
+                    viewer.capture_decision(result[3], ticks)
+                except Exception as exc:
+                    viewer.fail(exc)
             # One bounded packed transfer; copied before the simulator mutates observations.
             packed = torch.cat(
                 (
@@ -238,10 +271,17 @@ class CudaCompleteGamePPO(BaseAlgorithm):
                 ),
                 -1,
             )
-            host = packed.cpu().numpy()
+            if self._collection_host is None or self._collection_host.shape != packed.shape:
+                self._collection_host = torch.empty_like(packed, device="cpu", pin_memory=True)
+            self._collection_host.copy_(packed, non_blocking=True)
+            raw_tokens = torch.cat(
+                (obs, self._previous[:, None], resets[:, None], ticks[:, None]), -1
+            )
             next_obs, rewards, dones, _, _, infos = env.step_tensors(actions, autoreset=False)
-            reward = rewards.cpu().numpy()
-            duration = env.transition_ticks.cpu().numpy()
+            # step_tensors' required completion readback also completes pre-action copy.
+            host = self._collection_host.numpy()
+            reward = env.last_transition_host[:, 3]
+            duration = env.last_transition_host[:, 2]
             rows = np.zeros(self.n_envs, dtype=self._buffer.dtype)
             d = self.observation_space.shape[0]
             rows["observation"] = host[:, :d]
@@ -260,7 +300,11 @@ class CudaCompleteGamePPO(BaseAlgorithm):
             rows["reset"] = self._first
             rows["active"], rows["env"] = active, np.arange(self.n_envs)
             rows["reward"], rows["duration"] = reward, duration
-            self._buffer.append(rows)
+            self._buffer.append(rows, raw_tokens)
+            self._planting_samples += int(
+                np.count_nonzero(active & (rows["action"] > 0) & (rows["action"] < A.dig_start))
+            )
+            self._simulation_ticks += int(duration[active].sum())
             self._first = False
             self._last_obs = next_obs
             self._previous = env.executed_actions.clone()
@@ -276,10 +320,23 @@ class CudaCompleteGamePPO(BaseAlgorithm):
                 self._phase(CohortPhase.RETURNS, callback)
 
     def _prepare_fit(self, planting):
+        if self._fit_epoch >= self.n_epochs or (
+            planting and self._transaction is not None and self._transaction.state["stopped"]
+        ):
+            if self._fit_order is None:
+                self._fit_order = np.empty(0, dtype=np.int64)
+            return
         if self._fit_order is None:
             indices = self._buffer.valid_indices(planting)
             self._fit_order = indices[np.random.permutation(len(indices))]
             self._fit_cursor = 0
+        if self._prefetch is None and len(self._fit_order) > self._fit_cursor:
+            from pvz_rl.learning.transfers import BatchPrefetch
+
+            torch.cuda.current_stream(self.device).wait_stream(self.env.stream)
+            self._prefetch = BatchPrefetch(
+                self._buffer, self._fit_order[self._fit_cursor :], self.batch_size, self.device
+            )
 
     def _critic_step(self, data):
         values = self.policy.predict_values(data["observation"], data["context"])
@@ -351,15 +408,22 @@ class CudaCompleteGamePPO(BaseAlgorithm):
 
     @torch.no_grad()
     def _exact_kl(self):
+        from pvz_rl.learning.transfers import BatchPrefetch
+
         indices = self._buffer.valid_indices(True)
         total = 0.0
-        for start in range(0, len(indices), self.batch_size):
-            data = self._buffer.batch(indices[start : start + self.batch_size], self.device)
-            old = self._behavior.get_distribution(
-                data["observation"], data["masks"], data["context"]
-            )
-            new = self.policy.get_distribution(data["observation"], data["masks"], data["context"])
-            total += float(old.kl_divergence(new).sum())
+        prefetch = BatchPrefetch(self._buffer, indices, self.batch_size, self.device)
+        try:
+            for data in prefetch:
+                old = self._behavior.get_distribution(
+                    data["observation"], data["masks"], data["context"]
+                )
+                new = self.policy.get_distribution(
+                    data["observation"], data["masks"], data["context"]
+                )
+                total += float(old.kl_divergence(new).sum())
+        finally:
+            prefetch.close()
         return total / max(1, len(indices))
 
     def _guard(self):
@@ -384,23 +448,30 @@ class CudaCompleteGamePPO(BaseAlgorithm):
             or actor
             and self._transaction.state["stopped"]
         ):
+            self._drain_transfers()
             if actor:
                 self._guard()
-                self._phase(CohortPhase.SYNCHRONIZE, callback)
-            else:
-                self._phase(CohortPhase.ACTOR, callback)
+                if not self._buffer.group_counts[1]:
+                    self._stats["actor_skip_reason"] = "no_planting_samples"
+            self._phase(CohortPhase.SYNCHRONIZE, callback)
             self._fit_epoch = self._fit_cursor = 0
             self._fit_order = None
             return
         indices = self._fit_order[self._fit_cursor : self._fit_cursor + self.batch_size]
-        data = self._buffer.batch(indices, self.device)
+        data = next(self._prefetch)
+        start, end = torch.cuda.Event(enable_timing=True), torch.cuda.Event(enable_timing=True)
+        start.record()
         self.policy.set_training_mode(True)
         if actor:
             self._actor_step(data)
         else:
             self._critic_step(data)
+        end.record()
+        end.synchronize()
+        self._device_seconds += start.elapsed_time(end) / 1000
         self._fit_cursor += len(indices)
         if self._fit_cursor == len(self._fit_order):
+            self._drain_transfers()
             self._fit_epoch += 1
             self._fit_order = None
             if actor:
@@ -409,10 +480,23 @@ class CudaCompleteGamePPO(BaseAlgorithm):
             callback.log_progress()
 
     def _synchronize(self, callback):
+        self._drain_transfers()
         torch.cuda.synchronize(self.device)
         elapsed = sum(self._phase_times.values())
         transitions = int(self._buffer.group_counts.sum())
         self.cohort_metrics = {
+            **self._buffer.transport_metrics,
+            "cache_hit_rate": self._buffer.transport_metrics["cache_hits"]
+            / max(1, self._buffer.transport_metrics["cache_requests"]),
+            "device_compute_seconds": self._device_seconds,
+            "simulation_speed": self._simulation_ticks
+            / self.env.batch.rules.game["tick_rate"]
+            / max(self._phase_times["collect"], 1e-9),
+            "training_role": self.roles.role,
+            "role_games": self.roles.games + self.n_envs,
+            "role_phase_games": role_phase_games(self.cfg),
+            "planting_samples": int(self._buffer.group_counts[1]),
+            "actor_skip_reason": self._stats["actor_skip_reason"],
             "collection_seconds": self._phase_times["collect"],
             "critic_seconds": self._phase_times["critic"],
             "actor_seconds": self._phase_times["actor"],
@@ -435,6 +519,7 @@ class CudaCompleteGamePPO(BaseAlgorithm):
                 self.policy.exploration_settings[name + "_coef"],
             )
         self._n_updates += 1
+        self.roles.complete(self.n_envs, role_phase_games(self.cfg))
         self.logger.record("train/n_updates", self._n_updates)
         self._buffer.close()
         self._buffer = self._memory = self._behavior = self._transaction = None
@@ -493,7 +578,7 @@ class CudaCompleteGamePPO(BaseAlgorithm):
                                     "train/positive_advantage_fraction_" + name,
                                     values["positive_advantage_fraction"],
                                 )
-                            self._phase(CohortPhase.CRITIC, callback)
+                            self._phase(CohortPhase(self.roles.role), callback)
                         elif phase in (CohortPhase.CRITIC, CohortPhase.ACTOR):
                             self._fit_step(callback)
                         elif phase == CohortPhase.SYNCHRONIZE:
@@ -504,10 +589,13 @@ class CudaCompleteGamePPO(BaseAlgorithm):
             callback.on_training_end()
             return self
         except KeyboardInterrupt:
+            self._drain_transfers()
             if self.phase == CohortPhase.ACTOR:
                 with atomic_transition():
                     self._guard()
             raise
+        finally:
+            self._drain_transfers()
 
     def _restore_runtime(self):
         state = self.runtime_state
@@ -528,6 +616,9 @@ class CudaCompleteGamePPO(BaseAlgorithm):
         workspace = self._buffer.path
         with ZipFile(self._checkpoint_source) as archive:
             self._buffer = CompleteGameBuffer.restore_archive(archive, state["buffer"], workspace)
+        self._buffer.configure_cache(
+            self.device, self.env.cfg["training"].get("performance", {}).get("token_cache_gib", 2)
+        )
         self._behavior = self._snapshot_policy()
         self._behavior.load_state_dict(state["behavior"])
         if state["transaction"] is not None:
@@ -544,6 +635,7 @@ class CudaCompleteGamePPO(BaseAlgorithm):
         torch.cuda.set_rng_state_all([x.cpu() for x in state["cuda_rng"]])
 
     def save(self, path, *args, **kwargs):
+        self._drain_transfers()
         path = Path(path)
         if not path.suffix:
             path = path.with_suffix(".zip")
@@ -606,6 +698,8 @@ class CudaCompleteGamePPO(BaseAlgorithm):
             "_previous",
             "_checkpoint_source",
             "runtime_state",
+            "_prefetch",
+            "_collection_host",
         ]
 
     def _get_torch_save_params(self):

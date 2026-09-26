@@ -90,6 +90,7 @@ class CudaVecEnv(VecEnv):
         self._episode_serial = [0] * cfg["training"]["n_envs"]
         self._level_names = [None] * cfg["training"]["n_envs"]
         self.live_view = None
+        self._transition_host = None
         self.finished_outcomes = {}
         self._episode_stages = [0] * cfg["training"]["n_envs"]
         self.task_started, self.task_transitions, self.task_completed = (
@@ -195,7 +196,9 @@ class CudaVecEnv(VecEnv):
             viewer = self.live_view
             if viewer is not None:
                 try:
-                    viewer.prepare()
+                    if not viewer.prepared:
+                        viewer.prepare()
+                    viewer.prepared = False
                 except Exception as exc:
                     viewer.fail(exc)
                 if not viewer.enabled:
@@ -223,19 +226,28 @@ class CudaVecEnv(VecEnv):
             timed_out = done & (h[:, 1] == 0)
             # One compact transfer per decision; no entity state/observations.
             started = perf_counter()
-            compact_tensor = torch.stack((done.long(), timed_out.long(), h[:, 14]), dim=1)
+            compact_tensor = torch.stack(
+                (done.double(), timed_out.double(), h[:, 14].double(), reward.double()), dim=1
+            )
+            packed = compact_tensor.flatten()
             if viewer is not None:
                 try:
-                    packed = (
-                        torch.cat((compact_tensor.flatten(), viewer.diagnostics())).cpu().numpy()
-                    )
-                    compact = packed[: self.num_envs * 3].reshape(self.num_envs, 3)
-                    viewer.after_step(compact, packed[self.num_envs * 3 :].reshape(-1, 2))
+                    packed = torch.cat((packed, viewer.diagnostics()))
                 except Exception as exc:
                     viewer.fail(exc)
-                    compact = compact_tensor.cpu().numpy()
-            else:
-                compact = compact_tensor.cpu().numpy()
+                    viewer = None
+            if self._transition_host is None or self._transition_host.shape != packed.shape:
+                self._transition_host = torch.empty_like(packed, device="cpu", pin_memory=True)
+            self._transition_host.copy_(packed, non_blocking=True)
+            self.stream.synchronize()
+            host = self._transition_host.numpy()
+            compact = host[: self.num_envs * 4].reshape(self.num_envs, 4)
+            self.last_transition_host = compact
+            if viewer is not None:
+                try:
+                    viewer.after_step(compact, host[self.num_envs * 4 :].reshape(-1, 2))
+                except Exception as exc:
+                    viewer.fail(exc)
             self.phases["transfers"] += perf_counter() - started
             indices = np.flatnonzero(compact[:, 0]).tolist()
             infos = [{"ticks_advanced": int(row[2])} for row in compact]

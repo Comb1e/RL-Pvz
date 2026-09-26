@@ -1,5 +1,16 @@
 # Sources actually used
 
+## Alternating roles and transfers — inspected 2026-09-25
+
+- [Q-PAMDP full text](https://arxiv.org/html/1509.01644v4), Algorithm 1 and Theorem 4.1: inspected alternating parameter-policy updates and value fitting to convergence. The 256-game phases here are a user-selected finite schedule; this discrete MC/PPO adaptation does not satisfy or inherit that convergence result.
+- [PyTorch pinned/nonblocking tutorial](https://docs.pytorch.org/tutorials/intermediate/pinmem_nonblock.html): inspected pinned-source lifetime, copy direction, separate-stream overlap and main-thread pinning costs. Used for reusable pinned slots, transfer events, host-copy completion and device lifetime tracking. Prefetch alone does not remove gathering costs.
+- [PyTorch tuning guide](https://docs.pytorch.org/tutorials/recipes/recipes/tuning_guide.html): inspected asynchronous data loading and avoidable synchronization (`item`, CPU copies, `nonzero`). This release addresses raw-record gathering/readbacks; the remaining model validations/scalar reads can still synchronize. It does not promise full GPU saturation.
+- Local stopped run `runs/compact-stages-101/saving`: 70 fitted cohorts, median 1,166.93 transitions/s, mean collection 115.176 s and critic 247.464 s. Critic intervals averaged about one process CPU core and 29% device-wide GPU load. No planting after game 864; actor steps were zero. These are diagnostic observations, not a paired learning experiment. Data and plots remain under `artifacts/performance-review-20260925/`.
+
+The isolated prior profile measured about 95.1 ms for preparation/transfer and
+35.1 ms for a GPU-ready critic step. These motivate raw-token caching and bounded
+prefetch, not an assumed end-to-end gain. New matched results are in validation.
+
 ## Complete-game controller and PC mechanics — inspected 2026-09-25
 
 - [Q-PAMDP, full text](https://arxiv.org/html/1509.01644v4): alternating action-value and parameter-policy learning informed separate critic/controller and argument-policy roles. Its continuous arguments and convergence assumptions do not establish convergence of this greedy discrete MC/conditional-PPO adaptation.

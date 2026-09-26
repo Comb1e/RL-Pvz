@@ -1,4 +1,4 @@
-# Research protocol — 0.21.0
+# Research protocol — 0.22.0
 
 The sole method is complete-game CUDA collection, Monte Carlo action-value
 regression and conditional plant PPO. See [architecture](architecture.md) for
@@ -13,9 +13,14 @@ PC reconstruction sources with documented geometric/animation approximations.
 Each default cohort contains one complete game in each of 32 environments.
 Finished games pause. The frozen collection controller chooses maximum legal
 critic values; only planting species/tiles are sampled. After returns are
-finalized the critic trains, then the plant actor trains, then updated weights
-apply to a new cohort. The 6 GiB host trajectory budget overflows to disk;
-minibatches, not entire episodes, move to CUDA.
+finalized only the selected network trains, then updated weights apply to a new
+cohort. Roles alternate 256 critic games and 256 actor games, with eight updates
+at 32-game cohort boundaries per phase. Stages start with critic fitting. An
+actor cohort without planting samples trains neither network and still receives
+role credit; it cannot silently fall back to critic fitting. The 6 GiB host trajectory budget overflows to disk;
+bounded minibatches move to CUDA through two pinned staging slots. Raw tokens
+may be cached up to 2 GiB while leaving a 2 GiB free-VRAM reserve; the cache is
+disposable and CPU/disk storage remains authoritative.
 
 Reward remains outcome (+1 win, -2 loss) plus net value/30,000. Net value uses
 actual production, health-weighted living assets, effective plant damage and
@@ -53,7 +58,8 @@ Resume uses one atomic checkpoint archive, which preserves
 unfinished physical games, gameplay and sampling RNG, token banks, cohort phase,
 optimizer cursor, targets and rollback state. No in-flight game is silently
 restarted. Stage transfer loads only compatible weights into a fresh experiment.
-The changed observation/controller/training signatures reject old models.
+The new optimizer protocol rejects full 0.21.0 resume. Compatible 0.21.0
+inference and weights-only initialization remain available.
 Existing run files remain intact and can be read with their original versions.
 
 ## Interpretation

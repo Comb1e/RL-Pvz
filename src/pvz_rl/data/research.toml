@@ -66,6 +66,7 @@ eval_interval_games = 2000 # Used by diagnostic/fixed training or archived perio
 total_steps = 3000000 # Inactive unless budget_unit = "decisions" (legacy).
 learner_seeds = [101, 102]
 n_envs = 32
+role_phase_games = 256
 device = "cuda"
 max_minutes = 120
 finalization_minutes = 15
@@ -88,6 +89,7 @@ ram_gib = 6
 block_rows = 32768
 
 [training.performance]
+token_cache_gib = 2
 compile_kernels = true
 telemetry = true
 

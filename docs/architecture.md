@@ -1,4 +1,4 @@
-# Training architecture — 0.21.0
+# Training architecture — 0.22.0
 
 One CUDA controller plays every curriculum difficulty. An independent critic
 selects wait, plant or a digging tile greedily; an independent actor samples
@@ -19,9 +19,12 @@ flowchart LR
     History --> Store[Bounded host trajectories and disk overflow]
     Rewards --> Store
     Store --> Returns[Complete actual reward-to-go]
-    Returns --> FitCritic[Fit critic]
-    FitCritic --> FitActor[Conditional plant PPO]
-    FitActor --> Sync[Synchronize next cohort]
+    Returns --> Role{Selected training role}
+    Role -->|critic| FitCritic[Fit critic only]
+    Role -->|actor| FitActor[Conditional plant PPO only]
+    FitCritic --> Sync[Credit 32 games and synchronize]
+    FitActor --> Sync
+    Sync --> Roles[Switch role after 256 optimized games]
     Sync --> Critic
     Sync --> Actor
 ```
@@ -163,10 +166,11 @@ per-action coverage must be examined when diagnosing that behavior.
 stateDiagram-v2
     [*] --> Collect
     Collect --> Returns: Every game finished
-    Returns --> Critic: Actual returns and frozen plant advantages
-    Critic --> Actor: Critic fitting complete
-    Actor --> Synchronize: Plant PPO complete or KL stop
-    Synchronize --> Collect: Next cohort after boundary checks
+    Returns --> Critic: Critic role
+    Returns --> Actor: Actor role
+    Critic --> Synchronize: Critic fitting complete
+    Actor --> Synchronize: Plant PPO complete, KL stop or no planting samples
+    Synchronize --> Collect: Credit cohort, switch role at 256, boundary checks
     Synchronize --> Finished: Budget or mastery reached
     Collect --> Interrupted: Graceful stop
     Critic --> Interrupted: After atomic optimizer step
@@ -175,6 +179,14 @@ stateDiagram-v2
     Interrupted --> Critic: Resume saved critic phase
     Interrupted --> Actor: Resume saved actor phase
 ```
+
+Every stage starts with the critic role. It trains for 256 completed games,
+eight cohorts of 32, then the actor trains for 256 games; roles alternate.
+Only the selected network is fitted after each cohort. The inactive network's
+parameters and Adam state remain unchanged through the entire role phase.
+Validation games do not count. Role credit is applied after fitting, including
+an actor cohort skipped for zero planting coverage. Curriculum advancement resets
+to critic with zero role games. Both networks supply collection inference.
 
 The default cohort is 32 environments, one complete game each. Finished games
 pause until all finish. Actor and critic are frozen throughout collection;
@@ -186,16 +198,17 @@ keeps physical assets. It does not bootstrap. External interruption is not a los
 Plant advantages are actual return minus collection Q(plant), fixed before
 critic fitting and normalized once over planting decisions. Critic MSE fits
 selected outputs to unnormalized returns, with equal aggregate weight for each
-populated wait/plant/dig group. The actor then runs conditional PPO only on
-planting decisions. A no-plant cohort skips actor fitting. Defaults remain four
+populated wait/plant/dig group. In the actor role, conditional PPO uses only
+planting decisions. A no-plant actor cohort records a skip and trains neither
+network; it still counts toward the role boundary. Defaults remain four
 epochs, minibatches at most 1,024, actor/critic learning rates 0.0001/0.0003,
-clip 0.2 and gradient norm limit 0.5. No initial actor freeze remains.
+clip 0.2 and gradient norm limit 0.5. There is no additional warm-up freeze.
 
 The collector's controller is fixed for interpreting that cohort's actor data.
 Critic changes affect the next cohort. Sampled KL stops actor steps; exact KL
 checks the complete conditional plant distribution against collection weights.
 Exceeding target 0.01 restores actor weights and Adam moments and stops its
-phase. Critic fitting and completed experience remain retained. Zero disables
+phase. The inactive critic and completed experience remain retained. Zero disables
 the threshold. Non-finite values fail explicitly or roll back the actor.
 
 Plant-only injected exploration decays exponentially from 10% to 0.1% over
@@ -215,23 +228,41 @@ Compact trajectories store observations, packed masks, actions, actual rewards,
 durations, collection likelihoods and values on the CPU. Memory token references
 and compression metadata reconstruct the exact causal bank per minibatch;
 there is no whole-episode graph or rollout-tail bootstrap. The default 6 GiB
-trajectory RAM budget spills additional blocks to disk. Bounded minibatches
-transfer through pinned host memory to CUDA. Disk space remains a practical
+trajectory RAM budget spills additional blocks to disk. Raw tokens are built in
+float32 from observations, executed-action history, reset and tick only. Integer
+history references remain exact. A disposable GPU cache retains up to the configured
+`token_cache_gib` (default 2, zero disables), in trajectory block-sized chunks,
+reserving at least 2 GiB of free VRAM at each allocation. Full caches fall back to
+CPU/disk history, never drop samples or cache learned activations.
+
+One preparation worker and two reusable pinned staging slots prefetch one subsequent
+minibatch. A transfer stream reconstructs cached contexts on CUDA and transfers
+host misses; completion events order consumers and source reuse. The CPU trajectory
+is authoritative, minibatch order is unchanged, and no fitting occurs during
+collection. Collection copies immutable pre-action data before simulation and reads
+it after the existing completion synchronization. Checkpoints drain transfers;
+resume rebuilds disposable cache contents from the saved trajectory. Disk space remains a practical
 limit; failed writes must preserve prior checkpoints.
 
 One atomically replaced checkpoint archive contains both networks and optimizers.
 An interrupted cohort additionally stores simulator and gameplay
 RNG state, environment selection RNGs, public memory, collection progress,
-optimization phase/cursor, behavior weights, actor rollback state and sampler
+optimization phase/cursor, role/stage/game counter, behavior weights, actor rollback state and sampler
 RNGs and streamed trajectory blocks inside that archive. Resume continues the saved phase.
 Missing runtime data or damaged blocks fail explicitly. Stage transfer loads compatible weights
-into a new experiment with fresh optimizer/counters. The new observation,
-controller and optimizer protocols reject previous models; no conversion exists.
-Existing runs and recordings remain preserved for their original versions.
+into a new experiment with fresh optimizers/counters. The optimizer protocol is
+`alternating_complete_game_v1`: full resume rejects the previous scheduler.
+Structurally compatible 0.21.0 weights and inference remain supported. Existing
+runs, checkpoints and recordings remain preserved.
 
 The viewer and hardware monitor are diagnostic outputs. They neither select
 actions nor add model inputs. Last boards remain visible during critic/actor
-fitting and validation; hardware curves and terminal logs describe phase,
+fitting and validation. Panels show estimated critic returns, the actual sampled
+action, and “if planting” species/tile probabilities from the collection mixture,
+tagged with the latest decision tick and episode. Switch requests select only
+unfinished undisplayed environments; absent candidates retain the result and wait
+until a collector safe point makes a replacement available. Hardware curves and
+terminal logs describe role, role progress, planting coverage, phase,
 reward, net value, discounted return and throughput. Reporting failure does
 not invalidate a checkpoint. Detailed evidence and source limitations belong
 in [validation](validation.md), [references](references.md) and

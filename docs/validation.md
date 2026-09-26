@@ -1,5 +1,89 @@
 # Validation and measured results
 
+## 0.22.0 alternating roles and data preparation — 2026-09-25
+
+The game checkout, game 1.5.0 pin `092841aa0dc7dcb1f2c4e92bfbb1ba63e0adff8d`,
+286-value observation, reward, controller and network structure are unchanged.
+Full resume now uses `alternating_complete_game_v1`; 0.21.0 inference and
+compatible weights-only transfer remain available. Existing runs are preserved.
+
+Independent controls cover eight-cohort role switches, skipped zero-plant actor
+cohorts, stage resets, inactive parameters and Adam state, and exact interruption
+at collection, fitting and role-transition boundaries. Cache/host/prefetch controls
+compare raw tokens with a scalar CPU enumeration, returns, causal references,
+partial batches, disk overflow, exhausted cache and the 2 GiB reserve. Matching
+optimizer/RNG results verify that transfers do not change sampling or fitting.
+Viewer controls cover unfinished-only switching, uniqueness, absent candidates,
+next-cohort recovery, stale generations, mixture probabilities and unchanged RNG.
+The 1600×1050 four-panel render was inspected in `artifacts/0.22.0/viewer.png`.
+
+The clean research regression run passed **519 tests in 661.19 s**. Final
+resume/viewer verification passed **23 tests in 16.26 s**, including the added
+small-window control (520 maintained controls in total). The pinned game suite
+passed **226 tests in 242.68 s**. Ruff lint/format, dependency checks, editable
+installation and wheel/sdist builds passed. Doctor reports CUDA tensor sharing,
+kernel compilation, accounting, replay, rendering and training readiness passed.
+The game checkout remains clean at its unchanged pin. Logs are under
+`artifacts/0.22.0/`.
+
+The verified compatibility records are:
+
+| Record | Value |
+|---|---|
+| optimizer_protocol | `alternating_complete_game_v1` |
+| exploration_protocol | `cohort_plant_floor_v1` |
+| research_source_hash | `831e070e271a5a20752cbdc1703e697119ca5dbc3291c24f138c12199ff05836` |
+| resume_signature | `7bf832cb0dadfd88832a4cf14bad1596a7bf5a46cf5d2da4fd9039ac98914327` |
+| weight_signature | `47a84e18bb342ad444b14e760004900439b9bec4508a60adefbec220d219c323` |
+
+### Matched bounded transport measurement
+
+RTX 4070 Laptop GPU, PyTorch 2.8.0, 32 environments, four epochs, maximum
+minibatch 1,024, default 48-token memory. A one-second warm-up exercised both roles;
+each timed repetition used two complete 32-game cohorts with a five-second cutoff,
+straddling a normal 256-game role boundary initialized at critic progress 224.
+The critic planting bias was set to +10 **only in this disposable control** to
+ensure planting coverage in both roles. This is not a shipped initialization or
+learning comparison. Compilation was unavailable (no Triton); both variants used
+eager execution. The live viewer was off and hardware sampling was on for both.
+
+The baseline imported only the original buffer preparation from source commit
+`25d0269fc6d5af7857d476f5aab5506e7aa08830`, with caching/prefetch disabled in the
+measurement harness. Both variants used the same alternating scheduler and current
+collection path. There is no baseline scheduler or comparison option in production.
+
+| Measurement | Original preparation | Cache + prefetch |
+|---|---:|---:|
+| Complete transitions/s, repetitions | 2,023.0 / 1,988.5 / 2,067.0 | 3,141.4 / 3,257.6 / 3,208.4 |
+| Median complete transitions/s | 2,023.0 | 3,208.4 |
+| Median collection seconds, two cohorts | 7.3740 | 7.2816 |
+| Median critic fitting seconds | 7.8651 | 2.1253 |
+| Median actor fitting seconds | 0.1273 | 0.1098 |
+| Peak allocated VRAM MiB | 799.1 | 892.3 |
+| Peak allocator-reserved VRAM MiB | 1,016 | 1,722 |
+| Sampled device-wide GPU utilization, mean | 33.61% | 49.11% |
+| Sampled process CPU utilization, mean | 99.06% | 100.79% |
+| Sampled process RAM MiB, mean | 2,046.5 | 1,988.1 |
+
+Median gain is **58.6%**, exceeding the 20% bounded-control target. Every timed
+variant processed exactly 32,076 transitions, 64 planting samples across both
+cohorts, 64 critic optimizer steps and four attempted/retained actor steps. No
+actor window was rejected. Each pair produced the same final policy hash;
+no skipped optimization is credited as a transport gain. The actor workload
+is small, so these results chiefly establish relief of critic data preparation,
+not sustained full-sized actor-minibatch performance.
+
+Candidate median host preparation was 0.2323 s, host prefetch wait 0.0242 s,
+transfer-stream span 0.2758 s and device-computation span 2.1481 s. Those spans
+overlap; transfer-stream time includes device gathering and host submission gaps.
+The old buffer did not emit those subdivisions; its zero-valued counters are
+unavailable instrumentation, not evidence of zero transfer cost. Raw JSON and
+hardware samples remain in `artifacts/0.22.0/`. Five-second cutoff controls do
+not establish full-game learning quality or full-length-game throughput.
+
+No formal learning run or learning comparison was launched. The all-wait
+coverage problem remains outside this release.
+
 ## 0.21.0 complete games and corrected mechanics — 2026-09-25
 
 The game release is **1.5.0**, simulation **1.2.0**, at merged commit

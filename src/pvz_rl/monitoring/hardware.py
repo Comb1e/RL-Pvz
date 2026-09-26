@@ -102,6 +102,17 @@ class HardwareMonitor:
             critic_seconds=metrics.get("critic_seconds"),
             actor_seconds=metrics.get("actor_seconds"),
             window_seconds=metrics.get("window_seconds"),
+            **{
+                key: metrics.get(key)
+                for key in (
+                    "preparation_seconds",
+                    "transfer_stream_seconds",
+                    "transfer_wait_seconds",
+                    "device_compute_seconds",
+                    "cache_hit_rate",
+                    "simulation_speed",
+                )
+            },
         )
 
     @property

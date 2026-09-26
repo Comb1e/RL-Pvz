@@ -5,11 +5,33 @@ import signal
 import threading
 from contextlib import contextmanager
 from copy import deepcopy
+from dataclasses import dataclass
 from enum import StrEnum
 
 import torch
 
-OPTIMIZER_PROTOCOL = "complete_game_mc_conditional_ppo_v1"
+OPTIMIZER_PROTOCOL = "alternating_complete_game_v1"
+
+
+@dataclass
+class RoleSchedule:
+    """Credit a cohort once, after its selected optimization has completed."""
+
+    role: str = "critic"
+    games: int = 0
+    stage: str | None = None
+
+    def enter_stage(self, stage):
+        if stage != self.stage:
+            self.role, self.games, self.stage = "critic", 0, stage
+
+    def complete(self, games, limit):
+        if games <= 0 or self.games + games > limit:
+            raise ValueError("Role progress must finish at a complete-cohort boundary")
+        self.games += games
+        if self.games == limit:
+            self.role = "actor" if self.role == "critic" else "critic"
+            self.games = 0
 
 
 class CohortPhase(StrEnum):

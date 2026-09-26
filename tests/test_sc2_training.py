@@ -24,6 +24,7 @@ def small_cfg(device="cuda", backend="cuda", profile="E"):
         validation_schedule="periodic",  # Original periodic-validation regression protocol.
         device=device,
         n_envs=2,
+        role_phase_games=2,
         batch_size=32,
         n_epochs=1,
         total_games=12,
@@ -110,8 +111,10 @@ def test_spatial_training_reload_and_preserved_model_across_stages(
     assert len(set(identities)) == 1
     metrics = read_series(run / "training-metrics.jsonl")
     assert metrics[-1]["training_steps"] == read_json(run / "status.json")["steps"]
-    assert metrics[-1]["optimization"]["exploration_bonus"] is not None
-    assert metrics[-1]["optimization"]["joint_entropy"] >= 0
+    actor_metrics = [m for m in metrics if m["optimization"].get("actor_attempted_steps", 0)]
+    assert actor_metrics
+    assert all(m["optimization"]["exploration_bonus"] is not None for m in actor_metrics)
+    assert all(m["optimization"]["joint_entropy"] >= 0 for m in actor_metrics)
     loaded, _ = load_policy(run / "final.zip", device)
     again, _ = load_policy(run / "final.zip", device)
     env = PvZEnv(cfg)
@@ -140,7 +143,7 @@ def test_resume_keeps_cumulative_time_schedule_and_optimizer(tmp_path, monkeypat
         train(cfg, "masked", 101, first, validation_limit=1)
     interrupted, _ = load_policy(first / "interrupted.zip")
     assert interrupted.num_timesteps == 2 * 100  # Two complete one-second waiting games.
-    assert interrupted.optimizer_protocol == "complete_game_mc_conditional_ppo_v1"
+    assert interrupted.optimizer_protocol == "alternating_complete_game_v1"
     assert not interrupted.policy.optimizer.state  # No planting likelihood in this cohort.
     assert interrupted.policy.critic_optimizer.state
     elapsed = read_json(first / "status.json")["time_budget"]["elapsed_seconds"]

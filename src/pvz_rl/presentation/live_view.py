@@ -15,10 +15,19 @@ from enum import IntEnum, StrEnum
 from queue import Empty, Full
 from time import monotonic
 
+from pvz_rl.envs.actions import ActionSchema as A
+
 PANELS = 4
 ACTION_HISTORY = 3
 RESULT_SECONDS = 1.0
 UI_FPS = 30
+
+
+class DecisionLayout:
+    species = slice(3, 3 + A.plant_types)
+    tiles = slice(species.stop, species.stop + A.plant_types * A.tiles)
+    action = tiles.stop
+    tick = action + 1
 
 
 class PanelState(StrEnum):
@@ -33,6 +42,10 @@ class Activity(IntEnum):
     UPDATING = 2
     VALIDATING = 3
     REPORTING = 4
+    CRITIC_COLLECTING = 5
+    ACTOR_COLLECTING = 6
+    CRITIC_UPDATING = 7
+    ACTOR_UPDATING = 8
 
 
 ACTIVITY_TEXT = {
@@ -41,6 +54,10 @@ ACTIVITY_TEXT = {
     Activity.UPDATING: "Learner updating / preparing cohort - training boards unchanged",
     Activity.VALIDATING: "Validation - training games paused",
     Activity.REPORTING: "Reporting - training games paused",
+    Activity.CRITIC_COLLECTING: "Critic role | collecting complete games | both networks frozen",
+    Activity.ACTOR_COLLECTING: "Actor role | collecting complete games | both networks frozen",
+    Activity.CRITIC_UPDATING: "Critic role | fitting returns | training boards paused",
+    Activity.ACTOR_UPDATING: "Actor role | conditional planting PPO | training boards paused",
 }
 
 
@@ -58,6 +75,15 @@ class Selection:
         self.count = count
         self.rng = rng or random.Random()
         self.panels = [Panel(i) for i in self.rng.sample(range(count), min(PANELS, count))]
+        self.active = set(range(count))
+        self.pending = set()
+
+    def refresh(self, active):
+        self.active = set(active)
+        changed = False
+        for index in sorted(self.pending.copy()):
+            changed = self.switch(index, self.panels[index].generation) or changed
+        return changed
 
     def switch(self, panel, generation):
         if not 0 <= panel < len(self.panels):
@@ -66,8 +92,13 @@ class Selection:
         if generation != old.generation:
             return False
         occupied = {p.env for p in self.panels}
-        candidates = sorted(set(range(self.count)) - occupied)
-        selected = self.rng.choice(candidates) if candidates else old.env
+        candidates = sorted(self.active - occupied)
+        if not candidates:
+            self.pending.add(panel)
+            old.state = PanelState.SELECTING
+            return False
+        selected = self.rng.choice(candidates)
+        self.pending.discard(panel)
         self.panels[panel] = Panel(selected, old.generation + 1, PanelState.SELECTING)
         return True
 
@@ -78,7 +109,8 @@ class Selection:
         if p.frame is not None and frame["sequence"] <= p.frame["sequence"]:
             return False
         p.frame = frame
-        p.state = PanelState.RESULT if frame["outcome"] != "running" else PanelState.WATCHING
+        if panel not in self.pending:
+            p.state = PanelState.RESULT if frame["outcome"] != "running" else PanelState.WATCHING
         return True
 
 
@@ -113,6 +145,7 @@ class LiveSession:
         self.closed = ctx.Event()
         self.ready = ctx.Event()
         self.activity = ctx.Value("i", int(Activity.STARTING))
+        self.role = ctx.Value("i", 0)
         self.process = ctx.Process(
             target=viewer_main,
             args=(
@@ -122,6 +155,7 @@ class LiveSession:
                 self.closed,
                 self.ready,
                 self.activity,
+                self.role,
                 settings["live_window_size"],
                 count,
             ),
@@ -184,6 +218,9 @@ class LiveSession:
         self.stats[key] += 1
         self.last_publish = now
 
+    def set_role(self, role):
+        self.role.value = int(role == "actor")
+
     def set_activity(self, activity):
         if self.enabled:
             self.activity.value = int(activity)
@@ -203,21 +240,61 @@ class LiveSession:
             queue.close()
 
 
-def draw_view(surface, packets, activity, *, renderers, boards, pending=(), count=32):
+def draw_view(surface, packets, activity, *, renderers, boards, pending=(), count=32, role=None):
     """Draw through the pinned renderer; reusable in offscreen visual controls."""
     import pygame
     from pvz_game.rendering import BoardRenderer, RenderContext
 
     surface.fill((19, 28, 24))
     width, height = surface.get_size()
+    # Scale the complete layout on small screens instead of clipping the board
+    # behind the decision panel. Convert hit boxes back to window coordinates.
+    if width < 1280 or height < 950:
+        size = (max(width, 1280), max(height, 950))
+        canvas = renderers.get("canvas")
+        if canvas is None or canvas.get_size() != size:
+            canvas = renderers["canvas"] = pygame.Surface(size)
+        buttons = draw_view(
+            canvas,
+            packets,
+            activity,
+            renderers=renderers,
+            boards=boards,
+            pending=pending,
+            count=count,
+            role=role,
+        )
+        surface.blit(pygame.transform.smoothscale(canvas, (width, height)), (0, 0))
+        sx, sy = width / size[0], height / size[1]
+        return [
+            (
+                pygame.Rect(
+                    round(r.x * sx),
+                    round(r.y * sy),
+                    max(1, round(r.w * sx)),
+                    max(1, round(r.h * sy)),
+                ),
+                i,
+                target,
+            )
+            for r, i, target in buttons
+        ]
     if "fonts" not in renderers:
         renderers["fonts"] = (
             pygame.font.SysFont("Segoe UI", 17),
             pygame.font.SysFont("Segoe UI", 15),
         )
     font, small = renderers["fonts"]
-    surface.blit(font.render(ACTIVITY_TEXT[Activity(activity)], True, (225, 238, 225)), (12, 8))
+    label = ACTIVITY_TEXT[Activity(activity)]
+    if role and "role" not in label:
+        label = f"{role.capitalize()} role | " + label
+    surface.blit(font.render(label, True, (225, 238, 225)), (12, 8))
     buttons = []
+    species_selection = renderers.setdefault("species_selection", {})
+    current_selections = {(i, packet["generation"]) for i, packet in enumerate(packets)}
+    for key in list(species_selection):
+        if key not in current_selections:
+            del species_selection[key]
     original_clip = surface.get_clip()
     cell_w, cell_h = width // 2, (height - 36) // 2
     for index in range(PANELS):
@@ -265,7 +342,9 @@ def draw_view(surface, packets, activity, *, renderers, boards, pending=(), coun
                 (x + 12, y + 52),
             )
             continue
-        size = (max(1, cell_w - 16), max(1, cell_h - 116))
+        diagnostic = frame.get("decision")
+        footer = 230 if diagnostic else 70
+        size = (max(1, cell_w - 16), max(1, cell_h - footer - 46))
         key = (index, size)
         if key not in renderers:
             renderers[key] = BoardRenderer(size=size)
@@ -283,16 +362,92 @@ def draw_view(surface, packets, activity, *, renderers, boards, pending=(), coun
         caption = f"{obs.elapsed_seconds:.2f}s | sun {obs.sun} | {frame['outcome']}"
         if index in pending:
             caption += " | switch pending"
-        surface.blit(small.render(caption, True, (237, 222, 163)), (x + 12, y + cell_h - 64))
+        surface.blit(
+            small.render(caption, True, (237, 222, 163)), (x + 12, y + cell_h - footer + 4)
+        )
         for offset, text in enumerate(frame["actions"][-2:]):
             surface.blit(
-                small.render(text, True, (213, 227, 214)), (x + 12, y + cell_h - 44 + offset * 18)
+                small.render(text, True, (213, 227, 214)),
+                (x + 12, y + cell_h - footer + 24 + offset * 18),
+            )
+        if diagnostic:
+            from pvz_game.config import PLANT_TYPES
+
+            base_y = y + cell_h - footer + 63
+            action = diagnostic["action"]
+            selected_kind = 0 if action == 0 else 1 if action < A.dig_start else 2
+            q_text = "Estimated returns: " + " | ".join(
+                (">" if i == selected_kind else "")
+                + name
+                + " "
+                + ("n/a" if q is None else f"{q:+.3f}")
+                for i, (name, q) in enumerate(
+                    zip(("Q(wait)", "Q(plant)", "Q(dig best)"), diagnostic["q"])
+                )
+            )
+            surface.blit(small.render(q_text, True, (245, 229, 177)), (x + 12, base_y))
+            decoded = (
+                "wait"
+                if action == 0
+                else (
+                    f"dig tile {action - A.dig_start}"
+                    if action >= A.dig_start
+                    else f"{PLANT_TYPES[(action - 1) // A.tiles]} tile {(action - 1) % A.tiles}"
+                )
+            )
+            surface.blit(
+                small.render(
+                    f"Latest decision {diagnostic['tick'] / obs.tick_rate:.2f}s: {decoded} | If planting:",
+                    True,
+                    (219, 230, 219),
+                ),
+                (x + 12, base_y + 20),
+            )
+            key = (index, packet["generation"])
+            default = (
+                (action - 1) // A.tiles
+                if 0 < action < A.dig_start
+                else max(range(A.plant_types), key=lambda k: diagnostic["plants"][k])
+            )
+            species = species_selection.get(key, default)
+            button_w = max(50, (cell_w - 242) // 2)
+            for k, (name, probability) in enumerate(zip(PLANT_TYPES, diagnostic["plants"])):
+                r = pygame.Rect(
+                    x + 12 + k % 2 * button_w, base_y + 43 + k // 2 * 24, button_w - 4, 22
+                )
+                pygame.draw.rect(surface, (68, 106, 78) if k == species else (46, 65, 52), r)
+                surface.blit(
+                    small.render(
+                        f"{name.replace('_', ' ')} {probability:.1%}",
+                        True,
+                        (233, 239, 227) if probability else (141, 157, 144),
+                    ),
+                    (r.x + 3, r.y + 1),
+                )
+                buttons.append((r, index, (packet["generation"], k)))
+            tile_probs = diagnostic["tiles"][species]
+            maximum = max(tile_probs) or 1
+            for tile, probability in enumerate(tile_probs):
+                r = pygame.Rect(
+                    x + cell_w - 223 + tile % A.cols * 23, base_y + 44 + tile // A.cols * 19, 21, 17
+                )
+                intensity = probability / maximum
+                pygame.draw.rect(
+                    surface,
+                    (int(40 + 150 * intensity), int(55 + 160 * intensity), 60)
+                    if probability
+                    else (29, 35, 31),
+                    r,
+                )
+            surface.blit(
+                small.render("Tile heatmap: brighter = higher", True, (203, 219, 204)),
+                (x + cell_w - 225, base_y + 140),
             )
     surface.set_clip(original_clip)
     return buttons
 
 
-def viewer_main(frames, commands, errors, closed, ready, activity, size, count):
+def viewer_main(frames, commands, errors, closed, ready, activity, role, size, count):
     """Spawn entry point: no model, CUDA context, engine instance, or replay."""
     try:
         import pygame
@@ -307,6 +462,7 @@ def viewer_main(frames, commands, errors, closed, ready, activity, size, count):
         clock = pygame.time.Clock()
         packets, buttons, renderers, boards, pending, results = [], [], {}, {}, {}, {}
         dirty, displayed_activity = True, None
+        displayed_role = None
 
         def switch(index, generation):
             nonlocal dirty
@@ -327,13 +483,22 @@ def viewer_main(frames, commands, errors, closed, ready, activity, size, count):
                     screen = pygame.display.set_mode(
                         (max(640, event.w), max(480, event.h)), pygame.RESIZABLE
                     )
+                    selections = renderers.get("species_selection", {})
                     renderers.clear()
+                    renderers["species_selection"] = selections
                     boards.clear()
                     dirty = True
                 elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
                     for rect, index, generation in buttons:
                         if rect.collidepoint(event.pos):
-                            switch(index, generation)
+                            if isinstance(generation, tuple):
+                                gen, species = generation
+                                renderers.setdefault("species_selection", {})[(index, gen)] = (
+                                    species
+                                )
+                                dirty = True
+                            else:
+                                switch(index, generation)
             try:
                 incoming = frames.get_nowait()
                 dirty = True
@@ -359,7 +524,7 @@ def viewer_main(frames, commands, errors, closed, ready, activity, size, count):
                     if key[0] == index and key[1] != generation:
                         del results[key]
             current_activity = activity.value
-            if dirty or current_activity != displayed_activity:
+            if dirty or current_activity != displayed_activity or role.value != displayed_role:
                 buttons = draw_view(
                     screen,
                     packets,
@@ -368,9 +533,11 @@ def viewer_main(frames, commands, errors, closed, ready, activity, size, count):
                     boards=boards,
                     pending=pending,
                     count=count,
+                    role="actor" if role.value else "critic",
                 )
                 pygame.display.flip()
                 dirty, displayed_activity = False, current_activity
+                displayed_role = role.value
             clock.tick(UI_FPS)
     except Exception as exc:
         try:

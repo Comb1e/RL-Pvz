@@ -2,7 +2,7 @@
 
 from functools import lru_cache
 
-from pvz_rl.config import research_config, simulator, validate_config
+from pvz_rl.config import research_config, role_phase_games, simulator, validate_config
 from pvz_rl.envs.actions import ActionSchema
 from pvz_rl.learning.curriculum import selected_stage
 from pvz_rl.policy.grouped_policy import ACTION_DISTRIBUTION
@@ -50,6 +50,7 @@ def _cuda_probe():
 def require_cuda_training(cfg, condition="masked", *, runtime=True):
     """Reject unsupported runs before creating output or allocating collectors."""
     validate_config(cfg)
+    role_phase_games(cfg)
     if condition == "hybrid" or cfg["conditions"].get(condition, {}).get("hybrid"):
         raise ValueError("CPU/hybrid training was removed in 0.8.0; use a direct CUDA condition.")
     if condition not in cfg["conditions"]:

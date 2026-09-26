@@ -5,6 +5,27 @@ Dates and results belong to their recorded version. Current behavior lives in
 artifact locations and learning outcomes live in [validation](validation.md).
 The longer pre-consolidation notes remain in `git show b642c9c:docs/iteration.md`.
 
+## 0.22.0 — 2026-09-25
+
+- Problem: the previous scheduler fitted both networks after every complete-game
+  cohort, unlike the requested 256-game alternation. Long cohorts spent most time
+  gathering full structured history and creating pinned buffers before critic work.
+- Changes: an explicit saved role counter credits each optimized 32-game cohort,
+  switches after 256 games, resets at stage changes, and records empty actor coverage.
+  Inactive network/optimizer state stays fixed. Raw-only float32 gathering, bounded
+  GPU token caching, reusable staging and one-batch-ahead transfer preparation reduce
+  host work while preserving the authoritative CPU/disk trajectory and sample order.
+- Viewer: critic return estimates and actual conditional planting probabilities,
+  species-selectable tile heatmaps and decision timestamps. Manual and automatic
+  replacement wait for unfinished undisplayed games; no viewer input resets a game.
+- Verification: independent returns/token/gradient/Adam/RNG controls, role and
+  interruption boundaries, viewer parity and matched bounded CUDA workloads.
+  Measured median transport-control throughput improved 58.6%; see validation for
+  conditions and limits. No learning-performance conclusion is drawn.
+- Compatibility: new optimizer protocol rejects previous full resume; compatible
+  0.21.0 inference/weight initialization and every existing artifact remain available.
+  Greedy all-wait behavior and missing plant experience remain unresolved risks.
+
 ## 0.21.0 — 2026-09-25
 
 The prior model sampled action kinds and fitted short-rollout values. The user
