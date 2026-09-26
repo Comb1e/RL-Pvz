@@ -68,7 +68,7 @@ def test_selection_unique_private_rng_and_generation_rejection():
         small = Selection(count)
         assert len(small.panels) == count
         old = small.panels[0].env
-        assert small.switch(0, 0) and small.panels[0].env == old
+        assert not small.switch(0, 0) and small.panels[0].env == old
         assert len({p.env for p in small.panels}) == count
 
 
@@ -174,7 +174,7 @@ def test_capture_cpu_reference_terminals_actions_and_switches(per_tick_cfg):
         env.close()
 
 
-def test_paused_completion_can_be_selected_without_restart_or_duplicate_actions(per_tick_cfg):
+def test_paused_completion_waits_for_unfinished_replacement_without_restart(per_tick_cfg):
     from pvz_rl.envs.cuda_env import CudaVecEnv
 
     cfg = copy.deepcopy(per_tick_cfg)
@@ -194,7 +194,7 @@ def test_paused_completion_can_be_selected_without_restart_or_duplicate_actions(
         env.step_tensors(action, autoreset=False)
         env.live_view.drain(wait=True)
         p = session.selection.panels[2]
-        assert p.generation == 1 and p.state == PanelState.RESULT
+        assert p.generation == 0 and p.state == PanelState.SELECTING
         assert p.frame["outcome"] == "truncated" and not p.frame["actions"]
         assert [env.batch.state_hash(i) for i in range(5)] == hashes
         assert sum(x["completed_games"] for x in env.task_counts().values()) == 5
@@ -259,7 +259,7 @@ def test_complete_training_cohorts_identical_with_viewer(smoke_cfg, tmp_path):
     from pvz_rl.monitoring.benchmark import policy_digest
 
     cfg = copy.deepcopy(smoke_cfg)
-    cfg["training"].update(n_envs=2, batch_size=16)
+    cfg["training"].update(n_envs=2, batch_size=16, role_phase_games=2)
     cfg["training"]["performance"]["compile_kernels"] = False
     results = []
     for enabled in (False, True):
@@ -417,3 +417,89 @@ def test_mixed_natural_results_and_capture_never_reads_private_templates(per_tic
         }
     finally:
         env.close()
+
+
+def test_switch_only_unfinished_unique_and_retries_next_cohort():
+    selection = Selection(8, rng=random.Random(12))
+    previous = [p.env for p in selection.panels]
+    selection.refresh([])
+    for i, p in enumerate(selection.panels):
+        assert not selection.switch(i, p.generation)
+    assert len(selection.pending) == 4
+    assert selection.refresh(range(8))
+    current = [p.env for p in selection.panels]
+    assert len(set(current)) == 4
+    assert all(a != b for a, b in zip(previous, current))
+    assert not selection.pending
+    selection.refresh(current)
+    assert not selection.switch(0, selection.panels[0].generation)
+
+
+def test_view_decisions_match_sampled_mixture_without_rng_changes(smoke_cfg):
+    from pvz_rl.learning.training import build_model, vector_env
+    from pvz_rl.policy.grouped_policy import controller_choice
+
+    env = vector_env(smoke_cfg, "masked", 101)
+    try:
+        model = build_model(smoke_cfg, "masked", env, 101)
+        obs, mask = env.reset(), env.action_masks()
+        for planting in (False, True):
+            with torch.no_grad():
+                model.policy.value_net.bias[1] = 0.1 if planting else -0.1
+                state = torch.cuda.get_rng_state()
+                plain = model.policy.decide(obs, mask)
+                after = torch.cuda.get_rng_state()
+                torch.cuda.set_rng_state(state)
+                watched = model.policy.decide(
+                    obs, mask, diagnostic_indices=torch.tensor([0], device="cuda")
+                )
+                assert torch.equal(after, torch.cuda.get_rng_state())
+                for a, b in zip(plain, watched[:3]):
+                    assert torch.equal(a, b)
+                diagnostic = watched[3]
+                distribution = model.policy.get_distribution(obs, mask)
+                joint = distribution.probs.reshape(-1, 8, 45)
+                torch.testing.assert_close(diagnostic["plants"], joint.sum(-1))
+                torch.testing.assert_close(
+                    diagnostic["plants"][..., None] * diagnostic["tiles"], joint
+                )
+                values = model.policy.predict_values(obs)
+                torch.testing.assert_close(diagnostic["q"][:, :2], values[:, :2])
+                assert controller_choice(values, mask).item() == int(planting)
+    finally:
+        env.close()
+
+
+def test_decision_panel_small_window_hit_boxes_and_species_selection():
+    import pygame
+    from pvz_game import Game
+
+    pygame.font.init()
+    game = Game()
+    game.reset("easy", 5)
+    frame = dict(
+        observation=game.observe(),
+        task="saving",
+        episode=1,
+        outcome="running",
+        sequence=1,
+        actions=[],
+        decision=dict(
+            q=[0, 0, None],
+            plants=[1 / 8] * 8,
+            tiles=[[1 / 45] * 45 for _ in range(8)],
+            action=0,
+            tick=0,
+        ),
+    )
+    packets = [dict(env=i, generation=3, state="watching", frame=frame) for i in range(4)]
+    renderers = {"species_selection": {(0, 3): 2, (0, 2): 5}}
+    for size in ((1600, 1050), (944, 668), (640, 480)):
+        surface = pygame.Surface(size)
+        buttons = draw_view(
+            surface, packets, Activity.VALIDATING, renderers=renderers, boards={}, role="actor"
+        )
+        assert len(buttons) == 36
+        assert all(surface.get_rect().contains(rect) for rect, _, _ in buttons)
+        assert (0, (3, 2)) in [(panel, target) for _, panel, target in buttons]
+        assert renderers["species_selection"] == {(0, 3): 2}

@@ -263,11 +263,14 @@ class SpatialGroupedPolicy(MaskableActorCriticPolicy):
             **self.optimizer_kwargs,
         )
 
-    def decide(self, obs, action_masks, deterministic=False, context=None):
+    def decide(self, obs, action_masks, deterministic=False, context=None, diagnostic_indices=None):
         values = self.predict_values(obs, context)
         choices = controller_choice(values, action_masks)
         actions = torch.where(choices >= 2, A.dig_start + choices - 2, 0).long()
         logs = values.new_zeros(len(obs))
+        diagnostics = None
+        if diagnostic_indices is not None:
+            diagnostics = values.new_zeros((len(obs), A.plant_types, A.tiles))
         planting = (choices == 1).nonzero(as_tuple=True)[0]
         if len(planting):
             distribution = self.get_distribution(
@@ -278,6 +281,36 @@ class SpatialGroupedPolicy(MaskableActorCriticPolicy):
             selected = distribution.get_actions(deterministic=deterministic)
             actions[planting] = selected
             logs[planting] = distribution.log_prob(selected)
+            if diagnostics is not None:
+                diagnostics[planting] = distribution.probs.reshape(-1, A.plant_types, A.tiles)
+        if diagnostics is not None:
+            # Reuse sampled-row outputs; extra forwards are restricted to watched
+            # non-planting rows. This path never draws random numbers.
+            extra = diagnostic_indices[choices[diagnostic_indices] != 1]
+            if len(extra):
+                dist = self.get_distribution(
+                    obs[extra],
+                    action_masks[extra],
+                    None if context is None else context.select(extra),
+                )
+                diagnostics[extra] = dist.probs.reshape(-1, A.plant_types, A.tiles)
+            ix = diagnostic_indices
+            joint = diagnostics[ix]
+            plants = joint.sum(-1)
+            tiles = joint / plants.clamp_min(torch.finfo(joint.dtype).tiny)[..., None]
+            q = torch.stack(
+                (
+                    values[ix, 0],
+                    values[ix, 1],
+                    values[ix, 2:]
+                    .masked_fill(~action_masks[ix, A.dig_start :], -torch.inf)
+                    .max(-1)
+                    .values,
+                ),
+                -1,
+            )
+            result = dict(q=q, plants=plants, tiles=tiles, actions=actions[ix])
+            return actions, values.gather(1, choices[:, None]).flatten(), logs, result
         return actions, values.gather(1, choices[:, None]).flatten(), logs
 
     def sample_actions(self, obs, action_masks, deterministic=False, context=None):

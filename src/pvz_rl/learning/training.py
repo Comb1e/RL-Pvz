@@ -16,6 +16,7 @@ from stable_baselines3.common.callbacks import BaseCallback
 from pvz_rl.config import (
     curriculum_probe_seeds,
     output_settings,
+    role_phase_games,
     runtime_settings,
     seed_values,
     simulator,
@@ -189,14 +190,17 @@ class ResearchCallback(BaseCallback):
         if viewer is not None:
             from pvz_rl.presentation.live_view import Activity
 
+            viewer.role = getattr(getattr(self.model, "roles", None), "role", "critic")
             viewer.set_activity(
                 {
                     "training": Activity.UPDATING,
                     "validation": Activity.VALIDATING,
                     "reporting": Activity.REPORTING,
-                    "collect": Activity.COLLECTING,
-                    "critic": Activity.UPDATING,
-                    "actor": Activity.UPDATING,
+                    "collect": Activity.ACTOR_COLLECTING
+                    if getattr(getattr(self.model, "roles", None), "role", "critic") == "actor"
+                    else Activity.CRITIC_COLLECTING,
+                    "critic": Activity.CRITIC_UPDATING,
+                    "actor": Activity.ACTOR_UPDATING,
                     "returns": Activity.UPDATING,
                     "synchronize": Activity.UPDATING,
                 }[self.hardware_activity]
@@ -208,9 +212,26 @@ class ResearchCallback(BaseCallback):
                 phase=getattr(self.model, "phase", "starting"),
                 activity=self.hardware_activity,
                 training_steps=self.model.num_timesteps,
+                **self.role_status(),
             )
             if cohort:
                 self.hardware.record_window(cohort)
+
+    def role_status(self):
+        roles = getattr(self.model, "roles", None)
+        buffer = getattr(self.model, "_buffer", None)
+        stats = getattr(self.model, "_stats", {})
+        return dict(
+            training_role=getattr(roles, "role", "critic"),
+            role_games=getattr(roles, "games", 0),
+            role_phase_games=role_phase_games(self.cfg),
+            planting_samples=int(buffer.group_counts[1])
+            if buffer is not None and buffer.finalized
+            else getattr(self.model, "_planting_samples", 0),
+            actor_optimizer_steps=stats.get("actor_retained_steps", 0),
+            critic_optimizer_steps=stats.get("critic_optimizer_steps", 0),
+            actor_skip_reason=stats.get("actor_skip_reason"),
+        )
 
     def task_counts(self):
         env = getattr(self.model, "env", None)
@@ -244,6 +265,7 @@ class ResearchCallback(BaseCallback):
             self.cfg["conditions"][self.condition]["curriculum"],
         )
         return {
+            **self.role_status(),
             "live_view": dict(self.model.env.live_view.stats)
             if getattr(getattr(self.model, "env", None), "live_view", None)
             else None,
@@ -294,7 +316,7 @@ class ResearchCallback(BaseCallback):
                 getattr(self.model, "policy", None), "compilation_status", "unknown"
             ),
             "compilation_error": (
-                type(error).__name__
+                str(error)
                 if (
                     error := getattr(getattr(self.model, "policy", None), "compilation_error", None)
                 )
@@ -373,6 +395,7 @@ class ResearchCallback(BaseCallback):
     def log_progress(self, *, force=False):
         if not force and not self.progress.due():
             return
+        self.hardware_context()
         row = self.snapshot()
 
         def value(number, spec=".2f", suffix=""):
@@ -404,6 +427,7 @@ class ResearchCallback(BaseCallback):
         )
         self.progress.emit(
             f"Stage       {row['curriculum_stage']} | {row['training_phase']} | {progress}\n"
+            f"Role        {row['training_role']} | {row['role_games']}/{row['role_phase_games']} optimized games | planting samples {value(row['planting_samples'], '.0f')} | steps critic {row['critic_optimizer_steps']} / actor {row['actor_optimizer_steps']} | skip {row['actor_skip_reason'] or 'none'}\n"
             f"Time        {duration(row['wall_seconds'])} elapsed | next mastery probe {value(probe, ',.0f')} games\n"
             f"Recent task {tasks}\n"
             f"Game means  last {row['rolling_episodes']} finished games | {row['rolling_truncations']} cutoff failures included\n"
@@ -413,6 +437,7 @@ class ResearchCallback(BaseCallback):
             f"Recent play plants/game {value(row['rolling_plant_purchases'])} | attackers/game {value(row['rolling_attacker_purchases'])} | early digs/plant {value(row['early_digs_per_planting'], '.2%')} | game duration {value(row['rolling_seconds'], suffix='s')}\n"
             f"Exploration {row['exploration_rate']:.3%} | entropy factor {row['entropy_factor']:.3f}\n"
             f"Cohort      {value(cohort.get('transitions_per_second'), '.0f')} transitions/s | collect {value(row['last_collection_seconds'], suffix='s')} | update {value(row['last_optimization_seconds'], suffix='s')} | critic {value(cohort.get('critic_seconds'), suffix='s')} | actor {value(cohort.get('actor_seconds'), suffix='s')}\n"
+            f"Data path   prepare {value(cohort.get('preparation_seconds'), suffix='s')} | transfer wait {value(cohort.get('transfer_wait_seconds'), suffix='s')} | device {value(cohort.get('device_compute_seconds'), suffix='s')} | cache hit {value(cohort.get('cache_hit_rate'), '.1%')} | simulation {value(cohort.get('simulation_speed'), '.1f')}x aggregate\n"
             f"Learning    actor steps {value(optimizer.get('train/actor_retained_steps'), '.0f')} retained / {value(optimizer.get('train/actor_attempted_steps'), '.0f')} attempted | critic steps {value(optimizer.get('train/critic_optimizer_steps'), '.0f')} | exact KL {value(optimizer.get('train/exact_kl'), '.5f')} | value MSE {value(optimizer.get('train/value_loss'), '.5f')}\n"
             "Critic prefit "
             + " | ".join(
@@ -573,7 +598,7 @@ class ResearchCallback(BaseCallback):
                 force=True,
             )
             self.last_weights = list(weights)
-        # Optimization metrics are finalized after both fitting phases.
+        # Optimization metrics are finalized after the selected fitting phase.
         return True
 
     def _on_rollout_start(self):
@@ -696,6 +721,8 @@ class ResearchCallback(BaseCallback):
 
     def sync_curriculum(self):
         if self.curriculum:
+            if getattr(self.model, "phase", None) == "idle" and hasattr(self.model, "roles"):
+                self.model.roles.enter_stage(self.curriculum.name)
             self.model.curriculum_state = self.curriculum.to_dict()
             write_json(self.output / "curriculum.json", self.model.curriculum_state)
 

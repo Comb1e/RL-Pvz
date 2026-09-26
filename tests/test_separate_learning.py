@@ -90,7 +90,7 @@ def test_task_counts_track_partial_games_and_reset_at_episode_boundaries():
     from pvz_rl.learning.training import vector_env
 
     cfg = load_config()
-    cfg["training"].update(n_envs=3, batch_size=128)
+    cfg["training"].update(n_envs=3, batch_size=128, role_phase_games=24)
     cfg["environment"]["cutoff_seconds"] = 1
     env = vector_env(cfg, "masked", 101)
     try:

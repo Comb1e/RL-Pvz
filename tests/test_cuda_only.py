@@ -200,6 +200,7 @@ def test_benchmark_schedules_configurable_cuda_sizes(smoke_cfg, tmp_path, monkey
         return measure(cfg, seed, steps, output, **kwargs)
 
     monkeypatch.setattr(benchmark, "measure", limited)
+    smoke_cfg["training"]["role_phase_games"] = 512
     result = benchmark.benchmark_gpu(
         smoke_cfg, tmp_path / "custom", minutes=1, steps=128, env_counts=[64, 512]
     )

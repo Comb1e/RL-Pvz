@@ -2,6 +2,7 @@
 
 import shutil
 from pathlib import Path
+from time import perf_counter
 
 import numpy as np
 import torch
@@ -53,6 +54,27 @@ class CompleteGameBuffer:
         self.blocks = []
         self.size = self.ram_used = 0
         self.finalized = False
+        self.cache = None
+        self.transport_metrics = dict(
+            preparation_seconds=0.0,
+            transfer_wait_seconds=0.0,
+            transfer_stream_seconds=0.0,
+            cache_hits=0,
+            cache_requests=0,
+        )
+
+    def configure_cache(self, device, gib):
+        from pvz_rl.learning.transfers import TokenCache
+
+        if torch.device(device).type != "cuda":
+            return
+        self.cache = TokenCache(device, self.block_rows, self.observation_size + 3, gib * 1024**3)
+        # Resume rebuilds only raw inputs. CPU/disk storage remains authoritative.
+        for start in range(0, self.size, self.block_rows):
+            if self.cache.full:
+                break
+            tokens = self.raw_tokens(np.arange(start, min(self.size, start + self.block_rows)))
+            self.cache.append(torch.from_numpy(tokens).to(device))
 
     def _allocate(self):
         amount = self.block_rows * self.dtype.itemsize
@@ -68,10 +90,14 @@ class CompleteGameBuffer:
             )
         self.blocks.append(block)
 
-    def append(self, records):
+    def append(self, records, raw_tokens=None):
         if self.finalized:
             raise RuntimeError("Cannot append after complete-return finalization")
         records = np.asarray(records, dtype=self.dtype)
+        if self.cache is not None and not self.cache.full:
+            if raw_tokens is None:
+                raw_tokens = torch.from_numpy(self._tokens_from_rows(records)).to(self.cache.device)
+            self.cache.append(raw_tokens)
         if self.size + len(records) >= 2**32:
             raise OverflowError("Raw memory reference capacity exceeded")
         at = 0
@@ -93,6 +119,28 @@ class CompleteGameBuffer:
         for b in np.unique(block_ids):
             selected = block_ids == b
             result[selected] = self.blocks[b][offsets[selected]]
+        return result
+
+    def _tokens_from_rows(self, rows):
+        result = np.empty((*rows.shape, self.observation_size + 3), np.float32)
+        result[..., : self.observation_size] = rows["observation"]
+        for i, key in enumerate(("previous", "reset", "tick"), self.observation_size):
+            result[..., i] = rows[key]
+        return result
+
+    def raw_tokens(self, indices):
+        """Gather fields before rows: never copy masks, returns or history metadata."""
+        indices = np.asarray(indices, dtype=np.int64)
+        if np.any(indices < 0) or np.any(indices >= self.size):
+            raise IndexError("Trajectory index outside collected history")
+        result = np.empty((*indices.shape, self.observation_size + 3), np.float32)
+        blocks, offsets = np.divmod(indices, self.block_rows)
+        for b in np.unique(blocks):
+            selected = blocks == b
+            rows = offsets[selected]
+            result[selected, : self.observation_size] = self.blocks[b]["observation"][rows]
+            for i, key in enumerate(("previous", "reset", "tick"), self.observation_size):
+                result[..., i][selected] = self.blocks[b][key][rows]
         return result
 
     def valid_indices(self, planting=False):
@@ -158,25 +206,17 @@ class CompleteGameBuffer:
             for i, name in enumerate(("wait", "plant", "dig"))
         }
 
-    def batch(self, indices, device):
+    def batch(self, indices, device, *, staging=None):
+        started = perf_counter()
         rows = self.take(indices)
         ids = rows["ids"].astype(np.int64)
         valid = rows["counts"] > 0
         if np.any(ids[valid] > np.asarray(indices)[:, None].repeat(self.capacity, axis=1)[valid]):
             raise RuntimeError("Future token in causal memory")
-        archived = self.take(np.where(valid, ids, 0))
-        tokens = np.concatenate(
-            (
-                archived["observation"],
-                archived["previous"][..., None],
-                archived["reset"][..., None],
-                archived["tick"][..., None],
-            ),
-            -1,
-        ).astype(np.float32)
-        tokens[~valid] = 0
 
-        def tensor(x):
+        def tensor(x, key):
+            if staging is not None:
+                return staging.tensor(key, x, device)
             host = torch.from_numpy(np.ascontiguousarray(x))
             return (
                 host.pin_memory().to(device, non_blocking=True)
@@ -184,16 +224,44 @@ class CompleteGameBuffer:
                 else host.to(device)
             )
 
+        cached_size = (
+            self.cache.size if self.cache is not None and torch.device(device).type == "cuda" else 0
+        )
+        hit = valid & (ids < cached_size)
+        self.transport_metrics["cache_hits"] += int(hit.sum())
+        self.transport_metrics["cache_requests"] += int(valid.sum())
+        if hit.any():
+            tokens = torch.zeros(
+                (*ids.shape, self.observation_size + 3), device=device, dtype=torch.float32
+            )
+            flat = tokens.view(-1, self.observation_size + 3)
+            blocks = ids // self.block_rows
+            for b in np.unique(blocks[hit]):
+                positions = np.flatnonzero(hit & (blocks == b))
+                ix = tensor(positions, f"positions-{b}")
+                refs = tensor(ids.flat[positions] % self.block_rows, f"refs-{b}")
+                flat.index_copy_(0, ix, self.cache.blocks[b].index_select(0, refs))
+            misses = np.flatnonzero(valid & ~hit)
+            if len(misses):
+                flat.index_copy_(
+                    0,
+                    tensor(misses, "miss-ids"),
+                    tensor(self.raw_tokens(ids.flat[misses]), "miss-tokens"),
+                )
+        else:
+            raw = self.raw_tokens(np.where(valid, ids, 0))
+            raw[~valid] = 0
+            tokens = tensor(raw, "tokens")
         context = MemoryContext(
-            tensor(tokens),
-            tensor(valid),
-            tensor(rows["counts"].astype(np.float32)),
-            tensor(rows["starts"].astype(np.float32)),
+            tokens,
+            tensor(valid, "valid"),
+            tensor(rows["counts"].astype(np.float32), "counts"),
+            tensor(rows["starts"].astype(np.float32), "starts"),
         )
         masks = np.unpackbits(rows["mask"], axis=-1, count=A.size, bitorder="little").astype(bool)
         data = {
             name: tensor(
-                rows[name].astype(np.float32 if name not in ("action", "env") else np.int64)
+                rows[name].astype(np.float32 if name not in ("action", "env") else np.int64), name
             )
             for name in (
                 "observation",
@@ -206,7 +274,8 @@ class CompleteGameBuffer:
                 "env",
             )
         }
-        data.update(masks=tensor(masks), context=context)
+        data.update(masks=tensor(masks, "masks"), context=context)
+        self.transport_metrics["preparation_seconds"] += perf_counter() - started
         return data
 
     def save(self, destination):
@@ -234,6 +303,7 @@ class CompleteGameBuffer:
             "group_counts": getattr(self, "group_counts", None),
             "advantage_mean": getattr(self, "advantage_mean", 0.0),
             "advantage_std": getattr(self, "advantage_std", 0.0),
+            "transport_metrics": dict(self.transport_metrics),
         }
 
     def write_archive(self, archive):
@@ -274,9 +344,11 @@ class CompleteGameBuffer:
             obj.append(block)
         for k in ("finalized", "group_counts", "advantage_mean", "advantage_std"):
             setattr(obj, k, state[k])
+        obj.transport_metrics.update(state.get("transport_metrics", {}))
         return obj
 
     def close(self):
+        self.cache = None
         for block in self.blocks:
             if isinstance(block, np.memmap):
                 block.flush()

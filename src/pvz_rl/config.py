@@ -43,6 +43,8 @@ def research_config(cfg: dict) -> dict:
     }
     # Optional timing instrumentation never changes compatibility. Backend does.
     result["simulation"] = {"backend": simulator(cfg)}
+    result["training"] = copy.deepcopy(result["training"])
+    result["training"].get("performance", {}).pop("token_cache_gib", None)
     return result
 
 
@@ -82,6 +84,18 @@ def _teaching_defaults():
 
 def lesson_settings(cfg=None):
     return (cfg or {}).get("curriculum", {}).get("lessons", _teaching_defaults()["lessons"])
+
+
+def role_phase_games(cfg):
+    """Resolve and validate the complete-cohort role boundary for training."""
+    train = cfg["training"]
+    games = train.get("role_phase_games", 256)
+    n = train["n_envs"]
+    if type(n) is not int or n <= 0:
+        raise ValueError("n_envs must be a positive integer")
+    if type(games) is not int or games <= 0 or games % n:
+        raise ValueError("training.role_phase_games must be a positive multiple of n_envs")
+    return games
 
 
 def validate_config(cfg: dict) -> None:
@@ -322,6 +336,12 @@ def validate_config(cfg: dict) -> None:
         if type(storage.get(key)) is not int or storage[key] < 1:
             raise ValueError(f"training.storage.{key} must be a positive integer")
     performance = train.get("performance", {})
+    cache = performance.get("token_cache_gib", 2)
+    if type(cache) not in (int, float) or not math.isfinite(cache) or cache < 0:
+        raise ValueError("training.performance.token_cache_gib must be finite and nonnegative")
+    # Old checkpoints can be inspected/inferred without a new training schedule.
+    if "role_phase_games" in train:
+        role_phase_games(cfg)
     for key in ("compile_kernels", "telemetry"):
         if type(performance.get(key, False)) is not bool:
             raise ValueError(f"training.performance.{key} must be a boolean")

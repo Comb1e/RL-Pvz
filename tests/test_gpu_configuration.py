@@ -19,9 +19,12 @@ def test_new_shared_run_defaults_and_explicit_parallelism():
     assert simulator(cfg) == "cuda"
     assert cfg["training"]["n_envs"] == 32
     assert cfg["training"]["method"] == "complete_game_mc"
-    for count in (32, 64, 128, 256, 512, 1024):
+    for count in (32, 64, 128, 256):
         cfg = configured(args(n_envs=count))
         assert cfg["training"]["n_envs"] == count
+    for count in (3, 512, 1024):
+        with pytest.raises(ValueError, match="role_phase_games"):
+            configured(args(n_envs=count))
 
 
 @pytest.mark.parametrize(
@@ -52,7 +55,7 @@ def test_hardware_recommendations_and_override_conflicts(tmp_path):
 
 def test_resume_uses_saved_protocol_and_instrumentation_is_optional(tmp_path):
     saved = load_config()
-    saved["training"].update(n_envs=1024)
+    saved["training"].update(n_envs=1024, role_phase_games=1024)
     (tmp_path / "metadata.json").write_text(json.dumps({"config": saved}))
     cfg = configured(args(resume=tmp_path / "latest.zip"))
     assert research_config(cfg) == research_config(saved)

@@ -20,7 +20,8 @@ from pvz_game.types import (
 )
 
 from pvz_rl.envs.actions import ActionCodec
-from pvz_rl.presentation.live_view import Activity, LiveSession, PanelState
+from pvz_rl.envs.actions import ActionSchema as A
+from pvz_rl.presentation.live_view import Activity, DecisionLayout, LiveSession, PanelState
 
 
 def public_observation(arrays, rules, level):
@@ -130,6 +131,12 @@ class CudaLiveCapture:
         self.indices = None
         self.sequence = 0
         self.last_capture = -float("inf")
+        self.last_decision = -float("inf")
+        self.decisions = {}
+        self.decision_pending = None
+        self.decision_host = None
+        self.prepared = False
+        self.role = None
         self.stats = {"captures": 0, "capture_seconds": 0.0, "skipped": 0}
 
     @property
@@ -141,12 +148,21 @@ class CudaLiveCapture:
 
     def set_activity(self, activity):
         self.session.set_activity(activity)
+        if hasattr(self.session, "set_role"):
+            self.session.set_role(self.role)
 
     def prepare(self):
-        changed = self.session.poll()
+        changed = self.session.selection.refresh(np.flatnonzero(self.env.enabled_envs))
+        changed = self.session.poll() or changed
         if not self.enabled:
             return
-        self.set_activity(Activity.COLLECTING)
+        self.set_activity(
+            Activity.ACTOR_COLLECTING
+            if self.role == "actor"
+            else Activity.CRITIC_COLLECTING
+            if self.role == "critic"
+            else Activity.COLLECTING
+        )
         self.drain()
         if self.indices is None or changed:
             self.indices = torch.tensor(
@@ -154,6 +170,33 @@ class CudaLiveCapture:
             )
             self.last_capture = -float("inf")
             self.session.publish(force=True)
+        self.prepared = True
+
+    def decision_indices(self):
+        self.prepare()
+        if not self.enabled or perf_counter() - self.last_decision < 1 / self.session.fps:
+            return None
+        return self.indices
+
+    def capture_decision(self, diagnostic, ticks):
+        packed = torch.cat(
+            (
+                diagnostic["q"],
+                diagnostic["plants"],
+                diagnostic["tiles"].flatten(1),
+                diagnostic["actions"][:, None],
+                ticks[self.indices, None],
+            ),
+            -1,
+        )
+        if self.decision_host is None:
+            self.decision_host = torch.empty_like(packed, device="cpu", pin_memory=True)
+        self.decision_host.copy_(packed, non_blocking=True)
+        self.decision_pending = [
+            (i, p.generation, self.env._episode_serial[p.env])
+            for i, p in enumerate(self.session.selection.panels)
+        ]
+        self.last_decision = perf_counter()
 
     def diagnostics(self):
         h = self.env.header_tensor
@@ -167,10 +210,24 @@ class CudaLiveCapture:
 
     def after_step(self, compact, actions):
         started = perf_counter()
+        if self.decision_pending is not None:
+            for row, (i, generation, episode) in zip(
+                self.decision_host.numpy(), self.decision_pending
+            ):
+                self.decisions[i] = dict(
+                    generation=generation,
+                    episode=episode,
+                    q=[float(x) if np.isfinite(x) else None for x in row[:3]],
+                    plants=row[DecisionLayout.species].tolist(),
+                    tiles=row[DecisionLayout.tiles].reshape(A.plant_types, A.tiles).tolist(),
+                    action=int(row[DecisionLayout.action]),
+                    tick=int(row[DecisionLayout.tick]),
+                )
+            self.decision_pending = None
         panels = self.session.selection.panels
         terminal = []
         for i, p in enumerate(panels):
-            if p.state == PanelState.RESULT:
+            if p.state == PanelState.RESULT or i in self.session.selection.pending:
                 continue
             action, tick = map(int, actions[i])
             if action and self.env.enabled_envs[p.env]:
@@ -189,7 +246,11 @@ class CudaLiveCapture:
         now = perf_counter()
         if not terminal and now - self.last_capture < 1 / self.session.fps:
             return
-        watched = [i for i, p in enumerate(panels) if p.state != PanelState.RESULT]
+        watched = [
+            i
+            for i, p in enumerate(panels)
+            if p.state != PanelState.RESULT and i not in self.session.selection.pending
+        ]
         if not watched:
             self.session.publish()
             return
@@ -234,6 +295,10 @@ class CudaLiveCapture:
                         actions=list(p.actions),
                         sequence=self.sequence,
                         outcome=outcome,
+                        decision=self.decisions.get(i)
+                        if self.decisions.get(i, {}).get("generation") == p.generation
+                        and self.decisions[i]["episode"] == self.env._episode_serial[p.env]
+                        else None,
                     ),
                 )
             )

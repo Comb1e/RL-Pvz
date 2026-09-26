@@ -65,6 +65,10 @@ def benchmark_gpu(cfg, output, *, minutes=15, steps=16384, env_counts=None):
         raise ValueError(
             "Benchmark env counts must be unique positive integers compatible with batch_size"
         )
+    from pvz_rl.config import role_phase_games
+
+    if any(role_phase_games(cfg) % n for n in counts):
+        raise ValueError("Benchmark env counts must divide training.role_phase_games")
     output = Path(output)
     output.mkdir(parents=True, exist_ok=False)
     write_json(

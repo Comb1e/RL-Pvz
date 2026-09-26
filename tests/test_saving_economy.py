@@ -360,7 +360,7 @@ def test_mixed_vector_reset_uses_episode_family_and_leaves_normal_rules_unchange
     if not torch.cuda.is_available():
         pytest.skip("CUDA unavailable")
     cfg = load_config()
-    cfg["training"].update(n_envs=3, batch_size=128)
+    cfg["training"].update(n_envs=3, batch_size=128, role_phase_games=24)
     cases = [("easy", family, 4) for family in ("saving", "saving", "preset")]
     env = CudaVecEnv(cfg, "masked", 101, training=False, cases=cases)
     references = [PvZEnv(cfg, level=level, family=family) for level, family, _ in cases]

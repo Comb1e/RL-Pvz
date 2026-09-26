@@ -1,15 +1,16 @@
 # PVZ training research
 
-Research **0.21.0** uses one timer-free CUDA Transformer controller across
+Research **0.22.0** uses one timer-free CUDA Transformer controller across
 saving, easy, standard and hard games. A greedy critic chooses wait/plant/dig;
 conditional PPO learns planting species and tiles from complete games. Results
-remain experimental. This release requires fresh models.
+remain experimental. Training alternates 256 critic games and 256 actor games,
+updating the selected network after every 32 completed games.
 
 ## Requirements
 
 Python 3.12, Git, an NVIDIA CUDA GPU/driver, host RAM and disk space for complete
 trajectories. Defaults are 32 games per cohort and a 6 GiB trajectory RAM budget
-with disk overflow. FFmpeg is optional for video; the live viewer uses pygame.
+with disk overflow, plus up to 2 GiB of cached raw tokens on CUDA. FFmpeg is optional for video; the live viewer uses pygame.
 
 ## Installation
 
@@ -34,7 +35,9 @@ A bounded saving experiment, started only when you execute it:
 To continue until that stage passes, replace `--games` and `--max-minutes` with
 `--until-stage-complete`. The 1,200-second per-game failure cutoff still applies.
 Validation disables injected exploration. A four-game window shows actual
-training behavior; use its Switch buttons or add `--no-live-view`.
+training behavior, estimated wait/plant/dig returns, and conditional planting
+probabilities. Click a species for its tile heatmap. Switch selects an unfinished
+game; add `--no-live-view` to disable the window.
 
 Ctrl+C saves at the next atomic simulation/ledger or optimizer-step boundary.
 The atomic `interrupted.zip` includes unfinished games, optimizer progress and
@@ -48,7 +51,8 @@ RNG state. Resume with that archive:
 After mastery, start a new experiment with `--stage easy --init-from
 runs\saving-101\final.zip` and a new output directory. Stage transfer uses
 compatible actor/critic weights with fresh optimizers. Existing artifacts are
-preserved; older models require their original software.
+preserved. Version 0.21.0 supports inference and compatible `--init-from`; full
+resume requires a 0.22.0 alternating-role checkpoint.
 
 ## Common checks and curves
 
@@ -60,7 +64,9 @@ preserved; older models require their original software.
 ```
 
 Terminal blocks show completed-game reward, net value, discounted return,
-pre-fit critic errors/coverage and collection/critic/actor timing. Gamma 1 makes
+the current role and progress, pre-fit errors/planting coverage, and collection,
+data preparation, transfer, cache and optimization timing. No planting samples
+means an actor cohort skips its update; the greedy controller is unchanged. Gamma 1 makes
 discounted and undiscounted reward equal. Cutoff failures receive defeat reward.
 Hardware samples are flushed to `hardware-metrics.jsonl`; curves refresh after
 probes, validation and graceful interruption. Offline reports need no model.
