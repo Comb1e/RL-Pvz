@@ -23,8 +23,8 @@ previous flower's payments at t_i+1250+2500*k gives enough funds for every
 purchase. This establishes a possible investment schedule before tick 7500;
 it does not by itself establish a winning defense.
 
-Initial actor conditionals are uniform over legal species, then uniform over
-that species' legal tiles. There is no initial stochastic wait/dig/plant mixture.
-The critic starts wait=plant=0 and dig=-2 and resolves the tie as wait. See
-[complete-game learning](complete-game-learning.md) for normalization, exact KL,
-actual targets and the limitation of greedy action coverage.
+Initial branch values are wait/species=0 and dig=-2. Conditional plant values
+start at zero and conditional dig values at -2. Ties choose wait; negative waiting
+returns can make planting preferred, but this does not guarantee coverage.
+See [sequential Q control](sequential-q-control.md) for the two-coin exploration
+budget, actual-return targets and limitations. The saving lesson is unchanged.

@@ -56,7 +56,7 @@ def plot(source, output):
     ax.xaxis.grid(True, alpha=0.2)
     ax.set_axisbelow(True)
     fig.suptitle(
-        "Bars: medians · dots: three repetitions · labels: games × decisions per rollout\nSetup, warmup, validation and export excluded; identical PPO settings",
+        "Bars: medians · dots: three repetitions · labels: games × decisions per rollout\nSetup, warmup, validation and export excluded; identical Q settings",
         y=0.01,
         fontsize=9,
     )

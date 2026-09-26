@@ -1,40 +1,34 @@
-# Training architecture — 0.22.0
+# Training architecture — 0.23.0
 
-One CUDA controller plays every curriculum difficulty. An independent critic
-selects wait, plant or a digging tile greedily; an independent actor samples
-plant species and planting tiles during collection. Evaluation uses greedy
-plant arguments and disables injected exploration. Game 1.5.0 runs at 100 Hz.
+One CUDA Q network assembles each command in two levels: wait, one of eight
+species, or dig; then a conditional tile for non-wait branches. The same model
+plays every curriculum difficulty. Game 1.5.0 runs at 100 Hz without a wall-time
+frame limit. Rewards, observations and the pinned game remain unchanged.
 
 ```mermaid
 flowchart LR
-    Game[32 independent CUDA games] --> Public[286 public values and legal masks]
-    Public --> History[Bounded public event memory]
-    History --> Critic[Independent critic: 47 action values]
-    Critic --> Controller[Maximum legal value]
-    Controller -->|plant| Actor[Independent actor: species and tile]
-    Controller -->|wait or dig| Command[Executed command]
-    Actor --> Command
+    Game[32 CUDA games] --> Public[286 public values and separate legal masks]
+    Public --> Memory[Public event memory]
+    Memory --> Encoder[One spatial and temporal encoder]
+    Encoder --> Branch[10 branch Q values]
+    Branch --> Select[Maximum legal branch]
+    Encoder --> Tile[45 conditional tile Q values]
+    Select -->|non-wait branch identifier| Tile
+    Select -->|wait| Command[One complete command]
+    Tile --> Command
     Command --> Game
-    Game --> Rewards[Accounting rewards and episode outcome]
-    History --> Store[Bounded host trajectories and disk overflow]
-    Rewards --> Store
-    Store --> Returns[Complete actual reward-to-go]
-    Returns --> Role{Selected training role}
-    Role -->|critic| FitCritic[Fit critic only]
-    Role -->|actor| FitActor[Conditional plant PPO only]
-    FitCritic --> Sync[Credit 32 games and synchronize]
-    FitActor --> Sync
-    Sync --> Roles[Switch role after 256 optimized games]
-    Sync --> Critic
-    Sync --> Actor
+    Game --> Store[Host trajectories and disk overflow]
+    Memory --> Store
+    Store --> Returns[Complete actual returns]
+    Returns --> Fit[Fit both selected Q heads]
+    Fit --> Encoder
 ```
 
-The game package owns mechanics, gameplay RNG, legality, public views and
-snapshots. Research environment adapters own cutoff failures and accounting
-rewards. Policy code owns deterministic tokenization, two temporal encoders and
-conditional action selection. Learning owns complete-game storage, returns,
-separate optimization phases and checkpoints. Evaluation owns held-out seeds,
-mastery gates, recordings and checkpoint selection.
+The game owns mechanics, gameplay RNG, legality, public views and snapshots.
+Environment adapters own cutoff failures and accounting rewards. Policy owns
+one shared encoder, deterministic tokenization and masked sequential selection.
+Learning owns complete-game storage, returns, optimization and checkpoints.
+Evaluation owns held-out seeds, mastery gates, recordings and checkpoint selection.
 
 ## Exact model inputs
 
@@ -125,7 +119,7 @@ contain private simulator state for exact resume; they never enter an encoder.
 Regional aggregation hides exact individual arrangements; removed projectile
 and recharge information must be inferred from public history where possible.
 
-## Memory, networks and action selection
+## Memory, network and decisions
 
 The bank retains 8 recent tokens, 32 event tokens and 8 older summaries. Current
 tokens always include movement distances. Continuous movement within a region
@@ -135,139 +129,113 @@ legal masks and accepted actions do. Old quiet ticks are summarized by latest
 public state, earliest tick and represented count; old events eventually enter
 that same bounded summary bank. No future token is attended to.
 
-Actor and critic each use type/behavior embeddings, two 32-channel 3×3 spatial
-convolutions, a 64-value global encoder, and a separate gated temporal encoder
-with two blocks, width 128, four attention heads and feed-forward width 256.
-Each current query attends only to valid retained history. Relative age, span
-and represented count describe temporal position. Raw memory is re-encoded by
-current parameters; no learned activation survives an episode boundary.
-The heads use two 128-neuron hidden layers. The actor outputs eight species
-logits and eight 45-tile maps. The critic outputs 47 values: wait, plant, then
-45 row-major digging values. Parameters and Adam states never overlap.
+One set of type/behavior embeddings feeds two 32-channel 3×3 convolutions,
+a 64-value global encoder and one gated temporal encoder: two blocks, width 128,
+four attention heads, feed-forward width 256. Current queries attend only to
+valid causal memory. Raw history is re-encoded with current parameters; learned
+activations are never cached across optimizer updates.
 
-The controller masks illegal values and takes the maximum. Ties prefer wait,
-then plant, then the first digging tile. Plant availability requires at least
-one legal species/tile; digging requires a legal occupied tile. If plant wins,
-the actor chooses a species then a tile using one consistent conditional
-mixture. Injected exploration is uniform across legal species and uniformly
-across that species' legal tiles. It never alters controller or digging choices.
-Both probability factors contribute to plant PPO ratios, entropy and exact KL.
+Mean/max spatial pooling plus global features produce 128 pooled values.
+The first head has two 128-unit ReLU hidden layers and ten outputs, ordered
+wait, the eight species in the observation table, then dig. The shared tile MLP
+has two 128-unit ReLU hidden layers. For each of 45 tiles it receives 32 local
+features, 128 pooled features and a nine-category one-hot branch identifier.
+It produces one conditional Q value per tile plus a trainable branch offset.
+Ordinary selection evaluates the executed non-wait branch. If species exploration
+changes that branch, one additional map records the unmodified greedy command.
 
-Initial wait/plant values are zero; every digging value starts at the defeat
-reward (-2). Actor final weights are zero, giving uniform legal conditionals.
-The first all-wait cohort supplies negative waiting targets and can make
-planting preferred. Greedy selection provides no coverage guarantee: inaccurate
-values or untried actions can still cause a poor policy. Pre-fit error and
-per-action coverage must be examined when diagnosing that behavior.
+Masking removes a branch when it has no legal tile. Greedy ties prefer wait,
+then species order, then dig; tile ties use row-major order. First-level wait
+and species values initialize to zero and digging to the configured defeat
+reward (-2). Conditional species values initialize to zero and digging to -2.
+Both digging offsets remain trainable. The initial complete decision is wait.
+Intermediate branch selection has no simulator step, reward or history entry.
 
-## Collection and optimization
+After a planting branch wins, species and tile have independent epsilon-greedy
+exploration coins. Each coin probability is `1 - sqrt(1 - budget)`; random choices
+are uniform over legal alternatives, including the greedy alternative. Wait
+and dig winners stay greedy. Evaluation disables exploration completely. Values
+are estimated returns, not confidence probabilities; the two heads estimate the
+same remaining reward and are never added. First-level values describe continuation
+under the collecting tile selector, so they need not equal maximum tile values.
+See [the checked derivation](math/sequential-q-control.md).
+
+## Complete-game collection and optimization
 
 ```mermaid
 stateDiagram-v2
     [*] --> Collect
-    Collect --> Returns: Every game finished
-    Returns --> Critic: Critic role
-    Returns --> Actor: Actor role
-    Critic --> Synchronize: Critic fitting complete
-    Actor --> Synchronize: Plant PPO complete, KL stop or no planting samples
-    Synchronize --> Collect: Credit cohort, switch role at 256, boundary checks
-    Synchronize --> Finished: Budget or mastery reached
-    Collect --> Interrupted: Graceful stop
-    Critic --> Interrupted: After atomic optimizer step
-    Actor --> Interrupted: After atomic optimizer step and KL check
-    Interrupted --> Collect: Resume saved collection phase
-    Interrupted --> Critic: Resume saved critic phase
-    Interrupted --> Actor: Resume saved actor phase
+    Collect --> Returns: All 32 games complete
+    Returns --> Fit: Actual reward-to-go finalized
+    Fit --> Synchronize: Four epochs complete
+    Synchronize --> Collect: Boundary checks and new cohort
+    Synchronize --> Finished: Budget or selected-stage mastery
+    Collect --> Interrupted: Atomic simulation and ledger boundary
+    Fit --> Interrupted: Atomic optimizer step and cursor boundary
+    Interrupted --> Collect: Restore unfinished games and sampling state
+    Interrupted --> Fit: Restore saved epoch, permutation and cursor
 ```
 
-Every stage starts with the critic role. It trains for 256 completed games,
-eight cohorts of 32, then the actor trains for 256 games; roles alternate.
-Only the selected network is fitted after each cohort. The inactive network's
-parameters and Adam state remain unchanged through the entire role phase.
-Validation games do not count. Role credit is applied after fitting, including
-an actor cohort skipped for zero planting coverage. Curriculum advancement resets
-to critic with zero role games. Both networks supply collection inference.
+The network remains frozen throughout each 32-game cohort. Completed games pause
+until the last game finishes. Gamma-one targets sum all subsequent actual rewards,
+including zero-duration actions. Natural wins/losses terminate normally; at 1,200
+seconds a separate cutoff failure applies defeat once and preserves physical
+assets. Cutoffs do not bootstrap. External interruption is not an episode loss.
 
-The default cohort is 32 environments, one complete game each. Finished games
-pause until all finish. Actor and critic are frozen throughout collection;
-optimizer phases never overlap it. Actual reward-to-go uses gamma 1 and includes
-zero-duration actions. Natural win/loss ends the episode. At 1,200 seconds,
-research records a separate cutoff failure, applies defeat reward once and
-keeps physical assets. It does not bootstrap. External interruption is not a loss.
+Every executed command fits its selected first-level value. Non-wait commands
+also fit their selected tile value to the same return, averaging the two squared
+errors. Wait uses its single squared error. Whole-cohort wait/plant/dig counts
+give equal aggregate weight to each populated group, including the final partial
+minibatch. One Adam optimizer uses learning rate 0.0003, epsilon 0.00001, default
+moments, four epochs, minibatches up to 1,024 and gradient norm clipping at 0.5.
+There is no replay, TD bootstrap, target network, actor, PPO, entropy loss or role
+schedule. Non-finite targets, values, losses or gradients fail explicitly.
 
-Plant advantages are actual return minus collection Q(plant), fixed before
-critic fitting and normalized once over planting decisions. Critic MSE fits
-selected outputs to unnormalized returns, with equal aggregate weight for each
-populated wait/plant/dig group. In the actor role, conditional PPO uses only
-planting decisions. A no-plant actor cohort records a skip and trains neither
-network; it still counts toward the role boundary. Defaults remain four
-epochs, minibatches at most 1,024, actor/critic learning rates 0.0001/0.0003,
-clip 0.2 and gradient norm limit 0.5. There is no additional warm-up freeze.
+Exploration decays exponentially from a 10% combined coin budget to 0.1% over
+3,000 stage games, then holds its floor. Resolve once per cohort and preserve
+that value on resume. Stage progress resets the schedule. A negative all-wait
+cohort can make initially zero planting estimates preferred, but greedy control
+can still remain wrong with inaccurate values or unvisited alternatives.
+Pre-fit branch/tile errors, group/species coverage, coin firings and actual
+choice changes make that limitation visible; empty planting coverage is not success.
 
-The collector's controller is fixed for interpreting that cohort's actor data.
-Critic changes affect the next cohort. Sampled KL stops actor steps; exact KL
-checks the complete conditional plant distribution against collection weights.
-Exceeding target 0.01 restores actor weights and Adam moments and stops its
-phase. The inactive critic and completed experience remain retained. Zero disables
-the threshold. Non-finite values fail explicitly or roll back the actor.
+Curriculum remains saving → easy → standard → shared. Existing residency,
+held-out tasks and 100/100 mastery requirements remain, with probes every 2,000
+completed games at cohort boundaries. Selected-stage until-mastery mode has no
+game/time ceiling and stops at that stage. Bounded training remains the default.
+Validation, curriculum transitions and deadlines occur after a complete cohort.
 
-Plant-only injected exploration decays exponentially from 10% to 0.1% over
-3,000 stage games and then holds. Species/tile entropy coefficients begin at
-0.001 each and decay to 10% of those values. The resolved schedule is fixed for
-a whole cohort and resets with stage progress. See [the derivation](math/complete-game-learning.md).
+## Storage, recovery and diagnostics
 
-Curriculum is saving → easy → standard → shared. Existing held-out mastery
-tasks, residency and 100/100 requirements remain; probes occur every 2,000
-completed games at cohort boundaries. Selected-stage until-mastery training
-has no game/time ceiling and does not advance past that stage. Bounded training
-remains the default. Normal-game stage-success validation is deterministic.
+Compact CPU trajectories contain public observations, packed masks, commands,
+rewards, collection-time branch/tile values, greedy commands and exploration
+coins. Integer token references and compression metadata reconstruct exact causal
+memory in bounded minibatches. A 6 GiB RAM budget spills blocks to disk.
+Raw float32 tokens use only observation, previous executed action, reset and tick.
+A disposable 2 GiB GPU token cache reserves at least 2 GiB free VRAM per allocation;
+cache exhaustion falls back to host storage without dropping samples.
+Two reusable pinned slots prefetch one subsequent minibatch on a transfer stream.
+CUDA events protect readiness and staging-buffer reuse; no fitting occurs during
+collection. Pre-action readbacks complete before simulator-mutated data are read.
 
-## Storage, recovery and failures
+Atomic ZIP checkpoints contain the single network and optimizer, all RNGs,
+curriculum/exploration progress, unfinished simulator state, public memory,
+streamed trajectory blocks and optimization epoch/permutation/cursor. Transfers
+are drained before saving; cache contents are rebuilt after resume. A plain JSON
+protocol manifest is checked before class deserialization. Only
+`event_sequential_q_v1`, `sequential_q_mc_v1` and `sequential_plant_epsilon_v1`
+are accepted. Fresh models are required for this release. New-protocol stage
+transfer uses compatible weights with fresh optimizer/counters; full resume
+restores the same experiment exactly. Failed saves preserve the previous archive.
+Every existing run, recording and report is preserved, and historical reports
+remain regenerable without loading a retired model.
 
-Compact trajectories store observations, packed masks, actions, actual rewards,
-durations, collection likelihoods and values on the CPU. Memory token references
-and compression metadata reconstruct the exact causal bank per minibatch;
-there is no whole-episode graph or rollout-tail bootstrap. The default 6 GiB
-trajectory RAM budget spills additional blocks to disk. Raw tokens are built in
-float32 from observations, executed-action history, reset and tick only. Integer
-history references remain exact. A disposable GPU cache retains up to the configured
-`token_cache_gib` (default 2, zero disables), in trajectory block-sized chunks,
-reserving at least 2 GiB of free VRAM at each allocation. Full caches fall back to
-CPU/disk history, never drop samples or cache learned activations.
-
-One preparation worker and two reusable pinned staging slots prefetch one subsequent
-minibatch. A transfer stream reconstructs cached contexts on CUDA and transfers
-host misses; completion events order consumers and source reuse. The CPU trajectory
-is authoritative, minibatch order is unchanged, and no fitting occurs during
-collection. Collection copies immutable pre-action data before simulation and reads
-it after the existing completion synchronization. Checkpoints drain transfers;
-resume rebuilds disposable cache contents from the saved trajectory. Disk space remains a practical
-limit; failed writes must preserve prior checkpoints.
-
-One atomically replaced checkpoint archive contains both networks and optimizers.
-An interrupted cohort additionally stores simulator and gameplay
-RNG state, environment selection RNGs, public memory, collection progress,
-optimization phase/cursor, role/stage/game counter, behavior weights, actor rollback state and sampler
-RNGs and streamed trajectory blocks inside that archive. Resume continues the saved phase.
-Missing runtime data or damaged blocks fail explicitly. Stage transfer loads compatible weights
-into a new experiment with fresh optimizers/counters. The optimizer protocol is
-`alternating_complete_game_v1`: full resume rejects the previous scheduler.
-Structurally compatible 0.21.0 weights and inference remain supported. Existing
-runs, checkpoints and recordings remain preserved.
-
-The viewer and hardware monitor are diagnostic outputs. They neither select
-actions nor add model inputs. Last boards remain visible during critic/actor
-fitting and validation. Panels show predicted remaining reward for wait, plant and
-the best legal digging tile, marking unavailable choices. They highlight the
-actual chosen kind and explain its lead over the next legal kind, a deterministic
-tie, or a forced choice. These values explain the greedy comparison, not confidence
-or strategic reasoning. “If planting” species/tile probabilities come from the
-collection mixture. All decision data share the latest decision tick and episode,
-which can precede the displayed board. Switch requests select only
-unfinished undisplayed environments; absent candidates retain the result and wait
-until a collector safe point makes a replacement available. Hardware curves and
-terminal logs describe role, role progress, planting coverage, phase,
-reward, net value, discounted return and throughput. Reporting failure does
-not invalidate a checkpoint. Detailed evidence and source limitations belong
-in [validation](validation.md), [references](references.md) and
-[iteration history](iteration.md).
+The four-board viewer and hardware monitor are diagnostic outputs and do not
+change actions or policy inputs. The viewer shows ten branch return estimates,
+selectable species/dig tile-Q heatmaps, greedy and executed choices, value leads,
+ties and exploration overrides at the recorded decision tick. Unavailable choices
+are labelled; waiting boards retain the last decision. Replacement selects only
+unfinished undisplayed games. Terminal logs retain reward, net value, discounted
+return and hardware measurements, alongside Q fitting and coverage metrics.
+Reporting failure does not invalidate a checkpoint. Evidence and source limitations
+are in [validation](validation.md), [references](references.md) and [iteration](iteration.md).

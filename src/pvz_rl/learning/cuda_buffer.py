@@ -24,10 +24,12 @@ def trajectory_dtype(observations, capacity):
             ("env", "<u2"),
             ("duration", "<u2"),
             ("reward", "<f8"),
-            ("log_prob", "<f4"),
-            ("baseline", "<f4"),
+            ("branch_value", "<f4"),
+            ("tile_value", "<f4"),
+            ("greedy_action", "<u2"),
+            ("species_coin", "?"),
+            ("tile_coin", "?"),
             ("target", "<f4"),
-            ("advantage", "<f4"),
             ("ids", "<u4", capacity),
             ("counts", "<u2", capacity),
             ("starts", "<u4", capacity),
@@ -143,66 +145,55 @@ class CompleteGameBuffer:
                 result[..., i][selected] = self.blocks[b][key][rows]
         return result
 
-    def valid_indices(self, planting=False):
+    def valid_indices(self):
         parts = []
         for b, block in enumerate(self.blocks):
             rows = block[: min(self.block_rows, self.size - b * self.block_rows)]
             keep = rows["active"].copy()
-            if planting:
-                keep &= (rows["action"] > 0) & (rows["action"] < A.dig_start)
             parts.append(np.flatnonzero(keep) + b * self.block_rows)
         return np.concatenate(parts) if parts else np.empty(0, np.int64)
 
     def finalize(self):
-        """Independent episodes, gamma one, no truncation or rollout bootstrap."""
+        """Actual per-game returns and errors measured before fitting either head."""
         running = np.zeros(self.n_envs, np.float64)
-        coverage = np.zeros(3, np.int64)
-        squared_error = np.zeros(3, np.float64)
-        signed_error = np.zeros(3, np.float64)
-        positive_advantages = np.zeros(3, np.int64)
+        counts = np.zeros(3, np.int64)
+        species_counts = np.zeros(A.plant_types, np.int64)
+        sums = np.zeros((3, 4), np.float64)
         for b in reversed(range(len(self.blocks))):
             rows = self.blocks[b][: min(self.block_rows, self.size - b * self.block_rows)]
-            # Returns are accumulated per environment, including instantaneous actions.
             for env in range(self.n_envs):
                 ix = np.flatnonzero(rows["active"] & (rows["env"] == env))
-                rewards = rows["reward"][ix]
-                values = np.cumsum(rewards[::-1], dtype=np.float64)[::-1] + running[env]
+                values = np.cumsum(rows["reward"][ix][::-1], dtype=np.float64)[::-1] + running[env]
                 if len(ix):
                     running[env] = values[0]
                 rows["target"][ix] = values
-                rows["advantage"][ix] = values - rows["baseline"][ix]
+            kinds = np.where(rows["action"] == 0, 0, np.where(rows["action"] < A.dig_start, 1, 2))
             for group in range(3):
-                kinds = np.where(
-                    rows["action"] == 0, 0, np.where(rows["action"] < A.dig_start, 1, 2)
-                )
                 ix = rows["active"] & (kinds == group)
-                errors = rows["baseline"][ix] - rows["target"][ix]
-                coverage[group] += len(errors)
-                squared_error[group] += np.square(errors.astype(np.float64)).sum()
-                signed_error[group] += errors.astype(np.float64).sum()
-                positive_advantages[group] += np.count_nonzero(errors < 0)
-        self.finalized = True
-        self.group_counts = coverage
-        planting = self.valid_indices(planting=True)
-        # Bounded reductions; no full context or computation graph is retained.
-        total = squares = 0.0
-        for start in range(0, len(planting), self.block_rows):
-            a = self.take(planting[start : start + self.block_rows])["advantage"].astype(np.float64)
-            total += a.sum()
-            squares += np.square(a).sum()
-        self.advantage_mean = total / max(1, len(planting))
-        self.advantage_std = (
-            max(0.0, squares / max(1, len(planting)) - self.advantage_mean**2) ** 0.5
-        )
+                first = rows["branch_value"][ix].astype(np.float64) - rows["target"][ix]
+                second = rows["tile_value"][ix].astype(np.float64) - rows["target"][ix]
+                counts[group] += len(first)
+                sums[group] += [
+                    np.square(first).sum(),
+                    first.sum(),
+                    np.square(second).sum(),
+                    second.sum(),
+                ]
+            planted = rows["active"] & (kinds == 1)
+            species_counts += np.bincount(
+                (rows["action"][planted] - 1) // A.tiles, minlength=A.plant_types
+            )
+        if not np.isfinite(sums).all() or not np.isfinite(running).all():
+            raise FloatingPointError("Non-finite complete returns or collection Q values")
+        self.finalized, self.group_counts, self.species_counts = True, counts, species_counts
         return {
-            name: {
-                "count": int(coverage[i]),
-                "mse": float(squared_error[i] / coverage[i]) if coverage[i] else None,
-                "signed_error": float(signed_error[i] / coverage[i]) if coverage[i] else None,
-                "positive_advantage_fraction": float(positive_advantages[i] / coverage[i])
-                if coverage[i]
-                else None,
-            }
+            name: dict(
+                count=int(counts[i]),
+                mse=float(sums[i, 0] / counts[i]) if counts[i] else None,
+                signed_error=float(sums[i, 1] / counts[i]) if counts[i] else None,
+                tile_mse=float(sums[i, 2] / counts[i]) if i and counts[i] else None,
+                tile_signed_error=float(sums[i, 3] / counts[i]) if i and counts[i] else None,
+            )
             for i, name in enumerate(("wait", "plant", "dig"))
         }
 
@@ -267,10 +258,9 @@ class CompleteGameBuffer:
                 "observation",
                 "action",
                 "reward",
-                "log_prob",
-                "baseline",
+                "branch_value",
+                "tile_value",
                 "target",
-                "advantage",
                 "env",
             )
         }
@@ -301,8 +291,7 @@ class CompleteGameBuffer:
             "size": self.size,
             "finalized": self.finalized,
             "group_counts": getattr(self, "group_counts", None),
-            "advantage_mean": getattr(self, "advantage_mean", 0.0),
-            "advantage_std": getattr(self, "advantage_std", 0.0),
+            "species_counts": getattr(self, "species_counts", None),
             "transport_metrics": dict(self.transport_metrics),
         }
 
@@ -342,7 +331,7 @@ class CompleteGameBuffer:
         for b in range((state["size"] + obj.block_rows - 1) // obj.block_rows):
             block = np.load(source / f"block-{b:06d}.npy", mmap_mode="r", allow_pickle=False)
             obj.append(block)
-        for k in ("finalized", "group_counts", "advantage_mean", "advantage_std"):
+        for k in ("finalized", "group_counts", "species_counts"):
             setattr(obj, k, state[k])
         obj.transport_metrics.update(state.get("transport_metrics", {}))
         return obj

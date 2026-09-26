@@ -9,7 +9,6 @@ import pytest
 import torch
 
 from pvz_rl.config import load_config, output_settings, validate_config
-from pvz_rl.envs.actions import ActionSchema as A
 from pvz_rl.presentation.live_view import (
     Activity,
     LiveSession,
@@ -261,7 +260,7 @@ def test_complete_training_cohorts_identical_with_viewer(smoke_cfg, tmp_path):
     from pvz_rl.monitoring.benchmark import policy_digest
 
     cfg = copy.deepcopy(smoke_cfg)
-    cfg["training"].update(n_envs=2, batch_size=16, role_phase_games=2)
+    cfg["training"].update(n_envs=2, batch_size=16)
     cfg["training"]["performance"]["compile_kernels"] = False
     results = []
     for enabled in (False, True):
@@ -437,35 +436,19 @@ def test_switch_only_unfinished_unique_and_retries_next_cohort():
     assert not selection.switch(0, selection.panels[0].generation)
 
 
-def test_view_decisions_match_sampled_mixture_without_rng_changes(smoke_cfg):
+def test_view_decisions_match_q_values_without_rng_changes(smoke_cfg):
     from pvz_rl.learning.training import build_model, vector_env
-    from pvz_rl.policy.grouped_policy import controller_choice
+    from pvz_rl.policy.sequential_q import branch_masks
 
     env = vector_env(smoke_cfg, "masked", 101)
     try:
         model = build_model(smoke_cfg, "masked", env, 101)
         obs, mask = env.reset(), env.action_masks()
-        choices = [0, 1, 3, 92, A.dig_start + 4]
-        cases = [
-            ([2, 1, 0], choices, 0),
-            ([0, 2, 1], choices, 1),
-            ([0, 1, 2], choices, 6),
-            ([0, 999, -1], [0, A.dig_start + 4], 0),
-            ([999, 1, 2], [1, 3, A.dig_start + 4], 6),
-            ([0, 0, 0], choices, 0),
-            ([999, 0, 0], [1, 3, A.dig_start + 4], 1),
-            ([0, 99, 99], [0], 0),
-            ([99, 99, 0], [A.dig_start + 4], 6),
-        ]
-        for q, legal, expected_choice in cases:
+        for winner in (0, 1, 3, 9):
             with torch.no_grad():
-                model.policy.value_net.weight.zero_()
-                model.policy.value_net.bias.fill_(-10)
-                model.policy.value_net.bias[[0, 1, 6]] = torch.tensor(
-                    q, device="cuda", dtype=torch.float32
-                )
-                mask.fill_(False)
-                mask[0, legal] = True
+                model.policy.branch_head[-1].bias.zero_()
+                model.policy.branch_head[-1].bias[winner] = 1
+                mask[:] = True
                 state = torch.cuda.get_rng_state()
                 plain = model.policy.decide(obs, mask)
                 after = torch.cuda.get_rng_state()
@@ -474,27 +457,22 @@ def test_view_decisions_match_sampled_mixture_without_rng_changes(smoke_cfg):
                     obs, mask, diagnostic_indices=torch.tensor([0], device="cuda")
                 )
                 assert torch.equal(after, torch.cuda.get_rng_state())
-                for a, b in zip(plain, watched[:3]):
-                    assert torch.equal(a, b)
-                diagnostic = watched[3]
-                distribution = model.policy.get_distribution(obs, mask)
-                joint = distribution.probs.reshape(-1, 8, 45)
-                torch.testing.assert_close(diagnostic["plants"], joint.sum(-1))
+                for a, b in zip(plain[:3], watched[:3]):
+                    torch.testing.assert_close(a, b, rtol=0, atol=0)
+                diagnostic = watched[3]["viewer"]
                 torch.testing.assert_close(
-                    diagnostic["plants"][..., None] * diagnostic["tiles"], joint
+                    diagnostic["q"],
+                    model.policy.predict_values(obs)[:1].masked_fill(
+                        ~branch_masks(mask[:1]), -torch.inf
+                    ),
                 )
-                expected_q = [
-                    q[0] if 0 in legal else -torch.inf,
-                    q[1] if any(0 < a < A.dig_start for a in legal) else -torch.inf,
-                    q[2] if A.dig_start + 4 in legal else -torch.inf,
-                ]
-                torch.testing.assert_close(
-                    diagnostic["q"][0], torch.tensor(expected_q, device="cuda", dtype=torch.float32)
-                )
-                assert (
-                    controller_choice(model.policy.predict_values(obs), mask).item()
-                    == expected_choice
-                )
+                assert diagnostic["tiles"].shape == (1, 9, 45)
+                for k in range(9):
+                    expected = model.policy.tile_values(
+                        *model.policy.encode(obs[:1]), torch.tensor([k + 1], device="cuda")
+                    )
+                    torch.testing.assert_close(diagnostic["tiles"][:, k], expected)
+                assert diagnostic["actions"].item() == watched[0][0].item()
     finally:
         env.close()
 
@@ -503,13 +481,13 @@ def test_view_decisions_match_sampled_mixture_without_rng_changes(smoke_cfg):
     "selected,values,reason",
     [
         (1, [-0.4, 0.1, -0.9], "highest legal Q; lead +0.5 over wait"),
-        (0, [-0.2, -0.8, -1.0], "highest legal Q; lead +0.6 over plant"),
+        (0, [-0.2, -0.8, -1.0], "highest legal Q; lead +0.6 over sunflower"),
         (2, [0, None, 1], "highest legal Q; lead +1 over wait"),
         (1, [0, 1e-8, None], "highest legal Q; lead +1e-08 over wait"),
-        (0, [0, 0, None], "tied best; priority wait > plant > dig"),
-        (1, [None, 0, 0], "tied best; priority wait > plant > dig"),
-        (0, [-2, None, None], "only legal kind"),
-        (2, [None, None, -2], "only legal kind"),
+        (0, [0, 0, None], "tied best; priority wait > species order > dig"),
+        (1, [None, 0, 0], "tied best; priority wait > species order > dig"),
+        (0, [-2, None, None], "only legal branch"),
+        (2, [None, None, -2], "only legal branch"),
         (0, [None, 1, 2], "Q comparison unavailable"),
         (0, [0, float("nan"), None], "Q comparison unavailable"),
         (0, [float("inf"), 1, None], "Q comparison unavailable"),
@@ -535,9 +513,10 @@ def test_decision_panel_small_window_hit_boxes_and_species_selection():
         sequence=1,
         actions=[],
         decision=dict(
-            q=[0, 0, None],
-            plants=[1 / 8] * 8,
-            tiles=[[1 / 45] * 45 for _ in range(8)],
+            q=[0] * 9 + [None],
+            tiles=[[0] * 45 for _ in range(9)],
+            greedy_action=0,
+            coins=[False, False],
             action=0,
             tick=0,
         ),
@@ -560,12 +539,10 @@ def test_decision_panel_small_window_hit_boxes_and_species_selection():
     for size in ((1600, 1050), (944, 668), (640, 480)):
         labels.clear()
         surface = pygame.Surface(size)
-        buttons = draw_view(
-            surface, packets, Activity.VALIDATING, renderers=renderers, boards={}, role="actor"
-        )
-        assert len(buttons) == 36
+        buttons = draw_view(surface, packets, Activity.VALIDATING, renderers=renderers, boards={})
+        assert len(buttons) == 40
         assert all(surface.get_rect().contains(rect) for rect, _, _ in buttons)
         assert (0, (3, 2)) in [(panel, target) for _, panel, target in buttons]
         assert renderers["species_selection"] == {(0, 3): 2}
-        assert labels.count("Chosen WAIT: tied best; priority wait > plant > dig") == 4
-        assert sum("Q(dig best) unavailable" in label for label in labels) == 4
+        assert labels.count("Greedy wait: tied best; priority wait > species order > dig") == 4
+        assert sum("Q(dig) unavailable" in label for label in labels) == 4

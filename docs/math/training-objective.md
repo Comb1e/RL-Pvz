@@ -1,10 +1,9 @@
 # Training objective
 
-The implemented complete-game objective, target derivation, conditional planting
-likelihood/KL and balanced critic weighting are specified in
-[complete-game learning](complete-game-learning.md). Gamma is 1; cutoff episodes
-receive defeat reward once and are never bootstrapped. Plant advantages are
-fixed before critic fitting. Maximum net value and drawdown are diagnostics.
+The implemented complete-game targets, sequential Q values and balanced loss are
+specified in [sequential Q control](sequential-q-control.md). Gamma is one;
+cutoff episodes receive defeat reward once and never bootstrap. Maximum net value
+and drawdown remain diagnostics. This release does not change the accounting below.
 
 Assets are available sun plus each living plant's purchase cost times its
 remaining-health fraction. Purchase is neutral. Effective damage includes

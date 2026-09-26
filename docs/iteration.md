@@ -5,6 +5,32 @@ Dates and results belong to their recorded version. Current behavior lives in
 artifact locations and learning outcomes live in [validation](validation.md).
 The longer pre-consolidation notes remain in `git show b642c9c:docs/iteration.md`.
 
+## 0.23.0 — 2026-09-26
+
+- Problem: action kinds/digging used critic values while species/tiles used a
+  separate PPO actor and alternating roles. The user requested one agent assembling
+  commands through two Q-value judgments.
+- Change: one shared spatial/history encoder, ten branch values and a shared
+  nine-branch-conditioned 45-tile value head. Full-game Monte Carlo targets fit
+  selected outputs with a balanced wait/plant/dig loss and one Adam optimizer.
+  The actor, PPO/KL/entropy machinery and role schedule are removed. Compact
+  simulator action transport, observations, memory, rewards and game pin remain.
+- Exploration: only a winning planting branch explores. Independent species/tile
+  coins use 1−sqrt(1−budget), preserving the requested 10% → 0.1% combined budget.
+  The viewer shows raw Q values, branch comparisons, tile maps and overrides;
+  terminal and report metrics expose pre-fit errors and missing action coverage.
+- Evidence: derivation and independent controls preceded implementation. Bounded
+  CUDA checks for seeds 101/102 finished in 8.61 seconds with real planting and
+  16 Q optimizer steps each; complete throughput was 2,141/2,178 transitions/s.
+  These one-second episodes establish operability only. See validation for tests,
+  memory/timings and limitations; no formal learning was launched.
+- Compatibility: fresh models required. Protocol manifests reject retired archives
+  before class loading. New-protocol resume preserves one optimizer, RNGs, incomplete
+  trajectories and fitting cursor. Historical runs, recordings and reports remain.
+- Remaining limits: greedy selection cannot force exploration from waiting; untried
+  values can still be wrong. Shared targets do not enforce exact branch/tile agreement.
+  Neither the short controls nor the sequential-Q paper prove this agent will learn.
+
 ## 0.22.0 — 2026-09-25
 
 Viewer follow-up: the Q row did not explain the comparison and could show a

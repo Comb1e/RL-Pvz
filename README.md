@@ -1,10 +1,8 @@
 # PVZ training research
 
-Research **0.22.0** uses one timer-free CUDA Transformer controller across
-saving, easy, standard and hard games. A greedy critic chooses wait/plant/dig;
-conditional PPO learns planting species and tiles from complete games. Results
-remain experimental. Training alternates 256 critic games and 256 actor games,
-updating the selected network after every 32 completed games.
+Research **0.23.0** uses one CUDA Transformer Q network. It selects wait, a plant
+species or dig, then a tile for non-wait commands. After 32 complete games it fits
+both selected Q heads to actual remaining rewards. Learning remains experimental.
 
 ## Requirements
 
@@ -37,8 +35,8 @@ To continue until that stage passes, replace `--games` and `--max-minutes` with
 Validation disables injected exploration. A four-game window shows actual
 training behavior, estimated wait/plant/dig returns, and why the highest legal
 value was chosen (including its lead or a tie). Unavailable choices are marked.
-These are predicted future rewards; species probabilities are conditional on
-planting. Click a species for its tile heatmap. Switch selects an unfinished
+These are predicted future rewards, not probabilities. Click a species or dig
+for its conditional tile-Q heatmap; exploration overrides are labelled. Switch selects an unfinished
 game; add `--no-live-view` to disable the window.
 
 Ctrl+C saves at the next atomic simulation/ledger or optimizer-step boundary.
@@ -52,9 +50,10 @@ RNG state. Resume with that archive:
 
 After mastery, start a new experiment with `--stage easy --init-from
 runs\saving-101\final.zip` and a new output directory. Stage transfer uses
-compatible actor/critic weights with fresh optimizers. Existing artifacts are
-preserved. Version 0.21.0 supports inference and compatible `--init-from`; full
-resume requires a 0.22.0 alternating-role checkpoint.
+compatible Q weights with a fresh optimizer. Existing artifacts are preserved.
+This release requires fresh models: checkpoints before 0.23.0 cannot be loaded
+for inference, initialization or resume. Same-protocol interruption/resume and
+stage transfer remain supported. Historical curves can be regenerated offline.
 
 ## Common checks and curves
 
@@ -66,9 +65,9 @@ resume requires a 0.22.0 alternating-role checkpoint.
 ```
 
 Terminal blocks show completed-game reward, net value, discounted return,
-the current role and progress, pre-fit errors/planting coverage, and collection,
-data preparation, transfer, cache and optimization timing. No planting samples
-means an actor cohort skips its update; the greedy controller is unchanged. Gamma 1 makes
+Q-update steps, pre-fit errors/species coverage, and collection,
+data preparation, transfer, cache and optimization timing. Missing planting
+coverage remains visible; exploration cannot force planting. Gamma 1 makes
 discounted and undiscounted reward equal. Cutoff failures receive defeat reward.
 Hardware samples are flushed to `hardware-metrics.jsonl`; curves refresh after
 probes, validation and graceful interruption. Offline reports need no model.

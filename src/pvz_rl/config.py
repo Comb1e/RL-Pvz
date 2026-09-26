@@ -86,18 +86,6 @@ def lesson_settings(cfg=None):
     return (cfg or {}).get("curriculum", {}).get("lessons", _teaching_defaults()["lessons"])
 
 
-def role_phase_games(cfg):
-    """Resolve and validate the complete-cohort role boundary for training."""
-    train = cfg["training"]
-    games = train.get("role_phase_games", 256)
-    n = train["n_envs"]
-    if type(n) is not int or n <= 0:
-        raise ValueError("n_envs must be a positive integer")
-    if type(games) is not int or games <= 0 or games % n:
-        raise ValueError("training.role_phase_games must be a positive multiple of n_envs")
-    return games
-
-
 def validate_config(cfg: dict) -> None:
     if cfg["training"].get("validation_schedule", "periodic") not in (
         "periodic",
@@ -107,7 +95,7 @@ def validate_config(cfg: dict) -> None:
     if simulator(cfg) not in ("cpu", "cuda"):
         raise ValueError("simulation.backend must be cpu or cuda")
     if cfg["encoding"].get("version") != "event_v7" or cfg.get("policy", {}).get("kind") not in (
-        "event_q_controller_v1",
+        "event_sequential_q_v1",
     ):
         raise ValueError(
             "Retired observation/policy format. Start fresh with configs/train.toml; archived reports remain readable; recordings must use the 100 Hz engine."
@@ -128,8 +116,8 @@ def validate_config(cfg: dict) -> None:
     if set(cfg["reward"]) != reward_keys:
         raise ValueError("reward must contain only the outcome and net-value settings")
     if "actor_objective" in cfg["training"] or "ent_coef" in cfg["training"]:
-        raise ValueError("Retired PPO objective; use standard PPO and training.exploration")
-    if cfg["training"]["exploration"].get("objective") != "conditional_plant_v1":
+        raise ValueError("Retired PPO objective; use sequential Q fitting")
+    if cfg["training"]["exploration"].get("objective") != "sequential_plant_epsilon_v1":
         raise ValueError("Only conditional planting exploration is supported")
     for key in (
         "win_reward",
@@ -181,19 +169,8 @@ def validate_config(cfg: dict) -> None:
         or sample_seconds < 0.1
     ):
         raise ValueError("hardware_sample_seconds must be finite and at least 0.1")
-    for key in ("target_kl",):
-        value = cfg["training"][key]
-        if type(value) not in (int, float) or not math.isfinite(value) or value < 0:
-            raise ValueError(f"training.{key} must be finite and nonnegative")
-    if type(cfg["training"]["normalize_advantage"]) is not bool:
-        raise ValueError("normalize_advantage must be a boolean")
-    critic_lr = cfg["training"].get("critic_learning_rate")
-    if critic_lr is not None and (
-        type(critic_lr) not in (int, float) or not math.isfinite(critic_lr) or critic_lr <= 0
-    ):
-        raise ValueError("critic_learning_rate must be finite and positive")
     exploration = cfg["training"]["exploration"]
-    for key in ("epsilon_start", "epsilon_floor", "entropy_floor_fraction"):
+    for key in ("epsilon_start", "epsilon_floor"):
         value = exploration.get(key)
         if type(value) not in (int, float) or not math.isfinite(value) or not 0 < value <= 1:
             raise ValueError(f"exploration.{key} must be finite and in (0, 1]")
@@ -201,9 +178,6 @@ def validate_config(cfg: dict) -> None:
         raise ValueError("exploration floor exceeds start")
     if type(exploration.get("decay_games")) is not int or exploration["decay_games"] < 1:
         raise ValueError("exploration.decay_games must be a positive integer")
-    for key in ("plant_coef", "tile_coef"):
-        if not math.isfinite(exploration[key]) or exploration[key] < 0:
-            raise ValueError(f"exploration.{key} must be finite and nonnegative")
     minutes = cfg["training"].get("max_minutes")
     reserve = cfg["training"].get("finalization_minutes", 15)
     if minutes is not None and (
@@ -318,11 +292,16 @@ def validate_config(cfg: dict) -> None:
     if not math.isfinite(visual["final_hold_seconds"]) or visual["final_hold_seconds"] < 0:
         raise ValueError("Visualization final_hold_seconds must be finite and nonnegative")
     env, train = cfg["environment"], cfg["training"]
-    if train.get("method") != "complete_game_mc":
-        raise ValueError("Training requires complete_game_mc and fresh models")
+    if train.get("method") != "sequential_q_mc_v1":
+        raise ValueError("Training requires sequential_q_mc_v1 and fresh models")
     if any(
         k in train
         for k in (
+            "role_phase_games",
+            "critic_learning_rate",
+            "clip_range",
+            "normalize_advantage",
+            "target_kl",
             "pipeline",
             "rollout_size",
             "rollout_steps_per_env",
@@ -339,9 +318,6 @@ def validate_config(cfg: dict) -> None:
     cache = performance.get("token_cache_gib", 2)
     if type(cache) not in (int, float) or not math.isfinite(cache) or cache < 0:
         raise ValueError("training.performance.token_cache_gib must be finite and nonnegative")
-    # Old checkpoints can be inspected/inferred without a new training schedule.
-    if "role_phase_games" in train:
-        role_phase_games(cfg)
     for key in ("compile_kernels", "telemetry"):
         if type(performance.get(key, False)) is not bool:
             raise ValueError(f"training.performance.{key} must be a boolean")
@@ -397,7 +373,7 @@ def validate_config(cfg: dict) -> None:
         raise ValueError("Hidden layer sizes must be positive integers")
     for group, keys in (
         ("encoding", ("count_scale", "wave_scale")),
-        ("training", ("learning_rate", "clip_range")),
+        ("training", ("learning_rate",)),
     ):
         for key in keys:
             if not math.isfinite(cfg[group][key]) or cfg[group][key] <= 0:

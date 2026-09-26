@@ -173,7 +173,6 @@ def test_all_stage_handoffs_preserve_only_weights_and_reset_optimizer_schedules(
         if expected is not None:
             assert_tensor_tree_equal(expected.policy.state_dict(), self.model.policy.state_dict())
             assert not self.model.policy.optimizer.state
-            assert not self.model.policy.critic_optimizer.state
             assert self.model._n_updates == 0
         original(self)
         starts.append(
@@ -216,12 +215,10 @@ def test_all_stage_handoffs_preserve_only_weights_and_reset_optimizer_schedules(
         else:
             assert meta["initialization"] is None
         expected, previous = model, run / "final.zip"
-        # A cohort with no planting or a rejected first PPO update correctly
-        # leaves the actor's Adam state empty; transfer must not fabricate it.
+        # Every nonempty cohort fits the single network, including all-wait games.
         metrics = read_series(run / "training-metrics.jsonl")
-        if any(row["optimization"]["actor_retained_steps"] for row in metrics):
-            assert model.policy.optimizer.state
-        assert model.policy.critic_optimizer.state
+        assert all(row["optimization"]["q_optimizer_steps"] > 0 for row in metrics)
+        assert model.policy.optimizer.state
     assert starts == [(0, 0)] * len(STAGES)
     build_run_report(tmp_path / "shared", stage_cfg)
     page = (tmp_path / "shared/visualizations/index.html").read_text("utf-8")
@@ -295,7 +292,7 @@ def test_mastered_stage_saves_without_collecting_next_stage(
         model.policy.optimizer.state_dict(), restored.policy.optimizer.state_dict()
     )
     assert_tensor_tree_equal(
-        model.policy.critic_optimizer.state_dict(), restored.policy.critic_optimizer.state_dict()
+        model.policy.optimizer.state_dict(), restored.policy.optimizer.state_dict()
     )
 
 
@@ -558,7 +555,7 @@ def test_shared_mastery_stops_after_update_and_is_resumable(
         model.policy.optimizer.state_dict(), restored.policy.optimizer.state_dict()
     )
     assert_tensor_tree_equal(
-        model.policy.critic_optimizer.state_dict(), restored.policy.critic_optimizer.state_dict()
+        model.policy.optimizer.state_dict(), restored.policy.optimizer.state_dict()
     )
 
 
@@ -647,7 +644,7 @@ def test_previous_action_distribution_rejected_by_metadata_and_direct_loader(
     import json
     import zipfile
 
-    from pvz_rl.learning.cuda_ppo import CudaCompleteGamePPO
+    from pvz_rl.learning.cuda_q import CudaSequentialQ
     from pvz_rl.learning.training_requirements import current_model_config
 
     stage_cfg["policy"].pop("action_distribution")
@@ -659,7 +656,7 @@ def test_previous_action_distribution_rejected_by_metadata_and_direct_loader(
     with zipfile.ZipFile(checkpoint, "w") as archive:
         archive.writestr("data", json.dumps({"optimizer_protocol": "periodic_exact_kl_v1"}))
     with pytest.raises(ValueError, match="requires fresh models"):
-        CudaCompleteGamePPO.load(checkpoint)
+        CudaSequentialQ.load(checkpoint)
     # A mismatched sidecar must not allow old archive weights into a new experiment.
     stage_cfg["policy"]["action_distribution"] = "balanced_species_tiles_v1"
     write_json(

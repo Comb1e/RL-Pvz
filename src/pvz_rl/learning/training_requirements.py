@@ -2,22 +2,22 @@
 
 from functools import lru_cache
 
-from pvz_rl.config import research_config, role_phase_games, simulator, validate_config
+from pvz_rl.config import research_config, simulator, validate_config
 from pvz_rl.envs.actions import ActionSchema
 from pvz_rl.learning.curriculum import selected_stage
-from pvz_rl.policy.grouped_policy import ACTION_DISTRIBUTION
+from pvz_rl.policy.sequential_q import ACTION_DISTRIBUTION
 
 TRAINING_CONDITIONS = ("masked",)
 
 
 def current_model_config(cfg):
     return (
-        cfg.get("policy", {}).get("kind") == "event_q_controller_v1"
+        cfg.get("policy", {}).get("kind") == "event_sequential_q_v1"
         and cfg.get("policy", {}).get("action_distribution") == ACTION_DISTRIBUTION
         and cfg.get("encoding", {}).get("version") == "event_v7"
         and cfg.get("reward", {}).get("version") == "net_value_v1"
         and cfg.get("training", {}).get("discount_clock") == "simulation_ticks"
-        and cfg.get("training", {}).get("method") == "complete_game_mc"
+        and cfg.get("training", {}).get("method") == "sequential_q_mc_v1"
     )
 
 
@@ -30,7 +30,7 @@ def require_supported_policy(cfg, condition="masked"):
         or not current_model_config(cfg)
     ):
         raise ValueError(
-            "Retired policy or scheduler. Models require event_q_controller_v1, event_v7, net_value_v1, the conditional_plant_v1 distribution and complete-game collection. Start fresh with configs/train.toml."
+            "Retired policy or scheduler. Models require event_sequential_q_v1, event_v7, net_value_v1, the sequential_plant_epsilon_v1 distribution and complete-game collection. Start fresh with configs/train.toml."
         )
 
 
@@ -50,7 +50,6 @@ def _cuda_probe():
 def require_cuda_training(cfg, condition="masked", *, runtime=True):
     """Reject unsupported runs before creating output or allocating collectors."""
     validate_config(cfg)
-    role_phase_games(cfg)
     if condition == "hybrid" or cfg["conditions"].get(condition, {}).get("hybrid"):
         raise ValueError("CPU/hybrid training was removed in 0.8.0; use a direct CUDA condition.")
     if condition not in cfg["conditions"]:

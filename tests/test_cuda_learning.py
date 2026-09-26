@@ -23,7 +23,6 @@ def gpu_cfg():
         n_envs=2,
         device="cuda",
         batch_size=64,
-        target_kl=0,
     )
     cfg["visualization"].update(enabled=False, demos=False, videos=False)
     return cfg

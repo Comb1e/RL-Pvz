@@ -45,7 +45,7 @@ def recommend(rows, *, parity_passed=False, provisional=True):
         "parity_passed": parity_passed,
         "provisional": provisional,
         "promote_default": bool(parity_passed and not provisional and selected is not None),
-        "note": "Complete collection+PPO updates; setup, warmup, validation and export reported separately. No promotion from utilization alone.",
+        "note": "Complete collection+Q updates; setup, warmup, validation and export reported separately. No promotion from utilization alone.",
     }
 
 
@@ -65,10 +65,7 @@ def benchmark_gpu(cfg, output, *, minutes=15, steps=16384, env_counts=None):
         raise ValueError(
             "Benchmark env counts must be unique positive integers compatible with batch_size"
         )
-    from pvz_rl.config import role_phase_games
 
-    if any(role_phase_games(cfg) % n for n in counts):
-        raise ValueError("Benchmark env counts must divide training.role_phase_games")
     output = Path(output)
     output.mkdir(parents=True, exist_ok=False)
     write_json(

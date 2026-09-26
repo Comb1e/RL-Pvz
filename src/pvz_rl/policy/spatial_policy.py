@@ -4,19 +4,20 @@ import importlib.util
 
 import torch
 from pvz_game import Rules
-from sb3_contrib.common.maskable.policies import MaskableActorCriticPolicy
+from stable_baselines3.common.policies import BasePolicy
 from stable_baselines3.common.torch_layers import BaseFeaturesExtractor
 from torch import nn
 
 from pvz_rl.envs.actions import ActionSchema as A
 from pvz_rl.envs.encoding import ObservationEncoder
-from pvz_rl.learning.exploration import pooled_spatial
 from pvz_rl.policy.event_memory import MemoryContext
-from pvz_rl.policy.grouped_policy import (
-    GroupedDistribution,
-    controller_choice,
-    masked_controller_values,
-    selected_value_indices,
+from pvz_rl.policy.sequential_q import (
+    action_parts,
+    assemble,
+    branch_masks,
+    explore,
+    greedy_choice,
+    per_head_epsilon,
 )
 from pvz_rl.policy.temporal import TemporalEncoder
 
@@ -127,200 +128,190 @@ class SpatialFeatures(BaseFeaturesExtractor):
         return MemoryContext(tokens, valid, valid.float(), tokens[..., -1].clone())
 
 
-class SpatialLatents(nn.Module):
-    def __init__(self, channels, scalar_channels, hidden_sizes, features_dim):
-        super().__init__()
-        self.channels, self.scalar_channels = channels, scalar_channels
-        self.latent_dim_pi, self.latent_dim_vf = features_dim, hidden_sizes[-1]
-        self.critic = mlp(channels * 2 + scalar_channels, hidden_sizes)
-
-    def forward_actor(self, features):
-        return features
-
-    def forward_critic(self, features):
-        return self.critic(pooled_spatial(features, self.channels, self.scalar_channels)[1])
-
-    def forward(self, features):
-        return self.forward_actor(features), self.forward_critic(features)
+def pooled_spatial(features, channels, scalar_channels):
+    spatial = features[:, scalar_channels:].reshape(-1, channels, A.rows, A.cols)
+    pooled = torch.cat(
+        (spatial.mean((2, 3)), spatial.amax((2, 3)), features[:, :scalar_channels]), dim=1
+    )
+    return spatial, pooled
 
 
-class SpatialLogits(nn.Module):
-    def __init__(self, channels, scalar_channels, hidden_sizes):
-        super().__init__()
-        self.channels, self.scalar_channels = channels, scalar_channels
-        self.shared_head = mlp(channels * 2 + scalar_channels, hidden_sizes)
-        self.plant_head = nn.Linear(hidden_sizes[-1], A.plant_types)
-        # A constant per-map bias cancels in each tile softmax. Omitting it
-        # avoids optimizing an unidentifiable parameter on roundoff gradients.
-        self.tiles = nn.Conv2d(channels, A.plant_types, 1, bias=False)
+class SequentialQPolicy(BasePolicy):
+    """One encoder, a branch Q head and a shared branch-conditioned tile Q head."""
 
-    def forward(self, features):
-        board, pooled = pooled_spatial(features, self.channels, self.scalar_channels)
-        hidden = self.shared_head(pooled)
-        return torch.cat((self.plant_head(hidden), self.tiles(board).flatten(1)), 1)
-
-
-class SpatialGroupedPolicy(MaskableActorCriticPolicy):
-    def __init__(self, *args, critic_learning_rate=None, exploration_epsilon=0.0, **kwargs):
-        if kwargs.pop("share_features_extractor", False):
-            raise ValueError("The event Transformer requires independent actor and critic encoders")
-        self.critic_learning_rate = critic_learning_rate
+    def __init__(
+        self,
+        observation_space,
+        action_space,
+        lr_schedule,
+        *,
+        features_extractor_class=SpatialFeatures,
+        features_extractor_kwargs=None,
+        hidden_sizes=(128, 128),
+        exploration_epsilon=0.0,
+    ):
+        super().__init__(
+            observation_space,
+            action_space,
+            features_extractor_class=features_extractor_class,
+            features_extractor_kwargs=features_extractor_kwargs,
+        )
+        if action_space.n != A.size:
+            raise ValueError("Sequential Q control requires Discrete(406) transport")
+        self.features_extractor = self.make_features_extractor()
+        encoder = self.features_extractor
         self.exploration_epsilon = exploration_epsilon
-        self.compilation_status = "disabled"
-        self.compilation_error = None
-        super().__init__(*args, share_features_extractor=False, **kwargs)
+        self.compilation_status, self.compilation_error = "disabled", None
+        pooled = 2 * encoder.channels + encoder.scalar_channels
+        self.branch_head = nn.Sequential(
+            mlp(pooled, hidden_sizes), nn.Linear(hidden_sizes[-1], A.tile_groups + 1)
+        )
+        self.tile_head = nn.Sequential(
+            mlp(encoder.channels + pooled + A.tile_groups, hidden_sizes),
+            nn.Linear(hidden_sizes[-1], 1),
+        )
+        self.tile_offsets = nn.Parameter(torch.zeros(A.tile_groups))
+        with torch.no_grad():
+            for head in (self.branch_head[-1], self.tile_head[-1]):
+                head.weight.zero_()
+                head.bias.zero_()
+            defeat = -encoder.cfg["reward"]["loss_penalty"]
+            self.branch_head[-1].bias[-1] = defeat
+            self.tile_offsets[-1] = defeat
+        self.optimizer = torch.optim.Adam(self.parameters(), lr=lr_schedule(1), eps=1e-5)
 
     def enable_compilation(self):
-        """Compile fixed-shape feature paths without changing module parameters."""
-        if self.device.type != "cuda" or not hasattr(torch, "compile"):
-            self.compilation_status = "unavailable"
-            return
-        if importlib.util.find_spec("triton") is None:
-            # Avoid entering compiler tracing (and its RNG save/restore contexts)
-            # beside a sampling collector when this CUDA backend cannot execute.
+        if self.device.type != "cuda" or importlib.util.find_spec("triton") is None:
             self.compilation_status = "unavailable"
             self.compilation_error = "CUDA compilation requires an installed Triton backend"
             return
         try:
-            # Keep compiled wrappers out of the module tree so checkpoint keys and
-            # optimizer parameter ownership remain identical to eager execution.
-            self.__dict__["_compiled_pi"] = torch.compile(
-                self.pi_features_extractor, mode="reduce-overhead", dynamic=False
-            )
-            self.__dict__["_compiled_vf"] = torch.compile(
-                self.vf_features_extractor, mode="reduce-overhead", dynamic=False
+            self.__dict__["_compiled_encoder"] = torch.compile(
+                self.features_extractor, mode="reduce-overhead", dynamic=False
             )
             self.compilation_status = "enabled"
-        except Exception as exc:  # pragma: no cover - depends on local compiler
-            self.__dict__.pop("_compiled_pi", None)
-            self.__dict__.pop("_compiled_vf", None)
-            self.compilation_status = "fallback"
-            self.compilation_error = repr(exc)
+        except Exception as exc:
+            self.compilation_status, self.compilation_error = "fallback", repr(exc)
 
-    def actor_parameters(self):
-        return (*self.pi_features_extractor.parameters(), *self.action_net.parameters())
-
-    def critic_parameters(self):
-        return (
-            *self.vf_features_extractor.parameters(),
-            *self.mlp_extractor.critic.parameters(),
-            *self.value_net.parameters(),
+    def encode(self, observations, context=None):
+        encoder = self.__dict__.get("_compiled_encoder", self.features_extractor)
+        try:
+            features = encoder(observations, context)
+        except Exception as exc:
+            if encoder is self.features_extractor:
+                raise
+            self.__dict__.pop("_compiled_encoder", None)
+            self.compilation_status, self.compilation_error = "fallback", repr(exc)
+            features = self.features_extractor(observations, context)
+        return pooled_spatial(
+            features, self.features_extractor.channels, self.features_extractor.scalar_channels
         )
 
-    def initialize_action_heads(self):
-        with torch.no_grad():
-            for head in (self.action_net.plant_head, self.action_net.tiles):
-                head.weight.zero_()
-                if head.bias is not None:
-                    head.bias.zero_()
-            self.value_net.weight.zero_()
-            self.value_net.bias.zero_()
-            self.value_net.bias[2:] = -self.features_extractor.cfg["reward"]["loss_penalty"]
+    def tile_values(self, board, pooled, branches):
+        # Non-wait branch IDs 1..9 condition a shared per-tile MLP.
+        category = torch.nn.functional.one_hot(branches.long() - 1, A.tile_groups).to(pooled.dtype)
+        local = board.flatten(2).transpose(1, 2)
+        inputs = torch.cat(
+            (
+                local,
+                pooled[:, None].expand(-1, A.tiles, -1),
+                category[:, None].expand(-1, A.tiles, -1),
+            ),
+            -1,
+        )
+        return self.tile_head(inputs).squeeze(-1) + self.tile_offsets[branches - 1, None]
 
-    def _build_mlp_extractor(self):
-        self.mlp_extractor = SpatialLatents(
-            self.features_extractor.channels,
-            self.features_extractor.scalar_channels,
-            self.net_arch["vf"],
-            self.features_dim,
-        ).to(self.device)
+    def selected_values(self, obs, actions, context=None):
+        board, pooled = self.encode(obs, context)
+        branches, tiles = action_parts(actions)
+        first = self.branch_head(pooled).gather(1, branches[:, None]).flatten()
+        second = first.new_zeros(len(obs))
+        ix = (branches != 0).nonzero(as_tuple=True)[0]
+        if len(ix):
+            second[ix] = (
+                self.tile_values(board[ix], pooled[ix], branches[ix])
+                .gather(1, tiles[ix, None])
+                .flatten()
+            )
+        return first, second
 
-    def _build(self, lr_schedule):
-        if self.action_space.n != GroupedDistribution.action_dim:
-            raise ValueError("Spatial policy requires direct Discrete(406) actions")
-        # Environment masks are validated at the CUDA environment boundary;
-        # avoid a device-to-host reduction on every policy forward.
-        self.action_dist = GroupedDistribution(
-            self.exploration_epsilon,
-            validate_args=False,
-        )
-        super()._build(lr_schedule)
-        self.action_net = SpatialLogits(
-            self.features_extractor.channels,
-            self.features_extractor.scalar_channels,
-            self.net_arch["pi"],
-        ).to(self.device)
-        if self.ortho_init:
-            self.action_net.apply(lambda module: self.init_weights(module, gain=2**0.5))
-        self.value_net = nn.Linear(self.mlp_extractor.latent_dim_vf, 2 + A.tiles).to(self.device)
-        self.initialize_action_heads()
-        # SB3 recursively initializes Linear modules. Restore identity-biased gates
-        # and zero padding embeddings after that pass.
-        for extractor in (self.pi_features_extractor, self.vf_features_extractor):
-            for block in extractor.temporal.blocks:
-                for gate in (block.attn_gate, block.feed_gate):
-                    nn.init.zeros_(gate.weight)
-                    nn.init.constant_(gate.bias, -extractor.cfg["policy"]["memory"]["gate_bias"])
-            with torch.no_grad():
-                extractor.plant_types.weight[0].zero_()
-                extractor.plant_states.weight[0].zero_()
-        # Include the replacement spatial head, never the discarded linear head.
-        self.optimizer = self.optimizer_class(
-            self.actor_parameters(), lr=lr_schedule(1), **self.optimizer_kwargs
-        )
-        self.critic_optimizer = self.optimizer_class(
-            self.critic_parameters(),
-            lr=self.critic_learning_rate or lr_schedule(1),
-            **self.optimizer_kwargs,
-        )
+    def predict_values(self, obs, context=None):
+        return self.branch_head(self.encode(obs, context)[1])
 
     def decide(self, obs, action_masks, deterministic=False, context=None, diagnostic_indices=None):
-        values = self.predict_values(obs, context)
-        choices = controller_choice(values, action_masks)
-        actions = torch.where(choices >= 2, A.dig_start + choices - 2, 0).long()
-        logs = values.new_zeros(len(obs))
-        diagnostics = None
-        if diagnostic_indices is not None:
-            diagnostics = values.new_zeros((len(obs), A.plant_types, A.tiles))
-        planting = (choices == 1).nonzero(as_tuple=True)[0]
+        board, pooled = self.encode(obs, context)
+        values = self.branch_head(pooled)
+        legal = branch_masks(action_masks)
+        greedy = greedy_choice(values, legal)
+        branches = greedy.clone()
+        coins = torch.zeros(len(obs), 2, device=obs.device, dtype=torch.bool)
+        epsilon = per_head_epsilon(0.0 if deterministic else self.exploration_epsilon)
+        planting = ((greedy > 0) & (greedy <= A.plant_types)).nonzero(as_tuple=True)[0]
         if len(planting):
-            distribution = self.get_distribution(
-                obs[planting],
-                action_masks[planting],
-                None if context is None else context.select(planting),
+            species, coins[planting, 0] = explore(
+                greedy[planting] - 1, legal[planting, 1:-1], epsilon
             )
-            selected = distribution.get_actions(deterministic=deterministic)
-            actions[planting] = selected
-            logs[planting] = distribution.log_prob(selected)
-            if diagnostics is not None:
-                diagnostics[planting] = distribution.probs.reshape(-1, A.plant_types, A.tiles)
-        if diagnostics is not None:
-            # Reuse sampled-row outputs; extra forwards are restricted to watched
-            # non-planting rows. This path never draws random numbers.
-            extra = diagnostic_indices[choices[diagnostic_indices] != 1]
-            if len(extra):
-                dist = self.get_distribution(
-                    obs[extra],
-                    action_masks[extra],
-                    None if context is None else context.select(extra),
-                )
-                diagnostics[extra] = dist.probs.reshape(-1, A.plant_types, A.tiles)
+            branches[planting] = species + 1
+        tiles = torch.zeros_like(branches)
+        greedy_tiles = torch.zeros_like(branches)
+        selected_tile_values = values.new_zeros(len(obs))
+        nonwait = (branches > 0).nonzero(as_tuple=True)[0]
+        if len(nonwait):
+            tile_q = self.tile_values(board[nonwait], pooled[nonwait], branches[nonwait])
+            tile_legal = A.tile_masks(action_masks[nonwait])[
+                torch.arange(len(nonwait), device=obs.device), branches[nonwait] - 1
+            ]
+            preferred = greedy_choice(tile_q, tile_legal)
+            tiles[nonwait] = preferred
+            greedy_tiles[nonwait] = preferred
+            plant_rows = (branches[nonwait] <= A.plant_types).nonzero(as_tuple=True)[0]
+            if len(plant_rows):
+                selected, fired = explore(preferred[plant_rows], tile_legal[plant_rows], epsilon)
+                tiles[nonwait[plant_rows]] = selected
+                coins[nonwait[plant_rows], 1] = fired
+            selected_tile_values[nonwait] = tile_q.gather(1, tiles[nonwait, None]).flatten()
+        # Recover the unmodified greedy full command when species exploration switched branches.
+        changed = (branches != greedy).nonzero(as_tuple=True)[0]
+        if len(changed):
+            q = self.tile_values(board[changed], pooled[changed], greedy[changed])
+            mask = A.tile_masks(action_masks[changed])[
+                torch.arange(len(changed), device=obs.device), greedy[changed] - 1
+            ]
+            greedy_tiles[changed] = greedy_choice(q, mask)
+        actions = assemble(branches, tiles)
+        details = dict(greedy_actions=assemble(greedy, greedy_tiles), coins=coins)
+        if diagnostic_indices is not None:
             ix = diagnostic_indices
-            joint = diagnostics[ix]
-            plants = joint.sum(-1)
-            tiles = joint / plants.clamp_min(torch.finfo(joint.dtype).tiny)[..., None]
-            legal_values = masked_controller_values(values[ix], action_masks[ix])
-            q = torch.stack(
-                (
-                    legal_values[:, 0],
-                    legal_values[:, 1],
-                    legal_values[:, 2:].max(-1).values,
-                ),
-                -1,
+            maps = []
+            for branch in range(1, A.tile_groups + 1):
+                q = self.tile_values(board[ix], pooled[ix], torch.full_like(ix, branch))
+                maps.append(
+                    q.masked_fill(~A.tile_masks(action_masks[ix])[:, branch - 1], -torch.inf)
+                )
+            details["viewer"] = dict(
+                q=values[ix].masked_fill(~legal[ix], -torch.inf),
+                tiles=torch.stack(maps, 1),
+                actions=actions[ix],
+                greedy_actions=details["greedy_actions"][ix],
+                coins=coins[ix],
             )
-            result = dict(q=q, plants=plants, tiles=tiles, actions=actions[ix])
-            return actions, values.gather(1, choices[:, None]).flatten(), logs, result
-        return actions, values.gather(1, choices[:, None]).flatten(), logs
+        return actions, values.gather(1, branches[:, None]).flatten(), selected_tile_values, details
 
     def sample_actions(self, obs, action_masks, deterministic=False, context=None):
-        actions, _, logs = self.decide(obs, action_masks, deterministic, context)
-        return actions, logs
+        return self.decide(obs, action_masks, deterministic, context)[0], None
+
+    def _predict(self, observation, deterministic=False):
+        masks = torch.ones(len(observation), A.size, device=observation.device, dtype=torch.bool)
+        return self.decide(observation, masks, deterministic)[0]
+
+    def forward(self, obs, deterministic=False, action_masks=None, context=None):
+        return self.decide(obs, action_masks, deterministic, context)
 
     @torch.no_grad()
     def predict(
         self, observation, state=None, episode_start=None, deterministic=False, action_masks=None
     ):
-        """Explicit public history for actor and critic playing inference.
+        """Explicit public history for sequential Q playing inference.
 
         Legal masked actions are executed as proposed. Callers that reject an
         action must set state.previous_actions to its executed action instead.
@@ -358,43 +349,3 @@ class SpatialGroupedPolicy(MaskableActorCriticPolicy):
         state.previous_actions = actions
         actions = actions.cpu().numpy()
         return (actions if vectorized else actions.squeeze(0)), state
-
-    def evaluate_actor(self, obs, actions, action_masks, context=None):
-        distribution = self.get_distribution(obs, action_masks=action_masks, context=context)
-        return distribution.log_prob(actions), distribution.entropy()
-
-    def get_distribution(self, obs, action_masks=None, context=None):
-        extractor = self.__dict__.get("_compiled_pi", self.pi_features_extractor)
-        try:
-            features = extractor(obs, context)
-        except Exception as exc:  # pragma: no cover - compiler/backend dependent
-            if extractor is self.pi_features_extractor:
-                raise
-            self.__dict__.pop("_compiled_pi", None)
-            self.compilation_status = "fallback"
-            self.compilation_error = repr(exc)
-            features = self.pi_features_extractor(obs, context)
-        self.action_dist.proba_distribution(self.action_net(features), masks=action_masks)
-        return self.action_dist
-
-    def predict_values(self, obs, context=None):
-        extractor = self.__dict__.get("_compiled_vf", self.vf_features_extractor)
-        try:
-            features = extractor(obs, context)
-        except Exception as exc:  # pragma: no cover - compiler/backend dependent
-            if extractor is self.vf_features_extractor:
-                raise
-            self.__dict__.pop("_compiled_vf", None)
-            self.compilation_status = "fallback"
-            self.compilation_error = repr(exc)
-            features = self.vf_features_extractor(obs, context)
-        return self.value_net(self.mlp_extractor.forward_critic(features))
-
-    def evaluate_actions(self, obs, actions, action_masks=None, context=None):
-        logs, entropy = self.evaluate_actor(obs, actions, action_masks, context)
-        indices = selected_value_indices(actions)
-        values = self.predict_values(obs, context).gather(1, indices[:, None]).flatten()
-        return values, logs, entropy
-
-    def forward(self, obs, deterministic=False, action_masks=None, context=None):
-        return self.decide(obs, action_masks, deterministic, context)

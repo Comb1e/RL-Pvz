@@ -57,7 +57,7 @@ value_scale = 300.0 # Unit conversion, never a sun cap.
 [training]
 gamma = 1.0
 discount_clock = "simulation_ticks"
-method = "complete_game_mc"
+method = "sequential_q_mc_v1"
 budget_unit = "games"
 until_stage_complete = false # With --stage: stop only when its mastery gate passes.
 total_games = 10000
@@ -66,20 +66,15 @@ eval_interval_games = 2000 # Used by diagnostic/fixed training or archived perio
 total_steps = 3000000 # Inactive unless budget_unit = "decisions" (legacy).
 learner_seeds = [101, 102]
 n_envs = 32
-role_phase_games = 256
 device = "cuda"
 max_minutes = 120
 finalization_minutes = 15
 # Plant-only exploration is fixed throughout each complete-game cohort.
-exploration = {objective = "conditional_plant_v1", plant_coef = 0.001, tile_coef = 0.001, epsilon_start = 0.1, epsilon_floor = 0.001, entropy_floor_fraction = 0.1, decay_games = 3000}
+exploration = {objective = "sequential_plant_epsilon_v1", epsilon_start = 0.1, epsilon_floor = 0.001, decay_games = 3000}
 batch_size = 1024
 n_epochs = 4
-learning_rate = 0.0001
-critic_learning_rate = 0.0003
-clip_range = 0.2
+learning_rate = 0.0003
 max_grad_norm = 0.5
-normalize_advantage = true
-target_kl = 0.01 # Zero disables KL stopping.
 hidden_sizes = [128, 128]
 eval_interval = 250000 # Periodic decision interval for archived/diagnostic protocols.
 torch_threads = 1
@@ -131,8 +126,8 @@ curriculum = true
 hybrid = false
 
 [policy]
-kind = "event_q_controller_v1"
-action_distribution = "conditional_plant_v1"
+kind = "event_sequential_q_v1"
+action_distribution = "sequential_plant_epsilon_v1"
 plant_embedding = 8
 state_embedding = 4
 scalar_sizes = [64]

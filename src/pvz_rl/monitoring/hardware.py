@@ -99,8 +99,7 @@ class HardwareMonitor:
             transitions_per_second=metrics.get("transitions_per_second"),
             collection_seconds=metrics["collection_seconds"],
             update_seconds=metrics["optimization_seconds"],
-            critic_seconds=metrics.get("critic_seconds"),
-            actor_seconds=metrics.get("actor_seconds"),
+            fit_seconds=metrics.get("fit_seconds"),
             window_seconds=metrics.get("window_seconds"),
             **{
                 key: metrics.get(key)

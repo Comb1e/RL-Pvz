@@ -16,19 +16,13 @@ from pvz_rl.policy.event_memory import EventMemory
 @contextmanager
 def deterministic_validation(policy):
     """Validation never uses injected training exploration."""
-    actor = policy.policy
-    action_dist = getattr(actor, "action_dist", None)
-    if action_dist is None:
-        yield
-        return
-    old_epsilon = getattr(action_dist, "epsilon", 0.0)
-    old_policy_epsilon = getattr(actor, "exploration_epsilon", old_epsilon)
+    network = policy.policy
+    old_policy_epsilon = getattr(network, "exploration_epsilon", 0.0)
     old_model_epsilon = getattr(policy, "exploration_rate", None)
     policy_kwargs = getattr(policy, "policy_kwargs", {})
     had_policy_kw_epsilon = "exploration_epsilon" in policy_kwargs
     old_policy_kw_epsilon = policy_kwargs.get("exploration_epsilon")
-    action_dist.epsilon = 0.0
-    actor.exploration_epsilon = 0.0
+    network.exploration_epsilon = 0.0
     if old_model_epsilon is not None:
         policy.exploration_rate = 0.0
     if had_policy_kw_epsilon:
@@ -36,8 +30,7 @@ def deterministic_validation(policy):
     try:
         yield
     finally:
-        action_dist.epsilon = old_epsilon
-        actor.exploration_epsilon = old_policy_epsilon
+        network.exploration_epsilon = old_policy_epsilon
         if old_model_epsilon is not None:
             policy.exploration_rate = old_model_epsilon
         if had_policy_kw_epsilon:
