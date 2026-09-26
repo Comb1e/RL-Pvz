@@ -66,8 +66,14 @@ def test_real_training_serialization_and_replay(smoke_cfg, tmp_path, condition):
         )
         np.testing.assert_array_equal(action, restored)
         obs, _, _, _, info = env.step(int(action))
-        if condition != "unmasked":
-            assert info["accepted"]
+        if not info["accepted"]:
+            assert info["ticks_advanced"] == 1
+            assert (
+                info["reward_parts"]["invalid_plant_penalty"] < 0
+                or info["reward_parts"]["empty_dig_penalty"] < 0
+            )
+            state.previous_actions.zero_()
+            reloaded_state.previous_actions.zero_()
     replay = output / "probe.json"
     env.recorder.save(replay)
     assert verify_replay(replay).state_hash() == env.game.state_hash()

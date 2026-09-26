@@ -136,8 +136,10 @@ def test_sequential_heads_masks_ties_conditioning_and_roundtrips(device):
         torch.testing.assert_close(q[:, :-1], torch.zeros_like(q[:, :-1]))
         assert (q[:, -1] == -2).all()
         result = p.decide(obs, mask, deterministic=True)
-        assert result[0].tolist() == [0, A.dig_start + 9, 46, 0, 91]
-        assert (mask.gather(1, result[0][:, None])).all()
+        assert (
+            result[0].tolist() == [0] * 5
+        )  # All ten branches compete even with sparse transport masks.
+        assert torch.isfinite(result[3]["branch_q"]).all()
         board, pooled = p.encode(obs)
         plants = p.tile_values(board, pooled, torch.ones(5, device=device, dtype=torch.long))
         digs = p.tile_values(board, pooled, torch.full((5,), 9, device=device, dtype=torch.long))
@@ -237,3 +239,90 @@ def test_shared_q_cpu_cuda_outputs_gradients_and_adam_parity():
             torch.testing.assert_close(
                 value, cuda.optimizer.state[b][key].cpu(), rtol=1e-8, atol=1e-10
             )
+
+
+@pytest.mark.parametrize("device", ["cpu", "cuda"])
+def test_ten_way_scores_ignore_affordability_and_full_board(device):
+    from gymnasium import spaces
+
+    from pvz_rl.config import load_config
+    from pvz_rl.policy.spatial_policy import SequentialQPolicy
+
+    p = SequentialQPolicy(
+        spaces.Box(-1, 1, (286,)),
+        spaces.Discrete(406),
+        lambda _: 3e-4,
+        features_extractor_kwargs={"layout_cfg": load_config()},
+    ).to(device)
+    obs = torch.zeros(3, 286, device=device)
+    masks = torch.ones(3, 406, dtype=torch.bool, device=device)
+    masks[0, 1:361] = False  # Even a legacy affordability mask cannot hide the branch.
+    masks[1, 1:361] = False  # Full board: explicit tile-zero rejected proposal.
+    masks[2, 1:361:45] = False  # Occupied tile zero: row-major empty tile one.
+    with torch.no_grad():
+        p.branch_head[-1].bias.fill_(-1)
+        p.branch_head[-1].bias[1] = 3
+        p.branch_head[-1].bias[9] = 2  # Dig used to win when planting was masked.
+        result = p.decide(obs, masks, deterministic=True)
+        assert result[0].tolist() == [1, 1, 2]
+        assert result[3]["branch_q"].shape == (3, 10)
+        assert torch.isfinite(result[3]["branch_q"]).all()
+        p.branch_head[-1].bias[9] = 4
+        assert p.decide(obs, masks, deterministic=True)[0].tolist() == [361] * 3
+        # Public inference without an explicit mask uses observation occupancy.
+        # All three entry points must exclude tile zero only for planting.
+        obs[:, 0] = 1
+        p.branch_head[-1].bias[9] = 2
+        assert p.decide(obs, None, deterministic=True)[0].tolist() == [2] * 3
+        assert p._predict(obs, deterministic=True).tolist() == [2] * 3
+        assert p.predict(obs.cpu().numpy(), deterministic=True)[0].tolist() == [2] * 3
+        p.branch_head[-1].bias[9] = 4
+        assert p.decide(obs, None, deterministic=True)[0].tolist() == [361] * 3
+        p.legacy_selection = True
+        p.branch_head[-1].bias[9] = 2
+        assert p.decide(obs, None, deterministic=True)[0].tolist() == [1] * 3
+        p.legacy_selection = False
+        p.tile_head[-1].bias.fill_(float("nan"))
+        with pytest.raises(ValueError, match="finite"):
+            p.decide(obs, masks, deterministic=True)
+
+
+@pytest.mark.parametrize("budget", [0, 0.1, 1])
+def test_plant_exploration_includes_all_species_and_only_empty_tiles(budget):
+    from gymnasium import spaces
+
+    from pvz_rl.config import load_config
+    from pvz_rl.policy.sequential_q import action_parts, per_head_epsilon
+    from pvz_rl.policy.spatial_policy import SequentialQPolicy
+
+    p = SequentialQPolicy(
+        spaces.Box(-1, 1, (286,)),
+        spaces.Discrete(406),
+        lambda _: 3e-4,
+        features_extractor_kwargs={"layout_cfg": load_config()},
+        exploration_epsilon=budget,
+    )
+    n = 12000
+    obs = torch.zeros(n, 286)
+    masks = torch.ones(n, 406, dtype=torch.bool)
+    masks[:, 1:361] = False
+    for species in range(8):
+        masks[:, 1 + species * 45 + 2] = True
+        masks[:, 1 + species * 45 + 7] = True
+    # Bypass expensive encoding; independently fixed head outputs isolate selection.
+    p.encode = lambda obs, context: (torch.zeros(n, 32, 5, 9), torch.zeros(n, 128))
+    p.tile_values = lambda board, pooled, branches: torch.zeros(len(branches), 45)
+    torch.manual_seed(101)
+    with torch.no_grad():
+        p.branch_head[-1].bias[1] = 1
+        actions, _, _, detail = p.decide(obs, masks)
+    species, tile = action_parts(actions)
+    alpha = per_head_epsilon(budget)
+    assert ((tile == 2) | (tile == 7)).all()
+    for k in range(1, 9):
+        for t in (2, 7):
+            expected = ((1 - alpha) * (k == 1) + alpha / 8) * ((1 - alpha) * (t == 2) + alpha / 2)
+            assert ((species == k) & (tile == t)).float().mean().item() == pytest.approx(
+                expected, abs=0.012
+            )
+    assert detail["coins"].any(1).float().mean().item() == pytest.approx(budget, abs=0.012)

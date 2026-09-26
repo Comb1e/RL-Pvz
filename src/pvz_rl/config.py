@@ -86,7 +86,17 @@ def lesson_settings(cfg=None):
     return (cfg or {}).get("curriculum", {}).get("lessons", _teaching_defaults()["lessons"])
 
 
-def validate_config(cfg: dict) -> None:
+def legacy_q_inference(cfg):
+    """The pinned 0.24.0 network can still play with its original semantics."""
+    return (
+        cfg.get("policy", {}).get("kind") == "event_sequential_q_v1"
+        and cfg["policy"].get("action_distribution") == "sequential_plant_epsilon_v1"
+        and cfg.get("training", {}).get("method") == "sequential_q_mc_v1"
+    )
+
+
+def validate_config(cfg: dict, *, inference=False) -> None:
+    legacy = inference and legacy_q_inference(cfg)
     if cfg["training"].get("validation_schedule", "periodic") not in (
         "periodic",
         "stage_success",
@@ -95,7 +105,7 @@ def validate_config(cfg: dict) -> None:
     if simulator(cfg) not in ("cpu", "cuda"):
         raise ValueError("simulation.backend must be cpu or cuda")
     if cfg["encoding"].get("version") != "event_v7" or cfg.get("policy", {}).get("kind") not in (
-        "event_sequential_q_v1",
+        "event_sequential_q_v1" if legacy else "event_sequential_q_v2",
     ):
         raise ValueError(
             "Retired observation/policy format. Start fresh with configs/train.toml; archived reports remain readable; recordings must use the 100 Hz engine."
@@ -112,9 +122,15 @@ def validate_config(cfg: dict) -> None:
         "basic_zombie_value",
         "progress_weight",
         "value_scale",
+        "invalid_plant_penalty",
+        "empty_dig_penalty",
     }
+    if legacy:
+        reward_keys -= {"invalid_plant_penalty", "empty_dig_penalty"}
     if set(cfg["reward"]) != reward_keys:
-        raise ValueError("reward must contain only the outcome and net-value settings")
+        raise ValueError(
+            "reward must contain the outcome, net-value and rejection-penalty settings"
+        )
     if "actor_objective" in cfg["training"] or "ent_coef" in cfg["training"]:
         raise ValueError("Retired PPO objective; use sequential Q fitting")
     if cfg["training"]["exploration"].get("objective") != "sequential_plant_epsilon_v1":
@@ -125,8 +141,10 @@ def validate_config(cfg: dict) -> None:
         "mower_value",
         "basic_zombie_value",
         "progress_weight",
+        "invalid_plant_penalty",
+        "empty_dig_penalty",
     ):
-        value = cfg["reward"][key]
+        value = cfg["reward"].get(key, 0) if legacy else cfg["reward"][key]
         if type(value) not in (int, float) or not math.isfinite(value) or value < 0:
             raise ValueError(f"reward.{key} must be finite and nonnegative")
     for group, keys in (
@@ -294,8 +312,8 @@ def validate_config(cfg: dict) -> None:
     if not math.isfinite(visual["final_hold_seconds"]) or visual["final_hold_seconds"] < 0:
         raise ValueError("Visualization final_hold_seconds must be finite and nonnegative")
     env, train = cfg["environment"], cfg["training"]
-    if train.get("method") != "sequential_q_mc_v1":
-        raise ValueError("Training requires sequential_q_mc_v1 and fresh models")
+    if train.get("method") != ("sequential_q_mc_v1" if legacy else "sequential_q_mc_v2"):
+        raise ValueError("Training requires sequential_q_mc_v2 and fresh models")
     if any(
         k in train
         for k in (

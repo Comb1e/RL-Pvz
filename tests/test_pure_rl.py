@@ -16,7 +16,8 @@ def test_task_restrictions_dig_cooldown_and_reset_boundaries():
     shooter = env.codec.encode(Place("peashooter", 0, 0))
     env.step(shooter)
     assert env.public.sun == 0
-    assert not env.action_masks()[env.codec.encode(Place("peashooter", 1, 0))]
+    assert env.action_masks()[env.codec.encode(Place("peashooter", 1, 0))]
+    assert not env.game.validate_action(Place("peashooter", 1, 0)).accepted
     assert env.action_masks()[env.codec.encode(Dig(0, 0))]
     before = env.action_masks()
     env.set_curriculum_stage(3)

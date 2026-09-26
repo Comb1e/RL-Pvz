@@ -34,18 +34,7 @@ def test_entire_offscreen_game_spills_pages_and_restores(tmp_path):
         assert first["total"] == 150 and len(first["rows"]) == 64
         assert first["rows"][17]["accepted"] is False and first["rows"][17]["reason"] == 1
         assert first["rows"][17]["q"] == (scores[4] + 17).tolist()
-        assert first["rows"][17]["legal"] == [
-            True,
-            True,
-            False,
-            False,
-            False,
-            False,
-            False,
-            False,
-            False,
-            True,
-        ]
+        assert first["rows"][17]["legal"] == [True] * 10
         assert first["rows"][0]["tick"] == first["rows"][1]["tick"]
         assert first["rows"][0]["sequence"] != first["rows"][1]["sequence"]
         assert journal.page(4, 6, 0) is None
@@ -129,8 +118,10 @@ def test_selecting_a_row_keeps_its_page_position_and_follow_is_explicit():
     state = Browse(page=dict(start=60, total=70, rows=rows))
     state.choose(rows[8])
     assert state.mode == HistoryMode.BROWSING
-    assert state.start == 68 and state.page["rows"][0] is state.selected
-    assert state.request == 1 and state.sent == 0
+    assert state.start == 60 and state.selected_offset == 68
+    assert state.page["rows"] is rows and len(rows) == 10
+    assert state.selected == rows[8] and state.selected is not rows[8]
+    assert state.request == 1 and state.sent == float("inf")
     state.follow = True
     assert state.mode == HistoryMode.FOLLOWING
 
@@ -221,15 +212,17 @@ def test_128_game_interruption_restores_actual_scores_and_optimizer(tmp_path):
         try:
             model = build_model(cfg, "masked", env, 101)
             model.set_logger(configure(format_strings=[]))
-            model.policy.exploration_epsilon = 0.0
+            from pvz_rl.learning.exploration import set_exploration_rate
+
+            set_exploration_rate(model, 0.0)
             with torch.no_grad():
                 model.policy.branch_head[-1].bias[1] = 0.1
-                model.policy.branch_head[-1].bias[-1] = 0.2
+                model.policy.branch_head[-1].bias[-1] = -0.2
             if interrupted:
                 with pytest.raises(KeyboardInterrupt):
                     model.learn(1, callback=Interrupt())
                 page = env.action_journal.page(127, env._episode_serial[127])
-                assert [r["action"] for r in page["rows"]] == [1, 361]
+                assert [r["action"] for r in page["rows"]] == [1, 2]
                 assert [r["sequence"] for r in page["rows"]] == [1, 2]
                 assert [r["tick"] for r in page["rows"]] == [0, 0]
                 assert page["rows"][0]["q"][1] == pytest.approx(0.1)
@@ -242,7 +235,7 @@ def test_128_game_interruption_restores_actual_scores_and_optimizer(tmp_path):
                 model.learn(1)
             assert model.training_games == 128
             assert model.cohort_metrics["q_optimizer_steps"] == 52
-            assert model.cohort_metrics["planting_samples"] == 128
+            assert model.cohort_metrics["planting_samples"] == 128 * 101
             outcomes.append(
                 (
                     policy_digest(model),
@@ -260,3 +253,63 @@ def test_128_game_interruption_restores_actual_scores_and_optimizer(tmp_path):
         for name, value in state.items():
             assert torch.equal(value, b[1]["state"][key][name])
     assert torch.equal(a[3], b[3]) and torch.equal(a[4], b[4])
+
+
+def test_page_selection_survives_scroll_and_stale_requests():
+    from pvz_rl.presentation.live_layout import Browse, accept_history_response
+
+    rows = [dict(sequence=5 + i, q=[float(i)] * 10) for i in range(64)]
+    page = dict(start=64, total=200, rows=rows)
+    state = Browse(page=page)
+    state.choose(rows[63])
+    original = list(state.selected["q"])
+    assert state.selected_offset == 127 and page["start"] == 64 and len(page["rows"]) == 64
+    rows[63]["q"][0] = -999  # Selection owns the recorded vector independently.
+    state.start = 128
+    state.request += 1
+    packets = [dict(env=4, generation=2, state="watching", frame=dict(episode=3))]
+    browse = {(0, 2, 3): state}
+    response = dict(
+        panel=0,
+        env=4,
+        generation=2,
+        episode=3,
+        request=state.request,
+        page=dict(start=128, total=201, rows=[dict(sequence=500)]),
+    )
+    assert accept_history_response(packets, browse, response)
+    assert state.selected["q"] == original and state.selected["sequence"] == 68
+    assert not accept_history_response(packets, browse, {**response, "request": state.request - 1})
+    assert state.page["start"] == 128 and state.selected_offset == 127
+    state.follow = True
+    assert not accept_history_response(packets, browse, response)
+
+
+def test_journal_penalties_and_exact_q_survive_archive(tmp_path):
+    from pvz_rl.config import load_config
+    from pvz_rl.presentation.live_layout import result_label
+
+    settings = load_config()["reward"]
+    a = ActionJournal(5, ram_bytes=0, block_rows=2, reward_settings=settings)
+    b = ActionJournal(5, ram_bytes=0, block_rows=2, reward_settings=settings)
+    try:
+        rows, scores, results = batch()
+        rows["action"] = [1, 2, 361, 362, 0]
+        results[:] = [[0, 3], [0, 2], [0, 4], [1, 0], [1, 0]]
+        a.record_batch(rows, scores, results, [7] * 5)
+        assert a.latest[0]["penalty"] == -settings["invalid_plant_penalty"]
+        assert a.latest[2]["penalty"] == -settings["empty_dig_penalty"]
+        assert a.latest[3]["penalty"] == 0
+        assert "automatic wait: insufficient_sun" in result_label(a.page(0, 7)["latest"])
+        assert "penalty -0.000333333" in result_label(a.page(2, 7)["latest"])
+        with ZipFile(tmp_path / "history.zip", "w") as archive:
+            a.write_archive(archive)
+        with ZipFile(tmp_path / "history.zip") as archive:
+            b.restore_archive(archive)
+        for env in range(5):
+            assert a.page(env, 7) == b.page(env, 7)
+            assert b.page(env, 7)["latest"]["q"] == scores[env].tolist()
+            assert b.page(env, 7)["latest"]["legal"] == [True] * 10
+    finally:
+        a.close()
+        b.close()

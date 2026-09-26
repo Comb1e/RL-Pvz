@@ -5,7 +5,7 @@ import threading
 from contextlib import contextmanager
 from enum import StrEnum
 
-OPTIMIZER_PROTOCOL = "sequential_q_mc_v1"
+OPTIMIZER_PROTOCOL = "sequential_q_mc_v2"
 
 
 class CohortPhase(StrEnum):

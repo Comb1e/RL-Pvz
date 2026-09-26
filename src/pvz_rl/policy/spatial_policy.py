@@ -8,16 +8,19 @@ from stable_baselines3.common.policies import BasePolicy
 from stable_baselines3.common.torch_layers import BaseFeaturesExtractor
 from torch import nn
 
+from pvz_rl.config import legacy_q_inference
 from pvz_rl.envs.actions import ActionSchema as A
 from pvz_rl.envs.encoding import ObservationEncoder
 from pvz_rl.policy.event_memory import MemoryContext
 from pvz_rl.policy.sequential_q import (
     action_parts,
     assemble,
-    branch_masks,
     explore,
     greedy_choice,
+    observation_tile_masks,
     per_head_epsilon,
+    selection_masks,
+    transport_branch_masks,
 )
 from pvz_rl.policy.temporal import TemporalEncoder
 
@@ -161,6 +164,7 @@ class SequentialQPolicy(BasePolicy):
         self.features_extractor = self.make_features_extractor()
         encoder = self.features_extractor
         self.exploration_epsilon = exploration_epsilon
+        self.legacy_selection = legacy_q_inference(encoder.cfg)
         self.compilation_status, self.compilation_error = "disabled", None
         pooled = 2 * encoder.channels + encoder.scalar_channels
         self.branch_head = nn.Sequential(
@@ -238,10 +242,32 @@ class SequentialQPolicy(BasePolicy):
     def predict_values(self, obs, context=None):
         return self.branch_head(self.encode(obs, context)[1])
 
-    def decide(self, obs, action_masks, deterministic=False, context=None, diagnostic_indices=None):
+    def default_masks(self, obs):
+        if self.legacy_selection:
+            return torch.ones(len(obs), A.size, dtype=torch.bool, device=obs.device)
+        return observation_tile_masks(obs)
+
+    def decide(
+        self,
+        obs,
+        action_masks,
+        deterministic=False,
+        context=None,
+        diagnostic_indices=None,
+        active=None,
+    ):
         board, pooled = self.encode(obs, context)
         values = self.branch_head(pooled)
-        legal = branch_masks(action_masks)
+        if action_masks is None:
+            action_masks = self.default_masks(obs)
+        # Every active environment compares all ten first-level outputs.
+        # Affordability and cooldown are simulator outcomes; only the selected
+        # tile uses the occupancy mask.
+        legal = (transport_branch_masks if self.legacy_selection else selection_masks)(action_masks)
+        if active is not None:
+            legal = legal.clone()
+            legal[~active] = False
+            legal[~active, 0] = True
         greedy = greedy_choice(values, legal)
         branches = greedy.clone()
         coins = torch.zeros(len(obs), 2, device=obs.device, dtype=torch.bool)
@@ -261,12 +287,20 @@ class SequentialQPolicy(BasePolicy):
             tile_legal = A.tile_masks(action_masks[nonwait])[
                 torch.arange(len(nonwait), device=obs.device), branches[nonwait] - 1
             ]
-            preferred = greedy_choice(tile_q, tile_legal)
+            # Full-board proposals deterministically target tile zero.  The
+            # simulator rejects them and advances time.  Validate every value,
+            # even when the geometry has no empty tile.
+            has_tile = tile_legal.any(-1)
+            tile_candidates = tile_legal.clone()
+            tile_candidates[~has_tile, 0] = True
+            preferred = greedy_choice(tile_q, tile_candidates)
             tiles[nonwait] = preferred
             greedy_tiles[nonwait] = preferred
             plant_rows = (branches[nonwait] <= A.plant_types).nonzero(as_tuple=True)[0]
             if len(plant_rows):
-                selected, fired = explore(preferred[plant_rows], tile_legal[plant_rows], epsilon)
+                selected, fired = explore(
+                    preferred[plant_rows], tile_candidates[plant_rows], epsilon
+                )
                 tiles[nonwait[plant_rows]] = selected
                 coins[nonwait[plant_rows], 1] = fired
             selected_tile_values[nonwait] = tile_q.gather(1, tiles[nonwait, None]).flatten()
@@ -277,6 +311,8 @@ class SequentialQPolicy(BasePolicy):
             mask = A.tile_masks(action_masks[changed])[
                 torch.arange(len(changed), device=obs.device), greedy[changed] - 1
             ]
+            mask = mask.clone()
+            mask[~mask.any(-1), 0] = True
             greedy_tiles[changed] = greedy_choice(q, mask)
         actions = assemble(branches, tiles)
         details = dict(greedy_actions=assemble(greedy, greedy_tiles), coins=coins)
@@ -296,8 +332,7 @@ class SequentialQPolicy(BasePolicy):
         return self.decide(obs, action_masks, deterministic, context)[0], None
 
     def _predict(self, observation, deterministic=False):
-        masks = torch.ones(len(observation), A.size, device=observation.device, dtype=torch.bool)
-        return self.decide(observation, masks, deterministic)[0]
+        return self.decide(observation, None, deterministic)[0]
 
     def forward(self, obs, deterministic=False, action_masks=None, context=None):
         return self.decide(obs, action_masks, deterministic, context)
@@ -308,8 +343,8 @@ class SequentialQPolicy(BasePolicy):
     ):
         """Explicit public history for sequential Q playing inference.
 
-        Legal masked actions are executed as proposed. Callers that reject an
-        action must set state.previous_actions to its executed action instead.
+        The command is a proposal. Callers that receive a rejection must set
+        state.previous_actions to the executed wait marker (zero).
         """
         from pvz_rl.policy.event_memory import EventMemory
 
@@ -319,7 +354,7 @@ class SequentialQPolicy(BasePolicy):
         masks = (
             torch.as_tensor(action_masks, device=self.device, dtype=torch.bool)
             if action_masks is not None
-            else torch.ones(len(obs), A.size, device=self.device, dtype=torch.bool)
+            else self.default_masks(obs)
         )
         masks = masks.reshape(len(obs), A.size)
         new = state is None

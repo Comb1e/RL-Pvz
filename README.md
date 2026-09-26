@@ -1,6 +1,6 @@
 # PVZ training research
 
-Research **0.24.0** uses one CUDA Transformer Q network. It selects wait, a plant
+Research **0.25.0** uses one CUDA Transformer Q network. It selects wait, a plant
 species or dig, then a tile for non-wait commands. After 128 complete games it fits
 both selected Q heads to actual remaining rewards. Learning remains experimental.
 
@@ -34,8 +34,10 @@ A bounded saving experiment, started only when you execute it:
 To continue until that stage passes, replace `--games` and `--max-minutes` with
 `--until-stage-complete`. The 1,200-second per-game failure cutoff still applies.
 Validation disables injected exploration. A four-game window shows actual
-training behavior, estimated wait/plant/dig returns, and why the highest legal
-value was chosen (including its lead or a tie). Unavailable choices are marked.
+training behavior, estimated wait/plant/dig returns, and why the highest Q
+value was chosen (including its lead or a tie). All ten first-level outputs
+remain visible; rejected plants are shown as automatic waits with their reason,
+and empty digs show their explicit penalty.
 These are predicted future rewards. Focus opens a readable full-game action/Q
 table; Switch chooses another unfinished game. Viewer controls and storage are
 in [the live-view guide](docs/live-view.md). Add `--no-live-view` to close the window.
@@ -52,10 +54,11 @@ RNG state. Resume with that archive:
 After mastery, start a new experiment with `--stage easy --init-from
 runs\saving-101\final.zip` and a new output directory. Stage transfer uses
 compatible Q weights with a fresh optimizer. Existing artifacts are preserved.
-This release requires fresh experiments because the game pin changed. Older-engine
-checkpoints require their matching release for inference, initialization or resume.
-Same-release interruption/resume and stage transfer remain supported. Historical
-curves can be regenerated offline.
+This release requires fresh experiments because the action-selection and reward
+protocol changed. 0.24.0 checkpoints remain usable for inference with their
+original semantics, but cannot initialize or resume new training. Same-release
+interruption/resume and stage transfer remain supported. Historical curves can
+be regenerated offline.
 
 ## Common checks and curves
 
@@ -77,6 +80,7 @@ probes, validation and graceful interruption. Offline reports need no model.
 - [Exact inputs, network roles and training workflow](docs/architecture.md)
 - [Curriculum, rewards, stopping and recovery](docs/research.md)
 - [Mathematical controls and limitations](docs/math/complete-game-learning.md)
+- [Rejection penalties and reward limits](docs/math/invalid-action-penalties.md)
 - [Current mechanics and bounds](docs/math/mechanics-024.md)
 - [Viewer controls and action history](docs/live-view.md)
 - [Verified results](docs/validation.md)

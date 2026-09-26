@@ -294,3 +294,85 @@ def test_retired_method_rejected_before_weights_are_read(tmp_path, retired):
         initial_weights(missing, cfg)
     with pytest.raises(ValueError, match="fresh"):
         load_policy(missing)
+
+
+@pytest.mark.parametrize(
+    "reason",
+    ["insufficient_sun", "card_recharging", "occupied_tile", "outside_board", "unknown_plant"],
+)
+def test_rejection_penalties_are_separate_from_economy_and_terminal(reason):
+    from dataclasses import replace
+
+    from pvz_game import ActionResult, Dig, Game, Place, Status
+
+    from pvz_rl.config import load_config
+
+    cfg = load_config()
+    before = Game().reset("easy", 101)
+    for outcome, terminal in ((Status.RUNNING, 0), (Status.WON, 1), (Status.LOST, -2)):
+        after = replace(before, status=outcome)
+        parts = reward_parts(
+            before,
+            after,
+            cfg,
+            action=Place("sunflower", 0, 0),
+            action_result=ActionResult(False, reason),
+        )
+        assert parts["net_value"] == parts["development"] == 0
+        assert parts["terminal"] == terminal
+        assert parts["total"] == pytest.approx(terminal - 30 / 30000)
+        dig = reward_parts(
+            before, after, cfg, action=Dig(0, 0), action_result=ActionResult(False, reason)
+        )
+        assert dig["total"] == terminal  # Non-empty dig errors carry no empty-tile charge.
+
+
+def test_penalties_cpu_cuda_accounting_and_cutoff_targets():
+    import torch
+    from pvz_game import Dig, LevelSpec, Place, Spawn
+
+    from pvz_rl.config import load_config
+    from pvz_rl.envs.cuda_features import REWARD_FIELDS, CudaFeatures
+    from pvz_rl.envs.cuda_lessons import LessonCudaBatch
+    from pvz_rl.envs.env import PvZEnv
+
+    cfg = load_config()
+    cfg["environment"]["cutoff_seconds"] = 1
+    level = LevelSpec("penalty-control", (Spawn(1000, "basic", 0),), initial_sun=100)
+    cpu = PvZEnv(cfg)
+    cpu.reset(seed=101, options={"scenario": level})
+    batch = LessonCudaBatch(1, zombie_capacity=1, max_step_ticks=1)
+    batch.reset([level], [101])
+    features = CudaFeatures(batch, cfg, "masked")
+    features.encode()
+    commands = [
+        Place("sunflower", 0, 0),
+        Place("sunflower", 0, 1),
+        Place("peashooter", 1, 0),
+        Place("potato_mine", 0, 0),
+        Dig(4, 8),
+        Dig(4, 8),
+    ]
+    actions = [cpu.codec.encode(a) for a in commands] + [0] * 95
+    accumulated = 0.0
+    for action in actions:
+        _, reward, _, truncated, info = cpu.step(action)
+        _, device_reward = features.step(batch.cp.asarray([action], dtype=batch.cp.int64))
+        accumulated += reward
+        assert float(device_reward[0]) == pytest.approx(reward, abs=2e-7)
+        actual = dict(zip(REWARD_FIELDS, features.parts.get()[0]))
+        for key in REWARD_FIELDS:
+            assert actual[key] == pytest.approx(info["reward_parts"][key], abs=1e-10), key
+        np.testing.assert_array_equal(features.mask_tensor.cpu()[0], cpu.action_masks())
+    assert truncated and cpu.public.tick == 100
+    metrics = cpu.episode_metrics()
+    assert metrics["invalid_plant_penalty"] == pytest.approx(-0.003)
+    assert metrics["empty_dig_penalty"] == pytest.approx(-2 / 3000)
+    assert metrics["return"] == metrics["discounted_return"] == accumulated
+    assert metrics["return"] == pytest.approx(
+        metrics["terminal"]
+        + metrics["development"]
+        + metrics["invalid_plant_penalty"]
+        + metrics["empty_dig_penalty"]
+    )
+    torch.cuda.synchronize()

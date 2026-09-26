@@ -5,6 +5,34 @@ Dates and results belong to their recorded version. Current behavior lives in
 artifact locations and learning outcomes live in [validation](validation.md).
 The longer pre-consolidation notes remain in `git show b642c9c:docs/iteration.md`.
 
+## 0.25.0 — 2026-09-26
+
+- Request motivation: the user observed that earlier training often dug
+  immediately after planting, even though the planting Q value was higher but
+  masked. The previous controller removed unaffordable/cooling-down plant branches
+  before comparison, allowing digging to win that restricted comparison.
+  Historical viewer pages also truncated themselves when a row was selected,
+  making the recorded reason difficult to inspect.
+- Changes: all ten first-level Q values are now compared on every active state;
+  plant tile masks describe occupancy only and digging covers all tiles.
+  Rejected plant proposals remain in trajectories as automatic waits with a
+  configurable penalty, while empty digs receive their own small penalty. CPU
+  and CUDA use the same accounting. Journal paging keeps absolute offsets and
+  immutable collection-time Q vectors.
+- Verification: 544 maintained regressions passed, followed by 111 focused
+  policy/environment/reward/journal/viewer controls after final adjustments.
+  CPU/CUDA penalties, exact 128-game resume, old inference, viewer isolation,
+  paging and reduced-size rendering pass; lint, doctor, dependencies and
+  packaging pass. See validation for timings and artifact locations. No formal
+  learning run or comparison was launched.
+- Compatibility: the new identifiers are `event_sequential_q_v2`,
+  `sequential_q_unmasked_penalty_v1`, and `sequential_q_mc_v2`. Previous
+  0.24.0 checkpoints retain original inference and report reading but are rejected
+  for new training, initialization, or resume.
+- Remaining limitation: repeated invalid proposals can outweigh a victory reward;
+  the earlier outcome-separation bounds cover only the economic/outcome component.
+  This change does not establish that immediate digging or learning failure is fixed.
+
 ## 0.24.0 — 2026-09-26
 
 - Problems: coarse zombie displacement/contact geometry omitted source gait and

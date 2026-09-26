@@ -1,9 +1,11 @@
-# Research design — 0.24.0
+# Research design — 0.25.0
 
 The single supported method is a two-level, complete-return Q controller. A shared
 public-history Transformer first values wait, eight species and digging, then
 values tiles conditioned on the chosen non-wait branch. One complete command
-advances the game. Legal argmax is deterministic except for plant-only exploration.
+advances the game. The argmax is deterministic across all ten branches; plant-only
+exploration can alter species and tile after a plant branch wins. Invalid plant
+proposals are retained as actions and are penalized by the reward ledger.
 
 Collect 128 complete games with frozen weights; finalize gamma-one reward-to-go;
 fit selected branch and tile values with one optimizer; then synchronize and run
@@ -18,11 +20,13 @@ and tiles only after a planting branch wins; it cannot force planting when wait
 wins. Coin firing and actual choice changes are separate diagnostics. Evaluation
 is entirely greedy. No entropy or policy-likelihood objective remains.
 
-The observation, event memory, widths, net-value reward, saving lesson and pinned
-100 Hz clock remain unchanged. Game 1.6.0 corrects numerical gait, chilling and
+The observation, event memory, widths, net-value accounting, saving lesson and pinned
+100 Hz clock remain unchanged. Rejected-action penalties are added on top of the
+net-value objective. Game 1.6.0 corrects numerical gait, chilling and
 source-based contact/targeting/blast/vault geometry; this is a community-source
-reconstruction with documented limits, not original-executable equivalence. Complete trajectories stay in bounded
-CPU/disk storage with disposable raw-token caching and one-minibatch prefetch.
+reconstruction with documented limits, not original-executable equivalence.
+Complete trajectories stay in bounded CPU/disk storage with disposable raw-token
+caching and one-minibatch prefetch.
 See [architecture](architecture.md) for every input and recovery path.
 
 This adaptation uses Monte Carlo regression, not the bootstrapped/off-policy

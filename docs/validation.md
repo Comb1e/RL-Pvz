@@ -1,5 +1,41 @@
 # Validation and measured results
 
+## Ten-way Q selection and historical-Q repair 0.25.0 — 2026-09-26
+
+This release changes training compatibility to `event_sequential_q_v2`,
+`sequential_q_unmasked_penalty_v1`, and `sequential_q_mc_v2`. Every active
+environment scores all ten first-level outputs. Occupancy-only plant tile masks
+and all-tile digging leave affordability and cooldown rejection to the pinned
+simulator. CPU and CUDA add `-0.001` for rejected plants and
+`-0.0003333333333333333` for empty digs. Historical viewer pages preserve
+absolute offsets and selected collection-time Q vectors while new pages arrive.
+The full maintained research regression passed **544 tests in 889.32 seconds**.
+After final default-mask and presentation adjustments, the focused policy,
+environment, reward, journal and viewer suite passed **111 tests in 38.55 seconds**.
+These cover CPU/CUDA rejection and cutoff accounting, occupancy/full-board
+boundaries, all-species exploration, exact recorded Q vectors, spilled history,
+stale responses and selected rows across pages/switching. A 128-game one-second
+cutoff control restores policy, Adam, RNG and journals exactly after interruption,
+including rejected planting samples. Viewer capture on/off controls match actions,
+rewards, observations, RNG and optimizer tensors. Prior-protocol inference retains
+its original masking, while initialization and full resume are rejected.
+
+Synthetic grid/Focus renders were visually inspected at 1600×1050 and 640×480,
+including horizontal scrolling to the last Q column. They distinguish the current
+board timestamp from the selected historical decision and keep result/penalty
+text out of the Q columns. These images test presentation, not agent behavior.
+Ruff lint/format, dependency checks, local Markdown links, bundled-default parity,
+CUDA/rendering/replay/accounting doctor checks and wheel/source packaging pass.
+Logs and images are under `artifacts/regression-025.txt`,
+`artifacts/focused-final-025.txt`, `artifacts/doctor-final-025.json`,
+`artifacts/package-025/` and `artifacts/viewer-025/`.
+
+At 100 Hz, repeated rejected plants cost 0.1 reward per simulation second. Earlier
+positive-win/negative-loss separation does not cover total reward with these
+penalties; see the [derivation and limits](math/invalid-action-penalties.md).
+No formal training, learning comparison or claim of resolved immediate digging
+is made. The game pin, historical artifacts and prior benchmark results remain intact.
+
 ## Original-style mechanics and whole-game history 0.24.0 — 2026-09-26
 
 Game **1.6.0**, simulation **1.3.0**, snapshot/CUDA schema **3**, is pinned to

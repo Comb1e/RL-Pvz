@@ -4,7 +4,9 @@ from importlib.resources import files
 
 import torch
 from pvz_game.cuda.backend import kernel_source
+from pvz_game.cuda.schema import REASONS
 
+from pvz_rl.config import legacy_q_inference
 from pvz_rl.envs.actions import ActionSchema
 from pvz_rl.envs.encoding import PLANT_BEHAVIOR, ObservationEncoder
 from pvz_rl.envs.rewards import LEDGER_METRICS, REWARD_METRICS
@@ -49,6 +51,7 @@ class CudaFeatures:
             "BASIC_HP": batch.rules.zombies["basic"]["health"],
             "REWARD_SIZE": len(REWARD_FIELDS),
             "METRIC_SIZE": METRIC_SIZE,
+            "EMPTY_TILE_REASON": REASONS.index("empty_tile"),
         }
         params.update({f"Z_{k}": v for k, v in encoder.zombie_fields.items()})
         params.update({f"O_{k}": v for k, v in encoder.global_fields.items()})
@@ -59,8 +62,10 @@ class CudaFeatures:
             "mower_value",
             "progress_weight",
             "value_scale",
+            "invalid_plant_penalty",
+            "empty_dig_penalty",
         )
-        params.update({f"R_{k}": float(cfg["reward"][k]) for k in reward_keys})
+        params.update({f"R_{k}": float(cfg["reward"].get(k, 0)) for k in reward_keys})
         params.update({f"F_{k}": i for i, k in enumerate(REWARD_FIELDS)})
         params.update({f"T_{k}": i for k, i in zip(REWARD_METRICS, METRIC_INDICES)})
         params.update({f"T_{k}": i for k, i in LEDGER_INDICES.items()})
@@ -79,6 +84,7 @@ class CudaFeatures:
         )
         self.module = cp.RawModule(code=source, options=("--std=c++11", "--fmad=false"))
         self.encode_kernel = self.module.get_function("encode_state")
+        self.policy_mask_kernel = self.module.get_function("policy_masks")
         self.reward_kernel = self.module.get_function("reward_metrics")
         self.observations = cp.zeros((batch.n, encoder.size), cp.float32)
         self.assets = cp.zeros(batch.n, cp.float64)
@@ -105,7 +111,14 @@ class CudaFeatures:
                 b.n,
             ),
         )
-        b.action_masks_device()
+        if legacy_q_inference(self.cfg):
+            b.action_masks_device()
+        else:
+            self.policy_mask_kernel(
+                ((b.n * ActionSchema.size + 255) // 256,),
+                (256,),
+                (b.header, b.plants, b.masks, b.n),
+            )
         return self.obs_tensor
 
     def step(self, actions, *, ticks=1, per_tick=True):

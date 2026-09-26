@@ -3,7 +3,10 @@
 The implemented complete-game targets, sequential Q values and balanced loss are
 specified in [sequential Q control](sequential-q-control.md). Gamma is one;
 cutoff episodes receive defeat reward once and never bootstrap. Maximum net value
-and drawdown remain diagnostics. This release does not change the accounting below.
+and drawdown remain diagnostics. The economic accounting below is unchanged.
+Total reward additionally includes the explicit
+[rejected-action penalties](invalid-action-penalties.md). Earlier
+outcome-separation bounds do not apply to totals with repeated penalties.
 
 Assets are available sun plus each living plant's purchase cost times its
 remaining-health fraction. Purchase is neutral. Effective damage includes

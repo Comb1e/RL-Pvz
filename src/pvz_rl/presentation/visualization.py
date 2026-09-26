@@ -271,6 +271,8 @@ def build_run_report(run, cfg=None):
         ("rolling_nonlethal_health_damage", "Nonlethal damage / training episode"),
         ("rolling_empty_mower_activations", "Empty mower activations / training episode"),
         ("rolling_mower_activation_penalty", "Mower activation cost / game"),
+        ("rolling_invalid_plant_penalty", "Rejected plant penalty / game"),
+        ("rolling_empty_dig_penalty", "Empty dig penalty / game"),
         ("rolling_wall_nut_damage", "Wall-nut damage / training episode"),
         ("rolling_empty_explosions", "Empty explosions / training episode"),
         ("simulation_ticks_per_second", "Simulation ticks / training second"),
@@ -327,13 +329,16 @@ def build_run_report(run, cfg=None):
         ("plant_value_loss", "Lost plant value (sun equivalents)"),
         ("combat_value", "Damage value (sun equivalents)"),
         ("mower_expenditure", "Mower expenditure (sun equivalents)"),
+        ("invalid_plant_penalty", "Rejected plant penalty"),
+        ("empty_dig_penalty", "Empty dig penalty"),
         ("development", "Net development reward"),
         ("terminal", "Outcome reward"),
         ("cumulative_net_value", "Cumulative net value per game"),
         ("maximum_net_value", "Historical maximum net value per game"),
         ("value_drawdown", "Drawdown from maximum (diagnostic only)"),
     ]
-    fig, axes = plt.subplots(6, 2, figsize=(12, 18))
+    panel_rows = (len(accounting_panels) + 1) // 2
+    fig, axes = plt.subplots(panel_rows, 2, figsize=(12, 3 * panel_rows))
     for ax, (key, title) in zip(axes.flat, accounting_panels):
         plotted = False
         for label, series in segments:
@@ -355,7 +360,8 @@ def build_run_report(run, cfg=None):
             ax.legend(fontsize=7)
         else:
             _empty(ax, "Accounting unavailable in this run")
-    axes.flat[-1].set_visible(False)
+    for ax in list(axes.flat)[len(accounting_panels) :]:
+        ax.set_visible(False)
     _save(fig, output, "accounting-curves")
     images.append(("Net realized value accounting", "accounting-curves.png"))
 

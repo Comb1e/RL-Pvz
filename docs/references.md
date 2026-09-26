@@ -523,6 +523,30 @@ The inspected RUDDER abstract (arXiv:1806.07857) motivates examining delayed cre
 its redistribution algorithm is not adopted and no performance claim is borrowed.
 
 
+## 0.25.0 ten-way Q selection and viewer paging — 2026-09-26
+
+- Pinned game 1.6.0, commit `fdab989fe20ad3415c2b8975fccdeec834d0196e`:
+  inspected installed `pvz_game.engine.Game.validate_action`, `Game.step`,
+  `cuda/schema.py` rejection reasons, and `cuda/simulation.cu` action/per-tick
+  handling, plus the local `ActionPhaseGame` adapter. Rejected plants do not
+  execute a purchase; rejection advances a normal simulation tick. Ongoing
+  combat/production can therefore change the board during that tick. The 406
+  transport IDs cannot encode an out-of-board coordinate; direct CPU reward
+  controls cover such public-API rejection results separately.
+- Installed Stable-Baselines3 2.7.1, `dqn/policies.py`, `QNetwork._predict`:
+  inspected the complete method: compute Q outputs then `argmax(dim=1)`.
+  This supports raw value comparison, not confidence percentages. No DQN replay,
+  bootstrap, target-network method or performance claim is adopted.
+- Reused Huang and Ontañón's masking discussion and counterexample already
+  inspected above. Its policy-gradient results do not establish the right
+  penalties for this Monte Carlo Q controller. The 30/10 sun-equivalent defaults
+  and full-board fallback are explicit local design choices. The user-reported
+  higher-but-masked planting scores motivated removing branch masking; bounded
+  controls establish the mechanism, not a learning improvement.
+- Reused the inspected pygame event/scroll guidance in the 0.24.0 entry.
+  Immutable records and separately tracked page/selection state fix the local
+  history bug; no external paper claims are needed for these state invariants.
+
 ## 0.24.0 mechanics and full-game history — 2026-09-26
 
 - [Patoke PC/GOTY reconstruction](https://github.com/Patoke/re-plants-vs-zombies/tree/c4692036c5e11d227c8fb7c593b734dac96da028): inspected full relevant `Zombie.cpp` method bodies for speed selection, walk restart, gait rate/chilling, pole jumping, attack/body rectangles and damage eligibility; `Plant.cpp` target selection, production, body/attack rectangles and explosions; `Board.cpp` circle/rectangle intersection; `Projectile.cpp` pea rectangle; `LawnMower.cpp` contact/slowdown; `Reanimator.cpp` phase update, frame endpoint and ground velocity. Exact functions and audit limits are recorded in the [merged game references](https://github.com/Comb1e/pvz-cuda-work/blob/fdab989fe20ad3415c2b8975fccdeec834d0196e/docs/references.md). Reconstruction evidence is not proof of original-binary equivalence.
