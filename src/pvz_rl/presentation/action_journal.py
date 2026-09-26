@@ -18,6 +18,7 @@ RECORD = np.dtype(
         ("greedy_action", "<u2"),
         ("accepted", "?"),
         ("reason", "u1"),
+        ("penalty", "<f8"),
         ("coins", "?", 2),
         ("legal", "?", 10),
         ("q", "<f4", 10),
@@ -32,15 +33,17 @@ def public_record(row):
 class ActionJournal:
     """Bounded resident blocks; disk spill retains every non-wait decision.
 
-    One latest record per environment also retains waiting decisions. Reset only
-    replaces that environment's current-game journal. Checkpoint blocks are
+    One latest record per environment also retains waiting decisions. Every
+    retained row contains the immutable ten-way Q vector and selection metadata.
+    Reset only replaces that environment's current-game journal. Checkpoint blocks are
     streamed, so neither long games nor saving require a whole-game RAM copy.
     """
 
-    def __init__(self, count, *, ram_bytes=16 * 1024**2, block_rows=256):
+    def __init__(self, count, *, ram_bytes=16 * 1024**2, block_rows=256, reward_settings=None):
         self.workspace = self.root = None
         self.count, self.ram_bytes, self.block_rows = count, int(ram_bytes), block_rows
         self.disabled = False
+        self.reward_settings = reward_settings or {}
         self.ram_used = 0
         self.episodes = [-1] * count
         self.sizes = [0] * count
@@ -108,9 +111,18 @@ class ActionJournal:
         records["coins"][:, 1] = rows["tile_coin"]
         records["q"] = scores
         records["accepted"], records["reason"] = results[:, 0], results[:, 1]
-        masks = np.unpackbits(rows["mask"], axis=1, count=A.size, bitorder="little")
-        records["legal"][:, 0] = masks[:, 0]
-        records["legal"][:, 1:] = masks[:, 1:].reshape(self.count, 9, A.tiles).any(2)
+        records["legal"][:] = rows["active"][:, None]
+        rejected = ~records["accepted"]
+        records["penalty"][
+            rejected & (rows["action"] > 0) & (rows["action"] < A.dig_start)
+        ] = -self.reward_settings.get("invalid_plant_penalty", 0)
+        from pvz_game.cuda.schema import REASONS
+
+        records["penalty"][
+            rejected
+            & (rows["action"] >= A.dig_start)
+            & (records["reason"] == REASONS.index("empty_tile"))
+        ] = -self.reward_settings.get("empty_dig_penalty", 0)
         for env in np.flatnonzero(rows["active"]):
             if self.episodes[env] != episodes[env]:
                 self.reset(env, episodes[env])

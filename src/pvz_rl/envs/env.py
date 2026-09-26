@@ -11,7 +11,13 @@ import numpy as np
 from pvz_game import Dig, Game, LevelSpec, Place, Rules, Status, Wait, WaveSpec
 from pvz_game.replay import Recorder
 
-from pvz_rl.config import lesson_settings, load_config, runtime_settings, validate_config
+from pvz_rl.config import (
+    legacy_q_inference,
+    lesson_settings,
+    load_config,
+    runtime_settings,
+    validate_config,
+)
 from pvz_rl.envs.action_timing import ActionPhaseGame, per_tick_actions
 from pvz_rl.envs.actions import ActionCodec
 from pvz_rl.envs.encoding import ObservationEncoder
@@ -51,7 +57,8 @@ class PvZEnv(gym.Env):
     ):
         super().__init__()
         self.cfg = copy.deepcopy(cfg or load_config())
-        validate_config(self.cfg)
+        validate_config(self.cfg, inference=not training)
+        self.legacy_selection = legacy_q_inference(self.cfg)
         self.condition = condition
         self.options = (
             {"masked": True, "shaped": True, "curriculum": True, "hybrid": True}
@@ -196,32 +203,52 @@ class PvZEnv(gym.Env):
             return np.zeros(self.action_space.n, dtype=np.bool_)
         if self.options["hybrid"]:
             return np.array([a is not None for a in self.candidates()], dtype=np.bool_)
-        legal = self.public_board().legal
-        if self._direct_mask is None or not self.cache_legal_actions:
-            mask = np.zeros(self.codec.size, dtype=np.bool_)
-            for action in legal:
-                mask[self.codec.encode(action)] = True
-            if self.episode_family == "diagnostic":
-                # An explicitly restricted learning diagnostic, never a formal game condition.
-                allowed = np.array(
-                    [
-                        isinstance(a, Wait) or isinstance(a, Place) and a.plant_type == "peashooter"
-                        for a in self.codec.actions
-                    ]
+        if self.legacy_selection:
+            mask = self.engine_action_masks()
+            if self.episode_family in (*LESSONS, "diagnostic"):
+                allowed = (
+                    ("peashooter",)
+                    if self.episode_family == "diagnostic"
+                    else lesson_settings(self.cfg)[self.episode_family]["allowed_plants"]
                 )
-                mask &= allowed
-            if self.episode_family in LESSONS:
-                allowed_plants = lesson_settings(self.cfg)[self.episode_family]["allowed_plants"]
                 mask &= np.array(
                     [
-                        isinstance(a, (Wait, Dig))
+                        isinstance(a, Wait)
+                        or isinstance(a, Dig)
+                        and self.episode_family != "diagnostic"
                         or isinstance(a, Place)
-                        and a.plant_type in allowed_plants
+                        and a.plant_type in allowed
                         for a in self.codec.actions
                     ]
                 )
+            return mask
+        if self._direct_mask is None or not self.cache_legal_actions:
+            # Policy masks describe tile occupancy only. The ten-way Q head
+            # still compares every species when sun is low or cards are cooling
+            # down; the simulator reports those proposals as rejected waits.
+            mask = np.zeros(self.codec.size, dtype=np.bool_)
+            mask[0] = True
+            occupied = {(plant.row, plant.col) for plant in self.public.plants}
+            for plant_index in range(len(self.codec.plants)):
+                offset = 1 + plant_index * (self.codec.rows * self.codec.cols)
+                for row in range(self.codec.rows):
+                    for col in range(self.codec.cols):
+                        mask[offset + row * self.codec.cols + col] = (row, col) not in occupied
+            dig_start = 1 + len(self.codec.plants) * self.codec.rows * self.codec.cols
+            mask[dig_start:] = True
             self._direct_mask = mask
         return self._direct_mask.copy()
+
+    def engine_action_masks(self):
+        """Return authoritative engine legality for non-learning baselines."""
+        if self.state != EpisodeState.RUNNING:
+            return np.zeros(self.action_space.n, dtype=np.bool_)
+        if self.options["hybrid"]:
+            return np.array([a is not None for a in self.candidates()], dtype=np.bool_)
+        mask = np.zeros(self.codec.size, dtype=np.bool_)
+        for action in self.public_board().legal:
+            mask[self.codec.encode(action)] = True
+        return mask
 
     def step(self, action):
         if self.state != EpisodeState.RUNNING:
@@ -235,13 +262,12 @@ class PvZEnv(gym.Env):
             concrete = Wait() if concrete is None else concrete
         else:
             concrete = self.codec.decode(action)
-        restricted = (
-            self.episode_family in (*LESSONS, "diagnostic") and not self.action_masks()[int(action)]
-        )
-        if restricted:
-            # Task restrictions apply even to callers that ignore the mask.
-            concrete = Wait()
-            rejected_strategy = True
+        if (
+            self.legacy_selection
+            and self.episode_family in (*LESSONS, "diagnostic")
+            and not self.action_masks()[int(action)]
+        ):
+            concrete, rejected_strategy = Wait(), True
         before = self.public
         attackers = ("peashooter", "snow_pea", "repeater")
         self.metrics["affordable_attacker_opportunities"] += int(
@@ -263,6 +289,10 @@ class PvZEnv(gym.Env):
         result = (self.recorder or self.game).step(concrete, ticks=ticks)
         self.public = result.observation
         self.maximum_sun = max(self.maximum_sun, before.sun, self.public.sun)
+        # The policy mask depends only on occupancy, so invalidate its cached
+        # tile geometry after every simulator transition.  (The engine legal
+        # cache may still be retained for hybrid diagnostics.)
+        self._direct_mask = None
         if not self.cache_legal_actions:
             self._legal = None
         self._candidates = None
@@ -281,6 +311,8 @@ class PvZEnv(gym.Env):
             self.cfg,
             events=result.events,
             rules=self.rules,
+            action=concrete,
+            action_result=result.action_result,
         )
         if truncated:
             parts["terminal"] = -self.cfg["reward"]["loss_penalty"]
@@ -344,6 +376,7 @@ class PvZEnv(gym.Env):
             "status": self.state.value,
             "reward_parts": parts,
             "accepted": result.action_result.accepted and not rejected_strategy,
+            "rejection_reason": result.action_result.reason,
             "ticks_advanced": result.ticks_advanced,
         }
         if terminated or truncated:

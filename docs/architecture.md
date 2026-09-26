@@ -1,18 +1,19 @@
-# Training architecture — 0.24.0
+# Training architecture — 0.25.0
 
 One CUDA Q network assembles each command in two levels: wait, one of eight
 species, or dig; then a conditional tile for non-wait branches. The same model
 plays every curriculum difficulty. Game 1.6.0 runs at 100 Hz without a wall-time
-frame limit. Rewards and the 286-value observation remain unchanged; corrected movement and
+frame limit. The 286-value observation and net-value accounting remain unchanged;
+explicit rejected-action penalties are added to transition rewards. Movement and
 collision mechanics come from the strictly pinned game 1.6.0.
 
 ```mermaid
 flowchart LR
-    Game[128 CUDA games] --> Public[286 public values and separate legal masks]
+    Game[128 CUDA games] --> Public[286 public values and separate tile masks]
     Public --> Memory[Public event memory]
     Memory --> Encoder[One spatial and temporal encoder]
     Encoder --> Branch[10 branch Q values]
-    Branch --> Select[Maximum legal branch]
+    Branch --> Select[Maximum of all ten branch values]
     Encoder --> Tile[45 conditional tile Q values]
     Select -->|non-wait branch identifier| Tile
     Select -->|wait| Command[One complete command]
@@ -27,9 +28,20 @@ flowchart LR
 
 The game owns mechanics, gameplay RNG, legality, public views and snapshots.
 Environment adapters own cutoff failures and accounting rewards. Policy owns
-one shared encoder, deterministic tokenization and masked sequential selection.
+one shared encoder, deterministic tokenization and sequential selection with
+occupancy-only tile masks.
 Learning owns complete-game storage, returns, optimization and checkpoints.
 Evaluation owns held-out seeds, mastery gates, recordings and checkpoint selection.
+
+The first-level comparison always includes wait, all eight plant species, and
+dig. Plant tile masks contain only empty tiles and dig masks contain all tiles;
+sun and cooldown checks are deliberately left to the engine. Research lesson
+roster restrictions are removed for the current controller. A rejected plant
+advances one per-tick wait and receives `invalid_plant_penalty`; an empty dig
+receives `empty_dig_penalty`. See the
+[penalty derivation and limits](math/invalid-action-penalties.md). The journal
+stores the exact ten Q values from the pre-action forward pass, so historical
+rows are never recomputed with newer weights.
 
 ## Exact model inputs
 
@@ -104,7 +116,7 @@ These additional inputs are separate from the observation vector:
 
 | Input | Role |
 |---|---|
-| 406 legal-action booleans | Constrain selection; not concatenated into the observation |
+| 406 action-geometry booleans | Occupancy-only plant tiles and all dig tiles; not concatenated into the observation |
 | Previous executed action | Public history; rejected proposals use the wait marker |
 | Episode-reset marker | Clear history at game boundaries |
 | Public simulation tick | Relative temporal positions |
@@ -127,7 +139,7 @@ The bank retains 8 recent tokens, 32 event tokens and 8 older summaries. Current
 tokens always include movement distances. Continuous movement within a region
 and elapsed time alone do not admit an event. Health, type, armor, region,
 active-pole presence, headless flags, plant categories, sun/wave/mower flags,
-legal masks and accepted actions do. Old quiet ticks are summarized by latest
+tile masks and accepted actions do. Old quiet ticks are summarized by latest
 public state, earliest tick and represented count; old events eventually enter
 that same bounded summary bank. No future token is attended to.
 
@@ -146,7 +158,9 @@ It produces one conditional Q value per tile plus a trainable branch offset.
 Ordinary selection evaluates the executed non-wait branch. If species exploration
 changes that branch, one additional map records the unmodified greedy command.
 
-Masking removes a branch when it has no legal tile. Greedy ties prefer wait,
+All ten first-level branches remain in the comparison. Plant tiles use an
+occupancy-only mask and dig tiles are all available; a full board selects tile
+zero and lets the simulator reject the plant. Greedy ties prefer wait,
 then species order, then dig; tile ties use row-major order. First-level wait
 and species values initialize to zero and digging to the configured defeat
 reward (-2). Conditional species values initialize to zero and digging to -2.
@@ -155,7 +169,7 @@ Intermediate branch selection has no simulator step, reward or history entry.
 
 After a planting branch wins, species and tile have independent epsilon-greedy
 exploration coins. Each coin probability is `1 - sqrt(1 - budget)`; random choices
-are uniform over legal alternatives, including the greedy alternative. Wait
+are uniform over all eight species and empty tiles, including the greedy choice. Wait
 and dig winners stay greedy. Evaluation disables exploration completely. Values
 are estimated returns, not confidence probabilities; the two heads estimate the
 same remaining reward and are never added. First-level values describe continuation
@@ -184,7 +198,8 @@ including zero-duration actions. Natural wins/losses terminate normally; at 1,20
 seconds a separate cutoff failure applies defeat once and preserves physical
 assets. Cutoffs do not bootstrap. External interruption is not an episode loss.
 
-Every executed command fits its selected first-level value. Non-wait commands
+Every proposed command, including rejected proposals, fits its selected first-level
+value. Non-wait proposals
 also fit their selected tile value to the same return, averaging the two squared
 errors. Wait uses its single squared error. Whole-cohort wait/plant/dig counts
 give equal aggregate weight to each populated group, including the final partial
@@ -222,13 +237,14 @@ collection. Pre-action readbacks complete before simulator-mutated data are read
 
 Atomic ZIP checkpoints contain the single network and optimizer, all RNGs,
 curriculum/exploration progress, unfinished simulator state, public memory,
-streamed trajectory and diagnostic-journal blocks and optimization epoch/permutation/cursor. Transfers
-are drained before saving; cache contents are rebuilt after resume. A plain JSON
-protocol manifest is checked before class deserialization. Only
-`event_sequential_q_v1`, `sequential_q_mc_v1` and `sequential_plant_epsilon_v1`
-are accepted. Game 1.6.0 requires fresh experiments through the strict engine pin. The Q network
-and optimizer protocol identifiers are unchanged. New-protocol stage
-transfer uses compatible weights with fresh optimizer/counters; full resume
+streamed trajectory and diagnostic-journal blocks and optimization
+epoch/permutation/cursor. Transfers are drained before saving; cache contents are
+rebuilt after resume. A plain JSON protocol manifest is checked before class
+deserialization. Training requires `event_sequential_q_v2`, `sequential_q_mc_v2` and
+`sequential_q_unmasked_penalty_v1`. The pinned 0.24.0 network remains available
+for inference with its original legality masks and zero rejection charges; it
+cannot initialize or resume new training. The engine pin remains game 1.6.0.
+New-protocol stage transfer uses compatible weights with fresh optimizer/counters; full resume
 restores the same experiment exactly. Failed saves preserve the previous archive.
 Every existing run, recording and report is preserved, and historical reports
 remain regenerable without loading a retired model.
@@ -240,8 +256,9 @@ ties and exploration overrides at the recorded decision tick. Focus enlarges one
 and its scrollable Q table; switching retains the old board until the destination
 board and history page arrive together. All environments retain non-wait actions
 with their actual ten pre-action scores in 16 MiB of RAM plus disk overflow. The
-journal is saved in checkpoints and never becomes a policy input. Unavailable choices
-are labelled; waiting boards retain the last decision. Replacement selects only
+journal is saved in checkpoints and never becomes a policy input. Rejected plants
+are labelled as automatic waits and empty digs show their penalty; waiting boards
+retain the last decision. Replacement selects only
 unfinished undisplayed games. Terminal logs retain reward, net value, discounted
 return and hardware measurements, alongside Q fitting and coverage metrics.
 Reporting failure does not invalidate a checkpoint. Evidence and source limitations

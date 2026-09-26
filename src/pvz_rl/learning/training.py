@@ -426,6 +426,7 @@ class ResearchCallback(BaseCallback):
             f"Reward      {value(row['rolling_return'], '+.5f')} | discounted return {value(row['rolling_discounted_return'], '+.5f')} | outcome {value(row['rolling_terminal'], '+.5f')} | development {value(row['rolling_development'], '+.5f')}\n"
             f"Net value   {value(row['rolling_cumulative_net_value'], '+.2f')} sun-equiv/game | peak {value(row['rolling_maximum_net_value'])} | drawdown {value(row['rolling_value_drawdown'])}\n"
             f"Economy     produced sun {value(row['rolling_produced_sun'])} | effective damage {value(row['rolling_effective_damage'])} HP | plant loss {value(row['rolling_plant_value_loss'])} | mower cost {value(row['rolling_mower_expenditure'])}\n"
+            f"Penalties   rejected plant {value(row['rolling_invalid_plant_penalty'], '+.5f')} | empty dig {value(row['rolling_empty_dig_penalty'], '+.5f')}\n"
             f"Recent play plants/game {value(row['rolling_plant_purchases'])} | attackers/game {value(row['rolling_attacker_purchases'])} | early digs/plant {value(row['early_digs_per_planting'], '.2%')} | game duration {value(row['rolling_seconds'], suffix='s')}\n"
             f"Exploration budget {row['exploration_rate']:.3%} | per head {row['per_head_epsilon']:.3%} | fired species/tile {row['species_exploration_coins']}/{row['tile_exploration_coins']} | changed commands {row['exploratory_changes']}\n"
             f"Cohort      {value(cohort.get('transitions_per_second'), '.0f')} transitions/s | collect {value(row['last_collection_seconds'], suffix='s')} | fit {value(row['last_optimization_seconds'], suffix='s')}\n"
@@ -966,15 +967,16 @@ def load_policy(checkpoint, device="cpu"):
     run = checkpoint.parent
     data = json.loads((run / "metadata.json").read_text("utf-8"))
     cfg, condition = data["config"], data["condition"]
-    validate_config(cfg)
+    validate_config(cfg, inference=True)
     verify_engine(cfg)
-    require_supported_policy(cfg, condition)
+    require_supported_policy(cfg, condition, inference=True)
     from pvz_rl.learning.cuda_q import CudaSequentialQ
 
     torch.set_num_threads(cfg["training"]["torch_threads"])
     model = CudaSequentialQ.load(
         checkpoint,
         device=device,
+        inference_only=True,
     )
     configure_exploration(model, cfg)
     return model, data

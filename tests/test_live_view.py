@@ -277,7 +277,7 @@ def test_complete_training_cohorts_identical_with_viewer(smoke_cfg, tmp_path):
                 synchronize(callback)
 
             model._synchronize = capture
-            model.learn(201)  # Waiting cohort, then planting with actor updates.
+            model.learn(201)  # Waiting cohort, then planting with Q updates.
             assert model.policy.optimizer.state
             del model._synchronize
             buffer = np.concatenate(captured)
@@ -475,14 +475,14 @@ def test_view_decisions_match_q_values_without_rng_changes(smoke_cfg):
 @pytest.mark.parametrize(
     "selected,values,reason",
     [
-        (1, [-0.4, 0.1, -0.9], "highest legal Q; lead +0.5 over wait"),
-        (0, [-0.2, -0.8, -1.0], "highest legal Q; lead +0.6 over sunflower"),
-        (2, [0, None, 1], "highest legal Q; lead +1 over wait"),
-        (1, [0, 1e-8, None], "highest legal Q; lead +1e-08 over wait"),
+        (1, [-0.4, 0.1, -0.9], "highest Q; lead +0.5 over wait"),
+        (0, [-0.2, -0.8, -1.0], "highest Q; lead +0.6 over sunflower"),
+        (2, [0, None, 1], "highest Q; lead +1 over wait"),
+        (1, [0, 1e-8, None], "highest Q; lead +1e-08 over wait"),
         (0, [0, 0, None], "tied best; priority wait > species order > dig"),
         (1, [None, 0, 0], "tied best; priority wait > species order > dig"),
-        (0, [-2, None, None], "only legal branch"),
-        (2, [None, None, -2], "only legal branch"),
+        (0, [-2, None, None], "only recorded branch"),
+        (2, [None, None, -2], "only recorded branch"),
         (0, [None, 1, 2], "Q comparison unavailable"),
         (0, [0, float("nan"), None], "Q comparison unavailable"),
         (0, [float("inf"), 1, None], "Q comparison unavailable"),
@@ -539,3 +539,48 @@ def test_decision_panel_readable_focus_and_small_window_controls():
         assert (0, ("focus", 3)) in [(panel, target) for _, panel, target in buttons]
         assert labels.count("Greedy wait: tied best; priority wait > species order > dig") == 4
         assert sum("Dig unavailable" in label for label in labels) == 4
+
+
+def test_switch_retains_browsed_q_until_destination_and_table_scroll_bounds():
+    import pygame
+    from pvz_game import Game
+
+    from pvz_rl.presentation.live_layout import TABLE_WIDTHS, Browse, horizontal_limit
+
+    pygame.font.init()
+    record = dict(
+        sequence=17,
+        tick=8,
+        action=2,
+        greedy_action=2,
+        q=list(range(10)),
+        legal=[True] * 10,
+        coins=[False, False],
+        accepted=False,
+        reason=2,
+        penalty=-0.001,
+    )
+    frame = dict(
+        observation=Game().reset("easy", 101),
+        task="saving",
+        episode=1,
+        sequence=1,
+        outcome="running",
+        decision=record,
+        history=dict(start=0, total=1, rows=[record]),
+    )
+    packet = dict(env=0, generation=0, state="watching", frame=frame)
+    surface = pygame.Surface((640, 480))
+    state = Browse(page=frame["history"])
+    state.choose(record)
+    renderers = {"focus": 0, "browse": {(0, 0, 1): state}}
+    draw_view(surface, [packet], Activity.COLLECTING, renderers=renderers, boards={})
+    packet.update(env=7, generation=1, state="selecting")
+    draw_view(surface, [packet], Activity.COLLECTING, renderers=renderers, boards={})
+    assert renderers["browse"][(0, 0, 1)].selected == record
+    packet.update(state="watching", frame={**frame, "episode": 2, "sequence": 2})
+    draw_view(surface, [packet], Activity.COLLECTING, renderers=renderers, boards={})
+    assert (0, 0, 1) not in renderers["browse"]
+    assert renderers["browse"][(0, 1, 2)].follow
+    assert horizontal_limit(600) == sum(TABLE_WIDTHS) - 600
+    assert horizontal_limit(10000) == 0

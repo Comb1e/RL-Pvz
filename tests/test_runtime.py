@@ -91,10 +91,10 @@ def test_legality_cache_requeries_only_after_relevant_public_change(cfg, monkeyp
 
     monkeypatch.setattr(env.game, "legal_actions", query)
     expected = [env.game.validate_action(a).accepted for a in env.codec.actions]
-    np.testing.assert_array_equal(env.action_masks(), expected)
+    np.testing.assert_array_equal(env.engine_action_masks(), expected)
     for _ in range(5):
         env.step(0)
-        np.testing.assert_array_equal(env.action_masks(), expected)
+        np.testing.assert_array_equal(env.engine_action_masks(), expected)
     assert calls == [0]  # Time passes without changing legality.
     env.game.step(ticks=3501)
     env.public = env.game.observe()
@@ -102,12 +102,12 @@ def test_legality_cache_requeries_only_after_relevant_public_change(cfg, monkeyp
     env.step(env.codec.encode(Place("cherry_bomb", 2, 0)))
     for _ in range(14):
         expected = [env.game.validate_action(a).accepted for a in env.codec.actions]
-        np.testing.assert_array_equal(env.action_masks(), expected)
+        np.testing.assert_array_equal(env.engine_action_masks(), expected)
         env.step(0)
     assert len(calls) >= 3
     env.reset(seed=43)
     np.testing.assert_array_equal(
-        env.action_masks(), [env.game.validate_action(a).accepted for a in env.codec.actions]
+        env.engine_action_masks(), [env.game.validate_action(a).accepted for a in env.codec.actions]
     )
     assert calls[-1] == 0
 

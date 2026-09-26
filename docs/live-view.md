@@ -29,8 +29,9 @@ decision. Pending replacement pages cannot be mixed with the retained old board.
 The table retains planting and digging for the entire current game, even while
 that environment is offscreen or the window is closed. Rows show decision number,
 simulation time, action name, acceptance/rejection and all ten **raw estimated
-returns**. `*` marks an unavailable branch; its numerical output was not eligible
-for selection. Wait rows and tile information are omitted. Decision numbers still
+returns**. All ten branches participate in selection; affordability and cooldown do not
+hide their scores. Rejected plants are labelled automatic waits with their reason; empty
+digs show `empty_tile` and the configured penalty. Wait rows and tile information are omitted. Decision numbers still
 advance during waiting, and multiple instantaneous commands may share a timestamp.
 
 Use the mouse wheel to browse history and Shift+wheel to scroll columns. Click a
@@ -50,3 +51,9 @@ they do not alter actions, rewards or model inputs.
 Output-only settings are `visualization.live_enabled`, `live_fps`,
 `live_window_size` and `live_history_ram_mib`. Zero history RAM uses disk storage.
 `train --live-view` and `--no-live-view` override only window visibility.
+
+Selecting a row preserves the page and its absolute offsets. Scrolling may
+replace the visible page but keeps the selected record and its scores until
+Follow latest or a destination board arrives. Responses must match panel,
+environment, episode, generation and request ID. Horizontal bounds derive from
+the complete table width, including all ten Q columns.

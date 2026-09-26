@@ -52,17 +52,19 @@ def test_legality_exact_cost_cooldown_and_dig(cfg, sun, can_plant):
         options={"scenario": LevelSpec("money", (Spawn(1000, "basic", 0),), initial_sun=sun)},
     )
     flower = env.codec.encode(Place("sunflower", 0, 0))
-    assert bool(env.action_masks()[flower]) is can_plant
+    assert env.action_masks()[flower]
+    assert env.game.validate_action(Place("sunflower", 0, 0)).accepted is can_plant
     _, _, _, _, info = env.step(flower)
     assert info["accepted"] is can_plant
     assert env.public.tick == 10
     assert env.public.sun == (0 if can_plant else 49)
     if can_plant:
-        assert not env.action_masks()[env.codec.encode(Place("sunflower", 0, 1))]
+        assert env.action_masks()[env.codec.encode(Place("sunflower", 0, 1))]
         assert env.action_masks()[env.codec.encode(Dig(0, 0))]
         env.step(env.codec.encode(Dig(0, 0)))
         assert env.public.sun == 0
-        assert not env.action_masks()[env.codec.encode(Dig(0, 0))]
+        assert env.action_masks()[env.codec.encode(Dig(0, 0))]
+        assert not env.game.validate_action(Dig(0, 0)).accepted
 
 
 def test_mask_matches_every_engine_action_and_cooldown_boundary(cfg):
@@ -74,13 +76,13 @@ def test_mask_matches_every_engine_action_and_cooldown_boundary(cfg):
     env.step(env.codec.encode(Place("sunflower", 0, 0)))
     for _ in range(74):
         expected = [env.game.validate_action(action).accepted for action in env.codec.actions]
-        np.testing.assert_array_equal(env.action_masks(), expected)
-        assert not env.action_masks()[env.codec.encode(Place("sunflower", 1, 1))]
+        np.testing.assert_array_equal(env.engine_action_masks(), expected)
+        assert not env.engine_action_masks()[env.codec.encode(Place("sunflower", 1, 1))]
         env.step(0)
     assert env.public.tick == 750
-    assert not env.action_masks()[env.codec.encode(Place("sunflower", 1, 1))]
+    assert not env.engine_action_masks()[env.codec.encode(Place("sunflower", 1, 1))]
     env.step(0)
-    assert env.action_masks()[env.codec.encode(Place("sunflower", 1, 1))]
+    assert env.engine_action_masks()[env.codec.encode(Place("sunflower", 1, 1))]
 
 
 def test_single_action_not_repeated_in_tick_batch(cfg):
@@ -203,3 +205,52 @@ def test_training_reset_stays_inside_training_split(cfg):
     env.set_progress(1234)
     env.step(0)
     assert env.progress == 1234 + cfg["training"]["n_envs"]
+
+
+def test_all_species_geometry_is_independent_of_sun_cooldown_and_lesson(per_tick_cfg):
+    env = PvZEnv(per_tick_cfg, family="saving")
+    env.reset(
+        seed=101,
+        options={"scenario": LevelSpec("zero-sun", (Spawn(1000, "basic", 0),), initial_sun=0)},
+    )
+    assert env.action_masks().all()
+    before = env.public
+    for kind in env.codec.plants:
+        _, reward, _, _, info = env.step(env.codec.encode(Place(kind, 1, 2)))
+        assert reward == pytest.approx(-0.001)
+        assert info["rejection_reason"] in ("insufficient_sun", "card_recharging")
+        assert info["ticks_advanced"] == 1 and not info["accepted"]
+        assert env.public.plants == before.plants and env.public.sun == 0
+    for _ in range(3):
+        _, reward, _, _, info = env.step(env.codec.encode(Dig(4, 8)))
+        assert reward == pytest.approx(-1 / 3000)
+        assert info["rejection_reason"] == "empty_tile" and info["ticks_advanced"] == 1
+    metrics = env.episode_metrics()
+    assert metrics["net_value"] == metrics["development"] == 0
+    assert metrics["return"] == pytest.approx(-0.009)
+    assert metrics["discounted_return"] == metrics["return"]
+    assert metrics["invalid_plant_penalty"] == pytest.approx(-0.008)
+    assert metrics["empty_dig_penalty"] == pytest.approx(-0.001)
+
+
+def test_full_board_all_digs_and_no_plant_tile(per_tick_cfg):
+    from pvz_game import InitialPlant
+
+    env = PvZEnv(per_tick_cfg)
+    env.reset(
+        seed=101,
+        options={
+            "scenario": LevelSpec(
+                "full",
+                (Spawn(1000, "basic", 0),),
+                plants=tuple(InitialPlant("wall_nut", r, c) for r in range(5) for c in range(9)),
+            )
+        },
+    )
+    mask = env.action_masks()
+    assert mask[0] and not mask[1:361].any() and mask[361:].all()
+    _, reward, _, _, info = env.step(1)
+    assert reward == pytest.approx(-0.001) and info["rejection_reason"] == "occupied_tile"
+    assert len(env.public.plants) == 45 and env.public.tick == 1
+    env.step(361)
+    assert env.action_masks()[1:361:45].all()

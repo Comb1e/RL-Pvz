@@ -142,7 +142,7 @@ def test_resume_keeps_cumulative_time_schedule_and_optimizer(tmp_path, monkeypat
         train(cfg, "masked", 101, first, validation_limit=1)
     interrupted, _ = load_policy(first / "interrupted.zip")
     assert interrupted.num_timesteps == 2 * 100  # Two complete one-second waiting games.
-    assert interrupted.optimizer_protocol == "sequential_q_mc_v1"
+    assert interrupted.optimizer_protocol == "sequential_q_mc_v2"
     assert interrupted.policy.optimizer.state
     elapsed = read_json(first / "status.json")["time_budget"]["elapsed_seconds"]
     monkeypatch.setattr(ResearchCallback, "_on_rollout_start", original)
@@ -273,3 +273,79 @@ def test_cuda_long_horizon_reward_and_early_dig_boundaries(wait_ticks):
             == int(wait_ticks <= 500)
         )
         assert batch.state_hash(0) == cpu.game.state_hash()
+
+
+def test_024_checkpoint_inference_preserves_masking_but_training_is_rejected(smoke_cfg, tmp_path):
+    import copy
+    import json
+    from zipfile import ZipFile
+
+    from pvz_rl.config import validate_config
+    from pvz_rl.envs.env import PvZEnv
+    from pvz_rl.learning.cuda_q import CudaSequentialQ
+    from pvz_rl.learning.training import build_model, initial_weights, load_policy, vector_env
+
+    c = copy.deepcopy(smoke_cfg)
+    env = vector_env(c, "masked", 101, "saving")
+    try:
+        model = build_model(c, "masked", env, 101)
+        old = copy.deepcopy(c)
+        old["policy"].update(
+            kind="event_sequential_q_v1", action_distribution="sequential_plant_epsilon_v1"
+        )
+        old["training"]["method"] = "sequential_q_mc_v1"
+        old["reward"].pop("invalid_plant_penalty")
+        old["reward"].pop("empty_dig_penalty")
+        model.policy_kwargs["features_extractor_kwargs"]["layout_cfg"] = old
+        model.optimizer_protocol = "sequential_q_mc_v1"
+        model.action_distribution_protocol = "sequential_plant_epsilon_v1"
+        with torch.no_grad():
+            model.policy.branch_head[-1].bias[1] = 0.1
+            model.policy.branch_head[-1].bias[9] = 0.2
+        source = tmp_path / "source.zip"
+        model.save(source)
+        archive_path = tmp_path / "old.zip"
+        with ZipFile(source) as source_zip, ZipFile(archive_path, "w") as dest:
+            for name in source_zip.namelist():
+                content = source_zip.read(name)
+                if name == "protocol.json":
+                    content = json.dumps(
+                        dict(
+                            policy="event_sequential_q_v1",
+                            optimizer="sequential_q_mc_v1",
+                            exploration="sequential_plant_epsilon_v1",
+                        )
+                    ).encode()
+                dest.writestr(name, content)
+        (tmp_path / "metadata.json").write_text(
+            json.dumps(
+                dict(
+                    config=old,
+                    condition="masked",
+                    exploration_protocol="sequential_plant_epsilon_v1",
+                )
+            )
+        )
+        restored, _ = load_policy(archive_path)
+        reference = PvZEnv(old, family="saving")
+        obs, _ = reference.reset(seed=101)
+        action, state = restored.predict(
+            obs, deterministic=True, action_masks=reference.action_masks()
+        )
+        assert int(action) == 1  # Original legal argmax: empty digging is unavailable.
+        obs, _, _, _, _ = reference.step(int(action))
+        action, _ = restored.predict(
+            obs, state=state, deterministic=True, action_masks=reference.action_masks()
+        )
+        assert int(action) == 361  # Original cooldown mask now hides the sunflower.
+        for operation in (
+            lambda: initial_weights(archive_path, c),
+            lambda: CudaSequentialQ.load(archive_path, env=env),
+            lambda: restored.learn(1),
+            lambda: restored.save(tmp_path / "conversion.zip"),
+            lambda: validate_config(old),
+        ):
+            with pytest.raises(ValueError):
+                operation()
+    finally:
+        env.close()

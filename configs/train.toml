@@ -54,11 +54,13 @@ basic_zombie_value = 50.0 # Sun-equivalent value per basic zombie's actual HP re
 mower_value = 200.0
 progress_weight = 0.01
 value_scale = 300.0 # Unit conversion, never a sun cap.
+invalid_plant_penalty = 0.001 # Rejected plant proposal, 30 sun-equivalents.
+empty_dig_penalty = 0.0003333333333333333 # Empty dig proposal, 10 sun-equivalents.
 
 [training]
 gamma = 1.0
 discount_clock = "simulation_ticks"
-method = "sequential_q_mc_v1"
+method = "sequential_q_mc_v2"
 budget_unit = "games"
 until_stage_complete = false # With --stage: stop only when its mastery gate passes.
 total_games = 10000
@@ -127,8 +129,8 @@ curriculum = true
 hybrid = false
 
 [policy]
-kind = "event_sequential_q_v1"
-action_distribution = "sequential_plant_epsilon_v1"
+kind = "event_sequential_q_v2"
+action_distribution = "sequential_q_unmasked_penalty_v1"
 plant_embedding = 8
 state_embedding = 4
 scalar_sizes = [64]

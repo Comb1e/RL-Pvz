@@ -34,7 +34,8 @@ def test_multiple_actions_at_tick_zero_update_legality_and_preserve_time(per_tic
         _, _, ended, truncated, info = env.step(env.codec.encode(Place(kind, 0, i)))
         assert not ended and not truncated and info["accepted"]
         assert info["ticks_advanced"] == 0 and env.public.tick == 0
-        assert not env.action_masks()[env.codec.encode(Place(kind, 1, 0))]
+        assert env.action_masks()[env.codec.encode(Place(kind, 1, 0))]
+        assert not env.game.validate_action(Place(kind, 1, 0)).accepted
         assert not env.action_masks()[env.codec.encode(Place("potato_mine", 0, i))]
     assert env.public.sun == 200 and len(env.public.plants) == 3
     assert all(
@@ -81,7 +82,8 @@ def test_exact_cost_cooldown_and_many_operations_without_an_artificial_cap(per_t
     for _ in range(750):
         env.step(0)
     assert env.public.tick == 750
-    assert not env.action_masks()[env.codec.encode(Place("sunflower", 0, 1))]
+    assert env.action_masks()[env.codec.encode(Place("sunflower", 0, 1))]
+    assert not env.game.validate_action(Place("sunflower", 0, 1)).accepted
     env.step(0)
     assert env.action_masks()[env.codec.encode(Place("sunflower", 0, 1))]
     env.step(env.codec.encode(Place("sunflower", 0, 1)))

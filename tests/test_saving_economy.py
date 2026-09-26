@@ -49,7 +49,7 @@ def control_action(env, flowers, invest=True, delay=0):
                     candidate = mine
                     break
     action = env.codec.encode(candidate)
-    if not env.action_masks()[action]:
+    if not env.game.validate_action(candidate).accepted:
         return 0, flowers
     return action, flowers + int(candidate.plant_type == "sunflower")
 
@@ -122,7 +122,11 @@ def test_saving_success_and_necessary_income(lanes, mode):
             candidate = env.codec.encode(
                 Place("potato_mine", lanes[purchases % 3], 1 + purchases // 3)
             )
-            action = candidate if purchases < 4 and env.action_masks()[candidate] else 0
+            action = (
+                candidate
+                if purchases < 4 and env.game.validate_action(env.codec.decode(candidate)).accepted
+                else 0
+            )
             purchases += bool(action)
             env.step(action)
     result = env.episode_metrics()

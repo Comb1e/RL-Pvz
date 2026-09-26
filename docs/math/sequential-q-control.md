@@ -1,6 +1,6 @@
 # Sequential complete-return Q control
 
-The implemented objective in research 0.24.0 (unchanged from 0.23.0) uses complete episodes, gamma one,
+The implemented objective in research 0.25.0 uses complete episodes, gamma one,
 and one shared encoder. A decision assembles a branch b (wait, eight species,
 dig) and, except for wait, a tile t. Only the assembled command advances the
 simulator or enters public history. The 1,200-second cutoff is a labelled failure.
@@ -10,7 +10,8 @@ simulator or enters public history. The 1,200-second cutoff is a labelled failur
 For transition i in a completed game, G_i = sum_{j=i}^{T-1} r_j. Backward
 accumulation uses float64; stored fitting targets use float32. No value bootstrap,
 replay, target network or intermediate reward is used. Gamma one makes the first
-target equal to episode reward, including outcome and net-value development.
+target equal to episode reward, including outcome, net-value development and
+[rejection penalties](invalid-action-penalties.md).
 
 Q1(s,b) estimates the remaining return after selecting b and continuing with
 the collecting tile selector. Q2(s,b,t) estimates it after also selecting t.
@@ -38,18 +39,21 @@ error of 0 give L=(4+1+0)/3=5/3, irrespective of group frequencies.
 
 ## Exploration
 
-The branch controller first takes the maximum legal Q1, breaking ties by wait,
+The branch controller first takes the maximum of all ten Q1 outputs, breaking ties by wait,
 configured species order, then dig. Wait and dig receive no injected exploration.
 If a species wins, independently explore species and tile with probability
 alpha = 1-sqrt(1-e), where e is the cohort's exploration budget.
 Then P(at least one coin fires)=1-(1-alpha)^2=e. At e=0.1,
 alpha=0.0513167019494862; at e=0.001, alpha=0.0005001250625391.
 
-For m legal species, p(k)=(1-alpha)1[k=k*]+alpha/m. Given k and its n_k
-legal tiles, p(t|k)=(1-alpha)1[t=t*_k]+alpha/n_k. The complete planting
-probability is their product, even when species have unequal tile counts.
-Each conditional sums to one and illegal commands have zero mass. Coin firing
-can select the greedy option, so it must be logged separately from deviation.
+For m=8 species, p(k)=(1-alpha)1[k=k*]+alpha/m. Given k and its n_k
+empty tiles, p(t|k)=(1-alpha)1[t=t*_k]+alpha/n_k. The complete planting
+probability is their product, with the same empty-tile set for every species.
+A full board uses the explicit rejected tile-zero proposal described in the
+penalty derivation. When empty tiles exist, each conditional sums to one and
+occupied tiles have zero exploration mass; affordability and cooldown rejection
+remain simulator outcomes. Coin firing can select the greedy option, so it must
+be logged separately from deviation.
 At e=0, selection is greedy; at e=1, species and their tiles are uniform.
 Neither endpoint can force planting when waiting has the greatest value.
 

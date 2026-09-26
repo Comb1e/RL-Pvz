@@ -240,20 +240,20 @@ class LiveSession:
 
 
 def decision_reason(selected_kind, values):
-    """Explain the recorded greedy decision using its legal, pre-action Q values."""
+    """Explain the recorded greedy decision using its pre-action Q values."""
     selected = values[selected_kind]
     if selected is None or any(q is not None and not isfinite(q) for q in values):
         return "Q comparison unavailable"
     alternatives = [(i, q) for i, q in enumerate(values) if i != selected_kind and q is not None]
     if not alternatives:
-        return "only legal branch"
+        return "only recorded branch"
     runner_up, value = max(alternatives, key=lambda item: item[1])
     gap = selected - value
     if gap < 0:
         return "recorded choice differs from Q ranking"
     if gap == 0:
         return "tied best; priority wait > species order > dig"
-    return f"highest legal Q; lead {gap:+.6g} over {DECISION_BRANCHES[runner_up]}"
+    return f"highest Q; lead {gap:+.6g} over {DECISION_BRANCHES[runner_up]}"
 
 
 from .live_layout import draw_view, viewer_main  # noqa: E402, F401

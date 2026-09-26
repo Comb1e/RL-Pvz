@@ -1,5 +1,6 @@
 """Resizable board overview and readable paged decision tables. CPU process only."""
 
+from copy import deepcopy
 from dataclasses import dataclass
 from enum import StrEnum
 from queue import Empty, Full
@@ -23,6 +24,21 @@ SHORT = (
     "Repeater",
     "Dig",
 )
+TABLE_WIDTHS = (78, 75, 105, 300, 100, *([90] * 10))
+
+
+def horizontal_limit(viewport_width):
+    return max(0, sum(TABLE_WIDTHS) - viewport_width)
+
+
+def result_label(record, *, show_penalty=True):
+    if record.get("accepted", True):
+        return "accepted"
+    reason = REASONS[record.get("reason", 0)] or "rejected"
+    result = (
+        f"automatic wait: {reason}" if 0 < branch(record["action"]) < 9 else f"rejected: {reason}"
+    )
+    return f"{result} | penalty {record.get('penalty', 0):+.6g}" if show_penalty else result
 
 
 def branch(action):
@@ -40,6 +56,7 @@ class Browse:
     start: int = 0
     horizontal: int = 0
     selected: dict | None = None
+    selected_offset: int | None = None
     page: dict | None = None
     request: int = 0
     sent: float = 0
@@ -54,15 +71,15 @@ class Browse:
 
     def choose(self, row):
         self.follow = False
-        self.selected = row
+        self.selected = deepcopy(row)
         if self.page is not None:
             offset = next(
                 (i for i, r in enumerate(self.page["rows"]) if r["sequence"] == row["sequence"]), 0
             )
-            self.start = self.page["start"] + offset
-            self.page = {**self.page, "start": self.start, "rows": self.page["rows"][offset:]}
+            self.selected_offset = self.page["start"] + offset
+            self.start = self.page["start"]
         self.request += 1
-        self.sent = 0
+        self.sent = float("inf")
 
 
 def accept_history_response(packets, browse, response):
@@ -102,10 +119,15 @@ def draw_view(surface, packets, activity, *, renderers, boards, pending=(), coun
     focus = renderers.get("focus")
     browse = renderers.setdefault("browse", {})
     regions = renderers["regions"] = {}
-    valid = {
-        (i, p["generation"], p["frame"].get("episode") if p["frame"] else None)
+    previous = renderers.get("browse_keys", {})
+    keys = {
+        i: previous[i]
+        if p["state"] == "selecting" and i in previous
+        else (i, p["generation"], p["frame"].get("episode") if p["frame"] else None)
         for i, p in enumerate(packets)
     }
+    renderers["browse_keys"] = keys
+    valid = set(keys.values())
     for key in list(browse):
         if key not in valid:
             del browse[key]
@@ -164,7 +186,7 @@ def draw_view(surface, packets, activity, *, renderers, boards, pending=(), coun
                 font.render("Waiting for collection", True, (201, 213, 201)), (x + 12, y + 60)
             )
             continue
-        key = (index, gen, frame["episode"])
+        key = keys[index]
         state = browse.setdefault(key, Browse())
         incoming = frame.get("history")
         if state.follow and incoming is not None:
@@ -172,6 +194,7 @@ def draw_view(surface, packets, activity, *, renderers, boards, pending=(), coun
         elif incoming is not None and state.page is not None:
             state.page["total"] = incoming["total"]
         page = state.page or incoming or dict(start=0, total=0, rows=[])
+        state.horizontal = max(0, min(state.horizontal, horizontal_limit(cell_w - 24)))
         board_h = max(
             85,
             int(
@@ -212,11 +235,14 @@ def draw_view(surface, packets, activity, *, renderers, boards, pending=(), coun
         if decision:
             greedy, chosen = branch(decision["greedy_action"]), branch(decision["action"])
             legal = decision.get("legal", [q is not None for q in decision["q"]])
-            values = [q if ok else None for q, ok in zip(decision["q"], legal)]
+            # Q values are immutable collection-time diagnostics. Current
+            # decisions compare all ten outputs; preserve archived flags
+            # without hiding any recorded score.
+            values = list(decision["q"])
             mode = (
                 "Latest decision" if state.follow or state.selected is None else "Historical action"
             )
-            summary = f"{mode} #{decision.get('sequence', '?')} @ {decision['tick'] / obs.tick_rate:.2f}s: {NAMES[chosen]}"
+            summary = f"{mode} #{decision.get('sequence', '?')} @ {decision['tick'] / obs.tick_rate:.2f}s | proposal {NAMES[chosen]}"
             surface.blit(
                 small.render(
                     summary + " | coins S/T " + "/".join(str(int(c)) for c in decision["coins"]),
@@ -231,7 +257,7 @@ def draw_view(surface, packets, activity, *, renderers, boards, pending=(), coun
             surface.blit(small.render(reason, True, (216, 230, 214)), (x + 12, top + 41))
             surface.blit(
                 small.render(
-                    "Estimated returns (raw Q); * = illegal; no probabilities",
+                    "Raw Q (estimated returns) | " + result_label(decision),
                     True,
                     (220, 232, 215),
                 ),
@@ -245,11 +271,14 @@ def draw_view(surface, packets, activity, *, renderers, boards, pending=(), coun
                     else f"{SHORT[k]} unavailable"
                 )
                 color = (
-                    (252, 223, 131) if k == chosen else (221, 231, 215) if ok else (146, 157, 150)
+                    (252, 223, 131) if k == chosen else (221, 231, 215) if ok else (184, 192, 182)
                 )
                 surface.blit(
                     small.render(text, True, color),
-                    (x + 12 + k % 5 * 157 - state.horizontal, top + 81 + k // 5 * 20),
+                    (
+                        x + 12 + k % 5 * 157 - min(state.horizontal, max(0, 785 - cell_w + 24)),
+                        top + 81 + k // 5 * 20,
+                    ),
                 )
         table_y = top + 126
         row_height = 22
@@ -257,13 +286,15 @@ def draw_view(surface, packets, activity, *, renderers, boards, pending=(), coun
         rows = (
             (page["rows"][-visible:] if state.follow else page["rows"][:visible]) if visible else []
         )
-        headings = ["Decision", "Time(s)", "Action", "Status", *SHORT]
-        widths = [78, 85, 112, 105] + [96] * 10
+        headings = ["Decision", "Time(s)", "Proposal", "Result", "Penalty", *SHORT]
+        widths = TABLE_WIDTHS
         tx = x + 12 - state.horizontal
         pygame.draw.rect(surface, (48, 67, 54), (x + 8, table_y, cell_w - 16, row_height))
         for heading, col_w in zip(headings, widths):
+            surface.set_clip(rect.clip(pygame.Rect(tx, table_y, col_w - 4, row_height)))
             surface.blit(small.render(heading, True, (229, 237, 221)), (tx, table_y + 2))
             tx += col_w
+        surface.set_clip(rect)
         for offset, row in enumerate(rows):
             ry = table_y + (offset + 1) * row_height
             if state.selected and row["sequence"] == state.selected["sequence"]:
@@ -272,14 +303,17 @@ def draw_view(surface, packets, activity, *, renderers, boards, pending=(), coun
                 str(row["sequence"]),
                 f"{row['tick'] / obs.tick_rate:.2f}",
                 NAMES[branch(row["action"])],
-                "accepted" if row["accepted"] else "REJECTED",
+                result_label(row, show_penalty=False),
+                f"{row.get('penalty', 0):+.5g}",
             ]
             cells += [f"{q:+.5g}{'' if ok else '*'}" for q, ok in zip(row["q"], row["legal"])]
             tx = x + 12 - state.horizontal
             for c, (text, col_w) in enumerate(zip(cells, widths)):
-                color = (220, 231, 218) if c < 4 or row["legal"][c - 4] else (142, 153, 146)
+                color = (220, 231, 218) if c < 5 or row["legal"][c - 5] else (184, 192, 182)
+                surface.set_clip(rect.clip(pygame.Rect(tx, ry, col_w - 4, row_height)))
                 surface.blit(small.render(text, True, color), (tx, ry + 2))
                 tx += col_w
+            surface.set_clip(rect)
             buttons.append(
                 (pygame.Rect(x + 8, ry, cell_w - 16, row_height), index, ("row", gen, row))
             )
@@ -289,9 +323,9 @@ def draw_view(surface, packets, activity, *, renderers, boards, pending=(), coun
                 (x + 12, table_y + 25),
             )
         if state.selected and not state.selected["accepted"]:
-            reason = REASONS[state.selected["reason"]]
+            reason = result_label(state.selected)
             surface.blit(
-                small.render(f"Rejected: {reason}", True, (250, 181, 137)),
+                small.render(reason, True, (250, 181, 137)),
                 (x + 12, y + cell_h - 22),
             )
         else:
@@ -367,11 +401,12 @@ def viewer_main(frames, commands, history_responses, errors, closed, ready, acti
                             and packets[index]["frame"]
                         ):
                             p = packets[index]
-                            key = (index, p["generation"], p["frame"]["episode"])
+                            key = renderers["browse_keys"][index]
                             state = renderers["browse"].setdefault(key, Browse())
                             if pygame.key.get_mods() & pygame.KMOD_SHIFT or event.x:
+                                limit = horizontal_limit(max(1, rect.width - 16))
                                 state.horizontal = max(
-                                    0, min(1300, state.horizontal - (event.x or event.y) * 60)
+                                    0, min(limit, state.horizontal - (event.x or event.y) * 60)
                                 )
                             else:
                                 page = (
@@ -404,7 +439,7 @@ def viewer_main(frames, commands, history_responses, errors, closed, ready, acti
                                 None if renderers.get("focus") is not None else index
                             )
                         elif p["frame"]:
-                            key = (index, generation, p["frame"]["episode"])
+                            key = renderers["browse_keys"][index]
                             state = renderers["browse"].setdefault(key, Browse())
                             if operation == "follow":
                                 state.follow, state.selected = True, None

@@ -84,6 +84,34 @@ extern "C" __global__ void encode_state(const I *headers, const I *plants,
   }
   assets[i] = asset_value(h, p);
 }
+
+// Policy masks expose only board geometry.  The sequential Q controller keeps
+// all ten branch values visible; the simulator remains authoritative for
+// affordability, cooldown, and rejection reasons.
+extern "C" __global__ void policy_masks(const I *headers, const I *plants,
+                                         bool *masks, I n) {
+  I index = blockIdx.x * blockDim.x + threadIdx.x;
+  if (index >= n * ACTION_COUNT)
+    return;
+  I game = index / ACTION_COUNT;
+  I action = index % ACTION_COUNT;
+  Header h = ((Header *)headers)[game];
+  if (!h.enabled || h.status != 0 || h.tick >= CUTOFF_SECONDS * G_tick_rate) {
+    masks[index] = false;
+    return;
+  }
+  bool available = action == 0 || action >= ACTION_DIG_START;
+  if (action > 0 && action < ACTION_DIG_START) {
+    I tile = (action - 1) % ACTION_TILES;
+    I row = tile / 9, col = tile % 9;
+    available = true;
+    Plant *p = (Plant *)(plants + game * 45 * GAME_PLANT_WIDTH);
+    for (I j = 0; j < h.np; j++)
+      if (p[j].row == row && p[j].col == col) available = false;
+  }
+  masks[index] = available;
+}
+
 // Reward order mirrors reward_parts, using double intermediates before casting
 // the scalar reward to the same float32 rollout storage used by SB3.
 extern "C" __global__ void
@@ -122,7 +150,14 @@ reward_metrics(const I *headers, const I *old_headers, const I *old_cd,
   double scale = R_progress_weight / R_value_scale;
   v[F_development] = scale * v[F_net_value];
   v[F_mower_activation_penalty] = -scale * v[F_mower_expenditure];
-  double total = v[F_terminal] + v[F_development];
+  v[F_invalid_plant_penalty] =
+      action > 0 && action < ACTION_DIG_START && !h.accepted
+      ? -R_invalid_plant_penalty : 0.;
+  v[F_empty_dig_penalty] =
+      action >= ACTION_DIG_START && action < ACTION_COUNT && !h.accepted
+      && h.reason == EMPTY_TILE_REASON ? -R_empty_dig_penalty : 0.;
+  double total = v[F_terminal] + v[F_development]
+      + v[F_invalid_plant_penalty] + v[F_empty_dig_penalty];
   v[F_total] = total;
   rewards[i] = (float)total;
   t[0] += total;

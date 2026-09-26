@@ -6,12 +6,38 @@ import torch
 
 from pvz_rl.envs.actions import ActionSchema as A
 
-POLICY_SIGNATURE = "event_sequential_q_v1"
-ACTION_DISTRIBUTION = "sequential_plant_epsilon_v1"
+POLICY_SIGNATURE = "event_sequential_q_v2"
+ACTION_DISTRIBUTION = "sequential_q_unmasked_penalty_v1"
+
+
+def observation_tile_masks(obs):
+    """Default proposal geometry from public plant fields, without private state."""
+    empty = obs[:, : A.tiles * 3 : 3] == 0
+    available = torch.ones(len(obs), 1, dtype=torch.bool, device=obs.device)
+    return torch.cat((available, empty.repeat(1, A.plant_types), available.expand(-1, A.tiles)), -1)
 
 
 def branch_masks(masks):
+    """Return the ten-way comparison mask used by the controller."""
+    return selection_masks(masks)
+
+
+def transport_branch_masks(masks):
+    """Describe which transport branches have at least one candidate tile."""
     return torch.cat((masks[:, :1], A.tile_masks(masks).any(-1)), -1)
+
+
+def selection_masks(masks):
+    """Return the ten-way comparison mask used by the controller.
+
+    Every active environment compares wait, all eight plants, and dig.  Tile
+    masks still constrain the second-level selector; a full board therefore
+    produces a rejected plant proposal instead of silently hiding its branch.
+    """
+    if masks.ndim != 2 or masks.shape[-1] != A.size or masks.dtype != torch.bool:
+        raise ValueError("Action masks must be boolean [batch, action] tensors")
+    active = masks.any(-1)
+    return active[:, None].expand(-1, A.tile_groups + 1)
 
 
 def validate_values(values, masks):

@@ -26,7 +26,8 @@ def select_action(env: PvZEnv, obs, *, policy=None, baseline=None, rng=None, mas
     if baseline == "wait":
         return 0
     if baseline in ("random_legal", "random_strategy"):
-        return int(rng.choice(np.flatnonzero(env.action_masks())))
+        mask = env.engine_action_masks() if baseline == "random_legal" else env.action_masks()
+        return int(rng.choice(np.flatnonzero(mask)))
     if baseline == "heuristic":
         return env.codec.encode(choose_action(env.public_board()))
     if policy is None:
@@ -210,6 +211,11 @@ def evaluate(
                             trace_index += 1
                             inference_seconds += perf_counter() - t
                             obs, _, terminated, truncated, info = env.step(action)
+                            if (
+                                not info["accepted"]
+                                and getattr(env, "_policy_memory", None) is not None
+                            ):
+                                env._policy_memory.previous_actions.zero_()
                             progress.emit(
                                 f"Evaluation {len(rows)}/{total} complete; {level}, seed {seed}, "
                                 f"game time {env.public.elapsed_seconds:.1f}s"

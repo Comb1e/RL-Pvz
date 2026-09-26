@@ -2,7 +2,7 @@
 
 from functools import lru_cache
 
-from pvz_game import Observation, Rules, Status
+from pvz_game import Dig, Observation, Place, Rules, Status
 
 # Combat diagnostics and additive accounting components share one reporting schema.
 REWARD_METRICS = (
@@ -15,6 +15,8 @@ REWARD_METRICS = (
     "wall_nut_damage",
     "empty_explosions",
     "mower_activation_penalty",
+    "invalid_plant_penalty",
+    "empty_dig_penalty",
     "sky_income",
     "produced_sun",
     "effective_damage",
@@ -167,7 +169,14 @@ def defense_metrics(before: Observation, events, rules: Rules) -> dict:
 
 
 def reward_parts(
-    before: Observation, after: Observation, cfg: dict, *, events=(), rules=None
+    before: Observation,
+    after: Observation,
+    cfg: dict,
+    *,
+    events=(),
+    rules=None,
+    action=None,
+    action_result=None,
 ) -> dict:
     """Count actual gains/losses once, independent of action names and difficulty."""
     rules = rules if rules is not None else _default_rules()
@@ -199,6 +208,13 @@ def reward_parts(
     net = resource_delta + combat_value - mower_cost
     scale = settings["progress_weight"] / settings["value_scale"]
     development = scale * net
+    invalid_plant = 0.0
+    empty_dig = 0.0
+    if action_result is not None and not action_result.accepted:
+        if isinstance(action, Place):
+            invalid_plant = -float(settings.get("invalid_plant_penalty", 0))
+        elif isinstance(action, Dig) and action_result.reason == "empty_tile":
+            empty_dig = -float(settings.get("empty_dig_penalty", 0))
     return {
         **combat,
         "terminal": terminal,
@@ -212,5 +228,7 @@ def reward_parts(
         "net_value": net,
         # A reported component of development, never added a second time.
         "mower_activation_penalty": -scale * mower_cost,
-        "total": terminal + development,
+        "invalid_plant_penalty": invalid_plant,
+        "empty_dig_penalty": empty_dig,
+        "total": terminal + development + invalid_plant + empty_dig,
     }
