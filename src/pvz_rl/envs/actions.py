@@ -16,8 +16,6 @@ class ActionSchema:
     tile_groups = plant_types + 1
     dig_start = 1 + plant_types * tiles
     size = dig_start + tiles
-    tile_logits_start = plant_types
-    logit_size = tile_logits_start + plant_types * tiles
 
     @classmethod
     def unpack(cls, actions):

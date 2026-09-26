@@ -2,7 +2,7 @@
 
 Only the current query is evaluated. Attention is O(memory), not O(ticks²).
 Raw memories are re-encoded by current weights, avoiding stale learned KV caches
-between PPO updates. This is a project-specific sparse Transformer, not GTrXL.
+between Q updates. This is a project-specific sparse Transformer, not GTrXL.
 """
 
 import math

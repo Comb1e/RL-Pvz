@@ -1,6 +1,7 @@
-"""One CUDA trainer: complete games, Monte Carlo critic, conditional plant PPO."""
+"""One CUDA trainer: complete games and sequential Q Monte Carlo regression."""
 
 import io
+import json
 import random
 import shutil
 import tempfile
@@ -11,41 +12,49 @@ from zipfile import ZipFile
 import numpy as np
 import torch
 from stable_baselines3.common.base_class import BaseAlgorithm
-from stable_baselines3.common.save_util import load_from_zip_file
 
-from pvz_rl.config import role_phase_games
 from pvz_rl.envs.actions import ActionSchema as A
 from pvz_rl.learning.cohort import (
     OPTIMIZER_PROTOCOL,
-    ActorTransaction,
     CohortPhase,
-    RoleSchedule,
     atomic_transition,
 )
 from pvz_rl.learning.cuda_buffer import CompleteGameBuffer
-from pvz_rl.learning.exploration import configure_exploration, exploration_loss
+from pvz_rl.learning.exploration import EXPLORATION_PROTOCOL, configure_exploration
 from pvz_rl.policy.event_memory import EventMemory
-from pvz_rl.policy.grouped_policy import ACTION_DISTRIBUTION, selected_value_indices
+from pvz_rl.policy.sequential_q import ACTION_DISTRIBUTION, POLICY_SIGNATURE, balanced_q_loss
+
+
+def checkpoint_metadata(path):
+    """Read plain JSON before any SB3/cloudpickle or torch model deserialization."""
+    path = Path(path)
+    if not path.suffix:
+        path = path.with_suffix(".zip")
+    with ZipFile(path) as archive:
+        if "protocol.json" not in archive.namelist():
+            raise ValueError("Sequential Q controller requires fresh models; retired checkpoint")
+        metadata = json.loads(archive.read("protocol.json"))
+    if metadata != dict(
+        policy=POLICY_SIGNATURE, optimizer=OPTIMIZER_PROTOCOL, exploration=EXPLORATION_PROTOCOL
+    ):
+        raise ValueError("Incompatible sequential Q checkpoint protocol; start fresh")
+    return metadata
 
 
 def checkpoint_optimizer_protocol(path):
-    data, _, _ = load_from_zip_file(path, device="cpu", load_data=True)
-    return data.get("optimizer_protocol")
+    return checkpoint_metadata(path)["optimizer"]
 
 
-class CudaCompleteGamePPO(BaseAlgorithm):
+class CudaSequentialQ(BaseAlgorithm):
     def __init__(
         self,
         policy,
         env=None,
         *,
-        learning_rate=1e-4,
+        learning_rate=3e-4,
         batch_size=1024,
         n_epochs=4,
-        clip_range=0.2,
         max_grad_norm=0.5,
-        normalize_advantage=True,
-        target_kl=0.01,
         policy_kwargs=None,
         seed=None,
         device="cuda",
@@ -64,17 +73,15 @@ class CudaCompleteGamePPO(BaseAlgorithm):
             tensorboard_log=tensorboard_log,
             support_multi_env=True,
         )
-        self.batch_size, self.n_epochs, self.clip_range = batch_size, n_epochs, clip_range
-        self.max_grad_norm, self.normalize_advantage = max_grad_norm, normalize_advantage
-        self.target_kl = target_kl or 0.0
+        self.batch_size, self.n_epochs = batch_size, n_epochs
+        self.max_grad_norm = max_grad_norm
         self.optimizer_protocol = OPTIMIZER_PROTOCOL
         self.action_distribution_protocol = ACTION_DISTRIBUTION
         self.phase = CohortPhase.IDLE
-        self.roles = RoleSchedule()
         self.training_games = self._n_updates = 0
         self.cohort_metrics = {}
         self.runtime_state = None
-        self._buffer = self._memory = self._behavior = self._transaction = None
+        self._buffer = self._memory = None
         self._fit_order = None
         self._fit_epoch = self._fit_cursor = 0
         self._cohort_elapsed = 0.0
@@ -93,14 +100,12 @@ class CudaCompleteGamePPO(BaseAlgorithm):
 
     @classmethod
     def load(cls, path, *args, **kwargs):
-        data, _, _ = load_from_zip_file(path, device="cpu")
-        if data.get("action_distribution_protocol") != ACTION_DISTRIBUTION:
-            raise ValueError("Complete-game controller requires fresh models")
+        checkpoint_metadata(path)
         model = super().load(path, *args, **kwargs)
         model.phase = CohortPhase(model.phase)
         # SB3 maps every saved tensor to the requested device. Ordinary Adam
         # keeps its scalar step on CPU; retain that original optimizer protocol.
-        for optimizer in (model.policy.optimizer, model.policy.critic_optimizer):
+        for optimizer in (model.policy.optimizer,):
             for group in optimizer.param_groups:
                 if not group.get("capturable", False) and not group.get("fused", False):
                     for parameter in group["params"]:
@@ -169,8 +174,6 @@ class CudaCompleteGamePPO(BaseAlgorithm):
 
     def _begin(self, callback):
         callback.on_rollout_start()
-        curriculum = getattr(callback, "curriculum", None)
-        self.roles.enter_stage(curriculum.name if curriculum else "fixed")
         self._last_obs = self.env.reset()
         self._memory = EventMemory(self.cfg, self.env.batch.rules, self.n_envs, self.device)
         self._previous = torch.zeros(self.n_envs, device=self.device, dtype=torch.long)
@@ -179,49 +182,20 @@ class CudaCompleteGamePPO(BaseAlgorithm):
         self._fit_epoch = self._fit_cursor = 0
         self._fit_order = None
         self._cohort_elapsed = 0.0
-        self._phase_times = {"collect": 0.0, "returns": 0.0, "critic": 0.0, "actor": 0.0}
+        self._phase_times = {"collect": 0.0, "returns": 0.0, "fit": 0.0}
         self._device_seconds = 0.0
         self._simulation_ticks = 0
         self._planting_samples = 0
-        for key in (
-            "policy_gradient_loss",
-            "joint_entropy",
-            "exploration_bonus",
-            "plant_exploration_bonus",
-            "tile_exploration_bonus",
-            "actor_grad_norm",
-            "approx_kl",
-            "value_loss",
-            "critic_grad_norm",
-        ):
+        for key in ("q_loss", "branch_loss", "tile_loss", "q_grad_norm"):
             self.logger.record("train/" + key, None)
-        self._stats = {
-            "actor_attempted_steps": 0,
-            "actor_retained_steps": 0,
-            "critic_optimizer_steps": 0,
-            "exact_kl": 0.0,
-            "actor_window_rejected": 0,
-            "exact_kl_attempted_max": 0.0,
-            "actor_skip_reason": None,
-        }
-        self._behavior = self._snapshot_policy()
-        self._behavior.set_training_mode(False)
-        self._transaction = None
-        self._phase(CohortPhase.COLLECT, callback)
-
-    def _snapshot_policy(self):
-        # Module construction initializes weights; preserve both CPU/CUDA RNG.
-        devices = (
-            [self.device.index or torch.cuda.current_device()] if self.device.type == "cuda" else []
+        self._stats = dict(
+            q_optimizer_steps=0,
+            species_exploration_coins=0,
+            tile_exploration_coins=0,
+            exploratory_changes=0,
         )
-        with torch.random.fork_rng(devices=devices):
-            policy = self.policy_class(
-                self.observation_space, self.action_space, self.lr_schedule, **self.policy_kwargs
-            ).to(self.device)
-        policy.load_state_dict(self.policy.state_dict())
-        policy.exploration_settings = dict(self.policy.exploration_settings)
-        policy.set_training_mode(False)
-        return policy
+        self._loss_sums = dict(branch=0.0, tile=0.0, branch_count=0, tile_count=0)
+        self._phase(CohortPhase.COLLECT, callback)
 
     def _collect_step(self, callback):
         env = self.env
@@ -243,15 +217,14 @@ class CudaCompleteGamePPO(BaseAlgorithm):
             watched = None
             if viewer is not None and viewer.enabled:
                 try:
-                    viewer.role = self.roles.role
                     watched = viewer.decision_indices()
                 except Exception as exc:
                     viewer.fail(exc)
             result = self.policy.decide(obs, masks, context=context, diagnostic_indices=watched)
-            actions, values, logs = result[:3]
+            actions, values, tile_values = result[:3]
             if watched is not None:
                 try:
-                    viewer.capture_decision(result[3], ticks)
+                    viewer.capture_decision(result[3]["viewer"], ticks)
                 except Exception as exc:
                     viewer.fail(exc)
             # One bounded packed transfer; copied before the simulator mutates observations.
@@ -263,7 +236,9 @@ class CudaCompleteGamePPO(BaseAlgorithm):
                     ticks[:, None].float(),
                     actions[:, None].float(),
                     values[:, None],
-                    logs[:, None],
+                    tile_values[:, None],
+                    result[3]["greedy_actions"][:, None].float(),
+                    result[3]["coins"].float(),
                     # Bit-preserve 32-bit references, including indices above 2**24.
                     self._memory.ids.to(torch.int32).view(torch.float32),
                     self._memory.counts,
@@ -289,9 +264,20 @@ class CudaCompleteGamePPO(BaseAlgorithm):
                 host[:, d : d + A.size].astype(bool), axis=-1, bitorder="little"
             )
             base = d + A.size
-            for j, key in enumerate(("previous", "tick", "action", "baseline", "log_prob")):
+            for j, key in enumerate(
+                (
+                    "previous",
+                    "tick",
+                    "action",
+                    "branch_value",
+                    "tile_value",
+                    "greedy_action",
+                    "species_coin",
+                    "tile_coin",
+                )
+            ):
                 rows[key] = host[:, base + j]
-            base += 5
+            base += 8
             rows["ids"] = host[:, base : base + self._memory.capacity].view(np.uint32)
             base += self._memory.capacity
             for key in ("counts", "starts"):
@@ -301,6 +287,11 @@ class CudaCompleteGamePPO(BaseAlgorithm):
             rows["active"], rows["env"] = active, np.arange(self.n_envs)
             rows["reward"], rows["duration"] = reward, duration
             self._buffer.append(rows, raw_tokens)
+            self._stats["species_exploration_coins"] += int(rows["species_coin"][active].sum())
+            self._stats["tile_exploration_coins"] += int(rows["tile_coin"][active].sum())
+            self._stats["exploratory_changes"] += int(
+                np.count_nonzero(active & (rows["action"] != rows["greedy_action"]))
+            )
             self._planting_samples += int(
                 np.count_nonzero(active & (rows["action"] > 0) & (rows["action"] < A.dig_start))
             )
@@ -319,15 +310,13 @@ class CudaCompleteGamePPO(BaseAlgorithm):
             if not env.enabled_envs.any():
                 self._phase(CohortPhase.RETURNS, callback)
 
-    def _prepare_fit(self, planting):
-        if self._fit_epoch >= self.n_epochs or (
-            planting and self._transaction is not None and self._transaction.state["stopped"]
-        ):
+    def _prepare_fit(self):
+        if self._fit_epoch >= self.n_epochs:
             if self._fit_order is None:
                 self._fit_order = np.empty(0, dtype=np.int64)
             return
         if self._fit_order is None:
-            indices = self._buffer.valid_indices(planting)
+            indices = self._buffer.valid_indices()
             self._fit_order = indices[np.random.permutation(len(indices))]
             self._fit_cursor = 0
         if self._prefetch is None and len(self._fit_order) > self._fit_cursor:
@@ -338,121 +327,40 @@ class CudaCompleteGamePPO(BaseAlgorithm):
                 self._buffer, self._fit_order[self._fit_cursor :], self.batch_size, self.device
             )
 
-    def _critic_step(self, data):
-        values = self.policy.predict_values(data["observation"], data["context"])
-        indices = selected_value_indices(data["action"])
-        predicted = values.gather(1, indices[:, None]).flatten()
-        groups = torch.where(indices < 2, indices, 2)
-        counts = torch.as_tensor(self._buffer.group_counts, device=self.device, dtype=values.dtype)
-        weight = counts.sum() / (counts.clamp_min(1)[groups] * (counts > 0).sum())
-        # Keep the same per-sample scale in the final short minibatch, so each
-        # populated group has equal aggregate weight over a complete epoch.
-        loss = ((predicted - data["target"]).square() * weight).sum() / min(
-            self.batch_size, int(self._buffer.group_counts.sum())
+    def _q_step(self, data):
+        branch, tile = self.policy.selected_values(
+            data["observation"], data["action"], data["context"]
+        )
+        loss, branch_error, tile_error = balanced_q_loss(
+            branch, tile, data["target"], data["action"], self._buffer.group_counts, self.batch_size
         )
         if not torch.isfinite(loss):
-            raise FloatingPointError("Non-finite critic loss")
-        self.policy.critic_optimizer.zero_grad(set_to_none=True)
+            raise FloatingPointError("Non-finite Q loss")
+        self.policy.optimizer.zero_grad(set_to_none=True)
         loss.backward()
         norm = torch.nn.utils.clip_grad_norm_(
-            self.policy.critic_parameters(), self.max_grad_norm, error_if_nonfinite=True
+            self.policy.parameters(), self.max_grad_norm, error_if_nonfinite=True
         )
-        self.policy.critic_optimizer.step()
-        self._stats["critic_optimizer_steps"] += 1
-        self.logger.record("train/value_loss", float(loss.detach()))
-        self.logger.record("train/critic_grad_norm", float(norm))
-
-    def _actor_step(self, data):
-        distribution = self.policy.get_distribution(
-            data["observation"], data["masks"], data["context"]
-        )
-        logs = distribution.log_prob(data["action"])
-        delta = logs - data["log_prob"]
-        ratio = delta.exp()
-        approx = ((ratio - 1) - delta).mean()
-        if not torch.isfinite(approx):
-            self._transaction.reject("nonfinite_likelihood")
-            return
-        if self.target_kl and float(approx.detach()) > 1.5 * self.target_kl:
-            self._transaction.state["stopped"] = True
-            return
-        advantage = data["advantage"]
-        if self.normalize_advantage and self._buffer.group_counts[1] > 1:
-            advantage = (advantage - self._buffer.advantage_mean) / (
-                self._buffer.advantage_std + 1e-8
-            )
-        policy_loss = -torch.minimum(
-            ratio * advantage, ratio.clamp(1 - self.clip_range, 1 + self.clip_range) * advantage
-        ).mean()
-        entropy_loss, metrics = exploration_loss(self.policy, distribution.entropy(), logs)
-        loss = policy_loss + entropy_loss
-        self._stats["actor_attempted_steps"] += 1
-        self.policy.optimizer.zero_grad(set_to_none=True)
-        if not torch.isfinite(loss):
-            self._transaction.reject("nonfinite_actor_loss")
-            return
-        loss.backward()
-        norm = torch.nn.utils.clip_grad_norm_(self.policy.actor_parameters(), self.max_grad_norm)
-        if not torch.isfinite(norm):
-            self._transaction.reject("nonfinite_actor_gradient")
-            return
         self.policy.optimizer.step()
-        self._stats["actor_retained_steps"] += 1
-        for key, value in {
-            "policy_gradient_loss": policy_loss,
-            "actor_grad_norm": norm,
-            "approx_kl": approx,
-            **metrics,
-        }.items():
-            self.logger.record("train/" + key, float(value.detach()))
-
-    @torch.no_grad()
-    def _exact_kl(self):
-        from pvz_rl.learning.transfers import BatchPrefetch
-
-        indices = self._buffer.valid_indices(True)
-        total = 0.0
-        prefetch = BatchPrefetch(self._buffer, indices, self.batch_size, self.device)
-        try:
-            for data in prefetch:
-                old = self._behavior.get_distribution(
-                    data["observation"], data["masks"], data["context"]
-                )
-                new = self.policy.get_distribution(
-                    data["observation"], data["masks"], data["context"]
-                )
-                total += float(old.kl_divergence(new).sum())
-        finally:
-            prefetch.close()
-        return total / max(1, len(indices))
-
-    def _guard(self):
-        if self._transaction is None:
-            return
-        kl = self._exact_kl()
-        self._stats["exact_kl_attempted_max"] = max(self._stats["exact_kl_attempted_max"], kl)
-        self._transaction.check(kl)
-        self._stats["exact_kl"] = 0.0 if self._transaction.state["rejected"] else kl
-        self._stats["actor_window_rejected"] = int(self._transaction.state["rejected"])
-        if self._transaction.state["rejected"]:
-            self._stats["actor_retained_steps"] = 0
+        self._stats["q_optimizer_steps"] += 1
+        self.logger.record("train/q_loss", float(loss.detach()))
+        nonwait = data["action"] != 0
+        totals = self._loss_sums
+        totals["branch"] += float(branch_error.detach().sum())
+        totals["branch_count"] += len(branch_error)
+        totals["tile"] += float(tile_error[nonwait].detach().sum())
+        totals["tile_count"] += int(nonwait.sum())
+        self.logger.record("train/branch_loss", totals["branch"] / totals["branch_count"])
+        self.logger.record(
+            "train/tile_loss",
+            totals["tile"] / totals["tile_count"] if totals["tile_count"] else None,
+        )
+        self.logger.record("train/q_grad_norm", float(norm))
 
     def _fit_step(self, callback):
-        actor = self.phase == CohortPhase.ACTOR
-        if actor and self._transaction is None:
-            self._transaction = ActorTransaction(self.policy, self.target_kl)
-        self._prepare_fit(actor)
-        if (
-            self._fit_epoch >= self.n_epochs
-            or not len(self._fit_order)
-            or actor
-            and self._transaction.state["stopped"]
-        ):
+        self._prepare_fit()
+        if self._fit_epoch >= self.n_epochs or not len(self._fit_order):
             self._drain_transfers()
-            if actor:
-                self._guard()
-                if not self._buffer.group_counts[1]:
-                    self._stats["actor_skip_reason"] = "no_planting_samples"
             self._phase(CohortPhase.SYNCHRONIZE, callback)
             self._fit_epoch = self._fit_cursor = 0
             self._fit_order = None
@@ -462,10 +370,7 @@ class CudaCompleteGamePPO(BaseAlgorithm):
         start, end = torch.cuda.Event(enable_timing=True), torch.cuda.Event(enable_timing=True)
         start.record()
         self.policy.set_training_mode(True)
-        if actor:
-            self._actor_step(data)
-        else:
-            self._critic_step(data)
+        self._q_step(data)
         end.record()
         end.synchronize()
         self._device_seconds += start.elapsed_time(end) / 1000
@@ -474,8 +379,6 @@ class CudaCompleteGamePPO(BaseAlgorithm):
             self._drain_transfers()
             self._fit_epoch += 1
             self._fit_order = None
-            if actor:
-                self._guard()
         if hasattr(callback, "log_progress"):
             callback.log_progress()
 
@@ -485,6 +388,8 @@ class CudaCompleteGamePPO(BaseAlgorithm):
         elapsed = sum(self._phase_times.values())
         transitions = int(self._buffer.group_counts.sum())
         self.cohort_metrics = {
+            **self._stats,
+            "prefit_errors": self.prefit_errors,
             **self._buffer.transport_metrics,
             "cache_hit_rate": self._buffer.transport_metrics["cache_hits"]
             / max(1, self._buffer.transport_metrics["cache_requests"]),
@@ -492,17 +397,13 @@ class CudaCompleteGamePPO(BaseAlgorithm):
             "simulation_speed": self._simulation_ticks
             / self.env.batch.rules.game["tick_rate"]
             / max(self._phase_times["collect"], 1e-9),
-            "training_role": self.roles.role,
-            "role_games": self.roles.games + self.n_envs,
-            "role_phase_games": role_phase_games(self.cfg),
             "planting_samples": int(self._buffer.group_counts[1]),
-            "actor_skip_reason": self._stats["actor_skip_reason"],
+            "species_counts": self._buffer.species_counts.tolist(),
             "collection_seconds": self._phase_times["collect"],
-            "critic_seconds": self._phase_times["critic"],
-            "actor_seconds": self._phase_times["actor"],
+            "fit_seconds": self._phase_times["fit"],
             "returns_seconds": self._phase_times["returns"],
             "window_seconds": elapsed,
-            "optimization_seconds": self._phase_times["critic"] + self._phase_times["actor"],
+            "optimization_seconds": self._phase_times["fit"],
             "transitions_per_second": transitions / max(elapsed, 1e-9),
             "transitions": transitions,
             "peak_cuda_memory_bytes": torch.cuda.max_memory_allocated(self.device),
@@ -510,19 +411,10 @@ class CudaCompleteGamePPO(BaseAlgorithm):
         for key, value in self._stats.items():
             self.logger.record("train/" + key, value)
         self.logger.record("train/learning_rate", self.policy.optimizer.param_groups[0]["lr"])
-        self.logger.record(
-            "train/critic_learning_rate", self.policy.critic_optimizer.param_groups[0]["lr"]
-        )
-        for name in ("plant", "tile"):
-            self.logger.record(
-                "train/effective_" + name + "_entropy_coef",
-                self.policy.exploration_settings[name + "_coef"],
-            )
         self._n_updates += 1
-        self.roles.complete(self.n_envs, role_phase_games(self.cfg))
         self.logger.record("train/n_updates", self._n_updates)
         self._buffer.close()
-        self._buffer = self._memory = self._behavior = self._transaction = None
+        self._buffer = self._memory = None
         self.phase = CohortPhase.IDLE
         callback.on_rollout_end()
 
@@ -571,15 +463,10 @@ class CudaCompleteGamePPO(BaseAlgorithm):
                                     "train/value_target_error_" + name, values["mse"]
                                 )
                                 self.logger.record(
-                                    "train/raw_advantage_mean_" + name,
-                                    -values["signed_error"] if values["count"] else None,
+                                    "train/tile_target_error_" + name, values["tile_mse"]
                                 )
-                                self.logger.record(
-                                    "train/positive_advantage_fraction_" + name,
-                                    values["positive_advantage_fraction"],
-                                )
-                            self._phase(CohortPhase(self.roles.role), callback)
-                        elif phase in (CohortPhase.CRITIC, CohortPhase.ACTOR):
+                            self._phase(CohortPhase.FIT, callback)
+                        elif phase == CohortPhase.FIT:
                             self._fit_step(callback)
                         elif phase == CohortPhase.SYNCHRONIZE:
                             self._synchronize(callback)
@@ -590,9 +477,6 @@ class CudaCompleteGamePPO(BaseAlgorithm):
             return self
         except KeyboardInterrupt:
             self._drain_transfers()
-            if self.phase == CohortPhase.ACTOR:
-                with atomic_transition():
-                    self._guard()
             raise
         finally:
             self._drain_transfers()
@@ -619,10 +503,6 @@ class CudaCompleteGamePPO(BaseAlgorithm):
         self._buffer.configure_cache(
             self.device, self.env.cfg["training"].get("performance", {}).get("token_cache_gib", 2)
         )
-        self._behavior = self._snapshot_policy()
-        self._behavior.load_state_dict(state["behavior"])
-        if state["transaction"] is not None:
-            self._transaction = ActorTransaction(self.policy, self.target_kl, state["transaction"])
         self._restore_rng(state)
         self.runtime_state = None
         self.resumed_cohort = True
@@ -655,8 +535,6 @@ class CudaCompleteGamePPO(BaseAlgorithm):
                 "memory": self._memory.snapshot(),
                 "previous": self._previous,
                 "buffer": self._buffer.metadata(),
-                "behavior": self._behavior.state_dict(),
-                "transaction": None if self._transaction is None else self._transaction.state,
                 "python_rng": random.getstate(),
                 "numpy_rng": np.random.get_state(),
                 "torch_rng": torch.get_rng_state(),
@@ -670,6 +548,16 @@ class CudaCompleteGamePPO(BaseAlgorithm):
         try:
             super().save(temporary, *args, **kwargs)
             with ZipFile(temporary, "a") as archive:
+                archive.writestr(
+                    "protocol.json",
+                    json.dumps(
+                        dict(
+                            policy=POLICY_SIGNATURE,
+                            optimizer=OPTIMIZER_PROTOCOL,
+                            exploration=EXPLORATION_PROTOCOL,
+                        )
+                    ),
+                )
                 state_bytes = io.BytesIO()
                 torch.save(runtime, state_bytes)
                 archive.writestr("cohort-state.pt", state_bytes.getvalue())
@@ -693,8 +581,6 @@ class CudaCompleteGamePPO(BaseAlgorithm):
             *super()._excluded_save_params(),
             "_buffer",
             "_memory",
-            "_behavior",
-            "_transaction",
             "_previous",
             "_checkpoint_source",
             "runtime_state",
@@ -703,4 +589,4 @@ class CudaCompleteGamePPO(BaseAlgorithm):
         ]
 
     def _get_torch_save_params(self):
-        return ["policy", "policy.optimizer", "policy.critic_optimizer"], []
+        return ["policy", "policy.optimizer"], []

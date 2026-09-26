@@ -24,7 +24,7 @@ def test_progress_has_aligned_recent_and_run_metrics_and_unlimited_has_no_eta(tm
         assert "next mastery probe 2,000 games" in text
         assert "Reward      n/a | discounted return n/a" in text
         assert "Net value   n/a" in text
-        callback.model.phase = "actor"
+        callback.model.phase = "fit"
         callback.recent.append(
             dict(
                 family="saving",
@@ -45,7 +45,7 @@ def test_progress_has_aligned_recent_and_run_metrics_and_unlimited_has_no_eta(tm
         )
         callback.log_progress(force=True)
         text = capsys.readouterr().out
-        assert "| actor" in text and "early digs/plant 12.50%" in text
+        assert "| fit" in text and "early digs/plant 12.50%" in text
         assert "attackers/game 3.00" in text and "discounted return +1.10000" in text
         assert "Reward      +1.10000" in text and "Net value   +3000.00" in text
     finally:

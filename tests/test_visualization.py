@@ -138,9 +138,11 @@ def test_shared_checkpoint_reports_and_videos(smoke_cfg, tmp_path, monkeypatch):
     metrics = read_series(run / "training-metrics.jsonl")
     assert [m["training_steps"] for m in metrics] == [100, 201]
     assert [m["completed_updates"] for m in metrics] == [1, 2]
-    assert all(m["optimization"]["value_loss"] is not None for m in metrics)
-    assert all(m["optimization"]["critic_optimizer_steps"] > 0 for m in metrics)
-    assert all(m["optimization"]["exact_kl"] is not None for m in metrics)
+    assert all(m["optimization"]["q_loss"] is not None for m in metrics)
+    assert all(m["optimization"]["q_optimizer_steps"] > 0 for m in metrics)
+    assert all(m["optimization"]["branch_loss"] is not None for m in metrics)
+    assert metrics[0]["optimization"]["tile_loss"] is None
+    assert metrics[1]["optimization"]["tile_loss"] is not None
     assert metrics[-1]["rolling_by_task"]["saving"]["completed_games"] > 0
     assert sum(t["transitions"] for t in metrics[-1]["task_counts"].values()) == 201
     assert (run / "tensorboard").exists()
@@ -148,7 +150,7 @@ def test_shared_checkpoint_reports_and_videos(smoke_cfg, tmp_path, monkeypatch):
 
     event_file = next((run / "tensorboard").glob("*/events.out.tfevents.*"))
     events = EventAccumulator(str(event_file)).Reload()
-    assert [r.step for r in events.Scalars("train/value_loss")] == [100, 201]
+    assert [r.step for r in events.Scalars("train/q_loss")] == [100, 201]
     demo_data = json.loads((run / "visualizations/demos.json").read_text())
     demos = demo_data["demos"]
     assert {r["level"] for r in demos} == {"easy", "standard", "hard"}

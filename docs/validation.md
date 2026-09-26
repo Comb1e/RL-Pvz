@@ -1,5 +1,57 @@
 # Validation and measured results
 
+## Sequential Q controller 0.23.0 — 2026-09-26
+
+The mathematics was written and independently checked before changing behavior.
+Controls enumerate branch/tile legality, row-major ties, the two-coin exploration
+budget, whole-cohort balanced loss, selected-output gradients and Adam states.
+Integration preserves causal memory, CPU/disk overflow, disposable token caches,
+prefetch order, exact interrupted collection/fitting and viewer-on/off RNG,
+actions, rewards, optimizer states and policy hashes. Old archives are rejected
+from a plain protocol manifest before retired class deserialization. Historical
+reports remain readable without models. The game checkout and pin are unchanged.
+
+Two explicitly labelled **one-second cutoff integration controls**, seeds 101/102,
+used 32 environments, four epochs, minibatches up to 1,024 and current widths.
+Each seed warmed one waiting cohort, then measured one cohort with real planting
+and optimizer work through the existing benchmark interface. Total setup, warm-up
+and measurement wall time for both was **8.61 seconds**, within ten minutes.
+There was no formal training, normal-length learning comparison or speedup claim.
+Compilation was unavailable without Triton; these are eager measurements.
+
+| Measurement | Seed 101 | Seed 102 |
+|---|---:|---:|
+| Complete measured wall seconds, including reset | 1.5093 | 1.4839 |
+| Complete transitions/s | 2,141.4 | 2,178.1 |
+| Collection seconds | 0.7912 | 0.7849 |
+| Q fitting seconds | 0.5172 | 0.5056 |
+| Measured transitions | 3,232 | 3,232 |
+| Q optimizer steps | 16 | 16 |
+| Wait / plant / dig coverage | 3,200 / 32 / 0 | 3,200 / 32 / 0 |
+| Sunflower / peashooter coverage | 31 / 1 | 31 / 1 |
+| Species / tile exploration coins | 1 / 1 | 1 / 1 |
+| Changed commands | 2 | 2 |
+| Peak allocated VRAM MiB | 886.0 | 886.0 |
+| Peak reserved VRAM MiB | 1,992 | 1,998 |
+
+Other species and digging have zero coverage in this short control; synthetic
+masked cases and gradient controls exercise those outputs separately. All games
+end at the deliberately short failure cutoff. These numbers establish operability,
+not mastery, representative long-run throughput or improved learning.
+Raw measurements and doctor output: `artifacts/sequential-q-0.23.0/`.
+Full/reduced-size synthetic viewer images were inspected at 1600×1050 and 944×668;
+tests also cover 640×480, responsive controls, generation rejection and closing.
+
+Maintained game regressions: **226 passed in 219.59 seconds**. All **515** current
+research cases were covered by the full regression run and focused reruns. The
+full run passed 505 cases; nine obsolete scheduler/metric assertions were migrated
+and passed on rerun. The final focused Q/viewer/storage pass covered 81 cases,
+and the added CPU/CUDA network-gradient/Adam control plus shared-checkpoint
+report/video control passed together (2 tests, 37.16 s). No failing current cases
+remain. Replay/checkpoint tests verify three demonstrations use the same selected
+checkpoint. Ruff lint/format, dependency checks, doctor, wheel and source packaging
+passed; the wheel contains neither retired policy module and no SB3-Contrib dependency.
+
 ## Viewer decision explanation — 2026-09-25
 
 The live panels now compare the legal collection-time Q values and explain the

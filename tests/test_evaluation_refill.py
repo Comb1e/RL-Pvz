@@ -110,18 +110,18 @@ def test_plant_and_mower_kills_survive_cuda_episode_reset(monkeypatch):
 
 
 def test_validation_temporarily_disables_injected_exploration():
-    actor = SimpleNamespace(action_dist=SimpleNamespace(epsilon=0.05), exploration_epsilon=0.05)
+    actor = SimpleNamespace(exploration_epsilon=0.05)
     policy = SimpleNamespace(
         policy=actor,
         exploration_rate=0.05,
         policy_kwargs={"exploration_epsilon": 0.05},
     )
     with deterministic_validation(policy):
-        assert actor.action_dist.epsilon == 0
+        assert actor.exploration_epsilon == 0
         assert actor.exploration_epsilon == 0
         assert policy.exploration_rate == 0
         assert policy.policy_kwargs["exploration_epsilon"] == 0
-    assert actor.action_dist.epsilon == 0.05
+    assert actor.exploration_epsilon == 0.05
     assert actor.exploration_epsilon == 0.05
     assert policy.exploration_rate == 0.05
     assert policy.policy_kwargs["exploration_epsilon"] == 0.05

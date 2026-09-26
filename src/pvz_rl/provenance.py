@@ -123,7 +123,6 @@ def metadata(cfg: dict, **extra) -> dict:
         "torch",
         "gymnasium",
         "stable-baselines3",
-        "sb3-contrib",
         "cupy-cuda12x",
         "nvidia-cuda-runtime-cu12",
         "nvidia-cuda-nvrtc-cu12",

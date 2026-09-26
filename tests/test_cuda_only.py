@@ -188,7 +188,7 @@ def test_benchmark_schedules_configurable_cuda_sizes(smoke_cfg, tmp_path, monkey
     monkeypatch.setattr(benchmark, "measure", measure)
     result = benchmark.benchmark_gpu(smoke_cfg, tmp_path / "benchmark", minutes=1, steps=128)
     assert len(seen) == 3
-    assert {(n, steps) for n, steps, _ in seen} == {(32, "complete_game_mc")}
+    assert {(n, steps) for n, steps, _ in seen} == {(32, "sequential_q_mc_v1")}
     assert {seed for _, _, seed in seen} == {800, 801, 802}
     assert result["n_envs"] == 32
     assert "speedup_over_current" not in result
@@ -200,7 +200,6 @@ def test_benchmark_schedules_configurable_cuda_sizes(smoke_cfg, tmp_path, monkey
         return measure(cfg, seed, steps, output, **kwargs)
 
     monkeypatch.setattr(benchmark, "measure", limited)
-    smoke_cfg["training"]["role_phase_games"] = 512
     result = benchmark.benchmark_gpu(
         smoke_cfg, tmp_path / "custom", minutes=1, steps=128, env_counts=[64, 512]
     )

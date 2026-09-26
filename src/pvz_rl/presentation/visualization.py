@@ -136,8 +136,9 @@ def hardware_panels(segments, output):
             (
                 ("collection_seconds", "Collection"),
                 ("update_seconds", "Update"),
-                ("critic_seconds", "Critic"),
-                ("actor_seconds", "Plant actor"),
+                ("fit_seconds", "Q fitting"),
+                ("critic_seconds", "Archived critic"),
+                ("actor_seconds", "Archived actor"),
                 ("window_seconds", "Critical path"),
             ),
         ),
@@ -171,6 +172,7 @@ def hardware_panels(segments, output):
                     "warmup": "#d8e8f6",
                     "collect": "#d8e8f6",
                     "critic": "#e2f0df",
+                    "fit": "#e2f0df",
                     "actor": "#eaddef",
                     "formal": "#e2f0df",
                     "validation": "#ffe3a5",
@@ -187,7 +189,7 @@ def hardware_panels(segments, output):
         ax.set(title=title, ylabel=unit, xlabel="Elapsed wall time within session (minutes)")
         ax.grid(alpha=0.2)
     fig.suptitle(
-        "Hardware telemetry • blue: collection • green: critic • purple: actor/reporting • amber: validation",
+        "Hardware telemetry • blue: collection • green: fitting • purple: actor/reporting • amber: validation",
         fontsize=11,
     )
     _save(fig, output, "hardware")
@@ -358,6 +360,14 @@ def build_run_report(run, cfg=None):
     images.append(("Net realized value accounting", "accounting-curves.png"))
 
     optimizer_panels = [
+        ("q_loss", "Balanced Q loss"),
+        ("branch_loss", "First-level MSE"),
+        ("tile_loss", "Conditional tile MSE"),
+        ("q_grad_norm", "Q gradient norm before clipping"),
+        ("q_optimizer_steps", "Q optimizer steps per cohort"),
+    ]
+    # Existing reports remain readable without loading their retired model classes.
+    archived_panels = [
         ("policy_gradient_loss", "Conditional planting PPO loss"),
         ("value_loss", "Balanced critic MSE (last minibatch)"),
         ("approx_kl", "Sampled conditional planting KL"),
@@ -376,6 +386,18 @@ def build_run_report(run, cfg=None):
                 ("action_count", "completed-cohort decisions"),
             )
         ),
+    ]
+    present_keys = {
+        k
+        for _, series in segments
+        for row in series["training-metrics"]
+        for k, v in row.get("optimization", {}).items()
+        if v is not None
+    }
+    optimizer_panels += [
+        (key, title)
+        for key, title in archived_panels
+        if key in present_keys or key.startswith(("value_target_error", "action_count"))
     ]
     panel_rows = (len(optimizer_panels) + 1) // 2
     fig, axes = plt.subplots(panel_rows, 2, figsize=(12, 3 * panel_rows))
@@ -405,7 +427,7 @@ def build_run_report(run, cfg=None):
     for ax in list(axes.flat)[len(optimizer_panels) :]:
         ax.set_visible(False)
     _save(fig, output, "optimization-curves")
-    images.append(("Critic and conditional PPO optimization", "optimization-curves.png"))
+    images.append(("Optimization diagnostics", "optimization-curves.png"))
 
     fig, axes = plt.subplots(2, 3, figsize=(15, 7))
     for ax, key, title in zip(
@@ -414,17 +436,17 @@ def build_run_report(run, cfg=None):
             "rolling_attacker_purchases",
             "rolling_maximum_sun",
             "exploration_rate",
-            "plant_exploration_bonus",
-            "tile_exploration_bonus",
-            "joint_entropy",
+            "species_exploration_coins",
+            "tile_exploration_coins",
+            "exploratory_changes",
         ),
         (
             "Sustained attackers purchased / episode",
             "Maximum sun / episode",
             "Injected planting exploration fraction",
-            "Normalized species entropy bonus",
-            "Normalized tile entropy bonus",
-            "Joint species-and-tile entropy",
+            "Species exploration coins per cohort",
+            "Tile exploration coins per cohort",
+            "Commands changed by exploration per cohort",
         ),
     ):
         plotted = False

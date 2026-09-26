@@ -1,5 +1,13 @@
 # Sources actually used
 
+## Sequential Q controller — inspected 2026-09-25, implemented 2026-09-26
+
+- [Metz et al., Discrete Sequential Prediction of Continuous Actions for Deep RL](https://arxiv.org/abs/1705.05035), [full method text](https://arxiv.org/html/1705.05035v3), especially §2.2: inspected sequential component prediction, augmented intermediate states, zero intermediate reward and action execution only after assembly. Its additional Bellman backups can introduce approximation/overestimation difficulties. This project adopts the action assembly idea with complete-return regression, not its bootstrapped off-policy learning algorithm or reported performance.
+- Installed [Stable-Baselines3 2.7.1 QNetwork](https://github.com/DLR-RM/stable-baselines3/blob/v2.7.1/stable_baselines3/dqn/policies.py), `forward` and `_predict`, and [DQN.predict](https://github.com/DLR-RM/stable-baselines3/blob/v2.7.1/stable_baselines3/dqn/dqn.py): inspected value output, argmax and epsilon exploration. The project uses masked two-level selection and a plant-only two-coin budget; it does not adopt SB3 DQN replay or TD targets. SB3 remains for base interfaces, callbacks and serialization; SB3-Contrib is no longer required.
+
+Earlier sections record sources for their dated releases. Their actor/PPO claims
+describe historical implementations, not the current Q controller.
+
 ## Live decision explanation — inspected 2026-09-25
 
 Inspected installed [Stable-Baselines3 2.7.1 QNetwork prediction](https://github.com/DLR-RM/stable-baselines3/blob/v2.7.1/stable_baselines3/dqn/policies.py),

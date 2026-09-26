@@ -111,7 +111,7 @@ def test_event_fifo_retains_actions_and_never_reads_future():
 def test_timer_replacement_probe_same_current_state_different_history():
     from gymnasium.spaces import Discrete
 
-    from pvz_rl.policy.spatial_policy import SpatialFeatures, SpatialGroupedPolicy
+    from pvz_rl.policy.spatial_policy import SequentialQPolicy, SpatialFeatures
 
     torch.set_num_threads(1)
     torch.manual_seed(7)
@@ -125,26 +125,26 @@ def test_timer_replacement_probe_same_current_state_different_history():
     observe(late, obs, masks, 900, action=190)
     a = observe(early, obs, masks, 1000).clone()
     b = observe(late, obs, masks, 1000).clone()
-    policy = SpatialGroupedPolicy(
+    policy = SequentialQPolicy(
         encoder.space,
         Discrete(406),
         lambda _: 3e-4,
-        net_arch={"pi": [128, 128], "vf": [128, 128]},
+        hidden_sizes=[128, 128],
         features_extractor_class=SpatialFeatures,
         features_extractor_kwargs={"layout_cfg": cfg},
     )
     # Same current public state; a random network must receive distinct usable
     # history features. This proves observability, not learned phase competence.
     with torch.no_grad():
-        ea = policy.pi_features_extractor(obs, a)
-        eb = policy.pi_features_extractor(obs, b)
+        ea = policy.features_extractor(obs, a)
+        eb = policy.features_extractor(obs, b)
         assert not torch.allclose(ea, eb, atol=1e-7)
         future = a.clone()
         future.tokens[:, -1, -1] = 1001
         future.valid[:, -1] = True
         future.tokens[:, -1, : encoder.size] = 0
-        torch.testing.assert_close(policy.pi_features_extractor(obs, future), ea)
-        for extractor in (policy.pi_features_extractor, policy.vf_features_extractor):
+        torch.testing.assert_close(policy.features_extractor(obs, future), ea)
+        for extractor in (policy.features_extractor,):
             assert (extractor.temporal.blocks[0].attn_gate.bias == -2).all()
     loss = policy.predict_values(obs, a).square().mean()
     loss.backward()
@@ -154,14 +154,14 @@ def test_timer_replacement_probe_same_current_state_different_history():
 def test_real_mine_histories_affect_tile_preferences_without_countdown_inputs():
     """Identical current boards/masks, different actual arming ages.
 
-    This is a representational control, not evidence that PPO learned timing.
+    This is a representational control, not evidence that the agent learned timing.
     """
     from gymnasium.spaces import Discrete
     from pvz_game import Place, Wait
 
     from pvz_rl.envs.actions import ActionCodec
     from pvz_rl.envs.lesson_rules import sky_rules
-    from pvz_rl.policy.spatial_policy import SpatialFeatures, SpatialGroupedPolicy
+    from pvz_rl.policy.spatial_policy import SequentialQPolicy, SpatialFeatures
 
     torch.set_num_threads(1)
     torch.manual_seed(7)
@@ -192,22 +192,23 @@ def test_real_mine_histories_affect_tile_preferences_without_countdown_inputs():
     torch.testing.assert_close(observations[0], observations[1], atol=0, rtol=0)
     torch.testing.assert_close(masks[0], masks[1], atol=0, rtol=0)
     assert games[0].observe().plants[0].timer_ticks != games[1].observe().plants[0].timer_ticks
-    policy = SpatialGroupedPolicy(
+    policy = SequentialQPolicy(
         encoder.space,
         Discrete(406),
         lambda _: 3e-4,
-        net_arch={"pi": [128, 128], "vf": [128, 128]},
+        hidden_sizes=[128, 128],
         features_extractor_class=SpatialFeatures,
         features_extractor_kwargs={"layout_cfg": cfg},
     )
     with torch.no_grad():
         # Initialization intentionally has no learned tile preference. A nonzero
         # readout tests whether temporal features can inform such preferences.
-        policy.action_net.tiles.weight.normal_(std=0.01)
-        logits = policy.get_distribution(observations, masks, context).logits
+        policy.tile_head[-1].weight.normal_(std=0.01)
+        board, pooled = policy.encode(observations, context)
+        logits = policy.tile_values(board, pooled, torch.full((2,), 5))
         # Temporal information reaches conditional tile preferences, not only
         # a uniform tile-map offset that would cancel under softmax.
-        difference = logits[0, 8:].reshape(8, 45) - logits[1, 8:].reshape(8, 45)
+        difference = logits[0] - logits[1]
         assert difference.std(-1).max() > 1e-7
         isolated = EventMemory(cfg, rules, 2, "cpu")
         reset = isolated.observe(
@@ -221,9 +222,10 @@ def test_real_mine_histories_affect_tile_preferences_without_countdown_inputs():
         # Compare identical batch positions: CPU GEMM can round a three-wide
         # output differently across rows even when their inputs are identical.
         reset_logits = [
-            policy.get_distribution(
-                observations[i : i + 1], masks[i : i + 1], reset.select(torch.tensor([i]))
-            ).logits.clone()
+            policy.tile_values(
+                *policy.encode(observations[i : i + 1], reset.select(torch.tensor([i]))),
+                torch.tensor([5]),
+            ).clone()
             for i in range(2)
         ]
         torch.testing.assert_close(reset_logits[0], reset_logits[1], atol=0, rtol=0)

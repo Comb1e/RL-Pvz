@@ -68,7 +68,6 @@ def smoke_cfg(per_tick_cfg):
         total_steps=128,
         batch_size=32,
         n_epochs=1,
-        target_kl=0,
         n_envs=1,
         hidden_sizes=[32, 32],
         eval_interval=64,

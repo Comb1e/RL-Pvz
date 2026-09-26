@@ -136,7 +136,6 @@ class CudaLiveCapture:
         self.decision_pending = None
         self.decision_host = None
         self.prepared = False
-        self.role = None
         self.stats = {"captures": 0, "capture_seconds": 0.0, "skipped": 0}
 
     @property
@@ -148,21 +147,13 @@ class CudaLiveCapture:
 
     def set_activity(self, activity):
         self.session.set_activity(activity)
-        if hasattr(self.session, "set_role"):
-            self.session.set_role(self.role)
 
     def prepare(self):
         changed = self.session.selection.refresh(np.flatnonzero(self.env.enabled_envs))
         changed = self.session.poll() or changed
         if not self.enabled:
             return
-        self.set_activity(
-            Activity.ACTOR_COLLECTING
-            if self.role == "actor"
-            else Activity.CRITIC_COLLECTING
-            if self.role == "critic"
-            else Activity.COLLECTING
-        )
+        self.set_activity(Activity.COLLECTING)
         self.drain()
         if self.indices is None or changed:
             self.indices = torch.tensor(
@@ -182,9 +173,10 @@ class CudaLiveCapture:
         packed = torch.cat(
             (
                 diagnostic["q"],
-                diagnostic["plants"],
                 diagnostic["tiles"].flatten(1),
                 diagnostic["actions"][:, None],
+                diagnostic["greedy_actions"][:, None],
+                diagnostic["coins"],
                 ticks[self.indices, None],
             ),
             -1,
@@ -217,9 +209,13 @@ class CudaLiveCapture:
                 self.decisions[i] = dict(
                     generation=generation,
                     episode=episode,
-                    q=[float(x) if np.isfinite(x) else None for x in row[:3]],
-                    plants=row[DecisionLayout.species].tolist(),
-                    tiles=row[DecisionLayout.tiles].reshape(A.plant_types, A.tiles).tolist(),
+                    q=[float(x) if np.isfinite(x) else None for x in row[DecisionLayout.q]],
+                    tiles=[
+                        [float(q) if np.isfinite(q) else None for q in tile_row]
+                        for tile_row in row[DecisionLayout.tiles].reshape(A.tile_groups, A.tiles)
+                    ],
+                    greedy_action=int(row[DecisionLayout.greedy]),
+                    coins=row[DecisionLayout.coins].astype(bool).tolist(),
                     action=int(row[DecisionLayout.action]),
                     tick=int(row[DecisionLayout.tick]),
                 )

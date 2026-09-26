@@ -94,7 +94,7 @@ def test_categorical_embedding_matches_lookup_gradients_and_adam(device, categor
 
 
 def test_missing_cuda_compiler_backend_never_enters_tracing(monkeypatch):
-    from pvz_rl.policy.spatial_policy import SpatialGroupedPolicy
+    from pvz_rl.policy.spatial_policy import SequentialQPolicy
 
     monkeypatch.setattr("pvz_rl.policy.spatial_policy.importlib.util.find_spec", lambda _: None)
 
@@ -103,5 +103,137 @@ def test_missing_cuda_compiler_backend_never_enters_tracing(monkeypatch):
 
     monkeypatch.setattr(torch, "compile", unexpected)
     policy = SimpleNamespace(device=torch.device("cuda"))
-    SpatialGroupedPolicy.enable_compilation(policy)
+    SequentialQPolicy.enable_compilation(policy)
     assert policy.compilation_status == "unavailable" and "Triton" in policy.compilation_error
+
+
+@pytest.mark.parametrize("device", ["cpu", "cuda"])
+def test_sequential_heads_masks_ties_conditioning_and_roundtrips(device):
+    from gymnasium import spaces
+
+    from pvz_rl.config import load_config
+    from pvz_rl.envs.actions import ActionCodec
+    from pvz_rl.envs.actions import ActionSchema as A
+    from pvz_rl.policy.sequential_q import action_parts, assemble, branch_masks, greedy_choice
+    from pvz_rl.policy.spatial_policy import SequentialQPolicy
+
+    cfg = load_config()
+    p = SequentialQPolicy(
+        spaces.Box(-1, 1, (286,)),
+        spaces.Discrete(A.size),
+        lambda _: 3e-4,
+        features_extractor_kwargs={"layout_cfg": cfg},
+    ).to(device)
+    obs = torch.zeros(5, 286, device=device)
+    mask = torch.zeros(5, A.size, device=device, dtype=torch.bool)
+    mask[0, 0] = True  # wait only
+    mask[1, A.dig_start + 9] = True  # dig only
+    mask[2, [46, 50]] = True  # one species, row-major tie
+    mask[3, [0, 1, 46, A.dig_start]] = True
+    mask[4, [91, 182, A.dig_start]] = True
+    with torch.no_grad():
+        q = p.predict_values(obs)
+        torch.testing.assert_close(q[:, :-1], torch.zeros_like(q[:, :-1]))
+        assert (q[:, -1] == -2).all()
+        result = p.decide(obs, mask, deterministic=True)
+        assert result[0].tolist() == [0, A.dig_start + 9, 46, 0, 91]
+        assert (mask.gather(1, result[0][:, None])).all()
+        board, pooled = p.encode(obs)
+        plants = p.tile_values(board, pooled, torch.ones(5, device=device, dtype=torch.long))
+        digs = p.tile_values(board, pooled, torch.full((5,), 9, device=device, dtype=torch.long))
+        assert plants.shape == digs.shape == (5, 45)
+        assert (plants == 0).all() and (digs == -2).all()
+        # Changing the branch offset changes only that conditional value map.
+        p.tile_offsets[1] = 3
+        assert (p.tile_values(board, pooled, torch.full((5,), 2, device=device)) == 3).all()
+        assert (
+            p.tile_values(board, pooled, torch.ones(5, device=device, dtype=torch.long)) == 0
+        ).all()
+    with pytest.raises(ValueError, match="legal"):
+        p.decide(obs, torch.zeros_like(mask))
+    with pytest.raises(ValueError, match="finite"):
+        greedy_choice(torch.full((5, 10), torch.nan, device=device), branch_masks(mask))
+    commands = torch.arange(A.size, device=device)
+    torch.testing.assert_close(assemble(*action_parts(commands)), commands)
+    codec = ActionCodec(cfg)
+    assert all(codec.encode(codec.decode(i)) == i for i in range(A.size))
+    # Unselected outputs receive no direct regression gradient; digging is trainable.
+    actions = torch.tensor([0, A.dig_start + 9, 46, 0, 91], device=device)
+    first, second = p.selected_values(obs, actions)
+    loss = (first - 1).square().mean() + (second[1] - 1).square()
+    loss.backward()
+    assert p.tile_offsets.grad[-1] < 0
+    assert (p.branch_head[-1].bias.grad[[1, 4, 5, 6, 7, 8]] == 0).all()
+
+
+@pytest.mark.parametrize("budget", [0.0, 0.1, 1.0])
+def test_exploration_unequal_tiles_matches_independent_enumeration(budget):
+    from pvz_rl.policy.sequential_q import explore, per_head_epsilon
+
+    torch.manual_seed(103)
+    count = 50000
+    alpha = per_head_epsilon(budget)
+    legal = torch.tensor([[True, False, True]]).expand(count, -1)
+    species, first_coin = explore(torch.zeros(count, dtype=torch.long), legal, alpha)
+    tile_mask = torch.arange(5)[None] < torch.where(species == 0, 2, 5)[:, None]
+    tile, second_coin = explore(torch.zeros(count, dtype=torch.long), tile_mask, alpha)
+    for k, n in ((0, 2), (2, 5)):
+        for t in range(n):
+            expected = ((1 - alpha) * (k == 0) + alpha / 2) * ((1 - alpha) * (t == 0) + alpha / n)
+            measured = ((species == k) & (tile == t)).float().mean().item()
+            assert measured == pytest.approx(expected, abs=0.007)
+    assert (first_coin | second_coin).float().mean().item() == pytest.approx(budget, abs=0.007)
+    assert not (species == 1).any()
+
+
+def test_shared_q_cpu_cuda_outputs_gradients_and_adam_parity():
+
+    from gymnasium import spaces
+
+    from pvz_rl.config import load_config
+    from pvz_rl.policy.spatial_policy import SequentialQPolicy
+
+    torch.manual_seed(102)
+    policy = SequentialQPolicy(
+        spaces.Box(-1, 1, (286,)),
+        spaces.Discrete(406),
+        lambda _: 3e-4,
+        features_extractor_kwargs={"layout_cfg": load_config()},
+    ).double()
+    with torch.no_grad():
+        policy.branch_head[-1].weight.normal_(std=0.01)
+        policy.tile_head[-1].weight.normal_(std=0.01)
+    cuda = (
+        SequentialQPolicy(
+            spaces.Box(-1, 1, (286,)),
+            spaces.Discrete(406),
+            lambda _: 3e-4,
+            features_extractor_kwargs={"layout_cfg": load_config()},
+        )
+        .double()
+        .cuda()
+    )
+    cuda.load_state_dict(policy.state_dict())
+    obs = torch.zeros(3, 286, dtype=torch.float64)
+    obs[:, 270] = torch.tensor([0.5, 1, 3])
+    actions = torch.tensor([0, 47, 365])
+    values = []
+    for network, device in ((policy, "cpu"), (cuda, "cuda")):
+        first, second = network.selected_values(obs.to(device), actions.to(device))
+        values.append((first.detach().cpu(), second.detach().cpu()))
+        loss = (first - torch.tensor([-2.0, 1.0, -0.3], device=device)).square().mean() + second[
+            1:
+        ].square().mean()
+        network.optimizer.zero_grad()
+        loss.backward()
+        network.optimizer.step()
+    for a, b in zip(*values):
+        torch.testing.assert_close(a, b, rtol=1e-8, atol=1e-10)
+    for a, b in zip(policy.parameters(), cuda.parameters()):
+        if a.grad is not None:
+            torch.testing.assert_close(a.grad, b.grad.cpu(), rtol=1e-8, atol=1e-10)
+        torch.testing.assert_close(a, b.cpu(), rtol=1e-8, atol=1e-10)
+        for key, value in policy.optimizer.state.get(a, {}).items():
+            torch.testing.assert_close(
+                value, cuda.optimizer.state[b][key].cpu(), rtol=1e-8, atol=1e-10
+            )

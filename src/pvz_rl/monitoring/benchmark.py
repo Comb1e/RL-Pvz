@@ -1,4 +1,4 @@
-"""Measure warmed-up PPO collection/update speed without changing the strategy."""
+"""Measure warmed-up Q collection/update speed without changing the strategy."""
 
 import gc
 import hashlib
