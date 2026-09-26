@@ -5,6 +5,7 @@ import json
 import random
 import shutil
 import tempfile
+import warnings
 from pathlib import Path
 from time import perf_counter
 from zipfile import ZipFile
@@ -213,20 +214,8 @@ class CudaSequentialQ(BaseAlgorithm):
                 self._buffer.size, self._buffer.size + self.n_envs, device=self.device
             )
             context = self._memory.observe(obs, masks, self._previous, resets, ticks, token_ids=ids)
-            viewer = env.live_view
-            watched = None
-            if viewer is not None and viewer.enabled:
-                try:
-                    watched = viewer.decision_indices()
-                except Exception as exc:
-                    viewer.fail(exc)
-            result = self.policy.decide(obs, masks, context=context, diagnostic_indices=watched)
+            result = self.policy.decide(obs, masks, context=context)
             actions, values, tile_values = result[:3]
-            if watched is not None:
-                try:
-                    viewer.capture_decision(result[3]["viewer"], ticks)
-                except Exception as exc:
-                    viewer.fail(exc)
             # One bounded packed transfer; copied before the simulator mutates observations.
             packed = torch.cat(
                 (
@@ -243,6 +232,7 @@ class CudaSequentialQ(BaseAlgorithm):
                     self._memory.ids.to(torch.int32).view(torch.float32),
                     self._memory.counts,
                     self._memory.starts,
+                    result[3]["branch_q"],
                 ),
                 -1,
             )
@@ -286,6 +276,9 @@ class CudaSequentialQ(BaseAlgorithm):
             rows["reset"] = self._first
             rows["active"], rows["env"] = active, np.arange(self.n_envs)
             rows["reward"], rows["duration"] = reward, duration
+            env.action_journal.record_batch_safe(
+                rows, host[:, -10:], env.last_action_result_host, env._episode_serial
+            )
             self._buffer.append(rows, raw_tokens)
             self._stats["species_exploration_coins"] += int(rows["species_coin"][active].sum())
             self._stats["tile_exploration_coins"] += int(rows["tile_coin"][active].sum())
@@ -488,6 +481,8 @@ class CudaSequentialQ(BaseAlgorithm):
             self.runtime_state = None
             return
         self._last_obs = self.env.restore_training(state["environment"])
+        with ZipFile(self._checkpoint_source) as archive:
+            self.env.action_journal.restore_archive_safe(archive)
         self.resumed_cohort = True
         if self.phase == CohortPhase.IDLE:
             self._restore_rng(state)
@@ -561,6 +556,26 @@ class CudaSequentialQ(BaseAlgorithm):
                 state_bytes = io.BytesIO()
                 torch.save(runtime, state_bytes)
                 archive.writestr("cohort-state.pt", state_bytes.getvalue())
+                if self.env is not None:
+                    try:
+                        self.env.action_journal.write_archive(archive)
+                    except (OSError, MemoryError, ValueError) as exc:
+                        # Journal metadata is the last entry; incomplete optional
+                        # blocks have no manifest and cannot invalidate training state.
+                        warnings.warn(
+                            f"Checkpoint saved without complete action history: {exc}",
+                            RuntimeWarning,
+                            stacklevel=2,
+                        )
+                elif hasattr(self, "_checkpoint_source"):
+                    with ZipFile(self._checkpoint_source) as source:
+                        for name in source.namelist():
+                            if name.startswith("journal/"):
+                                with (
+                                    source.open(name) as inp,
+                                    archive.open(name, "w", force_zip64=True) as out,
+                                ):
+                                    shutil.copyfileobj(inp, out, length=1024 * 1024)
                 if self._buffer is not None:
                     self._buffer.write_archive(archive)
                 elif runtime.get("buffer") is not None:

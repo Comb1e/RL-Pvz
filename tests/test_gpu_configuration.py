@@ -17,7 +17,7 @@ def args(**kwargs):
 def test_new_shared_run_defaults_and_explicit_parallelism():
     cfg = configured(args())
     assert simulator(cfg) == "cuda"
-    assert cfg["training"]["n_envs"] == 32
+    assert cfg["training"]["n_envs"] == 128
     assert cfg["training"]["method"] == "sequential_q_mc_v1"
     for count in (3, 32, 64, 128, 256, 512, 1024):
         cfg = configured(args(n_envs=count))

@@ -5,6 +5,36 @@ Dates and results belong to their recorded version. Current behavior lives in
 artifact locations and learning outcomes live in [validation](validation.md).
 The longer pre-consolidation notes remain in `git show b642c9c:docs/iteration.md`.
 
+## 0.24.0 — 2026-09-26
+
+- Problems: coarse zombie displacement/contact geometry omitted source gait and
+  vault details. The viewer kept only a few selected-worker actions and discarded
+  useful history on switching. Smaller cohorts limited measured device throughput.
+- Causes and changes: source animation/ground-track and collision rules now drive
+  independently implemented fixed-point CPU/CUDA mechanics in game 1.6.0. Speed,
+  gait phase/remainders and portable RNG restore exactly. Mine trigger eligibility
+  is separate from blast eligibility; airborne exclusions, chilling, vault landing,
+  targeting and mower contact use inspected source rules. Matching mechanics remain.
+- Research uses 128 complete games per unchanged sequential-Q update. Ten actual
+  pre-action Q outputs piggyback on the existing collector readback. Every worker's
+  entire current-game plant/dig journal uses bounded RAM and disk spill and streams
+  into checkpoints. Focus/fullscreen, paged browsing and follow-latest expose raw
+  historical returns without tile maps. Switching replaces board and history together.
+- Verification: independent math/boundary controls preceded mechanics changes;
+  CPU/CUDA states, events, RNG, snapshots/replays and all ten saving combinations
+  pass. A 128-game short interruption control preserves policy, optimizer, RNG and
+  history. Three warmed five-second cutoff viewer pairs measured **3.04% median
+  overhead** and identical paired policy hashes, within 183.20 seconds total.
+  See [validation](validation.md) for regression checks, full measurements and scope.
+- Compatibility: game simulation/snapshot identifiers and strict pin changed;
+  fresh experiments are required. Q architecture and optimizer/exploration protocols
+  are unchanged. Existing files and offline report readability are preserved.
+- Remaining limits: reconstruction evidence and compact numerical mechanics are
+  not original-binary equivalence. The frozen baseline now loses hard seed 4;
+  this is recorded without tuning the lesson. Larger cohorts delay feedback and
+  repeat the frozen controller longer. Five-second performance controls establish
+  neither full-game throughput nor learning improvement. No formal training ran.
+
 ## 0.23.0 — 2026-09-26
 
 - Problem: action kinds/digging used critic values while species/tiles used a

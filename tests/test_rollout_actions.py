@@ -13,7 +13,7 @@ from pvz_rl.monitoring.metrics import agent_action_count, mean_agent_actions
 def test_defaults_and_archived_action_counts():
     cfg = load_config()
     assert cfg == load_config("configs/train.toml")
-    assert cfg["training"]["n_envs"] == gpu_defaults()["n_envs"] == 32
+    assert cfg["training"]["n_envs"] == gpu_defaults()["n_envs"] == 128
     assert cfg["training"]["method"] == "sequential_q_mc_v1"
     assert agent_action_count({"agent_actions": 2, "decisions": 1000}) == 2
     assert agent_action_count({"action_timing": "per_tick", "instant_actions": 3}) == 3

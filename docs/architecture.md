@@ -1,13 +1,14 @@
-# Training architecture — 0.23.0
+# Training architecture — 0.24.0
 
 One CUDA Q network assembles each command in two levels: wait, one of eight
 species, or dig; then a conditional tile for non-wait branches. The same model
-plays every curriculum difficulty. Game 1.5.0 runs at 100 Hz without a wall-time
-frame limit. Rewards, observations and the pinned game remain unchanged.
+plays every curriculum difficulty. Game 1.6.0 runs at 100 Hz without a wall-time
+frame limit. Rewards and the 286-value observation remain unchanged; corrected movement and
+collision mechanics come from the strictly pinned game 1.6.0.
 
 ```mermaid
 flowchart LR
-    Game[32 CUDA games] --> Public[286 public values and separate legal masks]
+    Game[128 CUDA games] --> Public[286 public values and separate legal masks]
     Public --> Memory[Public event memory]
     Memory --> Encoder[One spatial and temporal encoder]
     Encoder --> Branch[10 branch Q values]
@@ -58,7 +59,8 @@ share this compact mapping; simulator phase numbers are not directly exposed.
 Each tile's three raw values becomes an 8-value type embedding, one health
 value and a 4-value behavior embedding: 13 learned spatial input values.
 
-A zombie region starts at `135 + 9 × (3 × lane + region)`.
+Zombie x denotes the body rectangle’s left edge (80 source pixels per tile).
+Private gait phase, velocity and RNG remain excluded. A zombie region starts at `135 + 9 × (3 × lane + region)`.
 
 | Region offset | Input | Encoding |
 |---|---|---|
@@ -165,7 +167,7 @@ See [the checked derivation](math/sequential-q-control.md).
 ```mermaid
 stateDiagram-v2
     [*] --> Collect
-    Collect --> Returns: All 32 games complete
+    Collect --> Returns: All 128 games complete
     Returns --> Fit: Actual reward-to-go finalized
     Fit --> Synchronize: Four epochs complete
     Synchronize --> Collect: Boundary checks and new cohort
@@ -176,7 +178,7 @@ stateDiagram-v2
     Interrupted --> Fit: Restore saved epoch, permutation and cursor
 ```
 
-The network remains frozen throughout each 32-game cohort. Completed games pause
+The network remains frozen throughout each 128-game cohort. Completed games pause
 until the last game finishes. Gamma-one targets sum all subsequent actual rewards,
 including zero-duration actions. Natural wins/losses terminate normally; at 1,200
 seconds a separate cutoff failure applies defeat once and preserves physical
@@ -220,11 +222,12 @@ collection. Pre-action readbacks complete before simulator-mutated data are read
 
 Atomic ZIP checkpoints contain the single network and optimizer, all RNGs,
 curriculum/exploration progress, unfinished simulator state, public memory,
-streamed trajectory blocks and optimization epoch/permutation/cursor. Transfers
+streamed trajectory and diagnostic-journal blocks and optimization epoch/permutation/cursor. Transfers
 are drained before saving; cache contents are rebuilt after resume. A plain JSON
 protocol manifest is checked before class deserialization. Only
 `event_sequential_q_v1`, `sequential_q_mc_v1` and `sequential_plant_epsilon_v1`
-are accepted. Fresh models are required for this release. New-protocol stage
+are accepted. Game 1.6.0 requires fresh experiments through the strict engine pin. The Q network
+and optimizer protocol identifiers are unchanged. New-protocol stage
 transfer uses compatible weights with fresh optimizer/counters; full resume
 restores the same experiment exactly. Failed saves preserve the previous archive.
 Every existing run, recording and report is preserved, and historical reports
@@ -232,8 +235,12 @@ remain regenerable without loading a retired model.
 
 The four-board viewer and hardware monitor are diagnostic outputs and do not
 change actions or policy inputs. The viewer shows ten branch return estimates,
-selectable species/dig tile-Q heatmaps, greedy and executed choices, value leads,
-ties and exploration overrides at the recorded decision tick. Unavailable choices
+complete current-game planting/digging journals, greedy and executed choices, value leads,
+ties and exploration overrides at the recorded decision tick. Focus enlarges one board
+and its scrollable Q table; switching retains the old board until the destination
+board and history page arrive together. All environments retain non-wait actions
+with their actual ten pre-action scores in 16 MiB of RAM plus disk overflow. The
+journal is saved in checkpoints and never becomes a policy input. Unavailable choices
 are labelled; waiting boards retain the last decision. Replacement selects only
 unfinished undisplayed games. Terminal logs retain reward, net value, discounted
 return and hardware measurements, alongside Q fitting and coverage metrics.

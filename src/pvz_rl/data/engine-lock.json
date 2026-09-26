@@ -1,5 +1,5 @@
 {
-  "commit": "092841aa0dc7dcb1f2c4e92bfbb1ba63e0adff8d",
+  "commit": "fdab989fe20ad3415c2b8975fccdeec834d0196e",
   "files": {
     "__init__.py": "0ff0ce51659ef6f96d1a55694c8c4bd444702102a85d838222081ba8fbe44515",
     "__main__.py": "935a1c1166b0c1ea35a82256345000bf2c73ded718d77773bc27a71ecce28f7d",
@@ -8,24 +8,26 @@
     "cli.py": "b6ca43bd7fab9d8d831dd17259d2207048a3e2e8660ebbcacbe01489129202b6",
     "config.py": "cf6af730b7e752a037499b98673f806a0b7d240cfb010fa4856f5df585a68613",
     "cuda/__init__.py": "323419d205819d130c2611e1eaa02c79d30c8ff4eafa53520a7a0db641bfe905",
-    "cuda/backend.py": "7e49d625ec87de3a2548a9809bde7134404210738d8c030669ab8292acfbc9d6",
-    "cuda/schema.py": "525059f497f950daf5ecf251891624d43a22945075315875e4db7fff13d13b1c",
-    "cuda/simulation.cu": "979b9b0c1bcd532e0f9822f2e4655e086edd0afacf340746331ccf1cda404540",
+    "cuda/backend.py": "7324df95e22a0863c42aa99fb6161537ca2d3b743b4fd750553d54857f93594a",
+    "cuda/schema.py": "10bc21a6df8eedf6b9447139226b4bf4c29e98afe9d6b101ad6862a692eb1878",
+    "cuda/simulation.cu": "495eb64458d3d53deb67d3a2d0de4a657bf55cf399880468dbfc232ea040b63f",
     "data/demo.toml": "de330da07ac63b75d00fcd2ad7ba72d03d83e6b8c3375d0f2a8e6bf17c155115",
     "data/levels.toml": "ba714d5919854b0cd1291399add4fa0ec5f7d3de0c27c95b32b0b6aaa9364aeb",
-    "data/rules.toml": "9896677de84fe098581702a40ae377d561dcb469af731f2f88bd090ef5d1dc42",
+    "data/mechanics.toml": "2b4b98448e4ee50ad35af13317087117b9d0118b33e569fd226a39356b2c634b",
+    "data/rules.toml": "760a10903918115d766f570e60405817728b50439433d5be60c2ccbb0a1b3c96",
     "data/theme.toml": "f6dfb232cfb9ed42b17a96ee8bcce0865346b8d2ca0b49ddc9210b5e5debdf48",
     "data/ui.toml": "b4564ba548fcdffa311fd12bf1466f082f15316547e68f736363c11987e0ac37",
     "demo.py": "c98f4c92c1f50b842732786552eace48124dff47e8ea6fec28c3908c75fda3b4",
     "demo_ui.py": "9191fecf3c23ff39aa23577af27d66c0d6aa041fadf29956ab4441c740f8cd1b",
-    "engine.py": "14d3782aaff6c752ee11066ea57a019a8e16b2503b2252141dda8aa9224e801c",
+    "engine.py": "cd32631ae9546fe71194f145f2ec84149504e370a27d068db444b40c4344daca",
+    "mechanics.py": "9dd169e67fd887299f4eeb102df42c882aa9201c571ec0296aa9fad544fe6bc0",
     "randomness.py": "06d6a39da0a45d50fe330b29cf6d581dc78728d1bd98d9c1e2ff1d809913b66e",
-    "rendering.py": "18969de6912e1d51aada8ff657e9a74925031b742c3c5971e348c9cb0f8486d4",
+    "rendering.py": "25e54041bf6b3adf579cc091508ad42235c5aee5ecaf6c5290ceace2ad76b4b9",
     "replay.py": "6ac9c8ed28bf2a36cb71b6ab92fc992a74d4922c46b74821bb2d9ceb8620db12",
-    "types.py": "c301b69fff4ef70cbab13db84893353d69bb554d070bdccb76406f1dd77fe29c",
+    "types.py": "d13c871f9bc06e2dd1b61c17a8649713352e8643dbd806c62694bdd334decbdf",
     "ui.py": "fcc7c601aa00bb75316ec32aad690ce598a5e44ce15132f16423209a5e101ec3"
   },
-  "package_version": "1.5.0",
-  "rules_hash": "4d8bf373986ec6240441115bec6db6aa15dfa3ebbcbea293aed9bf7b3422ed33",
-  "version": "1.2.0"
+  "package_version": "1.6.0",
+  "rules_hash": "71bd64fb138b96118d860a750b97acbb98e92babcb6376ef83897d6bb2490235",
+  "version": "1.3.0"
 }

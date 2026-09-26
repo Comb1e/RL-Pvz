@@ -150,8 +150,7 @@ def test_capture_cpu_reference_terminals_actions_and_switches(per_tick_cfg):
             env.live_view.drain(wait=True)
             for panel in session.selection.panels:
                 assert panel.frame["observation"] == env.batch.observe(panel.env)
-        assert "Plant sunflower at A1" in session.selection.panels[0].frame["actions"][0]
-        assert "Dig" in session.selection.panels[0].frame["actions"][1]
+        assert not session.selection.panels[0].frame["history"]["rows"]
         for _ in range(3):
             env.step_tensors(torch.zeros(5, device="cuda", dtype=torch.long))
         env.live_view.drain(wait=True)
@@ -196,7 +195,7 @@ def test_paused_completion_waits_for_unfinished_replacement_without_restart(per_
         env.live_view.drain(wait=True)
         p = session.selection.panels[2]
         assert p.generation == 0 and p.state == PanelState.SELECTING
-        assert p.frame["outcome"] == "truncated" and not p.frame["actions"]
+        assert p.frame["outcome"] == "truncated" and not p.frame["history"]["rows"]
         assert [env.batch.state_hash(i) for i in range(5)] == hashes
         assert sum(x["completed_games"] for x in env.task_counts().values()) == 5
     finally:
@@ -341,7 +340,7 @@ def test_process_lifecycle_and_offscreen_render(tmp_path, monkeypatch):
             for p in session.selection.panels
         ]
         buttons = draw_view(surface, packets, Activity.COLLECTING, renderers={}, boards={})
-        assert len(buttons) == 4
+        assert len(buttons) == 12
         pygame.image.save(surface, tmp_path / "four-games.png")
         # Automatic replacement is requested only after the result has been
         # displayed. Commands do not directly touch the collector selection.
@@ -466,12 +465,8 @@ def test_view_decisions_match_q_values_without_rng_changes(smoke_cfg):
                         ~branch_masks(mask[:1]), -torch.inf
                     ),
                 )
-                assert diagnostic["tiles"].shape == (1, 9, 45)
-                for k in range(9):
-                    expected = model.policy.tile_values(
-                        *model.policy.encode(obs[:1]), torch.tensor([k + 1], device="cuda")
-                    )
-                    torch.testing.assert_close(diagnostic["tiles"][:, k], expected)
+                assert "tiles" not in diagnostic
+                torch.testing.assert_close(diagnostic["legal"], branch_masks(mask[:1]))
                 assert diagnostic["actions"].item() == watched[0][0].item()
     finally:
         env.close()
@@ -498,7 +493,7 @@ def test_greedy_decision_explanation(selected, values, reason):
     assert decision_reason(selected, values) == reason
 
 
-def test_decision_panel_small_window_hit_boxes_and_species_selection():
+def test_decision_panel_readable_focus_and_small_window_controls():
     import pygame
     from pvz_game import Game
 
@@ -533,16 +528,14 @@ def test_decision_panel_small_window_hit_boxes_and_species_selection():
             return self.font.render(text, *args)
 
     renderers = {
-        "species_selection": {(0, 3): 2, (0, 2): 5},
         "fonts": (RecordingFont(17), RecordingFont(15)),
     }
     for size in ((1600, 1050), (944, 668), (640, 480)):
         labels.clear()
         surface = pygame.Surface(size)
         buttons = draw_view(surface, packets, Activity.VALIDATING, renderers=renderers, boards={})
-        assert len(buttons) == 40
+        assert len(buttons) == 12
         assert all(surface.get_rect().contains(rect) for rect, _, _ in buttons)
-        assert (0, (3, 2)) in [(panel, target) for _, panel, target in buttons]
-        assert renderers["species_selection"] == {(0, 3): 2}
+        assert (0, ("focus", 3)) in [(panel, target) for _, panel, target in buttons]
         assert labels.count("Greedy wait: tied best; priority wait > species order > dig") == 4
-        assert sum("Q(dig) unavailable" in label for label in labels) == 4
+        assert sum("Dig unavailable" in label for label in labels) == 4

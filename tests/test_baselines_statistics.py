@@ -10,15 +10,16 @@ from pvz_rl.evaluation.statistics import bootstrap_interval, paired_difference, 
 @pytest.mark.parametrize(
     "level,seed,outcome,tick",
     [
-        ("easy", 0, "won", 15164),
-        ("standard", 0, "won", 29471),
-        ("standard", 1, "won", 28698),
-        ("hard", 0, "won", 42278),
-        ("hard", 4, "won", 42618),
-        ("hard", 6, "won", 46546),
-        ("easy", 42, "won", 14799),
-        ("standard", 42, "won", 29363),
-        ("hard", 42, "won", 47581),
+        ("easy", 0, "won", 15857),
+        ("standard", 0, "won", 29479),
+        ("standard", 1, "won", 29558),
+        ("hard", 0, "won", 42945),
+        # Versioned known failure: corrected gait, pole and collision behavior.
+        ("hard", 4, "lost", 33957),
+        ("hard", 6, "won", 43625),
+        ("easy", 42, "won", 15287),
+        ("standard", 42, "won", 27453),
+        ("hard", 42, "won", 41428),
     ],
 )
 def test_frozen_baseline_versioned_outcomes(cfg, level, seed, outcome, tick):

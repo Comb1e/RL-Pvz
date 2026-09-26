@@ -98,7 +98,7 @@ def test_compact_recording_metadata_and_input_isolation(cfg, tmp_path):
     native = Playback(path)
     assert native.display_outcome == "running"
     assert native.metadata["checkpoint_sha256"] == "a" * 64
-    assert native.metadata["experiment"]["engine"]["package_version"] == "1.5.0"
+    assert native.metadata["experiment"]["engine"]["package_version"] == "1.6.0"
     native.verify()
     assert native.display_outcome == "truncated"
     assert native.metadata["termination_reason"] == "time_limit"
