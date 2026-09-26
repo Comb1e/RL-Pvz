@@ -521,3 +521,11 @@ these coefficients or establishes an early-digging cure. Historical peak/drawdow
 is diagnostic because ordered loss/repayment controls invalidate peak gating.
 The inspected RUDDER abstract (arXiv:1806.07857) motivates examining delayed credit;
 its redistribution algorithm is not adopted and no performance claim is borrowed.
+
+
+## 0.24.0 mechanics and full-game history — 2026-09-26
+
+- [Patoke PC/GOTY reconstruction](https://github.com/Patoke/re-plants-vs-zombies/tree/c4692036c5e11d227c8fb7c593b734dac96da028): inspected full relevant `Zombie.cpp` method bodies for speed selection, walk restart, gait rate/chilling, pole jumping, attack/body rectangles and damage eligibility; `Plant.cpp` target selection, production, body/attack rectangles and explosions; `Board.cpp` circle/rectangle intersection; `Projectile.cpp` pea rectangle; `LawnMower.cpp` contact/slowdown; `Reanimator.cpp` phase update, frame endpoint and ground velocity. Exact functions and audit limits are recorded in the [merged game references](https://github.com/Comb1e/pvz-cuda-work/blob/fdab989fe20ad3415c2b8975fccdeec834d0196e/docs/references.md). Reconstruction evidence is not proof of original-binary equivalence.
+- [Bamcane animation reference](https://github.com/Bamcane/re-plants-vs-zombies/tree/0f6bbd39302acf69484ba8b3e071724e35cfba17/pak/reanim): inspected `_ground` numerical intervals in `Zombie.reanim` (walk/walk2) and `Zombie_polevaulter.reanim` (run/walk/jump). Only compact numerical mechanics facts are distributed, not artwork.
+- [pygame-ce event documentation](https://pyga.me/docs/ref/event.html): inspected event pumping, bounded queue, wheel and resize/maximize event guidance. Used a continuously pumped CPU process, bounded messages and explicit watching/result/selecting plus following/browsing states. UI timing never supplies simulation time.
+- Local 0.23.0 environment-count controls: `artifacts/env-count-planning-20260926-005934/` (including `env64/`) and `artifacts/env-count-128-planning-20260926-011138/`. Three warmed 10-second cutoffs, viewer disabled. These informed the selected 128-environment execution configuration; they are not learning evidence or full-game throughput measurements.

@@ -90,6 +90,13 @@ class CudaVecEnv(VecEnv):
         self._episode_serial = [0] * cfg["training"]["n_envs"]
         self._level_names = [None] * cfg["training"]["n_envs"]
         self.live_view = None
+        from pvz_rl.config import output_settings
+        from pvz_rl.presentation.action_journal import ActionJournal
+
+        self.action_journal = ActionJournal(
+            cfg["training"]["n_envs"],
+            ram_bytes=output_settings(cfg)["visualization"]["live_history_ram_mib"] * 1024**2,
+        )
         self._transition_host = None
         self.finished_outcomes = {}
         self._episode_stages = [0] * cfg["training"]["n_envs"]
@@ -136,6 +143,11 @@ class CudaVecEnv(VecEnv):
 
     def reset_indices(self, indices, cases=None):
         started = perf_counter()
+        if self.live_view is not None:
+            try:
+                self.live_view.drain(wait=True)
+            except Exception as exc:
+                self.live_view.fail(exc)
         self.enabled_envs[indices] = True
         if cases is None:
             staged = self.queue.prepare(indices)
@@ -155,6 +167,7 @@ class CudaVecEnv(VecEnv):
             self.task_started[task] += 1
             self._episode[index] = (level, family, seed)
             self._episode_serial[index] += 1
+            self.action_journal.reset(index, self._episode_serial[index])
             self._level_names[index] = spec if isinstance(spec, str) else spec.name
             self._episode_stages[index] = self.queue.stage
             types = PLANT_TYPES
@@ -229,13 +242,7 @@ class CudaVecEnv(VecEnv):
             compact_tensor = torch.stack(
                 (done.double(), timed_out.double(), h[:, 14].double(), reward.double()), dim=1
             )
-            packed = compact_tensor.flatten()
-            if viewer is not None:
-                try:
-                    packed = torch.cat((packed, viewer.diagnostics()))
-                except Exception as exc:
-                    viewer.fail(exc)
-                    viewer = None
+            packed = torch.cat((compact_tensor.flatten(), h[:, 12:14].double().flatten()))
             if self._transition_host is None or self._transition_host.shape != packed.shape:
                 self._transition_host = torch.empty_like(packed, device="cpu", pin_memory=True)
             self._transition_host.copy_(packed, non_blocking=True)
@@ -243,9 +250,12 @@ class CudaVecEnv(VecEnv):
             host = self._transition_host.numpy()
             compact = host[: self.num_envs * 4].reshape(self.num_envs, 4)
             self.last_transition_host = compact
+            self.last_action_result_host = host[self.num_envs * 4 : self.num_envs * 6].reshape(
+                self.num_envs, 2
+            )
             if viewer is not None:
                 try:
-                    viewer.after_step(compact, host[self.num_envs * 4 :].reshape(-1, 2))
+                    viewer.after_step(compact)
                 except Exception as exc:
                     viewer.fail(exc)
             self.phases["transfers"] += perf_counter() - started
@@ -416,6 +426,7 @@ class CudaVecEnv(VecEnv):
                 self.live_view.fail(exc)
                 self.live_view.session.close()
             self.live_view = None
+        self.action_journal.close()
         self._closed = True
 
     def start_live_view(self, *, notify=None):

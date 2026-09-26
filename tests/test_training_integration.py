@@ -15,7 +15,7 @@ from pvz_rl.provenance import verify_engine
 def test_installed_engine_matches_recorded_commit(cfg):
     result = verify_engine(cfg)
     assert result["commit"] == cfg["engine_commit"]
-    assert result["package_version"] == "1.5.0" and result["version"] == "1.2.0"
+    assert result["package_version"] == "1.6.0" and result["version"] == "1.3.0"
 
 
 @pytest.mark.learning

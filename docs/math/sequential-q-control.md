@@ -1,6 +1,6 @@
 # Sequential complete-return Q control
 
-The implemented objective in research 0.23.0 uses complete episodes, gamma one,
+The implemented objective in research 0.24.0 (unchanged from 0.23.0) uses complete episodes, gamma one,
 and one shared encoder. A decision assembles a branch b (wait, eight species,
 dig) and, except for wait, a tile t. Only the assembled command advances the
 simulator or enters public history. The 1,200-second cutoff is a labelled failure.
@@ -68,3 +68,10 @@ Greedy control can remain wrong when values are inaccurate or untried.
 Metz et al.'s sequential-Q method motivates assembling actions in stages; its
 bootstrapped off-policy objective is different from this Monte Carlo adaptation.
 See the inspected-method evidence and SB3 argmax source in ../references.md.
+
+
+The default cohort is now 128 complete games. All 128 environments use the same
+frozen network until each has finished; an early finisher waits. Increasing the
+cohort changes the number/diversity of games between fits, not this target or loss
+formula. It can reduce fitting frequency per completed game and increase stale
+behavior within a cohort. Short-cutoff throughput does not quantify learning gains.

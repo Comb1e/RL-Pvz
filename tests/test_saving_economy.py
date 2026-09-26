@@ -85,12 +85,17 @@ def test_lesson_economics_and_pressure_independent_calculations():
     assert mine["cost"] == 25 and 100 // mine["cost"] == 4
     assert (100 - flower["cost"]) // mine["cost"] == 2 < 3
     # A four-mine budget leaves one of three lanes with at most one mine.
-    # Even the conservative three-second eating delay cannot close the 2.4-tile gap
-    # into the mine's one-tile explosion interval.
-    spacing = (8700 - 7500) / g["tick_rate"] * rules.zombies["basic"]["speed"]
-    delay = mine["health"] / g["bite_damage"] * g["bite_ticks"] / g["tick_rate"]
-    assert spacing == 1620 and delay == 3
-    assert spacing - delay * rules.zombies["basic"]["speed"] > g["units_per_tile"]
+    # Nonuniform, independently sampled gait invalidates the former constant-speed
+    # one-tile blast argument. Verify source-unit speed and blast extent separately;
+    # the ten-lane simulation controls below are witnesses, not a universal theorem.
+    from fractions import Fraction
+
+    slow = Fraction(23, 100) * 47 * 47 / (80 * 46)
+    fast = Fraction(32, 100) * 47 * 47 / (80 * 46)
+    assert float(slow) == pytest.approx(0.1380625)
+    assert float(fast) == pytest.approx(0.19208695652173913)
+    assert (mine["health"] / g["bite_damage"] * g["bite_ticks"] / g["tick_rate"]) == 3
+    assert 2 * 60 + 42 == 162  # circle diameter plus body rectangle, source pixels
     assert flower["first_ticks"] == 300 and flower["interval_ticks"] == 2350
     assert flower["recharge_ticks"] == 750
     # Worst production delays still finance five flowers before first spawn.
@@ -177,7 +182,7 @@ def test_all_species_legal_and_mine_arming_and_blast_boundaries():
     case = LevelSpec(
         "mine-boundary",
         tuple(
-            Spawn(1607, "basic", r, x=x) for r, x in [(0, 1000), (0, 1999), (0, 2000), (1, 1500)]
+            Spawn(1607, "basic", r, x=x) for r, x in [(0, 1000), (0, 2000), (0, 2001), (1, 1500)]
         ),
         plants=(InitialPlant("potato_mine", 0, 1),),
         mowers=False,

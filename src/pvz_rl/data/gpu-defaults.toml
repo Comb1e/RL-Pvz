@@ -1,5 +1,5 @@
 simulator = "cuda"
 device = "cuda"
-n_envs = 32
-benchmark_env_counts = [32]
+n_envs = 128
+benchmark_env_counts = [128]
 benchmark_min_cohorts = 1

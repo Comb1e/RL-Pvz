@@ -131,21 +131,26 @@ def test_real_simultaneous_batch_keeps_both_sources(cfg):
 @pytest.mark.parametrize(
     "plant,col", [("peashooter", 0), ("snow_pea", 0), ("repeater", 0), ("chomper", 1)]
 )
-def test_failed_close_threat_controls_do_not_earn_kill_credit(cfg, plant, col):
+@pytest.mark.parametrize("x", [0, 1400])
+def test_close_threat_success_and_failure_credit(cfg, plant, col, x):
     env = PvZEnv(cfg)
     env.reset(
         seed=4,
         options={
             "scenario": LevelSpec(
-                "too-close", (Spawn(1500, "basic", 2, x=1400),), initial_sun=500, mowers=False
+                "too-close", (Spawn(1500, "basic", 2, x=x),), initial_sun=500, mowers=False
             )
         },
     )
     env.step(env.codec.encode(Place(plant, 2, col)))
     while env.state == "running":
         env.step(0)
-    assert env.state == "lost"
-    assert env.episode_metrics()["plant_kills"] == env.episode_metrics()["mower_kills"] == 0
+    # Source rectangles and half-rate chilling let three of the old close
+    # controls win; retain those exact cases plus threats behind every attacker.
+    won = x == 1400 and plant != "peashooter"
+    assert env.state == ("won" if won else "lost")
+    assert env.episode_metrics()["plant_kills"] == int(won)
+    assert env.episode_metrics()["mower_kills"] == 0
 
 
 @pytest.mark.parametrize(

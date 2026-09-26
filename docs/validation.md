@@ -1,5 +1,110 @@
 # Validation and measured results
 
+## Original-style mechanics and whole-game history 0.24.0 — 2026-09-26
+
+Game **1.6.0**, simulation **1.3.0**, snapshot/CUDA schema **3**, is pinned to
+`fdab989fe20ad3415c2b8975fccdeec834d0196e`. The game release merged before updating
+the research pin. The sequential-Q architecture, 286 observations, optimizer and
+exploration protocols are unchanged; strict engine compatibility requires fresh
+experiments. Historical runs, checkpoints, recordings and reports are preserved.
+
+The [mechanics derivation](math/mechanics-024.md) links the engine's math-first
+gait/geometry controls. **227 CPU game tests** and **17 CUDA differential/replay
+cases** passed, including independent rational movement, restart RNG, chilled
+phase progression, collision tangencies, pole/mine/projectile exclusions, mower
+overlap, headless accounting and restored replay. Lint and game wheel/sdist passed.
+The maintained **50 saving controls** cover the public winning witness and four
+failure strategies over all ten lane combinations on CPU/CUDA. Saving was not
+retuned. Conservative natural-win/loss separation remains valid under the bounds
+and limitations in the mathematics; these are not learning guarantees.
+
+The frozen hand-written baseline has a changed result: **hard seed 4 loses at
+33,957 ticks**, where it previously won. At failure, a post-vault pole zombie is
+in lane 4 at x=−500 with 200 HP and that lane's mower is spent. This is the observed
+final state, not an isolated causal proof. The other eight maintained baseline
+cases win. Separate fresh public-API game acceptance controls win easy/standard/hard
+at 14,936 / 29,352 / 42,381 ticks with all mowers ready; replays verify. No baseline
+or lesson tuning was used to conceal the changed failure.
+
+History controls retain every offscreen planting/digging record, actual pre-action
+scores/masks, same-tick decision numbers and rejected commands. They cover disk
+spill, bounded pages, stale responses, atomic board/history switching, result holds,
+new-cohort recovery, browsing during arrivals and optional-diagnostic failures.
+A **128-game one-second cutoff** interrupted/resumed control executes both Q heads,
+52 Adam steps and 128 planting samples; its final policy, Adam tensors, CPU/CUDA RNG
+and journal match uninterrupted execution exactly. Existing viewer-on/off controls
+also compare actions, rewards, observations and optimizer state. Grid/Focus renders
+were inspected at 1600×1050, 1920×1080 and reduced sizes; the actual spawned viewer
+ran in all three performance pairs. Raw verification artifacts are under
+`artifacts/release-024/`.
+
+The full research regression passed **524 tests in 664.59 seconds**. After final
+paging and diagnostic-failure fixes, the focused journal/viewer suite passed
+**41 tests in 21.97 seconds**, including the 128-game resume and optimizer-isolation
+control. Ruff lint/format, dependency checks, doctor, and research wheel/sdist
+packaging passed. Doctor verified the merged game source manifest, CUDA kernel
+availability, accounting, replay and rendering. Later changes were presentation
+and optional-diagnostic failure handling, with no game or learning-rule changes.
+
+### Environment-count decision
+
+These completed **0.23.0-engine** controls used three warmed, viewer-disabled,
+**10-second cutoff** repetitions per count. They measure execution, not normal
+complete-game throughput or learning quality. Their shorter update delay at small
+counts and greater batching throughput at large counts are separate tradeoffs.
+The selected shipped configuration is 128 environments and **128 complete games
+per update**, with completed workers paused until the cohort finishes.
+
+| Environments | Median complete transitions/s | Median cycle seconds |
+|---:|---:|---:|
+| 8 | 809.7 | 9.886 |
+| 16 | 1,401.6 | 11.438 |
+| 32 | 2,309.5 | 13.896 |
+| 64 | 3,687.4 | 17.407 |
+| 128 | **4,840.5** | **26.523** |
+
+Raw files: `artifacts/env-count-planning-20260926-005934/` (including `env64/`)
+and `artifacts/env-count-128-planning-20260926-011138/`.
+
+### Viewer overhead at 128 environments
+
+Three warmed on/off pairs used the maintained benchmark interface, game 1.6.0,
+four epochs and minibatches of 1,024, with actual five-FPS spawned viewing. Each
+measured cohort has **five-second cutoff episodes**, controlled initial boards
+and declared branch preferences. Pair 2 includes 45 preplaced sunflowers per game
+and digging to stress history. Preferences are reset before each warm/timed cohort;
+these are identical controlled workloads, not successive learning comparisons.
+
+| Pair | Viewer | Complete transitions/s | Collection s | Fit s | Timed cycle s | Q steps | Plant samples |
+|---:|---|---:|---:|---:|---:|---:|---:|
+| 1 | Off | 4,670.9 | 4.056 | 8.951 | 13.839 | 256 | 640 |
+| 1 | On | 4,533.8 | 4.362 | 9.061 | 14.258 | 256 | 640 |
+| 2, history | On | 4,378.5 | 5.138 | 10.013 | 16.225 | 280 | 640 |
+| 2, history | Off | 4,573.0 | 4.625 | 9.852 | 15.535 | 280 | 640 |
+| 3 | Off | 4,599.6 | 4.276 | 8.924 | 14.053 | 256 | 640 |
+| 3 | On | 4,463.7 | 4.660 | 8.960 | 14.481 | 256 | 640 |
+
+Elapsed-time overheads are **3.03%, 4.44%, 3.04%**: median **3.04%**, meeting the
+≤5% target in this control. Each pair has identical final policy hashes. Total
+setup, warm-up and trials took **183.20 seconds**, within the ten-minute bound.
+Host snapshot-capture totals are 0.00384 / 0.00442 / 0.00424 seconds for the on
+cases; these are CPU enqueue costs, not separately synchronized CUDA durations.
+
+| Pair | System CPU mean %, off/on | Parent CPU mean %, off/on | Device GPU mean %, off/on | Peak Torch allocation MiB, off/on | Peak device VRAM MiB, off/on |
+|---:|---:|---:|---:|---:|---:|
+| 1 | 13.06 / 13.89 | 102.64 / 101.27 | 59.13 / 61.76 | 927.62 / 936.32 | 2,627 / 2,643 |
+| 2 | 14.22 / 17.61 | 103.72 / 103.15 | 64.19 / 62.73 | 964.10 / 972.53 | 2,925 / 2,939 |
+| 3 | 13.78 / 14.71 | 104.30 / 101.37 | 64.41 / 59.00 | 927.64 / 936.33 | 2,533 / 2,549 |
+
+Hardware samples include setup/warm-up, not just the timed interval. System CPU
+is averaged over logical processors; process CPU uses 100% per fully busy core.
+GPU activity/VRAM are device-wide; Torch allocation is process-owned. Parent peak
+sampled RSS spans 1,940–1,977 MiB. The viewer uses 3.73 / 4.24 / 3.45% of one core
+and approximately 504 MiB RSS; the spawned benchmark entry point imports Torch,
+but the viewer performs no CUDA inference. Raw pairs, hashes and hardware JSONLs
+are in `artifacts/release-024/viewer-performance/`. No formal training, learning
+comparison, representative full-game speed or original-binary equivalence is claimed.
+
 ## Sequential Q controller 0.23.0 — 2026-09-26
 
 The mathematics was written and independently checked before changing behavior.

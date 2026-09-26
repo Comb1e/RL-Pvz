@@ -280,17 +280,12 @@ class SequentialQPolicy(BasePolicy):
             greedy_tiles[changed] = greedy_choice(q, mask)
         actions = assemble(branches, tiles)
         details = dict(greedy_actions=assemble(greedy, greedy_tiles), coins=coins)
+        details["branch_q"] = values
         if diagnostic_indices is not None:
             ix = diagnostic_indices
-            maps = []
-            for branch in range(1, A.tile_groups + 1):
-                q = self.tile_values(board[ix], pooled[ix], torch.full_like(ix, branch))
-                maps.append(
-                    q.masked_fill(~A.tile_masks(action_masks[ix])[:, branch - 1], -torch.inf)
-                )
             details["viewer"] = dict(
-                q=values[ix].masked_fill(~legal[ix], -torch.inf),
-                tiles=torch.stack(maps, 1),
+                q=values[ix],
+                legal=legal[ix],
                 actions=actions[ix],
                 greedy_actions=details["greedy_actions"][ix],
                 coins=coins[ix],

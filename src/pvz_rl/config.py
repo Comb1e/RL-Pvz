@@ -269,6 +269,8 @@ def validate_config(cfg: dict) -> None:
         raise ValueError("Visualization enabled/demos/videos/live_enabled must be booleans")
     if type(visual["live_fps"]) is not int or not 1 <= visual["live_fps"] <= 30:
         raise ValueError("live_fps must be an integer from 1 to 30")
+    if type(visual["live_history_ram_mib"]) is not int or visual["live_history_ram_mib"] < 0:
+        raise ValueError("live_history_ram_mib must be a nonnegative integer")
     size = visual["live_window_size"]
     if (
         not isinstance(size, (tuple, list))
