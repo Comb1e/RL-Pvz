@@ -257,9 +257,13 @@ runs, checkpoints and recordings remain preserved.
 
 The viewer and hardware monitor are diagnostic outputs. They neither select
 actions nor add model inputs. Last boards remain visible during critic/actor
-fitting and validation. Panels show estimated critic returns, the actual sampled
-action, and “if planting” species/tile probabilities from the collection mixture,
-tagged with the latest decision tick and episode. Switch requests select only
+fitting and validation. Panels show predicted remaining reward for wait, plant and
+the best legal digging tile, marking unavailable choices. They highlight the
+actual chosen kind and explain its lead over the next legal kind, a deterministic
+tie, or a forced choice. These values explain the greedy comparison, not confidence
+or strategic reasoning. “If planting” species/tile probabilities come from the
+collection mixture. All decision data share the latest decision tick and episode,
+which can precede the displayed board. Switch requests select only
 unfinished undisplayed environments; absent candidates retain the result and wait
 until a collector safe point makes a replacement available. Hardware curves and
 terminal logs describe role, role progress, planting coverage, phase,

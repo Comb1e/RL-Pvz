@@ -12,6 +12,7 @@ import warnings
 from collections import deque
 from dataclasses import dataclass, field
 from enum import IntEnum, StrEnum
+from math import isfinite
 from queue import Empty, Full
 from time import monotonic
 
@@ -21,6 +22,7 @@ PANELS = 4
 ACTION_HISTORY = 3
 RESULT_SECONDS = 1.0
 UI_FPS = 30
+DECISION_KINDS = ("wait", "plant", "dig")  # Critic diagnostic order, not action-kind IDs.
 
 
 class DecisionLayout:
@@ -240,6 +242,23 @@ class LiveSession:
             queue.close()
 
 
+def decision_reason(selected_kind, values):
+    """Explain the recorded greedy decision using its legal, pre-action Q values."""
+    selected = values[selected_kind]
+    if selected is None or any(q is not None and not isfinite(q) for q in values):
+        return "Q comparison unavailable"
+    alternatives = [(i, q) for i, q in enumerate(values) if i != selected_kind and q is not None]
+    if not alternatives:
+        return "only legal kind"
+    runner_up, value = max(alternatives, key=lambda item: item[1])
+    gap = selected - value
+    if gap < 0:
+        return "recorded choice differs from Q ranking"
+    if gap == 0:
+        return "tied best; priority wait > plant > dig"
+    return f"highest legal Q; lead {gap:+.6g} over {DECISION_KINDS[runner_up]}"
+
+
 def draw_view(surface, packets, activity, *, renderers, boards, pending=(), count=32, role=None):
     """Draw through the pinned renderer; reusable in offscreen visual controls."""
     import pygame
@@ -343,7 +362,7 @@ def draw_view(surface, packets, activity, *, renderers, boards, pending=(), coun
             )
             continue
         diagnostic = frame.get("decision")
-        footer = 230 if diagnostic else 70
+        footer = 250 if diagnostic else 70
         size = (max(1, cell_w - 16), max(1, cell_h - footer - 46))
         key = (index, size)
         if key not in renderers:
@@ -380,12 +399,21 @@ def draw_view(surface, packets, activity, *, renderers, boards, pending=(), coun
                 (">" if i == selected_kind else "")
                 + name
                 + " "
-                + ("n/a" if q is None else f"{q:+.3f}")
+                + ("unavailable" if q is None else f"{q:+.6g}")
                 for i, (name, q) in enumerate(
                     zip(("Q(wait)", "Q(plant)", "Q(dig best)"), diagnostic["q"])
                 )
             )
             surface.blit(small.render(q_text, True, (245, 229, 177)), (x + 12, base_y))
+            reason = decision_reason(selected_kind, diagnostic["q"])
+            surface.blit(
+                small.render(
+                    f"Chosen {DECISION_KINDS[selected_kind].upper()}: {reason}",
+                    True,
+                    (245, 229, 177),
+                ),
+                (x + 12, base_y + 20),
+            )
             decoded = (
                 "wait"
                 if action == 0
@@ -401,7 +429,7 @@ def draw_view(surface, packets, activity, *, renderers, boards, pending=(), coun
                     True,
                     (219, 230, 219),
                 ),
-                (x + 12, base_y + 20),
+                (x + 12, base_y + 40),
             )
             key = (index, packet["generation"])
             default = (
@@ -413,7 +441,7 @@ def draw_view(surface, packets, activity, *, renderers, boards, pending=(), coun
             button_w = max(50, (cell_w - 242) // 2)
             for k, (name, probability) in enumerate(zip(PLANT_TYPES, diagnostic["plants"])):
                 r = pygame.Rect(
-                    x + 12 + k % 2 * button_w, base_y + 43 + k // 2 * 24, button_w - 4, 22
+                    x + 12 + k % 2 * button_w, base_y + 63 + k // 2 * 24, button_w - 4, 22
                 )
                 pygame.draw.rect(surface, (68, 106, 78) if k == species else (46, 65, 52), r)
                 surface.blit(
@@ -429,7 +457,7 @@ def draw_view(surface, packets, activity, *, renderers, boards, pending=(), coun
             maximum = max(tile_probs) or 1
             for tile, probability in enumerate(tile_probs):
                 r = pygame.Rect(
-                    x + cell_w - 223 + tile % A.cols * 23, base_y + 44 + tile // A.cols * 19, 21, 17
+                    x + cell_w - 223 + tile % A.cols * 23, base_y + 64 + tile // A.cols * 19, 21, 17
                 )
                 intensity = probability / maximum
                 pygame.draw.rect(
@@ -441,7 +469,7 @@ def draw_view(surface, packets, activity, *, renderers, boards, pending=(), coun
                 )
             surface.blit(
                 small.render("Tile heatmap: brighter = higher", True, (203, 219, 204)),
-                (x + cell_w - 225, base_y + 140),
+                (x + cell_w - 225, base_y + 160),
             )
     surface.set_clip(original_clip)
     return buttons

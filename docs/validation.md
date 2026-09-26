@@ -1,5 +1,23 @@
 # Validation and measured results
 
+## Viewer decision explanation — 2026-09-25
+
+The live panels now compare the legal collection-time Q values and explain the
+chosen kind's lead, tie or forced choice. Illegal wait/plant values are masked
+just like illegal digging values. The same masking implementation serves the
+controller and diagnostics; action selection and checkpoint protocols are unchanged.
+
+Viewer/policy checks passed **45 tests in 11.10 s**; the existing independent
+greedy-controller legality/tie control also passed. The revised rendered-label
+and resize assertions passed separately at 1600×1050, 944×668 and 640×480.
+Controls include unavailable high-valued actions, wait/plant/dig choices, negative
+values, small gaps, ties, forced choices and invalid diagnostic comparisons.
+The bounded viewer-on/off integration preserves actions, rewards, observations,
+final policy hashes, optimizer state and RNG. Ruff lint and formatting passed.
+Synthetic display-control images were inspected at full and reduced size in
+`artifacts/viewer-decision-reasons/`. They illustrate layout, not learned behavior.
+No formal training or learning comparison was launched.
+
 ## 0.22.0 alternating roles and data preparation — 2026-09-25
 
 The game checkout, game 1.5.0 pin `092841aa0dc7dcb1f2c4e92bfbb1ba63e0adff8d`,

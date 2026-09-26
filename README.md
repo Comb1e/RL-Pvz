@@ -35,8 +35,10 @@ A bounded saving experiment, started only when you execute it:
 To continue until that stage passes, replace `--games` and `--max-minutes` with
 `--until-stage-complete`. The 1,200-second per-game failure cutoff still applies.
 Validation disables injected exploration. A four-game window shows actual
-training behavior, estimated wait/plant/dig returns, and conditional planting
-probabilities. Click a species for its tile heatmap. Switch selects an unfinished
+training behavior, estimated wait/plant/dig returns, and why the highest legal
+value was chosen (including its lead or a tie). Unavailable choices are marked.
+These are predicted future rewards; species probabilities are conditional on
+planting. Click a species for its tile heatmap. Switch selects an unfinished
 game; add `--no-live-view` to disable the window.
 
 Ctrl+C saves at the next atomic simulation/ledger or optimizer-step boundary.

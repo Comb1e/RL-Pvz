@@ -15,6 +15,7 @@ from pvz_rl.policy.event_memory import MemoryContext
 from pvz_rl.policy.grouped_policy import (
     GroupedDistribution,
     controller_choice,
+    masked_controller_values,
     selected_value_indices,
 )
 from pvz_rl.policy.temporal import TemporalEncoder
@@ -298,14 +299,12 @@ class SpatialGroupedPolicy(MaskableActorCriticPolicy):
             joint = diagnostics[ix]
             plants = joint.sum(-1)
             tiles = joint / plants.clamp_min(torch.finfo(joint.dtype).tiny)[..., None]
+            legal_values = masked_controller_values(values[ix], action_masks[ix])
             q = torch.stack(
                 (
-                    values[ix, 0],
-                    values[ix, 1],
-                    values[ix, 2:]
-                    .masked_fill(~action_masks[ix, A.dig_start :], -torch.inf)
-                    .max(-1)
-                    .values,
+                    legal_values[:, 0],
+                    legal_values[:, 1],
+                    legal_values[:, 2:].max(-1).values,
                 ),
                 -1,
             )

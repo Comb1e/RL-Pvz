@@ -9,11 +9,13 @@ import pytest
 import torch
 
 from pvz_rl.config import load_config, output_settings, validate_config
+from pvz_rl.envs.actions import ActionSchema as A
 from pvz_rl.presentation.live_view import (
     Activity,
     LiveSession,
     PanelState,
     Selection,
+    decision_reason,
     draw_view,
     offer_latest,
 )
@@ -443,9 +445,27 @@ def test_view_decisions_match_sampled_mixture_without_rng_changes(smoke_cfg):
     try:
         model = build_model(smoke_cfg, "masked", env, 101)
         obs, mask = env.reset(), env.action_masks()
-        for planting in (False, True):
+        choices = [0, 1, 3, 92, A.dig_start + 4]
+        cases = [
+            ([2, 1, 0], choices, 0),
+            ([0, 2, 1], choices, 1),
+            ([0, 1, 2], choices, 6),
+            ([0, 999, -1], [0, A.dig_start + 4], 0),
+            ([999, 1, 2], [1, 3, A.dig_start + 4], 6),
+            ([0, 0, 0], choices, 0),
+            ([999, 0, 0], [1, 3, A.dig_start + 4], 1),
+            ([0, 99, 99], [0], 0),
+            ([99, 99, 0], [A.dig_start + 4], 6),
+        ]
+        for q, legal, expected_choice in cases:
             with torch.no_grad():
-                model.policy.value_net.bias[1] = 0.1 if planting else -0.1
+                model.policy.value_net.weight.zero_()
+                model.policy.value_net.bias.fill_(-10)
+                model.policy.value_net.bias[[0, 1, 6]] = torch.tensor(
+                    q, device="cuda", dtype=torch.float32
+                )
+                mask.fill_(False)
+                mask[0, legal] = True
                 state = torch.cuda.get_rng_state()
                 plain = model.policy.decide(obs, mask)
                 after = torch.cuda.get_rng_state()
@@ -463,11 +483,41 @@ def test_view_decisions_match_sampled_mixture_without_rng_changes(smoke_cfg):
                 torch.testing.assert_close(
                     diagnostic["plants"][..., None] * diagnostic["tiles"], joint
                 )
-                values = model.policy.predict_values(obs)
-                torch.testing.assert_close(diagnostic["q"][:, :2], values[:, :2])
-                assert controller_choice(values, mask).item() == int(planting)
+                expected_q = [
+                    q[0] if 0 in legal else -torch.inf,
+                    q[1] if any(0 < a < A.dig_start for a in legal) else -torch.inf,
+                    q[2] if A.dig_start + 4 in legal else -torch.inf,
+                ]
+                torch.testing.assert_close(
+                    diagnostic["q"][0], torch.tensor(expected_q, device="cuda", dtype=torch.float32)
+                )
+                assert (
+                    controller_choice(model.policy.predict_values(obs), mask).item()
+                    == expected_choice
+                )
     finally:
         env.close()
+
+
+@pytest.mark.parametrize(
+    "selected,values,reason",
+    [
+        (1, [-0.4, 0.1, -0.9], "highest legal Q; lead +0.5 over wait"),
+        (0, [-0.2, -0.8, -1.0], "highest legal Q; lead +0.6 over plant"),
+        (2, [0, None, 1], "highest legal Q; lead +1 over wait"),
+        (1, [0, 1e-8, None], "highest legal Q; lead +1e-08 over wait"),
+        (0, [0, 0, None], "tied best; priority wait > plant > dig"),
+        (1, [None, 0, 0], "tied best; priority wait > plant > dig"),
+        (0, [-2, None, None], "only legal kind"),
+        (2, [None, None, -2], "only legal kind"),
+        (0, [None, 1, 2], "Q comparison unavailable"),
+        (0, [0, float("nan"), None], "Q comparison unavailable"),
+        (0, [float("inf"), 1, None], "Q comparison unavailable"),
+        (0, [0, 1, None], "recorded choice differs from Q ranking"),
+    ],
+)
+def test_greedy_decision_explanation(selected, values, reason):
+    assert decision_reason(selected, values) == reason
 
 
 def test_decision_panel_small_window_hit_boxes_and_species_selection():
@@ -493,8 +543,22 @@ def test_decision_panel_small_window_hit_boxes_and_species_selection():
         ),
     )
     packets = [dict(env=i, generation=3, state="watching", frame=frame) for i in range(4)]
-    renderers = {"species_selection": {(0, 3): 2, (0, 2): 5}}
+    labels = []
+
+    class RecordingFont:
+        def __init__(self, size):
+            self.font = pygame.font.SysFont("Segoe UI", size)
+
+        def render(self, text, *args):
+            labels.append(text)
+            return self.font.render(text, *args)
+
+    renderers = {
+        "species_selection": {(0, 3): 2, (0, 2): 5},
+        "fonts": (RecordingFont(17), RecordingFont(15)),
+    }
     for size in ((1600, 1050), (944, 668), (640, 480)):
+        labels.clear()
         surface = pygame.Surface(size)
         buttons = draw_view(
             surface, packets, Activity.VALIDATING, renderers=renderers, boards={}, role="actor"
@@ -503,3 +567,5 @@ def test_decision_panel_small_window_hit_boxes_and_species_selection():
         assert all(surface.get_rect().contains(rect) for rect, _, _ in buttons)
         assert (0, (3, 2)) in [(panel, target) for _, panel, target in buttons]
         assert renderers["species_selection"] == {(0, 3): 2}
+        assert labels.count("Chosen WAIT: tied best; priority wait > plant > dig") == 4
+        assert sum("Q(dig best) unavailable" in label for label in labels) == 4
