@@ -9,11 +9,11 @@ Research 0.25.0 compares the ten first-level values
 for every active state. The controller applies deterministic tie order (wait,
 the configured plant order, then dig), then selects a tile. A plant tile mask
 contains empty board tiles only; digging considers all 45 tiles. The branch
-comparison therefore never changes merely because sun is insufficient, a card is
-cooling down, or the board is full. Research lesson restrictions no longer limit
-the controller or simulator roster. The pinned simulator rejects the proposed
-command and advances one per-tick wait when the
-command cannot execute.
+comparison therefore never changes merely because sun is insufficient or a card
+is cooling down. The selected plant proposal is kept through CPU and CUDA
+validation. On a full board it still gets the deterministic tile-zero proposal,
+so the pinned simulator reports occupancy rejection rather than a lower-Q
+fallback and advances one per-tick wait when the command cannot execute.
 
 The development scale is `progress_weight / value_scale = 0.01 / 300`. Thus the
 configured rejected-plant charge is
@@ -42,8 +42,10 @@ discounted-return identity. With gamma one, the return target remains the sum of
 the actual transition rewards, including these explicit charges. CPU computes
 the indicators from the public action result; CUDA uses the same action index,
 accepted flag, and pinned rejection reason (`empty_tile`, reason 4). Independent
-controls cover zero-sun and cooldown plants, occupied/out-of-board proposals,
-empty digs, one-tick advancement, terminal conservation, and CPU/CUDA equality.
+controls cover zero-sun and cooldown plants, occupied/full-board proposals, empty
+digs, one-tick advancement, terminal conservation, and CPU/CUDA equality.
+Recurrent history stores the selected proposal with its acceptance flag and
+duration; the event-memory alternative retains its executed-action convention.
 
 Historical Q records are immutable snapshots of the pre-action vector. Paging
 uses an absolute `start` offset and request identifier; selecting a row stores

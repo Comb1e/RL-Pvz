@@ -104,7 +104,10 @@ class CudaRecurrentQ(CudaSequentialQ):
             rows["done"] = env.last_transition_host[:, 0].astype(bool)
             rows["accepted"] = env.last_action_result_host[:, 0].astype(bool)
             self._memory.observe_result(
-                actions, rows["accepted"].copy(), rows["duration"].copy(), active=enabled
+                env.proposed_actions,
+                rows["accepted"].copy(),
+                rows["duration"].copy(),
+                active=enabled,
             )
             env.action_journal.record_batch_safe(
                 rows,

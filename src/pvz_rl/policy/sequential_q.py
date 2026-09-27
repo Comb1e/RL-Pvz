@@ -27,7 +27,15 @@ def selection_masks(masks):
     if masks.ndim != 2 or masks.shape[-1] != A.size or masks.dtype != torch.bool:
         raise ValueError("Action masks must be boolean [batch, action] tensors")
     active = masks.any(-1)
-    return active[:, None].expand(-1, A.tile_groups + 1)
+    # The transport mask describes candidate tiles, not first-level branch
+    # legality.  An active row therefore compares wait, every one of the
+    # eight plant species, and dig even when a card cannot currently execute.
+    # Inactive rows stay illegal here; select_q_actions overlays wait only
+    # when its caller explicitly marks a row inactive for batched collection.
+    legal = torch.ones(
+        (len(masks), A.tile_groups + 1), dtype=torch.bool, device=masks.device
+    )
+    return legal & active[:, None]
 
 
 def validate_values(values, masks):
@@ -100,9 +108,11 @@ def select_q_actions(
     diagnostic_indices=None,
 ):
     """Shared ten-way Q comparison and conditional plant exploration."""
-    # Every active environment compares all ten first-level outputs.
-    # Affordability and cooldown are simulator outcomes; only the selected
-    # tile uses the occupancy mask.
+    # Every active environment compares all ten first-level outputs.  The
+    # transport mask is used only for the selected tile; affordability and
+    # cooldown are simulator outcomes.  Empty rows stay illegal and are
+    # rejected by the normal value validator unless the caller marks them
+    # inactive for a batched collection step.
     legal = selection_masks(action_masks)
     if active is not None:
         legal = legal.clone()

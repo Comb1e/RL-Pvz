@@ -4,6 +4,12 @@ Record a human Plants vs. Zombies game, initialize a Transformer–LSTM Q policy
 then train and evaluate the same model autonomously. The pinned simulator runs
 at 100 Hz; policies receive only public observations.
 
+Direct policy masks describe board occupancy only. The ten-way Q selector always
+compares wait, all eight plant species and dig; an unaffordable or cooling-down
+winner remains the submitted plant proposal. The pinned simulator rejects that
+proposal for one tick, reports its reason and applies `invalid_plant_penalty`.
+Training and evaluation retain the rejected proposal in Transformer–LSTM history.
+
 ## Requirements
 
 Python 3.12, Git and the pinned game package. Recording needs pygame.
