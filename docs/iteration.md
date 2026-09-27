@@ -5,6 +5,23 @@ Dates and results belong to their recorded version. Current behavior lives in
 artifact locations and learning outcomes live in [validation](validation.md).
 The longer pre-consolidation notes remain in `git show b642c9c:docs/iteration.md`.
 
+## Full-game memory research — 2026-09-26
+
+- Problem: a bounded event bank can lose early planting details, and rejected
+  proposals become wait markers before entering policy memory.
+- Cause: finite event/summary queues and executed-action-only memory inputs.
+- Proposal: an append-only public event archive and joint causal sparse attention;
+  record non-wait attempts, deduplicate consecutive digs at the same unchanged
+  tile, and retain all public plant/zombie/sun/mower changes even during waits.
+  Compare reversible layers separately as an activation-storage optimization.
+- Verification: inspected papers/project sources, ran synthetic existing-memory
+  retention probes, independently enumerated sparse edge counts and same-tick
+  causal counterexamples, and checked local runtime/GPU availability. Calculations
+  are in [memory math](math/history-attention.md).
+- Remaining issues: framework only; retrieval quality, actual sparse backend,
+  gradients, throughput and learning quality are unverified. No policy change or
+  training run was made. Current architecture documentation remains authoritative.
+
 ## 0.25.0 — 2026-09-26
 
 - Request motivation: the user observed that earlier training often dug
