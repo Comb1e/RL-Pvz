@@ -12,8 +12,6 @@ from pvz_game import Dig, Game, LevelSpec, Place, Rules, Status, Wait, WaveSpec
 from pvz_game.replay import Recorder
 
 from pvz_rl.config import (
-    legacy_q_inference,
-    lesson_settings,
     load_config,
     runtime_settings,
     validate_config,
@@ -57,8 +55,7 @@ class PvZEnv(gym.Env):
     ):
         super().__init__()
         self.cfg = copy.deepcopy(cfg or load_config())
-        validate_config(self.cfg, inference=not training)
-        self.legacy_selection = legacy_q_inference(self.cfg)
+        validate_config(self.cfg)
         self.condition = condition
         self.options = (
             {"masked": True, "shaped": True, "curriculum": True, "hybrid": True}
@@ -203,25 +200,6 @@ class PvZEnv(gym.Env):
             return np.zeros(self.action_space.n, dtype=np.bool_)
         if self.options["hybrid"]:
             return np.array([a is not None for a in self.candidates()], dtype=np.bool_)
-        if self.legacy_selection:
-            mask = self.engine_action_masks()
-            if self.episode_family in (*LESSONS, "diagnostic"):
-                allowed = (
-                    ("peashooter",)
-                    if self.episode_family == "diagnostic"
-                    else lesson_settings(self.cfg)[self.episode_family]["allowed_plants"]
-                )
-                mask &= np.array(
-                    [
-                        isinstance(a, Wait)
-                        or isinstance(a, Dig)
-                        and self.episode_family != "diagnostic"
-                        or isinstance(a, Place)
-                        and a.plant_type in allowed
-                        for a in self.codec.actions
-                    ]
-                )
-            return mask
         if self._direct_mask is None or not self.cache_legal_actions:
             # Policy masks describe tile occupancy only. The ten-way Q head
             # still compares every species when sun is low or cards are cooling
@@ -262,12 +240,6 @@ class PvZEnv(gym.Env):
             concrete = Wait() if concrete is None else concrete
         else:
             concrete = self.codec.decode(action)
-        if (
-            self.legacy_selection
-            and self.episode_family in (*LESSONS, "diagnostic")
-            and not self.action_masks()[int(action)]
-        ):
-            concrete, rejected_strategy = Wait(), True
         before = self.public
         attackers = ("peashooter", "snow_pea", "repeater")
         self.metrics["affordable_attacker_opportunities"] += int(

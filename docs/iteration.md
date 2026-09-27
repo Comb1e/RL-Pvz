@@ -1,9 +1,91 @@
 # Iteration history
 
+## 0.27.0 — 2026-09-27
+
+- Previous problems/root causes: early engine contact clamping, uncadenced bite
+  transitions, inclusive pea tangency, missed mower crossings and low-HP defeat
+  accounting. The human recorder conflated native/research settings and lacked
+  its action codec. Shared demo defaults and unconditional cooldown encoding
+  also changed the established collector's input contract.
+- Improvements: pin merged game 1.7.0 / simulation 1.4.0 at
+  `1424b4d802e783a36772091c49d96aa7c6036d7a` (engine PR #4).
+  Share F/button follow-latest transitions, invalidate stale history responses,
+  preserve horizontal scroll and isolate pending game replacements. Validate
+  every recording artifact before opening the window; enforce one easy-stage
+  attempt and keep interruptions incomplete. Give demo and collector commands
+  separate bundled/configurable profiles; gate cooldowns to event_v8 on CPU/CUDA.
+- Preserved work: integrate the unmerged Transformer–LSTM initialization and
+  its complete archives; retain demo settings of 20 passes, 256-decision chunks,
+  0.0003 learning rate, 0.5 gradient clipping and a 30-minute ceiling. Preserve
+  the 50% to 1% tile-exploration schedule over 5,000 games in the recurrent
+  profile and the existing collector's separate recipe.
+- Cleanup: remove retired Q checkpoint inference, alternate CPU/CUDA masking,
+  redundant mask/action helpers, unused transport flags and lesson-roster
+  settings. Remove spatial/event-memory parameters from the recurrent demo
+  profile. The active event-memory collector and historical recordings remain.
+  Old model protocols fail before deserialization; current workflow instructions
+  distinguish demo fitting from CUDA training.
+- Regression correction: the unmerged demo tile-exploration adjustment had also
+  changed the collector's coin probability. Restore its independently tested
+  two-coin budget without changing the demo's 50% to 1% schedule or weakening
+  the empirical distribution controls.
+- Initialization correction: replace duplicated chunk-local group averaging
+  with the shared complete-game balanced Q loss. Verify replay hashes, reward
+  reconstruction and completion metadata before fitting; save each completed
+  pass atomically and check recurrent checkpoint protocol on reload. A tiny
+  complete replay independently checks group weights across unequal chunks.
+  Recurrent selection now shares the public occupancy/branch selectors and
+  applies full-board fallback per board, so one full board cannot unmask tiles
+  on other boards. Remove unused record types and recurrent API aliases.
+- Verification: independent collision and CPU/CUDA controls pass in the engine;
+  headless native recorder startup, accepted/rejected actions, pause, disabled
+  restarts/stage changes, interruption, natural loss, native replay and reusable
+  archive verification pass. Grid/focused F and button event-loop checks cover
+  repeated presses, stale responses, empty histories and unavailable panels.
+  Exact collector regressions and final totals are recorded in validation.
+  Final affected suites: 108 passes; engine rerun: 427 passes. The full research
+  sweep and repaired-case rechecks are recorded explicitly in validation.
+- Baseline compatibility: the unchanged research controller wins all nine
+  versioned cases with new exact ticks. In particular, the previous hard/4 loss
+  now wins at tick 43424. Independent failure/boundary controls remain strict;
+  no controller or collision assertion was relaxed to recover wins.
+- Limits: 1.6.0 recordings require their original engine. The recurrent demo
+  checkpoint is a one-demonstration fit, not an event-memory collector resume.
+  No formal training was launched.
+
 Dates and results belong to their recorded version. Current behavior lives in
 [research design](research.md) and [architecture](architecture.md); test counts,
 artifact locations and learning outcomes live in [validation](validation.md).
 The longer pre-consolidation notes remain in `git show b642c9c:docs/iteration.md`.
+
+## 0.26.0 — 2026-09-26
+
+- Problem: the previous controller used a compact 286-value spatial encoder and
+  bounded event attention, with no recurrent state shared by waits, rejected
+  proposals or duplicate digs. Human play could not be used as a verified
+  initialization artifact.
+- Cause: card countdowns were omitted from policy observations and the native
+  replay was separate from learning transitions. No protocol linked a complete
+  demonstration to recurrent Q fitting.
+- Improvement: `event_v8` appends eight normalized cooldowns; the new entity
+  Transformer–LSTM policy exposes shared single-step and sequence interfaces.
+  `record-demo` preserves zero-tick action phases, pause queue order, native
+  replay hashes and append-only transition records. `initialize-demo` verifies
+  action order and observations, fits complete reward-to-go in 256-decision
+  chunks, and publishes an initialization checkpoint, curves, coverage and a
+  replay report.
+- Verification: CPU encoding checks cover ready, initial recharge, immediate
+  planting and cooldown normalization. Step/sequence recurrent parity, reset
+  isolation, action/tile outputs, synthetic archive spill and native replay
+  reconstruction pass. No formal autonomous training was launched.
+- Remaining issues: CUDA kernel compilation and full 128-game recurrent
+  sequence training need hardware runs; one demonstration gives no evidence of
+  generalization or mastery. Legacy 0.25.0 checkpoints remain inference-only.
+
+- Parameter adjustment: the later autonomous collector's tile exploration coin
+  now starts at 50%, decays to 1% over 5,000 completed games, and stays at the
+  floor. Deterministic validation clears both exploration budgets before any
+  evaluation action.
 
 ## Full-game memory research — 2026-09-26
 

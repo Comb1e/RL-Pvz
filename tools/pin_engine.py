@@ -40,10 +40,13 @@ def pin_engine(repo):
     destination = project / "src/pvz_rl/data/engine-lock.json"
     previous = json.loads(destination.read_text("utf-8"))
     destination.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    for path in [project / "src/pvz_rl/data/research.toml", *(project / "configs").glob("*.toml")]:
+    for path in [
+        *(project / "src/pvz_rl/data").glob("*.toml"),
+        *(project / "configs").glob("*.toml"),
+    ]:
+        original = path.read_text("utf-8")
         text = (
-            path.read_text("utf-8")
-            .replace(previous["commit"], commit)
+            original.replace(previous["commit"], commit)
             .replace(
                 f'engine_version = "{previous["version"]}"', f'engine_version = "{ENGINE_VERSION}"'
             )
@@ -52,7 +55,8 @@ def pin_engine(repo):
                 f'engine_package_version = "{PACKAGE_VERSION}"',
             )
         )
-        path.write_text(text, encoding="utf-8")
+        if text != original:
+            path.write_text(text, encoding="utf-8")
     print(
         json.dumps({"commit": commit, "package_version": PACKAGE_VERSION, "files": len(manifest)})
     )

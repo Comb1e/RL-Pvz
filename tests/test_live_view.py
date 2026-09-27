@@ -437,7 +437,7 @@ def test_switch_only_unfinished_unique_and_retries_next_cohort():
 
 def test_view_decisions_match_q_values_without_rng_changes(smoke_cfg):
     from pvz_rl.learning.training import build_model, vector_env
-    from pvz_rl.policy.sequential_q import branch_masks
+    from pvz_rl.policy.sequential_q import selection_masks
 
     env = vector_env(smoke_cfg, "masked", 101)
     try:
@@ -462,11 +462,11 @@ def test_view_decisions_match_q_values_without_rng_changes(smoke_cfg):
                 torch.testing.assert_close(
                     diagnostic["q"],
                     model.policy.predict_values(obs)[:1].masked_fill(
-                        ~branch_masks(mask[:1]), -torch.inf
+                        ~selection_masks(mask[:1]), -torch.inf
                     ),
                 )
                 assert "tiles" not in diagnostic
-                torch.testing.assert_close(diagnostic["legal"], branch_masks(mask[:1]))
+                torch.testing.assert_close(diagnostic["legal"], selection_masks(mask[:1]))
                 assert diagnostic["actions"].item() == watched[0][0].item()
     finally:
         env.close()

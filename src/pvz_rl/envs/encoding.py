@@ -32,8 +32,8 @@ class ObservationEncoder:
         self.zombies = {kind: i for i, kind in enumerate(env["zombies"])}
         self.plant_states = {state: i for i, state in enumerate(env["plant_states"])}
         self.rows, self.cols, self.bins = env["rows"], env["cols"], env["bins"]
-        if cfg["encoding"]["version"] != "event_v7":
-            raise ValueError("Only event_v7 observations are supported")
+        if cfg["encoding"]["version"] not in ("event_v7", "event_v8"):
+            raise ValueError("Only event_v7 and event_v8 observations are supported")
         self.plant_width = 3
         # Per lane-region: one count per zombie type, aggregate health and armor,
         # nearest zombie distance, and nearest carrier of an unused pole.
@@ -51,6 +51,15 @@ class ObservationEncoder:
             )
         }
         self.global_width = len(self.global_fields)
+        # Card countdowns are public state.  They are deliberately appended in
+        # the fixed plant-species order so old spatial offsets remain stable and
+        # CPU/CUDA encoders can share one compatibility digest.
+        self.cooldown_fields = (
+            {kind: i for i, kind in enumerate(env["plants"])}
+            if cfg["encoding"]["version"] == "event_v8"
+            else {}
+        )
+        self.cooldown_width = len(self.cooldown_fields)
         sizes = [
             self.rows * self.cols * self.plant_width,
             self.rows * self.bins * self.zombie_width,
@@ -58,6 +67,9 @@ class ObservationEncoder:
             self.rows,
         ]
         names = ["plants", "zombies", "globals", "headless"]
+        if self.cooldown_width:
+            sizes.append(self.cooldown_width)
+            names.append("cooldowns")
         offsets = np.cumsum([0, *sizes])
         self.slices = dict(
             zip(
@@ -134,4 +146,14 @@ class ObservationEncoder:
                 default=None,
             )
             result[self.slices["headless"].start + row] = bool(front and front.headless)
+        cooldowns = result[self.slices["cooldowns"]] if self.cooldown_width else ()
+        cards = {card.plant_type: card for card in obs.cards}
+        for kind, index in self.cooldown_fields.items():
+            card = cards.get(kind)
+            if card is None:
+                raise ValueError(f"observation is missing card {kind!r}")
+            denominator = card.recharge_ticks + 1
+            if denominator <= 0:
+                raise ValueError(f"card {kind!r} has invalid recharge_ticks")
+            cooldowns[index] = card.cooldown_ticks / denominator
         return result

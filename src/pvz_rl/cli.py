@@ -8,6 +8,7 @@ from pathlib import Path
 
 from pvz_rl.config import (
     load_config,
+    load_demo_config,
     research_config,
     seed_values,
     validate_config,
@@ -65,7 +66,8 @@ def training_options(parser):
 
 
 def configured(args):
-    cfg = load_config(args.config)
+    loader = load_demo_config if args.command in ("record-demo", "initialize-demo") else load_config
+    cfg = loader(args.config)
     checkpoint = getattr(args, "resume", None) or getattr(args, "init_from", None)
     if checkpoint and not args.config:
         run = args.output if args.command == "suite" else checkpoint.parent
@@ -185,6 +187,32 @@ def main(argv=None):
     continuation.add_argument(
         "--init-from", type=Path, help="load compatible weights into a fresh experiment or stage"
     )
+    demo = subs.add_parser(
+        "record-demo",
+        help="open one easy seed-1000 game and record a verified human transition archive",
+    )
+    common(demo)
+    demo.add_argument(
+        "--output", type=Path, required=True, help="native replay path (.pvzdemo or .json)"
+    )
+    demo.add_argument(
+        "--archive", type=Path, help="append-only transition JSONL (default: replay.jsonl)"
+    )
+    demo.add_argument("--seed", type=int, default=1000)
+    demo.add_argument("--speed", type=float, choices=(1, 2, 4), default=1)
+    initialize = subs.add_parser(
+        "initialize-demo", help="verify one completed demo and fit the recurrent policy"
+    )
+    common(initialize)
+    initialize.add_argument("--archive", type=Path, required=True)
+    initialize.add_argument("--replay", type=Path, required=True)
+    initialize.add_argument("--output", type=Path, required=True)
+    initialize.add_argument("--passes", type=int)
+    initialize.add_argument("--learning-rate", type=float)
+    initialize.add_argument("--gradient-clip", type=float)
+    initialize.add_argument("--seed", type=int)
+    initialize.add_argument("--max-minutes", type=float)
+    initialize.add_argument("--device", choices=("cpu", "cuda"), default="cpu")
     evaluation = subs.add_parser("evaluate", help="evaluate a checkpoint or non-learning baseline")
     common(evaluation)
     source = evaluation.add_mutually_exclusive_group(required=True)
@@ -288,7 +316,38 @@ def main(argv=None):
         return
 
     cfg = configured(args)
-    if args.command == "visualize":
+    if args.command == "record-demo":
+        from pvz_rl.presentation.demo_recording import record_demo
+
+        print(
+            json.dumps(
+                record_demo(
+                    args.output,
+                    archive=args.archive,
+                    seed=args.seed,
+                    speed=args.speed,
+                    cfg=cfg,
+                ),
+                indent=2,
+            )
+        )
+    elif args.command == "initialize-demo":
+        from pvz_rl.learning.demo_initialization import initialize_demo
+
+        result = initialize_demo(
+            args.archive,
+            args.replay,
+            args.output,
+            cfg=cfg,
+            passes=args.passes,
+            learning_rate=args.learning_rate,
+            gradient_clip=args.gradient_clip,
+            seed=args.seed,
+            time_budget_minutes=args.max_minutes,
+            device=args.device,
+        )
+        print(json.dumps(result, indent=2))
+    elif args.command == "visualize":
         from pvz_rl.presentation.visualization import visualize_run
 
         original = json.loads((args.run / "metadata.json").read_text("utf-8"))["config"]

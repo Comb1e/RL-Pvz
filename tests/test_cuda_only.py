@@ -151,12 +151,16 @@ def test_stage_rejects_missing_or_mismatched_pin(staged_repository, tmp_path, fa
     assert not (tmp_path / "rejected").exists()
 
 
-def test_only_one_recipe_is_shipped():
+def test_training_and_demo_recipes_remain_distinct():
+    from pvz_rl.config import load_demo_config
+
     root = Path(__file__).resolve().parents[1]
-    expected = {"train"}
+    expected = {"train", "demo"}
     assert {p.stem for p in (root / "configs").glob("*.toml")} == expected
-    for name in expected:
-        require_cuda_training(load_config(root / "configs" / f"{name}.toml"), runtime=False)
+    require_cuda_training(load_config(root / "configs/train.toml"), runtime=False)
+    demo = load_demo_config(root / "configs/demo.toml")
+    with pytest.raises(ValueError, match="Retired policy"):
+        require_cuda_training(demo, runtime=False)
 
 
 def test_benchmark_schedules_configurable_cuda_sizes(smoke_cfg, tmp_path, monkeypatch):

@@ -1,8 +1,8 @@
 profile = "complete-game"
 schema_version = 1
-engine_commit = "fdab989fe20ad3415c2b8975fccdeec834d0196e"
-engine_version = "1.3.0"
-engine_package_version = "1.6.0"
+engine_commit = "1424b4d802e783a36772091c49d96aa7c6036d7a"
+engine_version = "1.4.0"
+engine_package_version = "1.7.0"
 
 [runtime]
 cache_legal_actions = true
@@ -141,7 +141,6 @@ spawn_ticks = [7500, 8700, 9900] # 75 seconds, then every 12 seconds in three la
 initial_sun = 100
 natural_sun = false
 lanes_per_spawn = 3
-allowed_plants = ["sunflower", "peashooter", "wall_nut", "cherry_bomb", "potato_mine", "snow_pea", "chomper", "repeater"]
 
 [curriculum.stages.saving]
 tasks = ["saving"]

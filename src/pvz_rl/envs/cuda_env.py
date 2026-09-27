@@ -12,7 +12,6 @@ from pvz_game import Game, Rules
 from pvz_game.config import PLANT_TYPES
 from stable_baselines3.common.vec_env import VecEnv
 
-from pvz_rl.config import legacy_q_inference, lesson_settings
 from pvz_rl.envs.actions import ActionSchema as A
 from pvz_rl.envs.cuda_features import LEDGER_INDICES, METRIC_INDICES, CudaFeatures
 from pvz_rl.envs.cuda_lessons import LessonCudaBatch
@@ -21,6 +20,7 @@ from pvz_rl.envs.rewards import REWARD_METRICS
 from pvz_rl.envs.scenarios import difficulty_weights, scenario
 from pvz_rl.learning.budget import budget_target
 from pvz_rl.learning.curriculum import LESSONS, stage_distribution, teaching_enabled
+from pvz_rl.learning.training_requirements import require_supported_policy
 from pvz_rl.monitoring.metrics import task_name
 
 
@@ -81,9 +81,8 @@ class CudaVecEnv(VecEnv):
             raise ValueError(
                 "CUDA training requires per_tick actions; legacy timing is inference-only"
             )
+        require_supported_policy(cfg, condition)
         self.cfg, self.condition, self.family, self.training = cfg, condition, family, training
-        if training and legacy_q_inference(cfg):
-            raise ValueError("Legacy Q checkpoints are inference-only; start fresh")
         self.queue = ScenarioQueue(cfg, condition, learner_seed, family, cfg["training"]["n_envs"])
         self.stream = torch.cuda.current_stream()
         self.phases = dict(simulation_features=0.0, scenario_preparation=0.0, transfers=0.0)
@@ -162,7 +161,6 @@ class CudaVecEnv(VecEnv):
         # Branch restrictions are intentionally absent from policy masks and
         # simulator setup.  Invalid plant proposals are retained as actions
         # and receive the configured rejection penalty.
-        allowed, digging = [], []
         for index, level, family, seed, spec in staged:
             self.finished_outcomes.pop(index, None)
             task = task_name(level, family)
@@ -176,20 +174,10 @@ class CudaVecEnv(VecEnv):
             self.action_journal.reset(index, self._episode_serial[index])
             self._level_names[index] = spec if isinstance(spec, str) else spec.name
             self._episode_stages[index] = self.queue.stage
-            types = PLANT_TYPES
-            if legacy_q_inference(self.cfg):
-                if family == "diagnostic":
-                    types = ("peashooter",)
-                elif family in LESSONS:
-                    types = lesson_settings(self.cfg)[family]["allowed_plants"]
-            allowed.append(sum(1 << PLANT_TYPES.index(t) for t in types))
-            digging.append(not legacy_q_inference(self.cfg) or family != "diagnostic")
         self.batch.reset(
             [s[4] for s in staged],
             [s[3] for s in staged],
             indices=indices,
-            allowed=allowed,
-            digging=digging,
             natural_sun=[natural_sun(self.cfg, s[2]) for s in staged],
         )
         ix = self.cp.asarray(indices)

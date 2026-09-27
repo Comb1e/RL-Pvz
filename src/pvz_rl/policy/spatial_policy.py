@@ -8,7 +8,6 @@ from stable_baselines3.common.policies import BasePolicy
 from stable_baselines3.common.torch_layers import BaseFeaturesExtractor
 from torch import nn
 
-from pvz_rl.config import legacy_q_inference
 from pvz_rl.envs.actions import ActionSchema as A
 from pvz_rl.envs.encoding import ObservationEncoder
 from pvz_rl.policy.event_memory import MemoryContext
@@ -20,7 +19,6 @@ from pvz_rl.policy.sequential_q import (
     observation_tile_masks,
     per_head_epsilon,
     selection_masks,
-    transport_branch_masks,
 )
 from pvz_rl.policy.temporal import TemporalEncoder
 
@@ -152,6 +150,7 @@ class SequentialQPolicy(BasePolicy):
         features_extractor_kwargs=None,
         hidden_sizes=(128, 128),
         exploration_epsilon=0.0,
+        tile_exploration_epsilon=None,
     ):
         super().__init__(
             observation_space,
@@ -164,7 +163,11 @@ class SequentialQPolicy(BasePolicy):
         self.features_extractor = self.make_features_extractor()
         encoder = self.features_extractor
         self.exploration_epsilon = exploration_epsilon
-        self.legacy_selection = legacy_q_inference(encoder.cfg)
+        self.tile_exploration_epsilon = (
+            per_head_epsilon(exploration_epsilon)
+            if tile_exploration_epsilon is None
+            else tile_exploration_epsilon
+        )
         self.compilation_status, self.compilation_error = "disabled", None
         pooled = 2 * encoder.channels + encoder.scalar_channels
         self.branch_head = nn.Sequential(
@@ -243,8 +246,6 @@ class SequentialQPolicy(BasePolicy):
         return self.branch_head(self.encode(obs, context)[1])
 
     def default_masks(self, obs):
-        if self.legacy_selection:
-            return torch.ones(len(obs), A.size, dtype=torch.bool, device=obs.device)
         return observation_tile_masks(obs)
 
     def decide(
@@ -263,7 +264,7 @@ class SequentialQPolicy(BasePolicy):
         # Every active environment compares all ten first-level outputs.
         # Affordability and cooldown are simulator outcomes; only the selected
         # tile uses the occupancy mask.
-        legal = (transport_branch_masks if self.legacy_selection else selection_masks)(action_masks)
+        legal = selection_masks(action_masks)
         if active is not None:
             legal = legal.clone()
             legal[~active] = False
@@ -272,6 +273,7 @@ class SequentialQPolicy(BasePolicy):
         branches = greedy.clone()
         coins = torch.zeros(len(obs), 2, device=obs.device, dtype=torch.bool)
         epsilon = per_head_epsilon(0.0 if deterministic else self.exploration_epsilon)
+        tile_epsilon = 0.0 if deterministic else self.tile_exploration_epsilon
         planting = ((greedy > 0) & (greedy <= A.plant_types)).nonzero(as_tuple=True)[0]
         if len(planting):
             species, coins[planting, 0] = explore(
@@ -299,7 +301,7 @@ class SequentialQPolicy(BasePolicy):
             plant_rows = (branches[nonwait] <= A.plant_types).nonzero(as_tuple=True)[0]
             if len(plant_rows):
                 selected, fired = explore(
-                    preferred[plant_rows], tile_candidates[plant_rows], epsilon
+                    preferred[plant_rows], tile_candidates[plant_rows], tile_epsilon
                 )
                 tiles[nonwait[plant_rows]] = selected
                 coins[nonwait[plant_rows], 1] = fired

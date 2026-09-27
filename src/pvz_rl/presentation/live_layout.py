@@ -81,6 +81,39 @@ class Browse:
         self.request += 1
         self.sent = float("inf")
 
+    def resume_follow(self, page=None):
+        """Return to the live tail while retaining horizontal table scrolling."""
+        self.mode = HistoryMode.FOLLOWING
+        self.selected = None
+        self.selected_offset = None
+        self.page = page
+        if page is not None:
+            self.start = max(0, int(page.get("total", 0)))
+        else:
+            self.start = 0
+        # Invalidate historical page requests without changing horizontal scroll.
+        self.request += 1
+        self.sent = float("inf")
+
+
+def resume_visible_history(packets, renderers, indices=None):
+    """Resume the displayed games; a replacement never inherits an old page."""
+    if indices is None:
+        focus = renderers.get("focus")
+        indices = [focus] if focus is not None else range(min(4, len(packets)))
+    for index in indices:
+        if not 0 <= index < len(packets):
+            continue
+        packet = packets[index]
+        frame = packet.get("frame")
+        if packet.get("state") == "selecting" or frame is None:
+            continue
+        key = (index, packet["generation"], frame["episode"])
+        if renderers.get("browse_keys", {}).get(index) != key:
+            continue
+        state = renderers.setdefault("browse", {}).setdefault(key, Browse())
+        state.resume_follow(frame.get("history"))
+
 
 def accept_history_response(packets, browse, response):
     """A page belongs to the displayed game, never a pending replacement."""
@@ -133,7 +166,7 @@ def draw_view(surface, packets, activity, *, renderers, boards, pending=(), coun
             del browse[key]
     label = (
         ACTIVITY_TEXT[Activity(activity)]
-        + " | F11 fullscreen | Focus / Esc | wheel: history, Shift+wheel: columns"
+        + " | F follow latest | F11 fullscreen | Focus / Esc | wheel: history, Shift+wheel: columns"
     )
     surface.blit(small.render(label, True, (225, 237, 226)), (12, 8))
     buttons = []
@@ -392,6 +425,8 @@ def viewer_main(frames, commands, history_responses, errors, closed, ready, acti
                             desktop if fullscreen else size,
                             pygame.FULLSCREEN if fullscreen else pygame.RESIZABLE,
                         )
+                    elif event.key == pygame.K_f:
+                        resume_visible_history(packets, renderers)
                     dirty = True
                 elif event.type == pygame.MOUSEWHEEL:
                     for index, rect in renderers.get("regions", {}).items():
@@ -438,11 +473,11 @@ def viewer_main(frames, commands, history_responses, errors, closed, ready, acti
                             renderers["focus"] = (
                                 None if renderers.get("focus") is not None else index
                             )
-                        elif p["frame"]:
+                        elif p["frame"] and p["state"] != "selecting":
                             key = renderers["browse_keys"][index]
                             state = renderers["browse"].setdefault(key, Browse())
                             if operation == "follow":
-                                state.follow, state.selected = True, None
+                                resume_visible_history(packets, renderers, [index])
                             else:
                                 state.choose(extra[0])
                         dirty = True

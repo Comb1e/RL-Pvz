@@ -18,23 +18,35 @@ def deterministic_validation(policy):
     """Validation never uses injected training exploration."""
     network = policy.policy
     old_policy_epsilon = getattr(network, "exploration_epsilon", 0.0)
+    has_tile_epsilon = hasattr(network, "tile_exploration_epsilon")
+    old_tile_epsilon = getattr(network, "tile_exploration_epsilon", 0.0)
     old_model_epsilon = getattr(policy, "exploration_rate", None)
     policy_kwargs = getattr(policy, "policy_kwargs", {})
     had_policy_kw_epsilon = "exploration_epsilon" in policy_kwargs
     old_policy_kw_epsilon = policy_kwargs.get("exploration_epsilon")
+    had_policy_kw_tile = "tile_exploration_epsilon" in policy_kwargs
+    old_policy_kw_tile = policy_kwargs.get("tile_exploration_epsilon")
     network.exploration_epsilon = 0.0
+    if has_tile_epsilon:
+        network.tile_exploration_epsilon = 0.0
     if old_model_epsilon is not None:
         policy.exploration_rate = 0.0
     if had_policy_kw_epsilon:
         policy.policy_kwargs["exploration_epsilon"] = 0.0
+    if had_policy_kw_tile:
+        policy.policy_kwargs["tile_exploration_epsilon"] = 0.0
     try:
         yield
     finally:
         network.exploration_epsilon = old_policy_epsilon
+        if has_tile_epsilon:
+            network.tile_exploration_epsilon = old_tile_epsilon
         if old_model_epsilon is not None:
             policy.exploration_rate = old_model_epsilon
         if had_policy_kw_epsilon:
             policy.policy_kwargs["exploration_epsilon"] = old_policy_kw_epsilon
+        if had_policy_kw_tile:
+            policy.policy_kwargs["tile_exploration_epsilon"] = old_policy_kw_tile
 
 
 def batched_games(
