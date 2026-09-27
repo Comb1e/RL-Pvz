@@ -19,12 +19,11 @@ from pvz_rl.config import (
 from pvz_rl.envs.action_timing import ActionPhaseGame, per_tick_actions
 from pvz_rl.envs.actions import ActionCodec
 from pvz_rl.envs.encoding import ObservationEncoder
-from pvz_rl.envs.lesson_rules import natural_sun, sky_rules
 from pvz_rl.envs.rewards import LEDGER_METRICS, REWARD_METRICS, reward_parts
 from pvz_rl.envs.scenarios import difficulty_weights, scenario
 from pvz_rl.evaluation.controllers import PublicBoard, strategy_candidates
 from pvz_rl.learning.budget import budget_target, uses_games
-from pvz_rl.learning.curriculum import LESSONS, stage_distribution, teaching_enabled
+from pvz_rl.learning.curriculum import stage_distribution, teaching_enabled
 from pvz_rl.presentation.recordings import ActionPhaseRecorder
 
 
@@ -122,7 +121,7 @@ class PvZEnv(gym.Env):
         if self.training and self.family == "preset" and teaching_enabled(self.cfg):
             tasks, weights = stage_distribution(self.cfg, self.curriculum_stage)
             task = str(self.selection_rng.choice(tasks, p=weights))
-            family, level = (task, "easy") if task in LESSONS else ("preset", task)
+            family, level = ("preset", task)
         if family == "diagnostic" and (self.options["hybrid"] or not self.options["masked"]):
             raise ValueError("The diagnostic requires a direct-placement masked condition")
         resolved = options.get("scenario")
@@ -130,7 +129,7 @@ class PvZEnv(gym.Env):
             resolved = scenario(level, family, game_seed, self.rules, self.cfg)
         if not isinstance(resolved, (str, LevelSpec, WaveSpec)):
             raise TypeError("Scenario must be a preset, LevelSpec or WaveSpec")
-        rules = sky_rules(self.rules, natural_sun(self.cfg, family))
+        rules = self.rules
         if self.game.rules.digest != rules.digest:
             self.game = ActionPhaseGame(rules) if self.per_tick else Game(rules)
         self.public = self.game.reset(resolved, game_seed)
@@ -362,6 +361,7 @@ class PvZEnv(gym.Env):
                     }
                 )
             info["episode_metrics"] = self.episode_metrics()
+        self.last_policy_outcome = (int(action), info["accepted"], info["ticks_advanced"])
         return self.encoder.encode(self.public), parts["total"], terminated, truncated, info
 
     def episode_metrics(self):

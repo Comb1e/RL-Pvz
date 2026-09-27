@@ -559,7 +559,7 @@ def build_run_report(run, cfg=None):
     )
     policy_description = (
         "Restricted diagnostic policy; this run does not evaluate the full game"
-        if meta.get("family") in ("diagnostic", "placement", "saving")
+        if meta.get("family") in ("diagnostic",)
         else "One shared policy for easy, standard, and hard"
     )
     completion = (
@@ -669,11 +669,7 @@ def create_demonstrations(run, cfg, progress, deadline=None):
         raise ValueError("Selected checkpoint hash does not match best.json")
     meta = read_json(run / "metadata.json")
     archive = not current_engine_config(meta["config"]) or not current_model_config(meta["config"])
-    levels = (
-        ["easy"]
-        if meta["family"] in ("diagnostic", "placement", "saving")
-        else cfg["evaluation"]["levels"]
-    )
+    levels = ["easy"] if meta["family"] in ("diagnostic",) else cfg["evaluation"]["levels"]
     seed = cfg["splits"]["validation"][0]
     existing = read_json(output / "demos.json", {})
     demos = existing.get("demos", [])

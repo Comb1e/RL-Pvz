@@ -1,5 +1,52 @@
 # Iteration history
 
+## 0.28.0 — 2026-09-27
+
+- Previous problems/root causes: demo weights could not enter autonomous training;
+  training assumed an event-memory model and shuffled decisions. Initialization
+  device/time CLI options mutated the recording verification configuration.
+  The saving lesson was embedded in curriculum stages, CPU rules and CUDA hooks.
+- Improvements: recurrent defaults throughout recording, initialization, training,
+  evaluation and replay. Shared model/protocol inspection accepts demonstration
+  weights or autonomous ZIPs, records source hashes and rejects incompatible
+  transfers before creating environments. Resume restores optimizer and recovery
+  state; weights-only initialization starts fresh. ZIPs embed run configuration.
+- Recurrent lifecycle: fixed-weight cohorts retain previous proposals and public
+  acceptance/duration, freeze completed slots and limit the final cohort to the
+  remaining games. Whole-cohort equal-group regression recomputes episode states,
+  carries detached state across 256-decision chunks and applies one clipped Adam
+  update per full pass. Batch size 1,024 represents four sequences. Interrupted
+  fitting restarts only the uncommitted pass; completed updates are preserved.
+- User adjustments: remove the saving curriculum, rehearsal mixtures, custom sky
+  rules, scenario generation, unused lesson defaults and obsolete feasibility
+  tests/docs. Curriculum now starts at easy, then standard, then shared. Remove
+  the max-minutes CLI flag; time allowances remain configuration settings. Keep
+  recurrent 50%→1% tile exploration over 5,000 stage games, species-coin algebra,
+  reward coefficients, engine pin and four autonomous passes. Event memory stays
+  available under configs/event-memory.toml with its original model protocols.
+- Verification: the existing human-1000 archive reconstructed all 16,364 decisions
+  and the winning final state in 34.72 seconds, without fitting. Tiny complete-demo
+  weights and same-device predictions transferred exactly, then autonomous fitting
+  changed the weights. CLI initialization→training→evaluation→in-place resume
+  passed. CPU/CUDA evaluation traces agree; collection/fitting interruption tests
+  match uninterrupted weights and Adam state exactly. Independent returns, group
+  means, padding, rejected/zero-tick actions, resets, gradient partitioning and
+  atomic-save failure controls pass.
+- Bounded GPU evidence: RTX 4070 Laptop GPU (8 GiB), 128 active slots, 384 collected
+  decisions plus one synthetic 1,024-decision fitting chunk; peak PyTorch allocation
+  924.68 MiB. That memory check completed zero games and performed zero optimizer
+  updates. This allocation metric excludes CuPy/driver allocations and is not a
+  full-game throughput or learning result.
+- Final checks: full regression suite 536/536 passed; focused recurrent suite
+  17/17 passed, including three added migration and CPU/CUDA sequence controls.
+  The subsequent in-place elapsed-time control passed. Ruff lint/format, dependency
+  checks and CLI help checks passed. In-place resume retains both elapsed status
+  time and the prior best validation score.
+- Remaining limits: no formal training or win-rate claim. Removed-lesson runtime
+  checkpoints cannot resume those unavailable scenarios; compatible weights can
+  initialize a fresh run. The exact archive digest migration permits only the
+  known curriculum-only change; other recording modifications still fail checks.
+
 ## 0.27.0 — 2026-09-27
 
 - Previous problems/root causes: early engine contact clamping, uncadenced bite

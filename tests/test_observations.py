@@ -8,7 +8,7 @@ import torch
 from pvz_game import Game, InitialPlant, LevelSpec, Rules, Spawn
 from pvz_game.types import ZombieView
 
-from pvz_rl.config import load_config
+from pvz_rl.config import load_event_config as load_config
 from pvz_rl.envs.encoding import ObservationEncoder
 
 
@@ -133,10 +133,10 @@ def test_globals_and_removed_fields_never_admit_events():
 def test_cuda_ignores_projectiles_spawned_and_unspent_mower_details():
     from pvz_game.cuda.schema import HEADER, MOWER
 
+    from pvz_rl.envs.cuda_accounting import AccountingCudaBatch
     from pvz_rl.envs.cuda_features import CudaFeatures
-    from pvz_rl.envs.cuda_lessons import LessonCudaBatch
 
-    batch = LessonCudaBatch(1, zombie_capacity=1, max_step_ticks=1)
+    batch = AccountingCudaBatch(1, zombie_capacity=1, max_step_ticks=1)
     batch.reset([LevelSpec("public", (Spawn(10000, "basic", 0),))], [0])
     with batch.cp.cuda.ExternalStream(torch.cuda.current_stream().cuda_stream):
         features = CudaFeatures(batch, load_config(), "masked")
@@ -173,8 +173,8 @@ def test_distance_and_region_boundaries(row, x, region):
 def test_no_states_countdowns_or_private_fields_in_cpu_and_cuda_inputs():
     from pvz_game.cuda.schema import PLANT, ZOMBIE, ZOMBIE_STATES
 
+    from pvz_rl.envs.cuda_accounting import AccountingCudaBatch
     from pvz_rl.envs.cuda_features import CudaFeatures
-    from pvz_rl.envs.cuda_lessons import LessonCudaBatch
 
     cfg = load_config()
     specs = [
@@ -184,7 +184,7 @@ def test_no_states_countdowns_or_private_fields_in_cpu_and_cuda_inputs():
             plants=(InitialPlant("potato_mine", 1, 1),),
         )
     ]
-    batch = LessonCudaBatch(1, zombie_capacity=5, max_step_ticks=1)
+    batch = AccountingCudaBatch(1, zombie_capacity=5, max_step_ticks=1)
     batch.reset(specs, [0])
     with batch.cp.cuda.ExternalStream(torch.cuda.current_stream().cuda_stream):
         features = CudaFeatures(batch, cfg, "masked")
@@ -225,8 +225,8 @@ def test_no_states_countdowns_or_private_fields_in_cpu_and_cuda_inputs():
 
 
 def test_actual_vault_consumes_pole_in_cpu_and_cuda():
+    from pvz_rl.envs.cuda_accounting import AccountingCudaBatch
     from pvz_rl.envs.cuda_features import CudaFeatures
-    from pvz_rl.envs.cuda_lessons import LessonCudaBatch
 
     cfg = load_config()
     spec = LevelSpec(
@@ -237,7 +237,7 @@ def test_actual_vault_consumes_pole_in_cpu_and_cuda():
     )
     game = Game()
     game.reset(spec, 0)
-    batch = LessonCudaBatch(1, zombie_capacity=1, max_step_ticks=1)
+    batch = AccountingCudaBatch(1, zombie_capacity=1, max_step_ticks=1)
     batch.reset([spec], [0])
     seen = set()
     with batch.cp.cuda.ExternalStream(torch.cuda.current_stream().cuda_stream):

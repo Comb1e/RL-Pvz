@@ -1,16 +1,19 @@
 import numpy as np
 import pytest
-from pvz_game import Dig, Place
+from pvz_game import Dig, LevelSpec, Place, Spawn
 
-from pvz_rl.config import load_config
+from pvz_rl.config import load_event_config as load_config
 from pvz_rl.envs.env import PvZEnv
 
 
 def test_task_restrictions_dig_cooldown_and_reset_boundaries():
     cfg = load_config()
     env = PvZEnv(cfg, training=True)
-    env.reset(seed=3)
-    assert env.episode_family == "saving"
+    env.reset(
+        seed=3,
+        options={"scenario": LevelSpec("control", (Spawn(1000, "basic", 0),), initial_sun=100)},
+    )
+    assert env.episode_family == "preset"
     flower = env.codec.encode(Place("sunflower", 0, 0))
     assert env.action_masks()[flower] and env.public.sun == 100
     shooter = env.codec.encode(Place("peashooter", 0, 0))
@@ -20,14 +23,14 @@ def test_task_restrictions_dig_cooldown_and_reset_boundaries():
     assert not env.game.validate_action(Place("peashooter", 1, 0)).accepted
     assert env.action_masks()[env.codec.encode(Dig(0, 0))]
     before = env.action_masks()
-    env.set_curriculum_stage(3)
+    env.set_curriculum_stage(2)
     np.testing.assert_array_equal(before, env.action_masks())
-    assert env.episode_family == "saving"
+    assert env.episode_family == "preset"
     env.reset(seed=3)
     assert env.episode_family == "preset"
     assert env.action_masks()[flower]
     cfg["environment"]["cutoff_seconds"] = 1
-    env = PvZEnv(cfg, family="saving")
+    env = PvZEnv(cfg, family="diagnostic")
     env.reset(seed=3)
     for _ in range(99):
         assert env.step(0)[2:4] == (False, False)
@@ -35,8 +38,8 @@ def test_task_restrictions_dig_cooldown_and_reset_boundaries():
     assert truncated and not terminated
 
 
-@pytest.mark.parametrize("family", ["saving"])
-def test_lesson_checkpoints_cannot_enter_normal_or_final_evaluation(
+@pytest.mark.parametrize("family", ["diagnostic"])
+def test_diagnostic_checkpoints_cannot_enter_normal_or_final_evaluation(
     cfg, tmp_path, monkeypatch, family
 ):
     from pvz_rl.cli import main
@@ -49,6 +52,9 @@ def test_lesson_checkpoints_cannot_enter_normal_or_final_evaluation(
             object(),
             {"config": cfg, "condition": "masked", "learner_seed": 101, "family": family},
         ),
+    )
+    monkeypatch.setattr(
+        "pvz_rl.learning.checkpoints.inspect_checkpoint", lambda path: {"config": cfg}
     )
     args = ["evaluate", "--checkpoint", str(checkpoint), "--output", str(tmp_path / "out")]
     with pytest.raises(ValueError, match="--family"):

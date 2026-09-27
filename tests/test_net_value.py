@@ -8,7 +8,7 @@ import torch
 from pvz_game import Dig, InitialPlant, LevelSpec, Place, Spawn
 from pvz_game.types import Event
 
-from pvz_rl.config import load_config
+from pvz_rl.config import load_event_config as load_config
 from pvz_rl.envs.env import PvZEnv
 from pvz_rl.envs.rewards import reward_parts
 
@@ -145,8 +145,8 @@ def test_actual_capped_income_not_requested_income(sky, flower):
     ],
 )
 def test_real_explosions_break_even_and_empty_loss_on_cpu_and_cuda(kind, count, expected):
+    from pvz_rl.envs.cuda_accounting import AccountingCudaBatch
     from pvz_rl.envs.cuda_features import REWARD_FIELDS, CudaFeatures
-    from pvz_rl.envs.cuda_lessons import LessonCudaBatch
 
     cfg = load_config()
     # A remote future zombie keeps the control running after this detonation.
@@ -158,7 +158,7 @@ def test_real_explosions_break_even_and_empty_loss_on_cpu_and_cuda(kind, count, 
     )
     env = PvZEnv(cfg)
     env.reset(seed=4, options={"scenario": case})
-    batch = LessonCudaBatch(1, zombie_capacity=count + 1)
+    batch = AccountingCudaBatch(1, zombie_capacity=count + 1)
     cp = batch.cp
     with cp.cuda.ExternalStream(torch.cuda.current_stream().cuda_stream):
         batch.reset([case], [4])
@@ -180,8 +180,8 @@ def test_real_explosions_break_even_and_empty_loss_on_cpu_and_cuda(kind, count, 
 
 
 def test_projectiles_keep_credit_after_voluntary_dig():
+    from pvz_rl.envs.cuda_accounting import AccountingCudaBatch
     from pvz_rl.envs.cuda_features import CudaFeatures
-    from pvz_rl.envs.cuda_lessons import LessonCudaBatch
 
     case = LevelSpec(
         "late-shot",
@@ -192,7 +192,7 @@ def test_projectiles_keep_credit_after_voluntary_dig():
     cfg = load_config()
     env = PvZEnv(cfg)
     env.reset(seed=4, options={"scenario": case})
-    batch = LessonCudaBatch(1, zombie_capacity=2)
+    batch = AccountingCudaBatch(1, zombie_capacity=2)
     cp = batch.cp
     with cp.cuda.ExternalStream(torch.cuda.current_stream().cuda_stream):
         batch.reset([case], [4])
@@ -220,7 +220,7 @@ def test_mixed_cuda_resets_preserve_duration_and_episode_ledgers():
     cfg = load_config()
     cfg["training"].update(n_envs=2, batch_size=128)
     cfg["environment"]["cutoff_seconds"] = 1
-    cases = [("easy", "saving", 4), ("easy", "saving", 5)]
+    cases = [("easy", "diagnostic", 4), ("easy", "diagnostic", 5)]
     gpu = CudaVecEnv(cfg, "masked", 0, training=False, cases=cases)
     cpus = [PvZEnv(cfg, family=family, level=level) for level, family, _ in cases]
     for env, (_, _, seed) in zip(cpus, cases):
@@ -305,7 +305,7 @@ def test_rejection_penalties_are_separate_from_economy_and_terminal(reason):
 
     from pvz_game import ActionResult, Dig, Game, Place, Status
 
-    from pvz_rl.config import load_config
+    from pvz_rl.config import load_event_config as load_config
 
     cfg = load_config()
     before = Game().reset("easy", 101)
@@ -331,9 +331,9 @@ def test_penalties_cpu_cuda_accounting_and_cutoff_targets():
     import torch
     from pvz_game import Dig, LevelSpec, Place, Spawn
 
-    from pvz_rl.config import load_config
+    from pvz_rl.config import load_event_config as load_config
+    from pvz_rl.envs.cuda_accounting import AccountingCudaBatch
     from pvz_rl.envs.cuda_features import REWARD_FIELDS, CudaFeatures
-    from pvz_rl.envs.cuda_lessons import LessonCudaBatch
     from pvz_rl.envs.env import PvZEnv
 
     cfg = load_config()
@@ -341,7 +341,7 @@ def test_penalties_cpu_cuda_accounting_and_cutoff_targets():
     level = LevelSpec("penalty-control", (Spawn(1000, "basic", 0),), initial_sun=100)
     cpu = PvZEnv(cfg)
     cpu.reset(seed=101, options={"scenario": level})
-    batch = LessonCudaBatch(1, zombie_capacity=1, max_step_ticks=1)
+    batch = AccountingCudaBatch(1, zombie_capacity=1, max_step_ticks=1)
     batch.reset([level], [101])
     features = CudaFeatures(batch, cfg, "masked")
     features.encode()

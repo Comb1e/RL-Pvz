@@ -35,10 +35,10 @@ def checkpoint_metadata(path):
         if "protocol.json" not in archive.namelist():
             raise ValueError("Sequential Q controller requires fresh models; retired checkpoint")
         metadata = json.loads(archive.read("protocol.json"))
-    if metadata != dict(
-        policy=POLICY_SIGNATURE, optimizer=OPTIMIZER_PROTOCOL, exploration=EXPLORATION_PROTOCOL
-    ):
-        raise ValueError("Incompatible sequential Q checkpoint protocol; start fresh")
+    from pvz_rl.learning.checkpoints import protocol_for
+
+    if metadata != protocol_for(metadata.get("policy")):
+        raise ValueError("Incompatible model/optimizer checkpoint protocol")
     return metadata
 
 
@@ -47,6 +47,9 @@ def checkpoint_optimizer_protocol(path):
 
 
 class CudaSequentialQ(BaseAlgorithm):
+    policy_protocol = POLICY_SIGNATURE
+    optimizer_version = OPTIMIZER_PROTOCOL
+
     def __init__(
         self,
         policy,
@@ -76,7 +79,7 @@ class CudaSequentialQ(BaseAlgorithm):
         )
         self.batch_size, self.n_epochs = batch_size, n_epochs
         self.max_grad_norm = max_grad_norm
-        self.optimizer_protocol = OPTIMIZER_PROTOCOL
+        self.optimizer_protocol = self.optimizer_version
         self.action_distribution_protocol = ACTION_DISTRIBUTION
         self.phase = CohortPhase.IDLE
         self.training_games = self._n_updates = 0
@@ -101,7 +104,8 @@ class CudaSequentialQ(BaseAlgorithm):
 
     @classmethod
     def load(cls, path, *args, **kwargs):
-        checkpoint_metadata(path)
+        if checkpoint_metadata(path)["policy"] != cls.policy_protocol:
+            raise ValueError("Incompatible checkpoint model family for this loader")
         model = super().load(path, *args, **kwargs)
         model.phase = CohortPhase(model.phase)
         # SB3 maps every saved tensor to the requested device. Ordinary Adam
@@ -139,6 +143,9 @@ class CudaSequentialQ(BaseAlgorithm):
             action_masks=action_masks,
         )
 
+    def _new_memory(self):
+        return EventMemory(self.cfg, self.env.batch.rules, self.n_envs, self.device)
+
     def _new_buffer(self):
         root = Path(getattr(self, "trajectory_root", tempfile.gettempdir()))
         path = Path(tempfile.mkdtemp(prefix="cohort-", dir=root))
@@ -151,9 +158,11 @@ class CudaSequentialQ(BaseAlgorithm):
             ram_bytes=spec["ram_gib"] * 1024**3,
             block_rows=spec["block_rows"],
         )
-        buffer.configure_cache(
-            self.device, self.env.cfg["training"].get("performance", {}).get("token_cache_gib", 2)
-        )
+        if self._memory.capacity:
+            buffer.configure_cache(
+                self.device,
+                self.env.cfg["training"].get("performance", {}).get("token_cache_gib", 2),
+            )
         return buffer
 
     def _drain_transfers(self):
@@ -175,8 +184,18 @@ class CudaSequentialQ(BaseAlgorithm):
 
     def _begin(self, callback):
         callback.on_rollout_start()
-        self._last_obs = self.env.reset()
-        self._memory = EventMemory(self.cfg, self.env.batch.rules, self.n_envs, self.device)
+        from pvz_rl.learning.budget import budget_target, uses_games
+
+        count = self.n_envs
+        target = budget_target(self.env.cfg)
+        if uses_games(self.env.cfg) and target is not None:
+            count = min(count, max(0, target - self.training_games))
+        if count < 1:
+            from pvz_rl.learning.training import TrainingGamesComplete
+
+            raise TrainingGamesComplete
+        self._last_obs = self.env.reset_cohort(count)
+        self._memory = self._new_memory()
         self._previous = torch.zeros(self.n_envs, device=self.device, dtype=torch.long)
         self._first = True
         self._buffer = self._new_buffer()
@@ -420,7 +439,7 @@ class CudaSequentialQ(BaseAlgorithm):
         reset_num_timesteps=True,
         progress_bar=False,
     ):
-        if self.optimizer_protocol != OPTIMIZER_PROTOCOL:
+        if self.optimizer_protocol != self.optimizer_version:
             raise ValueError("Incompatible optimizer protocol")
         if reset_num_timesteps:
             self.num_timesteps = 0
@@ -439,6 +458,15 @@ class CudaSequentialQ(BaseAlgorithm):
         try:
             while self.num_timesteps < total or self.phase != CohortPhase.IDLE:
                 if self.phase == CohortPhase.IDLE:
+                    from pvz_rl.learning.budget import budget_target, uses_games
+
+                    target = budget_target(self.env.cfg)
+                    if (
+                        uses_games(self.env.cfg)
+                        and target is not None
+                        and self.training_games >= target
+                    ):
+                        break
                     with atomic_transition():
                         self._begin(callback)
                     continue
@@ -488,16 +516,18 @@ class CudaSequentialQ(BaseAlgorithm):
             self._restore_rng(state)
             self.runtime_state = None
             return
-        self._memory = EventMemory(self.cfg, self.env.batch.rules, self.n_envs, self.device)
+        self._memory = self._new_memory()
         self._memory.restore(state["memory"])
         self._previous = state["previous"].to(self.device)
         self._buffer = self._new_buffer()
         workspace = self._buffer.path
         with ZipFile(self._checkpoint_source) as archive:
             self._buffer = CompleteGameBuffer.restore_archive(archive, state["buffer"], workspace)
-        self._buffer.configure_cache(
-            self.device, self.env.cfg["training"].get("performance", {}).get("token_cache_gib", 2)
-        )
+        if self._memory.capacity:
+            self._buffer.configure_cache(
+                self.device,
+                self.env.cfg["training"].get("performance", {}).get("token_cache_gib", 2),
+            )
         self._restore_rng(state)
         self.runtime_state = None
         self.resumed_cohort = True
@@ -547,9 +577,26 @@ class CudaSequentialQ(BaseAlgorithm):
                     "protocol.json",
                     json.dumps(
                         dict(
-                            policy=POLICY_SIGNATURE,
-                            optimizer=OPTIMIZER_PROTOCOL,
+                            policy=self.policy_protocol,
+                            optimizer=self.optimizer_version,
                             exploration=EXPLORATION_PROTOCOL,
+                        )
+                    ),
+                )
+                archive.writestr(
+                    "run.json",
+                    json.dumps(
+                        getattr(
+                            self,
+                            "research_metadata",
+                            {
+                                "config": self.cfg,
+                                "condition": "masked",
+                                "family": "preset",
+                                "learner_seed": self.seed,
+                                "validation_limit": None,
+                                "exploration_protocol": EXPLORATION_PROTOCOL,
+                            },
                         )
                     ),
                 )

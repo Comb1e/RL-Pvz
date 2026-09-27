@@ -32,9 +32,7 @@ from pvz_rl.learning.budget import (
     until_stage_complete,
     uses_games,
 )
-from pvz_rl.learning.cohort import OPTIMIZER_PROTOCOL
 from pvz_rl.learning.curriculum import (
-    LESSONS,
     CurriculumState,
     initial_state,
     selected_stage,
@@ -86,8 +84,16 @@ def build_model(cfg, condition, env, seed, log_dir=None):
         "exploration_epsilon": t["exploration"]["epsilon_start"],
         "tile_exploration_epsilon": per_head_epsilon(t["exploration"]["epsilon_start"]),
     }
-    model = CudaSequentialQ(
-        SequentialQPolicy,
+    policy_class = SequentialQPolicy
+    algorithm = CudaSequentialQ
+    if cfg["policy"]["kind"] == "transformer_lstm_q_v1":
+        from pvz_rl.learning.recurrent_q import CudaRecurrentQ
+        from pvz_rl.policy.recurrent_policy import RecurrentQPolicy
+
+        algorithm, policy_class = CudaRecurrentQ, RecurrentQPolicy
+        policy_kwargs = {"features_extractor_kwargs": {"layout_cfg": cfg}}
+    model = algorithm(
+        policy_class,
         env,
         learning_rate=t["learning_rate"],
         batch_size=t["batch_size"],
@@ -337,9 +343,7 @@ class ResearchCallback(BaseCallback):
                     for r in rows
                 )
             ),
-            "rolling_mower_free_lessons": sum(
-                r.get("family") in (*LESSONS, "diagnostic") for r in rows
-            ),
+            "rolling_mower_free_lessons": sum(r.get("family") in ("diagnostic",) for r in rows),
             "rolling_win_rate": sum(r["win"] for r in rows) / len(rows) if rows else None,
             "rolling_return": sum(r["return"] for r in rows) / len(rows) if rows else None,
             "rolling_seconds": (
@@ -746,8 +750,8 @@ class ResearchCallback(BaseCallback):
             try:
                 rows = self.cached_evaluation(
                     curriculum_probe_seeds(self.cfg),
-                    ["easy" if task in LESSONS else task],
-                    task if task in LESSONS else "preset",
+                    [task],
+                    "preset",
                     self.output / "curriculum-probes" / str(self.model.num_timesteps) / task,
                     "curriculum_validation",
                     final=final,
@@ -820,9 +824,7 @@ class ResearchCallback(BaseCallback):
         try:
             rows = self.cached_evaluation(
                 seed_values(self.cfg, "validation", self.validation_limit),
-                ["easy"]
-                if self.family in ("diagnostic", *LESSONS)
-                else self.cfg["evaluation"]["levels"],
+                ["easy"] if self.family in ("diagnostic",) else self.cfg["evaluation"]["levels"],
                 self.family,
                 self.output / "validation" / str(self.model.num_timesteps),
                 "validation",
@@ -921,66 +923,69 @@ class ResearchCallback(BaseCallback):
 
 
 def initial_weights(checkpoint, cfg):
-    """Load current-method weights without restoring optimizers or experiment settings."""
-    from stable_baselines3.common.save_util import load_from_zip_file
+    """Transfer validated weights with fresh optimizer, counters and curriculum."""
+    from pvz_rl.learning.checkpoints import compatible_config, inspect_checkpoint
 
-    from pvz_rl.policy.sequential_q import ACTION_DISTRIBUTION
-
-    checkpoint = Path(checkpoint).resolve()
-    saved = json.loads((checkpoint.parent / "metadata.json").read_text("utf-8"))
+    require_supported_policy(cfg)
+    saved = inspect_checkpoint(checkpoint)
     source_cfg = saved["config"]
-    # Only target experiment settings execute. Source compatibility below is
-    # structural; weights-only transfer never restores old lesson parameters.
-    validate_config(cfg)
+    compatible_config(source_cfg, cfg)
     verify_engine(source_cfg)
-    if (
-        source_cfg.get("reward", {}).get("version") != "net_value_v1"
-        or source_cfg.get("training", {}).get("discount_clock") != "simulation_ticks"
-    ):
-        raise ValueError("Retired checkpoint; 0.11.0 requires fresh training")
-    require_supported_policy(source_cfg, saved["condition"])
-    if transfer_protocol(source_cfg) != transfer_protocol(cfg):
-        raise ValueError(
-            "Weights-only initialization requires matching engine, observation and network structure; start fresh for changed dimensions"
-        )
-    if saved.get("exploration_protocol") != EXPLORATION_PROTOCOL:
-        raise ValueError("Checkpoint uses the retired exploration schedule; start a fresh run")
-    from pvz_rl.learning.cuda_q import checkpoint_metadata
-
-    checkpoint_metadata(checkpoint)
-    data, parameters, _ = load_from_zip_file(checkpoint, device="cpu")
-    if data.get("action_distribution_protocol") != ACTION_DISTRIBUTION:
-        raise ValueError("Action distribution changed; fresh training is required")
-    weights = {key: value.detach().clone() for key, value in parameters["policy"].items()}
+    model, _ = load_policy(checkpoint, "cpu")
+    weights = {key: value.detach().clone() for key, value in model.policy.state_dict().items()}
     return weights, {
         "mode": "weights_only",
+        "type": saved["initialization_type"],
         "conversion": "none",
-        "checkpoint": str(checkpoint),
+        "checkpoint": str(Path(checkpoint).resolve()),
         "checkpoint_sha256": file_hash(checkpoint),
         "source_learner_seed": saved["learner_seed"],
-        "steps": data["num_timesteps"],
-        "games": data.get("training_games", 0),
-        "updates": data["_n_updates"],
+        "steps": model.num_timesteps,
+        "games": getattr(model, "training_games", 0),
+        "updates": model._n_updates,
         "source_structural_signature": transfer_protocol(source_cfg),
         "parameter_changes": parameter_changes(source_cfg, cfg),
     }
 
 
-def load_policy(checkpoint, device="cpu"):
-    checkpoint = Path(checkpoint).resolve()
-    run = checkpoint.parent
-    data = json.loads((run / "metadata.json").read_text("utf-8"))
-    cfg, condition = data["config"], data["condition"]
-    validate_config(cfg)
-    verify_engine(cfg)
-    require_supported_policy(cfg, condition)
-    from pvz_rl.learning.cuda_q import CudaSequentialQ
+def load_policy(checkpoint, device="cpu", *, for_resume=False):
+    from gymnasium import spaces
+    from pvz_game import Rules
 
+    from pvz_rl.envs.actions import ActionSchema
+    from pvz_rl.envs.encoding import ObservationEncoder
+    from pvz_rl.learning.checkpoints import inspect_checkpoint, model_class
+    from pvz_rl.policy.recurrent_policy import RecurrentQPolicy
+
+    data = inspect_checkpoint(checkpoint)
+    cfg = data["config"]
+    verify_engine(cfg)
+    require_supported_policy(cfg, data["condition"])
     torch.set_num_threads(cfg["training"]["torch_threads"])
-    model = CudaSequentialQ.load(
-        checkpoint,
-        device=device,
-    )
+    if data["initialization_type"] == "demonstration":
+        model = model_class(cfg)(
+            RecurrentQPolicy,
+            device=device,
+            _init_setup_model=False,
+            policy_kwargs={"features_extractor_kwargs": {"layout_cfg": cfg}},
+        )
+        model.observation_space = ObservationEncoder(cfg, Rules()).space
+        model.action_space = spaces.Discrete(ActionSchema.size)
+        model.n_envs = cfg["training"]["n_envs"]
+        model._setup_model()
+        model.policy.load_state_dict(data.pop("payload")["model"], strict=True)
+    else:
+        model = model_class(cfg).load(checkpoint, device=device)
+        if transfer_protocol(model.cfg) != transfer_protocol(cfg):
+            raise ValueError("Checkpoint contents disagree with saved model configuration")
+    if any(not torch.isfinite(value).all() for value in model.policy.state_dict().values()):
+        raise ValueError("Checkpoint contains non-finite model weights")
+    if for_resume:
+        from pvz_rl.learning.checkpoints import migrate_resume_state
+
+        migrate_resume_state(model, data)
+    model.policy.features_extractor.cfg = cfg
+    model.policy_kwargs["features_extractor_kwargs"]["layout_cfg"] = cfg
     configure_exploration(model, cfg)
     return model, data
 
@@ -1014,13 +1019,21 @@ def train(
     if init_from:
         initialized_model, initialization = initial_weights(init_from, cfg)
     if resume:
+        from pvz_rl.learning.checkpoints import inspect_checkpoint, protocol_for
         from pvz_rl.learning.cuda_q import checkpoint_optimizer_protocol
 
-        saved = json.loads((Path(resume).resolve().parent / "metadata.json").read_text("utf-8"))
+        saved = inspect_checkpoint(resume)
+        if saved["initialization_type"] != "autonomous":
+            raise ValueError(
+                "Demonstration weights require --init-from; --resume needs an autonomous ZIP"
+            )
         require_cuda_training(saved["config"], saved["condition"])
         if saved.get("exploration_protocol") != EXPLORATION_PROTOCOL:
             raise ValueError("Checkpoint uses the retired exploration schedule; start a fresh run")
-        if checkpoint_optimizer_protocol(resume) != OPTIMIZER_PROTOCOL:
+        if (
+            checkpoint_optimizer_protocol(resume)
+            != protocol_for(cfg["policy"]["kind"])["optimizer"]
+        ):
             raise ValueError("Optimizer protocol changed; use fresh training or --init-from")
         if (
             saved["condition"] != condition
@@ -1032,13 +1045,24 @@ def train(
             )
         if saved["learner_seed"] != learner_seed or saved["validation_limit"] != validation_limit:
             raise ValueError("Resume learner seed or validation limit differs")
+    resumed_model = (
+        load_policy(resume, cfg["training"]["device"], for_resume=True)[0] if resume else None
+    )
     torch.set_num_threads(cfg["training"]["torch_threads"])
     # Complete Q rollouts are counted explicitly; no discarded partial optimization batch.
     game_budget = uses_games(cfg)
     unlimited = until_stage_complete(cfg)
     nominal_steps = None if game_budget else cfg["training"]["total_steps"]
     effective_steps = None if game_budget else nominal_steps
-    output.mkdir(parents=True, exist_ok=False)
+    in_place_resume = bool(resume and output.resolve() == Path(resume).resolve().parent)
+    prior_time = 0.0
+    if resume:
+        previous_status = Path(resume).resolve().parent / "status.json"
+        if previous_status.exists():
+            prior_time = (
+                json.loads(previous_status.read_text("utf-8")).get("time_budget") or {}
+            ).get("elapsed_seconds", 0.0)
+    output.mkdir(parents=True, exist_ok=in_place_resume)
     details = metadata(
         cfg,
         condition=condition,
@@ -1052,10 +1076,15 @@ def train(
         budget_unit="games" if game_budget else "decisions",
         validation_limit=validation_limit,
         resume=str(Path(resume).resolve()) if resume else None,
-        initialization=initialization,
+        initialization=initialization
+        if initialization
+        else saved.get("initialization")
+        if resume
+        else None,
         exploration_protocol=EXPLORATION_PROTOCOL,
         structural_signature=transfer_protocol(cfg),
-        optimizer_protocol=OPTIMIZER_PROTOCOL,
+        optimizer_protocol=cfg["training"]["method"],
+        model_family=cfg["policy"]["kind"],
         hardware_telemetry={
             "enabled": cfg["training"].get("performance", {}).get("telemetry", False),
             "sample_seconds": output_settings(cfg)["logging"]["hardware_sample_seconds"],
@@ -1065,7 +1094,7 @@ def train(
         },
         optimizer_settings={
             "learning_rate": cfg["training"]["learning_rate"],
-            "adam_epsilon": 1e-5,
+            "adam_epsilon": 1e-8 if cfg["policy"]["kind"] == "transformer_lstm_q_v1" else 1e-5,
             "batch_size": cfg["training"]["batch_size"],
             "shared_encoder": True,
         },
@@ -1083,7 +1112,7 @@ def train(
         else f"{budget_target(cfg) if game_budget else effective_steps:,} {'games' if game_budget else 'decisions'}"
     )
     progress.emit(
-        f"Shared {condition} policy; learner seed {learner_seed}; {cfg['training']['device']}; "
+        f"Shared {condition} {cfg['policy']['kind']} policy; learner seed {learner_seed}; {cfg['training']['device']}; "
         f"{cfg['training']['n_envs']} parallel games; simulator {simulator(cfg)}; "
         "one complete game per environment per cohort; "
         f"{budget_label}; "
@@ -1123,19 +1152,12 @@ def train(
         force=True,
     )
     training_complete = False
-    prior_time = 0.0
-    if resume:
-        previous_status = Path(resume).resolve().parent / "status.json"
-        if previous_status.exists():
-            prior_time = (
-                json.loads(previous_status.read_text("utf-8")).get("time_budget") or {}
-            ).get("elapsed_seconds", 0.0)
     wall_budget = RunBudget(cfg, elapsed=prior_time, started=started)
     try:
         env = vector_env(cfg, condition, learner_seed, family)
         env.start_live_view(notify=lambda text: progress.emit(text, force=True))
         if resume:
-            model, old = load_policy(resume, cfg["training"]["device"])
+            model = resumed_model
             wall_budget.prior_elapsed = max(
                 wall_budget.prior_elapsed,
                 getattr(model, "wall_budget_state", {}).get("elapsed_seconds", 0.0),
@@ -1148,7 +1170,7 @@ def train(
             details["resume_games"] = getattr(model, "training_games", 0)
             write_json(output / "metadata.json", details)
             progress.emit(
-                f"Resumed shared policy and both optimizers at {progress_value(cfg, model):,} {'games' if game_budget else 'decisions'}",
+                f"Resumed shared policy and optimizer at {progress_value(cfg, model):,} {'games' if game_budget else 'decisions'}",
                 force=True,
             )
         else:
@@ -1161,6 +1183,7 @@ def train(
                 )
             if teaching_enabled(cfg) and family == "preset":
                 model.curriculum_state = initial_state(cfg).to_dict()
+        model.research_metadata = details
         remaining = (
             None
             if unlimited
@@ -1187,8 +1210,9 @@ def train(
             if (previous / "best.json").exists():
                 best = json.loads((previous / "best.json").read_text("utf-8"))
                 if best["steps"] <= model.num_timesteps:
-                    shutil.copy2(previous / "best.zip", output / "best.zip")
-                    shutil.copy2(previous / "best.json", output / "best.json")
+                    if not in_place_resume:
+                        shutil.copy2(previous / "best.zip", output / "best.zip")
+                        shutil.copy2(previous / "best.json", output / "best.json")
                     callback.best_score = best["macro_win_rate"]
         env.env_method("set_progress", progress_value(cfg, model))
         if teaching_enabled(cfg) and family == "preset":
@@ -1231,6 +1255,7 @@ def train(
             else:
                 callback.validate(final=True)
         callback.save_checkpoint("final.zip")
+        callback.save_checkpoint("latest.zip")
         final_status = {
             **callback.snapshot(),
             "state": "complete",

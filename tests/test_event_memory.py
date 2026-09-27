@@ -5,7 +5,7 @@ import pytest
 import torch
 from pvz_game import Game, InitialPlant, LevelSpec, Rules, Spawn
 
-from pvz_rl.config import load_config
+from pvz_rl.config import load_event_config as load_config
 from pvz_rl.envs.encoding import ObservationEncoder
 from pvz_rl.policy.event_memory import EventMemory
 
@@ -160,13 +160,14 @@ def test_real_mine_histories_affect_tile_preferences_without_countdown_inputs():
     from pvz_game import Place, Wait
 
     from pvz_rl.envs.actions import ActionCodec
-    from pvz_rl.envs.lesson_rules import sky_rules
     from pvz_rl.policy.spatial_policy import SequentialQPolicy, SpatialFeatures
 
     torch.set_num_threads(1)
     torch.manual_seed(7)
     cfg = load_config()
-    rules = sky_rules(Rules(), False)
+    raw = Rules().to_dict()
+    raw["game"]["sky_sun_amount"] = 0
+    rules = Rules(raw)
     encoder, codec = ObservationEncoder(cfg, rules), ActionCodec(cfg)
     games = [Game(rules), Game(rules)]
     for game in games:

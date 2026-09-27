@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import math
 import time
+from importlib.resources import files
 from pathlib import Path
 
 import torch
@@ -16,13 +17,12 @@ from pvz_rl.envs.action_timing import ActionPhaseGame
 from pvz_rl.envs.actions import ActionCodec
 from pvz_rl.envs.encoding import ObservationEncoder
 from pvz_rl.envs.rewards import reward_parts
+from pvz_rl.learning.checkpoints import DEMO_PROTOCOL as CHECKPOINT_PROTOCOL
+from pvz_rl.learning.checkpoints import STATE_PROTOCOL as RECURRENT_STORAGE_PROTOCOL
 from pvz_rl.policy.sequential_q import action_groups, action_parts, balanced_q_loss
 from pvz_rl.policy.transformer_lstm import TransformerLSTMPolicy
 from pvz_rl.presentation.recordings import open_playback, verify_replay
 from pvz_rl.provenance import file_hash, write_json
-
-CHECKPOINT_PROTOCOL = "pvz-rl/demo-initialization-checkpoint-v1"
-RECURRENT_STORAGE_PROTOCOL = "pvz-rl/lstm-state-v1"
 
 
 def _verify_action_order(archive_path: Path, replay_path: Path, cfg: dict) -> dict:
@@ -124,10 +124,16 @@ def verify_demo(archive: str | Path, replay: str | Path, cfg: dict | None = None
     manifest = (
         json.loads(manifest_path.read_text(encoding="utf-8")) if manifest_path.exists() else {}
     )
-    if manifest.get("protocol") != "pvz-rl/transition-archive-v1" or manifest.get(
-        "config_digest"
-    ) != digest(cfg):
-        raise ValueError("archive protocol or configuration digest does not match")
+    if not manifest_path.exists():
+        raise ValueError("Demonstration archive manifest is missing")
+    if manifest.get("protocol") != "pvz-rl/transition-archive-v1":
+        raise ValueError("Unsupported demonstration archive protocol")
+    recorded_digest = manifest.get("config_digest")
+    migrations = json.loads(
+        files("pvz_rl").joinpath("data/archive-config-migrations.json").read_text("utf-8")
+    )
+    if recorded_digest != digest(cfg) and migrations.get(recorded_digest) != digest(cfg):
+        raise ValueError("Archive configuration digest does not match")
     if manifest.get("replay") != file_hash(replay):
         raise ValueError("archive replay hash does not match")
     rows = [json.loads(line) for line in archive.read_text(encoding="utf-8").splitlines() if line]
@@ -232,6 +238,7 @@ def initialize_demo(
         for value in (learning_rate, gradient_clip, time_budget_minutes)
     ):
         raise ValueError("demo initialization settings must be positive")
+    torch.set_num_threads(cfg["training"]["torch_threads"])
     torch.manual_seed(seed)
     model = TransformerLSTMPolicy(cfg).to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
@@ -328,16 +335,14 @@ def _save_checkpoint(payload, path):
 
 
 def load_demo_checkpoint(path: str | Path, cfg: dict | None = None, *, device="cpu"):
-    saved = torch.load(path, map_location=device, weights_only=True)
-    cfg = cfg or saved["config"]
-    if saved.get("protocol") != CHECKPOINT_PROTOCOL:
-        raise ValueError("unsupported demonstration checkpoint protocol")
-    if saved.get("recurrent_storage_protocol") != RECURRENT_STORAGE_PROTOCOL:
-        raise ValueError("unsupported recurrent storage protocol")
-    if saved.get("config_digest") != digest(cfg):
-        raise ValueError(
-            "checkpoint configuration does not match current observation/policy protocol"
-        )
-    model = TransformerLSTMPolicy(cfg).to(device)
-    model.load_state_dict(saved["model"])
+    from pvz_rl.learning.checkpoints import compatible_config, inspect_checkpoint
+
+    info = inspect_checkpoint(path)
+    if info["initialization_type"] != "demonstration":
+        raise ValueError("Expected a demonstration initialization checkpoint")
+    saved = info["payload"]
+    if cfg is not None:
+        compatible_config(saved["config"], cfg)
+    model = TransformerLSTMPolicy(cfg or info["config"]).to(device)
+    model.load_state_dict(saved["model"], strict=True)
     return model, saved

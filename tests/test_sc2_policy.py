@@ -6,7 +6,7 @@ import pytest
 import torch
 from pvz_game import Dig, Place
 
-from pvz_rl.config import load_config
+from pvz_rl.config import load_event_config as load_config
 from pvz_rl.envs.env import PvZEnv
 from pvz_rl.learning.curriculum import CurriculumState
 from pvz_rl.learning.deadline import RunBudget
@@ -19,16 +19,16 @@ def one_cpu_thread():
 
 def test_stage_residency_counts_only_matching_episode_starts():
     cfg = load_config()
-    state = CurriculumState(stage=1)
+    state = CurriculumState(stage=0)
     for _ in range(100):
-        state.completed_episode(0)
+        state.completed_episode(1)
     assert not state.observe({"easy": 100}, 500, cfg)
     assert not state.observe({"easy": 100}, 1000, cfg)
     for _ in range(99):
-        state.completed_episode(1)
+        state.completed_episode(0)
     restored = CurriculumState(**state.to_dict())
     assert not restored.observe({"easy": 100}, 1500, cfg)
-    restored.completed_episode(1)
+    restored.completed_episode(0)
     assert restored.observe({"easy": 100}, 2000, cfg)
     assert restored.name == "standard" and restored.completed_stage_games == 0
 
@@ -111,7 +111,7 @@ def test_missing_cuda_compiler_backend_never_enters_tracing(monkeypatch):
 def test_sequential_heads_masks_ties_conditioning_and_roundtrips(device):
     from gymnasium import spaces
 
-    from pvz_rl.config import load_config
+    from pvz_rl.config import load_event_config as load_config
     from pvz_rl.envs.actions import ActionCodec
     from pvz_rl.envs.actions import ActionSchema as A
     from pvz_rl.policy.sequential_q import action_parts, assemble, greedy_choice, selection_masks
@@ -192,7 +192,7 @@ def test_shared_q_cpu_cuda_outputs_gradients_and_adam_parity():
 
     from gymnasium import spaces
 
-    from pvz_rl.config import load_config
+    from pvz_rl.config import load_event_config as load_config
     from pvz_rl.policy.spatial_policy import SequentialQPolicy
 
     torch.manual_seed(102)
@@ -245,7 +245,7 @@ def test_shared_q_cpu_cuda_outputs_gradients_and_adam_parity():
 def test_ten_way_scores_ignore_affordability_and_full_board(device):
     from gymnasium import spaces
 
-    from pvz_rl.config import load_config
+    from pvz_rl.config import load_event_config as load_config
     from pvz_rl.policy.spatial_policy import SequentialQPolicy
 
     p = SequentialQPolicy(
@@ -287,7 +287,7 @@ def test_ten_way_scores_ignore_affordability_and_full_board(device):
 def test_plant_exploration_includes_all_species_and_only_empty_tiles(budget):
     from gymnasium import spaces
 
-    from pvz_rl.config import load_config
+    from pvz_rl.config import load_event_config as load_config
     from pvz_rl.policy.sequential_q import action_parts, per_head_epsilon
     from pvz_rl.policy.spatial_policy import SequentialQPolicy
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 from pathlib import Path
 
@@ -51,11 +52,6 @@ def training_options(parser):
     parser.add_argument("--device", choices=("cuda",))
     parser.add_argument("--simulator", choices=("cuda",))
     parser.add_argument("--batch-size", type=int)
-    parser.add_argument(
-        "--max-minutes",
-        type=float,
-        help="cumulative time cap per run, including validation and demos",
-    )
     parser.add_argument("--eval-interval", type=int)
     parser.add_argument(
         "--eval-games",
@@ -69,10 +65,16 @@ def configured(args):
     loader = load_demo_config if args.command in ("record-demo", "initialize-demo") else load_config
     cfg = loader(args.config)
     checkpoint = getattr(args, "resume", None) or getattr(args, "init_from", None)
+    if args.command == "evaluate":
+        checkpoint = getattr(args, "checkpoint", None)
     if checkpoint and not args.config:
-        run = args.output if args.command == "suite" else checkpoint.parent
-        saved = json.loads((run / "metadata.json").read_text("utf-8"))
-        cfg = saved["config"]
+        if args.command == "suite":
+            saved = json.loads((args.output / "metadata.json").read_text("utf-8"))
+        else:
+            from pvz_rl.learning.checkpoints import inspect_checkpoint
+
+            saved = inspect_checkpoint(checkpoint)
+        cfg = copy.deepcopy(saved["config"])
         if args.command == "train":
             for name, field in (
                 ("seed", "learner_seed"),
@@ -91,11 +93,9 @@ def configured(args):
     if (
         args.command in ("train", "suite")
         and cfg["training"].get("until_stage_complete", False)
-        and any(getattr(args, name, None) is not None for name in ("games", "steps", "max_minutes"))
+        and any(getattr(args, name, None) is not None for name in ("games", "steps"))
     ):
-        raise ValueError(
-            "--until-stage-complete cannot be combined with --games, --steps, or --max-minutes"
-        )
+        raise ValueError("--until-stage-complete cannot be combined with --games, --steps")
     if getattr(args, "hardware", None):
         hardware = json.loads(args.hardware.read_text("utf-8"))
         if type(hardware.get("n_envs")) is not int or hardware["n_envs"] < 1:
@@ -109,12 +109,11 @@ def configured(args):
         ("n_envs", "n_envs"),
         ("device", "device"),
         ("batch_size", "batch_size"),
-        ("max_minutes", "max_minutes"),
         ("eval_interval", "eval_interval"),
         ("eval_games", "eval_interval_games"),
     ):
         value = getattr(args, arg, None)
-        if value is not None:
+        if value is not None and args.command != "initialize-demo":
             cfg["training"][key] = value
     if getattr(args, "games", None) is not None:
         cfg["training"]["budget_unit"] = "games"
@@ -211,7 +210,6 @@ def main(argv=None):
     initialize.add_argument("--learning-rate", type=float)
     initialize.add_argument("--gradient-clip", type=float)
     initialize.add_argument("--seed", type=int)
-    initialize.add_argument("--max-minutes", type=float)
     initialize.add_argument("--device", choices=("cpu", "cuda"), default="cpu")
     evaluation = subs.add_parser("evaluate", help="evaluate a checkpoint or non-learning baseline")
     common(evaluation)
@@ -231,7 +229,6 @@ def main(argv=None):
         choices=(
             "preset",
             "diagnostic",
-            "saving",
             "redistributed",
             "faster",
             "concentrated",
@@ -343,7 +340,6 @@ def main(argv=None):
             learning_rate=args.learning_rate,
             gradient_clip=args.gradient_clip,
             seed=args.seed,
-            time_budget_minutes=args.max_minutes,
             device=args.device,
         )
         print(json.dumps(result, indent=2))
@@ -464,14 +460,14 @@ def main(argv=None):
         policy, condition, learner_seed, checkpoint_hash = None, "masked", None, None
         if args.checkpoint:
             policy, data = load_policy(args.checkpoint)
-            if args.config and research_config(cfg) != research_config(data["config"]):
-                raise ValueError(
-                    "Evaluation config must match the checkpoint; omit --config to reuse it"
-                )
+            if args.config:
+                from pvz_rl.learning.checkpoints import compatible_config
+
+                compatible_config(data["config"], cfg)
             cfg = cfg if args.config else data["config"]
             condition, learner_seed = data["condition"], data["learner_seed"]
             checkpoint_hash = file_hash(args.checkpoint)
-            if data["family"] in ("diagnostic", "saving") and args.family != data["family"]:
+            if data["family"] in ("diagnostic",) and args.family != data["family"]:
                 raise ValueError(
                     f"Diagnostic checkpoints must be evaluated with --family {data['family']}"
                 )
@@ -479,7 +475,7 @@ def main(argv=None):
             raise ValueError("Changed scenario families must use --split ood")
         if args.split == "ood" and args.family not in cfg["evaluation"]["ood_families"]:
             raise ValueError("OOD split requires a changed scenario family")
-        if args.family in ("diagnostic", "saving") and args.split not in (
+        if args.family in ("diagnostic",) and args.split not in (
             "development",
             "validation",
         ):

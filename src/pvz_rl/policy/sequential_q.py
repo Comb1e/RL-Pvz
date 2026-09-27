@@ -84,3 +84,85 @@ def balanced_q_loss(branch, tile, targets, actions, counts, batch_size):
     weights = counts.sum() / (counts.clamp_min(1)[groups] * (counts > 0).sum())
     loss = (errors * weights).sum() / counts.sum().clamp(max=batch_size)
     return loss, branch_error, tile_error
+
+
+def select_q_actions(
+    values,
+    board,
+    pooled,
+    tile_values,
+    action_masks,
+    *,
+    deterministic=False,
+    exploration_epsilon=0.0,
+    tile_exploration_epsilon=0.0,
+    active=None,
+    diagnostic_indices=None,
+):
+    """Shared ten-way Q comparison and conditional plant exploration."""
+    # Every active environment compares all ten first-level outputs.
+    # Affordability and cooldown are simulator outcomes; only the selected
+    # tile uses the occupancy mask.
+    legal = selection_masks(action_masks)
+    if active is not None:
+        legal = legal.clone()
+        legal[~active] = False
+        legal[~active, 0] = True
+    greedy = greedy_choice(values, legal)
+    branches = greedy.clone()
+    coins = torch.zeros(len(values), 2, device=values.device, dtype=torch.bool)
+    epsilon = per_head_epsilon(0.0 if deterministic else exploration_epsilon)
+    tile_epsilon = 0.0 if deterministic else tile_exploration_epsilon
+    planting = ((greedy > 0) & (greedy <= A.plant_types)).nonzero(as_tuple=True)[0]
+    if len(planting):
+        species, coins[planting, 0] = explore(greedy[planting] - 1, legal[planting, 1:-1], epsilon)
+        branches[planting] = species + 1
+    tiles = torch.zeros_like(branches)
+    greedy_tiles = torch.zeros_like(branches)
+    selected_tile_values = values.new_zeros(len(values))
+    nonwait = (branches > 0).nonzero(as_tuple=True)[0]
+    if len(nonwait):
+        tile_q = tile_values(board[nonwait], pooled[nonwait], branches[nonwait])
+        tile_legal = A.tile_masks(action_masks[nonwait])[
+            torch.arange(len(nonwait), device=values.device), branches[nonwait] - 1
+        ]
+        # Full-board proposals deterministically target tile zero.  The
+        # simulator rejects them and advances time.  Validate every value,
+        # even when the geometry has no empty tile.
+        has_tile = tile_legal.any(-1)
+        tile_candidates = tile_legal.clone()
+        tile_candidates[~has_tile, 0] = True
+        preferred = greedy_choice(tile_q, tile_candidates)
+        tiles[nonwait] = preferred
+        greedy_tiles[nonwait] = preferred
+        plant_rows = (branches[nonwait] <= A.plant_types).nonzero(as_tuple=True)[0]
+        if len(plant_rows):
+            selected, fired = explore(
+                preferred[plant_rows], tile_candidates[plant_rows], tile_epsilon
+            )
+            tiles[nonwait[plant_rows]] = selected
+            coins[nonwait[plant_rows], 1] = fired
+        selected_tile_values[nonwait] = tile_q.gather(1, tiles[nonwait, None]).flatten()
+    # Recover the unmodified greedy full command when species exploration switched branches.
+    changed = (branches != greedy).nonzero(as_tuple=True)[0]
+    if len(changed):
+        q = tile_values(board[changed], pooled[changed], greedy[changed])
+        mask = A.tile_masks(action_masks[changed])[
+            torch.arange(len(changed), device=values.device), greedy[changed] - 1
+        ]
+        mask = mask.clone()
+        mask[~mask.any(-1), 0] = True
+        greedy_tiles[changed] = greedy_choice(q, mask)
+    actions = assemble(branches, tiles)
+    details = dict(greedy_actions=assemble(greedy, greedy_tiles), coins=coins)
+    details["branch_q"] = values
+    if diagnostic_indices is not None:
+        ix = diagnostic_indices
+        details["viewer"] = dict(
+            q=values[ix],
+            legal=legal[ix],
+            actions=actions[ix],
+            greedy_actions=details["greedy_actions"][ix],
+            coins=coins[ix],
+        )
+    return actions, values.gather(1, branches[:, None]).flatten(), selected_tile_values, details

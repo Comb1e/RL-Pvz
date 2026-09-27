@@ -8,7 +8,7 @@ import torch
 from pvz_game import LevelSpec, Spawn
 from pvz_game.config import PLANT_TYPES, ZOMBIE_TYPES, InitialPlant
 
-from pvz_rl.config import load_config
+from pvz_rl.config import load_event_config as load_config
 from pvz_rl.envs.env import PvZEnv
 
 
@@ -30,8 +30,8 @@ def gpu_cfg():
 
 @pytest.mark.parametrize("condition", ["masked"])
 def test_observations_rewards_and_metrics_against_cpu(gpu_cfg, condition):
+    from pvz_rl.envs.cuda_accounting import AccountingCudaBatch as CudaBatch
     from pvz_rl.envs.cuda_features import REWARD_FIELDS, CudaFeatures
-    from pvz_rl.envs.cuda_lessons import LessonCudaBatch as CudaBatch
 
     cfg = copy.deepcopy(gpu_cfg)
     scenario = LevelSpec(
@@ -65,12 +65,12 @@ def test_observations_rewards_and_metrics_against_cpu(gpu_cfg, condition):
 def test_gpu_lesson_and_changed_scenarios_match_public_encodings(gpu_cfg):
     from pvz_game import Game, Rules
 
+    from pvz_rl.envs.cuda_accounting import AccountingCudaBatch as CudaBatch
     from pvz_rl.envs.cuda_features import CudaFeatures
-    from pvz_rl.envs.cuda_lessons import LessonCudaBatch as CudaBatch
     from pvz_rl.envs.scenarios import scenario
 
     cfg = copy.deepcopy(gpu_cfg)
-    families = ["saving", "redistributed", "faster", "concentrated"]
+    families = ["preset", "redistributed", "faster", "concentrated"]
     # Development seeds only; formal test/changed-distribution seeds stay untouched.
     levels = [scenario("standard", family, 9, Rules(), cfg) for family in families]
     games = [Game() for _ in levels]
@@ -89,8 +89,8 @@ def test_gpu_lesson_and_changed_scenarios_match_public_encodings(gpu_cfg):
 def test_gpu_encoding_crowds_order_and_private_schedule(gpu_cfg):
     from pvz_game import Game
 
+    from pvz_rl.envs.cuda_accounting import AccountingCudaBatch as CudaBatch
     from pvz_rl.envs.cuda_features import CudaFeatures
-    from pvz_rl.envs.cuda_lessons import LessonCudaBatch as CudaBatch
 
     cfg = copy.deepcopy(gpu_cfg)
     games = []

@@ -11,7 +11,7 @@ import pytest
 import torch
 
 from pvz_rl.cli import configured, main
-from pvz_rl.config import load_config
+from pvz_rl.config import load_event_config as load_config
 from pvz_rl.learning.training import train
 from pvz_rl.learning.training_requirements import require_cuda_training, resume_protocol
 
@@ -71,13 +71,21 @@ def test_cpu_hardware_recommendation_is_rejected(tmp_path):
         configured(argparse.Namespace(command="train", config=None, hardware=path))
 
 
-def test_cpu_resume_and_dormant_condition_compatibility(smoke_cfg, tmp_path):
+def test_cpu_resume_and_dormant_condition_compatibility(smoke_cfg, tmp_path, monkeypatch):
     cfg = json.loads(json.dumps(smoke_cfg))
     original = resume_protocol(cfg, "masked")
     cfg["conditions"]["hybrid"] = dict(masked=True, shaped=True, curriculum=True, hybrid=True)
     assert resume_protocol(cfg, "masked") == original
     cfg["simulation"]["backend"] = "cpu"
     (tmp_path / "metadata.json").write_text(json.dumps({"config": cfg, "condition": "masked"}))
+    monkeypatch.setattr(
+        "pvz_rl.learning.checkpoints.inspect_checkpoint",
+        lambda path: {
+            "config": cfg,
+            "condition": "masked",
+            "initialization_type": "autonomous",
+        },
+    )
     with pytest.raises(ValueError, match="CPU training is not supported"):
         train(smoke_cfg, "masked", 101, tmp_path / "new", resume=tmp_path / "old.zip")
     assert not (tmp_path / "new").exists()
@@ -151,16 +159,15 @@ def test_stage_rejects_missing_or_mismatched_pin(staged_repository, tmp_path, fa
     assert not (tmp_path / "rejected").exists()
 
 
-def test_training_and_demo_recipes_remain_distinct():
+def test_recurrent_defaults_and_explicit_event_memory_are_trainable():
     from pvz_rl.config import load_demo_config
 
     root = Path(__file__).resolve().parents[1]
-    expected = {"train", "demo"}
+    expected = {"train", "demo", "event-memory"}
     assert {p.stem for p in (root / "configs").glob("*.toml")} == expected
-    require_cuda_training(load_config(root / "configs/train.toml"), runtime=False)
+    require_cuda_training(load_config(root / "configs/event-memory.toml"), runtime=False)
     demo = load_demo_config(root / "configs/demo.toml")
-    with pytest.raises(ValueError, match="Retired policy"):
-        require_cuda_training(demo, runtime=False)
+    require_cuda_training(demo, runtime=False)
 
 
 def test_benchmark_schedules_configurable_cuda_sizes(smoke_cfg, tmp_path, monkeypatch):

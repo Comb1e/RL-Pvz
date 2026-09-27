@@ -9,7 +9,7 @@ from pvz_game import Dig, LevelSpec, Place, Spawn, Status
 from pvz_game.config import PLANT_TYPES, InitialPlant
 from pvz_game.types import Event
 
-from pvz_rl.config import load_config
+from pvz_rl.config import load_event_config as load_config
 from pvz_rl.envs.env import PvZEnv
 from pvz_rl.envs.rewards import asset_value, reward_parts
 from pvz_rl.policy.spatial_policy import SpatialFeatures

@@ -17,29 +17,28 @@
 
 ## Code structure
 
-- `configs/demo.toml` and bundled `data/demo.toml` define the recurrent human
-  workflow; `configs/train.toml` and bundled `data/research.toml` retain the
-  separate CUDA collector. CLI commands select their matching profile.
-- `src/pvz_rl/envs/` adapts the pinned game, encodes the versioned public
-  observation (including card cooldowns), and computes transition/accounting
-  rewards.
-- `src/pvz_rl/policy/transformer_lstm.py` contains the 45-tile/15-region entity
-  Transformer, recurrent state interface, and branch/tile Q heads for demo fitting.
-  `policy/event_memory.py`, `temporal.py`, and `spatial_policy.py` implement the
-  active CUDA collector. `sequential_q.py` shares action algebra and selection.
-  Retired checkpoint inference and its alternative masks have been removed.
-- `src/pvz_rl/presentation/demo_recording.py` owns the interactive easy-game
-  recorder, append-only transition archive, compact history index, native
-  action-phase replay, output-path validation, and one-session human controls.
-- `src/pvz_rl/presentation/live_layout.py` owns the multi-panel viewer layout,
-  history paging, generation-safe responses, and F follow-latest state changes;
-  horizontal table scrolling is independent from selection/follow state.
-- `src/pvz_rl/learning/demo_initialization.py` verifies a complete archive and
-  replay, computes complete returns, performs chunked initialization, and writes
-  the versioned checkpoint and diagnostics. It does not start formal 128-game
-  training.
-- `src/pvz_rl/learning/` contains the later CUDA complete-game collector and
-  optimizer; `src/pvz_rl/evaluation/` runs held-out games; `tests/` mirrors these
-  boundaries with CPU, CUDA, integration, and independent math controls.
-- `docs/training.md` documents recording, initialization, explicit CUDA training,
-  resume and evaluation; `docs/live-view.md` describes viewer controls.
+- `configs/train.toml`, `configs/demo.toml` and bundled profiles use the recurrent
+  Transformer–LSTM by default; `configs/event-memory.toml` is the explicit alternative.
+- `src/pvz_rl/envs/` adapts the pinned game, public observations and rewards;
+  `cuda_accounting.py` adds read-only accounting counters to the pinned CUDA kernel.
+- `src/pvz_rl/policy/transformer_lstm.py` owns the entity Transformer and recurrent
+  Q heads. `recurrent_policy.py` adapts the same weights to the training lifecycle;
+  `runner.py` owns public action/outcome history for collection, evaluation and replay.
+  `sequential_q.py` shares selection and group-weighted loss across both model families.
+  `event_memory.py`, `temporal.py` and `spatial_policy.py` retain the explicit alternative.
+- `src/pvz_rl/learning/checkpoints.py` inspects protocols, saved configurations and
+  model dispatch. `demo_initialization.py` verifies and fits a completed archive.
+  `cuda_q.py` owns cohort lifecycle/atomic recovery; `recurrent_q.py` adds chronological
+  recurrent collection and whole-pass gradient accumulation. `cuda_buffer.py` bounds
+  host trajectory memory with disk overflow. Curriculum stages are easy, standard, shared.
+- `src/pvz_rl/presentation/demo_recording.py` owns the one-attempt human recorder,
+  append-only transition archive, compact history, replay and output validation.
+  `live_layout.py` owns viewer layout, paging, generation checks and F follow-latest.
+  `action_journal.py` retains Q values captured during actual collection decisions.
+- `src/pvz_rl/evaluation/` runs deterministic held-out games through the shared runner
+  and verifies recorded CUDA traces against CPU replay. `tests/test_recurrent_training.py`
+  covers recurrent handoff, fitting, state boundaries, recovery and mathematical controls;
+  legacy model tests select the explicit event-memory configuration.
+- `docs/training.md` documents recording, initialization, CUDA training, resume and
+  evaluation; `docs/architecture.md` describes current ownership and failure paths;
+  `docs/math/recurrent-training.md` defines the sequence objective and independent controls.

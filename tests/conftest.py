@@ -1,6 +1,6 @@
 import pytest
 
-from pvz_rl.config import load_config
+from pvz_rl.config import load_event_config as load_config
 
 
 @pytest.fixture(autouse=True)
@@ -25,8 +25,7 @@ def legacy_teaching():
         c.pop("residency", None)
         cfg["splits"].pop("curriculum", None)
         for stage, requirements in {
-            "saving": {"saving": 18},
-            "easy": {"easy": 16},
+            "easy": {"easy": 18},
             "standard": {"easy": 16, "standard": 12},
             "shared": {},
         }.items():
@@ -81,7 +80,7 @@ def tiny_cli_config(tmp_path):
 
     path = tmp_path / "tiny.toml"
     path.write_text(
-        Path("configs/train.toml")
+        Path("configs/event-memory.toml")
         .read_text()
         .replace("live_enabled = true", "live_enabled = false")
         .replace("cutoff_seconds = 1200", "cutoff_seconds = 1")

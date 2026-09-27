@@ -22,7 +22,7 @@ def task_name(level, family):
         level
         if family == "preset"
         else family
-        if family in ("placement", "saving", "diagnostic")
+        if family in ("diagnostic",)
         else f"{family}/{level}"
     )
 

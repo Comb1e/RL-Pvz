@@ -192,7 +192,7 @@ def test_128_game_interruption_restores_actual_scores_and_optimizer(tmp_path):
     from stable_baselines3.common.callbacks import BaseCallback
     from stable_baselines3.common.logger import configure
 
-    from pvz_rl.config import load_config
+    from pvz_rl.config import load_event_config as load_config
     from pvz_rl.learning.cuda_q import CudaSequentialQ
     from pvz_rl.learning.training import build_model, vector_env
     from pvz_rl.monitoring.benchmark import policy_digest
@@ -208,7 +208,7 @@ def test_128_game_interruption_restores_actual_scores_and_optimizer(tmp_path):
             return self.n_calls < 2
 
     for interrupted in (False, True):
-        env = vector_env(copy.deepcopy(cfg), "masked", 101, "saving")
+        env = vector_env(copy.deepcopy(cfg), "masked", 101, "diagnostic")
         try:
             model = build_model(cfg, "masked", env, 101)
             model.set_logger(configure(format_strings=[]))
@@ -286,7 +286,7 @@ def test_page_selection_survives_scroll_and_stale_requests():
 
 
 def test_journal_penalties_and_exact_q_survive_archive(tmp_path):
-    from pvz_rl.config import load_config
+    from pvz_rl.config import load_event_config as load_config
     from pvz_rl.presentation.live_layout import result_label
 
     settings = load_config()["reward"]

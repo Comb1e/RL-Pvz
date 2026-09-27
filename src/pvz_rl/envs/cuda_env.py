@@ -13,13 +13,12 @@ from pvz_game.config import PLANT_TYPES
 from stable_baselines3.common.vec_env import VecEnv
 
 from pvz_rl.envs.actions import ActionSchema as A
+from pvz_rl.envs.cuda_accounting import AccountingCudaBatch
 from pvz_rl.envs.cuda_features import LEDGER_INDICES, METRIC_INDICES, CudaFeatures
-from pvz_rl.envs.cuda_lessons import LessonCudaBatch
-from pvz_rl.envs.lesson_rules import natural_sun
 from pvz_rl.envs.rewards import REWARD_METRICS
 from pvz_rl.envs.scenarios import difficulty_weights, scenario
 from pvz_rl.learning.budget import budget_target
-from pvz_rl.learning.curriculum import LESSONS, stage_distribution, teaching_enabled
+from pvz_rl.learning.curriculum import stage_distribution, teaching_enabled
 from pvz_rl.learning.training_requirements import require_supported_policy
 from pvz_rl.monitoring.metrics import task_name
 
@@ -55,7 +54,7 @@ class ScenarioQueue:
             if family == "preset" and teaching_enabled(cfg):
                 tasks, weights = stage_distribution(cfg, self.stage)
                 task = str(rng.choice(tasks, p=weights))
-                family, level = (task, "easy") if task in LESSONS else ("preset", task)
+                family, level = ("preset", task)
             self.pending.append(
                 (index, level, family, seed, scenario(level, family, seed, self.rules, cfg))
             )
@@ -120,7 +119,7 @@ class CudaVecEnv(VecEnv):
             for level, fam, seed in cases:
                 game.reset(scenario(level, fam, seed, self.queue.rules, cfg), seed)
                 counts.append(game.observe().counts.initial_total)
-        self.batch = LessonCudaBatch(
+        self.batch = AccountingCudaBatch(
             cfg["training"]["n_envs"],
             zombie_capacity=max(1, *counts),
             max_step_ticks=1,
@@ -178,7 +177,6 @@ class CudaVecEnv(VecEnv):
             [s[4] for s in staged],
             [s[3] for s in staged],
             indices=indices,
-            natural_sun=[natural_sun(self.cfg, s[2]) for s in staged],
         )
         ix = self.cp.asarray(indices)
         self.features.totals[ix] = 0
@@ -193,6 +191,23 @@ class CudaVecEnv(VecEnv):
                 self.queue.rngs[index] = np.random.default_rng(seed)
         with self.device_context():
             self.reset_indices(list(range(self.num_envs)), self.cases)
+        self._reset_seeds()
+        return self.features.obs_tensor
+
+    def reset_cohort(self, count):
+        """Initialize only the remaining requested games; other slots stay inactive."""
+        for index, seed in enumerate(self._seeds):
+            if seed is not None and self.training:
+                self.queue.rngs[index] = np.random.default_rng(seed)
+        with self.device_context():
+            unused = [i for i in range(count, self.num_envs) if self._episode[i] is None]
+            if unused:
+                # Initialize private storage for atomic snapshots, without scheduling,
+                # observing, counting or advancing these inactive slots.
+                self.batch.reset(["easy"] * len(unused), [0] * len(unused), indices=unused)
+            self.enabled_envs[:] = False
+            self.batch.header[:, 17] = 0
+            self.reset_indices(list(range(count)))
         self._reset_seeds()
         return self.features.obs_tensor
 

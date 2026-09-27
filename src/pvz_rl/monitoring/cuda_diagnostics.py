@@ -39,13 +39,13 @@ def cuda_doctor():
     from pvz_game import Game, LevelSpec
 
     from pvz_rl.config import load_config
+    from pvz_rl.envs.cuda_accounting import AccountingCudaBatch
     from pvz_rl.envs.cuda_features import CudaFeatures
-    from pvz_rl.envs.cuda_lessons import LessonCudaBatch
 
     if not torch.cuda.is_available():
         return {"available": False, "error": "PyTorch CUDA is unavailable"}
     try:
-        batch = LessonCudaBatch(1, zombie_capacity=1, max_step_ticks=1)
+        batch = AccountingCudaBatch(1, zombie_capacity=1, max_step_ticks=1)
         cp = batch.cp
         stream = torch.cuda.current_stream()
         with cp.cuda.ExternalStream(stream.cuda_stream, device_id=stream.device_index):

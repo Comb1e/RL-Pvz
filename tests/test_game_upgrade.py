@@ -177,7 +177,7 @@ def test_legacy_sidecar_and_outcome_precedence(tmp_path, natural):
 def test_default_training_records_without_pygame_or_ffmpeg(tmp_path):
     script = r"""
 import builtins, sys
-from pvz_rl.config import load_config
+from pvz_rl.config import load_event_config as load_config
 from pvz_rl.learning.training import train
 cfg = load_config()
 cfg['visualization']['live_enabled'] = False

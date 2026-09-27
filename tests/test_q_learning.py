@@ -3,7 +3,7 @@
 import pytest
 import torch
 
-from pvz_rl.config import load_config
+from pvz_rl.config import load_event_config as load_config
 from pvz_rl.envs.env import PvZEnv
 from pvz_rl.monitoring.metrics import task_statistics
 from pvz_rl.policy.spatial_policy import SequentialQPolicy, SpatialFeatures
@@ -83,8 +83,9 @@ def test_task_counts_track_partial_games_and_reset_at_episode_boundaries():
         env.env_method("set_curriculum_stage", 2)
         before = env.task_counts()
         assert env.task_counts() == before
-        env.reset_indices([0], cases=[("easy", "preset", 1000)])
-        assert env.task_counts()["easy"]["active_games"] == 1
+        env.reset_indices([0], cases=[("hard", "preset", 1000)])
+        assert env.task_counts()["hard"]["active_games"] == 1
+        assert env.task_counts()["easy"]["active_games"] == 2
         assert sum(v["active_games"] for v in env.task_counts().values()) == 3
     finally:
         env.close()
