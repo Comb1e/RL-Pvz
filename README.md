@@ -8,7 +8,8 @@ Direct policy masks describe board occupancy only. The ten-way Q selector always
 compares wait, all eight plant species and dig; an unaffordable or cooling-down
 winner remains the submitted plant proposal. The pinned simulator rejects that
 proposal for one tick, reports its reason and applies `invalid_plant_penalty`.
-Training and evaluation retain the rejected proposal in Transformer–LSTM history.
+The proposal remains the trajectory and Q-learning target, while execution and
+recurrent history receive wait (`0`) plus `accepted=false` and one tick.
 
 ## Requirements
 

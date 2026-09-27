@@ -34,9 +34,7 @@ def test_high_q_unaffordable_plant_stays_selected_and_is_rejected(per_tick_cfg):
     env.reset(
         seed=101,
         options={
-            "scenario": LevelSpec(
-                "q-sun-boundary", (Spawn(1000, "basic", 0),), initial_sun=50
-            )
+            "scenario": LevelSpec("q-sun-boundary", (Spawn(1000, "basic", 0),), initial_sun=50)
         },
     )
     mask = env.action_masks()
@@ -62,6 +60,7 @@ def test_high_q_unaffordable_plant_stays_selected_and_is_rejected(per_tick_cfg):
     }
     assert env.public.tick == before.tick + 1
     assert not info["accepted"] and info["rejection_reason"] == "insufficient_sun"
+    assert info["proposal_action"] == peashooter and info["executed_action"] == 0
     assert info["ticks_advanced"] == 1
     assert reward == pytest.approx(-per_tick_cfg["reward"]["invalid_plant_penalty"])
 
@@ -94,6 +93,7 @@ def test_high_q_cooling_plant_stays_selected_and_is_rejected(per_tick_cfg):
     }
     assert env.public.tick == before.tick + 1
     assert not info["accepted"] and info["rejection_reason"] == "card_recharging"
+    assert info["proposal_action"] == cooling and info["executed_action"] == 0
     assert info["ticks_advanced"] == 1
     assert reward == pytest.approx(-per_tick_cfg["reward"]["invalid_plant_penalty"])
 
@@ -102,11 +102,7 @@ def test_occupancy_masks_are_shared_by_all_plant_branches(per_tick_cfg):
     env = PvZEnv(per_tick_cfg)
     env.reset(
         seed=103,
-        options={
-            "scenario": LevelSpec(
-                "q-occupied", (Spawn(1000, "basic", 0),), initial_sun=1000
-            )
-        },
+        options={"scenario": LevelSpec("q-occupied", (Spawn(1000, "basic", 0),), initial_sun=1000)},
     )
     occupied = env.codec.encode(Place("peashooter", 0, 0))
     assert env.action_masks()[occupied]
@@ -134,9 +130,7 @@ def test_cuda_rejection_preserves_proposal_and_matches_cpu(
     from pvz_rl.envs.cuda_accounting import AccountingCudaBatch
     from pvz_rl.envs.cuda_features import CudaFeatures
 
-    scenario = LevelSpec(
-        "q-cuda-rejection", (Spawn(1000, "basic", 0),), initial_sun=initial_sun
-    )
+    scenario = LevelSpec("q-cuda-rejection", (Spawn(1000, "basic", 0),), initial_sun=initial_sun)
     env = PvZEnv(per_tick_cfg)
     env.reset(seed=104, options={"scenario": scenario})
     batch = AccountingCudaBatch(1, zombie_capacity=1, max_step_ticks=1)
@@ -158,6 +152,7 @@ def test_cuda_rejection_preserves_proposal_and_matches_cpu(
             assert float(features.rewards.get()[0]) == pytest.approx(cpu_reward, abs=2e-6)
             if not cpu_info["accepted"]:
                 assert cpu_info["rejection_reason"] == reason
+                assert cpu_info["executed_action"] == 0
                 assert cpu_info["ticks_advanced"] == 1
                 assert len(env.public.plants) == len(cpu_before.plants)
                 assert int(batch.header.get()[0, 9]) == len(cpu_before.plants)

@@ -60,11 +60,10 @@ until that stage passes. Use it only intentionally.
 
 Up to 128 games form a cohort at fixed weights. Finished slots stay inactive;
 the final cohort is limited to the remaining requested games. The recurrent
-collector feeds the previous proposed action, acceptance and ticks advanced into
-the next decision, including rejected plant proposals and zero-tick operations.
-A rejected proposal remains the selected plant action; the simulator supplies
-the one-tick duration and rejection reason used by the next recurrent step and
-complete-return target.
+collector retains the selected proposal for the trajectory and complete-return
+target. The next decision receives the resolved previous action: the proposal
+when accepted, or wait (`0`) with `accepted=false` and the simulator's duration
+when rejected. The rejection reason remains diagnostic metadata.
 
 Each of four default fitting passes recomputes recurrent states from episode
 starts. State carries across 256-decision chunks with gradients detached at
@@ -80,7 +79,9 @@ Exploration applies only after a plant branch wins the ten-way comparison;
 wait/dig remain greedy. Evaluation disables both coins. Plant tiles use
 occupancy only; affordability and cooldown do not hide a branch. Dig tiles are
 unrestricted; a full-board plant proposal targets tile zero and receives the
-simulator's rejection outcome and configured invalid-plant penalty.
+simulator's rejection outcome and configured invalid-plant penalty. The viewer
+and action journal show that proposal while labeling its resolved execution as
+an automatic wait.
 
 The default budget is 10,000 games with `training.max_minutes = 120` and a
 15-minute finalization reserve. `--games`, `--n-envs`, `--batch-size` and

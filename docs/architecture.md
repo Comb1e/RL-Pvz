@@ -47,16 +47,19 @@ The entity Transformer encodes all 45 tiles and 15 regions, including empty
 entities. It uses position, type and segment embeddings, two no-dropout layers,
 128-wide representations and four heads. A scalar encoder reads public global,
 lane and cooldown fields. Pooled entity features, scalar features, elapsed time,
-previous proposed action and previous acceptance/duration feed a 256-unit LSTM.
+previous executed action and previous acceptance/duration feed a 256-unit LSTM.
+An accepted proposal is the previous executed action; a rejected proposal is
+executed and fed back as wait (`0`).
 The shared Q selector compares wait, eight species and dig, then chooses a tile
 for a non-wait branch. Occupancy limits plant tiles; dig can target every tile.
 A full board gives a deterministic tile-zero plant proposal that the simulator
 may reject. Affordability and cooldown never remove a plant branch from that
 comparison. The CPU adapter and CUDA batch pass the selected proposal unchanged
 to validation, so a rejected plant advances exactly one tick, carries the pinned
-reason into the transition, and receives `invalid_plant_penalty`. The recurrent
-runner stores the proposal together with acceptance and duration; the legacy
-event-memory profile keeps its separate executed-action convention.
+reason into the transition, and receives `invalid_plant_penalty`. The proposal
+is retained for rewards, Q fitting, journals and viewers; the resolved execution
+action is exposed separately as wait. The event-memory profile uses the same
+proposal/execution split.
 
 ```mermaid
 flowchart LR
@@ -64,16 +67,20 @@ flowchart LR
     Tile --> Proposal[Selected plant proposal]
     Proposal --> Validate[CPU or CUDA validation]
     Validate -->|accepted| Place[Place immediately]
-    Validate -->|rejected| Wait[Advance one tick]
+    Validate -->|rejected| Wait[Execute wait / advance one tick]
     Wait --> Penalty[Invalid-plant penalty + reason]
-    Proposal --> History[Recurrent proposal history]
+    Validate -->|accepted| History[Previous action = proposal]
+    Wait --> History2[Previous action = wait (0)]
+    History --> Outcome[accepted + duration]
+    History2 --> Outcome
 ```
 
 The stateful policy runner owns hidden/cell state and public previous outcomes.
-It resets only new episode slots. Rejected proposals and zero-tick operations
-remain recurrent inputs; finished collection slots are frozen. Evaluation uses
-the same runner with both exploration coins disabled. The event-memory alternative
-retains its model-specific public token memory and executed-action convention.
+It resets only new episode slots. Rejected proposals remain the action target,
+while the next recurrent input uses previous action `0`, `accepted=false` and
+the simulator duration. Finished collection slots are frozen. Evaluation uses
+the same runner with both exploration coins disabled. The event-memory
+alternative applies the same executed-action convention.
 
 ## Recording and initialization
 
@@ -114,7 +121,8 @@ stateDiagram-v2
 A cohort holds at most 128 games at fixed weights. Completed slots remain inactive
 until the next cohort, and the final cohort uses only the remaining game count.
 Trajectories use bounded RAM blocks and disk overflow, retaining ordered public
-observations, proposals, previous and current outcomes, rewards and boundaries.
+observations, proposals, executed previous actions, current outcomes, rewards
+and boundaries.
 Only recovery state stores private simulator snapshots and scenario RNGs.
 
 Fitting visits episodes chronologically from zero recurrent state each pass.

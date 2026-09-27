@@ -182,7 +182,9 @@ reward_metrics(const I *headers, const I *old_headers, const I *old_cd,
   if (h.advanced)
     t[4] = 0;
   t[6] += !h.accepted;
-  t[7] += action == 0 || h.reason == 5;
+  // Rejected proposals advance one tick as automatic waits, so metrics count
+  // their resolved execution action rather than only explicit Wait commands.
+  t[7] += action == 0 || !h.accepted;
   t[8] = fmax(t[8], (double)hi(b.sun, h.sun));
   bool opportunity = false;
   I kinds[3] = {1, 5, 7};

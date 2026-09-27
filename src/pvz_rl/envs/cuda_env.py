@@ -134,11 +134,11 @@ class CudaVecEnv(VecEnv):
         super().__init__(self.batch.n, self.features.encoder.space, spaces.Discrete(A.size))
         self._closed = False
         self.transition_ticks = torch.zeros(self.num_envs, dtype=torch.int64, device="cuda")
-        # Keep the proposal separate from the legacy event-memory
-        # ``executed_actions`` channel.  Recurrent policies learn from the
-        # selected proposal even when the simulator rejects it and advances a
-        # one-tick wait.
+        # Keep proposal and execution channels separate.  Trajectories and
+        # journals retain the selected proposal even when the simulator rejects
+        # it and advances a one-tick wait; policy history consumes execution.
         self.proposed_actions = torch.zeros(self.num_envs, dtype=torch.long, device="cuda")
+        self.executed_actions = torch.zeros(self.num_envs, dtype=torch.long, device="cuda")
 
     @contextmanager
     def device_context(self):
@@ -185,6 +185,7 @@ class CudaVecEnv(VecEnv):
             indices=indices,
         )
         self.proposed_actions[indices] = 0
+        self.executed_actions[indices] = 0
         ix = self.cp.asarray(indices)
         self.features.totals[ix] = 0
         self.features.totals[ix, 8] = self.batch.header[ix, 2]
@@ -243,7 +244,9 @@ class CudaVecEnv(VecEnv):
             h = self.header_tensor
             self.proposed_actions.copy_(actions)
             self.transition_ticks.copy_(h[:, 14])
-            self.executed_actions = torch.where(h[:, 14] == 0, actions, 0)
+            # Instantaneous accepted plant/dig proposals execute themselves;
+            # waits and every rejected proposal execute action zero.
+            self.executed_actions.copy_(torch.where(h[:, 14] == 0, actions, 0))
             self.terminal_ticks = h[:, 0].clone()
             self.terminal_masks = self.action_masks().clone()
             done = (
@@ -289,6 +292,8 @@ class CudaVecEnv(VecEnv):
                 )
                 infos.append(
                     {
+                        "proposal_action": int(self.proposed_actions[index]),
+                        "executed_action": int(self.executed_actions[index]),
                         "accepted": accepted,
                         "rejection_reason": reason,
                         "ticks_advanced": int(row[2]),

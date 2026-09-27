@@ -323,7 +323,12 @@ class PvZEnv(gym.Env):
         self.metrics["invalid_actions"] += int(
             not result.action_result.accepted or rejected_strategy
         )
-        self.metrics["wait_actions"] += int(isinstance(concrete, Wait))
+        # Rejected proposals execute as waits.  Count the resolved execution
+        # action, while keeping the submitted proposal available for penalties
+        # and Q fitting below.
+        self.metrics["wait_actions"] += int(
+            isinstance(concrete, Wait) or not result.action_result.accepted
+        )
         if isinstance(concrete, Place) and result.action_result.accepted:
             self.planted_ticks[concrete.row, concrete.col] = before.tick
             self.plant_usage[concrete.plant_type] += 1
@@ -345,6 +350,10 @@ class PvZEnv(gym.Env):
             self.metrics[event.kind] += 1
         info = {
             "status": self.state.value,
+            "proposal_action": int(action),
+            "executed_action": int(action)
+            if result.action_result.accepted and not rejected_strategy
+            else 0,
             "reward_parts": parts,
             "accepted": result.action_result.accepted and not rejected_strategy,
             "rejection_reason": result.action_result.reason,

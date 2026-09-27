@@ -108,6 +108,14 @@ def test_event_fifo_retains_actions_and_never_reads_future():
     assert memory.counts.sum() == 100
 
 
+def test_event_memory_rejected_proposal_feeds_back_as_wait():
+    from pvz_rl.policy.spatial_policy import SequentialQPolicy
+
+    *_, memory = inputs(2)
+    SequentialQPolicy.observe_result(memory, [120, 361], [False, True])
+    assert memory.previous_actions.tolist() == [0, 361]
+
+
 def test_timer_replacement_probe_same_current_state_different_history():
     from gymnasium.spaces import Discrete
 

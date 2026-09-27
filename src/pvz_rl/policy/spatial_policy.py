@@ -10,7 +10,7 @@ from torch import nn
 
 from pvz_rl.envs.actions import ActionSchema as A
 from pvz_rl.envs.encoding import ObservationEncoder
-from pvz_rl.policy.event_memory import MemoryContext
+from pvz_rl.policy.event_memory import EventMemory, MemoryContext
 from pvz_rl.policy.sequential_q import (
     action_parts,
     observation_tile_masks,
@@ -287,11 +287,10 @@ class SequentialQPolicy(BasePolicy):
     ):
         """Explicit public history for sequential Q playing inference.
 
-        The command is a proposal. Callers that receive a rejection must set
-        state.previous_actions to the executed wait marker (zero).
+        The command is a proposal. Call :meth:`observe_result` with the
+        simulator outcome before the next call so rejected proposals feed back
+        as the executed wait marker (zero).
         """
-        from pvz_rl.policy.event_memory import EventMemory
-
         self.set_training_mode(False)
         obs, vectorized = self.obs_to_tensor(observation)
         cfg = self.features_extractor.cfg
@@ -323,3 +322,23 @@ class SequentialQPolicy(BasePolicy):
         state.previous_actions = actions
         actions = actions.cpu().numpy()
         return (actions if vectorized else actions.squeeze(0)), state
+
+    @staticmethod
+    @torch.no_grad()
+    def observe_result(state, proposals, accepted):
+        """Feed a proposal outcome into explicit event-memory inference state."""
+        if not isinstance(state, EventMemory):
+            raise TypeError("state must be an EventMemory instance")
+        proposals = torch.as_tensor(
+            proposals, device=state.tokens.device, dtype=torch.long
+        ).reshape(-1)
+        accepted = torch.as_tensor(accepted, device=state.tokens.device, dtype=torch.bool).reshape(
+            -1
+        )
+        if proposals.shape[0] != state.n or accepted.shape != proposals.shape:
+            raise ValueError("proposal and accepted batches must match event-memory state")
+        if not hasattr(state, "previous_actions"):
+            state.previous_actions = torch.zeros(
+                state.n, dtype=torch.long, device=state.tokens.device
+            )
+        state.previous_actions.copy_(torch.where(accepted, proposals, 0))

@@ -336,7 +336,7 @@ def test_rejected_proposals_zero_ticks_and_isolated_runner_reset(recurrent_cfg):
     masks = torch.tensor(np.stack([env.action_masks()] * 2))
     runner.decide(observations, masks, None)
     runner.observe_result([120, 361], [False, True], [1, 0])
-    assert runner.previous_actions.tolist() == [120, 361]
+    assert runner.previous_actions.tolist() == [0, 361]
     assert runner.outcomes.tolist() == [[0, 1], [1, 0]]
     saved = runner.state.clone()
     runner.decide(observations, masks, None, active=torch.tensor([True, False]))

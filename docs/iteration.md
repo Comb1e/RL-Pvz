@@ -1,5 +1,21 @@
 # Iteration history
 
+## 0.28.2 — 2026-09-27
+
+- Problem/root cause: the selector retained an illegal highest-Q proposal for
+  penalty learning, but recurrent history could still describe that proposal as
+  the previous action. Execution, metrics and diagnostics therefore disagreed
+  about whether the simulator had waited.
+- Improvement: keep proposal and execution channels separate across CPU, CUDA,
+  recurrent collection, evaluation, event memory and journals. Rejected
+  proposals remain targets and diagnostics; execution is wait (`0`) with
+  `accepted=false`, the pinned reason, configured penalty and one-tick duration.
+- Verification: focused policy, environment, recurrent, journal and CUDA parity
+  controls cover unaffordable, cooling, full-board and empty-dig proposals plus
+  legal and boundary actions. No formal training run was launched.
+- Remaining limits: CUDA parity requires the pinned CUDA runtime; CPU fixed-tick
+  compatibility retains its configured decision duration.
+
 ## 0.28.1 — 2026-09-27
 
 - Previous problem/root cause: the ten-way selector was correct for the current

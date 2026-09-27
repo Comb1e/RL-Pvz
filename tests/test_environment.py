@@ -225,12 +225,14 @@ def test_all_species_geometry_is_independent_of_sun_cooldown_and_lesson(per_tick
         _, reward, _, _, info = env.step(env.codec.encode(Dig(4, 8)))
         assert reward == pytest.approx(-1 / 3000)
         assert info["rejection_reason"] == "empty_tile" and info["ticks_advanced"] == 1
+        assert info["executed_action"] == 0
     metrics = env.episode_metrics()
     assert metrics["net_value"] == metrics["development"] == 0
     assert metrics["return"] == pytest.approx(-0.009)
     assert metrics["discounted_return"] == metrics["return"]
     assert metrics["invalid_plant_penalty"] == pytest.approx(-0.008)
     assert metrics["empty_dig_penalty"] == pytest.approx(-0.001)
+    assert metrics["wait_actions"] == 11
 
 
 def test_full_board_all_digs_and_no_plant_tile(per_tick_cfg):
@@ -251,6 +253,7 @@ def test_full_board_all_digs_and_no_plant_tile(per_tick_cfg):
     assert mask[0] and not mask[1:361].any() and mask[361:].all()
     _, reward, _, _, info = env.step(1)
     assert reward == pytest.approx(-0.001) and info["rejection_reason"] == "occupied_tile"
+    assert info["proposal_action"] == 1 and info["executed_action"] == 0
     assert len(env.public.plants) == 45 and env.public.tick == 1
     env.step(361)
     assert env.action_masks()[1:361:45].all()

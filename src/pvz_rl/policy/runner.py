@@ -59,7 +59,11 @@ class PolicyRunner:
         proposals = torch.as_tensor(proposals, device=self.device).long().reshape(-1)
         accepted = torch.as_tensor(accepted, device=self.device).bool().reshape(-1)
         ticks = torch.as_tensor(ticks, device=self.device, dtype=torch.float32).reshape(-1)
-        previous = proposals if self.recurrent else torch.where(accepted, proposals, 0)
+        # The proposal is the learning target and remains in the trajectory,
+        # but recurrent history must describe what the simulator actually
+        # executed.  A rejected proposal advances time as an automatic wait,
+        # so every policy family receives the wait marker (action zero).
+        previous = torch.where(accepted, proposals, 0)
         self.previous_actions[active] = previous[active]
         self.outcomes[active, 0] = accepted[active].float()
         self.outcomes[active, 1] = ticks[active].float()

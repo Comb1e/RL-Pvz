@@ -44,8 +44,11 @@ the indicators from the public action result; CUDA uses the same action index,
 accepted flag, and pinned rejection reason (`empty_tile`, reason 4). Independent
 controls cover zero-sun and cooldown plants, occupied/full-board proposals, empty
 digs, one-tick advancement, terminal conservation, and CPU/CUDA equality.
-Recurrent history stores the selected proposal with its acceptance flag and
-duration; the event-memory alternative retains its executed-action convention.
+The trajectory stores the selected proposal so its complete-return target learns
+the penalty. Recurrent input stores the resolved execution action separately:
+the proposal after acceptance, or wait (`0`) after rejection, together with
+`accepted` and `ticks_advanced`. The event-memory alternative follows the same
+proposal/execution contract.
 
 Historical Q records are immutable snapshots of the pre-action vector. Paging
 uses an absolute `start` offset and request identifier; selecting a row stores
