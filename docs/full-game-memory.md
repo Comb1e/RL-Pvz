@@ -13,7 +13,7 @@ not neighboring spatial coordinates. A different non-wait action, a change to
 that target, or an episode reset ends the run. Compare target state after the
 first dig, so a successful removal followed by empty digs is one run.
 
-Independently record every public change to plants, zombies, sun, or lawn mowers,
+Independently record every encoded change to plants, zombies, sun, or mower spent flags,
 including changes during waits and duplicate digs. This includes observable
 movement, health, behavior, appearance/removal, region/pole/headless state, and
 existing wave/count inputs. Only a wait with no public-state change except elapsed
@@ -27,16 +27,15 @@ plant must not become indistinguishable from an intentional wait. Do not expose
 hidden rejection reasons. Preserve all transitions, durations, rewards and
 penalties in the learning ledger, even when a memory action token is suppressed.
 
-The present public encoder only exposes whether a mower is spent; ready and
-moving are indistinguishable. Meeting the mower-status requirement therefore
-requires a versioned public input schema with ready/moving/spent states and
-CPU/CUDA parity. It must use public game observations, not private engine state.
+Keep the observation input schema unchanged. For mowers, record a change in the
+existing spent flag only; do not add ready/moving states. Plant and zombie change
+detection likewise uses existing encoded fields, not new private engine inputs.
 
 ## Framework
 
 ```mermaid
 flowchart TD
-    O[Public observation before and after each action] --> D[Compare public plant, zombie, sun and mower state]
+    O[Existing public observation before and after each action] --> D[Compare plants, zombies, sun and mower spent flags]
     P[Proposed action and public outcome] --> R[Action filter: omit wait and duplicate same-tile digs]
     D --> E[Merge state deltas and retained action into timestamped events]
     R --> E
@@ -141,7 +140,7 @@ causal sparse kernel; a sparse Boolean mask over dense scores is insufficient.
 - Keep an early accepted plant and every later rejected plant proposal after a
   long failure burst; retrieve the old event rather than only retaining it on disk.
 - During waits, independently vary plant status, zombie status/position, sun and
-  public mower status: each change produces an event; a pure elapsed-time change
+  mower spent flag: each change produces an event; a pure elapsed-time change
   does not. A duplicate dig with a world delta still produces a state event.
 - Cover different-tile digs, dig/plant/dig, same-tick actions, empty prefixes,
   episode boundaries, interleaved environments, and resume inside a dig run.

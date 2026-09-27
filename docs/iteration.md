@@ -12,7 +12,8 @@ The longer pre-consolidation notes remain in `git show b642c9c:docs/iteration.md
 - Cause: finite event/summary queues and executed-action-only memory inputs.
 - Proposal: an append-only public event archive and joint causal sparse attention;
   record non-wait attempts, deduplicate consecutive digs at the same unchanged
-  tile, and retain all public plant/zombie/sun/mower changes even during waits.
+  tile, and retain encoded plant/zombie/sun/mower-spent changes even during waits,
+  using the existing observation schema without adding mower states.
   Compare reversible layers separately as an activation-storage optimization.
 - Verification: inspected papers/project sources, ran synthetic existing-memory
   retention probes, independently enumerated sparse edge counts and same-tick

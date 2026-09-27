@@ -18,7 +18,8 @@ Also traced this project's event admission/eviction, rejected-action mapping,
 collection, public encoding, and complete-game storage. Local Torch is 2.8.0+cu128
 on an 8 GiB RTX 4070 Laptop GPU. Sources accessed through mutable project branches
 are not assigned unverified revisions. The user supplies the non-wait retention,
-same-tile dig deduplication, and state-change-during-wait requirements. The archive,
+same-tile dig deduplication, and state-change-during-wait requirements, including
+using the existing mower spent flag without adding inputs. The archive,
 event-order masking and tile/species links are project-specific design choices.
 
 ## Sequential Q controller — inspected 2026-09-25, implemented 2026-09-26
