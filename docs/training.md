@@ -68,15 +68,16 @@ The viewer's **F** shortcut follows the latest actions in visible panels;
 
 ## Resume and evaluation
 
-Resume from an existing run's `last.zip`; metadata next to the checkpoint supplies
+Resume from an existing run's `final.zip`, written at shutdown. `latest.zip` is
+also saved after validation or stage progress. Metadata next to the checkpoint supplies
 the original configuration, seed and progress. Full resume restores optimizer,
 RNGs, unfinished games and collection/fitting position.
 
 ```powershell
 .\.venv\Scripts\python.exe -m pvz_rl train `
-  --resume runs\cuda-101\last.zip --output runs\cuda-101
+  --resume runs\cuda-101\final.zip --output runs\cuda-101
 .\.venv\Scripts\python.exe -m pvz_rl evaluate `
-  --checkpoint runs\cuda-101\last.zip --split validation `
+  --checkpoint runs\cuda-101\final.zip --split validation `
   --output runs\cuda-101\validation.jsonl
 ```
 

@@ -43,6 +43,8 @@
   archive verification pass. Grid/focused F and button event-loop checks cover
   repeated presses, stale responses, empty histories and unavailable panels.
   Exact collector regressions and final totals are recorded in validation.
+  Final affected suites: 108 passes; engine rerun: 427 passes. The full research
+  sweep and repaired-case rechecks are recorded explicitly in validation.
 - Baseline compatibility: the unchanged research controller wins all nine
   versioned cases with new exact ticks. In particular, the previous hard/4 loss
   now wins at tick 43424. Independent failure/boundary controls remain strict;

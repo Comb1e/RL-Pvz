@@ -32,6 +32,21 @@ are rejected. An injected checkpoint-write failure preserves the previous pass.
 Recurrent selection tests full and partly occupied boards in the same batch,
 occupancy-derived defaults and non-finite value rejection.
 
+Verification sequence: the complete research sweep ran 577 cases in 796.62 s
+(574 passed, three failures). The two low-level viewer boundary failures came
+from an overly broad adapter configuration check; the adapter now checks its
+policy contract without changing the existing boundary controls. The third was
+an obsolete integration assertion for game 1.6.0, updated to require exactly
+1.7.0 / simulation 1.4.0. All three pass on recheck. The final affected suites
+pass **108 tests in 47.56 s**, including 13 added initialization/selection
+controls; the maintained suite now contains **590 cases**. The game rerun passes
+**427 tests in 284.61 s**. No test thresholds were loosened.
+
+Both wheel/source builds pass. An isolated installation of the research wheel
+loads both bundled profiles, runs a recurrent forward step, includes its CUDA
+source and verifies the installed game hashes. The pinned game Git archive also
+matches the lock's full source manifest.
+
 Ruff lint/Python formatting, dependency checks, Markdown links, verified source installation,
 CUDA/accounting/render/replay availability and wheel/source packaging are checked.
 See [iteration history](iteration.md) for limitations. No formal training.
