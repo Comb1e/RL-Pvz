@@ -10,6 +10,7 @@ import torch
 from gymnasium import spaces
 from pvz_game import Game, Rules
 from pvz_game.config import PLANT_TYPES
+from pvz_game.cuda.schema import REASONS
 from stable_baselines3.common.vec_env import VecEnv
 
 from pvz_rl.envs.actions import ActionSchema as A
@@ -133,6 +134,11 @@ class CudaVecEnv(VecEnv):
         super().__init__(self.batch.n, self.features.encoder.space, spaces.Discrete(A.size))
         self._closed = False
         self.transition_ticks = torch.zeros(self.num_envs, dtype=torch.int64, device="cuda")
+        # Keep the proposal separate from the legacy event-memory
+        # ``executed_actions`` channel.  Recurrent policies learn from the
+        # selected proposal even when the simulator rejects it and advances a
+        # one-tick wait.
+        self.proposed_actions = torch.zeros(self.num_envs, dtype=torch.long, device="cuda")
 
     @contextmanager
     def device_context(self):
@@ -178,6 +184,7 @@ class CudaVecEnv(VecEnv):
             [s[3] for s in staged],
             indices=indices,
         )
+        self.proposed_actions[indices] = 0
         ix = self.cp.asarray(indices)
         self.features.totals[ix] = 0
         self.features.totals[ix, 8] = self.batch.header[ix, 2]
@@ -234,6 +241,7 @@ class CudaVecEnv(VecEnv):
             obs, reward = self.features.step(self.cp.from_dlpack(actions.detach().contiguous()))
             self.phases["simulation_features"] += perf_counter() - started
             h = self.header_tensor
+            self.proposed_actions.copy_(actions)
             self.transition_ticks.copy_(h[:, 14])
             self.executed_actions = torch.where(h[:, 14] == 0, actions, 0)
             self.terminal_ticks = h[:, 0].clone()
@@ -270,7 +278,22 @@ class CudaVecEnv(VecEnv):
                     viewer.fail(exc)
             self.phases["transfers"] += perf_counter() - started
             indices = np.flatnonzero(compact[:, 0]).tolist()
-            infos = [{"ticks_advanced": int(row[2])} for row in compact]
+            infos = []
+            for index, row in enumerate(compact):
+                accepted = bool(self.last_action_result_host[index, 0])
+                reason_code = int(self.last_action_result_host[index, 1])
+                reason = (
+                    None
+                    if accepted or not 0 <= reason_code < len(REASONS)
+                    else REASONS[reason_code]
+                )
+                infos.append(
+                    {
+                        "accepted": accepted,
+                        "rejection_reason": reason,
+                        "ticks_advanced": int(row[2]),
+                    }
+                )
             reward = reward.clone()
             terminal_observations = None
             if indices:

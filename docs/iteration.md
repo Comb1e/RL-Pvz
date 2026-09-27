@@ -1,5 +1,27 @@
 # Iteration history
 
+## 0.28.1 — 2026-09-27
+
+- Previous problem/root cause: the ten-way selector was correct for the current
+  occupancy masks, but the CPU/CUDA boundary did not make the proposal channel
+  and CUDA rejection metadata explicit. Legacy executed-action history could
+  therefore be mistaken for the recurrent proposal history when diagnosing an
+  unavailable high-Q plant.
+- Improvement: make the shared selector's all-ten-branch comparison explicit;
+  keep plant tile masks independent of affordability and cooldown; retain the
+  selected proposal through CUDA collection/evaluation; and publish CUDA
+  acceptance, rejection reason and one-tick duration alongside the reward.
+  Legacy event-memory keeps its executed-action convention, while recurrent
+  Transformer–LSTM history uses the selected proposal and public outcome.
+- Regression coverage: higher-Q peashooter at 50 sun, a cooling-down sunflower,
+  occupied-tile geometry, full-board fallback, tie order, species/tile
+  exploration, one-tick rejection, no plant creation, reason propagation and
+  invalid-plant penalty. No formal training was launched.
+- Verification: focused policy/environment/recurrent tests pass after the repair;
+  full pytest, Ruff, dependency and doctor results are recorded with the final
+  run. Remaining limitation: CUDA-specific execution still requires the pinned
+  CUDA runtime and is skipped when unavailable.
+
 ## 0.28.0 — 2026-09-27
 
 - Previous problems/root causes: demo weights could not enter autonomous training;

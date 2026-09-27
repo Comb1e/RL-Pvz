@@ -116,7 +116,7 @@ def refilled_games(
                     buffered.append(actions)
                 obs, _, _, _, _, infos = env.step_tensors(actions, autoreset=False)
                 runner.observe_result(
-                    actions,
+                    env.proposed_actions,
                     env.last_action_result_host[:, 0].copy(),
                     env.last_transition_host[:, 2].copy(),
                     active=active,
@@ -207,7 +207,7 @@ def fixed_batches(
                             buffered.append(actions)
                         obs, _, _, _, _, infos = env.step_tensors(actions, autoreset=False)
                         runner.observe_result(
-                            actions,
+                            env.proposed_actions,
                             env.last_action_result_host[:, 0].copy(),
                             env.last_transition_host[:, 2].copy(),
                             active=active,

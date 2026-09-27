@@ -616,3 +616,23 @@ whole-cohort group weighting and whole-pass Adam updates. No PPO/GAE objective,
 DRQN performance claim or published support for the local reward coefficients is
 adopted. Saving-curriculum removal is user-directed; historical measurements in
 this reference index are not current lesson definitions.
+
+## Q-selection fallback repair — 2026-09-27
+
+- Pinned game **1.7.0**, commit `1424b4d802e783a36772091c49d96aa7c6036d7a`:
+  re-inspected `Game.validate_action`/`Game.step`, CUDA `REASONS`, and
+  `simulation.cu`'s `legality` and per-tick action path. These confirm that an
+  unaffordable, cooling-down, or occupied plant proposal is rejected without a
+  purchase and advances one simulation tick; the reason code remains available
+  for CPU/CUDA reward accounting.
+- Reused Metz et al., [Discrete Sequential Prediction of Continuous Actions for
+  Deep RL](https://arxiv.org/abs/1705.05035) §2.2 for staged branch/tile assembly,
+  and the inspected Stable-Baselines3 2.7.1 `QNetwork._predict` argmax source for
+  deterministic tie order. The project retains complete-return regression and
+  does not adopt Metz et al.'s bootstrapped objective or SB3 DQN training.
+
+These sources support the execution contract only. Keeping all ten branches in
+the first-level comparison, occupancy-only plant tile masks, and the tile-zero
+full-board proposal are project-specific controls. The added CPU regressions and
+CUDA result-channel checks establish behavior and parity; they do not claim a
+learning improvement or justify formal training.

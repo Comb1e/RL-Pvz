@@ -51,7 +51,23 @@ previous proposed action and previous acceptance/duration feed a 256-unit LSTM.
 The shared Q selector compares wait, eight species and dig, then chooses a tile
 for a non-wait branch. Occupancy limits plant tiles; dig can target every tile.
 A full board gives a deterministic tile-zero plant proposal that the simulator
-may reject. Rewards retain the configured rejection penalties.
+may reject. Affordability and cooldown never remove a plant branch from that
+comparison. The CPU adapter and CUDA batch pass the selected proposal unchanged
+to validation, so a rejected plant advances exactly one tick, carries the pinned
+reason into the transition, and receives `invalid_plant_penalty`. The recurrent
+runner stores the proposal together with acceptance and duration; the legacy
+event-memory profile keeps its separate executed-action convention.
+
+```mermaid
+flowchart LR
+    Q[Ten branch Q comparison] --> Tile[Occupancy tile selection]
+    Tile --> Proposal[Selected plant proposal]
+    Proposal --> Validate[CPU or CUDA validation]
+    Validate -->|accepted| Place[Place immediately]
+    Validate -->|rejected| Wait[Advance one tick]
+    Wait --> Penalty[Invalid-plant penalty + reason]
+    Proposal --> History[Recurrent proposal history]
+```
 
 The stateful policy runner owns hidden/cell state and public previous outcomes.
 It resets only new episode slots. Rejected proposals and zero-tick operations

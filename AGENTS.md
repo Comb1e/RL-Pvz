@@ -21,10 +21,14 @@
   Transformer–LSTM by default; `configs/event-memory.toml` is the explicit alternative.
 - `src/pvz_rl/envs/` adapts the pinned game, public observations and rewards;
   `cuda_accounting.py` adds read-only accounting counters to the pinned CUDA kernel.
+  CPU and CUDA retain rejected plant proposals, report the pinned reason and
+  advance one tick before applying `invalid_plant_penalty`.
 - `src/pvz_rl/policy/transformer_lstm.py` owns the entity Transformer and recurrent
   Q heads. `recurrent_policy.py` adapts the same weights to the training lifecycle;
   `runner.py` owns public action/outcome history for collection, evaluation and replay.
-  `sequential_q.py` shares selection and group-weighted loss across both model families.
+  `sequential_q.py` compares all ten branches independently of affordability and
+  cooldown, applies occupancy-only plant tile masks and a full-board tile-zero
+  proposal, and shares selection and group-weighted loss across both model families.
   `event_memory.py`, `temporal.py` and `spatial_policy.py` retain the explicit alternative.
 - `src/pvz_rl/learning/checkpoints.py` inspects protocols, saved configurations and
   model dispatch. `demo_initialization.py` verifies and fits a completed archive.
