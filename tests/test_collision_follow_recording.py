@@ -1,16 +1,17 @@
 import pytest
 
 
-def test_demo_and_training_default_profiles_are_separate():
+def test_demo_and_explicit_event_memory_profiles_are_separate():
     from types import SimpleNamespace
 
     from pvz_rl.cli import configured
-    from pvz_rl.config import load_config, load_demo_config
+    from pvz_rl.config import load_demo_config
+    from pvz_rl.config import load_event_config as load_config
     from pvz_rl.learning.exploration import exploration_state
     from pvz_rl.learning.training_requirements import require_supported_policy
 
     training, demo = load_config(), load_demo_config()
-    assert training == load_config("configs/train.toml")
+    assert training == load_config("configs/event-memory.toml")
     assert demo == load_demo_config("configs/demo.toml")
     require_supported_policy(training)
     assert configured(SimpleNamespace(command="record-demo", config=None)) == demo
@@ -19,12 +20,13 @@ def test_demo_and_training_default_profiles_are_separate():
     assert exploration_state(demo, 0).tile_epsilon == 0.5
     assert exploration_state(demo, 5000).tile_epsilon == pytest.approx(0.01)
     with pytest.raises(ValueError, match="demo profile"):
-        load_demo_config("configs/train.toml")
+        load_demo_config("configs/event-memory.toml")
 
 
 @pytest.mark.parametrize("demo", [False, True])
 def test_profiles_reject_mismatched_optimizer(demo):
-    from pvz_rl.config import load_config, load_demo_config, validate_config
+    from pvz_rl.config import load_demo_config, validate_config
+    from pvz_rl.config import load_event_config as load_config
 
     cfg = load_demo_config() if demo else load_config()
     cfg["training"]["method"] = "sequential_q_mc_v2" if demo else "complete_return_lstm_v1"
@@ -34,11 +36,12 @@ def test_profiles_reject_mismatched_optimizer(demo):
 
 @pytest.mark.parametrize("name", ["coalesce_masks", "cache_rollout_on_device", "allowed_plants"])
 def test_removed_settings_are_rejected(name):
-    from pvz_rl.config import load_config, validate_config
+    from pvz_rl.config import load_event_config as load_config
+    from pvz_rl.config import validate_config
 
     cfg = load_config()
     if name == "allowed_plants":
-        cfg["curriculum"]["lessons"]["saving"][name] = ["peashooter"]
+        cfg["curriculum"]["lessons"] = {"obsolete": {name: ["peashooter"]}}
     else:
         cfg["runtime"][name] = True
     with pytest.raises(ValueError, match="Runtime|Retired"):

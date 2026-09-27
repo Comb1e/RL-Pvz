@@ -25,7 +25,7 @@ def test_hardware_sampler_flushes_sessions_and_keeps_null_measurements(tmp_path,
     for phase in ("warmup", "formal"):
         sampled.clear()
         with HardwareMonitor(path, seconds=0.1, gpu_id="GPU-test") as monitor:
-            monitor.update(stage="saving", phase=phase, activity="validation", training_steps=128)
+            monitor.update(stage="easy", phase=phase, activity="validation", training_steps=128)
             assert sampled.wait(3)
         assert not monitor.thread.is_alive()
         assert monitor.latest["gpu_percent"] is None
@@ -35,7 +35,7 @@ def test_hardware_sampler_flushes_sessions_and_keeps_null_measurements(tmp_path,
     rows = read_series(path)
     assert len({row["session"] for row in rows}) == 2
     assert {row["phase"] for row in rows} == {"warmup", "formal"}
-    assert all(row["activity"] == "validation" and row["stage"] == "saving" for row in rows)
+    assert all(row["activity"] == "validation" and row["stage"] == "easy" for row in rows)
     with path.open("a") as stream:
         stream.write('{"partial":')
     assert read_series(path, tolerate_partial_tail=True) == rows

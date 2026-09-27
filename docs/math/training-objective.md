@@ -1,7 +1,8 @@
 # Training objective
 
 The implemented complete-game targets, sequential Q values and balanced loss are
-specified in [sequential Q control](sequential-q-control.md). Gamma is one;
+specified in [recurrent training](recurrent-training.md) for the default model and
+[sequential Q control](sequential-q-control.md) for the event-memory alternative. Gamma is one;
 cutoff episodes receive defeat reward once and never bootstrap. Maximum net value
 and drawdown remain diagnostics. The economic accounting below is unchanged.
 Total reward additionally includes the explicit

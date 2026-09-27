@@ -141,7 +141,7 @@ Re-inspected installed game 1.4.0, simulation 1.1.0, commit
 `1fc80386859087b9d715c4706b3f7875844430cc`: plant costs, sunflower payment/recharge,
 200-HP basic movement/bites, and engine `_detonate`'s half-open mine tile interval.
 The existing CPU/CUDA parity controls verify the unchanged dependency. The
-[saving and probability derivations](math/saving-and-actions.md) are project-specific;
+historical saving and probability derivations (retired) are project-specific;
 no published learning/speedup claim is transferred to this laptop.
 
 During reproducibility verification, also inspected installed **PyTorch 2.8.0**
@@ -603,3 +603,16 @@ and the merged game 1.7.0 CPU/CUDA collision controls. These confirm the 20-pixe
 attack threshold and strictly positive projectile overlap used in the audit.
 Cleanup follows the repository's active imports and independent probability
 controls; no additional learning method or external performance claim is adopted.
+
+## Recurrent autonomous training — 2026-09-27
+
+- Hausknecht and Stone (2015), [Deep Recurrent Q-Learning for Partially Observable MDPs](https://arxiv.org/abs/1507.06527): inspected the abstract. It motivates recurrent state for partial observation and explicitly does not establish a systematic advantage from recurrence. HTML SHA-256: `8fc5df018fb118dd735ca458401485e267b90cb5f9ee130ce73b9c4699bc0130`.
+- [SB3-Contrib 2.7.1 recurrent policies](https://github.com/Stable-Baselines-Team/stable-baselines3-contrib/blob/v2.7.1/sb3_contrib/common/recurrent/policies.py): inspected `_process_sequence` and forward handling. Episode-start masks reset hidden/cell slots; sequences without interior resets use the fused LSTM path. Source SHA-256: `7b2314050c1325f2ebbd051b570e5811eb1e0219ebeabf91cb5bca621b88e6df`.
+- [SB3-Contrib 2.7.1 recurrent buffers](https://github.com/Stable-Baselines-Team/stable-baselines3-contrib/blob/v2.7.1/sb3_contrib/common/recurrent/buffers.py): inspected `create_sequencers` and buffer state layout for episode/environment boundaries and padding. Source SHA-256: `b1c5632149bfe8db3472f8608ed0f28e0686d8bb937aec05890ca2cee57ef75c`.
+
+These sources informed public recurrent-state ownership and chronological
+boundaries. The implemented objective remains complete-return Q regression with
+whole-cohort group weighting and whole-pass Adam updates. No PPO/GAE objective,
+DRQN performance claim or published support for the local reward coefficients is
+adopted. Saving-curriculum removal is user-directed; historical measurements in
+this reference index are not current lesson definitions.

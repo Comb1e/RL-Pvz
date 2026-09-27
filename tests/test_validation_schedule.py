@@ -5,7 +5,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from pvz_rl.config import load_config, validate_config
+from pvz_rl.config import load_event_config as load_config
+from pvz_rl.config import validate_config
 from pvz_rl.learning.curriculum import STAGES, CurriculumState, validation_after_stage
 from pvz_rl.learning.deadline import BudgetExpired
 from pvz_rl.learning.training import ResearchCallback, TrainingDeadline, load_policy, train
@@ -71,7 +72,7 @@ def test_report_refreshes_once_per_probe_or_validation_attempt(
     monkeypatch.setattr(cb, "cached_evaluation", evaluate)
     for operation in (cb.probe_curriculum, cb.validate):
         if operation == cb.validate:
-            cb.pending_stage_validation = {"stage": "saving"}
+            cb.pending_stage_validation = {"stage": "easy"}
         before = len(refreshes)
         if failure == "interrupt":
             with pytest.raises(KeyboardInterrupt):
@@ -135,11 +136,11 @@ def test_every_stage_triggers_once_and_equal_scores_keep_earliest(stage_callback
     cb._on_training_end()  # Finalization must not add a sixth normal evaluation.
     rows = read_series(cb.output / "learning-curve.jsonl")
     assert [r["stage_success"]["stage"] for r in rows] == list(STAGES)
-    assert [r["training_games"] for r in rows] == [2000, 4000, 6000, 8000]
+    assert [r["training_games"] for r in rows] == [2000, 4000, 6000]
     assert [c for c in calls if c[0] == "validation"] == [
         ("validation", "preset", ["easy", "standard", "hard"], 1)
     ] * len(STAGES)
-    assert read_json(cb.output / "best.json")["stage_success"]["stage"] == "saving"
+    assert read_json(cb.output / "best.json")["stage_success"]["stage"] == "easy"
     assert (cb.output / "best.zip").read_bytes() == b"64"
 
 
@@ -193,7 +194,7 @@ def test_old_configuration_and_non_curriculum_runs_keep_periodic_schedule():
     cfg = load_config()
     assert validation_after_stage(cfg)
     assert not validation_after_stage(cfg, "diagnostic")
-    assert not validation_after_stage(cfg, "saving")
+    assert not validation_after_stage(cfg, "easy")
     cfg["curriculum"]["mode"] = "fixed"
     assert not validation_after_stage(cfg)
     cfg["curriculum"]["mode"] = "teaching"
@@ -278,7 +279,7 @@ def test_interrupted_stage_evaluation_resumes_without_relearning(
         budget_unit="games",
         total_games=2 if budget_exhausted else 100,
     )
-    cfg["curriculum"].update(run_stage="saving", probe_interval_games=1, minimum_stage_games=1)
+    cfg["curriculum"].update(run_stage="easy", probe_interval_games=1, minimum_stage_games=1)
     original = ResearchCallback.cached_evaluation
 
     def interrupt(self, seeds, levels, family, destination, split, final=False):
@@ -291,7 +292,7 @@ def test_interrupted_stage_evaluation_resumes_without_relearning(
     with pytest.raises(KeyboardInterrupt):
         train(cfg, "masked", 101, first, validation_limit=1)
     before, _ = load_policy(first / "interrupted.zip")
-    assert before.research_schedule["pending_stage_validation"]["stage"] == "saving"
+    assert before.research_schedule["pending_stage_validation"]["stage"] == "easy"
     monkeypatch.setattr(ResearchCallback, "cached_evaluation", original)
     resumed = train(
         cfg,
@@ -304,6 +305,6 @@ def test_interrupted_stage_evaluation_resumes_without_relearning(
     after, _ = load_policy(resumed / "final.zip")
     assert before.num_timesteps == after.num_timesteps and before._n_updates == after._n_updates
     rows = read_series(resumed / "learning-curve.jsonl")
-    assert len(rows) == 1 and rows[0]["stage_success"]["stage"] == "saving"
+    assert len(rows) == 1 and rows[0]["stage_success"]["stage"] == "easy"
     assert read_json(resumed / "best.json")["checkpoint_hash"] == file_hash(resumed / "best.zip")
     assert after.research_schedule["pending_stage_validation"] is None

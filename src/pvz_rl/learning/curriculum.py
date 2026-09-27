@@ -4,8 +4,7 @@ from dataclasses import asdict, dataclass
 
 from pvz_rl.learning.budget import uses_games
 
-STAGES = ("saving", "easy", "standard", "shared")
-LESSONS = ("saving",)
+STAGES = ("easy", "standard", "shared")
 
 
 def teaching_enabled(cfg):

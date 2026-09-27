@@ -6,7 +6,8 @@ import json
 import pytest
 
 from pvz_rl.cli import configured
-from pvz_rl.config import load_config, research_config, simulator
+from pvz_rl.config import load_event_config as load_config
+from pvz_rl.config import research_config, simulator
 from pvz_rl.monitoring.gpu_benchmark import recommend
 
 
@@ -18,7 +19,7 @@ def test_new_shared_run_defaults_and_explicit_parallelism():
     cfg = configured(args())
     assert simulator(cfg) == "cuda"
     assert cfg["training"]["n_envs"] == 128
-    assert cfg["training"]["method"] == "sequential_q_mc_v2"
+    assert cfg["training"]["method"] == "complete_return_lstm_v1"
     for count in (3, 32, 64, 128, 256, 512, 1024):
         cfg = configured(args(n_envs=count))
         assert cfg["training"]["n_envs"] == count
@@ -50,10 +51,13 @@ def test_hardware_recommendations_and_override_conflicts(tmp_path):
         configured(args(hardware=path))
 
 
-def test_resume_uses_saved_protocol_and_instrumentation_is_optional(tmp_path):
+def test_resume_uses_saved_protocol_and_instrumentation_is_optional(tmp_path, monkeypatch):
     saved = load_config()
     saved["training"].update(n_envs=1024)
     (tmp_path / "metadata.json").write_text(json.dumps({"config": saved}))
+    monkeypatch.setattr(
+        "pvz_rl.learning.checkpoints.inspect_checkpoint", lambda path: {"config": saved}
+    )
     cfg = configured(args(resume=tmp_path / "latest.zip"))
     assert research_config(cfg) == research_config(saved)
     cfg["simulation"] = {"backend": "cuda", "profile": True}

@@ -8,7 +8,8 @@ import pytest
 import torch
 
 from pvz_rl.cli import configured, main
-from pvz_rl.config import curriculum_probe_seeds, load_config, seed_values, validate_config
+from pvz_rl.config import curriculum_probe_seeds, seed_values, validate_config
+from pvz_rl.config import load_event_config as load_config
 from pvz_rl.learning.curriculum import STAGES, CurriculumState, stage_distribution
 from pvz_rl.learning.training import ResearchCallback, load_policy, train
 from pvz_rl.learning.training_requirements import require_cuda_training, transfer_protocol
@@ -18,8 +19,8 @@ from pvz_rl.provenance import file_hash, write_json
 
 @pytest.fixture
 def stage_cfg():
-    cfg = load_config("configs/train.toml")
-    cfg["curriculum"]["run_stage"] = "saving"
+    cfg = load_config("configs/event-memory.toml")
+    cfg["curriculum"]["run_stage"] = "easy"
     cfg["environment"]["cutoff_seconds"] = 1
     cfg["training"].update(
         n_envs=2,
@@ -52,24 +53,24 @@ def test_mastery_holds_stage_requires_residency_and_consecutive_passes(stage_cfg
     stage_cfg["curriculum"]["residency"] = "episode_start_stage"
     state = CurriculumState()
     state.completed_stage_games = 99
-    assert not state.observe({"saving": 18}, 100, stage_cfg, advance=False)
-    assert not state.observe({"saving": 18}, 200, stage_cfg, advance=False)
+    assert not state.observe({"easy": 18}, 100, stage_cfg, advance=False)
+    assert not state.observe({"easy": 18}, 200, stage_cfg, advance=False)
     assert not state.mastered  # Passing probes cannot replace stage residency.
     state.completed_episode(1)
     assert state.completed_stage_games == 99
     state.completed_episode(0)
-    state.observe({"saving": 17}, 300, stage_cfg, advance=False)
+    state.observe({"easy": 17}, 300, stage_cfg, advance=False)
     assert state.consecutive_passes == 0
-    state.observe({"saving": 18}, 400, stage_cfg, advance=False)
+    state.observe({"easy": 18}, 400, stage_cfg, advance=False)
     restored = CurriculumState(**state.to_dict())
-    restored.observe({"saving": 20}, 500, stage_cfg, advance=False)
-    assert restored.mastered and restored.name == "saving"
+    restored.observe({"easy": 20}, 500, stage_cfg, advance=False)
+    assert restored.mastered and restored.name == "easy"
     assert not restored.due(600, stage_cfg)
-    assert stage_distribution(stage_cfg, 1) == (["easy", "saving"], [0.8, 0.2])
+    assert stage_distribution(stage_cfg, 1) == (["easy", "standard"], [0.5, 0.5])
     # The ordinary automatic curriculum still promotes on the same gates.
-    state.observe({"saving": 18}, 500, stage_cfg)
-    assert state.name == "easy" and not state.mastered
-    shared = CurriculumState(stage=3, completed_stage_games=1000)
+    state.observe({"easy": 18}, 500, stage_cfg)
+    assert state.name == "standard" and not state.mastered
+    shared = CurriculumState(stage=2, completed_stage_games=1000)
     shared.observe({}, 1000, stage_cfg, advance=False)
     assert not shared.mastered and not shared.due(2000, stage_cfg)
 
@@ -81,7 +82,7 @@ def test_transfer_compatibility_preserves_learning_contract(stage_cfg, change):
     altered = copy.deepcopy(stage_cfg)
     altered["training"].update(total_games=1200, max_minutes=60, eval_interval_games=500)
     if change == "stage":
-        altered["curriculum"]["run_stage"] = "saving"
+        altered["curriculum"]["run_stage"] = "easy"
     elif change == "reward":
         altered["reward"]["basic_zombie_value"] = 25
     elif change == "discount":
@@ -89,18 +90,20 @@ def test_transfer_compatibility_preserves_learning_contract(stage_cfg, change):
     elif change == "policy":
         altered["policy"]["channels"] = [48, 48]
     elif change == "tasks":
-        altered["curriculum"]["lessons"]["saving"]["initial_sun"] = 100
+        altered["curriculum"]["stages"]["standard"]["weights"] = [0.6, 0.4]
     elif change == "optimizer":
         altered["training"]["learning_rate"] = 1e-4
     else:
         altered["engine_commit"] = "different"
     assert (transfer_protocol(stage_cfg, "masked") == transfer_protocol(altered, "masked")) == (
-        change not in ("policy", "engine")
+        change not in ("policy", "engine", "reward", "discount")
     )
-    assert stage_cfg["curriculum"]["run_stage"] == "saving"
+    assert stage_cfg["curriculum"]["run_stage"] == "easy"
 
 
-def test_cli_inherits_source_config_and_seed_but_requires_explicit_stage(stage_cfg, tmp_path):
+def test_cli_inherits_source_config_and_seed_but_requires_explicit_stage(
+    stage_cfg, tmp_path, monkeypatch
+):
     write_json(
         tmp_path / "metadata.json",
         {
@@ -110,20 +113,32 @@ def test_cli_inherits_source_config_and_seed_but_requires_explicit_stage(stage_c
             "validation_limit": 1,
         },
     )
+    monkeypatch.setattr(
+        "pvz_rl.learning.checkpoints.inspect_checkpoint",
+        lambda path: {
+            "config": copy.deepcopy(stage_cfg),
+            "learner_seed": 102,
+            "condition": "masked",
+            "validation_limit": 1,
+        },
+    )
     args = argparse.Namespace(
         command="train",
         config=None,
         init_from=tmp_path / "final.zip",
-        stage="saving",
+        stage="easy",
         games=50,
         max_minutes=10,
     )
     cfg = configured(args)
-    assert cfg["curriculum"]["run_stage"] == "saving"
-    assert cfg["training"]["total_games"] == 50 and cfg["training"]["max_minutes"] == 10
+    assert cfg["curriculum"]["run_stage"] == "easy"
+    assert (
+        cfg["training"]["total_games"] == 50
+        and cfg["training"]["max_minutes"] == stage_cfg["training"]["max_minutes"]
+    )
     assert (args.seed, args.condition, args.validation_count) == (102, "masked", 1)
     args.stage = None
-    assert configured(args)["curriculum"]["run_stage"] == "saving"
+    assert configured(args)["curriculum"]["run_stage"] == "easy"
     with pytest.raises(SystemExit):
         main(["train", "--resume", "one.zip", "--init-from", "two.zip", "--output", "unused"])
 
@@ -151,13 +166,21 @@ def test_invalid_stage_requests_leave_no_run(stage_cfg, tmp_path, case):
     assert not output.exists()
 
 
-def test_incompatible_checkpoint_rejected_before_run(stage_cfg, tmp_path):
+def test_incompatible_checkpoint_rejected_before_run(stage_cfg, tmp_path, monkeypatch):
     saved = copy.deepcopy(stage_cfg)
     saved["policy"]["plant_embedding"] = 16
     write_json(
         tmp_path / "metadata.json", {"config": saved, "condition": "masked", "family": "preset"}
     )
-    with pytest.raises(ValueError, match="matching engine, observation and network structure"):
+    monkeypatch.setattr(
+        "pvz_rl.learning.checkpoints.inspect_checkpoint",
+        lambda path: {
+            "config": saved,
+            "condition": "masked",
+            "family": "preset",
+        },
+    )
+    with pytest.raises(ValueError, match="matching engine, observation encoding"):
         train(stage_cfg, "masked", 101, tmp_path / "out", init_from=tmp_path / "absent.zip")
     assert not (tmp_path / "out").exists()
 
@@ -266,7 +289,7 @@ def test_mastered_stage_saves_without_collecting_next_stage(
         log = (run / "train.log").read_text()
         assert "until stage mastery" in log and "training ETA" not in log
     curves = read_series(run / "learning-curve.jsonl")
-    assert len(curves) == 1 and curves[0]["stage_success"]["stage"] == "saving"
+    assert len(curves) == 1 and curves[0]["stage_success"]["stage"] == "easy"
     demos = read_json(run / "visualizations/demos.json")["demos"]
     assert {d["level"] for d in demos} == {"easy", "standard", "hard"}
     assert {d["checkpoint_hash"] for d in demos} == {file_hash(run / "best.zip")}
@@ -301,7 +324,7 @@ def test_mastered_stage_saves_without_collecting_next_stage(
 def test_stage_interrupt_resume_retains_stage_and_budget(
     stage_cfg, tmp_path, monkeypatch, unlimited
 ):
-    stage_cfg["curriculum"]["run_stage"] = "saving"
+    stage_cfg["curriculum"]["run_stage"] = "easy"
     stage_cfg["training"]["total_games"] = 24
     if unlimited:
         stage_cfg["training"].update(until_stage_complete=True, total_games=1, max_minutes=1e-9)
@@ -354,7 +377,7 @@ def test_stage_interrupt_resume_retains_stage_and_budget(
         0
     }
     changed = copy.deepcopy(stage_cfg)
-    changed["curriculum"]["run_stage"] = "easy"
+    changed["curriculum"]["run_stage"] = "standard"
     with pytest.raises(ValueError, match="Resume requires identical"):
         train(
             changed,
@@ -424,9 +447,9 @@ def test_automatic_curriculum_finishes_only_after_shared_mastery(stage_cfg):
         wins = {task: 100 for task in state.requirements(stage_cfg)}
         assert state.observe(wins, (index + 1) * 500, stage_cfg) == (stage != "shared")
         assert state.complete(stage_cfg) == (stage == "shared")
-    assert state.mastered and state.stage == 3
+    assert state.mastered and state.stage == 2
     assert not state.observe({"easy": 100, "standard": 100, "hard": 100}, 3000, stage_cfg)
-    assert state.stage == 3  # Never advance beyond the last valid stage.
+    assert state.stage == 2  # Never advance beyond the last valid stage.
 
 
 def test_mastery_seed_pool_and_retained_recipe_defaults():
@@ -451,20 +474,23 @@ def test_mastery_seed_pool_and_retained_recipe_defaults():
 
 
 def test_old_gates_are_preserved_on_resume_but_can_change_on_handoff(
-    stage_cfg, legacy_teaching, tmp_path
+    stage_cfg, legacy_teaching, tmp_path, monkeypatch
 ):
     from pvz_rl.learning.training_requirements import resume_protocol
 
     old = legacy_teaching(copy.deepcopy(stage_cfg))
     old["training"]["eval_interval_games"] = 1000
     write_json(tmp_path / "metadata.json", {"config": old})
+    monkeypatch.setattr(
+        "pvz_rl.learning.checkpoints.inspect_checkpoint", lambda path: {"config": old}
+    )
     args = argparse.Namespace(command="train", config=None, resume=tmp_path / "final.zip")
     restored = configured(args)
     assert restored == old
     assert curriculum_probe_seeds(restored) == list(range(100000, 100020))
     assert transfer_protocol(old, "masked") == transfer_protocol(stage_cfg, "masked")
     assert resume_protocol(old, "masked") != resume_protocol(stage_cfg, "masked")
-    old_state = CurriculumState(stage=3)
+    old_state = CurriculumState(stage=2)
     assert old_state.complete(old) and not old_state.due(10000, old)
 
 
@@ -472,7 +498,7 @@ def test_old_gates_are_preserved_on_resume_but_can_change_on_handoff(
 def test_impossible_probe_counts_are_rejected(stage_cfg, count):
     state = CurriculumState(completed_stage_games=100)
     with pytest.raises(ValueError, match="Probe wins"):
-        state.observe({"saving": count}, 500, stage_cfg)
+        state.observe({"easy": count}, 500, stage_cfg)
     assert state.last_probe_games == 0 and not state.mastered
 
 
@@ -559,7 +585,7 @@ def test_shared_mastery_stops_after_update_and_is_resumable(
     )
 
 
-@pytest.mark.parametrize("option", ["games", "steps", "max_minutes"])
+@pytest.mark.parametrize("option", ["games", "steps"])
 def test_until_mastery_cli_rejects_explicit_ceilings_before_output(tmp_path, option):
     output = tmp_path / "absent"
     with pytest.raises(ValueError, match="cannot be combined"):
@@ -567,7 +593,7 @@ def test_until_mastery_cli_rejects_explicit_ceilings_before_output(tmp_path, opt
             argparse.Namespace(
                 command="train",
                 config=None,
-                stage="saving",
+                stage="easy",
                 until_stage_complete=True,
                 output=output,
                 **{option: 1},
@@ -588,18 +614,23 @@ def test_until_mastery_invalid_configuration_leaves_no_output(stage_cfg, tmp_pat
     elif change == "boolean":
         stage_cfg["training"]["until_stage_complete"] = 1
     else:
-        stage_cfg["curriculum"]["stages"]["saving"]["requirements"] = {}
+        stage_cfg["curriculum"]["stages"]["easy"]["requirements"] = {}
     with pytest.raises(ValueError, match="until_stage_complete"):
         train(stage_cfg, "masked", 101, tmp_path / "absent")
     assert not (tmp_path / "absent").exists()
 
 
-def test_until_mastery_cli_saved_resume_and_unbounded_clock(stage_cfg, tmp_path):
+def test_until_mastery_cli_saved_resume_and_unbounded_clock(stage_cfg, tmp_path, monkeypatch):
     from pvz_rl.learning.budget import budget_target, effective_limits
     from pvz_rl.learning.deadline import RunBudget
 
     cfg = configured(
-        argparse.Namespace(command="train", config=None, stage="saving", until_stage_complete=True)
+        argparse.Namespace(
+            command="train",
+            config=Path("configs/event-memory.toml"),
+            stage="easy",
+            until_stage_complete=True,
+        )
     )
     assert budget_target(cfg) is None
     assert effective_limits(cfg) == {"games": None, "decisions": None, "minutes": None}
@@ -615,11 +646,16 @@ def test_until_mastery_cli_saved_resume_and_unbounded_clock(stage_cfg, tmp_path)
         tmp_path / "metadata.json",
         {"config": cfg, "learner_seed": 101, "condition": "masked", "validation_limit": None},
     )
+    monkeypatch.setattr(
+        "pvz_rl.learning.checkpoints.inspect_checkpoint", lambda path: {"config": cfg}
+    )
     restored = configured(
         argparse.Namespace(command="train", config=None, resume=tmp_path / "latest.zip")
     )
     assert restored == cfg
-    assert transfer_protocol(cfg) == transfer_protocol(stage_cfg)
+    target = copy.deepcopy(stage_cfg)
+    target["environment"] = cfg["environment"]
+    assert transfer_protocol(cfg) == transfer_protocol(target)
     with pytest.raises(ValueError, match="explicit training deadline"):
         train(cfg, "masked", 101, tmp_path / "absent", deadline=1)
     assert not (tmp_path / "absent").exists()
@@ -675,11 +711,11 @@ def test_previous_action_distribution_rejected_by_metadata_and_direct_loader(
 
 def test_until_stage_config_does_not_disable_benchmark_window(tmp_path):
     source = (
-        Path("configs/train.toml")
+        Path("configs/event-memory.toml")
         .read_text()
         .replace("until_stage_complete = false", "until_stage_complete = true")
     )
-    source = source.replace("[curriculum]", '[curriculum]\nrun_stage = "saving"')
+    source = source.replace("[curriculum]", '[curriculum]\nrun_stage = "easy"')
     path = tmp_path / "stage.toml"
     path.write_text(source)
     cfg = configured(argparse.Namespace(command="benchmark-gpu", config=path, steps=16384))

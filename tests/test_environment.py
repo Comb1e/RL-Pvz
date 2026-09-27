@@ -208,7 +208,7 @@ def test_training_reset_stays_inside_training_split(cfg):
 
 
 def test_all_species_geometry_is_independent_of_sun_cooldown_and_lesson(per_tick_cfg):
-    env = PvZEnv(per_tick_cfg, family="saving")
+    env = PvZEnv(per_tick_cfg, family="diagnostic")
     env.reset(
         seed=101,
         options={"scenario": LevelSpec("zero-sun", (Spawn(1000, "basic", 0),), initial_sun=0)},

@@ -1,13 +1,13 @@
 from types import SimpleNamespace
 
-from pvz_rl.config import load_config
+from pvz_rl.config import load_event_config as load_config
 from pvz_rl.learning.curriculum import CurriculumState
 from pvz_rl.learning.training import ResearchCallback
 
 
 def test_progress_has_aligned_recent_and_run_metrics_and_unlimited_has_no_eta(tmp_path, capsys):
     cfg = load_config()
-    cfg["curriculum"]["run_stage"] = "saving"
+    cfg["curriculum"]["run_stage"] = "easy"
     cfg["training"]["until_stage_complete"] = True
     callback = ResearchCallback(cfg, "masked", 101, tmp_path)
     callback.model = SimpleNamespace(
@@ -17,7 +17,7 @@ def test_progress_has_aligned_recent_and_run_metrics_and_unlimited_has_no_eta(tm
     try:
         callback.log_progress(force=True)
         text = capsys.readouterr().out
-        assert "Stage       saving | collect" in text
+        assert "Stage       easy | collect" in text
         assert "until stage mastery" in text and "ETA" not in text
         assert "Hardware    GPU n/a" in text
         assert "Run average" in text and "Recent play" in text
@@ -27,7 +27,7 @@ def test_progress_has_aligned_recent_and_run_metrics_and_unlimited_has_no_eta(tm
         callback.model.phase = "fit"
         callback.recent.append(
             dict(
-                family="saving",
+                family="diagnostic",
                 level="easy",
                 decisions=100,
                 win=1,

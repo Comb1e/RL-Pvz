@@ -34,6 +34,11 @@ def trajectory_dtype(observations, capacity):
             ("counts", "<u2", capacity),
             ("starts", "<u4", capacity),
         ]
+        + (
+            [("previous_outcome", "<f4", 2), ("accepted", "?"), ("done", "?")]
+            if capacity == 0
+            else []
+        )
     )
 
 

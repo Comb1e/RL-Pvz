@@ -10,7 +10,7 @@ from pvz_rl.config import runtime_settings
 from pvz_rl.envs.cuda_env import CudaVecEnv
 from pvz_rl.learning.deadline import check_deadline
 from pvz_rl.monitoring.cuda_diagnostics import DeviceProfiler
-from pvz_rl.policy.event_memory import EventMemory
+from pvz_rl.policy.runner import PolicyRunner
 
 
 @contextmanager
@@ -102,30 +102,25 @@ def refilled_games(
         started = [perf_counter()] * count
         inference_start = [0.0] * count
         obs = env.reset()
-        memory = EventMemory(cfg, env.batch.rules, count, policy.policy.device)
-        previous = torch.zeros(count, device=policy.policy.device)
-        resets = torch.ones(count, dtype=torch.bool, device=policy.policy.device)
+        runner = PolicyRunner(policy.policy, cfg, env.batch.rules, count, policy.policy.device)
         with env.device_context():
             while finished < len(cases):
                 check_deadline(deadline)
                 with torch.inference_mode():
-                    kwargs = {}
-                    context = memory.observe(
-                        obs, env.action_masks(), previous, resets, env.header_tensor[:, 0]
-                    )
-                    if cfg["conditions"][condition]["masked"]:
-                        masks = env.action_masks().clone()
-                        masks[:, 0] |= env.header_tensor[:, 17] == 0
-                        kwargs["action_masks"] = masks
+                    active = torch.as_tensor(env.enabled_envs.copy(), device=policy.policy.device)
                     with timer.track("inference"):
-                        actions, _ = policy.policy.sample_actions(
-                            obs, kwargs.get("action_masks"), deterministic=True, context=context
-                        )
+                        actions = runner.decide(
+                            obs, env.action_masks(), env.header_tensor[:, 0], active=active
+                        )[0]
                 if record:
                     buffered.append(actions)
                 obs, _, _, _, _, infos = env.step_tensors(actions, autoreset=False)
-                previous = env.executed_actions
-                resets = torch.zeros_like(resets)
+                runner.observe_result(
+                    actions,
+                    env.last_action_result_host[:, 0].copy(),
+                    env.last_transition_host[:, 2].copy(),
+                    active=active,
+                )
                 done = [i for i, info in enumerate(infos) if "episode_metrics" in info]
                 if record and (done or len(buffered) >= 128):
                     raw = torch.stack(buffered).cpu().numpy()
@@ -156,8 +151,7 @@ def refilled_games(
                         started[i], inference_start[i] = perf_counter(), inference
                 if reset:
                     env.reset_indices(reset, assigned)
-                    resets[reset] = True
-                    previous[reset] = 0
+                    runner.reset(reset)
                 if progress:
                     progress.emit(f"GPU evaluation: {finished}/{len(cases)} games complete")
                 while next_yield in completed:
@@ -195,35 +189,29 @@ def fixed_batches(
             started = perf_counter()
             try:
                 obs = env.reset()
-                memory = EventMemory(cfg, env.batch.rules, len(chunk), policy.policy.device)
-                previous = torch.zeros(len(chunk), device=policy.policy.device)
-                resets = torch.ones(len(chunk), dtype=torch.bool, device=policy.policy.device)
+                runner = PolicyRunner(
+                    policy.policy, cfg, env.batch.rules, len(chunk), policy.policy.device
+                )
                 with env.device_context():
                     while len(completed) < len(chunk):
                         check_deadline(deadline)
                         with torch.inference_mode():
-                            kwargs = {}
-                            context = memory.observe(
-                                obs, env.action_masks(), previous, resets, env.header_tensor[:, 0]
+                            active = torch.as_tensor(
+                                env.enabled_envs.copy(), device=policy.policy.device
                             )
-                            if cfg["conditions"][condition]["masked"]:
-                                masks = env.action_masks().clone()
-                                # Completed slots are inactive; dummy wait is never
-                                # sent to simulation as an active game operation.
-                                masks[:, 0] |= env.header_tensor[:, 17] == 0
-                                kwargs["action_masks"] = masks
                             with inference_timer.track("inference"):
-                                actions, _ = policy.policy.sample_actions(
-                                    obs,
-                                    kwargs.get("action_masks"),
-                                    deterministic=True,
-                                    context=context,
-                                )
+                                actions = runner.decide(
+                                    obs, env.action_masks(), env.header_tensor[:, 0], active=active
+                                )[0]
                         if record:
                             buffered.append(actions)
                         obs, _, _, _, _, infos = env.step_tensors(actions, autoreset=False)
-                        previous = env.executed_actions
-                        resets = torch.zeros_like(resets)
+                        runner.observe_result(
+                            actions,
+                            env.last_action_result_host[:, 0].copy(),
+                            env.last_transition_host[:, 2].copy(),
+                            active=active,
+                        )
                         # The compact completion transfer has already waited for
                         # inference. Bound event storage and measure execution,
                         # rather than reporting host enqueue time as GPU latency.

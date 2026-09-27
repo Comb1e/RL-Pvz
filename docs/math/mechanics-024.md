@@ -46,7 +46,7 @@ invalidate these conservative bounds. They do change realized timing and damage.
 
 Saving is unchanged: 100 sun, all eight plants, no natural income or mowers,
 three lanes and waves at 75/87/99 seconds. The cash/production controls remain in
-[saving feasibility](saving-and-actions.md). The public-only five-flower witness
+the retired saving-feasibility control. The public-only five-flower witness
 and wait/no-flower/dig/four-mine failures are checked for all ten lane combinations.
 CPU/CUDA agreement includes complete states, public observations and reward.
 

@@ -18,6 +18,7 @@ from pvz_rl.presentation.recordings import ActionPhaseRecorder
 @pytest.fixture
 def completed_demo(tmp_path):
     cfg = load_demo_config()
+    cfg["environment"]["cutoff_seconds"] = 1
     cfg["policy"].update(
         entity_width=8,
         transformer_heads=2,

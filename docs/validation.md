@@ -520,7 +520,7 @@ ending at tick **13652**, with five flowers, three shooters, **650** produced su
 **1100** cumulative net value and return **1.03666667**. CPU/CUDA observations,
 rewards, legal masks and state hashes agree. Wait, one-shooter, immediate-dig and
 mine-only controls lose. Mine arming and half-open blast boundaries are checked
-alongside the [independent affordability proof](math/saving-and-actions.md).
+alongside the historical affordability proof (retired).
 
 Independent CPU/CUDA enumeration covers initial weights, changing affordability,
 partial tiles, epsilon zero/one, forced actions, entropy, exact KL and likelihood

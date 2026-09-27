@@ -57,7 +57,7 @@ def test_old_config_and_output_only_compatibility(cfg):
 def test_hardware_report_only_never_loads_checkpoint_and_respects_resume_cutoff(
     tmp_path, monkeypatch
 ):
-    from pvz_rl.config import load_config
+    from pvz_rl.config import load_event_config as load_config
 
     cfg = load_config()
     ancestor, run = tmp_path / "previous", tmp_path / "resumed"
@@ -133,7 +133,7 @@ def test_shared_checkpoint_reports_and_videos(smoke_cfg, tmp_path, monkeypatch):
 
     monkeypatch.setattr(training, "load_policy", tracked_load)
     run = train(smoke_cfg, "masked", 101, tmp_path / "shared", validation_limit=1)
-    assert len(set(identities)) == 1 and stages == {("saving",)}
+    assert len(set(identities)) == 1 and stages == {("easy",)}
     assert loads == ["best.zip"]
     metrics = read_series(run / "training-metrics.jsonl")
     assert [m["training_steps"] for m in metrics] == [100, 201]
@@ -143,7 +143,7 @@ def test_shared_checkpoint_reports_and_videos(smoke_cfg, tmp_path, monkeypatch):
     assert all(m["optimization"]["branch_loss"] is not None for m in metrics)
     assert metrics[0]["optimization"]["tile_loss"] is None
     assert metrics[1]["optimization"]["tile_loss"] is not None
-    assert metrics[-1]["rolling_by_task"]["saving"]["completed_games"] > 0
+    assert metrics[-1]["rolling_by_task"]["easy"]["completed_games"] > 0
     assert sum(t["transitions"] for t in metrics[-1]["task_counts"].values()) == 201
     assert (run / "tensorboard").exists()
     from tensorboard.backend.event_processing.event_accumulator import EventAccumulator

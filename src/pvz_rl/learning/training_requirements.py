@@ -11,13 +11,20 @@ TRAINING_CONDITIONS = ("masked",)
 
 
 def current_model_config(cfg):
+    identity = (
+        cfg.get("policy", {}).get("kind"),
+        cfg.get("encoding", {}).get("version"),
+        cfg.get("training", {}).get("method"),
+    )
     return (
-        cfg.get("policy", {}).get("kind") == "event_sequential_q_v2"
+        identity
+        in {
+            ("event_sequential_q_v2", "event_v7", "sequential_q_mc_v2"),
+            ("transformer_lstm_q_v1", "event_v8", "complete_return_lstm_v1"),
+        }
         and cfg.get("policy", {}).get("action_distribution") == ACTION_DISTRIBUTION
-        and cfg.get("encoding", {}).get("version") == "event_v7"
         and cfg.get("reward", {}).get("version") == "net_value_v1"
         and cfg.get("training", {}).get("discount_clock") == "simulation_ticks"
-        and cfg.get("training", {}).get("method") == "sequential_q_mc_v2"
     )
 
 
@@ -30,7 +37,7 @@ def require_supported_policy(cfg, condition="masked"):
         or not current_model_config(cfg)
     ):
         raise ValueError(
-            "Retired policy or scheduler. Models require event_sequential_q_v2, event_v7, net_value_v1, the sequential_q_unmasked_penalty_v1 distribution and complete-game collection. Start fresh with configs/train.toml."
+            "Retired policy or scheduler. Models require matching recurrent event_v8 or event-memory event_v7 protocols, net_value_v1, the sequential_q_unmasked_penalty_v1 distribution and complete-game collection. Start fresh with configs/train.toml."
         )
 
 
@@ -93,6 +100,8 @@ def resume_protocol(cfg, condition):
     result = research_config(cfg)
     result.pop("profile", None)
     result["conditions"] = {condition: cfg["conditions"][condition]}
+    for key in ("total_games", "total_steps", "max_minutes", "finalization_minutes"):
+        result["training"].pop(key, None)
     return result
 
 
@@ -101,7 +110,9 @@ def transfer_protocol(cfg, condition="masked"):
     env, p = cfg["environment"], cfg["policy"]
     return {
         "engine": [cfg[k] for k in ("engine_commit", "engine_version", "engine_package_version")],
-        "encoding": cfg["encoding"]["version"],
+        "encoding": cfg["encoding"],
+        "reward": cfg["reward"],
+        "timing": {k: env[k] for k in ("action_timing", "decision_ticks", "cutoff_seconds")},
         "actions": ActionSchema.version,
         "action_distribution": p.get("action_distribution"),
         "action_history": "joint_embedding_v1",
@@ -141,6 +152,7 @@ def transfer_protocol(cfg, condition="masked"):
         },
         "heads": cfg["training"]["hidden_sizes"],
         "method": cfg["training"]["method"],
+        "return": [cfg["training"]["gamma"], cfg["training"]["discount_clock"]],
     }
 
 

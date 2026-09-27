@@ -32,9 +32,26 @@ def select_action(env: PvZEnv, obs, *, policy=None, baseline=None, rng=None, mas
         return env.codec.encode(choose_action(env.public_board()))
     if policy is None:
         raise ValueError("Specify a baseline or trained policy")
+    from pvz_rl.policy.runner import PolicyRunner
+
+    network = getattr(policy, "policy", None)
+    if network is not None:
+        import torch
+
+        if env.metrics["decisions"] == 0:
+            env._policy_memory = PolicyRunner(network, env.cfg, env.rules, 1, network.device)
+        runner = env._policy_memory
+        if env.metrics["decisions"]:
+            proposal, accepted, ticks = env.last_policy_outcome
+            runner.observe_result([proposal], [accepted], [ticks])
+        actions = runner.decide(
+            torch.as_tensor(obs, device=network.device).reshape(1, -1),
+            torch.as_tensor(env.action_masks(), device=network.device).reshape(1, -1),
+            torch.tensor([env.public.tick], device=network.device),
+        )[0]
+        return int(actions[0])
     kwargs = {"action_masks": env.action_masks()} if masked else {}
-    state = None if env.metrics["decisions"] == 0 else getattr(env, "_policy_memory", None)
-    action, env._policy_memory = policy.predict(obs, state=state, deterministic=True, **kwargs)
+    action, _ = policy.predict(obs, deterministic=True, **kwargs)
     return int(action)
 
 
@@ -211,11 +228,6 @@ def evaluate(
                             trace_index += 1
                             inference_seconds += perf_counter() - t
                             obs, _, terminated, truncated, info = env.step(action)
-                            if (
-                                not info["accepted"]
-                                and getattr(env, "_policy_memory", None) is not None
-                            ):
-                                env._policy_memory.previous_actions.zero_()
                             progress.emit(
                                 f"Evaluation {len(rows)}/{total} complete; {level}, seed {seed}, "
                                 f"game time {env.public.elapsed_seconds:.1f}s"

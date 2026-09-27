@@ -8,7 +8,8 @@ import numpy as np
 import pytest
 import torch
 
-from pvz_rl.config import load_config, output_settings, validate_config
+from pvz_rl.config import load_event_config as load_config
+from pvz_rl.config import output_settings, validate_config
 from pvz_rl.presentation.live_view import (
     Activity,
     LiveSession,
@@ -138,7 +139,7 @@ def test_capture_cpu_reference_terminals_actions_and_switches(per_tick_cfg):
     cfg = copy.deepcopy(per_tick_cfg)
     cfg["training"]["n_envs"] = 5
     cfg["environment"]["cutoff_seconds"] = 0.03
-    env = CudaVecEnv(cfg, "masked", 101, family="saving")
+    env = CudaVecEnv(cfg, "masked", 101, family="diagnostic")
     try:
         env.reset()
         session = attach_capture(env)
@@ -180,7 +181,7 @@ def test_paused_completion_waits_for_unfinished_replacement_without_restart(per_
     cfg = copy.deepcopy(per_tick_cfg)
     cfg["training"]["n_envs"] = 5
     cfg["environment"]["cutoff_seconds"] = 0.01
-    env = CudaVecEnv(cfg, "masked", 101, family="saving")
+    env = CudaVecEnv(cfg, "masked", 101, family="diagnostic")
     try:
         env.reset()
         session = attach_capture(env)
@@ -206,7 +207,7 @@ def test_paused_completion_waits_for_unfinished_replacement_without_restart(per_
 def test_public_decoder_all_entity_fields(state):
     from pvz_game import Game, LevelSpec, Rules, Spawn
 
-    from pvz_rl.envs.cuda_lessons import LessonCudaBatch
+    from pvz_rl.envs.cuda_accounting import AccountingCudaBatch
     from pvz_rl.presentation.live_capture import public_observation
 
     game = Game()
@@ -244,7 +245,7 @@ def test_public_decoder_all_entity_fields(state):
     # A restore requires extra projectile capacity beyond reachable play.
     from pvz_game.cuda.backend import projectile_bound
 
-    batch = LessonCudaBatch(
+    batch = AccountingCudaBatch(
         1, zombie_capacity=100, projectile_capacity=projectile_bound(Rules()) + 1
     )
     batch.restore([raw])
@@ -263,7 +264,7 @@ def test_complete_training_cohorts_identical_with_viewer(smoke_cfg, tmp_path):
     cfg["training"]["performance"]["compile_kernels"] = False
     results = []
     for enabled in (False, True):
-        env = vector_env(cfg, "masked", 101, "saving")
+        env = vector_env(cfg, "masked", 101, "diagnostic")
         try:
             model = build_model(cfg, "masked", env, 101)
             model.set_logger(configure(format_strings=[]))
@@ -324,7 +325,7 @@ def test_process_lifecycle_and_offscreen_render(tmp_path, monkeypatch):
         for p in session.selection.panels:
             p.frame = dict(
                 observation=obs,
-                task="saving",
+                task="easy",
                 episode=1,
                 outcome="running",
                 actions=["Planted sunflower"],
@@ -381,7 +382,7 @@ def test_mixed_natural_results_and_capture_never_reads_private_templates(per_tic
 
     cfg = copy.deepcopy(per_tick_cfg)
     cfg["training"]["n_envs"] = 3
-    env = CudaVecEnv(cfg, "masked", 101, family="saving")
+    env = CudaVecEnv(cfg, "masked", 101, family="diagnostic")
     try:
         env.reset()
         from pvz_game import Game
@@ -502,7 +503,7 @@ def test_decision_panel_readable_focus_and_small_window_controls():
     game.reset("easy", 5)
     frame = dict(
         observation=game.observe(),
-        task="saving",
+        task="easy",
         episode=1,
         outcome="running",
         sequence=1,
@@ -562,7 +563,7 @@ def test_switch_retains_browsed_q_until_destination_and_table_scroll_bounds():
     )
     frame = dict(
         observation=Game().reset("easy", 101),
-        task="saving",
+        task="easy",
         episode=1,
         sequence=1,
         outcome="running",

@@ -2,7 +2,7 @@
 
 import pytest
 
-from pvz_rl.config import load_config
+from pvz_rl.config import load_event_config as load_config
 from pvz_rl.learning.exploration import exploration_state
 
 

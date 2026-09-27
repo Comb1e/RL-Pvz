@@ -45,12 +45,12 @@ def test_recurrent_geometry_isolated_per_board_and_full_board_falls_back_to_zero
 def test_versioned_cpu_cuda_observation_width_and_cooldown_boundaries(demo, size):
     from pvz_game import LevelSpec
 
-    from pvz_rl.config import load_config
+    from pvz_rl.config import load_event_config as load_config
+    from pvz_rl.envs.cuda_accounting import AccountingCudaBatch
     from pvz_rl.envs.cuda_features import CudaFeatures
-    from pvz_rl.envs.cuda_lessons import LessonCudaBatch
 
     cfg = load_demo_config() if demo else load_config()
-    batch = LessonCudaBatch(1, zombie_capacity=1, max_step_ticks=1)
+    batch = AccountingCudaBatch(1, zombie_capacity=1, max_step_ticks=1)
     batch.reset([LevelSpec("cooldowns")], [0])
     with batch.cp.cuda.ExternalStream(torch.cuda.current_stream().cuda_stream):
         features = CudaFeatures(batch, cfg, "masked")

@@ -148,25 +148,14 @@ gradient_clip = 0.5
 learner_seed = 101
 time_budget_minutes = 30
 
-[curriculum.lessons.saving]
-spawn_ticks = [7500, 8700, 9900] # 75 seconds, then every 12 seconds in three lanes.
-initial_sun = 100
-natural_sun = false
-lanes_per_spawn = 3
-
-[curriculum.stages.saving]
-tasks = ["saving"]
-weights = [1.0]
-requirements = {saving = 100}
-
 [curriculum.stages.easy]
-tasks = ["easy", "saving"]
-weights = [0.8, 0.2]
+tasks = ["easy"]
+weights = [1.0]
 requirements = {easy = 100}
 
 [curriculum.stages.standard]
-tasks = ["easy", "standard", "saving"]
-weights = [0.45, 0.45, 0.1]
+tasks = ["easy", "standard"]
+weights = [0.5, 0.5]
 requirements = {easy = 100, standard = 100}
 
 [curriculum.stages.shared]

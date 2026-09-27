@@ -13,12 +13,8 @@ from pvz_rl.envs.encoding import ObservationEncoder
 from pvz_rl.policy.event_memory import MemoryContext
 from pvz_rl.policy.sequential_q import (
     action_parts,
-    assemble,
-    explore,
-    greedy_choice,
     observation_tile_masks,
     per_head_epsilon,
-    selection_masks,
 )
 from pvz_rl.policy.temporal import TemporalEncoder
 
@@ -261,74 +257,20 @@ class SequentialQPolicy(BasePolicy):
         values = self.branch_head(pooled)
         if action_masks is None:
             action_masks = self.default_masks(obs)
-        # Every active environment compares all ten first-level outputs.
-        # Affordability and cooldown are simulator outcomes; only the selected
-        # tile uses the occupancy mask.
-        legal = selection_masks(action_masks)
-        if active is not None:
-            legal = legal.clone()
-            legal[~active] = False
-            legal[~active, 0] = True
-        greedy = greedy_choice(values, legal)
-        branches = greedy.clone()
-        coins = torch.zeros(len(obs), 2, device=obs.device, dtype=torch.bool)
-        epsilon = per_head_epsilon(0.0 if deterministic else self.exploration_epsilon)
-        tile_epsilon = 0.0 if deterministic else self.tile_exploration_epsilon
-        planting = ((greedy > 0) & (greedy <= A.plant_types)).nonzero(as_tuple=True)[0]
-        if len(planting):
-            species, coins[planting, 0] = explore(
-                greedy[planting] - 1, legal[planting, 1:-1], epsilon
-            )
-            branches[planting] = species + 1
-        tiles = torch.zeros_like(branches)
-        greedy_tiles = torch.zeros_like(branches)
-        selected_tile_values = values.new_zeros(len(obs))
-        nonwait = (branches > 0).nonzero(as_tuple=True)[0]
-        if len(nonwait):
-            tile_q = self.tile_values(board[nonwait], pooled[nonwait], branches[nonwait])
-            tile_legal = A.tile_masks(action_masks[nonwait])[
-                torch.arange(len(nonwait), device=obs.device), branches[nonwait] - 1
-            ]
-            # Full-board proposals deterministically target tile zero.  The
-            # simulator rejects them and advances time.  Validate every value,
-            # even when the geometry has no empty tile.
-            has_tile = tile_legal.any(-1)
-            tile_candidates = tile_legal.clone()
-            tile_candidates[~has_tile, 0] = True
-            preferred = greedy_choice(tile_q, tile_candidates)
-            tiles[nonwait] = preferred
-            greedy_tiles[nonwait] = preferred
-            plant_rows = (branches[nonwait] <= A.plant_types).nonzero(as_tuple=True)[0]
-            if len(plant_rows):
-                selected, fired = explore(
-                    preferred[plant_rows], tile_candidates[plant_rows], tile_epsilon
-                )
-                tiles[nonwait[plant_rows]] = selected
-                coins[nonwait[plant_rows], 1] = fired
-            selected_tile_values[nonwait] = tile_q.gather(1, tiles[nonwait, None]).flatten()
-        # Recover the unmodified greedy full command when species exploration switched branches.
-        changed = (branches != greedy).nonzero(as_tuple=True)[0]
-        if len(changed):
-            q = self.tile_values(board[changed], pooled[changed], greedy[changed])
-            mask = A.tile_masks(action_masks[changed])[
-                torch.arange(len(changed), device=obs.device), greedy[changed] - 1
-            ]
-            mask = mask.clone()
-            mask[~mask.any(-1), 0] = True
-            greedy_tiles[changed] = greedy_choice(q, mask)
-        actions = assemble(branches, tiles)
-        details = dict(greedy_actions=assemble(greedy, greedy_tiles), coins=coins)
-        details["branch_q"] = values
-        if diagnostic_indices is not None:
-            ix = diagnostic_indices
-            details["viewer"] = dict(
-                q=values[ix],
-                legal=legal[ix],
-                actions=actions[ix],
-                greedy_actions=details["greedy_actions"][ix],
-                coins=coins[ix],
-            )
-        return actions, values.gather(1, branches[:, None]).flatten(), selected_tile_values, details
+        from pvz_rl.policy.sequential_q import select_q_actions
+
+        return select_q_actions(
+            values,
+            board,
+            pooled,
+            self.tile_values,
+            action_masks,
+            deterministic=deterministic,
+            exploration_epsilon=self.exploration_epsilon,
+            tile_exploration_epsilon=self.tile_exploration_epsilon,
+            active=active,
+            diagnostic_indices=diagnostic_indices,
+        )
 
     def sample_actions(self, obs, action_masks, deterministic=False, context=None):
         return self.decide(obs, action_masks, deterministic, context)[0], None

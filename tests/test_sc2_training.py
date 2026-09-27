@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 import torch
 
-from pvz_rl.config import load_config
+from pvz_rl.config import load_event_config as load_config
 from pvz_rl.envs.env import PvZEnv
 from pvz_rl.evaluation.runner import evaluate
 from pvz_rl.learning.curriculum import CurriculumState
@@ -245,8 +245,8 @@ def test_cuda_long_horizon_reward_and_early_dig_boundaries(wait_ticks):
         pytest.skip("CUDA unavailable")
     from pvz_game import Dig, LevelSpec, Place, Spawn
 
+    from pvz_rl.envs.cuda_accounting import AccountingCudaBatch as CudaBatch
     from pvz_rl.envs.cuda_features import CudaFeatures
-    from pvz_rl.envs.cuda_lessons import LessonCudaBatch as CudaBatch
 
     cfg = load_config()
     level = LevelSpec("ledger-boundary", (Spawn(20000, "basic", 0),), initial_sun=200)

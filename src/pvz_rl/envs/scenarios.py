@@ -23,24 +23,6 @@ def scenario(level: str, family: str, seed: int, rules: Rules, cfg=None):
             initial_sun=100,
             mowers=False,
         )
-    if family in ("saving",):
-        from pvz_rl.config import lesson_settings
-
-        lesson = lesson_settings(cfg)[family]
-        rng = random.Random(namespace_seed(family, seed))
-        count = lesson.get("lanes_per_spawn", 1)
-        # Preserve archived single-lane seed mappings exactly.
-        lanes = (
-            [rng.randrange(rules.game["rows"])]
-            if count == 1
-            else sorted(rng.sample(range(rules.game["rows"]), count))
-        )
-        return LevelSpec(
-            family,
-            tuple(Spawn(tick, "basic", lane) for tick in lesson["spawn_ticks"] for lane in lanes),
-            initial_sun=lesson["initial_sun"],
-            mowers=False,
-        )
     if family not in ("redistributed", "faster", "concentrated"):
         raise ValueError(f"Unknown scenario family: {family}")
     raw = bundled("levels.toml")[level]

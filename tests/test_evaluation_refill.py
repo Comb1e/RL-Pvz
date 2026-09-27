@@ -7,7 +7,8 @@ import pytest
 import torch
 from pvz_game import LevelSpec, Spawn
 
-from pvz_rl.config import load_config, research_config, validate_config
+from pvz_rl.config import load_event_config as load_config
+from pvz_rl.config import research_config, validate_config
 from pvz_rl.envs.env import PvZEnv
 from pvz_rl.envs.rewards import REWARD_METRICS
 from pvz_rl.evaluation.cuda_evaluation import batched_games, deterministic_validation
@@ -21,6 +22,12 @@ class WaitingPolicy(torch.nn.Module):
     @property
     def device(self):
         return self.anchor.device
+
+    def set_training_mode(self, mode):
+        self.train(mode)
+
+    def decide(self, obs, masks=None, **kwargs):
+        return self.sample_actions(obs, masks, **kwargs)[0], None, None, {}
 
     def sample_actions(self, obs, masks=None, **kwargs):
         return torch.zeros(len(obs), dtype=torch.long, device=self.device), None

@@ -8,7 +8,7 @@ import torch
 from stable_baselines3.common.callbacks import BaseCallback
 from stable_baselines3.common.logger import configure
 
-from pvz_rl.config import load_config
+from pvz_rl.config import load_event_config as load_config
 from pvz_rl.envs.actions import ActionSchema as A
 from pvz_rl.learning.cohort import CohortPhase
 from pvz_rl.learning.cuda_buffer import CompleteGameBuffer

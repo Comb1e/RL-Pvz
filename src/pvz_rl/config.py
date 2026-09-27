@@ -77,23 +77,19 @@ def load_config(path: str | Path | None = None) -> dict:
     return copy.deepcopy(cfg)
 
 
+def load_event_config(path=None):
+    """Explicit event-memory alternative, including archived regression controls."""
+    return load_config(path or files("pvz_rl").joinpath("data/event-memory.toml"))
+
+
 def load_demo_config(path: str | Path | None = None) -> dict:
-    """The recurrent human-demo protocol is separate from the CUDA collector."""
+    """Recording verification profile; execution options are supplied separately."""
     source = Path(path) if path else files("pvz_rl").joinpath("data/demo.toml")
     cfg = tomllib.loads(source.read_text("utf-8"))
     validate_config(cfg)
     if cfg["encoding"]["version"] != "event_v8" or cfg["policy"]["kind"] != "transformer_lstm_q_v1":
         raise ValueError("Human demonstrations require the event_v8 Transformer-LSTM demo profile")
     return copy.deepcopy(cfg)
-
-
-@lru_cache(maxsize=1)
-def _teaching_defaults():
-    return tomllib.loads(files("pvz_rl").joinpath("data/teaching.toml").read_text("utf-8"))
-
-
-def lesson_settings(cfg=None):
-    return (cfg or {}).get("curriculum", {}).get("lessons", _teaching_defaults()["lessons"])
 
 
 def validate_config(cfg: dict) -> None:
@@ -228,6 +224,8 @@ def validate_config(cfg: dict) -> None:
     if type(reserve) not in (int, float) or not math.isfinite(reserve) or reserve < 0:
         raise ValueError("finalization_minutes must be finite and nonnegative")
     c = cfg["curriculum"]
+    if c.get("lessons") or set(c.get("stages", {})) - {"easy", "standard", "shared"}:
+        raise ValueError("Retired curriculum lesson; use easy, standard and shared stages")
     unlimited = cfg["training"].get("until_stage_complete", False)
     if type(unlimited) is not bool:
         raise ValueError("training.until_stage_complete must be a boolean")
@@ -247,24 +245,6 @@ def validate_config(cfg: dict) -> None:
     if c.get("mode") == "teaching":
         from pvz_rl.learning.curriculum import STAGES
 
-        for lesson in lesson_settings(cfg).values():
-            if "allowed_plants" in lesson:
-                raise ValueError("Retired allowed_plants setting; every species is available")
-            if type(lesson.get("natural_sun")) is not bool:
-                raise ValueError(
-                    "lesson.natural_sun must be an explicit boolean; use configs/train.toml "
-                    "with --init-from to adopt the current lesson trial"
-                )
-            lanes = lesson.get("lanes_per_spawn", 1)
-            if type(lanes) is not int or not 1 <= lanes <= cfg["environment"]["rows"]:
-                raise ValueError("lesson.lanes_per_spawn must be an integer within the board")
-            if (
-                type(lesson["initial_sun"]) is not int
-                or lesson["initial_sun"] < 0
-                or not lesson["spawn_ticks"]
-                or any(type(t) is not int or t < 1 for t in lesson["spawn_ticks"])
-            ):
-                raise ValueError("Invalid lesson sun or spawn ticks")
         schedule = (
             ("probe_interval_games", "minimum_stage_games")
             if uses_games(cfg)
@@ -280,9 +260,7 @@ def validate_config(cfg: dict) -> None:
                 len(stage["tasks"]) != len(stage["weights"])
                 or min(stage["weights"]) < 0
                 or abs(sum(stage["weights"]) - 1) > 1e-9
-                or any(
-                    task not in (*STAGES[:2], "easy", "standard", "hard") for task in stage["tasks"]
-                )
+                or any(task not in ("easy", "standard", "hard") for task in stage["tasks"])
                 or any(
                     type(n) is not int or not 1 <= n <= c["probe_cases"]
                     for n in stage["requirements"].values()
@@ -396,6 +374,8 @@ def validate_config(cfg: dict) -> None:
             raise ValueError(f"{key} must be a positive integer")
     if train.get("discount_clock") != "simulation_ticks" or train["gamma"] != 1:
         raise ValueError("Complete actual returns require gamma 1; start fresh")
+    if recurrent and train["batch_size"] % policy["chunk_length"]:
+        raise ValueError("Recurrent batch_size must be a positive multiple of chunk_length")
     if train["batch_size"] > 1024:
         raise ValueError("Bounded minibatches must not exceed 1024")
     demo = train.get("demo", {})

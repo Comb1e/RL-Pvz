@@ -16,7 +16,7 @@ from torch import nn
 
 from pvz_rl.envs.actions import ActionSchema as A
 from pvz_rl.envs.encoding import ObservationEncoder
-from pvz_rl.policy.sequential_q import greedy_choice, observation_tile_masks, selection_masks
+from pvz_rl.policy.sequential_q import observation_tile_masks, select_q_actions
 
 
 @dataclass
@@ -232,21 +232,26 @@ class TransformerLSTMPolicy(nn.Module):
     ) -> tuple[torch.Tensor, torch.Tensor, RecurrentState]:
         if observations.ndim != 3:
             raise ValueError("sequence observations must have shape (batch, time, features)")
-        outputs, tiles, contexts = [], [], []
-        current = state
-        for t in range(observations.shape[1]):
-            action = None if previous_actions is None else previous_actions[:, t]
-            outcome = None if execution_outcomes is None else execution_outcomes[:, t]
-            result = self.forward_step(
-                observations[:, t], current, previous_action=action, execution_outcome=outcome
-            )
-            outputs.append(result.branch_q)
-            tiles.append(result.tile_features)
-            contexts.append(result.context)
-            current = result.state
-        result = (torch.stack(outputs, 1), torch.stack(tiles, 1), current)
+        batch, time, features = observations.shape
+        # Encode decisions together, then run the chronological LSTM. Dropout is
+        # zero, so this shares the exact single-decision computation.
+        inputs, tiles = self._inputs(
+            observations.reshape(-1, features),
+            None if previous_actions is None else previous_actions.reshape(-1),
+            None if execution_outcomes is None else execution_outcomes.reshape(-1, 2),
+        )
+        if state is None:
+            state = self.initial_state(batch, device=inputs.device, dtype=inputs.dtype)
+        contexts, (hidden, cell) = self.lstm(
+            inputs.reshape(batch, time, -1), (state.hidden, state.cell)
+        )
+        result = (
+            self.branch_head(contexts),
+            tiles.reshape(batch, time, A.tiles, -1),
+            RecurrentState(hidden, cell),
+        )
         if return_context:
-            return (*result[:2], torch.stack(contexts, 1), result[2])
+            return (*result[:2], contexts, result[2])
         return result
 
     def tile_values(
@@ -276,6 +281,8 @@ class TransformerLSTMPolicy(nn.Module):
         state: RecurrentState | None = None,
         *,
         action_masks: torch.Tensor | None = None,
+        deterministic: bool = True,
+        active: torch.Tensor | None = None,
         previous_action: torch.Tensor | None = None,
         execution_outcome: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, RecurrentState, dict]:
@@ -291,36 +298,16 @@ class TransformerLSTMPolicy(nn.Module):
             action_masks = observation_tile_masks(observations.reshape(batch, -1))
         if action_masks.shape != (batch, A.size):
             raise ValueError(f"action_masks must have shape ({batch}, {A.size})")
-        # Geometry masks constrain only the second-level tile choice. Every
-        # active decision still compares wait, all eight species and dig so a
-        # rejected proposal remains observable and trainable.
-        branches = greedy_choice(result.branch_q, selection_masks(action_masks))
-        actions = torch.zeros(batch, dtype=torch.long, device=observations.device)
-        tile_q = result.branch_q.new_zeros(batch, A.tiles)
-        for branch in range(1, 10):
-            ix = (branches == branch).nonzero(as_tuple=True)[0]
-            if not len(ix):
-                continue
-            values = self.tile_values(result.tile_features[ix], result.context[ix], branches[ix])
-            tile_q[ix] = values
-            if branch == 9:
-                legal_tiles = action_masks[ix, A.dig_start :]
-                offset = A.dig_start
-            else:
-                offset = 1 + (branch - 1) * A.tiles
-                legal_tiles = action_masks[ix, offset : offset + A.tiles]
-            # A full board still needs a well-defined rejected proposal; zero is
-            # the deterministic row-major fallback and remains simulator-owned.
-            legal_tiles = legal_tiles.clone()
-            legal_tiles[~legal_tiles.any(1), 0] = True
-            actions[ix] = offset + greedy_choice(values, legal_tiles)
-        return (
-            actions,
-            result.state,
-            {
-                "branch_q": result.branch_q,
-                "branches": branches,
-                "tile_q": tile_q,
-                "context": result.context,
-            },
+        actions, first, second, details = select_q_actions(
+            result.branch_q,
+            result.tile_features,
+            result.context,
+            self.tile_values,
+            action_masks,
+            deterministic=deterministic,
+            exploration_epsilon=getattr(self, "exploration_epsilon", 0.0),
+            tile_exploration_epsilon=getattr(self, "tile_exploration_epsilon", 0.0),
+            active=active,
         )
+        details.update(branch_value=first, tile_value=second, context=result.context)
+        return actions, result.state, details
