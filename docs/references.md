@@ -1,5 +1,27 @@
 # Sources actually used
 
+## Full-game event memory and efficient attention — 2026-09-26
+
+These sources inform the [proposed framework](full-game-memory.md); no sparse
+or reversible policy implementation or local speedup is claimed.
+
+| Source inspected | Used here | Limitation |
+|---|---|---|
+| Kitaev et al., [Reformer](https://arxiv.org/html/2001.04451v2), abstract, causal masking, §3 and complexity table | Separate LSH attention from reversible activation reconstruction | Approximate lookup; reversibility does not preserve evicted inputs |
+| [Trax Reformer source](https://github.com/google/trax/blob/master/trax/models/reformer/reformer.py), decoder attention and reversible half-residual blocks | Confirm these are separate architectural mechanisms | Source inspection only; Trax/JAX is not adopted |
+| Beltagy et al., [Longformer](https://arxiv.org/html/2004.05150v2), abstract, attention-pattern discussion, §3.2 and §4.1; [README](https://github.com/allenai/longformer) | Local/dilated/global patterns and actual sparse kernels | Convenient sliding-chunks implementation excludes autoregressive attention |
+| Zaheer et al., [BigBird](https://arxiv.org/html/2007.14062v2), abstract, §2, block-attention discussion; [README](https://github.com/google-research/bigbird) | Local/random/global connections and blocked computation | Static example tensors; theoretical guarantees do not transfer to a custom causal game graph |
+| Dao et al., [FlashAttention](https://arxiv.org/abs/2205.14135), abstract only | Distinguish score storage/IO from pairwise arithmetic | No full-text inspection or local benchmark claimed |
+| [PyTorch 2.8 FlexAttention source](https://github.com/pytorch/pytorch/blob/v2.8.0/torch/nn/attention/flex_attention.py), BlockMask, create_block_mask and compile path | Candidate causal block-sparse interface | No importable local Triton or demonstrated compiled sparse backend |
+
+Also traced this project's event admission/eviction, rejected-action mapping,
+collection, public encoding, and complete-game storage. Local Torch is 2.8.0+cu128
+on an 8 GiB RTX 4070 Laptop GPU. Sources accessed through mutable project branches
+are not assigned unverified revisions. The user supplies the non-wait retention,
+same-tile dig deduplication, and state-change-during-wait requirements, including
+using the existing mower spent flag without adding inputs. The archive,
+event-order masking and tile/species links are project-specific design choices.
+
 ## Sequential Q controller — inspected 2026-09-25, implemented 2026-09-26
 
 - [Metz et al., Discrete Sequential Prediction of Continuous Actions for Deep RL](https://arxiv.org/abs/1705.05035), [full method text](https://arxiv.org/html/1705.05035v3), especially §2.2: inspected sequential component prediction, augmented intermediate states, zero intermediate reward and action execution only after assembly. Its additional Bellman backups can introduce approximation/overestimation difficulties. This project adopts the action assembly idea with complete-return regression, not its bootstrapped off-policy learning algorithm or reported performance.

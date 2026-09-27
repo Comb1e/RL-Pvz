@@ -41,3 +41,7 @@ short-episode integration checks establish operability only. No formal training
 or learning comparison is launched for this release. Prior findings and performance
 measurements remain version-labelled in [iteration](iteration.md) and
 [validation](validation.md); inspected sources and limits are in [references](references.md).
+
+The [full-game memory framework](full-game-memory.md) is a separate researched
+proposal for retaining public events and replacing the current encoder with a
+joint sparse spatial–temporal transformer. It is not implemented behavior.
