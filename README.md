@@ -1,15 +1,14 @@
-# PVZ training research
+# PVZ plant research
 
-Research **0.25.0** uses one CUDA Transformer Q network. It selects wait, a plant
-species or dig, then a tile for non-wait commands. After 128 complete games it fits
-both selected Q heads to actual remaining rewards. Learning remains experimental.
+This project records one human easy game, verifies its native replay, and fits a
+Transformer–LSTM two-level Q policy from complete reward-to-go. The shipped
+observation protocol is `event_v8` (294 public values, including eight card
+cooldowns). Formal autonomous training is a separate explicit workflow.
 
 ## Requirements
 
-Python 3.12, Git, an NVIDIA CUDA GPU/driver, host RAM and disk space for complete
-trajectories. Defaults are 128 games per cohort and a 6 GiB trajectory RAM budget
-with disk overflow, plus up to 2 GiB of cached raw tokens on CUDA. FFmpeg is optional
-for video; the live viewer uses pygame.
+Python 3.12, Git, and the pinned game package. The live demo needs pygame; CUDA
+is required only for the later autonomous collector.
 
 ## Installation
 
@@ -18,71 +17,43 @@ for video; the live viewer uses pygame.
 .\.venv\Scripts\python.exe -m pvz_rl doctor --output artifacts\availability.json
 ```
 
-Bootstrap reuses `.venv` and installs a verified non-editable archive of game
-**1.6.0**, simulation **1.3.0**, at **100 Hz**. The exact source and hashes are
-in [the engine lock](src/pvz_rl/data/engine-lock.json).
+Bootstrap installs the pinned game package. Source and hash details are in [the
+engine lock](src/pvz_rl/data/engine-lock.json).
 
-## First useful commands
+## First useful command
 
-A bounded saving experiment, started only when you execute it:
-
-```powershell
-.\.venv\Scripts\python.exe -m pvz_rl train --config configs\train.toml `
-  --stage saving --games 2000 --max-minutes 120 --seed 101 --output runs\saving-101
-```
-
-To continue until that stage passes, replace `--games` and `--max-minutes` with
-`--until-stage-complete`. The 1,200-second per-game failure cutoff still applies.
-Validation disables injected exploration. A four-game window shows actual
-training behavior, estimated wait/plant/dig returns, and why the highest Q
-value was chosen (including its lead or a tie). All ten first-level outputs
-remain visible; rejected plants are shown as automatic waits with their reason,
-and empty digs show their explicit penalty.
-These are predicted future rewards. Focus opens a readable full-game action/Q
-table; Switch chooses another unfinished game. Viewer controls and storage are
-in [the live-view guide](docs/live-view.md). Add `--no-live-view` to close the window.
-
-Ctrl+C saves at the next atomic simulation/ledger or optimizer-step boundary.
-The atomic `interrupted.zip` includes unfinished games, optimizer progress and
-RNG state. Resume with that archive:
+Open the normal-speed easy game with the default seed 1000:
 
 ```powershell
-.\.venv\Scripts\python.exe -m pvz_rl train `
-  --resume runs\saving-101\interrupted.zip --output runs\saving-resumed
+.\.venv\Scripts\python.exe -m pvz_rl record-demo `
+  --output runs\human-1000.pvzdemo --archive runs\human-1000.jsonl
 ```
 
-After mastery, start a new experiment with `--stage easy --init-from
-runs\saving-101\final.zip` and a new output directory. Stage transfer uses
-compatible Q weights with a fresh optimizer. Existing artifacts are preserved.
-This release requires fresh experiments because the action-selection and reward
-protocol changed. 0.24.0 checkpoints remain usable for inference with their
-original semantics, but cannot initialize or resume new training. Same-release
-interruption/resume and stage transfer remain supported. Historical curves can
-be regenerated offline.
+After the game reaches a natural win or loss, run the one-demonstration fit:
 
-## Common checks and curves
+```powershell
+.\.venv\Scripts\python.exe -m pvz_rl initialize-demo `
+  --archive runs\human-1000.jsonl --replay runs\human-1000.pvzdemo `
+  --output runs\human-init
+```
+
+The command writes `initialization.pt`, curves, per-branch coverage and a replay
+verification report. An interrupted recording stays incomplete and is rejected
+by initialization; no terminal result is invented. The result fits one
+demonstration and does not establish generalization or mastery. The later
+autonomous collector uses a 50% tile exploration coin at game zero, decaying to
+1% by game 5,000; validation disables exploration.
+
+## Common checks
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest -q
 .\.venv\Scripts\python.exe -m ruff check .
 .\.venv\Scripts\python.exe -m pip check
-.\.venv\Scripts\python.exe -m pvz_rl visualize --run runs\saving-101 --report-only
+.\.venv\Scripts\python.exe -m pvz_rl replay runs\human-1000.pvzdemo
 ```
 
-Terminal blocks show completed-game reward, net value, discounted return,
-Q-update steps, pre-fit errors/species coverage, and collection,
-data preparation, transfer, cache and optimization timing. Missing planting
-coverage remains visible; exploration cannot force planting. Gamma 1 makes
-discounted and undiscounted reward equal. Cutoff failures receive defeat reward.
-Hardware samples are flushed to `hardware-metrics.jsonl`; curves refresh after
-probes, validation and graceful interruption. Offline reports need no model.
-
-- [Exact inputs, network roles and training workflow](docs/architecture.md)
-- [Curriculum, rewards, stopping and recovery](docs/research.md)
-- [Mathematical controls and limitations](docs/math/complete-game-learning.md)
-- [Rejection penalties and reward limits](docs/math/invalid-action-penalties.md)
-- [Current mechanics and bounds](docs/math/mechanics-024.md)
-- [Viewer controls and action history](docs/live-view.md)
-- [Verified results](docs/validation.md)
+- [Architecture and workflows](docs/architecture.md)
+- [Math controls](docs/math/complete-game-learning.md)
 - [Inspected sources](docs/references.md)
 - [Iteration history](docs/iteration.md)

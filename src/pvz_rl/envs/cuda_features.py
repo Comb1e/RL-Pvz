@@ -47,6 +47,7 @@ class CudaFeatures:
             "COUNT_SCALE": encoder.count_scale,
             "GLOBAL_OFFSET": encoder.slices["globals"].start,
             "HEADLESS_OFFSET": encoder.slices["headless"].start,
+            "COOLDOWN_OFFSET": encoder.slices["cooldowns"].start,
             "GAMMA": cfg["training"]["gamma"],
             "BASIC_HP": batch.rules.zombies["basic"]["health"],
             "REWARD_SIZE": len(REWARD_FIELDS),
@@ -55,6 +56,8 @@ class CudaFeatures:
         }
         params.update({f"Z_{k}": v for k, v in encoder.zombie_fields.items()})
         params.update({f"O_{k}": v for k, v in encoder.global_fields.items()})
+        for index, kind in enumerate(encoder.plants):
+            params[f"CD_{index}"] = batch.rules.plants[kind]["recharge_ticks"] + 1
         reward_keys = (
             "win_reward",
             "loss_penalty",
@@ -106,6 +109,7 @@ class CudaFeatures:
                 b.plants,
                 b.zombies,
                 b.mowers,
+                b.cooldowns,
                 self.observations,
                 self.assets,
                 b.n,

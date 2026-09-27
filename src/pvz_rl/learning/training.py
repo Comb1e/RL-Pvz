@@ -84,6 +84,7 @@ def build_model(cfg, condition, env, seed, log_dir=None):
         "features_extractor_class": SpatialFeatures,
         "features_extractor_kwargs": {"layout_cfg": cfg},
         "exploration_epsilon": t["exploration"]["epsilon_start"],
+        "tile_exploration_epsilon": t["exploration"]["epsilon_start"],
     }
     model = CudaSequentialQ(
         SequentialQPolicy,
@@ -217,6 +218,9 @@ class ResearchCallback(BaseCallback):
             if buffer is not None and buffer.finalized
             else getattr(self.model, "_planting_samples", 0),
             q_optimizer_steps=stats.get("q_optimizer_steps", 0),
+            tile_exploration_epsilon=getattr(
+                getattr(self.model, "policy", None), "tile_exploration_epsilon", 0.0
+            ),
             species_counts=buffer.species_counts.tolist()
             if buffer is not None and buffer.finalized
             else getattr(self.model, "cohort_metrics", {}).get("species_counts"),

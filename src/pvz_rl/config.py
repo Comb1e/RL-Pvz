@@ -97,6 +97,10 @@ def legacy_q_inference(cfg):
 
 def validate_config(cfg: dict, *, inference=False) -> None:
     legacy = inference and legacy_q_inference(cfg)
+    recurrent = (
+        cfg.get("encoding", {}).get("version") == "event_v8"
+        and cfg.get("policy", {}).get("kind") == "transformer_lstm_q_v1"
+    )
     if cfg["training"].get("validation_schedule", "periodic") not in (
         "periodic",
         "stage_success",
@@ -104,8 +108,10 @@ def validate_config(cfg: dict, *, inference=False) -> None:
         raise ValueError("training.validation_schedule must be periodic or stage_success")
     if simulator(cfg) not in ("cpu", "cuda"):
         raise ValueError("simulation.backend must be cpu or cuda")
-    if cfg["encoding"].get("version") != "event_v7" or cfg.get("policy", {}).get("kind") not in (
-        "event_sequential_q_v1" if legacy else "event_sequential_q_v2",
+    allowed_kind = ("event_sequential_q_v1" if legacy else "event_sequential_q_v2")
+    if not (
+        (cfg["encoding"].get("version") == "event_v7" and cfg.get("policy", {}).get("kind") == allowed_kind)
+        or recurrent
     ):
         raise ValueError(
             "Retired observation/policy format. Start fresh with configs/train.toml; archived reports remain readable; recordings must use the 100 Hz engine."
@@ -180,6 +186,22 @@ def validate_config(cfg: dict, *, inference=False) -> None:
     for key in ("scalar_sizes", "channels"):
         if not policy[key] or any(type(n) is not int or n < 1 for n in policy[key]):
             raise ValueError(f"policy.{key} must contain positive integers")
+    if recurrent:
+        for key in (
+            "entity_width",
+            "transformer_layers",
+            "transformer_heads",
+            "transformer_feedforward",
+            "scalar_width",
+            "lstm_hidden",
+            "action_embedding",
+            "outcome_width",
+            "chunk_length",
+        ):
+            if type(policy.get(key)) is not int or policy[key] < 1:
+                raise ValueError(f"policy.{key} must be a positive integer")
+        if policy["entity_width"] % policy["transformer_heads"]:
+            raise ValueError("policy.entity_width must be divisible by transformer_heads")
     sample_seconds = output_settings(cfg)["logging"]["hardware_sample_seconds"]
     if (
         type(sample_seconds) not in (int, float)
@@ -312,8 +334,11 @@ def validate_config(cfg: dict, *, inference=False) -> None:
     if not math.isfinite(visual["final_hold_seconds"]) or visual["final_hold_seconds"] < 0:
         raise ValueError("Visualization final_hold_seconds must be finite and nonnegative")
     env, train = cfg["environment"], cfg["training"]
-    if train.get("method") != ("sequential_q_mc_v1" if legacy else "sequential_q_mc_v2"):
-        raise ValueError("Training requires sequential_q_mc_v2 and fresh models")
+    expected_methods = {"sequential_q_mc_v1" if legacy else "sequential_q_mc_v2"}
+    if recurrent:
+        expected_methods.add("complete_return_lstm_v1")
+    if train.get("method") not in expected_methods:
+        raise ValueError("Training requires a supported complete-return method and fresh models")
     if any(
         k in train
         for k in (
@@ -378,6 +403,15 @@ def validate_config(cfg: dict, *, inference=False) -> None:
         raise ValueError("Complete actual returns require gamma 1; start fresh")
     if train["batch_size"] > 1024:
         raise ValueError("Bounded minibatches must not exceed 1024")
+    demo = train.get("demo", {})
+    if not isinstance(demo, dict):
+        raise ValueError("training.demo must be a table")
+    for key in ("passes", "learner_seed"):
+        if type(demo.get(key, 1)) is not int or demo.get(key, 1) < 1:
+            raise ValueError(f"training.demo.{key} must be a positive integer")
+    for key in ("learning_rate", "gradient_clip", "time_budget_minutes"):
+        if type(demo.get(key, 1.0)) not in (int, float) or not math.isfinite(demo.get(key, 1.0)) or demo.get(key, 1.0) <= 0:
+            raise ValueError(f"training.demo.{key} must be finite and positive")
     if train["device"] not in ("cpu", "cuda"):
         raise ValueError("Training device must be cpu or cuda")
     seeds = train["learner_seeds"]

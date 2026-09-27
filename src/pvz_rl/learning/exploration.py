@@ -18,6 +18,11 @@ class ExplorationState:
     def per_head_epsilon(self):
         return per_head_epsilon(self.epsilon)
 
+    @property
+    def tile_epsilon(self):
+        """Direct tile-choice coin probability (validation sets it to zero)."""
+        return self.epsilon
+
 
 def exploration_state(cfg, stage_games, *, staged=True):
     settings = cfg["training"]["exploration"]
@@ -41,7 +46,9 @@ def set_exploration_rate(model, rate):
     per_head_epsilon(rate)
     model.exploration_rate = float(rate)
     model.policy.exploration_epsilon = float(rate)
+    model.policy.tile_exploration_epsilon = float(rate)
     model.policy_kwargs["exploration_epsilon"] = float(rate)
+    model.policy_kwargs["tile_exploration_epsilon"] = float(rate)
 
 
 def apply_exploration_state(model, cfg, state):

@@ -5,6 +5,35 @@ Dates and results belong to their recorded version. Current behavior lives in
 artifact locations and learning outcomes live in [validation](validation.md).
 The longer pre-consolidation notes remain in `git show b642c9c:docs/iteration.md`.
 
+## 0.26.0 — 2026-09-26
+
+- Problem: the previous controller used a compact 286-value spatial encoder and
+  bounded event attention, with no recurrent state shared by waits, rejected
+  proposals or duplicate digs. Human play could not be used as a verified
+  initialization artifact.
+- Cause: card countdowns were omitted from policy observations and the native
+  replay was separate from learning transitions. No protocol linked a complete
+  demonstration to recurrent Q fitting.
+- Improvement: `event_v8` appends eight normalized cooldowns; the new entity
+  Transformer–LSTM policy exposes shared single-step and sequence interfaces.
+  `record-demo` preserves zero-tick action phases, pause queue order, native
+  replay hashes and append-only transition records. `initialize-demo` verifies
+  action order and observations, fits complete reward-to-go in 256-decision
+  chunks, and publishes an initialization checkpoint, curves, coverage and a
+  replay report.
+- Verification: CPU encoding checks cover ready, initial recharge, immediate
+  planting and cooldown normalization. Step/sequence recurrent parity, reset
+  isolation, action/tile outputs, synthetic archive spill and native replay
+  reconstruction pass. No formal autonomous training was launched.
+- Remaining issues: CUDA kernel compilation and full 128-game recurrent
+  sequence training need hardware runs; one demonstration gives no evidence of
+  generalization or mastery. Legacy 0.25.0 checkpoints remain inference-only.
+
+- Parameter adjustment: the later autonomous collector's tile exploration coin
+  now starts at 50%, decays to 1% over 5,000 completed games, and stays at the
+  floor. Deterministic validation clears both exploration budgets before any
+  evaluation action.
+
 ## Full-game memory research — 2026-09-26
 
 - Problem: a bounded event bank can lose early planting details, and rejected

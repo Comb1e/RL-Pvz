@@ -68,7 +68,6 @@ def require_cuda_training(cfg, condition="masked", *, runtime=True):
         raise ValueError(
             "CUDA training requires per_tick actions; legacy timing is inference-only."
         )
-    require_supported_policy(cfg, condition)
     if (
         cfg["conditions"][condition]
         != {"masked": True, "shaped": True, "curriculum": True, "hybrid": False}
@@ -86,6 +85,7 @@ def require_cuda_training(cfg, condition="masked", *, runtime=True):
                 "dependencies with tools/bootstrap.ps1; CPU training is no longer supported."
             )
         _cuda_probe()
+    require_supported_policy(cfg, condition)
 
 
 def resume_protocol(cfg, condition):
@@ -127,7 +127,17 @@ def transfer_protocol(cfg, condition="masked"):
                 "scalar_sizes",
                 "channels",
                 "memory",
+                "entity_width",
+                "transformer_layers",
+                "transformer_heads",
+                "transformer_feedforward",
+                "scalar_width",
+                "lstm_hidden",
+                "action_embedding",
+                "outcome_width",
+                "chunk_length",
             )
+            if k in p
         },
         "heads": cfg["training"]["hidden_sizes"],
         "method": cfg["training"]["method"],

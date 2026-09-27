@@ -1,5 +1,22 @@
 # Sources actually used
 
+## Transformer–LSTM entity policy — inspected 2026-09-26
+
+- Vinyals et al., [AlphaStar](https://www.nature.com/articles/s41586-019-1724-z):
+  inspected the entity-based observation encoding, autoregressive action
+  interfaces and recurrent processing described in the paper and supplement.
+  This project uses the entity/token and recurrent-state ideas with a two-level
+  Q objective; it does not claim AlphaStar scale, game equivalence or transfer
+  of its results.
+- [AlphaStar Unplugged](https://arxiv.org/abs/2308.03526): inspected the
+  offline demonstration and return-learning motivation. The one-game fit here
+  is a bounded initialization pass, not the paper's dataset, algorithm or
+  generalization evidence.
+- [Published AlphaStar architecture implementation](https://github.com/google-deepmind/alphastar):
+  inspected the public module boundaries for entity encoders, recurrent cores
+  and action heads. No source code or weights are copied; the local PyTorch
+  implementation is intentionally smaller and uses the pinned PVZ public API.
+
 ## Full-game event memory and efficient attention — 2026-09-26
 
 These sources inform the [proposed framework](full-game-memory.md); no sparse

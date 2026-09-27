@@ -1,4 +1,79 @@
-# Training architecture — 0.25.0
+# Training architecture — 0.26.0 Transformer–LSTM initialization
+
+The current initialization workflow uses the pinned game’s public observation,
+an entity Transformer and one recurrent state per episode. The older CUDA
+event-memory Q collector remains available for archived inference and is
+documented below as the legacy path.
+
+```mermaid
+flowchart LR
+    UI[Easy game / seed 1000] --> Replay[Verified native replay]
+    UI --> Archive[Append-only transition archive]
+    Archive --> Verify[Hash, action-order and observation checks]
+    Verify --> Tokens[45 tile + 15 zombie-region tokens]
+    Tokens --> Transformer[2-layer Transformer\n128 width / 4 heads]
+    Verify --> Scalars[16 globals/lane values + 8 cooldowns]
+    Scalars --> Scalar[64-value scalar encoder]
+    Transformer --> Pool[Entity mean pool]
+    Pool --> Input[Context + previous action + outcome + elapsed time]
+    Scalar --> Input
+    Input --> LSTM[256-unit LSTM\nstate persists every decision]
+    LSTM --> Branch[10 branch Q values]
+    LSTM --> Tile[Branch-conditioned 45-tile Q values]
+    Verify --> Returns[Complete reward-to-go]
+    Branch --> Fit[Chunked one-game fitting]
+    Tile --> Fit
+    Returns --> Fit
+    Fit --> Checkpoint[Initialization checkpoint + curves + coverage]
+```
+
+The public vector is versioned as `event_v8` and has 294 values. Existing
+plant, zombie, global, mower, action and reward semantics stay in their
+published order; indices 286–293 are card cooldowns in the eight plant-species
+order. Each cooldown is `cooldown_ticks / (recharge_ticks + 1)`, so zero means
+ready and a newly planted card has value one. Mower inputs remain only the five
+spent flags. Individual firing, arming and digestion timers remain excluded.
+
+The entity encoder includes empty tiles and empty zombie regions. It adds type,
+segment and spatial-position embeddings, then applies two no-dropout
+Transformer layers. The scalar encoder reads the 11 global fields, five
+headless lane flags and eight cooldowns. The LSTM input also contains the
+previous proposed action, the public accepted/ticks outcome of the previous
+decision, and normalized elapsed time. `RecurrentState` contains only hidden and
+cell tensors; collectors reset both tensors at episode boundaries and carry them
+through waits, rejected actions, repeated digs and zero-tick actions.
+
+Single-decision and ordered-sequence callers share `TransformerLSTMPolicy`.
+`forward_sequence` is a loop over `forward_step`, so step and sequence outputs
+are numerically the same. Chunk boundaries detach the state for gradient
+propagation but never reset forward memory. The branch head emits wait, eight
+species and dig; the tile head receives the current tile features and the
+selected branch identifier.
+
+`pvz-rl record-demo` opens the existing renderer at normal speed on easy seed
+1000. The action-phase recorder preserves zero-tick planting/digging, one-tick
+waits and queued operation order while pause freezes simulation. A JSONL
+archive records every proposal, including rejected proposals, with the
+pre-action observation, reward components, terminal status, episode/decision
+identity, simulation tick and ticks advanced. A manifest is updated atomically;
+an interrupted window remains incomplete and cannot be used for initialization.
+The compact history is derived from this archive and records state changes
+during waits, cooldown decrements, planting attempts and the first unchanged
+dig in a consecutive run. It never replaces the complete sequence used by the
+LSTM.
+
+`pvz-rl initialize-demo` verifies the native replay hash, action order,
+observation reconstruction and completion status before fitting. It computes
+gamma-one complete reward-to-go, runs 256-decision chunks from zero recurrent
+state, clips gradients at 0.5, and writes a checkpoint only after a complete
+pass. The output labels itself as fitting one demonstration and includes
+`learning-curves.json`, `action-coverage.json` and `replay-verification.json`.
+The checkpoint protocol, observation schema and recurrent-storage protocol are
+checked before loading. Subsequent 128-game autonomous training remains an
+explicit later workflow; seeds, snapshots, future schedules and presentation
+data are never policy inputs.
+
+## Legacy complete-game CUDA path — 0.25.0
 
 One CUDA Q network assembles each command in two levels: wait, one of eight
 species, or dig; then a conditional tile for non-wait branches. The same model

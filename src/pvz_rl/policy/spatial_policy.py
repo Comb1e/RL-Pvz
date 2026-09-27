@@ -152,6 +152,7 @@ class SequentialQPolicy(BasePolicy):
         features_extractor_kwargs=None,
         hidden_sizes=(128, 128),
         exploration_epsilon=0.0,
+        tile_exploration_epsilon=None,
     ):
         super().__init__(
             observation_space,
@@ -164,6 +165,9 @@ class SequentialQPolicy(BasePolicy):
         self.features_extractor = self.make_features_extractor()
         encoder = self.features_extractor
         self.exploration_epsilon = exploration_epsilon
+        self.tile_exploration_epsilon = (
+            exploration_epsilon if tile_exploration_epsilon is None else tile_exploration_epsilon
+        )
         self.legacy_selection = legacy_q_inference(encoder.cfg)
         self.compilation_status, self.compilation_error = "disabled", None
         pooled = 2 * encoder.channels + encoder.scalar_channels
@@ -272,6 +276,12 @@ class SequentialQPolicy(BasePolicy):
         branches = greedy.clone()
         coins = torch.zeros(len(obs), 2, device=obs.device, dtype=torch.bool)
         epsilon = per_head_epsilon(0.0 if deterministic else self.exploration_epsilon)
+        # The tile selector has its own direct probability budget.  This keeps
+        # the requested 50% initial tile exploration distinct from the two-head
+        # conversion used for species exploration.
+        tile_epsilon = 0.0 if deterministic else getattr(
+            self, "tile_exploration_epsilon", self.exploration_epsilon
+        )
         planting = ((greedy > 0) & (greedy <= A.plant_types)).nonzero(as_tuple=True)[0]
         if len(planting):
             species, coins[planting, 0] = explore(
@@ -298,9 +308,7 @@ class SequentialQPolicy(BasePolicy):
             greedy_tiles[nonwait] = preferred
             plant_rows = (branches[nonwait] <= A.plant_types).nonzero(as_tuple=True)[0]
             if len(plant_rows):
-                selected, fired = explore(
-                    preferred[plant_rows], tile_candidates[plant_rows], epsilon
-                )
+                selected, fired = explore(preferred[plant_rows], tile_candidates[plant_rows], tile_epsilon)
                 tiles[nonwait[plant_rows]] = selected
                 coins[nonwait[plant_rows], 1] = fired
             selected_tile_values[nonwait] = tile_q.gather(1, tiles[nonwait, None]).flatten()

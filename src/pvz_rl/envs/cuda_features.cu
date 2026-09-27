@@ -12,6 +12,7 @@ __device__ I bin_x(I x) {
 extern "C" __global__ void encode_state(const I *headers, const I *plants,
                                         const I *zombies,
                                         const I *mowers,
+                                        const I *cooldowns,
                                         float *output, double *assets, I n) {
   I i = blockIdx.x;
   if (threadIdx.x || i >= n)
@@ -73,6 +74,13 @@ extern "C" __global__ void encode_state(const I *headers, const I *plants,
   g[O_defeated] = (double)h.defeated / COUNT_SCALE;
   for (I r = 0; r < 5; r++)
     g[O_mower_spent_0 + r] = m[r].state == 2;
+  // Card cooldowns are public engine state.  Keep the fixed species order and
+  // use recharge_ticks + 1, matching the Python encoder immediately after a
+  // successful instantaneous placement.
+  const I *cd = cooldowns + i * 8;
+  const I recharge[8] = {CD_0, CD_1, CD_2, CD_3, CD_4, CD_5, CD_6, CD_7};
+  for (I j = 0; j < 8; j++)
+    o[COOLDOWN_OFFSET + j] = (double)cd[j] / recharge[j];
   for (I r = 0; r < 5; r++) {
     I nearest = 9223372036854775807LL;
     bool headless = false;
