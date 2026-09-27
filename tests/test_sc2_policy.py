@@ -284,11 +284,11 @@ def test_ten_way_scores_ignore_affordability_and_full_board(device):
 
 
 @pytest.mark.parametrize("budget", [0, 0.1, 1])
-def test_plant_exploration_includes_all_species_and_only_empty_tiles(budget):
+def test_branch_selection_is_greedy_and_only_tiles_explore(budget):
     from gymnasium import spaces
 
     from pvz_rl.config import load_event_config as load_config
-    from pvz_rl.policy.sequential_q import action_parts, per_head_epsilon
+    from pvz_rl.policy.sequential_q import action_parts
     from pvz_rl.policy.spatial_policy import SequentialQPolicy
 
     p = SequentialQPolicy(
@@ -313,12 +313,42 @@ def test_plant_exploration_includes_all_species_and_only_empty_tiles(budget):
         p.branch_head[-1].bias[1] = 1
         actions, _, _, detail = p.decide(obs, masks)
     species, tile = action_parts(actions)
-    alpha = per_head_epsilon(budget)
+    # The first-level winner is never explored. Only its tile target uses the
+    # configured exploration budget.
+    assert (species == 1).all()
     assert ((tile == 2) | (tile == 7)).all()
-    for k in range(1, 9):
-        for t in (2, 7):
-            expected = ((1 - alpha) * (k == 1) + alpha / 8) * ((1 - alpha) * (t == 2) + alpha / 2)
-            assert ((species == k) & (tile == t)).float().mean().item() == pytest.approx(
-                expected, abs=0.012
-            )
-    assert detail["coins"].any(1).float().mean().item() == pytest.approx(budget, abs=0.012)
+    expected_tile_two = (1 - budget) + budget / 2
+    assert (tile == 2).float().mean().item() == pytest.approx(expected_tile_two, abs=0.012)
+    assert detail["coins"][:, 0].sum() == 0
+    assert detail["coins"][:, 1].float().mean().item() == pytest.approx(budget, abs=0.012)
+
+
+def test_dig_tile_also_uses_tile_only_exploration():
+    from gymnasium import spaces
+
+    from pvz_rl.config import load_event_config as load_config
+    from pvz_rl.policy.sequential_q import action_parts
+    from pvz_rl.policy.spatial_policy import SequentialQPolicy
+
+    p = SequentialQPolicy(
+        spaces.Box(-1, 1, (286,)),
+        spaces.Discrete(406),
+        lambda _: 3e-4,
+        features_extractor_kwargs={"layout_cfg": load_config()},
+        exploration_epsilon=1.0,
+    )
+    n = 12000
+    obs = torch.zeros(n, 286)
+    masks = torch.ones(n, 406, dtype=torch.bool)
+    masks[:, :360] = False
+    p.encode = lambda obs, context: (torch.zeros(n, 32, 5, 9), torch.zeros(n, 128))
+    p.tile_values = lambda board, pooled, branches: torch.zeros(len(branches), 45)
+    with torch.no_grad():
+        p.branch_head[-1].bias.fill_(-1)
+        p.branch_head[-1].bias[9] = 1
+        actions, _, _, detail = p.decide(obs, masks)
+    branches, tiles = action_parts(actions)
+    assert (branches == 9).all()
+    assert detail["coins"][:, 0].sum() == 0
+    assert detail["coins"][:, 1].float().mean().item() == pytest.approx(1.0)
+    assert torch.bincount(tiles, minlength=45).min() > 0

@@ -1,10 +1,10 @@
-"""Plant-only epsilon budget resolved once per complete-game cohort."""
+"""Tile-only epsilon budget resolved once per complete-game cohort."""
 
 from dataclasses import dataclass
 
 from pvz_rl.policy.sequential_q import per_head_epsilon
 
-EXPLORATION_PROTOCOL = "sequential_plant_epsilon_v1"
+EXPLORATION_PROTOCOL = "sequential_tile_epsilon_v1"
 
 
 @dataclass(frozen=True)
@@ -16,6 +16,7 @@ class ExplorationState:
 
     @property
     def per_head_epsilon(self):
+        """Legacy two-coin value retained for archived schedule readers."""
         return per_head_epsilon(self.epsilon)
 
     @property
@@ -43,15 +44,13 @@ def configure_exploration(model, cfg):
 
 
 def set_exploration_rate(model, rate):
-    coin = per_head_epsilon(rate)
     model.exploration_rate = float(rate)
-    model.policy.exploration_epsilon = float(rate)
-    tile = (
-        float(rate) if getattr(model.policy, "protocol", None) == "transformer_lstm_q_v1" else coin
-    )
-    model.policy.tile_exploration_epsilon = tile
-    model.policy_kwargs["exploration_epsilon"] = float(rate)
-    model.policy_kwargs["tile_exploration_epsilon"] = tile
+    # The first-level ten-way proposal is always greedy. The cohort budget is
+    # spent by the selected branch's tile selector only.
+    model.policy.exploration_epsilon = 0.0
+    model.policy.tile_exploration_epsilon = float(rate)
+    model.policy_kwargs["exploration_epsilon"] = 0.0
+    model.policy_kwargs["tile_exploration_epsilon"] = float(rate)
 
 
 def apply_exploration_state(model, cfg, state):

@@ -39,23 +39,26 @@ error of 0 give L=(4+1+0)/3=5/3, irrespective of group frequencies.
 
 ## Exploration
 
-The branch controller first takes the maximum of all ten Q1 outputs, breaking ties by wait,
-configured species order, then dig. Wait and dig receive no injected exploration.
-If a species wins, independently explore species and tile with probability
-alpha = 1-sqrt(1-e), where e is the cohort's exploration budget.
-Then P(at least one coin fires)=1-(1-alpha)^2=e. At e=0.1,
-alpha=0.0513167019494862; at e=0.001, alpha=0.0005001250625391.
+The branch controller always takes the maximum of all ten Q1 outputs, breaking
+ties by wait, configured species order, then dig. The branch is never explored,
+so a high-value plant remains the submitted proposal even when the simulator
+will reject it for affordability or cooldown.
 
-For m=8 species, p(k)=(1-alpha)1[k=k*]+alpha/m. Given k and its n_k
-empty tiles, p(t|k)=(1-alpha)1[t=t*_k]+alpha/n_k. The complete planting
-probability is their product, with the same empty-tile set for every species.
-A full board uses the explicit rejected tile-zero proposal described in the
-penalty derivation. When empty tiles exist, each conditional sums to one and
-occupied tiles have zero exploration mass; affordability and cooldown rejection
-remain simulator outcomes. Coin firing can select the greedy option, so it must
-be logged separately from deviation.
-At e=0, selection is greedy; at e=1, species and their tiles are uniform.
-Neither endpoint can force planting when waiting has the greatest value.
+After the branch wins, a non-wait branch chooses a tile with one exploration
+coin of probability e, where e is the cohort's tile budget. If the greedy tile
+is t* and the candidate set has n tiles, then
+
+\[
+p(t\mid s,b)=(1-e)1[t=t^*]+e/n.
+\]
+
+Plant candidates are empty tiles; dig candidates are all 45 tiles. A full board
+uses the explicit rejected tile-zero proposal described in the penalty
+derivation, so there is no alternate tile to sample. Coin firing can still
+select the greedy tile and is logged separately from whether the command
+changed. At e=0 selection is fully greedy; at e=1 the selected branch's tile is
+uniform. Exploration cannot force a different branch when waiting has the
+greatest value.
 
 For stage games g, e(g)=e_start (e_floor/e_start)^min(1,g/3000), with
 defaults 0.1 and 0.001. Resolve once before a cohort and save that resolved state

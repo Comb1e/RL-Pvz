@@ -11,6 +11,11 @@ proposal for one tick, reports its reason and applies `invalid_plant_penalty`.
 The proposal remains the trajectory and Q-learning target, while execution and
 recurrent history receive wait (`0`) plus `accepted=false` and one tick.
 
+During collection, the ten-way branch choice is always the highest-Q choice.
+Exploration applies only to the selected branch's tile target: plant tiles use
+occupancy masks and dig tiles remain unrestricted. A tile exploration coin can
+therefore change the target without changing which branch was proposed.
+
 ## Requirements
 
 Python 3.12, Git and the pinned game package. Recording needs pygame.

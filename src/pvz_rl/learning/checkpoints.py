@@ -21,7 +21,9 @@ def protocol_for(kind):
     }
     if kind not in methods:
         raise ValueError(f"Incompatible checkpoint model family: {kind}")
-    return dict(policy=kind, optimizer=methods[kind], exploration="sequential_plant_epsilon_v1")
+    from pvz_rl.learning.exploration import EXPLORATION_PROTOCOL
+
+    return dict(policy=kind, optimizer=methods[kind], exploration=EXPLORATION_PROTOCOL)
 
 
 def compatible_config(source, target):

@@ -75,5 +75,5 @@ other learning failures will disappear.
 When no empty tile exists, a plant proposal deterministically uses tile zero,
 which the simulator rejects. This explicit fallback avoids an all-masked tile
 argmax. The tile exploration coin still fires at its configured rate, but there
-is no alternate tile to select. Species exploration still covers all eight
-species; evaluation uses neither exploration coin.
+is no alternate tile to select. The ten-way branch remains the greedy proposal;
+evaluation disables the tile exploration coin.

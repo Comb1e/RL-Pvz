@@ -135,8 +135,8 @@ def validate_config(cfg: dict) -> None:
         )
     if "actor_objective" in cfg["training"] or "ent_coef" in cfg["training"]:
         raise ValueError("Retired PPO objective; use sequential Q fitting")
-    if cfg["training"]["exploration"].get("objective") != "sequential_plant_epsilon_v1":
-        raise ValueError("Only conditional planting exploration is supported")
+    if cfg["training"]["exploration"].get("objective") != "sequential_tile_epsilon_v1":
+        raise ValueError("Only conditional tile exploration is supported")
     for key in (
         "win_reward",
         "loss_penalty",

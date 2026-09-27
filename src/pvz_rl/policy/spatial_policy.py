@@ -14,7 +14,6 @@ from pvz_rl.policy.event_memory import EventMemory, MemoryContext
 from pvz_rl.policy.sequential_q import (
     action_parts,
     observation_tile_masks,
-    per_head_epsilon,
 )
 from pvz_rl.policy.temporal import TemporalEncoder
 
@@ -158,9 +157,12 @@ class SequentialQPolicy(BasePolicy):
             raise ValueError("Sequential Q control requires Discrete(406) transport")
         self.features_extractor = self.make_features_extractor()
         encoder = self.features_extractor
+        # Branch selection is always greedy. Retain the argument for model
+        # schema compatibility, but use it as the default tile budget so
+        # direct policy construction follows the same tile-only contract.
         self.exploration_epsilon = exploration_epsilon
         self.tile_exploration_epsilon = (
-            per_head_epsilon(exploration_epsilon)
+            float(exploration_epsilon)
             if tile_exploration_epsilon is None
             else tile_exploration_epsilon
         )

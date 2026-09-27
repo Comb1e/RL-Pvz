@@ -72,8 +72,8 @@ n_envs = 128
 device = "cuda"
 max_minutes = 120
 finalization_minutes = 15
-# Plant-only exploration is fixed throughout each complete-game cohort.
-exploration = {objective = "sequential_plant_epsilon_v1", epsilon_start = 0.5, epsilon_floor = 0.01, decay_games = 5000}
+# Tile-only exploration is fixed throughout each complete-game cohort.
+exploration = {objective = "sequential_tile_epsilon_v1", epsilon_start = 0.5, epsilon_floor = 0.01, decay_games = 5000}
 batch_size = 1024
 n_epochs = 4
 learning_rate = 0.0003

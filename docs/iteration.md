@@ -1,5 +1,22 @@
 # Iteration history
 
+## 0.28.3 — 2026-09-27
+
+- Problem/root cause: collection still applied a species exploration coin after
+  the ten-way comparison, so the submitted branch could differ from the
+  highest-Q proposal. This made action exploration change the rejection and
+  penalty distribution rather than only the requested tile target.
+- Improvement: keep all ten branch choices greedy and apply the cohort budget
+  only to the selected non-wait tile. Plant occupancy masks and unrestricted dig
+  tiles remain unchanged; the branch coin field stays zero for journal/schema
+  compatibility. The scheduler is recorded as `sequential_tile_epsilon_v1` so
+  older two-coin checkpoints cannot be resumed under the new distribution.
+- Verification: policy controls cover greedy branch selection at budgets 0, 10%
+  and 100%, tile-only plant sampling, tile sampling for dig, and the existing
+  rejection/environment parity cases. No formal training was launched.
+- Remaining limits: the retained `per_head_epsilon` helper is a compatibility
+  reader for archived schedule reports; current collection uses one tile coin.
+
 ## 0.28.2 — 2026-09-27
 
 - Problem/root cause: the selector retained an illegal highest-Q proposal for

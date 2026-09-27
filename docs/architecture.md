@@ -50,8 +50,9 @@ lane and cooldown fields. Pooled entity features, scalar features, elapsed time,
 previous executed action and previous acceptance/duration feed a 256-unit LSTM.
 An accepted proposal is the previous executed action; a rejected proposal is
 executed and fed back as wait (`0`).
-The shared Q selector compares wait, eight species and dig, then chooses a tile
-for a non-wait branch. Occupancy limits plant tiles; dig can target every tile.
+The shared Q selector compares wait, eight species and dig greedily, then
+explores only the selected branch's tile target. It chooses a tile for a
+non-wait branch. Occupancy limits plant tiles; dig can target every tile.
 A full board gives a deterministic tile-zero plant proposal that the simulator
 may reject. Affordability and cooldown never remove a plant branch from that
 comparison. The CPU adapter and CUDA batch pass the selected proposal unchanged

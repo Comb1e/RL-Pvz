@@ -74,14 +74,14 @@ one clipped Adam update per whole-cohort pass, with equal total weight for each
 nonempty wait/plant/dig group.
 
 Tile exploration decays from 50% to 1% over 5,000 completed stage games and stays
-fixed during each cohort. The species coin retains `1-sqrt(1-epsilon)`.
-Exploration applies only after a plant branch wins the ten-way comparison;
-wait/dig remain greedy. Evaluation disables both coins. Plant tiles use
-occupancy only; affordability and cooldown do not hide a branch. Dig tiles are
-unrestricted; a full-board plant proposal targets tile zero and receives the
-simulator's rejection outcome and configured invalid-plant penalty. The viewer
-and action journal show that proposal while labeling its resolved execution as
-an automatic wait.
+fixed during each cohort. The ten-way branch choice (wait, eight plants and dig)
+is always greedy; the budget is spent only when choosing the selected branch's
+tile. Evaluation disables the tile coin. Plant tiles use occupancy only;
+affordability and cooldown do not hide a branch. Dig tiles are unrestricted; a
+full-board plant proposal targets tile zero and receives the simulator's
+rejection outcome and configured invalid-plant penalty. The viewer and action
+journal show that proposal while labeling its resolved execution as an automatic
+wait.
 
 The default budget is 10,000 games with `training.max_minutes = 120` and a
 15-minute finalization reserve. `--games`, `--n-envs`, `--batch-size` and
@@ -101,8 +101,8 @@ translated by name on resume. A checkpoint inside the removed lesson (or with
 unfinished lesson trajectories) must use `--init-from`; its private simulator
 state cannot be resumed after lesson removal.
 
-It uses `event_v7`, its own optimizer protocol and 10%→0.1% exploration over
-3,000 stage games. Cross-family weight transfers are rejected.
+It uses `event_v7`, its own optimizer protocol and 10%→0.1% tile exploration
+over 3,000 stage games. Cross-family weight transfers are rejected.
 
 ## Resume and evaluate
 

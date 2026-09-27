@@ -54,11 +54,10 @@ dig 361 becomes (361, 1, 0). Neither equals a recurrent reset. Finished collecti
 slots retain their final hidden/cell state until replaced by a new episode.
 
 Tile exploration uses epsilon(g)=0.5*(0.01/0.5)^min(g/5000,1).
-The species coin remains 1-sqrt(1-epsilon). These two recurrent coins have
-*different* probabilities, so the union is 1-(1-epsilon)*sqrt(1-epsilon).
-They apply only conditional on a greedy plant branch; firing can select the
-same action. Evaluation sets both probabilities to zero. The event-memory
-alternative retains its separate per-head split and decay configuration.
+The ten-way branch remains greedy; this single coin applies only to the selected
+non-wait tile and can still select the greedy tile. Evaluation sets the tile
+probability to zero. The event-memory alternative follows the same branch/tile
+contract and its separate decay configuration.
 
 `tests/test_recurrent_training.py` checks hand-computed returns, independently
 computed group means, episode-batch gradient invariance, unequal lengths,

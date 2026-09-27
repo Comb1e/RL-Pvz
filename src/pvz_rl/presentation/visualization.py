@@ -449,8 +449,8 @@ def build_run_report(run, cfg=None):
         (
             "Sustained attackers purchased / episode",
             "Maximum sun / episode",
-            "Injected planting exploration fraction",
-            "Species exploration coins per cohort",
+            "Tile exploration fraction",
+            "Branch exploration coins per cohort (always zero)",
             "Tile exploration coins per cohort",
             "Commands changed by exploration per cohort",
         ),

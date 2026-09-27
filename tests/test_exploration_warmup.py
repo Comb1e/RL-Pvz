@@ -1,4 +1,4 @@
-"""Plant-only exponential schedule, frozen cohort values and stage reset."""
+"""Tile-only exponential schedule, frozen cohort values and stage reset."""
 
 import pytest
 

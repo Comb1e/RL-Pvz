@@ -23,9 +23,9 @@ assertions. Profile mirrors and defaults are verified separately. The unchanged
 frozen controller retains exact outcome/tick assertions, including the previous
 hard/4 failure now winning under corrected cadence.
 
-The active collector's independent species/tile distribution controls retain
-the two-coin exploration budget. Removed model protocols and no-op settings are
-rejected explicitly. A five-decision complete demonstration fits across unequal
+The active collector's tile-only distribution controls keep the ten-way branch
+greedy and sample only its selected tile. Removed model protocols and no-op
+settings are rejected explicitly. A five-decision complete demonstration fits across unequal
 chunks and reloads; an independent group-mean calculation matches its loss.
 Corrupt hashes, episode/count/completion fields, observations, actions and rewards
 are rejected. An injected checkpoint-write failure preserves the previous pass.

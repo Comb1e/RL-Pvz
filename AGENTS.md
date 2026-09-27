@@ -29,7 +29,8 @@
   `runner.py` owns public action/outcome history for collection, evaluation and replay.
   `sequential_q.py` compares all ten branches independently of affordability and
   cooldown, applies occupancy-only plant tile masks and a full-board tile-zero
-  proposal, and shares selection and group-weighted loss across both model families.
+  proposal, and shares greedy branch selection, tile-only exploration and
+  group-weighted loss across both model families.
   `runner.py` feeds accepted proposals back as previous actions and rejected
   proposals back as wait (`0`) with acceptance and duration fields.
   `event_memory.py`, `temporal.py` and `spatial_policy.py` retain the explicit alternative.
