@@ -43,12 +43,12 @@ def configure_exploration(model, cfg):
 
 
 def set_exploration_rate(model, rate):
-    per_head_epsilon(rate)
+    coin = per_head_epsilon(rate)
     model.exploration_rate = float(rate)
     model.policy.exploration_epsilon = float(rate)
-    model.policy.tile_exploration_epsilon = float(rate)
+    model.policy.tile_exploration_epsilon = coin
     model.policy_kwargs["exploration_epsilon"] = float(rate)
-    model.policy_kwargs["tile_exploration_epsilon"] = float(rate)
+    model.policy_kwargs["tile_exploration_epsilon"] = coin
 
 
 def apply_exploration_state(model, cfg, state):

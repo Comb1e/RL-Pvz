@@ -592,3 +592,14 @@ its redistribution algorithm is not adopted and no performance claim is borrowed
 - [Bamcane animation reference](https://github.com/Bamcane/re-plants-vs-zombies/tree/0f6bbd39302acf69484ba8b3e071724e35cfba17/pak/reanim): inspected `_ground` numerical intervals in `Zombie.reanim` (walk/walk2) and `Zombie_polevaulter.reanim` (run/walk/jump). Only compact numerical mechanics facts are distributed, not artwork.
 - [pygame-ce event documentation](https://pyga.me/docs/ref/event.html): inspected event pumping, bounded queue, wheel and resize/maximize event guidance. Used a continuously pumped CPU process, bounded messages and explicit watching/result/selecting plus following/browsing states. UI timing never supplies simulation time.
 - Local 0.23.0 environment-count controls: `artifacts/env-count-planning-20260926-005934/` (including `env64/`) and `artifacts/env-count-128-planning-20260926-011138/`. Three warmed 10-second cutoffs, viewer disabled. These informed the selected 128-environment execution configuration; they are not learning evidence or full-game throughput measurements.
+
+## 0.27.0 collision and recording audit — 2026-09-27
+
+Re-read the pinned Patoke PC/GOTY reconstruction revision `c4692036c5e11d227c8fb7c593b734dac96da028` for zombie attack rectangles, pole-vault pre-movement checks, mine eligibility, projectile positive overlap and mower sweeps. These inspected functions informed the game 1.7.0 collision audit; the reconstruction remains an independent reference and does not establish binary equivalence. The research viewer and recorder changes use the existing pygame event model and local generation/episode identity checks; no external learning result is claimed.
+
+Continuation inspected `Zombie::FindPlantTarget`, `GetZombieAttackRect`,
+`CheckIfPreyCaught` and `Projectile::FindCollisionTarget` in that pinned source,
+and the merged game 1.7.0 CPU/CUDA collision controls. These confirm the 20-pixel
+attack threshold and strictly positive projectile overlap used in the audit.
+Cleanup follows the repository's active imports and independent probability
+controls; no additional learning method or external performance claim is adopted.

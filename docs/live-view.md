@@ -23,8 +23,21 @@ stateDiagram-v2
 ```
 
 History has a separate following/browsing state. Browsing fixes the page and
-selected action while new records arrive; Follow latest returns to the newest
-decision. Pending replacement pages cannot be mixed with the retained old board.
+selected action while new records arrive. Press **F** to return all visible
+panels to the newest decision (all four in the grid, one in Focus). The
+**Follow latest** button applies the same transition to its own panel. Both clear
+selection and paging offsets, invalidate outstanding history replies, and retain
+horizontal scrolling. Empty or unavailable panels and pending replacements do
+not inherit another game's history. Repeated presses are safe.
+
+```mermaid
+stateDiagram-v2
+    [*] --> Following
+    Following --> Browsing: Scroll history or select an action
+    Browsing --> Following: F or Follow latest
+    Following --> Following: New action or repeated F
+    Browsing --> Browsing: New live action / retain selected history
+```
 
 The table retains planting and digging for the entire current game, even while
 that environment is offscreen or the window is closed. Rows show decision number,

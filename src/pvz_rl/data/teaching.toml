@@ -12,7 +12,6 @@ spawn_ticks = [7500, 8700, 9900] # 75 seconds, then every 12 seconds in three la
 initial_sun = 100
 natural_sun = false
 lanes_per_spawn = 3
-allowed_plants = ["sunflower", "peashooter", "wall_nut", "cherry_bomb", "potato_mine", "snow_pea", "chomper", "repeater"]
 
 [stages.saving]
 tasks = ["saving"]

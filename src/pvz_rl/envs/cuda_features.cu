@@ -79,7 +79,7 @@ extern "C" __global__ void encode_state(const I *headers, const I *plants,
   // successful instantaneous placement.
   const I *cd = cooldowns + i * 8;
   const I recharge[8] = {CD_0, CD_1, CD_2, CD_3, CD_4, CD_5, CD_6, CD_7};
-  for (I j = 0; j < 8; j++)
+  for (I j = 0; j < COOLDOWN_WIDTH; j++)
     o[COOLDOWN_OFFSET + j] = (double)cd[j] / recharge[j];
   for (I r = 0; r < 5; r++) {
     I nearest = 9223372036854775807LL;

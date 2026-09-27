@@ -1,9 +1,16 @@
-# Training architecture — 0.26.0 Transformer–LSTM initialization
+# Recording, initialization and CUDA training architecture
 
-The current initialization workflow uses the pinned game’s public observation,
-an entity Transformer and one recurrent state per episode. The older CUDA
-event-memory Q collector remains available for archived inference and is
-documented below as the legacy path.
+The initialization workflow uses the pinned game’s public observation, an entity
+Transformer and one recurrent state per episode. Autonomous CUDA training uses
+the separate event-memory Q collector. Both are active workflows with different
+observation and checkpoint contracts; the initialization checkpoint cannot be
+loaded by the CUDA collector.
+
+Recording and initialization select the event_v8 profile in `configs/demo.toml`
+(bundled as `data/demo.toml`). The existing CUDA collector uses event_v7 from
+`configs/train.toml` (bundled as `data/research.toml`). Explicitly passing the
+wrong profile fails validation; a recurrent initialization checkpoint is not
+silently interpreted as an event-memory collector checkpoint.
 
 ```mermaid
 flowchart LR
@@ -57,30 +64,52 @@ archive records every proposal, including rejected proposals, with the
 pre-action observation, reward components, terminal status, episode/decision
 identity, simulation tick and ticks advanced. A manifest is updated atomically;
 an interrupted window remains incomplete and cannot be used for initialization.
+Before the native window opens, replay, archive, manifest and history paths are
+checked for any existing file and for overlap. A human session owns one easy-stage
+attempt; restart and stage switching are disabled. The native UI reads its own
+presentation configuration, while research settings remain in the research TOML.
+
+```mermaid
+stateDiagram-v2
+    [*] --> ValidatePaths
+    ValidatePaths --> Rejected: existing or overlapping artifact
+    ValidatePaths --> Playing: fresh outputs / one easy attempt
+    Playing --> Paused: pause
+    Paused --> Playing: resume
+    Playing --> Complete: natural win or loss / verify and finalize
+    Playing --> Incomplete: interruption / save partial replay
+    Paused --> Incomplete: interruption
+    Complete --> [*]
+    Incomplete --> [*]
+    Rejected --> [*]
+```
+
 The compact history is derived from this archive and records state changes
 during waits, cooldown decrements, planting attempts and the first unchanged
 dig in a consecutive run. It never replaces the complete sequence used by the
 LSTM.
 
 `pvz-rl initialize-demo` verifies the native replay hash, action order,
-observation reconstruction and completion status before fitting. It computes
+observation/reward reconstruction and completion metadata before fitting. It computes
 gamma-one complete reward-to-go, runs 256-decision chunks from zero recurrent
 state, clips gradients at 0.5, and writes a checkpoint only after a complete
-pass. The output labels itself as fitting one demonstration and includes
+pass, using the shared Q loss with equal total weight for each nonempty
+wait/plant/dig group regardless of chunk length. Atomic replacement preserves
+the previous completed pass if saving fails. The output labels itself as fitting one demonstration and includes
 `learning-curves.json`, `action-coverage.json` and `replay-verification.json`.
 The checkpoint protocol, observation schema and recurrent-storage protocol are
 checked before loading. Subsequent 128-game autonomous training remains an
 explicit later workflow; seeds, snapshots, future schedules and presentation
 data are never policy inputs.
 
-## Legacy complete-game CUDA path — 0.25.0
+## Complete-game CUDA training
 
 One CUDA Q network assembles each command in two levels: wait, one of eight
 species, or dig; then a conditional tile for non-wait branches. The same model
-plays every curriculum difficulty. Game 1.6.0 runs at 100 Hz without a wall-time
+plays every curriculum difficulty. Game 1.7.0 runs at 100 Hz without a wall-time
 frame limit. The 286-value observation and net-value accounting remain unchanged;
 explicit rejected-action penalties are added to transition rewards. Movement and
-collision mechanics come from the strictly pinned game 1.6.0.
+collision mechanics come from the strictly pinned game 1.7.0 (simulation 1.4.0).
 
 ```mermaid
 flowchart LR
@@ -316,10 +345,13 @@ streamed trajectory and diagnostic-journal blocks and optimization
 epoch/permutation/cursor. Transfers are drained before saving; cache contents are
 rebuilt after resume. A plain JSON protocol manifest is checked before class
 deserialization. Training requires `event_sequential_q_v2`, `sequential_q_mc_v2` and
-`sequential_q_unmasked_penalty_v1`. The pinned 0.24.0 network remains available
-for inference with its original legality masks and zero rejection charges; it
-cannot initialize or resume new training. The engine pin remains game 1.6.0.
-New-protocol stage transfer uses compatible weights with fresh optimizer/counters; full resume
+`sequential_q_unmasked_penalty_v1`. Retired checkpoint protocols are rejected
+before model deserialization, including inference. The engine pin is game 1.7.0
+with simulation compatibility 1.4.0. Runtime configuration accepts only the
+implemented legal-action cache and evaluation refill options; lesson rosters
+always allow all eight species. Demo configuration contains only its recurrent
+policy settings, while the collector owns spatial and event-memory settings.
+Stage transfer uses compatible weights with fresh optimizer/counters; full resume
 restores the same experiment exactly. Failed saves preserve the previous archive.
 Every existing run, recording and report is preserved, and historical reports
 remain regenerable without loading a retired model.
@@ -331,10 +363,23 @@ ties and exploration overrides at the recorded decision tick. Focus enlarges one
 and its scrollable Q table; switching retains the old board until the destination
 board and history page arrive together. All environments retain non-wait actions
 with their actual ten pre-action scores in 16 MiB of RAM plus disk overflow. The
-journal is saved in checkpoints and never becomes a policy input. Rejected plants
+journal is saved in checkpoints and never becomes a policy input. Pressing F
+resumes following the latest action in every visible grid panel, or the focused
+panel, clears historical selection and invalidates stale page responses while
+retaining horizontal table scroll. Empty histories and pending board replacements
+remain isolated by panel generation and episode identity. Rejected plants
 are labelled as automatic waits and empty digs show their penalty; waiting boards
 retain the last decision. Replacement selects only
 unfinished undisplayed games. Terminal logs retain reward, net value, discounted
 return and hardware measurements, alongside Q fitting and coverage metrics.
 Reporting failure does not invalidate a checkpoint. Evidence and source limitations
 are in [validation](validation.md), [references](references.md) and [iteration](iteration.md).
+
+```mermaid
+stateDiagram-v2
+    Following --> Browsing: vertical scroll or select action
+    Browsing --> Following: F or Follow latest / invalidate requests
+    Following --> Following: horizontal scroll / retain follow mode
+    Browsing --> Browsing: horizontal scroll / retain selection
+    Browsing --> Following: replacement board and episode arrive
+```

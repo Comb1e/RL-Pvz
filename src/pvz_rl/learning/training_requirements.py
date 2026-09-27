@@ -2,7 +2,7 @@
 
 from functools import lru_cache
 
-from pvz_rl.config import legacy_q_inference, research_config, simulator, validate_config
+from pvz_rl.config import research_config, simulator, validate_config
 from pvz_rl.envs.actions import ActionSchema
 from pvz_rl.learning.curriculum import selected_stage
 from pvz_rl.policy.sequential_q import ACTION_DISTRIBUTION
@@ -21,13 +21,13 @@ def current_model_config(cfg):
     )
 
 
-def require_supported_policy(cfg, condition="masked", *, inference=False):
-    """One training method, plus explicitly requested 0.24.0 inference."""
+def require_supported_policy(cfg, condition="masked"):
+    """Require the current complete-game CUDA collector protocol."""
     if (
         condition != "masked"
         or not cfg["conditions"].get(condition, {}).get("masked")
         or cfg["conditions"].get(condition, {}).get("hybrid")
-        or not (current_model_config(cfg) or inference and legacy_q_inference(cfg))
+        or not current_model_config(cfg)
     ):
         raise ValueError(
             "Retired policy or scheduler. Models require event_sequential_q_v2, event_v7, net_value_v1, the sequential_q_unmasked_penalty_v1 distribution and complete-game collection. Start fresh with configs/train.toml."

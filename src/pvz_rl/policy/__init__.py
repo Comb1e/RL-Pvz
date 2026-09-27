@@ -4,12 +4,10 @@ from pvz_rl.policy.transformer_lstm import (
     RecurrentOutput,
     RecurrentState,
     TransformerLSTMPolicy,
-    TransformerLSTMSequentialQPolicy,
 )
 
 __all__ = [
     "RecurrentOutput",
     "RecurrentState",
     "TransformerLSTMPolicy",
-    "TransformerLSTMSequentialQPolicy",
 ]

@@ -6,7 +6,6 @@ import torch
 from pvz_game.cuda.backend import kernel_source
 from pvz_game.cuda.schema import REASONS
 
-from pvz_rl.config import legacy_q_inference
 from pvz_rl.envs.actions import ActionSchema
 from pvz_rl.envs.encoding import PLANT_BEHAVIOR, ObservationEncoder
 from pvz_rl.envs.rewards import LEDGER_METRICS, REWARD_METRICS
@@ -47,7 +46,10 @@ class CudaFeatures:
             "COUNT_SCALE": encoder.count_scale,
             "GLOBAL_OFFSET": encoder.slices["globals"].start,
             "HEADLESS_OFFSET": encoder.slices["headless"].start,
-            "COOLDOWN_OFFSET": encoder.slices["cooldowns"].start,
+            "COOLDOWN_OFFSET": encoder.slices.get(
+                "cooldowns", slice(encoder.size, encoder.size)
+            ).start,
+            "COOLDOWN_WIDTH": encoder.cooldown_width,
             "GAMMA": cfg["training"]["gamma"],
             "BASIC_HP": batch.rules.zombies["basic"]["health"],
             "REWARD_SIZE": len(REWARD_FIELDS),
@@ -115,14 +117,11 @@ class CudaFeatures:
                 b.n,
             ),
         )
-        if legacy_q_inference(self.cfg):
-            b.action_masks_device()
-        else:
-            self.policy_mask_kernel(
-                ((b.n * ActionSchema.size + 255) // 256,),
-                (256,),
-                (b.header, b.plants, b.masks, b.n),
-            )
+        self.policy_mask_kernel(
+            ((b.n * ActionSchema.size + 255) // 256,),
+            (256,),
+            (b.header, b.plants, b.masks, b.n),
+        )
         return self.obs_tensor
 
     def step(self, actions, *, ticks=1, per_tick=True):

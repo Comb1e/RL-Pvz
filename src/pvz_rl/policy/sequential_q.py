@@ -17,16 +17,6 @@ def observation_tile_masks(obs):
     return torch.cat((available, empty.repeat(1, A.plant_types), available.expand(-1, A.tiles)), -1)
 
 
-def branch_masks(masks):
-    """Return the ten-way comparison mask used by the controller."""
-    return selection_masks(masks)
-
-
-def transport_branch_masks(masks):
-    """Describe which transport branches have at least one candidate tile."""
-    return torch.cat((masks[:, :1], A.tile_masks(masks).any(-1)), -1)
-
-
 def selection_masks(masks):
     """Return the ten-way comparison mask used by the controller.
 

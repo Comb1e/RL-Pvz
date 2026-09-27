@@ -41,7 +41,7 @@ zombie_states = ["walking", "carrying_pole", "vaulting", "biting", "dead"] # Eng
 mower_states = ["ready", "moving", "spent"]
 
 [encoding]
-version = "event_v7"
+version = "event_v8"
 local_count_scale = 5
 count_scale = 75
 wave_scale = 15
@@ -60,7 +60,7 @@ empty_dig_penalty = 0.0003333333333333333 # Empty dig proposal, 10 sun-equivalen
 [training]
 gamma = 1.0
 discount_clock = "simulation_ticks"
-method = "sequential_q_mc_v2"
+method = "complete_return_lstm_v1"
 budget_unit = "games"
 until_stage_complete = false # With --stage: stop only when its mastery gate passes.
 total_games = 10000
@@ -73,7 +73,7 @@ device = "cuda"
 max_minutes = 120
 finalization_minutes = 15
 # Plant-only exploration is fixed throughout each complete-game cohort.
-exploration = {objective = "sequential_plant_epsilon_v1", epsilon_start = 0.1, epsilon_floor = 0.001, decay_games = 3000}
+exploration = {objective = "sequential_plant_epsilon_v1", epsilon_start = 0.5, epsilon_floor = 0.01, decay_games = 5000}
 batch_size = 1024
 n_epochs = 4
 learning_rate = 0.0003
@@ -129,12 +129,24 @@ curriculum = true
 hybrid = false
 
 [policy]
-kind = "event_sequential_q_v2"
+kind = "transformer_lstm_q_v1"
 action_distribution = "sequential_q_unmasked_penalty_v1"
-plant_embedding = 8
-state_embedding = 4
-scalar_sizes = [64]
-channels = [32, 32]
+entity_width = 128
+transformer_layers = 2
+transformer_heads = 4
+transformer_feedforward = 256
+scalar_width = 64
+lstm_hidden = 256
+action_embedding = 32
+outcome_width = 16
+chunk_length = 256
+
+[training.demo]
+passes = 20
+learning_rate = 0.0003
+gradient_clip = 0.5
+learner_seed = 101
+time_budget_minutes = 30
 
 [curriculum.lessons.saving]
 spawn_ticks = [7500, 8700, 9900] # 75 seconds, then every 12 seconds in three lanes.
@@ -167,14 +179,3 @@ backend = "cuda"
 
 [diagnostics]
 early_dig_seconds = 5
-
-[policy.memory]
-model_width = 128
-layers = 2
-heads = 4
-feedforward_width = 256
-local_tokens = 8
-event_tokens = 32
-summary_tokens = 8
-summary_stride = 100
-gate_bias = 2.0

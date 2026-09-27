@@ -1,5 +1,41 @@
 # Validation and measured results
 
+## Collision and human-recording audit 0.27.0 — 2026-09-27
+
+Research 0.27.0 pins merged game **1.7.0**, simulation **1.4.0**, commit
+`1424b4d802e783a36772091c49d96aa7c6036d7a`. The game suite passes **427 tests**,
+including all eight plants/five zombies, independent contact/tangency controls,
+age residues, mine phases, pole removal/flight, custom coordinate and low-HP
+boundaries, mower crossings and exact CPU/CUDA observations/events/snapshots/
+RNG/outcomes. Three current winning replay fixtures pass on CPU and CUDA.
+
+Human-recorder tests use a real headless native window: fresh startup, zero-time
+accepted actions, rejected actions, paused queues, disabled restart/stage controls,
+interruption, natural completion and replay/archive reconstruction. Empty and
+incomplete replay/archive/manifest/history files are rejected before display
+initialization with unchanged contents. F/button controls run through the actual
+pygame loop in grid and focus modes, with stale replies and repeated presses.
+
+Demo commands use the event_v8 profile; established CUDA collection retains
+its event_v7 profile and width. Both CPU/CUDA encoders are checked for exact
+width, ordering and cooldown boundaries without relaxing older input-isolation
+assertions. Profile mirrors and defaults are verified separately. The unchanged
+frozen controller retains exact outcome/tick assertions, including the previous
+hard/4 failure now winning under corrected cadence.
+
+The active collector's independent species/tile distribution controls retain
+the two-coin exploration budget. Removed model protocols and no-op settings are
+rejected explicitly. A five-decision complete demonstration fits across unequal
+chunks and reloads; an independent group-mean calculation matches its loss.
+Corrupt hashes, episode/count/completion fields, observations, actions and rewards
+are rejected. An injected checkpoint-write failure preserves the previous pass.
+Recurrent selection tests full and partly occupied boards in the same batch,
+occupancy-derived defaults and non-finite value rejection.
+
+Ruff lint/Python formatting, dependency checks, Markdown links, verified source installation,
+CUDA/accounting/render/replay availability and wheel/source packaging are checked.
+See [iteration history](iteration.md) for limitations. No formal training.
+
 ## Ten-way Q selection and historical-Q repair 0.25.0 — 2026-09-26
 
 This release changes training compatibility to `event_sequential_q_v2`,

@@ -26,7 +26,7 @@ from pvz_rl.policy.event_memory import EventMemory
 from pvz_rl.policy.sequential_q import ACTION_DISTRIBUTION, POLICY_SIGNATURE, balanced_q_loss
 
 
-def checkpoint_metadata(path, *, inference=False):
+def checkpoint_metadata(path):
     """Read plain JSON before any SB3/cloudpickle or torch model deserialization."""
     path = Path(path)
     if not path.suffix:
@@ -35,13 +35,6 @@ def checkpoint_metadata(path, *, inference=False):
         if "protocol.json" not in archive.namelist():
             raise ValueError("Sequential Q controller requires fresh models; retired checkpoint")
         metadata = json.loads(archive.read("protocol.json"))
-    legacy = dict(
-        policy="event_sequential_q_v1",
-        optimizer="sequential_q_mc_v1",
-        exploration="sequential_plant_epsilon_v1",
-    )
-    if inference and metadata == legacy:
-        return metadata
     if metadata != dict(
         policy=POLICY_SIGNATURE, optimizer=OPTIMIZER_PROTOCOL, exploration=EXPLORATION_PROTOCOL
     ):
@@ -107,14 +100,9 @@ class CudaSequentialQ(BaseAlgorithm):
         configure_exploration(self, self.policy.features_extractor.cfg)
 
     @classmethod
-    def load(cls, path, *args, inference_only=False, **kwargs):
-        metadata = checkpoint_metadata(path, inference=inference_only)
-        if inference_only and kwargs.get("env") is not None:
-            raise ValueError(
-                "Inference-only checkpoint loading cannot attach a training environment"
-            )
+    def load(cls, path, *args, **kwargs):
+        checkpoint_metadata(path)
         model = super().load(path, *args, **kwargs)
-        model._legacy_inference_only = metadata["optimizer"] != OPTIMIZER_PROTOCOL
         model.phase = CohortPhase(model.phase)
         # SB3 maps every saved tensor to the requested device. Ordinary Adam
         # keeps its scalar step on CPU; retain that original optimizer protocol.
@@ -522,10 +510,6 @@ class CudaSequentialQ(BaseAlgorithm):
         torch.cuda.set_rng_state_all([x.cpu() for x in state["cuda_rng"]])
 
     def save(self, path, *args, **kwargs):
-        if getattr(self, "_legacy_inference_only", False):
-            raise ValueError(
-                "Legacy inference weights cannot be saved as a new training checkpoint"
-            )
         self._drain_transfers()
         path = Path(path)
         if not path.suffix:

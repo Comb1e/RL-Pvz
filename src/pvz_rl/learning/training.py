@@ -84,7 +84,7 @@ def build_model(cfg, condition, env, seed, log_dir=None):
         "features_extractor_class": SpatialFeatures,
         "features_extractor_kwargs": {"layout_cfg": cfg},
         "exploration_epsilon": t["exploration"]["epsilon_start"],
-        "tile_exploration_epsilon": t["exploration"]["epsilon_start"],
+        "tile_exploration_epsilon": per_head_epsilon(t["exploration"]["epsilon_start"]),
     }
     model = CudaSequentialQ(
         SequentialQPolicy,
@@ -971,16 +971,15 @@ def load_policy(checkpoint, device="cpu"):
     run = checkpoint.parent
     data = json.loads((run / "metadata.json").read_text("utf-8"))
     cfg, condition = data["config"], data["condition"]
-    validate_config(cfg, inference=True)
+    validate_config(cfg)
     verify_engine(cfg)
-    require_supported_policy(cfg, condition, inference=True)
+    require_supported_policy(cfg, condition)
     from pvz_rl.learning.cuda_q import CudaSequentialQ
 
     torch.set_num_threads(cfg["training"]["torch_threads"])
     model = CudaSequentialQ.load(
         checkpoint,
         device=device,
-        inference_only=True,
     )
     configure_exploration(model, cfg)
     return model, data

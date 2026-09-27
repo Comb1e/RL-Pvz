@@ -16,6 +16,7 @@ from torch import nn
 
 from pvz_rl.envs.actions import ActionSchema as A
 from pvz_rl.envs.encoding import ObservationEncoder
+from pvz_rl.policy.sequential_q import greedy_choice, observation_tile_masks, selection_masks
 
 
 @dataclass
@@ -24,14 +25,6 @@ class RecurrentState:
 
     hidden: torch.Tensor
     cell: torch.Tensor
-
-    @property
-    def h(self) -> torch.Tensor:
-        return self.hidden
-
-    @property
-    def c(self) -> torch.Tensor:
-        return self.cell
 
     def detach(self) -> "RecurrentState":
         return RecurrentState(self.hidden.detach(), self.cell.detach())
@@ -122,14 +115,14 @@ class TransformerLSTMPolicy(nn.Module):
         self.entity = EntityTransformer(self.layout, spec)
         self.scalar_width = spec["scalar_width"]
         scalar_input = self.layout.global_width + self.layout.rows + self.layout.cooldown_width
-        self.scalar = nn.Sequential(
-            nn.Linear(scalar_input, self.scalar_width), nn.ReLU()
-        )
+        self.scalar = nn.Sequential(nn.Linear(scalar_input, self.scalar_width), nn.ReLU())
         action_width = spec["action_embedding"]
         self.previous_action = nn.Embedding(action_count, action_width)
         self.outcome = nn.Sequential(nn.Linear(2, spec["outcome_width"]), nn.ReLU())
         self.elapsed = nn.Sequential(nn.Linear(1, 8), nn.Tanh())
-        core_input = spec["entity_width"] + self.scalar_width + action_width + spec["outcome_width"] + 8
+        core_input = (
+            spec["entity_width"] + self.scalar_width + action_width + spec["outcome_width"] + 8
+        )
         self.lstm = nn.LSTM(core_input, spec["lstm_hidden"], num_layers=1, batch_first=True)
         hidden = spec["lstm_hidden"]
         self.branch_head = nn.Sequential(nn.Linear(hidden, 128), nn.ReLU(), nn.Linear(128, 10))
@@ -155,10 +148,14 @@ class TransformerLSTMPolicy(nn.Module):
             torch.zeros(shape, device=device, dtype=dtype),
         )
 
-    def reset_state(self, state: RecurrentState, reset: torch.Tensor | None = None) -> RecurrentState:
+    def reset_state(
+        self, state: RecurrentState, reset: torch.Tensor | None = None
+    ) -> RecurrentState:
         """Clear selected batch entries at episode boundaries."""
         if reset is None:
-            return self.initial_state(state.hidden.shape[1], device=state.hidden.device, dtype=state.hidden.dtype)
+            return self.initial_state(
+                state.hidden.shape[1], device=state.hidden.device, dtype=state.hidden.dtype
+            )
         reset = reset.to(device=state.hidden.device, dtype=torch.bool).view(1, -1, 1)
         return RecurrentState(
             torch.where(reset, torch.zeros_like(state.hidden), state.hidden),
@@ -172,11 +169,10 @@ class TransformerLSTMPolicy(nn.Module):
         execution_outcome: torch.Tensor | None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         tiles, regions = self.entity(observations)
-        blocks = {
-            name: observations[:, sl]
-            for name, sl in self.layout.slices.items()
-        }
-        scalar = self.scalar(torch.cat((blocks["globals"], blocks["headless"], blocks["cooldowns"]), -1))
+        blocks = {name: observations[:, sl] for name, sl in self.layout.slices.items()}
+        scalar = self.scalar(
+            torch.cat((blocks["globals"], blocks["headless"], blocks["cooldowns"]), -1)
+        )
         batch = len(observations)
         if previous_action is None:
             previous_action = torch.zeros(batch, dtype=torch.long, device=observations.device)
@@ -187,7 +183,9 @@ class TransformerLSTMPolicy(nn.Module):
             execution_outcome = execution_outcome[:, None]
         if execution_outcome.shape[-1] != 2:
             raise ValueError("execution_outcome must contain accepted and ticks_advanced")
-        elapsed = blocks["globals"][:, self.layout.global_fields["elapsed"] : self.layout.global_fields["elapsed"] + 1]
+        elapsed = blocks["globals"][
+            :, self.layout.global_fields["elapsed"] : self.layout.global_fields["elapsed"] + 1
+        ]
         combined = torch.cat(
             (
                 tiles.mean(1),
@@ -214,7 +212,9 @@ class TransformerLSTMPolicy(nn.Module):
             raise ValueError(f"expected observations with shape (batch, {self.layout.size})")
         inputs, tiles = self._inputs(observations, previous_action, execution_outcome)
         if state is None:
-            state = self.initial_state(len(observations), device=observations.device, dtype=inputs.dtype)
+            state = self.initial_state(
+                len(observations), device=observations.device, dtype=inputs.dtype
+            )
         output, (hidden, cell) = self.lstm(inputs[:, None], (state.hidden, state.cell))
         context = output[:, 0]
         return RecurrentOutput(
@@ -237,7 +237,9 @@ class TransformerLSTMPolicy(nn.Module):
         for t in range(observations.shape[1]):
             action = None if previous_actions is None else previous_actions[:, t]
             outcome = None if execution_outcomes is None else execution_outcomes[:, t]
-            result = self.forward_step(observations[:, t], current, previous_action=action, execution_outcome=outcome)
+            result = self.forward_step(
+                observations[:, t], current, previous_action=action, execution_outcome=outcome
+            )
             outputs.append(result.branch_q)
             tiles.append(result.tile_features)
             contexts.append(result.context)
@@ -247,7 +249,9 @@ class TransformerLSTMPolicy(nn.Module):
             return (*result[:2], torch.stack(contexts, 1), result[2])
         return result
 
-    def tile_values(self, tile_features: torch.Tensor, context: torch.Tensor, branches: torch.Tensor) -> torch.Tensor:
+    def tile_values(
+        self, tile_features: torch.Tensor, context: torch.Tensor, branches: torch.Tensor
+    ) -> torch.Tensor:
         if branches.ndim != 1:
             branches = branches.reshape(-1)
         category = torch.nn.functional.one_hot(
@@ -261,20 +265,9 @@ class TransformerLSTMPolicy(nn.Module):
             ),
             -1,
         )
-        return self.tile_head(combined).squeeze(-1) + self.tile_offsets[(branches - 1).clamp(0, A.tile_groups - 1), None]
-
-    def values(self, result: RecurrentOutput, branches: torch.Tensor | None = None) -> torch.Tensor:
-        """Return branch values and, for selected non-wait branches, tile values."""
-        if branches is None:
-            return result.branch_q
-        return self.tile_values(result.tile_features, result.context, branches)
-
-    @staticmethod
-    def _branch_actions(actions: torch.Tensor) -> torch.Tensor:
-        return torch.where(
-            actions == 0,
-            torch.zeros_like(actions),
-            torch.where(actions < A.dig_start, (actions - 1) // A.tiles + 1, torch.full_like(actions, 9)),
+        return (
+            self.tile_head(combined).squeeze(-1)
+            + self.tile_offsets[(branches - 1).clamp(0, A.tile_groups - 1), None]
         )
 
     def decide(
@@ -295,18 +288,13 @@ class TransformerLSTMPolicy(nn.Module):
         )
         batch = result.branch_q.shape[0]
         if action_masks is None:
-            action_masks = torch.ones(batch, A.size, dtype=torch.bool, device=observations.device)
+            action_masks = observation_tile_masks(observations.reshape(batch, -1))
         if action_masks.shape != (batch, A.size):
             raise ValueError(f"action_masks must have shape ({batch}, {A.size})")
         # Geometry masks constrain only the second-level tile choice. Every
         # active decision still compares wait, all eight species and dig so a
         # rejected proposal remains observable and trainable.
-        active = action_masks.any(1)
-        branch_legal = active[:, None].expand(-1, 10).clone()
-        masked = result.branch_q.masked_fill(~branch_legal, -torch.inf)
-        if not torch.isfinite(masked).any(1).all():
-            raise ValueError("each decision needs at least one legal branch")
-        branches = masked.argmax(1)
+        branches = greedy_choice(result.branch_q, selection_masks(action_masks))
         actions = torch.zeros(batch, dtype=torch.long, device=observations.device)
         tile_q = result.branch_q.new_zeros(batch, A.tiles)
         for branch in range(1, 10):
@@ -323,25 +311,16 @@ class TransformerLSTMPolicy(nn.Module):
                 legal_tiles = action_masks[ix, offset : offset + A.tiles]
             # A full board still needs a well-defined rejected proposal; zero is
             # the deterministic row-major fallback and remains simulator-owned.
-            legal_tiles = legal_tiles if legal_tiles.any(1).all() else torch.ones_like(legal_tiles)
-            tile_values_masked = values.masked_fill(~legal_tiles, -torch.inf)
-            actions[ix] = offset + tile_values_masked.argmax(1)
-        return actions, result.state, {
-            "branch_q": result.branch_q,
-            "branches": branches,
-            "tile_q": tile_q,
-            "context": result.context,
-        }
-
-    def step(self, observations, state=None, **kwargs):
-        """Single-decision alias used by collectors, evaluators and playback."""
-        return self.decide(observations, state, **kwargs)
-
-    # Explicit aliases make the recurrent contract easy to share with callers
-    # that only need Q outputs rather than action selection.
-    single_decision = forward_step
-    sequence = forward_sequence
-    initial_recurrent_state = initial_state
-
-
-TransformerLSTMSequentialQPolicy = TransformerLSTMPolicy
+            legal_tiles = legal_tiles.clone()
+            legal_tiles[~legal_tiles.any(1), 0] = True
+            actions[ix] = offset + greedy_choice(values, legal_tiles)
+        return (
+            actions,
+            result.state,
+            {
+                "branch_q": result.branch_q,
+                "branches": branches,
+                "tile_q": tile_q,
+                "context": result.context,
+            },
+        )

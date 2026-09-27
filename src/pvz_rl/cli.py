@@ -8,6 +8,7 @@ from pathlib import Path
 
 from pvz_rl.config import (
     load_config,
+    load_demo_config,
     research_config,
     seed_values,
     validate_config,
@@ -65,7 +66,8 @@ def training_options(parser):
 
 
 def configured(args):
-    cfg = load_config(args.config)
+    loader = load_demo_config if args.command in ("record-demo", "initialize-demo") else load_config
+    cfg = loader(args.config)
     checkpoint = getattr(args, "resume", None) or getattr(args, "init_from", None)
     if checkpoint and not args.config:
         run = args.output if args.command == "suite" else checkpoint.parent
@@ -186,11 +188,16 @@ def main(argv=None):
         "--init-from", type=Path, help="load compatible weights into a fresh experiment or stage"
     )
     demo = subs.add_parser(
-        "record-demo", help="open one easy seed-1000 game and record a verified human transition archive"
+        "record-demo",
+        help="open one easy seed-1000 game and record a verified human transition archive",
     )
     common(demo)
-    demo.add_argument("--output", type=Path, required=True, help="native replay path (.pvzdemo or .json)")
-    demo.add_argument("--archive", type=Path, help="append-only transition JSONL (default: replay.jsonl)")
+    demo.add_argument(
+        "--output", type=Path, required=True, help="native replay path (.pvzdemo or .json)"
+    )
+    demo.add_argument(
+        "--archive", type=Path, help="append-only transition JSONL (default: replay.jsonl)"
+    )
     demo.add_argument("--seed", type=int, default=1000)
     demo.add_argument("--speed", type=float, choices=(1, 2, 4), default=1)
     initialize = subs.add_parser(

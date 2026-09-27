@@ -54,16 +54,22 @@ class ObservationEncoder:
         # Card countdowns are public state.  They are deliberately appended in
         # the fixed plant-species order so old spatial offsets remain stable and
         # CPU/CUDA encoders can share one compatibility digest.
-        self.cooldown_fields = {kind: i for i, kind in enumerate(env["plants"])}
+        self.cooldown_fields = (
+            {kind: i for i, kind in enumerate(env["plants"])}
+            if cfg["encoding"]["version"] == "event_v8"
+            else {}
+        )
         self.cooldown_width = len(self.cooldown_fields)
         sizes = [
             self.rows * self.cols * self.plant_width,
             self.rows * self.bins * self.zombie_width,
             self.global_width,
             self.rows,
-            self.cooldown_width,
         ]
-        names = ["plants", "zombies", "globals", "headless", "cooldowns"]
+        names = ["plants", "zombies", "globals", "headless"]
+        if self.cooldown_width:
+            sizes.append(self.cooldown_width)
+            names.append("cooldowns")
         offsets = np.cumsum([0, *sizes])
         self.slices = dict(
             zip(
@@ -140,7 +146,7 @@ class ObservationEncoder:
                 default=None,
             )
             result[self.slices["headless"].start + row] = bool(front and front.headless)
-        cooldowns = result[self.slices["cooldowns"]]
+        cooldowns = result[self.slices["cooldowns"]] if self.cooldown_width else ()
         cards = {card.plant_type: card for card in obs.cards}
         for kind, index in self.cooldown_fields.items():
             card = cards.get(kind)

@@ -1,6 +1,6 @@
 # PVZ plant research
 
-This project records one human easy game, verifies its native replay, and fits a
+Release 0.27.0 records one human easy game, verifies its native replay, and fits a
 Transformer–LSTM two-level Q policy from complete reward-to-go. The shipped
 observation protocol is `event_v8` (294 public values, including eight card
 cooldowns). Formal autonomous training is a separate explicit workflow.
@@ -24,6 +24,10 @@ engine lock](src/pvz_rl/data/engine-lock.json).
 
 Open the normal-speed easy game with the default seed 1000:
 
+Use unused replay/archive paths. Existing files (including empty archives and
+manifest/history sidecars) are rejected. Each recording permits one stage attempt;
+restart and stage switching are disabled.
+
 ```powershell
 .\.venv\Scripts\python.exe -m pvz_rl record-demo `
   --output runs\human-1000.pvzdemo --archive runs\human-1000.jsonl
@@ -40,9 +44,15 @@ After the game reaches a natural win or loss, run the one-demonstration fit:
 The command writes `initialization.pt`, curves, per-branch coverage and a replay
 verification report. An interrupted recording stays incomplete and is rejected
 by initialization; no terminal result is invented. The result fits one
-demonstration and does not establish generalization or mastery. The later
-autonomous collector uses a 50% tile exploration coin at game zero, decaying to
-1% by game 5,000; validation disables exploration.
+demonstration and does not establish generalization or mastery. The demo profile
+is [configs/demo.toml](configs/demo.toml); it retains the recurrent policy and
+50%→1% tile exploration settings over 5,000 games. The existing CUDA collector
+keeps its separate [training profile](configs/train.toml). Neither command above
+starts that collector. Validation disables exploration.
+
+In the training viewer, press **F** to follow the latest action in all visible
+grid panels, or in the focused panel. Historical selection and paging are cleared
+without resetting horizontal table scrolling.
 
 ## Common checks
 
@@ -54,6 +64,9 @@ autonomous collector uses a 50% tile exploration coin at game zero, decaying to
 ```
 
 - [Architecture and workflows](docs/architecture.md)
+- [Training, resume and evaluation](docs/training.md)
+- [Viewer controls](docs/live-view.md)
 - [Math controls](docs/math/complete-game-learning.md)
+- [Collision mathematics](docs/math/collision-audit.md)
 - [Inspected sources](docs/references.md)
 - [Iteration history](docs/iteration.md)

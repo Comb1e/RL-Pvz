@@ -1,4 +1,4 @@
-# Research design — 0.26.0
+# Research design — 0.27.0
 
 The first delivered workflow is a human-game initialization. `record-demo`
 records one easy seed-1000 game into a verified native replay and append-only
@@ -10,17 +10,22 @@ resetting forward memory. Defaults are 20 completed passes, learning rate
 0.0003, clip 0.5, seed 101 and a 30-minute budget. Outputs are labelled as a
 fit to one demonstration.
 
+Human commands select `configs/demo.toml` by default. The established CUDA
+collector retains its own `configs/train.toml` / event_v7 configuration;
+recording and initialization require the event_v8 recurrent profile.
+
 The observation protocol is `event_v8`: the former 286 public values plus eight
 card cooldowns in plant order, each divided by `recharge_ticks + 1`. CPU and
 CUDA encoders use the same offsets and normalization. Seeds, snapshots, future
 schedules, and presentation artifacts remain outside policy inputs. A partial
 archive cannot produce a terminal target or an initialization checkpoint.
 
-The later 128-game frozen-weight autonomous collector remains an explicit
-follow-up command. Its sequence-window storage and saved-state warm-up are not
-run by the first workflow.
+The 128-game frozen-weight autonomous collector is a separate explicit command
+using event-memory Q weights. Recurrent initialization checkpoints are not
+accepted by this collector. [Training instructions](training.md) give the
+commands and artifact requirements for both workflows.
 
-For that later collector, tile exploration starts at 50% and decays
+The recurrent demo profile retains tile exploration starting at 50% and decaying
 exponentially to a fixed 1% floor by game 5,000. Validation enters the existing
 deterministic context, which sets both species and tile exploration coins to
 zero for the entire evaluation pass.
@@ -45,10 +50,10 @@ and tiles only after a planting branch wins; it cannot force planting when wait
 wins. Coin firing and actual choice changes are separate diagnostics. Evaluation
 is entirely greedy. No entropy or policy-likelihood objective remains.
 
-The legacy CUDA collector keeps its event-memory widths, net-value accounting,
+The CUDA collector keeps its event-memory widths, net-value accounting,
 saving lesson and pinned 100 Hz clock. The current initialization workflow uses
 the event_v8 entity/recurrent protocol described above. Rejected-action penalties
-are added on top of the net-value objective. Game 1.6.0 corrects numerical gait, chilling and
+are added on top of the net-value objective. Game 1.7.0 corrects collision ordering, chilling and
 source-based contact/targeting/blast/vault geometry; this is a community-source
 reconstruction with documented limits, not original-executable equivalence.
 Complete trajectories stay in bounded CPU/disk storage with disposable raw-token

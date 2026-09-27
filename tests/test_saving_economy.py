@@ -71,7 +71,6 @@ def test_lesson_economics_and_pressure_independent_calculations():
     assert saving["spawn_ticks"] == [7500, 8700, 9900]
     assert saving["initial_sun"] == 100 and saving["lanes_per_spawn"] == 3
     assert not saving["natural_sun"]
-    assert set(saving["allowed_plants"]) == set(rules.plants)
     g, pea, flower, mine = (
         rules.game,
         rules.plants["peashooter"],

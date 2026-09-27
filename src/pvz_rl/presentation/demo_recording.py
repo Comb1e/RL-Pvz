@@ -3,14 +3,14 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
 from pvz_game import Dig, Place, Rules, Status, Wait
 from pvz_game.ui import App, Screen
 
-from pvz_rl.config import digest, load_config
+from pvz_rl.config import digest, load_demo_config
+from pvz_rl.envs.action_timing import ActionPhaseGame
 from pvz_rl.envs.actions import ActionCodec
 from pvz_rl.envs.actions import ActionSchema as A
 from pvz_rl.envs.encoding import ObservationEncoder
@@ -26,27 +26,15 @@ def _observation_vector(encoder: ObservationEncoder, observation) -> list[float]
     return encoder.encode(observation).astype(np.float32).tolist()
 
 
-@dataclass(frozen=True)
-class TransitionRecord:
-    episode_id: str
-    decision_index: int
-    tick: int
-    ticks_advanced: int
-    observation: list[float]
-    action: int
-    accepted: bool
-    rejection_reason: str | None
-    reward_parts: dict
-    terminal: str
-
-
 class CompactHistoryBuilder:
     """Build a derived event index without changing the complete sequence."""
 
     def __init__(self, *, cooldown_start: int = 286):
         self.cooldown_start = cooldown_start
 
-    def build(self, records: list[dict], final_observation: list[float] | None = None) -> list[dict]:
+    def build(
+        self, records: list[dict], final_observation: list[float] | None = None
+    ) -> list[dict]:
         history: list[dict] = []
         previous = None
         previous_dig = None
@@ -90,7 +78,9 @@ class CompactHistoryBuilder:
                     reasons.append("mower_state")
                 if np.any(diff >= self.cooldown_start):
                     reasons.append("cooldown_decrement")
-                history.append({"decision_index": records[-1]["decision_index"] + 1, "reasons": reasons})
+                history.append(
+                    {"decision_index": records[-1]["decision_index"] + 1, "reasons": reasons}
+                )
         return history
 
 
@@ -113,14 +103,9 @@ class TransitionArchive:
         self.records: list[dict] = []
         self.final_observation: list[float] | None = None
         self.closed = False
-        if self.path.exists() and self.path.stat().st_size:
-            existing = [json.loads(line) for line in self.path.read_text(encoding="utf-8").splitlines() if line]
-            if any(row.get("record_type") == "final_observation" for row in existing):
-                raise FileExistsError(f"completed transition archive already exists: {self.path}")
-            self.records = [row for row in existing if row.get("record_type") == "transition"]
-            if any(row.get("decision_index") != i for i, row in enumerate(self.records)):
-                raise ValueError("cannot resume archive with non-monotonic decisions")
-        self._stream = self.path.open("a", encoding="utf-8")
+        if self.path.exists():
+            raise FileExistsError(f"recording output already exists: {self.path}")
+        self._stream = self.path.open("x", encoding="utf-8")
         self._manifest(complete=False)
 
     def _manifest(self, *, complete: bool, outcome: str | None = None, replay: str | None = None):
@@ -159,7 +144,12 @@ class TransitionArchive:
             raise RuntimeError("archive is closed")
         if type(action) is not int or action < 0:
             raise ValueError("action must be a nonnegative integer")
-        if type(tick) is not int or tick < 0 or type(ticks_advanced) is not int or ticks_advanced < 0:
+        if (
+            type(tick) is not int
+            or tick < 0
+            or type(ticks_advanced) is not int
+            or ticks_advanced < 0
+        ):
             raise ValueError("tick and ticks_advanced must be nonnegative integers")
         if self.records and tick < self.records[-1]["tick"]:
             raise ValueError("simulation ticks must be monotonic")
@@ -204,9 +194,9 @@ class TransitionArchive:
         )
         self._stream.flush()
         self._stream.close()
-        history = CompactHistoryBuilder(cooldown_start=self.encoder.slices["cooldowns"].start).build(
-            self.records, self.final_observation
-        )
+        history = CompactHistoryBuilder(
+            cooldown_start=self.encoder.slices["cooldowns"].start
+        ).build(self.records, self.final_observation)
         write_json(self.history_path, {"protocol": HISTORY_PROTOCOL, "events": history})
         replay_hash = file_hash(replay_path) if replay_path and Path(replay_path).exists() else None
         self._manifest(complete=True, outcome=outcome, replay=replay_hash)
@@ -221,7 +211,9 @@ class TransitionArchive:
         self.closed = True
 
     def verify(self) -> dict:
-        rows = [json.loads(line) for line in self.path.read_text(encoding="utf-8").splitlines() if line]
+        rows = [
+            json.loads(line) for line in self.path.read_text(encoding="utf-8").splitlines() if line
+        ]
         transitions = [row for row in rows if row.get("record_type") == "transition"]
         finals = [row for row in rows if row.get("record_type") == "final_observation"]
         if any(row.get("decision_index") != i for i, row in enumerate(transitions)):
@@ -231,28 +223,52 @@ class TransitionArchive:
                 raise ValueError("archive observation size mismatch")
         if finals and finals[-1]["decision_index"] != len(transitions):
             raise ValueError("final observation index mismatch")
-        return {"decisions": len(transitions), "complete": bool(finals), "outcome": finals[-1].get("terminal") if finals else None}
+        return {
+            "decisions": len(transitions),
+            "complete": bool(finals),
+            "outcome": finals[-1].get("terminal") if finals else None,
+        }
 
 
 class DemoRecordingApp(App):
     """Native UI with per-decision archive hooks and zero-tick operations."""
 
     def __init__(self, cfg, *, replay_path: Path, archive_path: Path, seed=1000, speed=1):
-        self.cfg = cfg
+        self.research_cfg = cfg
+        self.codec = ActionCodec(cfg)
+        self._session_started = False
+        # ``cfg`` is the research configuration.  App loads its own native UI
+        # TOML; passing the research dictionary as a UI config is a startup bug.
+        validate_recording_outputs(replay_path, archive_path)
         self.transition_archive = TransitionArchive(archive_path, cfg=cfg)
         self._archive_finalized = False
         self._replay_path = Path(replay_path)
-        super().__init__(level="easy", seed=seed, record_path=self._replay_path, speed=speed)
+        try:
+            super().__init__(level="easy", seed=seed, record_path=self._replay_path, speed=speed)
+        except BaseException:
+            self.transition_archive.close()
+            import pygame
+
+            pygame.quit()
+            raise
 
     def start(self, level):
+        if self._session_started:
+            raise RuntimeError("a human recording has one fixed easy-stage attempt")
+        if level != "easy":
+            raise ValueError("human recordings use the easy stage")
+        self._session_started = True
         self._autosave()
         self.level = level
+        # The native UI owns presentation settings, while the research recorder
+        # needs the action-phase adapter for zero-tick plant/dig operations.
+        self.game = ActionPhaseGame(self.rules)
         self.game.reset(level, self.seed)
         metadata = {
             "protocol": ARCHIVE_PROTOCOL,
-            "config_digest": digest(self.cfg),
-            "observation_schema": self.cfg["encoding"]["version"],
-            "engine_commit": self.cfg["engine_commit"],
+            "config_digest": digest(self.research_cfg),
+            "observation_schema": self.research_cfg["encoding"]["version"],
+            "engine_commit": self.research_cfg["engine_commit"],
             "seed": self.seed,
         }
         self.recorder = ActionPhaseRecorder(self.game, metadata=metadata)
@@ -264,6 +280,31 @@ class DemoRecordingApp(App):
         self.sun_flash_until = 0
         self.selected = None
         self.message = "Plant sunflowers early. Cover every lane."
+
+    def restart(self):
+        self.message = "Restart and stage switching are disabled during a recording."
+
+    def activate(self, name):
+        if name in ("restart", "menu") or name.startswith("level:"):
+            self.message = "Restart and stage switching are disabled during a recording."
+            return
+        super().activate(name)
+
+    def button(self, name, label, rect, active=False):
+        if name in ("restart", "menu") or name.startswith("level:"):
+            if name == "menu":
+                self.text(
+                    "One attempt per recording. Close the window to finish.",
+                    rect[0],
+                    rect[1] + 10,
+                    15,
+                )
+            return
+        super().button(name, label, rect, active)
+
+    def text(self, label, *args, **kwargs):
+        """Keep the pinned native help consistent with this session's controls."""
+        return super().text(label.replace("   ·   R restart", ""), *args, **kwargs)
 
     def toggle_pause(self):
         # Pausing must freeze simulation while preserving queued operations.
@@ -287,7 +328,7 @@ class DemoRecordingApp(App):
         parts = reward_parts(
             before,
             result.observation,
-            self.cfg,
+            self.research_cfg,
             events=result.events,
             rules=self.game.rules,
             action=action,
@@ -310,7 +351,14 @@ class DemoRecordingApp(App):
         self.effects = [effect for effect in self.effects if effect[0] > result.observation.tick]
         for event in result.events:
             if event.kind == "PlantExploded":
-                self.effects.append((result.observation.tick + 12, event.get("row"), event.get("col"), event.get("radius")))
+                self.effects.append(
+                    (
+                        result.observation.tick + 12,
+                        event.get("row"),
+                        event.get("col"),
+                        event.get("radius"),
+                    )
+                )
             elif event.kind == "SunProduced" and event.get("amount"):
                 self.sun_flash_until = result.observation.tick + 8
 
@@ -326,7 +374,11 @@ class DemoRecordingApp(App):
 
             verify_replay(destination)
             if self.game.observe().status != Status.RUNNING:
-                self.transition_archive.finalize(self.game.observe(), outcome=self.game.observe().status.value, replay_path=destination)
+                self.transition_archive.finalize(
+                    self.game.observe(),
+                    outcome=self.game.observe().status.value,
+                    replay_path=destination,
+                )
                 self._archive_finalized = True
 
     def _autosave(self):
@@ -337,9 +389,13 @@ class DemoRecordingApp(App):
         try:
             return super().run()
         finally:
-            self._autosave()
-            if not self._archive_finalized:
-                self.transition_archive.close()
+            try:
+                if not self._archive_finalized:
+                    self.transition_archive.close()
+            finally:
+                import pygame
+
+                pygame.quit()
 
 
 def record_demo(
@@ -350,9 +406,35 @@ def record_demo(
     speed: float = 1,
     cfg: dict | None = None,
 ) -> dict:
-    cfg = cfg or load_config()
+    cfg = cfg or load_demo_config()
     output = Path(output)
     archive = Path(archive) if archive else output.with_suffix(".jsonl")
+    validate_recording_outputs(output, archive)
     app = DemoRecordingApp(cfg, replay_path=output, archive_path=archive, seed=seed, speed=speed)
     app.run()
-    return {"replay": str(output), "archive": str(archive), "seed": seed, "verified": output.exists()}
+    return {
+        "replay": str(output),
+        "archive": str(archive),
+        "seed": seed,
+        "verified": output.exists(),
+    }
+
+
+def validate_recording_outputs(replay_path: str | Path, archive_path: str | Path):
+    """Reject every prior or overlapping artifact before opening the UI."""
+    replay = Path(replay_path).resolve()
+    archive = Path(archive_path).resolve()
+    paths = {
+        "replay": replay,
+        "archive": archive,
+        "manifest": archive.with_suffix(archive.suffix + ".manifest.json"),
+        "history": archive.with_suffix(archive.suffix + ".history.json"),
+    }
+    from itertools import combinations
+
+    for (name, path), (other_name, other) in combinations(paths.items(), 2):
+        if path == other or path in other.parents or other in path.parents:
+            raise ValueError(f"recording outputs overlap ({name}, {other_name}): {path}, {other}")
+    for name, path in paths.items():
+        if path.exists() or path.is_symlink():
+            raise FileExistsError(f"recording {name} output already exists: {path}")

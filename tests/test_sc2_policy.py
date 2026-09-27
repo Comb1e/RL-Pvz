@@ -114,7 +114,7 @@ def test_sequential_heads_masks_ties_conditioning_and_roundtrips(device):
     from pvz_rl.config import load_config
     from pvz_rl.envs.actions import ActionCodec
     from pvz_rl.envs.actions import ActionSchema as A
-    from pvz_rl.policy.sequential_q import action_parts, assemble, branch_masks, greedy_choice
+    from pvz_rl.policy.sequential_q import action_parts, assemble, greedy_choice, selection_masks
     from pvz_rl.policy.spatial_policy import SequentialQPolicy
 
     cfg = load_config()
@@ -154,7 +154,7 @@ def test_sequential_heads_masks_ties_conditioning_and_roundtrips(device):
     with pytest.raises(ValueError, match="legal"):
         p.decide(obs, torch.zeros_like(mask))
     with pytest.raises(ValueError, match="finite"):
-        greedy_choice(torch.full((5, 10), torch.nan, device=device), branch_masks(mask))
+        greedy_choice(torch.full((5, 10), torch.nan, device=device), selection_masks(mask))
     commands = torch.arange(A.size, device=device)
     torch.testing.assert_close(assemble(*action_parts(commands)), commands)
     codec = ActionCodec(cfg)
@@ -278,10 +278,6 @@ def test_ten_way_scores_ignore_affordability_and_full_board(device):
         assert p.predict(obs.cpu().numpy(), deterministic=True)[0].tolist() == [2] * 3
         p.branch_head[-1].bias[9] = 4
         assert p.decide(obs, None, deterministic=True)[0].tolist() == [361] * 3
-        p.legacy_selection = True
-        p.branch_head[-1].bias[9] = 2
-        assert p.decide(obs, None, deterministic=True)[0].tolist() == [1] * 3
-        p.legacy_selection = False
         p.tile_head[-1].bias.fill_(float("nan"))
         with pytest.raises(ValueError, match="finite"):
             p.decide(obs, masks, deterministic=True)

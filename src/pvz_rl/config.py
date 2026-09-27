@@ -77,6 +77,16 @@ def load_config(path: str | Path | None = None) -> dict:
     return copy.deepcopy(cfg)
 
 
+def load_demo_config(path: str | Path | None = None) -> dict:
+    """The recurrent human-demo protocol is separate from the CUDA collector."""
+    source = Path(path) if path else files("pvz_rl").joinpath("data/demo.toml")
+    cfg = tomllib.loads(source.read_text("utf-8"))
+    validate_config(cfg)
+    if cfg["encoding"]["version"] != "event_v8" or cfg["policy"]["kind"] != "transformer_lstm_q_v1":
+        raise ValueError("Human demonstrations require the event_v8 Transformer-LSTM demo profile")
+    return copy.deepcopy(cfg)
+
+
 @lru_cache(maxsize=1)
 def _teaching_defaults():
     return tomllib.loads(files("pvz_rl").joinpath("data/teaching.toml").read_text("utf-8"))
@@ -86,17 +96,7 @@ def lesson_settings(cfg=None):
     return (cfg or {}).get("curriculum", {}).get("lessons", _teaching_defaults()["lessons"])
 
 
-def legacy_q_inference(cfg):
-    """The pinned 0.24.0 network can still play with its original semantics."""
-    return (
-        cfg.get("policy", {}).get("kind") == "event_sequential_q_v1"
-        and cfg["policy"].get("action_distribution") == "sequential_plant_epsilon_v1"
-        and cfg.get("training", {}).get("method") == "sequential_q_mc_v1"
-    )
-
-
-def validate_config(cfg: dict, *, inference=False) -> None:
-    legacy = inference and legacy_q_inference(cfg)
+def validate_config(cfg: dict) -> None:
     recurrent = (
         cfg.get("encoding", {}).get("version") == "event_v8"
         and cfg.get("policy", {}).get("kind") == "transformer_lstm_q_v1"
@@ -108,9 +108,11 @@ def validate_config(cfg: dict, *, inference=False) -> None:
         raise ValueError("training.validation_schedule must be periodic or stage_success")
     if simulator(cfg) not in ("cpu", "cuda"):
         raise ValueError("simulation.backend must be cpu or cuda")
-    allowed_kind = ("event_sequential_q_v1" if legacy else "event_sequential_q_v2")
     if not (
-        (cfg["encoding"].get("version") == "event_v7" and cfg.get("policy", {}).get("kind") == allowed_kind)
+        (
+            cfg["encoding"].get("version") == "event_v7"
+            and cfg.get("policy", {}).get("kind") == "event_sequential_q_v2"
+        )
         or recurrent
     ):
         raise ValueError(
@@ -131,8 +133,6 @@ def validate_config(cfg: dict, *, inference=False) -> None:
         "invalid_plant_penalty",
         "empty_dig_penalty",
     }
-    if legacy:
-        reward_keys -= {"invalid_plant_penalty", "empty_dig_penalty"}
     if set(cfg["reward"]) != reward_keys:
         raise ValueError(
             "reward must contain the outcome, net-value and rejection-penalty settings"
@@ -150,7 +150,7 @@ def validate_config(cfg: dict, *, inference=False) -> None:
         "invalid_plant_penalty",
         "empty_dig_penalty",
     ):
-        value = cfg["reward"].get(key, 0) if legacy else cfg["reward"][key]
+        value = cfg["reward"][key]
         if type(value) not in (int, float) or not math.isfinite(value) or value < 0:
             raise ValueError(f"reward.{key} must be finite and nonnegative")
     for group, keys in (
@@ -163,29 +163,30 @@ def validate_config(cfg: dict, *, inference=False) -> None:
             if type(value) not in (int, float) or not math.isfinite(value) or value <= 0:
                 raise ValueError(f"{group}.{key} must be finite and positive")
     policy = cfg["policy"]
-    memory = policy.get("memory", {})
-    for key in (
-        "model_width",
-        "layers",
-        "heads",
-        "feedforward_width",
-        "local_tokens",
-        "event_tokens",
-        "summary_tokens",
-        "summary_stride",
-    ):
-        if type(memory.get(key)) is not int or memory[key] < 1:
-            raise ValueError(f"policy.memory.{key} must be a positive integer")
-    if memory["model_width"] % memory["heads"]:
-        raise ValueError("Memory model_width must be divisible by heads")
-    if not math.isfinite(memory.get("gate_bias", float("nan"))):
-        raise ValueError("Memory gate_bias must be finite")
-    for key in ("plant_embedding", "state_embedding"):
-        if type(policy[key]) is not int or policy[key] < 1:
-            raise ValueError(f"policy.{key} must be a positive integer")
-    for key in ("scalar_sizes", "channels"):
-        if not policy[key] or any(type(n) is not int or n < 1 for n in policy[key]):
-            raise ValueError(f"policy.{key} must contain positive integers")
+    if not recurrent:
+        memory = policy.get("memory", {})
+        for key in (
+            "model_width",
+            "layers",
+            "heads",
+            "feedforward_width",
+            "local_tokens",
+            "event_tokens",
+            "summary_tokens",
+            "summary_stride",
+        ):
+            if type(memory.get(key)) is not int or memory[key] < 1:
+                raise ValueError(f"policy.memory.{key} must be a positive integer")
+        if memory["model_width"] % memory["heads"]:
+            raise ValueError("Memory model_width must be divisible by heads")
+        if not math.isfinite(memory.get("gate_bias", float("nan"))):
+            raise ValueError("Memory gate_bias must be finite")
+        for key in ("plant_embedding", "state_embedding"):
+            if type(policy[key]) is not int or policy[key] < 1:
+                raise ValueError(f"policy.{key} must be a positive integer")
+        for key in ("scalar_sizes", "channels"):
+            if not policy[key] or any(type(n) is not int or n < 1 for n in policy[key]):
+                raise ValueError(f"policy.{key} must contain positive integers")
     if recurrent:
         for key in (
             "entity_width",
@@ -247,6 +248,8 @@ def validate_config(cfg: dict, *, inference=False) -> None:
         from pvz_rl.learning.curriculum import STAGES
 
         for lesson in lesson_settings(cfg).values():
+            if "allowed_plants" in lesson:
+                raise ValueError("Retired allowed_plants setting; every species is available")
             if type(lesson.get("natural_sun")) is not bool:
                 raise ValueError(
                     "lesson.natural_sun must be an explicit boolean; use configs/train.toml "
@@ -260,10 +263,8 @@ def validate_config(cfg: dict, *, inference=False) -> None:
                 or lesson["initial_sun"] < 0
                 or not lesson["spawn_ticks"]
                 or any(type(t) is not int or t < 1 for t in lesson["spawn_ticks"])
-                or not lesson["allowed_plants"]
-                or not set(lesson["allowed_plants"]) <= set(PLANT_TYPES)
             ):
-                raise ValueError("Invalid lesson sun, spawn ticks or allowed plants")
+                raise ValueError("Invalid lesson sun or spawn ticks")
         schedule = (
             ("probe_interval_games", "minimum_stage_games")
             if uses_games(cfg)
@@ -292,13 +293,9 @@ def validate_config(cfg: dict, *, inference=False) -> None:
     runtime = runtime_settings(cfg)
     if not set(runtime) <= {
         "cache_legal_actions",
-        "coalesce_masks",
-        "cache_rollout_on_device",
         "refill_evaluation",
     } or any(type(value) is not bool for value in runtime.values()):
-        raise ValueError(
-            "Runtime settings must be known booleans (legacy transport flags are read-only compatibility settings)"
-        )
+        raise ValueError("Runtime settings must be known booleans")
     output = output_settings(cfg)
     log, visual = output["logging"], output["visualization"]
     if not math.isfinite(log["progress_seconds"]) or log["progress_seconds"] <= 0:
@@ -334,10 +331,8 @@ def validate_config(cfg: dict, *, inference=False) -> None:
     if not math.isfinite(visual["final_hold_seconds"]) or visual["final_hold_seconds"] < 0:
         raise ValueError("Visualization final_hold_seconds must be finite and nonnegative")
     env, train = cfg["environment"], cfg["training"]
-    expected_methods = {"sequential_q_mc_v1" if legacy else "sequential_q_mc_v2"}
-    if recurrent:
-        expected_methods.add("complete_return_lstm_v1")
-    if train.get("method") not in expected_methods:
+    expected_method = "complete_return_lstm_v1" if recurrent else "sequential_q_mc_v2"
+    if train.get("method") != expected_method:
         raise ValueError("Training requires a supported complete-return method and fresh models")
     if any(
         k in train
@@ -410,7 +405,11 @@ def validate_config(cfg: dict, *, inference=False) -> None:
         if type(demo.get(key, 1)) is not int or demo.get(key, 1) < 1:
             raise ValueError(f"training.demo.{key} must be a positive integer")
     for key in ("learning_rate", "gradient_clip", "time_budget_minutes"):
-        if type(demo.get(key, 1.0)) not in (int, float) or not math.isfinite(demo.get(key, 1.0)) or demo.get(key, 1.0) <= 0:
+        if (
+            type(demo.get(key, 1.0)) not in (int, float)
+            or not math.isfinite(demo.get(key, 1.0))
+            or demo.get(key, 1.0) <= 0
+        ):
             raise ValueError(f"training.demo.{key} must be finite and positive")
     if train["device"] not in ("cpu", "cuda"):
         raise ValueError("Training device must be cpu or cuda")
