@@ -2,7 +2,7 @@ import numpy as np
 import pytest
 from pvz_game import Dig, LevelSpec, Place, Spawn
 
-from pvz_rl.config import load_event_config as load_config
+from pvz_rl.config import load_config
 from pvz_rl.envs.env import PvZEnv
 
 

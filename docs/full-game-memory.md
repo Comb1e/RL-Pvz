@@ -1,7 +1,7 @@
-# Full-game memory: proposed framework
+# Archived full-game memory proposal
 
-Research proposal only. The policy has not been changed or trained. Current
-behavior remains in [architecture](architecture.md). See [sources](references.md#full-game-event-memory-and-efficient-attention--2026-09-26)
+Historical research notes for the removed event-memory model. Current entity
+attention and LSTM behavior is documented in [architecture](architecture.md). See [sources](references.md#full-game-event-memory-and-efficient-attention--2026-09-26)
 and [cost controls](math/history-attention.md).
 
 ## Retention contract

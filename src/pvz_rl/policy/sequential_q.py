@@ -3,16 +3,27 @@
 import math
 
 import torch
+from pvz_game import Rules
 
 from pvz_rl.envs.actions import ActionSchema as A
 
-POLICY_SIGNATURE = "event_sequential_q_v2"
+UNITS_PER_TILE = Rules().game["units_per_tile"]
+
+POLICY_SIGNATURE = "transformer_lstm_q_v2"
 ACTION_DISTRIBUTION = "sequential_q_unmasked_penalty_v1"
 
 
 def observation_tile_masks(obs):
     """Default proposal geometry from public plant fields, without private state."""
-    empty = obs[:, : A.tiles * 3 : 3] == 0
+    from pvz_rl.envs.encoding import collate_observations
+
+    obs = collate_observations(obs)
+    entities = obs.entities
+    plants = obs.entity_mask & (entities[..., 0] >= 1) & (entities[..., 0] <= A.plant_types)
+    tiles = entities[..., 2].long() * A.cols + entities[..., 3].long() // UNITS_PER_TILE
+    occupied = torch.zeros(len(obs), A.tiles, dtype=torch.long, device=obs.device)
+    occupied.scatter_add_(1, tiles.clamp(0, A.tiles - 1), plants.long())
+    empty = occupied == 0
     available = torch.ones(len(obs), 1, dtype=torch.bool, device=obs.device)
     return torch.cat((available, empty.repeat(1, A.plant_types), available.expand(-1, A.tiles)), -1)
 
@@ -32,9 +43,7 @@ def selection_masks(masks):
     # eight plant species, and dig even when a card cannot currently execute.
     # Inactive rows stay illegal here; select_q_actions overlays wait only
     # when its caller explicitly marks a row inactive for batched collection.
-    legal = torch.ones(
-        (len(masks), A.tile_groups + 1), dtype=torch.bool, device=masks.device
-    )
+    legal = torch.ones((len(masks), A.tile_groups + 1), dtype=torch.bool, device=masks.device)
     return legal & active[:, None]
 
 
@@ -107,7 +116,14 @@ def select_q_actions(
     active=None,
     diagnostic_indices=None,
 ):
-    """Shared ten-way Q comparison and conditional plant exploration."""
+    """Shared ten-way Q comparison and tile-only exploration.
+
+    The first-level branch is always the highest-Q proposal.  Exploration is
+    applied only after that branch has been selected, when choosing its tile.
+    Keeping the branch and tile decisions separate is important because the
+    simulator must receive the highest-Q proposal even when it later rejects
+    it for affordability or cooldown.
+    """
     # Every active environment compares all ten first-level outputs.  The
     # transport mask is used only for the selected tile; affordability and
     # cooldown are simulator outcomes.  Empty rows stay illegal and are
@@ -121,12 +137,7 @@ def select_q_actions(
     greedy = greedy_choice(values, legal)
     branches = greedy.clone()
     coins = torch.zeros(len(values), 2, device=values.device, dtype=torch.bool)
-    epsilon = per_head_epsilon(0.0 if deterministic else exploration_epsilon)
     tile_epsilon = 0.0 if deterministic else tile_exploration_epsilon
-    planting = ((greedy > 0) & (greedy <= A.plant_types)).nonzero(as_tuple=True)[0]
-    if len(planting):
-        species, coins[planting, 0] = explore(greedy[planting] - 1, legal[planting, 1:-1], epsilon)
-        branches[planting] = species + 1
     tiles = torch.zeros_like(branches)
     greedy_tiles = torch.zeros_like(branches)
     selected_tile_values = values.new_zeros(len(values))
@@ -145,24 +156,10 @@ def select_q_actions(
         preferred = greedy_choice(tile_q, tile_candidates)
         tiles[nonwait] = preferred
         greedy_tiles[nonwait] = preferred
-        plant_rows = (branches[nonwait] <= A.plant_types).nonzero(as_tuple=True)[0]
-        if len(plant_rows):
-            selected, fired = explore(
-                preferred[plant_rows], tile_candidates[plant_rows], tile_epsilon
-            )
-            tiles[nonwait[plant_rows]] = selected
-            coins[nonwait[plant_rows], 1] = fired
+        selected, fired = explore(preferred, tile_candidates, tile_epsilon)
+        tiles[nonwait] = selected
+        coins[nonwait, 1] = fired
         selected_tile_values[nonwait] = tile_q.gather(1, tiles[nonwait, None]).flatten()
-    # Recover the unmodified greedy full command when species exploration switched branches.
-    changed = (branches != greedy).nonzero(as_tuple=True)[0]
-    if len(changed):
-        q = tile_values(board[changed], pooled[changed], greedy[changed])
-        mask = A.tile_masks(action_masks[changed])[
-            torch.arange(len(changed), device=values.device), greedy[changed] - 1
-        ]
-        mask = mask.clone()
-        mask[~mask.any(-1), 0] = True
-        greedy_tiles[changed] = greedy_choice(q, mask)
     actions = assemble(branches, tiles)
     details = dict(greedy_actions=assemble(greedy, greedy_tiles), coins=coins)
     details["branch_q"] = values

@@ -4,8 +4,7 @@ import pytest
 import torch
 from pvz_game import Dig, LevelSpec, Place, Spawn
 
-from pvz_rl.config import gpu_defaults
-from pvz_rl.config import load_event_config as load_config
+from pvz_rl.config import gpu_defaults, load_config
 from pvz_rl.envs.env import PvZEnv
 from pvz_rl.learning.training import vector_env
 from pvz_rl.monitoring.metrics import agent_action_count, mean_agent_actions
@@ -13,9 +12,9 @@ from pvz_rl.monitoring.metrics import agent_action_count, mean_agent_actions
 
 def test_defaults_and_archived_action_counts():
     cfg = load_config()
-    assert cfg == load_config("configs/event-memory.toml")
+    assert cfg == load_config("src/pvz_rl/data/train.toml")
     assert cfg["training"]["n_envs"] == gpu_defaults()["n_envs"] == 128
-    assert cfg["training"]["method"] == "sequential_q_mc_v2"
+    assert cfg["training"]["method"] == "complete_return_lstm_v1"
     assert agent_action_count({"agent_actions": 2, "decisions": 1000}) == 2
     assert agent_action_count({"action_timing": "per_tick", "instant_actions": 3}) == 3
     assert agent_action_count({"decisions": 1000}) is None
@@ -53,6 +52,7 @@ def test_cuda_counts_and_games_survive_128_waits():
         pytest.skip("CUDA unavailable")
     cfg = load_config()
     cfg["training"].update(n_envs=1, batch_size=128)
+    cfg["policy"]["chunk_length"] = 16
     env = vector_env(cfg, "masked", 101, family="diagnostic")
     try:
         env.reset()

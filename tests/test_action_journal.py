@@ -9,7 +9,7 @@ from pvz_rl.presentation.action_journal import ActionJournal
 
 
 def batch(n=5):
-    rows = np.zeros(n, dtype=trajectory_dtype(286, 48))
+    rows = np.zeros(n, dtype=trajectory_dtype())
     rows["active"] = True
     masks = np.zeros((n, 406), dtype=bool)
     masks[:, [0, 1, 361]] = True
@@ -44,8 +44,15 @@ def test_entire_offscreen_game_spills_pages_and_restores(tmp_path):
             restored.restore_archive(archive)
         assert restored.page(4, 7, 0) == first
         rows["action"] = 0
+        rows["entity_count"] = 256
+        rows["entity_omitted"] = [0, 2, 81]
         restored.record_batch(rows, scores, outcomes, [7] * 5)
         assert restored.sizes == [150] * 5
+        latest = restored.page(4, 7)["latest"]
+        assert latest["entity_count"] == 256 and latest["entity_omitted"] == [0, 2, 81]
+        from pvz_rl.presentation.live_layout import entity_label
+
+        assert "omitted P/Z/Q 0/2/81" in entity_label(latest)
         assert restored.page(4, 7)["latest"]["sequence"] == 151
         restored.reset(4, 8)
         assert restored.page(4, 8)["rows"] == []
@@ -184,7 +191,7 @@ def test_pending_switch_cannot_mix_destination_history_with_previous_board():
     assert not accept_history_response([packet], browse, response)
 
 
-def test_128_game_interruption_restores_actual_scores_and_optimizer(tmp_path):
+def test_cohort_interruption_restores_actual_scores_and_optimizer(tmp_path):
     import copy
 
     import pytest
@@ -192,15 +199,16 @@ def test_128_game_interruption_restores_actual_scores_and_optimizer(tmp_path):
     from stable_baselines3.common.callbacks import BaseCallback
     from stable_baselines3.common.logger import configure
 
-    from pvz_rl.config import load_event_config as load_config
-    from pvz_rl.learning.cuda_q import CudaSequentialQ
+    from pvz_rl.config import load_config
+    from pvz_rl.learning.recurrent_q import CudaRecurrentQ
     from pvz_rl.learning.training import build_model, vector_env
     from pvz_rl.monitoring.benchmark import policy_digest
 
     cfg = load_config()
-    cfg["environment"]["cutoff_seconds"] = 1  # Explicit controlled short episode.
+    cfg["environment"]["cutoff_seconds"] = 1
+    cfg["training"]["n_envs"] = 4
+    cfg["training"]["n_epochs"] = 1
     cfg["visualization"]["live_history_ram_mib"] = 0  # Exercise disk and archive.
-    cfg["training"]["performance"]["token_cache_gib"] = 0
     outcomes = []
 
     class Interrupt(BaseCallback):
@@ -216,31 +224,32 @@ def test_128_game_interruption_restores_actual_scores_and_optimizer(tmp_path):
 
             set_exploration_rate(model, 0.0)
             with torch.no_grad():
+                model.policy.branch_head[-1].weight.zero_()
+                model.policy.branch_head[-1].bias.zero_()
                 model.policy.branch_head[-1].bias[1] = 0.1
-                model.policy.branch_head[-1].bias[-1] = -0.2
             if interrupted:
                 with pytest.raises(KeyboardInterrupt):
                     model.learn(1, callback=Interrupt())
-                page = env.action_journal.page(127, env._episode_serial[127])
-                assert [r["action"] for r in page["rows"]] == [1, 2]
+                page = env.action_journal.page(3, env._episode_serial[3])
+                assert all(1 <= r["action"] <= 45 for r in page["rows"])
                 assert [r["sequence"] for r in page["rows"]] == [1, 2]
                 assert [r["tick"] for r in page["rows"]] == [0, 0]
                 assert page["rows"][0]["q"][1] == pytest.approx(0.1)
                 assert page["rows"][1]["q"] == page["rows"][0]["q"]
                 model.save(tmp_path / "interrupted.zip")
-                model = CudaSequentialQ.load(tmp_path / "interrupted.zip", env=env)
+                model = CudaRecurrentQ.load(tmp_path / "interrupted.zip", env=env)
                 model.set_logger(configure(format_strings=[]))
                 model.learn(1, reset_num_timesteps=False)
             else:
                 model.learn(1)
-            assert model.training_games == 128
-            assert model.cohort_metrics["q_optimizer_steps"] == 52
-            assert model.cohort_metrics["planting_samples"] == 128 * 101
+            assert model.training_games == 4
+            assert model.cohort_metrics["q_optimizer_steps"] == 1
+            assert model.cohort_metrics["planting_samples"] == 4 * 101
             outcomes.append(
                 (
                     policy_digest(model),
                     model.policy.optimizer.state_dict(),
-                    env.action_journal.page(127, env._episode_serial[127]),
+                    env.action_journal.page(3, env._episode_serial[3]),
                     torch.get_rng_state(),
                     torch.cuda.get_rng_state(),
                 )
@@ -286,7 +295,7 @@ def test_page_selection_survives_scroll_and_stale_requests():
 
 
 def test_journal_penalties_and_exact_q_survive_archive(tmp_path):
-    from pvz_rl.config import load_event_config as load_config
+    from pvz_rl.config import load_config
     from pvz_rl.presentation.live_layout import result_label
 
     settings = load_config()["reward"]
@@ -301,6 +310,7 @@ def test_journal_penalties_and_exact_q_survive_archive(tmp_path):
         assert a.latest[2]["penalty"] == -settings["empty_dig_penalty"]
         assert a.latest[3]["penalty"] == 0
         assert "automatic wait: insufficient_sun" in result_label(a.page(0, 7)["latest"])
+        assert a.page(0, 7)["latest"]["executed_action"] == 0
         assert "penalty -0.000333333" in result_label(a.page(2, 7)["latest"])
         with ZipFile(tmp_path / "history.zip", "w") as archive:
             a.write_archive(archive)

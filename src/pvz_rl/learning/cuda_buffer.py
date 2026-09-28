@@ -1,20 +1,23 @@
-"""Bounded host trajectories and exact raw-memory reconstruction for complete games."""
+"""Bounded metadata and ragged entity storage for complete recurrent games."""
 
 import shutil
 from pathlib import Path
-from time import perf_counter
 
 import numpy as np
-import torch
 
 from pvz_rl.envs.actions import ActionSchema as A
-from pvz_rl.policy.event_memory import MemoryContext
+from pvz_rl.envs.encoding import ENTITY_WIDTH, GLOBAL_WIDTH, collate_observations
+
+TRAJECTORY_PROTOCOL = "pvz-rl/entity-trajectory-v1"
 
 
-def trajectory_dtype(observations, capacity):
+def trajectory_dtype():
     return np.dtype(
         [
-            ("observation", "<f4", observations),
+            ("entity_offset", "<u8"),
+            ("entity_count", "<u4"),
+            ("entity_omitted", "<u4", 3),
+            ("globals", "<f4", GLOBAL_WIDTH),
             ("mask", "u1", (A.size + 7) // 8),
             ("action", "<u2"),
             ("previous", "<u2"),
@@ -30,132 +33,101 @@ def trajectory_dtype(observations, capacity):
             ("species_coin", "?"),
             ("tile_coin", "?"),
             ("target", "<f4"),
-            ("ids", "<u4", capacity),
-            ("counts", "<u2", capacity),
-            ("starts", "<u4", capacity),
+            ("previous_outcome", "<f4", 2),
+            ("accepted", "?"),
+            ("done", "?"),
+            ("executed_action", "<u2"),
         ]
-        + (
-            [("previous_outcome", "<f4", 2), ("accepted", "?"), ("done", "?")]
-            if capacity == 0
-            else []
-        )
     )
 
 
 class CompleteGameBuffer:
-    """Blocks use RAM up to a budget, then disk-backed arrays without GPU growth.
-
-    Memory entries reference earlier raw tokens plus compression metadata. This
-    is a lossless checkpoint of the deterministic token bank, not hidden neural
-    activations. A bounded minibatch reconstructs precisely its causal context.
-    """
-
-    def __init__(
-        self, path, observation_size, capacity, n_envs, *, ram_bytes=6 * 1024**3, block_rows=32768
-    ):
+    def __init__(self, path, n_envs, *, ram_bytes=6 * 1024**3, block_rows=32768, schema=None):
         self.path = Path(path)
         self.path.mkdir(parents=True, exist_ok=True)
-        self.dtype = trajectory_dtype(observation_size, capacity)
-        self.observation_size, self.capacity, self.n_envs = observation_size, capacity, n_envs
-        self.ram_bytes, self.block_rows = int(ram_bytes), int(block_rows)
-        self.blocks = []
-        self.size = self.ram_used = 0
+        self.dtype = trajectory_dtype()
+        self.n_envs, self.ram_bytes, self.block_rows = n_envs, int(ram_bytes), int(block_rows)
+        self.schema = schema
+        self.blocks, self.entity_blocks = [], []
+        self.size = self.entity_size = self.ram_used = 0
         self.finalized = False
-        self.cache = None
         self.transport_metrics = dict(
-            preparation_seconds=0.0,
-            transfer_wait_seconds=0.0,
-            transfer_stream_seconds=0.0,
-            cache_hits=0,
-            cache_requests=0,
+            preparation_seconds=0.0, transfer_wait_seconds=0.0, transfer_stream_seconds=0.0
         )
 
-    def configure_cache(self, device, gib):
-        from pvz_rl.learning.transfers import TokenCache
-
-        if torch.device(device).type != "cuda":
-            return
-        self.cache = TokenCache(device, self.block_rows, self.observation_size + 3, gib * 1024**3)
-        # Resume rebuilds only raw inputs. CPU/disk storage remains authoritative.
-        for start in range(0, self.size, self.block_rows):
-            if self.cache.full:
-                break
-            tokens = self.raw_tokens(np.arange(start, min(self.size, start + self.block_rows)))
-            self.cache.append(torch.from_numpy(tokens).to(device))
-
-    def _allocate(self):
-        amount = self.block_rows * self.dtype.itemsize
+    def _allocate(self, entity=False):
+        blocks = self.entity_blocks if entity else self.blocks
+        shape = (self.block_rows, ENTITY_WIDTH) if entity else (self.block_rows,)
+        dtype = np.dtype("<i4") if entity else self.dtype
+        amount = int(np.prod(shape)) * dtype.itemsize
         if self.ram_used + amount <= self.ram_bytes:
-            block = np.zeros(self.block_rows, dtype=self.dtype)
+            block = np.zeros(shape, dtype=dtype)
             self.ram_used += amount
         else:
+            name = "entities" if entity else "block"
             block = np.lib.format.open_memmap(
-                self.path / f"block-{len(self.blocks):06d}.npy",
-                mode="w+",
-                dtype=self.dtype,
-                shape=(self.block_rows,),
+                self.path / f"{name}-{len(blocks):06d}.npy", mode="w+", dtype=dtype, shape=shape
             )
-        self.blocks.append(block)
+        blocks.append(block)
 
-    def append(self, records, raw_tokens=None):
+    def _append(self, values, entity=False):
+        blocks = self.entity_blocks if entity else self.blocks
+        key = "entity_size" if entity else "size"
+        at = 0
+        while at < len(values):
+            b, offset = divmod(getattr(self, key), self.block_rows)
+            if b == len(blocks):
+                self._allocate(entity)
+            take = min(len(values) - at, self.block_rows - offset)
+            blocks[b][offset : offset + take] = values[at : at + take]
+            setattr(self, key, getattr(self, key) + take)
+            at += take
+
+    def append(self, records, observations):
         if self.finalized:
             raise RuntimeError("Cannot append after complete-return finalization")
-        records = np.asarray(records, dtype=self.dtype)
-        if self.cache is not None and not self.cache.full:
-            if raw_tokens is None:
-                raw_tokens = torch.from_numpy(self._tokens_from_rows(records)).to(self.cache.device)
-            self.cache.append(raw_tokens)
-        if self.size + len(records) >= 2**32:
-            raise OverflowError("Raw memory reference capacity exceeded")
-        at = 0
-        while at < len(records):
-            b, offset = divmod(self.size, self.block_rows)
-            if b == len(self.blocks):
-                self._allocate()
-            take = min(len(records) - at, self.block_rows - offset)
-            self.blocks[b][offset : offset + take] = records[at : at + take]
-            at += take
-            self.size += take
+        records = np.array(records, dtype=self.dtype, copy=True)
+        observations = collate_observations(observations).observations()
+        if len(records) != len(observations):
+            raise ValueError("Each transition needs one public observation")
+        for row, obs in zip(records, observations, strict=True):
+            row["entity_offset"], row["entity_count"] = self.entity_size, len(obs["entities"])
+            row["globals"] = obs["globals"]
+            self._append(obs["entities"], entity=True)
+        self._append(records)
 
     def take(self, indices):
         indices = np.asarray(indices, dtype=np.int64)
         if np.any(indices < 0) or np.any(indices >= self.size):
             raise IndexError("Trajectory index outside collected history")
         result = np.empty(indices.shape, dtype=self.dtype)
-        block_ids, offsets = np.divmod(indices, self.block_rows)
-        for b in np.unique(block_ids):
-            selected = block_ids == b
-            result[selected] = self.blocks[b][offsets[selected]]
-        return result
-
-    def _tokens_from_rows(self, rows):
-        result = np.empty((*rows.shape, self.observation_size + 3), np.float32)
-        result[..., : self.observation_size] = rows["observation"]
-        for i, key in enumerate(("previous", "reset", "tick"), self.observation_size):
-            result[..., i] = rows[key]
-        return result
-
-    def raw_tokens(self, indices):
-        """Gather fields before rows: never copy masks, returns or history metadata."""
-        indices = np.asarray(indices, dtype=np.int64)
-        if np.any(indices < 0) or np.any(indices >= self.size):
-            raise IndexError("Trajectory index outside collected history")
-        result = np.empty((*indices.shape, self.observation_size + 3), np.float32)
         blocks, offsets = np.divmod(indices, self.block_rows)
         for b in np.unique(blocks):
             selected = blocks == b
-            rows = offsets[selected]
-            result[selected, : self.observation_size] = self.blocks[b]["observation"][rows]
-            for i, key in enumerate(("previous", "reset", "tick"), self.observation_size):
-                result[..., i][selected] = self.blocks[b][key][rows]
+            result[selected] = self.blocks[b][offsets[selected]]
         return result
+
+    def observations(self, rows, device=None):
+        observations = []
+        for row in rows.reshape(-1):
+            start, count = int(row["entity_offset"]), int(row["entity_count"])
+            if start < 0 or start + count > self.entity_size:
+                raise ValueError("Corrupt trajectory entity offset/count")
+            entities = np.empty((count, ENTITY_WIDTH), np.int32)
+            copied = 0
+            while copied < count:
+                b, offset = divmod(start + copied, self.block_rows)
+                take = min(count - copied, self.block_rows - offset)
+                entities[copied : copied + take] = self.entity_blocks[b][offset : offset + take]
+                copied += take
+            observations.append(dict(entities=entities, globals=row["globals"]))
+        return collate_observations(observations, device).reshape(*rows.shape)
 
     def valid_indices(self):
         parts = []
         for b, block in enumerate(self.blocks):
             rows = block[: min(self.block_rows, self.size - b * self.block_rows)]
-            keep = rows["active"].copy()
-            parts.append(np.flatnonzero(keep) + b * self.block_rows)
+            parts.append(np.flatnonzero(rows["active"]) + b * self.block_rows)
         return np.concatenate(parts) if parts else np.empty(0, np.int64)
 
     def finalize(self):
@@ -202,156 +174,130 @@ class CompleteGameBuffer:
             for i, name in enumerate(("wait", "plant", "dig"))
         }
 
-    def batch(self, indices, device, *, staging=None):
-        started = perf_counter()
-        rows = self.take(indices)
-        ids = rows["ids"].astype(np.int64)
-        valid = rows["counts"] > 0
-        if np.any(ids[valid] > np.asarray(indices)[:, None].repeat(self.capacity, axis=1)[valid]):
-            raise RuntimeError("Future token in causal memory")
-
-        def tensor(x, key):
-            if staging is not None:
-                return staging.tensor(key, x, device)
-            host = torch.from_numpy(np.ascontiguousarray(x))
-            return (
-                host.pin_memory().to(device, non_blocking=True)
-                if str(device).startswith("cuda")
-                else host.to(device)
-            )
-
-        cached_size = (
-            self.cache.size if self.cache is not None and torch.device(device).type == "cuda" else 0
-        )
-        hit = valid & (ids < cached_size)
-        self.transport_metrics["cache_hits"] += int(hit.sum())
-        self.transport_metrics["cache_requests"] += int(valid.sum())
-        if hit.any():
-            tokens = torch.zeros(
-                (*ids.shape, self.observation_size + 3), device=device, dtype=torch.float32
-            )
-            flat = tokens.view(-1, self.observation_size + 3)
-            blocks = ids // self.block_rows
-            for b in np.unique(blocks[hit]):
-                positions = np.flatnonzero(hit & (blocks == b))
-                ix = tensor(positions, f"positions-{b}")
-                refs = tensor(ids.flat[positions] % self.block_rows, f"refs-{b}")
-                flat.index_copy_(0, ix, self.cache.blocks[b].index_select(0, refs))
-            misses = np.flatnonzero(valid & ~hit)
-            if len(misses):
-                flat.index_copy_(
-                    0,
-                    tensor(misses, "miss-ids"),
-                    tensor(self.raw_tokens(ids.flat[misses]), "miss-tokens"),
+    def _arrays(self):
+        for prefix, blocks, size in (
+            ("block", self.blocks, self.size),
+            ("entities", self.entity_blocks, self.entity_size),
+        ):
+            for b, block in enumerate(blocks):
+                yield (
+                    f"{prefix}-{b:06d}.npy",
+                    block[: min(self.block_rows, size - b * self.block_rows)],
                 )
-        else:
-            raw = self.raw_tokens(np.where(valid, ids, 0))
-            raw[~valid] = 0
-            tokens = tensor(raw, "tokens")
-        context = MemoryContext(
-            tokens,
-            tensor(valid, "valid"),
-            tensor(rows["counts"].astype(np.float32), "counts"),
-            tensor(rows["starts"].astype(np.float32), "starts"),
+
+    def metadata(self):
+        return dict(
+            protocol=TRAJECTORY_PROTOCOL,
+            schema=self.schema,
+            n_envs=self.n_envs,
+            ram_bytes=self.ram_bytes,
+            block_rows=self.block_rows,
+            size=self.size,
+            entity_size=self.entity_size,
+            finalized=self.finalized,
+            group_counts=getattr(self, "group_counts", None),
+            species_counts=getattr(self, "species_counts", None),
+            transport_metrics=dict(self.transport_metrics),
         )
-        masks = np.unpackbits(rows["mask"], axis=-1, count=A.size, bitorder="little").astype(bool)
-        data = {
-            name: tensor(
-                rows[name].astype(np.float32 if name not in ("action", "env") else np.int64), name
-            )
-            for name in (
-                "observation",
-                "action",
-                "reward",
-                "branch_value",
-                "tile_value",
-                "target",
-                "env",
-            )
-        }
-        data.update(masks=tensor(masks, "masks"), context=context)
-        self.transport_metrics["preparation_seconds"] += perf_counter() - started
-        return data
 
     def save(self, destination):
-        """Publish a self-contained checkpoint sidecar, streaming one block at a time."""
         destination = Path(destination)
         destination.mkdir(parents=True, exist_ok=True)
-        for b, block in enumerate(self.blocks):
-            rows = block[: min(self.block_rows, self.size - b * self.block_rows)]
-            target = destination / f"block-{b:06d}.npy"
+        for name, array in self._arrays():
+            target = destination / name
             temporary = target.with_suffix(".tmp")
             with temporary.open("wb") as stream:
-                np.save(stream, rows, allow_pickle=False)
+                np.save(stream, array, allow_pickle=False)
             temporary.replace(target)
         return self.metadata()
 
-    def metadata(self):
-        return {
-            "observation_size": self.observation_size,
-            "capacity": self.capacity,
-            "n_envs": self.n_envs,
-            "ram_bytes": self.ram_bytes,
-            "block_rows": self.block_rows,
-            "size": self.size,
-            "finalized": self.finalized,
-            "group_counts": getattr(self, "group_counts", None),
-            "species_counts": getattr(self, "species_counts", None),
-            "transport_metrics": dict(self.transport_metrics),
-        }
-
     def write_archive(self, archive):
-        """Stream each block into the checkpoint; never assemble the whole cohort."""
-        for b, block in enumerate(self.blocks):
-            rows = block[: min(self.block_rows, self.size - b * self.block_rows)]
-            with archive.open(f"cohort/block-{b:06d}.npy", "w", force_zip64=True) as stream:
-                np.save(stream, rows, allow_pickle=False)
+        for name, array in self._arrays():
+            with archive.open("cohort/" + name, "w", force_zip64=True) as stream:
+                np.save(stream, array, allow_pickle=False)
+
+    @staticmethod
+    def validate_metadata(state):
+        if state.get("protocol") != TRAJECTORY_PROTOCOL:
+            raise ValueError("Retired trajectory schema; fresh initialization is required")
+        for name, minimum in (
+            ("n_envs", 1),
+            ("block_rows", 1),
+            ("size", 0),
+            ("entity_size", 0),
+            ("ram_bytes", 0),
+        ):
+            if type(state.get(name)) is not int or state[name] < minimum:
+                raise ValueError(f"Corrupt trajectory metadata: {name}")
 
     @classmethod
     def restore_archive(cls, archive, state, workspace):
+        cls.validate_metadata(state)
         source = Path(workspace) / "restore"
         source.mkdir()
         try:
-            for b in range((state["size"] + state["block_rows"] - 1) // state["block_rows"]):
-                name = f"block-{b:06d}.npy"
-                with archive.open("cohort/" + name) as inp, (source / name).open("wb") as out:
-                    shutil.copyfileobj(inp, out, length=1024 * 1024)
+            for prefix, size in (("block", state["size"]), ("entities", state["entity_size"])):
+                for b in range((size + state["block_rows"] - 1) // state["block_rows"]):
+                    name = f"{prefix}-{b:06d}.npy"
+                    with archive.open("cohort/" + name) as inp, (source / name).open("wb") as out:
+                        shutil.copyfileobj(inp, out, length=1024 * 1024)
             return cls.restore(source, state, workspace)
         finally:
-            for path in source.glob("block-*.npy"):
+            for path in source.glob("*.npy"):
                 path.unlink()
             source.rmdir()
 
     @classmethod
     def restore(cls, source, state, workspace):
-        source = Path(source)
+        cls.validate_metadata(state)
         obj = cls(
-            workspace,
-            **{
-                k: state[k]
-                for k in ("observation_size", "capacity", "n_envs", "ram_bytes", "block_rows")
-            },
+            workspace, **{k: state[k] for k in ("n_envs", "ram_bytes", "block_rows", "schema")}
         )
-        # Copy into new writable workspace; original checkpoint remains immutable.
-        for b in range((state["size"] + obj.block_rows - 1) // obj.block_rows):
-            block = np.load(source / f"block-{b:06d}.npy", mmap_mode="r", allow_pickle=False)
-            obj.append(block)
-        for k in ("finalized", "group_counts", "species_counts"):
-            setattr(obj, k, state[k])
-        obj.transport_metrics.update(state.get("transport_metrics", {}))
-        return obj
+        try:
+            for entity, prefix, size in (
+                (False, "block", state["size"]),
+                (True, "entities", state["entity_size"]),
+            ):
+                for b in range((size + obj.block_rows - 1) // obj.block_rows):
+                    array = np.load(Path(source) / f"{prefix}-{b:06d}.npy", allow_pickle=False)
+                    count = min(obj.block_rows, size - b * obj.block_rows)
+                    shape = (count, ENTITY_WIDTH) if entity else (count,)
+                    dtype = np.dtype("<i4") if entity else obj.dtype
+                    if array.shape != shape or array.dtype != dtype:
+                        raise ValueError("Corrupt trajectory block shape or dtype")
+                    obj._append(array, entity)
+            expected = 0
+            for b, block in enumerate(obj.blocks):
+                for row in block[: min(obj.block_rows, obj.size - b * obj.block_rows)]:
+                    count = int(row["entity_count"])
+                    if (
+                        int(row["entity_offset"]) != expected
+                        or expected + count > obj.entity_size
+                        or (obj.schema and count > obj.schema["max_entities"])
+                    ):
+                        raise ValueError("Corrupt trajectory entity offset/count")
+                    expected += count
+            if expected != obj.entity_size:
+                raise ValueError("Orphan entity records in trajectory")
+            for key in ("finalized", "group_counts", "species_counts"):
+                setattr(obj, key, state[key])
+            obj.transport_metrics.update(state.get("transport_metrics", {}))
+            return obj
+        except Exception:
+            obj.close()
+            raise
 
     def close(self):
-        self.cache = None
-        for block in self.blocks:
-            if isinstance(block, np.memmap):
-                block.flush()
-                block._mmap.close()
-        self.blocks.clear()
-        # Only transient files owned by this buffer are removed.
+        for blocks in (self.blocks, self.entity_blocks):
+            for block in blocks:
+                if isinstance(block, np.memmap):
+                    block.flush()
+                    block._mmap.close()
+            blocks.clear()
         if self.path.is_dir():
-            for path in self.path.glob("block-*.npy"):
-                path.unlink()
+            for prefix in ("block", "entities"):
+                for path in self.path.glob(prefix + "-*.npy"):
+                    path.unlink()
             try:
                 self.path.rmdir()
             except OSError:

@@ -10,18 +10,21 @@ import torch
 from pvz_rl.config import digest, load_config, validate_config
 from pvz_rl.learning.training_requirements import transfer_protocol
 
-DEMO_PROTOCOL = "pvz-rl/demo-initialization-checkpoint-v1"
-STATE_PROTOCOL = "pvz-rl/lstm-state-v1"
+DEMO_PROTOCOL = "pvz-rl/demo-initialization-checkpoint-v2"
+STATE_PROTOCOL = "pvz-rl/lstm-state-v2"
 
 
 def protocol_for(kind):
     methods = {
-        "event_sequential_q_v2": "sequential_q_mc_v2",
-        "transformer_lstm_q_v1": "complete_return_lstm_v1",
+        "transformer_lstm_q_v2": "complete_return_lstm_v1",
     }
     if kind not in methods:
-        raise ValueError(f"Incompatible checkpoint model family: {kind}")
-    return dict(policy=kind, optimizer=methods[kind], exploration="sequential_plant_epsilon_v1")
+        raise ValueError(
+            f"Incompatible checkpoint model family: {kind}; entity_v1 requires fresh initialization"
+        )
+    from pvz_rl.learning.exploration import EXPLORATION_PROTOCOL
+
+    return dict(policy=kind, optimizer=methods[kind], exploration=EXPLORATION_PROTOCOL)
 
 
 def compatible_config(source, target):
@@ -43,77 +46,6 @@ def execution_config(cfg):
     return cfg
 
 
-def migrate_curriculum(metadata):
-    """Read old model weights without reinstating removed lesson implementations."""
-    from pvz_rl.learning.curriculum import STAGES
-
-    cfg = copy.deepcopy(metadata["config"])
-    curriculum = cfg["curriculum"]
-    removed = set(curriculum.get("stages", {})) - set(STAGES)
-    if not removed:
-        return cfg
-    if len(removed) != 1 or not set(STAGES) <= set(curriculum["stages"]):
-        raise ValueError("Unsupported historical curriculum schema")
-    metadata["previous_stage_order"] = [*sorted(removed), *STAGES]
-    if curriculum.get("run_stage") in removed:
-        metadata["resume_unsupported_reason"] = "the selected curriculum lesson was removed"
-        curriculum.pop("run_stage")
-        cfg["training"]["until_stage_complete"] = False
-    curriculum.pop("lessons", None)
-    for name in removed:
-        curriculum["stages"].pop(name)
-    for stage in curriculum["stages"].values():
-        pairs = [
-            (task, weight)
-            for task, weight in zip(stage["tasks"], stage["weights"])
-            if task not in removed
-        ]
-        total = sum(weight for _, weight in pairs)
-        if not total:
-            raise ValueError("Historical curriculum has no retained task weight")
-        stage["tasks"] = [task for task, _ in pairs]
-        stage["weights"] = [weight / total for _, weight in pairs]
-        stage["requirements"] = {k: v for k, v in stage["requirements"].items() if k not in removed}
-    return cfg
-
-
-def migrate_resume_state(model, metadata):
-    """Translate retained stage indices; never resume an unavailable lesson."""
-    from pvz_rl.learning.curriculum import STAGES
-
-    previous = metadata.get("previous_stage_order")
-    if not previous:
-        return
-    if metadata.get("resume_unsupported_reason"):
-        raise ValueError(
-            "Cannot resume: " + metadata["resume_unsupported_reason"] + "; use --init-from"
-        )
-
-    def stage(index):
-        name = previous[index]
-        if name not in STAGES:
-            raise ValueError("Cannot resume a removed curriculum lesson; use --init-from")
-        return STAGES.index(name)
-
-    curriculum = getattr(model, "curriculum_state", None)
-    if curriculum:
-        curriculum["stage"] = stage(curriculum["stage"])
-    pending = getattr(model, "research_schedule", {}).get("pending_stage_validation")
-    if pending and pending.get("stage") not in STAGES:
-        raise ValueError("Cannot resume pending evaluation of a removed lesson; use --init-from")
-    runtime = model.runtime_state or {}
-    environment = runtime.get("environment")
-    if environment:
-        environment["queue_stage"] = stage(environment["queue_stage"])
-        attributes = environment["attributes"]
-        for episode in attributes["_episode"]:
-            if episode and episode[1] not in ("preset", "diagnostic"):
-                raise ValueError(
-                    "Cannot resume unfinished removed-lesson trajectories; use --init-from"
-                )
-        attributes["_episode_stages"] = [stage(i) for i in attributes["_episode_stages"]]
-
-
 def inspect_checkpoint(path):
     path = Path(path).resolve()
     if not path.suffix:
@@ -132,7 +64,9 @@ def inspect_checkpoint(path):
     if path.suffix == ".pt":
         saved = torch.load(path, map_location="cpu", weights_only=True)
         if saved.get("protocol") != DEMO_PROTOCOL:
-            raise ValueError("Unsupported demonstration checkpoint protocol")
+            raise ValueError(
+                "Unsupported demonstration checkpoint protocol; record a fresh entity_v1 demonstration"
+            )
         if saved.get("recurrent_storage_protocol") != STATE_PROTOCOL:
             raise ValueError("Unsupported recurrent storage protocol")
         if not isinstance(saved.get("config"), dict) or saved.get("config_digest") != digest(
@@ -147,7 +81,13 @@ def inspect_checkpoint(path):
         ):
             raise ValueError("Demonstration checkpoint contains invalid or non-finite weights")
         cfg = saved["config"]
-        if cfg["policy"]["kind"] != "transformer_lstm_q_v1":
+        from pvz_game import Rules
+
+        from pvz_rl.envs.encoding import ObservationEncoder
+
+        if saved.get("observation_schema") != ObservationEncoder(cfg, Rules()).schema():
+            raise ValueError("Checkpoint entity schema disagrees with configuration")
+        if cfg["policy"]["kind"] != "transformer_lstm_q_v2":
             raise ValueError("Demonstration checkpoint requires Transformer-LSTM weights")
         metadata = dict(
             config=cfg,
@@ -175,20 +115,32 @@ def inspect_checkpoint(path):
                 else json.loads((path.parent / "metadata.json").read_text("utf-8"))
             )
         cfg = metadata["config"]
+        from pvz_game import Rules
+
+        from pvz_rl.envs.encoding import ObservationEncoder
+
+        with ZipFile(path) as archive:
+            if "observation-schema.json" not in archive.namelist():
+                raise ValueError(
+                    "Checkpoint is missing entity schema; fresh initialization is required"
+                )
+            if (
+                json.loads(archive.read("observation-schema.json"))
+                != ObservationEncoder(cfg, Rules()).schema()
+            ):
+                raise ValueError("Checkpoint entity schema disagrees with configuration")
         if protocol != protocol_for(cfg["policy"]["kind"]):
             raise ValueError("Checkpoint model family disagrees with saved configuration")
         metadata["initialization_type"] = "autonomous"
-    cfg = execution_config(migrate_curriculum(metadata))
+    cfg = execution_config(metadata["config"])
     validate_config(cfg)
     metadata["config"] = cfg
     return metadata
 
 
 def model_class(cfg):
-    if cfg["policy"]["kind"] == "transformer_lstm_q_v1":
-        from pvz_rl.learning.recurrent_q import CudaRecurrentQ
+    if cfg["policy"]["kind"] != "transformer_lstm_q_v2":
+        raise ValueError("Retired model; entity_v1 requires fresh initialization")
+    from pvz_rl.learning.recurrent_q import CudaRecurrentQ
 
-        return CudaRecurrentQ
-    from pvz_rl.learning.cuda_q import CudaSequentialQ
-
-    return CudaSequentialQ
+    return CudaRecurrentQ

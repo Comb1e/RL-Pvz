@@ -2,7 +2,9 @@
 
 Install with the [quick start](../README.md). Run commands from the project root.
 The default model throughout recording, initialization, training and evaluation
-is Transformer–LSTM with 294 public observation values (`event_v8`).
+is the entity Transformer–LSTM (`entity_v1`, `transformer_lstm_q_v2`).
+A public observation contains an integer `[n,11]` entity matrix and 18 global
+values; each retained entity becomes a learned 32-dimensional vector.
 
 ## Record and initialize
 
@@ -21,9 +23,9 @@ switching are disabled. Closing early leaves an incomplete recording.
 Initialization checks the manifest, native replay hash, every observation,
 proposed action, acceptance result, duration, reward and terminal state before
 fitting. Missing manifests, unsupported protocols and configuration mismatches
-have separate errors. The existing default-profile recording remains verifiable
-through an exact configuration-digest migration for curriculum removal; changes
-to other settings are not covered by that migration.
+have separate errors. Record a new demonstration or initialize from scratch.
+Old model weights and aggregate-observation archives require fresh initialization;
+there is no migration. Existing run files and recordings remain on disk.
 
 Use the recording's `--config` when it was customized. `--device cpu` is the
 initialization default; `--device cuda` changes execution without changing archive
@@ -60,11 +62,10 @@ until that stage passes. Use it only intentionally.
 
 Up to 128 games form a cohort at fixed weights. Finished slots stay inactive;
 the final cohort is limited to the remaining requested games. The recurrent
-collector feeds the previous proposed action, acceptance and ticks advanced into
-the next decision, including rejected plant proposals and zero-tick operations.
-A rejected proposal remains the selected plant action; the simulator supplies
-the one-tick duration and rejection reason used by the next recurrent step and
-complete-return target.
+collector retains the selected proposal for the trajectory and complete-return
+target. The next decision receives the resolved previous action: the proposal
+when accepted, or wait (`0`) with `accepted=false` and the simulator's duration
+when rejected. The rejection reason remains diagnostic metadata.
 
 Each of four default fitting passes recomputes recurrent states from episode
 starts. State carries across 256-decision chunks with gradients detached at
@@ -75,12 +76,14 @@ one clipped Adam update per whole-cohort pass, with equal total weight for each
 nonempty wait/plant/dig group.
 
 Tile exploration decays from 50% to 1% over 5,000 completed stage games and stays
-fixed during each cohort. The species coin retains `1-sqrt(1-epsilon)`.
-Exploration applies only after a plant branch wins the ten-way comparison;
-wait/dig remain greedy. Evaluation disables both coins. Plant tiles use
-occupancy only; affordability and cooldown do not hide a branch. Dig tiles are
-unrestricted; a full-board plant proposal targets tile zero and receives the
-simulator's rejection outcome and configured invalid-plant penalty.
+fixed during each cohort. The ten-way branch choice (wait, eight plants and dig)
+is always greedy; the budget is spent only when choosing the selected branch's
+tile. Evaluation disables the tile coin. Plant tiles use occupancy only;
+affordability and cooldown do not hide a branch. Dig tiles are unrestricted; a
+full-board plant proposal targets tile zero and receives the simulator's
+rejection outcome and configured invalid-plant penalty. The viewer and action
+journal show that proposal while labeling its resolved execution as an automatic
+wait.
 
 The default budget is 10,000 games with `training.max_minutes = 120` and a
 15-minute finalization reserve. `--games`, `--n-envs`, `--batch-size` and
@@ -88,20 +91,43 @@ The default budget is 10,000 games with `training.max_minutes = 120` and a
 TOML. The viewer retains Q values from the actual decision and existing history,
 progress, coverage and checkpoint reporting. Press **F** to follow latest actions.
 
-The event-memory alternative is explicit:
+## Entity inputs and memory
+
+The single `src/pvz_rl/data/train.toml` controls both profiles. `encoding.max_entities`
+sets the entity cap; model width, encoder microbatch (16), token budget (4,096),
+and attention query chunk (64) are configured under `policy`. Mowers precede
+plants, then zombies, then projectiles. On overflow projectiles are omitted first,
+then zombies, then plants; all five mowers remain. Zombies closest to the house
+are retained first. Ordering uses only public fields, so changing entity IDs
+cannot change the chosen records. The network is invariant to permutations of
+those retained rows. Counts in the global vector include omitted entities.
+
+The viewer's action history records retained entities and omitted plants/zombies/
+projectiles for the decision input. CPU/CUDA step info also reports omission
+counts. A cap discards individual information above that limit; total counts do
+not reconstruct it. See [schema and normalization](math/entity-inputs.md).
+
+Only collating adds padding. Every attention layer masks padded keys. The global
+and 45 tile query tokens remain valid even on an empty board. Training stores
+real entity rows in separate append-only slabs, with offsets/counts in transition
+metadata. Both slabs share `training.storage.ram_gib`; excess blocks spill to disk.
+
+Encoder microbatches shrink with sequence width. Attention uses scaled dot-product
+attention and an exact query-chunk fallback; each query still sees all valid keys.
+Activation checkpointing recomputes encoder activations during backward. These
+settings bound encoder working memory without changing chronological LSTM order,
+whole-cohort loss weights, or whole-pass optimizer updates. Allocation failures
+remain explicit; the program never silently reduces the configured entity cap.
+
+To measure 256/512 caps on a device (short synthetic fitting, no formal training):
 
 ```powershell
-.\.venv\Scripts\python.exe -m pvz_rl train `
-  --config configs\event-memory.toml --output runs\event-memory
+.\.venv\Scripts\python.exe -m pvz_rl.monitoring.entity_benchmark `
+  --output artifacts\entity-benchmark.json
 ```
 
-Historical event-memory weights remain loadable. Retained curriculum stages are
-translated by name on resume. A checkpoint inside the removed lesson (or with
-unfinished lesson trajectories) must use `--init-from`; its private simulator
-state cannot be resumed after lesson removal.
-
-It uses `event_v7`, its own optimizer protocol and 10%→0.1% exploration over
-3,000 stage games. Cross-family weight transfers are rejected.
+The report separates inference from fitting and reports Torch allocated/reserved
+memory. These timings exclude simulation and do not measure learning quality.
 
 ## Resume and evaluate
 

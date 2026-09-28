@@ -1,6 +1,6 @@
 import pytest
 
-from pvz_rl.config import load_event_config as load_config
+from pvz_rl.config import load_config
 
 
 @pytest.fixture(autouse=True)
@@ -71,6 +71,7 @@ def smoke_cfg(per_tick_cfg):
         hidden_sizes=[32, 32],
         eval_interval=64,
     )
+    cfg["policy"]["chunk_length"] = 16
     return cfg
 
 
@@ -80,9 +81,10 @@ def tiny_cli_config(tmp_path):
 
     path = tmp_path / "tiny.toml"
     path.write_text(
-        Path("configs/event-memory.toml")
+        Path("src/pvz_rl/data/train.toml")
         .read_text()
         .replace("live_enabled = true", "live_enabled = false")
         .replace("cutoff_seconds = 1200", "cutoff_seconds = 1")
+        .replace("chunk_length = 256", "chunk_length = 16")
     )
     return path

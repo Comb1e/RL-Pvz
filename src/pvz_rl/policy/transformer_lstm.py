@@ -15,7 +15,8 @@ from pvz_game import Rules
 from torch import nn
 
 from pvz_rl.envs.actions import ActionSchema as A
-from pvz_rl.envs.encoding import ObservationEncoder
+from pvz_rl.envs.encoding import ObservationEncoder, collate_observations
+from pvz_rl.policy.entity_attention import EntityTransformer
 from pvz_rl.policy.sequential_q import observation_tile_masks, select_q_actions
 
 
@@ -41,70 +42,10 @@ class RecurrentOutput:
     state: RecurrentState
 
 
-class EntityTransformer(nn.Module):
-    """Encode all 45 tiles and 15 zombie regions, including empty entities."""
-
-    def __init__(self, layout: ObservationEncoder, spec: dict):
-        super().__init__()
-        width = spec["entity_width"]
-        self.layout = layout
-        self.width = width
-        self.tile_type = nn.Embedding(len(layout.plants) + 1, width)
-        self.tile_state = nn.Embedding(len(layout.plant_states) + 1, width)
-        self.region_type = nn.Embedding(len(layout.zombies) + 1, width)
-        self.tile_position = nn.Embedding(layout.rows * layout.cols, width)
-        self.region_position = nn.Embedding(layout.rows * layout.bins, width)
-        self.segment = nn.Embedding(2, width)
-        self.tile_continuous = nn.Linear(1, width)
-        self.region_continuous = nn.Linear(layout.zombie_width, width)
-        layer = nn.TransformerEncoderLayer(
-            d_model=width,
-            nhead=spec["transformer_heads"],
-            dim_feedforward=spec["transformer_feedforward"],
-            dropout=0.0,
-            activation="gelu",
-            batch_first=True,
-            norm_first=True,
-        )
-        self.transformer = nn.TransformerEncoder(layer, num_layers=spec["transformer_layers"])
-        self.norm = nn.LayerNorm(width)
-
-    def forward(self, observations: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        b = observations.shape[0]
-        tiles = observations[:, self.layout.slices["plants"]].reshape(b, -1, 3)
-        regions = observations[:, self.layout.slices["zombies"]].reshape(
-            b, self.layout.rows * self.layout.bins, self.layout.zombie_width
-        )
-        tile_ids = tiles[..., 0].long().clamp(0, self.tile_type.num_embeddings - 1)
-        tile_states = tiles[..., 2].long().clamp(0, self.tile_state.num_embeddings - 1)
-        tile_pos = torch.arange(tiles.shape[1], device=observations.device)
-        region_pos = torch.arange(regions.shape[1], device=observations.device)
-        tile = (
-            self.tile_type(tile_ids)
-            + self.tile_state(tile_states)
-            + self.tile_position(tile_pos)[None]
-            + self.segment.weight[0]
-            + self.tile_continuous(tiles[..., 1:2])
-        )
-        region = (
-            self.region_position(region_pos)[None]
-            + self.segment.weight[1]
-            + self.region_continuous(regions)
-        )
-        region_counts = regions[..., : len(self.layout.zombies)]
-        region_ids = region_counts.argmax(-1) + 1
-        region_ids = torch.where(
-            region_counts.sum(-1) > 0, region_ids, torch.zeros_like(region_ids)
-        )
-        region = region + self.region_type(region_ids)
-        entities = self.norm(self.transformer(torch.cat((tile, region), dim=1)))
-        return entities[:, : tiles.shape[1]], entities[:, tiles.shape[1] :]
-
-
 class TransformerLSTMPolicy(nn.Module):
     """Two-level Q controller with a persistent LSTM decision state."""
 
-    protocol = "transformer_lstm_q_v1"
+    protocol = "transformer_lstm_q_v2"
 
     def __init__(self, cfg: dict, *, action_count: int = A.size):
         super().__init__()
@@ -114,7 +55,7 @@ class TransformerLSTMPolicy(nn.Module):
         self.action_count = action_count
         self.entity = EntityTransformer(self.layout, spec)
         self.scalar_width = spec["scalar_width"]
-        scalar_input = self.layout.global_width + self.layout.rows + self.layout.cooldown_width
+        scalar_input = self.layout.global_width
         self.scalar = nn.Sequential(nn.Linear(scalar_input, self.scalar_width), nn.ReLU())
         action_width = spec["action_embedding"]
         self.previous_action = nn.Embedding(action_count, action_width)
@@ -168,31 +109,26 @@ class TransformerLSTMPolicy(nn.Module):
         previous_action: torch.Tensor | None,
         execution_outcome: torch.Tensor | None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        tiles, regions = self.entity(observations)
-        blocks = {name: observations[:, sl] for name, sl in self.layout.slices.items()}
-        scalar = self.scalar(
-            torch.cat((blocks["globals"], blocks["headless"], blocks["cooldowns"]), -1)
-        )
+        summary, tiles = self.entity(observations)
+        scalar = self.scalar(observations.globals.to(self.scalar[0].weight.dtype))
         batch = len(observations)
         if previous_action is None:
             previous_action = torch.zeros(batch, dtype=torch.long, device=observations.device)
         previous_action = previous_action.long().clamp(0, self.action_count - 1)
         if execution_outcome is None:
-            execution_outcome = observations.new_zeros(batch, 2)
+            execution_outcome = observations.globals.new_zeros(batch, 2)
         if execution_outcome.ndim == 1:
             execution_outcome = execution_outcome[:, None]
         if execution_outcome.shape[-1] != 2:
             raise ValueError("execution_outcome must contain accepted and ticks_advanced")
-        elapsed = blocks["globals"][
-            :, self.layout.global_fields["elapsed"] : self.layout.global_fields["elapsed"] + 1
-        ]
+        elapsed = observations.globals[:, 1:2]
         combined = torch.cat(
             (
-                tiles.mean(1),
+                summary,
                 scalar,
                 self.previous_action(previous_action),
-                self.outcome(execution_outcome.to(observations.dtype)),
-                self.elapsed(elapsed),
+                self.outcome(execution_outcome.to(scalar.dtype)),
+                self.elapsed(elapsed.to(scalar.dtype)),
             ),
             -1,
         )
@@ -206,10 +142,9 @@ class TransformerLSTMPolicy(nn.Module):
         previous_action: torch.Tensor | None = None,
         execution_outcome: torch.Tensor | None = None,
     ) -> RecurrentOutput:
-        if observations.ndim == 1:
-            observations = observations.unsqueeze(0)
-        if observations.ndim != 2 or observations.shape[-1] != self.layout.size:
-            raise ValueError(f"expected observations with shape (batch, {self.layout.size})")
+        observations = collate_observations(observations, next(self.parameters()).device)
+        if len(observations.shape) != 1:
+            raise ValueError("expected a batch of entity observations")
         inputs, tiles = self._inputs(observations, previous_action, execution_outcome)
         if state is None:
             state = self.initial_state(
@@ -230,13 +165,11 @@ class TransformerLSTMPolicy(nn.Module):
         execution_outcomes: torch.Tensor | None = None,
         return_context: bool = False,
     ) -> tuple[torch.Tensor, torch.Tensor, RecurrentState]:
-        if observations.ndim != 3:
-            raise ValueError("sequence observations must have shape (batch, time, features)")
-        batch, time, features = observations.shape
-        # Encode decisions together, then run the chronological LSTM. Dropout is
-        # zero, so this shares the exact single-decision computation.
+        if len(observations.shape) != 2:
+            raise ValueError("sequence observations require batch and time dimensions")
+        batch, time = observations.shape
         inputs, tiles = self._inputs(
-            observations.reshape(-1, features),
+            observations.reshape(-1),
             None if previous_actions is None else previous_actions.reshape(-1),
             None if execution_outcomes is None else execution_outcomes.reshape(-1, 2),
         )
@@ -295,7 +228,9 @@ class TransformerLSTMPolicy(nn.Module):
         )
         batch = result.branch_q.shape[0]
         if action_masks is None:
-            action_masks = observation_tile_masks(observations.reshape(batch, -1))
+            action_masks = observation_tile_masks(
+                collate_observations(observations, result.branch_q.device)
+            )
         if action_masks.shape != (batch, A.size):
             raise ValueError(f"action_masks must have shape ({batch}, {A.size})")
         actions, first, second, details = select_q_actions(

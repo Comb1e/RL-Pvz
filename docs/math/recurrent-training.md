@@ -48,17 +48,17 @@ precision), but generally changes truncated gradients; it is not claimed to equa
 full-episode backpropagation. An uncommitted interrupted pass must clear its
 partial gradient before recomputing from episode starts.
 
-Previous inputs are the proposed action and actual accepted/ticks outcome.
-A rejected proposal 120 with one tick becomes (120, 0, 1); an accepted zero-tick
+Previous inputs are the executed action and actual accepted/ticks outcome.
+A rejected proposal 120 with one tick becomes (0, 0, 1); an accepted zero-tick
 dig 361 becomes (361, 1, 0). Neither equals a recurrent reset. Finished collection
 slots retain their final hidden/cell state until replaced by a new episode.
 
 Tile exploration uses epsilon(g)=0.5*(0.01/0.5)^min(g/5000,1).
-The species coin remains 1-sqrt(1-epsilon). These two recurrent coins have
-*different* probabilities, so the union is 1-(1-epsilon)*sqrt(1-epsilon).
-They apply only conditional on a greedy plant branch; firing can select the
-same action. Evaluation sets both probabilities to zero. The event-memory
-alternative retains its separate per-head split and decay configuration.
+The ten-way branch remains greedy; this single coin applies only to the selected
+non-wait tile and can still select the greedy tile. Evaluation sets the tile
+probability to zero. The proposal remains the action selected for Q fitting.
+Entity encoder microbatching preserves frame order when reconstructing the LSTM
+sequence; it changes neither the group denominators nor optimizer boundaries.
 
 `tests/test_recurrent_training.py` checks hand-computed returns, independently
 computed group means, episode-batch gradient invariance, unequal lengths,

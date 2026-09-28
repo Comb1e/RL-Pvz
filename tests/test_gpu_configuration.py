@@ -6,8 +6,7 @@ import json
 import pytest
 
 from pvz_rl.cli import configured
-from pvz_rl.config import load_event_config as load_config
-from pvz_rl.config import research_config, simulator
+from pvz_rl.config import load_config, research_config, simulator
 from pvz_rl.monitoring.gpu_benchmark import recommend
 
 

@@ -8,7 +8,7 @@ import torch
 from pvz_game import Dig, InitialPlant, LevelSpec, Place, Spawn
 from pvz_game.types import Event
 
-from pvz_rl.config import load_event_config as load_config
+from pvz_rl.config import load_config
 from pvz_rl.envs.env import PvZEnv
 from pvz_rl.envs.rewards import reward_parts
 
@@ -219,6 +219,7 @@ def test_mixed_cuda_resets_preserve_duration_and_episode_ledgers():
 
     cfg = load_config()
     cfg["training"].update(n_envs=2, batch_size=128)
+    cfg["policy"]["chunk_length"] = 16
     cfg["environment"]["cutoff_seconds"] = 1
     cases = [("easy", "diagnostic", 4), ("easy", "diagnostic", 5)]
     gpu = CudaVecEnv(cfg, "masked", 0, training=False, cases=cases)
@@ -305,7 +306,7 @@ def test_rejection_penalties_are_separate_from_economy_and_terminal(reason):
 
     from pvz_game import ActionResult, Dig, Game, Place, Status
 
-    from pvz_rl.config import load_event_config as load_config
+    from pvz_rl.config import load_config
 
     cfg = load_config()
     before = Game().reset("easy", 101)
@@ -320,7 +321,7 @@ def test_rejection_penalties_are_separate_from_economy_and_terminal(reason):
         )
         assert parts["net_value"] == parts["development"] == 0
         assert parts["terminal"] == terminal
-        assert parts["total"] == pytest.approx(terminal - 30 / 30000)
+        assert parts["total"] == pytest.approx(terminal - cfg["reward"]["invalid_plant_penalty"])
         dig = reward_parts(
             before, after, cfg, action=Dig(0, 0), action_result=ActionResult(False, reason)
         )
@@ -331,7 +332,7 @@ def test_penalties_cpu_cuda_accounting_and_cutoff_targets():
     import torch
     from pvz_game import Dig, LevelSpec, Place, Spawn
 
-    from pvz_rl.config import load_event_config as load_config
+    from pvz_rl.config import load_config
     from pvz_rl.envs.cuda_accounting import AccountingCudaBatch
     from pvz_rl.envs.cuda_features import REWARD_FIELDS, CudaFeatures
     from pvz_rl.envs.env import PvZEnv
@@ -366,7 +367,9 @@ def test_penalties_cpu_cuda_accounting_and_cutoff_targets():
         np.testing.assert_array_equal(features.mask_tensor.cpu()[0], cpu.action_masks())
     assert truncated and cpu.public.tick == 100
     metrics = cpu.episode_metrics()
-    assert metrics["invalid_plant_penalty"] == pytest.approx(-0.003)
+    assert metrics["invalid_plant_penalty"] == pytest.approx(
+        -3 * cfg["reward"]["invalid_plant_penalty"]
+    )
     assert metrics["empty_dig_penalty"] == pytest.approx(-2 / 3000)
     assert metrics["return"] == metrics["discounted_return"] == accumulated
     assert metrics["return"] == pytest.approx(

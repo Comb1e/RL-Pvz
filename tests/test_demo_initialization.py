@@ -126,14 +126,16 @@ def test_manifest_corruption_blocks_initialization(completed_demo, tmp_path, fie
     assert not (tmp_path / "fit").exists()
 
 
-@pytest.mark.parametrize("field", ["observation", "action", "reward_parts", "terminal", "tick"])
+@pytest.mark.parametrize(
+    "field", ["observation", "action", "executed_action", "reward_parts", "terminal", "tick"]
+)
 def test_transition_corruption_rejected_by_reconstruction(completed_demo, field):
     cfg, archive, replay = completed_demo
     rows = [json.loads(line) for line in archive.read_text().splitlines()]
     if field == "reward_parts":
         rows[0][field]["total"] += 1
     elif field == "observation":
-        rows[0][field][270] += 1
+        rows[0][field]["globals"][0] += 1
     elif field == "terminal":
         rows[0][field] = "lost"
     else:

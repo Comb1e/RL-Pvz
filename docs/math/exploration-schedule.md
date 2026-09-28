@@ -10,8 +10,9 @@ resume restores the same saved budget, progress and RNGs. Deterministic validati
 sets exploration to zero in a restoring context and does not advance training
 progress.
 
-Planting winners use independent species and tile coins with probability
-1-sqrt(1-budget) each. Wait/dig winners remain greedy. The probability that either
-coin fires equals the budget; actual action changes can be less frequent because
-uniform exploration includes the preferred option. See the enumeration and
-counterexamples in [sequential Q control](sequential-q-control.md).
+The ten-way branch winner is always greedy. Its tile selector uses one coin with
+probability equal to the current budget. Wait has no tile and therefore no coin;
+plant tiles use occupancy candidates and dig tiles use all board tiles. A fired
+coin can still select the preferred tile, so the number of changed commands can
+be lower than the number of tile coins. See the probability controls in
+[sequential Q control](sequential-q-control.md).

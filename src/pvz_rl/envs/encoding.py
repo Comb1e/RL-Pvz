@@ -1,159 +1,345 @@
-"""A versioned, ID-free spatial representation of public observations.
+"""Compact ID-free public entity records and shared ragged batching."""
 
-Integer accumulation precedes scaling, making entity permutation immaterial.
-Spatial aggregation deliberately trades exact entity identity for a compact input.
-"""
+from dataclasses import dataclass
 
 import numpy as np
+import torch
 from gymnasium import spaces
 from pvz_game import Observation, Rules
+from pvz_game.cuda.schema import MOWER_STATES, PLANT_STATES, ZOMBIE_STATES
 
-# Internal animation phases share compact public behavior categories.
-PLANT_BEHAVIOR = {
-    "ready": "ready",
-    "arming": "arming",
-    "rising": "arming",
-    "armed": "armed",
-    "fusing": "fusing",
-    "digesting": "digesting",
-    "biting": "digesting",
-    "biting_got_one": "digesting",
-    "recovering": "digesting",
-    "exploding": "exploding",
-    "detonating": "detonating",
-}
+ENTITY_FIELDS = (
+    "type",
+    "state",
+    "row",
+    "x",
+    "health",
+    "armor",
+    "phase_ticks",
+    "slow_ticks",
+    "has_pole",
+    "headless",
+    "damage",
+)
+ENTITY_WIDTH = len(ENTITY_FIELDS)
+GLOBAL_FIELDS = (
+    "sun",
+    "elapsed",
+    "wave",
+    "total_waves",
+    "initial",
+    "defeated",
+    *(f"cooldown_{i}" for i in range(8)),
+    "plant_count",
+    "zombie_count",
+    "projectile_count",
+    "mower_count",
+)
+GLOBAL_WIDTH = len(GLOBAL_FIELDS)
+OBSERVATION_PROTOCOL = "entity_v1"
+
+
+@dataclass
+class EntityBatch:
+    """Padded batch (or batch/time sequence); padding exists only in transport."""
+
+    entities: torch.Tensor
+    entity_mask: torch.Tensor
+    globals: torch.Tensor
+
+    def __len__(self):
+        return len(self.globals)
+
+    @property
+    def shape(self):
+        return self.globals.shape[:-1]
+
+    @property
+    def device(self):
+        return self.globals.device
+
+    def __getitem__(self, index):
+        return EntityBatch(self.entities[index], self.entity_mask[index], self.globals[index])
+
+    def clone(self):
+        return EntityBatch(*(x.clone() for x in self.tensors()))
+
+    def tensors(self):
+        return self.entities, self.entity_mask, self.globals
+
+    def to(self, device):
+        return EntityBatch(*(x.to(device) for x in self.tensors()))
+
+    def cpu(self):
+        return self.to("cpu")
+
+    def reshape(self, *shape):
+        n = self.entities.shape[-2]
+        globals_ = self.globals.reshape(*shape, GLOBAL_WIDTH)
+        batch_shape = globals_.shape[:-1]
+        return EntityBatch(
+            self.entities.reshape(*batch_shape, n, ENTITY_WIDTH),
+            self.entity_mask.reshape(*batch_shape, n),
+            globals_,
+        )
+
+    def observations(self):
+        """Unpad a flattened batch for storage and public API returns."""
+        host = self.reshape(-1).cpu()
+        return [
+            {"entities": e[m].numpy().copy(), "globals": g.numpy().copy()}
+            for e, m, g in zip(*host.tensors(), strict=True)
+        ]
+
+
+def collate_observations(observations, device=None):
+    if isinstance(observations, EntityBatch):
+        return observations if device is None else observations.to(device)
+    if isinstance(observations, dict):
+        observations = [observations]
+    observations = list(observations)
+    count = len(observations)
+    width = max((len(o["entities"]) for o in observations), default=0)
+    entities = np.zeros((count, width, ENTITY_WIDTH), np.int32)
+    valid = np.zeros((count, width), bool)
+    globals_ = np.zeros((count, GLOBAL_WIDTH), np.float32)
+    for i, obs in enumerate(observations):
+        raw = np.asarray(obs["entities"])
+        if raw.size == 0:
+            raw = raw.reshape(0, ENTITY_WIDTH)
+        if raw.ndim != 2 or raw.shape[1] != ENTITY_WIDTH:
+            raise ValueError("entities must have shape (n, 11)")
+        if not np.isfinite(raw).all() or not np.equal(raw, raw.astype(np.int32)).all():
+            raise ValueError("entity fields must be finite int32 values")
+        g = np.asarray(obs["globals"], dtype=np.float32)
+        if g.shape != (GLOBAL_WIDTH,) or not np.isfinite(g).all():
+            raise ValueError("globals must contain 18 finite values")
+        entities[i, : len(raw)] = raw
+        valid[i, : len(raw)] = True
+        globals_[i] = g
+    return EntityBatch(
+        torch.as_tensor(entities, device=device),
+        torch.as_tensor(valid, device=device),
+        torch.as_tensor(globals_, device=device),
+    )
+
+
+def observation_json(observation):
+    return {name: np.asarray(observation[name]).tolist() for name in ("entities", "globals")}
+
+
+def observations_equal(left, right, *, atol=0):
+    return all(
+        np.asarray(left[k]).shape == np.asarray(right[k]).shape
+        and np.allclose(left[k], right[k], atol=atol, rtol=0)
+        for k in ("entities", "globals")
+    )
 
 
 class ObservationEncoder:
     def __init__(self, cfg: dict, rules: Rules):
-        env = cfg["environment"]
+        if cfg["encoding"]["version"] != OBSERVATION_PROTOCOL:
+            raise ValueError("Retired observations; entity_v1 requires fresh initialization")
         self.cfg, self.rules = cfg, rules
-        self.plants = {kind: i for i, kind in enumerate(env["plants"])}
-        self.zombies = {kind: i for i, kind in enumerate(env["zombies"])}
-        self.plant_states = {state: i for i, state in enumerate(env["plant_states"])}
-        self.rows, self.cols, self.bins = env["rows"], env["cols"], env["bins"]
-        if cfg["encoding"]["version"] not in ("event_v7", "event_v8"):
-            raise ValueError("Only event_v7 and event_v8 observations are supported")
-        self.plant_width = 3
-        # Per lane-region: one count per zombie type, aggregate health and armor,
-        # nearest zombie distance, and nearest carrier of an unused pole.
-        self.zombie_fields = {
-            name: i
-            for i, name in enumerate((*self.zombies, "health", "armor", "nearest", "nearest_pole"))
-        }
-        self.zombie_width = len(self.zombie_fields)
-        self.empty_distance = -1.0
-        self.global_fields = {
-            name: i
-            for i, name in enumerate(
-                ("sun", "elapsed", "wave", "total_waves", "initial", "defeated")
-                + tuple(f"mower_spent_{r}" for r in range(self.rows))
-            )
-        }
-        self.global_width = len(self.global_fields)
-        # Card countdowns are public state.  They are deliberately appended in
-        # the fixed plant-species order so old spatial offsets remain stable and
-        # CPU/CUDA encoders can share one compatibility digest.
-        self.cooldown_fields = (
-            {kind: i for i, kind in enumerate(env["plants"])}
-            if cfg["encoding"]["version"] == "event_v8"
-            else {}
-        )
-        self.cooldown_width = len(self.cooldown_fields)
-        sizes = [
-            self.rows * self.cols * self.plant_width,
-            self.rows * self.bins * self.zombie_width,
-            self.global_width,
-            self.rows,
+        env = cfg["environment"]
+        self.rows, self.cols = env["rows"], env["cols"]
+        names = [
+            *(f"plant:{k}" for k in env["plants"]),
+            *(f"zombie:{k}" for k in env["zombies"]),
+            "projectile:pea",
+            "projectile:icy",
+            "mower",
         ]
-        names = ["plants", "zombies", "globals", "headless"]
-        if self.cooldown_width:
-            sizes.append(self.cooldown_width)
-            names.append("cooldowns")
-        offsets = np.cumsum([0, *sizes])
-        self.slices = dict(
-            zip(
-                names,
-                (slice(int(a), int(b)) for a, b in zip(offsets, offsets[1:])),
-            )
-        )
-        self.size = int(offsets[-1])
-        self.space = spaces.Box(-np.inf, np.inf, shape=(self.size,), dtype=np.float32)
+        self.types = {name: i + 1 for i, name in enumerate(names)}
+        self.plants = {k: self.types[f"plant:{k}"] for k in env["plants"]}
+        self.zombies = {k: self.types[f"zombie:{k}"] for k in env["zombies"]}
+        states = [
+            *(f"plant:{s}" for s in PLANT_STATES),
+            *(f"zombie:{s}" for s in ZOMBIE_STATES),
+            *(f"mower:{s}" for s in MOWER_STATES),
+        ]
+        self.states = {name: i + 1 for i, name in enumerate(states)}
+        self.global_fields = {name: i for i, name in enumerate(GLOBAL_FIELDS)}
+        self.global_width = GLOBAL_WIDTH
         self.count_scale = cfg["encoding"]["count_scale"]
-        self.local_count_scale = cfg["encoding"]["local_count_scale"]
-        self.hp_scale = max(z["health"] for z in rules.zombies.values())
-        self.armor_scale = max(z["armor"] for z in rules.zombies.values())
-        self.position_scale = rules.game["spawn_x"] - rules.game["house_x"]
+        self.max_entities = cfg["encoding"]["max_entities"]
         self.cost_scale = max(p["cost"] for p in rules.plants.values())
-
-    def bin_index(self, x: int) -> int:
-        shifted = x - self.rules.game["house_x"]
-        return max(0, min(self.bins - 1, shifted * self.bins // self.position_scale))
-
-    def encode(self, obs: Observation) -> np.ndarray:
-        result = np.zeros(self.size, dtype=np.float32)
-        plant = result[self.slices["plants"]].reshape(self.rows, self.cols, self.plant_width)
-        for p in obs.plants:
-            tile = plant[p.row, p.col]
-            tile[:] = (
-                self.plants[p.plant_type] + 1,
-                p.health / p.max_health,
-                self.plant_states[PLANT_BEHAVIOR[p.state]] + 1,
-            )
-
-        # All sums are exact integer operations; IDs and tuple order are never features.
-        shape = (self.rows, self.bins)
-        zombies = np.zeros((*shape, self.zombie_width), dtype=np.int64)
-        nearest = np.full((*shape, 2), np.iinfo(np.int64).max, dtype=np.int64)
-        fields = self.zombie_fields
-        for z in obs.zombies:
-            r, b = z.row, self.bin_index(z.x)
-            nearest[r, b, 0] = min(nearest[r, b, 0], z.x)
-            cell = zombies[r, b]
-            cell[self.zombies[z.zombie_type]] += 1
-            cell[fields["health"]] += z.health
-            cell[fields["armor"]] += z.armor
-            if z.has_pole and not z.headless:
-                nearest[r, b, 1] = min(nearest[r, b, 1], z.x)
-        zscale = np.full(self.zombie_width, self.local_count_scale, dtype=np.float32)
-        zscale[fields["health"]] *= self.hp_scale
-        zscale[fields["armor"]] *= max(1, self.armor_scale)
-        encoded = zombies / zscale
-        # The negative sentinel distinguishes absence from a carrier at spawn_x.
-        encoded[:, :, fields["nearest"] : fields["nearest_pole"] + 1] = np.where(
-            nearest == np.iinfo(np.int64).max,
-            self.empty_distance,
-            (nearest.astype(np.float64) - self.rules.game["house_x"]) / self.position_scale,
+        self.position_scale = rules.game["spawn_x"] - rules.game["house_x"]
+        self.armor_scale = max(1, *(z["armor"] for z in rules.zombies.values()))
+        self.health_scales = np.ones(len(self.types) + 1, np.float32)
+        for kinds, specs in ((self.plants, rules.plants), (self.zombies, rules.zombies)):
+            for name, code in kinds.items():
+                self.health_scales[code] = specs[name]["health"]
+        self.space = spaces.Dict(
+            {
+                "entities": spaces.Sequence(
+                    spaces.Box(
+                        np.iinfo(np.int32).min,
+                        np.iinfo(np.int32).max,
+                        shape=(ENTITY_WIDTH,),
+                        dtype=np.int32,
+                    ),
+                    stack=True,
+                ),
+                "globals": spaces.Box(-np.inf, np.inf, shape=(GLOBAL_WIDTH,), dtype=np.float32),
+            }
         )
-        result[self.slices["zombies"]] = encoded.ravel()
-        counts = obs.counts
-        values = {
-            "sun": obs.sun / self.cost_scale,
-            "elapsed": obs.elapsed_seconds / self.cfg["environment"]["cutoff_seconds"],
-            "wave": obs.wave / self.cfg["encoding"]["wave_scale"],
-            "total_waves": obs.total_waves / self.cfg["encoding"]["wave_scale"],
-            "initial": counts.initial_total / self.count_scale,
-            "defeated": counts.defeated / self.count_scale,
+
+    def schema(self):
+        return dict(
+            version=OBSERVATION_PROTOCOL,
+            fields=list(ENTITY_FIELDS),
+            globals=list(GLOBAL_FIELDS),
+            types=self.types,
+            states=self.states,
+            normalization="pinned_rules_v1",
+            rules_hash=self.rules.digest,
+            max_entities=self.max_entities,
+            selection="mowers_plants_zombies_projectiles_v1",
+        )
+
+    def encode(self, obs: Observation):
+        rows = []
+        unit = self.rules.game["units_per_tile"]
+        try:
+            for p in obs.plants:
+                rows.append(
+                    (
+                        self.plants[p.plant_type],
+                        self.states[f"plant:{p.state}"],
+                        p.row,
+                        p.col * unit + unit // 2,
+                        p.health,
+                        0,
+                        p.timer_ticks,
+                        0,
+                        0,
+                        0,
+                        0,
+                    )
+                )
+            for z in obs.zombies:
+                rows.append(
+                    (
+                        self.zombies[z.zombie_type],
+                        self.states[f"zombie:{z.state}"],
+                        z.row,
+                        z.x,
+                        z.health,
+                        z.armor,
+                        z.timer_ticks,
+                        z.slow_ticks,
+                        z.has_pole,
+                        z.headless,
+                        0,
+                    )
+                )
+            for p in obs.projectiles:
+                rows.append(
+                    (
+                        self.types["projectile:icy" if p.icy else "projectile:pea"],
+                        0,
+                        p.row,
+                        p.x,
+                        0,
+                        0,
+                        0,
+                        0,
+                        0,
+                        0,
+                        p.damage,
+                    )
+                )
+            for m in obs.mowers:
+                rows.append(
+                    (
+                        self.types["mower"],
+                        self.states[f"mower:{m.state}"],
+                        m.row,
+                        m.x,
+                        0,
+                        0,
+                        0,
+                        0,
+                        0,
+                        0,
+                        0,
+                    )
+                )
+        except KeyError as exc:
+            raise ValueError(f"Unknown public entity category: {exc}") from exc
+
+        def priority(record):
+            kind = record[0]
+            group = 0 if kind == 16 else 1 if kind <= 8 else 2 if kind <= 13 else 3
+            lane = record[2] if group <= 1 else 0
+            return group, lane, record[3], *record
+
+        retained = sorted(rows, key=priority)[: self.max_entities]
+        if any(not np.iinfo(np.int32).min <= v <= np.iinfo(np.int32).max for r in rows for v in r):
+            raise ValueError("Public entity fields exceed int32 range")
+        raw = np.asarray(retained, dtype=np.int32).reshape(-1, ENTITY_WIDTH)
+        self.last_truncation = {
+            "total": len(rows) - len(retained),
+            **{
+                name: sum(lo <= r[0] <= hi for r in rows) - sum(lo <= r[0] <= hi for r in retained)
+                for name, lo, hi in (("plants", 1, 8), ("zombies", 9, 13), ("projectiles", 14, 15))
+            },
         }
-        values.update({f"mower_spent_{m.row}": float(m.state == "spent") for m in obs.mowers})
-        globals_ = result[self.slices["globals"]]
-        for name, value in values.items():
-            globals_[self.global_fields[name]] = value
-        for row in range(self.rows):
-            front = min(
-                (z for z in obs.zombies if z.row == row),
-                key=lambda z: (z.x, z.headless),
-                default=None,
+        cards = {c.plant_type: c for c in obs.cards}
+        cooldowns = []
+        for name in self.plants:
+            if name not in cards or cards[name].recharge_ticks < 0:
+                raise ValueError(f"Missing or invalid public card {name!r}")
+            c = cards[name]
+            cooldowns.append(c.cooldown_ticks / (c.recharge_ticks + 1))
+        globals_ = np.asarray(
+            [
+                obs.sun / self.cost_scale,
+                obs.elapsed_seconds / self.cfg["environment"]["cutoff_seconds"],
+                obs.wave / self.cfg["encoding"]["wave_scale"],
+                obs.total_waves / self.cfg["encoding"]["wave_scale"],
+                obs.counts.initial_total / self.count_scale,
+                obs.counts.defeated / self.count_scale,
+                *cooldowns,
+                *(
+                    len(xs) / self.count_scale
+                    for xs in (obs.plants, obs.zombies, obs.projectiles, obs.mowers)
+                ),
+            ],
+            dtype=np.float32,
+        )
+        return {"entities": raw, "globals": globals_}
+
+    def normalize(self, batch):
+        raw = batch.entities
+        kind, state = raw[..., 0].long(), raw[..., 1].long()
+        valid = batch.entity_mask
+        if torch.any(valid & ((kind < 1) | (kind > len(self.types)))):
+            raise ValueError("Unknown public entity type")
+        if torch.any(valid & ((state < 0) | (state > len(self.states)))):
+            raise ValueError("Unknown public entity state")
+        correct_state = (
+            ((kind <= 8) & (state >= 1) & (state <= len(PLANT_STATES)))
+            | (
+                (kind >= 9)
+                & (kind <= 13)
+                & (state > len(PLANT_STATES))
+                & (state <= len(PLANT_STATES) + len(ZOMBIE_STATES))
             )
-            result[self.slices["headless"].start + row] = bool(front and front.headless)
-        cooldowns = result[self.slices["cooldowns"]] if self.cooldown_width else ()
-        cards = {card.plant_type: card for card in obs.cards}
-        for kind, index in self.cooldown_fields.items():
-            card = cards.get(kind)
-            if card is None:
-                raise ValueError(f"observation is missing card {kind!r}")
-            denominator = card.recharge_ticks + 1
-            if denominator <= 0:
-                raise ValueError(f"card {kind!r} has invalid recharge_ticks")
-            cooldowns[index] = card.cooldown_ticks / denominator
-        return result
+            | (((kind == 14) | (kind == 15)) & (state == 0))
+            | ((kind == 16) & (state > len(PLANT_STATES) + len(ZOMBIE_STATES)))
+        )
+        if torch.any(valid & ~correct_state):
+            raise ValueError("Public entity state does not match its type")
+        kind = torch.where(valid, kind, 0)
+        state = torch.where(valid, state, 0)
+        values = torch.where(valid[..., None], raw[..., 2:], 0).float()
+        scales = torch.as_tensor(self.health_scales, device=raw.device)
+        values[..., 0] /= max(1, self.rows - 1)
+        values[..., 1] = (values[..., 1] - self.rules.game["house_x"]) / self.position_scale
+        values[..., 2] /= scales[kind]
+        values[..., 3] /= self.armor_scale
+        values[..., 4:6] /= self.rules.game["tick_rate"]
+        values[..., 8] /= self.rules.plants["peashooter"]["damage"]
+        return kind, state, values

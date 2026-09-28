@@ -151,6 +151,7 @@ def refilled_games(
                         started[i], inference_start[i] = perf_counter(), inference
                 if reset:
                     env.reset_indices(reset, assigned)
+                    obs = env.features.obs_tensor
                     runner.reset(reset)
                 if progress:
                     progress.emit(f"GPU evaluation: {finished}/{len(cases)} games complete")

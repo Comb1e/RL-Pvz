@@ -636,3 +636,15 @@ the first-level comparison, occupancy-only plant tile masks, and the tile-zero
 full-board proposal are project-specific controls. The added CPU regressions and
 CUDA result-channel checks establish behavior and parity; they do not claim a
 learning improvement or justify formal training.
+
+
+## Individual entity encoder — 2026-09-28
+
+- [Official AlphaStar unit encoder and Transformer](https://github.com/google-deepmind/alphastar/blob/700b1e74364ed5dfc66f6cd2574c5ffac2fa474e/alphastar/architectures/components/units.py): inspected the entity embedding and masked unit-attention design. Used shared per-entity numerical/categorical projections, masks for absent units and contextual entity processing. AlphaStar's game-specific features, model scale, training regime and results are not adopted.
+- [mini-AlphaStar, §3.2 entity encoder](https://arxiv.org/html/2104.06890v2#S3.SS2): inspected the entity-list representation and Transformer description. Used the separation between individual entity records and learned embeddings; no tokenized text or pretrained language model is involved.
+- Pinned game 1.7.0, commit `1424b4d802e783a36772091c49d96aa7c6036d7a`: inspected public plant/zombie/projectile/mower views, species rule constants, CPU observation countdown formulas and CUDA state schema. These define the exact 11-field records, normalization and device parity; private state is used only to derive the equivalent documented public values.
+
+The 11 raw fields, width 32, global/tile readout tokens, cap candidates 256/512,
+mower-first retention, nearest-zombie priority and all reward coefficients are
+local design decisions. Benchmarks measure mechanics and resource use, not an
+AlphaStar-level capability or improved win rate. The pinned game is unchanged.

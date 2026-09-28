@@ -42,7 +42,6 @@ def pin_engine(repo):
     destination.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     for path in [
         *(project / "src/pvz_rl/data").glob("*.toml"),
-        *(project / "configs").glob("*.toml"),
     ]:
         original = path.read_text("utf-8")
         text = (

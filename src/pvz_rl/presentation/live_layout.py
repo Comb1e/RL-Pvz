@@ -35,10 +35,15 @@ def result_label(record, *, show_penalty=True):
     if record.get("accepted", True):
         return "accepted"
     reason = REASONS[record.get("reason", 0)] or "rejected"
-    result = (
-        f"automatic wait: {reason}" if 0 < branch(record["action"]) < 9 else f"rejected: {reason}"
-    )
+    result = f"automatic wait: {reason}"
     return f"{result} | penalty {record.get('penalty', 0):+.6g}" if show_penalty else result
+
+
+def entity_label(record):
+    if "entity_count" not in record:
+        return ""
+    omitted = record.get("entity_omitted", (0, 0, 0))
+    return f" | entities {record['entity_count']} | omitted P/Z/Q " + "/".join(map(str, omitted))
 
 
 def branch(action):
@@ -290,7 +295,7 @@ def draw_view(surface, packets, activity, *, renderers, boards, pending=(), coun
             surface.blit(small.render(reason, True, (216, 230, 214)), (x + 12, top + 41))
             surface.blit(
                 small.render(
-                    "Raw Q (estimated returns) | " + result_label(decision),
+                    "Raw Q | " + result_label(decision) + entity_label(decision),
                     True,
                     (220, 232, 215),
                 ),

@@ -57,7 +57,7 @@ def test_old_config_and_output_only_compatibility(cfg):
 def test_hardware_report_only_never_loads_checkpoint_and_respects_resume_cutoff(
     tmp_path, monkeypatch
 ):
-    from pvz_rl.config import load_event_config as load_config
+    from pvz_rl.config import load_config
 
     cfg = load_config()
     ancestor, run = tmp_path / "previous", tmp_path / "resumed"
@@ -136,21 +136,25 @@ def test_shared_checkpoint_reports_and_videos(smoke_cfg, tmp_path, monkeypatch):
     assert len(set(identities)) == 1 and stages == {("easy",)}
     assert loads == ["best.zip"]
     metrics = read_series(run / "training-metrics.jsonl")
-    assert [m["training_steps"] for m in metrics] == [100, 201]
+    steps = [m["training_steps"] for m in metrics]
+    assert len(steps) == 2 and steps[0] >= 100 and steps[1] >= steps[0] + 100
     assert [m["completed_updates"] for m in metrics] == [1, 2]
     assert all(m["optimization"]["q_loss"] is not None for m in metrics)
     assert all(m["optimization"]["q_optimizer_steps"] > 0 for m in metrics)
     assert all(m["optimization"]["branch_loss"] is not None for m in metrics)
-    assert metrics[0]["optimization"]["tile_loss"] is None
-    assert metrics[1]["optimization"]["tile_loss"] is not None
+    for m in metrics:
+        opt = m["optimization"]
+        assert (opt["tile_loss"] is not None) == (
+            m["q_prefit"]["plant"]["count"] + m["q_prefit"]["dig"]["count"] > 0
+        )
     assert metrics[-1]["rolling_by_task"]["easy"]["completed_games"] > 0
-    assert sum(t["transitions"] for t in metrics[-1]["task_counts"].values()) == 201
+    assert sum(t["transitions"] for t in metrics[-1]["task_counts"].values()) == steps[-1]
     assert (run / "tensorboard").exists()
     from tensorboard.backend.event_processing.event_accumulator import EventAccumulator
 
     event_file = next((run / "tensorboard").glob("*/events.out.tfevents.*"))
     events = EventAccumulator(str(event_file)).Reload()
-    assert [r.step for r in events.Scalars("train/q_loss")] == [100, 201]
+    assert [r.step for r in events.Scalars("train/q_loss")] == steps
     demo_data = json.loads((run / "visualizations/demos.json").read_text())
     demos = demo_data["demos"]
     assert {r["level"] for r in demos} == {"easy", "standard", "hard"}

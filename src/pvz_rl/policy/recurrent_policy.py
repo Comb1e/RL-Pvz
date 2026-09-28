@@ -40,12 +40,12 @@ class RecurrentQPolicy(TransformerLSTMPolicy):
     def predict(
         self, observation, state=None, episode_start=None, deterministic=True, action_masks=None
     ):
+        from pvz_rl.envs.encoding import collate_observations
         from pvz_rl.policy.runner import PolicyRunner
         from pvz_rl.policy.sequential_q import observation_tile_masks
 
-        obs = torch.as_tensor(observation, device=self.device, dtype=torch.float32)
-        vectorized = obs.ndim > 1
-        obs = obs.reshape(-1, self.layout.size)
+        vectorized = not isinstance(observation, dict)
+        obs = collate_observations(observation, self.device)
         if state is None:
             state = PolicyRunner(self, self.cfg, self.layout.rules, len(obs), self.device)
         if episode_start is not None:

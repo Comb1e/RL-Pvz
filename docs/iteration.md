@@ -1,5 +1,96 @@
 # Iteration history
 
+## 0.29.0 — 2026-09-28
+
+- Problem/root cause: regional zombie aggregates detached health/armor and state
+  from individual positions, fixed flat vectors omitted projectiles, and the
+  alternative event-memory runtime duplicated storage and dispatch paths.
+- Improvement: one `entity_v1` schema stores 11 integer public fields per physical
+  entity and 18 globals, with shared 32-dimensional embeddings, a global plus 45
+  tile readouts, two masked attention layers and the retained 256-unit LSTM.
+  Public timers, headless zombies, projectiles and spent mowers are represented;
+  IDs, RNGs, schedules and private movement state remain excluded.
+- User-directed cap: default 256 based on RTX 4070 Laptop measurements, configurable
+  in the single TOML. Retain mowers → plants → zombies → projectiles; omit
+  projectiles first, then zombies, then plants, with nearest-house zombies first.
+  Globals keep pre-cap counts and action journals/viewers expose omissions.
+- Runtime/storage: GPU encoding stays on device, packs present slots and matches
+  CPU public formulas. Ragged metadata/entity slabs share RAM and disk spill,
+  recover with validated offsets/counts, and use versioned schemas. Encoder
+  microbatches, query chunks and activation checkpointing bound attention memory.
+  Refilled evaluation slots explicitly refresh their newly allocated observation.
+- Removal/compatibility: event-memory model, temporal encoder, banks, caches,
+  profile and dispatch are removed. Checkpoints, demos and trajectories require
+  fresh entity-based initialization; existing recordings/run files are preserved.
+  Greedy ten-way proposals, tile-only exploration, penalty targets and rejected
+  `(previous_action=0, accepted=0, ticks=1)` feedback remain. The user's 0.003 train
+  and 0.001 demo plant penalties are preserved; the game pin is unchanged.
+- Verification: information counterexamples, all categories/public states,
+  duplicates, caps, ID isolation, CPU/CUDA parity, padding/permutation invariance,
+  independent float64 attention/gradient controls, causal recurrence, ragged spill,
+  archive corruption, demo/viewer/replay, checkpoint and interruption recovery.
+  All 537 collected tests verified: 489 in the full-suite run, then 48 after
+  correcting two obsolete fixture assertions; production code was unchanged.
+  The focused 92-case suite, Ruff, dependency checks, sdist/wheel builds and
+  local documentation links pass. The wheel contains one bundled TOML and no
+  retired model modules.
+- Resource evidence: 256/512-entity fitting measured 686/247 frames/s; both fit
+  in VRAM. A warmed 128-slot one-second collection/fitting check measured 1,080
+  decisions/s, 95.4 MiB Torch peak allocation and 128.6 MiB CuPy pool reservation.
+  A default 1,024-frame fitting-chunk control peaked at 46.3 MiB Torch allocation.
+  [Full measurements](evidence/entity-inputs-v029.json) separate synthetic inputs,
+  collection and memory counters. No formal training or learning-quality claim.
+- Remaining limits: the cap loses individual facts above its limit; 32 dimensions
+  and the cap require future learning evaluation. Quadratic attention arithmetic
+  remains, while short-cutoff throughput is not a full-game speed estimate.
+
+## 0.28.4 — 2026-09-27
+
+- Problem/root cause: the same profile parameters were copied across root
+  `configs/` files and bundled package data, so changing a setting could leave
+  source and installed behavior out of sync.
+- Improvement: keep one bundled `src/pvz_rl/data/train.toml` with sparse `demo`,
+  `event-memory`, and `gpu_defaults` overlays. Loaders and the CLI resolve those
+  overlays through one profile interface; `--profile event-memory` preserves the
+  archived model choice.
+- Verification: profile equivalence, custom-path loading, CLI training and the
+  complete regression suite (546 tests) pass; no formal training was launched.
+- Remaining limits: external scripts that refer to deleted `configs/*.toml`
+  paths must use the bundled file and profile option.
+
+## 0.28.3 — 2026-09-27
+
+- Problem/root cause: collection still applied a species exploration coin after
+  the ten-way comparison, so the submitted branch could differ from the
+  highest-Q proposal. This made action exploration change the rejection and
+  penalty distribution rather than only the requested tile target.
+- Improvement: keep all ten branch choices greedy and apply the cohort budget
+  only to the selected non-wait tile. Plant occupancy masks and unrestricted dig
+  tiles remain unchanged; the branch coin field stays zero for journal/schema
+  compatibility. The scheduler is recorded as `sequential_tile_epsilon_v1` so
+  older two-coin checkpoints cannot be resumed under the new distribution.
+- Verification: policy controls cover greedy branch selection at budgets 0, 10%
+  and 100%, tile-only plant sampling, tile sampling for dig, and the existing
+  rejection/environment parity cases. No formal training was launched.
+- Remaining limits: the retained `per_head_epsilon` helper is a compatibility
+  reader for archived schedule reports; current collection uses one tile coin.
+
+## 0.28.2 — 2026-09-27
+
+- Problem/root cause: the selector retained an illegal highest-Q proposal for
+  penalty learning, but recurrent history could still describe that proposal as
+  the previous action. Execution, metrics and diagnostics therefore disagreed
+  about whether the simulator had waited.
+- Improvement: keep proposal and execution channels separate across CPU, CUDA,
+  recurrent collection, evaluation, event memory and journals. Rejected
+  proposals remain targets and diagnostics; execution is wait (`0`) with
+  `accepted=false`, the pinned reason, configured penalty and one-tick duration.
+- Verification: focused policy, environment, recurrent, journal and CUDA parity
+  controls cover unaffordable, cooling, full-board and empty-dig proposals plus
+  legal and boundary actions. No formal training run was launched.
+- Remaining limits: CUDA parity requires the pinned CUDA runtime; CPU fixed-tick
+  compatibility retains its configured decision duration.
+
 ## 0.28.1 — 2026-09-27
 
 - Previous problem/root cause: the ten-way selector was correct for the current
@@ -45,7 +136,7 @@
   the max-minutes CLI flag; time allowances remain configuration settings. Keep
   recurrent 50%→1% tile exploration over 5,000 stage games, species-coin algebra,
   reward coefficients, engine pin and four autonomous passes. Event memory stays
-  available under configs/event-memory.toml with its original model protocols.
+  available through the event-memory overlay in the bundled train.toml profile.
 - Verification: the existing human-1000 archive reconstructed all 16,364 decisions
   and the winning final state in 34.72 seconds, without fitting. Tiny complete-demo
   weights and same-device predictions transferred exactly, then autonomous fitting

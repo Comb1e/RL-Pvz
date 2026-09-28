@@ -5,6 +5,7 @@ import pytest
 from pvz_game import Dig, Game, LevelSpec, Place, Spawn, Status, Wait
 
 from pvz_rl.envs.actions import ActionCodec
+from pvz_rl.envs.encoding import observations_equal
 from pvz_rl.envs.env import EpisodeState, PvZEnv
 from pvz_rl.envs.rewards import asset_value
 
@@ -141,18 +142,19 @@ def test_time_cutoff_keeps_final_observation_and_assets(cfg):
     assert info["episode_metrics"]["win"] == 0
 
 
-def test_vector_truncation_has_terminal_observation_for_bootstrapping(cfg):
-    from stable_baselines3.common.vec_env import DummyVecEnv
+def test_vector_truncation_retains_structured_terminal_observation(per_tick_cfg):
+    from pvz_rl.envs.cuda_env import CudaVecEnv
 
-    cfg["environment"]["cutoff_seconds"] = 1
-    vec = DummyVecEnv([lambda: PvZEnv(cfg)])
+    per_tick_cfg["environment"]["cutoff_seconds"] = 1
+    per_tick_cfg["training"]["n_envs"] = 1
+    vec = CudaVecEnv(per_tick_cfg, "masked", 101)
     try:
         vec.reset()
-        for _ in range(9):
+        for _ in range(99):
             vec.step([0])
         reset_obs, _, dones, infos = vec.step([0])
         assert dones[0] and infos[0]["TimeLimit.truncated"]
-        assert not np.array_equal(reset_obs[0], infos[0]["terminal_observation"])
+        assert not observations_equal(reset_obs[0], infos[0]["terminal_observation"])
     finally:
         vec.close()
 
@@ -164,7 +166,7 @@ def test_future_schedule_ids_and_names_are_not_observation_features(cfg):
     b, _ = env.reset(
         seed=876, options={"scenario": LevelSpec("hidden-B", (Spawn(1900, "buckethead", 4),))}
     )
-    np.testing.assert_array_equal(a, b)
+    assert observations_equal(a, b)
     np.testing.assert_array_equal(mask_a, env.action_masks())
     env.step(env.codec.encode(Place("sunflower", 2, 0)))
     c = env.encoder.encode(env.public)
@@ -173,7 +175,7 @@ def test_future_schedule_ids_and_names_are_not_observation_features(cfg):
         plants=tuple(replace(p, id=999) for p in env.public.plants),
         level="different-label",
     )
-    np.testing.assert_array_equal(c, env.encoder.encode(changed))
+    assert observations_equal(c, env.encoder.encode(changed))
 
 
 def test_hybrid_only_proposes_legal_single_actions(cfg):
@@ -217,7 +219,7 @@ def test_all_species_geometry_is_independent_of_sun_cooldown_and_lesson(per_tick
     before = env.public
     for kind in env.codec.plants:
         _, reward, _, _, info = env.step(env.codec.encode(Place(kind, 1, 2)))
-        assert reward == pytest.approx(-0.001)
+        assert reward == pytest.approx(-per_tick_cfg["reward"]["invalid_plant_penalty"])
         assert info["rejection_reason"] in ("insufficient_sun", "card_recharging")
         assert info["ticks_advanced"] == 1 and not info["accepted"]
         assert env.public.plants == before.plants and env.public.sun == 0
@@ -225,12 +227,18 @@ def test_all_species_geometry_is_independent_of_sun_cooldown_and_lesson(per_tick
         _, reward, _, _, info = env.step(env.codec.encode(Dig(4, 8)))
         assert reward == pytest.approx(-1 / 3000)
         assert info["rejection_reason"] == "empty_tile" and info["ticks_advanced"] == 1
+        assert info["executed_action"] == 0
     metrics = env.episode_metrics()
     assert metrics["net_value"] == metrics["development"] == 0
-    assert metrics["return"] == pytest.approx(-0.009)
+    assert metrics["return"] == pytest.approx(
+        -8 * per_tick_cfg["reward"]["invalid_plant_penalty"] - 0.001
+    )
     assert metrics["discounted_return"] == metrics["return"]
-    assert metrics["invalid_plant_penalty"] == pytest.approx(-0.008)
+    assert metrics["invalid_plant_penalty"] == pytest.approx(
+        -8 * per_tick_cfg["reward"]["invalid_plant_penalty"]
+    )
     assert metrics["empty_dig_penalty"] == pytest.approx(-0.001)
+    assert metrics["wait_actions"] == 11
 
 
 def test_full_board_all_digs_and_no_plant_tile(per_tick_cfg):
@@ -250,7 +258,11 @@ def test_full_board_all_digs_and_no_plant_tile(per_tick_cfg):
     mask = env.action_masks()
     assert mask[0] and not mask[1:361].any() and mask[361:].all()
     _, reward, _, _, info = env.step(1)
-    assert reward == pytest.approx(-0.001) and info["rejection_reason"] == "occupied_tile"
+    assert (
+        reward == pytest.approx(-per_tick_cfg["reward"]["invalid_plant_penalty"])
+        and info["rejection_reason"] == "occupied_tile"
+    )
+    assert info["proposal_action"] == 1 and info["executed_action"] == 0
     assert len(env.public.plants) == 45 and env.public.tick == 1
     env.step(361)
     assert env.action_masks()[1:361:45].all()

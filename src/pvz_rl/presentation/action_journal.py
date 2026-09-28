@@ -14,7 +14,10 @@ RECORD = np.dtype(
     [
         ("sequence", "<u8"),
         ("tick", "<u4"),
+        ("entity_count", "<u4"),
+        ("entity_omitted", "<u4", 3),
         ("action", "<u2"),
+        ("executed_action", "<u2"),
         ("greedy_action", "<u2"),
         ("accepted", "?"),
         ("reason", "u1"),
@@ -105,12 +108,15 @@ class ActionJournal:
 
     def record_batch(self, rows, scores, results, episodes):
         records = np.zeros(self.count, dtype=RECORD)
-        for name in ("tick", "action", "greedy_action"):
+        for name in ("tick", "action", "greedy_action", "entity_count", "entity_omitted"):
             records[name] = rows[name]
         records["coins"][:, 0] = rows["species_coin"]
         records["coins"][:, 1] = rows["tile_coin"]
         records["q"] = scores
         records["accepted"], records["reason"] = results[:, 0], results[:, 1]
+        # Journal rows retain the proposal in ``action`` and expose the
+        # resolved simulator command independently for viewer diagnostics.
+        records["executed_action"] = np.where(records["accepted"], records["action"], 0)
         records["legal"][:] = rows["active"][:, None]
         rejected = ~records["accepted"]
         records["penalty"][
@@ -202,12 +208,22 @@ class ActionJournal:
             if latest is not None:
                 row = np.zeros((), dtype=RECORD)
                 for key, value in latest.items():
-                    row[key] = value
+                    if key in RECORD.names:
+                        row[key] = value
+                if "executed_action" not in latest:
+                    row["executed_action"] = row["action"] if row["accepted"] else 0
                 self.latest[env] = row
             for index in range((self.sizes[env] + self.block_rows - 1) // self.block_rows):
                 with archive.open(f"journal/{env}-{index}.npy") as stream:
                     block = np.load(stream, allow_pickle=False)
-                self._allocate(env)[: len(block)] = block
+                target = self._allocate(env)
+                for name in RECORD.names:
+                    if name in block.dtype.names:
+                        target[: len(block)][name] = block[name]
+                if "executed_action" not in block.dtype.names:
+                    target[: len(block)]["executed_action"] = np.where(
+                        target[: len(block)]["accepted"], target[: len(block)]["action"], 0
+                    )
 
     def close(self):
         for env in range(self.count):

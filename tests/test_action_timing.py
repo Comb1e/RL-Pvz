@@ -9,6 +9,7 @@ from pvz_game.replay import Playback, read_recording, write_recording
 
 from pvz_rl.config import validate_config
 from pvz_rl.envs.action_timing import ActionPhaseGame
+from pvz_rl.envs.encoding import observations_equal
 from pvz_rl.envs.env import PvZEnv
 from pvz_rl.envs.rewards import asset_value, reward_parts
 from pvz_rl.presentation.recordings import (
@@ -33,6 +34,7 @@ def test_multiple_actions_at_tick_zero_update_legality_and_preserve_time(per_tic
     for i, kind in enumerate(("peashooter", "sunflower", "chomper")):
         _, _, ended, truncated, info = env.step(env.codec.encode(Place(kind, 0, i)))
         assert not ended and not truncated and info["accepted"]
+        assert info["executed_action"] == env.codec.encode(Place(kind, 0, i))
         assert info["ticks_advanced"] == 0 and env.public.tick == 0
         assert env.action_masks()[env.codec.encode(Place(kind, 1, 0))]
         assert not env.game.validate_action(Place(kind, 1, 0)).accepted
@@ -43,10 +45,12 @@ def test_multiple_actions_at_tick_zero_update_legality_and_preserve_time(per_tic
         for c in env.public.cards
         if c.plant_type in ("peashooter", "sunflower", "chomper")
     )
-    env.step(env.codec.encode(Dig(0, 1)))
+    _, _, _, _, info = env.step(env.codec.encode(Dig(0, 1)))
+    assert info["executed_action"] == env.codec.encode(Dig(0, 1))
     assert env.public.tick == 0 and env.public.sun == 200
     assert len(env.public.plants) == 2
     _, _, _, _, info = env.step(0)
+    assert info["executed_action"] == 0
     assert info["ticks_advanced"] == 1 and env.public.tick == 1
     assert env.episode_metrics()["max_actions_per_tick"] == 4
     assert env.episode_metrics()["instant_actions"] == 4
@@ -246,7 +250,7 @@ def test_mask_cache_equivalence_between_instant_actions(per_tick_cfg):
     envs = [ready(cfg) for cfg in (per_tick_cfg, stock_cfg)]
     for action in (Place("peashooter", 0, 0), Place("sunflower", 1, 0), Dig(0, 0), Wait()):
         observations = [e.step(e.codec.encode(action))[0] for e in envs]
-        np.testing.assert_array_equal(*observations)
+        assert observations_equal(*observations)
         np.testing.assert_array_equal(*(e.action_masks() for e in envs))
 
 

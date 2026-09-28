@@ -1,6 +1,7 @@
 # Full-game history: cost and causal controls
 
-These calculations support the [proposed framework](../full-game-memory.md).
+Historical calculations for the [retired memory proposal](../full-game-memory.md).
+Current observation attention is specified in [entity inputs](entity-inputs.md).
 They are not measured sparse-transformer performance or a training result.
 
 ## Dense scores and retained state

@@ -57,8 +57,6 @@ from pvz_rl.learning.training_requirements import (
 from pvz_rl.monitoring.metrics import episode_task, mean_agent_actions, task_statistics
 from pvz_rl.monitoring.progress import Phase, ProgressReporter, duration
 from pvz_rl.monitoring.timing import TrainingTimings
-from pvz_rl.policy.sequential_q import per_head_epsilon
-from pvz_rl.policy.spatial_policy import SequentialQPolicy, SpatialFeatures
 from pvz_rl.provenance import append_jsonl, file_hash, metadata, verify_engine, write_json
 
 
@@ -71,27 +69,16 @@ def vector_env(cfg, condition, learner_seed, family="preset"):
 
 def build_model(cfg, condition, env, seed, log_dir=None):
     from pvz_rl.envs.cuda_env import CudaVecEnv
-    from pvz_rl.learning.cuda_q import CudaSequentialQ
 
     require_cuda_training(cfg, condition)
     if not isinstance(env, CudaVecEnv):
         raise ValueError("Training requires the CUDA tensor environment")
     t = cfg["training"]
-    policy_kwargs = {
-        "hidden_sizes": t["hidden_sizes"],
-        "features_extractor_class": SpatialFeatures,
-        "features_extractor_kwargs": {"layout_cfg": cfg},
-        "exploration_epsilon": t["exploration"]["epsilon_start"],
-        "tile_exploration_epsilon": per_head_epsilon(t["exploration"]["epsilon_start"]),
-    }
-    policy_class = SequentialQPolicy
-    algorithm = CudaSequentialQ
-    if cfg["policy"]["kind"] == "transformer_lstm_q_v1":
-        from pvz_rl.learning.recurrent_q import CudaRecurrentQ
-        from pvz_rl.policy.recurrent_policy import RecurrentQPolicy
+    from pvz_rl.learning.recurrent_q import CudaRecurrentQ
+    from pvz_rl.policy.recurrent_policy import RecurrentQPolicy
 
-        algorithm, policy_class = CudaRecurrentQ, RecurrentQPolicy
-        policy_kwargs = {"features_extractor_kwargs": {"layout_cfg": cfg}}
+    algorithm, policy_class = CudaRecurrentQ, RecurrentQPolicy
+    policy_kwargs = {"features_extractor_kwargs": {"layout_cfg": cfg}}
     model = algorithm(
         policy_class,
         env,
@@ -307,7 +294,7 @@ class ResearchCallback(BaseCallback):
             "training_phase": str(getattr(self.model, "phase", "starting")),
             "q_prefit": getattr(self.model, "prefit_errors", {}),
             "exploration_rate": getattr(self.model, "exploration_rate", 0.0),
-            "per_head_epsilon": per_head_epsilon(getattr(self.model, "exploration_rate", 0.0)),
+            "tile_exploration_epsilon": getattr(self.model, "exploration_rate", 0.0),
             "exploration_phase": getattr(self.model, "exploration_phase", None),
             "exploration_progress": getattr(self.model, "exploration_progress", 0.0),
             "exploration_at_floor": getattr(self.model, "exploration_at_floor", False),
@@ -436,9 +423,9 @@ class ResearchCallback(BaseCallback):
             f"Economy     produced sun {value(row['rolling_produced_sun'])} | effective damage {value(row['rolling_effective_damage'])} HP | plant loss {value(row['rolling_plant_value_loss'])} | mower cost {value(row['rolling_mower_expenditure'])}\n"
             f"Penalties   rejected plant {value(row['rolling_invalid_plant_penalty'], '+.5f')} | empty dig {value(row['rolling_empty_dig_penalty'], '+.5f')}\n"
             f"Recent play plants/game {value(row['rolling_plant_purchases'])} | attackers/game {value(row['rolling_attacker_purchases'])} | early digs/plant {value(row['early_digs_per_planting'], '.2%')} | game duration {value(row['rolling_seconds'], suffix='s')}\n"
-            f"Exploration budget {row['exploration_rate']:.3%} | per head {row['per_head_epsilon']:.3%} | fired species/tile {row['species_exploration_coins']}/{row['tile_exploration_coins']} | changed commands {row['exploratory_changes']}\n"
+            f"Exploration budget {row['exploration_rate']:.3%} | tile epsilon {row['tile_exploration_epsilon']:.3%} | fired branch/tile {row['species_exploration_coins']}/{row['tile_exploration_coins']} | changed commands {row['exploratory_changes']}\n"
             f"Cohort      {value(cohort.get('transitions_per_second'), '.0f')} transitions/s | collect {value(row['last_collection_seconds'], suffix='s')} | fit {value(row['last_optimization_seconds'], suffix='s')}\n"
-            f"Data path   prepare {value(cohort.get('preparation_seconds'), suffix='s')} | transfer wait {value(cohort.get('transfer_wait_seconds'), suffix='s')} | device {value(cohort.get('device_compute_seconds'), suffix='s')} | cache hit {value(cohort.get('cache_hit_rate'), '.1%')} | simulation {value(cohort.get('simulation_speed'), '.1f')}x aggregate\n"
+            f"Data path   prepare {value(cohort.get('preparation_seconds'), suffix='s')} | transfer wait {value(cohort.get('transfer_wait_seconds'), suffix='s')} | device {value(cohort.get('device_compute_seconds'), suffix='s')} | simulation {value(cohort.get('simulation_speed'), '.1f')}x aggregate\n"
             f"Learning    branch MSE {value(optimizer.get('train/branch_loss'), '.5f')} | tile MSE {value(optimizer.get('train/tile_loss'), '.5f')} | balanced loss {value(optimizer.get('train/q_loss'), '.5f')}\n"
             "Species     "
             + (
@@ -980,10 +967,6 @@ def load_policy(checkpoint, device="cpu", *, for_resume=False):
             raise ValueError("Checkpoint contents disagree with saved model configuration")
     if any(not torch.isfinite(value).all() for value in model.policy.state_dict().values()):
         raise ValueError("Checkpoint contains non-finite model weights")
-    if for_resume:
-        from pvz_rl.learning.checkpoints import migrate_resume_state
-
-        migrate_resume_state(model, data)
     model.policy.features_extractor.cfg = cfg
     model.policy_kwargs["features_extractor_kwargs"]["layout_cfg"] = cfg
     configure_exploration(model, cfg)
@@ -1094,7 +1077,7 @@ def train(
         },
         optimizer_settings={
             "learning_rate": cfg["training"]["learning_rate"],
-            "adam_epsilon": 1e-8 if cfg["policy"]["kind"] == "transformer_lstm_q_v1" else 1e-5,
+            "adam_epsilon": 1e-8 if cfg["policy"]["kind"] == "transformer_lstm_q_v2" else 1e-5,
             "batch_size": cfg["training"]["batch_size"],
             "shared_encoder": True,
         },
@@ -1127,7 +1110,7 @@ def train(
     )
     progress.emit(f"Reward settings: {cfg['reward']}", force=True)
     progress.emit(
-        f"Plant-only exploration {cfg['training']['exploration']}; greedy wait/plant/dig values",
+        f"Tile-only exploration {cfg['training']['exploration']}; greedy wait/plant/dig values",
         force=True,
     )
     if validation_after_stage(cfg, family):
