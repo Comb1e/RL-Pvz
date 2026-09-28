@@ -11,8 +11,8 @@ def test_demo_and_explicit_event_memory_profiles_are_separate():
     from pvz_rl.learning.training_requirements import require_supported_policy
 
     training, demo = load_config(), load_demo_config()
-    assert training == load_config("configs/event-memory.toml")
-    assert demo == load_demo_config("configs/demo.toml")
+    assert training == load_config("src/pvz_rl/data/train.toml")
+    assert demo == load_demo_config("src/pvz_rl/data/train.toml")
     require_supported_policy(training)
     assert configured(SimpleNamespace(command="record-demo", config=None)) == demo
     assert configured(SimpleNamespace(command="initialize-demo", config=None)) == demo
@@ -20,7 +20,7 @@ def test_demo_and_explicit_event_memory_profiles_are_separate():
     assert exploration_state(demo, 0).tile_epsilon == 0.5
     assert exploration_state(demo, 5000).tile_epsilon == pytest.approx(0.01)
     with pytest.raises(ValueError, match="demo profile"):
-        load_demo_config("configs/event-memory.toml")
+        load_demo_config("src/pvz_rl/data/train.toml", profile="event-memory")
 
 
 @pytest.mark.parametrize("demo", [False, True])

@@ -27,9 +27,11 @@ flowchart LR
 
 ## Components and ownership
 
-Configuration selects the model and protocol. `configs/train.toml` and
-`configs/demo.toml` describe the recurrent default, bundled for installed CLI use.
-`configs/event-memory.toml` selects the separate event-memory architecture.
+Configuration selects the model and protocol. The single bundled
+`src/pvz_rl/data/train.toml` file contains the shared parameters plus sparse
+`train`, `demo`, and `event-memory` overlays. Installed CLI use and source-tree
+commands therefore resolve the same values; `--profile event-memory` selects the
+separate event-memory architecture.
 Shared checkpoint inspection validates format, model/optimizer protocols,
 configuration identity and weight structure before environment creation. Loading
 without an explicit target uses saved settings and missing execution defaults.

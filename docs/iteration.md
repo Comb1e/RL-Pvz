@@ -1,5 +1,19 @@
 # Iteration history
 
+## 0.28.4 — 2026-09-27
+
+- Problem/root cause: the same profile parameters were copied across root
+  `configs/` files and bundled package data, so changing a setting could leave
+  source and installed behavior out of sync.
+- Improvement: keep one bundled `src/pvz_rl/data/train.toml` with sparse `demo`,
+  `event-memory`, and `gpu_defaults` overlays. Loaders and the CLI resolve those
+  overlays through one profile interface; `--profile event-memory` preserves the
+  archived model choice.
+- Verification: profile equivalence, custom-path loading, CLI training and the
+  complete regression suite (546 tests) pass; no formal training was launched.
+- Remaining limits: external scripts that refer to deleted `configs/*.toml`
+  paths must use the bundled file and profile option.
+
 ## 0.28.3 — 2026-09-27
 
 - Problem/root cause: collection still applied a species exploration coin after
@@ -78,7 +92,7 @@
   the max-minutes CLI flag; time allowances remain configuration settings. Keep
   recurrent 50%→1% tile exploration over 5,000 stage games, species-coin algebra,
   reward coefficients, engine pin and four autonomous passes. Event memory stays
-  available under configs/event-memory.toml with its original model protocols.
+  available through the event-memory overlay in the bundled train.toml profile.
 - Verification: the existing human-1000 archive reconstructed all 16,364 decisions
   and the winning final state in 34.72 seconds, without fitting. Tiny complete-demo
   weights and same-device predictions transferred exactly, then autonomous fitting

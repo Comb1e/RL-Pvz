@@ -113,6 +113,8 @@ def test_windows_cuda_cli(tmp_path, tiny_cli_config):
             "train",
             "--config",
             str(tiny_cli_config),
+            "--profile",
+            "event-memory",
             "--condition",
             "masked",
             "--steps",

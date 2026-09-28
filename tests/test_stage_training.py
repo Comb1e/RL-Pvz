@@ -19,7 +19,7 @@ from pvz_rl.provenance import file_hash, write_json
 
 @pytest.fixture
 def stage_cfg():
-    cfg = load_config("configs/event-memory.toml")
+    cfg = load_config("src/pvz_rl/data/train.toml")
     cfg["curriculum"]["run_stage"] = "easy"
     cfg["environment"]["cutoff_seconds"] = 1
     cfg["training"].update(
@@ -453,10 +453,10 @@ def test_automatic_curriculum_finishes_only_after_shared_mastery(stage_cfg):
 
 
 def test_mastery_seed_pool_and_retained_recipe_defaults():
-    from pathlib import Path
+    from pvz_rl.config import load_config as load_profile_config
 
-    for path in Path("configs").glob("*.toml"):
-        cfg = load_config(path)
+    for profile in ("train", "event-memory"):
+        cfg = load_profile_config("src/pvz_rl/data/train.toml", profile=profile)
         assert cfg["training"]["eval_interval_games"] == 2000
         assert seed_values(cfg, "validation") == list(range(100000, 100050))
         if cfg["curriculum"].get("mode") != "teaching":
@@ -627,7 +627,8 @@ def test_until_mastery_cli_saved_resume_and_unbounded_clock(stage_cfg, tmp_path,
     cfg = configured(
         argparse.Namespace(
             command="train",
-            config=Path("configs/event-memory.toml"),
+            config=Path("src/pvz_rl/data/train.toml"),
+            profile="event-memory",
             stage="easy",
             until_stage_complete=True,
         )
@@ -711,13 +712,17 @@ def test_previous_action_distribution_rejected_by_metadata_and_direct_loader(
 
 def test_until_stage_config_does_not_disable_benchmark_window(tmp_path):
     source = (
-        Path("configs/event-memory.toml")
+        Path("src/pvz_rl/data/train.toml")
         .read_text()
         .replace("until_stage_complete = false", "until_stage_complete = true")
     )
     source = source.replace("[curriculum]", '[curriculum]\nrun_stage = "easy"')
     path = tmp_path / "stage.toml"
     path.write_text(source)
-    cfg = configured(argparse.Namespace(command="benchmark-gpu", config=path, steps=16384))
+    cfg = configured(
+        argparse.Namespace(
+            command="benchmark-gpu", config=path, profile="event-memory", steps=16384
+        )
+    )
     assert cfg["training"]["until_stage_complete"]
     assert cfg["training"]["total_steps"] == 16384

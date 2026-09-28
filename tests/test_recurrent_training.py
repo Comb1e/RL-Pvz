@@ -50,7 +50,11 @@ def recurrent_cfg():
 
 def test_default_and_removed_interfaces():
     cfg = load_config()
-    assert cfg == load_config("configs/train.toml") == load_demo_config()
+    assert cfg == load_config("src/pvz_rl/data/train.toml")
+    demo = load_demo_config()
+    assert demo["policy"] == cfg["policy"]
+    assert demo["training"]["method"] == cfg["training"]["method"]
+    assert demo["reward"]["invalid_plant_penalty"] == 0.001
     assert cfg["policy"]["kind"] == "transformer_lstm_q_v1"
     assert tuple(cfg["curriculum"]["stages"]) == ("easy", "standard", "shared")
     assert "lessons" not in cfg["curriculum"]

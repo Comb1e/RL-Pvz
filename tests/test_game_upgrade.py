@@ -264,7 +264,7 @@ def test_video_options_respect_config_and_mutual_exclusion(cfg, tmp_path, monkey
     with pytest.raises(SystemExit):
         main(["train", "--output", str(tmp_path), "--videos", "--no-videos"])
     config = (
-        Path("src/pvz_rl/data/research.toml").read_text().replace("videos = false", "videos = true")
+        Path("src/pvz_rl/data/train.toml").read_text().replace("videos = false", "videos = true")
     )
     custom = tmp_path / "custom.toml"
     custom.write_text(config)

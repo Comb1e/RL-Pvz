@@ -54,7 +54,7 @@ basic_zombie_value = 50.0 # Sun-equivalent value per basic zombie's actual HP re
 mower_value = 200.0
 progress_weight = 0.01
 value_scale = 300.0 # Unit conversion, never a sun cap.
-invalid_plant_penalty = 0.001 # Rejected plant proposal, 30 sun-equivalents.
+invalid_plant_penalty = 0.003 # Rejected plant proposal, 90 sun-equivalents.
 empty_dig_penalty = 0.0003333333333333333 # Empty dig proposal, 10 sun-equivalents.
 
 [training]
@@ -168,3 +168,61 @@ backend = "cuda"
 
 [diagnostics]
 early_dig_seconds = 5
+
+# All runnable profiles share this file. The loader applies these sparse overlays
+# to the base training profile so shared parameters have one source of truth.
+[profiles.demo.reward]
+invalid_plant_penalty = 0.001
+
+[profiles."event-memory"]
+remove = [
+  "training.demo",
+  "policy.entity_width",
+  "policy.transformer_layers",
+  "policy.transformer_heads",
+  "policy.transformer_feedforward",
+  "policy.scalar_width",
+  "policy.lstm_hidden",
+  "policy.action_embedding",
+  "policy.outcome_width",
+  "policy.chunk_length",
+]
+
+[profiles."event-memory".encoding]
+version = "event_v7"
+
+[profiles."event-memory".reward]
+invalid_plant_penalty = 0.001
+
+[profiles."event-memory".training]
+method = "sequential_q_mc_v2"
+
+[profiles."event-memory".training.exploration]
+epsilon_start = 0.1
+epsilon_floor = 0.001
+decay_games = 3000
+
+[profiles."event-memory".policy]
+kind = "event_sequential_q_v2"
+plant_embedding = 8
+state_embedding = 4
+scalar_sizes = [64]
+channels = [32, 32]
+
+[profiles."event-memory".policy.memory]
+model_width = 128
+layers = 2
+heads = 4
+feedforward_width = 256
+local_tokens = 8
+event_tokens = 32
+summary_tokens = 8
+summary_stride = 100
+gate_bias = 2.0
+
+[profiles.gpu_defaults]
+simulator = "cuda"
+device = "cuda"
+n_envs = 128
+benchmark_env_counts = [128]
+benchmark_min_cohorts = 1

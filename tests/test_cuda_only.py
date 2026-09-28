@@ -163,10 +163,9 @@ def test_recurrent_defaults_and_explicit_event_memory_are_trainable():
     from pvz_rl.config import load_demo_config
 
     root = Path(__file__).resolve().parents[1]
-    expected = {"train", "demo", "event-memory"}
-    assert {p.stem for p in (root / "configs").glob("*.toml")} == expected
-    require_cuda_training(load_config(root / "configs/event-memory.toml"), runtime=False)
-    demo = load_demo_config(root / "configs/demo.toml")
+    assert {p.stem for p in (root / "src/pvz_rl/data").glob("*.toml")} == {"train"}
+    require_cuda_training(load_config(), runtime=False)
+    demo = load_demo_config()
     require_cuda_training(demo, runtime=False)
 
 

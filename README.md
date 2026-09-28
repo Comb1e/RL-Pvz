@@ -58,6 +58,10 @@ Training commands explicitly start autonomous learning. Availability and replay
 checks do not. Incomplete recordings are rejected. The curriculum is easy →
 standard → shared; a demonstration fit alone does not establish mastery.
 
+All profiles share one bundled configuration at
+`src/pvz_rl/data/train.toml`; use `--profile event-memory` for the archived
+event-memory model.
+
 ## Common checks
 
 ```powershell

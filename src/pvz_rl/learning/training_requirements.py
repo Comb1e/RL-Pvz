@@ -37,7 +37,7 @@ def require_supported_policy(cfg, condition="masked"):
         or not current_model_config(cfg)
     ):
         raise ValueError(
-            "Retired policy or scheduler. Models require matching recurrent event_v8 or event-memory event_v7 protocols, net_value_v1, the sequential_q_unmasked_penalty_v1 distribution and complete-game collection. Start fresh with configs/train.toml."
+            "Retired policy or scheduler. Models require matching recurrent event_v8 or event-memory event_v7 protocols, net_value_v1, the sequential_q_unmasked_penalty_v1 distribution and complete-game collection. Start fresh with the bundled train profile."
         )
 
 
@@ -69,7 +69,7 @@ def require_cuda_training(cfg, condition="masked", *, runtime=True):
         raise ValueError(
             "Training and resume require simulation.backend=cuda and training.device=cuda. "
             "CPU training is not supported. "
-            "Start a fresh complete-game CUDA run with configs/train.toml."
+            "Start a fresh complete-game CUDA run with the bundled train profile."
         )
     if cfg["environment"].get("action_timing") != "per_tick":
         raise ValueError(

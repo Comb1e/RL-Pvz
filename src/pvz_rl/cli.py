@@ -10,6 +10,7 @@ from pathlib import Path
 from pvz_rl.config import (
     load_config,
     load_demo_config,
+    load_event_config,
     research_config,
     seed_values,
     validate_config,
@@ -20,6 +21,12 @@ from pvz_rl.provenance import file_hash, metadata, write_json
 
 def common(parser):
     parser.add_argument("--config", type=Path)
+    parser.add_argument(
+        "--profile",
+        choices=("train", "event-memory"),
+        default="train",
+        help="profile from the bundled single TOML configuration (default: train)",
+    )
 
 
 def video_options(parser):
@@ -62,8 +69,12 @@ def training_options(parser):
 
 
 def configured(args):
-    loader = load_demo_config if args.command in ("record-demo", "initialize-demo") else load_config
-    cfg = loader(args.config)
+    if args.command in ("record-demo", "initialize-demo"):
+        cfg = load_demo_config(args.config)
+    elif getattr(args, "profile", "train") == "event-memory":
+        cfg = load_event_config(args.config)
+    else:
+        cfg = load_config(args.config)
     checkpoint = getattr(args, "resume", None) or getattr(args, "init_from", None)
     if args.command == "evaluate":
         checkpoint = getattr(args, "checkpoint", None)

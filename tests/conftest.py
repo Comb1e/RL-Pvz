@@ -80,7 +80,7 @@ def tiny_cli_config(tmp_path):
 
     path = tmp_path / "tiny.toml"
     path.write_text(
-        Path("configs/event-memory.toml")
+        Path("src/pvz_rl/data/train.toml")
         .read_text()
         .replace("live_enabled = true", "live_enabled = false")
         .replace("cutoff_seconds = 1200", "cutoff_seconds = 1")

@@ -16,6 +16,8 @@ from pvz_game.cuda.schema import MOWER_STATES, ZOMBIE_STATES
 
 from pvz_rl.learning.budget import uses_games
 
+_CONFIG_RESOURCE = "data/train.toml"
+
 
 def digest(value: object) -> str:
     return hashlib.sha256(
@@ -24,8 +26,13 @@ def digest(value: object) -> str:
 
 
 @lru_cache(maxsize=1)
+def _bundled_config() -> dict:
+    return tomllib.loads(files("pvz_rl").joinpath(_CONFIG_RESOURCE).read_text("utf-8"))
+
+
+@lru_cache(maxsize=1)
 def _output_defaults():
-    bundled = tomllib.loads(files("pvz_rl").joinpath("data/research.toml").read_text("utf-8"))
+    bundled = _bundled_config()
     return {key: bundled[key] for key in ("logging", "visualization")}
 
 
@@ -50,9 +57,7 @@ def research_config(cfg: dict) -> dict:
 
 @lru_cache(maxsize=1)
 def _runtime_defaults():
-    return tomllib.loads(files("pvz_rl").joinpath("data/research.toml").read_text("utf-8"))[
-        "runtime"
-    ]
+    return _bundled_config()["runtime"]
 
 
 def runtime_settings(cfg: dict) -> dict:
@@ -67,26 +72,63 @@ def simulator(cfg):
 
 @lru_cache(maxsize=1)
 def gpu_defaults():
-    return tomllib.loads(files("pvz_rl").joinpath("data/gpu-defaults.toml").read_text("utf-8"))
+    return copy.deepcopy(_bundled_config()["profiles"]["gpu_defaults"])
 
 
-def load_config(path: str | Path | None = None) -> dict:
-    source = Path(path) if path else files("pvz_rl").joinpath("data/research.toml")
-    cfg = tomllib.loads(source.read_text("utf-8"))
+def _deep_update(target: dict, updates: dict) -> None:
+    for key, value in updates.items():
+        if isinstance(value, dict) and isinstance(target.get(key), dict):
+            _deep_update(target[key], value)
+        else:
+            target[key] = copy.deepcopy(value)
+
+
+def _remove_path(target: dict, path: str) -> None:
+    parts = path.split(".")
+    current = target
+    for part in parts[:-1]:
+        current = current.get(part, {})
+    current.pop(parts[-1], None)
+
+
+def _read_config(path: str | Path | None) -> dict:
+    if path is None:
+        return _bundled_config()
+    return tomllib.loads(Path(path).read_text("utf-8"))
+
+
+def _resolve_profile(raw: dict, profile: str) -> dict:
+    raw = copy.deepcopy(raw)
+    profiles = raw.pop("profiles", {})
+    selected = profiles.get(profile)
+    if selected is None:
+        if not profiles:
+            return raw
+        if profile != "train":
+            raise ValueError(f"Configuration profile {profile!r} is not available")
+        return raw
+    selected = copy.deepcopy(selected)
+    removals = selected.pop("remove", [])
+    _deep_update(raw, selected)
+    for path in removals:
+        _remove_path(raw, path)
+    return raw
+
+
+def load_config(path: str | Path | None = None, *, profile: str = "train") -> dict:
+    cfg = _resolve_profile(_read_config(path), profile)
     validate_config(cfg)
     return copy.deepcopy(cfg)
 
 
 def load_event_config(path=None):
     """Explicit event-memory alternative, including archived regression controls."""
-    return load_config(path or files("pvz_rl").joinpath("data/event-memory.toml"))
+    return load_config(path, profile="event-memory")
 
 
-def load_demo_config(path: str | Path | None = None) -> dict:
+def load_demo_config(path: str | Path | None = None, *, profile: str = "demo") -> dict:
     """Recording verification profile; execution options are supplied separately."""
-    source = Path(path) if path else files("pvz_rl").joinpath("data/demo.toml")
-    cfg = tomllib.loads(source.read_text("utf-8"))
-    validate_config(cfg)
+    cfg = load_config(path, profile=profile)
     if cfg["encoding"]["version"] != "event_v8" or cfg["policy"]["kind"] != "transformer_lstm_q_v1":
         raise ValueError("Human demonstrations require the event_v8 Transformer-LSTM demo profile")
     return copy.deepcopy(cfg)
@@ -112,11 +154,11 @@ def validate_config(cfg: dict) -> None:
         or recurrent
     ):
         raise ValueError(
-            "Retired observation/policy format. Start fresh with configs/train.toml; archived reports remain readable; recordings must use the 100 Hz engine."
+            "Retired observation/policy format. Start fresh with the bundled train profile; archived reports remain readable; recordings must use the 100 Hz engine."
         )
     if cfg["reward"].get("version") != "net_value_v1":
         raise ValueError(
-            "Retired reward format; 0.11.0 requires fresh training with configs/train.toml"
+            "Retired reward format; 0.11.0 requires fresh training with the bundled train profile"
         )
     reward_keys = {
         "version",

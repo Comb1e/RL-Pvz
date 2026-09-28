@@ -89,11 +89,11 @@ The default budget is 10,000 games with `training.max_minutes = 120` and a
 TOML. The viewer retains Q values from the actual decision and existing history,
 progress, coverage and checkpoint reporting. Press **F** to follow latest actions.
 
-The event-memory alternative is explicit:
+The event-memory alternative is explicit and uses the same bundled TOML:
 
 ```powershell
 .\.venv\Scripts\python.exe -m pvz_rl train `
-  --config configs\event-memory.toml --output runs\event-memory
+  --profile event-memory --output runs\event-memory
 ```
 
 Historical event-memory weights remain loadable. Retained curriculum stages are

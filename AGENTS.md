@@ -17,8 +17,9 @@
 
 ## Code structure
 
-- `configs/train.toml`, `configs/demo.toml` and bundled profiles use the recurrent
-  Transformer–LSTM by default; `configs/event-memory.toml` is the explicit alternative.
+- `src/pvz_rl/data/train.toml` is the single source for all profiles. The default
+  `train` and `demo` overlays use the recurrent Transformer–LSTM; the
+  `event-memory` overlay is the explicit alternative.
 - `src/pvz_rl/envs/` adapts the pinned game, public observations and rewards;
   `cuda_accounting.py` adds read-only accounting counters to the pinned CUDA kernel.
   CPU and CUDA share an execution outcome contract: retain the proposal, report
