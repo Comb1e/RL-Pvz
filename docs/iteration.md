@@ -1,5 +1,32 @@
 # Iteration history
 
+## Documentation and test cleanup — 2026-09-28 (0.30.0 unchanged)
+
+- Problem/root cause: guides accumulated retired event-memory, regional-input,
+  two-coin exploration and minibatch-update descriptions alongside the current
+  entity model. Validation and reference pages duplicated release narratives.
+  Test suites retained obsolete training-mode exercises and repeated assertions.
+- Improvement: delete eight redundant/retired guides; keep one current home for
+  entity inputs, recurrent learning, rewards, rejection penalties and precision.
+  Shorten the README to quick start, replace validation history with coverage
+  ownership, and retain source attribution relevant to the current system.
+  Historical narratives remain accessible through versioned Git links; raw
+  evidence and recordings are preserved.
+- Test cleanup: static inventory falls from 270 to 251 test functions and from
+  36 to 35 test files. Remove two-coin/fixed/hybrid training exercises, duplicate
+  report/reload runs, reward checks and viewer checks. Move unique deadline,
+  profile, probe-size and rejected-dig assertions to their existing owners.
+  Rename the retained SC2/compact/warmup suites for their current purpose.
+  Keep independent math, CPU/CUDA parity, supported-reader compatibility,
+  incompatible-checkpoint rejection and atomic interruption controls.
+- Verification: Ruff lint and format checks, in-memory syntax compilation of
+  104 Python files, PowerShell parsing and local Markdown link/anchor checks
+  passed. No tests were collected or executed, and no benchmarks or simulation
+  ran, as requested. These are static checks, not a new runtime validation claim.
+- Isolation/limits: changes were made in a separate worktree. Runtime source,
+  configuration, dependency pin, running training and run artifacts were untouched;
+  the user's parameters remain intact. Behavioral validation is unexecuted.
+
 ## 0.30.0 — 2026-09-28
 
 - Problem/root cause: small encoder batches, unconditional query splitting and
@@ -265,8 +292,8 @@
   No formal training was launched.
 
 Dates and results belong to their recorded version. Current behavior lives in
-[research design](research.md) and [architecture](architecture.md); test counts,
-artifact locations and learning outcomes live in [validation](validation.md).
+[architecture](architecture.md) and [training](training.md). Archived test counts,
+artifact locations and learning outcomes remain in the historical validation snapshot.
 The longer pre-consolidation notes remain in `git show b642c9c:docs/iteration.md`.
 
 ## 0.26.0 — 2026-09-26
@@ -311,7 +338,7 @@ The longer pre-consolidation notes remain in `git show b642c9c:docs/iteration.md
 - Verification: inspected papers/project sources, ran synthetic existing-memory
   retention probes, independently enumerated sparse edge counts and same-tick
   causal counterexamples, and checked local runtime/GPU availability. Calculations
-  are in [memory math](math/history-attention.md).
+  are in [archived memory math](https://github.com/Comb1e/RL-Pvz/blob/40529687133cf897ad401034991f755bada34954/docs/math/history-attention.md).
 - Remaining issues: framework only; retrieval quality, actual sparse backend,
   gradients, throughput and learning quality are unverified. No policy change or
   training run was made. Current architecture documentation remains authoritative.
@@ -364,7 +391,7 @@ The longer pre-consolidation notes remain in `git show b642c9c:docs/iteration.md
   pass. A 128-game short interruption control preserves policy, optimizer, RNG and
   history. Three warmed five-second cutoff viewer pairs measured **3.04% median
   overhead** and identical paired policy hashes, within 183.20 seconds total.
-  See [validation](validation.md) for regression checks, full measurements and scope.
+  See [archived validation](https://github.com/Comb1e/RL-Pvz/blob/40529687133cf897ad401034991f755bada34954/docs/validation.md) for regression checks, full measurements and scope.
 - Compatibility: game simulation/snapshot identifiers and strict pin changed;
   fresh experiments are required. Q architecture and optimizer/exploration protocols
   are unchanged. Existing files and offline report readability are preserved.
@@ -468,7 +495,7 @@ that learning collapse is resolved, and no formal learning run was launched.
   compatible 0.19.0 class references loadable without duplicate source files.
 - Compatibility: output-only settings preserve 0.19.0 resume/weight transfer and the
   engine pin. Existing runs/artifacts remain intact. No formal training launched.
-- Verification and overhead results are recorded in [validation](validation.md).
+- Verification and overhead results are recorded in [archived validation](https://github.com/Comb1e/RL-Pvz/blob/40529687133cf897ad401034991f755bada34954/docs/validation.md).
   The final median viewer overhead was 0.55% (2,466 → 2,452 transitions/s), with
   matching final policy hashes in all three pairs. Individual comparisons ranged
   from −2.74% to +8.91%; performance remains hardware/load dependent.
@@ -501,7 +528,7 @@ that learning collapse is resolved, and no formal learning run was launched.
   Triton is now detected before tracing. The strict output-enabled/disabled
   parameter-equality control then passed without relaxing its assertion.
 - Current verification and telemetry overhead are recorded in
-  [validation](validation.md): 606 research regressions and 224 pinned game tests
+  [archived validation](https://github.com/Comb1e/RL-Pvz/blob/40529687133cf897ad401034991f755bada34954/docs/validation.md): 606 research regressions and 224 pinned game tests
   passed. Three paired telemetry checks retained identical policy hashes, with a
   2.16% median sampling cost. All existing runs and artifacts remain preserved.
   No formal training or learning comparison was launched. Lesson mastery and
@@ -591,7 +618,7 @@ that learning collapse is resolved, and no formal learning run was launched.
 - Representation: centralized command dimensions preserve compact simulator IDs.
   The factorized history trial was 4–5% slower and its bounded competence checks
   were inconclusive, so the existing history embedding remains. Temporary comparison
-  code is removed; measurements are in [validation](validation.md).
+  code is removed; measurements are in [archived validation](https://github.com/Comb1e/RL-Pvz/blob/40529687133cf897ad401034991f755bada34954/docs/validation.md).
 - Compatibility: event_transformer_v2 requires fresh weights; one policy/recipe,
   281 observations, 128 environments, game checkout and dependency pin remain unchanged.
 - Verification: independent probability/gradient/PPO controls, stage state-machine
@@ -612,7 +639,7 @@ that learning collapse is resolved, and no formal learning run was launched.
 - Compatibility: fresh models; one architecture/recipe, existing runs and reports preserved,
   game checkout and pin unchanged. Warm-up, rewards, learning rates and PPO remain unchanged.
 - Verification and limitations: measured checks and bounded comparison results are recorded
-  in [validation](validation.md). No formal training or claim of solved lesson learning.
+  in [archived validation](https://github.com/Comb1e/RL-Pvz/blob/40529687133cf897ad401034991f755bada34954/docs/validation.md). No formal training or claim of solved lesson learning.
 
 ## 0.13.0 — 2026-09-24
 
@@ -654,7 +681,7 @@ that learning collapse is resolved, and no formal learning run was launched.
 - Compatibility: 0.11.0 weights still load. Explicit current configuration enables
   the new settings on weights-only transfer; resume retains the saved experiment.
   Warm-up and decay reuse saved stage residency and preserve optimizer identities.
-- Verification and bounded learning findings: see [validation](validation.md).
+- Verification and bounded learning findings: see [archived validation](https://github.com/Comb1e/RL-Pvz/blob/40529687133cf897ad401034991f755bada34954/docs/validation.md).
   The initial 256-game adaptation was insufficient; 1,024 games retained placement
   in short checks, but saving still failed and critic errors remained mixed.
   Only three actor-updating rollouts fit each final check. Remains experimental.
@@ -677,7 +704,7 @@ that learning collapse is resolved, and no formal learning run was launched.
   conversion removed. New-method stage initialization and resume remain supported.
   Old generated outputs are retired; one recipe remains.
 - Verification: independent ledger/time controls, complete regressions and the
-  bounded two-seed fresh-saving comparison are recorded in [validation](validation.md).
+  bounded two-seed fresh-saving comparison are recorded in [archived validation](https://github.com/Comb1e/RL-Pvz/blob/40529687133cf897ad401034991f755bada34954/docs/validation.md).
   No formal training or final-test evaluation is launched. Learning remains experimental.
 
 ## 0.10.4 — 2026-09-23
@@ -694,7 +721,7 @@ that learning collapse is resolved, and no formal learning run was launched.
   recording hashes and the installed game pin. No game checkout changes.
 - Verification: income/rate calculations, all lane cases, exact delay boundaries,
   plant/dig failures, mixed income/cap events, CPU/CUDA agreement, recordings
-  and regressions are recorded in [validation](validation.md).
+  and regressions are recorded in [archived validation](https://github.com/Comb1e/RL-Pvz/blob/40529687133cf897ad401034991f755bada34954/docs/validation.md).
 - Limit: verified feasibility does not demonstrate improved learning. Tight
   lessons can hurt exploration and transfer; normal wins and planting must be
   measured alongside digs. No formal training launched.
@@ -712,7 +739,7 @@ that learning collapse is resolved, and no formal learning run was launched.
   often with alternatives still legal. Record weighted waiting-sample optimization
   and temporal-abstraction tradeoffs in the existing research/reference documents.
   Neither proposal is enabled; rewards, per-tick choices and PPO losses are unchanged.
-- Verification: see [validation](validation.md) for regression and continuation
+- Verification: see [archived validation](https://github.com/Comb1e/RL-Pvz/blob/40529687133cf897ad401034991f755bada34954/docs/validation.md) for regression and continuation
   controls. No formal training or stronger-learning claim.
 
 ## 0.10.2 — 2026-09-23
@@ -730,7 +757,7 @@ that learning collapse is resolved, and no formal learning run was launched.
   rewards and optimizer settings are unchanged.
 - Verification: 388 research, 207 CPU game and 222 CUDA game tests passed;
   scheduling, deadlines, checkpoint/resume, verified demos, reports, packaging
-  and documentation checks are recorded in [validation](validation.md).
+  and documentation checks are recorded in [archived validation](https://github.com/Comb1e/RL-Pvz/blob/40529687133cf897ad401034991f755bada34954/docs/validation.md).
 - Limit: fewer normal validation points delay detection of within-stage
   regressions. No formal training or learned-performance claim.
 
@@ -752,7 +779,7 @@ that learning collapse is resolved, and no formal learning run was launched.
   completion/reset confirmation of 42.40%; peak sampled GPU memory is 1427 MiB.
   Verification: 376 research, 207 CPU game and 222 CUDA game tests pass, plus
   focused controls and a 1024-game batch smoke with three verified demos.
-  Full measurements and limits are recorded in [validation](validation.md).
+  Full measurements and limits are recorded in [archived validation](https://github.com/Comb1e/RL-Pvz/blob/40529687133cf897ad401034991f755bada34954/docs/validation.md).
 - Compatibility: unchanged network and game pin. Explicit current-config
   weights-only initialization adopts new settings; resume retains saved settings.
 - Remaining limits: task feasibility is not learned mastery; the old saving
@@ -775,7 +802,7 @@ that learning collapse is resolved, and no formal learning run was launched.
 - Sources: inspected DeepSeek report, What Matters architecture findings and SB3
   interfaces; adopted gradient isolation and phase-specific work, not LLM algorithms.
 - Verification/results: independent controls, full regressions and paired five-minute
-  transfer comparisons are recorded in [validation](validation.md). The first 200
+  transfer comparisons are recorded in [archived validation](https://github.com/Comb1e/RL-Pvz/blob/40529687133cf897ad401034991f755bada34954/docs/validation.md). The first 200
   games are examined separately. No formal training is launched.
 - Remaining problem: easy validation improved for both transfer seeds, but saving
   retention failed and seed 102 developed destructive digging later. Throughput

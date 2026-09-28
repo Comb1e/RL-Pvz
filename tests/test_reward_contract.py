@@ -1,4 +1,4 @@
-"""Independent controls for the one compact observation and reward contract."""
+"""Asset conservation, reward diagnostics and supported training-mode boundaries."""
 
 from dataclasses import replace
 

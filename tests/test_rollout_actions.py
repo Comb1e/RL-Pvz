@@ -4,17 +4,13 @@ import pytest
 import torch
 from pvz_game import Dig, LevelSpec, Place, Spawn
 
-from pvz_rl.config import gpu_defaults, load_config
+from pvz_rl.config import load_config
 from pvz_rl.envs.env import PvZEnv
 from pvz_rl.learning.training import vector_env
 from pvz_rl.monitoring.metrics import agent_action_count, mean_agent_actions
 
 
-def test_defaults_and_archived_action_counts():
-    cfg = load_config()
-    assert cfg == load_config("src/pvz_rl/data/train.toml")
-    assert cfg["training"]["n_envs"] == gpu_defaults()["n_envs"] == 128
-    assert cfg["training"]["method"] == "complete_return_lstm_v1"
+def test_action_counts_and_missing_archived_metrics():
     assert agent_action_count({"agent_actions": 2, "decisions": 1000}) == 2
     assert agent_action_count({"action_timing": "per_tick", "instant_actions": 3}) == 3
     assert agent_action_count({"decisions": 1000}) is None
@@ -43,6 +39,7 @@ def test_accepted_actions_exclude_waits_and_rejections(timing, ticks):
         assert env.episode_metrics()["agent_actions"] == count
     row = env.episode_metrics()
     assert row["decisions"] == 133 and row["invalid_actions"] == 2
+    assert row["early_voluntary_digs"] == 1
     env.reset()
     assert env.episode_metrics()["agent_actions"] == 0
 
@@ -68,6 +65,7 @@ def test_cuda_counts_and_games_survive_128_waits():
             assert env.episode_metrics(0)["agent_actions"] == count
         row = env.episode_metrics(0)
         assert row["decisions"] == 133 and row["invalid_actions"] == 2
+        assert row["early_voluntary_digs"] == 1
         assert row["tick"] == 131
         env.reset()
         assert env.episode_metrics(0)["agent_actions"] == 0

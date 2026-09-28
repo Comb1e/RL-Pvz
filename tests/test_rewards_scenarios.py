@@ -3,32 +3,13 @@ from collections import Counter
 from dataclasses import replace
 
 import pytest
-from pvz_game import Game, Place, Rules, Status
+from pvz_game import Game, Place, Rules
 from pvz_game.config import resolve_level
 
 from pvz_rl.config import validate_config
 from pvz_rl.envs.env import PvZEnv
 from pvz_rl.envs.rewards import reward_parts
-from pvz_rl.envs.scenarios import difficulty_weights, scenario
-
-
-def test_legacy_tick_batch_discounts_at_elapsed_simulation_time(cfg):
-    env = PvZEnv(cfg)
-    env.reset(seed=10)
-    rewards = []
-    for action in [env.codec.encode(Place("sunflower", 0, 0)), 361, 0, 0, 0]:
-        rewards.append(env.step(action)[1])
-    assert rewards == pytest.approx([0, -50 / 30000, 0, 0, 0])
-    assert env.episode_metrics()["discounted_return"] == pytest.approx(
-        -50 / 30000 * cfg["training"]["gamma"] ** 10
-    )
-
-
-def test_terminal_accounting_does_not_destroy_assets(cfg):
-    obs = Game().reset("easy", 1)
-    for status, terminal in ((Status.WON, 1), (Status.LOST, -2)):
-        end = replace(obs, status=status)
-        assert reward_parts(obs, end, cfg)["total"] == terminal
+from pvz_rl.envs.scenarios import scenario
 
 
 def test_defeat_count_without_effective_damage_does_not_earn_credit(cfg):
@@ -61,14 +42,6 @@ def test_changed_scenarios_preserve_required_controls(level):
         (s.tick, s.zombie_type, s.wave) for s in base.spawns
     ]
     assert scenario(level, "concentrated", seed, rules) == concentrated
-
-
-def test_curriculum_boundaries_are_exact(cfg):
-    assert difficulty_weights(cfg, 9, 100, True) == [1, 0, 0]
-    assert difficulty_weights(cfg, 10, 100, True) == [0.5, 0.5, 0]
-    assert difficulty_weights(cfg, 39, 100, True) == [0.5, 0.5, 0]
-    assert difficulty_weights(cfg, 40, 100, True) == [0.2, 0.4, 0.4]
-    assert difficulty_weights(cfg, 0, 100, False) == [0.2, 0.4, 0.4]
 
 
 def test_overlapping_splits_are_rejected(cfg):

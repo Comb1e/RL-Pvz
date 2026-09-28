@@ -87,7 +87,7 @@ def test_independent_accounting_orders_and_late_projectile_credit():
     )
     assert (
         late == early == pytest.approx(600 * 50 / 270 - 100)
-    )  # 150 damage value minus 100 lost asset.
+    )  # Effective damage value minus the 100-sun lost asset.
     parts = reward_parts(full, gone, cfg, events=events)
     assert parts["effective_damage"] == 600 and parts["plant_value_loss"] == 100
     assert parts["total"] == pytest.approx((600 * 50 / 270 - 100) / 30000)
@@ -176,7 +176,6 @@ def test_real_explosions_break_even_and_empty_loss_on_cpu_and_cuda(kind, count, 
         env.episode_metrics()["effective_damage"]
         == {"basic": 270, "conehead": 640, "buckethead": 1370}[kind] * count
     )
-    assert -100 > -200  # One-basic bomb costs less than consuming a mower.
 
 
 def test_projectiles_keep_credit_after_voluntary_dig():

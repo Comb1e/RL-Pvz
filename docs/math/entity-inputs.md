@@ -32,6 +32,9 @@ wave scale, initial/defeated zombies / count scale, and the eight card cooldowns
 in plant order as `cooldown_ticks / (recharge_ticks + 1)`. Four present-list
 counts (plants, zombies, projectiles, mowers) follow, each / count scale (75).
 Counts include entities omitted by the cap and preserve multiplicity.
+For a card, ready is exactly zero and an instantaneous placement sets the
+normalized cooldown to one. After one wait it is
+`recharge_ticks / (recharge_ticks + 1)`, preserving the pinned countdown boundary.
 
 ## Selection and information boundary
 
@@ -123,34 +126,6 @@ cap boundaries, and excluded private metadata. Ragged storage controls exercise
 empty rows, shared budgets, disk spill, archive round trips and corrupt offsets.
 These are implementation controls; cap benchmarks do not establish learning quality.
 
-
-## Device measurement and selected cap
-
-Measured on 2026-09-28, NVIDIA GeForce RTX 4070 Laptop GPU (8 GiB), PyTorch
-2.8.0+cu128, width 32. Three warmed repetitions of a 128-observation inference
-batch and a 128-frame chronological fitting sequence, both Q heads, Adam step:
-
-| Retained entities | Inference frames/s | Fitting frames/s | Peak Torch allocated / reserved MiB |
-|---|---:|---:|---:|
-| 5 | 7,570 | 1,491 | 45.7 / 64 |
-| 64 | 6,868 | 1,222 | 46.0 / 80 |
-| 256 | 4,849 | 686 | 47.8 / 84 |
-| 512 | 2,158 | 247 | 49.3 / 84 |
-
-The default cap is **256**, chosen for substantially lower attention cost.
-At 1,024 present entities the encoder retained exactly the configured cap and
-reported omissions. Counts and 256/512 comparisons are in the
-[measurement artifact](../evidence/entity-inputs-v029.json). Both caps fit on this
-GPU; selecting 256 trades individual detail in crowded boards for throughput.
-There is no claim that 256 improves learning. Settings remain configurable.
-
-A separate real 128-slot CUDA check used a one-second cutoff and one fitting pass.
-After warmup it collected/fitted 12,800 decisions in 11.85 s (1,080 decisions/s),
-with 95.4 MiB peak Torch allocation, 144 MiB Torch reservation and 128.6 MiB CuPy
-pool reservation. A 384-decision collection plus a synthetic default 1,024-frame
-fitting chunk peaked at 46.3 MiB Torch allocation. These counters exclude driver,
-display and other processes; the synthetic table excludes simulation. Short
-cutoffs and synthetic populations are resource controls, not full-game speed or
-learning-quality estimates. No formal training was run.
-
-Execution precision and pass retry controls: [training throughput](training-throughput.md).
+The default cap is 256; its detail/throughput tradeoff and recorded device
+measurements are in [iteration history](../iteration.md#0290--2026-09-28).
+Execution precision and retry controls are in [training throughput](training-throughput.md).

@@ -178,27 +178,6 @@ def test_future_schedule_ids_and_names_are_not_observation_features(cfg):
     assert observations_equal(c, env.encoder.encode(changed))
 
 
-def test_hybrid_only_proposes_legal_single_actions(cfg):
-    cfg["conditions"]["hybrid"] = dict(masked=True, shaped=True, curriculum=False, hybrid=True)
-    env = PvZEnv(cfg, condition="hybrid")
-    env.reset(seed=42)
-    assert env.action_space.n == 5
-    for _ in range(80):
-        before = env.public.tick
-        candidates = env.candidates()
-        for candidate in candidates:
-            if candidate is not None:
-                assert env.game.validate_action(candidate).accepted
-        action = int(np.flatnonzero(env.action_masks())[-1])
-        env.step(action)
-        assert env.public.tick - before <= 10
-    env.reset(seed=43)
-    mask = env.action_masks()
-    unavailable = int(np.flatnonzero(~mask)[0])
-    _, _, _, _, info = env.step(unavailable)
-    assert not info["accepted"] and env.public.tick == 10
-
-
 def test_training_reset_stays_inside_training_split(cfg):
     env = PvZEnv(cfg, training=True)
     for seed in (0, 42, 100001, 200001):

@@ -27,7 +27,7 @@ flowchart LR
 
 ## Components and ownership
 
-Configuration selects the model and protocol. The single bundled
+Configuration defines model dimensions and the protocol. The single bundled
 `src/pvz_rl/data/train.toml` file contains the shared parameters plus sparse
 `train` and `demo` overlays. Installed CLI use and source-tree commands resolve
 the same values. There is one entity Transformer–LSTM architecture.
@@ -99,12 +99,12 @@ action is exposed separately as wait.
 
 ```mermaid
 flowchart LR
-    Q[Ten branch Q comparison] --> Tile[Occupancy tile selection]
-    Tile --> Proposal[Selected plant proposal]
+    Q[Ten branch Q comparison] --> Tile[Wait or selected branch's tile]
+    Tile --> Proposal[Selected proposal]
     Proposal --> Validate[CPU or CUDA validation]
-    Validate -->|accepted| Place[Place immediately]
+    Validate -->|accepted| Execute[Execute proposal]
     Validate -->|rejected| Wait[Execute wait / advance one tick]
-    Wait --> Penalty[Invalid-plant penalty + reason]
+    Wait --> Penalty[Rejection reason + applicable penalty]
     Validate -->|accepted| History[Previous action = proposal]
     Wait --> History2[Previous action = wait (0)]
     History --> Outcome[accepted + duration]
@@ -114,7 +114,8 @@ flowchart LR
 The stateful policy runner owns hidden/cell state and public previous outcomes.
 It resets only new episode slots. Rejected proposals remain the action target,
 while the next recurrent input uses previous action `0`, `accepted=false` and
-the simulator duration. Finished collection slots are frozen. Evaluation uses
+the simulator duration. Accepted plants and digs take zero ticks; waits and
+rejections advance one tick. Finished collection slots are frozen. Evaluation uses
 the same runner with tile exploration disabled.
 
 ## Recording and initialization
@@ -231,7 +232,7 @@ Easy contains easy games only; standard mixes easy and standard equally; shared
 uses 20%/40%/40% easy/standard/hard. Probes use held-out curriculum seeds. Progress
 changes future resets, never a running game. Single-stage runs stop at that
 stage's mastery; ordinary runs promote. Normal validation follows successful
-stages. The saving curriculum and per-lesson simulation changes are absent.
+stages.
 
 Evaluation uses public observations through the same runner. CUDA evaluation can
 refill finished slots or hold a fixed batch; only replaced episodes reset memory.

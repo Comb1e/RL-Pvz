@@ -10,6 +10,8 @@
 - Record date, previous problems, root causes, improvements, verification, and
   remaining issues for each version in `docs/iteration.md`.
 - Verify successful, failing, boundary, and independent mathematical controls together.
+- Reduce duplicate tests: keep each behavior in its owning suite and preserve distinct
+  mathematical, boundary, backend and recovery controls.
 - Keep the game dependency separate and pinned. Never expose seeds, future schedules,
   or snapshots to policy inputs.
 - User's current scope: complete the code and training README; availability and short
@@ -57,6 +59,14 @@
 - `tests/test_observations.py`, `test_transformer_lstm.py`, `test_entity_storage.py`
   and `test_recurrent_training.py` cover information preservation, CPU/CUDA parity,
   independent attention math, order/padding invariance, ragged recovery and training.
+- `test_q_math.py` owns selected-Q gradient and atomic interruption controls;
+  `test_training_lifecycle.py` owns validation/finalization integration.
+  `test_reward_contract.py` owns asset conservation and reward-mode boundaries;
+  `test_exploration_schedule.py` checks the current tile-only schedule.
 - `docs/architecture.md` traces ownership and failures; `docs/training.md` documents
   recording, fresh initialization, training and recovery. `docs/math/entity-inputs.md`
   and `recurrent-training.md` define encoding, attention and the complete-return objective.
+  `training-objective.md` owns reward economics, `invalid-action-penalties.md` owns
+  rejection costs, and `training-throughput.md` owns precision/transfer controls.
+  `docs/validation.md` maps verification ownership; results/history belong only in
+  `docs/iteration.md`, with raw measurements in `docs/evidence/`.

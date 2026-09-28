@@ -13,6 +13,12 @@ def test_single_config_train_and_demo_profiles():
     training, demo = load_config(), load_demo_config()
     assert training == load_config("src/pvz_rl/data/train.toml")
     assert demo == load_demo_config("src/pvz_rl/data/train.toml")
+    assert demo["policy"] == training["policy"]
+    assert demo["training"]["method"] == training["training"]["method"]
+    assert demo["reward"]["invalid_plant_penalty"] == 0.001
+    assert training["policy"]["kind"] == "transformer_lstm_q_v2"
+    assert tuple(training["curriculum"]["stages"]) == ("easy", "standard", "shared")
+    assert "lessons" not in training["curriculum"] and "run_stage" not in training["curriculum"]
     require_supported_policy(training)
     from pvz_rl.learning.training_requirements import require_cuda_training
 
@@ -202,20 +208,6 @@ def test_follow_skips_unavailable_and_replacement_panels():
     packets[0].update(state="watching", frame={"episode": 3})
     resume_visible_history(packets, renderers)  # replacement not drawn yet
     assert not old.follow and len(renderers["browse"]) == 1
-
-
-def test_recording_outputs_reject_existing_sidecars_and_overlap(tmp_path):
-    from pvz_rl.presentation.demo_recording import validate_recording_outputs
-
-    replay = tmp_path / "human.pvzdemo"
-    archive = tmp_path / "human.jsonl"
-    validate_recording_outputs(replay, archive)
-    archive.with_suffix(archive.suffix + ".history.json").touch()
-    with pytest.raises(FileExistsError, match="history"):
-        validate_recording_outputs(replay, archive)
-    archive.with_suffix(archive.suffix + ".history.json").unlink()
-    with pytest.raises(ValueError, match="overlap"):
-        validate_recording_outputs(replay, replay)
 
 
 @pytest.mark.parametrize("artifact", ["replay", "archive", "manifest", "history"])

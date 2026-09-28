@@ -1,5 +1,10 @@
 # Recurrent complete-return Q regression
 
+Demonstration initialization and autonomous training use this same objective.
+A verified demonstration supplies one naturally completed episode; autonomous
+collection supplies a cohort of completed games. Both visit chronological chunks
+with fixed weights for the whole pass and publish only completed optimizer updates.
+
 For an episode of T decisions, including rejected proposals and zero-tick
 operations, the target is
 
@@ -11,6 +16,12 @@ Gamma is one. A simulator cutoff receives its configured terminal penalty once;
 there is no bootstrap. Different episode slots never share a return accumulator.
 For rewards [1, 2, -1, 4] and [3, -1], independent targets are [6, 5, 3, 4]
 and [2, -1]. Inactive rows with arbitrary rewards cannot alter these targets.
+
+The branch value estimates remaining return after choosing a branch and following
+the collecting tile policy. For a fixed continuation policy,
+`Q_branch(s,b) = sum_t p(t|s,b) Q_tile(s,b,t)`. During tile exploration this is an
+expectation, not necessarily the best tile value. Shared targets do not enforce
+exact equality between heads or provide information about unvisited alternatives.
 
 Let N_g count actual decisions in group g (wait, plant or dig) over the complete
 cohort, and let K be the number of nonempty groups. Selected branch and tile
@@ -57,6 +68,15 @@ Tile exploration uses epsilon(g)=0.5*(0.01/0.5)^min(g/5000,1).
 The ten-way branch remains greedy; this single coin applies only to the selected
 non-wait tile and can still select the greedy tile. Evaluation sets the tile
 probability to zero. The proposal remains the action selected for Q fitting.
+For n candidate tiles and greedy tile t*, the conditional probability is
+`p(t|s,b) = (1-epsilon) 1[t=t*] + epsilon/n`. Plants use empty tiles and digs
+use all tiles. Waiting has no tile coin; a full-board plant uses tile zero.
+Thus epsilon zero is greedy, epsilon one is uniform over the selected branch's
+tiles, and exploration never replaces the greedy branch.
+
+Resolve epsilon once per cohort from completed stage games and retain it through
+fitting and recovery. Stage promotion resets that progress. Deterministic
+evaluation temporarily disables exploration without advancing training counters.
 Entity encoder microbatching preserves frame order when reconstructing the LSTM
 sequence; it changes neither the group denominators nor optimizer boundaries.
 
@@ -66,3 +86,9 @@ inactive rewards, rejected/zero-tick inputs, isolated resets, exact weight
 transfer and exact collection/fitting recovery. The existing step/sequence and
 future-input controls check causality and forward agreement. These are numerical
 and implementation controls, not evidence of learning quality.
+
+Demonstration controls independently average wait/plant/dig errors over a
+five-decision, three-chunk episode and compare the published loss. Replay
+verification checks observation, action, outcome, reward and terminal reconstruction;
+manifest identity, count and hash must agree. Failed writes preserve the previous
+completed pass. Recording and verification commands are in [training](../training.md).

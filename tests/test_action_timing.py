@@ -70,16 +70,6 @@ def test_action_then_wait_matches_unchanged_engine_tick(per_tick_cfg, action):
     assert env.game.state_hash() == control.state_hash()
 
 
-def test_invalid_actions_advance_and_never_spend_or_change_board(per_tick_cfg):
-    env = ready(per_tick_cfg)
-    env.step(env.codec.encode(Place("peashooter", 0, 0)))
-    _, _, _, _, info = env.step(env.codec.encode(Place("peashooter", 0, 1)))
-    assert not info["accepted"] and info["ticks_advanced"] == 1
-    assert env.public.sun == 400 and len(env.public.plants) == 1
-    env.step(env.codec.encode(Dig(4, 8)))
-    assert env.public.tick == 2 and env.metrics["invalid_actions"] == 2
-
-
 def test_exact_cost_cooldown_and_many_operations_without_an_artificial_cap(per_tick_cfg):
     env = ready(per_tick_cfg)
     env.step(env.codec.encode(Place("sunflower", 0, 0)))
@@ -150,17 +140,6 @@ def test_wait_cutoff_terminal_precedence_and_restricted_request(per_tick_cfg):
     lesson.reset(seed=42)
     info = lesson.step(lesson.codec.encode(Place("cherry_bomb", 0, 0)))[4]
     assert not info["accepted"] and info["ticks_advanced"] == 1
-
-
-def test_zero_time_purchase_dig_has_no_free_reward(per_tick_cfg):
-    env = ready(per_tick_cfg)
-    total = sum(
-        env.step(env.codec.encode(action))[1]
-        for action in (Place("peashooter", 0, 0), Dig(0, 0), Wait())
-    )
-    assert env.public.tick == 1
-    assert total == pytest.approx(-100 / 30000)
-    assert env.episode_metrics()["discounted_return"] == pytest.approx(total)
 
 
 def recorded_actions(cfg, path, *, trailing=False):

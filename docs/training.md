@@ -55,8 +55,7 @@ and output settings can differ. CPU autonomous training is unsupported.
 
 The curriculum is **easy → standard → shared**. Easy uses only easy games;
 standard mixes easy/standard equally; shared mixes easy/standard/hard at
-20%/40%/40%. The saving lesson, its stage and rehearsals are removed. Mastery
-requires the configured held-out gates and residency; promotion changes future
+20%/40%/40%. Mastery requires the configured held-out gates and residency; promotion changes future
 resets only. `--stage easy --until-stage-complete` requests an unbounded run
 until that stage passes. Use it only intentionally.
 
@@ -93,42 +92,28 @@ progress, coverage and checkpoint reporting. Press **F** to follow latest action
 
 ## Entity inputs and memory
 
-The single `src/pvz_rl/data/train.toml` controls both profiles. `encoding.max_entities`
-sets the entity cap; model width, encoder microbatch (64), token budget (32,768),
-and attention query chunk (64) are configured under `policy`. Mowers precede
-plants, then zombies, then projectiles. On overflow projectiles are omitted first,
-then zombies, then plants; all five mowers remain. Zombies closest to the house
-are retained first. Ordering uses only public fields, so changing entity IDs
-cannot change the chosen records. The network is invariant to permutations of
-those retained rows. Counts in the global vector include omitted entities.
+The single `src/pvz_rl/data/train.toml` controls both profiles. The configured
+`encoding.max_entities` cap is 256. Overflow omits projectiles, then zombies,
+then plants; all five mowers remain. Nearest-house zombies take priority.
+Global counts include omitted entities, and the journal exposes omission counts.
+The cap loses individual information above the limit. See
+[entity fields, normalization and attention](math/entity-inputs.md).
 
-The viewer's action history records retained entities and omitted plants/zombies/
-projectiles for the decision input. CPU/CUDA step info also reports omission
-counts. A cap discards individual information above that limit; total counts do
-not reconstruct it. See [schema and normalization](math/entity-inputs.md).
+`training.storage.ram_gib` covers ragged trajectory slabs and pinned staging;
+excess slabs spill to disk. Encoder microbatch size (64), token budget (32,768)
+and fallback query chunk size (64) live under `policy`. Allocation retries
+reduce only encoder work size and then enable checkpointing; they never shrink
+the entity cap or recurrent sequence. Exhausted retries fail explicitly.
 
-Only collating adds padding. Every attention layer masks padded keys. The global
-and 45 tile query tokens remain valid even on an empty board. Training stores
-real entity rows in separate append-only slabs, with offsets/counts in transition
-metadata. Both slabs share `training.storage.ram_gib`; excess blocks spill to disk.
-
-Encoder microbatches shrink with sequence width. Attention uses scaled dot-product
-attention and an exact query-chunk fallback; each query still sees all valid keys.
-The normal efficient-attention path avoids activation checkpointing. Allocation
-failures restart the uncommitted pass with smaller microbatches, then one outer
-checkpoint. These settings bound encoder working memory without changing chronological LSTM order,
-whole-cohort loss weights, or whole-pass optimizer updates. Allocation failures
-remain explicit; the program never silently reduces the configured entity cap.
-
-To measure 256/512 caps on a device (short synthetic fitting, no formal training):
+For a short device comparison of entity caps:
 
 ```powershell
 .\.venv\Scripts\python.exe -m pvz_rl.monitoring.entity_benchmark `
   --output artifacts\entity-benchmark.json
 ```
 
-The report separates inference from fitting and reports Torch allocated/reserved
-memory. These timings exclude simulation and do not measure learning quality.
+This measures synthetic inference/fitting and Torch memory, excluding simulation
+and learning quality. Run resource measurements only when the device is available.
 
 ## Resume and evaluate
 

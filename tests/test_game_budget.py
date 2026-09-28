@@ -8,10 +8,10 @@ import pytest
 import torch
 
 from pvz_rl.cli import configured
-from pvz_rl.config import validate_config
-from pvz_rl.envs.env import PvZEnv
+from pvz_rl.config import load_config, validate_config
 from pvz_rl.learning.budget import budget_target, evaluation_interval, uses_games
 from pvz_rl.learning.curriculum import CurriculumState
+from pvz_rl.learning.deadline import RunBudget
 from pvz_rl.learning.training import ResearchCallback, load_policy, train
 from pvz_rl.presentation.visualization import read_series
 
@@ -41,29 +41,6 @@ def test_default_config_and_cli_use_games(per_tick_cfg):
     assert not uses_games(cfg) and budget_target(cfg) == 64
     with pytest.raises(ValueError, match="--eval-games"):
         configured(argparse.Namespace(config=None, command="train", games=3, eval_interval=1))
-
-
-def test_fixed_curriculum_changes_only_on_reset_and_ignores_decisions(per_tick_cfg):
-    per_tick_cfg["curriculum"]["mode"] = "fixed"
-    per_tick_cfg["training"].update(total_games=100, total_steps=1)
-    env = PvZEnv(per_tick_cfg, training=True)
-    env.reset(seed=5)
-    env.set_progress(10)
-    family = env.episode_level
-    for _ in range(50):
-        env.step(0)
-    assert env.progress == 10 and env.episode_level == family
-    env.set_progress(0)
-    assert all(
-        env.reset(seed=i)[1]["status"] == "running" and env.episode_level == "easy"
-        for i in range(10)
-    )
-    env.set_progress(40)
-    levels = []
-    for i in range(20):
-        env.reset(seed=i)
-        levels.append(env.episode_level)
-    assert set(levels) == {"easy", "standard", "hard"}
 
 
 def test_teaching_gates_use_games_and_resume_counters(per_tick_cfg, legacy_teaching):
@@ -214,3 +191,17 @@ def test_game_mastery_probes_keep_policy_and_optimizer(
         r["family"] == "preset" and r["level"] == "easy"
         for r in read_series(run / "training-episodes.jsonl")
     )
+
+
+def test_wall_budget_reserves_cleanup_and_restores_consumption():
+    cfg = load_config()
+    now = [100.0]
+    budget = RunBudget(cfg, elapsed=6000, clock=lambda: now[0])
+    assert budget.deadline == 1300
+    assert budget.learning_deadline == 400
+    assert budget.can_collect(200)
+    assert not budget.can_collect(251)
+    now[0] = 250
+    restored = RunBudget(cfg, elapsed=budget.state()["elapsed_seconds"], clock=lambda: 500)
+    assert restored.state()["remaining_seconds"] == 1050
+    assert restored.state()["reserve_seconds"] == 900
