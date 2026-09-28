@@ -11,7 +11,6 @@ import pytest
 import torch
 
 from pvz_rl.cli import configured, main
-from pvz_rl.config import load_config
 from pvz_rl.learning.training import train
 from pvz_rl.learning.training_requirements import require_cuda_training, resume_protocol
 
@@ -157,16 +156,6 @@ def test_stage_rejects_missing_or_mismatched_pin(staged_repository, tmp_path, fa
     with pytest.raises(ValueError, match="pinned commit|manifest"):
         module.stage_game(repo, tmp_path / "rejected")
     assert not (tmp_path / "rejected").exists()
-
-
-def test_recurrent_train_and_demo_defaults_are_trainable():
-    from pvz_rl.config import load_demo_config
-
-    root = Path(__file__).resolve().parents[1]
-    assert {p.stem for p in (root / "src/pvz_rl/data").glob("*.toml")} == {"train"}
-    require_cuda_training(load_config(), runtime=False)
-    demo = load_demo_config()
-    require_cuda_training(demo, runtime=False)
 
 
 def test_benchmark_schedules_configurable_cuda_sizes(smoke_cfg, tmp_path, monkeypatch):

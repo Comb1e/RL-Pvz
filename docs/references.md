@@ -648,3 +648,16 @@ The 11 raw fields, width 32, global/tile readout tokens, cap candidates 256/512,
 mower-first retention, nearest-zombie priority and all reward coefficients are
 local design decisions. Benchmarks measure mechanics and resource use, not an
 AlphaStar-level capability or improved win rate. The pinned game is unchanged.
+
+## Recurrent throughput — 2026-09-28
+
+- [PyTorch 2.8 AMP examples](https://github.com/pytorch/pytorch/blob/v2.8.0/docs/source/notes/amp_examples.rst): inspected accumulation and precision boundaries. Used selective autocast with FP32 master parameters and whole-pass updates. BF16 does not use the FP16 loss-scaling path. Source SHA-256: `ca4e1c814873b1191b2ea7aae208d2be27e355d2e221f59c10e9f6afa8b874e4`.
+- [PyTorch 2.8 SDPA implementation/documentation](https://github.com/pytorch/pytorch/blob/v2.8.0/torch/nn/functional.py): inspected supported efficient backends and numerical differences. Used one full SDPA call when supported and an exact query-chunk fallback. Source SHA-256: `2b6eb4aff305990cff9e32c6ff40ff82c1fec4b5ceba1f43540146a8eb64e952`.
+- [PyTorch pinned/nonblocking transfer tutorial](https://github.com/pytorch/tutorials/blob/main/intermediate_source/pinmem_nonblock.py): inspected pinned-buffer reuse, synchronization and nonblocking-copy hazards. Used reusable staging buffers with transfer events and a compute-stream dependency. Inspected source SHA-256: `c19188e197f5bccb7c26be751ce894c71091c02470164a5431f3829bad604c33`.
+- Rabe and Staats, [Self-attention Does Not Need O(n²) Memory](https://arxiv.org/abs/2112.05682): inspected abstract for exact memory-efficient attention and differentiation. Used the distinction between attention's arithmetic and storage requirements, not its reported speed or memory ratios.
+
+The installed Windows PyTorch build provides memory-efficient attention but not
+FlashAttention. FlashAttention-2's abstract was also inspected for context; no
+FlashAttention dependency, kernel implementation or paper throughput claim is
+adopted. BF16/FP32 boundaries, batch sizes and retry policies are local engineering
+choices verified against the existing complete-return objective.

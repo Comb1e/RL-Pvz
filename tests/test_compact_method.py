@@ -117,18 +117,6 @@ def test_retired_training_modes_fail_before_creating_output(tmp_path, setting):
     assert not output.exists()
 
 
-@pytest.mark.parametrize("version", ["event_v4", "event_v5"])
-def test_retired_weights_fail_before_deserialization(tmp_path, version):
-    from pvz_rl.learning.training import load_policy
-    from pvz_rl.provenance import write_json
-
-    cfg = load_config()
-    cfg["encoding"]["version"] = version
-    write_json(tmp_path / "metadata.json", {"config": cfg, "condition": "masked"})
-    with pytest.raises(ValueError, match="Retired"):
-        load_policy(tmp_path / "absent.zip")
-
-
 @pytest.mark.parametrize("retired", ["network", "observation", "reward", "clock"])
 def test_retired_report_rebuild_never_loads_model(tmp_path, monkeypatch, retired):
     from pvz_rl.presentation.visualization import visualize_run

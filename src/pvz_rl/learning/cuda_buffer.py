@@ -4,9 +4,16 @@ import shutil
 from pathlib import Path
 
 import numpy as np
+import torch
 
 from pvz_rl.envs.actions import ActionSchema as A
-from pvz_rl.envs.encoding import ENTITY_WIDTH, GLOBAL_WIDTH, collate_observations
+from pvz_rl.envs.encoding import (
+    ENTITY_WIDTH,
+    GLOBAL_WIDTH,
+    EntityBatch,
+    collate_observations,
+    validate_entity_records,
+)
 
 TRAJECTORY_PROTOCOL = "pvz-rl/entity-trajectory-v1"
 
@@ -50,6 +57,7 @@ class CompleteGameBuffer:
         self.schema = schema
         self.blocks, self.entity_blocks = [], []
         self.size = self.entity_size = self.ram_used = 0
+        self.staging_bytes = 0
         self.finalized = False
         self.transport_metrics = dict(
             preparation_seconds=0.0, transfer_wait_seconds=0.0, transfer_stream_seconds=0.0
@@ -60,7 +68,7 @@ class CompleteGameBuffer:
         shape = (self.block_rows, ENTITY_WIDTH) if entity else (self.block_rows,)
         dtype = np.dtype("<i4") if entity else self.dtype
         amount = int(np.prod(shape)) * dtype.itemsize
-        if self.ram_used + amount <= self.ram_bytes:
+        if self.ram_used + self.staging_bytes + amount <= self.ram_bytes:
             block = np.zeros(shape, dtype=dtype)
             self.ram_used += amount
         else:
@@ -69,6 +77,28 @@ class CompleteGameBuffer:
                 self.path / f"{name}-{len(blocks):06d}.npy", mode="w+", dtype=dtype, shape=shape
             )
         blocks.append(block)
+
+    def reserve_staging(self, amount):
+        """Charge reusable pinned buffers to the same budget, spilling RAM if needed."""
+        if amount > self.ram_bytes:
+            return False
+        self.staging_bytes = amount
+        for prefix, blocks in (("entities", self.entity_blocks), ("block", self.blocks)):
+            for i, block in enumerate(blocks):
+                if self.ram_used + amount <= self.ram_bytes:
+                    return True
+                if isinstance(block, np.memmap):
+                    continue
+                mapped = np.lib.format.open_memmap(
+                    self.path / f"{prefix}-{i:06d}.npy",
+                    mode="w+",
+                    dtype=block.dtype,
+                    shape=block.shape,
+                )
+                mapped[:] = block
+                blocks[i] = mapped
+                self.ram_used -= block.nbytes
+        return True
 
     def _append(self, values, entity=False):
         blocks = self.entity_blocks if entity else self.blocks
@@ -87,13 +117,18 @@ class CompleteGameBuffer:
         if self.finalized:
             raise RuntimeError("Cannot append after complete-return finalization")
         records = np.array(records, dtype=self.dtype, copy=True)
-        observations = collate_observations(observations).observations()
+        observations = collate_observations(observations).reshape(-1).cpu()
         if len(records) != len(observations):
             raise ValueError("Each transition needs one public observation")
-        for row, obs in zip(records, observations, strict=True):
-            row["entity_offset"], row["entity_count"] = self.entity_size, len(obs["entities"])
-            row["globals"] = obs["globals"]
-            self._append(obs["entities"], entity=True)
+        entities, mask, globals_ = (x.numpy() for x in observations.tensors())
+        counts = mask.sum(-1)
+        packed = entities[mask]
+        validate_entity_records(packed)
+        if not np.isfinite(globals_).all():
+            raise ValueError("Non-finite trajectory globals")
+        records["entity_offset"] = self.entity_size + np.cumsum(counts) - counts
+        records["entity_count"], records["globals"] = counts, globals_
+        self._append(packed, entity=True)
         self._append(records)
 
     def take(self, indices):
@@ -107,21 +142,38 @@ class CompleteGameBuffer:
             result[selected] = self.blocks[b][offsets[selected]]
         return result
 
-    def observations(self, rows, device=None):
-        observations = []
-        for row in rows.reshape(-1):
-            start, count = int(row["entity_offset"]), int(row["entity_count"])
-            if start < 0 or start + count > self.entity_size:
-                raise ValueError("Corrupt trajectory entity offset/count")
-            entities = np.empty((count, ENTITY_WIDTH), np.int32)
-            copied = 0
-            while copied < count:
-                b, offset = divmod(start + copied, self.block_rows)
-                take = min(count - copied, self.block_rows - offset)
-                entities[copied : copied + take] = self.entity_blocks[b][offset : offset + take]
-                copied += take
-            observations.append(dict(entities=entities, globals=row["globals"]))
-        return collate_observations(observations, device).reshape(*rows.shape)
+    def observations(self, rows, device=None, *, destination=None):
+        flat = rows.reshape(-1)
+        starts, counts = flat["entity_offset"], flat["entity_count"]
+        if np.any(starts > self.entity_size) or np.any(counts > self.entity_size - starts):
+            raise ValueError("Corrupt trajectory entity offset/count")
+        width = int(counts.max(initial=0))
+        if destination is None:
+            result = EntityBatch(
+                torch.empty(len(flat), width, ENTITY_WIDTH, dtype=torch.int32),
+                torch.empty(len(flat), width, dtype=torch.bool),
+                torch.empty(len(flat), GLOBAL_WIDTH),
+                validated=True,
+            )
+        else:
+            result = EntityBatch(
+                destination.entities[: len(flat), :width],
+                destination.entity_mask[: len(flat), :width],
+                destination.globals[: len(flat)],
+                validated=True,
+            )
+        entities, mask, globals_ = (x.numpy() for x in result.tensors())
+        mask[:] = np.arange(width)[None] < counts[:, None]
+        entities.fill(0)
+        globals_[:] = flat["globals"]
+        indices = (starts[:, None] + np.arange(width)[None])[mask].astype(np.int64)
+        blocks, offsets = np.divmod(indices, self.block_rows)
+        packed = np.empty((len(indices), ENTITY_WIDTH), np.int32)
+        for b in np.unique(blocks):
+            selected = blocks == b
+            packed[selected] = self.entity_blocks[b][offsets[selected]]
+        entities[mask] = packed
+        return result.reshape(*rows.shape).to(device) if device else result.reshape(*rows.shape)
 
     def valid_indices(self):
         parts = []
@@ -265,6 +317,10 @@ class CompleteGameBuffer:
                     dtype = np.dtype("<i4") if entity else obj.dtype
                     if array.shape != shape or array.dtype != dtype:
                         raise ValueError("Corrupt trajectory block shape or dtype")
+                    if entity:
+                        validate_entity_records(array)
+                    elif not np.isfinite(array["globals"]).all():
+                        raise ValueError("Non-finite trajectory globals")
                     obj._append(array, entity)
             expected = 0
             for b, block in enumerate(obj.blocks):

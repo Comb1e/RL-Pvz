@@ -663,19 +663,6 @@ def test_until_mastery_cli_saved_resume_and_unbounded_clock(stage_cfg, tmp_path,
     assert not (tmp_path / "absent").exists()
 
 
-@pytest.mark.parametrize("mode", ["resume", "init_from"])
-def test_previous_action_head_rejected_before_loading(stage_cfg, tmp_path, mode):
-    stage_cfg["policy"]["kind"] = "event_transformer_v1"
-    write_json(
-        tmp_path / "metadata.json",
-        {"config": stage_cfg, "learner_seed": 101, "condition": "masked"},
-    )
-    with pytest.raises(ValueError, match="Retired"):
-        configured(
-            argparse.Namespace(command="train", config=None, **{mode: tmp_path / "absent.zip"})
-        )
-
-
 def test_previous_action_distribution_rejected_by_metadata_and_direct_loader(
     stage_cfg, tmp_path, monkeypatch
 ):
@@ -690,6 +677,11 @@ def test_previous_action_distribution_rejected_by_metadata_and_direct_loader(
     write_json(tmp_path / "metadata.json", {"config": stage_cfg, "condition": "masked"})
     with pytest.raises(ValueError, match="Retired"):
         load_policy(tmp_path / "absent.zip")
+    import stable_baselines3.common.base_class as base
+
+    monkeypatch.setattr(
+        base, "load_from_zip_file", lambda *a, **kw: pytest.fail("retired class loaded")
+    )
     checkpoint = tmp_path / "old.zip"
     with zipfile.ZipFile(checkpoint, "w") as archive:
         archive.writestr("data", json.dumps({"optimizer_protocol": "periodic_exact_kl_v1"}))

@@ -20,10 +20,15 @@ from pvz_rl.presentation.visualization import visualize_run
 from pvz_rl.provenance import file_hash, verify_engine, write_json
 
 
-@pytest.mark.parametrize("changed", ["package", "simulation", "source", "rules"])
+@pytest.mark.parametrize("changed", [None, "package", "simulation", "source", "rules"])
 def test_strict_installed_game_verification(cfg, monkeypatch, changed):
     import pvz_rl.provenance as provenance
 
+    if changed is None:
+        result = verify_engine(cfg)
+        assert result["commit"] == cfg["engine_commit"]
+        assert result["package_version"] == "1.7.0" and result["version"] == "1.4.0"
+        return
     if changed == "package":
         monkeypatch.setattr(provenance.importlib.metadata, "version", lambda _: "1.0.0")
     elif changed == "simulation":

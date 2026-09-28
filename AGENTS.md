@@ -14,6 +14,7 @@
   or snapshots to policy inputs.
 - User's current scope: complete the code and training README; availability and short
   integration tests are allowed. Do not launch formal training unless requested.
+- In this project, always keep only one training and model framework.
 
 ## Code structure
 
@@ -29,7 +30,8 @@
   supplies read-only counters. The shared execution contract retains the proposal,
   reason and penalty, exposes `executed_action=0` for rejection and advances one tick.
 - `policy/entity_attention.py` owns shared embeddings, readout tokens, padding masks,
-  chunked attention and checkpointed encoder microbatches. `transformer_lstm.py`
+  full efficient attention, exact query fallback and optional outer checkpointing.
+  Fitting uses BF16 temporary features with FP32 master weights, LSTM and Q heads. `transformer_lstm.py`
   owns LSTM and Q heads; `recurrent_policy.py` adapts the training lifecycle.
   `sequential_q.py` keeps all ten branches greedy, independent of sun/cooldown;
   occupancy-only plant tiles and unrestricted dig tiles allow tile-only exploration.
@@ -39,13 +41,19 @@
   `cuda_q.py` owns cohort lifecycle and atomic recovery; `recurrent_q.py` collects
   chronological transitions and accumulates whole-pass gradients. `cuda_buffer.py`
   stores fixed metadata plus ragged entity slabs under one RAM/disk budget and
-  validates offsets/counts on recovery. Curriculum stages are easy, standard, shared.
+  validates offsets/counts and categories on recovery. `sequence_transport.py` owns
+  ordered double-buffer prefetch; `performance.py` defines the execution-only
+  refresh allowlist. `host_transfer.py` batches collection copies at the existing
+  host boundary. Fitting retries whole uncommitted passes on BF16/memory failure.
+  Curriculum stages are easy, standard, shared.
 - `presentation/demo_recording.py` records structured v2 archives and compact viewer
   history; `learning/demo_initialization.py` verifies and fits only fresh archives.
   `action_journal.py` retains actual Q values, proposal/execution and entity omissions;
   `live_layout.py` owns paging and F follow-latest. Presentation never feeds the model.
 - `evaluation/` uses the same runner and checks CUDA traces against CPU replay.
-  `monitoring/entity_benchmark.py` measures cap-dependent inference/fitting cost.
+  `monitoring/entity_benchmark.py` measures cap-dependent inference/fitting cost;
+  `throughput_benchmark.py` compares fixed 1,024-frame/four-pass execution and
+  short collection windows with and without the viewer.
 - `tests/test_observations.py`, `test_transformer_lstm.py`, `test_entity_storage.py`
   and `test_recurrent_training.py` cover information preservation, CPU/CUDA parity,
   independent attention math, order/padding invariance, ragged recovery and training.

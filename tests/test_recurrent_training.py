@@ -8,17 +8,21 @@ import numpy as np
 import pytest
 import torch
 from stable_baselines3.common.callbacks import BaseCallback
+from stable_baselines3.common.logger import configure
 from test_demo_initialization import completed_demo as demo_fixture
 
 from pvz_rl.cli import main
 from pvz_rl.config import load_config, load_demo_config, validate_config
 from pvz_rl.envs.encoding import collate_observations
 from pvz_rl.learning import demo_initialization as demo
-from pvz_rl.learning.checkpoints import compatible_config, inspect_checkpoint
+from pvz_rl.learning.checkpoints import compatible_config, execution_config, inspect_checkpoint
 from pvz_rl.learning.cohort import CohortPhase
 from pvz_rl.learning.cuda_buffer import CompleteGameBuffer
+from pvz_rl.learning.performance import refresh_performance
 from pvz_rl.learning.recurrent_q import sequence_batches, sequence_loss
 from pvz_rl.learning.training import build_model, initial_weights, load_policy, vector_env
+from pvz_rl.learning.training_requirements import resume_protocol
+from pvz_rl.monitoring.entity_benchmark import observation
 from pvz_rl.policy.runner import PolicyRunner
 from pvz_rl.policy.transformer_lstm import TransformerLSTMPolicy
 
@@ -363,23 +367,50 @@ class Stop(BaseCallback):
                 raise KeyboardInterrupt
 
 
-@pytest.mark.parametrize("phase", ["collect", "fit"])
-def test_cuda_recovery_matches_uninterrupted(recurrent_cfg, tmp_path, phase):
+@pytest.mark.parametrize("phase", ["collect", "fit", "idle"])
+def test_cuda_recovery_matches_uninterrupted(recurrent_cfg, tmp_path, phase, monkeypatch):
     cfg = recurrent_cfg
+    if phase == "idle":
+        cfg["training"]["total_games"] = 4
     reference_env = vector_env(cfg, "masked", 17)
     reference = build_model(cfg, "masked", reference_env, 17)
+
+    def inject_once(model):
+        if phase != "fit":
+            return
+        forward = model.policy.forward_sequence
+        failed = False
+
+        def fail_first(*args, **kwargs):
+            nonlocal failed
+            output = forward(*args, **kwargs)
+            if not failed:
+                failed = True
+                return (output[0] * float("nan"), *output[1:])
+            return output
+
+        monkeypatch.setattr(model.policy, "forward_sequence", fail_first)
+
+    inject_once(reference)
     reference.trajectory_root = tmp_path
     reference.learn(1, callback=Stop())
+    if phase == "idle":
+        reference.learn(1, callback=Stop(), reset_num_timesteps=False)
+    hashes = [reference_env.batch.state_hash(i) for i in range(2)]
     expected = copy.deepcopy(reference.policy.state_dict())
     expected_optimizer = copy.deepcopy(reference.policy.optimizer.state_dict())
     reference_env.close()
     env = vector_env(cfg, "masked", 17)
     model = build_model(cfg, "masked", env, 17)
+    inject_once(model)
     model.trajectory_root = tmp_path
     try:
-        with pytest.raises(KeyboardInterrupt):
-            model.learn(1, callback=Stop(phase))
-        assert model._fit_epoch == (1 if phase == "fit" else 0)
+        if phase == "idle":
+            model.learn(1, callback=Stop())
+        else:
+            with pytest.raises(KeyboardInterrupt):
+                model.learn(1, callback=Stop(phase))
+        assert model._fit_epoch == {"collect": 0, "fit": 1, "idle": 2}[phase]
         checkpoint = tmp_path / "recovery.zip"
         model.save(checkpoint)
         assert inspect_checkpoint(checkpoint)["config"] == cfg
@@ -388,12 +419,17 @@ def test_cuda_recovery_matches_uninterrupted(recurrent_cfg, tmp_path, phase):
             model._buffer.close()
         env.close()
     restored, _ = load_policy(checkpoint, device="cuda")
+    if phase == "fit":
+        assert restored.execution_state["precision"] == "fp32"
+        assert restored.execution_state["fallbacks"] == ["nonfinite_bf16"]
     env = vector_env(cfg, "masked", 17)
     try:
         restored.set_env(env)
         restored.trajectory_root = tmp_path
         restored.learn(1, callback=Stop(), reset_num_timesteps=False)
-        assert restored.training_games == 2 and restored._stats["q_optimizer_steps"] == 2
+        assert restored.training_games == (4 if phase == "idle" else 2)
+        assert restored._stats["q_optimizer_steps"] == 2
+        assert hashes == [env.batch.state_hash(i) for i in range(2)]
         from test_stage_training import assert_tensor_tree_equal
 
         assert_tensor_tree_equal(expected, restored.policy.state_dict())
@@ -502,4 +538,75 @@ def test_default_128_slot_bounded_collection_and_chunk_memory(tmp_path):
         model.policy.optimizer.zero_grad(set_to_none=True)
         if model._buffer:
             model._buffer.close()
+        env.close()
+
+
+def test_performance_refresh_keeps_learning_settings_and_old_precision():
+    current = load_config()
+    assert current["training"]["demo"]["passes"] == 5
+    old = copy.deepcopy(current)
+    old["training"]["performance"].pop("fit_precision")
+    old["training"]["performance"].pop("prefetch")
+    old["policy"]["encoder_microbatch"] = 16
+    old["training"].update(n_epochs=7, batch_size=512)
+    old["reward"]["invalid_plant_penalty"] = 0.123
+    normalized = execution_config(old)
+    assert normalized["training"]["performance"]["fit_precision"] == "fp32"
+    new = refresh_performance(normalized, current)
+    assert new["policy"]["encoder_microbatch"] == 64
+    assert new["training"]["performance"]["fit_precision"] == "features_bf16"
+    assert new["training"]["n_epochs"] == 7 and new["training"]["batch_size"] == 512
+    assert new["reward"] == old["reward"]
+    assert new["training"]["demo"] == old["training"]["demo"]
+    assert resume_protocol(new, "masked") == resume_protocol(normalized, "masked")
+
+
+@pytest.mark.parametrize("fault", ["nonfinite", "memory"])
+def test_failed_pass_restarts_without_skipping_updates(tmp_path, monkeypatch, fault):
+    cfg = load_config()
+    cfg["training"].update(n_envs=1, n_epochs=2, batch_size=256)
+    cfg["visualization"]["live_enabled"] = False
+    env = vector_env(cfg, "masked", 101)
+    model = build_model(cfg, "masked", env, 101)
+    model.trajectory_root = tmp_path
+    model._buffer = model._new_buffer()
+    model.set_logger(configure(format_strings=[]))
+    raw, _ = observation(cfg, 5)
+    rows = np.zeros(3, model._buffer.dtype)
+    rows["active"] = True
+    rows["reward"] = [0, 0, 1]
+    model._buffer.append(rows, [raw] * 3)
+    model._buffer.finalize()
+    model._stats = {"q_optimizer_steps": 0}
+    model.phase = CohortPhase.FIT
+    original = model.policy.forward_sequence
+    attempts = []
+
+    def failing_once(*args, **kwargs):
+        attempts.append(model.policy.fit_precision)
+        if len(attempts) == 1 and fault == "memory":
+            raise torch.cuda.OutOfMemoryError("injected allocation failure")
+        output = original(*args, **kwargs)
+        if len(attempts) == 1:
+            output = (output[0] * float("nan"), *output[1:])
+        return output
+
+    monkeypatch.setattr(model.policy, "forward_sequence", failing_once)
+    try:
+        for _ in range(15):
+            model._fit_step(Stop())
+            if model._fit_epoch == 2:
+                break
+        assert model._fit_epoch == model._stats["q_optimizer_steps"] == 2
+        assert len(attempts) == 3
+        assert model.execution_state["fallbacks"] == [
+            "nonfinite_bf16" if fault == "nonfinite" else "memory"
+        ]
+        assert attempts[1:] == (["fp32"] * 2 if fault == "nonfinite" else ["features_bf16"] * 2)
+        assert model.execution_state["microbatch"] == (32 if fault == "memory" else 64)
+        assert all(torch.isfinite(p).all() for p in model.policy.parameters())
+    finally:
+        model._drain()
+        model._close_sequences()
+        model._buffer.close()
         env.close()

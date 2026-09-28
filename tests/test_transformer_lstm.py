@@ -11,6 +11,7 @@ from pvz_game.types import ProjectileView, ZombieView
 
 from pvz_rl.config import load_config
 from pvz_rl.envs.encoding import EntityBatch, ObservationEncoder, collate_observations
+from pvz_rl.monitoring.entity_benchmark import observation
 from pvz_rl.policy.entity_attention import AttentionBlock
 from pvz_rl.policy.sequential_q import observation_tile_masks
 from pvz_rl.policy.transformer_lstm import TransformerLSTMPolicy
@@ -204,3 +205,117 @@ def test_compact_history_ignores_elapsed_only_waits_and_keeps_cooldowns():
     assert CompactHistoryBuilder().build(records) == [
         dict(decision_index=2, reasons=["cooldown_decrement"])
     ]
+
+
+@pytest.mark.parametrize("count", [0, 40, 256])
+def test_bf16_features_fp32_core_and_gradient_control(count):
+    cfg = load_config()
+    torch.manual_seed(101)
+    reference = TransformerLSTMPolicy(cfg).cuda().train()
+    mixed = TransformerLSTMPolicy(cfg).cuda().train()
+    mixed.load_state_dict(reference.state_dict())
+    raw, _ = observation(cfg, count)
+    if count == 0:
+        raw["entities"] = raw["entities"][:0]
+        raw["globals"][-4:] = 0
+    obs = collate_observations([raw] * 16, "cuda").reshape(2, 8)
+    results, gradients = [], []
+    seen = {}
+    hooks = []
+    for name in ("lstm", "branch_head", "tile_head"):
+        hooks.append(
+            getattr(mixed, name).register_forward_pre_hook(
+                lambda module, args, name=name: seen.update({name: args[0].dtype})
+            )
+        )
+    hooks.append(
+        mixed.entity.layers[0].qkv.register_forward_hook(
+            lambda module, args, output: seen.update(qkv=output.dtype)
+        )
+    )
+    for model, precision in ((reference, "fp32"), (mixed, "features_bf16")):
+        with model.fitting_precision(precision):
+            q, tiles, contexts, state = model.forward_sequence(obs, return_context=True)
+            tile_q = model.tile_values(
+                tiles.flatten(0, 1),
+                contexts.flatten(0, 1),
+                torch.ones(16, device="cuda", dtype=torch.long),
+            )
+            loss = (q - 0.5).square().mean() + (tile_q + 0.5).square().mean()
+            loss.backward()
+        results.append((q.detach(), tile_q.detach()))
+        assert state.hidden.dtype == state.cell.dtype == torch.float32
+        # BF16 inputs can alter accumulated cell values; independently verify that
+        # the recurrent core computes exactly FP32 LSTM on those actual inputs.
+        with model.fitting_precision(precision):
+            core_inputs, _ = model._inputs(obs.reshape(-1), None, None)
+        initial = model.initial_state(2, device="cuda")
+        _, (hidden, cell) = model.lstm(
+            core_inputs.reshape(2, 8, -1), (initial.hidden, initial.cell)
+        )
+        torch.testing.assert_close(state.hidden, hidden, atol=0, rtol=0)
+        torch.testing.assert_close(state.cell, cell, atol=0, rtol=0)
+        gradients.append(torch.cat([p.grad.flatten() for p in model.parameters()]))
+        assert all(p.dtype == p.grad.dtype == torch.float32 for p in model.parameters())
+    for a, b in zip(*results):
+        torch.testing.assert_close(a, b, atol=0.002, rtol=0.01)
+    relative = torch.linalg.vector_norm(gradients[0] - gradients[1]) / torch.linalg.vector_norm(
+        gradients[0]
+    )
+    assert relative < 0.02
+    assert seen == dict(
+        lstm=torch.float32, branch_head=torch.float32, tile_head=torch.float32, qkv=torch.bfloat16
+    )
+    assert torch.isfinite(gradients[1]).all()
+    for hook in hooks:
+        hook.remove()
+    # Small updates survive in the master weight even if BF16 would round them away.
+    parameter = mixed.previous_action.weight
+    with torch.no_grad():
+        parameter.fill_(1)
+    parameter.grad = torch.ones_like(parameter)
+    torch.optim.SGD([parameter], lr=1e-5).step()
+    assert torch.all(parameter < 1) and torch.all(parameter.bfloat16() == 1)
+
+
+def test_fp32_batching_attention_gradients_and_update_match_reference():
+    cfg = load_config()
+    torch.manual_seed(19)
+    reference = TransformerLSTMPolicy(cfg).cuda().train()
+    optimized = TransformerLSTMPolicy(cfg).cuda().train()
+    optimized.load_state_dict(reference.state_dict())
+    reference.entity.microbatch = 4
+    reference.entity.activation_checkpointing = True
+    for layer in reference.entity.layers:
+        layer.force_fallback = True
+    raw = [observation(cfg, n)[0] for n in (5, 40, 128, 256)] * 4
+    batch = collate_observations(raw, "cuda").reshape(2, 8)
+    outputs = []
+    for model in (reference, optimized):
+        q, tiles, context, state = model.forward_sequence(batch, return_context=True)
+        values = model.tile_values(
+            tiles.flatten(0, 1), context.flatten(0, 1), torch.arange(16, device="cuda") % 9 + 1
+        )
+        (q.square().mean() + values.square().mean()).backward()
+        outputs.append((q, values, state.hidden, state.cell))
+    for a, b in zip(*outputs):
+        torch.testing.assert_close(a, b, atol=1e-6, rtol=1e-5)
+    for a, b in zip(reference.parameters(), optimized.parameters()):
+        torch.testing.assert_close(a.grad, b.grad, atol=1e-6, rtol=1e-4)
+    updates = []
+    for model in (reference, optimized):
+        torch.nn.utils.clip_grad_norm_(model.parameters(), cfg["training"]["max_grad_norm"])
+        originals = [p.detach().clone() for p in model.parameters()]
+        # Independent first-step Adam formula. Near-zero key-bias gradients are
+        # rounding noise (softmax is shift-invariant); Adam's epsilon can amplify
+        # that tiny gradient difference, so verify the propagated difference.
+        deltas = [
+            cfg["training"]["learning_rate"] * p.grad / (p.grad.abs() + 1e-8)
+            for p in model.parameters()
+        ]
+        torch.optim.Adam(model.parameters(), lr=cfg["training"]["learning_rate"]).step()
+        for p, original, delta in zip(model.parameters(), originals, deltas):
+            torch.testing.assert_close(p, original - delta, atol=1e-7, rtol=1e-6)
+        updates.append(deltas)
+    for a, b, da, db in zip(reference.parameters(), optimized.parameters(), *updates):
+        assert torch.all((a - b).abs() <= (da - db).abs() + 2e-7)

@@ -263,7 +263,18 @@ class CudaVecEnv(VecEnv):
             compact_tensor = torch.stack(
                 (done.double(), timed_out.double(), h[:, 14].double(), reward.double()), dim=1
             )
-            packed = torch.cat((compact_tensor.flatten(), h[:, 12:14].double().flatten()))
+            # Include proposal/execution/omissions: never extract per-environment GPU scalars.
+            extra = torch.cat(
+                (
+                    self.proposed_actions[:, None].double(),
+                    self.executed_actions[:, None].double(),
+                    torch.from_dlpack(self.features.truncation_counts).double(),
+                ),
+                dim=1,
+            )
+            packed = torch.cat(
+                (compact_tensor.flatten(), h[:, 12:14].double().flatten(), extra.flatten())
+            )
             if self._transition_host is None or self._transition_host.shape != packed.shape:
                 self._transition_host = torch.empty_like(packed, device="cpu", pin_memory=True)
             self._transition_host.copy_(packed, non_blocking=True)
@@ -281,7 +292,8 @@ class CudaVecEnv(VecEnv):
                     viewer.fail(exc)
             self.phases["transfers"] += perf_counter() - started
             indices = np.flatnonzero(compact[:, 0]).tolist()
-            truncation = self.features.truncation_counts.get()
+            extra_host = host[self.num_envs * 6 :].reshape(self.num_envs, 5)
+            truncation = extra_host[:, 2:]
             infos = []
             for index, row in enumerate(compact):
                 accepted = bool(self.last_action_result_host[index, 0])
@@ -302,8 +314,8 @@ class CudaVecEnv(VecEnv):
                                 )
                             ),
                         },
-                        "proposal_action": int(self.proposed_actions[index]),
-                        "executed_action": int(self.executed_actions[index]),
+                        "proposal_action": int(extra_host[index, 0]),
+                        "executed_action": int(extra_host[index, 1]),
                         "accepted": accepted,
                         "rejection_reason": reason,
                         "ticks_advanced": int(row[2]),

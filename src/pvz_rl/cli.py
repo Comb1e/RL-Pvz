@@ -92,6 +92,10 @@ def configured(args):
                 if getattr(args, name, None) is None:
                     setattr(args, name, saved.get(field))
     if args.command == "train":
+        if getattr(args, "refresh_performance", False):
+            from pvz_rl.learning.performance import refresh_performance
+
+            cfg = refresh_performance(cfg, load_config(args.config))
         args.seed = 101 if getattr(args, "seed", None) is None else args.seed
         args.condition = getattr(args, "condition", None) or "masked"
         if getattr(args, "stage", None) is not None:
@@ -177,6 +181,11 @@ def main(argv=None):
     training.add_argument("--condition", choices=TRAINING_CONDITIONS, help="default: masked")
     training.add_argument("--seed", type=int, help="learner seed; default: saved seed or 101")
     training.add_argument("--output", required=True, type=Path)
+    training.add_argument(
+        "--refresh-performance",
+        action="store_true",
+        help="apply current execution settings while preserving checkpoint learning parameters",
+    )
     training.add_argument("--validation-count", type=int, help="reduced validation set for checks")
     training.add_argument("--family", choices=("preset", "diagnostic"), default="preset")
     from pvz_rl.learning.curriculum import STAGES

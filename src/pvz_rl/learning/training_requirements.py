@@ -90,13 +90,22 @@ def require_cuda_training(cfg, condition="masked", *, runtime=True):
                 "CUDA training is unavailable. Run pvz-rl doctor and install the locked CUDA "
                 "dependencies with tools/bootstrap.ps1; CPU training is no longer supported."
             )
+        if (
+            cfg["training"].get("performance", {}).get("fit_precision", "fp32") == "features_bf16"
+            and not torch.cuda.is_bf16_supported()
+        ):
+            raise RuntimeError(
+                "BF16 fitting is unavailable; set training.performance.fit_precision=fp32"
+            )
         _cuda_probe()
     require_supported_policy(cfg, condition)
 
 
 def resume_protocol(cfg, condition):
     """Unused historical condition definitions do not alter an individual run."""
-    result = research_config(cfg)
+    from pvz_rl.learning.performance import without_performance
+
+    result = without_performance(research_config(cfg))
     result.pop("profile", None)
     result["conditions"] = {condition: cfg["conditions"][condition]}
     for key in ("total_games", "total_steps", "max_minutes", "finalization_minutes"):

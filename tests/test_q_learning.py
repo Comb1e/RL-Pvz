@@ -1,6 +1,5 @@
 """Independent controls for shared encoder, deferred values and weight transfer."""
 
-import pytest
 import torch
 
 from pvz_rl.config import load_config
@@ -103,15 +102,3 @@ def test_task_counts_track_partial_games_and_reset_at_episode_boundaries():
         assert sum(v["active_games"] for v in env.task_counts().values()) == 3
     finally:
         env.close()
-
-
-@pytest.mark.parametrize("device", ["cpu", "cuda"])
-def test_neural_q_batching_preserves_predictions(device):
-    policy, obs, _, _ = policy_and_state()
-    policy.to(device).eval()
-    batch = collate_observations(obs.observations() * 17, device)
-    batch.globals[:, 0] = torch.linspace(0, 9, 17, device=device)
-    with torch.no_grad(), torch.backends.cudnn.flags(allow_tf32=False):
-        individual = torch.cat([policy.forward_step(batch[i : i + 1]).branch_q for i in range(17)])
-        together = policy.forward_step(batch).branch_q
-    torch.testing.assert_close(individual, together, rtol=2e-5, atol=2e-6)

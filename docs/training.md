@@ -31,7 +31,7 @@ Use the recording's `--config` when it was customized. `--device cpu` is the
 initialization default; `--device cuda` changes execution without changing archive
 verification. `--passes`, `--learning-rate`, `--gradient-clip` and `--seed` override
 fitting settings. Time budgets are configuration settings only: initialization
-uses `training.demo.time_budget_minutes` (30 by default). Defaults are 20 passes,
+uses `training.demo.time_budget_minutes` (30 by default). Defaults are 5 passes,
 learning rate 0.0003, clip 0.5 and 256-decision chunks. Checkpoints are published
 only after complete passes, alongside curves, coverage and verification reports.
 
@@ -94,7 +94,7 @@ progress, coverage and checkpoint reporting. Press **F** to follow latest action
 ## Entity inputs and memory
 
 The single `src/pvz_rl/data/train.toml` controls both profiles. `encoding.max_entities`
-sets the entity cap; model width, encoder microbatch (16), token budget (4,096),
+sets the entity cap; model width, encoder microbatch (64), token budget (32,768),
 and attention query chunk (64) are configured under `policy`. Mowers precede
 plants, then zombies, then projectiles. On overflow projectiles are omitted first,
 then zombies, then plants; all five mowers remain. Zombies closest to the house
@@ -114,8 +114,9 @@ metadata. Both slabs share `training.storage.ram_gib`; excess blocks spill to di
 
 Encoder microbatches shrink with sequence width. Attention uses scaled dot-product
 attention and an exact query-chunk fallback; each query still sees all valid keys.
-Activation checkpointing recomputes encoder activations during backward. These
-settings bound encoder working memory without changing chronological LSTM order,
+The normal efficient-attention path avoids activation checkpointing. Allocation
+failures restart the uncommitted pass with smaller microbatches, then one outer
+checkpoint. These settings bound encoder working memory without changing chronological LSTM order,
 whole-cohort loss weights, or whole-pass optimizer updates. Allocation failures
 remain explicit; the program never silently reduces the configured entity cap.
 
@@ -153,3 +154,50 @@ CUDA batches reset only replaced episode slots. A configuration with
 `simulation.backend = "cpu"` selects CPU evaluation while preserving the model
 contract. Recording traces are checked against the CPU simulator before export.
 Choose a fresh evaluation directory. Validation and test seeds remain separate.
+
+## Training throughput and precision
+
+The `training.performance.fit_precision` setting is `features_bf16` for new CUDA
+runs; use `fp32` for a reference comparison. BF16 applies to temporary encoder,
+embedding and auxiliary-projection computation. Parameters, optimizer state,
+LSTM, Q heads, losses and accumulated gradients remain FP32. No loss scaler is
+used. Collection/evaluation and demonstration initialization remain FP32;
+`training.demo.passes = 5` and autonomous `training.n_epochs = 4` are independent.
+
+Two pinned staging buffers use the same `training.storage.ram_gib` allowance as
+trajectory slabs, spilling resident slabs when necessary. `training.performance.prefetch`
+controls ordered preparation/transfer overlap. Telemetry reports preparation,
+transfer wait/device time, fitting, and optimizer time separately; overlapped
+phase durations must not be added to infer wall time.
+
+Older entity checkpoints can resume without retraining. To apply the current
+execution defaults while keeping their learning parameters:
+
+```powershell
+.\.venv\Scripts\python.exe -m pvz_rl train `
+  --resume runs\human-trained\interrupted.zip --output runs\human-trained `
+  --refresh-performance
+```
+
+The same flag works with `--init-from` for an existing demonstration checkpoint.
+This refresh cannot change passes, epochs, batch size, recurrent chunk length,
+rewards, curriculum or architecture. Without it, saved precision is retained;
+checkpoints lacking precision metadata use FP32. Precision changes begin when
+the unfinished pass restarts. A nonfinite BF16 pass retries wholly in FP32;
+only successful whole passes count as updates. Effective precision and fallback
+reasons are saved. A nonfinite FP32 pass or exhausted allocation fallback fails
+explicitly. See [precision and throughput controls](math/training-throughput.md).
+
+For a bounded four-pass throughput check with fixed model dimensions:
+
+```powershell
+.\.venv\Scripts\python.exe -m pvz_rl.monitoring.throughput_benchmark `
+  --scope synthetic --label current --output artifacts\throughput-synthetic.json
+.\.venv\Scripts\python.exe -m pvz_rl.monitoring.throughput_benchmark `
+  --scope collection --label current --output artifacts\throughput-collection.json
+```
+
+The collection check uses one-second cutoffs, three warmed repetitions, and
+viewer-on/off runs. It is a mechanical throughput check, not formal training.
+The [recorded comparison](evidence/training-throughput-v030.json) includes raw
+trials, phases, memory and measurement limits.

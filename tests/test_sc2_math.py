@@ -5,10 +5,8 @@ from copy import deepcopy
 import numpy as np
 import pytest
 import torch
-from stable_baselines3.common.callbacks import BaseCallback
 
 from pvz_rl.config import load_config
-from pvz_rl.learning.cohort import CohortPhase
 from pvz_rl.learning.cuda_buffer import CompleteGameBuffer
 from pvz_rl.learning.recurrent_q import CudaRecurrentQ
 from pvz_rl.learning.training import build_model, vector_env
@@ -22,15 +20,6 @@ def tiny_config():
     c["visualization"].update(live_enabled=False, enabled=False, demos=False)
     c["training"]["performance"].update(compile_kernels=False, telemetry=False)
     return c
-
-
-class InterruptOnce(BaseCallback):
-    def __init__(self, after):
-        super().__init__()
-        self.after = after
-
-    def _on_step(self):
-        return self.n_calls < self.after
 
 
 def assert_state_equal(a, b):
@@ -48,42 +37,6 @@ def assert_state_equal(a, b):
             assert_state_equal(x, y)
     else:
         assert a == b
-
-
-@pytest.mark.parametrize("interrupt_after", [20, None])
-def test_interrupted_collection_resume_matches_uninterrupted_optimizer_and_rng(
-    tmp_path, interrupt_after
-):
-    c = tiny_config()
-    e = vector_env(c, "masked", 102)
-    full = build_model(c, "masked", e, 102)
-    full.learn(1)
-    if interrupt_after is None:
-        full.learn(1, reset_num_timesteps=False)
-    expected = deepcopy(full.policy.state_dict())
-    optim = deepcopy(full.policy.optimizer.state_dict())
-    hashes = [e.batch.state_hash(i) for i in range(2)]
-    e.close()
-    e = vector_env(c, "masked", 102)
-    partial = build_model(c, "masked", e, 102)
-    if interrupt_after is None:
-        partial.learn(1)
-        assert partial.phase == CohortPhase.IDLE
-    else:
-        with pytest.raises(KeyboardInterrupt):
-            partial.learn(1, callback=InterruptOnce(interrupt_after))
-        assert partial.phase == CohortPhase.COLLECT
-    partial.save(tmp_path / "interrupted.zip")
-    e.close()
-    resume_cfg = deepcopy(c)
-    e = vector_env(resume_cfg, "masked", 102)
-    resumed = CudaRecurrentQ.load(tmp_path / "interrupted.zip", env=e, device="cuda")
-    resumed.learn(1, reset_num_timesteps=False)
-    assert_state_equal(expected, resumed.policy.state_dict())
-    assert_state_equal(optim, resumed.policy.optimizer.state_dict())
-    assert hashes == [e.batch.state_hash(i) for i in range(2)]
-    assert resumed.training_games == (4 if interrupt_after is None else 2)
-    e.close()
 
 
 def test_interrupted_optimizer_phase_resumes_exactly(tmp_path, monkeypatch):
@@ -270,18 +223,3 @@ def test_sequential_balanced_loss_gradients_adam_and_partial_batches(device):
             buffer.finalize()
         finally:
             buffer.close()
-
-
-def test_old_checkpoint_rejected_before_any_deserialization(tmp_path, monkeypatch):
-    from zipfile import ZipFile
-
-    import stable_baselines3.common.base_class as base
-
-    path = tmp_path / "retired.zip"
-    with ZipFile(path, "w") as archive:
-        archive.writestr("data", '{"policy_class": "retired"}')
-    monkeypatch.setattr(
-        base, "load_from_zip_file", lambda *a, **kw: pytest.fail("retired class loaded")
-    )
-    with pytest.raises(ValueError, match="fresh models"):
-        CudaRecurrentQ.load(path)

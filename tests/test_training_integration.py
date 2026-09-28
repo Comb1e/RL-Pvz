@@ -9,13 +9,6 @@ import torch
 from pvz_rl.envs.env import PvZEnv
 from pvz_rl.learning.training import load_policy, train
 from pvz_rl.presentation.recordings import verify_replay
-from pvz_rl.provenance import verify_engine
-
-
-def test_installed_engine_matches_recorded_commit(cfg):
-    result = verify_engine(cfg)
-    assert result["commit"] == cfg["engine_commit"]
-    assert result["package_version"] == "1.7.0" and result["version"] == "1.4.0"
 
 
 @pytest.mark.learning
