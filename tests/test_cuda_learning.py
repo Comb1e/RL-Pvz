@@ -2,13 +2,13 @@
 
 import copy
 
-import numpy as np
 import pytest
 import torch
 from pvz_game import LevelSpec, Spawn
 from pvz_game.config import PLANT_TYPES, ZOMBIE_TYPES, InitialPlant
 
-from pvz_rl.config import load_event_config as load_config
+from pvz_rl.config import load_config
+from pvz_rl.envs.encoding import observations_equal
 from pvz_rl.envs.env import PvZEnv
 
 
@@ -24,6 +24,7 @@ def gpu_cfg():
         device="cuda",
         batch_size=64,
     )
+    cfg["policy"]["chunk_length"] = 16
     cfg["visualization"].update(enabled=False, demos=False, videos=False)
     return cfg
 
@@ -49,8 +50,8 @@ def test_observations_rewards_and_metrics_against_cpu(gpu_cfg, condition):
         feature = CudaFeatures(batch, cfg, condition)
         feature.encode()
         for tick in range(600):
-            np.testing.assert_allclose(
-                feature.observations.get()[0], env.encoder.encode(env.public), atol=1e-7, rtol=1e-6
+            assert observations_equal(
+                feature.obs_tensor.observations()[0], env.encoder.encode(env.public), atol=1e-7
             )
             action = 0
             obs, reward, done, truncated, info = env.step(action)
@@ -82,8 +83,11 @@ def test_gpu_lesson_and_changed_scenarios_match_public_encodings(gpu_cfg):
     with batch.cp.cuda.ExternalStream(torch.cuda.current_stream().cuda_stream):
         features = CudaFeatures(batch, cfg, "masked")
         features.encode()
-        expected = np.stack([features.encoder.encode(g.observe()) for g in games])
-        np.testing.assert_allclose(features.observations.get(), expected, atol=1e-7, rtol=1e-6)
+        expected = [features.encoder.encode(g.observe()) for g in games]
+        assert all(
+            observations_equal(a, b, atol=1e-7)
+            for a, b in zip(features.obs_tensor.observations(), expected)
+        )
 
 
 def test_gpu_encoding_crowds_order_and_private_schedule(gpu_cfg):
@@ -103,7 +107,7 @@ def test_gpu_encoding_crowds_order_and_private_schedule(gpu_cfg):
                     [Spawn(1, "basic", 0, x=3000)] * 90 + [Spawn(1000 + seed, "basic", seed % 5)]
                 ),
             ),
-            seed,
+            8,  # Same present-state RNG; only future schedule differs.
         )
         game.step()
         games.append(game)
@@ -113,9 +117,11 @@ def test_gpu_encoding_crowds_order_and_private_schedule(gpu_cfg):
         features = CudaFeatures(batch, cfg, "masked")
         features.encode()
         expected = features.encoder.encode(games[0].observe())
-        np.testing.assert_array_equal(expected, features.encoder.encode(games[1].observe()))
-        before = features.observations.get().copy()
-        np.testing.assert_allclose(before, np.stack([expected, expected]), atol=1e-7, rtol=1e-6)
+        assert observations_equal(expected, features.encoder.encode(games[1].observe()))
+        before = features.obs_tensor.observations()
+        assert all(observations_equal(o, expected, atol=1e-7) for o in before)
         batch.zombies[:, :90] = batch.zombies[:, :90][:, ::-1].copy()
         features.encode()
-        np.testing.assert_array_equal(features.observations.get(), before)
+        assert all(
+            observations_equal(a, b) for a, b in zip(features.obs_tensor.observations(), before)
+        )

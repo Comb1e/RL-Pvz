@@ -165,7 +165,11 @@ class PvZEnv(gym.Env):
         self.first_attacker_tick = None
         self.episode_reward = 0.0
         self.cutoff_ticks = self.cfg["environment"]["cutoff_seconds"] * self.public.tick_rate
-        return self.encoder.encode(self.public), {"status": self.state.value}
+        encoded = self.encoder.encode(self.public)
+        return encoded, {
+            "status": self.state.value,
+            "entity_truncation": self.encoder.last_truncation,
+        }
 
     def public_board(self):
         obs = self.public
@@ -371,7 +375,9 @@ class PvZEnv(gym.Env):
                 )
             info["episode_metrics"] = self.episode_metrics()
         self.last_policy_outcome = (int(action), info["accepted"], info["ticks_advanced"])
-        return self.encoder.encode(self.public), parts["total"], terminated, truncated, info
+        encoded = self.encoder.encode(self.public)
+        info["entity_truncation"] = self.encoder.last_truncation
+        return encoded, parts["total"], terminated, truncated, info
 
     def episode_metrics(self):
         obs = self.public

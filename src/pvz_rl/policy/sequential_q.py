@@ -3,16 +3,27 @@
 import math
 
 import torch
+from pvz_game import Rules
 
 from pvz_rl.envs.actions import ActionSchema as A
 
-POLICY_SIGNATURE = "event_sequential_q_v2"
+UNITS_PER_TILE = Rules().game["units_per_tile"]
+
+POLICY_SIGNATURE = "transformer_lstm_q_v2"
 ACTION_DISTRIBUTION = "sequential_q_unmasked_penalty_v1"
 
 
 def observation_tile_masks(obs):
     """Default proposal geometry from public plant fields, without private state."""
-    empty = obs[:, : A.tiles * 3 : 3] == 0
+    from pvz_rl.envs.encoding import collate_observations
+
+    obs = collate_observations(obs)
+    entities = obs.entities
+    plants = obs.entity_mask & (entities[..., 0] >= 1) & (entities[..., 0] <= A.plant_types)
+    tiles = entities[..., 2].long() * A.cols + entities[..., 3].long() // UNITS_PER_TILE
+    occupied = torch.zeros(len(obs), A.tiles, dtype=torch.long, device=obs.device)
+    occupied.scatter_add_(1, tiles.clamp(0, A.tiles - 1), plants.long())
+    empty = occupied == 0
     available = torch.ones(len(obs), 1, dtype=torch.bool, device=obs.device)
     return torch.cat((available, empty.repeat(1, A.plant_types), available.expand(-1, A.tiles)), -1)
 
@@ -32,9 +43,7 @@ def selection_masks(masks):
     # eight plant species, and dig even when a card cannot currently execute.
     # Inactive rows stay illegal here; select_q_actions overlays wait only
     # when its caller explicitly marks a row inactive for batched collection.
-    legal = torch.ones(
-        (len(masks), A.tile_groups + 1), dtype=torch.bool, device=masks.device
-    )
+    legal = torch.ones((len(masks), A.tile_groups + 1), dtype=torch.bool, device=masks.device)
     return legal & active[:, None]
 
 

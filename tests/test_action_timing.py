@@ -9,6 +9,7 @@ from pvz_game.replay import Playback, read_recording, write_recording
 
 from pvz_rl.config import validate_config
 from pvz_rl.envs.action_timing import ActionPhaseGame
+from pvz_rl.envs.encoding import observations_equal
 from pvz_rl.envs.env import PvZEnv
 from pvz_rl.envs.rewards import asset_value, reward_parts
 from pvz_rl.presentation.recordings import (
@@ -249,7 +250,7 @@ def test_mask_cache_equivalence_between_instant_actions(per_tick_cfg):
     envs = [ready(cfg) for cfg in (per_tick_cfg, stock_cfg)]
     for action in (Place("peashooter", 0, 0), Place("sunflower", 1, 0), Dig(0, 0), Wait()):
         observations = [e.step(e.codec.encode(action))[0] for e in envs]
-        np.testing.assert_array_equal(*observations)
+        assert observations_equal(*observations)
         np.testing.assert_array_equal(*(e.action_masks() for e in envs))
 
 

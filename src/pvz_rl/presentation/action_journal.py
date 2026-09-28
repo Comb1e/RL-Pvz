@@ -14,6 +14,8 @@ RECORD = np.dtype(
     [
         ("sequence", "<u8"),
         ("tick", "<u4"),
+        ("entity_count", "<u4"),
+        ("entity_omitted", "<u4", 3),
         ("action", "<u2"),
         ("executed_action", "<u2"),
         ("greedy_action", "<u2"),
@@ -106,7 +108,7 @@ class ActionJournal:
 
     def record_batch(self, rows, scores, results, episodes):
         records = np.zeros(self.count, dtype=RECORD)
-        for name in ("tick", "action", "greedy_action"):
+        for name in ("tick", "action", "greedy_action", "entity_count", "entity_omitted"):
             records[name] = rows[name]
         records["coins"][:, 0] = rows["species_coin"]
         records["coins"][:, 1] = rows["tile_coin"]

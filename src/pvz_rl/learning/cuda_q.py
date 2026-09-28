@@ -14,16 +14,13 @@ import numpy as np
 import torch
 from stable_baselines3.common.base_class import BaseAlgorithm
 
-from pvz_rl.envs.actions import ActionSchema as A
 from pvz_rl.learning.cohort import (
-    OPTIMIZER_PROTOCOL,
     CohortPhase,
     atomic_transition,
 )
 from pvz_rl.learning.cuda_buffer import CompleteGameBuffer
 from pvz_rl.learning.exploration import EXPLORATION_PROTOCOL, configure_exploration
-from pvz_rl.policy.event_memory import EventMemory
-from pvz_rl.policy.sequential_q import ACTION_DISTRIBUTION, POLICY_SIGNATURE, balanced_q_loss
+from pvz_rl.policy.sequential_q import ACTION_DISTRIBUTION, POLICY_SIGNATURE
 
 
 def checkpoint_metadata(path):
@@ -46,9 +43,9 @@ def checkpoint_optimizer_protocol(path):
     return checkpoint_metadata(path)["optimizer"]
 
 
-class CudaSequentialQ(BaseAlgorithm):
+class CudaCohortLifecycle(BaseAlgorithm):
     policy_protocol = POLICY_SIGNATURE
-    optimizer_version = OPTIMIZER_PROTOCOL
+    optimizer_version = "complete_return_lstm_v1"
 
     def __init__(
         self,
@@ -86,11 +83,7 @@ class CudaSequentialQ(BaseAlgorithm):
         self.cohort_metrics = {}
         self.runtime_state = None
         self._buffer = self._memory = None
-        self._fit_order = None
-        self._fit_epoch = self._fit_cursor = 0
-        self._cohort_elapsed = 0.0
-        self._prefetch = None
-        self._collection_host = None
+        self._fit_epoch = 0
         if _init_setup_model:
             self._setup_model()
 
@@ -121,6 +114,12 @@ class CudaSequentialQ(BaseAlgorithm):
         if not model._checkpoint_source.suffix:
             model._checkpoint_source = model._checkpoint_source.with_suffix(".zip")
         with ZipFile(model._checkpoint_source) as archive:
+            if (
+                "observation-schema.json" not in archive.namelist()
+                or json.loads(archive.read("observation-schema.json"))
+                != model.policy.layout.schema()
+            ):
+                raise ValueError("Checkpoint entity schema disagrees with model")
             if "cohort-state.pt" not in archive.namelist():
                 raise ValueError("Checkpoint is missing its complete-game runtime state")
             model.runtime_state = torch.load(
@@ -143,32 +142,18 @@ class CudaSequentialQ(BaseAlgorithm):
             action_masks=action_masks,
         )
 
-    def _new_memory(self):
-        return EventMemory(self.cfg, self.env.batch.rules, self.n_envs, self.device)
-
     def _new_buffer(self):
         root = Path(getattr(self, "trajectory_root", tempfile.gettempdir()))
         path = Path(tempfile.mkdtemp(prefix="cohort-", dir=root))
         spec = self.cfg["training"]["storage"]
         buffer = CompleteGameBuffer(
             path,
-            self.observation_space.shape[0],
-            self._memory.capacity,
             self.n_envs,
             ram_bytes=spec["ram_gib"] * 1024**3,
             block_rows=spec["block_rows"],
+            schema=self.policy.layout.schema(),
         )
-        if self._memory.capacity:
-            buffer.configure_cache(
-                self.device,
-                self.env.cfg["training"].get("performance", {}).get("token_cache_gib", 2),
-            )
         return buffer
-
-    def _drain_transfers(self):
-        if self._prefetch is not None:
-            self._prefetch.close()
-            self._prefetch = None
 
     def _phase(self, phase, callback):
         self.phase = phase
@@ -196,12 +181,9 @@ class CudaSequentialQ(BaseAlgorithm):
             raise TrainingGamesComplete
         self._last_obs = self.env.reset_cohort(count)
         self._memory = self._new_memory()
-        self._previous = torch.zeros(self.n_envs, device=self.device, dtype=torch.long)
         self._first = True
         self._buffer = self._new_buffer()
-        self._fit_epoch = self._fit_cursor = 0
-        self._fit_order = None
-        self._cohort_elapsed = 0.0
+        self._fit_epoch = 0
         self._phase_times = {"collect": 0.0, "returns": 0.0, "fit": 0.0}
         self._device_seconds = 0.0
         self._simulation_ticks = 0
@@ -214,188 +196,9 @@ class CudaSequentialQ(BaseAlgorithm):
             tile_exploration_coins=0,
             exploratory_changes=0,
         )
-        self._loss_sums = dict(branch=0.0, tile=0.0, branch_count=0, tile_count=0)
         self._phase(CohortPhase.COLLECT, callback)
 
-    def _collect_step(self, callback):
-        env = self.env
-        self.policy.set_training_mode(False)
-        with torch.no_grad(), env.device_context():
-            active = env.enabled_envs.copy()
-            obs = self._last_obs
-            masks = env.action_masks().clone()
-            inactive = ~torch.as_tensor(active, device=self.device)
-            masks[inactive] = False
-            masks[inactive, 0] = True
-            ticks = env.header_tensor[:, 0]
-            resets = torch.full((self.n_envs,), self._first, device=self.device, dtype=torch.bool)
-            ids = torch.arange(
-                self._buffer.size, self._buffer.size + self.n_envs, device=self.device
-            )
-            context = self._memory.observe(obs, masks, self._previous, resets, ticks, token_ids=ids)
-            result = self.policy.decide(obs, masks, context=context, active=~inactive)
-            actions, values, tile_values = result[:3]
-            # One bounded packed transfer; copied before the simulator mutates observations.
-            packed = torch.cat(
-                (
-                    obs,
-                    masks.float(),
-                    self._previous[:, None].float(),
-                    ticks[:, None].float(),
-                    actions[:, None].float(),
-                    values[:, None],
-                    tile_values[:, None],
-                    result[3]["greedy_actions"][:, None].float(),
-                    result[3]["coins"].float(),
-                    # Bit-preserve 32-bit references, including indices above 2**24.
-                    self._memory.ids.to(torch.int32).view(torch.float32),
-                    self._memory.counts,
-                    self._memory.starts,
-                    result[3]["branch_q"],
-                ),
-                -1,
-            )
-            if self._collection_host is None or self._collection_host.shape != packed.shape:
-                self._collection_host = torch.empty_like(packed, device="cpu", pin_memory=True)
-            self._collection_host.copy_(packed, non_blocking=True)
-            raw_tokens = torch.cat(
-                (obs, self._previous[:, None], resets[:, None], ticks[:, None]), -1
-            )
-            next_obs, rewards, dones, _, _, infos = env.step_tensors(actions, autoreset=False)
-            # step_tensors' required completion readback also completes pre-action copy.
-            host = self._collection_host.numpy()
-            reward = env.last_transition_host[:, 3]
-            duration = env.last_transition_host[:, 2]
-            rows = np.zeros(self.n_envs, dtype=self._buffer.dtype)
-            d = self.observation_space.shape[0]
-            rows["observation"] = host[:, :d]
-            rows["mask"] = np.packbits(
-                host[:, d : d + A.size].astype(bool), axis=-1, bitorder="little"
-            )
-            base = d + A.size
-            for j, key in enumerate(
-                (
-                    "previous",
-                    "tick",
-                    "action",
-                    "branch_value",
-                    "tile_value",
-                    "greedy_action",
-                    "species_coin",
-                    "tile_coin",
-                )
-            ):
-                rows[key] = host[:, base + j]
-            base += 8
-            rows["ids"] = host[:, base : base + self._memory.capacity].view(np.uint32)
-            base += self._memory.capacity
-            for key in ("counts", "starts"):
-                rows[key] = host[:, base : base + self._memory.capacity]
-                base += self._memory.capacity
-            rows["reset"] = self._first
-            rows["active"], rows["env"] = active, np.arange(self.n_envs)
-            rows["reward"], rows["duration"] = reward, duration
-            env.action_journal.record_batch_safe(
-                rows, host[:, -10:], env.last_action_result_host, env._episode_serial
-            )
-            self._buffer.append(rows, raw_tokens)
-            self._stats["species_exploration_coins"] += int(rows["species_coin"][active].sum())
-            self._stats["tile_exploration_coins"] += int(rows["tile_coin"][active].sum())
-            self._stats["exploratory_changes"] += int(
-                np.count_nonzero(active & (rows["action"] != rows["greedy_action"]))
-            )
-            self._planting_samples += int(
-                np.count_nonzero(active & (rows["action"] > 0) & (rows["action"] < A.dig_start))
-            )
-            self._simulation_ticks += int(duration[active].sum())
-            self._first = False
-            self._last_obs = next_obs
-            self._previous = env.executed_actions.clone()
-            self.num_timesteps += int(active.sum())
-            # Paused workers contribute no action, reward, duration or optimizer sample.
-            active_infos = [info for info, on in zip(infos, active) if on]
-            if not hasattr(callback, "cfg"):
-                self.training_games += sum("episode_metrics" in x for x in active_infos)
-            callback.update_locals({"infos": active_infos, "dones": dones})
-            if not callback.on_step():
-                raise KeyboardInterrupt
-            if not env.enabled_envs.any():
-                self._phase(CohortPhase.RETURNS, callback)
-
-    def _prepare_fit(self):
-        if self._fit_epoch >= self.n_epochs:
-            if self._fit_order is None:
-                self._fit_order = np.empty(0, dtype=np.int64)
-            return
-        if self._fit_order is None:
-            indices = self._buffer.valid_indices()
-            self._fit_order = indices[np.random.permutation(len(indices))]
-            self._fit_cursor = 0
-        if self._prefetch is None and len(self._fit_order) > self._fit_cursor:
-            from pvz_rl.learning.transfers import BatchPrefetch
-
-            torch.cuda.current_stream(self.device).wait_stream(self.env.stream)
-            self._prefetch = BatchPrefetch(
-                self._buffer, self._fit_order[self._fit_cursor :], self.batch_size, self.device
-            )
-
-    def _q_step(self, data):
-        branch, tile = self.policy.selected_values(
-            data["observation"], data["action"], data["context"]
-        )
-        loss, branch_error, tile_error = balanced_q_loss(
-            branch, tile, data["target"], data["action"], self._buffer.group_counts, self.batch_size
-        )
-        if not torch.isfinite(loss):
-            raise FloatingPointError("Non-finite Q loss")
-        self.policy.optimizer.zero_grad(set_to_none=True)
-        loss.backward()
-        norm = torch.nn.utils.clip_grad_norm_(
-            self.policy.parameters(), self.max_grad_norm, error_if_nonfinite=True
-        )
-        self.policy.optimizer.step()
-        self._stats["q_optimizer_steps"] += 1
-        self.logger.record("train/q_loss", float(loss.detach()))
-        nonwait = data["action"] != 0
-        totals = self._loss_sums
-        totals["branch"] += float(branch_error.detach().sum())
-        totals["branch_count"] += len(branch_error)
-        totals["tile"] += float(tile_error[nonwait].detach().sum())
-        totals["tile_count"] += int(nonwait.sum())
-        self.logger.record("train/branch_loss", totals["branch"] / totals["branch_count"])
-        self.logger.record(
-            "train/tile_loss",
-            totals["tile"] / totals["tile_count"] if totals["tile_count"] else None,
-        )
-        self.logger.record("train/q_grad_norm", float(norm))
-
-    def _fit_step(self, callback):
-        self._prepare_fit()
-        if self._fit_epoch >= self.n_epochs or not len(self._fit_order):
-            self._drain_transfers()
-            self._phase(CohortPhase.SYNCHRONIZE, callback)
-            self._fit_epoch = self._fit_cursor = 0
-            self._fit_order = None
-            return
-        indices = self._fit_order[self._fit_cursor : self._fit_cursor + self.batch_size]
-        data = next(self._prefetch)
-        start, end = torch.cuda.Event(enable_timing=True), torch.cuda.Event(enable_timing=True)
-        start.record()
-        self.policy.set_training_mode(True)
-        self._q_step(data)
-        end.record()
-        end.synchronize()
-        self._device_seconds += start.elapsed_time(end) / 1000
-        self._fit_cursor += len(indices)
-        if self._fit_cursor == len(self._fit_order):
-            self._drain_transfers()
-            self._fit_epoch += 1
-            self._fit_order = None
-        if hasattr(callback, "log_progress"):
-            callback.log_progress()
-
     def _synchronize(self, callback):
-        self._drain_transfers()
         torch.cuda.synchronize(self.device)
         elapsed = sum(self._phase_times.values())
         transitions = int(self._buffer.group_counts.sum())
@@ -403,8 +206,6 @@ class CudaSequentialQ(BaseAlgorithm):
             **self._stats,
             "prefit_errors": self.prefit_errors,
             **self._buffer.transport_metrics,
-            "cache_hit_rate": self._buffer.transport_metrics["cache_hits"]
-            / max(1, self._buffer.transport_metrics["cache_requests"]),
             "device_compute_seconds": self._device_seconds,
             "simulation_speed": self._simulation_ticks
             / self.env.batch.rules.game["tick_rate"]
@@ -445,8 +246,12 @@ class CudaSequentialQ(BaseAlgorithm):
             self.num_timesteps = 0
         # BaseAlgorithm initializes callbacks/logger without resetting private games.
         if self._last_obs is None:
-            self._last_obs = torch.zeros(
-                self.n_envs, *self.observation_space.shape, device=self.device
+            from pvz_rl.envs.encoding import EntityBatch
+
+            self._last_obs = EntityBatch(
+                torch.zeros(self.n_envs, 0, 11, dtype=torch.int32, device=self.device),
+                torch.zeros(self.n_envs, 0, dtype=torch.bool, device=self.device),
+                torch.zeros(self.n_envs, 18, device=self.device),
             )
             self._last_episode_starts = np.ones(self.n_envs, dtype=bool)
         total, callback = self._setup_learn(
@@ -455,52 +260,44 @@ class CudaSequentialQ(BaseAlgorithm):
         if self.runtime_state:
             self._restore_runtime()
         callback.on_training_start(locals(), globals())
-        try:
-            while self.num_timesteps < total or self.phase != CohortPhase.IDLE:
-                if self.phase == CohortPhase.IDLE:
-                    from pvz_rl.learning.budget import budget_target, uses_games
+        while self.num_timesteps < total or self.phase != CohortPhase.IDLE:
+            if self.phase == CohortPhase.IDLE:
+                from pvz_rl.learning.budget import budget_target, uses_games
 
-                    target = budget_target(self.env.cfg)
-                    if (
-                        uses_games(self.env.cfg)
-                        and target is not None
-                        and self.training_games >= target
-                    ):
-                        break
-                    with atomic_transition():
-                        self._begin(callback)
-                    continue
-                phase = self.phase
-                start = perf_counter()
-                try:
-                    with atomic_transition():
-                        if phase == CohortPhase.COLLECT:
-                            self._collect_step(callback)
-                        elif phase == CohortPhase.RETURNS:
-                            self.prefit_errors = self._buffer.finalize()
-                            for name, values in self.prefit_errors.items():
-                                self.logger.record("train/action_count_" + name, values["count"])
-                                self.logger.record(
-                                    "train/value_target_error_" + name, values["mse"]
-                                )
-                                self.logger.record(
-                                    "train/tile_target_error_" + name, values["tile_mse"]
-                                )
-                            self._phase(CohortPhase.FIT, callback)
-                        elif phase == CohortPhase.FIT:
-                            self._fit_step(callback)
-                        elif phase == CohortPhase.SYNCHRONIZE:
-                            self._synchronize(callback)
-                finally:
-                    if phase.value in self._phase_times:
-                        self._phase_times[phase.value] += perf_counter() - start
-            callback.on_training_end()
-            return self
-        except KeyboardInterrupt:
-            self._drain_transfers()
-            raise
-        finally:
-            self._drain_transfers()
+                target = budget_target(self.env.cfg)
+                if (
+                    uses_games(self.env.cfg)
+                    and target is not None
+                    and self.training_games >= target
+                ):
+                    break
+                with atomic_transition():
+                    self._begin(callback)
+                continue
+            phase = self.phase
+            start = perf_counter()
+            try:
+                with atomic_transition():
+                    if phase == CohortPhase.COLLECT:
+                        self._collect_step(callback)
+                    elif phase == CohortPhase.RETURNS:
+                        self.prefit_errors = self._buffer.finalize()
+                        for name, values in self.prefit_errors.items():
+                            self.logger.record("train/action_count_" + name, values["count"])
+                            self.logger.record("train/value_target_error_" + name, values["mse"])
+                            self.logger.record(
+                                "train/tile_target_error_" + name, values["tile_mse"]
+                            )
+                        self._phase(CohortPhase.FIT, callback)
+                    elif phase == CohortPhase.FIT:
+                        self._fit_step(callback)
+                    elif phase == CohortPhase.SYNCHRONIZE:
+                        self._synchronize(callback)
+            finally:
+                if phase.value in self._phase_times:
+                    self._phase_times[phase.value] += perf_counter() - start
+        callback.on_training_end()
+        return self
 
     def _restore_runtime(self):
         state = self.runtime_state
@@ -518,16 +315,12 @@ class CudaSequentialQ(BaseAlgorithm):
             return
         self._memory = self._new_memory()
         self._memory.restore(state["memory"])
-        self._previous = state["previous"].to(self.device)
         self._buffer = self._new_buffer()
         workspace = self._buffer.path
         with ZipFile(self._checkpoint_source) as archive:
             self._buffer = CompleteGameBuffer.restore_archive(archive, state["buffer"], workspace)
-        if self._memory.capacity:
-            self._buffer.configure_cache(
-                self.device,
-                self.env.cfg["training"].get("performance", {}).get("token_cache_gib", 2),
-            )
+        if self._buffer.schema != self.policy.layout.schema():
+            raise ValueError("Trajectory entity schema disagrees with model")
         self._restore_rng(state)
         self.runtime_state = None
         self.resumed_cohort = True
@@ -540,7 +333,6 @@ class CudaSequentialQ(BaseAlgorithm):
         torch.cuda.set_rng_state_all([x.cpu() for x in state["cuda_rng"]])
 
     def save(self, path, *args, **kwargs):
-        self._drain_transfers()
         path = Path(path)
         if not path.suffix:
             path = path.with_suffix(".zip")
@@ -558,7 +350,6 @@ class CudaSequentialQ(BaseAlgorithm):
             runtime = {
                 "environment": self.env.snapshot_training(),
                 "memory": self._memory.snapshot(),
-                "previous": self._previous,
                 "buffer": self._buffer.metadata(),
                 "python_rng": random.getstate(),
                 "numpy_rng": np.random.get_state(),
@@ -583,6 +374,7 @@ class CudaSequentialQ(BaseAlgorithm):
                         )
                     ),
                 )
+                archive.writestr("observation-schema.json", json.dumps(self.policy.layout.schema()))
                 archive.writestr(
                     "run.json",
                     json.dumps(
@@ -643,11 +435,8 @@ class CudaSequentialQ(BaseAlgorithm):
             *super()._excluded_save_params(),
             "_buffer",
             "_memory",
-            "_previous",
             "_checkpoint_source",
             "runtime_state",
-            "_prefetch",
-            "_collection_host",
         ]
 
     def _get_torch_save_params(self):

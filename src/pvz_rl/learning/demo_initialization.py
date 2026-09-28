@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import math
 import time
-from importlib.resources import files
 from pathlib import Path
 
 import torch
@@ -15,7 +14,12 @@ from pvz_game.replay import decode_action, read_recording
 from pvz_rl.config import digest, load_demo_config
 from pvz_rl.envs.action_timing import ActionPhaseGame
 from pvz_rl.envs.actions import ActionCodec
-from pvz_rl.envs.encoding import ObservationEncoder
+from pvz_rl.envs.encoding import (
+    ObservationEncoder,
+    collate_observations,
+    observation_json,
+    observations_equal,
+)
 from pvz_rl.envs.rewards import reward_parts
 from pvz_rl.learning.checkpoints import DEMO_PROTOCOL as CHECKPOINT_PROTOCOL
 from pvz_rl.learning.checkpoints import STATE_PROTOCOL as RECURRENT_STORAGE_PROTOCOL
@@ -37,6 +41,7 @@ def _verify_action_order(archive_path: Path, replay_path: Path, cfg: dict) -> di
     encoder = ObservationEncoder(cfg, game.rules)
     codec = ActionCodec(cfg)
     observations = []
+    native_truncation = []
     native_actions = []
     native_outcomes = []
     native_rewards = []
@@ -44,7 +49,8 @@ def _verify_action_order(archive_path: Path, replay_path: Path, cfg: dict) -> di
     for entry in data["entries"]:
         before = game.observe()
         before_tick = before.tick
-        observations.append(encoder.encode(before).tolist())
+        observations.append(observation_json(encoder.encode(before)))
+        native_truncation.append(dict(encoder.last_truncation))
         native_actions.append(codec.encode(decode_action(entry["action"])))
         action = decode_action(entry["action"])
         result = game.step(action, ticks=entry["ticks"])
@@ -72,26 +78,26 @@ def _verify_action_order(archive_path: Path, replay_path: Path, cfg: dict) -> di
             raise ValueError("native replay state hash mismatch")
     if len(native_actions) != len(transitions):
         raise ValueError("archive and replay decision counts differ")
-    for row, action, obs, outcome, reward, terminal in zip(
+    for row, action, obs, outcome, reward, terminal, omitted in zip(
         transitions,
         native_actions,
         observations,
         native_outcomes,
         native_rewards,
         native_terminals,
+        native_truncation,
         strict=True,
     ):
         if row["action"] != action:
             raise ValueError(f"action order mismatch at decision {row['decision_index']}")
-        if row["observation"] != obs:
-            # JSON float round-tripping is exact for the float32 values emitted
-            # by the archive; use a tight tolerance for older writers.
-            import numpy as np
-
-            if not np.allclose(row["observation"], obs, atol=1e-6, rtol=0):
-                raise ValueError(
-                    f"observation reconstruction mismatch at decision {row['decision_index']}"
-                )
+        if not observations_equal(row["observation"], obs):
+            raise ValueError(
+                f"observation reconstruction mismatch at decision {row['decision_index']}"
+            )
+        if row.get("executed_action") != (action if outcome[1] else 0):
+            raise ValueError(f"execution action mismatch at decision {row['decision_index']}")
+        if row.get("entity_truncation") != omitted:
+            raise ValueError(f"entity truncation mismatch at decision {row['decision_index']}")
         if (
             row["tick"],
             row["accepted"],
@@ -103,10 +109,8 @@ def _verify_action_order(archive_path: Path, replay_path: Path, cfg: dict) -> di
             raise ValueError(f"reward or terminal mismatch at decision {row['decision_index']}")
     final_rows = [row for row in archive_rows if row.get("record_type") == "final_observation"]
     if final_rows:
-        final = encoder.encode(game.observe()).tolist()
-        import numpy as np
-
-        if not np.allclose(final_rows[-1]["observation"], final, atol=1e-6, rtol=0):
+        final = observation_json(encoder.encode(game.observe()))
+        if not observations_equal(final_rows[-1]["observation"], final):
             raise ValueError("final observation reconstruction mismatch")
     return {
         "replay_sha256": file_hash(replay_path),
@@ -126,14 +130,17 @@ def verify_demo(archive: str | Path, replay: str | Path, cfg: dict | None = None
     )
     if not manifest_path.exists():
         raise ValueError("Demonstration archive manifest is missing")
-    if manifest.get("protocol") != "pvz-rl/transition-archive-v1":
-        raise ValueError("Unsupported demonstration archive protocol")
+    if manifest.get("protocol") != "pvz-rl/transition-archive-v2":
+        raise ValueError(
+            "Unsupported demonstration archive protocol; record a fresh entity_v1 demonstration"
+        )
     recorded_digest = manifest.get("config_digest")
-    migrations = json.loads(
-        files("pvz_rl").joinpath("data/archive-config-migrations.json").read_text("utf-8")
-    )
-    if recorded_digest != digest(cfg) and migrations.get(recorded_digest) != digest(cfg):
-        raise ValueError("Archive configuration digest does not match")
+    if recorded_digest != digest(cfg):
+        raise ValueError(
+            "Archive configuration digest does not match; record a fresh demonstration"
+        )
+    if manifest.get("observation_schema") != ObservationEncoder(cfg, Rules()).schema():
+        raise ValueError("Archive entity schema does not match; record a fresh demonstration")
     if manifest.get("replay") != file_hash(replay):
         raise ValueError("archive replay hash does not match")
     rows = [json.loads(line) for line in archive.read_text(encoding="utf-8").splitlines() if line]
@@ -151,11 +158,8 @@ def verify_demo(archive: str | Path, replay: str | Path, cfg: dict | None = None
         raise ValueError("initialization requires one completed demonstration archive")
     if any(row.get("decision_index") != i for i, row in enumerate(transitions)):
         raise ValueError("decision indices are not monotonic")
-    if any(
-        len(row.get("observation", [])) != ObservationEncoder(cfg, Rules()).size
-        for row in transitions + finals
-    ):
-        raise ValueError("archive observation size mismatch")
+    for row in transitions + finals:
+        collate_observations(row["observation"])
     archive_check = {
         "decisions": len(transitions),
         "complete": bool(manifest.get("complete") and finals),
@@ -185,7 +189,7 @@ def _training_tensors(archive: Path, cfg: dict):
     rows = [row for row in rows if row.get("record_type") == "transition"]
     if not rows:
         raise ValueError("demonstration archive contains no transitions")
-    observations = torch.tensor([row["observation"] for row in rows], dtype=torch.float32)
+    observations = [row["observation"] for row in rows]
     actions = torch.tensor([row["action"] for row in rows], dtype=torch.long)
     returns = torch.zeros(len(rows), dtype=torch.float32)
     running = 0.0
@@ -195,7 +199,9 @@ def _training_tensors(archive: Path, cfg: dict):
     previous = torch.zeros_like(actions)
     outcomes = torch.zeros(len(rows), 2, dtype=torch.float32)
     if len(rows) > 1:
-        previous[1:] = actions[:-1]
+        previous[1:] = torch.where(
+            torch.tensor([row["accepted"] for row in rows[:-1]]), actions[:-1], 0
+        )
         outcomes[1:, 0] = torch.tensor([float(row["accepted"]) for row in rows[:-1]])
         outcomes[1:, 1] = torch.tensor([float(row["ticks_advanced"]) for row in rows[:-1]])
     return observations, actions, previous, outcomes, returns
@@ -243,7 +249,7 @@ def initialize_demo(
     model = TransformerLSTMPolicy(cfg).to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
     observations, actions, previous, outcomes, returns = _training_tensors(Path(archive), cfg)
-    observations, actions = observations.to(device), actions.to(device)
+    actions = actions.to(device)
     previous, outcomes, returns = previous.to(device), outcomes.to(device), returns.to(device)
     chunk = int(cfg["policy"].get("chunk_length", 256))
     output = Path(output)
@@ -261,7 +267,7 @@ def initialize_demo(
         for start in range(0, len(observations), chunk):
             stop = min(start + chunk, len(observations))
             branch_q, tile_features, contexts, state = model.forward_sequence(
-                observations[start:stop][None],
+                collate_observations(observations[start:stop], device).reshape(1, stop - start),
                 state,
                 previous_actions=previous[start:stop][None],
                 execution_outcomes=outcomes[start:stop][None],
@@ -295,6 +301,7 @@ def initialize_demo(
             {
                 "protocol": CHECKPOINT_PROTOCOL,
                 "recurrent_storage_protocol": RECURRENT_STORAGE_PROTOCOL,
+                "observation_schema": model.layout.schema(),
                 "config_digest": digest(cfg),
                 "config": cfg,
                 "model": model.state_dict(),

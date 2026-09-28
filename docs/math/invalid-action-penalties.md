@@ -1,6 +1,6 @@
 # Ten-way selection and rejection penalties
 
-Research 0.25.0 compares the ten first-level values
+The controller compares the ten first-level values
 
 \[
  Q_0(s), Q_{sunflower}(s),\ldots,Q_{repeater}(s),Q_{dig}(s)
@@ -19,10 +19,11 @@ The development scale is `progress_weight / value_scale = 0.01 / 300`. Thus the
 configured rejected-plant charge is
 
 \[
- p_{plant}=0.001 = 30/30000,
+ p_{plant}=0.003 = 90/30000,
 \]
 
-and the empty-dig charge is
+for the train profile. The demo overlay keeps its user-selected 0.001 charge
+(30/30000). The empty-dig charge in both profiles is
 
 \[
  p_{empty\ dig}=0.0003333333333333333 = 10/30000.
@@ -47,8 +48,8 @@ digs, one-tick advancement, terminal conservation, and CPU/CUDA equality.
 The trajectory stores the selected proposal so its complete-return target learns
 the penalty. Recurrent input stores the resolved execution action separately:
 the proposal after acceptance, or wait (`0`) after rejection, together with
-`accepted` and `ticks_advanced`. The event-memory alternative follows the same
-proposal/execution contract.
+`accepted` and `ticks_advanced`. Rejection therefore produces `(0, 0, 1)`
+for the next recurrent input. The cap does not change branch selection or penalties.
 
 Historical Q records are immutable snapshots of the pre-action vector. Paging
 uses an absolute `start` offset and request identifier; selecting a row stores
@@ -57,11 +58,11 @@ environment, episode, generation, and request all match. Consequently a newer
 network evaluation or a delayed page cannot rewrite a selected decision.
 
 These defaults are experimental costs, not learned calibration. At 100 decisions
-per simulated second, repeatedly selecting an invalid plant costs 0.1 reward per
+per simulated second, repeatedly selecting an invalid plant costs 0.3 reward per
 second, and repeated empty digs cost 1/30 reward per second. A 1,200-second cutoff
 permits at most 120,000 rejected actions because every rejection advances a tick;
-therefore the combined default rejection cost is bounded below by -120 reward
-units (the larger plant charge), not by the net-value economic bounds. Successful
+therefore the combined default rejection cost is bounded below by -360 reward
+units for train (-120 for demo; the larger plant charge), not by the net-value economic bounds. Successful
 instantaneous commands receive neither rejection charge.
 
 The earlier normal-level positive-win/negative-loss reward separation applies

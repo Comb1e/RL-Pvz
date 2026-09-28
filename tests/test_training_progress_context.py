@@ -1,6 +1,6 @@
 from types import SimpleNamespace
 
-from pvz_rl.config import load_event_config as load_config
+from pvz_rl.config import load_config
 from pvz_rl.learning.curriculum import CurriculumState
 from pvz_rl.learning.training import ResearchCallback
 

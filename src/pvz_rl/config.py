@@ -12,7 +12,7 @@ from importlib.resources import files
 from pathlib import Path
 
 from pvz_game.config import PLANT_TYPES, ZOMBIE_TYPES
-from pvz_game.cuda.schema import MOWER_STATES, ZOMBIE_STATES
+from pvz_game.cuda.schema import MOWER_STATES, PLANT_STATES, ZOMBIE_STATES
 
 from pvz_rl.learning.budget import uses_games
 
@@ -51,7 +51,6 @@ def research_config(cfg: dict) -> dict:
     # Optional timing instrumentation never changes compatibility. Backend does.
     result["simulation"] = {"backend": simulator(cfg)}
     result["training"] = copy.deepcopy(result["training"])
-    result["training"].get("performance", {}).pop("token_cache_gib", None)
     return result
 
 
@@ -121,23 +120,21 @@ def load_config(path: str | Path | None = None, *, profile: str = "train") -> di
     return copy.deepcopy(cfg)
 
 
-def load_event_config(path=None):
-    """Explicit event-memory alternative, including archived regression controls."""
-    return load_config(path, profile="event-memory")
-
-
 def load_demo_config(path: str | Path | None = None, *, profile: str = "demo") -> dict:
     """Recording verification profile; execution options are supplied separately."""
     cfg = load_config(path, profile=profile)
-    if cfg["encoding"]["version"] != "event_v8" or cfg["policy"]["kind"] != "transformer_lstm_q_v1":
-        raise ValueError("Human demonstrations require the event_v8 Transformer-LSTM demo profile")
+    if (
+        cfg["encoding"]["version"] != "entity_v1"
+        or cfg["policy"]["kind"] != "transformer_lstm_q_v2"
+    ):
+        raise ValueError("Human demonstrations require the entity_v1 Transformer-LSTM demo profile")
     return copy.deepcopy(cfg)
 
 
 def validate_config(cfg: dict) -> None:
     recurrent = (
-        cfg.get("encoding", {}).get("version") == "event_v8"
-        and cfg.get("policy", {}).get("kind") == "transformer_lstm_q_v1"
+        cfg.get("encoding", {}).get("version") == "entity_v1"
+        and cfg.get("policy", {}).get("kind") == "transformer_lstm_q_v2"
     )
     if cfg["training"].get("validation_schedule", "periodic") not in (
         "periodic",
@@ -146,15 +143,9 @@ def validate_config(cfg: dict) -> None:
         raise ValueError("training.validation_schedule must be periodic or stage_success")
     if simulator(cfg) not in ("cpu", "cuda"):
         raise ValueError("simulation.backend must be cpu or cuda")
-    if not (
-        (
-            cfg["encoding"].get("version") == "event_v7"
-            and cfg.get("policy", {}).get("kind") == "event_sequential_q_v2"
-        )
-        or recurrent
-    ):
+    if not recurrent:
         raise ValueError(
-            "Retired observation/policy format. Start fresh with the bundled train profile; archived reports remain readable; recordings must use the 100 Hz engine."
+            "Retired observation/policy format; entity_v1 requires fresh initialization"
         )
     if cfg["reward"].get("version") != "net_value_v1":
         raise ValueError(
@@ -193,54 +184,33 @@ def validate_config(cfg: dict) -> None:
             raise ValueError(f"reward.{key} must be finite and nonnegative")
     for group, keys in (
         ("reward", ("value_scale",)),
-        ("encoding", ("local_count_scale",)),
         ("training", ("max_grad_norm",)),
     ):
         for key in keys:
             value = cfg[group][key]
             if type(value) not in (int, float) or not math.isfinite(value) or value <= 0:
                 raise ValueError(f"{group}.{key} must be finite and positive")
+    if type(cfg["encoding"].get("max_entities")) is not int or cfg["encoding"]["max_entities"] < 5:
+        raise ValueError("encoding.max_entities must be an integer of at least 5")
     policy = cfg["policy"]
-    if not recurrent:
-        memory = policy.get("memory", {})
-        for key in (
-            "model_width",
-            "layers",
-            "heads",
-            "feedforward_width",
-            "local_tokens",
-            "event_tokens",
-            "summary_tokens",
-            "summary_stride",
-        ):
-            if type(memory.get(key)) is not int or memory[key] < 1:
-                raise ValueError(f"policy.memory.{key} must be a positive integer")
-        if memory["model_width"] % memory["heads"]:
-            raise ValueError("Memory model_width must be divisible by heads")
-        if not math.isfinite(memory.get("gate_bias", float("nan"))):
-            raise ValueError("Memory gate_bias must be finite")
-        for key in ("plant_embedding", "state_embedding"):
-            if type(policy[key]) is not int or policy[key] < 1:
-                raise ValueError(f"policy.{key} must be a positive integer")
-        for key in ("scalar_sizes", "channels"):
-            if not policy[key] or any(type(n) is not int or n < 1 for n in policy[key]):
-                raise ValueError(f"policy.{key} must contain positive integers")
-    if recurrent:
-        for key in (
-            "entity_width",
-            "transformer_layers",
-            "transformer_heads",
-            "transformer_feedforward",
-            "scalar_width",
-            "lstm_hidden",
-            "action_embedding",
-            "outcome_width",
-            "chunk_length",
-        ):
-            if type(policy.get(key)) is not int or policy[key] < 1:
-                raise ValueError(f"policy.{key} must be a positive integer")
-        if policy["entity_width"] % policy["transformer_heads"]:
-            raise ValueError("policy.entity_width must be divisible by transformer_heads")
+    for key in (
+        "entity_width",
+        "transformer_layers",
+        "transformer_heads",
+        "transformer_feedforward",
+        "scalar_width",
+        "lstm_hidden",
+        "action_embedding",
+        "outcome_width",
+        "chunk_length",
+        "encoder_microbatch",
+        "attention_query_chunk",
+        "encoder_token_budget",
+    ):
+        if type(policy.get(key)) is not int or policy[key] < 1:
+            raise ValueError(f"policy.{key} must be a positive integer")
+    if policy["entity_width"] % policy["transformer_heads"]:
+        raise ValueError("policy.entity_width must be divisible by transformer_heads")
     sample_seconds = output_settings(cfg)["logging"]["hardware_sample_seconds"]
     if (
         type(sample_seconds) not in (int, float)
@@ -351,7 +321,7 @@ def validate_config(cfg: dict) -> None:
     if not math.isfinite(visual["final_hold_seconds"]) or visual["final_hold_seconds"] < 0:
         raise ValueError("Visualization final_hold_seconds must be finite and nonnegative")
     env, train = cfg["environment"], cfg["training"]
-    expected_method = "complete_return_lstm_v1" if recurrent else "sequential_q_mc_v2"
+    expected_method = "complete_return_lstm_v1"
     if train.get("method") != expected_method:
         raise ValueError("Training requires a supported complete-return method and fresh models")
     if any(
@@ -375,9 +345,6 @@ def validate_config(cfg: dict) -> None:
         if type(storage.get(key)) is not int or storage[key] < 1:
             raise ValueError(f"training.storage.{key} must be a positive integer")
     performance = train.get("performance", {})
-    cache = performance.get("token_cache_gib", 2)
-    if type(cache) not in (int, float) or not math.isfinite(cache) or cache < 0:
-        raise ValueError("training.performance.token_cache_gib must be finite and nonnegative")
     for key in ("compile_kernels", "telemetry"):
         if type(performance.get(key, False)) is not bool:
             raise ValueError(f"training.performance.{key} must be a boolean")
@@ -387,14 +354,14 @@ def validate_config(cfg: dict) -> None:
         raise ValueError("Unsupported environment.action_timing")
     if env.get("action_timing") == "per_tick" and env["decision_ticks"] != 1:
         raise ValueError("per_tick action timing requires decision_ticks = 1")
-    if cfg["schema_version"] != 1 or (env["rows"], env["cols"], env["bins"]) != (5, 9, 3):
+    if cfg["schema_version"] != 1 or (env["rows"], env["cols"]) != (5, 9):
         raise ValueError("Unsupported research schema/board")
     if tuple(env["plants"]) != PLANT_TYPES or tuple(env["zombies"]) != ZOMBIE_TYPES:
         raise ValueError("Plant/zombie order is fixed by observation and action schema version 1")
     for key, expected in (
         (
             "plant_states",
-            ("ready", "arming", "armed", "fusing", "digesting", "exploding", "detonating"),
+            PLANT_STATES,
         ),
         ("zombie_states", ZOMBIE_STATES),
         ("mower_states", MOWER_STATES),
@@ -416,7 +383,7 @@ def validate_config(cfg: dict) -> None:
             raise ValueError(f"{key} must be a positive integer")
     if train.get("discount_clock") != "simulation_ticks" or train["gamma"] != 1:
         raise ValueError("Complete actual returns require gamma 1; start fresh")
-    if recurrent and train["batch_size"] % policy["chunk_length"]:
+    if train["batch_size"] % policy["chunk_length"]:
         raise ValueError("Recurrent batch_size must be a positive multiple of chunk_length")
     if train["batch_size"] > 1024:
         raise ValueError("Bounded minibatches must not exceed 1024")

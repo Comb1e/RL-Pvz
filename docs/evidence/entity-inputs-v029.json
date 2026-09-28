@@ -1,0 +1,366 @@
+{
+  "device": "NVIDIA GeForce RTX 4070 Laptop GPU",
+  "rows": [
+    {
+      "cap": 256,
+      "fitting": {
+        "observations": 384,
+        "observations_per_second": 1490.8898477000928,
+        "peak_allocated_mib": 45.6689453125,
+        "peak_reserved_mib": 64.0,
+        "seconds": 0.25756430000001274
+      },
+      "inference": {
+        "observations": 384,
+        "observations_per_second": 7570.186869264254,
+        "peak_allocated_mib": 38.55322265625,
+        "peak_reserved_mib": 60.0,
+        "seconds": 0.050725300000067364
+      },
+      "omitted": {
+        "plants": 0,
+        "projectiles": 0,
+        "total": 0,
+        "zombies": 0
+      },
+      "present": 5,
+      "retained": 5
+    },
+    {
+      "cap": 256,
+      "fitting": {
+        "observations": 384,
+        "observations_per_second": 1221.7132810738744,
+        "peak_allocated_mib": 45.99267578125,
+        "peak_reserved_mib": 80.0,
+        "seconds": 0.3143126999998458
+      },
+      "inference": {
+        "observations": 384,
+        "observations_per_second": 6868.36527540697,
+        "peak_allocated_mib": 37.94189453125,
+        "peak_reserved_mib": 76.0,
+        "seconds": 0.055908499999986816
+      },
+      "omitted": {
+        "plants": 0,
+        "projectiles": 0,
+        "total": 0,
+        "zombies": 0
+      },
+      "present": 64,
+      "retained": 64
+    },
+    {
+      "cap": 256,
+      "fitting": {
+        "observations": 384,
+        "observations_per_second": 685.9908870398191,
+        "peak_allocated_mib": 47.79736328125,
+        "peak_reserved_mib": 84.0,
+        "seconds": 0.5597741999999926
+      },
+      "inference": {
+        "observations": 384,
+        "observations_per_second": 4848.815449514237,
+        "peak_allocated_mib": 39.15966796875,
+        "peak_reserved_mib": 80.0,
+        "seconds": 0.0791946000003918
+      },
+      "omitted": {
+        "plants": 0,
+        "projectiles": 0,
+        "total": 0,
+        "zombies": 0
+      },
+      "present": 256,
+      "retained": 256
+    },
+    {
+      "cap": 256,
+      "fitting": {
+        "observations": 384,
+        "observations_per_second": 680.0988552018786,
+        "peak_allocated_mib": 47.79736328125,
+        "peak_reserved_mib": 84.0,
+        "seconds": 0.5646238000003905
+      },
+      "inference": {
+        "observations": 384,
+        "observations_per_second": 5204.436782358381,
+        "peak_allocated_mib": 39.15966796875,
+        "peak_reserved_mib": 80.0,
+        "seconds": 0.07378319999997984
+      },
+      "omitted": {
+        "plants": 0,
+        "projectiles": 256,
+        "total": 256,
+        "zombies": 0
+      },
+      "present": 512,
+      "retained": 256
+    },
+    {
+      "cap": 256,
+      "fitting": {
+        "observations": 384,
+        "observations_per_second": 684.604859090253,
+        "peak_allocated_mib": 47.79736328125,
+        "peak_reserved_mib": 84.0,
+        "seconds": 0.5609074999997574
+      },
+      "inference": {
+        "observations": 384,
+        "observations_per_second": 4896.972293869235,
+        "peak_allocated_mib": 39.15966796875,
+        "peak_reserved_mib": 80.0,
+        "seconds": 0.07841579999967507
+      },
+      "omitted": {
+        "plants": 0,
+        "projectiles": 768,
+        "total": 768,
+        "zombies": 0
+      },
+      "present": 1024,
+      "retained": 256
+    },
+    {
+      "cap": 512,
+      "fitting": {
+        "observations": 384,
+        "observations_per_second": 1517.4854633588848,
+        "peak_allocated_mib": 45.6689453125,
+        "peak_reserved_mib": 76.0,
+        "seconds": 0.2530501999999615
+      },
+      "inference": {
+        "observations": 384,
+        "observations_per_second": 7636.821411734203,
+        "peak_allocated_mib": 37.6181640625,
+        "peak_reserved_mib": 72.0,
+        "seconds": 0.050282700000025216
+      },
+      "omitted": {
+        "plants": 0,
+        "projectiles": 0,
+        "total": 0,
+        "zombies": 0
+      },
+      "present": 5,
+      "retained": 5
+    },
+    {
+      "cap": 512,
+      "fitting": {
+        "observations": 384,
+        "observations_per_second": 1289.44518598839,
+        "peak_allocated_mib": 45.99267578125,
+        "peak_reserved_mib": 80.0,
+        "seconds": 0.2978024999997615
+      },
+      "inference": {
+        "observations": 384,
+        "observations_per_second": 7468.143699549846,
+        "peak_allocated_mib": 37.94189453125,
+        "peak_reserved_mib": 76.0,
+        "seconds": 0.051418399999874964
+      },
+      "omitted": {
+        "plants": 0,
+        "projectiles": 0,
+        "total": 0,
+        "zombies": 0
+      },
+      "present": 64,
+      "retained": 64
+    },
+    {
+      "cap": 512,
+      "fitting": {
+        "observations": 384,
+        "observations_per_second": 695.4328354049144,
+        "peak_allocated_mib": 47.79736328125,
+        "peak_reserved_mib": 84.0,
+        "seconds": 0.5521740999997746
+      },
+      "inference": {
+        "observations": 384,
+        "observations_per_second": 4883.6943112535055,
+        "peak_allocated_mib": 39.15966796875,
+        "peak_reserved_mib": 80.0,
+        "seconds": 0.07862900000009176
+      },
+      "omitted": {
+        "plants": 0,
+        "projectiles": 0,
+        "total": 0,
+        "zombies": 0
+      },
+      "present": 256,
+      "retained": 256
+    },
+    {
+      "cap": 512,
+      "fitting": {
+        "observations": 384,
+        "observations_per_second": 247.42071953938225,
+        "peak_allocated_mib": 49.26611328125,
+        "peak_reserved_mib": 84.0,
+        "seconds": 1.552012300000115
+      },
+      "inference": {
+        "observations": 384,
+        "observations_per_second": 2158.153295202442,
+        "peak_allocated_mib": 40.62841796875,
+        "peak_reserved_mib": 80.0,
+        "seconds": 0.177929899999981
+      },
+      "omitted": {
+        "plants": 0,
+        "projectiles": 0,
+        "total": 0,
+        "zombies": 0
+      },
+      "present": 512,
+      "retained": 512
+    },
+    {
+      "cap": 512,
+      "fitting": {
+        "observations": 384,
+        "observations_per_second": 244.28040336805452,
+        "peak_allocated_mib": 49.26611328125,
+        "peak_reserved_mib": 84.0,
+        "seconds": 1.5719639999997526
+      },
+      "inference": {
+        "observations": 384,
+        "observations_per_second": 2135.642199844023,
+        "peak_allocated_mib": 40.62841796875,
+        "peak_reserved_mib": 80.0,
+        "seconds": 0.1798054000000775
+      },
+      "omitted": {
+        "plants": 0,
+        "projectiles": 512,
+        "total": 512,
+        "zombies": 0
+      },
+      "present": 1024,
+      "retained": 512
+    }
+  ],
+  "scope": "Warmed synthetic inference and short fitting; excludes simulation; no quality estimate",
+  "torch_version": "2.8.0+cu128",
+  "total_vram_mib": 8187.5,
+  "collection": {
+    "cohort": {
+      "collection_seconds": 2.9386194000021533,
+      "device_compute_seconds": 8.249849148496985,
+      "exploratory_changes": 6231,
+      "fit_seconds": 8.251706999998078,
+      "optimization_seconds": 8.251706999998078,
+      "peak_cuda_memory_bytes": 100076544,
+      "planting_samples": 128,
+      "prefit_errors": {
+        "dig": {
+          "count": 12672,
+          "mse": 4.504724299404689,
+          "signed_error": 2.122404901894054,
+          "tile_mse": 3.6719984302120996,
+          "tile_signed_error": 1.9162221783425217
+        },
+        "plant": {
+          "count": 128,
+          "mse": 4.455000629143797,
+          "signed_error": 2.110687240958214,
+          "tile_mse": 3.717263774289618,
+          "tile_signed_error": 1.92801379453158
+        },
+        "wait": {
+          "count": 0,
+          "mse": null,
+          "signed_error": null,
+          "tile_mse": null,
+          "tile_signed_error": null
+        }
+      },
+      "preparation_seconds": 0.0,
+      "q_optimizer_steps": 1,
+      "returns_seconds": 0.0030328999996527273,
+      "simulation_speed": 43.55786938584364,
+      "species_counts": [
+        0,
+        0,
+        0,
+        128,
+        0,
+        0,
+        0,
+        0
+      ],
+      "species_exploration_coins": 0,
+      "tile_exploration_coins": 6385,
+      "transfer_stream_seconds": 0.0,
+      "transfer_wait_seconds": 0.0,
+      "transitions": 12800,
+      "transitions_per_second": 1143.5351673201567,
+      "window_seconds": 11.193359299999884
+    },
+    "collection_seconds": 2.9386194000021533,
+    "completed_games": 128,
+    "cuda_peak_allocated_mib": 95.4404296875,
+    "cuda_peak_reserved_mib": 144.0,
+    "cupy_pool_reserved_mib": 128.599609375,
+    "decisions_per_second": 1079.9472094805367,
+    "device_phase_seconds": {},
+    "games_per_minute": 647.968325688322,
+    "host_phase_seconds": {
+      "scenario_preparation": 0.6570753000000877,
+      "simulation_features": 0.24994849999939106,
+      "transfers": 0.014657499998520507
+    },
+    "last_collection_seconds": 2.9386194000021533,
+    "last_optimization_seconds": 8.251706999998078,
+    "last_window_seconds": 11.193359299999884,
+    "live_view": null,
+    "optimization_seconds": 8.251706999998078,
+    "overlap_seconds": 0.0,
+    "policy_sha256": "9c17b7626f6666b43dcfa1372edab684313da6f7482641c2f74b5448b61906f0",
+    "queue_wait_seconds": 0.0,
+    "scope": "128 slots, 1-second cutoff, one fitting pass; short mechanical control, no quality estimate",
+    "seconds": 11.852431199999955,
+    "setup_seconds": 0.7952744999997776,
+    "simulation_ticks_per_second": 1079.9472094805367,
+    "state": "complete",
+    "steps": 12800,
+    "warmup_seconds": 12.281982599999992,
+    "warmup_steps": 12800,
+    "window_seconds": 11.193359299999884
+  },
+  "default_chunk": {
+    "device": "NVIDIA GeForce RTX 4070 Laptop GPU",
+    "slots": 128,
+    "collected_decisions": 384,
+    "synthetic_chunk_decisions": 1024,
+    "completed_games": 0,
+    "optimizer_updates": 0,
+    "peak_torch_allocated_mib": 46.32421875
+  },
+  "selection": {
+    "max_entities": 256,
+    "reason": "512 roughly triples dense fitting cost on the measured laptop GPU; both fit in VRAM. Prioritize mowers, plants, zombies, then projectiles."
+  },
+  "validation": {
+    "unique_tests_passed": 537,
+    "execution": "Full-suite run passed 489 cases; corrected two stale test-fixture assertions and verified the remaining 48 cases (47 plus the final report case). No production changes between these runs.",
+    "focused_tests_passed": 92,
+    "ruff": "passed",
+    "pip_check": "passed",
+    "sdist_and_wheel_build": "passed",
+    "documentation_links": "passed",
+    "formal_training": false
+  }
+}

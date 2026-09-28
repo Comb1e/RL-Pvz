@@ -8,8 +8,9 @@ regression, not a bootstrapped recurrent DQN or recurrent PPO implementation.
 
 The recurrent objective, group normalization, truncated gradients and exploration
 probabilities are specified in [recurrent training](math/recurrent-training.md).
-The event-memory model remains an explicit alternative configuration with its
-own model and optimizer protocols. Weights cannot cross those model families.
+The [entity schema](math/entity-inputs.md) preserves individual public facts before
+the configured cap. The retired event-memory architecture and old aggregate
+checkpoints are unsupported; fresh models and demonstrations are required.
 
 Curriculum progression is easy → standard → shared. Net-value reward coefficients,
 rejection penalties and the pinned game's 100 Hz mechanics are preserved. The

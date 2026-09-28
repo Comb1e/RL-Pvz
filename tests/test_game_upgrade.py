@@ -11,6 +11,7 @@ from pvz_game.replay import Playback, Recorder, read_recording, write_recording
 
 from pvz_rl.cli import main
 from pvz_rl.config import validate_config
+from pvz_rl.envs.encoding import observations_equal
 from pvz_rl.envs.env import PvZEnv
 from pvz_rl.evaluation.runner import evaluate
 from pvz_rl.learning.training import load_policy
@@ -119,7 +120,7 @@ def test_compact_recording_metadata_and_input_isolation(cfg, tmp_path):
     )
     a, _ = left.reset(seed=1)
     b, _ = right.reset(seed=1)
-    np.testing.assert_array_equal(a, b)
+    assert observations_equal(a, b)
     assert left.game.state_hash() == right.game.state_hash()
     np.testing.assert_array_equal(left.action_masks(), right.action_masks())
 
@@ -177,7 +178,7 @@ def test_legacy_sidecar_and_outcome_precedence(tmp_path, natural):
 def test_default_training_records_without_pygame_or_ffmpeg(tmp_path):
     script = r"""
 import builtins, sys
-from pvz_rl.config import load_event_config as load_config
+from pvz_rl.config import load_config
 from pvz_rl.learning.training import train
 cfg = load_config()
 cfg['visualization']['live_enabled'] = False
@@ -186,6 +187,7 @@ assert cfg['visualization']['demos'] and not cfg['visualization']['videos']
 cfg['training']['validation_schedule'] = 'periodic'
 cfg['environment']['cutoff_seconds'] = 1
 cfg['training'].update(budget_unit='decisions', device='cuda', total_steps=64, batch_size=32, n_envs=1, n_epochs=1, hidden_sizes=[32,32], eval_interval=64)
+cfg['policy']['chunk_length'] = 16
 cfg['visualization']['ffmpeg'] = 'missing-ffmpeg'
 original = builtins.__import__
 def checked(name, *args, **kwargs):

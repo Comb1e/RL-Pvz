@@ -33,16 +33,15 @@ decision_ticks = 1
 cutoff_seconds = 1200
 rows = 5
 cols = 9
-bins = 3
 plants = ["sunflower", "peashooter", "wall_nut", "cherry_bomb", "potato_mine", "snow_pea", "chomper", "repeater"]
 zombies = ["basic", "flag", "conehead", "buckethead", "pole_vaulting"]
-plant_states = ["ready", "arming", "armed", "fusing", "digesting", "exploding", "detonating"]
-zombie_states = ["walking", "carrying_pole", "vaulting", "biting", "dead"] # Engine schema only; not policy inputs.
+plant_states = ["ready", "arming", "armed", "fusing", "digesting", "exploding", "detonating", "rising", "biting", "biting_got_one", "recovering"]
+zombie_states = ["walking", "carrying_pole", "vaulting", "biting", "dead"]
 mower_states = ["ready", "moving", "spent"]
 
 [encoding]
-version = "event_v8"
-local_count_scale = 5
+version = "entity_v1"
+max_entities = 256 # RTX 4070 Laptop: lower attention cost than 512; see docs/math/entity-inputs.md.
 count_scale = 75
 wave_scale = 15
 
@@ -87,7 +86,6 @@ ram_gib = 6
 block_rows = 32768
 
 [training.performance]
-token_cache_gib = 2
 compile_kernels = true
 telemetry = true
 
@@ -129,17 +127,20 @@ curriculum = true
 hybrid = false
 
 [policy]
-kind = "transformer_lstm_q_v1"
+kind = "transformer_lstm_q_v2"
 action_distribution = "sequential_q_unmasked_penalty_v1"
-entity_width = 128
+entity_width = 32
 transformer_layers = 2
 transformer_heads = 4
-transformer_feedforward = 256
+transformer_feedforward = 64
 scalar_width = 64
 lstm_hidden = 256
 action_embedding = 32
 outcome_width = 16
 chunk_length = 256
+encoder_microbatch = 16
+attention_query_chunk = 64
+encoder_token_budget = 4096
 
 [training.demo]
 passes = 20
@@ -173,52 +174,6 @@ early_dig_seconds = 5
 # to the base training profile so shared parameters have one source of truth.
 [profiles.demo.reward]
 invalid_plant_penalty = 0.001
-
-[profiles."event-memory"]
-remove = [
-  "training.demo",
-  "policy.entity_width",
-  "policy.transformer_layers",
-  "policy.transformer_heads",
-  "policy.transformer_feedforward",
-  "policy.scalar_width",
-  "policy.lstm_hidden",
-  "policy.action_embedding",
-  "policy.outcome_width",
-  "policy.chunk_length",
-]
-
-[profiles."event-memory".encoding]
-version = "event_v7"
-
-[profiles."event-memory".reward]
-invalid_plant_penalty = 0.001
-
-[profiles."event-memory".training]
-method = "sequential_q_mc_v2"
-
-[profiles."event-memory".training.exploration]
-epsilon_start = 0.1
-epsilon_floor = 0.001
-decay_games = 3000
-
-[profiles."event-memory".policy]
-kind = "event_sequential_q_v2"
-plant_embedding = 8
-state_embedding = 4
-scalar_sizes = [64]
-channels = [32, 32]
-
-[profiles."event-memory".policy.memory]
-model_width = 128
-layers = 2
-heads = 4
-feedforward_width = 256
-local_tokens = 8
-event_tokens = 32
-summary_tokens = 8
-summary_stride = 100
-gate_bias = 2.0
 
 [profiles.gpu_defaults]
 simulator = "cuda"

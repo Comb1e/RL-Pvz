@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 import torch
 
-from pvz_rl.config import load_event_config as load_config
+from pvz_rl.config import load_config
 from pvz_rl.envs.env import PvZEnv
 from pvz_rl.evaluation.runner import evaluate
 from pvz_rl.learning.curriculum import CurriculumState
@@ -29,6 +29,7 @@ def small_cfg(device="cuda", backend="cuda", profile="E"):
         total_games=12,
         max_minutes=2,
     )
+    cfg["policy"]["chunk_length"] = 16
     return cfg
 
 
@@ -142,7 +143,7 @@ def test_resume_keeps_cumulative_time_schedule_and_optimizer(tmp_path, monkeypat
         train(cfg, "masked", 101, first, validation_limit=1)
     interrupted, _ = load_policy(first / "interrupted.zip")
     assert interrupted.num_timesteps == 2 * 100  # Two complete one-second waiting games.
-    assert interrupted.optimizer_protocol == "sequential_q_mc_v2"
+    assert interrupted.optimizer_protocol == "complete_return_lstm_v1"
     assert interrupted.policy.optimizer.state
     elapsed = read_json(first / "status.json")["time_budget"]["elapsed_seconds"]
     monkeypatch.setattr(ResearchCallback, "_on_rollout_start", original)
@@ -284,7 +285,7 @@ def test_retired_checkpoint_rejected_before_deserialization(smoke_cfg, tmp_path,
 
     from pvz_rl.config import validate_config
     from pvz_rl.envs.env import PvZEnv
-    from pvz_rl.learning.cuda_q import CudaSequentialQ
+    from pvz_rl.learning.recurrent_q import CudaRecurrentQ
     from pvz_rl.learning.training import initial_weights, load_policy
 
     old = copy.deepcopy(smoke_cfg)
@@ -316,7 +317,7 @@ def test_retired_checkpoint_rejected_before_deserialization(smoke_cfg, tmp_path,
     for operation in (
         lambda: load_policy(archive_path),
         lambda: initial_weights(archive_path, smoke_cfg),
-        lambda: CudaSequentialQ.load(archive_path),
+        lambda: CudaRecurrentQ.load(archive_path),
         lambda: validate_config(old),
         lambda: PvZEnv(old),
     ):

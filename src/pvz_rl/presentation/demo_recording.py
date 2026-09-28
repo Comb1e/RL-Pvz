@@ -13,74 +13,76 @@ from pvz_rl.config import digest, load_demo_config
 from pvz_rl.envs.action_timing import ActionPhaseGame
 from pvz_rl.envs.actions import ActionCodec
 from pvz_rl.envs.actions import ActionSchema as A
-from pvz_rl.envs.encoding import ObservationEncoder
+from pvz_rl.envs.encoding import (
+    ObservationEncoder,
+    collate_observations,
+    observation_json,
+    observations_equal,
+)
 from pvz_rl.envs.rewards import reward_parts
 from pvz_rl.presentation.recordings import ActionPhaseRecorder
 from pvz_rl.provenance import append_jsonl, file_hash, write_json
 
-ARCHIVE_PROTOCOL = "pvz-rl/transition-archive-v1"
-HISTORY_PROTOCOL = "pvz-rl/compact-history-v1"
+ARCHIVE_PROTOCOL = "pvz-rl/transition-archive-v2"
+HISTORY_PROTOCOL = "pvz-rl/compact-history-v2"
 
 
-def _observation_vector(encoder: ObservationEncoder, observation) -> list[float]:
-    return encoder.encode(observation).astype(np.float32).tolist()
+def _encode_observation(encoder: ObservationEncoder, observation) -> dict:
+    return observation_json(encoder.encode(observation))
 
 
 class CompactHistoryBuilder:
-    """Build a derived event index without changing the complete sequence."""
+    """Derived event index over public fields; entity order/IDs have no meaning."""
 
-    def __init__(self, *, cooldown_start: int = 286):
-        self.cooldown_start = cooldown_start
+    @staticmethod
+    def changes(before, after):
+        reasons = []
+        left = np.asarray(before["entities"], dtype=np.int32).reshape(-1, 11)
+        right = np.asarray(after["entities"], dtype=np.int32).reshape(-1, 11)
+        for name, lo, hi in (
+            ("mower_state", 16, 16),
+            ("plant_state", 1, 8),
+            ("zombie_state", 9, 13),
+            ("projectile_state", 14, 15),
+        ):
+            a = left[(left[:, 0] >= lo) & (left[:, 0] <= hi)]
+            b = right[(right[:, 0] >= lo) & (right[:, 0] <= hi)]
+            # Changes in movement alone stay quiet; exact positions remain in archives.
+            fields = [0, 1, 2, 4, 5, 8, 9, 10]
+            if sorted(map(tuple, a[:, fields])) != sorted(map(tuple, b[:, fields])):
+                reasons.append(name)
+        a, b = np.asarray(before["globals"]), np.asarray(after["globals"])
+        if np.any(a[[0, 2, 3, 4, 5, 14, 15, 16, 17]] != b[[0, 2, 3, 4, 5, 14, 15, 16, 17]]):
+            reasons.append("sun_or_global")
+        if np.any(a[6:14] != b[6:14]):
+            reasons.append("cooldown_decrement")
+        return reasons
 
-    def build(
-        self, records: list[dict], final_observation: list[float] | None = None
-    ) -> list[dict]:
-        history: list[dict] = []
-        previous = None
-        previous_dig = None
+    def build(self, records, final_observation=None):
+        history, previous, previous_dig = [], None, None
         for row in records:
-            obs = np.asarray(row["observation"], dtype=np.float32)
-            action = int(row["action"])
-            reasons: list[str] = []
-            if action and action < A.dig_start:
+            action, obs = int(row["action"]), row["observation"]
+            reasons = []
+            if 0 < action < A.dig_start:
                 reasons.append("plant_attempt")
-            is_dig = action >= A.dig_start
-            if is_dig and (previous_dig != action or previous is None):
+            if action >= A.dig_start and previous_dig != action:
                 reasons.append("dig_attempt")
             if previous is not None:
-                diff = np.flatnonzero(obs != previous)
-                if np.any((diff < 135)):
-                    reasons.append("plant_state")
-                if np.any((135 <= diff) & (diff < 270)):
-                    reasons.append("zombie_state")
-                if np.any((diff == 270) | ((272 <= diff) & (diff < 281))):
-                    reasons.append("sun_or_global")
-                if np.any((281 <= diff) & (diff < 286)):
-                    reasons.append("mower_state")
-                if np.any(diff >= self.cooldown_start):
-                    reasons.append("cooldown_decrement")
+                reasons += self.changes(previous, obs)
             if reasons:
-                history.append({"decision_index": row["decision_index"], "reasons": reasons})
-            previous = obs
-            previous_dig = action if is_dig else None
-        if final_observation is not None and records:
-            final = np.asarray(final_observation, dtype=np.float32)
-            if not np.array_equal(final, previous):
-                diff = np.flatnonzero(final != previous)
-                reasons = ["final_observation"]
-                if np.any(diff < 135):
-                    reasons.append("plant_state")
-                if np.any((135 <= diff) & (diff < 270)):
-                    reasons.append("zombie_state")
-                if np.any((diff == 270) | ((272 <= diff) & (diff < 281))):
-                    reasons.append("sun_or_global")
-                if np.any((281 <= diff) & (diff < 286)):
-                    reasons.append("mower_state")
-                if np.any(diff >= self.cooldown_start):
-                    reasons.append("cooldown_decrement")
-                history.append(
-                    {"decision_index": records[-1]["decision_index"] + 1, "reasons": reasons}
+                history.append(dict(decision_index=row["decision_index"], reasons=reasons))
+            previous, previous_dig = obs, action if action >= A.dig_start else None
+        if (
+            final_observation is not None
+            and records
+            and not observations_equal(previous, final_observation)
+        ):
+            history.append(
+                dict(
+                    decision_index=records[-1]["decision_index"] + 1,
+                    reasons=["final_observation", *self.changes(previous, final_observation)],
                 )
+            )
         return history
 
 
@@ -101,7 +103,7 @@ class TransitionArchive:
         self.encoder = ObservationEncoder(cfg, Rules())
         self.episode_id = episode_id
         self.records: list[dict] = []
-        self.final_observation: list[float] | None = None
+        self.final_observation: dict | None = None
         self.closed = False
         if self.path.exists():
             raise FileExistsError(f"recording output already exists: {self.path}")
@@ -116,7 +118,7 @@ class TransitionArchive:
             "outcome": outcome,
             "episode_id": self.episode_id,
             "decisions": len(self.records),
-            "observation_size": self.encoder.size,
+            "observation_schema": self.encoder.schema(),
             "config_digest": digest(self.cfg),
             "engine": {
                 "commit": self.cfg["engine_commit"],
@@ -160,15 +162,16 @@ class TransitionArchive:
             "decision_index": index,
             "tick": int(tick),
             "ticks_advanced": int(ticks_advanced),
-            "observation": _observation_vector(self.encoder, observation),
+            "observation": _encode_observation(self.encoder, observation),
+            "entity_truncation": dict(self.encoder.last_truncation),
             "action": action,
+            "executed_action": action if accepted else 0,
             "accepted": bool(accepted),
             "rejection_reason": rejection_reason,
             "reward_parts": dict(reward),
             "terminal": terminal,
         }
-        if len(row["observation"]) != self.encoder.size:
-            raise ValueError("encoded observation has the wrong protocol size")
+        collate_observations(row["observation"])
         append_jsonl(self._stream, row)
         self.records.append(row)
         return row
@@ -180,7 +183,7 @@ class TransitionArchive:
             raise ValueError("final observation tick precedes the last decision")
         if outcome not in ("won", "lost", "truncated", "interrupted", "running"):
             raise ValueError("unsupported archive outcome")
-        self.final_observation = _observation_vector(self.encoder, observation)
+        self.final_observation = _encode_observation(self.encoder, observation)
         append_jsonl(
             self._stream,
             {
@@ -194,9 +197,7 @@ class TransitionArchive:
         )
         self._stream.flush()
         self._stream.close()
-        history = CompactHistoryBuilder(
-            cooldown_start=self.encoder.slices["cooldowns"].start
-        ).build(self.records, self.final_observation)
+        history = CompactHistoryBuilder().build(self.records, self.final_observation)
         write_json(self.history_path, {"protocol": HISTORY_PROTOCOL, "events": history})
         replay_hash = file_hash(replay_path) if replay_path and Path(replay_path).exists() else None
         self._manifest(complete=True, outcome=outcome, replay=replay_hash)
@@ -219,8 +220,7 @@ class TransitionArchive:
         if any(row.get("decision_index") != i for i, row in enumerate(transitions)):
             raise ValueError("decision indices are not monotonic")
         for row in transitions + finals:
-            if len(row["observation"]) != self.encoder.size:
-                raise ValueError("archive observation size mismatch")
+            collate_observations(row["observation"])
         if finals and finals[-1]["decision_index"] != len(transitions):
             raise ValueError("final observation index mismatch")
         return {

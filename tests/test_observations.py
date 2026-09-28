@@ -1,4 +1,4 @@
-"""Independent controls for the single event_v7 public observation layout."""
+"""Independent information, truncation, public-boundary and CPU/CUDA controls."""
 
 from dataclasses import replace
 
@@ -6,16 +6,15 @@ import numpy as np
 import pytest
 import torch
 from pvz_game import Game, InitialPlant, LevelSpec, Rules, Spawn
-from pvz_game.types import ZombieView
+from pvz_game.cuda.schema import MOWER_STATES, PLANT_STATES, ZOMBIE_STATES
+from pvz_game.types import ProjectileView, ZombieView
 
-from pvz_rl.config import load_event_config as load_config
-from pvz_rl.envs.encoding import ObservationEncoder
+from pvz_rl.config import load_config
+from pvz_rl.envs.encoding import ObservationEncoder, collate_observations, observations_equal
 
 
 def public_board():
-    game = Game()
-    game.reset(LevelSpec("public", (Spawn(10000, "basic", 0),)))
-    return game.observe()
+    return Game().reset(LevelSpec("public", (Spawn(10000, "basic", 0),)))
 
 
 def zombie(kind="basic", row=0, x=1000, **changes):
@@ -24,276 +23,189 @@ def zombie(kind="basic", row=0, x=1000, **changes):
         zombie_type=kind,
         row=row,
         x=x,
-        health=200,
+        health=270,
         armor=0,
         state="walking",
         slow_ticks=0,
         has_pole=False,
         timer_ticks=0,
+        headless=False,
     )
     return ZombieView(**(values | changes))
 
 
-def test_layout_counts_assets_distances_and_empty_regions():
+def test_old_region_alias_is_separated_and_ids_order_are_irrelevant():
     encoder = ObservationEncoder(load_config(), Rules())
-    assert encoder.size == 286 and encoder.zombie_width == 9
-    assert [(s.start, s.stop) for s in encoder.slices.values()] == [
-        (0, 135),
-        (135, 270),
-        (270, 281),
-        (281, 286),
-    ]
-    # Literal values use the pinned house/spawn positions -500/9500. A nearer
-    # spent pole must not hide the next carrier whose pole is still unused.
-    zombies = (
-        zombie(x=1000),
-        zombie("flag", x=2000),
-        zombie("conehead", x=1500, armor=400),
-        zombie("buckethead", x=2200, armor=1100),
-        zombie("pole_vaulting", x=1200, health=400),
-        zombie("pole_vaulting", x=1700, health=400, has_pole=True),
-        zombie("pole_vaulting", x=2300, health=400, has_pole=True),
+    board = public_board()
+    a = replace(board, zombies=(zombie(x=1000, health=100), zombie(x=2000, health=200)))
+    b = replace(board, zombies=(zombie(x=1000, health=200), zombie(x=2000, health=100)))
+
+    # Independent old aggregate: same type count, total HP/armor and nearest x.
+    def aggregate(obs):
+        return len(obs.zombies), sum(z.health for z in obs.zombies), min(z.x for z in obs.zombies)
+
+    assert aggregate(a) == aggregate(b)
+    assert not observations_equal(encoder.encode(a), encoder.encode(b))
+    changed = replace(a, level="hidden", zombies=tuple(replace(z, id=987) for z in a.zombies[::-1]))
+    assert observations_equal(encoder.encode(a), encoder.encode(changed))
+    encoded = encoder.encode(a)
+    np.testing.assert_array_equal(encoded["entities"][:5, 0], 16)
+    np.testing.assert_array_equal(encoded["entities"][5:, [3, 4]], [[1000, 100], [2000, 200]])
+    assert encoder.space.contains(encoded)
+
+
+@pytest.mark.parametrize("state", ZOMBIE_STATES)
+@pytest.mark.parametrize("kind", list(Rules().zombies))
+def test_zombie_fields_types_states_and_boundaries(kind, state):
+    e = ObservationEncoder(load_config(), Rules())
+    z = zombie(
+        kind,
+        4,
+        -500,
+        state=state,
+        armor=700,
+        health=70,
+        slow_ticks=300,
+        timer_ticks=11,
+        has_pole=True,
+        headless=True,
     )
-    obs = replace(public_board(), zombies=zombies)
-    encoded = encoder.encode(obs)
-    grid = encoded[135:270].reshape(5, 3, 9)
+    raw = e.encode(replace(public_board(), zombies=(z,)))["entities"][-1]
+    np.testing.assert_array_equal(
+        raw, [e.zombies[kind], e.states["zombie:" + state], 4, -500, 70, 700, 11, 300, 1, 1, 0]
+    )
+    batch = collate_observations(dict(entities=[raw], globals=[0] * 18))
+    _, _, numeric = e.normalize(batch)
     np.testing.assert_allclose(
-        grid[0, 0],
-        [0.2, 0.2, 0.2, 0.2, 0.6, 0.8, 1500 / 5500, 0.15, 0.22],
+        numeric[0, 0].numpy(),
+        [1, 0, 70 / Rules().zombies[kind]["health"], 700 / 1100, 0.11, 3, 1, 1, 0],
         atol=1e-7,
     )
-    np.testing.assert_array_equal(grid[1:, :, :7], 0)
-    np.testing.assert_array_equal(grid[1:, :, 7:], -1)
-    np.testing.assert_array_equal(
-        encoded, encoder.encode(replace(obs, zombies=tuple(reversed(zombies))))
-    )
-    # Crowds are sums, never clipped to one, even when IDs repeat.
-    crowded = encoder.encode(replace(obs, zombies=zombies * 20))[135:270].reshape(5, 3, 9)
-    np.testing.assert_allclose(crowded[0, 0, :7], grid[0, 0, :7] * 20, atol=1e-6)
-    np.testing.assert_array_equal(crowded[0, 0, 7:], grid[0, 0, 7:])
-    spent = tuple(replace(z, has_pole=False) for z in zombies)
-    after = encoder.encode(replace(obs, zombies=spent))
-    assert np.flatnonzero(encoded != after).tolist() == [143]
-    assert after[143] == -1
 
 
-def test_globals_and_removed_fields_never_admit_events():
-    from pvz_game.types import ProjectileView
-
-    from pvz_rl.policy.event_memory import EventMemory
-
-    cfg, rules = load_config(), Rules()
-    encoder = ObservationEncoder(cfg, rules)
-    base = public_board()
-    obs = replace(
-        base,
-        sun=600,
-        elapsed_seconds=120,
-        wave=3,
-        total_waves=6,
-        counts=replace(base.counts, initial_total=150, spawned=40, defeated=15),
-        mowers=tuple(
-            replace(m, state="spent" if m.row in (1, 4) else "ready") for m in base.mowers
-        ),
-    )
-    expected = encoder.encode(obs)
-    np.testing.assert_allclose(expected[270:281], [3, 0.1, 0.2, 0.4, 2, 0.2, 0, 1, 0, 0, 1])
-    changed = replace(
-        obs,
-        counts=replace(obs.counts, spawned=100),
-        projectiles=(ProjectileView(999, 3, 4000, 1800, True),),
-        mowers=tuple(
-            replace(m, x=m.x + 2000, state="moving" if m.state == "ready" else m.state)
-            for m in reversed(obs.mowers)
-        ),
-    )
-    np.testing.assert_array_equal(encoder.encode(changed), expected)
-    memory = EventMemory(cfg, rules, 1, "cpu")
-    masks = torch.ones(1, 406, dtype=torch.bool)
-    for step, public in enumerate((obs, changed)):
-        memory.observe(
-            torch.tensor(encoder.encode(public)[None]),
-            masks,
-            torch.zeros(1),
-            torch.tensor([step == 0]),
-            torch.tensor([step]),
-        )
-    assert not memory.event_flags[0, -1]
-    changed = replace(changed, mowers=tuple(replace(m, state="spent") for m in changed.mowers))
-    memory.observe(
-        torch.tensor(encoder.encode(changed)[None]),
-        masks,
-        torch.zeros(1),
-        torch.tensor([False]),
-        torch.tensor([2]),
-    )
-    assert memory.event_flags[0, -1]
-
-
-def test_cuda_ignores_projectiles_spawned_and_unspent_mower_details():
-    from pvz_game.cuda.schema import HEADER, MOWER
-
-    from pvz_rl.envs.cuda_accounting import AccountingCudaBatch
-    from pvz_rl.envs.cuda_features import CudaFeatures
-
-    batch = AccountingCudaBatch(1, zombie_capacity=1, max_step_ticks=1)
-    batch.reset([LevelSpec("public", (Spawn(10000, "basic", 0),))], [0])
-    with batch.cp.cuda.ExternalStream(torch.cuda.current_stream().cuda_stream):
-        features = CudaFeatures(batch, load_config(), "masked")
-        features.encode()
-        expected = features.observations.get().copy()
-        batch.header[:, HEADER.index("spawn_index")] = 1
-        batch.header[:, HEADER.index("nq")] = 1
-        batch.projectiles[:, 0] = batch.cp.asarray([999, 3, 4000, 1800, 1, 0])
-        batch.mowers[:, :, MOWER.index("x")] += 2000
-        batch.mowers[:, :, MOWER.index("state")] = 1
-        features.encode()
-        np.testing.assert_array_equal(features.observations.get(), expected)
-        batch.mowers[:, 2, MOWER.index("state")] = 2
-        features.encode()
-        expected[0, 278] = 1
-        np.testing.assert_array_equal(features.observations.get(), expected)
-
-
-@pytest.mark.parametrize("row", range(5))
-@pytest.mark.parametrize(
-    "x,region", [(-500, 0), (2833, 0), (2834, 1), (6166, 1), (6167, 2), (9500, 2)]
-)
-def test_distance_and_region_boundaries(row, x, region):
-    encoder = ObservationEncoder(load_config(), Rules())
-    obs = replace(public_board(), zombies=(zombie("pole_vaulting", row, x, has_pole=True),))
-    grid = encoder.encode(obs)[135:270].reshape(5, 3, 9)
-    assert grid[:, :, 4].sum() == pytest.approx(0.2)
-    assert grid[row, region, 4] == pytest.approx(0.2)
-    np.testing.assert_allclose(grid[row, region, 7:], (x + 500) / 10000, atol=1e-7)
-    # Presence remains distinguishable at both physical endpoints.
-    assert np.count_nonzero(grid[:, :, 8] != -1) == 1
-
-
-def test_no_states_countdowns_or_private_fields_in_cpu_and_cuda_inputs():
-    from pvz_game.cuda.schema import PLANT, ZOMBIE, ZOMBIE_STATES
-
-    from pvz_rl.envs.cuda_accounting import AccountingCudaBatch
-    from pvz_rl.envs.cuda_features import CudaFeatures
-
-    cfg = load_config()
-    specs = [
+@pytest.mark.parametrize("state", PLANT_STATES)
+def test_every_plant_phase_is_preserved(state):
+    e = ObservationEncoder(load_config(), Rules())
+    obs = Game().reset(
         LevelSpec(
-            "public",
-            tuple(Spawn(1, "pole_vaulting", r, x=2000 + 1000 * r) for r in range(5)),
-            plants=(InitialPlant("potato_mine", 1, 1),),
+            "plants",
+            plants=tuple(InitialPlant(k, i % 5, i // 5) for i, k in enumerate(Rules().plants)),
         )
-    ]
-    batch = AccountingCudaBatch(1, zombie_capacity=5, max_step_ticks=1)
-    batch.reset(specs, [0])
-    with batch.cp.cuda.ExternalStream(torch.cuda.current_stream().cuda_stream):
-        features = CudaFeatures(batch, cfg, "masked")
-        features.step(batch.cp.zeros(1, dtype=batch.cp.int64))
-        public = batch.observe(0)
-        expected = features.encoder.encode(public)
-        np.testing.assert_allclose(features.observations.get()[0], expected, atol=1e-7, rtol=1e-6)
-        for field in ("due", "burst_due"):
-            batch.plants[:, :, PLANT.index(field)] += 777
-        for field in ("slow_until", "vault_until", "bite_progress", "id"):
-            batch.zombies[:, :, ZOMBIE.index(field)] += 777
-        batch.cooldowns[:] += 777
-        for code, state in enumerate(ZOMBIE_STATES):
-            # Synthetic state-only changes establish that no behavior label or
-            # countdown leaks into the features. These states are not simulated.
-            batch.zombies[:, :, ZOMBIE.index("state")] = code
-            changed = replace(
-                public,
-                level="private-label",
-                zombies=tuple(
-                    replace(z, state=state, slow_ticks=123, timer_ticks=456, id=999)
-                    for z in reversed(public.zombies)
-                ),
-                plants=tuple(replace(p, timer_ticks=321) for p in public.plants),
-                cards=tuple(replace(c, cooldown_ticks=654) for c in public.cards),
-            )
-            np.testing.assert_array_equal(features.encoder.encode(changed), expected)
-            features.encode()
-            np.testing.assert_allclose(
-                features.observations.get()[0], expected, atol=1e-7, rtol=1e-6
-            )
-        batch.zombies[:, :, ZOMBIE.index("has_pole")] = 0
-        features.encode()
-        changed = replace(public, zombies=tuple(replace(z, has_pole=False) for z in public.zombies))
-        np.testing.assert_allclose(
-            features.observations.get()[0], features.encoder.encode(changed), atol=1e-7, rtol=1e-6
-        )
+    )
+    obs = replace(obs, plants=tuple(replace(p, state=state, timer_ticks=123) for p in obs.plants))
+    raw = e.encode(obs)["entities"][5:]
+    assert set(raw[:, 0]) == set(e.plants.values())
+    assert (raw[:, 1] == e.states["plant:" + state]).all()
+    assert (raw[:, 6] == 123).all()
 
 
-def test_actual_vault_consumes_pole_in_cpu_and_cuda():
+@pytest.mark.parametrize("state", MOWER_STATES)
+def test_projectiles_and_mower_details(state):
+    e = ObservationEncoder(load_config(), Rules())
+    obs = public_board()
+    obs = replace(
+        obs,
+        mowers=tuple(replace(m, state=state, x=500) for m in obs.mowers),
+        projectiles=(ProjectileView(1, 2, 4000, 20, False), ProjectileView(2, 2, 4100, 1800, True)),
+    )
+    raw = e.encode(obs)["entities"]
+    assert (raw[:5, 1] == e.states["mower:" + state]).all()
+    np.testing.assert_array_equal(raw[-2:, [0, 3, 10]], [[14, 4000, 20], [15, 4100, 1800]])
+
+
+@pytest.mark.parametrize("limit", [5, 7, 10, 256, 512])
+def test_cap_retains_mowers_then_plants_then_nearest_zombies_then_projectiles(limit):
+    cfg = load_config()
+    cfg["encoding"]["max_entities"] = limit
+    e = ObservationEncoder(cfg, Rules())
+    base = Game().reset(
+        LevelSpec("crowd", plants=(InitialPlant("sunflower", 0, 0), InitialPlant("wall_nut", 4, 8)))
+    )
+    zombies = tuple(zombie(row=i % 5, x=9500 - i) for i in range(300))
+    projectiles = tuple(ProjectileView(i, 0, i, 20, False) for i in range(300))
+    obs = replace(base, zombies=zombies, projectiles=projectiles)
+    encoded = e.encode(obs)
+    raw = encoded["entities"]
+    assert len(raw) == limit and (raw[:5, 0] == 16).all()
+    assert ((raw[:, 0] >= 1) & (raw[:, 0] <= 8)).sum() == min(2, max(0, limit - 5))
+    kept_z = raw[(raw[:, 0] >= 9) & (raw[:, 0] <= 13)]
+    assert kept_z[:, 3].tolist() == sorted(z.x for z in zombies)[: max(0, limit - 7)]
+    assert e.last_truncation["total"] == 607 - limit
+    np.testing.assert_allclose(encoded["globals"][14:], np.array([2, 300, 300, 5]) / 75)
+    assert observations_equal(
+        encoded, e.encode(replace(obs, zombies=zombies[::-1], projectiles=projectiles[::-1]))
+    )
+
+
+def test_unknown_category_rejected_and_duplicates_retained():
+    e = ObservationEncoder(load_config(), Rules())
+    base = public_board()
+    encoded = e.encode(replace(base, zombies=(zombie(),) * 12))
+    assert len(encoded["entities"]) == 17
+    with pytest.raises(ValueError, match="Unknown"):
+        e.encode(replace(base, zombies=(zombie("unknown"),)))
+    with pytest.raises(ValueError, match="Unknown"):
+        e.encode(replace(base, zombies=(zombie(state="unknown"),)))
+
+
+@pytest.mark.parametrize("limit", [5, 9, 256, 512])
+def test_cuda_cpu_cap_and_public_countdowns(limit):
     from pvz_rl.envs.cuda_accounting import AccountingCudaBatch
     from pvz_rl.envs.cuda_features import CudaFeatures
 
     cfg = load_config()
+    cfg["encoding"]["max_entities"] = limit
     spec = LevelSpec(
-        "vault",
-        (Spawn(1, "pole_vaulting", 0, x=2000),),
-        plants=(InitialPlant("wall_nut", 0, 0),),
-        mowers=False,
+        "mixed",
+        tuple(
+            Spawn(1, k, i % 5, x=1800 + i * 10) for i, k in enumerate(tuple(Rules().zombies) * 3)
+        ),
+        plants=tuple(InitialPlant(k, i % 5, i // 5) for i, k in enumerate(Rules().plants)),
     )
     game = Game()
-    game.reset(spec, 0)
-    batch = AccountingCudaBatch(1, zombie_capacity=1, max_step_ticks=1)
-    batch.reset([spec], [0])
-    seen = set()
+    game.reset(spec, 4)
+    batch = AccountingCudaBatch(1, zombie_capacity=15, max_step_ticks=1)
+    batch.reset([spec], [4])
     with batch.cp.cuda.ExternalStream(torch.cuda.current_stream().cuda_stream):
         features = CudaFeatures(batch, cfg, "masked")
         features.encode()
-        for _ in range(1000):
+        for _ in range(180):
+            cpu = features.encoder.encode(game.observe())
+            actual = features.obs_tensor.observations()[0]
+            np.testing.assert_array_equal(actual["entities"], cpu["entities"])
+            np.testing.assert_allclose(actual["globals"], cpu["globals"], atol=1e-7, rtol=1e-6)
+            assert features.truncation_counts.get()[0].tolist() == [
+                features.encoder.last_truncation[k] for k in ("plants", "zombies", "projectiles")
+            ]
             game.step()
-            features.step(batch.cp.zeros(1, dtype=batch.cp.int64))
-            obs = game.observe()
-            encoded = features.encoder.encode(obs)
-            np.testing.assert_allclose(
-                features.observations.get()[0], encoded, atol=1e-7, rtol=1e-6
-            )
-            z = obs.zombies[0]
-            seen.add(z.state)
-            assert (encoded[143] != -1) == z.has_pole
-            if "vaulting" in seen and z.state != "vaulting":
-                break
-    assert {"carrying_pole", "vaulting", "walking"} <= seen
-    assert batch.state_hash(0) == game.state_hash()
+            features.step(batch.cp.zeros(1, batch.cp.int64))
+        assert batch.state_hash(0) == game.state_hash()
 
 
-@pytest.mark.parametrize("device", ["cpu", "cuda"])
-def test_headless_frontmost_ties_and_compact_phase_mapping(device):
-    cfg, rules = load_config(), Rules()
-    encoder = ObservationEncoder(cfg, rules)
-    obs = replace(
-        public_board(),
-        zombies=(
-            zombie(row=0, x=1000, headless=True, health=70),
-            zombie(row=0, x=1000, headless=False),
-            zombie(row=1, x=900, headless=True, health=50),
-            zombie(row=1, x=1200),
-            zombie(row=2, x=1000, headless=True),
-        ),
+@pytest.mark.parametrize("bad", [0, 100, 17])
+def test_invalid_type_state_pair_is_rejected(bad):
+    encoder = ObservationEncoder(load_config(), Rules())
+    batch = collate_observations(
+        dict(entities=[[1, bad, 0, 500, 10, 0, 0, 0, 0, 0, 0]], globals=[0] * 18)
     )
-    encoded = encoder.encode(obs)
-    np.testing.assert_array_equal(encoded[281:], [0, 1, 1, 0, 0])
-    np.testing.assert_array_equal(encoded, encoder.encode(replace(obs, zombies=obs.zombies[::-1])))
-    from pvz_rl.envs.encoding import PLANT_BEHAVIOR
+    with pytest.raises(ValueError, match="state"):
+        encoder.normalize(batch)
 
-    assert PLANT_BEHAVIOR["rising"] == "arming"
-    assert all(PLANT_BEHAVIOR[s] == "digesting" for s in ("biting", "biting_got_one", "recovering"))
-    from pvz_rl.policy.event_memory import EventMemory
 
-    memory = EventMemory(cfg, rules, 1, device)
-    assert memory.width == 289
-    masks = torch.ones(1, 406, dtype=torch.bool, device=device)
-    for i, public in enumerate(
-        (obs, replace(obs, zombies=tuple(replace(z, headless=False) for z in obs.zombies)))
-    ):
-        memory.observe(
-            torch.tensor(encoder.encode(public)[None], device=device),
-            masks,
-            torch.zeros(1, device=device),
-            torch.tensor([i == 0], device=device),
-            torch.tensor([i], device=device),
-        )
-    assert memory.event_flags[0, -1]
+def test_int32_overflow_is_rejected_and_valid_coordinates_are_not_clipped():
+    encoder = ObservationEncoder(load_config(), Rules())
+    with pytest.raises(ValueError, match="int32"):
+        encoder.encode(replace(public_board(), zombies=(zombie(x=2**31),)))
+    encoded = encoder.encode(replace(public_board(), zombies=(zombie(x=10500),)))
+    _, _, values = encoder.normalize(collate_observations(encoded))
+    assert values[0, -1, 1] > 1
+
+
+def test_mower_lane_order_survives_positions_beyond_adjacent_lane_width():
+    encoder = ObservationEncoder(load_config(), Rules())
+    public = public_board()
+    public = replace(
+        public, mowers=tuple(replace(m, x=10500 if m.row == 0 else 0) for m in public.mowers)
+    )
+    records = encoder.encode(public)["entities"]
+    assert records[:, 2].tolist() == list(range(5))

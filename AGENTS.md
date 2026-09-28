@@ -17,37 +17,38 @@
 
 ## Code structure
 
-- `src/pvz_rl/data/train.toml` is the single source for all profiles. The default
-  `train` and `demo` overlays use the recurrent Transformer–LSTM; the
-  `event-memory` overlay is the explicit alternative.
-- `src/pvz_rl/envs/` adapts the pinned game, public observations and rewards;
-  `cuda_accounting.py` adds read-only accounting counters to the pinned CUDA kernel.
-  CPU and CUDA share an execution outcome contract: retain the proposal, report
-  the pinned reason and penalty, expose `executed_action=0` for rejection, and
-  advance one tick before applying `invalid_plant_penalty`.
-- `src/pvz_rl/policy/transformer_lstm.py` owns the entity Transformer and recurrent
-  Q heads. `recurrent_policy.py` adapts the same weights to the training lifecycle;
-  `runner.py` owns public action/outcome history for collection, evaluation and replay.
-  `sequential_q.py` compares all ten branches independently of affordability and
-  cooldown, applies occupancy-only plant tile masks and a full-board tile-zero
-  proposal, and shares greedy branch selection, tile-only exploration and
-  group-weighted loss across both model families.
-  `runner.py` feeds accepted proposals back as previous actions and rejected
-  proposals back as wait (`0`) with acceptance and duration fields.
-  `event_memory.py`, `temporal.py` and `spatial_policy.py` retain the explicit alternative.
-- `src/pvz_rl/learning/checkpoints.py` inspects protocols, saved configurations and
-  model dispatch. `demo_initialization.py` verifies and fits a completed archive.
-  `cuda_q.py` owns cohort lifecycle/atomic recovery; `recurrent_q.py` adds chronological
-  recurrent collection and whole-pass gradient accumulation. `cuda_buffer.py` bounds
-  host trajectory memory with disk overflow. Curriculum stages are easy, standard, shared.
-- `src/pvz_rl/presentation/demo_recording.py` owns the one-attempt human recorder,
-  append-only transition archive, compact history, replay and output validation.
-  `live_layout.py` owns viewer layout, paging, generation checks and F follow-latest.
-  `action_journal.py` retains Q values captured during actual collection decisions.
-- `src/pvz_rl/evaluation/` runs deterministic held-out games through the shared runner
-  and verifies recorded CUDA traces against CPU replay. `tests/test_recurrent_training.py`
-  covers recurrent handoff, fitting, state boundaries, recovery and mathematical controls;
-  legacy model tests select the explicit event-memory configuration.
-- `docs/training.md` documents recording, initialization, CUDA training, resume and
-  evaluation; `docs/architecture.md` describes current ownership and failure paths;
-  `docs/math/recurrent-training.md` defines the sequence objective and independent controls.
+- `src/pvz_rl/data/train.toml` is the single parameter source for train/demo overlays.
+  Both use `entity_v1` observations and `transformer_lstm_q_v2`; old inputs/weights
+  require fresh initialization. Keep user reward adjustments when updating defaults.
+- `src/pvz_rl/envs/encoding.py` defines the shared 11-field entity schema,
+  normalization, truncation diagnostics and `EntityBatch` collator. Canonical order
+  is mowers, plants, zombies, projectiles; overflow drops from the end, with nearest
+  zombies first. CUDA features encode the same public facts on device. Reserved
+  simulator slots never become policy tokens. Globals count all present entities.
+- `envs/` owns simulator adapters, geometry masks and rewards; `cuda_accounting.py`
+  supplies read-only counters. The shared execution contract retains the proposal,
+  reason and penalty, exposes `executed_action=0` for rejection and advances one tick.
+- `policy/entity_attention.py` owns shared embeddings, readout tokens, padding masks,
+  chunked attention and checkpointed encoder microbatches. `transformer_lstm.py`
+  owns LSTM and Q heads; `recurrent_policy.py` adapts the training lifecycle.
+  `sequential_q.py` keeps all ten branches greedy, independent of sun/cooldown;
+  occupancy-only plant tiles and unrestricted dig tiles allow tile-only exploration.
+  A full-board plant still proposes tile zero. `runner.py` owns recurrent state and
+  feeds rejection back as `(previous_action=0, accepted=0, ticks=1)`.
+- `learning/checkpoints.py` inspects saved protocols/schema before simulation.
+  `cuda_q.py` owns cohort lifecycle and atomic recovery; `recurrent_q.py` collects
+  chronological transitions and accumulates whole-pass gradients. `cuda_buffer.py`
+  stores fixed metadata plus ragged entity slabs under one RAM/disk budget and
+  validates offsets/counts on recovery. Curriculum stages are easy, standard, shared.
+- `presentation/demo_recording.py` records structured v2 archives and compact viewer
+  history; `learning/demo_initialization.py` verifies and fits only fresh archives.
+  `action_journal.py` retains actual Q values, proposal/execution and entity omissions;
+  `live_layout.py` owns paging and F follow-latest. Presentation never feeds the model.
+- `evaluation/` uses the same runner and checks CUDA traces against CPU replay.
+  `monitoring/entity_benchmark.py` measures cap-dependent inference/fitting cost.
+- `tests/test_observations.py`, `test_transformer_lstm.py`, `test_entity_storage.py`
+  and `test_recurrent_training.py` cover information preservation, CPU/CUDA parity,
+  independent attention math, order/padding invariance, ragged recovery and training.
+- `docs/architecture.md` traces ownership and failures; `docs/training.md` documents
+  recording, fresh initialization, training and recovery. `docs/math/entity-inputs.md`
+  and `recurrent-training.md` define encoding, attention and the complete-return objective.

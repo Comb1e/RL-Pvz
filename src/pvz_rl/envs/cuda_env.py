@@ -281,6 +281,7 @@ class CudaVecEnv(VecEnv):
                     viewer.fail(exc)
             self.phases["transfers"] += perf_counter() - started
             indices = np.flatnonzero(compact[:, 0]).tolist()
+            truncation = self.features.truncation_counts.get()
             infos = []
             for index, row in enumerate(compact):
                 accepted = bool(self.last_action_result_host[index, 0])
@@ -292,6 +293,15 @@ class CudaVecEnv(VecEnv):
                 )
                 infos.append(
                     {
+                        "entity_truncation": {
+                            "total": int(truncation[index].sum()),
+                            **dict(
+                                zip(
+                                    ("plants", "zombies", "projectiles"),
+                                    map(int, truncation[index]),
+                                )
+                            ),
+                        },
                         "proposal_action": int(self.proposed_actions[index]),
                         "executed_action": int(self.executed_actions[index]),
                         "accepted": accepted,
@@ -314,6 +324,7 @@ class CudaVecEnv(VecEnv):
                     self.finished_outcomes[index] = infos[index]["episode_metrics"]["status"]
                 if autoreset:
                     self.reset_indices(indices)
+                    obs = self.features.obs_tensor
                 else:
                     self.batch.header[self.cp.asarray(indices), 17] = 0
                     self.enabled_envs[indices] = False
@@ -431,8 +442,8 @@ class CudaVecEnv(VecEnv):
         obs, reward, done, _, terminal, infos = self.step_tensors(self._actions)
         for i, info in enumerate(infos):
             if "episode_metrics" in info:
-                info["terminal_observation"] = terminal[i].cpu().numpy()
-        return obs.cpu().numpy(), reward.cpu().numpy(), done.cpu().numpy(), infos
+                info["terminal_observation"] = terminal[i : i + 1].observations()[0]
+        return obs.observations(), reward.cpu().numpy(), done.cpu().numpy(), infos
 
     def get_attr(self, attr_name, indices=None):
         return [getattr(self, attr_name)] * len(list(self._get_indices(indices)))

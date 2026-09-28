@@ -38,6 +38,8 @@ def select_action(env: PvZEnv, obs, *, policy=None, baseline=None, rng=None, mas
     if network is not None:
         import torch
 
+        from pvz_rl.envs.encoding import collate_observations
+
         if env.metrics["decisions"] == 0:
             env._policy_memory = PolicyRunner(network, env.cfg, env.rules, 1, network.device)
         runner = env._policy_memory
@@ -45,7 +47,7 @@ def select_action(env: PvZEnv, obs, *, policy=None, baseline=None, rng=None, mas
             proposal, accepted, ticks = env.last_policy_outcome
             runner.observe_result([proposal], [accepted], [ticks])
         actions = runner.decide(
-            torch.as_tensor(obs, device=network.device).reshape(1, -1),
+            collate_observations(obs, network.device),
             torch.as_tensor(env.action_masks(), device=network.device).reshape(1, -1),
             torch.tensor([env.public.tick], device=network.device),
         )[0]

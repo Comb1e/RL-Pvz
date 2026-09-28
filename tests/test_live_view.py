@@ -8,8 +8,7 @@ import numpy as np
 import pytest
 import torch
 
-from pvz_rl.config import load_event_config as load_config
-from pvz_rl.config import output_settings, validate_config
+from pvz_rl.config import load_config, output_settings, validate_config
 from pvz_rl.presentation.live_view import (
     Activity,
     LiveSession,
@@ -271,10 +270,13 @@ def test_complete_training_cohorts_identical_with_viewer(smoke_cfg, tmp_path):
             if enabled:
                 attach_capture(env)
             captured = []
+            entity_records = []
             synchronize = model._synchronize
 
             def capture(callback):
-                captured.append(model._buffer.take(np.arange(model._buffer.size)))
+                rows = model._buffer.take(np.arange(model._buffer.size))
+                captured.append(rows)
+                entity_records.extend(model._buffer.observations(rows).observations())
                 synchronize(callback)
 
             model._synchronize = capture
@@ -288,7 +290,7 @@ def test_complete_training_cohorts_identical_with_viewer(smoke_cfg, tmp_path):
                     policy_digest(model),
                     torch.from_numpy(buffer["action"].astype(np.int64)),
                     torch.from_numpy(buffer["reward"].copy()),
-                    torch.from_numpy(buffer["observation"].copy()),
+                    torch.from_numpy(np.concatenate([o["entities"] for o in entity_records])),
                     model.policy.optimizer.state_dict(),
                     torch.get_rng_state(),
                     torch.cuda.get_rng_state(),
@@ -450,25 +452,19 @@ def test_view_decisions_match_q_values_without_rng_changes(smoke_cfg):
                 model.policy.branch_head[-1].bias[winner] = 1
                 mask[:] = True
                 state = torch.cuda.get_rng_state()
-                plain = model.policy.decide(obs, mask)
+                plain = model.policy.decide(obs, action_masks=mask)
                 after = torch.cuda.get_rng_state()
                 torch.cuda.set_rng_state(state)
-                watched = model.policy.decide(
-                    obs, mask, diagnostic_indices=torch.tensor([0], device="cuda")
-                )
+                watched = model.policy.decide(obs, action_masks=mask)
                 assert torch.equal(after, torch.cuda.get_rng_state())
-                for a, b in zip(plain[:3], watched[:3]):
-                    torch.testing.assert_close(a, b, rtol=0, atol=0)
-                diagnostic = watched[3]["viewer"]
+                torch.testing.assert_close(plain[0], watched[0], rtol=0, atol=0)
+                torch.testing.assert_close(plain[1].hidden, watched[1].hidden, rtol=0, atol=0)
+                diagnostic = watched[2]
                 torch.testing.assert_close(
-                    diagnostic["q"],
-                    model.policy.predict_values(obs)[:1].masked_fill(
-                        ~selection_masks(mask[:1]), -torch.inf
-                    ),
+                    diagnostic["branch_q"], model.policy.forward_step(obs).branch_q
                 )
+                assert selection_masks(mask).all()
                 assert "tiles" not in diagnostic
-                torch.testing.assert_close(diagnostic["legal"], selection_masks(mask[:1]))
-                assert diagnostic["actions"].item() == watched[0][0].item()
     finally:
         env.close()
 

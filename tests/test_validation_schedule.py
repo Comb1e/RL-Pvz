@@ -5,8 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from pvz_rl.config import load_event_config as load_config
-from pvz_rl.config import validate_config
+from pvz_rl.config import load_config, validate_config
 from pvz_rl.learning.curriculum import STAGES, CurriculumState, validation_after_stage
 from pvz_rl.learning.deadline import BudgetExpired
 from pvz_rl.learning.training import ResearchCallback, TrainingDeadline, load_policy, train

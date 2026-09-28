@@ -1,5 +1,49 @@
 # Iteration history
 
+## 0.29.0 — 2026-09-28
+
+- Problem/root cause: regional zombie aggregates detached health/armor and state
+  from individual positions, fixed flat vectors omitted projectiles, and the
+  alternative event-memory runtime duplicated storage and dispatch paths.
+- Improvement: one `entity_v1` schema stores 11 integer public fields per physical
+  entity and 18 globals, with shared 32-dimensional embeddings, a global plus 45
+  tile readouts, two masked attention layers and the retained 256-unit LSTM.
+  Public timers, headless zombies, projectiles and spent mowers are represented;
+  IDs, RNGs, schedules and private movement state remain excluded.
+- User-directed cap: default 256 based on RTX 4070 Laptop measurements, configurable
+  in the single TOML. Retain mowers → plants → zombies → projectiles; omit
+  projectiles first, then zombies, then plants, with nearest-house zombies first.
+  Globals keep pre-cap counts and action journals/viewers expose omissions.
+- Runtime/storage: GPU encoding stays on device, packs present slots and matches
+  CPU public formulas. Ragged metadata/entity slabs share RAM and disk spill,
+  recover with validated offsets/counts, and use versioned schemas. Encoder
+  microbatches, query chunks and activation checkpointing bound attention memory.
+  Refilled evaluation slots explicitly refresh their newly allocated observation.
+- Removal/compatibility: event-memory model, temporal encoder, banks, caches,
+  profile and dispatch are removed. Checkpoints, demos and trajectories require
+  fresh entity-based initialization; existing recordings/run files are preserved.
+  Greedy ten-way proposals, tile-only exploration, penalty targets and rejected
+  `(previous_action=0, accepted=0, ticks=1)` feedback remain. The user's 0.003 train
+  and 0.001 demo plant penalties are preserved; the game pin is unchanged.
+- Verification: information counterexamples, all categories/public states,
+  duplicates, caps, ID isolation, CPU/CUDA parity, padding/permutation invariance,
+  independent float64 attention/gradient controls, causal recurrence, ragged spill,
+  archive corruption, demo/viewer/replay, checkpoint and interruption recovery.
+  All 537 collected tests verified: 489 in the full-suite run, then 48 after
+  correcting two obsolete fixture assertions; production code was unchanged.
+  The focused 92-case suite, Ruff, dependency checks, sdist/wheel builds and
+  local documentation links pass. The wheel contains one bundled TOML and no
+  retired model modules.
+- Resource evidence: 256/512-entity fitting measured 686/247 frames/s; both fit
+  in VRAM. A warmed 128-slot one-second collection/fitting check measured 1,080
+  decisions/s, 95.4 MiB Torch peak allocation and 128.6 MiB CuPy pool reservation.
+  A default 1,024-frame fitting-chunk control peaked at 46.3 MiB Torch allocation.
+  [Full measurements](evidence/entity-inputs-v029.json) separate synthetic inputs,
+  collection and memory counters. No formal training or learning-quality claim.
+- Remaining limits: the cap loses individual facts above its limit; 32 dimensions
+  and the cap require future learning evaluation. Quadratic attention arithmetic
+  remains, while short-cutoff throughput is not a full-game speed estimate.
+
 ## 0.28.4 — 2026-09-27
 
 - Problem/root cause: the same profile parameters were copied across root

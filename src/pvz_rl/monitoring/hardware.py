@@ -108,7 +108,6 @@ class HardwareMonitor:
                     "transfer_stream_seconds",
                     "transfer_wait_seconds",
                     "device_compute_seconds",
-                    "cache_hit_rate",
                     "simulation_speed",
                 )
             },

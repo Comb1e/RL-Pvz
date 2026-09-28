@@ -1,5 +1,10 @@
 # Validation and measured results
 
+Current entity-schema validation and cap measurements are recorded in
+[iteration history](iteration.md) and [entity mathematics](math/entity-inputs.md).
+The versioned measurements below describe historical architectures and profiles;
+they are not current loading or training instructions.
+
 ## Collision and human-recording audit 0.27.0 — 2026-09-27
 
 Research 0.27.0 pins merged game **1.7.0**, simulation **1.4.0**, commit

@@ -12,6 +12,7 @@ from test_demo_initialization import completed_demo as demo_fixture
 
 from pvz_rl.cli import main
 from pvz_rl.config import load_config, load_demo_config, validate_config
+from pvz_rl.envs.encoding import collate_observations
 from pvz_rl.learning import demo_initialization as demo
 from pvz_rl.learning.checkpoints import compatible_config, inspect_checkpoint
 from pvz_rl.learning.cohort import CohortPhase
@@ -55,7 +56,7 @@ def test_default_and_removed_interfaces():
     assert demo["policy"] == cfg["policy"]
     assert demo["training"]["method"] == cfg["training"]["method"]
     assert demo["reward"]["invalid_plant_penalty"] == 0.001
-    assert cfg["policy"]["kind"] == "transformer_lstm_q_v1"
+    assert cfg["policy"]["kind"] == "transformer_lstm_q_v2"
     assert tuple(cfg["curriculum"]["stages"]) == ("easy", "standard", "shared")
     assert "lessons" not in cfg["curriculum"]
     with pytest.raises(SystemExit):
@@ -127,12 +128,12 @@ def test_demo_weights_transfer_exactly_and_autonomous_fit_changes_them(completed
         obs, _, previous, outcomes, _ = demo._training_tensors(archive, cfg)
         with torch.no_grad():
             expected = source.cuda().forward_sequence(
-                obs[None].cuda(),
+                collate_observations(obs, "cuda").reshape(1, len(obs)),
                 previous_actions=previous[None].cuda(),
                 execution_outcomes=outcomes[None].cuda(),
             )[0]
             actual = model.policy.forward_sequence(
-                obs[None].cuda(),
+                collate_observations(obs, "cuda").reshape(1, len(obs)),
                 previous_actions=previous[None].cuda(),
                 execution_outcomes=outcomes[None].cuda(),
             )[0]
@@ -144,13 +145,12 @@ def test_demo_weights_transfer_exactly_and_autonomous_fit_changes_them(completed
         model._buffer = model._new_buffer()
         rows = np.zeros(len(obs), dtype=model._buffer.dtype)
         rows["active"] = True
-        rows["observation"] = obs.numpy()
         rows["previous"] = previous.numpy()
         rows["previous_outcome"] = outcomes.numpy()
         rows["action"] = demo._training_tensors(archive, cfg)[1].numpy()
         rows["reward"][-1] = 1
         rows["done"][-1] = True
-        model._buffer.append(rows)
+        model._buffer.append(rows, obs)
         model._buffer.finalize()
         from stable_baselines3.common.logger import configure
 
@@ -182,54 +182,6 @@ def test_transfer_rejects_reward_encoding_and_model_changes(recurrent_cfg):
             compatible_config(recurrent_cfg, changed)
 
 
-def test_historical_event_checkpoint_migrates_retained_stages_only(tmp_path):
-    from gymnasium.spaces import Discrete
-    from pvz_game import Rules
-
-    from pvz_rl.config import load_event_config
-    from pvz_rl.envs.encoding import ObservationEncoder
-    from pvz_rl.learning.cuda_q import CudaSequentialQ
-    from pvz_rl.policy.spatial_policy import SequentialQPolicy
-
-    cfg = load_event_config()
-    cfg["training"]["n_envs"] = 1
-    cfg["curriculum"]["stages"]["saving"] = {
-        "tasks": ["saving"],
-        "weights": [1.0],
-        "requirements": {"saving": 100},
-    }
-    cfg["curriculum"]["stages"]["easy"].update(tasks=["easy", "saving"], weights=[0.8, 0.2])
-    cfg["curriculum"]["lessons"] = {"saving": {"natural_sun": False}}
-    cfg["curriculum"]["run_stage"] = "easy"
-    model = CudaSequentialQ(
-        SequentialQPolicy,
-        device="cpu",
-        seed=17,
-        _init_setup_model=False,
-        policy_kwargs={"features_extractor_kwargs": {"layout_cfg": cfg}},
-    )
-    model.observation_space = ObservationEncoder(cfg, Rules()).space
-    model.action_space = Discrete(406)
-    model.n_envs = 1
-    model._setup_model()
-    model.curriculum_state = {"stage": 1}
-    checkpoint = tmp_path / "old.zip"
-    model.save(checkpoint)
-    restored, metadata = load_policy(checkpoint, for_resume=True)
-    assert restored.curriculum_state["stage"] == 0
-    assert metadata["config"]["curriculum"]["stages"]["easy"]["weights"] == [1.0]
-    assert "saving" not in metadata["config"]["curriculum"]["stages"]
-    for key, value in model.policy.state_dict().items():
-        torch.testing.assert_close(value, restored.policy.state_dict()[key], rtol=0, atol=0)
-    model.curriculum_state = {"stage": 0}
-    model.save(checkpoint)
-    with pytest.raises(ValueError, match="removed curriculum lesson.*--init-from"):
-        load_policy(checkpoint, for_resume=True)
-    weights, source = initial_weights(checkpoint, load_event_config())
-    assert weights.keys() == model.policy.state_dict().keys()
-    assert source["type"] == "autonomous"
-
-
 @pytest.mark.parametrize("device", ["cpu", "cuda"])
 def test_step_chunk_equivalence_with_real_outcomes(recurrent_cfg, device):
     from pvz_rl.envs.env import PvZEnv
@@ -237,7 +189,7 @@ def test_step_chunk_equivalence_with_real_outcomes(recurrent_cfg, device):
     env = PvZEnv(recurrent_cfg, family="diagnostic")
     obs, _ = env.reset(seed=8)
     model = TransformerLSTMPolicy(recurrent_cfg).to(device).eval()
-    observations = torch.tensor(np.stack([obs] * 8), device=device)[None]
+    observations = collate_observations([obs] * 8, device).reshape(1, 8)
     actions = torch.tensor([[0, 1, 1, 361, 0, 405, 3, 0]], device=device)
     outcomes = torch.tensor(
         [[[0, 0], [1, 0], [0, 1], [1, 0], [1, 1], [0, 1], [1, 0], [1, 1]]], device=device
@@ -336,7 +288,7 @@ def test_rejected_proposals_zero_ticks_and_isolated_runner_reset(recurrent_cfg):
         features_extractor_kwargs={"layout_cfg": recurrent_cfg},
     )
     runner = PolicyRunner(policy, recurrent_cfg, env.rules, 2, "cpu")
-    observations = torch.tensor(np.stack([obs, obs]))
+    observations = collate_observations([obs, obs])
     masks = torch.tensor(np.stack([env.action_masks()] * 2))
     runner.decide(observations, masks, None)
     runner.observe_result([120, 361], [False, True], [1, 0])
@@ -352,7 +304,7 @@ def test_rejected_proposals_zero_ticks_and_isolated_runner_reset(recurrent_cfg):
 
 def test_returns_group_loss_padding_and_partition_gradients(recurrent_cfg, tmp_path):
     policy = TransformerLSTMPolicy(recurrent_cfg)
-    buffer = CompleteGameBuffer(tmp_path / "buffer", policy.layout.size, 0, 2, block_rows=3)
+    buffer = CompleteGameBuffer(tmp_path / "buffer", 2, block_rows=3)
     rows = np.zeros(8, dtype=buffer.dtype)
     rows["env"] = np.tile([0, 1], 4)
     rows["active"] = [1, 1, 1, 1, 1, 0, 1, 0]
@@ -361,7 +313,7 @@ def test_returns_group_loss_padding_and_partition_gradients(recurrent_cfg, tmp_p
     rows["done"] = [0, 0, 0, 1, 0, 0, 1, 0]
     rows["previous"][2:] = rows["action"][:-2]
     rows["previous_outcome"][2:, 0] = 1
-    buffer.append(rows)
+    buffer.append(rows, [{"entities": [], "globals": [0] * 18}] * len(rows))
     buffer.finalize()
     np.testing.assert_array_equal(buffer.take(np.arange(8))["target"], [6, 2, 5, -1, 3, 0, 4, 0])
     gradients, losses = [], []
@@ -369,11 +321,11 @@ def test_returns_group_loss_padding_and_partition_gradients(recurrent_cfg, tmp_p
         for budget in [2, 4]:
             policy.zero_grad(set_to_none=True)
             state, total, errors = None, 0, {0: [], 1: [], 2: []}
-            for reset, chunk in sequence_batches(buffer, 2, budget):
+            for reset, chunk, observations in sequence_batches(buffer, 2, budget):
                 if reset:
                     state = None
                 loss, state, first, second = sequence_loss(
-                    policy, chunk, state, buffer.group_counts
+                    policy, chunk, state, buffer.group_counts, observations
                 )
                 loss.backward()
                 total += float(loss.detach())
@@ -526,7 +478,9 @@ def test_default_128_slot_bounded_collection_and_chunk_memory(tmp_path):
         rows["action"] = 0
         rows["target"] = 1
         model.policy.train()
-        loss, *_ = sequence_loss(model.policy, rows, None, [1024, 0, 0])
+        loss, *_ = sequence_loss(
+            model.policy, rows, None, [1024, 0, 0], model._buffer.observations(rows, model.device)
+        )
         loss.backward()
         torch.cuda.synchronize()
         allocated = torch.cuda.max_memory_allocated()

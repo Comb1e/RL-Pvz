@@ -1,5 +1,8 @@
 # Sequential complete-return Q control
 
+Historical 0.25.0 fitting protocol. The active recurrent model uses the same
+selected-Q algebra with whole-pass updates defined in [recurrent training](recurrent-training.md).
+
 The implemented objective in research 0.25.0 uses complete episodes, gamma one,
 and one shared encoder. A decision assembles a branch b (wait, eight species,
 dig) and, except for wait, a tile t. Only the assembled command advances the

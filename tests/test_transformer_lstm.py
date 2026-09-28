@@ -1,168 +1,206 @@
-"""Controls for the event_v8 entity/recurrent policy contract."""
+"""Entity attention, recurrent causality and action geometry controls."""
 
+import copy
 from dataclasses import replace
 
 import numpy as np
 import pytest
 import torch
-from pvz_game import Game, Rules
+from pvz_game import Game, InitialPlant, LevelSpec, Rules
+from pvz_game.types import ProjectileView, ZombieView
 
-from pvz_rl.config import load_demo_config
-from pvz_rl.envs.encoding import ObservationEncoder
+from pvz_rl.config import load_config
+from pvz_rl.envs.encoding import EntityBatch, ObservationEncoder, collate_observations
+from pvz_rl.policy.entity_attention import AttentionBlock
+from pvz_rl.policy.sequential_q import observation_tile_masks
 from pvz_rl.policy.transformer_lstm import TransformerLSTMPolicy
 from pvz_rl.presentation.demo_recording import CompactHistoryBuilder
 
 
-def test_recurrent_geometry_isolated_per_board_and_full_board_falls_back_to_zero(monkeypatch):
-    from pvz_rl.policy.transformer_lstm import RecurrentOutput
-
-    cfg = load_demo_config()
-    policy = TransformerLSTMPolicy(cfg)
-    observations = torch.zeros(3, 294)
-    q = torch.zeros(3, 10)
-    q[:, 1] = 1
-    result = RecurrentOutput(q, torch.zeros(3, 45, 1), torch.zeros(3, 1), policy.initial_state(3))
-    monkeypatch.setattr(policy, "forward_step", lambda *args, **kwargs: result)
-    monkeypatch.setattr(
-        policy,
-        "tile_values",
-        lambda tiles, context, branch: torch.arange(45).float().repeat(len(branch), 1),
-    )
-    masks = torch.zeros(3, 406, dtype=torch.bool)
-    masks[:, 0] = True
-    masks[0, 3] = masks[2, 8] = True
-    assert policy.decide(observations, action_masks=masks)[0].tolist() == [3, 1, 8]
-    # Default masks derive from occupancy; a full board cannot unmask another board.
-    observations[0, 44 * 3] = 1
-    observations[1, :135:3] = 1
-    assert policy.decide(observations)[0].tolist() == [44, 1, 45]
-    q[0, 3] = float("nan")
-    with pytest.raises(ValueError, match="finite"):
-        policy.decide(observations)
+@pytest.fixture(autouse=True)
+def full_precision_controls():
+    # cuDNN TF32 changes with batch shape; measure invariance at full FP32.
+    with torch.backends.cudnn.flags(allow_tf32=False):
+        yield
 
 
-@pytest.mark.parametrize("demo,size", [(False, 286), (True, 294)])
-def test_versioned_cpu_cuda_observation_width_and_cooldown_boundaries(demo, size):
-    from pvz_game import LevelSpec
-
-    from pvz_rl.config import load_event_config as load_config
-    from pvz_rl.envs.cuda_accounting import AccountingCudaBatch
-    from pvz_rl.envs.cuda_features import CudaFeatures
-
-    cfg = load_demo_config() if demo else load_config()
-    batch = AccountingCudaBatch(1, zombie_capacity=1, max_step_ticks=1)
-    batch.reset([LevelSpec("cooldowns")], [0])
-    with batch.cp.cuda.ExternalStream(torch.cuda.current_stream().cuda_stream):
-        features = CudaFeatures(batch, cfg, "masked")
-        assert features.observations.shape == (1, size)
-        for divisor in (1, 2, 10000):
-            ticks = [(p["recharge_ticks"] + 1) // divisor for p in batch.rules.plants.values()]
-            batch.cooldowns[0] = batch.cp.asarray(ticks)
-            features.encode()
-            actual = features.observations.get()[0]
-            np.testing.assert_array_equal(actual, features.encoder.encode(batch.observe(0)))
-            if demo:
-                expected = np.array(
-                    [
-                        t / (p["recharge_ticks"] + 1)
-                        for t, p in zip(ticks, batch.rules.plants.values())
-                    ],
-                    dtype=np.float32,
-                )
-                np.testing.assert_array_equal(actual[286:], expected)
-            else:
-                assert "cooldowns" not in features.encoder.slices
-
-
-def test_event_v8_cooldowns_use_ready_and_recharge_boundaries():
-    cfg = load_demo_config()
+def inputs(count=2, device="cpu"):
+    cfg = load_config()
     encoder = ObservationEncoder(cfg, Rules())
-    game = Game()
-    observation = game.reset("easy", 1000)
-    encoded = encoder.encode(observation)
-    assert encoded.shape == (294,)
-    assert np.all(encoded[286:] >= 0) and np.all(encoded[286:] <= 1)
-    full = replace(
-        observation,
-        cards=tuple(
-            replace(card, cooldown_ticks=card.recharge_ticks + 1) for card in observation.cards
+    public = Game().reset(LevelSpec("mixed", plants=(InitialPlant("wall_nut", 2, 3),)))
+    public = replace(
+        public,
+        zombies=(
+            ZombieView(1, "buckethead", 2, 3650, 120, 700, "biting", 17, False, 12, False),
+            ZombieView(2, "pole_vaulting", 0, 7000, 400, 0, "carrying_pole", 0, True, 0, False),
         ),
+        projectiles=(ProjectileView(3, 2, 4500, 20, True),),
     )
-    np.testing.assert_allclose(encoder.encode(full)[286:], 1)
-    ready = replace(
-        observation, cards=tuple(replace(card, cooldown_ticks=0) for card in observation.cards)
-    )
-    np.testing.assert_allclose(encoder.encode(ready)[286:], 0)
+    obs = encoder.encode(public)
+    return cfg, collate_observations([obs] * count, device)
 
 
-def test_step_and_sequence_outputs_match_and_reset_isolated():
-    cfg = load_demo_config()
-    torch.manual_seed(101)
+@pytest.mark.parametrize("device", ["cpu", "cuda"])
+def test_permutation_padding_batching_and_empty_entities(device):
+    cfg, batch = inputs(3, device)
+    p = TransformerLSTMPolicy(cfg).to(device).eval()
+    batch.globals[:, 0] = torch.arange(3, device=device)
+    with torch.no_grad():
+        reference = p.forward_step(batch)
+        order = torch.randperm(batch.entities.shape[1], device=device)
+        perm = EntityBatch(batch.entities[:, order], batch.entity_mask[:, order], batch.globals)
+        shuffled = p.forward_step(perm)
+        padding = torch.full((3, 7, 11), 999999, dtype=torch.int32, device=device)
+        padded = EntityBatch(
+            torch.cat((perm.entities, padding), 1),
+            torch.cat((perm.entity_mask, torch.zeros(3, 7, dtype=torch.bool, device=device)), 1),
+            batch.globals,
+        )
+        extra = p.forward_step(padded)
+        single = [p.forward_step(batch[i : i + 1]) for i in range(3)]
+        for other in (shuffled, extra):
+            torch.testing.assert_close(reference.branch_q, other.branch_q, atol=1e-6, rtol=1e-5)
+            torch.testing.assert_close(
+                reference.tile_features, other.tile_features, atol=2e-6, rtol=1e-5
+            )
+            torch.testing.assert_close(
+                reference.state.hidden, other.state.hidden, atol=1e-6, rtol=1e-5
+            )
+            branches = torch.tensor([1, 8, 9], device=device)
+            torch.testing.assert_close(
+                p.tile_values(reference.tile_features, reference.context, branches),
+                p.tile_values(other.tile_features, other.context, branches),
+                atol=2e-6,
+                rtol=1e-5,
+            )
+        torch.testing.assert_close(
+            reference.branch_q, torch.cat([x.branch_q for x in single]), atol=1e-6, rtol=1e-5
+        )
+        empty = collate_observations({"entities": [], "globals": [0] * 18}, device)
+        result = p.forward_step(empty)
+        assert torch.isfinite(result.branch_q).all() and result.tile_features.shape == (1, 45, 32)
+        assert p.entity.embed(batch).shape == (3, 9, 32)
+
+
+def test_step_sequence_causality_and_reset():
+    cfg, batch = inputs(10)
+    observations = batch.reshape(2, 5)
     policy = TransformerLSTMPolicy(cfg).eval()
-    observations = torch.randn(2, 5, 294)
     previous = torch.randint(0, 406, (2, 5))
     outcomes = torch.rand(2, 5, 2)
-    sequence_q, sequence_tiles, sequence_state = policy.forward_sequence(
-        observations,
-        previous_actions=previous,
-        execution_outcomes=outcomes,
+    q, tiles, state = policy.forward_sequence(
+        observations, previous_actions=previous, execution_outcomes=outcomes
     )
-    state = None
-    step_q, step_tiles = [], []
-    for index in range(observations.shape[1]):
-        result = policy.forward_step(
-            observations[:, index],
-            state,
-            previous_action=previous[:, index],
-            execution_outcome=outcomes[:, index],
+    carried = None
+    outputs = []
+    for t in range(5):
+        out = policy.forward_step(
+            observations[:, t],
+            carried,
+            previous_action=previous[:, t],
+            execution_outcome=outcomes[:, t],
         )
-        state = result.state
-        step_q.append(result.branch_q)
-        step_tiles.append(result.tile_features)
-    torch.testing.assert_close(sequence_q, torch.stack(step_q, 1))
-    torch.testing.assert_close(sequence_tiles, torch.stack(step_tiles, 1))
-    torch.testing.assert_close(sequence_state.hidden, state.hidden)
+        outputs.append(out.branch_q)
+        carried = out.state
+    torch.testing.assert_close(q, torch.stack(outputs, 1))
+    torch.testing.assert_close(state.hidden, carried.hidden)
+    changed = observations.clone()
+    changed.globals[:, 3:] = 100
+    q2 = policy.forward_sequence(changed, previous_actions=previous, execution_outcomes=outcomes)[0]
+    torch.testing.assert_close(q[:, :3], q2[:, :3])
     reset = policy.reset_state(state, torch.tensor([True, False]))
-    fresh = policy.initial_state(1)
-    reset_result = policy.forward_step(
-        observations[:, 0], reset, previous_action=previous[:, 0], execution_outcome=outcomes[:, 0]
+    assert not reset.hidden[:, 0].any()
+    torch.testing.assert_close(reset.hidden[:, 1], state.hidden[:, 1])
+
+
+@pytest.mark.parametrize("device", ["cpu", "cuda"])
+def test_attention_independent_control_and_backward(device):
+    torch.manual_seed(7)
+    block = AttentionBlock(32, 4, 64, 3).to(device).double().eval()
+    q = torch.randn(2, 4, 7, 8, device=device, dtype=torch.float64, requires_grad=True)
+    k = torch.randn_like(q, requires_grad=True)
+    v = torch.randn_like(q, requires_grad=True)
+    mask = torch.tensor([1, 1, 1, 1, 0, 0, 0], device=device, dtype=torch.bool)[None, None, None]
+    expected = ((q @ k.transpose(-2, -1)) / np.sqrt(8)).masked_fill(~mask, -torch.inf).softmax(
+        -1
+    ) @ v
+    actual = block.attention(q, k, v, mask)
+    torch.testing.assert_close(actual, expected, rtol=1e-9, atol=1e-9)
+    first = torch.autograd.grad(actual.square().sum(), (q, k, v), retain_graph=True)
+    block.force_fallback = True
+    block.train()
+    fallback = block.attention(q, k, v, mask)
+    second = torch.autograd.grad(fallback.square().sum(), (q, k, v))
+    torch.testing.assert_close(fallback, expected, rtol=1e-9, atol=1e-9)
+    for a, b in zip(first, second):
+        torch.testing.assert_close(a, b, rtol=1e-8, atol=1e-8)
+
+
+def test_cpu_cuda_model_outputs_gradients_and_adam():
+    cfg, batch = inputs()
+    cpu = TransformerLSTMPolicy(cfg).double()
+    gpu = TransformerLSTMPolicy(cfg).double().cuda()
+    gpu.load_state_dict(cpu.state_dict())
+    for model, obs in ((cpu, batch), (gpu, batch.to("cuda"))):
+        out = model.forward_step(obs)
+        tiles = model.tile_values(
+            out.tile_features,
+            out.context,
+            torch.ones(len(obs), device=obs.device, dtype=torch.long),
+        )
+        loss = out.branch_q.square().sum() + tiles.square().sum()
+        loss.backward()
+    for a, b in zip(cpu.parameters(), gpu.parameters()):
+        assert a.grad is not None and torch.isfinite(a.grad).all()
+        torch.testing.assert_close(a.grad, b.grad.cpu(), rtol=1e-7, atol=1e-9)
+    for model in (cpu, gpu):
+        torch.optim.Adam(model.parameters(), lr=1e-4).step()
+    for a, b in zip(cpu.parameters(), gpu.parameters()):
+        torch.testing.assert_close(a, b.cpu(), rtol=1e-7, atol=1e-9)
+
+
+@pytest.mark.parametrize("dig", [False, True])
+def test_greedy_branch_and_only_selected_tiles_explore(dig):
+    cfg, batch = inputs(100)
+    p = TransformerLSTMPolicy(cfg).eval()
+    with torch.no_grad():
+        p.branch_head[-1].weight.zero_()
+        p.branch_head[-1].bias.zero_()
+        p.branch_head[-1].bias[9 if dig else 2] = 5
+    p.tile_exploration_epsilon = 1
+    actions, _, details = p.decide(batch, deterministic=False)
+    assert ((actions >= 361) if dig else ((actions >= 46) & (actions <= 90))).all()
+    assert not details["coins"][:, 0].any() and details["coins"][:, 1].all()
+    assert len(torch.unique(actions)) > 10
+
+
+def test_occupancy_masks_and_full_board_proposal():
+    cfg = load_config()
+    encoder = ObservationEncoder(cfg, Rules())
+    obs = Game().reset(
+        LevelSpec(
+            "full", plants=tuple(InitialPlant("wall_nut", r, c) for r in range(5) for c in range(9))
+        )
     )
-    fresh_result = policy.forward_step(
-        observations[:1, 0],
-        fresh,
-        previous_action=previous[:1, 0],
-        execution_outcome=outcomes[:1, 0],
-    )
-    # The reset API zeros selected entries without altering the other batch lanes.
-    assert torch.count_nonzero(reset.hidden[:, 0]) == 0
-    assert torch.count_nonzero(reset.cell[:, 0]) == 0
-    assert reset_result.branch_q.shape == (2, 10)
-    torch.testing.assert_close(reset_result.branch_q[0], fresh_result.branch_q[0])
-    assert fresh.hidden.shape == (1, 1, 256)
+    batch = collate_observations([encoder.encode(obs), encoder.encode(replace(obs, plants=()))])
+    masks = observation_tile_masks(batch)
+    assert not masks[0, 1:361].any() and masks[:, 361:].all() and masks[1].all()
+    p = TransformerLSTMPolicy(cfg)
+    with torch.no_grad():
+        p.branch_head[-1].weight.zero_()
+        p.branch_head[-1].bias.zero_()
+        p.branch_head[-1].bias[1] = 5
+    assert p.decide(batch)[0][0] == 1
 
 
-def test_future_observation_does_not_change_prefix():
-    cfg = load_demo_config()
-    policy = TransformerLSTMPolicy(cfg).eval()
-    prefix = torch.zeros(1, 2, 294)
-    first = torch.cat((prefix, torch.zeros(1, 2, 294)), 1)
-    second = first.clone()
-    second[:, 2:] = torch.randn_like(second[:, 2:])
-    q1, _, _ = policy.forward_sequence(first)
-    q2, _, _ = policy.forward_sequence(second)
-    torch.testing.assert_close(q1[:, :2], q2[:, :2])
-
-
-def test_compact_history_omits_elapsed_only_waits_and_keeps_cooldowns():
-    base = np.zeros(294, dtype=np.float32)
-    elapsed = base.copy()
-    elapsed[271] = 0.1
-    cooldown = elapsed.copy()
-    cooldown[286] = 0.5
-    rows = [
-        {"decision_index": 0, "action": 0, "observation": base.tolist()},
-        {"decision_index": 1, "action": 0, "observation": elapsed.tolist()},
-        {"decision_index": 2, "action": 0, "observation": cooldown.tolist()},
+def test_compact_history_ignores_elapsed_only_waits_and_keeps_cooldowns():
+    cfg, batch = inputs(1)
+    a = batch.observations()[0]
+    b = copy.deepcopy(a)
+    b["globals"][1] = 0.1
+    c = copy.deepcopy(b)
+    c["globals"][6] = 0.5
+    records = [dict(decision_index=i, action=0, observation=o) for i, o in enumerate((a, b, c))]
+    assert CompactHistoryBuilder().build(records) == [
+        dict(decision_index=2, reasons=["cooldown_decrement"])
     ]
-    events = CompactHistoryBuilder().build(rows)
-    assert events == [{"decision_index": 2, "reasons": ["cooldown_decrement"]}]

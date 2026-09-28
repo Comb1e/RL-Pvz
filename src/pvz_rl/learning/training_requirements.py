@@ -19,8 +19,7 @@ def current_model_config(cfg):
     return (
         identity
         in {
-            ("event_sequential_q_v2", "event_v7", "sequential_q_mc_v2"),
-            ("transformer_lstm_q_v1", "event_v8", "complete_return_lstm_v1"),
+            ("transformer_lstm_q_v2", "entity_v1", "complete_return_lstm_v1"),
         }
         and cfg.get("policy", {}).get("action_distribution") == ACTION_DISTRIBUTION
         and cfg.get("reward", {}).get("version") == "net_value_v1"
@@ -37,7 +36,7 @@ def require_supported_policy(cfg, condition="masked"):
         or not current_model_config(cfg)
     ):
         raise ValueError(
-            "Retired policy or scheduler. Models require matching recurrent event_v8 or event-memory event_v7 protocols, net_value_v1, the sequential_q_unmasked_penalty_v1 distribution and complete-game collection. Start fresh with the bundled train profile."
+            "Retired policy or scheduler. Models require the entity_v1 recurrent protocol, net_value_v1, the sequential_q_unmasked_penalty_v1 distribution and complete-game collection. Start fresh with the bundled train profile."
         )
 
 
@@ -121,7 +120,6 @@ def transfer_protocol(cfg, condition="masked"):
             for k in (
                 "rows",
                 "cols",
-                "bins",
                 "plants",
                 "zombies",
                 "plant_states",
@@ -133,11 +131,6 @@ def transfer_protocol(cfg, condition="masked"):
             k: p[k]
             for k in (
                 "kind",
-                "plant_embedding",
-                "state_embedding",
-                "scalar_sizes",
-                "channels",
-                "memory",
                 "entity_width",
                 "transformer_layers",
                 "transformer_heads",

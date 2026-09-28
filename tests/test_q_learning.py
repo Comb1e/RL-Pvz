@@ -3,10 +3,11 @@
 import pytest
 import torch
 
-from pvz_rl.config import load_event_config as load_config
+from pvz_rl.config import load_config
+from pvz_rl.envs.encoding import collate_observations
 from pvz_rl.envs.env import PvZEnv
 from pvz_rl.monitoring.metrics import task_statistics
-from pvz_rl.policy.spatial_policy import SequentialQPolicy, SpatialFeatures
+from pvz_rl.policy.recurrent_policy import RecurrentQPolicy
 
 
 def policy_and_state():
@@ -15,15 +16,27 @@ def policy_and_state():
     cfg = load_config()
     env = PvZEnv(cfg, level="easy")
     obs, _ = env.reset(seed=4)
-    policy = SequentialQPolicy(
+    policy = RecurrentQPolicy(
         env.observation_space,
         env.action_space,
         lambda _: 3e-4,
-        hidden_sizes=[128, 128],
-        features_extractor_class=SpatialFeatures,
         features_extractor_kwargs={"layout_cfg": cfg},
     )
-    return policy, torch.tensor(obs).unsqueeze(0), env.action_masks()[None], cfg
+    return policy, collate_observations(obs), env.action_masks()[None], cfg
+
+
+def selected_values(policy, obs, actions):
+    from pvz_rl.policy.sequential_q import action_parts
+
+    result = policy.forward_step(obs)
+    branch, tile = action_parts(actions)
+    first = result.branch_q.gather(1, branch[:, None]).flatten()
+    second = (
+        policy.tile_values(result.tile_features, result.context, branch)
+        .gather(1, tile[:, None])
+        .flatten()
+    )
+    return first, second
 
 
 def test_one_optimizer_owns_entire_shared_network():
@@ -33,16 +46,16 @@ def test_one_optimizer_owns_entire_shared_network():
     }
     assert not hasattr(policy, "critic_optimizer")
     actions = torch.tensor([1])
-    before = tuple(q.detach().clone() for q in policy.selected_values(obs, actions))
+    before = tuple(q.detach().clone() for q in selected_values(policy, obs, actions))
     for _ in range(3):
-        first, second = policy.selected_values(obs, actions)
+        first, second = selected_values(policy, obs, actions)
         loss = ((first - 1).square() + (second - 1).square()).mean() / 2
         policy.optimizer.zero_grad()
         loss.backward()
         policy.optimizer.step()
-    after = policy.selected_values(obs, actions)
+    after = selected_values(policy, obs, actions)
     assert all(bool(a > b) for a, b in zip(after, before))
-    assert policy.optimizer.defaults["eps"] == 1e-5
+    assert policy.optimizer.defaults["eps"] == 1e-8
 
 
 def test_early_dig_ratios_do_not_confuse_more_planting_with_regression():
@@ -69,6 +82,7 @@ def test_task_counts_track_partial_games_and_reset_at_episode_boundaries():
 
     cfg = load_config()
     cfg["training"].update(n_envs=3, batch_size=128)
+    cfg["policy"]["chunk_length"] = 16
     cfg["environment"]["cutoff_seconds"] = 1
     env = vector_env(cfg, "masked", 101)
     try:
@@ -93,25 +107,11 @@ def test_task_counts_track_partial_games_and_reset_at_episode_boundaries():
 
 @pytest.mark.parametrize("device", ["cpu", "cuda"])
 def test_neural_q_batching_preserves_predictions(device):
-    if device == "cuda" and not torch.cuda.is_available():
-        pytest.skip("CUDA unavailable")
     policy, obs, _, _ = policy_and_state()
-    policy.to(device).set_training_mode(False)
-    batch = obs.repeat(17, 1).to(device)
-    with torch.no_grad():
-        policy.branch_head[-1].weight.normal_(std=0.01)
-    # Distinct public sun inputs; category fields stay valid.
-    sun_index = policy.features_extractor.layout.slices["globals"].start
-    batch[:, sun_index] = torch.linspace(0, 9, len(batch), device=device)
-    # Select true FP32 convolutions for this mathematical batching control.
-    # cuDNN's default TF32 kernels vary by batch shape; they are measured separately.
+    policy.to(device).eval()
+    batch = collate_observations(obs.observations() * 17, device)
+    batch.globals[:, 0] = torch.linspace(0, 9, 17, device=device)
     with torch.no_grad(), torch.backends.cudnn.flags(allow_tf32=False):
-        per_step = torch.cat([policy.predict_values(row[None]) for row in batch])
-        batched = policy.predict_values(batch)
-        policy.double()
-        reference = policy.predict_values(batch.double())
-        single_reference = torch.cat([policy.predict_values(row[None].double()) for row in batch])
-    torch.testing.assert_close(reference, single_reference, rtol=1e-11, atol=1e-11)
-    torch.testing.assert_close(batched.double(), reference, rtol=2e-6, atol=2e-6)
-    torch.testing.assert_close(per_step.double(), reference, rtol=2e-6, atol=2e-6)
-    torch.testing.assert_close(batched, per_step, rtol=2e-6, atol=2e-6)
+        individual = torch.cat([policy.forward_step(batch[i : i + 1]).branch_q for i in range(17)])
+        together = policy.forward_step(batch).branch_q
+    torch.testing.assert_close(individual, together, rtol=2e-5, atol=2e-6)

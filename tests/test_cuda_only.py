@@ -11,7 +11,7 @@ import pytest
 import torch
 
 from pvz_rl.cli import configured, main
-from pvz_rl.config import load_event_config as load_config
+from pvz_rl.config import load_config
 from pvz_rl.learning.training import train
 from pvz_rl.learning.training_requirements import require_cuda_training, resume_protocol
 
@@ -159,7 +159,7 @@ def test_stage_rejects_missing_or_mismatched_pin(staged_repository, tmp_path, fa
     assert not (tmp_path / "rejected").exists()
 
 
-def test_recurrent_defaults_and_explicit_event_memory_are_trainable():
+def test_recurrent_train_and_demo_defaults_are_trainable():
     from pvz_rl.config import load_demo_config
 
     root = Path(__file__).resolve().parents[1]
@@ -198,7 +198,7 @@ def test_benchmark_schedules_configurable_cuda_sizes(smoke_cfg, tmp_path, monkey
     monkeypatch.setattr(benchmark, "measure", measure)
     result = benchmark.benchmark_gpu(smoke_cfg, tmp_path / "benchmark", minutes=1, steps=128)
     assert len(seen) == 3
-    assert {(n, steps) for n, steps, _ in seen} == {(128, "sequential_q_mc_v2")}
+    assert {(n, steps) for n, steps, _ in seen} == {(128, "complete_return_lstm_v1")}
     assert {seed for _, _, seed in seen} == {800, 801, 802}
     assert result["n_envs"] == 128
     assert "speedup_over_current" not in result

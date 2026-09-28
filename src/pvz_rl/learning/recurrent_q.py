@@ -4,7 +4,7 @@ import numpy as np
 import torch
 
 from pvz_rl.learning.cohort import CohortPhase
-from pvz_rl.learning.cuda_q import CudaSequentialQ
+from pvz_rl.learning.cuda_q import CudaCohortLifecycle
 from pvz_rl.policy.runner import PolicyRunner
 from pvz_rl.policy.sequential_q import action_parts, balanced_q_loss
 
@@ -22,10 +22,10 @@ def sequence_batches(buffer, chunk_length, decision_budget):
             rows = buffer.take(slots[:, None] + times[None] * buffer.n_envs)
             if not rows["active"].any():
                 break
-            yield start == 0, rows
+            yield start == 0, rows, buffer.observations(rows)
 
 
-def sequence_loss(policy, rows, state, counts):
+def sequence_loss(policy, rows, state, counts, observations):
     """The contribution to whole-cohort equal-group regression, excluding padding."""
     device = next(policy.parameters()).device
 
@@ -35,7 +35,7 @@ def sequence_loss(policy, rows, state, counts):
     active = tensor("active", torch.bool)
     actions = tensor("action", torch.long)[active]
     q, tiles, context, state = policy.forward_sequence(
-        tensor("observation", torch.float32),
+        observations.to(device),
         state,
         previous_actions=tensor("previous", torch.long),
         execution_outcomes=tensor("previous_outcome", torch.float32),
@@ -57,8 +57,8 @@ def sequence_loss(policy, rows, state, counts):
     return loss, state.detach(), branch_error, tile_error[nonwait]
 
 
-class CudaRecurrentQ(CudaSequentialQ):
-    policy_protocol = "transformer_lstm_q_v1"
+class CudaRecurrentQ(CudaCohortLifecycle):
+    policy_protocol = "transformer_lstm_q_v2"
     optimizer_version = "complete_return_lstm_v1"
 
     def _new_memory(self):
@@ -76,7 +76,9 @@ class CudaRecurrentQ(CudaSequentialQ):
             enabled = torch.as_tensor(active, device=self.device)
             rows = np.zeros(self.n_envs, dtype=self._buffer.dtype)
             # Copy public inputs before the simulator overwrites its observation tensor.
-            rows["observation"] = self._last_obs.cpu().numpy()
+            observations = self._last_obs.cpu()
+            rows["entity_count"] = observations.entity_mask.sum(-1).numpy()
+            rows["entity_omitted"] = env.features.truncation_counts.get()
             rows["previous"] = self._memory.previous_actions.cpu().numpy()
             rows["previous_outcome"] = self._memory.outcomes.cpu().numpy()
             rows["reset"] = self._first
@@ -115,7 +117,11 @@ class CudaRecurrentQ(CudaSequentialQ):
                 env.last_action_result_host,
                 env._episode_serial,
             )
-            self._buffer.append(rows)
+            rows["executed_action"] = env.executed_actions.cpu().numpy()
+            self._buffer.append(rows, observations)
+            self._planting_samples += int(
+                np.count_nonzero(active & (rows["action"] > 0) & (rows["action"] < 361))
+            )
             self._stats["species_exploration_coins"] += int(rows["species_coin"][active].sum())
             self._stats["tile_exploration_coins"] += int(rows["tile_coin"][active].sum())
             self._stats["exploratory_changes"] += int(
@@ -170,12 +176,12 @@ class CudaRecurrentQ(CudaSequentialQ):
             self.logger.record("train/q_loss", self._pass_loss)
             self.logger.record("train/q_grad_norm", float(norm))
         else:
-            reset, rows = item
+            reset, rows, observations = item
             if reset:
                 self._sequence_state = None
             self.policy.set_training_mode(True)
             loss, self._sequence_state, branch_error, tile_error = sequence_loss(
-                self.policy, rows, self._sequence_state, self._buffer.group_counts
+                self.policy, rows, self._sequence_state, self._buffer.group_counts, observations
             )
             if not torch.isfinite(loss):
                 raise FloatingPointError("Non-finite recurrent Q loss")
@@ -194,7 +200,6 @@ class CudaRecurrentQ(CudaSequentialQ):
         # pass from episode starts; gradients and carried fitting states are transient.
         self.policy.optimizer.zero_grad(set_to_none=True)
         self._sequence_iterator = self._sequence_state = None
-        self._fit_cursor = 0
 
     def _excluded_save_params(self):
         return [*super()._excluded_save_params(), "_sequence_iterator", "_sequence_state"]

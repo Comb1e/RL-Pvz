@@ -7,7 +7,13 @@ from pvz_game.cuda.backend import kernel_source
 from pvz_game.cuda.schema import REASONS
 
 from pvz_rl.envs.actions import ActionSchema
-from pvz_rl.envs.encoding import PLANT_BEHAVIOR, ObservationEncoder
+from pvz_rl.envs.encoding import (
+    ENTITY_FIELDS,
+    ENTITY_WIDTH,
+    GLOBAL_WIDTH,
+    EntityBatch,
+    ObservationEncoder,
+)
 from pvz_rl.envs.rewards import LEDGER_METRICS, REWARD_METRICS
 from pvz_rl.monitoring.cuda_diagnostics import DeviceProfiler
 
@@ -26,38 +32,30 @@ class CudaFeatures:
         self.profiler = DeviceProfiler(cp, cfg.get("simulation", {}).get("profile", False))
         encoder = self.encoder = ObservationEncoder(cfg, batch.rules)
         params = {
+            "ENTITY_WIDTH": ENTITY_WIDTH,
+            "GLOBAL_WIDTH": GLOBAL_WIDTH,
             "ACTION_DIG_START": ActionSchema.dig_start,
             "ACTION_COUNT": ActionSchema.size,
             "ACTION_TILES": ActionSchema.tiles,
-            "BINS": encoder.bins,
-            "ZOMBIE_WIDTH": encoder.zombie_width,
-            "ZOMBIE_OFFSET": encoder.slices["zombies"].start,
-            "EMPTY_DISTANCE": encoder.empty_distance,
-            "OBS_SIZE": encoder.size,
-            "LOCAL_COUNT": encoder.local_count_scale,
-            "HP_SCALE": encoder.hp_scale,
-            "ARMOR_SCALE": max(1, encoder.armor_scale),
-            "POSITION_SCALE": encoder.position_scale,
+            "ZOMBIE_TYPE_START": min(encoder.zombies.values()),
+            "ZOMBIE_STATE_START": encoder.states["zombie:walking"],
+            "PROJECTILE_TYPE_START": encoder.types["projectile:pea"],
+            "MOWER_TYPE": encoder.types["mower"],
+            "MOWER_STATE_START": encoder.states["mower:ready"],
             "COST_SCALE": encoder.cost_scale,
             "CUTOFF_SECONDS": cfg["environment"]["cutoff_seconds"],
             "EARLY_DIG_TICKS": cfg.get("diagnostics", {}).get("early_dig_seconds", 5)
             * batch.rules.game["tick_rate"],
             "WAVE_SCALE": cfg["encoding"]["wave_scale"],
             "COUNT_SCALE": encoder.count_scale,
-            "GLOBAL_OFFSET": encoder.slices["globals"].start,
-            "HEADLESS_OFFSET": encoder.slices["headless"].start,
-            "COOLDOWN_OFFSET": encoder.slices.get(
-                "cooldowns", slice(encoder.size, encoder.size)
-            ).start,
-            "COOLDOWN_WIDTH": encoder.cooldown_width,
             "GAMMA": cfg["training"]["gamma"],
             "BASIC_HP": batch.rules.zombies["basic"]["health"],
             "REWARD_SIZE": len(REWARD_FIELDS),
             "METRIC_SIZE": METRIC_SIZE,
             "EMPTY_TILE_REASON": REASONS.index("empty_tile"),
         }
-        params.update({f"Z_{k}": v for k, v in encoder.zombie_fields.items()})
         params.update({f"O_{k}": v for k, v in encoder.global_fields.items()})
+        params.update({f"E_{k}": i for i, k in enumerate(ENTITY_FIELDS)})
         for index, kind in enumerate(encoder.plants):
             params[f"CD_{index}"] = batch.rules.plants[kind]["recharge_ticks"] + 1
         reward_keys = (
@@ -75,12 +73,6 @@ class CudaFeatures:
         params.update({f"T_{k}": i for k, i in zip(REWARD_METRICS, METRIC_INDICES)})
         params.update({f"T_{k}": i for k, i in LEDGER_INDICES.items()})
         source = kernel_source(batch.rules, batch.zcap, batch.qcap, batch.ecap, batch.diagnostic)
-        from pvz_game.cuda.schema import PLANT_STATES
-
-        categories = [encoder.plant_states[PLANT_BEHAVIOR[s]] + 1 for s in PLANT_STATES]
-        source += (
-            "\n__device__ __constant__ I BEHAVIOR[] = {" + ",".join(map(str, categories)) + "};"
-        )
         source += "\n" + "\n".join(f"#define {k} {v}" for k, v in params.items())
         source += "\n" + files("pvz_rl.envs").joinpath("cuda_features.cu").read_text(
             "utf-8"
@@ -91,31 +83,76 @@ class CudaFeatures:
         self.encode_kernel = self.module.get_function("encode_state")
         self.policy_mask_kernel = self.module.get_function("policy_masks")
         self.reward_kernel = self.module.get_function("reward_metrics")
-        self.observations = cp.zeros((batch.n, encoder.size), cp.float32)
+        self.globals = cp.zeros((batch.n, encoder.global_width), cp.float32)
+        self.obs_tensor = None
         self.assets = cp.zeros(batch.n, cp.float64)
         self.rewards = cp.zeros(batch.n, cp.float32)
         self.parts = cp.zeros((batch.n, len(REWARD_FIELDS)), cp.float64)
         self.totals = cp.zeros((batch.n, METRIC_SIZE), cp.float64)
         self.totals[:, 11] = -1
-        self.obs_tensor = torch.from_dlpack(self.observations)
         self.reward_tensor = torch.from_dlpack(self.rewards)
         self.mask_tensor = torch.from_dlpack(batch.masks)
 
     def encode(self):
         b = self.batch
+        cp = b.cp
+        counts = b.header[:, 9] + b.header[:, 10] + b.header[:, 11] + 5
+        width = int(counts.max().get())
+        if width < 5 or width > 45 + b.zcap + b.qcap + 5:
+            raise ValueError("Invalid public entity count in CUDA state")
+        entities = cp.zeros((b.n, width, ENTITY_WIDTH), cp.int32)
         self.encode_kernel(
             (b.n,),
-            (32,),
+            (128,),
             (
                 b.header,
                 b.plants,
                 b.zombies,
+                b.projectiles,
                 b.mowers,
                 b.cooldowns,
-                self.observations,
+                entities,
+                self.globals,
                 self.assets,
+                width,
                 b.n,
             ),
+        )
+        valid = cp.arange(width)[None] < counts[:, None]
+        # Lexicographic public-field ordering, with padding sorted last.
+        kind = entities[:, :, 0]
+        group = cp.where(kind == 16, 0, cp.where(kind <= 8, 1, cp.where(kind <= 13, 2, 3)))
+        lane = cp.where(group <= 1, entities[:, :, 2], 0)
+        keys = [entities[:, :, j].ravel() for j in reversed(range(ENTITY_WIDTH))]
+        keys += [
+            entities[:, :, 3].ravel(),
+            lane.ravel(),
+            group.ravel(),
+            (~valid).ravel(),
+            cp.repeat(cp.arange(b.n), width),
+        ]
+        order = cp.lexsort(cp.stack(keys))
+        entities = entities.reshape(-1, ENTITY_WIDTH)[order].reshape(b.n, width, ENTITY_WIDTH)
+        limit = self.encoder.max_entities
+        kept = cp.minimum(counts, limit)
+        self.truncation_counts = cp.stack(
+            (
+                cp.maximum(0, b.header[:, 9] - (limit - 5)),
+                cp.maximum(0, b.header[:, 10] - cp.maximum(0, limit - 5 - b.header[:, 9])),
+                cp.maximum(
+                    0, b.header[:, 11] - cp.maximum(0, limit - 5 - b.header[:, 9] - b.header[:, 10])
+                ),
+            ),
+            axis=1,
+        )
+        if width > limit:
+            entities = cp.ascontiguousarray(entities[:, :limit])
+            width = limit
+        valid = cp.arange(width)[None] < kept[:, None]
+        self.obs_tensor = EntityBatch(
+            torch.from_dlpack(entities),
+            torch.from_dlpack(valid),
+            torch.from_dlpack(self.globals.copy()),
         )
         self.policy_mask_kernel(
             ((b.n * ActionSchema.size + 255) // 256,),

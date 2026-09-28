@@ -5,6 +5,7 @@ import pytest
 from pvz_game import LevelSpec, Place, Spawn
 
 from pvz_rl.config import research_config, runtime_settings, validate_config
+from pvz_rl.envs.encoding import observations_equal
 from pvz_rl.envs.env import PvZEnv
 from pvz_rl.monitoring.timing import TrainingTimings
 
@@ -120,7 +121,7 @@ def test_cached_and_reference_game_hashes_rewards_and_masks_match(cfg, level):
     left, _ = reference.reset(seed=42)
     right, _ = cached.reset(seed=42)
     while reference.state == "running":
-        np.testing.assert_array_equal(left, right)
+        assert observations_equal(left, right)
         np.testing.assert_array_equal(reference.action_masks(), cached.action_masks())
         action = reference.codec.encode(choose_action(reference.public_board()))
         left, r1, term1, trunc1, info1 = reference.step(action)

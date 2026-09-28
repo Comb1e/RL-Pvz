@@ -2,17 +2,14 @@
 
 from dataclasses import replace
 
-import numpy as np
 import pytest
-import torch
 from pvz_game import Dig, LevelSpec, Place, Spawn, Status
 from pvz_game.config import PLANT_TYPES, InitialPlant
 from pvz_game.types import Event
 
-from pvz_rl.config import load_event_config as load_config
+from pvz_rl.config import load_config
 from pvz_rl.envs.env import PvZEnv
 from pvz_rl.envs.rewards import asset_value, reward_parts
-from pvz_rl.policy.spatial_policy import SpatialFeatures
 
 
 @pytest.mark.parametrize("kind", PLANT_TYPES)
@@ -103,35 +100,6 @@ def test_empty_explosion_and_nut_bite_are_only_diagnostics():
     part = reward_parts(before, before, cfg, events=events)
     assert part["wall_nut_damage"] == 25 and part["empty_explosions"] == 1
     assert part["total"] == 0
-
-
-def test_categorical_boundaries_and_empty_embeddings():
-    cfg = load_config()
-    env = PvZEnv(cfg)
-    env.reset(
-        seed=3,
-        options={
-            "scenario": LevelSpec(
-                "types",
-                (Spawn(1000, "basic", 0),),
-                plants=tuple(InitialPlant(kind, 0, i) for i, kind in enumerate(PLANT_TYPES)),
-            )
-        },
-    )
-    obs = env.encoder.encode(env.public)
-    assert obs.shape == (286,)
-    grid = obs[:135].reshape(5, 9, 3)
-    np.testing.assert_array_equal(grid[0, :8, 0], np.arange(1, 9))
-    assert not grid[1:].any()
-    for state, index in env.encoder.plant_states.items():
-        public = replace(env.public, plants=(replace(env.public.plants[0], state=state),))
-        assert env.encoder.encode(public)[2] == index + 1
-    features = SpatialFeatures(env.observation_space, cfg)
-    assert torch.count_nonzero(features.plant_types.weight[0]) == 0
-    assert torch.count_nonzero(features.plant_states.weight[0]) == 0
-    features(torch.tensor(obs).unsqueeze(0)).sum().backward()
-    assert torch.count_nonzero(features.plant_types.weight.grad[0]) == 0
-    assert torch.count_nonzero(features.plant_states.weight.grad[0]) == 0
 
 
 @pytest.mark.parametrize("setting", ["shaped", "curriculum", "masked", "fixed"])

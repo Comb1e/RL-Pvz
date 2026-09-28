@@ -8,8 +8,7 @@ import pytest
 import torch
 
 from pvz_rl.cli import configured, main
-from pvz_rl.config import curriculum_probe_seeds, seed_values, validate_config
-from pvz_rl.config import load_event_config as load_config
+from pvz_rl.config import curriculum_probe_seeds, load_config, seed_values, validate_config
 from pvz_rl.learning.curriculum import STAGES, CurriculumState, stage_distribution
 from pvz_rl.learning.training import ResearchCallback, load_policy, train
 from pvz_rl.learning.training_requirements import require_cuda_training, transfer_protocol
@@ -30,6 +29,7 @@ def stage_cfg():
         max_minutes=2,
     )
     cfg["visualization"].update(enabled=False, demos=False)
+    cfg["policy"]["chunk_length"] = 16
     return cfg
 
 
@@ -88,7 +88,7 @@ def test_transfer_compatibility_preserves_learning_contract(stage_cfg, change):
     elif change == "discount":
         altered["training"]["gamma"] = 0.9999
     elif change == "policy":
-        altered["policy"]["channels"] = [48, 48]
+        altered["policy"]["entity_width"] = 64
     elif change == "tasks":
         altered["curriculum"]["stages"]["standard"]["weights"] = [0.6, 0.4]
     elif change == "optimizer":
@@ -168,7 +168,7 @@ def test_invalid_stage_requests_leave_no_run(stage_cfg, tmp_path, case):
 
 def test_incompatible_checkpoint_rejected_before_run(stage_cfg, tmp_path, monkeypatch):
     saved = copy.deepcopy(stage_cfg)
-    saved["policy"]["plant_embedding"] = 16
+    saved["policy"]["entity_width"] = 64
     write_json(
         tmp_path / "metadata.json", {"config": saved, "condition": "masked", "family": "preset"}
     )
@@ -455,7 +455,7 @@ def test_automatic_curriculum_finishes_only_after_shared_mastery(stage_cfg):
 def test_mastery_seed_pool_and_retained_recipe_defaults():
     from pvz_rl.config import load_config as load_profile_config
 
-    for profile in ("train", "event-memory"):
+    for profile in ("train",):
         cfg = load_profile_config("src/pvz_rl/data/train.toml", profile=profile)
         assert cfg["training"]["eval_interval_games"] == 2000
         assert seed_values(cfg, "validation") == list(range(100000, 100050))
@@ -628,7 +628,7 @@ def test_until_mastery_cli_saved_resume_and_unbounded_clock(stage_cfg, tmp_path,
         argparse.Namespace(
             command="train",
             config=Path("src/pvz_rl/data/train.toml"),
-            profile="event-memory",
+            profile="train",
             stage="easy",
             until_stage_complete=True,
         )
@@ -656,6 +656,7 @@ def test_until_mastery_cli_saved_resume_and_unbounded_clock(stage_cfg, tmp_path,
     assert restored == cfg
     target = copy.deepcopy(stage_cfg)
     target["environment"] = cfg["environment"]
+    target["policy"]["chunk_length"] = cfg["policy"]["chunk_length"]
     assert transfer_protocol(cfg) == transfer_protocol(target)
     with pytest.raises(ValueError, match="explicit training deadline"):
         train(cfg, "masked", 101, tmp_path / "absent", deadline=1)
@@ -681,7 +682,7 @@ def test_previous_action_distribution_rejected_by_metadata_and_direct_loader(
     import json
     import zipfile
 
-    from pvz_rl.learning.cuda_q import CudaSequentialQ
+    from pvz_rl.learning.recurrent_q import CudaRecurrentQ
     from pvz_rl.learning.training_requirements import current_model_config
 
     stage_cfg["policy"].pop("action_distribution")
@@ -693,7 +694,7 @@ def test_previous_action_distribution_rejected_by_metadata_and_direct_loader(
     with zipfile.ZipFile(checkpoint, "w") as archive:
         archive.writestr("data", json.dumps({"optimizer_protocol": "periodic_exact_kl_v1"}))
     with pytest.raises(ValueError, match="requires fresh models"):
-        CudaSequentialQ.load(checkpoint)
+        CudaRecurrentQ.load(checkpoint)
     # A mismatched sidecar must not allow old archive weights into a new experiment.
     stage_cfg["policy"]["action_distribution"] = "balanced_species_tiles_v1"
     write_json(
@@ -720,9 +721,7 @@ def test_until_stage_config_does_not_disable_benchmark_window(tmp_path):
     path = tmp_path / "stage.toml"
     path.write_text(source)
     cfg = configured(
-        argparse.Namespace(
-            command="benchmark-gpu", config=path, profile="event-memory", steps=16384
-        )
+        argparse.Namespace(command="benchmark-gpu", config=path, profile="train", steps=16384)
     )
     assert cfg["training"]["until_stage_complete"]
     assert cfg["training"]["total_steps"] == 16384

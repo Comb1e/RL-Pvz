@@ -4,17 +4,10 @@ Record a human Plants vs. Zombies game, initialize a Transformer–LSTM Q policy
 then train and evaluate the same model autonomously. The pinned simulator runs
 at 100 Hz; policies receive only public observations.
 
-Direct policy masks describe board occupancy only. The ten-way Q selector always
-compares wait, all eight plant species and dig; an unaffordable or cooling-down
-winner remains the submitted plant proposal. The pinned simulator rejects that
-proposal for one tick, reports its reason and applies `invalid_plant_penalty`.
-The proposal remains the trajectory and Q-learning target, while execution and
-recurrent history receive wait (`0`) plus `accepted=false` and one tick.
-
-During collection, the ten-way branch choice is always the highest-Q choice.
-Exploration applies only to the selected branch's tile target: plant tiles use
-occupancy masks and dig tiles remain unrestricted. A tile exploration coin can
-therefore change the target without changing which branch was proposed.
+Each plant, zombie, projectile and mower has its own 11-field public record,
+embedded into 32 values and processed by attention before the recurrent policy.
+The ten action branches remain greedy; exploration only chooses tiles. Rejected
+proposals receive their penalty and execute/feed back as waits.
 
 ## Requirements
 
@@ -58,9 +51,10 @@ Training commands explicitly start autonomous learning. Availability and replay
 checks do not. Incomplete recordings are rejected. The curriculum is easy →
 standard → shared; a demonstration fit alone does not establish mastery.
 
-All profiles share one bundled configuration at
-`src/pvz_rl/data/train.toml`; use `--profile event-memory` for the archived
-event-memory model.
+All parameters live in `src/pvz_rl/data/train.toml` (train and demo overlays).
+This architecture requires a newly recorded demonstration or a fresh model;
+previous checkpoints and aggregate-observation archives cannot be loaded.
+Existing files are preserved. Choose new output paths.
 
 ## Common checks
 
@@ -74,6 +68,7 @@ event-memory model.
 - [Training, configuration, resume and evaluation](docs/training.md)
 - [Architecture and workflows](docs/architecture.md)
 - [Viewer controls](docs/live-view.md)
+- [Entity schema, cap and attention mathematics](docs/math/entity-inputs.md)
 - [Recurrent objective and mathematical controls](docs/math/recurrent-training.md)
 - [Inspected sources](docs/references.md)
 - [Iteration history](docs/iteration.md)

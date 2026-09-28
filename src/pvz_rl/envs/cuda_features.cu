@@ -6,91 +6,58 @@ __device__ double asset_value(Header &h, Plant *p) {
   for (I j = 0; j < h.np; j++) value += (double)PC[p[j].kind] * p[j].health / PH[p[j].kind];
   return value;
 }
-__device__ I bin_x(I x) {
-  return hi(0, lo(BINS - 1, (x - G_house_x) * BINS / (G_spawn_x - G_house_x)));
-}
+// Each thread emits one real public entity; reserved simulator slots are skipped.
 extern "C" __global__ void encode_state(const I *headers, const I *plants,
-                                        const I *zombies,
-                                        const I *mowers,
-                                        const I *cooldowns,
-                                        float *output, double *assets, I n) {
+    const I *zombies, const I *projectiles, const I *mowers, const I *cooldowns,
+    int *entities, float *globals, double *assets, I width, I n) {
   I i = blockIdx.x;
-  if (threadIdx.x || i >= n)
-    return;
+  if (i >= n) return;
   Header h = ((Header *)headers)[i];
   Plant *p = (Plant *)(plants + i * 45 * GAME_PLANT_WIDTH);
   Zombie *z = (Zombie *)(zombies + i * ZCAP * GAME_ZOMBIE_WIDTH);
+  Shot *q = (Shot *)(projectiles + i * QCAP * GAME_PROJECTILE_WIDTH);
   Mower *m = (Mower *)(mowers + i * 5 * GAME_MOWER_WIDTH);
-  float *o = output + i * OBS_SIZE;
-  for (I j = 0; j < OBS_SIZE; j++)
-    o[j] = 0;
-  for (I j = 0; j < h.np; j++) {
-    Plant a = p[j];
-    I k = (a.row * 9 + a.col) * 3;
-    o[k] = a.kind + 1;
-    o[k + 1] = (double)a.health / PH[a.kind];
-    o[k + 2] = BEHAVIOR[a.state];
+  if (!threadIdx.x) {
+    float *g = globals + i * GLOBAL_WIDTH;
+    g[O_sun] = (double)h.sun / COST_SCALE;
+    g[O_elapsed] = (double)h.tick / G_tick_rate / CUTOFF_SECONDS;
+    g[O_wave] = (double)h.wave / WAVE_SCALE;
+    g[O_total_waves] = (double)h.total_waves / WAVE_SCALE;
+    g[O_initial] = (double)h.total_spawns / COUNT_SCALE;
+    g[O_defeated] = (double)h.defeated / COUNT_SCALE;
+    const I recharge[8] = {CD_0, CD_1, CD_2, CD_3, CD_4, CD_5, CD_6, CD_7};
+    for (I j=0; j<8; j++) g[O_cooldown_0+j] = (double)cooldowns[i*8+j] / recharge[j];
+    g[O_plant_count] = (double)h.np / COUNT_SCALE;
+    g[O_zombie_count] = (double)h.nz / COUNT_SCALE;
+    g[O_projectile_count] = (double)h.nq / COUNT_SCALE;
+    g[O_mower_count] = 5.0 / COUNT_SCALE;
+    assets[i] = asset_value(h, p);
   }
-  I zs[5 * BINS * ZOMBIE_WIDTH] = {0};
-  I nearest[5 * BINS];
-  I nearest_pole[5 * BINS];
-  for (I j = 0; j < 5 * BINS; j++) nearest[j] = 9223372036854775807LL;
-  for (I j = 0; j < 5 * BINS; j++) nearest_pole[j] = 9223372036854775807LL;
-  for (I j = 0; j < h.nz; j++) {
-    Zombie a = z[j];
-    I region = a.row * BINS + bin_x(a.x);
-    I *cell = zs + region * ZOMBIE_WIDTH;
-    cell[a.kind]++;
-    cell[Z_health] += a.health;
-    cell[Z_armor] += a.armor;
-    nearest[region] = lo(nearest[region], a.x);
-    if (a.has_pole && !a.headless)
-      nearest_pole[region] = lo(nearest_pole[region], a.x);
-  }
-  for (I j = 0; j < 5 * BINS * ZOMBIE_WIDTH; j++) {
-    I f = j % ZOMBIE_WIDTH;
-    double scale = LOCAL_COUNT;
-    if (f == Z_health)
-      scale *= HP_SCALE;
-    else if (f == Z_armor)
-      scale *= ARMOR_SCALE;
-    if (f == Z_nearest)
-      o[ZOMBIE_OFFSET + j] = nearest[j / ZOMBIE_WIDTH] == 9223372036854775807LL
-          ? EMPTY_DISTANCE
-          : (double)(nearest[j / ZOMBIE_WIDTH] - G_house_x) / POSITION_SCALE;
-    else if (f == Z_nearest_pole)
-      o[ZOMBIE_OFFSET + j] = nearest_pole[j / ZOMBIE_WIDTH] == 9223372036854775807LL
-          ? EMPTY_DISTANCE
-          : (double)(nearest_pole[j / ZOMBIE_WIDTH] - G_house_x) / POSITION_SCALE;
-    else
-      o[ZOMBIE_OFFSET + j] = (double)zs[j] / scale;
-  }
-  float *g = o + GLOBAL_OFFSET;
-  g[O_sun] = (double)h.sun / COST_SCALE;
-  g[O_elapsed] = (double)h.tick / G_tick_rate / CUTOFF_SECONDS;
-  g[O_wave] = (double)h.wave / WAVE_SCALE;
-  g[O_total_waves] = (double)h.total_waves / WAVE_SCALE;
-  g[O_initial] = (double)h.total_spawns / COUNT_SCALE;
-  g[O_defeated] = (double)h.defeated / COUNT_SCALE;
-  for (I r = 0; r < 5; r++)
-    g[O_mower_spent_0 + r] = m[r].state == 2;
-  // Card cooldowns are public engine state.  Keep the fixed species order and
-  // use recharge_ticks + 1, matching the Python encoder immediately after a
-  // successful instantaneous placement.
-  const I *cd = cooldowns + i * 8;
-  const I recharge[8] = {CD_0, CD_1, CD_2, CD_3, CD_4, CD_5, CD_6, CD_7};
-  for (I j = 0; j < COOLDOWN_WIDTH; j++)
-    o[COOLDOWN_OFFSET + j] = (double)cd[j] / recharge[j];
-  for (I r = 0; r < 5; r++) {
-    I nearest = 9223372036854775807LL;
-    bool headless = false;
-    for (I j = 0; j < h.nz; j++) if (z[j].row == r) {
-      if (z[j].x < nearest) { nearest = z[j].x; headless = z[j].headless; }
-      else if (z[j].x == nearest && !z[j].headless) headless = false;
+  for (I index=threadIdx.x; index<width; index+=blockDim.x) {
+    int *o = entities + (i * width + index) * ENTITY_WIDTH;
+    for (I f=0; f<ENTITY_WIDTH; f++) o[f]=0;
+    I j=index;
+    if (j < h.np) {
+      Plant a=p[j];
+      o[E_type]=a.kind+1; o[E_state]=a.state+1; o[E_row]=a.row;
+      o[E_x]=a.col*G_units_per_tile+G_units_per_tile/2; o[E_health]=a.health;
+      o[E_phase_ticks]=hi(0, a.due-h.tick);
+    } else if ((j-=h.np) < h.nz) {
+      Zombie a=z[j];
+      o[E_type]=a.kind+ZOMBIE_TYPE_START; o[E_state]=a.state+ZOMBIE_STATE_START;
+      o[E_row]=a.row; o[E_x]=a.x; o[E_health]=a.health; o[E_armor]=a.armor;
+      o[E_phase_ticks]=a.state==2 ? hi(0,a.vault_until-h.tick) : a.state==3
+        ? (hi(0,G_bite_ticks*2-a.bite_progress)+(h.tick<a.slow_until ? 0:1))
+          / (h.tick<a.slow_until ? 1:2) : 0;
+      o[E_slow_ticks]=hi(0,a.slow_until-h.tick); o[E_has_pole]=a.has_pole; o[E_headless]=a.headless;
+    } else if ((j-=h.nz) < h.nq) {
+      Shot a=q[j];
+      o[E_type]=PROJECTILE_TYPE_START+a.icy; o[E_row]=a.row; o[E_x]=a.x; o[E_damage]=a.damage;
+    } else if ((j-=h.nq) < 5) {
+      Mower a=m[j];
+      o[E_type]=MOWER_TYPE; o[E_state]=MOWER_STATE_START+a.state; o[E_row]=a.row; o[E_x]=a.x;
     }
-    o[HEADLESS_OFFSET + r] = headless;
   }
-  assets[i] = asset_value(h, p);
 }
 
 // Policy masks expose only board geometry.  The sequential Q controller keeps
