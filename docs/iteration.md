@@ -1,5 +1,56 @@
 # Iteration history
 
+## 0.30.0 — 2026-09-28
+
+- Problem/root cause: small encoder batches, unconditional query splitting and
+  nested activation checkpoints multiplied kernel launches and recomputation.
+  Collection repeatedly extracted GPU scalars; fitting rebuilt dictionaries and
+  synchronized each chunk. Sparse-game GPU utilization stayed near 35%.
+- Improvement: full efficient SDPA, a 64-frame/32,768-token encoder budget,
+  cached normalization constants, bulk ragged gathers, ordered double-buffer
+  pinned prefetch, batched collection copies and deferred telemetry. Unsupported
+  attention backends retain an exact query fallback.
+- Precision: BF16 temporary features, embeddings and auxiliary projections;
+  FP32 master weights, normalization/residual accumulation, recurrent core/state,
+  Q heads, loss, accumulated gradients and optimizer state. No loss scaler.
+  Failed BF16 passes restart in FP32 without losing an update. Allocation retries
+  reduce only encoder microbatches and then enable one outer checkpoint.
+- Compatibility: entity inputs, all parameter names/shapes, action semantics,
+  rewards and the game pin remain unchanged. Ordinary resume preserves saved
+  execution precision (older entity checkpoints default to FP32).
+  `--refresh-performance` replaces only execution settings. Saved cohort fallback
+  state survives SB3 policy reconstruction and uncommitted-pass recovery.
+- Preserved user choices: `training.demo.passes=5`, four autonomous passes,
+  128 environments, 1,024-decision batches, 256-step chunks, 256 entities, and
+  train/demo invalid-plant penalties of 0.003/0.001. Demo fitting remains FP32.
+- Test consolidation: eight overlapping test functions were removed; unique
+  assertions moved into the existing owners. Batching, profile defaults,
+  obsolete-checkpoint rejection, occupancy and collection recovery each have
+  consolidated controls. New BF16, prefetch and retry coverage lives in existing
+  model/storage/recurrent files. The final suite contains 536 cases, versus 537
+  before this change; atomic signal interruption and independent math controls
+  remain covered.
+- Verification: 213 focused tests passed on the final implementation. An earlier
+  full-suite run passed 545 cases before test consolidation and recovery refinements.
+  The final 536-case full-suite rerun was stopped at the user's request; it is not
+  reported as a completed run. Ruff lint, dependency checks, packaging and local
+  documentation links passed. The existing five-pass entity demo checkpoint loads
+  with FP32 parameters. No further tests were run after the stop request.
+- Measured improvement on RTX 4070 Laptop: median short end-to-end throughput
+  rose from 318 to 1,553 decisions/s without the viewer (4.89x), and 307 to 1,638
+  with it (5.34x). Four-pass fitting fell from 35.97 to 6.27 seconds without the
+  viewer (5.73x), and 37.55 to 5.84 seconds with it (6.43x). Synthetic fitting
+  improved 7.37–16.05x across sparse, mixed and capped populations. Crowded
+  synthetic Torch allocation peaked at 859.6 MiB; short real collection peaked
+  at 143.0 MiB plus a separate 128.6 MiB CuPy pool.
+- Evidence and limits: [raw repetitions and phase/memory measurements](evidence/training-throughput-v030.json).
+  Collection used one-second cutoffs and three warmed repetitions per viewer
+  setting, keeping four passes and the normal batch dimensions. Hardware sampling
+  includes warmup. Baseline zero transport counters were uninstrumented.
+  No formal training or learning-quality claim. Long-run throughput, disk-heavy
+  cohorts and other GPUs require their own measurements; Windows FlashAttention
+  and Triton are unavailable in the tested installation.
+
 ## 0.29.0 — 2026-09-28
 
 - Problem/root cause: regional zombie aggregates detached health/armor and state

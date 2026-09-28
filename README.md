@@ -51,9 +51,14 @@ Training commands explicitly start autonomous learning. Availability and replay
 checks do not. Incomplete recordings are rejected. The curriculum is easy →
 standard → shared; a demonstration fit alone does not establish mastery.
 
+CUDA fitting uses BF16 features with FP32 master weights, LSTM and Q heads.
+To apply current execution settings to an existing run, add `--refresh-performance`
+when initializing from or resuming an existing checkpoint. Demonstration fitting keeps the configured five passes.
+
 All parameters live in `src/pvz_rl/data/train.toml` (train and demo overlays).
 This architecture requires a newly recorded demonstration or a fresh model;
-previous checkpoints and aggregate-observation archives cannot be loaded.
+aggregate-observation checkpoints and archives cannot be loaded. Existing entity_v1
+weights remain compatible with the throughput update.
 Existing files are preserved. Choose new output paths.
 
 ## Common checks

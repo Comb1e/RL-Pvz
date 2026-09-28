@@ -88,6 +88,8 @@ block_rows = 32768
 [training.performance]
 compile_kernels = true
 telemetry = true
+fit_precision = "features_bf16"
+prefetch = true
 
 [curriculum]
 mode = "teaching"
@@ -138,12 +140,12 @@ lstm_hidden = 256
 action_embedding = 32
 outcome_width = 16
 chunk_length = 256
-encoder_microbatch = 16
+encoder_microbatch = 64
 attention_query_chunk = 64
-encoder_token_budget = 4096
+encoder_token_budget = 32768
 
 [training.demo]
-passes = 20
+passes = 5
 learning_rate = 0.0003
 gradient_clip = 0.5
 learner_seed = 101

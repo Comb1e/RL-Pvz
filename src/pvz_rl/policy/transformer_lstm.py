@@ -8,6 +8,7 @@ evaluation and replay agree about waits and zero-time plant/dig operations.
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from dataclasses import dataclass
 
 import torch
@@ -50,6 +51,7 @@ class TransformerLSTMPolicy(nn.Module):
     def __init__(self, cfg: dict, *, action_count: int = A.size):
         super().__init__()
         self.cfg = cfg
+        self.fit_precision = "fp32"
         self.layout = ObservationEncoder(cfg, Rules())
         spec = cfg["policy"]
         self.action_count = action_count
@@ -103,7 +105,23 @@ class TransformerLSTMPolicy(nn.Module):
             torch.where(reset, torch.zeros_like(state.cell), state.cell),
         )
 
-    def _inputs(
+    def _inputs(self, observations, previous_action, execution_outcome):
+        mixed = self.training and torch.is_grad_enabled() and self.fit_precision == "features_bf16"
+        with torch.autocast(observations.device.type, dtype=torch.bfloat16, enabled=mixed):
+            combined, tiles = self._feature_inputs(observations, previous_action, execution_outcome)
+        dtype = self.lstm.weight_ih_l0.dtype
+        return combined.to(dtype), tiles.to(dtype)
+
+    @contextmanager
+    def fitting_precision(self, precision):
+        previous = self.fit_precision
+        self.fit_precision = precision
+        try:
+            yield
+        finally:
+            self.fit_precision = previous
+
+    def _feature_inputs(
         self,
         observations: torch.Tensor,
         previous_action: torch.Tensor | None,
@@ -126,7 +144,7 @@ class TransformerLSTMPolicy(nn.Module):
             (
                 summary,
                 scalar,
-                self.previous_action(previous_action),
+                self.previous_action(previous_action).to(scalar.dtype),
                 self.outcome(execution_outcome.to(scalar.dtype)),
                 self.elapsed(elapsed.to(scalar.dtype)),
             ),

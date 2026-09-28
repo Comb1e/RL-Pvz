@@ -39,6 +39,24 @@ GLOBAL_WIDTH = len(GLOBAL_FIELDS)
 OBSERVATION_PROTOCOL = "entity_v1"
 
 
+def validate_entity_records(raw):
+    """Validate packed host records at archive/storage ingestion, once per slab."""
+    kind, state = raw[..., 0], raw[..., 1]
+    plants, zombies = len(PLANT_STATES), len(ZOMBIE_STATES)
+    correct = (
+        ((kind >= 1) & (kind <= 8) & (state >= 1) & (state <= plants))
+        | ((kind >= 9) & (kind <= 13) & (state > plants) & (state <= plants + zombies))
+        | (((kind == 14) | (kind == 15)) & (state == 0))
+        | (
+            (kind == 16)
+            & (state > plants + zombies)
+            & (state <= plants + zombies + len(MOWER_STATES))
+        )
+    )
+    if not np.all(correct):
+        raise ValueError("Unknown public entity type/state or state does not match its type")
+
+
 @dataclass
 class EntityBatch:
     """Padded batch (or batch/time sequence); padding exists only in transport."""
@@ -46,6 +64,7 @@ class EntityBatch:
     entities: torch.Tensor
     entity_mask: torch.Tensor
     globals: torch.Tensor
+    validated: bool = False
 
     def __len__(self):
         return len(self.globals)
@@ -59,7 +78,9 @@ class EntityBatch:
         return self.globals.device
 
     def __getitem__(self, index):
-        return EntityBatch(self.entities[index], self.entity_mask[index], self.globals[index])
+        return EntityBatch(
+            self.entities[index], self.entity_mask[index], self.globals[index], self.validated
+        )
 
     def clone(self):
         return EntityBatch(*(x.clone() for x in self.tensors()))
@@ -67,8 +88,11 @@ class EntityBatch:
     def tensors(self):
         return self.entities, self.entity_mask, self.globals
 
-    def to(self, device):
-        return EntityBatch(*(x.to(device) for x in self.tensors()))
+    def to(self, device, *, non_blocking=False):
+        return EntityBatch(
+            *(x.to(device, non_blocking=non_blocking) for x in self.tensors()),
+            validated=self.validated,
+        )
 
     def cpu(self):
         return self.to("cpu")
@@ -81,6 +105,7 @@ class EntityBatch:
             self.entities.reshape(*batch_shape, n, ENTITY_WIDTH),
             self.entity_mask.reshape(*batch_shape, n),
             globals_,
+            self.validated,
         )
 
     def observations(self):
@@ -311,14 +336,15 @@ class ObservationEncoder:
         )
         return {"entities": raw, "globals": globals_}
 
-    def normalize(self, batch):
+    def validate(self, batch):
+        """Validate once at ingestion, outside encoder microbatches/recomputation."""
+        if batch.validated:
+            return
         raw = batch.entities
         kind, state = raw[..., 0].long(), raw[..., 1].long()
         valid = batch.entity_mask
-        if torch.any(valid & ((kind < 1) | (kind > len(self.types)))):
-            raise ValueError("Unknown public entity type")
-        if torch.any(valid & ((state < 0) | (state > len(self.states)))):
-            raise ValueError("Unknown public entity state")
+        invalid_type = valid & ((kind < 1) | (kind > len(self.types)))
+        invalid_state = valid & ((state < 0) | (state > len(self.states)))
         correct_state = (
             ((kind <= 8) & (state >= 1) & (state <= len(PLANT_STATES)))
             | (
@@ -330,12 +356,22 @@ class ObservationEncoder:
             | (((kind == 14) | (kind == 15)) & (state == 0))
             | ((kind == 16) & (state > len(PLANT_STATES) + len(ZOMBIE_STATES)))
         )
-        if torch.any(valid & ~correct_state):
-            raise ValueError("Public entity state does not match its type")
+        if torch.any(invalid_type | invalid_state | (valid & ~correct_state)):
+            raise ValueError("Unknown public entity type/state or state does not match its type")
+        batch.validated = True
+
+    def normalize(self, batch, *, health_scales=None):
+        self.validate(batch)
+        raw = batch.entities
+        kind, state, valid = raw[..., 0].long(), raw[..., 1].long(), batch.entity_mask
         kind = torch.where(valid, kind, 0)
         state = torch.where(valid, state, 0)
         values = torch.where(valid[..., None], raw[..., 2:], 0).float()
-        scales = torch.as_tensor(self.health_scales, device=raw.device)
+        scales = (
+            torch.as_tensor(self.health_scales, device=raw.device)
+            if health_scales is None
+            else health_scales
+        )
         values[..., 0] /= max(1, self.rows - 1)
         values[..., 1] = (values[..., 1] - self.rules.game["house_x"]) / self.position_scale
         values[..., 2] /= scales[kind]

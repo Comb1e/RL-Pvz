@@ -164,14 +164,48 @@ Only recovery state stores private simulator snapshots and scenario RNGs.
 Fitting visits episodes chronologically from zero recurrent state each pass.
 The default 1,024-decision budget batches four 256-decision chunks. Short episodes
 are padded; padding contributes no target or loss. Carried state is detached at
-chunk boundaries. Encoder work is bounded by a 16-observation microbatch and a
-4,096-token budget; crowded batches shrink automatically. Attention uses SDPA
-with 64-query chunks and an exact fallback attending to all keys. Activation
-checkpointing bounds backward storage. Allocation errors are reported without
-changing the cap. Equal weighting of nonempty wait/plant/dig groups is computed
+chunk boundaries. Encoder work uses at most 64 observations and a 32,768-token
+budget. Full-sequence SDPA selects the available efficient backend; an exact
+64-query fallback attends to all keys. CPU preparation gathers entity slabs in
+bulk into two pinned buffers, charged against the shared RAM budget. One ordered
+worker and a CUDA transfer stream prepare the next chunk; events prevent reads
+or host-buffer reuse before the copy completes.
+
+CUDA fitting computes entity features, embeddings and auxiliary projections with
+BF16 temporary values. Stored weights, normalization reductions, residual sums,
+LSTM state/computation, Q heads, loss, gradients and Adam state remain FP32.
+Collection, evaluation and demonstration fitting use FP32. Precision does not
+change raw observations, parameter shapes, or the learning objective.
+
+Each pass is an uncommitted transaction until finite gradients are clipped and
+Adam updates once. Nonfinite BF16 computation discards the pass and retries in
+FP32, retained for the rest of the cohort. An FP32 failure stops before updating.
+Allocation failures restart with encoder microbatches 64, 32, then 16; the final
+fallback enables one outer encoder checkpoint. Exhaustion fails explicitly;
+entity caps and recurrent sequence lengths never shrink. Equal weighting of nonempty wait/plant/dig groups is computed
 across the entire cohort. Every pass accumulates chunk gradients before one
 clipped Adam update; four passes are the default. Collection states are never
 reused as fitting states after weights change.
+
+
+```mermaid
+stateDiagram-v2
+    [*] --> Prepare
+    Prepare --> Accumulate: ordered transfer completed
+    Accumulate --> Accumulate: next chronological chunk
+    Accumulate --> Prepare: allocation failure / smaller encoder microbatch
+    Accumulate --> Prepare: nonfinite BF16 / discard gradients and select FP32
+    Accumulate --> Commit: complete pass and finite gradients
+    Accumulate --> Failed: nonfinite FP32 or exhausted memory fallback
+    Commit --> Prepare: next pass
+    Commit --> [*]: all passes committed
+```
+
+Execution precision and fallback status accompany recovery metadata. Older entity
+checkpoints default to FP32. Ordinary resume keeps saved settings;
+`--refresh-performance` replaces only precision, prefetch, encoder batching,
+attention fallback size and instrumentation settings from current configuration.
+Learning parameters and input/output schemas are excluded from that refresh.
 
 Atomic ZIP replacement couples model, optimizer, counters, curriculum, exploration,
 RNGs, trajectory/entity slabs and collection states. Schema metadata records

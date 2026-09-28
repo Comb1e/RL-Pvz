@@ -2,6 +2,7 @@ import pytest
 
 
 def test_single_config_train_and_demo_profiles():
+    from pathlib import Path
     from types import SimpleNamespace
 
     from pvz_rl.cli import configured
@@ -13,6 +14,11 @@ def test_single_config_train_and_demo_profiles():
     assert training == load_config("src/pvz_rl/data/train.toml")
     assert demo == load_demo_config("src/pvz_rl/data/train.toml")
     require_supported_policy(training)
+    from pvz_rl.learning.training_requirements import require_cuda_training
+
+    require_cuda_training(training, runtime=False)
+    require_cuda_training(demo, runtime=False)
+    assert {p.stem for p in Path("src/pvz_rl/data").glob("*.toml")} == {"train"}
     assert configured(SimpleNamespace(command="record-demo", config=None)) == demo
     assert configured(SimpleNamespace(command="initialize-demo", config=None)) == demo
     assert demo["encoding"]["version"] == "entity_v1"

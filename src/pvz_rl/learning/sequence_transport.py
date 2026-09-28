@@ -1,0 +1,136 @@
+"""Ordered double-buffer preparation with explicit host-buffer ownership."""
+
+from concurrent.futures import ThreadPoolExecutor
+from time import perf_counter
+
+import numpy as np
+import torch
+
+from pvz_rl.envs.encoding import ENTITY_WIDTH, GLOBAL_WIDTH, EntityBatch
+
+
+def sequence_rows(buffer, chunk_length, decision_budget):
+    if decision_budget < 1 or decision_budget % chunk_length:
+        raise ValueError("Recurrent batch_size must be a positive multiple of chunk_length")
+    width = decision_budget // chunk_length
+    steps = buffer.size // buffer.n_envs
+    for first in range(0, buffer.n_envs, width):
+        slots = np.arange(first, min(first + width, buffer.n_envs))
+        for start in range(0, steps, chunk_length):
+            times = np.arange(start, min(start + chunk_length, steps))
+            rows = buffer.take(slots[:, None] + times[None] * buffer.n_envs)
+            if not rows["active"].any():
+                break
+            yield start == 0, rows
+
+
+class SequencePrefetch:
+    """One CPU producer, two pinned slots, independent ordered CUDA transfers."""
+
+    def __init__(self, buffer, chunk_length, batch_size, device, max_entities):
+        self.buffer, self.device = buffer, torch.device(device)
+        amount = 2 * batch_size * (max_entities * (ENTITY_WIDTH * 4 + 1) + (GLOBAL_WIDTH + 6) * 4)
+        if not buffer.reserve_staging(amount):
+            raise MemoryError("Trajectory RAM budget cannot accommodate pinned staging")
+        self.source = iter(sequence_rows(buffer, chunk_length, batch_size))
+        self.stream = torch.cuda.Stream(device=self.device)
+        self.slots, self.events, self.timings = [], [None, None], []
+        for _ in range(2):
+            self.slots.append(
+                (
+                    EntityBatch(
+                        torch.empty(
+                            batch_size,
+                            max_entities,
+                            ENTITY_WIDTH,
+                            dtype=torch.int32,
+                            pin_memory=True,
+                        ),
+                        torch.empty(batch_size, max_entities, dtype=torch.bool, pin_memory=True),
+                        torch.empty(batch_size, GLOBAL_WIDTH, pin_memory=True),
+                        validated=True,
+                    ),
+                    torch.empty(batch_size, 6, pin_memory=True),
+                )
+            )
+        self.worker = ThreadPoolExecutor(max_workers=1, thread_name_prefix="pvz-sequences")
+        self.futures = [self.worker.submit(self._prepare, i) for i in range(2)]
+        self.turn = 0
+        self.closed = False
+
+    def _prepare(self, slot):
+        event = self.events[slot]
+        if event is not None:
+            event.synchronize()  # D2H/H2D completion must precede host-buffer reuse.
+        started = perf_counter()
+        item = next(self.source, None)
+        if item is None:
+            return None
+        reset, rows = item
+        host, metadata = self.slots[slot]
+        obs = self.buffer.observations(rows, destination=host)
+        flat = rows.reshape(-1)
+        fields = metadata[: len(flat)]
+        array = fields.numpy()
+        for i, key in enumerate(("active", "action", "previous")):
+            array[:, i] = flat[key]
+        array[:, 3:5] = flat["previous_outcome"]
+        array[:, 5] = flat["target"]
+        self.buffer.transport_metrics["preparation_seconds"] += perf_counter() - started
+        return reset, rows, obs, fields
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        if self.closed:
+            raise StopIteration
+        slot = self.turn % 2
+        started = perf_counter()
+        item = self.futures[slot].result()
+        self.buffer.transport_metrics["transfer_wait_seconds"] += perf_counter() - started
+        if item is None:
+            self.close()
+            raise StopIteration
+        reset, rows, obs, host_fields = item
+        with torch.cuda.stream(self.stream):
+            start, end = torch.cuda.Event(enable_timing=True), torch.cuda.Event(enable_timing=True)
+            start.record()
+            obs = obs.to(self.device, non_blocking=True)
+            fields = host_fields.to(self.device, non_blocking=True).reshape(*rows.shape, 6)
+            end.record()
+        self.events[slot] = end
+        self.timings.append((start, end))
+        torch.cuda.current_stream(self.device).wait_event(end)
+        for tensor in (*obs.tensors(), fields):
+            tensor.record_stream(torch.cuda.current_stream(self.device))
+        self.turn += 1
+        # Prepare the just-consumed slot while its successor is computed.
+        # Submit in chronological order: there is exactly one producer.
+        self.futures[slot] = self.worker.submit(self._prepare, slot)
+        return (
+            reset,
+            rows,
+            obs,
+            {
+                "active": fields[..., 0].bool(),
+                "action": fields[..., 1].long(),
+                "previous": fields[..., 2].long(),
+                "previous_outcome": fields[..., 3:5],
+                "target": fields[..., 5],
+            },
+        )
+
+    def close(self):
+        if self.closed:
+            return
+        self.closed = True
+        self.worker.shutdown(wait=True, cancel_futures=True)
+        self.stream.synchronize()
+        self.buffer.transport_metrics["transfer_stream_seconds"] += sum(
+            start.elapsed_time(end) / 1000 for start, end in self.timings
+        )
+        self.slots.clear()
+        self.futures.clear()
+        self.timings.clear()
+        self.buffer.reserve_staging(0)

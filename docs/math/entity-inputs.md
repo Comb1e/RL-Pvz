@@ -90,11 +90,13 @@ Let L=n+46. Dense attention arithmetic is O(batch × L² × width). Query chunki
 splits Q into at most 64 rows, but every chunk attends to all K,V; concatenation
 is exactly the full result. The implementation uses PyTorch SDPA, or explicit
 scaled scores, mask, softmax and multiplication for its independent fallback.
-Fallback score working storage is O(microbatch × heads × 64 × L).
+One fallback query chunk uses O(microbatch × heads × 64 × L) score storage.
+Autograd may retain multiple chunks for backward; the allocation fallback and
+outer checkpoint bound practical usage. This is not a linear total-memory claim.
 
-Encoder microbatches contain at most 16 frames and at most the configured 4,096
-tokens when possible. Backward activation checkpointing recomputes these frames
-and attention chunks. Frames are reassembled in original batch/time order before
+Encoder microbatches contain at most 64 frames and at most the configured 32,768
+tokens when possible. Optional outer activation checkpointing recomputes these frames
+without nested attention checkpoints. Frames are reassembled in original batch/time order before
 the LSTM; encoder scheduling cannot change the recurrent objective or the single
 optimizer update per whole-cohort fitting pass. Unrecoverable allocation errors
 are surfaced; capacity is never silently reduced in response.
@@ -150,3 +152,5 @@ fitting chunk peaked at 46.3 MiB Torch allocation. These counters exclude driver
 display and other processes; the synthetic table excludes simulation. Short
 cutoffs and synthetic populations are resource controls, not full-game speed or
 learning-quality estimates. No formal training was run.
+
+Execution precision and pass retry controls: [training throughput](training-throughput.md).

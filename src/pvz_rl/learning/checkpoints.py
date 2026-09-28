@@ -39,10 +39,15 @@ def execution_config(cfg):
     """Fill optional execution settings; never replace recorded protocol parameters."""
     cfg = copy.deepcopy(cfg)
     defaults = load_config()
+    cfg["training"].setdefault("performance", {"fit_precision": "fp32", "prefetch": False})
     for key in ("logging", "visualization", "runtime", "simulation"):
         cfg.setdefault(key, copy.deepcopy(defaults[key]))
     for key in ("storage", "performance", "batch_size", "n_epochs", "max_grad_norm"):
         cfg["training"].setdefault(key, copy.deepcopy(defaults["training"][key]))
+    # Absence in a historical checkpoint means its original FP32 execution.
+    saved_performance = cfg["training"]["performance"]
+    saved_performance.setdefault("fit_precision", "fp32")
+    saved_performance.setdefault("prefetch", False)
     return cfg
 
 

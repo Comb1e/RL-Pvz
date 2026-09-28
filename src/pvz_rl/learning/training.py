@@ -1141,6 +1141,7 @@ def train(
         env.start_live_view(notify=lambda text: progress.emit(text, force=True))
         if resume:
             model = resumed_model
+            model.configure_execution(cfg)
             wall_budget.prior_elapsed = max(
                 wall_budget.prior_elapsed,
                 getattr(model, "wall_budget_state", {}).get("elapsed_seconds", 0.0),

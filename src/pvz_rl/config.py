@@ -348,6 +348,10 @@ def validate_config(cfg: dict) -> None:
     for key in ("compile_kernels", "telemetry"):
         if type(performance.get(key, False)) is not bool:
             raise ValueError(f"training.performance.{key} must be a boolean")
+    if performance.get("fit_precision", "fp32") not in ("fp32", "features_bf16"):
+        raise ValueError("training.performance.fit_precision must be fp32 or features_bf16")
+    if type(performance.get("prefetch", False)) is not bool:
+        raise ValueError("training.performance.prefetch must be a boolean")
     if train.get("budget_unit", "decisions") not in ("games", "decisions"):
         raise ValueError("training.budget_unit must be games or decisions")
     if env.get("action_timing", "fixed") not in ("fixed", "per_tick"):

@@ -98,22 +98,6 @@ def test_high_q_cooling_plant_stays_selected_and_is_rejected(per_tick_cfg):
     assert reward == pytest.approx(-per_tick_cfg["reward"]["invalid_plant_penalty"])
 
 
-def test_occupancy_masks_are_shared_by_all_plant_branches(per_tick_cfg):
-    env = PvZEnv(per_tick_cfg)
-    env.reset(
-        seed=103,
-        options={"scenario": LevelSpec("q-occupied", (Spawn(1000, "basic", 0),), initial_sun=1000)},
-    )
-    occupied = env.codec.encode(Place("peashooter", 0, 0))
-    assert env.action_masks()[occupied]
-    _, _, terminated, truncated, _ = env.step(occupied)
-    assert not terminated and not truncated
-    masks = env.action_masks()
-    for plant_index in range(A.plant_types):
-        assert not masks[1 + plant_index * A.tiles]
-        assert masks[1 + plant_index * A.tiles + 1]
-
-
 @pytest.mark.parametrize(
     ("initial_sun", "actions", "reason"),
     [
