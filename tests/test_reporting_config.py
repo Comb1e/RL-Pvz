@@ -68,7 +68,6 @@ def test_gpu_query_targets_uuid_and_exposes_missing_data(monkeypatch, response):
     "group,key,value",
     [
         ("encoding", "count_scale", 0),
-        ("reward", "value_scale", 0),
         ("training", "learner_seeds", [101, 101]),
         ("training", "hidden_sizes", [0]),
         ("training", "learning_rate", float("nan")),

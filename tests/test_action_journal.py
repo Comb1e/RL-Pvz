@@ -118,21 +118,6 @@ def test_diagnostic_spill_failure_is_visible_and_does_not_raise(monkeypatch):
         journal.close()
 
 
-def test_selecting_a_row_keeps_its_page_position_and_follow_is_explicit():
-    from pvz_rl.presentation.live_layout import Browse, HistoryMode
-
-    rows = [dict(sequence=100 + i, tick=20) for i in range(10)]
-    state = Browse(page=dict(start=60, total=70, rows=rows))
-    state.choose(rows[8])
-    assert state.mode == HistoryMode.BROWSING
-    assert state.start == 60 and state.selected_offset == 68
-    assert state.page["rows"] is rows and len(rows) == 10
-    assert state.selected == rows[8] and state.selected is not rows[8]
-    assert state.request == 1 and state.sent == float("inf")
-    state.follow = True
-    assert state.mode == HistoryMode.FOLLOWING
-
-
 def test_diagnostic_restore_and_cleanup_failures_do_not_abort_training(tmp_path, monkeypatch):
     import pytest
 

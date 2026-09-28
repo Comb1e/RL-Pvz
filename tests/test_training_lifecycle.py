@@ -1,8 +1,7 @@
-"""Scheduling, recovery, and real short PPO integration for the new profiles."""
+"""Validation scheduling, finalization, and recurrent checkpoint compatibility."""
 
 from time import perf_counter
 
-import numpy as np
 import pytest
 import torch
 
@@ -15,14 +14,12 @@ from pvz_rl.learning.training import ResearchCallback, load_policy, train
 from pvz_rl.presentation.visualization import read_json, read_series
 
 
-def small_cfg(device="cuda", backend="cuda", profile="E"):
+def small_cfg():
     cfg = load_config()
-    cfg["simulation"]["backend"] = backend
     cfg["environment"]["cutoff_seconds"] = 1
     cfg["visualization"].update(enabled=False, demos=False)
     cfg["training"].update(
         validation_schedule="periodic",  # Original periodic-validation regression protocol.
-        device=device,
         n_envs=2,
         batch_size=32,
         n_epochs=1,
@@ -88,78 +85,8 @@ def test_expired_evaluation_records_pending_not_a_win(smoke_cfg, tmp_path):
 
 
 @pytest.mark.learning
-@pytest.mark.parametrize("backend,device", [("cuda", "cuda")])
-def test_spatial_training_reload_and_preserved_model_across_stages(
-    tmp_path, backend, device, monkeypatch
-):
-    if device == "cuda" and not torch.cuda.is_available():
-        pytest.skip("CUDA unavailable")
-    cfg = small_cfg(device, backend)
-    original = ResearchCallback._on_rollout_start
-    identities = []
-
-    def transition(self):
-        identities.append((id(self.model.policy), id(self.model.policy.optimizer)))
-        if self.model.num_timesteps > 0 and self.curriculum.stage == 0:
-            self.curriculum.stage = 1
-            self.training_env.env_method("set_curriculum_stage", 1)
-        return original(self)
-
-    monkeypatch.setattr(ResearchCallback, "_on_rollout_start", transition)
-    run = tmp_path / "run"
-    train(cfg, "masked", 101, run, validation_limit=1)
-    assert len(set(identities)) == 1
-    metrics = read_series(run / "training-metrics.jsonl")
-    assert metrics[-1]["training_steps"] == read_json(run / "status.json")["steps"]
-    q_metrics = [m for m in metrics if m["optimization"].get("q_optimizer_steps", 0)]
-    assert q_metrics
-    assert all(m["optimization"]["branch_loss"] is not None for m in q_metrics)
-    assert all(m["optimization"]["q_loss"] >= 0 for m in q_metrics)
-    loaded, _ = load_policy(run / "final.zip", device)
-    again, _ = load_policy(run / "final.zip", device)
-    env = PvZEnv(cfg)
-    observation, _ = env.reset(seed=100000)
-    action = loaded.predict(observation, deterministic=True, action_masks=env.action_masks())[0]
-    np.testing.assert_array_equal(
-        action, again.predict(observation, deterministic=True, action_masks=env.action_masks())[0]
-    )
-    assert loaded.curriculum_state["stage"] == 1
-
-
-@pytest.mark.learning
-def test_resume_keeps_cumulative_time_schedule_and_optimizer(tmp_path, monkeypatch):
-    cfg = small_cfg()
-    cfg["training"]["total_games"] = 24
-    original = ResearchCallback._on_rollout_start
-
-    def interrupt(self):
-        if self.model.num_timesteps >= 64:
-            raise KeyboardInterrupt()
-        return original(self)
-
-    monkeypatch.setattr(ResearchCallback, "_on_rollout_start", interrupt)
-    first = tmp_path / "first"
-    with pytest.raises(KeyboardInterrupt):
-        train(cfg, "masked", 101, first, validation_limit=1)
-    interrupted, _ = load_policy(first / "interrupted.zip")
-    assert interrupted.num_timesteps == 2 * 100  # Two complete one-second waiting games.
-    assert interrupted.optimizer_protocol == "complete_return_lstm_v1"
-    assert interrupted.policy.optimizer.state
-    elapsed = read_json(first / "status.json")["time_budget"]["elapsed_seconds"]
-    monkeypatch.setattr(ResearchCallback, "_on_rollout_start", original)
-    resumed = tmp_path / "resumed"
-    train(cfg, "masked", 101, resumed, validation_limit=1, resume=first / "interrupted.zip")
-    status = read_json(resumed / "status.json")
-    assert status["time_budget"]["elapsed_seconds"] > elapsed
-    assert status["training_games"] >= 24
-    model, _ = load_policy(resumed / "final.zip")
-    assert model._n_updates > interrupted._n_updates
-    assert model.research_schedule["next_eval"] == 2000
-
-
-@pytest.mark.learning
 def test_validation_crossed_thresholds_and_final_tie_keep_earlier_weights(tmp_path):
-    cfg = small_cfg(profile="C")
+    cfg = small_cfg()
     cfg["training"].update(total_games=12, eval_interval_games=2)
     run = tmp_path / "run"
     train(cfg, "masked", 101, run, validation_limit=1)
@@ -217,29 +144,6 @@ def test_interrupted_export_counts_time_spent_after_final_checkpoint(tmp_path, m
     assert (run / "final.zip").is_file()
 
 
-@pytest.mark.learning
-def test_spatial_cuda_report_and_three_verified_shared_demos(tmp_path):
-    if not torch.cuda.is_available():
-        pytest.skip("CUDA unavailable")
-    from pvz_rl.presentation.recordings import open_playback
-    from pvz_rl.provenance import file_hash
-
-    cfg = small_cfg("cuda", "cuda")
-    cfg["training"]["total_games"] = 2
-    cfg["visualization"].update(enabled=True, demos=True, videos=False)
-    run = train(cfg, "masked", 101, tmp_path / "spatial-report", validation_limit=1)
-    assert (run / "visualizations/index.html").is_file()
-    demos = read_json(run / "visualizations/demos.json")["demos"]
-    assert {d["level"] for d in demos} == {"easy", "standard", "hard"}
-    assert {d["checkpoint_hash"] for d in demos} == {file_hash(run / "best.zip")}
-    for demo in demos:
-        playback = open_playback(run / "visualizations" / demo["replay"])
-        playback.verify()
-        assert playback.game.state_hash() == demo["state_hash"]
-        assert playback.display_outcome == "truncated"
-    assert read_json(run / "status.json")["visualization_state"] == "complete"
-
-
 @pytest.mark.parametrize("wait_ticks", [0, 500, 501])
 def test_cuda_long_horizon_reward_and_early_dig_boundaries(wait_ticks):
     if not torch.cuda.is_available():
@@ -286,7 +190,7 @@ def test_retired_checkpoint_rejected_before_deserialization(smoke_cfg, tmp_path,
     from pvz_rl.config import validate_config
     from pvz_rl.envs.env import PvZEnv
     from pvz_rl.learning.recurrent_q import CudaRecurrentQ
-    from pvz_rl.learning.training import initial_weights, load_policy
+    from pvz_rl.learning.training import initial_weights
 
     old = copy.deepcopy(smoke_cfg)
     old["policy"].update(

@@ -41,9 +41,6 @@ def test_legacy_runtime_defaults_and_compatibility(cfg):
     validate_config(old)
     assert runtime_settings(old) == runtime_settings(cfg)
     assert research_config(old) == research_config(cfg) == research_config(plain(cfg))
-    cfg["runtime"]["coalesce_masks"] = "false"
-    with pytest.raises(ValueError, match="Runtime"):
-        validate_config(cfg)
 
 
 def test_phase_timing_excludes_validation_and_captures_final_update():

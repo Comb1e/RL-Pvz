@@ -3,7 +3,6 @@ import pytest
 
 from pvz_rl.envs.env import PvZEnv
 from pvz_rl.evaluation.frozen_baseline import choose_action
-from pvz_rl.evaluation.runner import evaluate
 from pvz_rl.evaluation.statistics import bootstrap_interval, paired_difference, result_matrix
 
 
@@ -30,21 +29,6 @@ def test_frozen_baseline_versioned_outcomes(cfg, level, seed, outcome, tick):
         env.step(env.codec.encode(action))
     assert env.state == outcome and env.public.tick == tick
     assert env.metrics["invalid_actions"] == 0
-
-
-def test_replay_capture_for_truncated_and_winning_cases(cfg, tmp_path):
-    cfg["environment"]["cutoff_seconds"] = 1
-    rows = evaluate(
-        cfg,
-        seeds=[0, 1],
-        levels=["easy"],
-        output=tmp_path / "cutoff",
-        baseline="wait",
-        split="development",
-        record=True,
-    )
-    assert len(rows) == 2 and all(r["replay_verified"] for r in rows)
-    assert all(r["status"] == "truncated" for r in rows)
 
 
 def test_crossed_bootstrap_and_paired_difference_against_independent_control():

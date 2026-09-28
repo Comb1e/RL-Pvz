@@ -14,7 +14,7 @@ def test_schedule_values_and_floor(games, epsilon):
     cfg = load_config()
     s = exploration_state(cfg, games)
     assert s.epsilon == pytest.approx(epsilon)
-    assert 1 - (1 - s.per_head_epsilon) ** 2 == pytest.approx(epsilon)
+    assert s.tile_epsilon == pytest.approx(epsilon)
     assert s.at_floor == (games >= 5000)
     assert exploration_state(cfg, games, staged=False) == s
     assert exploration_state(cfg, 0).epsilon == 0.5

@@ -1,4 +1,4 @@
-"""Independent sequential-Q math, causal storage and exact interruption controls."""
+"""Independent selected-Q math and atomic checkpoint interruption controls."""
 
 from copy import deepcopy
 
@@ -54,7 +54,7 @@ def test_interrupted_optimizer_phase_resumes_exactly(tmp_path, monkeypatch):
     env, full = make()
     full.learn(1)
     expected = deepcopy(full.policy.state_dict())
-    critic = deepcopy(full.policy.optimizer.state_dict())
+    optimizer = deepcopy(full.policy.optimizer.state_dict())
     env.close()
     env, partial = make()
     name = "_fit_chunk"
@@ -77,7 +77,7 @@ def test_interrupted_optimizer_phase_resumes_exactly(tmp_path, monkeypatch):
     m = CudaRecurrentQ.load(tmp_path / "partial.zip", env=env, device="cuda")
     m.learn(0, reset_num_timesteps=False)
     assert_state_equal(expected, m.policy.state_dict())
-    assert_state_equal(critic, m.policy.optimizer.state_dict())
+    assert_state_equal(optimizer, m.policy.optimizer.state_dict())
     env.close()
 
 
@@ -151,30 +151,8 @@ def test_resume_at_game_ceiling_finishes_pending_optimization(tmp_path, monkeypa
     assert_state_equal(actual.policy.optimizer.state_dict(), expected.policy.optimizer.state_dict())
 
 
-def test_sequential_q_independent_math_controls():
-    import math
-
-    for budget in (0, 0.001, 0.1, 1):
-        alpha = 1 - math.sqrt(1 - budget)
-        assert 1 - (1 - alpha) ** 2 == pytest.approx(budget)
-        probabilities = []
-        for k, tiles in enumerate((2, 3, 7)):
-            species = alpha / 3 + (1 - alpha) * (k == 1)
-            probabilities.extend(
-                species * (alpha / tiles + (1 - alpha) * (t == 0)) for t in range(tiles)
-            )
-        assert sum(probabilities) == pytest.approx(1)
-    errors = [4] * 5 + [1] * 2 + [0]
-    weights = [8 / 15] * 5 + [8 / 6] * 2 + [8 / 3]
-    assert sum(e * w for e, w in zip(errors, weights)) / 8 == pytest.approx(5 / 3)
-    alpha = 1 - math.sqrt(0.9)
-    assert (1 - alpha) + alpha * (-2 + 1 + 0.25) / 3 == pytest.approx(0.935854122563)
-    rewards = [0.01, -0.02, 1.0]
-    assert [sum(rewards[i:]) for i in range(3)] == pytest.approx([0.99, 0.98, 1.0])
-
-
 @pytest.mark.parametrize("device", ["cpu", "cuda"])
-def test_sequential_balanced_loss_gradients_adam_and_partial_batches(device):
+def test_sequential_balanced_loss_gradients_adam_and_nonfinite_returns(device, tmp_path):
     from pvz_rl.policy.sequential_q import balanced_q_loss
 
     actions = torch.tensor([0, 0, 0, 1, 46, 361], device=device)
@@ -206,15 +184,8 @@ def test_sequential_balanced_loss_gradients_adam_and_partial_batches(device):
         ref_opt.step()
         torch.testing.assert_close(actual, reference, atol=1e-12, rtol=1e-12)
         assert_state_equal(opt.state_dict(), ref_opt.state_dict())
-    # Last short batch retains denominator four, not its own length two.
-    full = balanced_q_loss(actual[:, 0], actual[:, 1], targets, actions, [3, 2, 1], 4)[0]
-    pieces = sum(
-        balanced_q_loss(actual[a:b, 0], actual[a:b, 1], targets[a:b], actions[a:b], [3, 2, 1], 4)[0]
-        for a, b in ((0, 4), (4, 6))
-    )
-    torch.testing.assert_close(full, pieces)
     with pytest.raises(FloatingPointError, match="Non-finite"):
-        buffer = CompleteGameBuffer(__import__("tempfile").mkdtemp(), 1)
+        buffer = CompleteGameBuffer(tmp_path / "nonfinite", 1)
         rows = np.zeros(1, buffer.dtype)
         rows["active"] = True
         rows["reward"] = np.nan

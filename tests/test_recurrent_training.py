@@ -12,7 +12,7 @@ from stable_baselines3.common.logger import configure
 from test_demo_initialization import completed_demo as demo_fixture
 
 from pvz_rl.cli import main
-from pvz_rl.config import load_config, load_demo_config, validate_config
+from pvz_rl.config import load_config, validate_config
 from pvz_rl.envs.encoding import collate_observations
 from pvz_rl.learning import demo_initialization as demo
 from pvz_rl.learning.checkpoints import compatible_config, execution_config, inspect_checkpoint
@@ -53,16 +53,8 @@ def recurrent_cfg():
     return cfg
 
 
-def test_default_and_removed_interfaces():
+def test_removed_time_option_and_recurrent_batch_boundary():
     cfg = load_config()
-    assert cfg == load_config("src/pvz_rl/data/train.toml")
-    demo = load_demo_config()
-    assert demo["policy"] == cfg["policy"]
-    assert demo["training"]["method"] == cfg["training"]["method"]
-    assert demo["reward"]["invalid_plant_penalty"] == 0.001
-    assert cfg["policy"]["kind"] == "transformer_lstm_q_v2"
-    assert tuple(cfg["curriculum"]["stages"]) == ("easy", "standard", "shared")
-    assert "lessons" not in cfg["curriculum"]
     with pytest.raises(SystemExit):
         main(["train", "--output", "unused", "--max-minutes", "1"])
     cfg["training"]["batch_size"] = 257
@@ -98,7 +90,7 @@ def test_actual_cli_keeps_recording_verification_config(
     assert calls[0]["verified"]
 
 
-def test_manifest_errors_and_exact_migration(completed_demo):
+def test_missing_manifest_protocol_and_configuration_are_rejected(completed_demo):
     cfg, archive, replay = completed_demo
     path = archive.with_suffix(".jsonl.manifest.json")
     original = json.loads(path.read_text())

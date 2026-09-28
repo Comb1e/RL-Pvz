@@ -63,7 +63,7 @@ def test_observations_rewards_and_metrics_against_cpu(gpu_cfg, condition):
                 break
 
 
-def test_gpu_lesson_and_changed_scenarios_match_public_encodings(gpu_cfg):
+def test_gpu_changed_scenarios_match_public_encodings(gpu_cfg):
     from pvz_game import Game, Rules
 
     from pvz_rl.envs.cuda_accounting import AccountingCudaBatch as CudaBatch

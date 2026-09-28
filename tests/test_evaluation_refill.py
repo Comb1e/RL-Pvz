@@ -131,10 +131,8 @@ def test_validation_temporarily_disables_injected_exploration():
     )
     with deterministic_validation(policy):
         assert actor.exploration_epsilon == 0
-        assert actor.exploration_epsilon == 0
         assert policy.exploration_rate == 0
         assert policy.policy_kwargs["exploration_epsilon"] == 0
-    assert actor.exploration_epsilon == 0.05
     assert actor.exploration_epsilon == 0.05
     assert policy.exploration_rate == 0.05
     assert policy.policy_kwargs["exploration_epsilon"] == 0.05

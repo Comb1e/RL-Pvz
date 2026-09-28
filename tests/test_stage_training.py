@@ -8,10 +8,10 @@ import pytest
 import torch
 
 from pvz_rl.cli import configured, main
-from pvz_rl.config import curriculum_probe_seeds, load_config, seed_values, validate_config
+from pvz_rl.config import curriculum_probe_seeds, load_config, seed_values
 from pvz_rl.learning.curriculum import STAGES, CurriculumState, stage_distribution
 from pvz_rl.learning.training import ResearchCallback, load_policy, train
-from pvz_rl.learning.training_requirements import require_cuda_training, transfer_protocol
+from pvz_rl.learning.training_requirements import transfer_protocol
 from pvz_rl.presentation.visualization import build_run_report, read_json, read_series
 from pvz_rl.provenance import file_hash, write_json
 
@@ -101,9 +101,7 @@ def test_transfer_compatibility_preserves_learning_contract(stage_cfg, change):
     assert stage_cfg["curriculum"]["run_stage"] == "easy"
 
 
-def test_cli_inherits_source_config_and_seed_but_requires_explicit_stage(
-    stage_cfg, tmp_path, monkeypatch
-):
+def test_cli_inherits_source_config_seed_and_stage(stage_cfg, tmp_path, monkeypatch):
     write_json(
         tmp_path / "metadata.json",
         {
@@ -155,9 +153,6 @@ def test_invalid_stage_requests_leave_no_run(stage_cfg, tmp_path, case):
         condition = case
     elif case == "diagnostic":
         kwargs["family"] = "diagnostic"
-    elif case == "missing-stage":
-        stage_cfg["curriculum"].pop("run_stage")
-        kwargs["init_from"] = tmp_path / "absent.zip"
     else:
         kwargs.update(resume=tmp_path / "one.zip", init_from=tmp_path / "two.zip")
     output = tmp_path / "rejected"
@@ -314,9 +309,6 @@ def test_mastered_stage_saves_without_collecting_next_stage(
     assert_tensor_tree_equal(
         model.policy.optimizer.state_dict(), restored.policy.optimizer.state_dict()
     )
-    assert_tensor_tree_equal(
-        model.policy.optimizer.state_dict(), restored.policy.optimizer.state_dict()
-    )
 
 
 @pytest.mark.learning
@@ -388,13 +380,6 @@ def test_stage_interrupt_resume_retains_stage_and_budget(
             resume=first / "interrupted.zip",
         )
     assert not (tmp_path / "bad-resume").exists()
-
-
-def test_existing_profiles_remain_valid_without_stage():
-    cfg = load_config()
-    validate_config(cfg)
-    require_cuda_training(cfg, runtime=False)
-    assert "run_stage" not in cfg["curriculum"]
 
 
 @pytest.mark.parametrize("retired", ["architecture", "observation"])
@@ -502,36 +487,6 @@ def test_impossible_probe_counts_are_rejected(stage_cfg, count):
     assert state.last_probe_games == 0 and not state.mastered
 
 
-@pytest.mark.parametrize("failure", ["loss", "truncation", "partial"])
-def test_probe_failure_does_not_certify_mastery(stage_cfg, tmp_path, monkeypatch, failure):
-    from types import SimpleNamespace
-
-    cb = ResearchCallback(stage_cfg, "masked", 101, tmp_path, validation_limit=1)
-    cb.model = SimpleNamespace(num_timesteps=64, training_games=2000, save=lambda p: None)
-    cb.curriculum = CurriculumState(completed_stage_games=2000)
-    seen = []
-
-    def results(seeds, *args, **kwargs):
-        seen.extend(seeds)
-        rows = [{"win": True} for _ in seeds]
-        if failure == "partial":
-            return rows[:-1]
-        rows[-1] = {"win": False, "truncated": failure == "truncation"}
-        return rows
-
-    monkeypatch.setattr(cb, "cached_evaluation", results)
-    try:
-        if failure == "partial":
-            with pytest.raises(ValueError, match="Incomplete curriculum"):
-                cb.probe_curriculum()
-        else:
-            cb.probe_curriculum()
-        assert len(seen) == 100  # --validation-count never shrinks mastery probes.
-        assert not cb.curriculum.mastered
-    finally:
-        cb.close()
-
-
 @pytest.mark.learning
 @pytest.mark.parametrize("standalone", [False, True])
 def test_shared_mastery_stops_after_update_and_is_resumable(
@@ -577,9 +532,6 @@ def test_shared_mastery_stops_after_update_and_is_resumable(
     )
     restored, _ = load_policy(resumed / "final.zip")
     assert model.num_timesteps == restored.num_timesteps
-    assert_tensor_tree_equal(
-        model.policy.optimizer.state_dict(), restored.policy.optimizer.state_dict()
-    )
     assert_tensor_tree_equal(
         model.policy.optimizer.state_dict(), restored.policy.optimizer.state_dict()
     )

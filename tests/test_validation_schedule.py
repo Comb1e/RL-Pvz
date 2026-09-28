@@ -89,6 +89,7 @@ def test_failure_or_insufficient_residency_never_triggers_full_validation(
     calls = []
 
     def evaluate(seeds, levels, family, destination, split, final=False):
+        assert len(seeds) == 100  # --validation-count never shrinks mastery probes.
         calls.append(split)
         rows = evaluation_rows(seeds, levels, family)
         if failure == "incomplete":

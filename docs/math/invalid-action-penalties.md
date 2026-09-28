@@ -51,12 +51,6 @@ the proposal after acceptance, or wait (`0`) after rejection, together with
 `accepted` and `ticks_advanced`. Rejection therefore produces `(0, 0, 1)`
 for the next recurrent input. The cap does not change branch selection or penalties.
 
-Historical Q records are immutable snapshots of the pre-action vector. Paging
-uses an absolute `start` offset and request identifier; selecting a row stores
-the row without truncating its page. A response is accepted only when panel,
-environment, episode, generation, and request all match. Consequently a newer
-network evaluation or a delayed page cannot rewrite a selected decision.
-
 These defaults are experimental costs, not learned calibration. At 100 decisions
 per simulated second, repeatedly selecting an invalid plant costs 0.3 reward per
 second, and repeated empty digs cost 1/30 reward per second. A 1,200-second cutoff
@@ -65,16 +59,10 @@ therefore the combined default rejection cost is bounded below by -360 reward
 units for train (-120 for demo; the larger plant charge), not by the net-value economic bounds. Successful
 instantaneous commands receive neither rejection charge.
 
-The earlier normal-level positive-win/negative-loss reward separation applies
+The normal-level positive-win/negative-loss reward separation applies
 only to outcome plus economic development, or to trajectories with no penalties.
-It is **not a guarantee for 0.25.0 total reward**: repeated invalid proposals can
-make a win's total reward negative. Outcome reward itself and the old bounds on
+It is **not a guarantee for total reward**: repeated invalid proposals can
+make a win's total reward negative. Outcome reward itself and the bounds on
 assets/net value remain unchanged. The design asks regression to learn rejection
 cost from complete returns; it does not guarantee that immediate digging or
 other learning failures will disappear.
-
-When no empty tile exists, a plant proposal deterministically uses tile zero,
-which the simulator rejects. This explicit fallback avoids an all-masked tile
-argmax. The tile exploration coin still fires at its configured rate, but there
-is no alternate tile to select. The ten-way branch remains the greedy proposal;
-evaluation disables the tile exploration coin.

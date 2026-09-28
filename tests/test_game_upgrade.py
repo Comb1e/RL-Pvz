@@ -59,7 +59,7 @@ def test_old_checkpoint_rejected_before_model_deserialization(cfg, tmp_path, old
 
 
 @pytest.mark.parametrize("defeated,total", [(0, 15), (2, 15), (15, 15), (0, 0), (200, 200)])
-def test_native_121_progress_counter_and_rendering_purity(cfg, monkeypatch, defeated, total):
+def test_native_progress_counter_and_rendering_purity(cfg, monkeypatch, defeated, total):
     from dataclasses import replace
 
     from pvz_game.rendering import _BoardCanvas
