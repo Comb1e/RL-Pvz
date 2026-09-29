@@ -72,7 +72,9 @@ def configured(args):
         cfg = load_demo_config(args.config)
     else:
         cfg = load_config(args.config)
-    checkpoint = getattr(args, "resume", None) or getattr(args, "init_from", None)
+    # Weight initialization starts a new run under the current configuration.
+    # Only recovery/evaluation inherit the source checkpoint's run settings.
+    checkpoint = getattr(args, "resume", None)
     if args.command == "evaluate":
         checkpoint = getattr(args, "checkpoint", None)
     if checkpoint and not args.config:
@@ -225,7 +227,6 @@ def main(argv=None):
     initialize.add_argument("--output", type=Path, required=True)
     initialize.add_argument("--passes", type=int)
     initialize.add_argument("--learning-rate", type=float)
-    initialize.add_argument("--gradient-clip", type=float)
     initialize.add_argument("--seed", type=int)
     initialize.add_argument("--device", choices=("cpu", "cuda"), default="cpu")
     evaluation = subs.add_parser("evaluate", help="evaluate a checkpoint or non-learning baseline")
@@ -355,7 +356,6 @@ def main(argv=None):
             cfg=cfg,
             passes=args.passes,
             learning_rate=args.learning_rate,
-            gradient_clip=args.gradient_clip,
             seed=args.seed,
             device=args.device,
         )

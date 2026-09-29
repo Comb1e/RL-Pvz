@@ -119,7 +119,6 @@ def transfer_protocol(cfg, condition="masked"):
     return {
         "engine": [cfg[k] for k in ("engine_commit", "engine_version", "engine_package_version")],
         "encoding": cfg["encoding"],
-        "reward": cfg["reward"],
         "timing": {k: env[k] for k in ("action_timing", "decision_ticks", "cutoff_seconds")},
         "actions": ActionSchema.version,
         "action_distribution": p.get("action_distribution"),

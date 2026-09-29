@@ -22,17 +22,21 @@ switching are disabled. Closing early leaves an incomplete recording.
 
 Initialization checks the manifest, native replay hash, every observation,
 proposed action, acceptance result, duration, reward and terminal state before
-fitting. Missing manifests, unsupported protocols and configuration mismatches
-have separate errors. Record a new demonstration or initialize from scratch.
+fitting. Missing manifests, unsupported protocols, engine/schema mismatches and
+reconstruction failures have separate errors. Optimizer settings and the retired
+demo clipping field do not affect recording verification; replay rewards must
+still match the recording configuration.
 Old model weights and aggregate-observation archives require fresh initialization;
 there is no migration. Existing run files and recordings remain on disk.
 
 Use the recording's `--config` when it was customized. `--device cpu` is the
 initialization default; `--device cuda` changes execution without changing archive
-verification. `--passes`, `--learning-rate`, `--gradient-clip` and `--seed` override
-fitting settings. Time budgets are configuration settings only: initialization
+verification. `--passes`, `--learning-rate` and `--seed` override fitting settings.
+Both fitting paths read the single `training.max_grad_norm` limit (5 by default);
+there is no demo-only clipping setting or CLI override.
+Time budgets are configuration settings only: initialization
 uses `training.demo.time_budget_minutes` (30 by default). Defaults are 5 passes,
-learning rate 0.0003, clip 0.5 and 256-decision chunks. Checkpoints are published
+learning rate 0.0003 and 256-decision chunks. Checkpoints are published
 only after complete passes, alongside curves, coverage and verification reports.
 
 ## Autonomous training
@@ -48,12 +52,15 @@ It starts fresh Adam state, counters, curriculum and RNGs. Omitting both
 silently falls back to random initialization. Metadata records model family,
 initialization type, source SHA-256 and parameter differences.
 
+Fresh `--init-from` runs take all settings from the current `train.toml` (or
+explicit `--config`), including rewards, clipping, learning rate and performance.
+The source checkpoint supplies weights only. Weight transfer validates the pinned
+engine, observation encoding, action semantics and network structure; changed
+reward coefficients do not require a new demonstration initialization.
 Without `--config`, autonomous resume uses the checkpoint's saved configuration
-plus missing execution defaults. A demonstration initialization uses its saved
-structural metadata only and always takes execution settings from the current
-`train.toml`. An explicit configuration must preserve the engine,
-observation encoding, action semantics, rewards and network structure. Budgets
-and output settings can differ. CPU autonomous training is unsupported.
+plus missing execution defaults. Resume retains learning settings and rewards
+to preserve unfinished trajectories and optimizer state. CPU autonomous training
+is unsupported.
 
 The curriculum is **easy → standard → shared**. Easy uses only easy games;
 standard mixes easy/standard equally; shared mixes easy/standard/hard at
@@ -184,9 +191,8 @@ execution defaults while keeping their learning parameters:
   --refresh-performance
 ```
 
-The flag is for autonomous resume; `--init-from` already applies current
-execution settings automatically because demonstration checkpoints are
-weights-only artifacts. This refresh cannot change passes, epochs, batch size, recurrent chunk length,
+The flag is for autonomous resume; `--init-from` already applies all current
+settings automatically. This refresh cannot change passes, epochs, batch size, recurrent chunk length,
 learning rate, `max_grad_norm`, rewards, curriculum or architecture. The live
 window's read-only learning settings show the active values retained on resume;
 press **S** to hide or show them. Without the flag, saved precision is retained;

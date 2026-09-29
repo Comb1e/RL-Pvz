@@ -17,6 +17,7 @@ Autonomous training requires NVIDIA CUDA; demonstration fitting defaults to CPU.
 
 The [engine lock](src/pvz_rl/data/engine-lock.json) fixes source and package hashes.
 All train/demo parameters live in [train.toml](src/pvz_rl/data/train.toml).
+`training.max_grad_norm = 5` is the single clipping limit for both fitting paths.
 
 ## First useful command
 
@@ -32,9 +33,10 @@ evaluate. That guide also explains checkpoint compatibility and performance sett
 The live window shows the run's retained learning settings, including gradient
 clipping and rewards. Press **S** to hide or show them.
 
-Demonstration initialization stores weights and structural metadata only, so
-`--init-from` always uses the current execution settings from
+`--init-from` transfers weights into a new run using all current settings from
 `src/pvz_rl/data/train.toml` without requiring `--refresh-performance`.
+`--resume` retains checkpoint learning settings and rewards; the refresh flag
+only updates execution settings.
 With `compile_kernels = true`, the Windows CUDA path captures the fixed-shape
 entity encoder with CUDA graphs and falls back to eager execution once if the
 installed backend cannot compile it. Captured activations and gradients are copied

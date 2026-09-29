@@ -10,8 +10,10 @@ The read-only **Learning settings** strip shows the active learning rate,
 `max_grad_norm`, batch size, epochs, discount, sequence length, reward coefficients
 and tile-exploration schedule. These come from the resolved run configuration;
 on resume they are the checkpoint values retained by `--refresh-performance`,
-even if TOML now differs. `training.demo.gradient_clip` belongs to demonstration
-initialization and is not displayed as the autonomous gradient limit.
+even if TOML now differs. Fresh `--init-from` runs use the current TOML values.
+`training.max_grad_norm` is the shared clipping limit for demonstration and
+autonomous fitting. Reward settings are coefficients; action-history penalties
+are the corresponding signed reward contributions.
 The strip remains visible during fitting and wraps at narrower window widths.
 Press **S** to hide or show it when more board space is needed.
 

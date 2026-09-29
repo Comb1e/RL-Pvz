@@ -20,6 +20,8 @@ from pvz_rl.presentation.recordings import ActionPhaseRecorder
 def completed_demo(tmp_path):
     cfg = load_demo_config()
     cfg["environment"]["cutoff_seconds"] = 1
+    # A recording made before clipping was shared must remain reusable.
+    cfg["training"]["demo"]["gradient_clip"] = 0.5
     cfg["policy"].update(
         entity_width=8,
         transformer_heads=2,
@@ -76,8 +78,16 @@ def test_complete_demo_fit_uses_whole_game_group_loss_and_reloads(
     completed_demo, tmp_path, monkeypatch
 ):
     cfg, archive, replay = completed_demo
+    cfg["training"]["demo"].pop("gradient_clip")
+    cfg["training"]["max_grad_norm"] = 1.25
     samples = defaultdict(list)
     shared_loss = demo.balanced_q_loss
+    clip_calls = []
+    original_clip = torch.nn.utils.clip_grad_norm_
+
+    def observe_clip(parameters, max_norm):
+        clip_calls.append(max_norm)
+        return original_clip(parameters, max_norm)
 
     def observe(first, second, targets, actions, counts, batch_size):
         for q1, q2, target, action in zip(
@@ -91,19 +101,24 @@ def test_complete_demo_fit_uses_whole_game_group_loss_and_reloads(
         return shared_loss(first, second, targets, actions, counts, batch_size)
 
     monkeypatch.setattr(demo, "balanced_q_loss", observe)
+    monkeypatch.setattr(torch.nn.utils, "clip_grad_norm_", observe_clip)
     result = demo.initialize_demo(archive, replay, tmp_path / "fit", cfg=cfg, passes=1)
     assert result["state"] == "complete" and result["passes_completed"] == 1
+    assert clip_calls == [1.25]
     payload = torch.load(result["checkpoint"], map_location="cpu", weights_only=True)
     assert "performance" not in payload["config"]["training"]
+    assert "gradient_clip" not in payload["config"]["training"]["demo"]
+    assert payload["config"]["training"]["max_grad_norm"] == 1.25
     assert not {"encoder_microbatch", "encoder_token_budget", "attention_query_chunk"} & set(
         payload["config"]["policy"]
     )
     inspected = inspect_checkpoint(result["checkpoint"])
     current = load_config()
     assert inspected["config"]["training"]["performance"] == current["training"]["performance"]
-    assert inspected["config"]["policy"]["encoder_microbatch"] == current["policy"][
-        "encoder_microbatch"
-    ]
+    assert (
+        inspected["config"]["policy"]["encoder_microbatch"]
+        == current["policy"]["encoder_microbatch"]
+    )
     expected = sum(sum(errors) / len(errors) for errors in samples.values()) / len(samples)
     curves = json.loads((tmp_path / "fit/learning-curves.json").read_text())
     assert curves["curves"][0]["loss"] == pytest.approx(expected, rel=1e-6)
@@ -120,12 +135,17 @@ def test_complete_demo_fit_uses_whole_game_group_loss_and_reloads(
         demo.load_demo_checkpoint(tmp_path / "invalid.pt", cfg)
 
 
-@pytest.mark.parametrize("field", ["replay", "complete", "outcome", "decisions", "episode_id"])
+@pytest.mark.parametrize(
+    "field",
+    ["engine", "observation_schema", "replay", "complete", "outcome", "decisions", "episode_id"],
+)
 def test_manifest_corruption_blocks_initialization(completed_demo, tmp_path, field):
     cfg, archive, replay = completed_demo
     manifest = archive.with_suffix(".jsonl.manifest.json")
     data = json.loads(manifest.read_text())
     data[field] = {
+        "engine": {**data["engine"], "commit": "wrong"},
+        "observation_schema": {},
         "replay": "wrong",
         "complete": False,
         "outcome": "lost",

@@ -6,7 +6,7 @@ def test_single_config_train_and_demo_profiles():
     from types import SimpleNamespace
 
     from pvz_rl.cli import configured
-    from pvz_rl.config import load_config, load_demo_config
+    from pvz_rl.config import load_config, load_demo_config, validate_config
     from pvz_rl.learning.exploration import exploration_state
     from pvz_rl.learning.training_requirements import require_supported_policy
 
@@ -16,6 +16,8 @@ def test_single_config_train_and_demo_profiles():
     assert demo["policy"] == training["policy"]
     assert demo["training"]["method"] == training["training"]["method"]
     assert demo["reward"]["invalid_plant_penalty"] == training["reward"]["invalid_plant_penalty"]
+    assert demo["training"]["max_grad_norm"] == training["training"]["max_grad_norm"] == 5
+    assert "gradient_clip" not in demo["training"]["demo"]
     assert training["policy"]["kind"] == "transformer_lstm_q_v2"
     assert tuple(training["curriculum"]["stages"]) == ("easy", "standard", "shared")
     assert "lessons" not in training["curriculum"] and "run_stage" not in training["curriculum"]
@@ -32,6 +34,10 @@ def test_single_config_train_and_demo_profiles():
     assert exploration_state(demo, 5000).tile_epsilon == pytest.approx(0.01)
     with pytest.raises(ValueError, match="not available"):
         load_demo_config("src/pvz_rl/data/train.toml", profile="event-memory")
+    for invalid in (0, -1, float("inf"), float("nan"), True):
+        training["training"]["max_grad_norm"] = invalid
+        with pytest.raises(ValueError, match="training.max_grad_norm"):
+            validate_config(training)
 
 
 @pytest.mark.parametrize("demo", [False, True])

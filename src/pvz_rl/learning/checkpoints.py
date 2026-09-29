@@ -32,7 +32,7 @@ def compatible_config(source, target):
     if transfer_protocol(source) != transfer_protocol(target):
         raise ValueError(
             "Checkpoint transfer requires matching engine, observation encoding, action "
-            "semantics, reward definition and network structure; incompatible model transfer"
+            "semantics and network structure; incompatible model transfer"
         )
 
 

@@ -135,11 +135,14 @@ def verify_demo(archive: str | Path, replay: str | Path, cfg: dict | None = None
         raise ValueError(
             "Unsupported demonstration archive protocol; record a fresh entity_v1 demonstration"
         )
-    recorded_digest = manifest.get("config_digest")
-    if recorded_digest != digest(cfg):
-        raise ValueError(
-            "Archive configuration digest does not match; record a fresh demonstration"
-        )
+    # Optimizer settings are not recording inputs. Validate the pinned engine,
+    # schema and native replay facts instead of the complete configuration hash.
+    if manifest.get("engine") != {
+        "commit": cfg["engine_commit"],
+        "version": cfg["engine_version"],
+        "package_version": cfg["engine_package_version"],
+    }:
+        raise ValueError("Archive engine does not match the configured pinned engine")
     if manifest.get("observation_schema") != ObservationEncoder(cfg, Rules()).schema():
         raise ValueError("Archive entity schema does not match; record a fresh demonstration")
     if manifest.get("replay") != file_hash(replay):
@@ -216,7 +219,6 @@ def initialize_demo(
     cfg: dict | None = None,
     passes: int | None = None,
     learning_rate: float | None = None,
-    gradient_clip: float | None = None,
     seed: int | None = None,
     time_budget_minutes: float | None = None,
     device: str = "cpu",
@@ -231,9 +233,7 @@ def initialize_demo(
     learning_rate = float(
         settings.get("learning_rate", 3e-4) if learning_rate is None else learning_rate
     )
-    gradient_clip = float(
-        settings.get("gradient_clip", 0.5) if gradient_clip is None else gradient_clip
-    )
+    max_grad_norm = float(cfg["training"]["max_grad_norm"])
     seed = int(settings.get("learner_seed", 101) if seed is None else seed)
     time_budget_minutes = float(
         settings.get("time_budget_minutes", 30)
@@ -242,7 +242,7 @@ def initialize_demo(
     )
     if passes < 1 or any(
         not math.isfinite(value) or value <= 0
-        for value in (learning_rate, gradient_clip, time_budget_minutes)
+        for value in (learning_rate, max_grad_norm, time_budget_minutes)
     ):
         raise ValueError("demo initialization settings must be positive")
     torch.set_num_threads(cfg["training"]["torch_threads"])
@@ -260,6 +260,7 @@ def initialize_demo(
     # metadata for validation, but leave execution settings to the current
     # training profile when this artifact is consumed.
     checkpoint_cfg = without_performance(cfg)
+    checkpoint_cfg["training"].get("demo", {}).pop("gradient_clip", None)
     group_counts = torch.bincount(action_groups(actions), minlength=3)
     started = time.monotonic()
     completed = 0
@@ -297,7 +298,7 @@ def initialize_demo(
             loss.backward()
             pass_loss += float(loss.detach())
             state = state.detach()
-        torch.nn.utils.clip_grad_norm_(model.parameters(), gradient_clip)
+        torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
         optimizer.step()
         completed += 1
         coverage += torch.bincount(action_parts(actions)[0].detach().cpu(), minlength=10)

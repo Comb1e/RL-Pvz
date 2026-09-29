@@ -1,5 +1,28 @@
 # Iteration history
 
+## 0.31.4 — 2026-09-29
+
+- Problem/root cause: demo and autonomous fitting read separate clipping limits.
+  Fresh `--init-from` also copied the source configuration, so both easy runs
+  inherited the initialization's invalid-plant penalty of 0.001 despite TOML
+  having 0.003. The viewer correctly exposed the effective, unintended value.
+- Improvement: keep only `training.max_grad_norm = 5`, preserving the user's
+  clipping adjustment for both fitting paths. Remove the demo-only setting and
+  override. Fresh initialization now resolves all settings from current TOML
+  and transfers only compatible weights; reward changes do not block transfer.
+  Resume keeps saved learning settings and rewards. Recording verification checks
+  engine/schema and replay facts without binding optimizer settings to its digest.
+- Verification: 22 focused controls passed, including the real tiny CLI
+  initialization/training/evaluation/resume flow, shared clipping, archive
+  corruption, architecture mismatch and retained viewer values. The existing
+  human initialization transferred all 56 parameter tensors exactly and the
+  user's command resolved penalty 0.003, clipping 5 and `features_bf16` without
+  a refresh flag or starting simulation. Changed-file Ruff lint/format and Git
+  whitespace checks passed. No full suite or formal training ran.
+- Remaining limits: existing runs retain their saved penalty on resume; only a
+  new run adopts changed learning settings. Old recordings still require their
+  original reward configuration when verifying stored reward facts.
+
 ## 0.31.3 — 2026-09-29
 
 - Problem/root cause: autonomous resume retains learning settings, but the live

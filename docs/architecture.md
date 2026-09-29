@@ -126,16 +126,20 @@ outcome, duration, reward and episode boundary into JSONL. Native replay and
 manifest describe completion; closing early leaves an incomplete archive.
 Compact viewer history never replaces the complete fitting sequence.
 
-Initialization rejects missing manifests, unsupported protocols, hash/config
-mismatches, incomplete episodes and reconstruction differences. Only entity-v1
+Initialization rejects missing manifests, unsupported protocols, replay-hash or
+engine/schema mismatches, incomplete episodes and reconstruction differences. Only entity-v1
 archives and weights are accepted; earlier archives require a new recording.
-Execution device and fitting overrides do not modify verification configuration.
-The generated `initialization.pt` stores weights plus structural metadata; it
-omits encoder batching and performance settings. Reading it overlays those
-execution settings from the current `train.toml`, so autonomous training can
-reuse the weights after a performance change without a refresh flag.
+Verification compares recorded facts rather than the full configuration digest;
+changing optimizer settings does not invalidate a recording.
+The generated `initialization.pt` stores weights and source metadata; it omits
+encoder batching and performance settings. Fresh `--init-from` resolves the
+current configuration before weight transfer. Source learning/reward metadata
+is used for provenance, never to override the new run's settings. Compatibility
+checks validate the engine, input/action semantics and network dimensions;
+reward coefficients are excluded from weight compatibility.
 Complete gamma-one returns supervise both Q heads. Whole-pass gradients are
-clipped once; only completed passes atomically replace `initialization.pt`.
+clipped once using the same `training.max_grad_norm` limit as autonomous fitting;
+only completed passes atomically replace `initialization.pt`.
 
 ## Autonomous lifecycle and recovery
 
@@ -232,8 +236,9 @@ checkpoints default to FP32. Ordinary resume keeps saved settings;
 `--refresh-performance` replaces only precision, prefetch, encoder batching,
 attention fallback size and instrumentation settings from current configuration.
 Learning parameters and input/output schemas are excluded from that refresh.
-Demonstration weights always take these execution settings from the current
-configuration when they are loaded.
+Fresh weight initialization uses current learning and execution settings.
+Recovery retains saved rewards and clipping because collected returns and
+optimizer state belong to that saved configuration.
 
 Atomic ZIP replacement couples model, optimizer, counters, curriculum, exploration,
 RNGs, trajectory/entity slabs and collection states. Schema metadata records

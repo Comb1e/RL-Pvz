@@ -400,7 +400,7 @@ def validate_config(cfg: dict) -> None:
     for key in ("passes", "learner_seed"):
         if type(demo.get(key, 1)) is not int or demo.get(key, 1) < 1:
             raise ValueError(f"training.demo.{key} must be a positive integer")
-    for key in ("learning_rate", "gradient_clip", "time_budget_minutes"):
+    for key in ("learning_rate", "time_budget_minutes"):
         if (
             type(demo.get(key, 1.0)) not in (int, float)
             or not math.isfinite(demo.get(key, 1.0))

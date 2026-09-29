@@ -23,6 +23,8 @@
 - `src/pvz_rl/data/train.toml` is the single parameter source for train/demo overlays.
   Both use `entity_v1` observations and `transformer_lstm_q_v2`; old inputs/weights
   require fresh initialization. Keep user reward adjustments when updating defaults.
+  `training.max_grad_norm` is the sole clipping limit for demo and autonomous
+  fitting; historical demo clipping metadata has no effect.
 - `src/pvz_rl/envs/encoding.py` defines the shared 11-field entity schema,
   normalization, truncation diagnostics and `EntityBatch` collator. Canonical order
   is mowers, plants, zombies, projectiles; overflow drops from the end, with nearest
@@ -46,6 +48,9 @@
   A full-board plant still proposes tile zero. `runner.py` owns recurrent state and
   feeds rejection back as `(previous_action=0, accepted=0, ticks=1)`.
 - `learning/checkpoints.py` inspects saved protocols/schema before simulation.
+  `cli.py` resolves fresh `--init-from` runs from current configuration, transferring
+  only weights; `--resume` and evaluation retain saved settings. Weight compatibility
+  excludes reward coefficients, while recovery still requires matching rewards.
   `cuda_q.py` owns cohort lifecycle and atomic recovery; `recurrent_q.py` collects
   chronological transitions and accumulates whole-pass gradients. `cuda_buffer.py`
   stores fixed metadata plus ragged entity slabs under one RAM/disk budget and

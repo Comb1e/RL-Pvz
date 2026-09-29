@@ -35,6 +35,9 @@ notes are recoverable with `git show 4052968:docs/references.md`.
 
 ## Precision and device execution
 
+- [PyTorch 2.8 gradient clipping](https://github.com/pytorch/pytorch/blob/v2.8.0/torch/nn/utils/clip_grad.py):
+  `clip_grad_norm_` uses one total parameter-gradient norm and a clamped scaling
+  factor. Both fitting paths supply the same configured limit after accumulation.
 - [PyTorch 2.8 AMP examples](https://github.com/pytorch/pytorch/blob/v2.8.0/docs/source/notes/amp_examples.rst):
   accumulation and selective autocast, used with FP32 master weights and BF16
   feature computation. No FP16 scaler is used. Inspected SHA-256:

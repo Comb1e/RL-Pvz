@@ -52,6 +52,10 @@ D=\sum_j\nabla_\theta L_j(\theta;\operatorname{stopgrad}(h_j,c_j)),
 \quad \bar D=D\min(1,C/\lVert D\rVert_2).
 \]
 
+Both fitting paths use `C = training.max_grad_norm`, with default 5.
+PyTorch applies a small denominator epsilon and leaves gradients below the
+limit unamplified. Clipping occurs once after the complete pass accumulation.
+
 The test compares accumulated gradients when two episodes are processed together
 versus separately with the same two-decision detach boundaries. Changing chunk
 length preserves the scalar forward objective at fixed weights (within numeric

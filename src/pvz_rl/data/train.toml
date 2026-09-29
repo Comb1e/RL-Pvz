@@ -76,7 +76,7 @@ exploration = {objective = "sequential_tile_epsilon_v1", epsilon_start = 0.5, ep
 batch_size = 1024
 n_epochs = 4
 learning_rate = 0.0003
-max_grad_norm = 0.5
+max_grad_norm = 5 # Shared by autonomous training and demonstration initialization.
 hidden_sizes = [128, 128]
 eval_interval = 250000 # Periodic decision interval for archived/diagnostic protocols.
 torch_threads = 1
@@ -148,7 +148,6 @@ encoder_token_budget = 65536
 [training.demo]
 passes = 5
 learning_rate = 0.0003
-gradient_clip = 5
 learner_seed = 101
 time_budget_minutes = 30
 

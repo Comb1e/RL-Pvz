@@ -966,7 +966,10 @@ def load_policy(checkpoint, device="cpu", *, for_resume=False):
         model.policy.load_state_dict(data.pop("payload")["model"], strict=True)
     else:
         model = model_class(cfg).load(checkpoint, device=device)
-        if transfer_protocol(model.cfg) != transfer_protocol(cfg):
+        if (
+            transfer_protocol(model.cfg) != transfer_protocol(cfg)
+            or model.cfg["reward"] != cfg["reward"]
+        ):
             raise ValueError("Checkpoint contents disagree with saved model configuration")
     if any(not torch.isfinite(value).all() for value in model.policy.state_dict().values()):
         raise ValueError("Checkpoint contains non-finite model weights")

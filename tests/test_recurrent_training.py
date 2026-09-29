@@ -102,7 +102,7 @@ def test_missing_manifest_protocol_and_configuration_are_rejected(completed_demo
         demo.verify_demo(archive, replay, cfg)
     path.write_text(json.dumps(original))
     cfg["reward"]["win_reward"] += 1
-    with pytest.raises(ValueError, match="configuration digest"):
+    with pytest.raises(ValueError, match="reward or terminal mismatch"):
         demo.verify_demo(archive, replay, cfg)
 
 
@@ -166,9 +166,13 @@ def test_demo_weights_transfer_exactly_and_autonomous_fit_changes_them(completed
         env.close()
 
 
-def test_transfer_rejects_reward_encoding_and_model_changes(recurrent_cfg):
+def test_transfer_accepts_learning_changes_but_rejects_encoding_and_model_changes(recurrent_cfg):
+    changed = copy.deepcopy(recurrent_cfg)
+    changed["reward"]["invalid_plant_penalty"] = 0.123
+    changed["training"].update(max_grad_norm=1.25, learning_rate=0.0001, n_epochs=7)
+    compatible_config(recurrent_cfg, changed)
+    assert resume_protocol(recurrent_cfg, "masked") != resume_protocol(changed, "masked")
     for group, field, value in [
-        ("reward", "win_reward", 3),
         ("encoding", "count_scale", 3),
         ("policy", "lstm_hidden", 16),
     ]:
@@ -216,16 +220,11 @@ def test_step_chunk_equivalence_with_real_outcomes(recurrent_cfg, device):
 
 def test_cli_initialize_train_evaluate_and_in_place_resume(completed_demo, tmp_path, monkeypatch):
     cfg, archive, replay = completed_demo
-    # Re-record the tiny fixture with bounded autonomous execution parameters;
-    # these do not alter the native game's five recorded decisions.
+    # Bounded execution parameters do not alter the native recording's facts.
     cfg["environment"]["cutoff_seconds"] = 1
     cfg["training"].update(n_envs=2, total_games=1, n_epochs=1, batch_size=4)
     cfg["training"]["performance"].update(compile_kernels=False, telemetry=False)
     cfg["visualization"].update(enabled=False, live_enabled=False)
-    manifest = archive.with_suffix(".jsonl.manifest.json")
-    data = json.loads(manifest.read_text())
-    data["config_digest"] = demo.digest(cfg)
-    manifest.write_text(json.dumps(data))
     monkeypatch.setattr("pvz_rl.cli.load_demo_config", lambda path: copy.deepcopy(cfg))
     initial, run = tmp_path / "init", tmp_path / "train"
     main(
@@ -241,10 +240,24 @@ def test_cli_initialize_train_evaluate_and_in_place_resume(completed_demo, tmp_p
             "1",
         ]
     )
+    # Fresh --init-from must use today's learning/reward settings without a
+    # refresh flag, even when the checkpoint was generated under older values.
+    cfg["training"]["demo"].pop("gradient_clip")
+    cfg["training"]["max_grad_norm"] = 1.25
+    cfg["reward"]["invalid_plant_penalty"] = 0.123
+    cfg["training"]["learning_rate"] = 0.000125
+    monkeypatch.setattr("pvz_rl.cli.load_config", lambda path: copy.deepcopy(cfg))
     main(["train", "--init-from", str(initial / "initialization.pt"), "--output", str(run)])
     assert json.loads((run / "status.json").read_text())["training_games"] == 1
     run_config = json.loads((run / "config.json").read_text())
-    assert run_config["training"]["performance"] == load_config()["training"]["performance"]
+    assert run_config == cfg
+    from pvz_rl.presentation.live_view import learning_settings
+
+    assert "invalid_plant_penalty=0.123" in dict(learning_settings(run_config))["Rewards"]
+    metadata = json.loads((run / "metadata.json").read_text())
+    changes = metadata["initialization"]["parameter_changes"]
+    assert changes["reward.invalid_plant_penalty"]["after"] == 0.123
+    assert changes["training.max_grad_norm"]["after"] == 1.25
     main(
         [
             "evaluate",
@@ -262,10 +275,14 @@ def test_cli_initialize_train_evaluate_and_in_place_resume(completed_demo, tmp_p
     status = json.loads((run / "status.json").read_text())
     status["time_budget"]["elapsed_seconds"] = 60
     (run / "status.json").write_text(json.dumps(status))
+    cfg["reward"]["invalid_plant_penalty"] = 0.234
+    cfg["training"]["max_grad_norm"] = 2.5
     main(["train", "--resume", str(run / "latest.zip"), "--games", "2", "--output", str(run)])
     assert json.loads((run / "status.json").read_text())["training_games"] == 2
     metadata = json.loads((run / "metadata.json").read_text())
     assert metadata["initialization"]["type"] == "demonstration"
+    assert metadata["config"]["reward"]["invalid_plant_penalty"] == 0.123
+    assert metadata["config"]["training"]["max_grad_norm"] == 1.25
     assert json.loads((run / "status.json").read_text())["time_budget"]["elapsed_seconds"] >= 60
     assert len((run / "training-episodes.jsonl").read_text().splitlines()) == 2
 
@@ -536,13 +553,16 @@ def test_default_128_slot_bounded_collection_and_chunk_memory(tmp_path):
 
 
 def test_performance_refresh_keeps_learning_settings_and_old_precision():
+    from pvz_rl.presentation.live_view import learning_settings
+
     current = load_config()
     assert current["training"]["demo"]["passes"] == 5
     old = copy.deepcopy(current)
     old["training"]["performance"].pop("fit_precision")
     old["training"]["performance"].pop("prefetch")
     old["policy"]["encoder_microbatch"] = 16
-    old["training"].update(n_epochs=7, batch_size=512)
+    old["training"].update(n_epochs=7, batch_size=512, max_grad_norm=0.5)
+    old["training"]["demo"]["gradient_clip"] = 0.25  # Ignored historical metadata.
     old["reward"]["invalid_plant_penalty"] = 0.123
     normalized = execution_config(old)
     assert normalized["training"]["performance"]["fit_precision"] == "fp32"
@@ -553,6 +573,10 @@ def test_performance_refresh_keeps_learning_settings_and_old_precision():
     assert new["training"]["performance"]["fit_precision"] == "features_bf16"
     assert new["training"]["n_epochs"] == 7 and new["training"]["batch_size"] == 512
     assert new["reward"] == old["reward"]
+    assert new["training"]["max_grad_norm"] == 0.5
+    visible = dict(learning_settings(new))
+    assert "max_grad_norm=0.5" in visible["Learning"]
+    assert "invalid_plant_penalty=0.123" in visible["Rewards"]
     assert new["training"]["demo"] == old["training"]["demo"]
     assert resume_protocol(new, "masked") == resume_protocol(normalized, "masked")
 
