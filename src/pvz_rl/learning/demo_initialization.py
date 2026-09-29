@@ -23,6 +23,7 @@ from pvz_rl.envs.encoding import (
 from pvz_rl.envs.rewards import reward_parts
 from pvz_rl.learning.checkpoints import DEMO_PROTOCOL as CHECKPOINT_PROTOCOL
 from pvz_rl.learning.checkpoints import STATE_PROTOCOL as RECURRENT_STORAGE_PROTOCOL
+from pvz_rl.learning.performance import without_performance
 from pvz_rl.policy.sequential_q import action_groups, action_parts, balanced_q_loss
 from pvz_rl.policy.transformer_lstm import TransformerLSTMPolicy
 from pvz_rl.presentation.recordings import open_playback, verify_replay
@@ -255,6 +256,10 @@ def initialize_demo(
     output = Path(output)
     output.mkdir(parents=True, exist_ok=True)
     curves, coverage = [], torch.zeros(10, dtype=torch.long)
+    # Initialization transfers weights only.  Keep structural and learning
+    # metadata for validation, but leave execution settings to the current
+    # training profile when this artifact is consumed.
+    checkpoint_cfg = without_performance(cfg)
     group_counts = torch.bincount(action_groups(actions), minlength=3)
     started = time.monotonic()
     completed = 0
@@ -302,8 +307,8 @@ def initialize_demo(
                 "protocol": CHECKPOINT_PROTOCOL,
                 "recurrent_storage_protocol": RECURRENT_STORAGE_PROTOCOL,
                 "observation_schema": model.layout.schema(),
-                "config_digest": digest(cfg),
-                "config": cfg,
+                "config_digest": digest(checkpoint_cfg),
+                "config": checkpoint_cfg,
                 "model": model.state_dict(),
                 "passes_completed": completed,
                 "learner_seed": seed,

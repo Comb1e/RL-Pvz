@@ -48,8 +48,10 @@ It starts fresh Adam state, counters, curriculum and RNGs. Omitting both
 silently falls back to random initialization. Metadata records model family,
 initialization type, source SHA-256 and parameter differences.
 
-Without `--config`, loading uses the checkpoint's saved configuration plus missing
-execution defaults. An explicit configuration must preserve the engine,
+Without `--config`, autonomous resume uses the checkpoint's saved configuration
+plus missing execution defaults. A demonstration initialization uses its saved
+structural metadata only and always takes execution settings from the current
+`train.toml`. An explicit configuration must preserve the engine,
 observation encoding, action semantics, rewards and network structure. Budgets
 and output settings can differ. CPU autonomous training is unsupported.
 
@@ -100,10 +102,17 @@ The cap loses individual information above the limit. See
 [entity fields, normalization and attention](math/entity-inputs.md).
 
 `training.storage.ram_gib` covers ragged trajectory slabs and pinned staging;
-excess slabs spill to disk. Encoder microbatch size (64), token budget (32,768)
-and fallback query chunk size (64) live under `policy`. Allocation retries
-reduce only encoder work size and then enable checkpointing; they never shrink
-the entity cap or recurrent sequence. Exhausted retries fail explicitly.
+excess slabs spill to disk. The current execution profile uses an encoder
+microbatch of 128 observations, a 65,536-token budget and a fallback query
+chunk size of 64 under `policy`. Allocation retries reduce only encoder work
+size (128 → 64 → 32 → 16) and then enable one outer checkpoint; they never
+shrink the entity cap or recurrent sequence. Exhausted retries fail explicitly.
+
+Fitting groups four independent learning batches for execution only
+(`training.performance.fit_sequence_groups = 4`). Each group keeps complete
+256-step sequences and separate recurrent states, so chronological order,
+loss normalization and the single whole-pass optimizer update are unchanged.
+Partial groups and inactive environment slots are masked.
 
 For a short device comparison of entity caps:
 
@@ -153,7 +162,11 @@ Two pinned staging buffers use the same `training.storage.ram_gib` allowance as
 trajectory slabs, spilling resident slabs when necessary. `training.performance.prefetch`
 controls ordered preparation/transfer overlap. Telemetry reports preparation,
 transfer wait/device time, fitting, and optimizer time separately; overlapped
-phase durations must not be added to infer wall time.
+phase durations must not be added to infer wall time. Fitting synchronizes
+timing and device summaries at pass boundaries, checkpointing, interruption or
+shutdown; intermediate progress uses cached host metrics. Fixed-shape encoder
+compilation is optional and records either `compiled`, `fallback` or
+`unavailable` before reverting to eager execution.
 
 Older entity checkpoints can resume without retraining. To apply the current
 execution defaults while keeping their learning parameters:
@@ -164,8 +177,9 @@ execution defaults while keeping their learning parameters:
   --refresh-performance
 ```
 
-The same flag works with `--init-from` for an existing demonstration checkpoint.
-This refresh cannot change passes, epochs, batch size, recurrent chunk length,
+The flag is for autonomous resume; `--init-from` already applies current
+execution settings automatically because demonstration checkpoints are
+weights-only artifacts. This refresh cannot change passes, epochs, batch size, recurrent chunk length,
 rewards, curriculum or architecture. Without it, saved precision is retained;
 checkpoints lacking precision metadata use FP32. Precision changes begin when
 the unfinished pass restarts. A nonfinite BF16 pass retries wholly in FP32;

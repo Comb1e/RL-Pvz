@@ -352,6 +352,9 @@ def validate_config(cfg: dict) -> None:
         raise ValueError("training.performance.fit_precision must be fp32 or features_bf16")
     if type(performance.get("prefetch", False)) is not bool:
         raise ValueError("training.performance.prefetch must be a boolean")
+    fit_sequence_groups = performance.get("fit_sequence_groups", 1)
+    if type(fit_sequence_groups) is not int or fit_sequence_groups < 1 or fit_sequence_groups > 16:
+        raise ValueError("training.performance.fit_sequence_groups must be an integer from 1 to 16")
     if train.get("budget_unit", "decisions") not in ("games", "decisions"):
         raise ValueError("training.budget_unit must be games or decisions")
     if env.get("action_timing", "fixed") not in ("fixed", "per_tick"):

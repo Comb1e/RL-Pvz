@@ -1,6 +1,7 @@
 """Ordered double-buffer preparation with explicit host-buffer ownership."""
 
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 from time import perf_counter
 
 import numpy as np
@@ -9,15 +10,34 @@ import torch
 from pvz_rl.envs.encoding import ENTITY_WIDTH, GLOBAL_WIDTH, EntityBatch
 
 
+@dataclass(frozen=True)
+class SequenceMetadata:
+    """Device metadata for one chronological fitting batch.
+
+    Keeping these tensors together avoids allocating a new dictionary for every
+    sequence chunk while ``__getitem__`` preserves the old test and replay API.
+    """
+
+    active: torch.Tensor
+    action: torch.Tensor
+    previous: torch.Tensor
+    previous_outcome: torch.Tensor
+    target: torch.Tensor
+
+    def __getitem__(self, name):
+        return getattr(self, name)
+
+
 def sequence_rows(buffer, chunk_length, decision_budget):
     if decision_budget < 1 or decision_budget % chunk_length:
         raise ValueError("Recurrent batch_size must be a positive multiple of chunk_length")
     width = decision_budget // chunk_length
     steps = buffer.size // buffer.n_envs
+    time_template = np.arange(chunk_length, dtype=np.int64)
     for first in range(0, buffer.n_envs, width):
-        slots = np.arange(first, min(first + width, buffer.n_envs))
+        slots = np.arange(first, min(first + width, buffer.n_envs), dtype=np.int64)
         for start in range(0, steps, chunk_length):
-            times = np.arange(start, min(start + chunk_length, steps))
+            times = start + time_template[: min(chunk_length, steps - start)]
             rows = buffer.take(slots[:, None] + times[None] * buffer.n_envs)
             if not rows["active"].any():
                 break
@@ -72,8 +92,9 @@ class SequencePrefetch:
         flat = rows.reshape(-1)
         fields = metadata[: len(flat)]
         array = fields.numpy()
-        for i, key in enumerate(("active", "action", "previous")):
-            array[:, i] = flat[key]
+        array[:, 0] = flat["active"]
+        array[:, 1] = flat["action"]
+        array[:, 2] = flat["previous"]
         array[:, 3:5] = flat["previous_outcome"]
         array[:, 5] = flat["target"]
         self.buffer.transport_metrics["preparation_seconds"] += perf_counter() - started
@@ -112,13 +133,13 @@ class SequencePrefetch:
             reset,
             rows,
             obs,
-            {
-                "active": fields[..., 0].bool(),
-                "action": fields[..., 1].long(),
-                "previous": fields[..., 2].long(),
-                "previous_outcome": fields[..., 3:5],
-                "target": fields[..., 5],
-            },
+            SequenceMetadata(
+                active=fields[..., 0].bool(),
+                action=fields[..., 1].long(),
+                previous=fields[..., 2].long(),
+                previous_outcome=fields[..., 3:5],
+                target=fields[..., 5],
+            ),
         )
 
     def close(self):

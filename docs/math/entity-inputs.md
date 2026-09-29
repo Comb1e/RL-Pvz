@@ -97,7 +97,7 @@ One fallback query chunk uses O(microbatch × heads × 64 × L) score storage.
 Autograd may retain multiple chunks for backward; the allocation fallback and
 outer checkpoint bound practical usage. This is not a linear total-memory claim.
 
-Encoder microbatches contain at most 64 frames and at most the configured 32,768
+Encoder microbatches contain at most 128 frames and at most the configured 65,536
 tokens when possible. Optional outer activation checkpointing recomputes these frames
 without nested attention checkpoints. Frames are reassembled in original batch/time order before
 the LSTM; encoder scheduling cannot change the recurrent objective or the single

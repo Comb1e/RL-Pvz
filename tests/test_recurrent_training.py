@@ -243,6 +243,8 @@ def test_cli_initialize_train_evaluate_and_in_place_resume(completed_demo, tmp_p
     )
     main(["train", "--init-from", str(initial / "initialization.pt"), "--output", str(run)])
     assert json.loads((run / "status.json").read_text())["training_games"] == 1
+    run_config = json.loads((run / "config.json").read_text())
+    assert run_config["training"]["performance"] == load_config()["training"]["performance"]
     main(
         [
             "evaluate",
@@ -545,7 +547,9 @@ def test_performance_refresh_keeps_learning_settings_and_old_precision():
     normalized = execution_config(old)
     assert normalized["training"]["performance"]["fit_precision"] == "fp32"
     new = refresh_performance(normalized, current)
-    assert new["policy"]["encoder_microbatch"] == 64
+    assert new["policy"]["encoder_microbatch"] == 128
+    assert new["policy"]["encoder_token_budget"] == 65536
+    assert new["training"]["performance"]["fit_sequence_groups"] == 4
     assert new["training"]["performance"]["fit_precision"] == "features_bf16"
     assert new["training"]["n_epochs"] == 7 and new["training"]["batch_size"] == 512
     assert new["reward"] == old["reward"]
@@ -595,7 +599,7 @@ def test_failed_pass_restarts_without_skipping_updates(tmp_path, monkeypatch, fa
             "nonfinite_bf16" if fault == "nonfinite" else "memory"
         ]
         assert attempts[1:] == (["fp32"] * 2 if fault == "nonfinite" else ["features_bf16"] * 2)
-        assert model.execution_state["microbatch"] == (32 if fault == "memory" else 64)
+        assert model.execution_state["microbatch"] == (64 if fault == "memory" else 128)
         assert all(torch.isfinite(p).all() for p in model.policy.parameters())
     finally:
         model._drain()

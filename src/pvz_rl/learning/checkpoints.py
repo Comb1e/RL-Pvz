@@ -8,6 +8,7 @@ from zipfile import ZipFile
 import torch
 
 from pvz_rl.config import digest, load_config, validate_config
+from pvz_rl.learning.performance import refresh_performance
 from pvz_rl.learning.training_requirements import transfer_protocol
 
 DEMO_PROTOCOL = "pvz-rl/demo-initialization-checkpoint-v2"
@@ -48,6 +49,7 @@ def execution_config(cfg):
     saved_performance = cfg["training"]["performance"]
     saved_performance.setdefault("fit_precision", "fp32")
     saved_performance.setdefault("prefetch", False)
+    saved_performance.setdefault("fit_sequence_groups", 1)
     return cfg
 
 
@@ -137,7 +139,16 @@ def inspect_checkpoint(path):
         if protocol != protocol_for(cfg["policy"]["kind"]):
             raise ValueError("Checkpoint model family disagrees with saved configuration")
         metadata["initialization_type"] = "autonomous"
-    cfg = execution_config(metadata["config"])
+    # Demonstration checkpoints are weights-only artifacts.  Their structural
+    # configuration is retained for schema and transfer validation, but every
+    # execution-only setting comes from the current training profile.  This
+    # keeps an old initialization useful after a BF16, batching or prefetch
+    # change without requiring a refresh flag or another recording.
+    cfg = (
+        refresh_performance(metadata["config"], load_config())
+        if metadata["initialization_type"] == "demonstration"
+        else execution_config(metadata["config"])
+    )
     validate_config(cfg)
     metadata["config"] = cfg
     return metadata

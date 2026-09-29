@@ -356,6 +356,7 @@ class CudaCohortLifecycle(BaseAlgorithm):
                 "torch_rng": torch.get_rng_state(),
                 "cuda_rng": torch.cuda.get_rng_state_all(),
             }
+        runtime["execution_state"] = getattr(self, "execution_state", None)
         # One atomic archive ties weights, optimizers, RNG and unfinished games
         # together. A failed save leaves the previous checkpoint intact.
         path.parent.mkdir(parents=True, exist_ok=True)
