@@ -32,7 +32,8 @@ notes are recoverable with `git show 4052968:docs/references.md`.
   hindsight goals or the HER algorithm.
 - Hausknecht and Stone, [Deep Recurrent Q-Learning](https://arxiv.org/abs/1507.06527):
   abstract inspected for memory under partial observation. The local objective
-  uses complete returns, with no bootstrapped DQN targets or claimed recurrence advantage.
+  uses complete returns for selected actions and one-step EMA bootstrap for isolated
+  alternative-action probes; it makes no claimed recurrence advantage.
 - [SB3-Contrib 2.7.1 recurrent policies](https://github.com/Stable-Baselines-Team/stable-baselines3-contrib/blob/v2.7.1/sb3_contrib/common/recurrent/policies.py)
   and [buffers](https://github.com/Stable-Baselines-Team/stable-baselines3-contrib/blob/v2.7.1/sb3_contrib/common/recurrent/buffers.py):
   inspected sequence processing, episode-start resets, environment boundaries and
@@ -118,5 +119,3 @@ These references support execution controls only; the fused-group arithmetic,
 whole-pass gradient accumulation and one-event timing boundary are local
 implementation decisions. No learning-quality result is inferred from the
 throughput measurements.
-
-No new research method or benchmark was introduced by the documentation/test cleanup.

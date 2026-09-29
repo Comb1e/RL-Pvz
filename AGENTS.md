@@ -35,6 +35,10 @@
   reason and penalty, exposes `executed_action=0` for rejection and advances one tick.
   `rewards.py` also tracks one-time zombie entries into the two house-side columns;
   complete-game fitting finalizes victory-time shaping against the current cohort median.
+  `envs/probes.py` owns isolated CPU/CUDA counterfactual execution and round-robin
+  schedules; `learning/objective.py` owns six-component targets, probe Huber loss
+  and accepted-demonstration ranking. EMA history follows actual behavior, while
+  forked probe histories never reach actual gameplay or journals.
 - `policy/entity_attention.py` owns shared embeddings, readout tokens, padding masks,
   full efficient attention, exact query fallback and optional outer checkpointing.
   Fixed-shape compilation uses CUDA graphs on Windows and records a one-time eager
@@ -81,6 +85,8 @@
   `monitoring/entity_benchmark.py` measures cap-dependent inference/fitting cost;
   `throughput_benchmark.py` compares fixed 1,024-frame/four-pass execution and
   short collection windows with and without the viewer.
+  `monitoring/objective_diagnostic.py` compares bounded full-objective/reward-only
+  cohorts and fixed-history sensitivity; measurements are not mastery evidence.
 - `tests/test_observations.py`, `test_transformer_lstm.py`, `test_entity_storage.py`
   and `test_recurrent_training.py` cover information preservation, CPU/CUDA parity,
   independent attention math, order/padding invariance, ragged recovery and training.

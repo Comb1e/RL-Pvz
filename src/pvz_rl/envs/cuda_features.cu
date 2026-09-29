@@ -175,6 +175,9 @@ reward_metrics(const I *headers, const I *old_headers, const I *old_cd,
   v[F_home_inner_entries] = home_entries[i * 2 + 1];
   v[F_home_proximity] = -HOME_PENALTY_0 * home_entries[i * 2]
                        -HOME_PENALTY_1 * home_entries[i * 2 + 1];
+  // A corrupted/exhausted ledger must fail at the existing host boundary,
+  // never turn the negative overflow sentinel into a positive reward.
+  if (home_entries[i * 2] < 0) v[F_home_proximity] = 0.0 / 0.0;
   double total = v[F_terminal] + v[F_development] + v[F_home_proximity]
       + v[F_invalid_plant_penalty] + v[F_empty_dig_penalty];
   v[F_total] = total;

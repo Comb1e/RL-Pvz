@@ -15,6 +15,61 @@ from pvz_rl.learning.sequence_transport import SequencePrefetch
 from pvz_rl.monitoring.entity_benchmark import observation
 
 
+def test_probe_dedup_median_finalization_and_spilled_recovery(tmp_path):
+    cfg = load_config()
+    raw, _ = observation(cfg, 5)
+    buf = CompleteGameBuffer(tmp_path / "collect", 3, block_rows=2, ram_bytes=0, cfg=cfg)
+    recovered = None
+    try:
+        rows = np.zeros(3, buf.dtype)
+        rows["active"] = rows["components_valid"] = rows["done"] = True
+        rows["env"] = [0, 1, 2]
+        rows["tick"] = [8000, 16000, 24000]
+        rows["won"] = [True, False, True]
+        rows["components"][:, 0] = [1, -2, 1]
+        rows["components"][:, 1] = [0.01, 0, 0.02]
+        p = rows["probes"][:, 0]
+        p["valid"] = p["branch_role"] = p["done"] = p["won"] = True
+        p["action"] = 46
+        p["tick"] = 100  # Must not enter the duration median.
+        p["components"][:, 0] = 1
+        p["bootstrap"] = 99  # Terminal target excludes this.
+        rows["probes"][:, 1] = p
+        from pvz_rl.envs.encoding import collate_observations
+
+        obs = collate_observations([raw] * 3)
+        buf.append(rows, obs, [obs] * 4)
+        stored = buf.take(np.arange(3))
+        assert buf.entity_size == 30  # Three actual + three unique probe boards.
+        np.testing.assert_array_equal(
+            stored["probes"][:, 0]["entity_offset"], stored["probes"][:, 1]["entity_offset"]
+        )
+        state = buf.save(tmp_path / "saved")
+        recovered = CompleteGameBuffer.restore(tmp_path / "saved", state, tmp_path / "restored")
+        recovered.finalize()
+        summary = recovered.reward_summary
+        assert summary["duration_median_seconds"] == 160
+        assert summary["duration_reference_count"] == 3
+        assert summary["victory_time_adjustments"] == pytest.approx([1 / 30, -0.02])
+        actual = recovered.take(np.arange(3))
+        assert actual["target"].tolist() == pytest.approx([1.1 + 1 / 30, -2, 1.2 - 0.02])
+        assert actual["probes"][:, 0]["target"].tolist() == pytest.approx([1 + 0.1 * 159 / 161] * 3)
+        before = actual.copy()
+        recovered.finalize_rewards()
+        np.testing.assert_array_equal(before, recovered.take(np.arange(3)))
+        saved = recovered.save(tmp_path / "finalized")
+        pth = tmp_path / "finalized/block-000000.npy"
+        broken = np.load(pth)
+        broken["probes"][0, 0]["entity_offset"] = 100000
+        np.save(pth, broken)
+        with pytest.raises(ValueError, match="offset/count"):
+            CompleteGameBuffer.restore(tmp_path / "finalized", saved, tmp_path / "bad")
+    finally:
+        buf.close()
+        if recovered:
+            recovered.close()
+
+
 @pytest.mark.parametrize("ram_bytes", [0, 500, 10000])
 def test_ragged_round_trip_shared_budget_and_empty_rows(tmp_path, ram_bytes):
     schema = ObservationEncoder(load_config(), Rules()).schema()

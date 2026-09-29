@@ -75,8 +75,17 @@ class CounterfactualCollector:
         self.batch._schedules = b._schedules  # The pinned step kernel only reads schedules.
         self.features = CudaFeatures(self.batch, env.cfg, env.condition)
         self.copy_kernel = env.features.module.get_function("copy_probe_state")
+        objective = env.cfg["training"].get("objective", {})
+        self.branch_probes = int(objective.get("branch_probes", 2))
+        self.tile_probes = int(objective.get("tile_probes", 2))
+        self.probe_interval = int(objective.get("probe_interval_decisions", 1))
+        if not 0 <= self.branch_probes <= 2 or not 0 <= self.tile_probes <= 2:
+            raise ValueError("Counterfactual probes must be between zero and two per role")
+        if self.probe_interval < 1:
+            raise ValueError("probe_interval_decisions must be positive")
         self.branch_cursor = torch.zeros(b.n, dtype=torch.long, device="cuda")
         self.tile_cursor = torch.zeros(b.n, 10, dtype=torch.long, device="cuda")
+        self.decision_cursor = torch.zeros(b.n, dtype=torch.long, device="cuda")
         self.transfer = HostTransfer()
         self.profiler = DeviceProfiler(b.cp, env.cfg.get("simulation", {}).get("profile", False))
 
@@ -86,13 +95,19 @@ class CounterfactualCollector:
         branch, tile = action_parts(actions)
         all_branches = torch.arange(10, device=device).expand(n, -1)
         alternatives = all_branches[all_branches != branch[:, None]].reshape(n, 9)
-        chosen = alternatives.gather(
-            1, (self.branch_cursor[:, None] + torch.arange(2, device=device)) % 9
+        chosen = (
+            alternatives.gather(
+                1,
+                (self.branch_cursor[:, None] + torch.arange(self.branch_probes, device=device)) % 9,
+            )
+            if self.branch_probes
+            else alternatives[:, :0]
         )
         geometry = masks[:, 1:].reshape(n, 9, A.tiles)
         proposals = torch.zeros(n, MAX_PROBES, dtype=torch.long, device=device)
-        valid = active[:, None].expand(-1, MAX_PROBES).clone()
-        for slot in range(2):
+        eligible = active & (self.decision_cursor % self.probe_interval == 0)
+        valid = eligible[:, None].expand(-1, MAX_PROBES).clone()
+        for slot in range(self.branch_probes):
             b = chosen[:, slot]
             values = policy.tile_values(details["tile_features"], details["context"], b)
             legal = geometry[torch.arange(n, device=device), (b - 1).clamp_min(0)]
@@ -111,14 +126,16 @@ class CounterfactualCollector:
         cursor = self.tile_cursor.gather(1, branch[:, None])
         for j in range(2):
             location = indices.gather(1, ((cursor + j) % counts[:, None].clamp_min(1))).flatten()
-            valid[:, j + 2] &= (branch != 0) & (counts > j)
+            valid[:, j + 2] &= (branch != 0) & (counts > j) & (j < self.tile_probes)
             proposals[:, j + 2] = assemble(branch, location.clamp_max(A.tiles - 1))
-        self.branch_cursor += active.long() * 2
+        self.branch_cursor += eligible.long() * self.branch_probes
         self.tile_cursor.scatter_add_(
             1,
             branch[:, None],
-            (active & (branch != 0)).long()[:, None] * counts.clamp_max(2)[:, None],
+            (eligible & (branch != 0)).long()[:, None]
+            * counts.clamp_max(self.tile_probes)[:, None],
         )
+        self.decision_cursor += active.long()
         return proposals, valid
 
     @torch.no_grad()
@@ -186,9 +203,7 @@ class CounterfactualCollector:
                     .branch_q.max(-1)
                     .values
                 )
-            target = target * torch.pow(
-                self.env.cfg["training"]["gamma"], duration.float()
-            )
+            target = target * torch.pow(self.env.cfg["training"]["gamma"], duration.float())
             parts = torch.from_dlpack(self.features.parts)[
                 :, [REWARD_FIELDS.index(k) for k in COMPONENTS]
             ]
@@ -226,6 +241,8 @@ class CounterfactualCollector:
     @staticmethod
     def materialize(host):
         values = host["metadata"].numpy()
+        if not np.isfinite(values).all():
+            raise RuntimeError("Invalid counterfactual accounting or exhausted proximity ledger")
         records = np.zeros(values.shape[:2], dtype=probe_dtype())
         for index, field in enumerate(
             (
@@ -254,14 +271,24 @@ class CounterfactualCollector:
 
     def snapshot(self):
         return dict(
-            branch_cursor=self.branch_cursor.cpu(), tile_cursor=self.tile_cursor.cpu(),
+            branch_cursor=self.branch_cursor.cpu(),
+            tile_cursor=self.tile_cursor.cpu(),
+            decision_cursor=self.decision_cursor.cpu(),
             timing=self.profiler.flush(),
         )
 
     def restore(self, state):
-        for name, shape in (("branch_cursor", self.branch_cursor.shape), ("tile_cursor", self.tile_cursor.shape)):
-            if state[name].shape != shape or torch.any(state[name] < 0):
+        for name, shape in (
+            ("branch_cursor", self.branch_cursor.shape),
+            ("tile_cursor", self.tile_cursor.shape),
+            ("decision_cursor", self.decision_cursor.shape),
+        ):
+            cursor = state.get(name, torch.zeros(shape, dtype=torch.long))
+            if cursor.shape != shape or torch.any(cursor < 0):
                 raise ValueError("Invalid counterfactual schedule cursor")
         self.branch_cursor.copy_(state["branch_cursor"])
         self.tile_cursor.copy_(state["tile_cursor"])
+        self.decision_cursor.copy_(
+            state.get("decision_cursor", torch.zeros_like(self.decision_cursor))
+        )
         self.profiler.seconds.update(state.get("timing", {}))

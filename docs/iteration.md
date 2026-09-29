@@ -1,5 +1,43 @@
 # Iteration history
 
+## 0.31.6 — 2026-09-29
+
+- Problem/root cause: complete-return fitting provided almost no direct targets for
+  unselected branches, while development events, rejection costs and house threats
+  were recorded at incompatible scales. A cohort also needed deferred victory-time
+  rewards, and the CUDA proximity-ledger overflow sentinel could otherwise be read
+  as a positive reward during corruption.
+- Improvement: the official `complete_return_probe_v2` objective now keeps six
+  reward components, multiplies only development by 10 for fitting, charges each
+  living non-headless zombie once at `x < 2000` and `x < 1000`, and finalizes victory
+  time against the actual-game median. Every decision probes two round-robin
+  alternative branches and two alternative tiles through isolated CUDA state. A
+  frozen EMA teacher supplies branch-head bootstrap targets; accepted demonstrations
+  add balanced pairwise ranking. Probe cadence/counts are configurable up to the
+  fixed four-record storage shape. Finalization, EMA state, probe cursors, ledgers
+  and pending reports are recoverable and idempotent. CUDA ledger corruption now
+  fails at the host boundary; recovery validates IDs, stages, gaps and duplicates.
+  Progress output labels terminal records as provisional until finalization.
+- Verification: the new six-component scaling, deduplicated probe storage with
+  median finalization/spill recovery, partitioned probe/ranking gradients, and EMA
+  recovery controls passed. The CPU/CUDA counterfactual parity control passed for
+  rejected and danger-zone proposals, comparing proposal, execution, reason,
+  duration, components, next observation, simulator hash, RNG and ledger state.
+  The existing reward boundary and one CUDA recovery case also passed. Changed-file
+  Ruff, format, compile and whitespace checks passed. No broad suite or formal
+  training was run.
+- Bounded diagnostic: two 16-game cohorts and four fitting passes per arm were run
+  from a fresh five-pass demonstration initialization with identical probes. Full
+  objective wall time was 1,374.1 s and reward-only was 1,321.9 s; peak Torch
+  memory was 3,185 MiB and 1,457 MiB respectively. Cohort medians were 164.705 s
+  and 165.98 s for the full arm; target standard deviation was 0.1564 and 0.2109.
+  Probe coverage was about 56–58k samples per branch per cohort. Cell magnitudes
+  remained unsaturated (maximum about 0.43, no values over 5). Fixed-history
+  sensitivity still showed tiny zombie-position/health deltas (about 1e-6–5e-5)
+  compared with sun/cooldown changes (about 0.003–0.012), so the diagnostic does
+  not establish that state-dependent action preferences are solved. Raw and compact
+  measurements are in [objective-v032](evidence/objective-v032.json).
+
 ## 0.31.5 — 2026-09-29
 
 - Problem/root cause: initialization compared historical reward prices against

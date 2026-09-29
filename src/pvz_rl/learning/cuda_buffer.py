@@ -295,11 +295,23 @@ class CompleteGameBuffer:
         self.reward_summary = dict(
             duration_median_seconds=median / Rules().game["tick_rate"],
             duration_reference_count=len(durations),
-            victory_time_adjustments=[float(r["components"][5]) for r in terminal if r["won"]],
-            home_entries=np.sum([
-                block[:min(self.block_rows, self.size - b * self.block_rows)]["home_entries"].sum(0)
-                for b, block in enumerate(self.blocks)
-            ], axis=0).tolist() if self.blocks else [0, 0],
+            victory_time_adjustments=victory_time(
+                durations[np.asarray([bool(r["won"]) for r in terminal], dtype=bool)],
+                median,
+                True,
+                weight,
+            ).tolist(),
+            home_entries=np.sum(
+                [
+                    block[: min(self.block_rows, self.size - b * self.block_rows)][
+                        "home_entries"
+                    ].sum(0)
+                    for b, block in enumerate(self.blocks)
+                ],
+                axis=0,
+            ).tolist()
+            if self.blocks
+            else [0, 0],
         )
         self.rewards_finalized = True
         return self.reward_summary

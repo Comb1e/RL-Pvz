@@ -306,6 +306,8 @@ class CudaVecEnv(VecEnv):
             indices = np.flatnonzero(compact[:, 0]).tolist()
             extra_host = host[self.num_envs * 6 : self.num_envs * 11].reshape(self.num_envs, 5)
             self.last_reward_parts_host = host[self.num_envs * 11 :].reshape(self.num_envs, -1)
+            if not np.isfinite(self.last_reward_parts_host).all():
+                raise RuntimeError("Invalid CUDA reward accounting or exhausted proximity ledger")
             truncation = extra_host[:, 2:]
             infos = []
             for index, row in enumerate(compact):
@@ -386,15 +388,28 @@ class CudaVecEnv(VecEnv):
         }
 
     def restore_training(self, state):
+        ledger = state.get("home_ledger")
+        if ledger is not None:
+            ledger = np.asarray(ledger)
+            if ledger.shape != self.features.home_ledger.shape or ledger.dtype != np.int64:
+                raise ValueError("Invalid proximity ledger shape or dtype")
+            ids, stages = ledger[..., 0], ledger[..., 1]
+            if (
+                np.any(ids < 0)
+                or np.any((stages < 0) | (stages > 2))
+                or np.any((ids == 0) & (stages != 0))
+            ):
+                raise ValueError("Invalid proximity ledger ID or stage")
+            for row in ids:
+                occupied = row[row != 0]
+                if len(np.unique(occupied)) != len(occupied) or np.any(row[: len(occupied)] == 0):
+                    raise ValueError("Invalid proximity ledger duplicate ID or gap")
         with self.device_context():
             self.batch.restore(state["games"], allowed=state["allowed"], digging=state["digging"])
             self.batch.header[:, 17] = self.cp.asarray(state["enabled"])
             self.enabled_envs[:] = np.asarray(state["enabled"], dtype=bool)
             self.features.totals[:] = self.cp.asarray(state["totals"])
-            if "home_ledger" in state:
-                ledger = state["home_ledger"]
-                if ledger.shape != self.features.home_ledger.shape:
-                    raise ValueError("Invalid proximity ledger shape")
+            if ledger is not None:
                 self.features.home_ledger[:] = self.cp.asarray(ledger)
             else:
                 self.features.initialize_home(list(range(self.num_envs)))

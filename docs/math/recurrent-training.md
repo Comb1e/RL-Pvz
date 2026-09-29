@@ -17,7 +17,7 @@ For an episode of T decisions, including rejected proposals and zero-tick
 operations, the target is
 
 \[
-G_t = \sum_{u=t}^{T-1} r_u, \qquad G_T=0.
+G_t = \sum_{u=t}^{T-1} r^{train}_u, \qquad G_T=0.
 \]
 
 Gamma is one. A simulator cutoff receives its configured terminal penalty once;
@@ -92,12 +92,64 @@ evaluation temporarily disables exploration without advancing training counters.
 Entity encoder microbatching preserves frame order when reconstructing the LSTM
 sequence; it changes neither the group denominators nor optimizer boundaries.
 
-At collection time, two alternative branches and up to two alternative tiles are
-executed from a scratch simulator copy at every decision. Their targets use the
-fixed FP32 EMA teacher and bootstrap from the next branch head, including for tile
-probes. Huber probe loss is added with its configured weight. Accepted demonstration
-actions additionally receive pairwise softplus ranking loss against valid alternatives;
-rejected demonstrations do not.
+## Counterfactual supervision
+
+At every active decision, deterministic round-robin cursors select two distinct
+nonselected branches and up to two alternative tiles of the behavior branch.
+Alternative branch tiles are greedy under occupancy-only geometry; dig considers
+all tiles and a full-board plant proposes tile zero. Waiting has no tile probes.
+Sun and cooldown never filter these branches, and probing consumes no behavior RNG.
+
+An isolated simulator copies pre-decision state, RNG and proximity ledger for each
+probe. The frozen FP32 EMA teacher maintains its own history along actual execution.
+Each probe forks the history after encoding the current state, then evaluates its
+next observation with executed action, acceptance and duration. Rejection supplies
+`(0,0,1)`; accepted instantaneous actions retain zero ticks. Forks are discarded.
+
+\[
+y_p=r^{train}_p+(1-d_p)\gamma^{\Delta t_p}
+       \max_b Q^-_b(s'_p,h'_p).
+\]
+
+Both probe roles bootstrap from the next **branch** head. Terminal probes have no
+bootstrap, including cutoffs; their time component uses the actual cohort median.
+Bootstrap values are collected with fixed EMA weights, and finalized targets remain
+fixed through all four passes. A branch probe supervises its branch and non-wait
+tile; a tile probe supervises only its proposed tile.
+
+For head \(h\), let \(P_{h,b}\) contain all cohort probes supervising branch \(b\),
+and let \(B_h\) be its represented branches. Average Huber errors within each branch,
+then across represented branches and heads:
+
+\[
+L_{probe}=\frac1{|H|}\sum_{h\in H}\frac1{|B_h|}
+\sum_{b\in B_h}\frac1{|P_{h,b}|}
+\sum_{p\in P_{h,b}}\operatorname{Huber}_{1}(q_{h,p}-y_p),\qquad
+L_{auto}=L+0.25L_{probe}.
+\]
+
+All denominators cover the whole cohort, so summing chunk contributions preserves
+weights when execution groups change. After one successful FP32 optimizer commit,
+\(\theta^-\leftarrow0.95\theta^-+0.05\theta\), exactly once. Its half-life is about
+14 updates; failed attempts never advance the EMA version. No optimizer owns EMA.
+
+## Demonstration preferences
+
+Verified replay facts are repriced with current coefficients; a single replay has
+zero time adjustment. For each accepted demonstration, compare the chosen branch
+against executable alternatives, and its tile against other executable tiles:
+
+\[
+\ell_{i,h}=\frac1{|C_{i,h}|}\sum_{a\in C_{i,h}}
+\operatorname{softplus}(0.05-q_{i,h,selected}+q_{i,h,a}),\qquad
+L_{demo}=L+0.10(L_{rank,branch}+L_{rank,tile}).
+\]
+
+Each ranking head averages decisions within each demonstrated branch, then averages
+the represented branches. Empty competitor sets and rejected actions contribute
+zero; rejected actions retain complete-return regression. Ranking masks affect
+supervision only. Behavior branches remain unmasked and greedy. With both auxiliary
+weights zero, the shared selected-action loss remains exactly \(L\).
 
 `tests/test_recurrent_training.py` checks hand-computed returns, independently
 computed group means, episode-batch gradient invariance, unequal lengths,

@@ -168,14 +168,17 @@ stateDiagram-v2
     Inspect --> Idle: fresh / weights-only / resumed state
     Idle --> Collect: schedule remaining games
     Collect --> Collect: decision / store public transition
-    Collect --> Returns: every active game finishes
+    Collect --> FinalizeRewards: every active game finishes
+    FinalizeRewards --> Returns: median and terminal time rewards fixed
     Returns --> Fit: complete gamma-one targets
     Fit --> Fit: chronological chunks / detached state
     Fit --> Synchronize: all whole-pass updates committed
     Synchronize --> Idle: callbacks and next cohort
     Collect --> Saved: interrupt at decision boundary
+    FinalizeRewards --> Saved: preserve pending publication and median
     Fit --> Saved: interrupt with current pass uncommitted
     Saved --> Collect: resume saved collection
+    Saved --> FinalizeRewards: resume idempotent finalization
     Saved --> Fit: restart current pass only
     Idle --> Saved: budget or mastery reached
 ```
@@ -187,6 +190,23 @@ and contiguous append-only int32 entity slabs containing only real rows. Metadat
 and entities share one RAM budget with disk overflow. Proposals, executed previous
 actions, current outcomes, omission counts, rewards and boundaries remain explicit.
 Only recovery state stores private simulator snapshots and scenario RNGs.
+
+At each decision, a reusable scratch CUDA batch restores the pre-decision simulator,
+RNG and proximity-ledger state for two alternative branches and up to two alternative
+tiles. The frozen FP32 EMA teacher follows actual executed history and forks it for
+each next-state evaluation. These probes never change behavior RNG, episode totals,
+viewer history or journals. Ragged storage deduplicates identical next observations
+within a decision and stores outcomes, components and bootstrap values under the
+shared RAM/disk budget.
+
+Game and win counts update immediately; completed rewards remain provisional until
+the cohort median is known. Finalization includes all actual durations, applies time
+shaping only to victories, fixes terminal probe rewards with that same median and
+publishes finalized records once. Saved state includes median/reference count,
+publication state, EMA weights/version/history, probe cursors and proximity ledgers.
+Selected complete returns and branch-balanced probe Huber errors share each whole-pass
+optimizer update. EMA advances once after each successful commit, never after a failed
+or interrupted attempt. Demonstrations add accepted-action ranking instead of probes.
 
 Fitting visits episodes chronologically from zero recurrent state each pass.
 The learning batch remains 1,024 decisions and each recurrent boundary remains
@@ -307,18 +327,3 @@ Mathematical controls and verification limits are in
 [entity inputs](math/entity-inputs.md) and [recurrent training](math/recurrent-training.md); chronological release evidence
 belongs in [iteration history](iteration.md). Short integration checks establish
 mechanics and recovery, not win-rate improvement or formal training success.
-The recurrent training path has an explicit reward-finalization phase:
-
-```mermaid
-stateDiagram-v2
-  COLLECT --> FINALIZE_REWARDS: all games complete
-  FINALIZE_REWARDS --> RETURNS: median and terminal time rewards fixed
-  RETURNS --> FIT
-  FIT --> SYNCHRONIZE
-```
-
-The behavior game retains its proposal/execution outcome. At each decision, a
-scratch CUDA batch restores the pre-decision state for alternative branch/tile
-probes. The EMA policy evaluates those next states without changing the behavior
-recurrent history. Probe records, proximity ledgers, EMA state and the pending
-median are stored with the ragged cohort archive for interruption recovery.

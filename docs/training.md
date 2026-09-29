@@ -202,7 +202,9 @@ capture failure records `encoder_compilation`, discards uncommitted gradients
 and retries the pass eagerly at the same precision; optimizer counters advance
 only after a successful pass.
 
-Older entity checkpoints can resume without retraining. To apply the current
+Entity checkpoints with matching objective and reward protocols can resume. Old
+objective checkpoints can transfer compatible weights into a fresh cohort, but
+cannot resume unfinished trajectories under changed targets. To apply current
 execution defaults while keeping their learning parameters:
 
 ```powershell
@@ -235,3 +237,18 @@ The collection check uses one-second cutoffs, three warmed repetitions, and
 viewer-on/off runs. It is a mechanical throughput check, not formal training.
 The [recorded comparison](evidence/training-throughput-v030.json) includes raw
 trials, phases, memory and measurement limits.
+
+For the bounded objective comparison, use a separate five-pass initialization from
+an existing verified archive, then run:
+
+```powershell
+.\.venv\Scripts\python.exe -m pvz_rl.monitoring.objective_diagnostic `
+  --checkpoint runs\diagnostic-demo\initialization.pt --output runs\objective-diagnostic
+```
+
+This runs two 16-game cohorts for each of full-objective and reward-only fitting,
+with four passes per cohort. Both collect identical types of probes; the reward-only
+arm sets their loss weight to zero. It records actual cohort medians, six reward
+components, target errors, probe coverage, recurrent saturation, fixed-history Q
+sensitivity and costs. Output directories must be unused. This is a bounded diagnostic,
+not a curriculum or long-run learning result.

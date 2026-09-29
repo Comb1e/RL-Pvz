@@ -410,6 +410,8 @@ def test_cuda_recovery_matches_uninterrupted(recurrent_cfg, tmp_path, phase, mon
     hashes = [reference_env.batch.state_hash(i) for i in range(2)]
     expected = copy.deepcopy(reference.policy.state_dict())
     expected_optimizer = copy.deepcopy(reference.policy.optimizer.state_dict())
+    expected_teacher = copy.deepcopy(reference._teacher.state_dict())
+    expected_version = reference._teacher_version
     reference_env.close()
     env = vector_env(cfg, "masked", 17)
     model = build_model(cfg, "masked", env, 17)
@@ -422,6 +424,11 @@ def test_cuda_recovery_matches_uninterrupted(recurrent_cfg, tmp_path, phase, mon
             with pytest.raises(KeyboardInterrupt):
                 model.learn(1, callback=Stop(phase))
         assert model._fit_epoch == {"collect": 0, "fit": 1, "idle": 2}[phase]
+        if phase == "collect":
+            state = env.snapshot_training()
+            state["home_ledger"][0, 0, 1] = 3
+            with pytest.raises(ValueError, match="proximity ledger"):
+                env.restore_training(state)
         checkpoint = tmp_path / "recovery.zip"
         model.save(checkpoint)
         assert inspect_checkpoint(checkpoint)["config"] == cfg
@@ -445,6 +452,8 @@ def test_cuda_recovery_matches_uninterrupted(recurrent_cfg, tmp_path, phase, mon
 
         assert_tensor_tree_equal(expected, restored.policy.state_dict())
         assert_tensor_tree_equal(expected_optimizer, restored.policy.optimizer.state_dict())
+        assert_tensor_tree_equal(expected_teacher, restored._teacher.state_dict())
+        assert restored._teacher_version == expected_version
     finally:
         if restored._buffer:
             restored._buffer.close()

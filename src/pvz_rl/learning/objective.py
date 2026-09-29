@@ -79,8 +79,10 @@ def probe_loss(policy, q, tiles, context, probes, counts, delta):
     branch, location = action_parts(chosen[:, 2].long())
     target = chosen[:, 3]
     branch_role = chosen[:, 1].bool()
+    # Cohort denominators are host metadata; inspecting them must not wait on
+    # active device work in every recurrent chunk.
+    represented = np.count_nonzero(np.asarray(counts), axis=1)
     count = torch.as_tensor(counts, device=q.device, dtype=q.dtype)
-    represented = [int(value) for value in (count > 0).sum(dim=1).detach().cpu().tolist()]
     terms = []
     if represented[0]:
         error = F.huber_loss(q[source, branch], target, reduction="none", delta=delta)

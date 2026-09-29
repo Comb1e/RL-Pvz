@@ -37,8 +37,9 @@ Record one easy game using unused output paths; finish with a natural win or los
 
 Follow [recording and training](docs/training.md) to initialize, train, resume or
 evaluate. That guide also explains checkpoint compatibility and performance settings.
-Demonstrations are weights-only artifacts: initialization verifies the replay and
-recomputes fitting rewards with the current configuration. Any compatible model
+Recordings contain replay facts; generated initialization checkpoints transfer only
+weights. Initialization verifies the replay and recomputes fitting rewards with the
+current configuration. Any compatible model
 input/output architecture can reuse them after reward, objective, optimizer,
 chunking, or performance settings change.
 The live window shows the run's retained learning settings, including gradient

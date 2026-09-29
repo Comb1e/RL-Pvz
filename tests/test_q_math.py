@@ -194,3 +194,54 @@ def test_sequential_balanced_loss_gradients_adam_and_nonfinite_returns(device, t
             buffer.finalize()
         finally:
             buffer.close()
+
+
+def test_counterfactual_and_ranking_gradients_match_partitioned_cohort():
+    from pvz_rl.learning.objective import demonstration_rank_loss, probe_loss, ranking_counts
+
+    class TablePolicy:
+        def tile_values(self, tiles, context, branches):
+            return tiles[torch.arange(len(branches)), branches - 1]
+
+    policy = TablePolicy()
+    probes = torch.tensor(
+        [
+            [[1, 1, 46, 1.0], [1, 1, 361, -1.0], [1, 0, 2, 0.5]],
+            [[1, 1, 0, -1.0], [1, 1, 91, 1.0], [0, 0, 0, 0]],
+        ]
+    )
+    counts = np.zeros((2, 10), np.int64)
+    counts[0, [0, 2, 3, 9]] = 1
+    counts[1, [1, 2, 3, 9]] = 1
+    outcomes = []
+    for partition in ([slice(None)], [slice(0, 1), slice(1, 2)]):
+        q = torch.zeros(2, 10, requires_grad=True)
+        tiles = torch.zeros(2, 9, 45, requires_grad=True)
+        total = 0
+        for ix in partition:
+            loss = probe_loss(
+                policy, q[ix], tiles[ix], torch.empty(2, 0)[ix], probes[ix], counts, 1.0
+            )
+            loss.backward()
+            total += float(loss.detach())
+        outcomes.append((total, q.grad.clone(), tiles.grad.clone()))
+    for a, b in zip(*outcomes):
+        torch.testing.assert_close(a, b)
+    qg, tg = outcomes[0][1:]
+    assert torch.count_nonzero(qg) == 4
+    assert torch.count_nonzero(tg) == 4
+    assert qg[0, 2] < 0 and qg[0, 9] > 0
+    assert tg[0, 0, 1] < 0  # Alternative tile gets its own gradient.
+    actions = torch.tensor([46, 46])
+    accepted = torch.tensor([True, False])
+    masks = torch.ones(2, 406, dtype=torch.bool)
+    q = torch.zeros(2, 10, requires_grad=True)
+    tiles = torch.zeros(2, 9, 45, requires_grad=True)
+    rank_counts = ranking_counts(actions, accepted, masks)[0]
+    rank, _ = demonstration_rank_loss(
+        policy, q, tiles, torch.empty(2, 0), actions, accepted, masks, rank_counts, 0.05
+    )
+    rank.backward()
+    assert q.grad[0, 2] < 0 and tiles.grad[0, 1, 0] < 0
+    assert q.grad[1].count_nonzero() == tiles.grad[1].count_nonzero() == 0
+    assert torch.all(q.grad[0, torch.arange(10) != 2] > 0)

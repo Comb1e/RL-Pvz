@@ -323,6 +323,7 @@ class ResearchCallback(BaseCallback):
             if self.curriculum
             else None,
             "rolling_episodes": len(rows),
+            "rolling_pending_rewards": sum(bool(r.get("time_reward_pending")) for r in rows),
             "rolling_truncations": sum(r.get("status") == "truncated" for r in rows),
             "rolling_agent_actions": mean_agent_actions(rows),
             "rolling_tasks": dict(
@@ -415,16 +416,22 @@ class ResearchCallback(BaseCallback):
             )
             or "n/a"
         )
+        reward_status = (
+            f"provisional; {row['rolling_pending_rewards']} time adjustments pending"
+            if row["rolling_pending_rewards"]
+            else "finalized"
+        )
         self.progress.emit(
             f"Stage       {row['curriculum_stage']} | {row['training_phase']} | {progress}\n"
             f"Q fitting   steps {row['q_optimizer_steps']} | planting samples {row['planting_samples']}\n"
             f"Time        {duration(row['wall_seconds'])} elapsed | next mastery probe {value(probe, ',.0f')} games\n"
             f"Recent task {tasks}\n"
             f"Game means  last {row['rolling_episodes']} finished games | {row['rolling_truncations']} cutoff failures included\n"
-            f"Reward      {value(row['rolling_return'], '+.5f')} | discounted return {value(row['rolling_discounted_return'], '+.5f')} | outcome {value(row['rolling_terminal'], '+.5f')} | development {value(row['rolling_development'], '+.5f')}\n"
+            f"Reward      {value(row['rolling_return'], '+.5f')} ({reward_status}) | discounted return {value(row['rolling_discounted_return'], '+.5f')} | outcome {value(row['rolling_terminal'], '+.5f')} | development {value(row['rolling_development'], '+.5f')}\n"
             f"Net value   {value(row['rolling_cumulative_net_value'], '+.2f')} sun-equiv/game | peak {value(row['rolling_maximum_net_value'])} | drawdown {value(row['rolling_value_drawdown'])}\n"
             f"Economy     produced sun {value(row['rolling_produced_sun'])} | effective damage {value(row['rolling_effective_damage'])} HP | plant loss {value(row['rolling_plant_value_loss'])} | mower cost {value(row['rolling_mower_expenditure'])}\n"
             f"Penalties   rejected plant {value(row['rolling_invalid_plant_penalty'], '+.5f')} | empty dig {value(row['rolling_empty_dig_penalty'], '+.5f')}\n"
+            f"Shaping     house entry {value(row['rolling_home_proximity'], '+.5f')} | victory time {value(row['rolling_victory_time'], '+.5f')}\n"
             f"Recent play plants/game {value(row['rolling_plant_purchases'])} | attackers/game {value(row['rolling_attacker_purchases'])} | early digs/plant {value(row['early_digs_per_planting'], '.2%')} | game duration {value(row['rolling_seconds'], suffix='s')}\n"
             f"Exploration budget {row['exploration_rate']:.3%} | tile epsilon {row['tile_exploration_epsilon']:.3%} | fired branch/tile {row['species_exploration_coins']}/{row['tile_exploration_coins']} | changed commands {row['exploratory_changes']}\n"
             f"Cohort      {value(cohort.get('transitions_per_second'), '.0f')} transitions/s | collect {value(row['last_collection_seconds'], suffix='s')} | fit {value(row['last_optimization_seconds'], suffix='s')}\n"
