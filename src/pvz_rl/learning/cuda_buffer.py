@@ -14,8 +14,32 @@ from pvz_rl.envs.encoding import (
     collate_observations,
     validate_entity_records,
 )
+from pvz_rl.learning.objective import COMPONENTS, MAX_PROBES, training_rewards, victory_time
 
-TRAJECTORY_PROTOCOL = "pvz-rl/entity-trajectory-v1"
+TRAJECTORY_PROTOCOL = "pvz-rl/entity-probe-trajectory-v2"
+
+
+def probe_dtype():
+    return np.dtype(
+        [
+            ("valid", "?"),
+            ("branch_role", "?"),
+            ("action", "<u2"),
+            ("executed_action", "<u2"),
+            ("accepted", "?"),
+            ("reason", "u1"),
+            ("duration", "<u2"),
+            ("tick", "<u4"),
+            ("done", "?"),
+            ("won", "?"),
+            ("components", "<f8", len(COMPONENTS)),
+            ("bootstrap", "<f4"),
+            ("target", "<f4"),
+            ("entity_offset", "<u8"),
+            ("entity_count", "<u4"),
+            ("globals", "<f4", GLOBAL_WIDTH),
+        ]
+    )
 
 
 def trajectory_dtype():
@@ -34,6 +58,11 @@ def trajectory_dtype():
             ("env", "<u2"),
             ("duration", "<u2"),
             ("reward", "<f8"),
+            ("components", "<f8", len(COMPONENTS)),
+            ("components_valid", "?"),
+            ("won", "?"),
+            ("home_entries", "<u4", 2),
+            ("probes", probe_dtype(), MAX_PROBES),
             ("branch_value", "<f4"),
             ("tile_value", "<f4"),
             ("greedy_action", "<u2"),
@@ -49,12 +78,18 @@ def trajectory_dtype():
 
 
 class CompleteGameBuffer:
-    def __init__(self, path, n_envs, *, ram_bytes=6 * 1024**3, block_rows=32768, schema=None):
+    def __init__(
+        self, path, n_envs, *, ram_bytes=6 * 1024**3, block_rows=32768, schema=None, cfg=None
+    ):
         self.path = Path(path)
         self.path.mkdir(parents=True, exist_ok=True)
         self.dtype = trajectory_dtype()
         self.n_envs, self.ram_bytes, self.block_rows = n_envs, int(ram_bytes), int(block_rows)
         self.schema = schema
+        self.cfg = cfg
+        self.rewards_finalized = False
+        self.reward_summary = {}
+        self.probe_counts = np.zeros((2, 10), np.int64)
         self.blocks, self.entity_blocks = [], []
         self.size = self.entity_size = self.ram_used = 0
         self.staging_bytes = 0
@@ -115,8 +150,8 @@ class CompleteGameBuffer:
             setattr(self, key, getattr(self, key) + take)
             at += take
 
-    def append(self, records, observations):
-        if self.finalized:
+    def append(self, records, observations, probe_observations=None):
+        if self.finalized or self.rewards_finalized:
             raise RuntimeError("Cannot append after complete-return finalization")
         records = np.array(records, dtype=self.dtype, copy=True)
         observations = collate_observations(observations).reshape(-1).cpu()
@@ -131,6 +166,40 @@ class CompleteGameBuffer:
         records["entity_offset"] = self.entity_size + np.cumsum(counts) - counts
         records["entity_count"], records["globals"] = counts, globals_
         self._append(packed, entity=True)
+        if probe_observations is not None:
+            previous = []
+            for slot, observation in enumerate(probe_observations):
+                host = observation.cpu()
+                pe, pm, pg = (x.numpy() for x in host.tensors())
+                pc = pm.sum(-1)
+                valid = records["probes"][:, slot]["valid"]
+                validate_entity_records(pe[pm & valid[:, None]])
+                if not np.isfinite(pg[valid]).all():
+                    raise ValueError("Non-finite probe globals")
+                unique = valid.copy()
+                dest = records["probes"][:, slot]
+                dest["globals"] = pg
+                for prior, (oe, oc, og) in enumerate(previous):
+                    width = min(pe.shape[1], oe.shape[1])
+                    equal = (
+                        unique
+                        & records["probes"][:, prior]["valid"]
+                        & (pc == oc)
+                        & (pg == og).all(-1)
+                        & (pe[:, :width] == oe[:, :width]).all(axis=(1, 2))
+                    )
+                    dest["entity_offset"][equal] = records["probes"][:, prior]["entity_offset"][
+                        equal
+                    ]
+                    dest["entity_count"][equal] = pc[equal]
+                    unique[equal] = False
+                count = np.where(unique, pc, 0)
+                dest["entity_offset"][unique] = (self.entity_size + np.cumsum(count) - count)[
+                    unique
+                ]
+                dest["entity_count"][unique] = count[unique]
+                self._append(pe[pm & unique[:, None]], entity=True)
+                previous.append((pe, pc, pg))
         self._append(records)
 
     def take(self, indices):
@@ -191,9 +260,63 @@ class CompleteGameBuffer:
             parts.append(np.flatnonzero(rows["active"]) + b * self.block_rows)
         return np.concatenate(parts) if parts else np.empty(0, np.int64)
 
+    def finalize_rewards(self):
+        if self.rewards_finalized:
+            return self.reward_summary
+        terminal = []
+        for b, block in enumerate(self.blocks):
+            rows = block[: min(self.block_rows, self.size - b * self.block_rows)]
+            terminal.extend(rows[rows["active"] & rows["done"]])
+        durations = np.asarray([int(r["tick"]) + int(r["duration"]) for r in terminal], np.float64)
+        median = float(np.median(durations)) if len(durations) else 0.0
+        weight = self.cfg["reward"].get("win_time_weight", 0) if self.cfg else 0
+        for b, block in enumerate(self.blocks):
+            rows = block[: min(self.block_rows, self.size - b * self.block_rows)]
+            eligible = rows["active"] & rows["done"] & rows["components_valid"]
+            rows["components"][:, 5] = victory_time(
+                rows["tick"].astype(np.float64) + rows["duration"],
+                median,
+                eligible & rows["won"],
+                weight,
+            )
+            real = rows["components_valid"]
+            rows["reward"][real] = rows["components"][real].sum(-1)
+            probes = rows["probes"]
+            probes["components"][..., 5] = victory_time(
+                probes["tick"], median, probes["valid"] & probes["done"] & probes["won"], weight
+            )
+            if self.cfg:
+                probes["target"] = training_rewards(probes["components"], self.cfg) + np.where(
+                    probes["done"], 0, probes["bootstrap"]
+                )
+        # The pinned simulator clock is the only clock used for the median.
+        from pvz_game import Rules
+
+        self.reward_summary = dict(
+            duration_median_seconds=median / Rules().game["tick_rate"],
+            duration_reference_count=len(durations),
+            victory_time_adjustments=[float(r["components"][5]) for r in terminal if r["won"]],
+            home_entries=np.sum([
+                block[:min(self.block_rows, self.size - b * self.block_rows)]["home_entries"].sum(0)
+                for b, block in enumerate(self.blocks)
+            ], axis=0).tolist() if self.blocks else [0, 0],
+        )
+        self.rewards_finalized = True
+        return self.reward_summary
+
     def finalize(self):
         """Actual per-game returns and errors measured before fitting either head."""
+        self.finalize_rewards()
         running = np.zeros(self.n_envs, np.float64)
+        contribution = np.zeros((self.n_envs, len(COMPONENTS)), np.float64)
+        component_sum = np.zeros(len(COMPONENTS), np.float64)
+        component_square = np.zeros(len(COMPONENTS), np.float64)
+        target_sum = target_square = 0.0
+        episode_sum = np.zeros(self.n_envs, np.float64)
+        episode_square = np.zeros(self.n_envs, np.float64)
+        episode_count = np.zeros(self.n_envs, np.int64)
+        quantile_sample = []
+        self.probe_counts[:] = 0
         counts = np.zeros(3, np.int64)
         species_counts = np.zeros(A.plant_types, np.int64)
         sums = np.zeros((3, 4), np.float64)
@@ -201,10 +324,42 @@ class CompleteGameBuffer:
             rows = self.blocks[b][: min(self.block_rows, self.size - b * self.block_rows)]
             for env in range(self.n_envs):
                 ix = np.flatnonzero(rows["active"] & (rows["env"] == env))
-                values = np.cumsum(rows["reward"][ix][::-1], dtype=np.float64)[::-1] + running[env]
+                rewards = rows["reward"][ix]
+                if self.cfg:
+                    rewards = np.where(
+                        rows["components_valid"][ix],
+                        training_rewards(rows["components"][ix], self.cfg),
+                        rewards,
+                    )
+                values = np.cumsum(rewards[::-1], dtype=np.float64)[::-1] + running[env]
                 if len(ix):
                     running[env] = values[0]
                 rows["target"][ix] = values
+                parts = rows["components"][ix].copy()
+                if self.cfg:
+                    parts[:, 1] *= (
+                        self.cfg["training"].get("objective", {}).get("dense_multiplier", 1)
+                    )
+                returns = np.cumsum(parts[::-1], axis=0)[::-1] + contribution[env]
+                if len(ix):
+                    contribution[env] = returns[0]
+                component_sum += returns.sum(0)
+                component_square += np.square(returns).sum(0)
+                target_sum += values.sum()
+                target_square += np.square(values).sum()
+                episode_sum[env] += values.sum()
+                episode_square[env] += np.square(values).sum()
+                episode_count[env] += len(values)
+                # Deterministic bounded sample, separately labeled from exact moments.
+                quantile_sample.extend(values[:: max(1, self.size // 8192)].tolist())
+            probes = rows["probes"]
+            branch = np.where(
+                probes["action"] == 0, 0, 1 + (probes["action"].astype(np.int64) - 1) // A.tiles
+            )
+            for head, valid in enumerate(
+                (probes["valid"] & probes["branch_role"], probes["valid"] & (branch > 0))
+            ):
+                self.probe_counts[head] += np.bincount(branch[valid], minlength=10)
             kinds = np.where(rows["action"] == 0, 0, np.where(rows["action"] < A.dig_start, 1, 2))
             for group in range(3):
                 ix = rows["active"] & (kinds == group)
@@ -224,6 +379,66 @@ class CompleteGameBuffer:
         if not np.isfinite(sums).all() or not np.isfinite(running).all():
             raise FloatingPointError("Non-finite complete returns or collection Q values")
         self.finalized, self.group_counts, self.species_counts = True, counts, species_counts
+        n = max(1, counts.sum())
+        variance = max(0, target_square / n - (target_sum / n) ** 2)
+        self.reward_summary.update(
+            target_std=float(np.sqrt(variance)),
+            constant_predictor_mse=float(variance),
+            component_return_mean=dict(zip(COMPONENTS, (component_sum / n).tolist())),
+            component_return_std=dict(
+                zip(
+                    COMPONENTS,
+                    np.sqrt(
+                        np.maximum(0, component_square / n - (component_sum / n) ** 2)
+                    ).tolist(),
+                )
+            ),
+            probe_counts=self.probe_counts.tolist(),
+        )
+        live = episode_count > 0
+        self.reward_summary["within_episode_target_variance"] = (
+            float(
+                np.mean(
+                    np.maximum(
+                        0,
+                        episode_square[live] / episode_count[live]
+                        - (episode_sum[live] / episode_count[live]) ** 2,
+                    )
+                )
+            )
+            if live.any()
+            else 0.0
+        )
+        self.reward_summary["sampled_target_quantiles"] = (
+            np.quantile(quantile_sample, [0, 0.1, 0.5, 0.9, 1]).tolist() if quantile_sample else []
+        )
+        self.reward_summary["component_episode_mean"] = (
+            dict(zip(COMPONENTS, contribution[live].mean(0).tolist())) if live.any() else {}
+        )
+        raw = contribution[live].copy()
+        if self.cfg:
+            raw[:, 1] /= self.cfg["training"].get("objective", {}).get("dense_multiplier", 1)
+        self.reward_summary["raw_component_episode_mean"] = (
+            dict(zip(COMPONENTS, raw.mean(0).tolist())) if live.any() else {}
+        )
+        import warnings
+
+        dense_std = self.reward_summary["component_return_std"]["development"]
+        if variance > 1e-20 and dense_std < 0.05 * np.sqrt(variance):
+            warnings.warn(
+                "Dense return variation remains below 5% of target variation",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+        if live.any():
+            penalty = np.abs(contribution[live, 2:4].sum(-1)).mean()
+            terminal = np.abs(contribution[live, 0]).mean()
+            if penalty > 0.25 * terminal:
+                warnings.warn(
+                    "Rejection penalties exceed 25% of mean absolute terminal reward",
+                    RuntimeWarning,
+                    stacklevel=2,
+                )
         return {
             name: dict(
                 count=int(counts[i]),
@@ -259,6 +474,10 @@ class CompleteGameBuffer:
             group_counts=getattr(self, "group_counts", None),
             species_counts=getattr(self, "species_counts", None),
             transport_metrics=dict(self.transport_metrics),
+            cfg=self.cfg,
+            rewards_finalized=self.rewards_finalized,
+            reward_summary=self.reward_summary,
+            probe_counts=self.probe_counts,
         )
 
     def save(self, destination):
@@ -312,7 +531,9 @@ class CompleteGameBuffer:
     def restore(cls, source, state, workspace):
         cls.validate_metadata(state)
         obj = cls(
-            workspace, **{k: state[k] for k in ("n_envs", "ram_bytes", "block_rows", "schema")}
+            workspace,
+            **{k: state[k] for k in ("n_envs", "ram_bytes", "block_rows", "schema")},
+            cfg=state.get("cfg"),
         )
         try:
             for entity, prefix, size in (
@@ -332,21 +553,37 @@ class CompleteGameBuffer:
                         raise ValueError("Non-finite trajectory globals")
                     obj._append(array, entity)
             expected = 0
-            for b, block in enumerate(obj.blocks):
-                for row in block[: min(obj.block_rows, obj.size - b * obj.block_rows)]:
-                    count = int(row["entity_count"])
-                    if (
-                        int(row["entity_offset"]) != expected
-                        or expected + count > obj.entity_size
-                        or (obj.schema and count > obj.schema["max_entities"])
-                    ):
+            # Align metadata reads to collection steps: each step appends source
+            # records then its probe records. Sorting one bounded block suffices.
+            width = max(1, obj.block_rows // obj.n_envs) * obj.n_envs
+            for at in range(0, obj.size, width):
+                rows = obj.take(np.arange(at, min(obj.size, at + width)))
+                probes = rows["probes"][rows["probes"]["valid"]]
+                starts = np.concatenate((rows["entity_offset"], probes["entity_offset"]))
+                counts = np.concatenate((rows["entity_count"], probes["entity_count"]))
+                if (
+                    np.any(starts > obj.entity_size)
+                    or np.any(counts > obj.entity_size - starts)
+                    or (obj.schema and np.any(counts > obj.schema["max_entities"]))
+                ):
+                    raise ValueError("Corrupt trajectory entity offset/count")
+                for field in ("globals", "components", "bootstrap", "target"):
+                    if not np.isfinite(probes[field]).all():
+                        raise ValueError("Non-finite probe metadata")
+                intervals = np.unique(
+                    np.stack((starts[counts > 0], (starts + counts)[counts > 0]), -1), axis=0
+                )
+                if len(intervals):
+                    if intervals[0, 0] != expected or np.any(intervals[1:, 0] != intervals[:-1, 1]):
                         raise ValueError("Corrupt trajectory entity offset/count")
-                    expected += count
+                    expected = int(intervals[-1, 1])
             if expected != obj.entity_size:
                 raise ValueError("Orphan entity records in trajectory")
             for key in ("finalized", "group_counts", "species_counts"):
                 setattr(obj, key, state[key])
             obj.transport_metrics.update(state.get("transport_metrics", {}))
+            for key in ("rewards_finalized", "reward_summary", "probe_counts"):
+                setattr(obj, key, state[key])
             return obj
         except Exception:
             obj.close()

@@ -132,6 +132,39 @@ def load_demo_config(path: str | Path | None = None, *, profile: str = "demo") -
 
 
 def validate_config(cfg: dict) -> None:
+    objective = cfg["training"].get("objective")
+    if objective is not None:
+        if objective.get("protocol") != "complete_return_probe_v2":
+            raise ValueError("Unsupported training objective protocol")
+        for key in ("dense_multiplier", "probe_huber_delta", "demo_rank_margin"):
+            if (
+                not isinstance(objective.get(key), (int, float))
+                or not math.isfinite(objective[key])
+                or objective[key] <= 0
+            ):
+                raise ValueError(f"objective.{key} must be finite and positive")
+        for key in ("probe_loss_weight", "demo_rank_loss_weight", "ema_decay"):
+            if (
+                not isinstance(objective.get(key), (int, float))
+                or not math.isfinite(objective[key])
+                or not 0 <= objective[key] < 1
+            ):
+                raise ValueError(f"objective.{key} must be finite and in [0, 1)")
+        if any(
+            objective.get(k) != v
+            for k, v in (("branch_probes", 2), ("tile_probes", 2), ("probe_interval_decisions", 1))
+        ):
+            raise ValueError("The objective requires two branch/tile probes every decision")
+    penalties = cfg["reward"].get("home_entry_penalties", [0, 0])
+    if (
+        len(penalties) != 2
+        or any(not math.isfinite(p) or p < 0 for p in penalties)
+        or penalties[1] < penalties[0]
+    ):
+        raise ValueError("home_entry_penalties require two increasing nonnegative magnitudes")
+    weight = cfg["reward"].get("win_time_weight", 0)
+    if not math.isfinite(weight) or weight < 0:
+        raise ValueError("win_time_weight must be finite and nonnegative")
     recurrent = (
         cfg.get("encoding", {}).get("version") == "entity_v1"
         and cfg.get("policy", {}).get("kind") == "transformer_lstm_q_v2"
@@ -162,7 +195,10 @@ def validate_config(cfg: dict) -> None:
         "invalid_plant_penalty",
         "empty_dig_penalty",
     }
-    if set(cfg["reward"]) != reward_keys:
+    if set(cfg["reward"]) not in (
+        reward_keys,
+        reward_keys | {"home_entry_penalties", "win_time_weight"},
+    ):
         raise ValueError(
             "reward must contain the outcome, net-value and rejection-penalty settings"
         )

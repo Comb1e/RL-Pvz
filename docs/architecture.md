@@ -307,3 +307,18 @@ Mathematical controls and verification limits are in
 [entity inputs](math/entity-inputs.md) and [recurrent training](math/recurrent-training.md); chronological release evidence
 belongs in [iteration history](iteration.md). Short integration checks establish
 mechanics and recovery, not win-rate improvement or formal training success.
+The recurrent training path has an explicit reward-finalization phase:
+
+```mermaid
+stateDiagram-v2
+  COLLECT --> FINALIZE_REWARDS: all games complete
+  FINALIZE_REWARDS --> RETURNS: median and terminal time rewards fixed
+  RETURNS --> FIT
+  FIT --> SYNCHRONIZE
+```
+
+The behavior game retains its proposal/execution outcome. At each decision, a
+scratch CUDA batch restores the pre-decision state for alternative branch/tile
+probes. The EMA policy evaluates those next states without changing the behavior
+recurrent history. Probe records, proximity ledgers, EMA state and the pending
+median are stored with the ragged cohort archive for interruption recovery.

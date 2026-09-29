@@ -190,6 +190,7 @@ class CudaVecEnv(VecEnv):
             [s[3] for s in staged],
             indices=indices,
         )
+        self.features.initialize_home(indices)
         self.proposed_actions[indices] = 0
         self.executed_actions[indices] = 0
         ix = self.cp.asarray(indices)
@@ -279,7 +280,12 @@ class CudaVecEnv(VecEnv):
                 dim=1,
             )
             packed = torch.cat(
-                (compact_tensor.flatten(), h[:, 12:14].double().flatten(), extra.flatten())
+                (
+                    compact_tensor.flatten(),
+                    h[:, 12:14].double().flatten(),
+                    extra.flatten(),
+                    torch.from_dlpack(self.features.parts).flatten(),
+                )
             )
             if self._transition_host is None or self._transition_host.shape != packed.shape:
                 self._transition_host = torch.empty_like(packed, device="cpu", pin_memory=True)
@@ -298,7 +304,8 @@ class CudaVecEnv(VecEnv):
                     viewer.fail(exc)
             self.phases["transfers"] += perf_counter() - started
             indices = np.flatnonzero(compact[:, 0]).tolist()
-            extra_host = host[self.num_envs * 6 :].reshape(self.num_envs, 5)
+            extra_host = host[self.num_envs * 6 : self.num_envs * 11].reshape(self.num_envs, 5)
+            self.last_reward_parts_host = host[self.num_envs * 11 :].reshape(self.num_envs, -1)
             truncation = extra_host[:, 2:]
             infos = []
             for index, row in enumerate(compact):
@@ -357,6 +364,7 @@ class CudaVecEnv(VecEnv):
             "digging": header[:, 16].astype(bool).tolist(),
             "enabled": header[:, 17].tolist(),
             "totals": self.features.totals.get(),
+            "home_ledger": self.features.home_ledger.get(),
             "queue_rng": [deepcopy(r.bit_generator.state) for r in self.queue.rngs],
             "queue_progress": self.queue.progress,
             "queue_stage": self.queue.stage,
@@ -383,6 +391,13 @@ class CudaVecEnv(VecEnv):
             self.batch.header[:, 17] = self.cp.asarray(state["enabled"])
             self.enabled_envs[:] = np.asarray(state["enabled"], dtype=bool)
             self.features.totals[:] = self.cp.asarray(state["totals"])
+            if "home_ledger" in state:
+                ledger = state["home_ledger"]
+                if ledger.shape != self.features.home_ledger.shape:
+                    raise ValueError("Invalid proximity ledger shape")
+                self.features.home_ledger[:] = self.cp.asarray(ledger)
+            else:
+                self.features.initialize_home(list(range(self.num_envs)))
             self.features.encode()
             for rng, saved in zip(self.queue.rngs, state["queue_rng"], strict=True):
                 rng.bit_generator.state = deepcopy(saved)

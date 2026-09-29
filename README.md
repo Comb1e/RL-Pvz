@@ -1,5 +1,12 @@
 # PVZ plant research
 
+Training uses the current `complete_return_probe_v2` objective. The single TOML
+defines the small rejection penalties, development-target multiplier, one-time
+house-entry charges, and victory-time shaping. Two alternative branches and two
+alternative tiles are probed per decision on isolated simulator state; these probes
+do not change the actual game. See [training](docs/training.md) and
+[recurrent training](docs/math/recurrent-training.md) for target and recovery details.
+
 Record a human Plants vs. Zombies game, initialize an entity Transformer–LSTM Q
 policy, then train and evaluate it on a pinned 100 Hz simulator using public inputs.
 
@@ -30,8 +37,10 @@ Record one easy game using unused output paths; finish with a natural win or los
 
 Follow [recording and training](docs/training.md) to initialize, train, resume or
 evaluate. That guide also explains checkpoint compatibility and performance settings.
-Demonstrations are reusable after reward edits: initialization verifies the replay
-and recomputes fitting rewards with the current configuration.
+Demonstrations are weights-only artifacts: initialization verifies the replay and
+recomputes fitting rewards with the current configuration. Any compatible model
+input/output architecture can reuse them after reward, objective, optimizer,
+chunking, or performance settings change.
 The live window shows the run's retained learning settings, including gradient
 clipping and rewards. Press **S** to hide or show them.
 

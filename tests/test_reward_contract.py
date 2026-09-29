@@ -1,15 +1,17 @@
 """Asset conservation, reward diagnostics and supported training-mode boundaries."""
 
 from dataclasses import replace
+from types import SimpleNamespace
 
 import pytest
-from pvz_game import Dig, LevelSpec, Place, Spawn, Status
+from pvz_game import Dig, LevelSpec, Place, Rules, Spawn, Status
 from pvz_game.config import PLANT_TYPES, InitialPlant
 from pvz_game.types import Event
 
 from pvz_rl.config import load_config
 from pvz_rl.envs.env import PvZEnv
-from pvz_rl.envs.rewards import asset_value, reward_parts
+from pvz_rl.envs.rewards import HomeProximityLedger, asset_value, reward_parts
+from pvz_rl.learning.objective import victory_time
 
 
 @pytest.mark.parametrize("kind", PLANT_TYPES)
@@ -100,6 +102,25 @@ def test_empty_explosion_and_nut_bite_are_only_diagnostics():
     part = reward_parts(before, before, cfg, events=events)
     assert part["wall_nut_damage"] == 25 and part["empty_explosions"] == 1
     assert part["total"] == 0
+
+
+def test_house_entries_are_staged_once_and_victory_time_is_win_only():
+    cfg = load_config()
+    rules = Rules()
+    before = SimpleNamespace(zombies=(SimpleNamespace(id=7, x=2500, health=100, headless=False),))
+    ledger = HomeProximityLedger(before, rules)
+    outer = SimpleNamespace(zombies=(SimpleNamespace(id=7, x=1500, health=100, headless=False),))
+    inner = SimpleNamespace(zombies=(SimpleNamespace(id=7, x=500, health=100, headless=False),))
+    assert ledger.advance(outer, cfg["reward"]["home_entry_penalties"]) == {
+        "home_outer_entries": 1,
+        "home_inner_entries": 0,
+        "home_proximity": -0.005,
+    }
+    assert ledger.advance(inner, cfg["reward"]["home_entry_penalties"])["home_proximity"] == -0.015
+    assert ledger.advance(inner, cfg["reward"]["home_entry_penalties"])["home_proximity"] == 0
+    assert victory_time([80, 160, 240], [160, 160, 160], [True, True, False], 0.1).tolist() == pytest.approx(
+        [1 / 30, 0, 0]
+    )
 
 
 @pytest.mark.parametrize("setting", ["shaped", "curriculum", "masked", "fixed"])

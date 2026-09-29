@@ -69,6 +69,8 @@ class CudaFeatures:
             "empty_dig_penalty",
         )
         params.update({f"R_{k}": float(cfg["reward"].get(k, 0)) for k in reward_keys})
+        for index, value in enumerate(cfg["reward"].get("home_entry_penalties", (0, 0))):
+            params[f"HOME_PENALTY_{index}"] = float(value)
         params.update({f"F_{k}": i for i, k in enumerate(REWARD_FIELDS)})
         params.update({f"T_{k}": i for k, i in zip(REWARD_METRICS, METRIC_INDICES)})
         params.update({f"T_{k}": i for k, i in LEDGER_INDICES.items()})
@@ -83,6 +85,9 @@ class CudaFeatures:
         self.encode_kernel = self.module.get_function("encode_state")
         self.policy_mask_kernel = self.module.get_function("policy_masks")
         self.reward_kernel = self.module.get_function("reward_metrics")
+        self.home_kernel = self.module.get_function("home_entries")
+        self.home_ledger = cp.zeros((batch.n, batch.zcap, 2), cp.int64)
+        self.home_entries = cp.zeros((batch.n, 2), cp.int64)
         self.globals = cp.zeros((batch.n, encoder.global_width), cp.float32)
         self.obs_tensor = None
         self.assets = cp.zeros(batch.n, cp.float64)
@@ -92,6 +97,24 @@ class CudaFeatures:
         self.totals[:, 11] = -1
         self.reward_tensor = torch.from_dlpack(self.rewards)
         self.mask_tensor = torch.from_dlpack(batch.masks)
+
+    def initialize_home(self, indices):
+        self.home_ledger[indices] = 0
+        selected = self.batch.cp.zeros(self.batch.n, self.batch.cp.bool_)
+        selected[indices] = True
+        self.home_kernel(
+            ((self.batch.n + 63) // 64,),
+            (64,),
+            (
+                self.batch.header,
+                self.batch.zombies,
+                self.home_ledger,
+                self.home_entries,
+                selected,
+                self.batch.n,
+            ),
+        )
+        self.home_entries[indices] = 0
 
     def encode(self):
         b = self.batch
@@ -170,6 +193,18 @@ class CudaFeatures:
         with self.profiler.track("encoding_masks"):
             self.encode()
         with self.profiler.track("rewards_metrics"):
+            self.home_kernel(
+                ((b.n + 63) // 64,),
+                (64,),
+                (
+                    b.header,
+                    b.zombies,
+                    self.home_ledger,
+                    self.home_entries,
+                    b.header[:, 17].astype(b.cp.bool_),
+                    b.n,
+                ),
+            )
             self.reward_kernel(
                 ((b.n + 63) // 64,),
                 (64,),
@@ -185,6 +220,7 @@ class CudaFeatures:
                     self.rewards,
                     self.parts,
                     self.totals,
+                    self.home_entries,
                     b.n,
                 ),
             )

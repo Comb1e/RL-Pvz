@@ -53,8 +53,10 @@ basic_zombie_value = 50.0 # Sun-equivalent value per basic zombie's actual HP re
 mower_value = 200.0
 progress_weight = 0.01
 value_scale = 300.0 # Unit conversion, never a sun cap.
-invalid_plant_penalty = 0.003 # Rejected plant proposal, 90 sun-equivalents.
-empty_dig_penalty = 0.001 # Empty dig proposal, 30 sun-equivalents.
+invalid_plant_penalty = 0.00001
+empty_dig_penalty = 0.000003
+home_entry_penalties = [0.005, 0.015] # First entry into the second, then first column.
+win_time_weight = 0.1 # Victories relative to the current cohort's median duration.
 
 [training]
 gamma = 1.0
@@ -84,6 +86,18 @@ torch_threads = 1
 [training.storage]
 ram_gib = 6
 block_rows = 32768
+
+[training.objective]
+protocol = "complete_return_probe_v2"
+dense_multiplier = 10.0
+branch_probes = 2
+tile_probes = 2
+probe_interval_decisions = 1
+probe_loss_weight = 0.25
+probe_huber_delta = 1.0
+ema_decay = 0.95
+demo_rank_loss_weight = 0.10
+demo_rank_margin = 0.05
 
 [training.performance]
 compile_kernels = true

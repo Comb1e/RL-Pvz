@@ -9,7 +9,7 @@ import torch
 
 from pvz_rl.config import digest, load_config, validate_config
 from pvz_rl.learning.performance import refresh_performance
-from pvz_rl.learning.training_requirements import transfer_protocol
+from pvz_rl.learning.training_requirements import transfer_protocol, weight_transfer_protocol
 
 DEMO_PROTOCOL = "pvz-rl/demo-initialization-checkpoint-v2"
 STATE_PROTOCOL = "pvz-rl/lstm-state-v2"
@@ -28,8 +28,9 @@ def protocol_for(kind):
     return dict(policy=kind, optimizer=methods[kind], exploration=EXPLORATION_PROTOCOL)
 
 
-def compatible_config(source, target):
-    if transfer_protocol(source) != transfer_protocol(target):
+def compatible_config(source, target, *, weights_only=False):
+    protocol = weight_transfer_protocol if weights_only else transfer_protocol
+    if protocol(source) != protocol(target):
         raise ValueError(
             "Checkpoint transfer requires matching engine, observation encoding, action "
             "semantics and network structure; incompatible model transfer"
@@ -144,11 +145,24 @@ def inspect_checkpoint(path):
     # execution-only setting comes from the current training profile.  This
     # keeps an old initialization useful after a BF16, batching or prefetch
     # change without requiring a refresh flag or another recording.
-    cfg = (
-        refresh_performance(metadata["config"], load_config())
-        if metadata["initialization_type"] == "demonstration"
-        else execution_config(metadata["config"])
-    )
+    if metadata["initialization_type"] == "demonstration":
+        current = load_config()
+        source = copy.deepcopy(metadata["config"])
+        # Demonstration weights are structural artifacts. Historical reward files
+        # may predate the current optional shaping fields; hydrate those fields
+        # from today's profile while retaining the source's architecture.
+        source.setdefault("reward", {}).setdefault(
+            "home_entry_penalties", current["reward"]["home_entry_penalties"]
+        )
+        source.setdefault("reward", {}).setdefault(
+            "win_time_weight", current["reward"]["win_time_weight"]
+        )
+        source.setdefault("training", {})["objective"] = copy.deepcopy(
+            current["training"]["objective"]
+        )
+        cfg = refresh_performance(source, current)
+    else:
+        cfg = execution_config(metadata["config"])
     validate_config(cfg)
     metadata["config"] = cfg
     return metadata

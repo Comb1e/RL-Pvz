@@ -56,6 +56,10 @@ def _cuda_probe():
 def require_cuda_training(cfg, condition="masked", *, runtime=True):
     """Reject unsupported runs before creating output or allocating collectors."""
     validate_config(cfg)
+    if cfg["training"].get("objective", {}).get("protocol") != "complete_return_probe_v2":
+        raise ValueError(
+            "Old-objective training cannot resume. Use --init-from with current settings and a new output directory."
+        )
     if condition == "hybrid" or cfg["conditions"].get(condition, {}).get("hybrid"):
         raise ValueError("CPU/hybrid training was removed in 0.8.0; use a direct CUDA condition.")
     if condition not in cfg["conditions"]:
@@ -155,6 +159,21 @@ def transfer_protocol(cfg, condition="masked"):
         "method": cfg["training"]["method"],
         "return": [cfg["training"]["gamma"], cfg["training"]["discount_clock"]],
     }
+
+
+def weight_transfer_protocol(cfg):
+    """Describe only the public model interface required by demo weights.
+
+    A demonstration is re-fit under the current objective and execution
+    profile. Its weights require the same entity/action representation and
+    network dimensions, but do not require matching reward, return, optimizer,
+    or recurrent chunk settings.
+    """
+    result = transfer_protocol(cfg)
+    for name in ("timing", "heads", "method", "return"):
+        result.pop(name)
+    result["policy"].pop("chunk_length", None)
+    return result
 
 
 def parameter_changes(old, new, prefix=""):

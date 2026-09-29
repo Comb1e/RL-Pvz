@@ -13,6 +13,7 @@ from pvz_rl.envs.action_timing import ActionPhaseGame
 from pvz_rl.envs.rewards import reward_parts
 from pvz_rl.learning import demo_initialization as demo
 from pvz_rl.learning.checkpoints import inspect_checkpoint
+from pvz_rl.learning.objective import components, training_rewards
 from pvz_rl.presentation.demo_recording import TransitionArchive
 from pvz_rl.presentation.recordings import ActionPhaseRecorder
 
@@ -189,17 +190,13 @@ def test_reused_demo_fits_current_rewards_without_rewriting_recording(
     assert last["rejection_reason"] == (
         None if last["action"] == 0 else "card_recharging" if last["action"] < 361 else "empty_tile"
     )
-    penalty = 0.0 if last["accepted"] else 0.09 if last["action"] < 361 else 0.07
-    terminal = 3.0 - penalty
-    expected_returns = torch.tensor(
-        [
-            terminal - 0.015,
-            terminal - 0.015,
-            terminal - 0.015,
-            terminal - 0.01,
-            terminal,
-        ]
-    )
+    expected_returns = torch.zeros(len(verified.transitions))
+    running = 0.0
+    for index in range(len(verified.transitions) - 1, -1, -1):
+        running += float(
+            training_rewards(components(verified.transitions[index]["reward_parts"]), current)
+        )
+        expected_returns[index] = running
     torch.testing.assert_close(tensors[-1], expected_returns)
     assert original.report["reconstruction"]["reward_changes"] == 0
     assert verified.report["reconstruction"]["reward_changes"] == 3

@@ -8,6 +8,13 @@ notes are recoverable with `git show 4052968:docs/references.md`.
 
 ## Entities and recurrent decisions
 
+- Hester et al., [Deep Q-learning from Demonstrations](https://arxiv.org/abs/1704.03732):
+  accepted-demonstration action ranking alongside value regression. The project uses
+  only its supervised preference idea, not its replay or DQN implementation.
+- van Hasselt et al., [Learning values across many orders of magnitude](https://arxiv.org/abs/1602.07714):
+  reward/target scale sensitivity motivated separating raw ledger values from the
+  development multiplier; PopArt is not used.
+
 - Vinyals et al., [AlphaStar](https://www.nature.com/articles/s41586-019-1724-z):
   entity observations, structured action arguments and recurrent processing.
   No model weights, game features, league training or reported performance are adopted.

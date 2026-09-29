@@ -21,6 +21,34 @@ REWARD_FACT_FIELDS = (
     "effective_damage",
     "plant_value_loss",
 )
+HOME_FACT_FIELDS = ("home_outer_entries", "home_inner_entries")
+
+
+class HomeProximityLedger:
+    """Charge each living threat once per inward boundary; IDs never reach inputs."""
+
+    def __init__(self, observation, rules):
+        self.units = rules.game["units_per_tile"]
+        self.stages = {z.id: self.stage(z) for z in observation.zombies}
+
+    def stage(self, zombie):
+        if zombie.health <= 0 or zombie.headless:
+            return 0
+        return int(zombie.x < 2 * self.units) + int(zombie.x < self.units)
+
+    def advance(self, observation, penalties):
+        counts = [0, 0]
+        for zombie in observation.zombies:
+            old = self.stages.get(zombie.id, 0)
+            stage = self.stage(zombie)
+            for index in range(old, stage):
+                counts[index] += 1
+            self.stages[zombie.id] = max(old, stage)
+        return {
+            **dict(zip(HOME_FACT_FIELDS, counts)),
+            "home_proximity": -sum(n * p for n, p in zip(counts, penalties)),
+        }
+
 
 # Combat diagnostics and additive accounting components share one reporting schema.
 REWARD_METRICS = (
@@ -44,6 +72,10 @@ REWARD_METRICS = (
     "net_value",
     "development",
     "terminal",
+    "home_outer_entries",
+    "home_inner_entries",
+    "home_proximity",
+    "victory_time",
 )
 
 LEDGER_METRICS = (
@@ -195,6 +227,7 @@ def reward_parts(
     rules=None,
     action=None,
     action_result=None,
+    proximity=None,
 ) -> dict:
     """Count actual gains/losses once, independent of action names and difficulty."""
     rules = rules if rules is not None else _default_rules()
@@ -233,8 +266,12 @@ def reward_parts(
             invalid_plant = -float(settings.get("invalid_plant_penalty", 0))
         elif isinstance(action, Dig) and action_result.reason == "empty_tile":
             empty_dig = -float(settings.get("empty_dig_penalty", 0))
+    proximity = proximity if proximity is not None else HomeProximityLedger(before, rules)
+    home = proximity.advance(after, settings.get("home_entry_penalties", (0, 0)))
     return {
         **combat,
+        **home,
+        "victory_time": 0.0,
         "terminal": terminal,
         "development": development,
         "sky_income": sky,
@@ -248,5 +285,5 @@ def reward_parts(
         "mower_activation_penalty": -scale * mower_cost,
         "invalid_plant_penalty": invalid_plant,
         "empty_dig_penalty": empty_dig,
-        "total": terminal + development + invalid_plant + empty_dig,
+        "total": terminal + development + invalid_plant + empty_dig + home["home_proximity"],
     }

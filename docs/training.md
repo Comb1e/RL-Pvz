@@ -1,5 +1,16 @@
 # Recording and training
 
+The current objective is `complete_return_probe_v2`. Rejected plants and empty digs
+use the small shared penalties in `train.toml`; development is multiplied only in
+learning targets. A zombie entering either of the two columns nearest the house is
+charged once per boundary. Victory time is shaped only for wins, relative to the
+median duration of the current completed cohort.
+
+Each decision probes two unselected branches and up to two alternative tiles. The
+EMA teacher supplies fixed one-step targets. Probes run from scratch simulator state
+and never alter the behavior game. Cohort reward finalization occurs before complete
+returns and fitting, and is recoverable without applying time rewards twice.
+
 Install with the [quick start](../README.md). Run commands from the project root.
 The default model throughout recording, initialization, training and evaluation
 is the entity Transformer–LSTM (`entity_v1`, `transformer_lstm_q_v2`).
@@ -60,9 +71,12 @@ initialization type, source SHA-256 and parameter differences.
 
 Fresh `--init-from` runs take all settings from the current `train.toml` (or
 explicit `--config`), including rewards, clipping, learning rate and performance.
-The source checkpoint supplies weights only. Weight transfer validates the pinned
-engine, observation encoding, action semantics and network structure; changed
-reward coefficients do not require a new demonstration initialization.
+The source checkpoint supplies weights only. Demonstration weight transfer
+validates the pinned engine, observation encoding, action semantics and network
+dimensions; reward, objective, optimizer, return, recurrent chunk and performance
+settings are supplied by the new run. Changed settings therefore do not require a
+new demonstration initialization. Autonomous weight transfer keeps its stricter
+saved-protocol checks.
 Without `--config`, autonomous resume uses the checkpoint's saved configuration
 plus missing execution defaults. Resume retains learning settings and rewards
 to preserve unfinished trajectories and optimizer state. CPU autonomous training

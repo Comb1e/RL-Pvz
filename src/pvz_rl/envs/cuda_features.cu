@@ -87,13 +87,53 @@ extern "C" __global__ void policy_masks(const I *headers, const I *plants,
   masks[index] = available;
 }
 
+// Copy only occupied simulator slots, never the reserved projectile capacity.
+extern "C" __global__ void copy_probe_state(
+    const Header *sh, const Plant *sp, const Zombie *sz, const Shot *sq,
+    const Mower *sm, const I *sc, const I *sl, const double *sa,
+    Header *dh, Plant *dp, Zombie *dz, Shot *dq, Mower *dm, I *dc, I *dl,
+    double *da, const bool *active) {
+  I i = blockIdx.x, t = threadIdx.x;
+  Header h = sh[i];
+  if (t == 0) { dh[i] = h; dh[i].enabled = h.enabled && active[i]; da[i] = sa[i]; }
+  for (I j=t;j<h.np;j+=blockDim.x) dp[i*45+j]=sp[i*45+j];
+  for (I j=t;j<h.nz;j+=blockDim.x) dz[i*ZCAP+j]=sz[i*ZCAP+j];
+  for (I j=t;j<h.nq;j+=blockDim.x) dq[i*QCAP+j]=sq[i*QCAP+j];
+  for (I j=t;j<5;j+=blockDim.x) dm[i*5+j]=sm[i*5+j];
+  for (I j=t;j<8;j+=blockDim.x) dc[i*8+j]=sc[i*8+j];
+  for (I j=t;j<ZCAP*2;j+=blockDim.x) dl[i*ZCAP*2+j]=sl[i*ZCAP*2+j];
+}
+
+// Each episode's total roster is bounded by ZCAP. Keep IDs only in accounting.
+extern "C" __global__ void home_entries(const I *headers, const I *zombies,
+    I *ledger, I *entries, const bool *selected, I n) {
+  I i = blockIdx.x * blockDim.x + threadIdx.x;
+  if (i >= n) return;
+  entries[i * 2] = entries[i * 2 + 1] = 0;
+  if (!selected[i]) return;
+  Header h = ((const Header *)headers)[i];
+  const Zombie *z = ((const Zombie *)zombies) + i * ZCAP;
+  I *seen = ledger + i * ZCAP * 2;
+  for (I j = 0; j < h.nz; j++) {
+    if (z[j].headless || z[j].health <= 0) continue;
+    I stage = (z[j].x < 2 * G_units_per_tile) + (z[j].x < G_units_per_tile);
+    I slot = 0;
+    while (slot < ZCAP && seen[slot * 2] && seen[slot * 2] != z[j].id) slot++;
+    if (slot == ZCAP) { entries[i * 2] = -1; return; }
+    I old = seen[slot * 2 + 1];
+    for (I s = old; s < stage; s++) entries[i * 2 + s]++;
+    seen[slot * 2] = z[j].id;
+    seen[slot * 2 + 1] = hi(old, stage);
+  }
+}
+
 // Reward order mirrors reward_parts, using double intermediates before casting
 // the scalar reward to the same float32 rollout storage used by SB3.
 extern "C" __global__ void
 reward_metrics(const I *headers, const I *old_headers, const I *old_cd,
                const I *actions, const double *facts, const I *accounting, const double *before_assets,
                const double *after_assets, float *rewards, double *parts,
-               double *totals, I n) {
+               double *totals, const I *home_entries, I n) {
   I i = blockIdx.x * blockDim.x + threadIdx.x;
   if (i >= n)
     return;
@@ -131,7 +171,11 @@ reward_metrics(const I *headers, const I *old_headers, const I *old_cd,
   v[F_empty_dig_penalty] =
       action >= ACTION_DIG_START && action < ACTION_COUNT && !h.accepted
       && h.reason == EMPTY_TILE_REASON ? -R_empty_dig_penalty : 0.;
-  double total = v[F_terminal] + v[F_development]
+  v[F_home_outer_entries] = home_entries[i * 2];
+  v[F_home_inner_entries] = home_entries[i * 2 + 1];
+  v[F_home_proximity] = -HOME_PENALTY_0 * home_entries[i * 2]
+                       -HOME_PENALTY_1 * home_entries[i * 2 + 1];
+  double total = v[F_terminal] + v[F_development] + v[F_home_proximity]
       + v[F_invalid_plant_penalty] + v[F_empty_dig_penalty];
   v[F_total] = total;
   rewards[i] = (float)total;

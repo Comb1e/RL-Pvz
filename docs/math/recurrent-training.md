@@ -1,6 +1,14 @@
-# Recurrent complete-return Q regression
+# Recurrent complete-return Q regression and alternative-action supervision
 
-Demonstration initialization and autonomous training use this same objective.
+Demonstration initialization and autonomous training use the `complete_return_probe_v2`
+objective. The raw ledger keeps terminal, development, rejection, house-entry and
+victory-time components separately. Fitting multiplies only development by the
+configured dense multiplier before constructing complete returns.
+
+Each living zombie is charged once when it first enters the second house-side column
+and once again when it enters the innermost column. Victory time shaping is applied
+only after a cohort median is known, so every victory and counterfactual terminal
+transition uses the same median.
 A verified demonstration supplies one naturally completed episode; autonomous
 collection supplies a cohort of completed games. Both visit chronological chunks
 with fixed weights for the whole pass and publish only completed optimizer updates.
@@ -83,6 +91,13 @@ fitting and recovery. Stage promotion resets that progress. Deterministic
 evaluation temporarily disables exploration without advancing training counters.
 Entity encoder microbatching preserves frame order when reconstructing the LSTM
 sequence; it changes neither the group denominators nor optimizer boundaries.
+
+At collection time, two alternative branches and up to two alternative tiles are
+executed from a scratch simulator copy at every decision. Their targets use the
+fixed FP32 EMA teacher and bootstrap from the next branch head, including for tile
+probes. Huber probe loss is added with its configured weight. Accepted demonstration
+actions additionally receive pairwise softplus ranking loss against valid alternatives;
+rejected demonstrations do not.
 
 `tests/test_recurrent_training.py` checks hand-computed returns, independently
 computed group means, episode-batch gradient invariance, unequal lengths,

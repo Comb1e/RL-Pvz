@@ -19,7 +19,7 @@ from pvz_rl.envs.encoding import (
     observation_json,
     observations_equal,
 )
-from pvz_rl.envs.rewards import reward_parts
+from pvz_rl.envs.rewards import HomeProximityLedger, reward_parts
 from pvz_rl.presentation.recordings import ActionPhaseRecorder
 from pvz_rl.provenance import append_jsonl, file_hash, write_json
 
@@ -264,6 +264,7 @@ class DemoRecordingApp(App):
         # needs the action-phase adapter for zero-tick plant/dig operations.
         self.game = ActionPhaseGame(self.rules)
         self.game.reset(level, self.seed)
+        self.proximity = HomeProximityLedger(self.game.observe(), self.rules)
         metadata = {
             "protocol": ARCHIVE_PROTOCOL,
             "config_digest": digest(self.research_cfg),
@@ -333,6 +334,7 @@ class DemoRecordingApp(App):
             rules=self.game.rules,
             action=action,
             action_result=result.action_result,
+            proximity=self.proximity,
         )
         self.transition_archive.append(
             before,

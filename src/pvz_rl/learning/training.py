@@ -556,16 +556,17 @@ class ResearchCallback(BaseCallback):
                 self.recent_by_task.setdefault(
                     task, deque(maxlen=self.settings["logging"]["rolling_window"])
                 ).append(info["episode_metrics"])
-                append_jsonl(
-                    self.stream,
-                    {
-                        **info["episode_metrics"],
-                        "policy": self.condition,
-                        "learner_seed": self.learner_seed,
-                        "training_steps": self.num_timesteps,
-                        "training_games": self.model.training_games,
-                    },
-                )
+                report = {
+                    **info["episode_metrics"],
+                    "policy": self.condition,
+                    "learner_seed": self.learner_seed,
+                    "training_steps": self.num_timesteps,
+                    "training_games": self.model.training_games,
+                }
+                if info["episode_metrics"].get("time_reward_pending"):
+                    self.model._pending_episodes[info["episode_slot"]]["report"] = report
+                else:
+                    append_jsonl(self.stream, report)
         progress = progress_value(self.cfg, self.model)
         if hasattr(self, "progress"):
             self.log_progress()
@@ -587,6 +588,24 @@ class ResearchCallback(BaseCallback):
             self.last_weights = list(weights)
         # Optimization metrics are finalized after the selected fitting phase.
         return True
+
+    def finalize_cohort_rewards(self, pending):
+        """Publish finalized rewards once, even when replaying an older recovery ZIP."""
+        self.stream.flush()
+        path = self.output / "training-episodes.jsonl"
+        seen = set()
+        if path.exists():
+            with path.open(encoding="utf-8") as source:
+                for line in source:
+                    if line.strip():
+                        seen.add(json.loads(line).get("record_id"))
+        for item in pending.values():
+            report = item.get("report")
+            if report is not None and item["record_id"] not in seen:
+                append_jsonl(
+                    self.stream, {**report, **item["metrics"], "record_id": item["record_id"]}
+                )
+        self.stream.flush()
 
     def _on_rollout_start(self):
         # This hook runs after the preceding Q update. A step callback would
@@ -919,7 +938,11 @@ def initial_weights(checkpoint, cfg):
     require_supported_policy(cfg)
     saved = inspect_checkpoint(checkpoint)
     source_cfg = saved["config"]
-    compatible_config(source_cfg, cfg)
+    compatible_config(
+        source_cfg,
+        cfg,
+        weights_only=saved["initialization_type"] == "demonstration",
+    )
     verify_engine(source_cfg)
     model, _ = load_policy(checkpoint, "cpu")
     weights = {key: value.detach().clone() for key, value in model.policy.state_dict().items()}

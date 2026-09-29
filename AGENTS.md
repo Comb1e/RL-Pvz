@@ -33,6 +33,8 @@
 - `envs/` owns simulator adapters, geometry masks and rewards; `cuda_accounting.py`
   supplies read-only counters. The shared execution contract retains the proposal,
   reason and penalty, exposes `executed_action=0` for rejection and advances one tick.
+  `rewards.py` also tracks one-time zombie entries into the two house-side columns;
+  complete-game fitting finalizes victory-time shaping against the current cohort median.
 - `policy/entity_attention.py` owns shared embeddings, readout tokens, padding masks,
   full efficient attention, exact query fallback and optional outer checkpointing.
   Fixed-shape compilation uses CUDA graphs on Windows and records a one-time eager
@@ -49,8 +51,9 @@
   feeds rejection back as `(previous_action=0, accepted=0, ticks=1)`.
 - `learning/checkpoints.py` inspects saved protocols/schema before simulation.
   `cli.py` resolves fresh `--init-from` runs from current configuration, transferring
-  only weights; `--resume` and evaluation retain saved settings. Weight compatibility
-  excludes reward coefficients, while recovery still requires matching rewards.
+  only weights; demonstration weights require only the pinned input/output model
+  interface, while autonomous transfer and recovery retain stricter saved-protocol
+  checks. `--resume` and evaluation retain saved settings.
   `cuda_q.py` owns cohort lifecycle and atomic recovery; `recurrent_q.py` collects
   chronological transitions and accumulates whole-pass gradients. `cuda_buffer.py`
   stores fixed metadata plus ragged entity slabs under one RAM/disk budget and

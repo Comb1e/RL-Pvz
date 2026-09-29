@@ -8,6 +8,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
+import numpy as np
 import torch
 from pvz_game import Rules
 from pvz_game.replay import decode_action, read_recording
@@ -21,9 +22,20 @@ from pvz_rl.envs.encoding import (
     observation_json,
     observations_equal,
 )
-from pvz_rl.envs.rewards import REWARD_FACT_FIELDS, reward_parts
+from pvz_rl.envs.rewards import (
+    HOME_FACT_FIELDS,
+    REWARD_FACT_FIELDS,
+    HomeProximityLedger,
+    reward_parts,
+)
 from pvz_rl.learning.checkpoints import DEMO_PROTOCOL as CHECKPOINT_PROTOCOL
 from pvz_rl.learning.checkpoints import STATE_PROTOCOL as RECURRENT_STORAGE_PROTOCOL
+from pvz_rl.learning.objective import (
+    components,
+    demonstration_rank_loss,
+    ranking_counts,
+    training_rewards,
+)
 from pvz_rl.learning.performance import without_performance
 from pvz_rl.policy.sequential_q import action_groups, action_parts, balanced_q_loss
 from pvz_rl.policy.transformer_lstm import TransformerLSTMPolicy
@@ -43,11 +55,16 @@ def _verify_reward_facts(row: dict, reconstructed: dict) -> None:
     error = f"reward ledger mismatch at decision {row['decision_index']}"
     if (
         not isinstance(saved, dict)
-        or saved.keys() != reconstructed.keys()
+        or set(saved)
+        not in (
+            set(reconstructed),
+            set(reconstructed) - {*HOME_FACT_FIELDS, "home_proximity", "victory_time"},
+        )
         or any(
             type(value) not in (int, float) or not math.isfinite(value) for value in saved.values()
         )
         or any(saved[key] != reconstructed[key] for key in REWARD_FACT_FIELDS)
+        or any(saved[key] != reconstructed[key] for key in HOME_FACT_FIELDS if key in saved)
     ):
         raise ValueError(error)
     # Even old v2 archives without their reward configuration can verify these
@@ -57,6 +74,8 @@ def _verify_reward_facts(row: dict, reconstructed: dict) -> None:
         + saved["development"]
         + saved["invalid_plant_penalty"]
         + saved["empty_dig_penalty"]
+        + saved.get("home_proximity", 0)
+        + saved.get("victory_time", 0)
     )
     net = (
         saved["produced_sun"]
@@ -97,6 +116,8 @@ def _verify_action_order(archive_rows: list[dict], replay_path: Path, cfg: dict)
     game.restore(data["initial"])
     encoder = ObservationEncoder(cfg, game.rules)
     codec = ActionCodec(cfg)
+    proximity = HomeProximityLedger(game.observe(), game.rules)
+    native_masks = []
     observations = []
     native_truncation = []
     native_actions = []
@@ -106,6 +127,7 @@ def _verify_action_order(archive_rows: list[dict], replay_path: Path, cfg: dict)
     for entry in data["entries"]:
         before = game.observe()
         before_tick = before.tick
+        native_masks.append(codec.mask(game))
         observations.append(observation_json(encoder.encode(before)))
         native_truncation.append(dict(encoder.last_truncation))
         native_actions.append(codec.encode(decode_action(entry["action"])))
@@ -120,6 +142,7 @@ def _verify_action_order(archive_rows: list[dict], replay_path: Path, cfg: dict)
                 rules=game.rules,
                 action=action,
                 action_result=result.action_result,
+                proximity=proximity,
             )
         )
         native_terminals.append(result.status.value)
@@ -137,7 +160,7 @@ def _verify_action_order(archive_rows: list[dict], replay_path: Path, cfg: dict)
         raise ValueError("archive and replay decision counts differ")
     reward_changes = 0
     recorded_total = recomputed_total = 0.0
-    for row, action, obs, outcome, reward, terminal, omitted in zip(
+    for row, action, obs, outcome, reward, terminal, omitted, legal in zip(
         transitions,
         native_actions,
         observations,
@@ -145,6 +168,7 @@ def _verify_action_order(archive_rows: list[dict], replay_path: Path, cfg: dict)
         native_rewards,
         native_terminals,
         native_truncation,
+        native_masks,
         strict=True,
     ):
         if row["action"] != action:
@@ -172,6 +196,8 @@ def _verify_action_order(archive_rows: list[dict], replay_path: Path, cfg: dict)
         recomputed_total += reward["total"]
         # Replace only the in-memory fitting data, never the user's recording.
         row["reward_parts"] = reward
+        row["training_reward"] = float(training_rewards(components(reward), cfg))
+        row["legal_mask"] = legal
     final_rows = [row for row in archive_rows if row.get("record_type") == "final_observation"]
     if final_rows:
         final = observation_json(encoder.encode(game.observe()))
@@ -273,7 +299,7 @@ def _training_tensors(demonstration: VerifiedDemo):
     returns = torch.zeros(len(rows), dtype=torch.float32)
     running = 0.0
     for i in range(len(rows) - 1, -1, -1):
-        running += float(rows[i]["reward_parts"]["total"])
+        running += float(rows[i]["training_reward"])
         returns[i] = running
     previous = torch.zeros_like(actions)
     outcomes = torch.zeros(len(rows), 2, dtype=torch.float32)
@@ -338,6 +364,13 @@ def initialize_demo(
     checkpoint_cfg = without_performance(cfg)
     checkpoint_cfg["training"].get("demo", {}).pop("gradient_clip", None)
     group_counts = torch.bincount(action_groups(actions), minlength=3)
+    accepted = torch.tensor([r["accepted"] for r in demonstration.transitions], device=device)
+    legal = torch.as_tensor(
+        np.asarray([r["legal_mask"] for r in demonstration.transitions], dtype=np.bool_),
+        device=device,
+    )
+    rank_counts = ranking_counts(actions, accepted, legal)[0]
+    objective = cfg["training"]["objective"]
     started = time.monotonic()
     completed = 0
     for pass_index in range(passes):
@@ -346,6 +379,8 @@ def initialize_demo(
         optimizer.zero_grad(set_to_none=True)
         state = model.initial_state(1, device=device)
         pass_loss = 0.0
+        rank_accuracy = torch.zeros(4, device=device)
+        ranking_total = 0.0
         for start in range(0, len(observations), chunk):
             stop = min(start + chunk, len(observations))
             branch_q, tile_features, contexts, state = model.forward_sequence(
@@ -371,14 +406,39 @@ def initialize_demo(
             loss, _, _ = balanced_q_loss(
                 first, second, target, actions[start:stop], group_counts, len(actions)
             )
+            complete_loss = loss
+            rank, accuracy = demonstration_rank_loss(
+                model,
+                branch_q,
+                tile_features,
+                contexts,
+                actions[start:stop],
+                accepted[start:stop],
+                legal[start:stop],
+                rank_counts,
+                objective["demo_rank_margin"],
+            )
+            loss = loss + objective["demo_rank_loss_weight"] * rank
+            rank_accuracy += accuracy.detach()
+            ranking_total += float(rank.detach())
             loss.backward()
-            pass_loss += float(loss.detach())
+            pass_loss += float(complete_loss.detach())
             state = state.detach()
         torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
         optimizer.step()
         completed += 1
         coverage += torch.bincount(action_parts(actions)[0].detach().cpu(), minlength=10)
-        curves.append({"pass": completed, "loss": pass_loss, "decisions": len(actions)})
+        scores = rank_accuracy.cpu().tolist()
+        curves.append(
+            {
+                "pass": completed,
+                "loss": pass_loss,
+                "ranking_loss": ranking_total,
+                "branch_ranking_accuracy": scores[0] / scores[1] if scores[1] else None,
+                "tile_ranking_accuracy": scores[2] / scores[3] if scores[3] else None,
+                "decisions": len(actions),
+            }
+        )
         _save_checkpoint(
             {
                 "protocol": CHECKPOINT_PROTOCOL,
@@ -387,6 +447,7 @@ def initialize_demo(
                 "config_digest": digest(checkpoint_cfg),
                 "config": checkpoint_cfg,
                 "model": model.state_dict(),
+                "objective": dict(objective),
                 "passes_completed": completed,
                 "learner_seed": seed,
                 "source_replay_sha256": verification["reconstruction"]["replay_sha256"],
@@ -431,7 +492,7 @@ def load_demo_checkpoint(path: str | Path, cfg: dict | None = None, *, device="c
         raise ValueError("Expected a demonstration initialization checkpoint")
     saved = info["payload"]
     if cfg is not None:
-        compatible_config(saved["config"], cfg)
+        compatible_config(saved["config"], cfg, weights_only=True)
     model = TransformerLSTMPolicy(cfg or info["config"]).to(device)
     model.load_state_dict(saved["model"], strict=True)
     return model, saved

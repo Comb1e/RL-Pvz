@@ -1160,3 +1160,14 @@ that learning collapse is resolved, and no formal learning run was launched.
   CPU/CUDA/Windows learning, full miniature protocol and package checks.
 - Limit: no trained-skill/generalization claim; partial observation and inexact
   rollout/RNG resume. Formal runs remain user initiated; no remote was configured.
+## 2026-09-29 — probe objective and staged reward shaping
+
+The compact-stages run showed repeated rejection penalties dominating development
+returns and branch Q values changing by less than four decimal places after recurrent
+state saturation. The current objective adds scaled development targets, fixed
+per-zombie house-entry charges, cohort-median victory-time shaping, isolated
+alternative-action probes, EMA targets, and accepted-demonstration ranking. Focused
+CUDA collection/fitting smoke checks passed; reward, storage, recurrent recovery and
+demonstration controls pass, including 66 affected recurrent/reward/storage tests and
+23 demonstration tests. Long training and learning-quality claims remain intentionally
+unperformed.

@@ -265,5 +265,5 @@ class TransformerLSTMPolicy(nn.Module):
             tile_exploration_epsilon=getattr(self, "tile_exploration_epsilon", 0.0),
             active=active,
         )
-        details.update(branch_value=first, tile_value=second, context=result.context)
+        details.update(branch_value=first, tile_value=second, context=result.context, tile_features=result.tile_features)
         return actions, result.state, details
