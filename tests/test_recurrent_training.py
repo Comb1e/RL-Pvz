@@ -243,6 +243,8 @@ def test_cli_initialize_train_evaluate_and_in_place_resume(completed_demo, tmp_p
     )
     main(["train", "--init-from", str(initial / "initialization.pt"), "--output", str(run)])
     assert json.loads((run / "status.json").read_text())["training_games"] == 1
+    run_config = json.loads((run / "config.json").read_text())
+    assert run_config["training"]["performance"] == load_config()["training"]["performance"]
     main(
         [
             "evaluate",

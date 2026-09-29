@@ -7,10 +7,11 @@ import pytest
 import torch
 from pvz_game import Dig, LevelSpec, Place, Wait
 
-from pvz_rl.config import load_demo_config
+from pvz_rl.config import load_config, load_demo_config
 from pvz_rl.envs.action_timing import ActionPhaseGame
 from pvz_rl.envs.rewards import reward_parts
 from pvz_rl.learning import demo_initialization as demo
+from pvz_rl.learning.checkpoints import inspect_checkpoint
 from pvz_rl.presentation.demo_recording import TransitionArchive
 from pvz_rl.presentation.recordings import ActionPhaseRecorder
 
@@ -92,6 +93,17 @@ def test_complete_demo_fit_uses_whole_game_group_loss_and_reloads(
     monkeypatch.setattr(demo, "balanced_q_loss", observe)
     result = demo.initialize_demo(archive, replay, tmp_path / "fit", cfg=cfg, passes=1)
     assert result["state"] == "complete" and result["passes_completed"] == 1
+    payload = torch.load(result["checkpoint"], map_location="cpu", weights_only=True)
+    assert "performance" not in payload["config"]["training"]
+    assert not {"encoder_microbatch", "encoder_token_budget", "attention_query_chunk"} & set(
+        payload["config"]["policy"]
+    )
+    inspected = inspect_checkpoint(result["checkpoint"])
+    current = load_config()
+    assert inspected["config"]["training"]["performance"] == current["training"]["performance"]
+    assert inspected["config"]["policy"]["encoder_microbatch"] == current["policy"][
+        "encoder_microbatch"
+    ]
     expected = sum(sum(errors) / len(errors) for errors in samples.values()) / len(samples)
     curves = json.loads((tmp_path / "fit/learning-curves.json").read_text())
     assert curves["curves"][0]["loss"] == pytest.approx(expected, rel=1e-6)

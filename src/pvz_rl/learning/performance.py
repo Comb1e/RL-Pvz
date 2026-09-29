@@ -23,6 +23,5 @@ def without_performance(cfg):
     result = copy.deepcopy(cfg)
     for key in ENCODER_SETTINGS:
         result["policy"].pop(key, None)
-    for key in PERFORMANCE_SETTINGS:
-        result["training"].get("performance", {}).pop(key, None)
+    result["training"].pop("performance", None)
     return result

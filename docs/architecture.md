@@ -130,6 +130,10 @@ Initialization rejects missing manifests, unsupported protocols, hash/config
 mismatches, incomplete episodes and reconstruction differences. Only entity-v1
 archives and weights are accepted; earlier archives require a new recording.
 Execution device and fitting overrides do not modify verification configuration.
+The generated `initialization.pt` stores weights plus structural metadata; it
+omits encoder batching and performance settings. Reading it overlays those
+execution settings from the current `train.toml`, so autonomous training can
+reuse the weights after a performance change without a refresh flag.
 Complete gamma-one returns supervise both Q heads. Whole-pass gradients are
 clipped once; only completed passes atomically replace `initialization.pt`.
 
@@ -175,8 +179,10 @@ or host-buffer reuse before the copy completes.
 CUDA fitting computes entity features, embeddings and auxiliary projections with
 BF16 temporary values. Stored weights, normalization reductions, residual sums,
 LSTM state/computation, Q heads, loss, gradients and Adam state remain FP32.
-Collection, evaluation and demonstration fitting use FP32. Precision does not
-change raw observations, parameter shapes, or the learning objective.
+Collection, evaluation and demonstration fitting use FP32. Demonstration
+initialization settings are independent of autonomous execution settings;
+precision does not change raw observations, parameter shapes, or the learning
+objective.
 
 Each pass is an uncommitted transaction until finite gradients are clipped and
 Adam updates once. Nonfinite BF16 computation discards the pass and retries in
@@ -207,6 +213,8 @@ checkpoints default to FP32. Ordinary resume keeps saved settings;
 `--refresh-performance` replaces only precision, prefetch, encoder batching,
 attention fallback size and instrumentation settings from current configuration.
 Learning parameters and input/output schemas are excluded from that refresh.
+Demonstration weights always take these execution settings from the current
+configuration when they are loaded.
 
 Atomic ZIP replacement couples model, optimizer, counters, curriculum, exploration,
 RNGs, trajectory/entity slabs and collection states. Schema metadata records

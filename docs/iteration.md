@@ -27,6 +27,21 @@
   configuration, dependency pin, running training and run artifacts were untouched;
   the user's parameters remain intact. Behavioral validation is unexecuted.
 
+## 0.30.1 — 2026-09-28
+
+- Problem/root cause: `train --init-from` inherited stale encoder and precision
+  settings from the demonstration checkpoint, so changing the current training
+  profile required `--refresh-performance`.
+- Improvement: new `initialization.pt` files omit execution-only performance
+  fields. Loading a demonstration keeps structural metadata for validation and
+  overlays the current train profile's execution settings automatically.
+- Compatibility: demonstration weights and existing autonomous resume semantics
+  remain unchanged; `--refresh-performance` remains an explicit autonomous-resume
+  control.
+- Verification: demonstration initialization, checkpoint hydration, CLI transfer,
+  and performance-refresh controls passed in the focused test set; Ruff and
+  whitespace checks passed.
+
 ## 0.30.0 — 2026-09-28
 
 - Problem/root cause: small encoder batches, unconditional query splitting and
