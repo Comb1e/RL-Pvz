@@ -15,7 +15,7 @@ def test_single_config_train_and_demo_profiles():
     assert demo == load_demo_config("src/pvz_rl/data/train.toml")
     assert demo["policy"] == training["policy"]
     assert demo["training"]["method"] == training["training"]["method"]
-    assert demo["reward"]["invalid_plant_penalty"] == 0.001
+    assert demo["reward"]["invalid_plant_penalty"] == training["reward"]["invalid_plant_penalty"]
     assert training["policy"]["kind"] == "transformer_lstm_q_v2"
     assert tuple(training["curriculum"]["stages"]) == ("easy", "standard", "shared")
     assert "lessons" not in training["curriculum"] and "run_stage" not in training["curriculum"]

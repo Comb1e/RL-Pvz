@@ -33,7 +33,10 @@
   reason and penalty, exposes `executed_action=0` for rejection and advances one tick.
 - `policy/entity_attention.py` owns shared embeddings, readout tokens, padding masks,
   full efficient attention, exact query fallback and optional outer checkpointing.
-  Fitting uses BF16 temporary features with FP32 master weights, LSTM and Q heads. `transformer_lstm.py`
+  Fixed-shape compilation uses CUDA graphs on Windows and records a one-time eager
+  fallback when unavailable; the compiled path stays tensor-only so simulator
+  pybind objects are never traced. Fitting uses BF16 temporary features with FP32
+  master weights, LSTM and Q heads. `transformer_lstm.py`
   owns LSTM and Q heads; `recurrent_policy.py` adapts the training lifecycle.
   `sequential_q.py` keeps all ten branches greedy, independent of sun/cooldown;
   occupancy-only plant tiles and unrestricted dig tiles allow tile-only exploration.

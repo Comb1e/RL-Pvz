@@ -1,13 +1,12 @@
 """Shared entity embeddings and exact, bounded bidirectional attention."""
 
 import re
+import sys
 
 import torch
 from torch import nn
 from torch.nn import functional as F
 from torch.utils.checkpoint import checkpoint
-
-from pvz_rl.envs.encoding import EntityBatch
 
 
 def feature_dtype(device):
@@ -34,7 +33,12 @@ class AttentionBlock(nn.Module):
 
     def attention(self, q, k, v, mask):
         supported = True
-        if q.is_cuda and not self.force_fallback:
+        # SDPAParams is a pybind11 object.  Constructing it during a Dynamo
+        # trace creates a graph break before the actual tensor attention runs.
+        # The compiled path delegates backend selection to SDPA directly; the
+        # capability probe remains available for the eager path.
+        compiling = bool(getattr(torch.compiler, "is_compiling", lambda: False)())
+        if q.is_cuda and not self.force_fallback and not compiling:
             params = torch.backends.cuda.SDPAParams(q, k, v, mask, 0.0, False, False)
             supported = torch.backends.cuda.can_use_efficient_attention(
                 params
@@ -78,9 +82,39 @@ class EntityTransformer(nn.Module):
         self.activation_checkpointing = False
         self._compiled_encode = None
         self._compiled_shapes = {}
+        self.compilation_backend = None
         self.compilation_status = "disabled"
         self.compilation_error = None
         self.register_buffer("health_scales", torch.tensor(layout.health_scales), persistent=False)
+        # Keep all rule-derived normalization constants as tensor buffers.  The
+        # compiled encoder must not reach back through ObservationEncoder.rules:
+        # that object is a pybind11 wrapper owned by the simulator and Dynamo
+        # cannot trace it.  These buffers preserve the exact public normalization
+        # while keeping the graph tensor-only.
+        self.register_buffer(
+            "row_scale", torch.tensor(float(max(1, layout.rows - 1))), persistent=False
+        )
+        self.register_buffer(
+            "position_origin", torch.tensor(float(layout.rules.game["house_x"])), persistent=False
+        )
+        self.register_buffer(
+            "position_scale_buffer",
+            torch.tensor(float(layout.position_scale)),
+            persistent=False,
+        )
+        self.register_buffer(
+            "armor_scale_buffer",
+            torch.tensor(float(layout.armor_scale)),
+            persistent=False,
+        )
+        self.register_buffer(
+            "tick_rate", torch.tensor(float(layout.rules.game["tick_rate"])), persistent=False
+        )
+        self.register_buffer(
+            "projectile_damage",
+            torch.tensor(float(layout.rules.plants["peashooter"]["damage"])),
+            persistent=False,
+        )
         self.type_embedding = nn.Embedding(len(layout.types) + 1, width, padding_idx=0)
         self.state_embedding = nn.Embedding(len(layout.states) + 1, width, padding_idx=0)
         self.numeric = nn.Linear(9, width)
@@ -123,8 +157,15 @@ class EntityTransformer(nn.Module):
             self.compilation_status = "unavailable"
             self.compilation_error = "CUDA is unavailable"
             return
-        self._compiled_encode = torch.compile(self._encode, dynamic=False, mode="reduce-overhead")
+        # The Windows wheel does not ship Triton, so Inductor cannot compile
+        # even though CUDA graphs are available.  CUDA graphs still capture
+        # the fixed-shape tensor-only encoder and avoid both the pybind11 trace
+        # warning and Inductor's max-autotune SM heuristic.  Keep Inductor as
+        # the default on platforms where its compiler toolchain is available.
+        backend = "cudagraphs" if sys.platform == "win32" else "inductor"
+        self._compiled_encode = torch.compile(self._encode, backend=backend, dynamic=False)
         self._compiled_shapes.clear()
+        self.compilation_backend = backend
         self.compilation_status = "requested"
         self.compilation_error = None
 
@@ -145,14 +186,30 @@ class EntityTransformer(nn.Module):
         except Exception as exc:  # backend availability is device/build dependent
             self._compiled_encode = None
             self._compiled_shapes.clear()
+            self.compilation_backend = None
             self.compilation_status = "fallback"
             detail = str(exc).splitlines()[0] if str(exc) else "backend compilation failed"
             self.compilation_error = re.sub(r"https?://\S+", "<url>", detail)[:256]
             return self._encode(*args)
 
-    def embed(self, batch):
-        kind, state, numeric = self.layout.normalize(batch, health_scales=self.health_scales)
-        dtype = feature_dtype(batch.device) or self.numeric.weight.dtype
+    def _normalize_tensors(self, entities, entity_mask):
+        """Normalize validated records without touching simulator Python objects."""
+        raw = entities
+        kind, state, valid = raw[..., 0].long(), raw[..., 1].long(), entity_mask
+        kind = torch.where(valid, kind, 0)
+        state = torch.where(valid, state, 0)
+        values = torch.where(valid[..., None], raw[..., 2:], 0).float()
+        values[..., 0] /= self.row_scale
+        values[..., 1] = (values[..., 1] - self.position_origin) / self.position_scale_buffer
+        values[..., 2] /= self.health_scales[kind]
+        values[..., 3] /= self.armor_scale_buffer
+        values[..., 4:6] /= self.tick_rate
+        values[..., 8] /= self.projectile_damage
+        return kind, state, values
+
+    def _embed_tensors(self, entities, entity_mask):
+        kind, state, numeric = self._normalize_tensors(entities, entity_mask)
+        dtype = feature_dtype(entities.device) or self.numeric.weight.dtype
         accumulation = torch.float32 if dtype == torch.bfloat16 else dtype
         result = stable_norm(
             self.input_norm,
@@ -160,17 +217,22 @@ class EntityTransformer(nn.Module):
             + self.state_embedding(state).to(dtype).to(accumulation)
             + self.numeric(numeric.to(self.numeric.weight.dtype)).to(accumulation),
         )
-        return result.masked_fill(~batch.entity_mask[..., None], 0)
+        return result.masked_fill(~entity_mask[..., None], 0)
+
+    def embed(self, batch):
+        """Embed a public EntityBatch; retained for diagnostics and math tests."""
+        return self._embed_tensors(batch.entities, batch.entity_mask)
 
     def _encode(self, entities, mask, globals_):
-        batch = EntityBatch(entities, mask, globals_, validated=True)
-        embedded = self.embed(batch)
+        # Keep this function tensor-only so torch.compile can trace it.  Public
+        # validation happens once in forward() before this method is called.
+        embedded = self._embed_tensors(entities, mask)
         tiles = self.numeric(self.tile_coordinates)
         tiles = tiles + self.tile_marker.to(tiles.dtype)
         readouts = torch.cat(
             (
                 self.global_projection(globals_.to(self.global_projection.weight.dtype))[:, None],
-                tiles[None].expand(len(batch), -1, -1),
+                tiles[None].expand(entities.shape[0], -1, -1),
             ),
             1,
         )

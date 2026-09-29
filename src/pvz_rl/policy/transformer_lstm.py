@@ -129,6 +129,7 @@ class TransformerLSTMPolicy(nn.Module):
     ) -> tuple[torch.Tensor, torch.Tensor]:
         summary, tiles = self.entity(observations)
         self.compilation_status = self.entity.compilation_status
+        self.compilation_backend = self.entity.compilation_backend
         self.compilation_error = self.entity.compilation_error
         scalar = self.scalar(observations.globals.to(self.scalar[0].weight.dtype))
         batch = len(observations)

@@ -304,6 +304,9 @@ class ResearchCallback(BaseCallback):
             "compilation_status": getattr(
                 getattr(self.model, "policy", None), "compilation_status", "unknown"
             ),
+            "compilation_backend": getattr(
+                getattr(self.model, "policy", None), "compilation_backend", None
+            ),
             "compilation_error": (
                 str(error)
                 if (

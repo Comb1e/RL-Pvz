@@ -202,8 +202,7 @@ class CudaRecurrentQ(CudaCohortLifecycle):
             getattr(self, "execution_state", {}).get("requested_precision")
             != cfg["training"]["performance"].get("fit_precision", "fp32")
             or previous["policy"]["encoder_microbatch"] != cfg["policy"]["encoder_microbatch"]
-            or previous["policy"]["encoder_token_budget"]
-            != cfg["policy"]["encoder_token_budget"]
+            or previous["policy"]["encoder_token_budget"] != cfg["policy"]["encoder_token_budget"]
             or previous["training"].get("performance", {}).get("fit_sequence_groups", 1)
             != cfg["training"].get("performance", {}).get("fit_sequence_groups", 1)
         ):
@@ -391,6 +390,7 @@ class CudaRecurrentQ(CudaCohortLifecycle):
         self._stats["encoder_token_budget"] = self.execution_state["token_budget"]
         self._stats["execution_fallbacks"] = list(self.execution_state["fallbacks"])
         self._stats["compilation_status"] = getattr(self.policy, "compilation_status", "disabled")
+        self._stats["compilation_backend"] = getattr(self.policy, "compilation_backend", None)
         super()._synchronize(callback)
 
     def save(self, *args, **kwargs):

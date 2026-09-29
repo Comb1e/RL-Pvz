@@ -177,7 +177,10 @@ budget. Allocation fallback lowers the encoder microbatch to 64, 32 and 16,
 then enables one outer checkpoint without dropping entities.
 
 Full-sequence SDPA selects the available efficient backend; an exact 64-query
-fallback attends to all keys. CPU preparation caches sequence index templates,
+fallback attends to all keys. When compilation is enabled, fixed-shape encoder
+calls use CUDA graphs on Windows and the platform compiler elsewhere; a failed
+backend is recorded once and the exact eager path remains active. CPU preparation
+caches sequence index templates,
 gathers entity slabs into reusable buffers and fills metadata in bulk. Two
 pinned buffers and one ordered worker prepare the next fused batch; transfer
 events prevent reads or host-buffer reuse before the copy completes.
@@ -225,7 +228,9 @@ configuration when they are loaded.
 Atomic ZIP replacement couples model, optimizer, counters, curriculum, exploration,
 RNGs, trajectory/entity slabs and collection states. Schema metadata records
 field order, categories, normalization and cap; configuration records dimensions.
-Recovery validates slab dtype, shape and contiguous offsets/counts before reuse. A failed save leaves the previous
+CUDA recovery allocates the proved future projectile bound plus an equal headroom
+for active shots already present in a mid-game snapshot. Recovery validates slab
+dtype, shape and contiguous offsets/counts before reuse. A failed save leaves the previous
 ZIP intact. Resume restores a decision boundary during collection. Fitting
 restores completed updates and recomputes only the uncommitted pass with cleared
 gradients. The network has no stochastic dropout, and fitting does not sample

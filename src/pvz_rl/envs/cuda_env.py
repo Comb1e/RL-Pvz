@@ -10,6 +10,7 @@ import torch
 from gymnasium import spaces
 from pvz_game import Game, Rules
 from pvz_game.config import PLANT_TYPES
+from pvz_game.cuda.backend import projectile_bound
 from pvz_game.cuda.schema import REASONS
 from stable_baselines3.common.vec_env import VecEnv
 
@@ -123,6 +124,11 @@ class CudaVecEnv(VecEnv):
         self.batch = AccountingCudaBatch(
             cfg["training"]["n_envs"],
             zombie_capacity=max(1, *counts),
+            # A mid-game recovery snapshot already owns some projectile slots;
+            # the pinned backend also reserves its full reachable-shot bound for
+            # future simulation.  Allocate both portions up front so resume does
+            # not fail merely because the checkpoint was saved after firing.
+            projectile_capacity=2 * projectile_bound(self.queue.rules),
             max_step_ticks=1,
             diagnostic=False,
         )

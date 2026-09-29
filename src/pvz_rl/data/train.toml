@@ -54,7 +54,7 @@ mower_value = 200.0
 progress_weight = 0.01
 value_scale = 300.0 # Unit conversion, never a sun cap.
 invalid_plant_penalty = 0.003 # Rejected plant proposal, 90 sun-equivalents.
-empty_dig_penalty = 0.0003333333333333333 # Empty dig proposal, 10 sun-equivalents.
+empty_dig_penalty = 0.001 # Empty dig proposal, 30 sun-equivalents.
 
 [training]
 gamma = 1.0
@@ -148,7 +148,7 @@ encoder_token_budget = 65536
 [training.demo]
 passes = 5
 learning_rate = 0.0003
-gradient_clip = 0.5
+gradient_clip = 5
 learner_seed = 101
 time_budget_minutes = 30
 
@@ -173,10 +173,8 @@ backend = "cuda"
 [diagnostics]
 early_dig_seconds = 5
 
-# All runnable profiles share this file. The loader applies these sparse overlays
-# to the base training profile so shared parameters have one source of truth.
-[profiles.demo.reward]
-invalid_plant_penalty = 0.001
+# The demo profile intentionally inherits the same reward settings as training.
+[profiles.demo]
 
 [profiles.gpu_defaults]
 simulator = "cuda"

@@ -1,5 +1,22 @@
 # Iteration history
 
+## 0.31.1 — 2026-09-29
+
+- Problem/root cause: enabling the fixed-shape encoder through the default
+  Windows Inductor path traced PyTorch SDPA's pybind11 capability object, then
+  fell back because the Windows environment has no Triton. The simulator also
+  reserved only the proved future projectile bound, so a mid-game recovery
+  snapshot containing active shots could exceed capacity.
+- Improvement: keep SDPA capability probing out of Dynamo traces, use the
+  available CUDA-graphs compiler on Windows, retain a one-time eager fallback,
+  and allocate current-snapshot plus future projectile headroom. The shared
+  reward table now has one invalid-plant penalty; the demo profile inherits it
+  while preserving `training.demo.gradient_clip = 5`.
+- Verification: direct CUDA forward/backward compilation completed with
+  `compilation_status = compiled` and `compilation_backend = cudagraphs`; no
+  pybind or max-autotune warning was emitted. Ruff, syntax and configuration
+  checks were run without starting training.
+
 ## 0.31.0 — 2026-09-29
 
 - Problem/root cause: recurrent fitting processed only four 256-step sequences

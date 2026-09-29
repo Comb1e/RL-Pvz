@@ -33,6 +33,9 @@ evaluate. That guide also explains checkpoint compatibility and performance sett
 Demonstration initialization stores weights and structural metadata only, so
 `--init-from` always uses the current execution settings from
 `src/pvz_rl/data/train.toml` without requiring `--refresh-performance`.
+With `compile_kernels = true`, the Windows CUDA path captures the fixed-shape
+entity encoder with CUDA graphs and falls back to eager execution once if the
+installed backend cannot compile it.
 
 ## Common checks
 
