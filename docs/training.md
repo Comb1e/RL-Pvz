@@ -167,9 +167,13 @@ timing and device summaries at pass boundaries, checkpointing, interruption or
 shutdown; intermediate progress uses cached host metrics. Fixed-shape encoder
 compilation is optional and records its backend plus `compiled`, `fallback` or
 `unavailable` before reverting to eager execution. The Windows CUDA build uses
-the available `cudagraphs` backend, so it does not trace simulator pybind
-objects or invoke Inductor's max-autotune SM check. Other platforms use
-Inductor when available.
+the `cudagraphs_owned` backend: activations and gradients are copied out of
+reusable graph buffers, preserving them through delayed backward and whole-pass
+accumulation. It does not trace simulator pybind objects or invoke Inductor's
+max-autotune SM check. Other platforms use Inductor when available. A backward
+capture failure records `encoder_compilation`, discards uncommitted gradients
+and retries the pass eagerly at the same precision; optimizer counters advance
+only after a successful pass.
 
 Older entity checkpoints can resume without retraining. To apply the current
 execution defaults while keeping their learning parameters:

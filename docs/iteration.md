@@ -1,5 +1,35 @@
 # Iteration history
 
+## 0.31.2 — 2026-09-29
+
+- Problem/root cause: the Windows CUDA-graphs encoder was replayed for successive
+  entity microbatches while the recurrent loss still held the previous outputs
+  for backward. CUDA-graphs reclaimed that storage, producing an overwritten
+  tensor error and a pending-backward warning at fit startup.
+- Improvement: capture AOT forward/backward separately and copy all outputs
+  into independently owned storage, including saved activations and gradients.
+  Preserve SDPA strides and refresh input weights on every invocation. Backward
+  capture failure restarts the uncommitted pass eagerly at the same precision.
+  CUDA-graphs compilation remains enabled; model shapes and precision are unchanged.
+- Verification: five focused CUDA controls passed: compiled/eager FP32 and BF16
+  output, gradient and update comparisons across empty/mixed/capped observations,
+  partial microbatches and gradient accumulation, plus memory, nonfinite and
+  backward-compilation retries without duplicated optimizer updates. A marker-only
+  repair removed the warning but still produced about 11% gradient error during
+  replay and was discarded. The owned-buffer implementation's BF16 gradient
+  difference against eager measured 0.12–0.14% across four small updates.
+- Device smoke check: three BF16 forward/backward/Adam steps per population on the
+  RTX 4070 Laptop completed with `compiled / cudagraphs_owned` and no warnings.
+  The 4,096-frame/40-entity case took 0.164–0.168 seconds per warmed step with
+  1,730 MiB peak Torch allocation; 256 entities took 0.373–0.376 seconds and
+  4,551 MiB. Initial tracing/capture steps took 1.078/1.194 seconds respectively.
+  A truly empty 32-frame case also passed. These exclude simulation/storage and
+  do not measure learning quality; owned copies add memory overhead. No formal
+  training or full suite was run. Ruff lint, changed-file formatting, syntax and
+  whitespace checks passed. The repository-wide format check flagged an existing
+  assertion layout in `tests/test_demo_initialization.py`; that unrelated file
+  was left unchanged.
+
 ## 0.31.1 — 2026-09-29
 
 - Problem/root cause: enabling the fixed-shape encoder through the default

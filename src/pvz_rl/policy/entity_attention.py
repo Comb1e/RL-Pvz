@@ -160,14 +160,27 @@ class EntityTransformer(nn.Module):
         # The Windows wheel does not ship Triton, so Inductor cannot compile
         # even though CUDA graphs are available.  CUDA graphs still capture
         # the fixed-shape tensor-only encoder and avoid both the pybind11 trace
-        # warning and Inductor's max-autotune SM heuristic.  Keep Inductor as
+        # warning and Inductor's max-autotune SM heuristic. AOT outputs must
+        # outlive replay for the sequence's delayed backward. Keep Inductor as
         # the default on platforms where its compiler toolchain is available.
-        backend = "cudagraphs" if sys.platform == "win32" else "inductor"
-        self._compiled_encode = torch.compile(self._encode, backend=backend, dynamic=False)
+        from pvz_rl.policy.cudagraph_backend import cudagraph_backend
+
+        backend = cudagraph_backend if sys.platform == "win32" else "inductor"
+        self._compiled_encode = torch.compile(
+            self._encode, backend=backend, dynamic=False, fullgraph=True
+        )
         self._compiled_shapes.clear()
-        self.compilation_backend = backend
+        self.compilation_backend = "cudagraphs_owned" if sys.platform == "win32" else backend
         self.compilation_status = "requested"
         self.compilation_error = None
+
+    def disable_compilation(self, exc):
+        """Record one backend failure and retain the exact eager encoder."""
+        self._compiled_encode = None
+        self._compiled_shapes.clear()
+        self.compilation_status = "fallback"
+        detail = str(exc).splitlines()[0] if str(exc) else "backend compilation failed"
+        self.compilation_error = re.sub(r"https?://\S+", "<url>", detail)[:256]
 
     def _encode_with_optional_compile(self, args):
         if self._compiled_encode is None:
@@ -183,13 +196,10 @@ class EntityTransformer(nn.Module):
             self._compiled_shapes[shape] = True
             self.compilation_status = "compiled"
             return value
+        except torch.cuda.OutOfMemoryError:
+            raise
         except Exception as exc:  # backend availability is device/build dependent
-            self._compiled_encode = None
-            self._compiled_shapes.clear()
-            self.compilation_backend = None
-            self.compilation_status = "fallback"
-            detail = str(exc).splitlines()[0] if str(exc) else "backend compilation failed"
-            self.compilation_error = re.sub(r"https?://\S+", "<url>", detail)[:256]
+            self.disable_compilation(exc)
             return self._encode(*args)
 
     def _normalize_tensors(self, entities, entity_mask):

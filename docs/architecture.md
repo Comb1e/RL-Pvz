@@ -185,6 +185,16 @@ gathers entity slabs into reusable buffers and fills metadata in bulk. Two
 pinned buffers and one ordered worker prepare the next fused batch; transfer
 events prevent reads or host-buffer reuse before the copy completes.
 
+The Windows backend captures forward and backward separately. Every output,
+including internal activations saved for backward and returned parameter
+gradients, is copied out of reusable graph storage. Copies retain tensor strides
+and attention alignment. Consequently, replay cannot overwrite a preceding
+microbatch's saved activations or accumulated gradients. Input buffers are
+refreshed on every call, including updated FP32 weights. If backward capture
+fails, the uncommitted pass discards gradients and restarts eagerly without
+changing precision or counting an optimizer update. Allocation failures retain
+the bounded memory fallback above.
+
 CUDA fitting computes entity features, embeddings and auxiliary projections with
 BF16 temporary values. Stored weights, normalization reductions, residual sums,
 LSTM state/computation, Q heads, loss, gradients and Adam state remain FP32.

@@ -1,6 +1,7 @@
 """Entity attention, recurrent causality and action geometry controls."""
 
 import copy
+import warnings
 from dataclasses import replace
 
 import numpy as np
@@ -276,6 +277,70 @@ def test_bf16_features_fp32_core_and_gradient_control(count):
     parameter.grad = torch.ones_like(parameter)
     torch.optim.SGD([parameter], lr=1e-5).step()
     assert torch.all(parameter < 1) and torch.all(parameter.bfloat16() == 1)
+
+
+@pytest.mark.parametrize("precision", ["fp32", "features_bf16"])
+def test_compiled_microbatches_delayed_backward_matches_eager(precision):
+    """Warmup, replay, partial batches and saved activations survive until backward."""
+    cfg = load_config()
+    raw = [observation(cfg, count)[0] for count in (0, 40, 256)]
+    raw[0]["entities"] = raw[0]["entities"][:0]
+    raw[0]["globals"][-4:] = 0
+    batch = collate_observations((raw * 12)[:34], "cuda")
+    torch.manual_seed(101)
+    eager = TransformerLSTMPolicy(cfg).cuda().train()
+    compiled = TransformerLSTMPolicy(cfg).cuda().train()
+    compiled.load_state_dict(eager.state_dict())
+    for model in (eager, compiled):
+        model.entity.microbatch = 4
+    compiled.entity.enable_compilation()
+    states = [None, None]
+    optimizers = [torch.optim.SGD(model.parameters(), lr=1e-3) for model in (eager, compiled)]
+    observations = batch.reshape(2, 17)
+    previous = torch.arange(34, device="cuda").reshape(2, 17)
+    outcomes = torch.ones(2, 17, 2, device="cuda")
+    with warnings.catch_warnings(record=True) as seen:
+        for iteration in range(4):
+            observations.globals[..., 0] = iteration / 10
+            results = []
+            for index, model in enumerate((eager, compiled)):
+                with model.fitting_precision(precision):
+                    q, tiles, context, state = model.forward_sequence(
+                        observations,
+                        states[index],
+                        previous_actions=previous,
+                        execution_outcomes=outcomes,
+                        return_context=True,
+                    )
+                    values = model.tile_values(
+                        tiles.flatten(0, 1), context.flatten(0, 1), previous.flatten() % 9 + 1
+                    )
+                    loss = (q - 0.3).square().mean() + (values + 0.2).square().mean()
+                    loss.backward()
+                states[index] = state.detach()
+                results.append(
+                    (q.detach(), values.detach(), state.hidden.detach(), state.cell.detach())
+                )
+            for left, right in zip(*results):
+                # AOT BF16 backward rounds a few reductions differently. After
+                # weight updates a tiny master-weight difference can cross a
+                # BF16 rounding boundary; use the existing feature tolerance.
+                atol, rtol = (0.002, 0.01) if precision == "features_bf16" else (2e-5, 2e-4)
+                torch.testing.assert_close(left, right, atol=atol, rtol=rtol)
+            left = torch.cat([p.grad.flatten() for p in eager.parameters()])
+            right = torch.cat([p.grad.flatten() for p in compiled.parameters()])
+            assert torch.isfinite(right).all()
+            assert torch.linalg.vector_norm(left - right) / torch.linalg.vector_norm(left) < 0.002
+            if iteration % 2:
+                # Keep gradients across fitting chunks and commit only at the
+                # pass boundary, as the actual complete-return learner does.
+                for optimizer in optimizers:
+                    optimizer.step()
+                    optimizer.zero_grad(set_to_none=True)
+            for left, right in zip(eager.parameters(), compiled.parameters()):
+                torch.testing.assert_close(left, right, atol=2e-6, rtol=2e-5)
+    assert compiled.entity.compilation_status == "compiled", compiled.entity.compilation_error
+    assert not any("CUDAGraph" in str(w.message) for w in seen)
 
 
 def test_fp32_batching_attention_gradients_and_update_match_reference():

@@ -87,6 +87,12 @@ notes are recoverable with `git show 4052968:docs/references.md`.
 - [PyTorch `torch.compile` documentation](https://pytorch.org/docs/stable/torch.compiler.html):
   fixed-shape encoder compilation with a bounded eager fallback. The recurrent
   loop and ragged storage remain outside the compiled region.
+- [PyTorch 2.8 CUDA-graphs backend](https://github.com/pytorch/pytorch/blob/v2.8.0/torch/_dynamo/backends/cudagraphs.py):
+  inspected AOT forward/backward compilation and `cudagraphs_inner`'s static
+  input copies, side-stream warmup and output cloning. The local backend extends
+  ownership to every saved activation and returned gradient, retaining exact
+  strides for SDPA and copying updated weights before replay. It does not use
+  CUDA-graph tree lifetime inference for delayed recurrent backward.
 - [PyTorch LSTM documentation](https://pytorch.org/docs/stable/generated/torch.nn.LSTM.html):
   independent sequence batching with one hidden/cell state per sequence. Fused
   groups preserve chronological order and reset boundaries inside each slot.

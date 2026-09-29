@@ -34,8 +34,11 @@
 - `policy/entity_attention.py` owns shared embeddings, readout tokens, padding masks,
   full efficient attention, exact query fallback and optional outer checkpointing.
   Fixed-shape compilation uses CUDA graphs on Windows and records a one-time eager
-  fallback when unavailable; the compiled path stays tensor-only so simulator
-  pybind objects are never traced. Fitting uses BF16 temporary features with FP32
+  fallback when unavailable. `policy/cudagraph_backend.py` captures AOT forward/backward
+  separately and copies their outputs, including saved activations and gradients,
+  out of graph storage with SDPA strides intact. A backward capture failure restarts
+  the uncommitted pass eagerly. The compiled path stays tensor-only so simulator pybind
+  objects are never traced. Fitting uses BF16 temporary features with FP32
   master weights, LSTM and Q heads. `transformer_lstm.py`
   owns LSTM and Q heads; `recurrent_policy.py` adapts the training lifecycle.
   `sequential_q.py` keeps all ten branches greedy, independent of sun/cooldown;

@@ -10,6 +10,7 @@ from pvz_rl.learning.cohort import CohortPhase
 from pvz_rl.learning.cuda_q import CudaCohortLifecycle
 from pvz_rl.learning.host_transfer import HostTransfer
 from pvz_rl.learning.sequence_transport import SequencePrefetch, sequence_rows
+from pvz_rl.policy.cudagraph_backend import EncoderCompilationError
 from pvz_rl.policy.runner import PolicyRunner
 from pvz_rl.policy.sequential_q import action_parts, balanced_q_loss
 
@@ -252,10 +253,20 @@ class CudaRecurrentQ(CudaCohortLifecycle):
             if self.execution_state["precision"] == "fp32":
                 raise
             retry = "nonfinite_bf16"
+        except EncoderCompilationError as exc:
+            if (
+                self._optimizer_committing
+                or "encoder_compilation" in self.execution_state["fallbacks"]
+            ):
+                raise
+            self.policy.entity.disable_compilation(exc)
+            retry = "encoder_compilation"
         # Retry outside the exception frame, after failed activation graphs are released.
         if retry:
             if retry == "nonfinite_bf16":
                 self.execution_state["precision"] = "fp32"
+            elif retry == "encoder_compilation":
+                pass  # Replay the uncommitted pass eagerly with the same precision.
             elif self.execution_state["microbatch"] > 16:
                 self.execution_state["microbatch"] = max(
                     16, self.execution_state["microbatch"] // 2

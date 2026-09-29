@@ -557,7 +557,7 @@ def test_performance_refresh_keeps_learning_settings_and_old_precision():
     assert resume_protocol(new, "masked") == resume_protocol(normalized, "masked")
 
 
-@pytest.mark.parametrize("fault", ["nonfinite", "memory"])
+@pytest.mark.parametrize("fault", ["nonfinite", "memory", "compilation"])
 def test_failed_pass_restarts_without_skipping_updates(tmp_path, monkeypatch, fault):
     cfg = load_config()
     cfg["training"].update(n_envs=1, n_epochs=2, batch_size=256)
@@ -583,7 +583,14 @@ def test_failed_pass_restarts_without_skipping_updates(tmp_path, monkeypatch, fa
         if len(attempts) == 1 and fault == "memory":
             raise torch.cuda.OutOfMemoryError("injected allocation failure")
         output = original(*args, **kwargs)
-        if len(attempts) == 1:
+        if len(attempts) == 1 and fault == "compilation":
+            from pvz_rl.policy.cudagraph_backend import EncoderCompilationError
+
+            def fail_backward(gradient):
+                raise EncoderCompilationError("injected backward capture failure")
+
+            output[0].register_hook(fail_backward)
+        elif len(attempts) == 1:
             output = (output[0] * float("nan"), *output[1:])
         return output
 
@@ -591,12 +598,21 @@ def test_failed_pass_restarts_without_skipping_updates(tmp_path, monkeypatch, fa
     try:
         for _ in range(15):
             model._fit_step(Stop())
+            if fault == "compilation" and len(attempts) == 1:
+                assert model._fit_epoch == model._stats["q_optimizer_steps"] == 0
+                assert model.policy.entity.compilation_status == "fallback"
+                assert model.policy.entity._compiled_encode is None
+                assert all(p.grad is None for p in model.policy.parameters())
             if model._fit_epoch == 2:
                 break
         assert model._fit_epoch == model._stats["q_optimizer_steps"] == 2
         assert len(attempts) == 3
         assert model.execution_state["fallbacks"] == [
-            "nonfinite_bf16" if fault == "nonfinite" else "memory"
+            {
+                "nonfinite": "nonfinite_bf16",
+                "memory": "memory",
+                "compilation": "encoder_compilation",
+            }[fault]
         ]
         assert attempts[1:] == (["fp32"] * 2 if fault == "nonfinite" else ["features_bf16"] * 2)
         assert model.execution_state["microbatch"] == (64 if fault == "memory" else 128)

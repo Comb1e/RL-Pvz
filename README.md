@@ -35,7 +35,8 @@ Demonstration initialization stores weights and structural metadata only, so
 `src/pvz_rl/data/train.toml` without requiring `--refresh-performance`.
 With `compile_kernels = true`, the Windows CUDA path captures the fixed-shape
 entity encoder with CUDA graphs and falls back to eager execution once if the
-installed backend cannot compile it.
+installed backend cannot compile it. Captured activations and gradients are copied
+out of reusable graph storage before recurrent fitting consumes them.
 
 ## Common checks
 
