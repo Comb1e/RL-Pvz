@@ -4,6 +4,24 @@ from functools import lru_cache
 
 from pvz_game import Dig, Observation, Place, Rules, Status
 
+# Public facts in the reward ledger are independent of configurable reward prices.
+REWARD_FACT_FIELDS = (
+    "plant_kills",
+    "mower_kills",
+    "nonlethal_health_damage",
+    "nonlethal_damage_fraction",
+    "empty_mower_activations",
+    "mower_activations",
+    "mower_activation_sun",
+    "wall_nut_damage",
+    "wall_nut_damage_fraction",
+    "empty_explosions",
+    "sky_income",
+    "produced_sun",
+    "effective_damage",
+    "plant_value_loss",
+)
+
 # Combat diagnostics and additive accounting components share one reporting schema.
 REWARD_METRICS = (
     "plant_kills",

@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import math
 import time
+from dataclasses import dataclass
 from pathlib import Path
 
 import torch
@@ -13,14 +14,14 @@ from pvz_game.replay import decode_action, read_recording
 
 from pvz_rl.config import digest, load_demo_config
 from pvz_rl.envs.action_timing import ActionPhaseGame
-from pvz_rl.envs.actions import ActionCodec
+from pvz_rl.envs.actions import ActionCodec, ActionSchema
 from pvz_rl.envs.encoding import (
     ObservationEncoder,
     collate_observations,
     observation_json,
     observations_equal,
 )
-from pvz_rl.envs.rewards import reward_parts
+from pvz_rl.envs.rewards import REWARD_FACT_FIELDS, reward_parts
 from pvz_rl.learning.checkpoints import DEMO_PROTOCOL as CHECKPOINT_PROTOCOL
 from pvz_rl.learning.checkpoints import STATE_PROTOCOL as RECURRENT_STORAGE_PROTOCOL
 from pvz_rl.learning.performance import without_performance
@@ -30,10 +31,65 @@ from pvz_rl.presentation.recordings import open_playback, verify_replay
 from pvz_rl.provenance import file_hash, write_json
 
 
-def _verify_action_order(archive_path: Path, replay_path: Path, cfg: dict) -> dict:
-    archive_rows = [
-        json.loads(line) for line in archive_path.read_text(encoding="utf-8").splitlines() if line
-    ]
+@dataclass
+class VerifiedDemo:
+    report: dict
+    transitions: list[dict]
+
+
+def _verify_reward_facts(row: dict, reconstructed: dict) -> None:
+    """Validate historical facts/accounting, never historical reward coefficients."""
+    saved = row.get("reward_parts")
+    error = f"reward ledger mismatch at decision {row['decision_index']}"
+    if (
+        not isinstance(saved, dict)
+        or saved.keys() != reconstructed.keys()
+        or any(
+            type(value) not in (int, float) or not math.isfinite(value) for value in saved.values()
+        )
+        or any(saved[key] != reconstructed[key] for key in REWARD_FACT_FIELDS)
+    ):
+        raise ValueError(error)
+    # Even old v2 archives without their reward configuration can verify these
+    # identities. Historical prices are diagnostics; only replay rewards train.
+    total = (
+        saved["terminal"]
+        + saved["development"]
+        + saved["invalid_plant_penalty"]
+        + saved["empty_dig_penalty"]
+    )
+    net = (
+        saved["produced_sun"]
+        - saved["plant_value_loss"]
+        + saved["combat_value"]
+        - saved["mower_expenditure"]
+    )
+    if not math.isclose(saved["total"], total, rel_tol=1e-12, abs_tol=1e-12) or not math.isclose(
+        saved["net_value"], net, rel_tol=1e-12, abs_tol=1e-12
+    ):
+        raise ValueError(error)
+    invalid_plant = not row["accepted"] and 0 < row["action"] < ActionSchema.dig_start
+    empty_dig = (
+        not row["accepted"]
+        and row["action"] >= ActionSchema.dig_start
+        and row["rejection_reason"] == "empty_tile"
+    )
+    for key, applicable in (
+        ("invalid_plant_penalty", invalid_plant),
+        ("empty_dig_penalty", empty_dig),
+    ):
+        if saved[key] > 0 or (not applicable and saved[key] != 0):
+            raise ValueError(error)
+    terminal = saved["terminal"]
+    if (
+        (row["terminal"] == "running" and terminal != 0)
+        or (row["terminal"] == "won" and terminal < 0)
+        or (row["terminal"] == "lost" and terminal > 0)
+    ):
+        raise ValueError(error)
+
+
+def _verify_action_order(archive_rows: list[dict], replay_path: Path, cfg: dict) -> dict:
     transitions = [row for row in archive_rows if row.get("record_type") == "transition"]
     open_playback(replay_path)
     data = read_recording(replay_path)
@@ -79,6 +135,8 @@ def _verify_action_order(archive_path: Path, replay_path: Path, cfg: dict) -> di
             raise ValueError("native replay state hash mismatch")
     if len(native_actions) != len(transitions):
         raise ValueError("archive and replay decision counts differ")
+    reward_changes = 0
+    recorded_total = recomputed_total = 0.0
     for row, action, obs, outcome, reward, terminal, omitted in zip(
         transitions,
         native_actions,
@@ -106,8 +164,14 @@ def _verify_action_order(archive_path: Path, replay_path: Path, cfg: dict) -> di
             row["ticks_advanced"],
         ) != outcome:
             raise ValueError(f"action outcome mismatch at decision {row['decision_index']}")
-        if row["reward_parts"] != reward or row["terminal"] != terminal:
-            raise ValueError(f"reward or terminal mismatch at decision {row['decision_index']}")
+        if row["terminal"] != terminal:
+            raise ValueError(f"terminal mismatch at decision {row['decision_index']}")
+        _verify_reward_facts(row, reward)
+        reward_changes += row["reward_parts"] != reward
+        recorded_total += row["reward_parts"]["total"]
+        recomputed_total += reward["total"]
+        # Replace only the in-memory fitting data, never the user's recording.
+        row["reward_parts"] = reward
     final_rows = [row for row in archive_rows if row.get("record_type") == "final_observation"]
     if final_rows:
         final = observation_json(encoder.encode(game.observe()))
@@ -119,10 +183,21 @@ def _verify_action_order(archive_path: Path, replay_path: Path, cfg: dict) -> di
         "state_hash": game.state_hash(),
         "outcome": game.observe().status.value,
         "observations_reconstructed": True,
+        "rewards_recomputed": True,
+        "reward_changes": reward_changes,
+        "recorded_reward_total": recorded_total,
+        "recomputed_reward_total": recomputed_total,
+        "reward_settings": dict(cfg["reward"]),
     }
 
 
 def verify_demo(archive: str | Path, replay: str | Path, cfg: dict | None = None) -> dict:
+    return _load_verified_demo(archive, replay, cfg).report
+
+
+def _load_verified_demo(
+    archive: str | Path, replay: str | Path, cfg: dict | None = None
+) -> VerifiedDemo:
     cfg = cfg or load_demo_config()
     archive, replay = Path(archive), Path(replay)
     manifest_path = archive.with_suffix(archive.suffix + ".manifest.json")
@@ -135,7 +210,7 @@ def verify_demo(archive: str | Path, replay: str | Path, cfg: dict | None = None
         raise ValueError(
             "Unsupported demonstration archive protocol; record a fresh entity_v1 demonstration"
         )
-    # Optimizer settings are not recording inputs. Validate the pinned engine,
+    # Learning settings are not recording inputs. Validate the pinned engine,
     # schema and native replay facts instead of the complete configuration hash.
     if manifest.get("engine") != {
         "commit": cfg["engine_commit"],
@@ -170,7 +245,7 @@ def verify_demo(archive: str | Path, replay: str | Path, cfg: dict | None = None
         "outcome": manifest.get("outcome"),
     }
     replay_check = verify_replay(replay)
-    order = _verify_action_order(archive, replay, cfg)
+    order = _verify_action_order(rows, replay, cfg)
     if archive_check["outcome"] not in ("won", "lost") or order["outcome"] not in ("won", "lost"):
         raise ValueError("initialization requires a completed won or lost demonstration")
     if (
@@ -179,18 +254,18 @@ def verify_demo(archive: str | Path, replay: str | Path, cfg: dict | None = None
         or finals[0].get("tick") != replay_check.observe().tick
     ):
         raise ValueError("archive and replay completion do not match")
-    return {
+    report = {
         "protocol": CHECKPOINT_PROTOCOL,
         "archive": archive_check,
         "replay": replay_check.state_hash(),
         "reconstruction": order,
         "verified": archive_check["complete"] and order["observations_reconstructed"],
     }
+    return VerifiedDemo(report, transitions)
 
 
-def _training_tensors(archive: Path, cfg: dict):
-    rows = [json.loads(line) for line in archive.read_text(encoding="utf-8").splitlines() if line]
-    rows = [row for row in rows if row.get("record_type") == "transition"]
+def _training_tensors(demonstration: VerifiedDemo):
+    rows = demonstration.transitions
     if not rows:
         raise ValueError("demonstration archive contains no transitions")
     observations = [row["observation"] for row in rows]
@@ -198,7 +273,7 @@ def _training_tensors(archive: Path, cfg: dict):
     returns = torch.zeros(len(rows), dtype=torch.float32)
     running = 0.0
     for i in range(len(rows) - 1, -1, -1):
-        running += float(rows[i]["reward_parts"].get("total", 0.0))
+        running += float(rows[i]["reward_parts"]["total"])
         returns[i] = running
     previous = torch.zeros_like(actions)
     outcomes = torch.zeros(len(rows), 2, dtype=torch.float32)
@@ -225,7 +300,8 @@ def initialize_demo(
 ) -> dict:
     """Fit one complete game and publish a checkpoint only after whole passes."""
     cfg = cfg or load_demo_config()
-    verification = verify_demo(archive, replay, cfg)
+    demonstration = _load_verified_demo(archive, replay, cfg)
+    verification = demonstration.report
     if not verification["verified"]:
         raise ValueError("demonstration verification did not complete")
     settings = cfg["training"].get("demo", {})
@@ -249,7 +325,7 @@ def initialize_demo(
     torch.manual_seed(seed)
     model = TransformerLSTMPolicy(cfg).to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
-    observations, actions, previous, outcomes, returns = _training_tensors(Path(archive), cfg)
+    observations, actions, previous, outcomes, returns = _training_tensors(demonstration)
     actions = actions.to(device)
     previous, outcomes, returns = previous.to(device), outcomes.to(device), returns.to(device)
     chunk = int(cfg["policy"].get("chunk_length", 256))

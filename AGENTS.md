@@ -65,7 +65,11 @@
   host boundary. Fitting retries whole uncommitted passes on BF16/memory failure.
   Curriculum stages are easy, standard, shared.
 - `presentation/demo_recording.py` records structured v2 archives and compact viewer
-  history; `learning/demo_initialization.py` verifies and fits only fresh archives.
+  history; `learning/demo_initialization.py` reconstructs replay facts, checks the
+  archived ledger's facts/arithmetic, and recomputes rewards with current settings.
+  Its verified in-memory transitions are the sole source of demonstration returns;
+  historical reward prices never supervise fitting or rewrite the user's archive.
+  `envs/rewards.py` declares which ledger fields are configuration-independent facts.
   `action_journal.py` retains actual Q values, proposal/execution and entity omissions;
   `live_layout.py` owns paging and F follow-latest. Presentation never feeds the model.
   `live_view.py` snapshots effective learning settings once from the environment's

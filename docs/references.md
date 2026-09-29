@@ -18,6 +18,11 @@ notes are recoverable with `git show 4052968:docs/references.md`.
 - [AlphaStar Unplugged](https://arxiv.org/abs/2308.03526): inspected offline
   demonstration and return-learning motivation. The local one-game initialization
   does not reproduce its dataset, algorithm or generalization evidence.
+- [SB3 2.7.0 HER replay buffer](https://github.com/DLR-RM/stable-baselines3/blob/v2.7.0/stable_baselines3/her/her_replay_buffer.py):
+  inspected reward recomputation through the environment reward function before
+  tensor conversion. Demonstration reuse applies that separation to verified
+  replay observations/events and current reward coefficients; it does not use
+  hindsight goals or the HER algorithm.
 - Hausknecht and Stone, [Deep Recurrent Q-Learning](https://arxiv.org/abs/1507.06527):
   abstract inspected for memory under partial observation. The local objective
   uses complete returns, with no bootstrapped DQN targets or claimed recurrence advantage.

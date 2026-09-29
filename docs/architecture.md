@@ -130,7 +130,25 @@ Initialization rejects missing manifests, unsupported protocols, replay-hash or
 engine/schema mismatches, incomplete episodes and reconstruction differences. Only entity-v1
 archives and weights are accepted; earlier archives require a new recording.
 Verification compares recorded facts rather than the full configuration digest;
-changing optimizer settings does not invalidate a recording.
+changing optimizer or reward settings does not invalidate a recording. The loader
+checks public reward facts and ledger arithmetic against replay, then replaces
+rewards in its in-memory transitions using the current configuration. Both
+verification and fitting share this loader; fitting consumes the verified data
+without rereading historical reward totals from disk. The verification report
+records the current reward settings, changed decision count and old/new totals.
+Historical prices cannot be authenticated from old archives' configuration hashes;
+they never become fitting targets. Observation, outcome, terminal and replay-hash
+checks remain exact, and recording files remain unchanged.
+
+```mermaid
+flowchart LR
+    Archive[Archive and pinned replay] --> Verify[Verify public facts and ledger arithmetic]
+    Verify --> Price[Recompute rewards from replay events]
+    Config[Current reward settings] --> Price
+    Price --> Returns[Verified transitions and complete returns]
+    Returns --> Fit[Whole-pass demonstration fit]
+```
+
 The generated `initialization.pt` stores weights and source metadata; it omits
 encoder batching and performance settings. Fresh `--init-from` resolves the
 current configuration before weight transfer. Source learning/reward metadata

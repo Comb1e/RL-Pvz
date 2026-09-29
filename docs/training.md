@@ -21,15 +21,21 @@ archive and sidecar paths. Pause retains queued actions; restart and stage
 switching are disabled. Closing early leaves an incomplete recording.
 
 Initialization checks the manifest, native replay hash, every observation,
-proposed action, acceptance result, duration, reward and terminal state before
-fitting. Missing manifests, unsupported protocols, engine/schema mismatches and
-reconstruction failures have separate errors. Optimizer settings and the retired
-demo clipping field do not affect recording verification; replay rewards must
-still match the recording configuration.
+proposed action, acceptance result, duration and terminal state before fitting.
+It verifies the archived reward ledger's public facts and accounting identities,
+then recomputes every reward from replay observations/events using current reward
+settings. Complete returns use these recomputed rewards. Archived reward prices
+are historical diagnostics; changing penalties, terminal rewards or development
+weights does not require rerecording. The archive/replay stay unchanged, and
+`replay-verification.json` reports changed reward counts and old/new totals.
+Missing manifests, unsupported protocols, engine/schema mismatches and
+reconstruction failures remain errors. Optimizer settings and the retired demo
+clipping field do not affect recording verification.
 Old model weights and aggregate-observation archives require fresh initialization;
 there is no migration. Existing run files and recordings remain on disk.
 
-Use the recording's `--config` when it was customized. `--device cpu` is the
+Preserve the recording's input/action schema when using `--config`; learning and
+reward settings may change. `--device cpu` is the
 initialization default; `--device cuda` changes execution without changing archive
 verification. `--passes`, `--learning-rate` and `--seed` override fitting settings.
 Both fitting paths read the single `training.max_grad_norm` limit (5 by default);

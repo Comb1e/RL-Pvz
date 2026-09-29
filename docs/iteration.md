@@ -1,5 +1,30 @@
 # Iteration history
 
+## 0.31.5 — 2026-09-29
+
+- Problem/root cause: initialization compared historical reward prices against
+  current TOML, then would have fitted archived totals. The human recording's
+  decision 4930 rejected a recharging plant at the old penalty of 0.001; the
+  current 0.003 penalty incorrectly triggered a reconstruction failure.
+- Improvement: verify native replay hashes, observations, actions, outcomes,
+  terminal states and configuration-independent reward facts. Check historical
+  ledger arithmetic, finite values and penalty applicability, then recompute
+  rewards through the shared reward function using current coefficients. Fitting
+  consumes the verified in-memory transitions, so it cannot reread old targets.
+  Keep original files unchanged and report reward changes/settings in verification
+  metadata. No model, precision, dependency or user parameter changes.
+- Verification: 26 focused checks passed for unchanged/changed rewards, independent
+  returns, rejected plant/dig and terminal boundaries, corruption and CLI config.
+  One additional tiny complete-pass CUDA initialization/reload check passed.
+  The user's complete 15,372-decision recording verified with exactly one repriced
+  reward; decision 4930 now costs -0.003 and next feedback remains `(0, 0, 1)`.
+  SHA-256 checks confirmed archive, replay and manifest stayed unchanged. Ruff
+  lint/format and Git whitespace checks passed. No full suite or formal training.
+- Remaining limits: old archives store a configuration digest without original
+  reward coefficients, so historical prices cannot be authenticated. Replay facts
+  and accounting remain validated; those prices never train the model. Pinned
+  engine and observation/action compatibility requirements remain in force.
+
 ## 0.31.4 — 2026-09-29
 
 - Problem/root cause: demo and autonomous fitting read separate clipping limits.

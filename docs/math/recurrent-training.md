@@ -93,6 +93,10 @@ and implementation controls, not evidence of learning quality.
 
 Demonstration controls independently average wait/plant/dig errors over a
 five-decision, three-chunk episode and compare the published loss. Replay
-verification checks observation, action, outcome, reward and terminal reconstruction;
-manifest identity, count and hash must agree. Failed writes preserve the previous
+verification checks observation, action, outcome, public reward facts and terminal
+reconstruction; manifest identity, count and hash must agree. Initialization
+recomputes rewards from native replay observations/events using current coefficients
+before summing returns. Independent controls check asset losses of 50 and 100 sun,
+new rejection prices on a terminal tick, and changed win/loss rewards. Historical
+ledger prices never supply targets. Failed writes preserve the previous
 completed pass. Recording and verification commands are in [training](../training.md).
