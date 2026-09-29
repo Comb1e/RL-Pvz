@@ -102,10 +102,17 @@ The cap loses individual information above the limit. See
 [entity fields, normalization and attention](math/entity-inputs.md).
 
 `training.storage.ram_gib` covers ragged trajectory slabs and pinned staging;
-excess slabs spill to disk. Encoder microbatch size (64), token budget (32,768)
-and fallback query chunk size (64) live under `policy`. Allocation retries
-reduce only encoder work size and then enable checkpointing; they never shrink
-the entity cap or recurrent sequence. Exhausted retries fail explicitly.
+excess slabs spill to disk. The current execution profile uses an encoder
+microbatch of 128 observations, a 65,536-token budget and a fallback query
+chunk size of 64 under `policy`. Allocation retries reduce only encoder work
+size (128 → 64 → 32 → 16) and then enable one outer checkpoint; they never
+shrink the entity cap or recurrent sequence. Exhausted retries fail explicitly.
+
+Fitting groups four independent learning batches for execution only
+(`training.performance.fit_sequence_groups = 4`). Each group keeps complete
+256-step sequences and separate recurrent states, so chronological order,
+loss normalization and the single whole-pass optimizer update are unchanged.
+Partial groups and inactive environment slots are masked.
 
 For a short device comparison of entity caps:
 
@@ -155,7 +162,11 @@ Two pinned staging buffers use the same `training.storage.ram_gib` allowance as
 trajectory slabs, spilling resident slabs when necessary. `training.performance.prefetch`
 controls ordered preparation/transfer overlap. Telemetry reports preparation,
 transfer wait/device time, fitting, and optimizer time separately; overlapped
-phase durations must not be added to infer wall time.
+phase durations must not be added to infer wall time. Fitting synchronizes
+timing and device summaries at pass boundaries, checkpointing, interruption or
+shutdown; intermediate progress uses cached host metrics. Fixed-shape encoder
+compilation is optional and records either `compiled`, `fallback` or
+`unavailable` before reverting to eager execution.
 
 Older entity checkpoints can resume without retraining. To apply the current
 execution defaults while keeping their learning parameters:

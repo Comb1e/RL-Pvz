@@ -167,14 +167,20 @@ actions, current outcomes, omission counts, rewards and boundaries remain explic
 Only recovery state stores private simulator snapshots and scenario RNGs.
 
 Fitting visits episodes chronologically from zero recurrent state each pass.
-The default 1,024-decision budget batches four 256-decision chunks. Short episodes
-are padded; padding contributes no target or loss. Carried state is detached at
-chunk boundaries. Encoder work uses at most 64 observations and a 32,768-token
-budget. Full-sequence SDPA selects the available efficient backend; an exact
-64-query fallback attends to all keys. CPU preparation gathers entity slabs in
-bulk into two pinned buffers, charged against the shared RAM budget. One ordered
-worker and a CUDA transfer stream prepare the next chunk; events prevent reads
-or host-buffer reuse before the copy completes.
+The learning batch remains 1,024 decisions and each recurrent boundary remains
+256 decisions, but the execution path groups four independent batches into a
+single 4,096-decision transfer and forward/backward call when the environment
+count permits. State is reset between slot groups, so no episode can observe
+another episode's hidden state. Short episodes are padded; padding contributes
+no target or loss. Encoder work uses at most 128 observations and a 65,536-token
+budget. Allocation fallback lowers the encoder microbatch to 64, 32 and 16,
+then enables one outer checkpoint without dropping entities.
+
+Full-sequence SDPA selects the available efficient backend; an exact 64-query
+fallback attends to all keys. CPU preparation caches sequence index templates,
+gathers entity slabs into reusable buffers and fills metadata in bulk. Two
+pinned buffers and one ordered worker prepare the next fused batch; transfer
+events prevent reads or host-buffer reuse before the copy completes.
 
 CUDA fitting computes entity features, embeddings and auxiliary projections with
 BF16 temporary values. Stored weights, normalization reductions, residual sums,
@@ -187,8 +193,8 @@ objective.
 Each pass is an uncommitted transaction until finite gradients are clipped and
 Adam updates once. Nonfinite BF16 computation discards the pass and retries in
 FP32, retained for the rest of the cohort. An FP32 failure stops before updating.
-Allocation failures restart with encoder microbatches 64, 32, then 16; the final
-fallback enables one outer encoder checkpoint. Exhaustion fails explicitly;
+CUDA timing records one fitting event per pass instead of one event per chunk;
+intermediate progress uses cached metrics and does not drain the device. Exhaustion fails explicitly;
 entity caps and recurrent sequence lengths never shrink. Equal weighting of nonempty wait/plant/dig groups is computed
 across the entire cohort. Every pass accumulates chunk gradients before one
 clipped Adam update; four passes are the default. Collection states are never

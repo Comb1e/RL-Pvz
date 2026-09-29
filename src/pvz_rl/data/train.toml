@@ -90,6 +90,7 @@ compile_kernels = true
 telemetry = true
 fit_precision = "features_bf16"
 prefetch = true
+fit_sequence_groups = 4
 
 [curriculum]
 mode = "teaching"
@@ -140,9 +141,9 @@ lstm_hidden = 256
 action_embedding = 32
 outcome_width = 16
 chunk_length = 256
-encoder_microbatch = 64
+encoder_microbatch = 128
 attention_query_chunk = 64
-encoder_token_budget = 32768
+encoder_token_budget = 65536
 
 [training.demo]
 passes = 5

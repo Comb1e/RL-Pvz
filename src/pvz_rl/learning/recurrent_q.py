@@ -172,10 +172,13 @@ class CudaRecurrentQ(CudaCohortLifecycle):
 
     def _reset_execution(self):
         precision = self.cfg["training"].get("performance", {}).get("fit_precision", "fp32")
+        performance = self.cfg["training"].get("performance", {})
         self.execution_state = dict(
             requested_precision=precision,
             precision=precision,
             microbatch=self.cfg["policy"]["encoder_microbatch"],
+            token_budget=self.cfg["policy"]["encoder_token_budget"],
+            fit_sequence_groups=performance.get("fit_sequence_groups", 1),
             checkpointing=False,
             fallbacks=[],
         )
@@ -184,6 +187,8 @@ class CudaRecurrentQ(CudaCohortLifecycle):
         self._device_seconds = getattr(self, "_device_seconds", 0.0)
         self._optimizer_seconds = 0.0
         self._last_metrics_at = 0.0
+        self._cached_metrics = (None, None, None)
+        self._fit_pass_start = None
 
     def configure_execution(self, cfg):
         """Apply only approved execution settings to a resumed model."""
@@ -197,6 +202,10 @@ class CudaRecurrentQ(CudaCohortLifecycle):
             getattr(self, "execution_state", {}).get("requested_precision")
             != cfg["training"]["performance"].get("fit_precision", "fp32")
             or previous["policy"]["encoder_microbatch"] != cfg["policy"]["encoder_microbatch"]
+            or previous["policy"]["encoder_token_budget"]
+            != cfg["policy"]["encoder_token_budget"]
+            or previous["training"].get("performance", {}).get("fit_sequence_groups", 1)
+            != cfg["training"].get("performance", {}).get("fit_sequence_groups", 1)
         ):
             self._reset_execution()
         self.policy.entity.token_budget = cfg["policy"]["encoder_token_budget"]
@@ -228,12 +237,11 @@ class CudaRecurrentQ(CudaCohortLifecycle):
         self._close_sequences()
         self.policy.optimizer.zero_grad(set_to_none=True)
         self.execution_state["fallbacks"].append(reason)
+        self._fit_pass_start = None
         self._drain()
 
     def _fit_step(self, callback):
         self._optimizer_committing = False
-        start, end = torch.cuda.Event(enable_timing=True), torch.cuda.Event(enable_timing=True)
-        start.record()
         retry = None
         try:
             self._fit_chunk(callback)
@@ -245,9 +253,6 @@ class CudaRecurrentQ(CudaCohortLifecycle):
             if self.execution_state["precision"] == "fp32":
                 raise
             retry = "nonfinite_bf16"
-        finally:
-            end.record()
-            self._device_events.append((start, end))
         # Retry outside the exception frame, after failed activation graphs are released.
         if retry:
             if retry == "nonfinite_bf16":
@@ -277,8 +282,14 @@ class CudaRecurrentQ(CudaCohortLifecycle):
         self._sequence_state = None
         self._pass_metrics = torch.zeros(5, device=self.device, dtype=torch.float64)
         self.policy.entity.microbatch = self.execution_state["microbatch"]
+        self.policy.entity.token_budget = self.execution_state["token_budget"]
         self.policy.entity.activation_checkpointing = self.execution_state["checkpointing"]
-        args = self._buffer, self.cfg["policy"]["chunk_length"], self.batch_size
+        chunk_length = self.cfg["policy"]["chunk_length"]
+        groups = self.execution_state["fit_sequence_groups"]
+        fit_batch_size = min(self.batch_size * groups, self.n_envs * chunk_length)
+        args = self._buffer, chunk_length, fit_batch_size
+        self._fit_pass_start = torch.cuda.Event(enable_timing=True)
+        self._fit_pass_start.record()
         if self.cfg["training"].get("performance", {}).get("prefetch", False):
             try:
                 self._sequence_iterator = SequencePrefetch(
@@ -289,12 +300,20 @@ class CudaRecurrentQ(CudaCohortLifecycle):
         else:
             self._sequence_iterator = iter(sequence_batches(*args))
 
-    def _publish_fit_metrics(self):
-        self._drain()
-        loss, branch_sum, branch_n, tile_sum, tile_n = self._pass_metrics.cpu().tolist()
+    def _publish_fit_metrics(self, *, final=False):
+        if final:
+            loss, branch_sum, branch_n, tile_sum, tile_n = self._pass_metrics.cpu().tolist()
+            self._cached_metrics = (
+                loss,
+                branch_sum / branch_n if branch_n else None,
+                tile_sum / tile_n if tile_n else None,
+            )
+            _, branch_loss, tile_loss = self._cached_metrics
+        else:
+            loss, branch_loss, tile_loss = self._cached_metrics
         self.logger.record("train/q_loss", loss)
-        self.logger.record("train/branch_loss", branch_sum / branch_n if branch_n else None)
-        self.logger.record("train/tile_loss", tile_sum / tile_n if tile_n else None)
+        self.logger.record("train/branch_loss", branch_loss)
+        self.logger.record("train/tile_loss", tile_loss)
         self._last_metrics_at = perf_counter()
 
     def _fit_chunk(self, callback):
@@ -305,7 +324,12 @@ class CudaRecurrentQ(CudaCohortLifecycle):
             self._start_pass()
         item = next(self._sequence_iterator, None)
         if item is None:
-            self._publish_fit_metrics()
+            if self._fit_pass_start is not None:
+                end = torch.cuda.Event(enable_timing=True)
+                end.record()
+                self._device_events.append((self._fit_pass_start, end))
+                self._fit_pass_start = None
+            self._publish_fit_metrics(final=True)
             if not torch.isfinite(self._pass_metrics).all():
                 raise FloatingPointError("Non-finite recurrent Q loss")
             try:
@@ -362,7 +386,11 @@ class CudaRecurrentQ(CudaCohortLifecycle):
         self._drain()
         self._stats["optimizer_seconds"] = self._optimizer_seconds
         self._stats["fit_precision"] = self.execution_state["precision"]
+        self._stats["fit_sequence_groups"] = self.execution_state["fit_sequence_groups"]
+        self._stats["encoder_microbatch"] = self.execution_state["microbatch"]
+        self._stats["encoder_token_budget"] = self.execution_state["token_budget"]
         self._stats["execution_fallbacks"] = list(self.execution_state["fallbacks"])
+        self._stats["compilation_status"] = getattr(self.policy, "compilation_status", "disabled")
         super()._synchronize(callback)
 
     def save(self, *args, **kwargs):
@@ -386,6 +414,7 @@ class CudaRecurrentQ(CudaCohortLifecycle):
         self._optimizer_events = []
         self._last_metrics_at = 0.0
         self._optimizer_seconds = getattr(self, "_optimizer_seconds", 0.0)
+        self._fit_pass_start = None
 
     def _excluded_save_params(self):
         return [
@@ -395,5 +424,6 @@ class CudaRecurrentQ(CudaCohortLifecycle):
             "_pass_metrics",
             "_device_events",
             "_optimizer_events",
+            "_fit_pass_start",
             "_collection_host",
         ]

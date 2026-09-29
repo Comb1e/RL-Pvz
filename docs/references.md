@@ -82,4 +82,18 @@ notes are recoverable with `git show 4052968:docs/references.md`.
 - [FFmpeg](https://ffmpeg.org/), inspected local 8.1 help and encoders:
   optional RGB-to-H.264/yuv420p export with explicit dimensions and frame rate.
 
+## Fused recurrent fitting
+
+- [PyTorch `torch.compile` documentation](https://pytorch.org/docs/stable/torch.compiler.html):
+  fixed-shape encoder compilation with a bounded eager fallback. The recurrent
+  loop and ragged storage remain outside the compiled region.
+- [PyTorch LSTM documentation](https://pytorch.org/docs/stable/generated/torch.nn.LSTM.html):
+  independent sequence batching with one hidden/cell state per sequence. Fused
+  groups preserve chronological order and reset boundaries inside each slot.
+
+These references support execution controls only; the fused-group arithmetic,
+whole-pass gradient accumulation and one-event timing boundary are local
+implementation decisions. No learning-quality result is inferred from the
+throughput measurements.
+
 No new research method or benchmark was introduced by the documentation/test cleanup.

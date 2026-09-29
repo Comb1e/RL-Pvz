@@ -3,8 +3,10 @@
 The optimization changes execution, not the entity representation or complete-return
 objective. For each cohort, the same active decisions, group denominators and
 targets contribute to each of four whole-pass gradients. Chronological 256-step
-chunks retain the original detached recurrent boundaries. A 64-frame encoder
-microbatch does not define an optimizer minibatch.
+chunks retain the original detached recurrent boundaries. The execution path
+may concatenate four independent 1,024-decision groups, but this does not define
+a new optimizer minibatch or alter the loss denominator. The current encoder
+microbatch is 128 observations with a 65,536-token budget.
 
 Let `theta` be FP32 master weights and `Q_b(theta, x)` the network with eligible
 feature operations evaluated using BF16 computation copies. Fitting accumulates
@@ -52,6 +54,25 @@ it is overwritten. The compute stream waits for transfer completion, and copied
 device tensors retain stream ownership until their consumers finish. Checkpoints
 drain queued copies and retain durable arrays plus effective execution settings;
 prefetched chunks and partial gradients are reconstructed after interruption.
+
+If independent sequence groups are (G_1,…,G_k), with losses (L_i), the fused
+call computes
+
+\[
+L_{\mathrm{fused}} = \sum_i L_i,
+\qquad
+\nabla L_{\mathrm{fused}} = \sum_i \nabla L_i,
+\]
+
+because each group has its own hidden and cell state and attention is scoped to
+one observation row. The optimizer still clips and updates once after the full
+cohort pass. A reset is inserted between slot groups, and a partial final group
+is padded with inactive rows.
+
+Per-chunk CUDA timing and metric reads are intentionally absent from the hot
+loop. One timing event is recorded for each pass; intermediate logs reuse the
+last completed metric snapshot. This avoids host synchronization while keeping
+pass-end finite checks, optimizer timing, checkpointing and recovery explicit.
 
 Performance evidence must separate setup/warmup, collection, host preparation,
 transfer wait, transfer device time, fitting, optimizer time and total wall time.

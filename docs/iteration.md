@@ -1,5 +1,28 @@
 # Iteration history
 
+## 0.31.0 — 2026-09-29
+
+- Problem/root cause: recurrent fitting processed only four 256-step sequences
+  per call, created a CUDA timing event for every chunk, and used a no-op
+  compilation hook. Cohort telemetry showed 887–978 seconds of fitting with
+  about 30–40% GPU utilization while transfer wait stayed below 0.1 seconds.
+- Improvement: fuse four independent execution batches, increase the encoder
+  execution budget to 128 observations/65,536 tokens, cache sequence indexes and
+  ragged gathers, defer intermediate synchronization, and add bounded fixed-shape
+  encoder compilation with an eager fallback. The learning batch, recurrent
+  boundaries, complete-return weighting, precision boundaries and five demo
+  passes remain unchanged.
+- Verification: focused transport, recurrent-state, compilation-fallback and
+  precision controls passed. The synthetic BF16 benchmark reached 11,318–11,356
+  frames/s for mixed entity populations and 11,455–11,707 frames/s at the
+  256-entity cap, with 838 MiB peak Torch allocation. The short CUDA collection
+  check reached 2,939–3,249 decisions/s without the viewer and 2,938–3,121 with
+  it; fitting preparation stayed below 0.05 seconds and transfer wait below
+  0.005 seconds. The Windows compiler rejected the entity encoder because of a
+  pinned-game pybind object, so the run recorded `compilation_status = fallback`
+  and used the exact eager path. These checks are throughput evidence only, not
+  a learning-quality claim.
+
 ## Documentation and test cleanup — 2026-09-28 (0.30.0 unchanged)
 
 - Problem/root cause: guides accumulated retired event-memory, regional-input,

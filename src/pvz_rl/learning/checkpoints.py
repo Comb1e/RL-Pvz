@@ -49,6 +49,7 @@ def execution_config(cfg):
     saved_performance = cfg["training"]["performance"]
     saved_performance.setdefault("fit_precision", "fp32")
     saved_performance.setdefault("prefetch", False)
+    saved_performance.setdefault("fit_sequence_groups", 1)
     return cfg
 
 

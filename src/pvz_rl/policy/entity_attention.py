@@ -1,5 +1,7 @@
 """Shared entity embeddings and exact, bounded bidirectional attention."""
 
+import re
+
 import torch
 from torch import nn
 from torch.nn import functional as F
@@ -74,6 +76,10 @@ class EntityTransformer(nn.Module):
         self.microbatch = spec["encoder_microbatch"]
         self.token_budget = spec["encoder_token_budget"]
         self.activation_checkpointing = False
+        self._compiled_encode = None
+        self._compiled_shapes = {}
+        self.compilation_status = "disabled"
+        self.compilation_error = None
         self.register_buffer("health_scales", torch.tensor(layout.health_scales), persistent=False)
         self.type_embedding = nn.Embedding(len(layout.types) + 1, width, padding_idx=0)
         self.state_embedding = nn.Embedding(len(layout.states) + 1, width, padding_idx=0)
@@ -101,6 +107,48 @@ class EntityTransformer(nn.Module):
             ]
         )
         self.norm = nn.LayerNorm(width)
+
+    def enable_compilation(self):
+        """Request lazy compilation for fixed encoder shapes.
+
+        Compilation is deliberately limited to the tensor-only encoder.  Ragged
+        storage, recurrent state management and simulator code stay eager.  A
+        backend failure disables the wrapper and keeps the exact eager path.
+        """
+        if not hasattr(torch, "compile"):
+            self.compilation_status = "unavailable"
+            self.compilation_error = "torch.compile is unavailable"
+            return
+        if not torch.cuda.is_available():
+            self.compilation_status = "unavailable"
+            self.compilation_error = "CUDA is unavailable"
+            return
+        self._compiled_encode = torch.compile(self._encode, dynamic=False, mode="reduce-overhead")
+        self._compiled_shapes.clear()
+        self.compilation_status = "requested"
+        self.compilation_error = None
+
+    def _encode_with_optional_compile(self, args):
+        if self._compiled_encode is None:
+            return self._encode(*args)
+        shape = (int(args[0].shape[0]), int(args[0].shape[1]))
+        # Dynamic ragged shapes would trigger an unbounded stream of compiler
+        # graphs.  Compile at most four observed fixed shapes per run and use
+        # eager execution for additional buckets.
+        if shape not in self._compiled_shapes and len(self._compiled_shapes) >= 4:
+            return self._encode(*args)
+        try:
+            value = self._compiled_encode(*args)
+            self._compiled_shapes[shape] = True
+            self.compilation_status = "compiled"
+            return value
+        except Exception as exc:  # backend availability is device/build dependent
+            self._compiled_encode = None
+            self._compiled_shapes.clear()
+            self.compilation_status = "fallback"
+            detail = str(exc).splitlines()[0] if str(exc) else "backend compilation failed"
+            self.compilation_error = re.sub(r"https?://\S+", "<url>", detail)[:256]
+            return self._encode(*args)
 
     def embed(self, batch):
         kind, state, numeric = self.layout.normalize(batch, health_scales=self.health_scales)
@@ -147,6 +195,8 @@ class EntityTransformer(nn.Module):
             args = part.tensors()
             if self.activation_checkpointing and self.training and torch.is_grad_enabled():
                 value = checkpoint(self._encode, *args, use_reentrant=False)
+            elif self.training and torch.is_grad_enabled():
+                value = self._encode_with_optional_compile(args)
             else:
                 value = self._encode(*args)
             results.append(value)

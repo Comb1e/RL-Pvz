@@ -24,6 +24,8 @@ class RecurrentQPolicy(TransformerLSTMPolicy):
         self.exploration_epsilon = exploration_epsilon
         self.tile_exploration_epsilon = tile_exploration_epsilon
         self.optimizer = torch.optim.Adam(self.parameters(), lr=lr_schedule(1), eps=1e-8)
+        self.compilation_status = "disabled"
+        self.compilation_error = None
 
     @property
     def device(self):
@@ -33,8 +35,9 @@ class RecurrentQPolicy(TransformerLSTMPolicy):
         self.train(mode)
 
     def enable_compilation(self):
-        # The recurrent sequence path uses the fused PyTorch LSTM directly.
-        pass
+        self.entity.enable_compilation()
+        self.compilation_status = self.entity.compilation_status
+        self.compilation_error = self.entity.compilation_error
 
     @torch.no_grad()
     def predict(

@@ -45,7 +45,10 @@
   stores fixed metadata plus ragged entity slabs under one RAM/disk budget and
   validates offsets/counts and categories on recovery. `sequence_transport.py` owns
   ordered double-buffer prefetch; `performance.py` defines the execution-only
-  refresh allowlist. Demonstration initialization checkpoints omit those fields
+  refresh allowlist, including fused `fit_sequence_groups`. Recurrent fitting
+  groups independent slot batches without sharing hidden state, records one
+  device timing event per pass, and uses cached intermediate telemetry.
+  Demonstration initialization checkpoints omit those fields
   and hydrate them from the current train profile when loaded. `host_transfer.py`
   batches collection copies at the existing
   host boundary. Fitting retries whole uncommitted passes on BF16/memory failure.

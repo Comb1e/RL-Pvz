@@ -59,6 +59,8 @@ class CompleteGameBuffer:
         self.size = self.entity_size = self.ram_used = 0
         self.staging_bytes = 0
         self.finalized = False
+        self._position_cache = {}
+        self._entity_gather_workspace = None
         self.transport_metrics = dict(
             preparation_seconds=0.0, transfer_wait_seconds=0.0, transfer_stream_seconds=0.0
         )
@@ -163,12 +165,19 @@ class CompleteGameBuffer:
                 validated=True,
             )
         entities, mask, globals_ = (x.numpy() for x in result.tensors())
-        mask[:] = np.arange(width)[None] < counts[:, None]
+        positions = self._position_cache.get(width)
+        if positions is None:
+            positions = np.arange(width, dtype=np.int64)
+            self._position_cache[width] = positions
+        mask[:] = positions[None] < counts[:, None]
         entities.fill(0)
         globals_[:] = flat["globals"]
-        indices = (starts[:, None] + np.arange(width)[None])[mask].astype(np.int64)
+        indices = (starts[:, None] + positions[None])[mask].astype(np.int64, copy=False)
         blocks, offsets = np.divmod(indices, self.block_rows)
-        packed = np.empty((len(indices), ENTITY_WIDTH), np.int32)
+        shape = (len(indices), ENTITY_WIDTH)
+        if self._entity_gather_workspace is None or self._entity_gather_workspace.shape != shape:
+            self._entity_gather_workspace = np.empty(shape, np.int32)
+        packed = self._entity_gather_workspace
         for b in np.unique(blocks):
             selected = blocks == b
             packed[selected] = self.entity_blocks[b][offsets[selected]]
@@ -358,3 +367,5 @@ class CompleteGameBuffer:
                 self.path.rmdir()
             except OSError:
                 pass
+        self._position_cache.clear()
+        self._entity_gather_workspace = None
