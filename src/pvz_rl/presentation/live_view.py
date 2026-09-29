@@ -127,10 +127,37 @@ def history_page(selection, journal, command):
     return journal.page(current.env, command["episode"], command.get("start"))
 
 
+def learning_settings(cfg):
+    """Snapshot effective learning values without reading defaults or device state."""
+    training = cfg["training"]
+    return (
+        (
+            "Learning",
+            tuple(
+                f"{key}={training[key]}"
+                for key in ("learning_rate", "max_grad_norm", "batch_size", "n_epochs", "gamma")
+            )
+            + (f"chunk_length={cfg['policy']['chunk_length']}",),
+        ),
+        (
+            "Rewards",
+            tuple(f"{key}={value}" for key, value in cfg["reward"].items() if key != "version"),
+        ),
+        (
+            "Tile exploration",
+            tuple(
+                f"{key}={value}"
+                for key, value in training["exploration"].items()
+                if key != "objective"
+            ),
+        ),
+    )
+
+
 class LiveSession:
     """Process lifecycle and bounded mailboxes, owned by the training process."""
 
-    def __init__(self, count, settings, *, notify=None):
+    def __init__(self, count, settings, *, cfg=None, notify=None):
         self.selection = Selection(count)
         self.fps = settings["live_fps"]
         self.notify = notify or (lambda text: warnings.warn(text, RuntimeWarning, stacklevel=2))
@@ -155,6 +182,7 @@ class LiveSession:
                 self.activity,
                 settings["live_window_size"],
                 count,
+                learning_settings(cfg) if cfg is not None else (),
             ),
             name="pvz-live-view",
             daemon=True,

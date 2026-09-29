@@ -143,6 +143,36 @@ def accept_history_response(packets, browse, response):
     return True
 
 
+def draw_learning_settings(surface, font, renderers):
+    """Wrap immutable run settings above the boards, including before the first frame."""
+    settings = renderers.get("learning_settings", ())
+    if not settings:
+        return 34
+    import pygame
+
+    expanded = renderers.get("show_settings", True)
+    width = surface.get_width()
+    heading = "Learning settings: retained on resume"
+    toggle = f"S: {'hide' if expanded else 'show'} settings"
+    surface.blit(font.render(heading, True, (237, 211, 153)), (12, 33))
+    toggle_image = font.render(toggle, True, (190, 211, 194))
+    surface.blit(toggle_image, (width - toggle_image.get_width() - 12, 33))
+    y = 56
+    if expanded:
+        for title, entries in settings:
+            x = 12
+            for text in (f"{title}:", *entries):
+                label = font.render(text, True, (216, 226, 212))
+                if x > 12 and x + label.get_width() > width - 12:
+                    x = 12
+                    y += 20
+                surface.blit(label, (x, y))
+                x += label.get_width() + 16
+            y += 20
+    pygame.draw.line(surface, (67, 85, 69), (12, y + 1), (width - 12, y + 1))
+    return y + 8
+
+
 def draw_view(surface, packets, activity, *, renderers, boards, pending=(), count=128):
     import pygame
     from pvz_game.rendering import BoardRenderer, RenderContext
@@ -174,14 +204,21 @@ def draw_view(surface, packets, activity, *, renderers, boards, pending=(), coun
         + " | F follow latest | F11 fullscreen | Focus / Esc | wheel: history, Shift+wheel: columns"
     )
     surface.blit(small.render(label, True, (225, 237, 226)), (12, 8))
+    header_height = draw_learning_settings(surface, small, renderers)
     buttons = []
     old_clip = surface.get_clip()
     indices = [focus] if focus is not None else list(range(4))
     for index in indices:
         cell_w, cell_h = (
-            (width, height - 34) if focus is not None else (width // 2, (height - 34) // 2)
+            (width, height - header_height)
+            if focus is not None
+            else (width // 2, (height - header_height) // 2)
         )
-        x, y = (0, 34) if focus is not None else (index % 2 * cell_w, 34 + index // 2 * cell_h)
+        x, y = (
+            (0, header_height)
+            if focus is not None
+            else (index % 2 * cell_w, header_height + index // 2 * cell_h)
+        )
         rect = pygame.Rect(x + 4, y + 3, cell_w - 8, cell_h - 6)
         regions[index] = rect
         surface.set_clip(rect)
@@ -320,6 +357,8 @@ def draw_view(surface, packets, activity, *, renderers, boards, pending=(), coun
                 )
         table_y = top + 126
         row_height = 22
+        if table_y + row_height > y + cell_h - 27:
+            continue  # Compact panels reserve their space for the board and decision.
         visible = max(0, (y + cell_h - table_y - 27 - row_height) // row_height)
         rows = (
             (page["rows"][-visible:] if state.follow else page["rows"][:visible]) if visible else []
@@ -379,7 +418,9 @@ def draw_view(surface, packets, activity, *, renderers, boards, pending=(), coun
     return buttons
 
 
-def viewer_main(frames, commands, history_responses, errors, closed, ready, activity, size, count):
+def viewer_main(
+    frames, commands, history_responses, errors, closed, ready, activity, size, count, settings=()
+):
     import pygame
 
     from .live_view import RESULT_SECONDS, UI_FPS
@@ -394,6 +435,7 @@ def viewer_main(frames, commands, history_responses, errors, closed, ready, acti
         ready.set()
         clock = pygame.time.Clock()
         packets, buttons, renderers, boards, pending, results = [], [], {}, {}, {}, {}
+        renderers["learning_settings"] = settings
         fullscreen = False
         dirty, displayed_activity = True, None
 
@@ -432,6 +474,8 @@ def viewer_main(frames, commands, history_responses, errors, closed, ready, acti
                         )
                     elif event.key == pygame.K_f:
                         resume_visible_history(packets, renderers)
+                    elif event.key == pygame.K_s:
+                        renderers["show_settings"] = not renderers.get("show_settings", True)
                     dirty = True
                 elif event.type == pygame.MOUSEWHEEL:
                     for index, rect in renderers.get("regions", {}).items():

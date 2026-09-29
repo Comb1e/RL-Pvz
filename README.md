@@ -29,6 +29,8 @@ Record one easy game using unused output paths; finish with a natural win or los
 
 Follow [recording and training](docs/training.md) to initialize, train, resume or
 evaluate. That guide also explains checkpoint compatibility and performance settings.
+The live window shows the run's retained learning settings, including gradient
+clipping and rewards. Press **S** to hide or show them.
 
 Demonstration initialization stores weights and structural metadata only, so
 `--init-from` always uses the current execution settings from

@@ -79,6 +79,8 @@ notes are recoverable with `git show 4052968:docs/references.md`.
   collection/update reporting and serialization infrastructure.
 - [pygame-ce events](https://pyga.me/docs/ref/event.html): bounded event queues,
   wheel/resize handling and continuous pumping in a separate viewer process.
+- [pygame-ce Surface API](https://pyga.me/docs/ref/surface.html): rendered text
+  widths and blitting for the responsive, read-only learning-settings strip.
 - [FFmpeg](https://ffmpeg.org/), inspected local 8.1 help and encoders:
   optional RGB-to-H.264/yuv420p export with explicit dimensions and frame rate.
 

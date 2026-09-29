@@ -63,6 +63,8 @@
   history; `learning/demo_initialization.py` verifies and fits only fresh archives.
   `action_journal.py` retains actual Q values, proposal/execution and entity omissions;
   `live_layout.py` owns paging and F follow-latest. Presentation never feeds the model.
+  `live_view.py` snapshots effective learning settings once from the environment's
+  resolved run config; the read-only viewer strip never reloads TOML or device values.
 - `evaluation/` uses the same runner and checks CUDA traces against CPU replay.
   `monitoring/entity_benchmark.py` measures cap-dependent inference/fitting cost;
   `throughput_benchmark.py` compares fixed 1,024-frame/four-pass execution and

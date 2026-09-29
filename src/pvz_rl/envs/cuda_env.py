@@ -504,7 +504,7 @@ class CudaVecEnv(VecEnv):
         settings = output_settings(self.cfg)["visualization"]
         if self.live_view is not None or not settings["live_enabled"]:
             return
-        session = LiveSession(self.num_envs, settings, notify=notify)
+        session = LiveSession(self.num_envs, settings, cfg=self.cfg, notify=notify)
         try:
             with self.device_context():
                 self.live_view = CudaLiveCapture(self, settings, session=session)

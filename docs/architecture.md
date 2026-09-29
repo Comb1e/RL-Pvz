@@ -273,6 +273,12 @@ history pages and retained/omitted entity counts. Generation and episode identit
 clears selection/paging and follows the latest action while preserving horizontal
 scroll. Presentation runs separately and supplies no simulation time or policy
 inputs. Callback reports retain progress, coverage, probes and checkpoint status.
+At viewer startup, the environment supplies a small immutable snapshot of the
+resolved learning configuration: optimizer settings, sequence length, rewards
+and tile exploration. The settings strip shows checkpoint-retained values on
+resume, independently of refreshed execution settings. It is available before
+the first board and during fitting; **S** changes visibility only. The viewer
+never reloads defaults or reads GPU tensors to display these values.
 
 Mathematical controls and verification limits are in
 [entity inputs](math/entity-inputs.md) and [recurrent training](math/recurrent-training.md); chronological release evidence

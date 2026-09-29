@@ -1,5 +1,26 @@
 # Iteration history
 
+## 0.31.3 — 2026-09-29
+
+- Problem/root cause: autonomous resume retains learning settings, but the live
+  viewer only received display preferences, leaving active clipping and reward
+  values invisible when the current TOML differed from a checkpoint.
+- Improvement: send a one-time snapshot of the resolved run configuration to the
+  viewer. A read-only strip shows learning rate, `max_grad_norm`, batch size,
+  epochs, discount, sequence length, rewards and tile exploration. It wraps at
+  narrow widths and **S** hides/shows it; small panels omit history footers when
+  they would overlap board details. Demo-only clipping is not presented as an
+  autonomous setting. No training parameters or checkpoint semantics changed.
+- Verification: eight existing focused viewer controls passed. Offscreen review
+  covered 1600×1050, 944×668 and 640×480, grid/focus layouts, hidden/visible settings,
+  and the real S-key event loop before any board arrived. A deliberately different
+  saved configuration retained its displayed values after performance refresh.
+  The two layout controls passed again after the narrow-window adjustment.
+  Ruff lint/format and Git whitespace checks passed. No formal training or full
+  suite was run.
+- Remaining limits: existing viewer processes receive the strip on their next
+  launch; narrow windows still benefit from Focus or hiding settings for history.
+
 ## 0.31.2 — 2026-09-29
 
 - Problem/root cause: the Windows CUDA-graphs encoder was replayed for successive

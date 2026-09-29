@@ -107,7 +107,7 @@ class CudaLiveCapture:
 
     def __init__(self, env, settings, *, session=None, notify=None):
         self.env = env
-        self.session = session or LiveSession(env.num_envs, settings, notify=notify)
+        self.session = session or LiveSession(env.num_envs, settings, cfg=env.cfg, notify=notify)
         self.session.journal = env.action_journal
         self.source = {k: torch.from_dlpack(v) for k, v in env.batch.public_state_device().items()}
         self.shapes = {k: v.shape[1:] for k, v in self.source.items()}

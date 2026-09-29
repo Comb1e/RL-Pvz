@@ -187,7 +187,9 @@ execution defaults while keeping their learning parameters:
 The flag is for autonomous resume; `--init-from` already applies current
 execution settings automatically because demonstration checkpoints are
 weights-only artifacts. This refresh cannot change passes, epochs, batch size, recurrent chunk length,
-rewards, curriculum or architecture. Without it, saved precision is retained;
+learning rate, `max_grad_norm`, rewards, curriculum or architecture. The live
+window's read-only learning settings show the active values retained on resume;
+press **S** to hide or show them. Without the flag, saved precision is retained;
 checkpoints lacking precision metadata use FP32. Precision changes begin when
 the unfinished pass restarts. A nonfinite BF16 pass retries wholly in FP32;
 only successful whole passes count as updates. Effective precision and fallback
