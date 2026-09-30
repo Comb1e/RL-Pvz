@@ -186,6 +186,7 @@ class ResearchCallback(BaseCallback):
                     "validation": Activity.VALIDATING,
                     "reporting": Activity.REPORTING,
                     "collect": Activity.COLLECTING,
+                    "finalize_rewards": Activity.UPDATING,
                     "fit": Activity.UPDATING,
                     "returns": Activity.UPDATING,
                     "synchronize": Activity.UPDATING,

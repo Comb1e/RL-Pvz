@@ -3,6 +3,7 @@ from types import SimpleNamespace
 from pvz_rl.config import load_config
 from pvz_rl.learning.curriculum import CurriculumState
 from pvz_rl.learning.training import ResearchCallback
+from pvz_rl.presentation.live_view import Activity
 
 
 def test_progress_has_aligned_recent_and_run_metrics_and_unlimited_has_no_eta(tmp_path, capsys):
@@ -50,3 +51,25 @@ def test_progress_has_aligned_recent_and_run_metrics_and_unlimited_has_no_eta(tm
         assert "Reward      +1.10000" in text and "Net value   +3000.00" in text
     finally:
         callback.close()
+
+
+def test_finalize_rewards_uses_updating_viewer_activity(tmp_path):
+    cfg = load_config()
+    callback = ResearchCallback(cfg, "masked", 101, tmp_path)
+    activities = []
+
+    class Viewer:
+        def set_activity(self, activity):
+            activities.append(activity)
+
+    callback.model = SimpleNamespace(
+        num_timesteps=0,
+        training_games=0,
+        env=SimpleNamespace(live_view=Viewer()),
+        phase="finalize_rewards",
+    )
+    try:
+        callback.hardware_context("finalize_rewards")
+    finally:
+        callback.close()
+    assert activities == [Activity.UPDATING]
