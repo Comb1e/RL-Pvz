@@ -153,7 +153,9 @@ def test_counterfactual_parity_history_and_simulator_isolation(per_tick_cfg, mon
     from pvz_rl.envs.cuda_features import CudaFeatures
     from pvz_rl.envs.encoding import observations_equal
     from pvz_rl.envs.probes import CounterfactualCollector, cpu_probe
+    from pvz_rl.learning.host_transfer import HostHandoff
     from pvz_rl.learning.objective import components
+    from pvz_rl.monitoring.cuda_diagnostics import DeviceProfiler
     from pvz_rl.policy.transformer_lstm import RecurrentState
 
     scenarios = [
@@ -174,7 +176,7 @@ def test_counterfactual_parity_history_and_simulator_isolation(per_tick_cfg, mon
             calls.append((state.clone(), previous_action.clone(), execution_outcome.clone()))
             return SimpleNamespace(
                 state=RecurrentState(state.hidden + 1, state.cell + 1),
-                branch_q=torch.full((2, 10), 0.5, device="cuda"),
+                branch_q=torch.full((len(obs), 10), 0.5, device="cuda"),
             )
 
     teacher = Teacher()
@@ -184,7 +186,15 @@ def test_counterfactual_parity_history_and_simulator_isolation(per_tick_cfg, mon
         obs = features.encode()
         features.initialize_home([0, 1])
         probe = CounterfactualCollector(
-            SimpleNamespace(batch=batch, features=features, cfg=per_tick_cfg, condition="masked")
+            SimpleNamespace(
+                batch=batch,
+                features=features,
+                cfg=per_tick_cfg,
+                condition="masked",
+                profiler=DeviceProfiler(batch.cp),
+                handoff=HostHandoff(torch.cuda.current_stream()),
+                probe_width=lambda: 32,
+            )
         )
         active = torch.ones(2, dtype=torch.bool, device="cuda")
         actions = torch.zeros(2, dtype=torch.long, device="cuda")
@@ -221,7 +231,7 @@ def test_counterfactual_parity_history_and_simulator_isolation(per_tick_cfg, mon
         home = features.home_ledger.copy()
         totals = features.totals.copy()
         host = probe.collect(teacher, history, obs, actions, details, features.mask_tensor, active)
-        torch.cuda.synchronize()
+        probe.env.handoff.wait()
         rows, observations = probe.materialize(host)
         assert hashes == [batch.state_hash(i) for i in range(2)]
         np.testing.assert_array_equal(home.get(), features.home_ledger.get())
@@ -240,7 +250,14 @@ def test_counterfactual_parity_history_and_simulator_isolation(per_tick_cfg, mon
                     row["components"], components(expected["components"]), atol=1e-12
                 )
                 assert observations_equal(
-                    observations[j][i : i + 1].observations()[0], expected["observation"]
+                    dict(
+                        entities=observations.entities[
+                            observations.offsets[i, j] : observations.offsets[i, j]
+                            + observations.counts[i, j]
+                        ],
+                        globals=observations.globals[i, j],
+                    ),
+                    expected["observation"],
                 )
                 assert row["bootstrap"] == 0.5
                 if j in (0, 2, 3):
@@ -251,6 +268,7 @@ def test_counterfactual_parity_history_and_simulator_isolation(per_tick_cfg, mon
         # fork starts there, and rejected forks see executed wait + rejection.
         assert torch.all(history.state.hidden == 1)
         assert all(torch.all(state.hidden == 1) for state, _, _ in calls[1:])
-        for _, previous, outcome in calls[3:]:
-            assert torch.all(previous == 0)
-            torch.testing.assert_close(outcome, torch.tensor([[0.0, 1.0]] * 2, device="cuda"))
+        assert len(calls) == 2
+        _, previous, outcome = calls[1]
+        assert torch.all(previous[4:] == 0)
+        torch.testing.assert_close(outcome[4:], torch.tensor([[0.0, 1.0]] * 4, device="cuda"))

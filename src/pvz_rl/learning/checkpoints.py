@@ -41,16 +41,12 @@ def execution_config(cfg):
     """Fill optional execution settings; never replace recorded protocol parameters."""
     cfg = copy.deepcopy(cfg)
     defaults = load_config()
-    cfg["training"].setdefault("performance", {"fit_precision": "fp32", "prefetch": False})
     for key in ("logging", "visualization", "runtime", "simulation"):
         cfg.setdefault(key, copy.deepcopy(defaults[key]))
     for key in ("storage", "performance", "batch_size", "n_epochs", "max_grad_norm"):
         cfg["training"].setdefault(key, copy.deepcopy(defaults["training"][key]))
-    # Absence in a historical checkpoint means its original FP32 execution.
-    saved_performance = cfg["training"]["performance"]
-    saved_performance.setdefault("fit_precision", "fp32")
-    saved_performance.setdefault("prefetch", False)
-    saved_performance.setdefault("fit_sequence_groups", 1)
+    for key, value in defaults["training"]["performance"].items():
+        cfg["training"]["performance"].setdefault(key, copy.deepcopy(value))
     return cfg
 
 
@@ -58,17 +54,6 @@ def inspect_checkpoint(path):
     path = Path(path).resolve()
     if not path.suffix:
         path = path.with_suffix(".zip")
-    if not path.exists() and (path.parent / "metadata.json").exists():
-        # Diagnose an obsolete protocol from its plain metadata before touching
-        # model serialization; a valid sidecar never substitutes for a missing ZIP.
-        from pvz_rl.provenance import verify_engine
-
-        legacy = json.loads((path.parent / "metadata.json").read_text("utf-8"))
-        validate_config(legacy["config"])
-        from pvz_rl.learning.training_requirements import require_supported_policy
-
-        require_supported_policy(legacy["config"], legacy.get("condition", "masked"))
-        verify_engine(legacy["config"])
     if path.suffix == ".pt":
         saved = torch.load(path, map_location="cpu", weights_only=True)
         if saved.get("protocol") != DEMO_PROTOCOL:

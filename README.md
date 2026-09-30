@@ -1,14 +1,9 @@
 # PVZ plant research
 
-Training uses the current `complete_return_probe_v2` objective. The single TOML
-defines the small rejection penalties, development-target multiplier, one-time
-house-entry charges, and victory-time shaping. Two alternative branches and two
-alternative tiles are probed per decision on isolated simulator state; these probes
-do not change the actual game. See [training](docs/training.md) and
-[recurrent training](docs/math/recurrent-training.md) for target and recovery details.
-
-Record a human Plants vs. Zombies game, initialize an entity Transformer–LSTM Q
-policy, then train and evaluate it on a pinned 100 Hz simulator using public inputs.
+Record a human Plants vs. Zombies game, initialize one entity Transformer–LSTM Q
+policy, then train and evaluate it on a separate, pinned 100 Hz simulator.
+Only public observations enter the model. Parameters live in
+[src/pvz_rl/data/train.toml](src/pvz_rl/data/train.toml).
 
 ## Requirements
 
@@ -23,8 +18,6 @@ Autonomous training requires NVIDIA CUDA; demonstration fitting defaults to CPU.
 ```
 
 The [engine lock](src/pvz_rl/data/engine-lock.json) fixes source and package hashes.
-All train/demo parameters live in [train.toml](src/pvz_rl/data/train.toml).
-`training.max_grad_norm = 5` is the single clipping limit for both fitting paths.
 
 ## First useful command
 
@@ -36,40 +29,24 @@ Record one easy game using unused output paths; finish with a natural win or los
 ```
 
 Follow [recording and training](docs/training.md) to initialize, train, resume or
-evaluate. That guide also explains checkpoint compatibility and performance settings.
-Recordings contain replay facts; generated initialization checkpoints transfer only
-weights. Initialization verifies the replay and recomputes fitting rewards with the
-current configuration. Any compatible model
-input/output architecture can reuse them after reward, objective, optimizer,
-chunking, or performance settings change.
-The live window shows the run's retained learning settings, including gradient
-clipping and rewards. Press **S** to hide or show them.
-
-`--init-from` transfers weights into a new run using all current settings from
-`src/pvz_rl/data/train.toml` without requiring `--refresh-performance`.
-`--resume` retains checkpoint learning settings and rewards; the refresh flag
-only updates execution settings.
-With `compile_kernels = true`, the Windows CUDA path captures the fixed-shape
-entity encoder with CUDA graphs and falls back to eager execution once if the
-installed backend cannot compile it. Captured activations and gradients are copied
-out of reusable graph storage before recurrent fitting consumes them.
+recover. Fresh runs use current settings; resume retains learning parameters and
+rewards while applying current execution and compact-logging settings automatically.
 
 ## Common checks
 
-Static code checks do not start the simulator or training:
+Static checks do not start the simulator or training:
 
 ```powershell
 .\.venv\Scripts\python.exe -m ruff check --no-cache .
 .\.venv\Scripts\python.exe -m ruff format --check --no-cache .
 ```
 
-[Validation](docs/validation.md) describes the test suites and their execution costs.
-
+- [Validation and test ownership](docs/validation.md)
 - [Architecture and workflows](docs/architecture.md)
 - [Viewer controls](docs/live-view.md)
-- [Entity schema, cap and attention](docs/math/entity-inputs.md)
+- [Entity schema and attention](docs/math/entity-inputs.md)
+- [Recurrent training objective](docs/math/recurrent-training.md)
 - [Reward accounting](docs/math/training-objective.md)
-- [Recurrent objective and exploration](docs/math/recurrent-training.md)
-- [Precision and throughput](docs/math/training-throughput.md)
+- [Execution and throughput](docs/math/training-throughput.md)
 - [Sources used](docs/references.md)
-- [Iteration history and recorded measurements](docs/iteration.md)
+- [Iteration history and measurements](docs/iteration.md)

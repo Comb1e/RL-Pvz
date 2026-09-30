@@ -204,21 +204,21 @@ only after a successful pass.
 
 Entity checkpoints with matching objective and reward protocols can resume. Old
 objective checkpoints can transfer compatible weights into a fresh cohort, but
-cannot resume unfinished trajectories under changed targets. To apply current
-execution defaults while keeping their learning parameters:
+cannot resume unfinished trajectories under changed targets. Resume automatically
+uses current execution and logging defaults while keeping learning parameters:
 
 ```powershell
 .\.venv\Scripts\python.exe -m pvz_rl train `
-  --resume runs\human-trained\interrupted.zip --output runs\human-trained `
-  --refresh-performance
+  --resume runs\human-trained\interrupted.zip --output runs\human-trained
 ```
 
-The flag is for autonomous resume; `--init-from` already applies all current
-settings automatically. This refresh cannot change passes, epochs, batch size, recurrent chunk length,
+`--init-from` applies all current settings to a fresh run. Execution refresh on
+resume cannot change passes, epochs, batch size, recurrent chunk length,
 learning rate, `max_grad_norm`, rewards, curriculum or architecture. The live
 window's read-only learning settings show the active values retained on resume;
-press **S** to hide or show them. Without the flag, saved precision is retained;
-checkpoints lacking precision metadata use FP32. Precision changes begin when
+press **S** to hide or show them. Missing execution metadata uses current defaults;
+saved in-cohort numerical fallbacks remain when the execution profile is unchanged.
+Precision changes begin when
 the unfinished pass restarts. A nonfinite BF16 pass retries wholly in FP32;
 only successful whole passes count as updates. Effective precision and fallback
 reasons are saved. A nonfinite FP32 pass or exhausted allocation fallback fails
@@ -228,15 +228,41 @@ For a bounded four-pass throughput check with fixed model dimensions:
 
 ```powershell
 .\.venv\Scripts\python.exe -m pvz_rl.monitoring.throughput_benchmark `
-  --scope synthetic --label current --output artifacts\throughput-synthetic.json
-.\.venv\Scripts\python.exe -m pvz_rl.monitoring.throughput_benchmark `
-  --scope collection --label current --output artifacts\throughput-collection.json
+  --output artifacts\throughput-synthetic.json
+.\.venv\Scripts\python.exe -m pvz_rl.monitoring.collection_benchmark `
+  --output artifacts\throughput-collection.json
 ```
 
-The collection check uses one-second cutoffs, three warmed repetitions, and
-viewer-on/off runs. It is a mechanical throughput check, not formal training.
-The [recorded comparison](evidence/training-throughput-v030.json) includes raw
-trials, phases, memory and measurement limits.
+The collection check executes no optimizer steps: 128 environments, eight warmup
+decisions and three 32-decision trials on sparse, mixed, crowded, rejection-heavy
+and accepted-action snapshots. It compares two-lane execution with the current
+one-lane memory fallback, not a historical trainer. It records simulator, probe,
+encoding, online/EMA inference, synchronization, transfer, storage and presentation
+timings, separate memory pools and coarse hardware samples. Subsecond trials can
+have no hardware sample; null is not zero utilization. Matching completed trials
+are retained if the same evidence command is continued. Use a fresh output path
+after changing implementation or settings. Viewer startup/history belongs to the
+viewer integration controls, not this headless benchmark.
+
+### Compact progress
+
+The single `[logging]` table separates `progress_seconds = 15` machine-readable
+snapshots from `terminal_progress_seconds = 60` routine terminal updates.
+`terminal_mode = "compact"` is the only formatter. Phase changes, completed
+collection/fitting, checkpoint saves, warnings, errors and interruption/completion
+print immediately; unchanged progress and repeated report notices do not.
+The terminal summary shows cohort progress, games/transitions, throughput,
+collection/fitting times, optimizer step, available GPU/CPU utilization and the
+latest warning. Interactive terminals reuse one line; redirected stdout and
+`train.log` receive timestamped compact lines. Detailed telemetry remains in
+`status.json`, `training-metrics.jsonl` and `hardware-metrics.jsonl`.
+
+Transfer/per-probe and multiline dashboard implementations are removed. The
+explicit performance-refresh flag, historical execution defaults and replay
+sidecar annotation reader are also removed; current replay metadata is embedded.
+The training CLI uses game-count budgets and `--eval-games`; the archived training
+`--steps`/`--eval-interval` options and PPO report panels are removed. Benchmark
+decision windows and independent CPU mathematical controls remain separate.
 
 For the bounded objective comparison, use a separate five-pass initialization from
 an existing verified archive, then run:

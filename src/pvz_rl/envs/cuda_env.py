@@ -11,18 +11,31 @@ from gymnasium import spaces
 from pvz_game import Game, Rules
 from pvz_game.config import PLANT_TYPES
 from pvz_game.cuda.backend import projectile_bound
-from pvz_game.cuda.schema import REASONS
+from pvz_game.cuda.schema import HEADER, REASONS
 from stable_baselines3.common.vec_env import VecEnv
 
 from pvz_rl.envs.actions import ActionSchema as A
 from pvz_rl.envs.cuda_accounting import AccountingCudaBatch
 from pvz_rl.envs.cuda_features import LEDGER_INDICES, METRIC_INDICES, CudaFeatures
+from pvz_rl.envs.encoding import width_bucket
 from pvz_rl.envs.rewards import REWARD_METRICS
 from pvz_rl.envs.scenarios import difficulty_weights, scenario
 from pvz_rl.learning.budget import budget_target
 from pvz_rl.learning.curriculum import stage_distribution, teaching_enabled
+from pvz_rl.learning.host_transfer import HostHandoff
 from pvz_rl.learning.training_requirements import require_supported_policy
+from pvz_rl.monitoring.cuda_diagnostics import DeviceProfiler
 from pvz_rl.monitoring.metrics import task_name
+
+# Host step record: done, timed_out, ticks, reward | accepted, reason | proposal,
+# executed | kept entities, omitted plants/zombies/projectiles | reward parts.
+RECORD_OUTCOME, RECORD_RESULT, RECORD_ACTIONS, RECORD_SUMMARY, RECORD_PARTS = (
+    slice(0, 4),
+    slice(4, 6),
+    slice(6, 8),
+    slice(8, 12),
+    slice(12, None),
+)
 
 
 class ScenarioQueue:
@@ -68,9 +81,10 @@ class ScenarioQueue:
 class CudaVecEnv(VecEnv):
     """SB3 control interface plus device-native complete-game collection.
 
-    Completion flags (three integers/game) are the synchronization boundary.
-    Detailed episode totals transfer only for completed games, as one batch.
-    Rendering and canonical snapshots are explicit diagnostic operations.
+    One compact step record per decision is the synchronization boundary; it
+    also publishes the next observation's padding width. Detailed episode totals
+    transfer only for completed games, as one batch. Rendering and canonical
+    snapshots are explicit diagnostic operations.
     """
 
     def __init__(self, cfg, condition, learner_seed, family="preset", *, training=True, cases=None):
@@ -86,7 +100,7 @@ class CudaVecEnv(VecEnv):
         self.cfg, self.condition, self.family, self.training = cfg, condition, family, training
         self.queue = ScenarioQueue(cfg, condition, learner_seed, family, cfg["training"]["n_envs"])
         self.stream = torch.cuda.current_stream()
-        self.phases = dict(simulation_features=0.0, scenario_preparation=0.0, transfers=0.0)
+        self.handoff = HostHandoff(self.stream)
         self.cases = cases
         self._episode = [None] * cfg["training"]["n_envs"]
         self._episode_serial = [0] * cfg["training"]["n_envs"]
@@ -100,7 +114,7 @@ class CudaVecEnv(VecEnv):
             ram_bytes=output_settings(cfg)["visualization"]["live_history_ram_mib"] * 1024**2,
             reward_settings=cfg["reward"],
         )
-        self._transition_host = None
+        self._record = None
         self.finished_outcomes = {}
         self._episode_stages = [0] * cfg["training"]["n_envs"]
         self.task_started, self.task_transitions, self.task_completed = (
@@ -110,6 +124,8 @@ class CudaVecEnv(VecEnv):
         )
         self.active_tasks, self._tasks = Counter(), {}
         self.enabled_envs = np.ones(cfg["training"]["n_envs"], dtype=bool)
+        self._pending_spawns = np.zeros(cfg["training"]["n_envs"], dtype=np.int64)
+        self._plant_counts = np.zeros_like(self._pending_spawns)
         # All shipped scenario families preserve roster size. Lessons use smaller
         # rosters. Custom batches derive their capacity from the supplied cases.
         game = Game()
@@ -133,8 +149,15 @@ class CudaVecEnv(VecEnv):
             diagnostic=False,
         )
         self.cp = self.batch.cp
+        # Collection telemetry is shared by the environment, its features and
+        # the counterfactual collector; evaluation leaves it disabled.
+        self.profiler = DeviceProfiler(
+            self.cp,
+            training and cfg["training"].get("performance", {}).get("telemetry", False),
+        )
         with self.device_context():
             self.features = CudaFeatures(self.batch, cfg, condition)
+            self.features.profiler = self.profiler
             self.header_tensor = torch.from_dlpack(self.batch.header)
         self.render_mode = None
         super().__init__(self.batch.n, self.features.encoder.space, spaces.Discrete(A.size))
@@ -190,6 +213,7 @@ class CudaVecEnv(VecEnv):
             [s[3] for s in staged],
             indices=indices,
         )
+        self._refresh_growth_bounds(indices)
         self.features.initialize_home(indices)
         self.proposed_actions[indices] = 0
         self.executed_actions[indices] = 0
@@ -198,7 +222,7 @@ class CudaVecEnv(VecEnv):
         self.features.totals[ix, 8] = self.batch.header[ix, 2]
         self.features.totals[ix, 11] = -1
         self.features.encode()
-        self.phases["scenario_preparation"] += perf_counter() - started
+        self.profiler.host("scenario_preparation", perf_counter() - started)
 
     def reset(self):
         for index, seed in enumerate(self._seeds):
@@ -229,133 +253,156 @@ class CudaVecEnv(VecEnv):
     def action_masks(self):
         return self.features.mask_tensor
 
-    def step_tensors(self, actions, *, autoreset=True):
-        with self.device_context():
-            viewer = self.live_view
-            if viewer is not None:
-                try:
-                    if not viewer.prepared:
-                        viewer.prepare()
-                    viewer.prepared = False
-                except Exception as exc:
-                    viewer.fail(exc)
-                if not viewer.enabled:
-                    viewer = None
-            if self.training:
-                self.task_transitions.update(
-                    self._tasks[i] for i in np.flatnonzero(self.enabled_envs)
-                )
-            started = perf_counter()
-            obs, reward = self.features.step(self.cp.from_dlpack(actions.detach().contiguous()))
-            self.phases["simulation_features"] += perf_counter() - started
-            h = self.header_tensor
-            self.proposed_actions.copy_(actions)
-            self.transition_ticks.copy_(h[:, 14])
-            # Instantaneous accepted plant/dig proposals execute themselves;
-            # waits and every rejected proposal execute action zero.
-            self.executed_actions.copy_(torch.where(h[:, 14] == 0, actions, 0))
-            self.terminal_ticks = h[:, 0].clone()
-            self.terminal_masks = self.action_masks().clone()
-            done = (
-                (h[:, 1] != 0)
-                | (
-                    h[:, 0]
-                    >= self.cfg["environment"]["cutoff_seconds"]
-                    * self.batch.rules.game["tick_rate"]
-                )
-            ) & (h[:, 17] != 0)
-            timed_out = done & (h[:, 1] == 0)
-            # One compact transfer per decision; no entity state/observations.
-            started = perf_counter()
-            compact_tensor = torch.stack(
-                (done.double(), timed_out.double(), h[:, 14].double(), reward.double()), dim=1
+    def _refresh_growth_bounds(self, indices):
+        header = self.batch.header.get()
+        self._update_public_counts(header, indices)
+
+    def _update_public_counts(self, header, indices):
+        self._pending_spawns[indices] = (
+            header[indices, HEADER.index("total_spawns")]
+            - header[indices, HEADER.index("spawn_index")]
+        )
+        self._plant_counts[indices] = header[indices, HEADER.index("np")]
+
+    def probe_width(self):
+        """Public-count bound: one new plant, pending zombies and two shots per plant."""
+        kept = self.features.summary_host[:, 0]
+        bound = kept + self._pending_spawns + 2 * self._plant_counts + 1
+        return width_bucket(int(bound[self.enabled_envs].max(initial=0)), self.features.limit)
+
+    def step_device(self, actions):
+        """Queue one decision's simulation, encoding and host record without waiting.
+
+        Callers add their own copies to :attr:`handoff`, wait once, then call
+        :meth:`step_host`. The record also carries the next observation's kept
+        counts, so publishing its padding width needs no extra device read.
+        """
+        viewer = self.live_view
+        if viewer is not None:
+            presentation_started = perf_counter()
+            try:
+                if not viewer.prepared:
+                    viewer.prepare()
+                viewer.prepared = False
+            except Exception as exc:
+                viewer.fail(exc)
+            self.profiler.host("presentation", perf_counter() - presentation_started)
+        if self.training:
+            self.task_transitions.update(self._tasks[i] for i in np.flatnonzero(self.enabled_envs))
+        self._step_active = self.enabled_envs.copy()
+        _, reward = self.features.step(
+            self.cp.from_dlpack(actions.detach().contiguous()), publish=False
+        )
+        h = self.header_tensor
+        self.proposed_actions.copy_(actions)
+        self.transition_ticks.copy_(h[:, 14])
+        # Instantaneous accepted plant/dig proposals execute themselves;
+        # waits and every rejected proposal execute action zero.
+        self.executed_actions.copy_(torch.where(h[:, 14] == 0, actions, 0))
+        done = (
+            (h[:, 1] != 0)
+            | (
+                h[:, 0]
+                >= self.cfg["environment"]["cutoff_seconds"] * self.batch.rules.game["tick_rate"]
             )
-            # Include proposal/execution/omissions: never extract per-environment GPU scalars.
-            extra = torch.cat(
+        ) & (h[:, 17] != 0)
+        timed_out = done & (h[:, 1] == 0)
+        with self.profiler.track("transfer"):
+            record = torch.cat(
                 (
-                    self.proposed_actions[:, None].double(),
-                    self.executed_actions[:, None].double(),
-                    torch.from_dlpack(self.features.truncation_counts).double(),
+                    torch.stack((done, timed_out), 1).double(),
+                    h[:, 14:15].double(),
+                    reward[:, None].double(),
+                    h[:, 12:14].double(),
+                    torch.stack((self.proposed_actions, self.executed_actions), 1).double(),
+                    self.features.summary_tensor[: self.num_envs].double(),
+                    torch.from_dlpack(self.features.parts),
                 ),
                 dim=1,
             )
-            packed = torch.cat(
-                (
-                    compact_tensor.flatten(),
-                    h[:, 12:14].double().flatten(),
-                    extra.flatten(),
-                    torch.from_dlpack(self.features.parts).flatten(),
-                )
+            self._record = self.handoff.enqueue("transition", record)
+            self._episode_host = self.handoff.enqueue_fields(
+                "episode",
+                dict(
+                    header=h,
+                    totals=torch.from_dlpack(self.features.totals),
+                ),
             )
-            if self._transition_host is None or self._transition_host.shape != packed.shape:
-                self._transition_host = torch.empty_like(packed, device="cpu", pin_memory=True)
-            self._transition_host.copy_(packed, non_blocking=True)
-            self.stream.synchronize()
-            host = self._transition_host.numpy()
-            compact = host[: self.num_envs * 4].reshape(self.num_envs, 4)
-            self.last_transition_host = compact
-            self.last_action_result_host = host[self.num_envs * 4 : self.num_envs * 6].reshape(
-                self.num_envs, 2
+        self._step_device_result = reward, done, timed_out
+
+    def step_host(self, *, autoreset=True):
+        """Interpret the completed step record after the handoff wait."""
+        host = self._record.numpy()
+        self._update_public_counts(self._episode_host["header"].numpy(), slice(None))
+        compact = host[:, RECORD_OUTCOME]
+        self.last_transition_host = compact
+        self.last_action_result_host = host[:, RECORD_RESULT]
+        actions = host[:, RECORD_ACTIONS]
+        self.last_reward_parts_host = host[:, RECORD_PARTS]
+        viewer = self.live_view
+        if viewer is not None and viewer.enabled:
+            presentation_started = perf_counter()
+            try:
+                viewer.after_step(compact)
+            except Exception as exc:
+                viewer.fail(exc)
+            self.profiler.host("presentation", perf_counter() - presentation_started)
+        if not np.isfinite(self.last_reward_parts_host).all():
+            raise RuntimeError("Invalid CUDA reward accounting or exhausted proximity ledger")
+        summary = host[:, RECORD_SUMMARY].astype(np.int64)
+        # Every game active during this step keeps its complete terminal record.
+        obs = self.features.publish(summary, self._step_active)
+        truncation = summary[:, 1:]
+        infos = []
+        for index, row in enumerate(compact):
+            accepted = bool(self.last_action_result_host[index, 0])
+            reason_code = int(self.last_action_result_host[index, 1])
+            reason = (
+                None if accepted or not 0 <= reason_code < len(REASONS) else REASONS[reason_code]
             )
-            if viewer is not None:
-                try:
-                    viewer.after_step(compact)
-                except Exception as exc:
-                    viewer.fail(exc)
-            self.phases["transfers"] += perf_counter() - started
-            indices = np.flatnonzero(compact[:, 0]).tolist()
-            extra_host = host[self.num_envs * 6 : self.num_envs * 11].reshape(self.num_envs, 5)
-            self.last_reward_parts_host = host[self.num_envs * 11 :].reshape(self.num_envs, -1)
-            if not np.isfinite(self.last_reward_parts_host).all():
-                raise RuntimeError("Invalid CUDA reward accounting or exhausted proximity ledger")
-            truncation = extra_host[:, 2:]
-            infos = []
-            for index, row in enumerate(compact):
-                accepted = bool(self.last_action_result_host[index, 0])
-                reason_code = int(self.last_action_result_host[index, 1])
-                reason = (
-                    None
-                    if accepted or not 0 <= reason_code < len(REASONS)
-                    else REASONS[reason_code]
+            infos.append(
+                {
+                    "entity_truncation": {
+                        "total": int(truncation[index].sum()),
+                        **dict(
+                            zip(("plants", "zombies", "projectiles"), map(int, truncation[index]))
+                        ),
+                    },
+                    "proposal_action": int(actions[index, 0]),
+                    "executed_action": int(actions[index, 1]),
+                    "accepted": accepted,
+                    "rejection_reason": reason,
+                    "ticks_advanced": int(row[2]),
+                }
+            )
+        reward, done, timed_out = self._step_device_result
+        reward = reward.clone()
+        indices = np.flatnonzero(compact[:, 0]).tolist()
+        terminal_observations = None
+        if indices:
+            terminal_observations = obs.clone()
+            headers = self._episode_host["header"].numpy()[indices]
+            totals = self._episode_host["totals"].numpy()[indices]
+            for index, header, total in zip(indices, headers, totals):
+                self.task_completed[self._tasks[index]] += 1
+                infos[index].update(
+                    episode_metrics=self.episode_metrics(index, header, total),
+                    **{"TimeLimit.truncated": bool(compact[index, 1])},
                 )
-                infos.append(
-                    {
-                        "entity_truncation": {
-                            "total": int(truncation[index].sum()),
-                            **dict(
-                                zip(
-                                    ("plants", "zombies", "projectiles"),
-                                    map(int, truncation[index]),
-                                )
-                            ),
-                        },
-                        "proposal_action": int(extra_host[index, 0]),
-                        "executed_action": int(extra_host[index, 1]),
-                        "accepted": accepted,
-                        "rejection_reason": reason,
-                        "ticks_advanced": int(row[2]),
-                    }
-                )
-            reward = reward.clone()
-            terminal_observations = None
-            if indices:
-                terminal_observations = obs.clone()
-                headers = self.batch.header[self.cp.asarray(indices)].get()
-                totals = self.features.totals[self.cp.asarray(indices)].get()
-                for index, header, total in zip(indices, headers, totals):
-                    self.task_completed[self._tasks[index]] += 1
-                    infos[index].update(
-                        episode_metrics=self.episode_metrics(index, header, total),
-                        **{"TimeLimit.truncated": bool(compact[index, 1])},
-                    )
-                    self.finished_outcomes[index] = infos[index]["episode_metrics"]["status"]
-                if autoreset:
-                    self.reset_indices(indices)
-                    obs = self.features.obs_tensor
-                else:
-                    self.batch.header[self.cp.asarray(indices), 17] = 0
-                    self.enabled_envs[indices] = False
-            return obs, reward, done, timed_out, terminal_observations, infos
+                self.finished_outcomes[index] = infos[index]["episode_metrics"]["status"]
+            if autoreset:
+                self.reset_indices(indices)
+                obs = self.features.obs_tensor
+            else:
+                self.batch.header[self.cp.asarray(indices), 17] = 0
+                self.enabled_envs[indices] = False
+        return obs, reward, done, timed_out, terminal_observations, infos
+
+    def step_tensors(self, actions, *, autoreset=True):
+        with self.device_context():
+            self.step_device(actions)
+            self.handoff.wait()
+            return self.step_host(autoreset=autoreset)
 
     def snapshot_training(self):
         """Complete private simulator/queue state, never part of model inputs."""
@@ -406,6 +453,7 @@ class CudaVecEnv(VecEnv):
                     raise ValueError("Invalid proximity ledger duplicate ID or gap")
         with self.device_context():
             self.batch.restore(state["games"], allowed=state["allowed"], digging=state["digging"])
+            self._refresh_growth_bounds(range(self.num_envs))
             self.batch.header[:, 17] = self.cp.asarray(state["enabled"])
             self.enabled_envs[:] = np.asarray(state["enabled"], dtype=bool)
             self.features.totals[:] = self.cp.asarray(state["totals"])

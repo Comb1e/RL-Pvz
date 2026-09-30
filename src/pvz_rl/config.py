@@ -30,15 +30,9 @@ def _bundled_config() -> dict:
     return tomllib.loads(files("pvz_rl").joinpath(_CONFIG_RESOURCE).read_text("utf-8"))
 
 
-@lru_cache(maxsize=1)
-def _output_defaults():
-    bundled = _bundled_config()
-    return {key: bundled[key] for key in ("logging", "visualization")}
-
-
 def output_settings(cfg: dict) -> dict:
-    """Optional output settings also work with pre-0.2.0 checkpoint configurations."""
-    return {key: {**values, **cfg.get(key, {})} for key, values in _output_defaults().items()}
+    """Read the resolved current output configuration without version fallbacks."""
+    return {key: cfg[key] for key in ("logging", "visualization")}
 
 
 def research_config(cfg: dict) -> dict:
@@ -54,19 +48,12 @@ def research_config(cfg: dict) -> dict:
     return result
 
 
-@lru_cache(maxsize=1)
-def _runtime_defaults():
-    return _bundled_config()["runtime"]
-
-
 def runtime_settings(cfg: dict) -> dict:
-    """Old configurations get current transport defaults without changing strategy."""
-    return {**_runtime_defaults(), **cfg.get("runtime", {})}
+    return cfg["runtime"]
 
 
 def simulator(cfg):
-    """Archived configurations without a backend field retain CPU simulation."""
-    return cfg.get("simulation", {}).get("backend", "cpu")
+    return cfg["simulation"]["backend"]
 
 
 @lru_cache(maxsize=1)
@@ -326,6 +313,10 @@ def validate_config(cfg: dict) -> None:
     log, visual = output["logging"], output["visualization"]
     if not math.isfinite(log["progress_seconds"]) or log["progress_seconds"] <= 0:
         raise ValueError("Logging progress_seconds must be finite and positive")
+    if not math.isfinite(log["terminal_progress_seconds"]) or log["terminal_progress_seconds"] <= 0:
+        raise ValueError("Logging terminal_progress_seconds must be finite and positive")
+    if log["terminal_mode"] != "compact":
+        raise ValueError("Logging terminal_mode must be compact")
     if type(log["rolling_window"]) is not int or log["rolling_window"] < 1:
         raise ValueError("Logging rolling_window must be a positive integer")
     if any(type(visual[key]) is not bool for key in ("enabled", "demos", "videos", "live_enabled")):
@@ -391,9 +382,9 @@ def validate_config(cfg: dict) -> None:
     fit_sequence_groups = performance.get("fit_sequence_groups", 1)
     if type(fit_sequence_groups) is not int or fit_sequence_groups < 1 or fit_sequence_groups > 16:
         raise ValueError("training.performance.fit_sequence_groups must be an integer from 1 to 16")
-    if train.get("budget_unit", "decisions") not in ("games", "decisions"):
+    if train.get("budget_unit") not in ("games", "decisions"):
         raise ValueError("training.budget_unit must be games or decisions")
-    if env.get("action_timing", "fixed") not in ("fixed", "per_tick"):
+    if env.get("action_timing") not in ("fixed", "per_tick"):
         raise ValueError("Unsupported environment.action_timing")
     if env.get("action_timing") == "per_tick" and env["decision_ticks"] != 1:
         raise ValueError("per_tick action timing requires decision_ticks = 1")

@@ -1,0 +1,1236 @@
+{
+  "comparison": "two-lane versus the current one-lane memory fallback, not a historical trainer",
+  "config": {
+    "conditions": {
+      "masked": {
+        "curriculum": true,
+        "hybrid": false,
+        "masked": true,
+        "shaped": true
+      }
+    },
+    "curriculum": {
+      "boundaries": [
+        0.1,
+        0.4
+      ],
+      "consecutive_passes": 1,
+      "easy_weights": [
+        1.0,
+        0.0,
+        0.0
+      ],
+      "final_weights": [
+        0.2,
+        0.4,
+        0.4
+      ],
+      "intermediate_weights": [
+        0.5,
+        0.5,
+        0.0
+      ],
+      "minimum_stage_games": 100,
+      "minimum_stage_steps": 16384,
+      "mode": "teaching",
+      "probe_cases": 100,
+      "probe_interval": 16384,
+      "probe_interval_games": 2000,
+      "residency": "episode_start_stage",
+      "stages": {
+        "easy": {
+          "requirements": {
+            "easy": 100
+          },
+          "tasks": [
+            "easy"
+          ],
+          "weights": [
+            1.0
+          ]
+        },
+        "shared": {
+          "requirements": {
+            "easy": 100,
+            "hard": 100,
+            "standard": 100
+          },
+          "tasks": [
+            "easy",
+            "standard",
+            "hard"
+          ],
+          "weights": [
+            0.2,
+            0.4,
+            0.4
+          ]
+        },
+        "standard": {
+          "requirements": {
+            "easy": 100,
+            "standard": 100
+          },
+          "tasks": [
+            "easy",
+            "standard"
+          ],
+          "weights": [
+            0.5,
+            0.5
+          ]
+        }
+      }
+    },
+    "diagnostics": {
+      "early_dig_seconds": 5
+    },
+    "encoding": {
+      "count_scale": 75,
+      "max_entities": 256,
+      "version": "entity_v1",
+      "wave_scale": 15
+    },
+    "engine_commit": "1424b4d802e783a36772091c49d96aa7c6036d7a",
+    "engine_package_version": "1.7.0",
+    "engine_version": "1.4.0",
+    "environment": {
+      "action_timing": "per_tick",
+      "cols": 9,
+      "cutoff_seconds": 1200,
+      "decision_ticks": 1,
+      "mower_states": [
+        "ready",
+        "moving",
+        "spent"
+      ],
+      "plant_states": [
+        "ready",
+        "arming",
+        "armed",
+        "fusing",
+        "digesting",
+        "exploding",
+        "detonating",
+        "rising",
+        "biting",
+        "biting_got_one",
+        "recovering"
+      ],
+      "plants": [
+        "sunflower",
+        "peashooter",
+        "wall_nut",
+        "cherry_bomb",
+        "potato_mine",
+        "snow_pea",
+        "chomper",
+        "repeater"
+      ],
+      "rows": 5,
+      "zombie_states": [
+        "walking",
+        "carrying_pole",
+        "vaulting",
+        "biting",
+        "dead"
+      ],
+      "zombies": [
+        "basic",
+        "flag",
+        "conehead",
+        "buckethead",
+        "pole_vaulting"
+      ]
+    },
+    "evaluation": {
+      "bootstrap_replicates": 2000,
+      "bootstrap_seed": 1739,
+      "levels": [
+        "easy",
+        "standard",
+        "hard"
+      ],
+      "ood_families": [
+        "redistributed",
+        "faster",
+        "concentrated"
+      ],
+      "ood_levels": [
+        "standard",
+        "hard"
+      ],
+      "replays_per_outcome": 10,
+      "targets": [
+        0.95,
+        0.9,
+        0.75
+      ]
+    },
+    "logging": {
+      "hardware_sample_seconds": 1.0,
+      "progress_seconds": 15,
+      "rolling_window": 100,
+      "terminal_mode": "compact",
+      "terminal_progress_seconds": 60
+    },
+    "policy": {
+      "action_distribution": "sequential_q_unmasked_penalty_v1",
+      "action_embedding": 32,
+      "attention_query_chunk": 64,
+      "chunk_length": 256,
+      "encoder_microbatch": 128,
+      "encoder_token_budget": 65536,
+      "entity_width": 32,
+      "kind": "transformer_lstm_q_v2",
+      "lstm_hidden": 256,
+      "outcome_width": 16,
+      "scalar_width": 64,
+      "transformer_feedforward": 64,
+      "transformer_heads": 4,
+      "transformer_layers": 2
+    },
+    "profile": "complete-game",
+    "reward": {
+      "basic_zombie_value": 50.0,
+      "empty_dig_penalty": 3e-06,
+      "home_entry_penalties": [
+        0.005,
+        0.015
+      ],
+      "invalid_plant_penalty": 1e-05,
+      "loss_penalty": 2.0,
+      "mower_value": 200.0,
+      "progress_weight": 0.01,
+      "value_scale": 300.0,
+      "version": "net_value_v1",
+      "win_reward": 1.0,
+      "win_time_weight": 0.1
+    },
+    "runtime": {
+      "cache_legal_actions": true,
+      "refill_evaluation": true
+    },
+    "schema_version": 1,
+    "simulation": {
+      "backend": "cuda"
+    },
+    "splits": {
+      "curriculum": [
+        100050,
+        100149
+      ],
+      "ood": [
+        300000,
+        300099
+      ],
+      "test": [
+        200000,
+        200299
+      ],
+      "train": [
+        1000,
+        99999
+      ],
+      "validation": [
+        100000,
+        100049
+      ]
+    },
+    "training": {
+      "batch_size": 1024,
+      "budget_unit": "games",
+      "demo": {
+        "learner_seed": 101,
+        "learning_rate": 0.0003,
+        "passes": 5,
+        "time_budget_minutes": 30
+      },
+      "device": "cuda",
+      "discount_clock": "simulation_ticks",
+      "eval_interval": 250000,
+      "eval_interval_games": 2000,
+      "exploration": {
+        "decay_games": 5000,
+        "epsilon_floor": 0.01,
+        "epsilon_start": 0.5,
+        "objective": "sequential_tile_epsilon_v1"
+      },
+      "finalization_minutes": 15,
+      "gamma": 1.0,
+      "hidden_sizes": [
+        128,
+        128
+      ],
+      "learner_seeds": [
+        101,
+        102
+      ],
+      "learning_rate": 0.0003,
+      "max_grad_norm": 5,
+      "max_minutes": 120,
+      "method": "complete_return_lstm_v1",
+      "n_envs": 128,
+      "n_epochs": 4,
+      "objective": {
+        "branch_probes": 2,
+        "demo_rank_loss_weight": 0.1,
+        "demo_rank_margin": 0.05,
+        "dense_multiplier": 10.0,
+        "ema_decay": 0.95,
+        "probe_huber_delta": 1.0,
+        "probe_interval_decisions": 1,
+        "probe_loss_weight": 0.25,
+        "protocol": "complete_return_probe_v2",
+        "tile_probes": 2
+      },
+      "performance": {
+        "compile_kernels": true,
+        "fit_precision": "features_bf16",
+        "fit_sequence_groups": 4,
+        "prefetch": true,
+        "telemetry": true
+      },
+      "storage": {
+        "block_rows": 32768,
+        "ram_gib": 6
+      },
+      "torch_threads": 1,
+      "total_games": 10000,
+      "total_steps": 3000000,
+      "until_stage_complete": false,
+      "validation_schedule": "stage_success"
+    },
+    "visualization": {
+      "crf": 23,
+      "demos": true,
+      "enabled": false,
+      "ffmpeg": "",
+      "final_hold_seconds": 2,
+      "live_enabled": false,
+      "live_fps": 5,
+      "live_history_ram_mib": 16,
+      "live_window_size": [
+        1600,
+        1050
+      ],
+      "video_fps": 25,
+      "video_size": [
+        1280,
+        820
+      ],
+      "videos": false
+    }
+  },
+  "date": "2026-09-30",
+  "decisions_per_repeat": 32,
+  "device": "NVIDIA GeForce RTX 4070 Laptop GPU",
+  "environments": 128,
+  "formal_training": false,
+  "measurements": [
+    {
+      "case": "sparse",
+      "cupy_reserved_mib": 1018.47412109375,
+      "host_rss_mib": 1435.984375,
+      "phases_seconds": {
+        "ema_inference": 0.2863873929977418,
+        "encoding": 0.02090198403596878,
+        "host_synchronization": 0.00015760002133902162,
+        "online_inference": 0.10513433575630185,
+        "presentation": 0.012297199995373376,
+        "probe_simulation": 0.03047264015302061,
+        "simulation": 0.0052024639919400215,
+        "storage": 0.0054622000170638785,
+        "transfer": 0.022074975982308388
+      },
+      "pinned_transfer_mib": 1.216080665588379,
+      "process_cpu_percent": 92.12996045320278,
+      "repeat": 0,
+      "scratch_lanes": 1,
+      "seconds": 0.7123089999950025,
+      "torch_peak_allocated_mib": 66.4658203125,
+      "trajectory_bytes": 6309376,
+      "transitions": 4096,
+      "transitions_per_second": 5750.313417391521,
+      "utilization": {
+        "gpu_percent": 49.0,
+        "process_cpu_percent": 100.1,
+        "system_cpu_percent": 19.1
+      }
+    },
+    {
+      "case": "sparse",
+      "cupy_reserved_mib": 1018.47412109375,
+      "host_rss_mib": 1436.2265625,
+      "phases_seconds": {
+        "ema_inference": 0.25730985498428344,
+        "encoding": 0.020826816022396097,
+        "host_synchronization": 0.00017159999697469175,
+        "online_inference": 0.11340777587890624,
+        "presentation": 0.011991800012765452,
+        "probe_simulation": 0.031409856072627,
+        "simulation": 0.005186592008918524,
+        "storage": 0.005755099962698296,
+        "transfer": 0.02241344015300274
+      },
+      "pinned_transfer_mib": 1.216080665588379,
+      "process_cpu_percent": 91.24394282765134,
+      "repeat": 1,
+      "scratch_lanes": 1,
+      "seconds": 0.7021013999910792,
+      "torch_peak_allocated_mib": 66.4658203125,
+      "trajectory_bytes": 6309376,
+      "transitions": 4096,
+      "transitions_per_second": 5833.915158198008,
+      "utilization": {
+        "gpu_percent": 39.0,
+        "process_cpu_percent": 95.3,
+        "system_cpu_percent": 14.9
+      }
+    },
+    {
+      "case": "sparse",
+      "cupy_reserved_mib": 1018.47412109375,
+      "host_rss_mib": 1436.38671875,
+      "phases_seconds": {
+        "ema_inference": 0.24592697656154644,
+        "encoding": 0.018831264054402712,
+        "host_synchronization": 0.00015570000687148422,
+        "online_inference": 0.09847900819778443,
+        "presentation": 0.012775899973348714,
+        "probe_simulation": 0.03028172801714392,
+        "simulation": 0.0047003520168364035,
+        "storage": 0.005392899955040775,
+        "transfer": 0.02032992008328438
+      },
+      "pinned_transfer_mib": 1.216080665588379,
+      "process_cpu_percent": 100.8027973174667,
+      "repeat": 2,
+      "scratch_lanes": 1,
+      "seconds": 0.6510236000031,
+      "torch_peak_allocated_mib": 66.4658203125,
+      "trajectory_bytes": 6309376,
+      "transitions": 4096,
+      "transitions_per_second": 6291.630595235712,
+      "utilization": {
+        "gpu_percent": null,
+        "process_cpu_percent": null,
+        "system_cpu_percent": null
+      }
+    },
+    {
+      "case": "sparse",
+      "cupy_reserved_mib": 1514.17724609375,
+      "host_rss_mib": 1442.33984375,
+      "phases_seconds": {
+        "ema_inference": 0.29810272133350374,
+        "encoding": 0.019033248003572225,
+        "host_synchronization": 0.00017449997540097684,
+        "online_inference": 0.10741964960098266,
+        "presentation": 0.012210600019898266,
+        "probe_simulation": 0.01649324800167233,
+        "simulation": 0.005065760035067795,
+        "storage": 0.005402499999036081,
+        "transfer": 0.021671359926462175
+      },
+      "pinned_transfer_mib": 1.216080665588379,
+      "process_cpu_percent": 100.57165866410185,
+      "repeat": 0,
+      "scratch_lanes": 2,
+      "seconds": 0.6680559999949764,
+      "torch_peak_allocated_mib": 66.6484375,
+      "trajectory_bytes": 6309376,
+      "transitions": 4096,
+      "transitions_per_second": 6131.222532288911,
+      "utilization": {
+        "gpu_percent": null,
+        "process_cpu_percent": null,
+        "system_cpu_percent": null
+      }
+    },
+    {
+      "case": "sparse",
+      "cupy_reserved_mib": 1514.17724609375,
+      "host_rss_mib": 1442.671875,
+      "phases_seconds": {
+        "ema_inference": 0.2510013433694839,
+        "encoding": 0.018235551957041025,
+        "host_synchronization": 0.0002128000051015988,
+        "online_inference": 0.09657587218284606,
+        "presentation": 0.011938200012082234,
+        "probe_simulation": 0.016342624016106127,
+        "simulation": 0.005409792009741066,
+        "storage": 0.005707500051357783,
+        "transfer": 0.022748288050293924
+      },
+      "pinned_transfer_mib": 1.216080665588379,
+      "process_cpu_percent": 98.91080669010219,
+      "repeat": 1,
+      "scratch_lanes": 2,
+      "seconds": 0.60028830000374,
+      "torch_peak_allocated_mib": 66.6484375,
+      "trajectory_bytes": 6309376,
+      "transitions": 4096,
+      "transitions_per_second": 6823.388028676355,
+      "utilization": {
+        "gpu_percent": null,
+        "process_cpu_percent": null,
+        "system_cpu_percent": null
+      }
+    },
+    {
+      "case": "sparse",
+      "cupy_reserved_mib": 1514.17724609375,
+      "host_rss_mib": 1443.0078125,
+      "phases_seconds": {
+        "ema_inference": 0.24919462382793425,
+        "encoding": 0.01676892794668675,
+        "host_synchronization": 0.0001552999601699412,
+        "online_inference": 0.09751388812065123,
+        "presentation": 0.012045900031807832,
+        "probe_simulation": 0.01410812806710601,
+        "simulation": 0.00485334401577711,
+        "storage": 0.005664100026478991,
+        "transfer": 0.021466880038380626
+      },
+      "pinned_transfer_mib": 1.216080665588379,
+      "process_cpu_percent": 97.51029750919744,
+      "repeat": 2,
+      "scratch_lanes": 2,
+      "seconds": 0.5928860999993049,
+      "torch_peak_allocated_mib": 66.6484375,
+      "trajectory_bytes": 6309376,
+      "transitions": 4096,
+      "transitions_per_second": 6908.578224392177,
+      "utilization": {
+        "gpu_percent": 34.0,
+        "process_cpu_percent": 100.0,
+        "system_cpu_percent": 13.6
+      }
+    },
+    {
+      "case": "crowded",
+      "cupy_reserved_mib": 1018.47412109375,
+      "host_rss_mib": 1548.5703125,
+      "phases_seconds": {
+        "ema_inference": 0.9725509119033813,
+        "encoding": 0.02366553578525782,
+        "host_synchronization": 0.0556598000403028,
+        "online_inference": 0.23423443222045898,
+        "presentation": 0.01303579997329507,
+        "probe_simulation": 0.0758434243733063,
+        "simulation": 0.06608019205927847,
+        "storage": 0.061233200030983426,
+        "transfer": 0.03465504007041453
+      },
+      "pinned_transfer_mib": 7.231705665588379,
+      "process_cpu_percent": 98.3934408098371,
+      "repeat": 0,
+      "scratch_lanes": 1,
+      "seconds": 1.6832930999953533,
+      "torch_peak_allocated_mib": 66.4658203125,
+      "trajectory_bytes": 131919872,
+      "transitions": 4096,
+      "transitions_per_second": 2433.32548562773,
+      "utilization": {
+        "gpu_percent": 51.0,
+        "process_cpu_percent": 99.25,
+        "system_cpu_percent": 18.1
+      }
+    },
+    {
+      "case": "crowded",
+      "cupy_reserved_mib": 1018.47412109375,
+      "host_rss_mib": 1549.28515625,
+      "phases_seconds": {
+        "ema_inference": 0.9698756828308108,
+        "encoding": 0.023488959804177287,
+        "host_synchronization": 0.05567570001585409,
+        "online_inference": 0.23147679996490472,
+        "presentation": 0.01247380007407628,
+        "probe_simulation": 0.07670688027702267,
+        "simulation": 0.06546604788303374,
+        "storage": 0.060686400000122376,
+        "transfer": 0.033177375890314574
+      },
+      "pinned_transfer_mib": 7.231705665588379,
+      "process_cpu_percent": 99.51254255314497,
+      "repeat": 1,
+      "scratch_lanes": 1,
+      "seconds": 1.6800646000046981,
+      "torch_peak_allocated_mib": 66.4658203125,
+      "trajectory_bytes": 131919872,
+      "transitions": 4096,
+      "transitions_per_second": 2438.001491126321,
+      "utilization": {
+        "gpu_percent": 36.5,
+        "process_cpu_percent": 98.45,
+        "system_cpu_percent": 17.35
+      }
+    },
+    {
+      "case": "crowded",
+      "cupy_reserved_mib": 1018.47412109375,
+      "host_rss_mib": 1549.45703125,
+      "phases_seconds": {
+        "ema_inference": 0.9660524477958679,
+        "encoding": 0.022866687752306457,
+        "host_synchronization": 0.055047600049874745,
+        "online_inference": 0.22762118434906012,
+        "presentation": 0.01305819999834057,
+        "probe_simulation": 0.07563235216960307,
+        "simulation": 0.06542755222320557,
+        "storage": 0.060552600014489144,
+        "transfer": 0.03318271999061108
+      },
+      "pinned_transfer_mib": 7.231705665588379,
+      "process_cpu_percent": 99.91195080181755,
+      "repeat": 2,
+      "scratch_lanes": 1,
+      "seconds": 1.6577096000110032,
+      "torch_peak_allocated_mib": 66.4658203125,
+      "trajectory_bytes": 131919872,
+      "transitions": 4096,
+      "transitions_per_second": 2470.879097263364,
+      "utilization": {
+        "gpu_percent": 77.0,
+        "process_cpu_percent": 103.0,
+        "system_cpu_percent": 21.6
+      }
+    },
+    {
+      "case": "crowded",
+      "cupy_reserved_mib": 1514.17724609375,
+      "host_rss_mib": 1565.25390625,
+      "phases_seconds": {
+        "ema_inference": 0.9682412238121032,
+        "encoding": 0.01932668793201446,
+        "host_synchronization": 0.05660349999379832,
+        "online_inference": 0.234286783695221,
+        "presentation": 0.013743699950282462,
+        "probe_simulation": 0.05000774424429982,
+        "simulation": 0.06605788785219195,
+        "storage": 0.06449170003179461,
+        "transfer": 0.03490873616188766
+      },
+      "pinned_transfer_mib": 7.231705665588379,
+      "process_cpu_percent": 98.80344917384959,
+      "repeat": 0,
+      "scratch_lanes": 2,
+      "seconds": 1.6288652000075672,
+      "torch_peak_allocated_mib": 82.72265625,
+      "trajectory_bytes": 131919872,
+      "transitions": 4096,
+      "transitions_per_second": 2514.6341145854003,
+      "utilization": {
+        "gpu_percent": 81.0,
+        "process_cpu_percent": 100.0,
+        "system_cpu_percent": 17.9
+      }
+    },
+    {
+      "case": "crowded",
+      "cupy_reserved_mib": 1514.17724609375,
+      "host_rss_mib": 1565.19921875,
+      "phases_seconds": {
+        "ema_inference": 0.9655225605964659,
+        "encoding": 0.018689120046794398,
+        "host_synchronization": 0.058058800030266866,
+        "online_inference": 0.23051872062683113,
+        "presentation": 0.013827500035404228,
+        "probe_simulation": 0.04879667204711582,
+        "simulation": 0.06617520007491112,
+        "storage": 0.06244220008375123,
+        "transfer": 0.035658111922442906
+      },
+      "pinned_transfer_mib": 7.231705665588379,
+      "process_cpu_percent": 99.19251226777142,
+      "repeat": 1,
+      "scratch_lanes": 2,
+      "seconds": 1.606724099998246,
+      "torch_peak_allocated_mib": 82.72265625,
+      "trajectory_bytes": 131919872,
+      "transitions": 4096,
+      "transitions_per_second": 2549.2864643061444,
+      "utilization": {
+        "gpu_percent": 80.0,
+        "process_cpu_percent": 100.0,
+        "system_cpu_percent": 16.8
+      }
+    },
+    {
+      "case": "crowded",
+      "cupy_reserved_mib": 1514.17724609375,
+      "host_rss_mib": 1565.23046875,
+      "phases_seconds": {
+        "ema_inference": 0.9771217627525329,
+        "encoding": 0.020009727943688632,
+        "host_synchronization": 0.05672360000608023,
+        "online_inference": 0.23069964838027956,
+        "presentation": 0.012985700013814494,
+        "probe_simulation": 0.05015824004448949,
+        "simulation": 0.06614252832531929,
+        "storage": 0.06256940000457689,
+        "transfer": 0.03453811192512514
+      },
+      "pinned_transfer_mib": 7.231705665588379,
+      "process_cpu_percent": 99.54098436168972,
+      "repeat": 2,
+      "scratch_lanes": 2,
+      "seconds": 1.632493400000385,
+      "torch_peak_allocated_mib": 82.72265625,
+      "trajectory_bytes": 131919872,
+      "transitions": 4096,
+      "transitions_per_second": 2509.045365818345,
+      "utilization": {
+        "gpu_percent": 54.0,
+        "process_cpu_percent": 97.65,
+        "system_cpu_percent": 18.65
+      }
+    },
+    {
+      "case": "rejection-heavy",
+      "cupy_reserved_mib": 2009.88037109375,
+      "host_rss_mib": 1446.57421875,
+      "phases_seconds": {
+        "ema_inference": 0.2604442259073258,
+        "encoding": 0.02592009599693118,
+        "host_synchronization": 0.00031629999284632504,
+        "online_inference": 0.10585859251022339,
+        "presentation": 0.016962499998044223,
+        "probe_simulation": 0.03484339206758884,
+        "simulation": 0.006258783981204031,
+        "storage": 0.0059489000122994184,
+        "transfer": 0.024339264065027236
+      },
+      "pinned_transfer_mib": 1.216080665588379,
+      "process_cpu_percent": 94.52942085570622,
+      "repeat": 0,
+      "scratch_lanes": 1,
+      "seconds": 0.7272868000000017,
+      "torch_peak_allocated_mib": 98.9658203125,
+      "trajectory_bytes": 5627904,
+      "transitions": 4096,
+      "transitions_per_second": 5631.891022908694,
+      "utilization": {
+        "gpu_percent": 31.0,
+        "process_cpu_percent": 98.5,
+        "system_cpu_percent": 25.9
+      }
+    },
+    {
+      "case": "rejection-heavy",
+      "cupy_reserved_mib": 2009.88037109375,
+      "host_rss_mib": 1446.55859375,
+      "phases_seconds": {
+        "ema_inference": 0.24895769584178923,
+        "encoding": 0.019716383973136537,
+        "host_synchronization": 0.0001630999759072438,
+        "online_inference": 0.09572688055038454,
+        "presentation": 0.01498119997268077,
+        "probe_simulation": 0.02710451209265736,
+        "simulation": 0.005618463993072511,
+        "storage": 0.005160799977602437,
+        "transfer": 0.022787968009710304
+      },
+      "pinned_transfer_mib": 1.216080665588379,
+      "process_cpu_percent": 96.51753909005559,
+      "repeat": 1,
+      "scratch_lanes": 1,
+      "seconds": 0.647550699999556,
+      "torch_peak_allocated_mib": 98.9658203125,
+      "trajectory_bytes": 5627904,
+      "transitions": 4096,
+      "transitions_per_second": 6325.373441805883,
+      "utilization": {
+        "gpu_percent": 46.0,
+        "process_cpu_percent": 98.5,
+        "system_cpu_percent": 16.7
+      }
+    },
+    {
+      "case": "rejection-heavy",
+      "cupy_reserved_mib": 2009.88037109375,
+      "host_rss_mib": 1446.58984375,
+      "phases_seconds": {
+        "ema_inference": 0.24885715293884278,
+        "encoding": 0.01899654404260219,
+        "host_synchronization": 0.00014040003588888794,
+        "online_inference": 0.09078419184684751,
+        "presentation": 0.014619600013247691,
+        "probe_simulation": 0.028747040065936744,
+        "simulation": 0.004957152020186187,
+        "storage": 0.0049574999866308644,
+        "transfer": 0.020707839995622646
+      },
+      "pinned_transfer_mib": 1.216080665588379,
+      "process_cpu_percent": 99.44296417319191,
+      "repeat": 2,
+      "scratch_lanes": 1,
+      "seconds": 0.6442134999961127,
+      "torch_peak_allocated_mib": 98.9658203125,
+      "trajectory_bytes": 5627904,
+      "transitions": 4096,
+      "transitions_per_second": 6358.140585418834,
+      "utilization": {
+        "gpu_percent": null,
+        "process_cpu_percent": null,
+        "system_cpu_percent": null
+      }
+    },
+    {
+      "case": "rejection-heavy",
+      "cupy_reserved_mib": 2009.88037109375,
+      "host_rss_mib": 1446.5859375,
+      "phases_seconds": {
+        "ema_inference": 0.26255910384654996,
+        "encoding": 0.015605216119438414,
+        "host_synchronization": 0.00014650002412963659,
+        "online_inference": 0.09172511982917785,
+        "presentation": 0.015012600008049048,
+        "probe_simulation": 0.014403936009854082,
+        "simulation": 0.004879199992865326,
+        "storage": 0.005314100009854883,
+        "transfer": 0.02138316801190376
+      },
+      "pinned_transfer_mib": 1.216080665588379,
+      "process_cpu_percent": 97.42268241033202,
+      "repeat": 0,
+      "scratch_lanes": 2,
+      "seconds": 0.5934192999993684,
+      "torch_peak_allocated_mib": 115.22265625,
+      "trajectory_bytes": 5627904,
+      "transitions": 4096,
+      "transitions_per_second": 6902.370718317317,
+      "utilization": {
+        "gpu_percent": null,
+        "process_cpu_percent": null,
+        "system_cpu_percent": null
+      }
+    },
+    {
+      "case": "rejection-heavy",
+      "cupy_reserved_mib": 2009.88037109375,
+      "host_rss_mib": 1446.58203125,
+      "phases_seconds": {
+        "ema_inference": 0.24634233474731448,
+        "encoding": 0.015386720046401028,
+        "host_synchronization": 0.00014589997590519488,
+        "online_inference": 0.09087750411033631,
+        "presentation": 0.014657699925010093,
+        "probe_simulation": 0.014364992000162596,
+        "simulation": 0.00508201603218913,
+        "storage": 0.005104199983179569,
+        "transfer": 0.020618303969502445
+      },
+      "pinned_transfer_mib": 1.216080665588379,
+      "process_cpu_percent": 99.9834838094484,
+      "repeat": 1,
+      "scratch_lanes": 2,
+      "seconds": 0.5782204999995884,
+      "torch_peak_allocated_mib": 115.22265625,
+      "trajectory_bytes": 5627904,
+      "transitions": 4096,
+      "transitions_per_second": 7083.802805336228,
+      "utilization": {
+        "gpu_percent": 0.0,
+        "process_cpu_percent": 98.4,
+        "system_cpu_percent": 17.0
+      }
+    },
+    {
+      "case": "rejection-heavy",
+      "cupy_reserved_mib": 2009.88037109375,
+      "host_rss_mib": 1446.60546875,
+      "phases_seconds": {
+        "ema_inference": 0.24639903938770297,
+        "encoding": 0.01637635200470686,
+        "host_synchronization": 0.00014909998571965843,
+        "online_inference": 0.09330937600135804,
+        "presentation": 0.014746799992281012,
+        "probe_simulation": 0.01801123201847077,
+        "simulation": 0.00494147201627493,
+        "storage": 0.00516119999520015,
+        "transfer": 0.020798464000225073
+      },
+      "pinned_transfer_mib": 1.216080665588379,
+      "process_cpu_percent": 97.55018065633624,
+      "repeat": 2,
+      "scratch_lanes": 2,
+      "seconds": 0.5926437000016449,
+      "torch_peak_allocated_mib": 115.22265625,
+      "trajectory_bytes": 5627904,
+      "transitions": 4096,
+      "transitions_per_second": 6911.403934587732,
+      "utilization": {
+        "gpu_percent": 42.0,
+        "process_cpu_percent": 95.3,
+        "system_cpu_percent": 14.9
+      }
+    },
+    {
+      "case": "accepted-action",
+      "cupy_reserved_mib": 2009.88037109375,
+      "host_rss_mib": 1477.265625,
+      "phases_seconds": {
+        "ema_inference": 0.46206099104881293,
+        "encoding": 0.024358176030218615,
+        "host_synchronization": 0.00017430000298190862,
+        "online_inference": 0.11850352048873902,
+        "presentation": 0.015435200024512596,
+        "probe_simulation": 0.02924246405065058,
+        "simulation": 0.006942591995000838,
+        "storage": 0.016174400021554902,
+        "transfer": 0.03206486415863037
+      },
+      "pinned_transfer_mib": 3.450455665588379,
+      "process_cpu_percent": 96.84193248703995,
+      "repeat": 0,
+      "scratch_lanes": 1,
+      "seconds": 0.9358033000025898,
+      "torch_peak_allocated_mib": 141.80712890625,
+      "trajectory_bytes": 33476560,
+      "transitions": 4096,
+      "transitions_per_second": 4376.988198255621,
+      "utilization": {
+        "gpu_percent": 61.0,
+        "process_cpu_percent": 97.0,
+        "system_cpu_percent": 14.7
+      }
+    },
+    {
+      "case": "accepted-action",
+      "cupy_reserved_mib": 2009.88037109375,
+      "host_rss_mib": 1477.30859375,
+      "phases_seconds": {
+        "ema_inference": 0.4194237431287766,
+        "encoding": 0.021195456009358175,
+        "host_synchronization": 0.00016910000704228878,
+        "online_inference": 0.0947432634830475,
+        "presentation": 0.015299099977710284,
+        "probe_simulation": 0.027033152095042194,
+        "simulation": 0.0057229759879410275,
+        "storage": 0.01653479997185059,
+        "transfer": 0.027380799934268014
+      },
+      "pinned_transfer_mib": 3.450455665588379,
+      "process_cpu_percent": 100.20719671899772,
+      "repeat": 1,
+      "scratch_lanes": 1,
+      "seconds": 0.826412700000219,
+      "torch_peak_allocated_mib": 141.80712890625,
+      "trajectory_bytes": 33476560,
+      "transitions": 4096,
+      "transitions_per_second": 4956.36139183112,
+      "utilization": {
+        "gpu_percent": 59.0,
+        "process_cpu_percent": 100.0,
+        "system_cpu_percent": 15.9
+      }
+    },
+    {
+      "case": "accepted-action",
+      "cupy_reserved_mib": 2009.88037109375,
+      "host_rss_mib": 1477.26953125,
+      "phases_seconds": {
+        "ema_inference": 0.4303387196063997,
+        "encoding": 0.02278415997698904,
+        "host_synchronization": 0.00015729997539892793,
+        "online_inference": 0.1046388158798218,
+        "presentation": 0.014959999956772663,
+        "probe_simulation": 0.027406816100701694,
+        "simulation": 0.005571391981095077,
+        "storage": 0.016031099963583983,
+        "transfer": 0.027808160006999975
+      },
+      "pinned_transfer_mib": 3.450455665588379,
+      "process_cpu_percent": 95.835311277695,
+      "repeat": 2,
+      "scratch_lanes": 1,
+      "seconds": 0.8641126000002259,
+      "torch_peak_allocated_mib": 141.80712890625,
+      "trajectory_bytes": 33476560,
+      "transitions": 4096,
+      "transitions_per_second": 4740.122988600015,
+      "utilization": {
+        "gpu_percent": 58.0,
+        "process_cpu_percent": 98.4,
+        "system_cpu_percent": 15.4
+      }
+    },
+    {
+      "case": "accepted-action",
+      "cupy_reserved_mib": 2009.88037109375,
+      "host_rss_mib": 1477.41796875,
+      "phases_seconds": {
+        "ema_inference": 0.4428359386920928,
+        "encoding": 0.01790422406792642,
+        "host_synchronization": 0.00015910000365693122,
+        "online_inference": 0.10378841519355773,
+        "presentation": 0.015977199989720248,
+        "probe_simulation": 0.014444831995293506,
+        "simulation": 0.005647935995832085,
+        "storage": 0.01631239996640943,
+        "transfer": 0.0273693120032549
+      },
+      "pinned_transfer_mib": 3.450455665588379,
+      "process_cpu_percent": 100.24715705088106,
+      "repeat": 0,
+      "scratch_lanes": 2,
+      "seconds": 0.810496800011606,
+      "torch_peak_allocated_mib": 166.18896484375,
+      "trajectory_bytes": 33476560,
+      "transitions": 4096,
+      "transitions_per_second": 5053.690526528108,
+      "utilization": {
+        "gpu_percent": 67.0,
+        "process_cpu_percent": 100.0,
+        "system_cpu_percent": 14.9
+      }
+    },
+    {
+      "case": "accepted-action",
+      "cupy_reserved_mib": 2009.88037109375,
+      "host_rss_mib": 1477.49609375,
+      "phases_seconds": {
+        "ema_inference": 0.43001356768608084,
+        "encoding": 0.0211782720014453,
+        "host_synchronization": 0.0002497999957995489,
+        "online_inference": 0.11204384016990665,
+        "presentation": 0.017343599974992685,
+        "probe_simulation": 0.01687785596959294,
+        "simulation": 0.006670592010021208,
+        "storage": 0.01777500001480803,
+        "transfer": 0.03131427192687988
+      },
+      "pinned_transfer_mib": 3.450455665588379,
+      "process_cpu_percent": 99.13938204059576,
+      "repeat": 1,
+      "scratch_lanes": 2,
+      "seconds": 0.8510744999948656,
+      "torch_peak_allocated_mib": 166.18896484375,
+      "trajectory_bytes": 33476560,
+      "transitions": 4096,
+      "transitions_per_second": 4812.739660305544,
+      "utilization": {
+        "gpu_percent": 19.0,
+        "process_cpu_percent": 100.1,
+        "system_cpu_percent": 28.3
+      }
+    },
+    {
+      "case": "accepted-action",
+      "cupy_reserved_mib": 2009.88037109375,
+      "host_rss_mib": 1477.74609375,
+      "phases_seconds": {
+        "ema_inference": 0.42935452532768237,
+        "encoding": 0.018919327929615974,
+        "host_synchronization": 0.00018440002168063074,
+        "online_inference": 0.09678806352615357,
+        "presentation": 0.015423899967572652,
+        "probe_simulation": 0.014851487964391721,
+        "simulation": 0.005638976041227579,
+        "storage": 0.016157899968675338,
+        "transfer": 0.027528895974159234
+      },
+      "pinned_transfer_mib": 3.450455665588379,
+      "process_cpu_percent": 98.89693679704054,
+      "repeat": 2,
+      "scratch_lanes": 2,
+      "seconds": 0.7899637999944389,
+      "torch_peak_allocated_mib": 166.18896484375,
+      "trajectory_bytes": 33476560,
+      "transitions": 4096,
+      "transitions_per_second": 5185.04771994468,
+      "utilization": {
+        "gpu_percent": 0.0,
+        "process_cpu_percent": 98.4,
+        "system_cpu_percent": 22.3
+      }
+    },
+    {
+      "case": "mixed",
+      "cupy_reserved_mib": 1018.47412109375,
+      "host_rss_mib": 1421.51953125,
+      "phases_seconds": {
+        "ema_inference": 0.29443977653980247,
+        "encoding": 0.019409023977816096,
+        "host_synchronization": 0.0001638999965507537,
+        "online_inference": 0.10671334433555603,
+        "presentation": 0.012952800068887882,
+        "probe_simulation": 0.030962144067510983,
+        "simulation": 0.007872735995799306,
+        "storage": 0.011841700004879385,
+        "transfer": 0.023280703902244574
+      },
+      "pinned_transfer_mib": 2.075455665588379,
+      "process_cpu_percent": 99.53184375072549,
+      "repeat": 0,
+      "scratch_lanes": 1,
+      "seconds": 0.7221306999999797,
+      "torch_peak_allocated_mib": 66.4658203125,
+      "trajectory_bytes": 22349312,
+      "transitions": 4096,
+      "transitions_per_second": 5672.103401780474,
+      "utilization": {
+        "gpu_percent": 45.0,
+        "process_cpu_percent": 101.5,
+        "system_cpu_percent": 16.4
+      }
+    },
+    {
+      "case": "mixed",
+      "cupy_reserved_mib": 1018.47412109375,
+      "host_rss_mib": 1422.1328125,
+      "phases_seconds": {
+        "ema_inference": 0.30137660825252527,
+        "encoding": 0.02350758396089076,
+        "host_synchronization": 0.0002101999707520008,
+        "online_inference": 0.12138508796691895,
+        "presentation": 0.013462599978083745,
+        "probe_simulation": 0.03788576017972083,
+        "simulation": 0.009461503967642785,
+        "storage": 0.012827300015487708,
+        "transfer": 0.028953695908188824
+      },
+      "pinned_transfer_mib": 2.075455665588379,
+      "process_cpu_percent": 89.38906136650998,
+      "repeat": 1,
+      "scratch_lanes": 1,
+      "seconds": 0.8040692999929888,
+      "torch_peak_allocated_mib": 66.4658203125,
+      "trajectory_bytes": 22349312,
+      "transitions": 4096,
+      "transitions_per_second": 5094.088283230954,
+      "utilization": {
+        "gpu_percent": 49.0,
+        "process_cpu_percent": 95.3,
+        "system_cpu_percent": 16.5
+      }
+    },
+    {
+      "case": "mixed",
+      "cupy_reserved_mib": 1018.47412109375,
+      "host_rss_mib": 1423.10546875,
+      "phases_seconds": {
+        "ema_inference": 0.29195920097827915,
+        "encoding": 0.01896252790838479,
+        "host_synchronization": 0.00016990004223771393,
+        "online_inference": 0.10443878436088562,
+        "presentation": 0.012574100008350797,
+        "probe_simulation": 0.033885184029117235,
+        "simulation": 0.007393248014152053,
+        "storage": 0.011792499979492277,
+        "transfer": 0.023866624131798735
+      },
+      "pinned_transfer_mib": 2.075455665588379,
+      "process_cpu_percent": 100.16971050740972,
+      "repeat": 2,
+      "scratch_lanes": 1,
+      "seconds": 0.7331307999993442,
+      "torch_peak_allocated_mib": 66.4658203125,
+      "trajectory_bytes": 22349312,
+      "transitions": 4096,
+      "transitions_per_second": 5586.997572607323,
+      "utilization": {
+        "gpu_percent": 44.0,
+        "process_cpu_percent": 100.0,
+        "system_cpu_percent": 12.4
+      }
+    },
+    {
+      "case": "mixed",
+      "cupy_reserved_mib": 1514.17724609375,
+      "host_rss_mib": 1427.015625,
+      "phases_seconds": {
+        "ema_inference": 0.29490783917903896,
+        "encoding": 0.017452480010688304,
+        "host_synchronization": 0.0001520999794593081,
+        "online_inference": 0.11087862396240235,
+        "presentation": 0.012067300005583093,
+        "probe_simulation": 0.016372128036804504,
+        "simulation": 0.007713439989835024,
+        "storage": 0.012644300019019283,
+        "transfer": 0.023520000040531158
+      },
+      "pinned_transfer_mib": 2.075455665588379,
+      "process_cpu_percent": 97.14308299073208,
+      "repeat": 0,
+      "scratch_lanes": 2,
+      "seconds": 0.6755498999991687,
+      "torch_peak_allocated_mib": 82.72265625,
+      "trajectory_bytes": 22349312,
+      "transitions": 4096,
+      "transitions_per_second": 6063.208654172016,
+      "utilization": {
+        "gpu_percent": 0.0,
+        "process_cpu_percent": 100.0,
+        "system_cpu_percent": 16.4
+      }
+    },
+    {
+      "case": "mixed",
+      "cupy_reserved_mib": 1514.17724609375,
+      "host_rss_mib": 1427.01171875,
+      "phases_seconds": {
+        "ema_inference": 0.30213731288909923,
+        "encoding": 0.018853087916970247,
+        "host_synchronization": 0.0001583999692229554,
+        "online_inference": 0.11158067178726194,
+        "presentation": 0.013131299987435341,
+        "probe_simulation": 0.019801632110029457,
+        "simulation": 0.0075947519876062896,
+        "storage": 0.012481500016292557,
+        "transfer": 0.024766592070460322
+      },
+      "pinned_transfer_mib": 2.075455665588379,
+      "process_cpu_percent": 96.97702512014966,
+      "repeat": 1,
+      "scratch_lanes": 2,
+      "seconds": 0.7089307999995071,
+      "torch_peak_allocated_mib": 82.72265625,
+      "trajectory_bytes": 22349312,
+      "transitions": 4096,
+      "transitions_per_second": 5777.714834794662,
+      "utilization": {
+        "gpu_percent": 19.0,
+        "process_cpu_percent": 98.4,
+        "system_cpu_percent": 17.7
+      }
+    },
+    {
+      "case": "mixed",
+      "cupy_reserved_mib": 1514.17724609375,
+      "host_rss_mib": 1426.98828125,
+      "phases_seconds": {
+        "ema_inference": 0.29136572635173796,
+        "encoding": 0.01758166386559605,
+        "host_synchronization": 0.0001683000155026093,
+        "online_inference": 0.11222569632530213,
+        "presentation": 0.012857800029451028,
+        "probe_simulation": 0.018297024074941874,
+        "simulation": 0.008050847973674538,
+        "storage": 0.011745100026018918,
+        "transfer": 0.02600169609487057
+      },
+      "pinned_transfer_mib": 2.075455665588379,
+      "process_cpu_percent": 96.09282545084402,
+      "repeat": 2,
+      "scratch_lanes": 2,
+      "seconds": 0.6829333999921801,
+      "torch_peak_allocated_mib": 82.72265625,
+      "trajectory_bytes": 22349312,
+      "transitions": 4096,
+      "transitions_per_second": 5997.6565797585845,
+      "utilization": {
+        "gpu_percent": 34.0,
+        "process_cpu_percent": 100.0,
+        "system_cpu_percent": 15.7
+      }
+    }
+  ],
+  "optimizer_steps": 0,
+  "repetitions": 3,
+  "torch": "2.8.0+cu128",
+  "warmup_decisions": 8
+}

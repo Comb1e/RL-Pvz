@@ -10,6 +10,8 @@ refill_evaluation = true
 
 [logging]
 progress_seconds = 15
+terminal_progress_seconds = 60
+terminal_mode = "compact"
 hardware_sample_seconds = 1.0
 rolling_window = 100
 
@@ -66,8 +68,8 @@ budget_unit = "games"
 until_stage_complete = false # With --stage: stop only when its mastery gate passes.
 total_games = 10000
 validation_schedule = "stage_success" # Normal-game evaluation only after each stage passes.
-eval_interval_games = 2000 # Used by diagnostic/fixed training or archived periodic schedules.
-total_steps = 3000000 # Inactive unless budget_unit = "decisions" (legacy).
+eval_interval_games = 2000 # Used by periodic game-count diagnostic/fixed checks.
+total_steps = 3000000 # Inactive in normal training; bounded decision-window controls only.
 learner_seeds = [101, 102]
 n_envs = 128
 device = "cuda"
@@ -80,7 +82,7 @@ n_epochs = 4
 learning_rate = 0.0003
 max_grad_norm = 5 # Shared by autonomous training and demonstration initialization.
 hidden_sizes = [128, 128]
-eval_interval = 250000 # Periodic decision interval for archived/diagnostic protocols.
+eval_interval = 250000 # Used only by bounded decision-window diagnostics.
 torch_threads = 1
 
 [training.storage]

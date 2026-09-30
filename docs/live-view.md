@@ -9,7 +9,7 @@ small overview panels show less history, so use Focus for detail.
 The read-only **Learning settings** strip shows the active learning rate,
 `max_grad_norm`, batch size, epochs, discount, sequence length, reward coefficients
 and tile-exploration schedule. These come from the resolved run configuration;
-on resume they are the checkpoint values retained by `--refresh-performance`,
+on resume they are the checkpoint learning values retained during automatic execution refresh,
 even if TOML now differs. Fresh `--init-from` runs use the current TOML values.
 `training.max_grad_norm` is the shared clipping limit for demonstration and
 autonomous fitting. Reward settings are coefficients; action-history penalties

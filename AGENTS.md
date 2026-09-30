@@ -68,8 +68,17 @@
   device timing event per pass, and uses cached intermediate telemetry.
   Demonstration initialization checkpoints omit those fields
   and hydrate them from the current train profile when loaded. `host_transfer.py`
-  batches collection copies at the existing
-  host boundary. Fitting retries whole uncommitted passes on BF16/memory failure.
+  owns the sole reusable pinned `HostHandoff`. Device-packed behavior/probe slabs,
+  metadata and terminal headers/totals queue before one stream wait.
+  `PackedEntityBatch` carries validated slab offsets directly into storage.
+  Two independent scratch lanes retain per-slot feature rows; one-lane allocation
+  fallback preserves every scheduled probe. EMA next-state inference is stacked;
+  actual history stays isolated from every fork. Exact device deduplication
+  includes next recurrent inputs and never merges proposal/reward evidence.
+  Collection uses public-count padding bounds and the owned-output graph wrapper;
+  future schedules never determine policy inputs. Resume refreshes execution and
+  logging automatically; missing execution fields use current defaults.
+  Fitting retries whole uncommitted passes on BF16/memory failure.
   Curriculum stages are easy, standard, shared.
 - `presentation/demo_recording.py` records structured v2 archives and compact viewer
   history; `learning/demo_initialization.py` reconstructs replay facts, checks the
@@ -85,12 +94,22 @@
   `monitoring/entity_benchmark.py` measures cap-dependent inference/fitting cost;
   `throughput_benchmark.py` compares fixed 1,024-frame/four-pass execution and
   short collection windows with and without the viewer.
+  `collection_benchmark.py` owns three warmed 128-environment snapshot controls
+  with no fitting; `throughput_benchmark.py` owns only four-pass fitting.
+  `monitoring/progress.py` owns compact terminal/train.log events, independent
+  terminal/JSON cadences, duplicate suppression and redirected/interactive modes.
+  `cuda_diagnostics.py` pools timing events and reads them after the existing handoff.
   `monitoring/objective_diagnostic.py` compares bounded full-objective/reward-only
   cohorts and fixed-history sensitivity; measurements are not mastery evidence.
 - `tests/test_observations.py`, `test_transformer_lstm.py`, `test_entity_storage.py`
   and `test_recurrent_training.py` cover information preservation, CPU/CUDA parity,
   independent attention math, order/padding invariance, ragged recovery and training.
 - `test_q_math.py` owns selected-Q gradient and atomic interruption controls;
+  `test_collection.py` owns serial/batched equivalence, allocation fallback,
+  deduplication counterexamples and compiled inference buckets. Independent
+  constant-bootstrap CPU/CUDA controls remain in `test_q_selection_fallback.py`.
+  `test_progress.py` owns terminal cadence/modes; callback telemetry and active
+  accumulator isolation belong in `test_training_progress_context.py`.
   `test_training_lifecycle.py` owns validation/finalization integration.
   `test_reward_contract.py` owns asset conservation and reward-mode boundaries;
   `test_exploration_schedule.py` checks the current tile-only schedule.

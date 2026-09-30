@@ -6,8 +6,7 @@ def until_stage_complete(cfg):
 
 
 def uses_games(cfg):
-    # Old saved configurations keep their original decision schedule.
-    return cfg["training"].get("budget_unit", "decisions") == "games"
+    return cfg["training"]["budget_unit"] == "games"
 
 
 def budget_target(cfg):

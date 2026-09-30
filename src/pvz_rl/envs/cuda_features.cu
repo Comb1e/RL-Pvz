@@ -6,10 +6,63 @@ __device__ double asset_value(Header &h, Plant *p) {
   for (I j = 0; j < h.np; j++) value += (double)PC[p[j].kind] * p[j].health / PH[p[j].kind];
   return value;
 }
-// Each thread emits one real public entity; reserved simulator slots are skipped.
-extern "C" __global__ void encode_state(const I *headers, const I *plants,
+
+__device__ void clear_record(int *o) {
+  for (I f = 0; f < ENTITY_WIDTH; f++) o[f] = 0;
+}
+__device__ void plant_record(const Header &h, const Plant &a, int *o) {
+  clear_record(o);
+  o[E_type]=a.kind+1; o[E_state]=a.state+1; o[E_row]=a.row;
+  o[E_x]=a.col*G_units_per_tile+G_units_per_tile/2; o[E_health]=a.health;
+  o[E_phase_ticks]=hi(0, a.due-h.tick);
+}
+__device__ void zombie_record(const Header &h, const Zombie &a, int *o) {
+  clear_record(o);
+  o[E_type]=a.kind+ZOMBIE_TYPE_START; o[E_state]=a.state+ZOMBIE_STATE_START;
+  o[E_row]=a.row; o[E_x]=a.x; o[E_health]=a.health; o[E_armor]=a.armor;
+  o[E_phase_ticks]=a.state==2 ? hi(0,a.vault_until-h.tick) : a.state==3
+    ? (hi(0,G_bite_ticks*2-a.bite_progress)+(h.tick<a.slow_until ? 0:1))
+      / (h.tick<a.slow_until ? 1:2) : 0;
+  o[E_slow_ticks]=hi(0,a.slow_until-h.tick); o[E_has_pole]=a.has_pole; o[E_headless]=a.headless;
+}
+__device__ void shot_record(const Shot &a, int *o) {
+  clear_record(o);
+  o[E_type]=PROJECTILE_TYPE_START+a.icy; o[E_row]=a.row; o[E_x]=a.x; o[E_damage]=a.damage;
+}
+__device__ void mower_record(const Mower &a, int *o) {
+  clear_record(o);
+  o[E_type]=MOWER_TYPE; o[E_state]=MOWER_STATE_START+a.state; o[E_row]=a.row; o[E_x]=a.x;
+}
+
+// Canonical order within one group: lane (mowers and plants), x, then every
+// public field. Equal records are interchangeable; index breaks the tie.
+__device__ int record_order(const int *a, const int *b, bool lanes) {
+  if (lanes && a[E_row] != b[E_row]) return a[E_row] < b[E_row] ? -1 : 1;
+  if (a[E_x] != b[E_x]) return a[E_x] < b[E_x] ? -1 : 1;
+  for (I f = 0; f < ENTITY_WIDTH; f++)
+    if (a[f] != b[f]) return a[f] < b[f] ? -1 : 1;
+  return 0;
+}
+// Projectile records differ only in x, type, row and damage, compared after the
+// same int32 conversion as the stored record.
+__device__ int shot_order(const Shot &a, const Shot &b) {
+  int values[8] = {(int)a.x, (int)b.x, (int)(PROJECTILE_TYPE_START + a.icy),
+                   (int)(PROJECTILE_TYPE_START + b.icy), (int)a.row, (int)b.row,
+                   (int)a.damage, (int)b.damage};
+  for (int k = 0; k < 8; k += 2)
+    if (values[k] != values[k + 1]) return values[k] < values[k + 1] ? -1 : 1;
+  return 0;
+}
+
+// One block per game. The stable lexicographic order (group, lane, x, fields)
+// is reproduced by ranking each entity within its group, so no host read or
+// sort is needed. Mowers, plants and zombies are staged once; projectiles are
+// ranked from simulator slots, supporting the full allocated capacity. Records
+// past ENTITY_LIMIT are omitted and counted; later store positions are cleared.
+extern "C" __global__ void encode_canonical(const I *headers, const I *plants,
     const I *zombies, const I *projectiles, const I *mowers, const I *cooldowns,
-    int *entities, float *globals, double *assets, I width, I n) {
+    int *records, int *entities, bool *mask, float *globals, double *assets,
+    I *summary, I n) {
   I i = blockIdx.x;
   if (i >= n) return;
   Header h = ((Header *)headers)[i];
@@ -17,6 +70,10 @@ extern "C" __global__ void encode_state(const I *headers, const I *plants,
   Zombie *z = (Zombie *)(zombies + i * ZCAP * GAME_ZOMBIE_WIDTH);
   Shot *q = (Shot *)(projectiles + i * QCAP * GAME_PROJECTILE_WIDTH);
   Mower *m = (Mower *)(mowers + i * 5 * GAME_MOWER_WIDTH);
+  int *staged = records + i * RECORD_CAPACITY * ENTITY_WIDTH;
+  int *out = entities + i * ENTITY_LIMIT * ENTITY_WIDTH;
+  I staged_count = 5 + h.np + h.nz;
+  I kept = lo(staged_count + h.nq, ENTITY_LIMIT);
   if (!threadIdx.x) {
     float *g = globals + i * GLOBAL_WIDTH;
     g[O_sun] = (double)h.sun / COST_SCALE;
@@ -32,31 +89,47 @@ extern "C" __global__ void encode_state(const I *headers, const I *plants,
     g[O_projectile_count] = (double)h.nq / COUNT_SCALE;
     g[O_mower_count] = 5.0 / COUNT_SCALE;
     assets[i] = asset_value(h, p);
+    I *s = summary + i * 4;
+    s[0] = kept;
+    s[1] = hi(0, h.np - (ENTITY_LIMIT - 5));
+    s[2] = hi(0, h.nz - hi(0, ENTITY_LIMIT - 5 - h.np));
+    s[3] = hi(0, h.nq - hi(0, ENTITY_LIMIT - 5 - h.np - h.nz));
   }
-  for (I index=threadIdx.x; index<width; index+=blockDim.x) {
-    int *o = entities + (i * width + index) * ENTITY_WIDTH;
-    for (I f=0; f<ENTITY_WIDTH; f++) o[f]=0;
-    I j=index;
-    if (j < h.np) {
-      Plant a=p[j];
-      o[E_type]=a.kind+1; o[E_state]=a.state+1; o[E_row]=a.row;
-      o[E_x]=a.col*G_units_per_tile+G_units_per_tile/2; o[E_health]=a.health;
-      o[E_phase_ticks]=hi(0, a.due-h.tick);
-    } else if ((j-=h.np) < h.nz) {
-      Zombie a=z[j];
-      o[E_type]=a.kind+ZOMBIE_TYPE_START; o[E_state]=a.state+ZOMBIE_STATE_START;
-      o[E_row]=a.row; o[E_x]=a.x; o[E_health]=a.health; o[E_armor]=a.armor;
-      o[E_phase_ticks]=a.state==2 ? hi(0,a.vault_until-h.tick) : a.state==3
-        ? (hi(0,G_bite_ticks*2-a.bite_progress)+(h.tick<a.slow_until ? 0:1))
-          / (h.tick<a.slow_until ? 1:2) : 0;
-      o[E_slow_ticks]=hi(0,a.slow_until-h.tick); o[E_has_pole]=a.has_pole; o[E_headless]=a.headless;
-    } else if ((j-=h.nz) < h.nq) {
-      Shot a=q[j];
-      o[E_type]=PROJECTILE_TYPE_START+a.icy; o[E_row]=a.row; o[E_x]=a.x; o[E_damage]=a.damage;
-    } else if ((j-=h.nq) < 5) {
-      Mower a=m[j];
-      o[E_type]=MOWER_TYPE; o[E_state]=MOWER_STATE_START+a.state; o[E_row]=a.row; o[E_x]=a.x;
+  for (I j = threadIdx.x; j < staged_count; j += blockDim.x) {
+    int *o = staged + j * ENTITY_WIDTH;
+    if (j < 5) mower_record(m[j], o);
+    else if (j < 5 + h.np) plant_record(h, p[j - 5], o);
+    else zombie_record(h, z[j - 5 - h.np], o);
+  }
+  __syncthreads();
+  for (I j = threadIdx.x; j < staged_count; j += blockDim.x) {
+    I start = j < 5 ? 0 : j < 5 + h.np ? 5 : 5 + h.np;
+    I end = j < 5 ? 5 : j < 5 + h.np ? 5 + h.np : staged_count;
+    const int *own = staged + j * ENTITY_WIDTH;
+    I rank = start;
+    for (I k = start; k < end; k++) {
+      if (k == j) continue;
+      int order = record_order(staged + k * ENTITY_WIDTH, own, j < 5 + h.np);
+      rank += order < 0 || (order == 0 && k < j);
     }
+    if (rank < ENTITY_LIMIT)
+      for (I f = 0; f < ENTITY_WIDTH; f++) out[rank * ENTITY_WIDTH + f] = own[f];
+  }
+  I available = ENTITY_LIMIT - staged_count;
+  for (I j = threadIdx.x; j < h.nq && available > 0; j += blockDim.x) {
+    Shot a = q[j];
+    I rank = 0;
+    // Stop once this shot cannot be kept; ranks of kept shots stay exact.
+    for (I k = 0; k < h.nq && rank < available; k++) {
+      if (k == j) continue;
+      int order = shot_order(q[k], a);
+      rank += order < 0 || (order == 0 && k < j);
+    }
+    if (rank < available) shot_record(a, out + (staged_count + rank) * ENTITY_WIDTH);
+  }
+  for (I index = threadIdx.x; index < ENTITY_LIMIT; index += blockDim.x) {
+    mask[i * ENTITY_LIMIT + index] = index < kept;
+    if (index >= kept) clear_record(out + index * ENTITY_WIDTH);
   }
 }
 
@@ -90,8 +163,8 @@ extern "C" __global__ void policy_masks(const I *headers, const I *plants,
 // Copy only occupied simulator slots, never the reserved projectile capacity.
 extern "C" __global__ void copy_probe_state(
     const Header *sh, const Plant *sp, const Zombie *sz, const Shot *sq,
-    const Mower *sm, const I *sc, const I *sl, const double *sa,
-    Header *dh, Plant *dp, Zombie *dz, Shot *dq, Mower *dm, I *dc, I *dl,
+    const Mower *sm, const I *sc, const I *ss, const I *sl, const double *sa,
+    Header *dh, Plant *dp, Zombie *dz, Shot *dq, Mower *dm, I *dc, I *ds, I *dl,
     double *da, const bool *active) {
   I i = blockIdx.x, t = threadIdx.x;
   Header h = sh[i];
@@ -101,7 +174,55 @@ extern "C" __global__ void copy_probe_state(
   for (I j=t;j<h.nq;j+=blockDim.x) dq[i*QCAP+j]=sq[i*QCAP+j];
   for (I j=t;j<5;j+=blockDim.x) dm[i*5+j]=sm[i*5+j];
   for (I j=t;j<8;j+=blockDim.x) dc[i*8+j]=sc[i*8+j];
+  for (I j=t;j<ZCAP*5;j+=blockDim.x) ds[i*ZCAP*5+j]=ss[i*ZCAP*5+j];
   for (I j=t;j<ZCAP*2;j+=blockDim.x) dl[i*ZCAP*2+j]=sl[i*ZCAP*2+j];
+}
+
+// Probe rows are slot-major (row = slot * n + game). A valid probe reuses the
+// earliest earlier slot of the same game whose stored and recurrent inputs are
+// identical: kept records, globals, executed action, acceptance and duration.
+// source[row] is that slot, the probe's own slot when unique, or -1 if invalid.
+extern "C" __global__ void dedup_probes(const int *entities, const I *summary,
+    const float *globals, const I *executed, const I *accepted, const I *duration,
+    const bool *valid, I *source, I n, I slots) {
+  I game = blockIdx.x;
+  if (game >= n) return;
+  __shared__ int equal;
+  for (I slot = 0; slot < slots; slot++) {
+    I row = slot * n + game;
+    I chosen = valid[row] ? slot : -1;
+    for (I prior = 0; prior < slot && chosen == slot; prior++) {
+      I other = prior * n + game;
+      if (!valid[other] || summary[row * 4] != summary[other * 4]
+          || executed[row] != executed[other] || accepted[row] != accepted[other]
+          || duration[row] != duration[other])
+        continue;
+      if (!threadIdx.x) equal = 1;
+      __syncthreads();
+      const int *a = entities + row * ENTITY_LIMIT * ENTITY_WIDTH;
+      const int *b = entities + other * ENTITY_LIMIT * ENTITY_WIDTH;
+      for (I k = threadIdx.x; k < summary[row * 4] * ENTITY_WIDTH; k += blockDim.x)
+        if (a[k] != b[k]) atomicExch(&equal, 0);
+      for (I k = threadIdx.x; k < GLOBAL_WIDTH; k += blockDim.x)
+        if (globals[row * GLOBAL_WIDTH + k] != globals[other * GLOBAL_WIDTH + k]) atomicExch(&equal, 0);
+      __syncthreads();
+      if (equal) chosen = source[other];
+      __syncthreads();
+    }
+    if (!threadIdx.x) source[row] = chosen;
+    __syncthreads();
+  }
+}
+
+// Copy each selected row's kept canonical records to its exclusive-scan offset.
+extern "C" __global__ void pack_entities(const int *entities, const I *summary,
+    const I *offsets, const bool *selected, int *packed, I rows) {
+  I row = blockIdx.x;
+  if (row >= rows || !selected[row]) return;
+  const int *source = entities + row * ENTITY_LIMIT * ENTITY_WIDTH;
+  int *target = packed + offsets[row] * ENTITY_WIDTH;
+  for (I k = threadIdx.x; k < summary[row * 4] * ENTITY_WIDTH; k += blockDim.x)
+    target[k] = source[k];
 }
 
 // Each episode's total roster is bounded by ZCAP. Keep IDs only in accounting.

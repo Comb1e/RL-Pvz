@@ -8,7 +8,7 @@ import torch
 from pvz_game import Rules
 
 from pvz_rl.config import load_config
-from pvz_rl.envs.encoding import ObservationEncoder, observations_equal
+from pvz_rl.envs.encoding import ObservationEncoder, PackedEntityBatch, observations_equal
 from pvz_rl.learning.cuda_buffer import CompleteGameBuffer
 from pvz_rl.learning.recurrent_q import sequence_batches
 from pvz_rl.learning.sequence_transport import SequencePrefetch
@@ -38,7 +38,15 @@ def test_probe_dedup_median_finalization_and_spilled_recovery(tmp_path):
         from pvz_rl.envs.encoding import collate_observations
 
         obs = collate_observations([raw] * 3)
-        buf.append(rows, obs, [obs] * 4)
+        entities, mask, globals_ = (value.numpy() for value in obs.tensors())
+        counts = np.zeros((3, 4), np.int64)
+        counts[:, :2] = mask.sum(-1)[:, None]
+        offsets = np.zeros_like(counts)
+        offsets[:, :2] = (np.cumsum(mask.sum(-1)) - mask.sum(-1))[:, None]
+        probes = PackedEntityBatch(
+            entities[mask], offsets, counts, np.repeat(globals_[:, None], 4, axis=1)
+        )
+        buf.append(rows, obs, probes)
         stored = buf.take(np.arange(3))
         assert buf.entity_size == 30  # Three actual + three unique probe boards.
         np.testing.assert_array_equal(

@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 from pvz_game import LevelSpec, Place, Spawn
 
-from pvz_rl.config import research_config, runtime_settings, validate_config
+from pvz_rl.config import research_config, runtime_settings
 from pvz_rl.envs.encoding import observations_equal
 from pvz_rl.envs.env import PvZEnv
 from pvz_rl.monitoring.timing import TrainingTimings
@@ -35,12 +35,8 @@ def plain(cfg):
     return cfg
 
 
-def test_legacy_runtime_defaults_and_compatibility(cfg):
-    old = copy.deepcopy(cfg)
-    old.pop("runtime")
-    validate_config(old)
-    assert runtime_settings(old) == runtime_settings(cfg)
-    assert research_config(old) == research_config(cfg) == research_config(plain(cfg))
+def test_runtime_choices_do_not_change_learning_protocol(cfg):
+    assert research_config(cfg) == research_config(plain(cfg))
 
 
 def test_phase_timing_excludes_validation_and_captures_final_update():

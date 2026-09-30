@@ -96,6 +96,11 @@ def test_reward_changes_load_for_inference_but_require_weights_only_initializati
 
 @pytest.mark.learning
 def test_windows_cuda_cli(tmp_path, tiny_cli_config):
+    tiny_cli_config.write_text(
+        tiny_cli_config.read_text().replace(
+            'validation_schedule = "stage_success"', 'validation_schedule = "periodic"'
+        )
+    )
     output = tmp_path / "spawn"
     device = "cuda"
     result = subprocess.run(
@@ -110,14 +115,14 @@ def test_windows_cuda_cli(tmp_path, tiny_cli_config):
             "train",
             "--condition",
             "masked",
-            "--steps",
-            "64",
+            "--games",
+            "2",
             "--n-envs",
             "2",
             "--batch-size",
             "32",
-            "--eval-interval",
-            "64",
+            "--eval-games",
+            "2",
             "--device",
             device,
             "--validation-count",

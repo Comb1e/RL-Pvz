@@ -1,5 +1,48 @@
 # Precision and execution controls
 
+## Collection execution contract
+
+Collection leaves the model, reward prices, probe schedule, recurrent feedback,
+loss denominators and fitting settings unchanged. Two independent scratch lanes
+execute the two branch probes and two tile probes in two passes. If scratch
+allocation fails, one lane executes all scheduled slots; no probe is omitted.
+Every pass restores its own simulator RNG, accounting and proximity ledger.
+One EMA evaluation advances actual history; stacked fork inputs use that history
+without ever replacing it with a probe result.
+
+For public retained count `C`, pending-zombie count `Z` and present plant count `P`,
+`min(cap, C + Z + 2P + 1)` bounds one decision's retained next entities. Rejection
+and wait advance at most one tick; the pinned engine emits at most two shots per
+existing plant in that tick. Accepted planting/digging advances no tick and adds
+at most one plant. When already capped, the bound remains the cap. This count-only
+bound exposes neither future spawn ticks nor RNG. Buckets 32/64/128/256 hold it;
+CPU/CUDA canonical ordering, multiplicity and omissions remain unchanged.
+
+Probe equivalence is scoped to the same actual game/decision and requires exact
+kept entity records, globals, executed action, acceptance and duration. All forks
+in that scope share the actual EMA hidden/cell state. Thus both observation and
+recurrent inputs match before an entity offset can alias. Proposals, reasons,
+components and bootstrap targets are never deduplicated. Acceptance, duration,
+global or entity counterexamples keep independent offsets.
+
+Persistent feature stores and device packing replace per-probe width reads.
+Behavior transfer uses its already-known bucket; probe transfer copies a bounded
+packed bucket slab. Its unused tail can still cross PCIe: exact variable-length
+DMA would need an extra host count boundary. Deduplication reduces stored records
+and host comparison work, but does not guarantee proportional transfer savings.
+Pinned buffers are reusable and charged to trajectory RAM. All copies precede
+one collection-stream wait; headers/totals for terminal episodes use that handoff.
+Storage checks counts/offsets before ingestion and recovery validates saved slabs.
+
+Encoder graphs use the existing tensor-only, owned-output wrapper for collection
+and fitting. Shape caches remain bounded; unavailable compilation records one
+eager fallback. CUDA timings are read only after the existing handoff. Device
+spans and host storage/presentation/synchronization timings are reported separately
+and need not sum to wall time. Terminal formatting only consumes cached host
+metrics; its cadence does not control the 15-second detailed snapshot cadence.
+
+## Fitting execution contract
+
 The optimization changes execution, not the entity representation or complete-return
 objective. For each cohort, the same active decisions, group denominators and
 targets contribute to each of four whole-pass gradients. Chronological 256-step

@@ -81,7 +81,7 @@ def benchmark_gpu(cfg, output, *, minutes=15, steps=16384, env_counts=None):
         ),
     )
     rows = []
-    progress = ProgressReporter(output / "benchmark.log", 15)
+    progress = ProgressReporter.from_settings(output / "benchmark.log", cfg)
     deadline = perf_counter() + minutes * 60
     torch.set_num_threads(cfg["training"]["torch_threads"])
     profiles = [

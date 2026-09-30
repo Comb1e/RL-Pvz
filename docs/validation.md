@@ -31,6 +31,16 @@ values are intentional cases, not duplicate functionality.
 
 ## Running checks
 
+Collection ownership is `tests/test_collection.py`: serial/batched state and RNG
+isolation, unchanged EMA history, one-lane allocation fallback, exact device
+deduplication counterexamples and compiled inference buckets. Independent CPU/CUDA
+danger-zone/bootstrap controls live in `test_q_selection_fallback.py`; packed
+offset/spill/recovery controls live in `test_entity_storage.py`. Recurrent lifecycle
+tests cover interrupted collection and reconstruction without repeating probe math.
+`test_progress.py` covers terminal modes, cadence, duplicate suppression and failure
+events; `test_training_progress_context.py` covers detailed snapshot preservation
+and prohibition on reading active fitting accumulators.
+
 Run from the repository root. Static inspection is suitable while a training
 process is active; use a separate checkout for edits.
 

@@ -1,5 +1,64 @@
 # Iteration history
 
+## 0.31.7 — 2026-09-30
+
+- Problem/root cause: collection used serial probe simulation/inference, repeated
+  device width reads and host comparisons; terminal refreshes mixed detailed
+  telemetry with human-facing output. The unfinished optimization also left
+  removed transfer imports and aliased next-observation buffers between passes.
+- Improvement: two independent scratch lanes execute branch/tile pairs in two
+  passes, preserving RNG/accounting/proximity state. One stacked EMA next-state
+  evaluation follows actual history only. Persistent canonical stores, exact
+  device deduplication, packed offset ingestion and one reusable pinned handoff
+  remove per-probe host boundaries. Public-count padding buckets do not inspect
+  future schedules. Scratch allocation failure runs every slot through one lane.
+  Owned-output encoder graphs also cover inference; fitting/model/reward settings
+  and loss denominators remain unchanged.
+- Terminal/configuration cleanup: 15-second detailed snapshots are separate from
+  material-change/60-second terminal updates. Compact interactive/redirected
+  events, warning routing, duplicate suppression and checkpoint notices replace
+  multiline dashboards. Resume refreshes current execution/logging automatically
+  without changing saved learning parameters or rewards. Removed transfer/per-slot
+  implementations, explicit refresh flag, historical FP32/output/runtime defaults,
+  replay sidecar annotations, archived training CLI flags, PPO report/old-run
+  branches, the retired two-coin epsilon helper and the duplicate collection
+  benchmark path. Current replay/CPU mathematical references and recovery
+  validation remain necessary. Recordings, checkpoints and verification evidence
+  are preserved.
+- Verification: serial/batched simulator headers (including RNG), ledgers,
+  proposals/execution, rejection, durations, components, canonical next inputs and
+  bootstrap controls passed, including four separate real-network next-state
+  calls from the actual EMA history. Independent CPU danger-zone/constant-bootstrap
+  controls, deduplication counterexamples, compiled inference buckets, spilled
+  slab recovery, recurrent interrupted-collection/fitting controls and compact
+  reporting controls passed. Owning suites ran rather than repeated full suites.
+  Availability/engine hash, CUDA compilation/accounting/shared-stream and replay
+  checks passed. Ruff lint, changed-file formatting and whitespace checks passed;
+  one untouched pre-existing formatting issue remains in `policy/transformer_lstm.py`.
+  New defaults retain user reward prices and `max_grad_norm = 5`. No formal
+  training or learning-quality measurement was launched.
+- Snapshot benchmark: 128 environments, eight warmup decisions, three warmed
+  32-decision trials per arm/case, zero optimizer steps. Mean transitions/s for
+  one-lane reference → two-lane execution: sparse 5,959 → 6,621; mixed 5,451 →
+  5,946; crowded 2,447 → 2,524; rejection-heavy 6,105 → 6,966; accepted-action
+  4,691 → 5,017. This is roughly 1.03–1.14× against the current memory fallback,
+  not the earlier serial trainer. Raw subphases, CPU/GPU samples and memory are in
+  `docs/evidence/collection-v031.json` and its hardware JSONL. Two-lane peak Torch
+  allocation was 166.2 MiB, sampled process RSS up to 1,565.3 MiB and pinned
+  handoff allocation up to 7.23 MiB for these bounded, headless controls.
+- Limits/remaining issues: the requested 1.5–2× historical collection improvement
+  and total-cohort reduction are not established. No formal cohort or fitting
+  benchmark was added to infer them. Hardware sampling is coarse for subsecond
+  trials; missing samples stay null and observed GPU utilization includes warmup
+  and boundary effects. Public pending-roster bounds can overpad. Packed transfer
+  retains a bounded unused tail; deduplication is not proportional DMA compression.
+  Viewer history is covered by integration controls, not the headless snapshot
+  benchmark. Sparse/mixed fixture corrections were rerun only where relevant.
+- Local cleanup limitation: shell execution policy rejected deletion of the
+  verified, ignored `build/`, `dist/`, `.pytest_cache/` and `.ruff_cache/`
+  directories. Those generated copies and local Python bytecode caches remain;
+  none is required by the active source or installed pinned game package.
+
 ## 0.31.6 — 2026-09-29
 
 - Problem/root cause: complete-return fitting provided almost no direct targets for

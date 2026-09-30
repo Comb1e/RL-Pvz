@@ -3,8 +3,7 @@
 This index records sources used by the current implementation and the particular
 ideas adopted. Project choices such as the entity cap, embedding width, rewards
 and mastery gates are not established by these papers. Release history and local
-measurements belong in [iteration history](iteration.md); superseded source
-notes are recoverable with `git show 4052968:docs/references.md`.
+measurements belong in [iteration history](iteration.md).
 
 ## Entities and recurrent decisions
 
@@ -70,7 +69,9 @@ notes are recoverable with `git show 4052968:docs/references.md`.
   RawModule/NVRTC and DLPack/ExternalStream ownership for CUDA adapters.
 - [WarpDrive](https://jmlr.org/papers/v23/22-0185.html) and its
   [project README](https://github.com/salesforce/warp-drive): device-resident
-  simulation/learning design; no code or published throughput claim adopted.
+  simulation/learning design, now used for independent batched scratch execution,
+  device packing and avoiding per-probe host round trips. No code or published
+  throughput claim adopted.
 
 ## Simulator, evaluation and presentation
 
@@ -119,3 +120,15 @@ These references support execution controls only; the fused-group arithmetic,
 whole-pass gradient accumulation and one-event timing boundary are local
 implementation decisions. No learning-quality result is inferred from the
 throughput measurements.
+
+## Collection and terminal reporting
+
+- [PyTorch 2.8 CUDA semantics and graphs](https://github.com/pytorch/pytorch/blob/v2.8.0/docs/source/notes/cuda.rst):
+  inspected static-shape/control-flow constraints, stream synchronization and
+  long-lived capture buffers. Collection reuses the existing owned-output graph
+  wrapper; timings reuse its established host boundary rather than waiting per event.
+- [PyTorch pinned/nonblocking tutorial](https://github.com/pytorch/tutorials/blob/main/intermediate_source/pinmem_nonblock.py):
+  inspected pinned transfer ownership and copy-completion requirements. The single
+  reusable handoff waits before CPU consumption and before a named buffer is reused.
+- The compact terminal cadence, duplicate keys and separation from detailed JSON
+  snapshots are local implementation decisions, not research-derived claims.

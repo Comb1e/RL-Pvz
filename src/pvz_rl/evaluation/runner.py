@@ -9,7 +9,7 @@ from time import perf_counter
 
 import numpy as np
 
-from pvz_rl.config import digest, output_settings, simulator
+from pvz_rl.config import digest, simulator
 from pvz_rl.envs.env import PvZEnv
 from pvz_rl.envs.rewards import LEDGER_METRICS, REWARD_METRICS
 from pvz_rl.envs.scenarios import namespace_seed
@@ -149,9 +149,7 @@ def evaluate(
     )
     rows = []
     owns_progress = progress is None
-    progress = progress or ProgressReporter(
-        output / "evaluation.log", output_settings(cfg)["logging"]["progress_seconds"]
-    )
+    progress = progress or ProgressReporter.from_settings(output / "evaluation.log", cfg)
     if owns_progress:
         progress.phase(Phase.VALIDATING)
     total = len(levels) * len(seeds)

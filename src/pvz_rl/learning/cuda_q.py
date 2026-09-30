@@ -157,16 +157,11 @@ class CudaCohortLifecycle(BaseAlgorithm):
         return buffer
 
     def _phase(self, phase, callback):
-        self.phase = phase
+        previous, self.phase = self.phase, phase
         if hasattr(callback, "hardware_context"):
             callback.hardware_context(phase.value)
-        if hasattr(callback, "progress"):
-            from pvz_rl.monitoring.progress import Phase
-
-            callback.progress.phase(
-                Phase.COLLECTING if phase == CohortPhase.COLLECT else Phase.UPDATING,
-                f"Complete-game cohort: {phase.value}",
-            )
+        if hasattr(callback, "cohort_phase"):
+            callback.cohort_phase(previous, phase)
 
     def _begin(self, callback):
         callback.on_rollout_start()
@@ -185,6 +180,7 @@ class CudaCohortLifecycle(BaseAlgorithm):
         self._first = True
         self._buffer = self._new_buffer()
         self._fit_epoch = 0
+        self.cohort_games, self.cohort_start_steps = count, self.num_timesteps
         self._phase_times = {"collect": 0.0, "finalize_rewards": 0.0, "returns": 0.0, "fit": 0.0}
         self._device_seconds = 0.0
         self._simulation_ticks = 0

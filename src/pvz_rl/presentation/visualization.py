@@ -137,8 +137,6 @@ def hardware_panels(segments, output):
                 ("collection_seconds", "Collection"),
                 ("update_seconds", "Update"),
                 ("fit_seconds", "Q fitting"),
-                ("critic_seconds", "Archived critic"),
-                ("actor_seconds", "Archived actor"),
                 ("window_seconds", "Critical path"),
             ),
         ),
@@ -171,9 +169,7 @@ def hardware_panels(segments, output):
                 color = {
                     "warmup": "#d8e8f6",
                     "collect": "#d8e8f6",
-                    "critic": "#e2f0df",
                     "fit": "#e2f0df",
-                    "actor": "#eaddef",
                     "formal": "#e2f0df",
                     "validation": "#ffe3a5",
                     "reporting": "#eaddef",
@@ -189,7 +185,7 @@ def hardware_panels(segments, output):
         ax.set(title=title, ylabel=unit, xlabel="Elapsed wall time within session (minutes)")
         ax.grid(alpha=0.2)
     fig.suptitle(
-        "Hardware telemetry • blue: collection • green: fitting • purple: actor/reporting • amber: validation",
+        "Hardware telemetry • blue: collection • green: fitting • purple: reporting • amber: validation",
         fontsize=11,
     )
     _save(fig, output, "hardware")
@@ -372,18 +368,7 @@ def build_run_report(run, cfg=None):
         ("q_grad_norm", "Q gradient norm before clipping"),
         ("q_optimizer_steps", "Q optimizer steps per cohort"),
     ]
-    # Existing reports remain readable without loading their retired model classes.
-    archived_panels = [
-        ("policy_gradient_loss", "Conditional planting PPO loss"),
-        ("value_loss", "Balanced critic MSE (last minibatch)"),
-        ("approx_kl", "Sampled conditional planting KL"),
-        ("exact_kl", "Retained actor: exact conditional planting KL"),
-        ("actor_grad_norm", "Actor gradient norm before clipping"),
-        ("critic_grad_norm", "Critic gradient norm before clipping"),
-        ("actor_attempted_steps", "Actor steps attempted per cohort"),
-        ("critic_optimizer_steps", "Critic steps per cohort"),
-        ("actor_retained_steps", "Actor steps retained per cohort"),
-        ("actor_window_rejected", "Cohort actor update rejected"),
+    optimizer_panels += [
         *(
             (f"{key}_{group}", f"{group.title()}: {label}")
             for group in ("wait", "plant", "dig")
@@ -392,18 +377,6 @@ def build_run_report(run, cfg=None):
                 ("action_count", "completed-cohort decisions"),
             )
         ),
-    ]
-    present_keys = {
-        k
-        for _, series in segments
-        for row in series["training-metrics"]
-        for k, v in row.get("optimization", {}).items()
-        if v is not None
-    }
-    optimizer_panels += [
-        (key, title)
-        for key, title in archived_panels
-        if key in present_keys or key.startswith(("value_target_error", "action_count"))
     ]
     panel_rows = (len(optimizer_panels) + 1) // 2
     fig, axes = plt.subplots(panel_rows, 2, figsize=(12, 3 * panel_rows))
@@ -533,7 +506,7 @@ def build_run_report(run, cfg=None):
             f"<p>Validation seed {demo['scenario_seed']}; "
             f"{demo['simulated_seconds']:.1f} simulated seconds.</p>{player}"
             f'<p><a href="{escape(demo["replay"])}">Verified '
-            f"{'compact demo' if demo['replay'].endswith('.pvzdemo') else 'legacy replay'}</a></p>"
+            f"{'compact demo' if demo['replay'].endswith('.pvzdemo') else 'native replay'}</a></p>"
             f'<pre>pvz-rl replay "{escape((output / demo["replay"]).resolve())}" --watch --speed 2</pre>'
             f'<p class="hash">Shared checkpoint SHA-256: {escape(demo["checkpoint_hash"])}</p>'
             "</article>"
@@ -668,7 +641,8 @@ def create_demonstrations(run, cfg, progress, deadline=None):
     if best.get("checkpoint_hash") != checkpoint_hash:
         raise ValueError("Selected checkpoint hash does not match best.json")
     meta = read_json(run / "metadata.json")
-    archive = not current_engine_config(meta["config"]) or not current_model_config(meta["config"])
+    if not current_engine_config(meta["config"]) or not current_model_config(meta["config"]):
+        raise ValueError("Demonstration generation requires the current engine and model protocol")
     levels = ["easy"] if meta["family"] in ("diagnostic",) else cfg["evaluation"]["levels"]
     seed = cfg["splits"]["validation"][0]
     existing = read_json(output / "demos.json", {})
@@ -682,14 +656,6 @@ def create_demonstrations(run, cfg, progress, deadline=None):
             for d in demos
         )
     )
-    if archive:
-        # Historical reports and recordings are readable without deserializing a model.
-        if reusable:
-            return demos
-        raise RuntimeError(
-            "Archived checkpoint cannot regenerate gameplay. Start a fresh run; "
-            "existing replay files can still be watched/exported individually."
-        )
     if (
         not reusable
         or {d["level"] for d in demos} != set(levels)
@@ -778,9 +744,7 @@ def visualize_run(run, *, cfg=None, videos=None, progress=None, deadline=None, r
     output = run / "visualizations"
     output.mkdir(parents=True, exist_ok=True)
     owns_progress = progress is None
-    progress = progress or ProgressReporter(
-        run / "visualize.log", settings["logging"]["progress_seconds"]
-    )
+    progress = progress or ProgressReporter.from_settings(run / "visualize.log", cfg)
     started = perf_counter()
     status = {"state": "exporting", "videos_requested": videos}
     write_json(output / "status.json", status)
@@ -789,11 +753,12 @@ def visualize_run(run, *, cfg=None, videos=None, progress=None, deadline=None, r
         check_deadline(deadline)
         build_run_report(run, cfg)
         original = read_json(run / "metadata.json")["config"]
-        archived = not current_engine_config(original) or not current_model_config(original)
+        if not current_engine_config(original) or not current_model_config(original):
+            raise ValueError("Run visualization requires the current engine and model protocol")
         demos = []
         if report_only:
             status["note"] = "Report only; checkpoints and demonstrations were not loaded"
-        elif archived:
+        elif videos and not (run / "best.zip").exists():
             best = read_json(run / "best.json", {})
             demos = [
                 d
@@ -801,12 +766,10 @@ def visualize_run(run, *, cfg=None, videos=None, progress=None, deadline=None, r
                 if d.get("checkpoint_hash") == best.get("checkpoint_hash")
             ]
             status["note"] = (
-                "Archived run: report and existing recordings only; fresh training required"
+                "Exporting existing current-protocol recordings without loading a model"
             )
-            if videos and not demos:
-                raise RuntimeError(
-                    "No archived demonstrations to export; old checkpoints cannot regenerate gameplay"
-                )
+            if not demos:
+                raise RuntimeError("No validated checkpoint or matching recordings to export")
         elif (settings["visualization"]["demos"] or videos) and (run / "best.zip").exists():
             demos = create_demonstrations(run, cfg, progress, deadline=deadline)
         else:

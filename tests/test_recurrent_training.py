@@ -561,7 +561,7 @@ def test_default_128_slot_bounded_collection_and_chunk_memory(tmp_path):
         env.close()
 
 
-def test_performance_refresh_keeps_learning_settings_and_old_precision():
+def test_performance_refresh_keeps_learning_settings_and_uses_current_defaults():
     from pvz_rl.presentation.live_view import learning_settings
 
     current = load_config()
@@ -574,7 +574,7 @@ def test_performance_refresh_keeps_learning_settings_and_old_precision():
     old["training"]["demo"]["gradient_clip"] = 0.25  # Ignored historical metadata.
     old["reward"]["invalid_plant_penalty"] = 0.123
     normalized = execution_config(old)
-    assert normalized["training"]["performance"]["fit_precision"] == "fp32"
+    assert normalized["training"]["performance"]["fit_precision"] == "features_bf16"
     new = refresh_performance(normalized, current)
     assert new["policy"]["encoder_microbatch"] == 128
     assert new["policy"]["encoder_token_budget"] == 65536
@@ -588,6 +588,36 @@ def test_performance_refresh_keeps_learning_settings_and_old_precision():
     assert "invalid_plant_penalty=0.123" in visible["Rewards"]
     assert new["training"]["demo"] == old["training"]["demo"]
     assert resume_protocol(new, "masked") == resume_protocol(normalized, "masked")
+
+
+def test_cli_resume_refreshes_execution_and_logging_by_default(tmp_path, monkeypatch):
+    current = load_config()
+    saved = copy.deepcopy(current)
+    saved["training"]["performance"].update(
+        compile_kernels=False, fit_precision="fp32", fit_sequence_groups=1
+    )
+    saved["logging"].update(terminal_progress_seconds=5)
+    saved["reward"]["invalid_plant_penalty"] = 0.123
+    saved["training"]["max_grad_norm"] = 1.25
+    monkeypatch.setattr(
+        "pvz_rl.learning.checkpoints.inspect_checkpoint",
+        lambda path: dict(config=saved, condition="masked", learner_seed=101),
+    )
+    seen = []
+    monkeypatch.setattr(
+        "pvz_rl.learning.training.train", lambda cfg, *args, **kwargs: seen.append(cfg)
+    )
+    main(
+        ["train", "--resume", str(tmp_path / "interrupted.zip"), "--output", str(tmp_path / "run")]
+    )
+    assert seen[0]["training"]["performance"] == current["training"]["performance"]
+    assert seen[0]["logging"] == current["logging"]
+    assert seen[0]["reward"] == saved["reward"]
+    assert seen[0]["training"]["max_grad_norm"] == 1.25
+    with pytest.raises(SystemExit):
+        main(["train", "--output", str(tmp_path), "--refresh-performance"])
+    with pytest.raises(SystemExit):
+        main(["train", "--output", str(tmp_path), "--steps", "64"])
 
 
 @pytest.mark.parametrize("fault", ["nonfinite", "memory", "compilation"])

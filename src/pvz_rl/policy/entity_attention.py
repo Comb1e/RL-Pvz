@@ -2,6 +2,7 @@
 
 import re
 import sys
+import warnings
 
 import torch
 from torch import nn
@@ -176,11 +177,18 @@ class EntityTransformer(nn.Module):
 
     def disable_compilation(self, exc):
         """Record one backend failure and retain the exact eager encoder."""
+        if self.compilation_status == "fallback":
+            return
         self._compiled_encode = None
         self._compiled_shapes.clear()
         self.compilation_status = "fallback"
         detail = str(exc).splitlines()[0] if str(exc) else "backend compilation failed"
         self.compilation_error = re.sub(r"https?://\S+", "<url>", detail)[:256]
+        warnings.warn(
+            f"Encoder compilation failed; using eager execution: {self.compilation_error}",
+            RuntimeWarning,
+            stacklevel=2,
+        )
 
     def _encode_with_optional_compile(self, args):
         if self._compiled_encode is None:
@@ -267,7 +275,7 @@ class EntityTransformer(nn.Module):
             args = part.tensors()
             if self.activation_checkpointing and self.training and torch.is_grad_enabled():
                 value = checkpoint(self._encode, *args, use_reentrant=False)
-            elif self.training and torch.is_grad_enabled():
+            elif self._compiled_encode is not None:
                 value = self._encode_with_optional_compile(args)
             else:
                 value = self._encode(*args)

@@ -33,7 +33,9 @@ Configuration defines model dimensions and the protocol. The single bundled
 the same values. There is one entity Transformer–LSTM architecture.
 Shared checkpoint inspection validates format, model/optimizer protocols,
 configuration identity and weight structure before environment creation. Loading
-without an explicit target uses saved settings and missing execution defaults.
+for evaluation retains saved learning settings. Fresh initialization uses current
+configuration; autonomous resume automatically applies current execution and
+logging settings without replacing saved learning parameters.
 Engine, complete observation encoding, timing, action algebra, reward definition
 and network structure must match for transfer. Budgets and output preferences
 are execution choices. Invalid input raises an error; there is no random fallback.
@@ -191,13 +193,55 @@ and entities share one RAM budget with disk overflow. Proposals, executed previo
 actions, current outcomes, omission counts, rewards and boundaries remain explicit.
 Only recovery state stores private simulator snapshots and scenario RNGs.
 
-At each decision, a reusable scratch CUDA batch restores the pre-decision simulator,
-RNG and proximity-ledger state for two alternative branches and up to two alternative
-tiles. The frozen FP32 EMA teacher follows actual executed history and forks it for
-each next-state evaluation. These probes never change behavior RNG, episode totals,
-viewer history or journals. Ragged storage deduplicates identical next observations
-within a decision and stores outcomes, components and bootstrap values under the
-shared RAM/disk budget.
+At each decision, two scratch lanes independently restore pre-decision simulator,
+RNG, accounting and proximity-ledger state. The branch pair and tile pair execute
+in two simulator passes. Allocation failure releases the failed scratch allocation
+and selects one lane, executing all four scheduled probes sequentially. It never
+changes probe coverage. The frozen FP32 EMA teacher advances only on actual history;
+one stacked next-state evaluation receives four independent copies of that state.
+Probe states never enter behavior history, viewer history or journals.
+
+Device feature buffers retain each probe pass in its own rows. Canonical records
+are packed on device; duplicate probes share a slab offset only when entities,
+globals, executed action, acceptance and duration match within the same actual
+game. The latter fields are the next recurrent inputs; the forked hidden/cell
+state is shared only within that game's decision. Proposal, rejection reason,
+reward components and bootstrap remain separate records even when offsets alias.
+Storage consumes packed offsets directly rather than repeating host deduplication.
+
+Online observations use fixed 32/64/128/256 padding buckets. Probe padding uses a
+conservative bound from already-published public entity counts, pending-zombie
+counts, at most two shots per existing plant and one accepted new plant. No future
+schedule or RNG determines policy input. The configured entity cap still limits
+tokens, not simulator capacity; a bound violation fails instead of dropping records.
+Collection inference uses the same owned-output, fixed-shape encoder graphs as
+fitting, with a bounded four-shape cache and one recorded eager fallback.
+
+One reusable pinned handoff queues behavior inputs, probe metadata/slabs, execution
+results and episode headers/totals on the collection stream. A single stream wait
+precedes host interpretation, ragged storage and journal publication. Terminal
+metrics need no separate header/totals read. Viewer staging remains read-only and
+asynchronous; reset, checkpoint and shutdown explicitly drain it. Device timing
+events are read after the existing handoff and reused, not individually waited on.
+
+```mermaid
+flowchart LR
+    Source[Actual pre-decision state] --> Online[Online inference / proposal]
+    Source --> EMA[Advance actual EMA history once]
+    Online --> Scratch[Copy independent scratch lanes]
+    Scratch --> Branch[Branch pair / first pass]
+    Scratch --> Tile[Tile pair / second pass]
+    Branch --> Next[Owned canonical probe rows]
+    Tile --> Next
+    EMA --> Fork[Stack independent EMA next-state inputs]
+    Next --> Fork
+    Fork --> Pack[Exact device deduplication / packed records]
+    Online --> Actual[Execute actual proposal]
+    Actual --> Handoff[Queue public evidence / one stream wait]
+    Pack --> Handoff
+    Handoff --> Store[RAM/disk trajectories]
+    Handoff --> Journal[Actual journal / viewer]
+```
 
 Game and win counts update immediately; completed rewards remain provisional until
 the cohort median is known. Finalization includes all actual durations, applies time
@@ -269,10 +313,10 @@ stateDiagram-v2
     Commit --> [*]: all passes committed
 ```
 
-Execution precision and fallback status accompany recovery metadata. Older entity
-checkpoints default to FP32. Ordinary resume keeps saved settings;
-`--refresh-performance` replaces only precision, prefetch, encoder batching,
-attention fallback size and instrumentation settings from current configuration.
+Execution precision and fallback status accompany recovery metadata. Resume applies
+current precision, prefetch, encoder batching, attention fallback size,
+instrumentation and logging settings automatically. Missing execution metadata
+hydrates from the current profile, rather than historical FP32 defaults.
 Learning parameters and input/output schemas are excluded from that refresh.
 Fresh weight initialization uses current learning and execution settings.
 Recovery retains saved rewards and clipping because collected returns and
@@ -322,6 +366,16 @@ and tile exploration. The settings strip shows checkpoint-retained values on
 resume, independently of refreshed execution settings. It is available before
 the first board and during fitting; **S** changes visibility only. The viewer
 never reloads defaults or reads GPU tensors to display these values.
+
+Terminal output and `train.log` contain compact event records, not a dashboard.
+Phase boundaries, completed cohorts, checkpoint saves, warnings and final states
+print immediately. Routine output requires both material progress and the separate
+60-second terminal interval. Interactive output rewrites one line; redirected
+output uses timestamped lines without ANSI controls. Consecutive duplicates and
+repeated identical report-refresh notices are suppressed. Detailed `status.json`
+snapshots retain their independent 15-second cadence, alongside training and
+hardware JSONL streams. Formatting uses host-side snapshots and cached fitting
+metrics; it never reads active device accumulators.
 
 Mathematical controls and verification limits are in
 [entity inputs](math/entity-inputs.md) and [recurrent training](math/recurrent-training.md); chronological release evidence

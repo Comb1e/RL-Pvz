@@ -1,7 +1,5 @@
 """Shared legality, exploration and regression algebra for sequential Q control."""
 
-import math
-
 import torch
 from pvz_game import Rules
 
@@ -47,25 +45,8 @@ def selection_masks(masks):
     return legal & active[:, None]
 
 
-def validate_values(values, masks):
-    if values.shape != masks.shape or masks.dtype != torch.bool:
-        raise ValueError("Q values and boolean legal masks must have matching shapes")
-    if not bool(torch.isfinite(values).all()):
-        raise ValueError("Q values must be finite")
-    if not bool(masks.any(-1).all()):
-        raise ValueError("Each decision requires at least one legal action")
-
-
-def greedy_choice(values, masks, *, validate=True):
-    if validate:
-        validate_values(values, masks)
+def greedy_choice(values, masks):
     return values.masked_fill(~masks, -torch.inf).argmax(-1)
-
-
-def per_head_epsilon(budget):
-    if not math.isfinite(budget) or not 0 <= budget <= 1:
-        raise ValueError("Exploration budget must be finite and in [0, 1]")
-    return 1 - math.sqrt(1 - budget)
 
 
 def explore(greedy, legal, epsilon):
@@ -114,7 +95,6 @@ def select_q_actions(
     exploration_epsilon=0.0,
     tile_exploration_epsilon=0.0,
     active=None,
-    diagnostic_indices=None,
 ):
     """Shared ten-way Q comparison and tile-only exploration.
 
@@ -123,53 +103,46 @@ def select_q_actions(
     Keeping the branch and tile decisions separate is important because the
     simulator must receive the highest-Q proposal even when it later rejects
     it for affordability or cooldown.
+
+    Selection never waits for the device: tile values are evaluated for every
+    row and waits discard theirs. ``details["valid"]`` is a device flag (finite
+    values and a legal choice in every row) that callers check at their next
+    host boundary.
     """
     # Every active environment compares all ten first-level outputs.  The
     # transport mask is used only for the selected tile; affordability and
-    # cooldown are simulator outcomes.  Empty rows stay illegal and are
-    # rejected by the normal value validator unless the caller marks them
-    # inactive for a batched collection step.
+    # cooldown are simulator outcomes.  Empty rows stay illegal and invalidate
+    # the decision unless the caller marks them inactive for batched collection.
     legal = selection_masks(action_masks)
+    if values.shape != legal.shape:
+        raise ValueError("Q values and boolean legal masks must have matching shapes")
     if active is not None:
-        legal = legal.clone()
-        legal[~active] = False
-        legal[~active, 0] = True
-    greedy = greedy_choice(values, legal)
-    branches = greedy.clone()
-    coins = torch.zeros(len(values), 2, device=values.device, dtype=torch.bool)
+        wait_only = torch.zeros_like(legal)
+        wait_only[:, 0] = True
+        legal = torch.where(active[:, None], legal, wait_only)
+    branches = greedy_choice(values, legal)
+    nonwait = branches > 0
+    rows = torch.arange(len(values), device=values.device)
+    tile_q = tile_values(board, pooled, branches)
+    tile_legal = A.tile_masks(action_masks)[rows, (branches - 1).clamp_min(0)]
+    # Full-board proposals deterministically target tile zero.  The simulator
+    # rejects them and advances time.
+    first_tile = torch.zeros_like(tile_legal)
+    first_tile[:, 0] = True
+    tile_candidates = torch.where(tile_legal.any(-1, keepdim=True), tile_legal, first_tile)
+    preferred = greedy_choice(tile_q, tile_candidates)
     tile_epsilon = 0.0 if deterministic else tile_exploration_epsilon
-    tiles = torch.zeros_like(branches)
-    greedy_tiles = torch.zeros_like(branches)
-    selected_tile_values = values.new_zeros(len(values))
-    nonwait = (branches > 0).nonzero(as_tuple=True)[0]
-    if len(nonwait):
-        tile_q = tile_values(board[nonwait], pooled[nonwait], branches[nonwait])
-        tile_legal = A.tile_masks(action_masks[nonwait])[
-            torch.arange(len(nonwait), device=values.device), branches[nonwait] - 1
-        ]
-        # Full-board proposals deterministically target tile zero.  The
-        # simulator rejects them and advances time.  Validate every value,
-        # even when the geometry has no empty tile.
-        has_tile = tile_legal.any(-1)
-        tile_candidates = tile_legal.clone()
-        tile_candidates[~has_tile, 0] = True
-        preferred = greedy_choice(tile_q, tile_candidates)
-        tiles[nonwait] = preferred
-        greedy_tiles[nonwait] = preferred
-        selected, fired = explore(preferred, tile_candidates, tile_epsilon)
-        tiles[nonwait] = selected
-        coins[nonwait, 1] = fired
-        selected_tile_values[nonwait] = tile_q.gather(1, tiles[nonwait, None]).flatten()
+    selected, fired = explore(preferred, tile_candidates, tile_epsilon)
+    tiles = torch.where(nonwait, selected, 0)
+    coins = torch.stack((torch.zeros_like(nonwait), fired & nonwait), -1)
     actions = assemble(branches, tiles)
-    details = dict(greedy_actions=assemble(greedy, greedy_tiles), coins=coins)
-    details["branch_q"] = values
-    if diagnostic_indices is not None:
-        ix = diagnostic_indices
-        details["viewer"] = dict(
-            q=values[ix],
-            legal=legal[ix],
-            actions=actions[ix],
-            greedy_actions=details["greedy_actions"][ix],
-            coins=coins[ix],
-        )
+    details = dict(
+        greedy_actions=assemble(branches, torch.where(nonwait, preferred, 0)),
+        coins=coins,
+        branch_q=values,
+        valid=torch.isfinite(values).all()
+        & legal.any(-1).all()
+        & (torch.isfinite(tile_q) | ~nonwait[:, None]).all(),
+    )
+    selected_tile_values = torch.where(nonwait, tile_q.gather(1, tiles[:, None]).flatten(), 0)
     return actions, values.gather(1, branches[:, None]).flatten(), selected_tile_values, details

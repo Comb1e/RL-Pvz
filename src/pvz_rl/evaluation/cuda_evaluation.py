@@ -110,15 +110,20 @@ def refilled_games(
                     active = torch.as_tensor(env.enabled_envs.copy(), device=policy.policy.device)
                     with timer.track("inference"):
                         actions = runner.decide(
-                            obs, env.action_masks(), env.header_tensor[:, 0], active=active
+                            obs,
+                            env.action_masks(),
+                            env.header_tensor[:, 0],
+                            active=active,
+                            defer_check=True,
                         )[0]
                 if record:
                     buffered.append(actions)
                 obs, _, _, _, _, infos = env.step_tensors(actions, autoreset=False)
+                runner.check()
                 runner.observe_result(
                     env.proposed_actions,
-                    env.last_action_result_host[:, 0].copy(),
-                    env.last_transition_host[:, 2].copy(),
+                    env.header_tensor[:, 12],
+                    env.transition_ticks,
                     active=active,
                 )
                 done = [i for i, info in enumerate(infos) if "episode_metrics" in info]
@@ -202,15 +207,20 @@ def fixed_batches(
                             )
                             with inference_timer.track("inference"):
                                 actions = runner.decide(
-                                    obs, env.action_masks(), env.header_tensor[:, 0], active=active
+                                    obs,
+                                    env.action_masks(),
+                                    env.header_tensor[:, 0],
+                                    active=active,
+                                    defer_check=True,
                                 )[0]
                         if record:
                             buffered.append(actions)
                         obs, _, _, _, _, infos = env.step_tensors(actions, autoreset=False)
+                        runner.check()
                         runner.observe_result(
                             env.proposed_actions,
-                            env.last_action_result_host[:, 0].copy(),
-                            env.last_transition_host[:, 2].copy(),
+                            env.header_tensor[:, 12],
+                            env.transition_ticks,
                             active=active,
                         )
                         # The compact completion transfer has already waited for

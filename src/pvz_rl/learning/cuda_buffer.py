@@ -11,6 +11,7 @@ from pvz_rl.envs.encoding import (
     ENTITY_WIDTH,
     GLOBAL_WIDTH,
     EntityBatch,
+    PackedEntityBatch,
     collate_observations,
     validate_entity_records,
 )
@@ -154,52 +155,28 @@ class CompleteGameBuffer:
         if self.finalized or self.rewards_finalized:
             raise RuntimeError("Cannot append after complete-return finalization")
         records = np.array(records, dtype=self.dtype, copy=True)
-        observations = collate_observations(observations).reshape(-1).cpu()
-        if len(records) != len(observations):
+        if not isinstance(observations, PackedEntityBatch):
+            batch = collate_observations(observations).reshape(-1).cpu()
+            entities, mask, globals_ = (value.numpy() for value in batch.tensors())
+            counts = mask.sum(-1)
+            observations = PackedEntityBatch(
+                entities[mask], np.cumsum(counts) - counts, counts, globals_
+            )
+        observations.validate()
+        if observations.counts.shape != (len(records),):
             raise ValueError("Each transition needs one public observation")
-        entities, mask, globals_ = (x.numpy() for x in observations.tensors())
-        counts = mask.sum(-1)
-        packed = entities[mask]
-        validate_entity_records(packed)
-        if not np.isfinite(globals_).all():
-            raise ValueError("Non-finite trajectory globals")
-        records["entity_offset"] = self.entity_size + np.cumsum(counts) - counts
-        records["entity_count"], records["globals"] = counts, globals_
-        self._append(packed, entity=True)
         if probe_observations is not None:
-            previous = []
-            for slot, observation in enumerate(probe_observations):
-                host = observation.cpu()
-                pe, pm, pg = (x.numpy() for x in host.tensors())
-                pc = pm.sum(-1)
-                valid = records["probes"][:, slot]["valid"]
-                validate_entity_records(pe[pm & valid[:, None]])
-                if not np.isfinite(pg[valid]).all():
-                    raise ValueError("Non-finite probe globals")
-                unique = valid.copy()
-                dest = records["probes"][:, slot]
-                dest["globals"] = pg
-                for prior, (oe, oc, og) in enumerate(previous):
-                    width = min(pe.shape[1], oe.shape[1])
-                    equal = (
-                        unique
-                        & records["probes"][:, prior]["valid"]
-                        & (pc == oc)
-                        & (pg == og).all(-1)
-                        & (pe[:, :width] == oe[:, :width]).all(axis=(1, 2))
-                    )
-                    dest["entity_offset"][equal] = records["probes"][:, prior]["entity_offset"][
-                        equal
-                    ]
-                    dest["entity_count"][equal] = pc[equal]
-                    unique[equal] = False
-                count = np.where(unique, pc, 0)
-                dest["entity_offset"][unique] = (self.entity_size + np.cumsum(count) - count)[
-                    unique
-                ]
-                dest["entity_count"][unique] = count[unique]
-                self._append(pe[pm & unique[:, None]], entity=True)
-                previous.append((pe, pc, pg))
+            probe_observations.validate()
+            if probe_observations.counts.shape != (len(records), MAX_PROBES):
+                raise ValueError("Each transition needs its scheduled probe observations")
+        records["entity_offset"] = self.entity_size + observations.offsets
+        records["entity_count"], records["globals"] = observations.counts, observations.globals
+        self._append(observations.entities, entity=True)
+        if probe_observations is not None:
+            records["probes"]["entity_offset"] = self.entity_size + probe_observations.offsets
+            records["probes"]["entity_count"] = probe_observations.counts
+            records["probes"]["globals"] = probe_observations.globals
+            self._append(probe_observations.entities, entity=True)
         self._append(records)
 
     def take(self, indices):
