@@ -10,13 +10,6 @@ PERFORMANCE_SETTINGS = (
     "telemetry",
     "fit_sequence_groups",
 )
-PERFORMANCE_DEFAULTS = dict(
-    fit_precision="fp32",
-    prefetch=False,
-    compile_kernels=False,
-    telemetry=False,
-    fit_sequence_groups=1,
-)
 
 
 def refresh_performance(cfg, current):
@@ -25,7 +18,7 @@ def refresh_performance(cfg, current):
         result["policy"][key] = current["policy"][key]
     target = result["training"].setdefault("performance", {})
     for key in PERFORMANCE_SETTINGS:
-        target[key] = current["training"].get("performance", {}).get(key, PERFORMANCE_DEFAULTS[key])
+        target[key] = current["training"]["performance"][key]
     return result
 
 

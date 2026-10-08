@@ -9,7 +9,7 @@ from pvz_game import Dig, Game, Place, Wait
 
 
 def per_tick_actions(cfg):
-    return cfg["environment"].get("action_timing", "fixed") == "per_tick"
+    return cfg["environment"]["action_timing"] == "per_tick"
 
 
 class ActionPhaseGame(Game):

@@ -43,19 +43,10 @@ def test_strict_installed_game_verification(cfg, monkeypatch, changed):
         verify_engine(cfg)
 
 
-@pytest.mark.parametrize(
-    "old_pin",
-    [
-        "b3cfbd886ab378313a1fdb57ee43a9a1b36a0793",
-        "a47056d8141ec635d3ff3f4d5561d6a75cfca2cc",
-    ],
-)
-def test_old_checkpoint_rejected_before_model_deserialization(cfg, tmp_path, old_pin):
-    cfg["engine_commit"] = old_pin
-    cfg.pop("engine_package_version")
+def test_metadata_sidecar_cannot_substitute_for_checkpoint(cfg, tmp_path):
     write_json(tmp_path / "metadata.json", {"config": cfg, "condition": "masked"})
-    with pytest.raises(RuntimeError, match="fresh training"):
-        load_policy(tmp_path / "old.zip")
+    with pytest.raises(FileNotFoundError):
+        load_policy(tmp_path / "missing.zip")
 
 
 @pytest.mark.parametrize("defeated,total", [(0, 15), (2, 15), (15, 15), (0, 0), (200, 200)])
@@ -145,7 +136,7 @@ def test_native_metadata_precedence_and_seek(suffix, tmp_path):
         path.with_suffix(".metadata.json"),
         {"policy_id": "legacy", "outcome": "lost", "checkpoint_hash": "b" * 64},
     )
-    playback = open_playback(path, fallback={"outcome": "won", "policy_id": "fallback"})
+    playback = open_playback(path, context={"outcome": "won", "policy_id": "context"})
     identity = id(playback.game)
     assert playback.metadata["policy_id"] == "native"
     assert playback.metadata["checkpoint_sha256"] == "a" * 64
@@ -162,24 +153,6 @@ def test_native_metadata_precedence_and_seek(suffix, tmp_path):
         assert playback.display_outcome == ("truncated" if tick == 55 else "running")
 
 
-@pytest.mark.parametrize("natural", [False, True])
-def test_legacy_sidecar_and_outcome_precedence(tmp_path, natural):
-    game = Game()
-    game.reset(LevelSpec("empty") if natural else "easy", 0)
-    recorder = Recorder(game)
-    recorder.step()
-    path = tmp_path / "legacy.json"
-    recorder.save(path)
-    assert "metadata" not in read_recording(path)
-    write_json(
-        path.with_suffix(".metadata.json"), {"status": "truncated", "checkpoint_hash": "c" * 64}
-    )
-    playback = open_playback(path)
-    assert playback.display_outcome == "running"
-    playback.verify()
-    assert playback.display_outcome == ("won" if natural else "truncated")
-
-
 def test_default_training_records_without_pygame_or_ffmpeg(tmp_path):
     script = r"""
 import builtins, sys
@@ -191,7 +164,7 @@ assert cfg['visualization']['demos'] and not cfg['visualization']['videos']
 # Retain the archived periodic-export control independently of mastery scheduling.
 cfg['training']['validation_schedule'] = 'periodic'
 cfg['environment']['cutoff_seconds'] = 1
-cfg['training'].update(budget_unit='decisions', device='cuda', total_steps=64, batch_size=32, n_envs=1, n_epochs=1, hidden_sizes=[32,32], eval_interval=64)
+cfg['training'].update(budget_unit='decisions', device='cuda', total_steps=64, batch_size=32, n_envs=1, n_epochs=1, eval_interval=64)
 cfg['policy']['chunk_length'] = 16
 cfg['visualization']['ffmpeg'] = 'missing-ffmpeg'
 original = builtins.__import__
@@ -216,15 +189,13 @@ train(cfg, 'masked', 101, sys.argv[1], validation_limit=1)
     assert "--watch --speed 2" in (run / "visualizations/index.html").read_text()
 
 
-def test_archived_report_and_video_never_load_old_model(cfg, tmp_path, monkeypatch):
+def test_current_report_and_existing_video_do_not_load_checkpoint(cfg, tmp_path, monkeypatch):
     import pvz_rl.learning.training as training
 
     def forbidden(*args, **kwargs):
-        raise AssertionError("Old model must not be loaded")
+        raise AssertionError("Checkpoint must not be loaded")
 
     monkeypatch.setattr(training, "load_policy", forbidden)
-    cfg["engine_commit"] = "b3cfbd886ab378313a1fdb57ee43a9a1b36a0793"
-    cfg.pop("engine_package_version")
     cfg["visualization"]["final_hold_seconds"] = 0
     write_json(tmp_path / "metadata.json", {"config": cfg, "family": "preset"})
     write_json(tmp_path / "best.json", {"checkpoint_hash": "a" * 64})
@@ -244,7 +215,7 @@ def test_archived_report_and_video_never_load_old_model(cfg, tmp_path, monkeypat
     )
     write_json(tmp_path / "visualizations/demos.json", {"demos": [demo]})
     result = visualize_run(tmp_path, videos=False)
-    assert result["state"] == "complete" and "Archived" in result["note"]
+    assert result["state"] == "complete" and "Report only" in result["note"]
     if shutil.which("ffmpeg"):
         assert visualize_run(tmp_path, videos=True)["state"] == "complete"
         assert (tmp_path / "visualizations/videos/easy-100000.mp4").exists()
@@ -279,16 +250,15 @@ def test_video_options_respect_config_and_mutual_exclusion(cfg, tmp_path, monkey
     assert received[-1] is True
 
 
-def test_watch_uses_native_payload_speed_and_legacy_labels(tmp_path, monkeypatch, capsys):
+def test_watch_uses_native_payload_speed_and_embedded_labels(tmp_path, monkeypatch, capsys):
     import pvz_game.ui
 
     game = Game()
     game.reset("easy", 1)
-    recorder = Recorder(game)
+    recorder = Recorder(game, metadata={"outcome": "truncated"})
     recorder.step()
-    path = tmp_path / "old.json"
+    path = tmp_path / "current.json"
     recorder.save(path)
-    write_json(path.with_suffix(".metadata.json"), {"outcome": "truncated"})
 
     class Viewer:
         def __init__(self, replay_path, speed):

@@ -9,15 +9,15 @@ import torch
 
 from pvz_rl.config import digest, load_config, validate_config
 from pvz_rl.learning.performance import refresh_performance
-from pvz_rl.learning.training_requirements import transfer_protocol
+from pvz_rl.learning.training_requirements import transfer_protocol, weight_transfer_protocol
 
-DEMO_PROTOCOL = "pvz-rl/demo-initialization-checkpoint-v2"
-STATE_PROTOCOL = "pvz-rl/lstm-state-v2"
+DEMO_PROTOCOL = "pvz-rl/demo-initialization-checkpoint-v3"
+STATE_PROTOCOL = "pvz-rl/event-lstm-state-v1"
 
 
 def protocol_for(kind):
     methods = {
-        "transformer_lstm_q_v2": "complete_return_lstm_v1",
+        "transformer_lstm_q_v3": "complete_return_event_lstm_v1",
     }
     if kind not in methods:
         raise ValueError(
@@ -28,11 +28,12 @@ def protocol_for(kind):
     return dict(policy=kind, optimizer=methods[kind], exploration=EXPLORATION_PROTOCOL)
 
 
-def compatible_config(source, target):
-    if transfer_protocol(source) != transfer_protocol(target):
+def compatible_config(source, target, *, weights_only=False):
+    protocol = weight_transfer_protocol if weights_only else transfer_protocol
+    if protocol(source) != protocol(target):
         raise ValueError(
             "Checkpoint transfer requires matching engine, observation encoding, action "
-            "semantics, reward definition and network structure; incompatible model transfer"
+            "semantics and network structure; incompatible model transfer"
         )
 
 
@@ -40,16 +41,12 @@ def execution_config(cfg):
     """Fill optional execution settings; never replace recorded protocol parameters."""
     cfg = copy.deepcopy(cfg)
     defaults = load_config()
-    cfg["training"].setdefault("performance", {"fit_precision": "fp32", "prefetch": False})
     for key in ("logging", "visualization", "runtime", "simulation"):
         cfg.setdefault(key, copy.deepcopy(defaults[key]))
     for key in ("storage", "performance", "batch_size", "n_epochs", "max_grad_norm"):
         cfg["training"].setdefault(key, copy.deepcopy(defaults["training"][key]))
-    # Absence in a historical checkpoint means its original FP32 execution.
-    saved_performance = cfg["training"]["performance"]
-    saved_performance.setdefault("fit_precision", "fp32")
-    saved_performance.setdefault("prefetch", False)
-    saved_performance.setdefault("fit_sequence_groups", 1)
+    for key, value in defaults["training"]["performance"].items():
+        cfg["training"]["performance"].setdefault(key, copy.deepcopy(value))
     return cfg
 
 
@@ -57,17 +54,6 @@ def inspect_checkpoint(path):
     path = Path(path).resolve()
     if not path.suffix:
         path = path.with_suffix(".zip")
-    if not path.exists() and (path.parent / "metadata.json").exists():
-        # Diagnose an obsolete protocol from its plain metadata before touching
-        # model serialization; a valid sidecar never substitutes for a missing ZIP.
-        from pvz_rl.provenance import verify_engine
-
-        legacy = json.loads((path.parent / "metadata.json").read_text("utf-8"))
-        validate_config(legacy["config"])
-        from pvz_rl.learning.training_requirements import require_supported_policy
-
-        require_supported_policy(legacy["config"], legacy.get("condition", "masked"))
-        verify_engine(legacy["config"])
     if path.suffix == ".pt":
         saved = torch.load(path, map_location="cpu", weights_only=True)
         if saved.get("protocol") != DEMO_PROTOCOL:
@@ -94,7 +80,7 @@ def inspect_checkpoint(path):
 
         if saved.get("observation_schema") != ObservationEncoder(cfg, Rules()).schema():
             raise ValueError("Checkpoint entity schema disagrees with configuration")
-        if cfg["policy"]["kind"] != "transformer_lstm_q_v2":
+        if cfg["policy"]["kind"] != "transformer_lstm_q_v3":
             raise ValueError("Demonstration checkpoint requires Transformer-LSTM weights")
         metadata = dict(
             config=cfg,
@@ -144,18 +130,31 @@ def inspect_checkpoint(path):
     # execution-only setting comes from the current training profile.  This
     # keeps an old initialization useful after a BF16, batching or prefetch
     # change without requiring a refresh flag or another recording.
-    cfg = (
-        refresh_performance(metadata["config"], load_config())
-        if metadata["initialization_type"] == "demonstration"
-        else execution_config(metadata["config"])
-    )
+    if metadata["initialization_type"] == "demonstration":
+        current = load_config()
+        source = copy.deepcopy(metadata["config"])
+        # Demonstration weights are structural artifacts. Historical reward files
+        # may predate the current optional shaping fields; hydrate those fields
+        # from today's profile while retaining the source's architecture.
+        source.setdefault("reward", {}).setdefault(
+            "home_entry_penalties", current["reward"]["home_entry_penalties"]
+        )
+        source.setdefault("reward", {}).setdefault(
+            "win_time_weight", current["reward"]["win_time_weight"]
+        )
+        source.setdefault("training", {})["objective"] = copy.deepcopy(
+            current["training"]["objective"]
+        )
+        cfg = refresh_performance(source, current)
+    else:
+        cfg = execution_config(metadata["config"])
     validate_config(cfg)
     metadata["config"] = cfg
     return metadata
 
 
 def model_class(cfg):
-    if cfg["policy"]["kind"] != "transformer_lstm_q_v2":
+    if cfg["policy"]["kind"] != "transformer_lstm_q_v3":
         raise ValueError("Retired model; entity_v1 requires fresh initialization")
     from pvz_rl.learning.recurrent_q import CudaRecurrentQ
 

@@ -19,7 +19,7 @@ def current_model_config(cfg):
     return (
         identity
         in {
-            ("transformer_lstm_q_v2", "entity_v1", "complete_return_lstm_v1"),
+            ("transformer_lstm_q_v3", "entity_v1", "complete_return_event_lstm_v1"),
         }
         and cfg.get("policy", {}).get("action_distribution") == ACTION_DISTRIBUTION
         and cfg.get("reward", {}).get("version") == "net_value_v1"
@@ -56,6 +56,10 @@ def _cuda_probe():
 def require_cuda_training(cfg, condition="masked", *, runtime=True):
     """Reject unsupported runs before creating output or allocating collectors."""
     validate_config(cfg)
+    if cfg["training"].get("objective", {}).get("protocol") != "complete_return_probe_v3":
+        raise ValueError(
+            "Old-objective checkpoints cannot resume or initialize weights. Refit a verified demonstration in a new directory."
+        )
     if condition == "hybrid" or cfg["conditions"].get(condition, {}).get("hybrid"):
         raise ValueError("CPU/hybrid training was removed in 0.8.0; use a direct CUDA condition.")
     if condition not in cfg["conditions"]:
@@ -119,11 +123,10 @@ def transfer_protocol(cfg, condition="masked"):
     return {
         "engine": [cfg[k] for k in ("engine_commit", "engine_version", "engine_package_version")],
         "encoding": cfg["encoding"],
-        "reward": cfg["reward"],
         "timing": {k: env[k] for k in ("action_timing", "decision_ticks", "cutoff_seconds")},
         "actions": ActionSchema.version,
         "action_distribution": p.get("action_distribution"),
-        "action_history": "joint_embedding_v1",
+        "event_history": p["history"],
         "board": {
             k: env[k]
             for k in (
@@ -146,16 +149,29 @@ def transfer_protocol(cfg, condition="masked"):
                 "transformer_feedforward",
                 "scalar_width",
                 "lstm_hidden",
-                "action_embedding",
-                "outcome_width",
+                "event_width",
                 "chunk_length",
             )
             if k in p
         },
-        "heads": cfg["training"]["hidden_sizes"],
         "method": cfg["training"]["method"],
         "return": [cfg["training"]["gamma"], cfg["training"]["discount_clock"]],
     }
+
+
+def weight_transfer_protocol(cfg):
+    """Describe only the public model interface required by demo weights.
+
+    A demonstration is re-fit under the current objective and execution
+    profile. Its weights require the same entity/action representation and
+    network dimensions, but do not require matching reward, return, optimizer,
+    or recurrent chunk settings.
+    """
+    result = transfer_protocol(cfg)
+    for name in ("timing", "method", "return"):
+        result.pop(name)
+    result["policy"].pop("chunk_length", None)
+    return result
 
 
 def parameter_changes(old, new, prefix=""):

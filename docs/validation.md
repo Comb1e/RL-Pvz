@@ -16,7 +16,7 @@ of incompatible input; do not exercise retired models as supported methods.
 | Public records, categories, caps and private-state exclusion | `test_observations.py`, `test_cuda_learning.py` |
 | Attention math, permutation/padding, recurrence, precision | `test_transformer_lstm.py` |
 | Ragged storage, offsets, disk spill, ordered prefetch | `test_entity_storage.py` |
-| Proposals, execution, timing and recurrent rejection feedback | `test_q_selection_fallback.py`, `test_environment.py`, `test_action_timing.py`, `test_recurrent_training.py` |
+| Proposals, execution, timing and event-only memory | `test_q_selection_fallback.py`, `test_environment.py`, `test_action_timing.py`, `test_recurrent_training.py` |
 | Reward arithmetic and attribution | `test_net_value.py`, `test_reward_contract.py`, `test_kill_rewards.py` |
 | Complete returns, balanced loss, whole-pass updates, recovery | `test_q_math.py`, `test_recurrent_training.py` |
 | Demonstration verification and initialization | `test_demo_initialization.py`, `test_collision_follow_recording.py` |
@@ -30,6 +30,22 @@ that explicitly request the viewer. Different corruption fields and boundary
 values are intentional cases, not duplicate functionality.
 
 ## Running checks
+
+Collection ownership is `tests/test_collection.py`: serial/batched state and RNG
+isolation, gross CPU/CUDA public-event controls, unchanged EMA history,
+one-lane allocation fallback, exact device
+deduplication counterexamples and compiled inference buckets. Independent CPU/CUDA
+danger-zone/bootstrap controls live in `test_q_selection_fallback.py`; packed
+offset/spill/recovery controls live in `test_entity_storage.py`. Recurrent lifecycle
+tests cover interrupted collection and reconstruction without repeating probe math.
+Event-only identity/pending recovery, controlled current-state sensitivity and
+independent serial sparse gradients belong in `test_transformer_lstm.py`.
+Hierarchical outcome weights and missing strata belong in `test_q_math.py`;
+corrupt event/write-mask/stratum metadata belongs in `test_entity_storage.py`.
+Native event reconstruction belongs in `test_demo_initialization.py`.
+`test_progress.py` covers terminal modes, cadence, duplicate suppression and failure
+events; `test_training_progress_context.py` covers detailed snapshot preservation
+and prohibition on reading active fitting accumulators.
 
 Run from the repository root. Static inspection is suitable while a training
 process is active; use a separate checkout for edits.

@@ -30,15 +30,9 @@ def _bundled_config() -> dict:
     return tomllib.loads(files("pvz_rl").joinpath(_CONFIG_RESOURCE).read_text("utf-8"))
 
 
-@lru_cache(maxsize=1)
-def _output_defaults():
-    bundled = _bundled_config()
-    return {key: bundled[key] for key in ("logging", "visualization")}
-
-
 def output_settings(cfg: dict) -> dict:
-    """Optional output settings also work with pre-0.2.0 checkpoint configurations."""
-    return {key: {**values, **cfg.get(key, {})} for key, values in _output_defaults().items()}
+    """Read the resolved current output configuration without version fallbacks."""
+    return {key: cfg[key] for key in ("logging", "visualization")}
 
 
 def research_config(cfg: dict) -> dict:
@@ -54,19 +48,12 @@ def research_config(cfg: dict) -> dict:
     return result
 
 
-@lru_cache(maxsize=1)
-def _runtime_defaults():
-    return _bundled_config()["runtime"]
-
-
 def runtime_settings(cfg: dict) -> dict:
-    """Old configurations get current transport defaults without changing strategy."""
-    return {**_runtime_defaults(), **cfg.get("runtime", {})}
+    return cfg["runtime"]
 
 
 def simulator(cfg):
-    """Archived configurations without a backend field retain CPU simulation."""
-    return cfg.get("simulation", {}).get("backend", "cpu")
+    return cfg["simulation"]["backend"]
 
 
 @lru_cache(maxsize=1)
@@ -125,16 +112,51 @@ def load_demo_config(path: str | Path | None = None, *, profile: str = "demo") -
     cfg = load_config(path, profile=profile)
     if (
         cfg["encoding"]["version"] != "entity_v1"
-        or cfg["policy"]["kind"] != "transformer_lstm_q_v2"
+        or cfg["policy"]["kind"] != "transformer_lstm_q_v3"
     ):
         raise ValueError("Human demonstrations require the entity_v1 Transformer-LSTM demo profile")
     return copy.deepcopy(cfg)
 
 
 def validate_config(cfg: dict) -> None:
+    objective = cfg["training"].get("objective")
+    if objective is not None:
+        if objective.get("protocol") != "complete_return_probe_v3":
+            raise ValueError("Unsupported training objective protocol")
+        if objective.get("accepted_outcome_share") != 0.5:
+            raise ValueError("objective.accepted_outcome_share must be 0.5")
+        for key in ("dense_multiplier", "probe_huber_delta", "demo_rank_margin"):
+            if (
+                not isinstance(objective.get(key), (int, float))
+                or not math.isfinite(objective[key])
+                or objective[key] <= 0
+            ):
+                raise ValueError(f"objective.{key} must be finite and positive")
+        for key in ("probe_loss_weight", "demo_rank_loss_weight", "ema_decay"):
+            if (
+                not isinstance(objective.get(key), (int, float))
+                or not math.isfinite(objective[key])
+                or not 0 <= objective[key] < 1
+            ):
+                raise ValueError(f"objective.{key} must be finite and in [0, 1)")
+        if any(
+            objective.get(k) != v
+            for k, v in (("branch_probes", 2), ("tile_probes", 2), ("probe_interval_decisions", 1))
+        ):
+            raise ValueError("The objective requires two branch/tile probes every decision")
+    penalties = cfg["reward"].get("home_entry_penalties", [0, 0])
+    if (
+        len(penalties) != 2
+        or any(not math.isfinite(p) or p < 0 for p in penalties)
+        or penalties[1] < penalties[0]
+    ):
+        raise ValueError("home_entry_penalties require two increasing nonnegative magnitudes")
+    weight = cfg["reward"].get("win_time_weight", 0)
+    if not math.isfinite(weight) or weight < 0:
+        raise ValueError("win_time_weight must be finite and nonnegative")
     recurrent = (
         cfg.get("encoding", {}).get("version") == "entity_v1"
-        and cfg.get("policy", {}).get("kind") == "transformer_lstm_q_v2"
+        and cfg.get("policy", {}).get("kind") == "transformer_lstm_q_v3"
     )
     if cfg["training"].get("validation_schedule", "periodic") not in (
         "periodic",
@@ -162,7 +184,10 @@ def validate_config(cfg: dict) -> None:
         "invalid_plant_penalty",
         "empty_dig_penalty",
     }
-    if set(cfg["reward"]) != reward_keys:
+    if set(cfg["reward"]) not in (
+        reward_keys,
+        reward_keys | {"home_entry_penalties", "win_time_weight"},
+    ):
         raise ValueError(
             "reward must contain the outcome, net-value and rejection-penalty settings"
         )
@@ -200,8 +225,7 @@ def validate_config(cfg: dict) -> None:
         "transformer_feedforward",
         "scalar_width",
         "lstm_hidden",
-        "action_embedding",
-        "outcome_width",
+        "event_width",
         "chunk_length",
         "encoder_microbatch",
         "attention_query_chunk",
@@ -209,6 +233,10 @@ def validate_config(cfg: dict) -> None:
     ):
         if type(policy.get(key)) is not int or policy[key] < 1:
             raise ValueError(f"policy.{key} must be a positive integer")
+    if policy.get("history") != "public_event_history_v1":
+        raise ValueError("Unsupported public event-history protocol")
+    if any(key in policy for key in ("action_embedding", "outcome_width")):
+        raise ValueError("Per-decision recurrent input fields are retired")
     if policy["entity_width"] % policy["transformer_heads"]:
         raise ValueError("policy.entity_width must be divisible by transformer_heads")
     sample_seconds = output_settings(cfg)["logging"]["hardware_sample_seconds"]
@@ -290,6 +318,10 @@ def validate_config(cfg: dict) -> None:
     log, visual = output["logging"], output["visualization"]
     if not math.isfinite(log["progress_seconds"]) or log["progress_seconds"] <= 0:
         raise ValueError("Logging progress_seconds must be finite and positive")
+    if not math.isfinite(log["terminal_progress_seconds"]) or log["terminal_progress_seconds"] <= 0:
+        raise ValueError("Logging terminal_progress_seconds must be finite and positive")
+    if log["terminal_mode"] != "compact":
+        raise ValueError("Logging terminal_mode must be compact")
     if type(log["rolling_window"]) is not int or log["rolling_window"] < 1:
         raise ValueError("Logging rolling_window must be a positive integer")
     if any(type(visual[key]) is not bool for key in ("enabled", "demos", "videos", "live_enabled")):
@@ -321,7 +353,7 @@ def validate_config(cfg: dict) -> None:
     if not math.isfinite(visual["final_hold_seconds"]) or visual["final_hold_seconds"] < 0:
         raise ValueError("Visualization final_hold_seconds must be finite and nonnegative")
     env, train = cfg["environment"], cfg["training"]
-    expected_method = "complete_return_lstm_v1"
+    expected_method = "complete_return_event_lstm_v1"
     if train.get("method") != expected_method:
         raise ValueError("Training requires a supported complete-return method and fresh models")
     if any(
@@ -355,9 +387,9 @@ def validate_config(cfg: dict) -> None:
     fit_sequence_groups = performance.get("fit_sequence_groups", 1)
     if type(fit_sequence_groups) is not int or fit_sequence_groups < 1 or fit_sequence_groups > 16:
         raise ValueError("training.performance.fit_sequence_groups must be an integer from 1 to 16")
-    if train.get("budget_unit", "decisions") not in ("games", "decisions"):
+    if train.get("budget_unit") not in ("games", "decisions"):
         raise ValueError("training.budget_unit must be games or decisions")
-    if env.get("action_timing", "fixed") not in ("fixed", "per_tick"):
+    if env.get("action_timing") not in ("fixed", "per_tick"):
         raise ValueError("Unsupported environment.action_timing")
     if env.get("action_timing") == "per_tick" and env["decision_ticks"] != 1:
         raise ValueError("per_tick action timing requires decision_ticks = 1")
@@ -400,7 +432,7 @@ def validate_config(cfg: dict) -> None:
     for key in ("passes", "learner_seed"):
         if type(demo.get(key, 1)) is not int or demo.get(key, 1) < 1:
             raise ValueError(f"training.demo.{key} must be a positive integer")
-    for key in ("learning_rate", "gradient_clip", "time_budget_minutes"):
+    for key in ("learning_rate", "time_budget_minutes"):
         if (
             type(demo.get(key, 1.0)) not in (int, float)
             or not math.isfinite(demo.get(key, 1.0))
@@ -416,10 +448,6 @@ def validate_config(cfg: dict) -> None:
         or len(set(seeds)) != len(seeds)
     ):
         raise ValueError("Learner seeds must be nonnegative and distinct")
-    if not train["hidden_sizes"] or any(
-        type(n) is not int or n <= 0 for n in train["hidden_sizes"]
-    ):
-        raise ValueError("Hidden layer sizes must be positive integers")
     for group, keys in (
         ("encoding", ("count_scale", "wave_scale")),
         ("training", ("learning_rate",)),

@@ -1,15 +1,17 @@
 """Asset conservation, reward diagnostics and supported training-mode boundaries."""
 
 from dataclasses import replace
+from types import SimpleNamespace
 
 import pytest
-from pvz_game import Dig, LevelSpec, Place, Spawn, Status
+from pvz_game import Dig, LevelSpec, Place, Rules, Spawn, Status
 from pvz_game.config import PLANT_TYPES, InitialPlant
 from pvz_game.types import Event
 
 from pvz_rl.config import load_config
 from pvz_rl.envs.env import PvZEnv
-from pvz_rl.envs.rewards import asset_value, reward_parts
+from pvz_rl.envs.rewards import HomeProximityLedger, asset_value, reward_parts
+from pvz_rl.learning.objective import victory_time
 
 
 @pytest.mark.parametrize("kind", PLANT_TYPES)
@@ -102,6 +104,78 @@ def test_empty_explosion_and_nut_bite_are_only_diagnostics():
     assert part["total"] == 0
 
 
+def test_house_entries_are_staged_once_and_victory_time_is_win_only():
+    cfg = load_config()
+    rules = Rules()
+    before = SimpleNamespace(zombies=(SimpleNamespace(id=7, x=2500, health=100, headless=False),))
+    ledger = HomeProximityLedger(before, rules)
+    outer = SimpleNamespace(zombies=(SimpleNamespace(id=7, x=1500, health=100, headless=False),))
+    inner = SimpleNamespace(zombies=(SimpleNamespace(id=7, x=500, health=100, headless=False),))
+    assert ledger.advance(outer, cfg["reward"]["home_entry_penalties"]) == {
+        "home_outer_entries": 1,
+        "home_inner_entries": 0,
+        "home_proximity": -0.005,
+    }
+    assert ledger.advance(inner, cfg["reward"]["home_entry_penalties"])["home_proximity"] == -0.015
+    assert ledger.advance(inner, cfg["reward"]["home_entry_penalties"])["home_proximity"] == 0
+    assert victory_time(
+        [80, 160, 240], [160, 160, 160], [True, True, False], 0.1
+    ).tolist() == pytest.approx([1 / 30, 0, 0])
+
+    # Exact boundaries, retreat/re-entry, a spawn skipping both stages, and
+    # a threat eliminated in the same transition are independent controls.
+    def board(*entries):
+        return SimpleNamespace(
+            zombies=tuple(
+                SimpleNamespace(id=i, x=x, health=health, headless=headless)
+                for i, x, health, headless in entries
+            )
+        )
+
+    ledger = HomeProximityLedger(board(), rules)
+    assert ledger.advance(board((1, 2000, 100, False)), [0.005, 0.015])["home_proximity"] == 0
+    assert ledger.advance(board((1, 1999, 100, False)), [0.005, 0.015])["home_proximity"] == -0.005
+    assert ledger.advance(board((1, 1000, 100, False)), [0.005, 0.015])["home_proximity"] == 0
+    assert ledger.advance(board((1, 999, 100, False)), [0.005, 0.015])["home_proximity"] == -0.015
+    ledger.advance(board((1, 2500, 100, False)), [0.005, 0.015])
+    assert ledger.advance(board((1, 500, 100, False)), [0.005, 0.015])["home_proximity"] == 0
+    assert (
+        ledger.advance(
+            board((2, 500, 100, False), (3, 500, 0, False), (4, 500, 80, True)), [0.005, 0.015]
+        )["home_proximity"]
+        == -0.02
+    )
+    assert ledger.advance(board(), [0.005, 0.015])["home_proximity"] == 0
+    initial = HomeProximityLedger(board((1, 500, 100, False)), rules)
+    assert initial.advance(board((1, 400, 100, False)), [0.005, 0.015])["home_proximity"] == 0
+    assert victory_time([0, 80, 160, 240, 320], 160, True, 0.1).tolist() == pytest.approx(
+        [0.1, 1 / 30, 0, -0.02, -1 / 30]
+    )
+    assert victory_time(0, 0, True, 0.1) == 0
+    assert victory_time([0, 10, 300], 160, False, 0.1).tolist() == [0, 0, 0]
+
+
+def test_six_component_targets_only_scale_development():
+    from pvz_rl.learning.objective import components, training_rewards
+
+    cfg = load_config()
+    # One effective HP, full basic HP, mower, invalid planting and empty digging.
+    raw = [1.0, -2.0, 50 / 270 / 30000, 50 / 30000, -200 / 30000, -0.00001, -0.000003, -0.02, 0.03]
+    keys = (
+        ["terminal"] * 2
+        + ["development"] * 3
+        + ["invalid_plant_penalty", "empty_dig_penalty", "home_proximity", "victory_time"]
+    )
+    got = [float(training_rewards(components({k: v}), cfg)) for k, v in zip(keys, raw)]
+    assert got == pytest.approx(
+        [1, -2, 50 / 270 / 3000, 50 / 3000, -200 / 3000, -0.00001, -0.000003, -0.02, 0.03]
+    )
+    assert training_rewards(components({"terminal": 1, "development": 0.01}), cfg) == pytest.approx(
+        1.1
+    )
+    assert training_rewards(components({"terminal": 1}), cfg) == 1
+
+
 @pytest.mark.parametrize("setting", ["shaped", "curriculum", "masked", "fixed"])
 def test_retired_training_modes_fail_before_creating_output(tmp_path, setting):
     from pvz_rl.learning.training import train
@@ -118,7 +192,7 @@ def test_retired_training_modes_fail_before_creating_output(tmp_path, setting):
 
 
 @pytest.mark.parametrize("retired", ["network", "observation", "reward", "clock"])
-def test_retired_report_rebuild_never_loads_model(tmp_path, monkeypatch, retired):
+def test_retired_report_is_rejected_without_loading_model(tmp_path, monkeypatch, retired):
     from pvz_rl.presentation.visualization import visualize_run
     from pvz_rl.provenance import write_json
 
@@ -141,5 +215,6 @@ def test_retired_report_rebuild_never_loads_model(tmp_path, monkeypatch, retired
         raise AssertionError("Archived report must not deserialize weights")
 
     monkeypatch.setattr("pvz_rl.learning.training.load_policy", forbidden)
-    assert visualize_run(tmp_path, videos=False)["state"] == "complete"
-    assert (tmp_path / "visualizations/index.html").is_file()
+    result = visualize_run(tmp_path, videos=False)
+    assert result["state"] == "failed"
+    assert "current engine and model protocol" in result["error"]

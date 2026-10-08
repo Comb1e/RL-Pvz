@@ -4,18 +4,27 @@ from contextlib import contextmanager
 
 
 class DeviceProfiler:
-    """CUDA events measure execution on the shared stream, not enqueue latency."""
+    """Stream-ordered device phase spans plus host phase timings.
+
+    CUDA events bracket device phases on the recording stream. :meth:`flush`
+    runs after the caller's existing host synchronization, when every recorded
+    event has completed, so reading elapsed times does not add a wait. Event
+    objects are pooled; disabled profilers record no events.
+    """
 
     def __init__(self, cp, enabled=False):
         self.cp, self.enabled = cp, enabled
-        self.pending, self.seconds = [], {}
+        self.pending, self.seconds, self._pool = [], {}, []
+
+    def _event(self):
+        return self._pool.pop() if self._pool else self.cp.cuda.Event()
 
     @contextmanager
     def track(self, phase):
         if not self.enabled:
             yield
             return
-        start, end = self.cp.cuda.Event(), self.cp.cuda.Event()
+        start, end = self._event(), self._event()
         start.record()
         try:
             yield
@@ -23,12 +32,15 @@ class DeviceProfiler:
             end.record()
             self.pending.append((phase, start, end))
 
+    def host(self, phase, seconds):
+        self.seconds[phase] = self.seconds.get(phase, 0.0) + seconds
+
     def flush(self):
         for phase, start, end in self.pending:
-            end.synchronize()
             self.seconds[phase] = (
                 self.seconds.get(phase, 0.0) + self.cp.cuda.get_elapsed_time(start, end) / 1000
             )
+            self._pool.extend((start, end))
         self.pending.clear()
         return dict(self.seconds)
 
@@ -39,7 +51,7 @@ def cuda_doctor():
     from pvz_game import Game, LevelSpec
 
     from pvz_rl.config import load_config
-    from pvz_rl.envs.cuda_accounting import AccountingCudaBatch
+    from pvz_rl.envs.cuda_accounting import ACCOUNTING_WIDTH, AccountingCudaBatch
     from pvz_rl.envs.cuda_features import CudaFeatures
 
     if not torch.cuda.is_available():
@@ -57,7 +69,7 @@ def cuda_doctor():
             features.encode()
             features.step(cp.from_dlpack(action))
             assert features.rewards.get().tolist() == [1.0]
-            assert batch.accounting.get().tolist() == [[0, 0, 0]]
+            assert batch.accounting.get().tolist() == [[0] * ACCOUNTING_WIDTH]
             oracle = Game()
             oracle.reset(LevelSpec("cuda-doctor"), 0)
             oracle.step()

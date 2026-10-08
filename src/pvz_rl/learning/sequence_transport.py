@@ -8,6 +8,9 @@ import numpy as np
 import torch
 
 from pvz_rl.envs.encoding import ENTITY_WIDTH, GLOBAL_WIDTH, EntityBatch
+from pvz_rl.learning.objective import MAX_PROBES
+
+METADATA_WIDTH = 13 + MAX_PROBES * 5
 
 
 @dataclass(frozen=True)
@@ -20,9 +23,11 @@ class SequenceMetadata:
 
     active: torch.Tensor
     action: torch.Tensor
-    previous: torch.Tensor
-    previous_outcome: torch.Tensor
+    events: torch.Tensor
+    memory_write: torch.Tensor
+    accepted: torch.Tensor
     target: torch.Tensor
+    probes: torch.Tensor
 
     def __getitem__(self, name):
         return getattr(self, name)
@@ -49,7 +54,11 @@ class SequencePrefetch:
 
     def __init__(self, buffer, chunk_length, batch_size, device, max_entities):
         self.buffer, self.device = buffer, torch.device(device)
-        amount = 2 * batch_size * (max_entities * (ENTITY_WIDTH * 4 + 1) + (GLOBAL_WIDTH + 6) * 4)
+        amount = (
+            2
+            * batch_size
+            * (max_entities * (ENTITY_WIDTH * 4 + 1) + (GLOBAL_WIDTH + METADATA_WIDTH) * 4)
+        )
         if not buffer.reserve_staging(amount):
             raise MemoryError("Trajectory RAM budget cannot accommodate pinned staging")
         self.source = iter(sequence_rows(buffer, chunk_length, batch_size))
@@ -70,7 +79,7 @@ class SequencePrefetch:
                         torch.empty(batch_size, GLOBAL_WIDTH, pin_memory=True),
                         validated=True,
                     ),
-                    torch.empty(batch_size, 6, pin_memory=True),
+                    torch.empty(batch_size, METADATA_WIDTH, pin_memory=True),
                 )
             )
         self.worker = ThreadPoolExecutor(max_workers=1, thread_name_prefix="pvz-sequences")
@@ -94,9 +103,14 @@ class SequencePrefetch:
         array = fields.numpy()
         array[:, 0] = flat["active"]
         array[:, 1] = flat["action"]
-        array[:, 2] = flat["previous"]
-        array[:, 3:5] = flat["previous_outcome"]
-        array[:, 5] = flat["target"]
+        array[:, 2:10] = flat["events"]
+        array[:, 10] = flat["memory_write"]
+        array[:, 11] = flat["accepted"]
+        array[:, 12] = flat["target"]
+        probes = flat["probes"]
+        array[:, 13:] = np.stack(
+            [probes[k] for k in ("valid", "branch_role", "action", "target", "accepted")], -1
+        ).reshape(len(flat), -1)
         self.buffer.transport_metrics["preparation_seconds"] += perf_counter() - started
         return reset, rows, obs, fields
 
@@ -118,7 +132,9 @@ class SequencePrefetch:
             start, end = torch.cuda.Event(enable_timing=True), torch.cuda.Event(enable_timing=True)
             start.record()
             obs = obs.to(self.device, non_blocking=True)
-            fields = host_fields.to(self.device, non_blocking=True).reshape(*rows.shape, 6)
+            fields = host_fields.to(self.device, non_blocking=True).reshape(
+                *rows.shape, METADATA_WIDTH
+            )
             end.record()
         self.events[slot] = end
         self.timings.append((start, end))
@@ -136,9 +152,11 @@ class SequencePrefetch:
             SequenceMetadata(
                 active=fields[..., 0].bool(),
                 action=fields[..., 1].long(),
-                previous=fields[..., 2].long(),
-                previous_outcome=fields[..., 3:5],
-                target=fields[..., 5],
+                events=fields[..., 2:10],
+                memory_write=fields[..., 10].bool(),
+                accepted=fields[..., 11].bool(),
+                target=fields[..., 12],
+                probes=fields[..., 13:].reshape(*rows.shape, MAX_PROBES, 5),
             ),
         )
 

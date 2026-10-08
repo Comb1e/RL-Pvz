@@ -100,7 +100,8 @@ outer checkpoint bound practical usage. This is not a linear total-memory claim.
 Encoder microbatches contain at most 128 frames and at most the configured 65,536
 tokens when possible. Optional outer activation checkpointing recomputes these frames
 without nested attention checkpoints. Frames are reassembled in original batch/time order before
-the LSTM; encoder scheduling cannot change the recurrent objective or the single
+the sparse event sequence and current-state fusion; encoder scheduling cannot
+change the recurrent objective or the single
 optimizer update per whole-cohort fitting pass. Unrecoverable allocation errors
 are surfaced; capacity is never silently reduced in response.
 

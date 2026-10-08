@@ -6,6 +6,17 @@ with that board and its action table; Escape returns to the grid. Maximize the
 window normally or press F11 for fullscreen. Text stays at readable fixed sizes;
 small overview panels show less history, so use Focus for detail.
 
+The read-only **Learning settings** strip shows the active learning rate,
+`max_grad_norm`, batch size, epochs, discount, sequence length, reward coefficients
+and tile-exploration schedule. These come from the resolved run configuration;
+on resume they are the checkpoint learning values retained during automatic execution refresh,
+even if TOML now differs. Fresh `--init-from` runs use the current TOML values.
+`training.max_grad_norm` is the shared clipping limit for demonstration and
+autonomous fitting. Reward settings are coefficients; action-history penalties
+are the corresponding signed reward contributions.
+The strip remains visible during fitting and wraps at narrower window widths.
+Press **S** to hide or show it when more board space is needed.
+
 **Switch** selects an unfinished, undisplayed environment and never resets it.
 The old board stays visible with a switching label until the destination board
 and first history page arrive together. Finished boards retain their result for

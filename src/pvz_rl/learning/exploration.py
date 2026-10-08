@@ -2,8 +2,6 @@
 
 from dataclasses import dataclass
 
-from pvz_rl.policy.sequential_q import per_head_epsilon
-
 EXPLORATION_PROTOCOL = "sequential_tile_epsilon_v1"
 
 
@@ -13,11 +11,6 @@ class ExplorationState:
     progress: float
     epsilon: float
     at_floor: bool
-
-    @property
-    def per_head_epsilon(self):
-        """Legacy two-coin value retained for archived schedule readers."""
-        return per_head_epsilon(self.epsilon)
 
     @property
     def tile_epsilon(self):

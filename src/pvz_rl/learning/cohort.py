@@ -9,6 +9,7 @@ from enum import StrEnum
 class CohortPhase(StrEnum):
     IDLE = "idle"
     COLLECT = "collect"
+    FINALIZE_REWARDS = "finalize_rewards"
     RETURNS = "returns"
     FIT = "fit"
     SYNCHRONIZE = "synchronize"

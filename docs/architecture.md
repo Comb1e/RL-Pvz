@@ -33,7 +33,9 @@ Configuration defines model dimensions and the protocol. The single bundled
 the same values. There is one entity Transformer–LSTM architecture.
 Shared checkpoint inspection validates format, model/optimizer protocols,
 configuration identity and weight structure before environment creation. Loading
-without an explicit target uses saved settings and missing execution defaults.
+for evaluation retains saved learning settings. Fresh initialization uses current
+configuration; autonomous resume automatically applies current execution and
+logging settings without replacing saved learning parameters.
 Engine, complete observation encoding, timing, action algebra, reward definition
 and network structure must match for transfer. Budgets and output preferences
 are execution choices. Invalid input raises an error; there is no random fallback.
@@ -68,9 +70,11 @@ flowchart LR
     Embed --> Attention[2 masked bidirectional attention layers]
     Readout --> Attention
     Attention --> Summary[Global summary + tile features]
-    Summary --> LSTM[256-unit LSTM]
-    Feedback[Previous executed action / accepted / ticks] --> LSTM
-    LSTM --> Heads[Branch and conditional tile Q heads]
+    Summary --> Fusion[256-wide current-state and memory fusion]
+    Summary -->|context at event writes| LSTM[256-unit event LSTM]
+    Events[Gross public events and elapsed ticks] -->|32-wide projection| LSTM
+    LSTM --> Fusion
+    Fusion --> Heads[Branch and conditional tile Q heads]
 ```
 
 Each shared entity embedding sums type and state lookups and a projection of nine
@@ -83,9 +87,19 @@ join the sequence. Queries let empty tiles receive features. Padded keys are
 masked in every layer and padded entity outputs are zero. No entity-order or
 causal attention mask is added; the LSTM supplies chronological memory.
 
-Global summary, scalar features, elapsed time, previous executed action and previous
-acceptance/duration feed the LSTM. An accepted proposal is the previous executed
-action; a rejected proposal executes and feeds back as wait (`0`).
+Every decision encodes the current board. Gross sunlight gain/spend, zombie
+spawn/defeat/removal and plant addition/removal counters determine whether memory
+writes before the next decision, using the resulting board as context.
+Initial entities are not additions. Elapsed ticks accumulate since the previous
+write, but time, movement, damage, cooldown and rejection alone never write.
+Sunlight gains are actual capped gains; simultaneous additions/losses remain
+separate. Separate zero-time transitions retain their order.
+
+The 32-wide entity summary and 64-wide scalar features combine with a 32-wide
+event projection at writes through a 256-unit LSTM. Events use existing resource/
+count scales and log1p(elapsed seconds), without clipping. Every decision fuses
+its current summary/scalars with the latest event-memory output into 256 features
+for both Q heads. Quiet decisions still respond to current board changes.
 The shared Q selector compares wait, eight species and dig greedily, then
 explores only the selected branch's tile target. It chooses a tile for a
 non-wait branch. Occupancy limits plant tiles; dig can target every tile.
@@ -105,18 +119,33 @@ flowchart LR
     Validate -->|accepted| Execute[Execute proposal]
     Validate -->|rejected| Wait[Execute wait / advance one tick]
     Wait --> Penalty[Rejection reason + applicable penalty]
-    Validate -->|accepted| History[Previous action = proposal]
-    Wait --> History2[Previous action = wait (0)]
-    History --> Outcome[accepted + duration]
-    History2 --> Outcome
+    Execute --> Facts[Gross public transition events]
+    Wait --> Facts
+    Facts --> Pending[Pending event and elapsed ticks]
+    Pending -->|qualifying event| Memory[One LSTM write with resulting board]
+    Pending -->|quiet| Frozen[Preserve hidden and cell exactly]
+    Memory --> Fusion[Current board plus event memory]
+    Frozen --> Fusion
 ```
 
-The stateful policy runner owns hidden/cell state and public previous outcomes.
-It resets only new episode slots. Rejected proposals remain the action target,
-while the next recurrent input uses previous action `0`, `accepted=false` and
-the simulator duration. Accepted plants and digs take zero ticks; waits and
-rejections advance one tick. Finished collection slots are frozen. Evaluation uses
-the same runner with tile exploration disabled.
+The shared event-memory state owns hidden/cell, pending facts and elapsed ticks.
+Consumption clears pending facts once and resets timing only on a write.
+Reset clears all fields for new episode slots; inactive slots are frozen.
+Accepted plants and digs take zero ticks; waits and rejections advance one tick.
+A rejected attempt concurrent with a world event still queues a write. The same
+runner serves collection, evaluation and EMA history.
+
+```mermaid
+stateDiagram-v2
+    [*] --> Quiet: zero memory at reset
+    Quiet --> Quiet: no qualifying transition event
+    Quiet --> Pending: public transition event
+    Pending --> Quiet: consume once before next decision
+    Pending --> Pending: snapshot / restore retains facts and timing
+    Quiet --> Frozen: episode finishes
+    Pending --> Frozen: episode finishes
+    Frozen --> Quiet: new episode reset
+```
 
 ## Recording and initialization
 
@@ -126,16 +155,41 @@ outcome, duration, reward and episode boundary into JSONL. Native replay and
 manifest describe completion; closing early leaves an incomplete archive.
 Compact viewer history never replaces the complete fitting sequence.
 
-Initialization rejects missing manifests, unsupported protocols, hash/config
-mismatches, incomplete episodes and reconstruction differences. Only entity-v1
+Initialization rejects missing manifests, unsupported protocols, replay-hash or
+engine/schema mismatches, incomplete episodes and reconstruction differences. Only entity-v1
 archives and weights are accepted; earlier archives require a new recording.
-Execution device and fitting overrides do not modify verification configuration.
-The generated `initialization.pt` stores weights plus structural metadata; it
-omits encoder batching and performance settings. Reading it overlays those
-execution settings from the current `train.toml`, so autonomous training can
-reuse the weights after a performance change without a refresh flag.
+Verification compares recorded facts rather than the full configuration digest;
+changing optimizer or reward settings does not invalidate a recording. The loader
+checks public reward facts and ledger arithmetic against replay, then replaces
+rewards in its in-memory transitions using the current configuration. Both
+verification and fitting share this loader; fitting consumes the verified data
+without rereading historical reward totals from disk. The verification report
+records the current reward settings, changed decision count and old/new totals.
+Historical prices cannot be authenticated from old archives' configuration hashes;
+they never become fitting targets. Observation, outcome, terminal and replay-hash
+checks remain exact, and recording files remain unchanged.
+
+```mermaid
+flowchart LR
+    Archive[Archive and pinned replay] --> Verify[Verify public facts and ledger arithmetic]
+    Verify --> Price[Recompute rewards from replay events]
+    Config[Current reward settings] --> Price
+    Price --> Returns[Verified transitions and complete returns]
+    Returns --> Fit[Whole-pass demonstration fit]
+```
+
+The generated `initialization.pt` stores weights and source metadata; it omits
+encoder batching and performance settings. Fresh `--init-from` resolves the
+current configuration before weight transfer. Source learning/reward metadata
+is used for provenance, never to override the new run's settings. Compatibility
+checks validate the engine, input/action semantics and network dimensions;
+reward coefficients are excluded from weight compatibility.
 Complete gamma-one returns supervise both Q heads. Whole-pass gradients are
-clipped once; only completed passes atomically replace `initialization.pt`.
+clipped once using the same `training.max_grad_norm` limit as autonomous fitting;
+only completed passes atomically replace `initialization.pt`.
+`training.demo.passes` independently controls initialization (20 by default);
+autonomous fitting uses `training.n_epochs` (4 by default). The initialization
+`--passes` override does not change autonomous fitting.
 
 ## Autonomous lifecycle and recovery
 
@@ -146,14 +200,17 @@ stateDiagram-v2
     Inspect --> Idle: fresh / weights-only / resumed state
     Idle --> Collect: schedule remaining games
     Collect --> Collect: decision / store public transition
-    Collect --> Returns: every active game finishes
+    Collect --> FinalizeRewards: every active game finishes
+    FinalizeRewards --> Returns: median and terminal time rewards fixed
     Returns --> Fit: complete gamma-one targets
     Fit --> Fit: chronological chunks / detached state
     Fit --> Synchronize: all whole-pass updates committed
     Synchronize --> Idle: callbacks and next cohort
     Collect --> Saved: interrupt at decision boundary
+    FinalizeRewards --> Saved: preserve pending publication and median
     Fit --> Saved: interrupt with current pass uncommitted
     Saved --> Collect: resume saved collection
+    Saved --> FinalizeRewards: resume idempotent finalization
     Saved --> Fit: restart current pass only
     Idle --> Saved: budget or mastery reached
 ```
@@ -162,9 +219,74 @@ A cohort holds at most 128 games at fixed weights. Completed slots remain inacti
 until the next cohort, and the final cohort uses only the remaining game count.
 Trajectories retain fixed transition metadata and globals, entity offset/count,
 and contiguous append-only int32 entity slabs containing only real rows. Metadata
-and entities share one RAM budget with disk overflow. Proposals, executed previous
-actions, current outcomes, omission counts, rewards and boundaries remain explicit.
+and entities share one RAM budget with disk overflow. Proposals, executed actions,
+acceptance, durations, event facts/write masks/timing, omission counts, rewards and
+boundaries remain explicit. Group/outcome and probe head/branch/outcome counts
+cover the full cohort, including spilled blocks.
 Only recovery state stores private simulator snapshots and scenario RNGs.
+
+At each decision, two scratch lanes independently restore pre-decision simulator,
+RNG, accounting and proximity-ledger state. The branch pair and tile pair execute
+in two simulator passes. Allocation failure releases the failed scratch allocation
+and selects one lane, executing all four scheduled probes sequentially. It never
+changes probe coverage. The frozen FP32 EMA teacher advances only on actual history;
+one stacked next-state evaluation receives four complete independent event-memory
+copies, including pending facts and timing. Probe events update only these forks.
+Probe states never enter behavior history, viewer history or journals.
+
+Device feature buffers retain each probe pass in its own rows. Canonical records
+are packed on device; duplicate probes share a slab offset only when entities,
+globals and gross event/timing inputs match within the same actual game.
+Identical resulting boards alone are insufficient; the forked hidden/cell
+state is shared only within that game's decision. Proposal, rejection reason,
+reward components and bootstrap remain separate records even when offsets alias.
+Storage consumes packed offsets directly rather than repeating host deduplication.
+
+Online observations use fixed 32/64/128/256 padding buckets. Probe padding uses a
+conservative bound from already-published public entity counts, pending-zombie
+counts, at most two shots per existing plant and one accepted new plant. No future
+schedule or RNG determines policy input. The configured entity cap still limits
+tokens, not simulator capacity; a bound violation fails instead of dropping records.
+Collection inference uses the same owned-output, fixed-shape encoder graphs as
+fitting, with a bounded four-shape cache and one recorded eager fallback.
+
+One reusable pinned handoff queues behavior inputs, probe metadata/slabs, execution
+results and episode headers/totals on the collection stream. A single stream wait
+precedes host interpretation, ragged storage and journal publication. Terminal
+metrics need no separate header/totals read. Viewer staging remains read-only and
+asynchronous; reset, checkpoint and shutdown explicitly drain it. Device timing
+events are read after the existing handoff and reused, not individually waited on.
+
+```mermaid
+flowchart LR
+    Source[Actual pre-decision state] --> Online[Online inference / proposal]
+    Source --> EMA[Advance actual EMA history once]
+    Online --> Scratch[Copy independent scratch lanes]
+    Scratch --> Branch[Branch pair / first pass]
+    Scratch --> Tile[Tile pair / second pass]
+    Branch --> Next[Owned canonical probe rows]
+    Tile --> Next
+    EMA --> Fork[Stack independent EMA next-state inputs]
+    Next --> Fork
+    Fork --> Pack[Exact device deduplication / packed records]
+    Online --> Actual[Execute actual proposal]
+    Actual --> Handoff[Queue public evidence / one stream wait]
+    Pack --> Handoff
+    Handoff --> Store[RAM/disk trajectories]
+    Handoff --> Journal[Actual journal / viewer]
+```
+
+Game and win counts update immediately; completed rewards remain provisional until
+the cohort median is known. Finalization includes all actual durations, applies time
+shaping only to victories, fixes terminal probe rewards with that same median and
+publishes finalized records once. Saved state includes median/reference count,
+publication state, pending event/timing state, EMA weights/version/history,
+probe cursors, proximity ledgers and online/EMA compilation paths with bounded
+shape sets. Protocol/schema inspection precedes the CUDA availability probe,
+collector allocation and model transfer.
+Selected complete returns and outcome-balanced probe Huber errors share each whole-pass
+optimizer update. EMA advances once after each successful commit, never after a failed
+or interrupted attempt. Demonstrations add accepted-action ranking instead of probes.
 
 Fitting visits episodes chronologically from zero recurrent state each pass.
 The learning batch remains 1,024 decisions and each recurrent boundary remains
@@ -172,15 +294,30 @@ The learning batch remains 1,024 decisions and each recurrent boundary remains
 single 4,096-decision transfer and forward/backward call when the environment
 count permits. State is reset between slot groups, so no episode can observe
 another episode's hidden state. Short episodes are padded; padding contributes
-no target or loss. Encoder work uses at most 128 observations and a 65,536-token
+no target or loss. Only genuine event rows enter the recurrent sequence; latest
+memory is gathered onto every current-state prediction. Nonempty action groups
+have equal weight, with accepted/rejected outcomes sharing 50/50 when both exist. Encoder work uses at most 128 observations and a 65,536-token
 budget. Allocation fallback lowers the encoder microbatch to 64, 32 and 16,
 then enables one outer checkpoint without dropping entities.
 
 Full-sequence SDPA selects the available efficient backend; an exact 64-query
-fallback attends to all keys. CPU preparation caches sequence index templates,
+fallback attends to all keys. When compilation is enabled, fixed-shape encoder
+calls use CUDA graphs on Windows and the platform compiler elsewhere; a failed
+backend is recorded once and the exact eager path remains active. CPU preparation
+caches sequence index templates,
 gathers entity slabs into reusable buffers and fills metadata in bulk. Two
 pinned buffers and one ordered worker prepare the next fused batch; transfer
 events prevent reads or host-buffer reuse before the copy completes.
+
+The Windows backend captures forward and backward separately. Every output,
+including internal activations saved for backward and returned parameter
+gradients, is copied out of reusable graph storage. Copies retain tensor strides
+and attention alignment. Consequently, replay cannot overwrite a preceding
+microbatch's saved activations or accumulated gradients. Input buffers are
+refreshed on every call, including updated FP32 weights. If backward capture
+fails, the uncommitted pass discards gradients and restarts eagerly without
+changing precision or counting an optimizer update. Allocation failures retain
+the bounded memory fallback above.
 
 CUDA fitting computes entity features, embeddings and auxiliary projections with
 BF16 temporary values. Stored weights, normalization reductions, residual sums,
@@ -214,18 +351,21 @@ stateDiagram-v2
     Commit --> [*]: all passes committed
 ```
 
-Execution precision and fallback status accompany recovery metadata. Older entity
-checkpoints default to FP32. Ordinary resume keeps saved settings;
-`--refresh-performance` replaces only precision, prefetch, encoder batching,
-attention fallback size and instrumentation settings from current configuration.
+Execution precision and fallback status accompany recovery metadata. Resume applies
+current precision, prefetch, encoder batching, attention fallback size,
+instrumentation and logging settings automatically. Missing execution metadata
+hydrates from the current profile, rather than historical FP32 defaults.
 Learning parameters and input/output schemas are excluded from that refresh.
-Demonstration weights always take these execution settings from the current
-configuration when they are loaded.
+Fresh weight initialization uses current learning and execution settings.
+Recovery retains saved rewards and clipping because collected returns and
+optimizer state belong to that saved configuration.
 
 Atomic ZIP replacement couples model, optimizer, counters, curriculum, exploration,
 RNGs, trajectory/entity slabs and collection states. Schema metadata records
 field order, categories, normalization and cap; configuration records dimensions.
-Recovery validates slab dtype, shape and contiguous offsets/counts before reuse. A failed save leaves the previous
+CUDA recovery allocates the proved future projectile bound plus an equal headroom
+for active shots already present in a mid-game snapshot. Recovery validates slab
+dtype, shape and contiguous offsets/counts before reuse. A failed save leaves the previous
 ZIP intact. Resume restores a decision boundary during collection. Fitting
 restores completed updates and recomputes only the uncommitted pass with cleared
 gradients. The network has no stochastic dropout, and fitting does not sample
@@ -258,6 +398,22 @@ history pages and retained/omitted entity counts. Generation and episode identit
 clears selection/paging and follows the latest action while preserving horizontal
 scroll. Presentation runs separately and supplies no simulation time or policy
 inputs. Callback reports retain progress, coverage, probes and checkpoint status.
+At viewer startup, the environment supplies a small immutable snapshot of the
+resolved learning configuration: optimizer settings, sequence length, rewards
+and tile exploration. The settings strip shows checkpoint-retained values on
+resume, independently of refreshed execution settings. It is available before
+the first board and during fitting; **S** changes visibility only. The viewer
+never reloads defaults or reads GPU tensors to display these values.
+
+Terminal output and `train.log` contain compact event records, not a dashboard.
+Phase boundaries, completed cohorts, checkpoint saves, warnings and final states
+print immediately. Routine output requires both material progress and the separate
+60-second terminal interval. Interactive output rewrites one line; redirected
+output uses timestamped lines without ANSI controls. Consecutive duplicates and
+repeated identical report-refresh notices are suppressed. Detailed `status.json`
+snapshots retain their independent 15-second cadence, alongside training and
+hardware JSONL streams. Formatting uses host-side snapshots and cached fitting
+metrics; it never reads active device accumulators.
 
 Mathematical controls and verification limits are in
 [entity inputs](math/entity-inputs.md) and [recurrent training](math/recurrent-training.md); chronological release evidence

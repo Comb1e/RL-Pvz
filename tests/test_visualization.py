@@ -1,4 +1,5 @@
 import copy
+import io
 import json
 import re
 import shutil
@@ -11,7 +12,7 @@ import pytest
 import torch
 from pvz_game import LevelSpec, Spawn
 
-from pvz_rl.config import output_settings, research_config, validate_config
+from pvz_rl.config import output_settings, research_config
 from pvz_rl.envs.env import PvZEnv
 from pvz_rl.learning.training import ResearchCallback, load_policy, train
 from pvz_rl.monitoring.progress import Phase, ProgressReporter
@@ -25,33 +26,84 @@ from pvz_rl.presentation.visualization import (
 from pvz_rl.provenance import file_hash, write_json
 
 
-def test_progress_throttle_phases_and_persistence(tmp_path, capsys):
-    now = [0.0]
-    with ProgressReporter(tmp_path / "train.log", 15, clock=lambda: now[0]) as progress:
-        progress.emit("Startup", force=True)
-        for _ in range(100):
-            assert not progress.emit("episode spam")
+def test_progress_redirected_events_duplicates_and_persistence(tmp_path):
+    now, stream = [0.0], io.StringIO()
+    with ProgressReporter(
+        tmp_path / "train.log", 15, terminal_interval=60, clock=lambda: now[0], stream=stream
+    ) as progress:
+        assert not progress.interactive
+        assert progress.emit("Startup", force=True)
+        assert not progress.emit("Startup", force=True)
+        for step in range(100):
+            assert not progress.emit(f"cohort 1 | transitions {step}", change=step)
+        # The 15-second snapshot cadence is independent of terminal output.
+        assert progress.due() and not progress.due()
         now[0] = 15
-        assert progress.emit("Aggregate progress")
-        progress.phase(Phase.VALIDATING, "Validation started")
-        progress.phase(Phase.COMPLETE, "Complete")
-    text = capsys.readouterr().out
-    assert "episode spam" not in text and text.count("\n") == 4
-    assert "[validating]" in text
+        assert progress.due()
+        assert not progress.emit("cohort 1 | transitions 100", change=100)
+        now[0] = 61
+        assert progress.emit("cohort 1 | transitions 200", change=200)
+        now[0] = 200
+        assert not progress.emit("cohort 1 | transitions 200 | 3/s", change=200)
+        assert progress.emit("Report refreshed: report.html", force=True, key="report")
+        assert progress.emit("Saved latest.zip", force=True)
+        assert not progress.emit("Report refreshed: report.html", force=True, key="report")
+        progress.phase(Phase.UPDATING)
+        progress.phase(Phase.VALIDATING, "Validation started\n  second line")
+        progress.warn("slow\n device")
+        progress.phase(Phase.FAILED, "Training stopped: boom")
+    text = stream.getvalue()
+    lines = text.splitlines()
+    assert len(lines) == 7 and text.endswith("\n")
+    stamp = r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\+00:00"
+    assert all(re.fullmatch(stamp + r" \[[a-z]+\] \S.*", line) for line in lines)
+    assert "\r" not in text and "\x1b" not in text
+    assert "episode" not in text and "transitions 100" not in text
+    assert "[validating] Validation started | second line" in text
+    assert "[validating] Warning: slow device" in text
+    assert "[failed] Training stopped: boom" in text
     assert (tmp_path / "train.log").read_text("utf-8") == text
 
 
-def test_old_config_and_output_only_compatibility(cfg):
-    old = copy.deepcopy(cfg)
-    old.pop("logging")
-    old.pop("visualization")
-    validate_config(old)
+def test_progress_interactive_line_and_routed_warnings(tmp_path):
+    import warnings
+
+    now, stream = [60.0], io.StringIO()
+    original = warnings.showwarning
+    progress = ProgressReporter(
+        tmp_path / "train.log", clock=lambda: now[0], stream=stream, interactive=True
+    )
+    try:
+        progress.route_warnings()
+        assert progress.emit("cohort 1 | 1/4 games", change=1)
+        now[0] = 120
+        assert progress.emit("cohort 1 | 2/4", change=2)
+        with warnings.catch_warnings():
+            warnings.simplefilter("always")
+            warnings.warn("low memory", RuntimeWarning, stacklevel=1)
+        assert progress.warning == "RuntimeWarning: low memory"
+        now[0] = 180
+        assert progress.emit("cohort 1 | 3/4 games", change=3)
+    finally:
+        progress.close()
+    assert warnings.showwarning is original
+    text = stream.getvalue()
+    first, second, event, third = (tmp_path / "train.log").read_text("utf-8").splitlines()
+    # Routine lines rewrite in place (padding clears the longer line); events
+    # close the open line first and receive their own complete line.
+    assert text == (f"\r{first}\r{second}{' ' * (len(first) - len(second))}\n{event}\n\r{third}\n")
+    assert event.endswith("[starting] Warning: RuntimeWarning: low memory")
+    assert "\x1b" not in text
+
+
+def test_output_preferences_do_not_change_learning_protocol(cfg):
+    original = copy.deepcopy(cfg)
     cfg["logging"]["progress_seconds"] = 2
     cfg["visualization"]["videos"] = False
-    assert research_config(old) == research_config(cfg)
-    assert output_settings(old)["logging"]["progress_seconds"] == 15
+    assert research_config(original) == research_config(cfg)
+    assert output_settings(cfg)["logging"]["progress_seconds"] == 2
     cfg["training"]["learning_rate"] *= 2
-    assert research_config(old) != research_config(cfg)
+    assert research_config(original) != research_config(cfg)
 
 
 def test_hardware_report_only_never_loads_checkpoint_and_respects_resume_cutoff(
@@ -242,12 +294,12 @@ def test_video_outcomes_and_bad_replay_preserve_existing_video(cfg, tmp_path, ou
     assert not list(tmp_path.glob("*.tmp.mp4"))
 
 
-def test_empty_old_report_and_resume_segments(cfg, tmp_path):
+def test_empty_current_report_and_resume_segments(cfg, tmp_path):
     cfg["profile"] = "baseline"  # Labels must not hide current-method diagnostics.
     old, new = tmp_path / "old", tmp_path / "new"
     old.mkdir()
     new.mkdir()
-    write_json(old / "metadata.json", {"config": research_config(cfg)})
+    write_json(old / "metadata.json", {"config": cfg})
     page = build_run_report(old)
     assert "No validated checkpoint yet" in page.read_text("utf-8")
     assert (old / "visualizations/learning-diagnostics.png").is_file()

@@ -10,6 +10,8 @@ refill_evaluation = true
 
 [logging]
 progress_seconds = 15
+terminal_progress_seconds = 60
+terminal_mode = "compact"
 hardware_sample_seconds = 1.0
 rolling_window = 100
 
@@ -53,19 +55,21 @@ basic_zombie_value = 50.0 # Sun-equivalent value per basic zombie's actual HP re
 mower_value = 200.0
 progress_weight = 0.01
 value_scale = 300.0 # Unit conversion, never a sun cap.
-invalid_plant_penalty = 0.003 # Rejected plant proposal, 90 sun-equivalents.
-empty_dig_penalty = 0.0003333333333333333 # Empty dig proposal, 10 sun-equivalents.
+invalid_plant_penalty = 0.00001
+empty_dig_penalty = 0.000003
+home_entry_penalties = [0.005, 0.015] # First entry into the second, then first column.
+win_time_weight = 0.1 # Victories relative to the current cohort's median duration.
 
 [training]
 gamma = 1.0
 discount_clock = "simulation_ticks"
-method = "complete_return_lstm_v1"
+method = "complete_return_event_lstm_v1"
 budget_unit = "games"
 until_stage_complete = false # With --stage: stop only when its mastery gate passes.
 total_games = 10000
 validation_schedule = "stage_success" # Normal-game evaluation only after each stage passes.
-eval_interval_games = 2000 # Used by diagnostic/fixed training or archived periodic schedules.
-total_steps = 3000000 # Inactive unless budget_unit = "decisions" (legacy).
+eval_interval_games = 2000 # Used by periodic game-count diagnostic/fixed checks.
+total_steps = 3000000 # Inactive in normal training; bounded decision-window controls only.
 learner_seeds = [101, 102]
 n_envs = 128
 device = "cuda"
@@ -76,14 +80,26 @@ exploration = {objective = "sequential_tile_epsilon_v1", epsilon_start = 0.5, ep
 batch_size = 1024
 n_epochs = 4
 learning_rate = 0.0003
-max_grad_norm = 0.5
-hidden_sizes = [128, 128]
-eval_interval = 250000 # Periodic decision interval for archived/diagnostic protocols.
+max_grad_norm = 5 # Shared by autonomous training and demonstration initialization.
+eval_interval = 250000 # Used only by bounded decision-window diagnostics.
 torch_threads = 1
 
 [training.storage]
 ram_gib = 6
 block_rows = 32768
+
+[training.objective]
+protocol = "complete_return_probe_v3"
+accepted_outcome_share = 0.5
+dense_multiplier = 10.0
+branch_probes = 2
+tile_probes = 2
+probe_interval_decisions = 1
+probe_loss_weight = 0.25
+probe_huber_delta = 1.0
+ema_decay = 0.95
+demo_rank_loss_weight = 0.10
+demo_rank_margin = 0.05
 
 [training.performance]
 compile_kernels = true
@@ -130,7 +146,7 @@ curriculum = true
 hybrid = false
 
 [policy]
-kind = "transformer_lstm_q_v2"
+kind = "transformer_lstm_q_v3"
 action_distribution = "sequential_q_unmasked_penalty_v1"
 entity_width = 32
 transformer_layers = 2
@@ -138,17 +154,16 @@ transformer_heads = 4
 transformer_feedforward = 64
 scalar_width = 64
 lstm_hidden = 256
-action_embedding = 32
-outcome_width = 16
+history = "public_event_history_v1"
+event_width = 32
 chunk_length = 256
 encoder_microbatch = 128
 attention_query_chunk = 64
 encoder_token_budget = 65536
 
 [training.demo]
-passes = 5
+passes = 20
 learning_rate = 0.0003
-gradient_clip = 0.5
 learner_seed = 101
 time_budget_minutes = 30
 
@@ -173,10 +188,8 @@ backend = "cuda"
 [diagnostics]
 early_dig_seconds = 5
 
-# All runnable profiles share this file. The loader applies these sparse overlays
-# to the base training profile so shared parameters have one source of truth.
-[profiles.demo.reward]
-invalid_plant_penalty = 0.001
+# The demo profile intentionally inherits the same reward settings as training.
+[profiles.demo]
 
 [profiles.gpu_defaults]
 simulator = "cuda"

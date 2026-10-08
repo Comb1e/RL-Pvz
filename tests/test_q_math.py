@@ -170,7 +170,14 @@ def test_sequential_balanced_loss_gradients_adam_and_nonfinite_returns(device, t
             for i in range(6)
         ]
         expected = (sum(per_row[:3]) / 3 + sum(per_row[3:5]) / 2 + per_row[5]) / 3
-        loss, _, _ = balanced_q_loss(actual[:, 0], actual[:, 1], targets, actions, [3, 2, 1], 6)
+        loss, _, _ = balanced_q_loss(
+            actual[:, 0],
+            actual[:, 1],
+            targets,
+            actions,
+            [[0, 3], [0, 2], [0, 1]],
+            accepted=torch.ones(6, dtype=torch.bool, device=device),
+        )
         torch.testing.assert_close(loss, expected)
         opt.zero_grad()
         ref_opt.zero_grad()
@@ -194,3 +201,136 @@ def test_sequential_balanced_loss_gradients_adam_and_nonfinite_returns(device, t
             buffer.finalize()
         finally:
             buffer.close()
+
+
+@pytest.mark.parametrize("partition", [[slice(None)], [slice(0, 2), slice(2, 5), slice(5, 8)]])
+def test_outcome_balancing_independent_hierarchical_control(partition):
+    from pvz_rl.policy.sequential_q import balanced_q_loss
+
+    actions = torch.tensor([0, 0, 1, 46, 91, 136, 361, 362])
+    accepted = torch.tensor([1, 1, 1, 0, 0, 0, 1, 0], dtype=torch.bool)
+    counts = [[0, 2], [3, 1], [1, 1]]
+    predictions = torch.arange(16, dtype=torch.float64).reshape(8, 2).requires_grad_()
+    reference = predictions.detach().clone().requires_grad_()
+    targets = torch.arange(8, dtype=torch.float64)
+    row_errors = [
+        (reference[index, 0] - targets[index]).square()
+        if index < 2
+        else (
+            (reference[index, 0] - targets[index]).square()
+            + (reference[index, 1] - targets[index]).square()
+        )
+        / 2
+        for index in range(8)
+    ]
+    expected = (
+        (row_errors[0] + row_errors[1]) / 2
+        + row_errors[2] / 2
+        + sum(row_errors[3:6]) / 6
+        + (row_errors[6] + row_errors[7]) / 2
+    ) / 3
+    loss = sum(
+        balanced_q_loss(
+            predictions[chunk, 0],
+            predictions[chunk, 1],
+            targets[chunk],
+            actions[chunk],
+            counts,
+            accepted=accepted[chunk],
+        )[0]
+        for chunk in partition
+    )
+    torch.testing.assert_close(loss, expected)
+    loss.backward()
+    expected.backward()
+    torch.testing.assert_close(predictions.grad, reference.grad)
+
+
+def test_probe_outcomes_share_half_even_with_three_rejections():
+    from pvz_rl.learning.objective import probe_loss
+
+    class TablePolicy:
+        cfg = load_config()
+
+        def tile_values(self, tiles, context, branches):
+            return tiles
+
+    counts = np.zeros((2, 10, 2), dtype=np.int64)
+    counts[:, 2] = [3, 1]
+    probes = torch.tensor(
+        [[[1, 1, 46, target, accepted]] for target, accepted in ((1, 1), (3, 0), (5, 0), (7, 0))],
+        dtype=torch.float32,
+    )
+    first = torch.zeros(4, 10, requires_grad=True)
+    second = torch.zeros(4, 45, requires_grad=True)
+    total = 0
+    for start, stop in ((0, 1), (1, 4)):
+        loss = probe_loss(
+            TablePolicy(),
+            first[start:stop],
+            second[start:stop],
+            torch.empty(stop - start, 0),
+            probes[start:stop],
+            counts,
+            1,
+        )
+        loss.backward()
+        total += loss.detach()
+    torch.testing.assert_close(total, torch.tensor(2.5))
+    torch.testing.assert_close(first.grad[:, 2], torch.tensor([-0.25, -1 / 12, -1 / 12, -1 / 12]))
+    torch.testing.assert_close(second.grad[:, 0], first.grad[:, 2])
+
+
+def test_counterfactual_and_ranking_gradients_match_partitioned_cohort():
+    from pvz_rl.learning.objective import demonstration_rank_loss, probe_loss, ranking_counts
+
+    class TablePolicy:
+        cfg = load_config()
+
+        def tile_values(self, tiles, context, branches):
+            return tiles[torch.arange(len(branches)), branches - 1]
+
+    policy = TablePolicy()
+    probes = torch.tensor(
+        [
+            [[1, 1, 46, 1.0, 1], [1, 1, 361, -1.0, 0], [1, 0, 2, 0.5, 1]],
+            [[1, 1, 0, -1.0, 1], [1, 1, 91, 1.0, 0], [0, 0, 0, 0, 0]],
+        ]
+    )
+    counts = np.zeros((2, 10, 2), np.int64)
+    counts[0, [0, 2], 1] = 1
+    counts[0, [3, 9], 0] = 1
+    counts[1, [1, 2], 1] = 1
+    counts[1, [3, 9], 0] = 1
+    outcomes = []
+    for partition in ([slice(None)], [slice(0, 1), slice(1, 2)]):
+        q = torch.zeros(2, 10, requires_grad=True)
+        tiles = torch.zeros(2, 9, 45, requires_grad=True)
+        total = 0
+        for ix in partition:
+            loss = probe_loss(
+                policy, q[ix], tiles[ix], torch.empty(2, 0)[ix], probes[ix], counts, 1.0
+            )
+            loss.backward()
+            total += float(loss.detach())
+        outcomes.append((total, q.grad.clone(), tiles.grad.clone()))
+    for a, b in zip(*outcomes):
+        torch.testing.assert_close(a, b)
+    qg, tg = outcomes[0][1:]
+    assert torch.count_nonzero(qg) == 4
+    assert torch.count_nonzero(tg) == 4
+    assert qg[0, 2] < 0 and qg[0, 9] > 0
+    assert tg[0, 0, 1] < 0  # Alternative tile gets its own gradient.
+    actions = torch.tensor([46, 46])
+    accepted = torch.tensor([True, False])
+    masks = torch.ones(2, 406, dtype=torch.bool)
+    q = torch.zeros(2, 10, requires_grad=True)
+    tiles = torch.zeros(2, 9, 45, requires_grad=True)
+    rank_counts = ranking_counts(actions, accepted, masks)[0]
+    rank, _ = demonstration_rank_loss(
+        policy, q, tiles, torch.empty(2, 0), actions, accepted, masks, rank_counts, 0.05
+    )
+    rank.backward()
+    assert q.grad[0, 2] < 0 and tiles.grad[0, 1, 0] < 0
+    assert q.grad[1].count_nonzero() == tiles.grad[1].count_nonzero() == 0
+    assert torch.all(q.grad[0, torch.arange(10) != 2] > 0)

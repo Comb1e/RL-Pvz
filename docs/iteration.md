@@ -1,5 +1,268 @@
 # Iteration history
 
+## 0.32.0 — 2026-10-07
+
+- Demonstration-pass adjustment: changed `training.demo.passes` from 5 to 20;
+  the existing independent autonomous `training.n_epochs` remains 4. Configuration
+  and `--passes` overrides still apply only to demonstration initialization;
+  the 30-minute budget is unchanged. Tiny replay controls verify the 20-pass
+  default, custom pass counts, the one-pass override and rejection of zero passes.
+  The demonstration suite and execution-refresh control passed all 29 cases;
+  repository-wide Ruff lint/format and whitespace checks passed before commit.
+- Problem/root cause: per-decision recurrence repeatedly stored quiet/rejected
+  decisions; branch Q had no direct current-board path. Group-only regression
+  let abundant rejected actions dominate rare accepted outcomes.
+- Improvement: deterministic gross sunlight/zombie/plant events write memory
+  once with resulting board context; initial entities are not fabricated writes.
+  Current board features reach both heads every decision through 256-wide fusion.
+  Sparse chronological event fitting preserves all decisions and 256-decision
+  detach boundaries. Whole-cohort group and probe head/branch losses balance
+  accepted/rejected strata equally when both exist. Rewards, exploration, four
+  passes, clipping, Adam settings and action timing remain unchanged.
+- Recovery/cleanup: shared pending-event/timing state, isolated complete EMA forks,
+  event-aware deduplication and versioned metadata use the existing pinned handoff
+  and RAM/disk budget. Removed action/outcome recurrent embeddings and unused
+  architecture fields. Old checkpoints cannot resume or initialize weights;
+  verified recordings remain reusable in new initialization directories.
+- Verification: independent CPU/CUDA cap, gross-flow, spawn/removal, defeat-before-
+  removal, plant-death and zero-time controls; sparse/serial gradients, hierarchical
+  losses, pending recovery, replay reconstruction and spill/corruption controls.
+  Exact recovery exposed repeated-read atomic gradient accumulation; deterministic
+  matrix reduction fixes it without loosening equality checks. Direct checkpoint
+  reload also lost online/EMA compilation state; recovery now retains both paths
+  and their bounded shape sets. Checkpoint rejection precedes the CUDA availability
+  probe as well as collector allocation.
+- Test execution: owning suites and one shared-contract full-suite run (537 passed,
+  24 failed on that initial run). Stale expectations/retired-only controls and the
+  recovery/compiler failures were then corrected or retired and rechecked with
+  focused selections; no second full-suite run. The final focused selection passed
+  all 11 cases. Ruff lint/format checks and `git diff --check` passed.
+- Bounded diagnostic: 16 games, four passes, 30-second cutoff, 48,016 decisions;
+  91 writes (0.1895%), approximately 796 transitions/second. Actual final memory
+  had no cells above absolute 5; fixed-history board interventions retained
+  measurable branch/tile Q sensitivity. Raw summary:
+  [event-memory-v032.json](evidence/event-memory-v032.json).
+- Existing demonstration: reconstructed all 15,372 decisions from the unchanged
+  human recording and completed five fitting passes in `runs/human-init-events-v032`.
+  The new initialization reloads and transfers strictly under current settings;
+  old initialization files remain untouched.
+- Limits: truncated fresh-weight games establish mechanical behavior, not a
+  win-rate improvement. Dense-return variation warning remains visible. No formal
+  training, commit or push was launched.
+
+## 0.31.7 — 2026-09-30
+
+- Problem/root cause: collection used serial probe simulation/inference, repeated
+  device width reads and host comparisons; terminal refreshes mixed detailed
+  telemetry with human-facing output. The unfinished optimization also left
+  removed transfer imports and aliased next-observation buffers between passes.
+- Improvement: two independent scratch lanes execute branch/tile pairs in two
+  passes, preserving RNG/accounting/proximity state. One stacked EMA next-state
+  evaluation follows actual history only. Persistent canonical stores, exact
+  device deduplication, packed offset ingestion and one reusable pinned handoff
+  remove per-probe host boundaries. Public-count padding buckets do not inspect
+  future schedules. Scratch allocation failure runs every slot through one lane.
+  Owned-output encoder graphs also cover inference; fitting/model/reward settings
+  and loss denominators remain unchanged.
+- Terminal/configuration cleanup: 15-second detailed snapshots are separate from
+  material-change/60-second terminal updates. Compact interactive/redirected
+  events, warning routing, duplicate suppression and checkpoint notices replace
+  multiline dashboards. Resume refreshes current execution/logging automatically
+  without changing saved learning parameters or rewards. Removed transfer/per-slot
+  implementations, explicit refresh flag, historical FP32/output/runtime defaults,
+  replay sidecar annotations, archived training CLI flags, PPO report/old-run
+  branches, the retired two-coin epsilon helper and the duplicate collection
+  benchmark path. Current replay/CPU mathematical references and recovery
+  validation remain necessary. Recordings, checkpoints and verification evidence
+  are preserved.
+- Verification: serial/batched simulator headers (including RNG), ledgers,
+  proposals/execution, rejection, durations, components, canonical next inputs and
+  bootstrap controls passed, including four separate real-network next-state
+  calls from the actual EMA history. Independent CPU danger-zone/constant-bootstrap
+  controls, deduplication counterexamples, compiled inference buckets, spilled
+  slab recovery, recurrent interrupted-collection/fitting controls and compact
+  reporting controls passed. Owning suites ran rather than repeated full suites.
+  Availability/engine hash, CUDA compilation/accounting/shared-stream and replay
+  checks passed. Ruff lint, changed-file formatting and whitespace checks passed;
+  one untouched pre-existing formatting issue remains in `policy/transformer_lstm.py`.
+  New defaults retain user reward prices and `max_grad_norm = 5`. No formal
+  training or learning-quality measurement was launched.
+- Snapshot benchmark: 128 environments, eight warmup decisions, three warmed
+  32-decision trials per arm/case, zero optimizer steps. Mean transitions/s for
+  one-lane reference → two-lane execution: sparse 5,959 → 6,621; mixed 5,451 →
+  5,946; crowded 2,447 → 2,524; rejection-heavy 6,105 → 6,966; accepted-action
+  4,691 → 5,017. This is roughly 1.03–1.14× against the current memory fallback,
+  not the earlier serial trainer. Raw subphases, CPU/GPU samples and memory are in
+  `docs/evidence/collection-v031.json` and its hardware JSONL. Two-lane peak Torch
+  allocation was 166.2 MiB, sampled process RSS up to 1,565.3 MiB and pinned
+  handoff allocation up to 7.23 MiB for these bounded, headless controls.
+- Limits/remaining issues: the requested 1.5–2× historical collection improvement
+  and total-cohort reduction are not established. No formal cohort or fitting
+  benchmark was added to infer them. Hardware sampling is coarse for subsecond
+  trials; missing samples stay null and observed GPU utilization includes warmup
+  and boundary effects. Public pending-roster bounds can overpad. Packed transfer
+  retains a bounded unused tail; deduplication is not proportional DMA compression.
+  Viewer history is covered by integration controls, not the headless snapshot
+  benchmark. Sparse/mixed fixture corrections were rerun only where relevant.
+- Local cleanup limitation: shell execution policy rejected deletion of the
+  verified, ignored `build/`, `dist/`, `.pytest_cache/` and `.ruff_cache/`
+  directories. Those generated copies and local Python bytecode caches remain;
+  none is required by the active source or installed pinned game package.
+
+## 0.31.6 — 2026-09-29
+
+- Problem/root cause: complete-return fitting provided almost no direct targets for
+  unselected branches, while development events, rejection costs and house threats
+  were recorded at incompatible scales. A cohort also needed deferred victory-time
+  rewards, and the CUDA proximity-ledger overflow sentinel could otherwise be read
+  as a positive reward during corruption.
+- Improvement: the official `complete_return_probe_v2` objective now keeps six
+  reward components, multiplies only development by 10 for fitting, charges each
+  living non-headless zombie once at `x < 2000` and `x < 1000`, and finalizes victory
+  time against the actual-game median. Every decision probes two round-robin
+  alternative branches and two alternative tiles through isolated CUDA state. A
+  frozen EMA teacher supplies branch-head bootstrap targets; accepted demonstrations
+  add balanced pairwise ranking. Probe cadence/counts are configurable up to the
+  fixed four-record storage shape. Finalization, EMA state, probe cursors, ledgers
+  and pending reports are recoverable and idempotent. CUDA ledger corruption now
+  fails at the host boundary; recovery validates IDs, stages, gaps and duplicates.
+  Progress output labels terminal records as provisional until finalization.
+- Verification: the new six-component scaling, deduplicated probe storage with
+  median finalization/spill recovery, partitioned probe/ranking gradients, and EMA
+  recovery controls passed. The CPU/CUDA counterfactual parity control passed for
+  rejected and danger-zone proposals, comparing proposal, execution, reason,
+  duration, components, next observation, simulator hash, RNG and ledger state.
+  The existing reward boundary and one CUDA recovery case also passed. Changed-file
+  Ruff, format, compile and whitespace checks passed. No broad suite or formal
+  training was run.
+- Bounded diagnostic: two 16-game cohorts and four fitting passes per arm were run
+  from a fresh five-pass demonstration initialization with identical probes. Full
+  objective wall time was 1,374.1 s and reward-only was 1,321.9 s; peak Torch
+  memory was 3,185 MiB and 1,457 MiB respectively. Cohort medians were 164.705 s
+  and 165.98 s for the full arm; target standard deviation was 0.1564 and 0.2109.
+  Probe coverage was about 56–58k samples per branch per cohort. Cell magnitudes
+  remained unsaturated (maximum about 0.43, no values over 5). Fixed-history
+  sensitivity still showed tiny zombie-position/health deltas (about 1e-6–5e-5)
+  compared with sun/cooldown changes (about 0.003–0.012), so the diagnostic does
+  not establish that state-dependent action preferences are solved. Raw and compact
+  measurements are in [objective-v032](evidence/objective-v032.json).
+
+## 0.31.5 — 2026-09-29
+
+- Problem/root cause: initialization compared historical reward prices against
+  current TOML, then would have fitted archived totals. The human recording's
+  decision 4930 rejected a recharging plant at the old penalty of 0.001; the
+  current 0.003 penalty incorrectly triggered a reconstruction failure.
+- Improvement: verify native replay hashes, observations, actions, outcomes,
+  terminal states and configuration-independent reward facts. Check historical
+  ledger arithmetic, finite values and penalty applicability, then recompute
+  rewards through the shared reward function using current coefficients. Fitting
+  consumes the verified in-memory transitions, so it cannot reread old targets.
+  Keep original files unchanged and report reward changes/settings in verification
+  metadata. No model, precision, dependency or user parameter changes.
+- Verification: 26 focused checks passed for unchanged/changed rewards, independent
+  returns, rejected plant/dig and terminal boundaries, corruption and CLI config.
+  One additional tiny complete-pass CUDA initialization/reload check passed.
+  The user's complete 15,372-decision recording verified with exactly one repriced
+  reward; decision 4930 now costs -0.003 and next feedback remains `(0, 0, 1)`.
+  SHA-256 checks confirmed archive, replay and manifest stayed unchanged. Ruff
+  lint/format and Git whitespace checks passed. No full suite or formal training.
+- Remaining limits: old archives store a configuration digest without original
+  reward coefficients, so historical prices cannot be authenticated. Replay facts
+  and accounting remain validated; those prices never train the model. Pinned
+  engine and observation/action compatibility requirements remain in force.
+
+## 0.31.4 — 2026-09-29
+
+- Problem/root cause: demo and autonomous fitting read separate clipping limits.
+  Fresh `--init-from` also copied the source configuration, so both easy runs
+  inherited the initialization's invalid-plant penalty of 0.001 despite TOML
+  having 0.003. The viewer correctly exposed the effective, unintended value.
+- Improvement: keep only `training.max_grad_norm = 5`, preserving the user's
+  clipping adjustment for both fitting paths. Remove the demo-only setting and
+  override. Fresh initialization now resolves all settings from current TOML
+  and transfers only compatible weights; reward changes do not block transfer.
+  Resume keeps saved learning settings and rewards. Recording verification checks
+  engine/schema and replay facts without binding optimizer settings to its digest.
+- Verification: 22 focused controls passed, including the real tiny CLI
+  initialization/training/evaluation/resume flow, shared clipping, archive
+  corruption, architecture mismatch and retained viewer values. The existing
+  human initialization transferred all 56 parameter tensors exactly and the
+  user's command resolved penalty 0.003, clipping 5 and `features_bf16` without
+  a refresh flag or starting simulation. Changed-file Ruff lint/format and Git
+  whitespace checks passed. No full suite or formal training ran.
+- Remaining limits: existing runs retain their saved penalty on resume; only a
+  new run adopts changed learning settings. Old recordings still require their
+  original reward configuration when verifying stored reward facts.
+
+## 0.31.3 — 2026-09-29
+
+- Problem/root cause: autonomous resume retains learning settings, but the live
+  viewer only received display preferences, leaving active clipping and reward
+  values invisible when the current TOML differed from a checkpoint.
+- Improvement: send a one-time snapshot of the resolved run configuration to the
+  viewer. A read-only strip shows learning rate, `max_grad_norm`, batch size,
+  epochs, discount, sequence length, rewards and tile exploration. It wraps at
+  narrow widths and **S** hides/shows it; small panels omit history footers when
+  they would overlap board details. Demo-only clipping is not presented as an
+  autonomous setting. No training parameters or checkpoint semantics changed.
+- Verification: eight existing focused viewer controls passed. Offscreen review
+  covered 1600×1050, 944×668 and 640×480, grid/focus layouts, hidden/visible settings,
+  and the real S-key event loop before any board arrived. A deliberately different
+  saved configuration retained its displayed values after performance refresh.
+  The two layout controls passed again after the narrow-window adjustment.
+  Ruff lint/format and Git whitespace checks passed. No formal training or full
+  suite was run.
+- Remaining limits: existing viewer processes receive the strip on their next
+  launch; narrow windows still benefit from Focus or hiding settings for history.
+
+## 0.31.2 — 2026-09-29
+
+- Problem/root cause: the Windows CUDA-graphs encoder was replayed for successive
+  entity microbatches while the recurrent loss still held the previous outputs
+  for backward. CUDA-graphs reclaimed that storage, producing an overwritten
+  tensor error and a pending-backward warning at fit startup.
+- Improvement: capture AOT forward/backward separately and copy all outputs
+  into independently owned storage, including saved activations and gradients.
+  Preserve SDPA strides and refresh input weights on every invocation. Backward
+  capture failure restarts the uncommitted pass eagerly at the same precision.
+  CUDA-graphs compilation remains enabled; model shapes and precision are unchanged.
+- Verification: five focused CUDA controls passed: compiled/eager FP32 and BF16
+  output, gradient and update comparisons across empty/mixed/capped observations,
+  partial microbatches and gradient accumulation, plus memory, nonfinite and
+  backward-compilation retries without duplicated optimizer updates. A marker-only
+  repair removed the warning but still produced about 11% gradient error during
+  replay and was discarded. The owned-buffer implementation's BF16 gradient
+  difference against eager measured 0.12–0.14% across four small updates.
+- Device smoke check: three BF16 forward/backward/Adam steps per population on the
+  RTX 4070 Laptop completed with `compiled / cudagraphs_owned` and no warnings.
+  The 4,096-frame/40-entity case took 0.164–0.168 seconds per warmed step with
+  1,730 MiB peak Torch allocation; 256 entities took 0.373–0.376 seconds and
+  4,551 MiB. Initial tracing/capture steps took 1.078/1.194 seconds respectively.
+  A truly empty 32-frame case also passed. These exclude simulation/storage and
+  do not measure learning quality; owned copies add memory overhead. No formal
+  training or full suite was run. Ruff lint, changed-file formatting, syntax and
+  whitespace checks passed. The repository-wide format check flagged an existing
+  assertion layout in `tests/test_demo_initialization.py`; that unrelated file
+  was left unchanged.
+
+## 0.31.1 — 2026-09-29
+
+- Problem/root cause: enabling the fixed-shape encoder through the default
+  Windows Inductor path traced PyTorch SDPA's pybind11 capability object, then
+  fell back because the Windows environment has no Triton. The simulator also
+  reserved only the proved future projectile bound, so a mid-game recovery
+  snapshot containing active shots could exceed capacity.
+- Improvement: keep SDPA capability probing out of Dynamo traces, use the
+  available CUDA-graphs compiler on Windows, retain a one-time eager fallback,
+  and allocate current-snapshot plus future projectile headroom. The shared
+  reward table now has one invalid-plant penalty; the demo profile inherits it
+  while preserving `training.demo.gradient_clip = 5`.
+- Verification: direct CUDA forward/backward compilation completed with
+  `compilation_status = compiled` and `compilation_backend = cudagraphs`; no
+  pybind or max-autotune warning was emitted. Ruff, syntax and configuration
+  checks were run without starting training.
+
 ## 0.31.0 — 2026-09-29
 
 - Problem/root cause: recurrent fitting processed only four 256-step sequences
@@ -1044,3 +1307,14 @@ that learning collapse is resolved, and no formal learning run was launched.
   CPU/CUDA/Windows learning, full miniature protocol and package checks.
 - Limit: no trained-skill/generalization claim; partial observation and inexact
   rollout/RNG resume. Formal runs remain user initiated; no remote was configured.
+## 2026-09-29 — probe objective and staged reward shaping
+
+The compact-stages run showed repeated rejection penalties dominating development
+returns and branch Q values changing by less than four decimal places after recurrent
+state saturation. The current objective adds scaled development targets, fixed
+per-zombie house-entry charges, cohort-median victory-time shaping, isolated
+alternative-action probes, EMA targets, and accepted-demonstration ranking. Focused
+CUDA collection/fitting smoke checks passed; reward, storage, recurrent recovery and
+demonstration controls pass, including 66 affected recurrent/reward/storage tests and
+23 demonstration tests. Long training and learning-quality claims remain intentionally
+unperformed.

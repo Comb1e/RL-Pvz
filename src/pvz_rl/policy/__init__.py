@@ -1,13 +1,13 @@
 """Policy components of the shared CUDA training method."""
 
 from pvz_rl.policy.transformer_lstm import (
+    EventMemoryState,
     RecurrentOutput,
-    RecurrentState,
     TransformerLSTMPolicy,
 )
 
 __all__ = [
     "RecurrentOutput",
-    "RecurrentState",
+    "EventMemoryState",
     "TransformerLSTMPolicy",
 ]

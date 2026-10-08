@@ -1,6 +1,5 @@
-"""Read native replay annotations with a fallback for research 0.2 sidecars."""
+"""Read embedded replay annotations and current action-phase recordings."""
 
-import json
 from dataclasses import replace
 from pathlib import Path
 
@@ -92,34 +91,11 @@ class ActionPhasePlayback(Playback):
         return replace(result, observation=self.game.observe(), events=(*result.events, *events))
 
 
-def open_playback(source, *, fallback=None):
+def open_playback(source, *, context=None):
     source = source if isinstance(source, dict) else Path(source)
     data = read_recording(source)
-    legacy = dict(fallback or {})
-    sidecar = None if isinstance(source, dict) else source.with_suffix(".metadata.json")
-    if sidecar is not None and sidecar.exists():
-        legacy.update(json.loads(sidecar.read_text("utf-8")))
-    annotations = {}
-    for key in ("policy_id", "checkpoint_sha256", "outcome", "termination_reason"):
-        value = legacy.get(key)
-        if value is not None:
-            annotations[key] = value
-    for old, new in (
-        ("policy", "policy_id"),
-        ("checkpoint_hash", "checkpoint_sha256"),
-        ("status", "outcome"),
-    ):
-        if legacy.get(old) is not None:
-            annotations.setdefault(new, legacy[old])
-    annotations["experiment"] = {
-        key: legacy[key]
-        for key in ("level", "family", "scenario_seed", "learner_seed")
-        if key in legacy
-    }
-    # Embedded metadata is authoritative. Legacy annotations only fill absent fields.
-    annotations.update(data.get("metadata", {}))
-    if annotations:
-        data["metadata"] = annotations
+    if context:
+        data = {**data, "metadata": {**context, **data.get("metadata", {})}}
     playback_type = (
         ActionPhasePlayback
         if data.get("replay_version") == ACTION_PHASE_REPLAY_VERSION

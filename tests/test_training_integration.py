@@ -65,8 +65,8 @@ def test_real_training_serialization_and_replay(smoke_cfg, tmp_path, condition):
                 info["reward_parts"]["invalid_plant_penalty"] < 0
                 or info["reward_parts"]["empty_dig_penalty"] < 0
             )
-            state.previous_actions.zero_()
-            reloaded_state.previous_actions.zero_()
+            state.state.pending.zero_()
+            reloaded_state.state.pending.zero_()
     replay = output / "probe.json"
     env.recorder.save(replay)
     assert verify_replay(replay).state_hash() == env.game.state_hash()
@@ -96,6 +96,11 @@ def test_reward_changes_load_for_inference_but_require_weights_only_initializati
 
 @pytest.mark.learning
 def test_windows_cuda_cli(tmp_path, tiny_cli_config):
+    tiny_cli_config.write_text(
+        tiny_cli_config.read_text().replace(
+            'validation_schedule = "stage_success"', 'validation_schedule = "periodic"'
+        )
+    )
     output = tmp_path / "spawn"
     device = "cuda"
     result = subprocess.run(
@@ -110,14 +115,14 @@ def test_windows_cuda_cli(tmp_path, tiny_cli_config):
             "train",
             "--condition",
             "masked",
-            "--steps",
-            "64",
+            "--games",
+            "2",
             "--n-envs",
             "2",
             "--batch-size",
             "32",
-            "--eval-interval",
-            "64",
+            "--eval-games",
+            "2",
             "--device",
             device,
             "--validation-count",

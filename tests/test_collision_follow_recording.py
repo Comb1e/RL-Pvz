@@ -6,7 +6,7 @@ def test_single_config_train_and_demo_profiles():
     from types import SimpleNamespace
 
     from pvz_rl.cli import configured
-    from pvz_rl.config import load_config, load_demo_config
+    from pvz_rl.config import load_config, load_demo_config, validate_config
     from pvz_rl.learning.exploration import exploration_state
     from pvz_rl.learning.training_requirements import require_supported_policy
 
@@ -15,8 +15,10 @@ def test_single_config_train_and_demo_profiles():
     assert demo == load_demo_config("src/pvz_rl/data/train.toml")
     assert demo["policy"] == training["policy"]
     assert demo["training"]["method"] == training["training"]["method"]
-    assert demo["reward"]["invalid_plant_penalty"] == 0.001
-    assert training["policy"]["kind"] == "transformer_lstm_q_v2"
+    assert demo["reward"]["invalid_plant_penalty"] == training["reward"]["invalid_plant_penalty"]
+    assert demo["training"]["max_grad_norm"] == training["training"]["max_grad_norm"] == 5
+    assert "gradient_clip" not in demo["training"]["demo"]
+    assert training["policy"]["kind"] == "transformer_lstm_q_v3"
     assert tuple(training["curriculum"]["stages"]) == ("easy", "standard", "shared")
     assert "lessons" not in training["curriculum"] and "run_stage" not in training["curriculum"]
     require_supported_policy(training)
@@ -32,6 +34,10 @@ def test_single_config_train_and_demo_profiles():
     assert exploration_state(demo, 5000).tile_epsilon == pytest.approx(0.01)
     with pytest.raises(ValueError, match="not available"):
         load_demo_config("src/pvz_rl/data/train.toml", profile="event-memory")
+    for invalid in (0, -1, float("inf"), float("nan"), True):
+        training["training"]["max_grad_norm"] = invalid
+        with pytest.raises(ValueError, match="training.max_grad_norm"):
+            validate_config(training)
 
 
 @pytest.mark.parametrize("demo", [False, True])
@@ -300,7 +306,7 @@ def test_easy_recording_natural_completion_is_reusable(tmp_path, monkeypatch):
     from pvz_game import Status
 
     from pvz_rl.config import load_demo_config
-    from pvz_rl.learning.demo_initialization import _training_tensors, verify_demo
+    from pvz_rl.learning.demo_initialization import _load_verified_demo, _training_tensors
     from pvz_rl.presentation.demo_recording import DemoRecordingApp
 
     monkeypatch.setenv("SDL_VIDEODRIVER", "dummy")
@@ -314,10 +320,13 @@ def test_easy_recording_natural_completion_is_reusable(tmp_path, monkeypatch):
             app.advance()
         assert app.game.observe().status == Status.LOST
         assert app._archive_finalized and app.transition_archive.closed
-        verification = verify_demo(archive, replay, cfg)
+        cfg["reward"]["loss_penalty"] = 3.5
+        verified = _load_verified_demo(archive, replay, cfg)
+        verification = verified.report
         assert verification["verified"]
-        tensors = _training_tensors(archive, cfg)
+        tensors = _training_tensors(verified)
         assert len(tensors[0]) == verification["archive"]["decisions"]
+        assert tensors[-1][-1].item() == pytest.approx(-3.5)
         saved = (archive.read_bytes(), replay.read_bytes())
         app.restart()
         app.advance()

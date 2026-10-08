@@ -1,38 +1,56 @@
-"""Entity Transformer + recurrent Q policy used by fresh demonstrations.
-
-The module has a deliberately small public interface: callers carry a
-``RecurrentState`` and call :meth:`forward_step` once for every decision.  A
-sequence helper uses exactly the same step path, which makes collection,
-evaluation and replay agree about waits and zero-time plant/dig operations.
-"""
-
-from __future__ import annotations
+"""Current-board Q inference with deterministic sparse public-event memory."""
 
 from contextlib import contextmanager
 from dataclasses import dataclass
 
+import numpy as np
 import torch
 from pvz_game import Rules
 from torch import nn
+from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence
 
 from pvz_rl.envs.actions import ActionSchema as A
 from pvz_rl.envs.encoding import ObservationEncoder, collate_observations
+from pvz_rl.envs.history import EVENT_WIDTH, normalize_events
 from pvz_rl.policy.entity_attention import EntityTransformer
 from pvz_rl.policy.sequential_q import observation_tile_masks, select_q_actions
 
 
 @dataclass
-class RecurrentState:
-    """LSTM state owned by one batch of episodes."""
-
+class EventMemoryState:
     hidden: torch.Tensor
     cell: torch.Tensor
+    pending: torch.Tensor
+    elapsed_ticks: torch.Tensor
 
-    def detach(self) -> "RecurrentState":
-        return RecurrentState(self.hidden.detach(), self.cell.detach())
+    def detach(self):
+        return EventMemoryState(*(value.detach() for value in self.tensors()))
 
-    def clone(self) -> "RecurrentState":
-        return RecurrentState(self.hidden.clone(), self.cell.clone())
+    def clone(self):
+        return EventMemoryState(*(value.clone() for value in self.tensors()))
+
+    def tensors(self):
+        return self.hidden, self.cell, self.pending, self.elapsed_ticks
+
+    def inputs(self):
+        return torch.cat((self.pending, self.elapsed_ticks[:, None]), -1)
+
+    def consume(self, hidden, cell, writes, events=None):
+        events = self.inputs() if events is None else events.to(self.pending.dtype)
+        return EventMemoryState(
+            hidden,
+            cell,
+            torch.where(writes[:, None], 0, events[:, :7]),
+            torch.where(writes, 0, events[:, 7]),
+        )
+
+    def observe(self, facts, duration, active):
+        return EventMemoryState(
+            self.hidden,
+            self.cell,
+            torch.where(active[:, None], facts.to(self.pending.dtype), self.pending),
+            self.elapsed_ticks + torch.where(active, duration.to(self.elapsed_ticks.dtype), 0),
+        )
 
 
 @dataclass
@@ -40,34 +58,41 @@ class RecurrentOutput:
     branch_q: torch.Tensor
     tile_features: torch.Tensor
     context: torch.Tensor
-    state: RecurrentState
+    state: EventMemoryState
+
+
+class EventMemoryRead(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, memory, latest):
+        ctx.save_for_backward(latest)
+        ctx.width = memory.shape[1]
+        return memory.gather(1, latest[..., None].expand(-1, -1, memory.shape[-1]))
+
+    @staticmethod
+    def backward(ctx, gradient):
+        (latest,) = ctx.saved_tensors
+        selection = torch.nn.functional.one_hot(latest, ctx.width).to(gradient.dtype)
+        return torch.bmm(selection.transpose(1, 2), gradient), None
 
 
 class TransformerLSTMPolicy(nn.Module):
-    """Two-level Q controller with a persistent LSTM decision state."""
+    protocol = "transformer_lstm_q_v3"
 
-    protocol = "transformer_lstm_q_v2"
-
-    def __init__(self, cfg: dict, *, action_count: int = A.size):
+    def __init__(self, cfg: dict):
         super().__init__()
         self.cfg = cfg
         self.fit_precision = "fp32"
         self.layout = ObservationEncoder(cfg, Rules())
         spec = cfg["policy"]
-        self.action_count = action_count
         self.entity = EntityTransformer(self.layout, spec)
-        self.scalar_width = spec["scalar_width"]
-        scalar_input = self.layout.global_width
-        self.scalar = nn.Sequential(nn.Linear(scalar_input, self.scalar_width), nn.ReLU())
-        action_width = spec["action_embedding"]
-        self.previous_action = nn.Embedding(action_count, action_width)
-        self.outcome = nn.Sequential(nn.Linear(2, spec["outcome_width"]), nn.ReLU())
-        self.elapsed = nn.Sequential(nn.Linear(1, 8), nn.Tanh())
-        core_input = (
-            spec["entity_width"] + self.scalar_width + action_width + spec["outcome_width"] + 8
+        self.scalar = nn.Sequential(
+            nn.Linear(self.layout.global_width, spec["scalar_width"]), nn.ReLU()
         )
-        self.lstm = nn.LSTM(core_input, spec["lstm_hidden"], num_layers=1, batch_first=True)
+        self.event = nn.Sequential(nn.Linear(EVENT_WIDTH, spec["event_width"]), nn.ReLU())
+        current_width = spec["entity_width"] + spec["scalar_width"]
         hidden = spec["lstm_hidden"]
+        self.lstm = nn.LSTM(current_width + spec["event_width"], hidden, batch_first=True)
+        self.fusion = nn.Sequential(nn.Linear(current_width + hidden, hidden), nn.ReLU())
         self.branch_head = nn.Sequential(nn.Linear(hidden, 128), nn.ReLU(), nn.Linear(128, 10))
         self.tile_head = nn.Sequential(
             nn.Linear(spec["entity_width"] + hidden + A.tile_groups, 128),
@@ -75,42 +100,35 @@ class TransformerLSTMPolicy(nn.Module):
             nn.Linear(128, 1),
         )
         self.tile_offsets = nn.Parameter(torch.zeros(A.tile_groups))
-        self.register_buffer("zero_action", torch.zeros(1, dtype=torch.long), persistent=False)
 
     @property
-    def hidden_size(self) -> int:
+    def hidden_size(self):
         return self.lstm.hidden_size
 
-    def initial_state(self, batch_size: int, *, device=None, dtype=None) -> RecurrentState:
+    def initial_state(self, batch_size, *, device=None, dtype=None):
         parameter = next(self.parameters())
         device = parameter.device if device is None else device
         dtype = parameter.dtype if dtype is None else dtype
         shape = (1, int(batch_size), self.hidden_size)
-        return RecurrentState(
+        return EventMemoryState(
             torch.zeros(shape, device=device, dtype=dtype),
             torch.zeros(shape, device=device, dtype=dtype),
+            torch.zeros(batch_size, 7, device=device, dtype=torch.int64),
+            torch.zeros(batch_size, device=device, dtype=torch.int64),
         )
 
-    def reset_state(
-        self, state: RecurrentState, reset: torch.Tensor | None = None
-    ) -> RecurrentState:
-        """Clear selected batch entries at episode boundaries."""
+    def reset_state(self, state, reset=None):
         if reset is None:
             return self.initial_state(
                 state.hidden.shape[1], device=state.hidden.device, dtype=state.hidden.dtype
             )
-        reset = reset.to(device=state.hidden.device, dtype=torch.bool).view(1, -1, 1)
-        return RecurrentState(
-            torch.where(reset, torch.zeros_like(state.hidden), state.hidden),
-            torch.where(reset, torch.zeros_like(state.cell), state.cell),
+        reset = reset.to(device=state.hidden.device, dtype=torch.bool)
+        return EventMemoryState(
+            torch.where(reset[None, :, None], 0, state.hidden),
+            torch.where(reset[None, :, None], 0, state.cell),
+            torch.where(reset[:, None], 0, state.pending),
+            torch.where(reset, 0, state.elapsed_ticks),
         )
-
-    def _inputs(self, observations, previous_action, execution_outcome):
-        mixed = self.training and torch.is_grad_enabled() and self.fit_precision == "features_bf16"
-        with torch.autocast(observations.device.type, dtype=torch.bfloat16, enabled=mixed):
-            combined, tiles = self._feature_inputs(observations, previous_action, execution_outcome)
-        dtype = self.lstm.weight_ih_l0.dtype
-        return combined.to(dtype), tiles.to(dtype)
 
     @contextmanager
     def fitting_precision(self, precision):
@@ -121,97 +139,114 @@ class TransformerLSTMPolicy(nn.Module):
         finally:
             self.fit_precision = previous
 
-    def _feature_inputs(
-        self,
-        observations: torch.Tensor,
-        previous_action: torch.Tensor | None,
-        execution_outcome: torch.Tensor | None,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        summary, tiles = self.entity(observations)
-        self.compilation_status = self.entity.compilation_status
-        self.compilation_error = self.entity.compilation_error
-        scalar = self.scalar(observations.globals.to(self.scalar[0].weight.dtype))
-        batch = len(observations)
-        if previous_action is None:
-            previous_action = torch.zeros(batch, dtype=torch.long, device=observations.device)
-        previous_action = previous_action.long().clamp(0, self.action_count - 1)
-        if execution_outcome is None:
-            execution_outcome = observations.globals.new_zeros(batch, 2)
-        if execution_outcome.ndim == 1:
-            execution_outcome = execution_outcome[:, None]
-        if execution_outcome.shape[-1] != 2:
-            raise ValueError("execution_outcome must contain accepted and ticks_advanced")
-        elapsed = observations.globals[:, 1:2]
-        combined = torch.cat(
-            (
-                summary,
-                scalar,
-                self.previous_action(previous_action).to(scalar.dtype),
-                self.outcome(execution_outcome.to(scalar.dtype)),
-                self.elapsed(elapsed.to(scalar.dtype)),
-            ),
-            -1,
-        )
-        return combined, tiles
+    def _inputs(self, observations, events):
+        mixed = self.training and torch.is_grad_enabled() and self.fit_precision == "features_bf16"
+        with torch.autocast(observations.device.type, dtype=torch.bfloat16, enabled=mixed):
+            summary, tiles = self.entity(observations)
+            self.compilation_status = self.entity.compilation_status
+            self.compilation_backend = self.entity.compilation_backend
+            self.compilation_error = self.entity.compilation_error
+            scalar = self.scalar(observations.globals.to(self.scalar[0].weight.dtype))
+            current = torch.cat((summary, scalar), -1)
+            event = self.event(normalize_events(events.to(self.event[0].weight.dtype), self.layout))
+            recurrent = torch.cat((current, event), -1)
+        dtype = self.lstm.weight_ih_l0.dtype
+        return current.to(dtype), recurrent.to(dtype), tiles.to(dtype)
 
-    def forward_step(
-        self,
-        observations: torch.Tensor,
-        state: RecurrentState | None = None,
-        *,
-        previous_action: torch.Tensor | None = None,
-        execution_outcome: torch.Tensor | None = None,
-    ) -> RecurrentOutput:
+    def forward_step(self, observations, state=None, *, events=None, memory_write=None):
         observations = collate_observations(observations, next(self.parameters()).device)
         if len(observations.shape) != 1:
             raise ValueError("expected a batch of entity observations")
-        inputs, tiles = self._inputs(observations, previous_action, execution_outcome)
         if state is None:
-            state = self.initial_state(
-                len(observations), device=observations.device, dtype=inputs.dtype
-            )
-        output, (hidden, cell) = self.lstm(inputs[:, None], (state.hidden, state.cell))
-        context = output[:, 0]
+            state = self.initial_state(len(observations), device=observations.device)
+        events = state.inputs() if events is None else events
+        writes = events[:, :7].ne(0).any(-1) if memory_write is None else memory_write
+        current, inputs, tiles = self._inputs(observations, events)
+        _, (hidden, cell) = self.lstm(inputs[:, None], (state.hidden, state.cell))
+        hidden = torch.where(writes[None, :, None], hidden, state.hidden)
+        cell = torch.where(writes[None, :, None], cell, state.cell)
+        context = self.fusion(torch.cat((current, hidden[0]), -1))
         return RecurrentOutput(
-            self.branch_head(context), tiles, context, RecurrentState(hidden, cell)
+            self.branch_head(context), tiles, context, state.consume(hidden, cell, writes, events)
         )
 
     def forward_sequence(
         self,
-        observations: torch.Tensor,
-        state: RecurrentState | None = None,
+        observations,
+        state=None,
         *,
-        previous_actions: torch.Tensor | None = None,
-        execution_outcomes: torch.Tensor | None = None,
-        return_context: bool = False,
-    ) -> tuple[torch.Tensor, torch.Tensor, RecurrentState]:
+        events=None,
+        memory_write=None,
+        write_plan=None,
+        active_plan=None,
+        return_context=False,
+    ):
         if len(observations.shape) != 2:
             raise ValueError("sequence observations require batch and time dimensions")
         batch, time = observations.shape
-        inputs, tiles = self._inputs(
-            observations.reshape(-1),
-            None if previous_actions is None else previous_actions.reshape(-1),
-            None if execution_outcomes is None else execution_outcomes.reshape(-1, 2),
-        )
         if state is None:
-            state = self.initial_state(batch, device=inputs.device, dtype=inputs.dtype)
-        contexts, (hidden, cell) = self.lstm(
-            inputs.reshape(batch, time, -1), (state.hidden, state.cell)
+            state = self.initial_state(batch, device=observations.device)
+        if events is None:
+            events = observations.globals.new_zeros(batch, time, EVENT_WIDTH)
+        if memory_write is None:
+            memory_write = events[..., :7].ne(0).any(-1)
+        plan = np.asarray(
+            memory_write.detach().cpu() if write_plan is None else write_plan, dtype=bool
         )
-        result = (
-            self.branch_head(contexts),
-            tiles.reshape(batch, time, A.tiles, -1),
-            RecurrentState(hidden, cell),
+        current, inputs, tiles = self._inputs(
+            observations.reshape(-1), events.reshape(-1, EVENT_WIDTH)
         )
-        if return_context:
-            return (*result[:2], contexts, result[2])
-        return result
+        inputs = inputs.reshape(batch, time, -1)
+        lengths = plan.sum(-1)
+        represented = np.flatnonzero(lengths)
+        contexts = state.hidden[0][:, None].expand(-1, time, -1)
+        hidden, cell = state.hidden, state.cell
+        if len(represented):
+            width = int(lengths.max())
+            locations = np.zeros((len(represented), width), dtype=np.int64)
+            for index, slot in enumerate(represented):
+                locations[index, : lengths[slot]] = np.flatnonzero(plan[slot])
+            slots = torch.as_tensor(represented, device=inputs.device)
+            positions = torch.as_tensor(locations, device=inputs.device)
+            packed = pack_padded_sequence(
+                inputs[slots[:, None], positions],
+                lengths[represented],
+                batch_first=True,
+                enforce_sorted=False,
+            )
+            packed_output, (next_hidden, next_cell) = self.lstm(
+                packed, (hidden[:, slots], cell[:, slots])
+            )
+            outputs, _ = pad_packed_sequence(packed_output, batch_first=True, total_length=width)
+            latest = torch.as_tensor(np.cumsum(plan[represented], -1), device=inputs.device)
+            available = torch.cat((hidden[0, slots, None], outputs), 1)
+            selected = EventMemoryRead.apply(available, latest)
+            contexts = contexts.index_copy(0, slots, selected)
+            hidden = hidden.index_copy(1, slots, next_hidden)
+            cell = cell.index_copy(1, slots, next_cell)
+        contexts = self.fusion(torch.cat((current.reshape(batch, time, -1), contexts), -1))
+        last = (
+            np.full(batch, time - 1)
+            if active_plan is None
+            else np.where(active_plan, np.arange(time), -1).max(-1)
+        )
+        last_rows = torch.as_tensor(last.clip(min=0), device=events.device)
+        slots = torch.arange(batch, device=events.device)
+        consumed = state.consume(
+            hidden, cell, memory_write[slots, last_rows], events[slots, last_rows]
+        )
+        live = torch.as_tensor(last >= 0, device=events.device)
+        next_state = EventMemoryState(
+            hidden,
+            cell,
+            torch.where(live[:, None], consumed.pending, state.pending),
+            torch.where(live, consumed.elapsed_ticks, state.elapsed_ticks),
+        )
+        result = (self.branch_head(contexts), tiles.reshape(batch, time, A.tiles, -1), next_state)
+        return (*result[:2], contexts, result[2]) if return_context else result
 
-    def tile_values(
-        self, tile_features: torch.Tensor, context: torch.Tensor, branches: torch.Tensor
-    ) -> torch.Tensor:
-        if branches.ndim != 1:
-            branches = branches.reshape(-1)
+    def tile_values(self, tile_features, context, branches):
+        branches = branches.reshape(-1)
         category = torch.nn.functional.one_hot(
             (branches - 1).clamp(0, A.tile_groups - 1), A.tile_groups
         ).to(context.dtype)
@@ -230,22 +265,16 @@ class TransformerLSTMPolicy(nn.Module):
 
     def decide(
         self,
-        observations: torch.Tensor,
-        state: RecurrentState | None = None,
+        observations,
+        state=None,
         *,
-        action_masks: torch.Tensor | None = None,
-        deterministic: bool = True,
-        active: torch.Tensor | None = None,
-        previous_action: torch.Tensor | None = None,
-        execution_outcome: torch.Tensor | None = None,
-    ) -> tuple[torch.Tensor, RecurrentState, dict]:
-        """Select one complete command and return the advanced recurrent state."""
-        result = self.forward_step(
-            observations,
-            state,
-            previous_action=previous_action,
-            execution_outcome=execution_outcome,
-        )
+        action_masks=None,
+        deterministic=True,
+        active=None,
+        events=None,
+        memory_write=None,
+    ):
+        result = self.forward_step(observations, state, events=events, memory_write=memory_write)
         batch = result.branch_q.shape[0]
         if action_masks is None:
             action_masks = observation_tile_masks(
@@ -264,5 +293,10 @@ class TransformerLSTMPolicy(nn.Module):
             tile_exploration_epsilon=getattr(self, "tile_exploration_epsilon", 0.0),
             active=active,
         )
-        details.update(branch_value=first, tile_value=second, context=result.context)
+        details.update(
+            branch_value=first,
+            tile_value=second,
+            context=result.context,
+            tile_features=result.tile_features,
+        )
         return actions, result.state, details

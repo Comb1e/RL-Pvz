@@ -141,3 +141,141 @@ def test_cuda_rejection_preserves_proposal_and_matches_cpu(
                 assert len(env.public.plants) == len(cpu_before.plants)
                 assert int(batch.header.get()[0, 9]) == len(cpu_before.plants)
                 assert int(batch.header.get()[0, 14]) == 1
+
+
+def test_counterfactual_parity_history_and_simulator_isolation(per_tick_cfg, monkeypatch):
+    from copy import deepcopy
+    from types import SimpleNamespace
+
+    import numpy as np
+
+    from pvz_rl.envs.cuda_accounting import AccountingCudaBatch
+    from pvz_rl.envs.cuda_features import CudaFeatures
+    from pvz_rl.envs.encoding import observations_equal
+    from pvz_rl.envs.probes import CounterfactualCollector, cpu_probe
+    from pvz_rl.learning.host_transfer import HostHandoff
+    from pvz_rl.learning.objective import components
+    from pvz_rl.monitoring.cuda_diagnostics import DeviceProfiler
+    from pvz_rl.policy.runner import PolicyRunner
+    from pvz_rl.policy.transformer_lstm import EventMemoryState
+
+    scenarios = [
+        LevelSpec("probe-boundary", (Spawn(1, "basic", 0, x=x),), initial_sun=50)
+        for x in (1999, 999)
+    ]
+    cpus = [PvZEnv(per_tick_cfg) for _ in scenarios]
+    for env, scenario in zip(cpus, scenarios):
+        env.reset(seed=104, options={"scenario": scenario})
+    batch = AccountingCudaBatch(2, zombie_capacity=1, max_step_ticks=1)
+    calls = []
+
+    class Teacher:
+        def tile_values(self, tiles, context, branches):
+            return torch.arange(45, device="cuda").float().expand(len(branches), -1)
+
+        def initial_state(self, count, *, device):
+            return EventMemoryState(
+                torch.zeros(1, count, 1, device=device),
+                torch.zeros(1, count, 1, device=device),
+                torch.zeros(count, 7, dtype=torch.int64, device=device),
+                torch.zeros(count, dtype=torch.int64, device=device),
+            )
+
+        def forward_step(self, obs, state, *, events, memory_write):
+            calls.append((state.clone(), events.clone(), memory_write.clone()))
+            return SimpleNamespace(
+                state=state.consume(
+                    state.hidden + memory_write[None, :, None],
+                    state.cell + memory_write[None, :, None],
+                    memory_write,
+                ),
+                branch_q=torch.full((len(obs), 10), 0.5, device="cuda"),
+            )
+
+    teacher = Teacher()
+    with batch.cp.cuda.ExternalStream(torch.cuda.current_stream().cuda_stream):
+        batch.reset(scenarios, [104, 104])
+        features = CudaFeatures(batch, per_tick_cfg, "masked")
+        obs = features.encode()
+        features.initialize_home([0, 1])
+        probe = CounterfactualCollector(
+            SimpleNamespace(
+                batch=batch,
+                features=features,
+                cfg=per_tick_cfg,
+                condition="masked",
+                profiler=DeviceProfiler(batch.cp),
+                handoff=HostHandoff(torch.cuda.current_stream()),
+                probe_width=lambda: 32,
+            )
+        )
+        active = torch.ones(2, dtype=torch.bool, device="cuda")
+        actions = torch.zeros(2, dtype=torch.long, device="cuda")
+        details = dict(tile_features=torch.zeros(2, 1, device="cuda"), context=None)
+        # Nine successive pairs cover every nonselected branch exactly twice;
+        # no behavior random draw or tile probe is made for waiting.
+        rng = torch.cuda.get_rng_state().clone()
+        branches = []
+        for _ in range(9):
+            proposed, valid = probe.schedule(
+                teacher, actions, details, features.mask_tensor, active
+            )
+            branches.extend(((proposed[0, :2] - 1) // 45 + 1).cpu().tolist())
+            assert not valid[:, 2:].any()
+        assert np.bincount(branches, minlength=10).tolist() == [0] + [2] * 9
+        torch.testing.assert_close(rng, torch.cuda.get_rng_state())
+
+        proposals = torch.tensor([[0, 1, 46, 361]] * 2, device="cuda")
+        monkeypatch.setattr(
+            probe, "schedule", lambda *args: (proposals, active[:, None].expand(-1, 4))
+        )
+        history = PolicyRunner(teacher, per_tick_cfg, batch.rules, 2, "cuda")
+        hashes = [batch.state_hash(i) for i in range(2)]
+        snapshots = [env.game.snapshot() for env in cpus]
+        ledgers = [deepcopy(env.proximity.stages) for env in cpus]
+        home = features.home_ledger.copy()
+        totals = features.totals.copy()
+        host = probe.collect(teacher, history, obs, actions, details, features.mask_tensor, active)
+        probe.env.handoff.wait()
+        rows, observations = probe.materialize(host)
+        assert hashes == [batch.state_hash(i) for i in range(2)]
+        np.testing.assert_array_equal(home.get(), features.home_ledger.get())
+        np.testing.assert_array_equal(totals.get(), features.totals.get())
+        for i, env in enumerate(cpus):
+            for j, action in enumerate((0, 1, 46, 361)):
+                expected = cpu_probe(env.game, env.proximity, action, per_tick_cfg)
+                row = rows[i, j]
+                assert row["action"] == expected["proposal"]
+                for key in ("executed_action", "accepted", "duration", "tick", "done", "won"):
+                    assert row[key] == expected[key]
+                assert row["reason"] == (
+                    0 if expected["accepted"] else REASONS.index(expected["reason"])
+                )
+                np.testing.assert_allclose(
+                    row["components"], components(expected["components"]), atol=1e-12
+                )
+                assert observations_equal(
+                    dict(
+                        entities=observations.entities[
+                            observations.offsets[i, j] : observations.offsets[i, j]
+                            + observations.counts[i, j]
+                        ],
+                        globals=observations.globals[i, j],
+                    ),
+                    expected["observation"],
+                )
+                assert row["bootstrap"] == 0.5
+                if j in (0, 2, 3):
+                    assert row["components"][4] == pytest.approx((-0.005, -0.020)[i])
+            assert env.game.snapshot() == snapshots[i]
+            assert env.proximity.stages == ledgers[i]
+        assert torch.all(history.state.hidden == 0)
+        assert all(torch.all(state.hidden == 0) for state, _, _ in calls[1:])
+        assert len(calls) == 2
+        _, event_inputs, writes = calls[1]
+        assert writes[4:].all()
+        assert (event_inputs[4:, 2] == 1).all()
+        assert not event_inputs[4:, [0, 1, 3, 4, 5, 6]].any()
+        torch.testing.assert_close(
+            event_inputs[4:, 7], torch.ones(4, device="cuda", dtype=torch.int64)
+        )

@@ -45,7 +45,7 @@ def checkpoint_optimizer_protocol(path):
 
 class CudaCohortLifecycle(BaseAlgorithm):
     policy_protocol = POLICY_SIGNATURE
-    optimizer_version = "complete_return_lstm_v1"
+    optimizer_version = "complete_return_event_lstm_v1"
 
     def __init__(
         self,
@@ -125,6 +125,10 @@ class CudaCohortLifecycle(BaseAlgorithm):
             model.runtime_state = torch.load(
                 io.BytesIO(archive.read("cohort-state.pt")), map_location="cpu", weights_only=False
             )
+        from pvz_rl.learning.checkpoints import STATE_PROTOCOL
+
+        if model.runtime_state.get("protocol") != STATE_PROTOCOL:
+            raise ValueError("Unsupported recurrent recovery protocol")
         return model
 
     @property
@@ -152,20 +156,16 @@ class CudaCohortLifecycle(BaseAlgorithm):
             ram_bytes=spec["ram_gib"] * 1024**3,
             block_rows=spec["block_rows"],
             schema=self.policy.layout.schema(),
+            cfg=self.cfg,
         )
         return buffer
 
     def _phase(self, phase, callback):
-        self.phase = phase
+        previous, self.phase = self.phase, phase
         if hasattr(callback, "hardware_context"):
             callback.hardware_context(phase.value)
-        if hasattr(callback, "progress"):
-            from pvz_rl.monitoring.progress import Phase
-
-            callback.progress.phase(
-                Phase.COLLECTING if phase == CohortPhase.COLLECT else Phase.UPDATING,
-                f"Complete-game cohort: {phase.value}",
-            )
+        if hasattr(callback, "cohort_phase"):
+            callback.cohort_phase(previous, phase)
 
     def _begin(self, callback):
         callback.on_rollout_start()
@@ -184,7 +184,8 @@ class CudaCohortLifecycle(BaseAlgorithm):
         self._first = True
         self._buffer = self._new_buffer()
         self._fit_epoch = 0
-        self._phase_times = {"collect": 0.0, "returns": 0.0, "fit": 0.0}
+        self.cohort_games, self.cohort_start_steps = count, self.num_timesteps
+        self._phase_times = {"collect": 0.0, "finalize_rewards": 0.0, "returns": 0.0, "fit": 0.0}
         self._device_seconds = 0.0
         self._simulation_ticks = 0
         self._planting_samples = 0
@@ -205,6 +206,7 @@ class CudaCohortLifecycle(BaseAlgorithm):
         self.cohort_metrics = {
             **self._stats,
             "prefit_errors": self.prefit_errors,
+            "objective": self._buffer.reward_summary,
             **self._buffer.transport_metrics,
             "device_compute_seconds": self._device_seconds,
             "simulation_speed": self._simulation_ticks
@@ -280,6 +282,8 @@ class CudaCohortLifecycle(BaseAlgorithm):
                 with atomic_transition():
                     if phase == CohortPhase.COLLECT:
                         self._collect_step(callback)
+                    elif phase == CohortPhase.FINALIZE_REWARDS:
+                        self._finalize_rewards(callback)
                     elif phase == CohortPhase.RETURNS:
                         self.prefit_errors = self._buffer.finalize()
                         for name, values in self.prefit_errors.items():
@@ -356,7 +360,11 @@ class CudaCohortLifecycle(BaseAlgorithm):
                 "torch_rng": torch.get_rng_state(),
                 "cuda_rng": torch.cuda.get_rng_state_all(),
             }
+        from pvz_rl.learning.checkpoints import STATE_PROTOCOL
+
+        runtime["protocol"] = STATE_PROTOCOL
         runtime["execution_state"] = getattr(self, "execution_state", None)
+        runtime.update(self._extra_runtime())
         # One atomic archive ties weights, optimizers, RNG and unfinished games
         # together. A failed save leaves the previous checkpoint intact.
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -439,6 +447,9 @@ class CudaCohortLifecycle(BaseAlgorithm):
             "_checkpoint_source",
             "runtime_state",
         ]
+
+    def _extra_runtime(self):
+        return {}
 
     def _get_torch_save_params(self):
         return ["policy", "policy.optimizer"], []

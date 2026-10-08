@@ -97,18 +97,9 @@ def test_view_settings_invalid(key, value):
         validate_config(cfg)
 
 
-def test_cli_and_old_checkpoint_output_compatibility(tmp_path, monkeypatch):
+def test_cli_live_view_flags(tmp_path, monkeypatch):
     from pvz_rl.cli import main
-    from pvz_rl.learning.training_requirements import resume_protocol, transfer_protocol
 
-    cfg = load_config()
-    old = copy.deepcopy(cfg)
-    for key in ("live_enabled", "live_fps", "live_window_size"):
-        del old["visualization"][key]
-    assert output_settings(old)["visualization"]["live_enabled"]
-    validate_config(old)
-    assert resume_protocol(cfg, "masked") == resume_protocol(old, "masked")
-    assert transfer_protocol(cfg) == transfer_protocol(old)
     seen = []
     monkeypatch.setattr(
         "pvz_rl.learning.training.train",

@@ -37,6 +37,19 @@ GLOBAL_FIELDS = (
 )
 GLOBAL_WIDTH = len(GLOBAL_FIELDS)
 OBSERVATION_PROTOCOL = "entity_v1"
+MINIMUM_PADDING = 32
+
+
+def width_bucket(count, limit):
+    """Fixed transport padding (32, 64, 128, ... capped at ``limit``) holding ``count``.
+
+    Padding never carries information; a few fixed widths keep device buffers and
+    compiled inference shapes reusable while preserving every kept entity.
+    """
+    width = MINIMUM_PADDING
+    while width < count:
+        width *= 2
+    return min(width, limit)
 
 
 def validate_entity_records(raw):
@@ -55,6 +68,38 @@ def validate_entity_records(raw):
     )
     if not np.all(correct):
         raise ValueError("Unknown public entity type/state or state does not match its type")
+
+
+@dataclass
+class PackedEntityBatch:
+    entities: np.ndarray
+    offsets: np.ndarray
+    counts: np.ndarray
+    globals: np.ndarray
+
+    def validate(self):
+        if self.offsets.shape != self.counts.shape or self.globals.shape != (
+            *self.counts.shape,
+            GLOBAL_WIDTH,
+        ):
+            raise ValueError("Packed observation shapes disagree")
+        if self.entities.ndim != 2 or self.entities.shape[1] != ENTITY_WIDTH:
+            raise ValueError("Invalid packed entity slab")
+        if (
+            self.entities.dtype != np.int32
+            or self.offsets.dtype != np.int64
+            or self.counts.dtype != np.int64
+        ):
+            raise ValueError("Invalid packed observation dtype")
+        if (
+            np.any(self.offsets < 0)
+            or np.any(self.counts < 0)
+            or np.any(self.offsets + self.counts > len(self.entities))
+        ):
+            raise ValueError("Packed entity offset/count outside slab")
+        validate_entity_records(self.entities)
+        if not np.isfinite(self.globals).all():
+            raise ValueError("Non-finite trajectory globals")
 
 
 @dataclass

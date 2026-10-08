@@ -1,12 +1,27 @@
 # Sources actually used
 
+## Selective event memory
+
+- Campos et al., [Skip RNN: Learning to Skip State Updates in Recurrent Neural Networks](https://arxiv.org/abs/1708.06834)
+  and the [official project](https://imatge-upc.github.io/skiprnn-2017-telecombcn/):
+  inspected for selective recurrent-state updates on low-information sequences.
+  This project uses deterministic public sunlight/zombie/plant events, not learned
+  skip gates, periodic updates or the paper's training mechanism. Current board
+  features remain available at every decision through a separate fusion path.
+
 This index records sources used by the current implementation and the particular
 ideas adopted. Project choices such as the entity cap, embedding width, rewards
 and mastery gates are not established by these papers. Release history and local
-measurements belong in [iteration history](iteration.md); superseded source
-notes are recoverable with `git show 4052968:docs/references.md`.
+measurements belong in [iteration history](iteration.md).
 
 ## Entities and recurrent decisions
+
+- Hester et al., [Deep Q-learning from Demonstrations](https://arxiv.org/abs/1704.03732):
+  accepted-demonstration action ranking alongside value regression. The project uses
+  only its supervised preference idea, not its replay or DQN implementation.
+- van Hasselt et al., [Learning values across many orders of magnitude](https://arxiv.org/abs/1602.07714):
+  reward/target scale sensitivity motivated separating raw ledger values from the
+  development multiplier; PopArt is not used.
 
 - Vinyals et al., [AlphaStar](https://www.nature.com/articles/s41586-019-1724-z):
   entity observations, structured action arguments and recurrent processing.
@@ -18,9 +33,15 @@ notes are recoverable with `git show 4052968:docs/references.md`.
 - [AlphaStar Unplugged](https://arxiv.org/abs/2308.03526): inspected offline
   demonstration and return-learning motivation. The local one-game initialization
   does not reproduce its dataset, algorithm or generalization evidence.
+- [SB3 2.7.0 HER replay buffer](https://github.com/DLR-RM/stable-baselines3/blob/v2.7.0/stable_baselines3/her/her_replay_buffer.py):
+  inspected reward recomputation through the environment reward function before
+  tensor conversion. Demonstration reuse applies that separation to verified
+  replay observations/events and current reward coefficients; it does not use
+  hindsight goals or the HER algorithm.
 - Hausknecht and Stone, [Deep Recurrent Q-Learning](https://arxiv.org/abs/1507.06527):
   abstract inspected for memory under partial observation. The local objective
-  uses complete returns, with no bootstrapped DQN targets or claimed recurrence advantage.
+  uses complete returns for selected actions and one-step EMA bootstrap for isolated
+  alternative-action probes; it makes no claimed recurrence advantage.
 - [SB3-Contrib 2.7.1 recurrent policies](https://github.com/Stable-Baselines-Team/stable-baselines3-contrib/blob/v2.7.1/sb3_contrib/common/recurrent/policies.py)
   and [buffers](https://github.com/Stable-Baselines-Team/stable-baselines3-contrib/blob/v2.7.1/sb3_contrib/common/recurrent/buffers.py):
   inspected sequence processing, episode-start resets, environment boundaries and
@@ -35,6 +56,9 @@ notes are recoverable with `git show 4052968:docs/references.md`.
 
 ## Precision and device execution
 
+- [PyTorch 2.8 gradient clipping](https://github.com/pytorch/pytorch/blob/v2.8.0/torch/nn/utils/clip_grad.py):
+  `clip_grad_norm_` uses one total parameter-gradient norm and a clamped scaling
+  factor. Both fitting paths supply the same configured limit after accumulation.
 - [PyTorch 2.8 AMP examples](https://github.com/pytorch/pytorch/blob/v2.8.0/docs/source/notes/amp_examples.rst):
   accumulation and selective autocast, used with FP32 master weights and BF16
   feature computation. No FP16 scaler is used. Inspected SHA-256:
@@ -54,7 +78,9 @@ notes are recoverable with `git show 4052968:docs/references.md`.
   RawModule/NVRTC and DLPack/ExternalStream ownership for CUDA adapters.
 - [WarpDrive](https://jmlr.org/papers/v23/22-0185.html) and its
   [project README](https://github.com/salesforce/warp-drive): device-resident
-  simulation/learning design; no code or published throughput claim adopted.
+  simulation/learning design, now used for independent batched scratch execution,
+  device packing and avoiding per-probe host round trips. No code or published
+  throughput claim adopted.
 
 ## Simulator, evaluation and presentation
 
@@ -79,6 +105,8 @@ notes are recoverable with `git show 4052968:docs/references.md`.
   collection/update reporting and serialization infrastructure.
 - [pygame-ce events](https://pyga.me/docs/ref/event.html): bounded event queues,
   wheel/resize handling and continuous pumping in a separate viewer process.
+- [pygame-ce Surface API](https://pyga.me/docs/ref/surface.html): rendered text
+  widths and blitting for the responsive, read-only learning-settings strip.
 - [FFmpeg](https://ffmpeg.org/), inspected local 8.1 help and encoders:
   optional RGB-to-H.264/yuv420p export with explicit dimensions and frame rate.
 
@@ -87,6 +115,12 @@ notes are recoverable with `git show 4052968:docs/references.md`.
 - [PyTorch `torch.compile` documentation](https://pytorch.org/docs/stable/torch.compiler.html):
   fixed-shape encoder compilation with a bounded eager fallback. The recurrent
   loop and ragged storage remain outside the compiled region.
+- [PyTorch 2.8 CUDA-graphs backend](https://github.com/pytorch/pytorch/blob/v2.8.0/torch/_dynamo/backends/cudagraphs.py):
+  inspected AOT forward/backward compilation and `cudagraphs_inner`'s static
+  input copies, side-stream warmup and output cloning. The local backend extends
+  ownership to every saved activation and returned gradient, retaining exact
+  strides for SDPA and copying updated weights before replay. It does not use
+  CUDA-graph tree lifetime inference for delayed recurrent backward.
 - [PyTorch LSTM documentation](https://pytorch.org/docs/stable/generated/torch.nn.LSTM.html):
   independent sequence batching with one hidden/cell state per sequence. Fused
   groups preserve chronological order and reset boundaries inside each slot.
@@ -96,4 +130,14 @@ whole-pass gradient accumulation and one-event timing boundary are local
 implementation decisions. No learning-quality result is inferred from the
 throughput measurements.
 
-No new research method or benchmark was introduced by the documentation/test cleanup.
+## Collection and terminal reporting
+
+- [PyTorch 2.8 CUDA semantics and graphs](https://github.com/pytorch/pytorch/blob/v2.8.0/docs/source/notes/cuda.rst):
+  inspected static-shape/control-flow constraints, stream synchronization and
+  long-lived capture buffers. Collection reuses the existing owned-output graph
+  wrapper; timings reuse its established host boundary rather than waiting per event.
+- [PyTorch pinned/nonblocking tutorial](https://github.com/pytorch/tutorials/blob/main/intermediate_source/pinmem_nonblock.py):
+  inspected pinned transfer ownership and copy-completion requirements. The single
+  reusable handoff waits before CPU consumption and before a named buffer is reused.
+- The compact terminal cadence, duplicate keys and separation from detailed JSON
+  snapshots are local implementation decisions, not research-derived claims.

@@ -36,11 +36,6 @@ def test_default_config_and_cli_use_games(per_tick_cfg):
     args = argparse.Namespace(config=None, command="train", games=20, eval_games=5)
     cfg = configured(args)
     assert budget_target(cfg) == 20 and evaluation_interval(cfg) == 5
-    args = argparse.Namespace(config=None, command="train", steps=64, eval_interval=32)
-    cfg = configured(args)
-    assert not uses_games(cfg) and budget_target(cfg) == 64
-    with pytest.raises(ValueError, match="--eval-games"):
-        configured(argparse.Namespace(config=None, command="train", games=3, eval_interval=1))
 
 
 def test_teaching_gates_use_games_and_resume_counters(per_tick_cfg, legacy_teaching):

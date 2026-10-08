@@ -47,22 +47,17 @@ def video_options(parser):
 def training_options(parser):
     common(parser)
     parser.add_argument("--hardware", type=Path, help="benchmark recommendation.json")
-    budget = parser.add_mutually_exclusive_group()
-    budget.add_argument(
+    parser.add_argument(
         "--games", type=int, help="total completed training games across all workers"
-    )
-    budget.add_argument(
-        "--steps", type=int, help="legacy decision-budget mode; for archived protocols only"
     )
     parser.add_argument("--n-envs", type=int)
     parser.add_argument("--device", choices=("cuda",))
     parser.add_argument("--simulator", choices=("cuda",))
     parser.add_argument("--batch-size", type=int)
-    parser.add_argument("--eval-interval", type=int)
     parser.add_argument(
         "--eval-games",
         type=int,
-        help="periodic validation interval for diagnostic/fixed or archived runs; teaching uses stage success",
+        help="periodic validation interval in completed games; teaching uses stage success",
     )
     video_options(parser)
 
@@ -72,7 +67,9 @@ def configured(args):
         cfg = load_demo_config(args.config)
     else:
         cfg = load_config(args.config)
-    checkpoint = getattr(args, "resume", None) or getattr(args, "init_from", None)
+    # Weight initialization starts a new run under the current configuration.
+    # Only recovery/evaluation inherit the source checkpoint's run settings.
+    checkpoint = getattr(args, "resume", None)
     if args.command == "evaluate":
         checkpoint = getattr(args, "checkpoint", None)
     if checkpoint and not args.config:
@@ -92,10 +89,11 @@ def configured(args):
                 if getattr(args, name, None) is None:
                     setattr(args, name, saved.get(field))
     if args.command == "train":
-        if getattr(args, "refresh_performance", False):
-            from pvz_rl.learning.performance import refresh_performance
+        from pvz_rl.learning.performance import refresh_performance
 
-            cfg = refresh_performance(cfg, load_config(args.config))
+        current = load_config(args.config)
+        cfg = refresh_performance(cfg, current)
+        cfg["logging"] = copy.deepcopy(current["logging"])
         args.seed = 101 if getattr(args, "seed", None) is None else args.seed
         args.condition = getattr(args, "condition", None) or "masked"
         if getattr(args, "stage", None) is not None:
@@ -105,9 +103,9 @@ def configured(args):
     if (
         args.command in ("train", "suite")
         and cfg["training"].get("until_stage_complete", False)
-        and any(getattr(args, name, None) is not None for name in ("games", "steps"))
+        and getattr(args, "games", None) is not None
     ):
-        raise ValueError("--until-stage-complete cannot be combined with --games, --steps")
+        raise ValueError("--until-stage-complete cannot be combined with --games")
     if getattr(args, "hardware", None):
         hardware = json.loads(args.hardware.read_text("utf-8"))
         if type(hardware.get("n_envs")) is not int or hardware["n_envs"] < 1:
@@ -116,12 +114,10 @@ def configured(args):
         if "simulator" in hardware:
             cfg["simulation"] = {"backend": hardware["simulator"]}
     for arg, key in (
-        ("steps", "total_steps"),
         ("games", "total_games"),
         ("n_envs", "n_envs"),
         ("device", "device"),
         ("batch_size", "batch_size"),
-        ("eval_interval", "eval_interval"),
         ("eval_games", "eval_interval_games"),
     ):
         value = getattr(args, arg, None)
@@ -129,8 +125,6 @@ def configured(args):
             cfg["training"][key] = value
     if getattr(args, "games", None) is not None:
         cfg["training"]["budget_unit"] = "games"
-    elif getattr(args, "steps", None) is not None and args.command in ("train", "suite"):
-        cfg["training"]["budget_unit"] = "decisions"
     selected_simulator = getattr(args, "simulator", None)
     if selected_simulator is not None:
         cfg["simulation"] = {"backend": selected_simulator}
@@ -140,13 +134,6 @@ def configured(args):
         and cfg["training"].get("budget_unit") != "games"
     ):
         raise ValueError("--eval-games requires a game-count training budget")
-    if (
-        getattr(args, "eval_interval", None) is not None
-        and cfg["training"].get("budget_unit") == "games"
-    ):
-        raise ValueError(
-            "Use --eval-games with game-count training; --eval-interval is for legacy --steps"
-        )
     if getattr(args, "videos", None) is not None:
         cfg.setdefault("visualization", {})["videos"] = args.videos
     if getattr(args, "live_view", None) is not None:
@@ -181,11 +168,6 @@ def main(argv=None):
     training.add_argument("--condition", choices=TRAINING_CONDITIONS, help="default: masked")
     training.add_argument("--seed", type=int, help="learner seed; default: saved seed or 101")
     training.add_argument("--output", required=True, type=Path)
-    training.add_argument(
-        "--refresh-performance",
-        action="store_true",
-        help="apply current execution settings while preserving checkpoint learning parameters",
-    )
     training.add_argument("--validation-count", type=int, help="reduced validation set for checks")
     training.add_argument("--family", choices=("preset", "diagnostic"), default="preset")
     from pvz_rl.learning.curriculum import STAGES
@@ -225,7 +207,6 @@ def main(argv=None):
     initialize.add_argument("--output", type=Path, required=True)
     initialize.add_argument("--passes", type=int)
     initialize.add_argument("--learning-rate", type=float)
-    initialize.add_argument("--gradient-clip", type=float)
     initialize.add_argument("--seed", type=int)
     initialize.add_argument("--device", choices=("cpu", "cuda"), default="cpu")
     evaluation = subs.add_parser("evaluate", help="evaluate a checkpoint or non-learning baseline")
@@ -321,7 +302,6 @@ def main(argv=None):
         if args.watch:
             from pvz_rl.presentation.recordings import watch_recording
 
-            # Pass the normalized payload so legacy sidecars retain their cutoff labels.
             watch_recording(args.path, speed=speed)
         if args.video:
             from pvz_rl.presentation.video import export_replay
@@ -355,7 +335,6 @@ def main(argv=None):
             cfg=cfg,
             passes=args.passes,
             learning_rate=args.learning_rate,
-            gradient_clip=args.gradient_clip,
             seed=args.seed,
             device=args.device,
         )

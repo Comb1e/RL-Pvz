@@ -19,7 +19,7 @@ from pvz_rl.config import (
 from pvz_rl.envs.action_timing import ActionPhaseGame, per_tick_actions
 from pvz_rl.envs.actions import ActionCodec
 from pvz_rl.envs.encoding import ObservationEncoder
-from pvz_rl.envs.rewards import LEDGER_METRICS, REWARD_METRICS, reward_parts
+from pvz_rl.envs.rewards import LEDGER_METRICS, REWARD_METRICS, HomeProximityLedger, reward_parts
 from pvz_rl.envs.scenarios import difficulty_weights, scenario
 from pvz_rl.evaluation.controllers import PublicBoard, strategy_candidates
 from pvz_rl.learning.budget import budget_target, uses_games
@@ -133,6 +133,7 @@ class PvZEnv(gym.Env):
         if self.game.rules.digest != rules.digest:
             self.game = ActionPhaseGame(rules) if self.per_tick else Game(rules)
         self.public = self.game.reset(resolved, game_seed)
+        self.proximity = HomeProximityLedger(self.public, self.rules)
         self.episode_level, self.episode_family, self.episode_seed = level, family, game_seed
         self.episode_stage = self.curriculum_stage
         self.planted_ticks = {}
@@ -288,6 +289,7 @@ class PvZEnv(gym.Env):
             rules=self.rules,
             action=concrete,
             action_result=result.action_result,
+            proximity=self.proximity,
         )
         if truncated:
             parts["terminal"] = -self.cfg["reward"]["loss_penalty"]
@@ -374,6 +376,9 @@ class PvZEnv(gym.Env):
                     }
                 )
             info["episode_metrics"] = self.episode_metrics()
+        from pvz_rl.envs.history import public_history_event
+
+        self.last_history_event = public_history_event(result.events, self.rules)
         self.last_policy_outcome = (int(action), info["accepted"], info["ticks_advanced"])
         encoded = self.encoder.encode(self.public)
         info["entity_truncation"] = self.encoder.last_truncation

@@ -1,7 +1,12 @@
 # PVZ plant research
 
-Record a human Plants vs. Zombies game, initialize an entity Transformer–LSTM Q
-policy, then train and evaluate it on a pinned 100 Hz simulator using public inputs.
+Record a human Plants vs. Zombies game, initialize one entity Transformer–LSTM Q
+policy, then train and evaluate it on a separate, pinned 100 Hz simulator.
+The model reads the current board every decision; LSTM memory writes only on
+sunlight, zombie and plant events. Old checkpoints require fresh initialization
+from a verified recording in a new directory. Only public observations enter the
+model. Parameters live in
+[src/pvz_rl/data/train.toml](src/pvz_rl/data/train.toml).
 
 ## Requirements
 
@@ -16,7 +21,6 @@ Autonomous training requires NVIDIA CUDA; demonstration fitting defaults to CPU.
 ```
 
 The [engine lock](src/pvz_rl/data/engine-lock.json) fixes source and package hashes.
-All train/demo parameters live in [train.toml](src/pvz_rl/data/train.toml).
 
 ## First useful command
 
@@ -28,28 +32,26 @@ Record one easy game using unused output paths; finish with a natural win or los
 ```
 
 Follow [recording and training](docs/training.md) to initialize, train, resume or
-evaluate. That guide also explains checkpoint compatibility and performance settings.
-
-Demonstration initialization stores weights and structural metadata only, so
-`--init-from` always uses the current execution settings from
-`src/pvz_rl/data/train.toml` without requiring `--refresh-performance`.
+recover. Demonstration initialization defaults to 20 passes (`training.demo.passes`);
+autonomous training stays at four (`training.n_epochs`). Fresh runs use current
+settings; resume retains learning parameters and
+rewards while applying current execution and compact-logging settings automatically.
 
 ## Common checks
 
-Static code checks do not start the simulator or training:
+Static checks do not start the simulator or training:
 
 ```powershell
 .\.venv\Scripts\python.exe -m ruff check --no-cache .
 .\.venv\Scripts\python.exe -m ruff format --check --no-cache .
 ```
 
-[Validation](docs/validation.md) describes the test suites and their execution costs.
-
+- [Validation and test ownership](docs/validation.md)
 - [Architecture and workflows](docs/architecture.md)
 - [Viewer controls](docs/live-view.md)
-- [Entity schema, cap and attention](docs/math/entity-inputs.md)
+- [Entity schema and attention](docs/math/entity-inputs.md)
+- [Recurrent training objective](docs/math/recurrent-training.md)
 - [Reward accounting](docs/math/training-objective.md)
-- [Recurrent objective and exploration](docs/math/recurrent-training.md)
-- [Precision and throughput](docs/math/training-throughput.md)
+- [Execution and throughput](docs/math/training-throughput.md)
 - [Sources used](docs/references.md)
-- [Iteration history and recorded measurements](docs/iteration.md)
+- [Iteration history and measurements](docs/iteration.md)

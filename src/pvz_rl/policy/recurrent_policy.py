@@ -25,6 +25,7 @@ class RecurrentQPolicy(TransformerLSTMPolicy):
         self.tile_exploration_epsilon = tile_exploration_epsilon
         self.optimizer = torch.optim.Adam(self.parameters(), lr=lr_schedule(1), eps=1e-8)
         self.compilation_status = "disabled"
+        self.compilation_backend = None
         self.compilation_error = None
 
     @property
@@ -37,6 +38,7 @@ class RecurrentQPolicy(TransformerLSTMPolicy):
     def enable_compilation(self):
         self.entity.enable_compilation()
         self.compilation_status = self.entity.compilation_status
+        self.compilation_backend = self.entity.compilation_backend
         self.compilation_error = self.entity.compilation_error
 
     @torch.no_grad()

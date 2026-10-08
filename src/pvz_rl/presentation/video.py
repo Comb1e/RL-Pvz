@@ -58,7 +58,7 @@ def export_replay(source, destination, cfg, *, context=None, progress=None, dead
         raise ValueError("Video destination must have an .mp4 extension")
     settings = output_settings(cfg)
     encoder = ffmpeg_info(cfg)
-    playback = open_playback(source, fallback=context)
+    playback = open_playback(source, context=context)
     details = playback.metadata
     width, height = settings["visualization"]["video_size"]
     renderer = board_renderer((width, height))
@@ -67,9 +67,7 @@ def export_replay(source, destination, cfg, *, context=None, progress=None, dead
     destination.parent.mkdir(parents=True, exist_ok=True)
     temporary = destination.with_name(destination.stem + ".tmp.mp4")
     owns_progress = progress is None
-    progress = progress or ProgressReporter(
-        destination.with_suffix(".log"), settings["logging"]["progress_seconds"]
-    )
+    progress = progress or ProgressReporter.from_settings(destination.with_suffix(".log"), cfg)
     progress.phase(Phase.EXPORTING)
     progress.emit(f"Video export: {destination.name}, {fps} frames/s", force=True)
     started = perf_counter()

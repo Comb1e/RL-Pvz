@@ -55,7 +55,7 @@ from pvz_rl.learning.training_requirements import (
     transfer_protocol,
 )
 from pvz_rl.monitoring.metrics import episode_task, mean_agent_actions, task_statistics
-from pvz_rl.monitoring.progress import Phase, ProgressReporter, duration
+from pvz_rl.monitoring.progress import Phase, ProgressReporter
 from pvz_rl.monitoring.timing import TrainingTimings
 from pvz_rl.provenance import append_jsonl, file_hash, metadata, verify_engine, write_json
 
@@ -111,6 +111,22 @@ class TrainingStageComplete(Exception):
     """The selected stage passed its mastery gates after a complete Q update."""
 
 
+def optimizer_step(model):
+    """Adam's host-side step counter; capturable device counters are never read."""
+    optimizer = getattr(getattr(model, "policy", None), "optimizer", None)
+    for state in getattr(optimizer, "state", {}).values():
+        step = state.get("step")
+        if isinstance(step, torch.Tensor) and step.device.type == "cpu":
+            return int(step)
+        if isinstance(step, (int, float)):
+            return int(step)
+    return 0
+
+
+def seconds_text(value):
+    return "n/a" if value is None or not math.isfinite(value) else f"{value:.0f}s"
+
+
 class ResearchCallback(BaseCallback):
     def __init__(
         self,
@@ -137,9 +153,7 @@ class ResearchCallback(BaseCallback):
         self.stream = None
         self.settings = output_settings(cfg)
         self.owns_progress = progress is None
-        self.progress = progress or ProgressReporter(
-            self.output / "train.log", self.settings["logging"]["progress_seconds"]
-        )
+        self.progress = progress or ProgressReporter.from_settings(self.output / "train.log", cfg)
         self.recent = deque(maxlen=self.settings["logging"]["rolling_window"])
         self.recent_by_task = {}
         self.initial_task_counts = {}
@@ -186,6 +200,7 @@ class ResearchCallback(BaseCallback):
                     "validation": Activity.VALIDATING,
                     "reporting": Activity.REPORTING,
                     "collect": Activity.COLLECTING,
+                    "finalize_rewards": Activity.UPDATING,
                     "fit": Activity.UPDATING,
                     "returns": Activity.UPDATING,
                     "synchronize": Activity.UPDATING,
@@ -304,6 +319,9 @@ class ResearchCallback(BaseCallback):
             "compilation_status": getattr(
                 getattr(self.model, "policy", None), "compilation_status", "unknown"
             ),
+            "compilation_backend": getattr(
+                getattr(self.model, "policy", None), "compilation_backend", None
+            ),
             "compilation_error": (
                 str(error)
                 if (
@@ -320,6 +338,7 @@ class ResearchCallback(BaseCallback):
             if self.curriculum
             else None,
             "rolling_episodes": len(rows),
+            "rolling_pending_rewards": sum(bool(r.get("time_reward_pending")) for r in rows),
             "rolling_truncations": sum(r.get("status") == "truncated" for r in rows),
             "rolling_agent_actions": mean_agent_actions(rows),
             "rolling_tasks": dict(
@@ -380,74 +399,77 @@ class ResearchCallback(BaseCallback):
         }
 
     def log_progress(self, *, force=False):
+        """Write the detailed status snapshot; offer one compact line to the terminal."""
         if not force and not self.progress.due():
             return
         self.hardware_context()
         row = self.snapshot()
-
-        def value(number, spec=".2f", suffix=""):
-            return (
-                "n/a" if number is None or not math.isfinite(number) else f"{number:{spec}}{suffix}"
-            )
-
-        hardware, cohort = row["hardware"], row["cohort"]
-        optimizer = {
-            **getattr(self, "last_optimizer_metrics", {}),
-            **getattr(getattr(self.model, "logger", None), "name_to_value", {}),
-        }
-        progress = f"{row['budget_progress']:,} {row['budget_unit']}"
-        if self.target is not None:
-            progress += f" / {self.target:,}"
-        else:
-            progress += "; until stage mastery"
-        probe = (
-            self.curriculum.last_probe_games + self.cfg["curriculum"]["probe_interval_games"]
-            if self.curriculum and uses_games(self.cfg) and not self.curriculum.mastered
-            else None
-        )
-        tasks = (
-            ", ".join(
-                f"{task} {metrics['win_rate']:.1%} ({metrics['completed_games']} games)"
-                for task, metrics in row["rolling_by_task"].items()
-            )
-            or "n/a"
-        )
-        self.progress.emit(
-            f"Stage       {row['curriculum_stage']} | {row['training_phase']} | {progress}\n"
-            f"Q fitting   steps {row['q_optimizer_steps']} | planting samples {row['planting_samples']}\n"
-            f"Time        {duration(row['wall_seconds'])} elapsed | next mastery probe {value(probe, ',.0f')} games\n"
-            f"Recent task {tasks}\n"
-            f"Game means  last {row['rolling_episodes']} finished games | {row['rolling_truncations']} cutoff failures included\n"
-            f"Reward      {value(row['rolling_return'], '+.5f')} | discounted return {value(row['rolling_discounted_return'], '+.5f')} | outcome {value(row['rolling_terminal'], '+.5f')} | development {value(row['rolling_development'], '+.5f')}\n"
-            f"Net value   {value(row['rolling_cumulative_net_value'], '+.2f')} sun-equiv/game | peak {value(row['rolling_maximum_net_value'])} | drawdown {value(row['rolling_value_drawdown'])}\n"
-            f"Economy     produced sun {value(row['rolling_produced_sun'])} | effective damage {value(row['rolling_effective_damage'])} HP | plant loss {value(row['rolling_plant_value_loss'])} | mower cost {value(row['rolling_mower_expenditure'])}\n"
-            f"Penalties   rejected plant {value(row['rolling_invalid_plant_penalty'], '+.5f')} | empty dig {value(row['rolling_empty_dig_penalty'], '+.5f')}\n"
-            f"Recent play plants/game {value(row['rolling_plant_purchases'])} | attackers/game {value(row['rolling_attacker_purchases'])} | early digs/plant {value(row['early_digs_per_planting'], '.2%')} | game duration {value(row['rolling_seconds'], suffix='s')}\n"
-            f"Exploration budget {row['exploration_rate']:.3%} | tile epsilon {row['tile_exploration_epsilon']:.3%} | fired branch/tile {row['species_exploration_coins']}/{row['tile_exploration_coins']} | changed commands {row['exploratory_changes']}\n"
-            f"Cohort      {value(cohort.get('transitions_per_second'), '.0f')} transitions/s | collect {value(row['last_collection_seconds'], suffix='s')} | fit {value(row['last_optimization_seconds'], suffix='s')}\n"
-            f"Data path   prepare {value(cohort.get('preparation_seconds'), suffix='s')} | transfer wait {value(cohort.get('transfer_wait_seconds'), suffix='s')} | device {value(cohort.get('device_compute_seconds'), suffix='s')} | simulation {value(cohort.get('simulation_speed'), '.1f')}x aggregate\n"
-            f"Learning    branch MSE {value(optimizer.get('train/branch_loss'), '.5f')} | tile MSE {value(optimizer.get('train/tile_loss'), '.5f')} | balanced loss {value(optimizer.get('train/q_loss'), '.5f')}\n"
-            "Species     "
-            + (
-                " | ".join(
-                    f"{name}={count}"
-                    for name, count in zip(self.cfg["environment"]["plants"], row["species_counts"])
-                )
-                if row["species_counts"] is not None
-                else "cohort not finalized"
-            )
-            + "\n"
-            "Q prefit "
-            + " | ".join(
-                f"{name}: n={value(row['q_prefit'].get(name, {}).get('count'), '.0f')} branch/tile MSE={value(row['q_prefit'].get(name, {}).get('mse'), '.4f')}/{value(row['q_prefit'].get(name, {}).get('tile_mse'), '.4f')}"
-                for name in ("wait", "plant", "dig")
-            )
-            + "\n"
-            f"Hardware    GPU {value(hardware.get('gpu_percent'), '.0f', '%')} | VRAM {value(hardware.get('gpu_memory_mib'), '.0f', ' MiB')} | CPU {value(hardware.get('system_cpu_percent'), '.0f', '%')} | sample age {value(hardware.get('age_seconds'), '.1f', 's')}\n"
-            f"Run average {row['decisions_per_second']:.0f} transitions/s (training time)",
-            force=force,
-        )
         write_json(self.output / "status.json", row)
+        text, change = self.compact_status(row)
+        self.progress.emit(text, force=force, change=change)
+
+    def compact_status(self, row):
+        """Terminal summary from host-side status; never reads device tensors."""
+        model = self.model
+        phase = str(row["training_phase"])
+        cohort = getattr(model, "_n_updates", 0) + 1
+        if phase == "collect" and getattr(model, "env", None) is not None:
+            size = getattr(model, "cohort_games", 0)
+            finished = max(0, size - int(model.env.enabled_envs[:size].sum()))
+            marker = f"{finished}/{size} games"
+        elif phase == "fit":
+            marker = (
+                f"pass {getattr(model, '_fit_epoch', 0) + 1}/{self.cfg['training']['n_epochs']}"
+            )
+        else:
+            marker = phase
+        games = f"games {row['training_games']:,}"
+        if row["target_games"] is not None:
+            games += f"/{row['target_games']:,}"
+        step = optimizer_step(model)
+        parts = [
+            f"cohort {cohort} {marker}",
+            games,
+            f"transitions {row['training_steps']:,}",
+            f"{row['decisions_per_second']:,.0f}/s",
+            "collect "
+            + seconds_text(row["last_collection_seconds"])
+            + " fit "
+            + seconds_text(row["last_optimization_seconds"]),
+            f"optimizer step {step:,}",
+        ]
+        hardware = row["hardware"]
+        usage = [
+            f"{name} {hardware[key]:.0f}%"
+            for name, key in (("GPU", "gpu_percent"), ("CPU", "system_cpu_percent"))
+            if isinstance(hardware.get(key), (int, float)) and math.isfinite(hardware[key])
+        ]
+        if usage:
+            parts.append(" ".join(usage))
+        if self.progress.warning:
+            parts.append(f"warning: {self.progress.warning[:96]}")
+        change = (phase, cohort, marker, row["training_games"], row["training_steps"], step)
+        return " | ".join(parts), change
+
+    def cohort_phase(self, previous, phase):
+        """Print cohort boundaries: collection start/completion; fitting is reported at its end."""
+        from pvz_rl.learning.cohort import CohortPhase
+
+        self.progress.phase(Phase.COLLECTING if phase == CohortPhase.COLLECT else Phase.UPDATING)
+        if phase == CohortPhase.COLLECT:
+            self.log_progress(force=True)
+        elif previous == CohortPhase.COLLECT:
+            model = self.model
+            seconds = model._phase_times["collect"]
+            transitions = model.num_timesteps - getattr(model, "cohort_start_steps", 0)
+            self.progress.emit(
+                f"Cohort {model._n_updates + 1} collected: {getattr(model, 'cohort_games', 0)} "
+                f"games, {transitions:,} transitions in {seconds:.1f}s "
+                f"({transitions / max(seconds, 1e-9):,.0f}/s)",
+                force=True,
+            )
+        else:
+            self.log_progress(force=True)
 
     def capture_update(self):
         if self.model._n_updates <= self.last_updates:
@@ -496,7 +518,7 @@ class ResearchCallback(BaseCallback):
                 if stream and not stream.closed:
                     stream.flush()
             report = build_run_report(self.output, self.cfg)
-            self.progress.emit(f"Report refreshed: {report}", force=True)
+            self.progress.emit(f"Report refreshed: {report}", force=True, key="report")
         except Exception as exc:
             write_json(
                 self.output / "visualizations" / "status.json",
@@ -505,7 +527,7 @@ class ResearchCallback(BaseCallback):
                     "error": repr(exc),
                 },
             )
-            self.progress.emit(f"Report refresh failed: {exc}", force=True)
+            self.progress.emit(f"Report refresh failed: {exc}", force=True, key="report")
         finally:
             self.report_seconds += perf_counter() - started
             self.hardware_context(previous_activity)
@@ -553,16 +575,17 @@ class ResearchCallback(BaseCallback):
                 self.recent_by_task.setdefault(
                     task, deque(maxlen=self.settings["logging"]["rolling_window"])
                 ).append(info["episode_metrics"])
-                append_jsonl(
-                    self.stream,
-                    {
-                        **info["episode_metrics"],
-                        "policy": self.condition,
-                        "learner_seed": self.learner_seed,
-                        "training_steps": self.num_timesteps,
-                        "training_games": self.model.training_games,
-                    },
-                )
+                report = {
+                    **info["episode_metrics"],
+                    "policy": self.condition,
+                    "learner_seed": self.learner_seed,
+                    "training_steps": self.num_timesteps,
+                    "training_games": self.model.training_games,
+                }
+                if info["episode_metrics"].get("time_reward_pending"):
+                    self.model._pending_episodes[info["episode_slot"]]["report"] = report
+                else:
+                    append_jsonl(self.stream, report)
         progress = progress_value(self.cfg, self.model)
         if hasattr(self, "progress"):
             self.log_progress()
@@ -584,6 +607,24 @@ class ResearchCallback(BaseCallback):
             self.last_weights = list(weights)
         # Optimization metrics are finalized after the selected fitting phase.
         return True
+
+    def finalize_cohort_rewards(self, pending):
+        """Publish finalized rewards once, even when replaying an older recovery ZIP."""
+        self.stream.flush()
+        path = self.output / "training-episodes.jsonl"
+        seen = set()
+        if path.exists():
+            with path.open(encoding="utf-8") as source:
+                for line in source:
+                    if line.strip():
+                        seen.add(json.loads(line).get("record_id"))
+        for item in pending.values():
+            report = item.get("report")
+            if report is not None and item["record_id"] not in seen:
+                append_jsonl(
+                    self.stream, {**report, **item["metrics"], "record_id": item["record_id"]}
+                )
+        self.stream.flush()
 
     def _on_rollout_start(self):
         # This hook runs after the preceding Q update. A step callback would
@@ -671,6 +712,11 @@ class ResearchCallback(BaseCallback):
         }
         self.sync_curriculum()
         self.model.save(self.output / name)
+        self.progress.emit(
+            f"Checkpoint saved: {name}; transitions {self.model.num_timesteps:,}; "
+            f"optimizer step {optimizer_step(self.model):,}",
+            force=True,
+        )
 
     def cached_evaluation(self, seeds, levels, family, destination, split, final=False):
         if self.cache_steps != self.model.num_timesteps:
@@ -790,8 +836,15 @@ class ResearchCallback(BaseCallback):
         self.hardware_context()
         self.sync_curriculum()
         self.progress.phase(Phase.UPDATING)
+        cohort = self.model.cohort_metrics
+        self.progress.emit(
+            f"Cohort {self.model._n_updates} fitted: {cohort.get('q_optimizer_steps', 0)} passes "
+            f"in {cohort['fit_seconds']:.1f}s after {cohort['collection_seconds']:.1f}s "
+            f"collection; {cohort['transitions_per_second']:,.0f} transitions/s; "
+            f"optimizer step {optimizer_step(self.model):,}",
+            force=True,
+        )
         write_json(self.output / "status.json", self.snapshot())
-        self.log_progress()
 
     def validate(self, *, nominal_games=None, final=False):
         if self.stage_validation and not self.pending_stage_validation:
@@ -916,7 +969,11 @@ def initial_weights(checkpoint, cfg):
     require_supported_policy(cfg)
     saved = inspect_checkpoint(checkpoint)
     source_cfg = saved["config"]
-    compatible_config(source_cfg, cfg)
+    compatible_config(
+        source_cfg,
+        cfg,
+        weights_only=saved["initialization_type"] == "demonstration",
+    )
     verify_engine(source_cfg)
     model, _ = load_policy(checkpoint, "cpu")
     weights = {key: value.detach().clone() for key, value in model.policy.state_dict().items()}
@@ -963,7 +1020,10 @@ def load_policy(checkpoint, device="cpu", *, for_resume=False):
         model.policy.load_state_dict(data.pop("payload")["model"], strict=True)
     else:
         model = model_class(cfg).load(checkpoint, device=device)
-        if transfer_protocol(model.cfg) != transfer_protocol(cfg):
+        if (
+            transfer_protocol(model.cfg) != transfer_protocol(cfg)
+            or model.cfg["reward"] != cfg["reward"]
+        ):
             raise ValueError("Checkpoint contents disagree with saved model configuration")
     if any(not torch.isfinite(value).all() for value in model.policy.state_dict().values()):
         raise ValueError("Checkpoint contains non-finite model weights")
@@ -989,7 +1049,7 @@ def train(
     cfg = copy.deepcopy(cfg)
     validate_config(cfg)
     output = Path(output)
-    require_cuda_training(cfg, condition)
+    require_cuda_training(cfg, condition, runtime=False)
     if resume and init_from:
         raise ValueError("Use either resume or init_from, not both")
     if selected_stage(cfg) and family != "preset":
@@ -1010,7 +1070,7 @@ def train(
             raise ValueError(
                 "Demonstration weights require --init-from; --resume needs an autonomous ZIP"
             )
-        require_cuda_training(saved["config"], saved["condition"])
+        require_cuda_training(saved["config"], saved["condition"], runtime=False)
         if saved.get("exploration_protocol") != EXPLORATION_PROTOCOL:
             raise ValueError("Checkpoint uses the retired exploration schedule; start a fresh run")
         if (
@@ -1028,6 +1088,7 @@ def train(
             )
         if saved["learner_seed"] != learner_seed or saved["validation_limit"] != validation_limit:
             raise ValueError("Resume learner seed or validation limit differs")
+    require_cuda_training(cfg, condition)
     resumed_model = (
         load_policy(resume, cfg["training"]["device"], for_resume=True)[0] if resume else None
     )
@@ -1077,7 +1138,7 @@ def train(
         },
         optimizer_settings={
             "learning_rate": cfg["training"]["learning_rate"],
-            "adam_epsilon": 1e-8 if cfg["policy"]["kind"] == "transformer_lstm_q_v2" else 1e-5,
+            "adam_epsilon": 1e-8,
             "batch_size": cfg["training"]["batch_size"],
             "shared_encoder": True,
         },
@@ -1088,7 +1149,8 @@ def train(
     write_json(output / "status.json", {"state": "starting"})
     env, model, callback = None, None, None
     settings = output_settings(cfg)
-    progress = ProgressReporter(output / "train.log", settings["logging"]["progress_seconds"])
+    progress = ProgressReporter.from_settings(output / "train.log", cfg)
+    progress.route_warnings()
     budget_label = (
         "until stage mastery; no time or game ceiling"
         if unlimited
