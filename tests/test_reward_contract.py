@@ -192,7 +192,7 @@ def test_retired_training_modes_fail_before_creating_output(tmp_path, setting):
 
 
 @pytest.mark.parametrize("retired", ["network", "observation", "reward", "clock"])
-def test_retired_report_rebuild_never_loads_model(tmp_path, monkeypatch, retired):
+def test_retired_report_is_rejected_without_loading_model(tmp_path, monkeypatch, retired):
     from pvz_rl.presentation.visualization import visualize_run
     from pvz_rl.provenance import write_json
 
@@ -215,5 +215,6 @@ def test_retired_report_rebuild_never_loads_model(tmp_path, monkeypatch, retired
         raise AssertionError("Archived report must not deserialize weights")
 
     monkeypatch.setattr("pvz_rl.learning.training.load_policy", forbidden)
-    assert visualize_run(tmp_path, videos=False)["state"] == "complete"
-    assert (tmp_path / "visualizations/index.html").is_file()
+    result = visualize_run(tmp_path, videos=False)
+    assert result["state"] == "failed"
+    assert "current engine and model protocol" in result["error"]

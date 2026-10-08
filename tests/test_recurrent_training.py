@@ -20,7 +20,7 @@ from pvz_rl.learning.cohort import CohortPhase
 from pvz_rl.learning.cuda_buffer import CompleteGameBuffer
 from pvz_rl.learning.performance import refresh_performance
 from pvz_rl.learning.recurrent_q import sequence_batches, sequence_loss
-from pvz_rl.learning.training import build_model, initial_weights, load_policy, vector_env
+from pvz_rl.learning.training import build_model, initial_weights, load_policy, train, vector_env
 from pvz_rl.learning.training_requirements import resume_protocol
 from pvz_rl.monitoring.entity_benchmark import observation
 from pvz_rl.policy.runner import PolicyRunner
@@ -42,8 +42,7 @@ def recurrent_cfg():
         transformer_feedforward=16,
         scalar_width=8,
         lstm_hidden=8,
-        action_embedding=4,
-        outcome_width=4,
+        event_width=4,
         chunk_length=16,
     )
     cfg["environment"]["cutoff_seconds"] = 1
@@ -51,6 +50,44 @@ def recurrent_cfg():
     cfg["training"]["performance"].update(compile_kernels=False, telemetry=False)
     cfg["visualization"].update(enabled=False, live_enabled=False)
     return cfg
+
+
+@pytest.mark.parametrize("suffix", [".pt", ".zip"])
+@pytest.mark.parametrize("mode", ["init_from", "resume"])
+def test_previous_model_rejected_before_cuda_probe_or_simulator(
+    tmp_path, monkeypatch, suffix, mode
+):
+    from zipfile import ZipFile
+
+    from pvz_rl.learning.checkpoints import inspect_checkpoint
+
+    path = tmp_path / ("previous" + suffix)
+    if suffix == ".pt":
+        torch.save({"protocol": "pvz-rl/demo-initialization-checkpoint-v2"}, path)
+    else:
+        with ZipFile(path, "w") as archive:
+            archive.writestr(
+                "protocol.json",
+                json.dumps(
+                    dict(
+                        policy="transformer_lstm_q_v2",
+                        optimizer="complete_return_lstm_v1",
+                        exploration="sequential_tile_epsilon_v1",
+                    )
+                ),
+            )
+    with pytest.raises(ValueError, match="protocol|family"):
+        inspect_checkpoint(path)
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("Old checkpoints must fail before allocating any simulator")
+
+    monkeypatch.setattr("pvz_rl.learning.training_requirements._cuda_probe", forbidden)
+    monkeypatch.setattr("pvz_rl.learning.training.vector_env", forbidden)
+    output = tmp_path / "absent"
+    with pytest.raises(ValueError, match="protocol|family"):
+        train(load_config(), "masked", 101, output, **{mode: path})
+    assert not output.exists()
 
 
 def test_removed_time_option_and_recurrent_batch_boundary():
@@ -119,19 +156,19 @@ def test_demo_weights_transfer_exactly_and_autonomous_fit_changes_them(completed
         assert provenance["type"] == "demonstration" and len(provenance["checkpoint_sha256"]) == 64
         for key, value in source.state_dict().items():
             torch.testing.assert_close(value, model.policy.state_dict()[key].cpu(), rtol=0, atol=0)
-        obs, actions, previous, outcomes, _ = demo._training_tensors(
+        obs, actions, events, writes, _ = demo._training_tensors(
             demo._load_verified_demo(archive, replay, cfg)
         )
         with torch.no_grad():
             expected = source.cuda().forward_sequence(
                 collate_observations(obs, "cuda").reshape(1, len(obs)),
-                previous_actions=previous[None].cuda(),
-                execution_outcomes=outcomes[None].cuda(),
+                events=events[None].cuda(),
+                memory_write=writes[None].cuda(),
             )[0]
             actual = model.policy.forward_sequence(
                 collate_observations(obs, "cuda").reshape(1, len(obs)),
-                previous_actions=previous[None].cuda(),
-                execution_outcomes=outcomes[None].cuda(),
+                events=events[None].cuda(),
+                memory_write=writes[None].cuda(),
             )[0]
         torch.testing.assert_close(expected, actual, rtol=0, atol=0)
         assert not model.policy.optimizer.state and model.training_games == model.num_timesteps == 0
@@ -141,8 +178,8 @@ def test_demo_weights_transfer_exactly_and_autonomous_fit_changes_them(completed
         model._buffer = model._new_buffer()
         rows = np.zeros(len(obs), dtype=model._buffer.dtype)
         rows["active"] = True
-        rows["previous"] = previous.numpy()
-        rows["previous_outcome"] = outcomes.numpy()
+        rows["events"] = events.numpy()
+        rows["memory_write"] = writes.numpy()
         rows["action"] = actions.numpy()
         rows["reward"][-1] = 1
         rows["done"][-1] = True
@@ -190,18 +227,16 @@ def test_step_chunk_equivalence_with_real_outcomes(recurrent_cfg, device):
     obs, _ = env.reset(seed=8)
     model = TransformerLSTMPolicy(recurrent_cfg).to(device).eval()
     observations = collate_observations([obs] * 8, device).reshape(1, 8)
-    actions = torch.tensor([[0, 1, 1, 361, 0, 405, 3, 0]], device=device)
-    outcomes = torch.tensor(
-        [[[0, 0], [1, 0], [0, 1], [1, 0], [1, 1], [0, 1], [1, 0], [1, 1]]], device=device
-    ).float()
+    events = torch.zeros(1, 8, 8, device=device)
+    events[0, [1, 3, 6], 0] = 25
+    events[0, :, 7] = torch.arange(8, device=device)
     with torch.no_grad(), torch.backends.cudnn.flags(allow_tf32=False):
         state, expected = None, []
         for index in range(8):
             out = model.forward_step(
                 observations[:, index],
                 state,
-                previous_action=actions[:, index],
-                execution_outcome=outcomes[:, index],
+                events=events[:, index],
             )
             state = out.state
             expected.append(out.branch_q)
@@ -210,8 +245,7 @@ def test_step_chunk_equivalence_with_real_outcomes(recurrent_cfg, device):
             q, _, chunk_state = model.forward_sequence(
                 observations[:, start : start + 3],
                 chunk_state,
-                previous_actions=actions[:, start : start + 3],
-                execution_outcomes=outcomes[:, start : start + 3],
+                events=events[:, start : start + 3],
             )
             actual.append(q)
     torch.testing.assert_close(torch.stack(expected, 1), torch.cat(actual, 1), rtol=1e-5, atol=1e-6)
@@ -306,14 +340,14 @@ def test_rejected_proposals_zero_ticks_and_isolated_runner_reset(recurrent_cfg):
     observations = collate_observations([obs, obs])
     masks = torch.tensor(np.stack([env.action_masks()] * 2))
     runner.decide(observations, masks, None)
-    runner.observe_result([120, 361], [False, True], [1, 0])
-    assert runner.previous_actions.tolist() == [0, 361]
-    assert runner.outcomes.tolist() == [[0, 1], [1, 0]]
+    runner.observe_result([[0] * 7, [0, 0, 0, 0, 0, 0, 1]], [1, 0])
+    assert runner.state.elapsed_ticks.tolist() == [1, 0]
+    assert runner.state.pending[1, 6] == 1
     saved = runner.state.clone()
     runner.decide(observations, masks, None, active=torch.tensor([True, False]))
     torch.testing.assert_close(saved.hidden[:, 1], runner.state.hidden[:, 1], rtol=0, atol=0)
     runner.reset([0])
-    assert not runner.state.hidden[:, 0].any() and runner.previous_actions.tolist() == [0, 361]
+    assert not runner.state.hidden[:, 0].any() and runner.state.pending[1, 6] == 1
     torch.testing.assert_close(saved.hidden[:, 1], runner.state.hidden[:, 1], rtol=0, atol=0)
 
 
@@ -326,8 +360,8 @@ def test_returns_group_loss_padding_and_partition_gradients(recurrent_cfg, tmp_p
     rows["action"] = [0, 1, 1, 361, 361, 0, 0, 0]
     rows["reward"] = [1, 3, 2, -1, -1, 999, 4, 999]
     rows["done"] = [0, 0, 0, 1, 0, 0, 1, 0]
-    rows["previous"][2:] = rows["action"][:-2]
-    rows["previous_outcome"][2:, 0] = 1
+    rows["events"][2:, 0] = 25
+    rows["memory_write"][2:] = rows["active"][2:]
     buffer.append(rows, [{"entities": [], "globals": [0] * 18}] * len(rows))
     buffer.finalize()
     np.testing.assert_array_equal(buffer.take(np.arange(8))["target"], [6, 2, 5, -1, 3, 0, 4, 0])
@@ -340,7 +374,7 @@ def test_returns_group_loss_padding_and_partition_gradients(recurrent_cfg, tmp_p
                 if reset:
                     state = None
                 loss, state, first, second = sequence_loss(
-                    policy, chunk, state, buffer.group_counts, observations
+                    policy, chunk, state, buffer.outcome_counts, observations
                 )
                 loss.backward()
                 total += float(loss.detach())
@@ -354,7 +388,12 @@ def test_returns_group_loss_padding_and_partition_gradients(recurrent_cfg, tmp_p
                     errors[group].append(error if group == 0 else (error + next(tile)) / 2)
             assert total == pytest.approx(sum(np.mean(v) for v in errors.values()) / 3, rel=1e-6)
             losses.append(total)
-            gradients.append([p.grad.clone() for p in policy.parameters()])
+            gradients.append(
+                [
+                    torch.zeros_like(p) if p.grad is None else p.grad.clone()
+                    for p in policy.parameters()
+                ]
+            )
         assert losses[0] == pytest.approx(losses[1], rel=1e-6)
         for a, b in zip(*gradients):
             torch.testing.assert_close(a, b, atol=2e-6, rtol=1e-5)
@@ -535,7 +574,11 @@ def test_default_128_slot_bounded_collection_and_chunk_memory(tmp_path):
         rows["target"] = 1
         model.policy.train()
         loss, *_ = sequence_loss(
-            model.policy, rows, None, [1024, 0, 0], model._buffer.observations(rows, model.device)
+            model.policy,
+            rows,
+            None,
+            [[1024, 0], [0, 0], [0, 0]],
+            model._buffer.observations(rows, model.device),
         )
         loss.backward()
         torch.cuda.synchronize()
@@ -565,7 +608,6 @@ def test_performance_refresh_keeps_learning_settings_and_uses_current_defaults()
     from pvz_rl.presentation.live_view import learning_settings
 
     current = load_config()
-    assert current["training"]["demo"]["passes"] == 5
     old = copy.deepcopy(current)
     old["training"]["performance"].pop("fit_precision")
     old["training"]["performance"].pop("prefetch")

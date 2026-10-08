@@ -4,9 +4,9 @@ import numpy as np
 import torch
 from torch.nn import functional as F
 
-from pvz_rl.policy.sequential_q import action_parts
+from pvz_rl.policy.sequential_q import action_parts, outcome_weights
 
-OBJECTIVE_PROTOCOL = "complete_return_probe_v2"
+OBJECTIVE_PROTOCOL = "complete_return_probe_v3"
 COMPONENTS = (
     "terminal",
     "development",
@@ -70,7 +70,7 @@ def finalize_episode_metrics(rows, cfg, *, median=None):
 
 
 def probe_loss(policy, q, tiles, context, probes, counts, delta):
-    """probes[..., :] = valid, branch-role, proposal, finalized target."""
+    """probes[..., :] = valid, branch-role, proposal, target, accepted."""
     valid = probes[..., 0].bool()
     source, slot = valid.nonzero(as_tuple=True)
     if not len(source):
@@ -81,14 +81,21 @@ def probe_loss(policy, q, tiles, context, probes, counts, delta):
     branch_role = chosen[:, 1].bool()
     # Cohort denominators are host metadata; inspecting them must not wait on
     # active device work in every recurrent chunk.
-    represented = np.count_nonzero(np.asarray(counts), axis=1)
-    count = torch.as_tensor(counts, device=q.device, dtype=q.dtype)
+    represented = np.count_nonzero(np.asarray(counts).sum(-1), axis=1)
+    weights = [
+        outcome_weights(
+            head,
+            device=q.device,
+            dtype=q.dtype,
+            accepted_share=policy.cfg["training"]["objective"]["accepted_outcome_share"],
+        )
+        for head in counts
+    ]
+    accepted = chosen[:, 4].long()
     terms = []
     if represented[0]:
         error = F.huber_loss(q[source, branch], target, reduction="none", delta=delta)
-        terms.append(
-            (error * branch_role / count[0, branch].clamp_min(1)).sum() / int(represented[0])
-        )
+        terms.append((error * branch_role * weights[0][branch, accepted]).sum())
     nonwait = branch != 0
     if represented[1] and len(source[nonwait]):
         predicted = (
@@ -97,7 +104,7 @@ def probe_loss(policy, q, tiles, context, probes, counts, delta):
             .flatten()
         )
         error = F.huber_loss(predicted, target[nonwait], reduction="none", delta=delta)
-        terms.append((error / count[1, branch[nonwait]].clamp_min(1)).sum() / int(represented[1]))
+        terms.append((error * weights[1][branch[nonwait], accepted[nonwait]]).sum())
     return sum(terms, q.sum() * 0) / max(1, sum(bool(value) for value in represented))
 
 

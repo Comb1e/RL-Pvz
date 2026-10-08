@@ -1,6 +1,6 @@
 # Recurrent complete-return Q regression and alternative-action supervision
 
-Demonstration initialization and autonomous training use the `complete_return_probe_v2`
+Demonstration initialization and autonomous training use the `complete_return_probe_v3`
 objective. The raw ledger keeps terminal, development, rejection, house-entry and
 victory-time components separately. Fitting multiplies only development by the
 configured dense multiplier before constructing complete returns.
@@ -31,9 +31,10 @@ the collecting tile policy. For a fixed continuation policy,
 expectation, not necessarily the best tile value. Shared targets do not enforce
 exact equality between heads or provide information about unvisited alternatives.
 
-Let N_g count actual decisions in group g (wait, plant or dig) over the complete
-cohort, and let K be the number of nonempty groups. Selected branch and tile
-predictions are q_b and q_l. Define
+Let N_{g,o} count decisions in group g (wait, plant or dig), with outcome o
+(accepted or rejected), over the complete cohort. Let K count nonempty groups.
+If both strata exist alpha_{g,o}=0.5 each; the sole represented stratum otherwise
+gets alpha=1. Missing strata get zero. Selected predictions are q_b and q_l. Define
 
 \[
 e_i = \begin{cases}
@@ -41,15 +42,16 @@ e_i = \begin{cases}
 \tfrac12\big((q_b-G_i)^2+(q_l-G_i)^2\big) & \text{otherwise}.
 \end{cases}
 \qquad
-L=\frac1K\sum_{g:N_g>0}\frac1{N_g}\sum_{i\in g}e_i.
+L=\frac1K\sum_{g:N_g>0}\sum_{o:N_{g,o}>0}
+\frac{\alpha_{g,o}}{N_{g,o}}\sum_{i\in(g,o)}e_i.
 \]
 
-Each chronological chunk contributes only its real decisions with coefficient
-1/(K N_g). Thus summing all chunk losses exactly recovers L regardless of episode
-batch partitioning. The shared loss interface uses the entire cohort count as
-its normalization budget on this path. Padding has coefficient zero; it does not
-create wait samples or alter N_g. Empty groups are excluded instead of diluting
-the loss with a third zero contribution.
+Each chunk contributes real decisions with coefficient alpha_{g,o}/(K N_{g,o}).
+Denominators cover the complete cohort, never individual chunks. Summing chunks
+recovers L regardless of episode partitioning. Padding creates neither wait samples
+nor outcome counts. Empty groups and missing strata do not dilute the objective.
+Demonstration selected-action regression uses this rule too; accepted-only ranking
+is unchanged.
 
 At the start of every pass h_0=c_0=0 independently for each episode. Forward
 memory crosses chunk boundaries, but gradients treat the carried h,c as constants
@@ -71,10 +73,32 @@ precision), but generally changes truncated gradients; it is not claimed to equa
 full-episode backpropagation. An uncommitted interrupted pass must clear its
 partial gradient before recomputing from episode starts.
 
-Previous inputs are the executed action and actual accepted/ticks outcome.
-A rejected proposal 120 with one tick becomes (0, 0, 1); an accepted zero-tick
-dig 361 becomes (361, 1, 0). Neither equals a recurrent reset. Finished collection
-slots retain their final hidden/cell state until replaced by a new episode.
+## Event-only recurrent memory
+
+Transitions supply seven gross public facts: actual sunlight gained/spent, zombies
+spawned/defeated/physically removed, and plants added/removed. Any positive counter
+triggers a write. Actual capped gains, additions and losses remain separate.
+Initial entities are not fabricated events. One transition makes one entry;
+separate zero-time operations at the same tick remain separate entries.
+
+An entry is consumed once before the next decision, using the resulting board.
+Otherwise hidden/cell remain exactly unchanged. Time, movement, nonlethal damage,
+cooldown and rejection alone never write; a rejection concurrent with a qualifying
+world event does. Memory resets to zero. Recovery includes pending facts and time
+since the previous write, preventing lost or repeated event consumption.
+
+At writes, the 32-wide entity summary, 64-wide scalar features and 32-wide event
+projection feed the 256-unit LSTM. Sun uses the existing cost scale, counts the
+public count scale, and elapsed time log1p(ticks/tick_rate), without clipping.
+Every decision fuses its current summary/scalars with latest memory into 256 Q-head
+features. Action/outcome embeddings are absent; evidence remains in trajectories.
+
+Fitting packs genuine event rows per episode chronologically, excludes padding,
+then gathers latest memory onto all decision rows. Quiet rows still supervise
+current-state predictions. Detach boundaries count decisions, not events:
+defaults stay 256 decisions, four whole-cohort passes, Adam learning rate 0.0003
+and clipping limit 5. Quiet chunks carry state forward. Deterministic memory-read
+backward avoids repeated-index atomic accumulation during recovery.
 
 Tile exploration uses epsilon(g)=0.5*(0.01/0.5)^min(g/5000,1).
 The ten-way branch remains greedy; this single coin applies only to the selected
@@ -102,9 +126,10 @@ Sun and cooldown never filter these branches, and probing consumes no behavior R
 
 An isolated simulator copies pre-decision state, RNG and proximity ledger for each
 probe. The frozen FP32 EMA teacher maintains its own history along actual execution.
-Each probe forks the history after encoding the current state, then evaluates its
-next observation with executed action, acceptance and duration. Rejection supplies
-`(0,0,1)`; accepted instantaneous actions retain zero ticks. Forks are discarded.
+Each probe clones complete event-memory state after consuming actual pending facts,
+then observes only its own public events and duration. Its current board remains
+available even without a write. Forks are discarded, never updating actual or EMA
+history. Deduplication requires matching boards and event/timing inputs.
 
 \[
 y_p=r^{train}_p+(1-d_p)\gamma^{\Delta t_p}
@@ -118,13 +143,15 @@ fixed through all four passes. A branch probe supervises its branch and non-wait
 tile; a tile probe supervises only its proposed tile.
 
 For head \(h\), let \(P_{h,b}\) contain all cohort probes supervising branch \(b\),
-and let \(B_h\) be its represented branches. Average Huber errors within each branch,
-then across represented branches and heads:
+and let \(B_h\) be its represented branches. Within each head/branch split outcomes
+50/50 when both exist; otherwise the sole stratum receives full weight. Define
+alpha_{h,b,o} accordingly, then average across represented branches and heads:
 
 \[
 L_{probe}=\frac1{|H|}\sum_{h\in H}\frac1{|B_h|}
-\sum_{b\in B_h}\frac1{|P_{h,b}|}
-\sum_{p\in P_{h,b}}\operatorname{Huber}_{1}(q_{h,p}-y_p),\qquad
+\sum_{b\in B_h}\sum_{o:|P_{h,b,o}|>0}
+\frac{\alpha_{h,b,o}}{|P_{h,b,o}|}
+\sum_{p\in P_{h,b,o}}\operatorname{Huber}_{1}(q_{h,p}-y_p),\qquad
 L_{auto}=L+0.25L_{probe}.
 \]
 
@@ -153,7 +180,7 @@ weights zero, the shared selected-action loss remains exactly \(L\).
 
 `tests/test_recurrent_training.py` checks hand-computed returns, independently
 computed group means, episode-batch gradient invariance, unequal lengths,
-inactive rewards, rejected/zero-tick inputs, isolated resets, exact weight
+inactive rewards, quiet/event/zero-tick inputs, isolated resets, exact weight
 transfer and exact collection/fitting recovery. The existing step/sequence and
 future-input controls check causality and forward agreement. These are numerical
 and implementation controls, not evidence of learning quality.

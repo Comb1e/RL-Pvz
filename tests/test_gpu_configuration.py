@@ -18,7 +18,7 @@ def test_new_shared_run_defaults_and_explicit_parallelism():
     cfg = configured(args())
     assert simulator(cfg) == "cuda"
     assert cfg["training"]["n_envs"] == 128
-    assert cfg["training"]["method"] == "complete_return_lstm_v1"
+    assert cfg["training"]["method"] == "complete_return_event_lstm_v1"
     for count in (3, 32, 64, 128, 256, 512, 1024):
         cfg = configured(args(n_envs=count))
         assert cfg["training"]["n_envs"] == count
@@ -30,12 +30,6 @@ def test_new_shared_run_defaults_and_explicit_parallelism():
 def test_cpu_and_hybrid_requests_are_rejected(options):
     with pytest.raises(ValueError, match="removed|not supported"):
         configured(args(**options))
-
-
-def test_explicit_legacy_decision_budget_still_uses_cuda():
-    cfg = configured(args(steps=4096))
-    assert simulator(cfg) == "cuda"
-    assert cfg["training"]["budget_unit"] == "decisions"
 
 
 def test_hardware_recommendations_and_override_conflicts(tmp_path):

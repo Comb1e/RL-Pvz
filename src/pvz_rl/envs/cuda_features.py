@@ -8,6 +8,7 @@ from pvz_game.cuda.backend import kernel_source
 from pvz_game.cuda.schema import REASONS
 
 from pvz_rl.envs.actions import ActionSchema
+from pvz_rl.envs.cuda_accounting import ACCOUNTING_WIDTH
 from pvz_rl.envs.encoding import (
     ENTITY_FIELDS,
     ENTITY_WIDTH,
@@ -16,6 +17,7 @@ from pvz_rl.envs.encoding import (
     ObservationEncoder,
     width_bucket,
 )
+from pvz_rl.envs.history import EVENT_WIDTH
 from pvz_rl.envs.rewards import LEDGER_METRICS, REWARD_METRICS
 
 REWARD_FIELDS = (*REWARD_METRICS, "total")
@@ -45,6 +47,8 @@ class CudaFeatures:
         self.limit = encoder.max_entities
         params = {
             "ENTITY_WIDTH": ENTITY_WIDTH,
+            "ACCOUNTING_WIDTH": ACCOUNTING_WIDTH,
+            "HISTORY_WIDTH": EVENT_WIDTH,
             "ENTITY_LIMIT": self.limit,
             "RECORD_CAPACITY": 50 + batch.zcap,
             "GLOBAL_WIDTH": GLOBAL_WIDTH,
@@ -108,6 +112,8 @@ class CudaFeatures:
         self.globals = cp.zeros((rows, GLOBAL_WIDTH), cp.float32)
         # Kept count, then plants/zombies/projectiles omitted by the entity cap.
         self.summary = cp.zeros((rows, 4), cp.int64)
+        self.history = cp.zeros((rows, 7), cp.int64)
+        self.history_tensor = torch.from_dlpack(self.history)
         self.records = cp.zeros((batch.n, 50 + batch.zcap, ENTITY_WIDTH), cp.int32)
         self.truncation_counts = self.summary[: batch.n, 1:]
         self.entity_tensor = torch.from_dlpack(self.entities)
@@ -215,6 +221,7 @@ class CudaFeatures:
             b.step_device(actions, ticks=ticks, per_tick=per_tick)
         with self._track("encoding"):
             observation = self.encode(offset=offset, publish=publish)
+            cp.copyto(self.history[offset : offset + b.n], b.accounting[:, 3:])
         with self._track(phase):
             cp.copyto(self.enabled, b.header[:, 17], casting="unsafe")
             self.home_kernel(
@@ -243,7 +250,7 @@ class CudaFeatures:
             )
         return observation, self.reward_tensor
 
-    def dedup(self, executed, accepted, duration, valid, source, slots):
+    def dedup(self, events, valid, source, slots):
         """Mark probe rows whose stored and recurrent inputs repeat an earlier slot."""
         cp = self.batch.cp
         n = len(self.entities) // slots
@@ -254,9 +261,7 @@ class CudaFeatures:
                 self.entities,
                 self.summary,
                 self.globals,
-                cp.from_dlpack(executed),
-                cp.from_dlpack(accepted),
-                cp.from_dlpack(duration),
+                cp.from_dlpack(events.contiguous()),
                 cp.from_dlpack(valid),
                 cp.from_dlpack(source),
                 n,

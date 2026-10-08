@@ -204,19 +204,22 @@ def test_all_species_geometry_is_independent_of_sun_cooldown_and_lesson(per_tick
         assert env.public.plants == before.plants and env.public.sun == 0
     for _ in range(3):
         _, reward, _, _, info = env.step(env.codec.encode(Dig(4, 8)))
-        assert reward == pytest.approx(-1 / 3000)
+        assert reward == pytest.approx(-per_tick_cfg["reward"]["empty_dig_penalty"])
         assert info["rejection_reason"] == "empty_tile" and info["ticks_advanced"] == 1
         assert info["executed_action"] == 0
     metrics = env.episode_metrics()
     assert metrics["net_value"] == metrics["development"] == 0
     assert metrics["return"] == pytest.approx(
-        -8 * per_tick_cfg["reward"]["invalid_plant_penalty"] - 0.001
+        -8 * per_tick_cfg["reward"]["invalid_plant_penalty"]
+        - 3 * per_tick_cfg["reward"]["empty_dig_penalty"]
     )
     assert metrics["discounted_return"] == metrics["return"]
     assert metrics["invalid_plant_penalty"] == pytest.approx(
         -8 * per_tick_cfg["reward"]["invalid_plant_penalty"]
     )
-    assert metrics["empty_dig_penalty"] == pytest.approx(-0.001)
+    assert metrics["empty_dig_penalty"] == pytest.approx(
+        -3 * per_tick_cfg["reward"]["empty_dig_penalty"]
+    )
     assert metrics["wait_actions"] == 11
 
 

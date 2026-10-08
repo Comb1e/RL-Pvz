@@ -15,6 +15,35 @@ from pvz_rl.learning.sequence_transport import SequencePrefetch
 from pvz_rl.monitoring.entity_benchmark import observation
 
 
+@pytest.mark.parametrize("corruption", ["negative", "write_mask", "counts", "counts_mismatch"])
+def test_event_storage_corruption_is_rejected(tmp_path, corruption):
+    buffer = CompleteGameBuffer(tmp_path / "collect", 1, block_rows=1, ram_bytes=0)
+    try:
+        rows = np.zeros(1, buffer.dtype)
+        rows["active"] = True
+        rows["events"][0, 0] = 25
+        rows["memory_write"] = True
+        buffer.append(rows, [dict(entities=[], globals=[0] * 18)])
+        buffer.finalize()
+        state = buffer.save(tmp_path / "saved")
+        path = tmp_path / "saved/block-000000.npy"
+        stored = np.load(path)
+        if corruption == "counts":
+            state["outcome_counts"] = np.zeros((3, 1), dtype=np.int64)
+        elif corruption == "counts_mismatch":
+            state["outcome_counts"] = state["outcome_counts"].copy()
+            state["outcome_counts"][0, 0] += 1
+        elif corruption == "negative":
+            stored["events"][0, 7] = -1
+        else:
+            stored["memory_write"] = False
+        np.save(path, stored)
+        with pytest.raises(ValueError, match="event|acceptance"):
+            CompleteGameBuffer.restore(tmp_path / "saved", state, tmp_path / "bad")
+    finally:
+        buffer.close()
+
+
 def test_probe_dedup_median_finalization_and_spilled_recovery(tmp_path):
     cfg = load_config()
     raw, _ = observation(cfg, 5)
@@ -96,6 +125,10 @@ def test_ragged_round_trip_shared_budget_and_empty_rows(tmp_path, ram_bytes):
         rows = np.zeros(5, buf.dtype)
         rows["active"] = True
         rows["reward"] = [1, 2, 3, 4, 5]
+        rows["events"][1, [0, 1, 7]] = [25, 25, 1000]
+        rows["events"][3, [5, 6]] = [1, 1]
+        rows["memory_write"][[1, 3]] = True
+        rows["accepted"] = [1, 0, 0, 1, 1]
         buf.append(rows[:2], observations[:2])
         buf.append(rows[2:], observations[2:])
         assert buf.entity_size == 20 and buf.ram_used <= ram_bytes
@@ -112,7 +145,9 @@ def test_ragged_round_trip_shared_budget_and_empty_rows(tmp_path, ram_bytes):
         with ZipFile(tmp_path / "saved.zip") as archive:
             restored = CompleteGameBuffer.restore_archive(archive, buf.metadata(), workspace)
         assert restored.entity_size == 20 and restored.ram_used <= ram_bytes
+        np.testing.assert_array_equal(restored.take(np.arange(5))["events"], rows["events"])
         restored.finalize()
+        np.testing.assert_array_equal(restored.outcome_counts, [[2, 3], [0, 0], [0, 0]])
         np.testing.assert_array_equal(restored.take(np.arange(5))["target"], [15, 14, 12, 9, 5])
         assert all(
             observations_equal(a, b)

@@ -7,7 +7,7 @@ from pvz_rl.envs.actions import ActionSchema as A
 
 UNITS_PER_TILE = Rules().game["units_per_tile"]
 
-POLICY_SIGNATURE = "transformer_lstm_q_v2"
+POLICY_SIGNATURE = "transformer_lstm_q_v3"
 ACTION_DISTRIBUTION = "sequential_q_unmasked_penalty_v1"
 
 
@@ -72,15 +72,26 @@ def action_groups(actions):
     return torch.where(actions == 0, 0, torch.where(actions < A.dig_start, 1, 2))
 
 
-def balanced_q_loss(branch, tile, targets, actions, counts, batch_size):
-    """Whole-cohort group weights, retaining scale in a short final minibatch."""
+def outcome_weights(counts, *, device, dtype, accepted_share=0.5):
+    """Whole-cohort coefficients for equal groups and conditional outcome strata."""
+    counts = torch.as_tensor(counts, device=device, dtype=dtype)
+    present = counts > 0
+    both = present.all(-1, keepdim=True)
+    shares = counts.new_tensor([1 - accepted_share, accepted_share])
+    shares = torch.where(both, shares, present.to(dtype))
+    represented = present.any(-1).sum().clamp_min(1)
+    return shares / counts.clamp_min(1) / represented
+
+
+def balanced_q_loss(branch, tile, targets, actions, counts, *, accepted, accepted_share=0.5):
+    """Equal nonempty wait/plant/dig groups, then equal accepted/rejected outcomes."""
     branch_error = (branch - targets).square()
     tile_error = (tile - targets).square()
     errors = torch.where(actions == 0, branch_error, (branch_error + tile_error) / 2)
-    counts = torch.as_tensor(counts, device=branch.device, dtype=branch.dtype)
-    groups = action_groups(actions)
-    weights = counts.sum() / (counts.clamp_min(1)[groups] * (counts > 0).sum())
-    loss = (errors * weights).sum() / counts.sum().clamp(max=batch_size)
+    weights = outcome_weights(
+        counts, device=branch.device, dtype=branch.dtype, accepted_share=accepted_share
+    )
+    loss = (errors * weights[action_groups(actions), accepted.long()]).sum()
     return loss, branch_error, tile_error
 
 

@@ -273,29 +273,6 @@ def test_partial_plant_damage_then_mower_credit_once():
     assert parts["total"] == pytest.approx((20 * 50 / 270 - 200) / 30000)
 
 
-@pytest.mark.parametrize("retired", ["reward", "clock"])
-def test_retired_method_rejected_before_weights_are_read(tmp_path, retired):
-    from copy import deepcopy
-
-    from pvz_rl.learning.training import initial_weights, load_policy
-    from pvz_rl.provenance import write_json
-
-    cfg = load_config()
-    old = deepcopy(cfg)
-    if retired == "reward":
-        old["reward"]["version"] = "potential_mower_v1"
-    else:
-        old["training"].pop("discount_clock")
-    write_json(
-        tmp_path / "metadata.json", {"config": old, "condition": "masked", "learner_seed": 101}
-    )
-    missing = tmp_path / "does-not-exist.zip"
-    with pytest.raises(ValueError, match="fresh"):
-        initial_weights(missing, cfg)
-    with pytest.raises(ValueError, match="fresh"):
-        load_policy(missing)
-
-
 @pytest.mark.parametrize(
     "reason",
     ["insufficient_sun", "card_recharging", "occupied_tile", "outside_board", "unknown_plant"],
@@ -369,7 +346,7 @@ def test_penalties_cpu_cuda_accounting_and_cutoff_targets():
     assert metrics["invalid_plant_penalty"] == pytest.approx(
         -3 * cfg["reward"]["invalid_plant_penalty"]
     )
-    assert metrics["empty_dig_penalty"] == pytest.approx(-2 / 3000)
+    assert metrics["empty_dig_penalty"] == pytest.approx(-2 * cfg["reward"]["empty_dig_penalty"])
     assert metrics["return"] == metrics["discounted_return"] == accumulated
     assert metrics["return"] == pytest.approx(
         metrics["terminal"]

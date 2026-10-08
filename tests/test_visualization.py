@@ -294,12 +294,12 @@ def test_video_outcomes_and_bad_replay_preserve_existing_video(cfg, tmp_path, ou
     assert not list(tmp_path.glob("*.tmp.mp4"))
 
 
-def test_empty_old_report_and_resume_segments(cfg, tmp_path):
+def test_empty_current_report_and_resume_segments(cfg, tmp_path):
     cfg["profile"] = "baseline"  # Labels must not hide current-method diagnostics.
     old, new = tmp_path / "old", tmp_path / "new"
     old.mkdir()
     new.mkdir()
-    write_json(old / "metadata.json", {"config": research_config(cfg)})
+    write_json(old / "metadata.json", {"config": cfg})
     page = build_run_report(old)
     assert "No validated checkpoint yet" in page.read_text("utf-8")
     assert (old / "visualizations/learning-diagnostics.png").is_file()

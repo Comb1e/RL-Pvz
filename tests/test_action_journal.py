@@ -296,7 +296,9 @@ def test_journal_penalties_and_exact_q_survive_archive(tmp_path):
         assert a.latest[3]["penalty"] == 0
         assert "automatic wait: insufficient_sun" in result_label(a.page(0, 7)["latest"])
         assert a.page(0, 7)["latest"]["executed_action"] == 0
-        assert "penalty -0.000333333" in result_label(a.page(2, 7)["latest"])
+        assert f"penalty {-settings['empty_dig_penalty']:.9g}" in result_label(
+            a.page(2, 7)["latest"]
+        )
         with ZipFile(tmp_path / "history.zip", "w") as archive:
             a.write_archive(archive)
         with ZipFile(tmp_path / "history.zip") as archive:

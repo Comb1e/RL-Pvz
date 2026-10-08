@@ -1049,7 +1049,7 @@ def train(
     cfg = copy.deepcopy(cfg)
     validate_config(cfg)
     output = Path(output)
-    require_cuda_training(cfg, condition)
+    require_cuda_training(cfg, condition, runtime=False)
     if resume and init_from:
         raise ValueError("Use either resume or init_from, not both")
     if selected_stage(cfg) and family != "preset":
@@ -1070,7 +1070,7 @@ def train(
             raise ValueError(
                 "Demonstration weights require --init-from; --resume needs an autonomous ZIP"
             )
-        require_cuda_training(saved["config"], saved["condition"])
+        require_cuda_training(saved["config"], saved["condition"], runtime=False)
         if saved.get("exploration_protocol") != EXPLORATION_PROTOCOL:
             raise ValueError("Checkpoint uses the retired exploration schedule; start a fresh run")
         if (
@@ -1088,6 +1088,7 @@ def train(
             )
         if saved["learner_seed"] != learner_seed or saved["validation_limit"] != validation_limit:
             raise ValueError("Resume learner seed or validation limit differs")
+    require_cuda_training(cfg, condition)
     resumed_model = (
         load_policy(resume, cfg["training"]["device"], for_resume=True)[0] if resume else None
     )
@@ -1137,7 +1138,7 @@ def train(
         },
         optimizer_settings={
             "learning_rate": cfg["training"]["learning_rate"],
-            "adam_epsilon": 1e-8 if cfg["policy"]["kind"] == "transformer_lstm_q_v2" else 1e-5,
+            "adam_epsilon": 1e-8,
             "batch_size": cfg["training"]["batch_size"],
             "shared_encoder": True,
         },

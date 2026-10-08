@@ -18,7 +18,7 @@ def test_single_config_train_and_demo_profiles():
     assert demo["reward"]["invalid_plant_penalty"] == training["reward"]["invalid_plant_penalty"]
     assert demo["training"]["max_grad_norm"] == training["training"]["max_grad_norm"] == 5
     assert "gradient_clip" not in demo["training"]["demo"]
-    assert training["policy"]["kind"] == "transformer_lstm_q_v2"
+    assert training["policy"]["kind"] == "transformer_lstm_q_v3"
     assert tuple(training["curriculum"]["stages"]) == ("easy", "standard", "shared")
     assert "lessons" not in training["curriculum"] and "run_stage" not in training["curriculum"]
     require_supported_policy(training)

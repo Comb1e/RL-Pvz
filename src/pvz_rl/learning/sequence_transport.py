@@ -10,7 +10,7 @@ import torch
 from pvz_rl.envs.encoding import ENTITY_WIDTH, GLOBAL_WIDTH, EntityBatch
 from pvz_rl.learning.objective import MAX_PROBES
 
-METADATA_WIDTH = 6 + MAX_PROBES * 4
+METADATA_WIDTH = 13 + MAX_PROBES * 5
 
 
 @dataclass(frozen=True)
@@ -23,8 +23,9 @@ class SequenceMetadata:
 
     active: torch.Tensor
     action: torch.Tensor
-    previous: torch.Tensor
-    previous_outcome: torch.Tensor
+    events: torch.Tensor
+    memory_write: torch.Tensor
+    accepted: torch.Tensor
     target: torch.Tensor
     probes: torch.Tensor
 
@@ -102,12 +103,13 @@ class SequencePrefetch:
         array = fields.numpy()
         array[:, 0] = flat["active"]
         array[:, 1] = flat["action"]
-        array[:, 2] = flat["previous"]
-        array[:, 3:5] = flat["previous_outcome"]
-        array[:, 5] = flat["target"]
+        array[:, 2:10] = flat["events"]
+        array[:, 10] = flat["memory_write"]
+        array[:, 11] = flat["accepted"]
+        array[:, 12] = flat["target"]
         probes = flat["probes"]
-        array[:, 6:] = np.stack(
-            [probes[k] for k in ("valid", "branch_role", "action", "target")], -1
+        array[:, 13:] = np.stack(
+            [probes[k] for k in ("valid", "branch_role", "action", "target", "accepted")], -1
         ).reshape(len(flat), -1)
         self.buffer.transport_metrics["preparation_seconds"] += perf_counter() - started
         return reset, rows, obs, fields
@@ -150,10 +152,11 @@ class SequencePrefetch:
             SequenceMetadata(
                 active=fields[..., 0].bool(),
                 action=fields[..., 1].long(),
-                previous=fields[..., 2].long(),
-                previous_outcome=fields[..., 3:5],
-                target=fields[..., 5],
-                probes=fields[..., 6:].reshape(*rows.shape, MAX_PROBES, 4),
+                events=fields[..., 2:10],
+                memory_write=fields[..., 10].bool(),
+                accepted=fields[..., 11].bool(),
+                target=fields[..., 12],
+                probes=fields[..., 13:].reshape(*rows.shape, MAX_PROBES, 5),
             ),
         )
 

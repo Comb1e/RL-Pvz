@@ -376,6 +376,9 @@ class PvZEnv(gym.Env):
                     }
                 )
             info["episode_metrics"] = self.episode_metrics()
+        from pvz_rl.envs.history import public_history_event
+
+        self.last_history_event = public_history_event(result.events, self.rules)
         self.last_policy_outcome = (int(action), info["accepted"], info["ticks_advanced"])
         encoded = self.encoder.encode(self.public)
         info["entity_truncation"] = self.encoder.last_truncation

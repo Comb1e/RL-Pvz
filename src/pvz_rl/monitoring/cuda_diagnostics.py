@@ -51,7 +51,7 @@ def cuda_doctor():
     from pvz_game import Game, LevelSpec
 
     from pvz_rl.config import load_config
-    from pvz_rl.envs.cuda_accounting import AccountingCudaBatch
+    from pvz_rl.envs.cuda_accounting import ACCOUNTING_WIDTH, AccountingCudaBatch
     from pvz_rl.envs.cuda_features import CudaFeatures
 
     if not torch.cuda.is_available():
@@ -69,7 +69,7 @@ def cuda_doctor():
             features.encode()
             features.step(cp.from_dlpack(action))
             assert features.rewards.get().tolist() == [1.0]
-            assert batch.accounting.get().tolist() == [[0, 0, 0]]
+            assert batch.accounting.get().tolist() == [[0] * ACCOUNTING_WIDTH]
             oracle = Game()
             oracle.reset(LevelSpec("cuda-doctor"), 0)
             oracle.step()

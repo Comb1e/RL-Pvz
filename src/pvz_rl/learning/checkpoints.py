@@ -11,13 +11,13 @@ from pvz_rl.config import digest, load_config, validate_config
 from pvz_rl.learning.performance import refresh_performance
 from pvz_rl.learning.training_requirements import transfer_protocol, weight_transfer_protocol
 
-DEMO_PROTOCOL = "pvz-rl/demo-initialization-checkpoint-v2"
-STATE_PROTOCOL = "pvz-rl/lstm-state-v2"
+DEMO_PROTOCOL = "pvz-rl/demo-initialization-checkpoint-v3"
+STATE_PROTOCOL = "pvz-rl/event-lstm-state-v1"
 
 
 def protocol_for(kind):
     methods = {
-        "transformer_lstm_q_v2": "complete_return_lstm_v1",
+        "transformer_lstm_q_v3": "complete_return_event_lstm_v1",
     }
     if kind not in methods:
         raise ValueError(
@@ -80,7 +80,7 @@ def inspect_checkpoint(path):
 
         if saved.get("observation_schema") != ObservationEncoder(cfg, Rules()).schema():
             raise ValueError("Checkpoint entity schema disagrees with configuration")
-        if cfg["policy"]["kind"] != "transformer_lstm_q_v2":
+        if cfg["policy"]["kind"] != "transformer_lstm_q_v3":
             raise ValueError("Demonstration checkpoint requires Transformer-LSTM weights")
         metadata = dict(
             config=cfg,
@@ -154,7 +154,7 @@ def inspect_checkpoint(path):
 
 
 def model_class(cfg):
-    if cfg["policy"]["kind"] != "transformer_lstm_q_v2":
+    if cfg["policy"]["kind"] != "transformer_lstm_q_v3":
         raise ValueError("Retired model; entity_v1 requires fresh initialization")
     from pvz_rl.learning.recurrent_q import CudaRecurrentQ
 

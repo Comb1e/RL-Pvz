@@ -13,11 +13,12 @@ from pvz_rl.envs.actions import ActionSchema as A
 from pvz_rl.envs.cuda_accounting import AccountingCudaBatch
 from pvz_rl.envs.cuda_features import REWARD_FIELDS, CudaFeatures
 from pvz_rl.envs.encoding import ENTITY_WIDTH, ObservationEncoder, PackedEntityBatch
+from pvz_rl.envs.history import public_history_event
 from pvz_rl.envs.rewards import reward_parts
 from pvz_rl.learning.cuda_buffer import probe_dtype
 from pvz_rl.learning.objective import COMPONENTS, MAX_PROBES
 from pvz_rl.policy.sequential_q import action_parts, assemble
-from pvz_rl.policy.transformer_lstm import RecurrentState
+from pvz_rl.policy.transformer_lstm import EventMemoryState
 
 
 def cpu_probe(game, proximity, proposal, cfg):
@@ -56,6 +57,7 @@ def cpu_probe(game, proximity, proposal, cfg):
         won=result.status.value == "won",
         components=parts,
         observation=ObservationEncoder(cfg, game.rules).encode(result.observation),
+        history_event=public_history_event(result.events, game.rules),
     )
 
 
@@ -171,18 +173,7 @@ class CounterfactualCollector:
         proposals, valid = self.schedule(policy, actions, details, masks, active)
         teacher = teacher_memory.policy
         with self.profiler.track("ema_inference"):
-            output = teacher.forward_step(
-                obs,
-                teacher_memory.state,
-                previous_action=teacher_memory.previous_actions,
-                execution_outcome=teacher_memory.outcomes,
-            )
-        keep = active[None, :, None]
-        teacher_memory.state = RecurrentState(
-            torch.where(keep, output.state.hidden, teacher_memory.state.hidden),
-            torch.where(keep, output.state.cell, teacher_memory.state.cell),
-        )
-        teacher_memory.resets &= ~active
+            output, _, _ = teacher_memory.advance(obs, active)
         source, scratch = self.env.batch, self.batch
         for first in range(0, MAX_PROBES, self.lanes):
             with self.profiler.track("probe_simulation"):
@@ -258,20 +249,26 @@ class CounterfactualCollector:
                     -1,
                 )
             )
-        executed, accepted, duration = (self.metadata[:, column].long() for column in (3, 4, 6))
+        duration = self.metadata[:, 6].long()
         width = self.env.probe_width()
         next_obs = self.features.view(0, MAX_PROBES * source.n, width)
-        next_state = RecurrentState(
+        next_state = EventMemoryState(
             output.state.hidden.repeat(1, MAX_PROBES, 1),
             output.state.cell.repeat(1, MAX_PROBES, 1),
+            output.state.pending.repeat(MAX_PROBES, 1),
+            output.state.elapsed_ticks.repeat(MAX_PROBES),
+        ).observe(self.features.history_tensor, duration, valid.T.contiguous().flatten())
+        history_inputs = torch.where(
+            valid.T.contiguous().flatten()[:, None], next_state.inputs(), 0
         )
+        history_writes = history_inputs[:, :7].ne(0).any(-1)
         with self.profiler.track("ema_inference"):
             target = (
                 teacher.forward_step(
                     next_obs,
                     next_state,
-                    previous_action=executed,
-                    execution_outcome=torch.stack((accepted.float(), duration.float()), -1),
+                    events=history_inputs,
+                    memory_write=history_writes,
                 )
                 .branch_q.max(-1)
                 .values
@@ -280,7 +277,7 @@ class CounterfactualCollector:
             self.metadata[:, 16].copy_(torch.where(self.metadata[:, 8].bool(), 0, target))
         with self.profiler.track("encoding"):
             valid_flat = valid.T.contiguous().flatten()
-            self.features.dedup(executed, accepted, duration, valid_flat, self.source, MAX_PROBES)
+            self.features.dedup(history_inputs, valid_flat, self.source, MAX_PROBES)
             unique = valid_flat & (self.source == self.slots)
             counts = torch.where(unique, self.features.summary_tensor[:, 0], 0)
             offsets = counts.cumsum(0) - counts
@@ -293,6 +290,8 @@ class CounterfactualCollector:
                 "probe",
                 dict(
                     metadata=self.metadata,
+                    events=history_inputs,
+                    memory_write=history_writes,
                     entities=self.packed[: MAX_PROBES * source.n * width],
                     counts=observation_counts,
                     offsets=observation_offsets,
@@ -329,6 +328,8 @@ class CounterfactualCollector:
             records[field] = values[..., column]
         records["components"] = values[..., 10:16]
         records["bootstrap"] = values[..., 16]
+        records["events"] = host["events"].numpy().reshape(MAX_PROBES, count, 8).transpose(1, 0, 2)
+        records["memory_write"] = host["memory_write"].numpy().reshape(MAX_PROBES, count).T
         observations = PackedEntityBatch(
             host["entities"].numpy()[: int(host["size"][0])],
             host["offsets"].numpy().reshape(MAX_PROBES, count).T,

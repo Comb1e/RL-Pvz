@@ -11,7 +11,7 @@ from pvz_rl.config import load_config, research_config, validate_config
 from pvz_rl.envs.env import PvZEnv
 from pvz_rl.envs.rewards import REWARD_METRICS
 from pvz_rl.evaluation.cuda_evaluation import batched_games, deterministic_validation
-from pvz_rl.policy.transformer_lstm import RecurrentState, TransformerLSTMPolicy
+from pvz_rl.policy.transformer_lstm import EventMemoryState, TransformerLSTMPolicy
 
 
 class WaitingPolicy(TransformerLSTMPolicy):
@@ -33,8 +33,14 @@ class WaitingPolicy(TransformerLSTMPolicy):
         assert (obs.globals[initial, 1] == 0).all(), (
             "refilled slots must receive fresh observations"
         )
-        state = RecurrentState(state.hidden + 1, state.cell + 1)
-        return zero.long(), state, dict(branch_value=zero, tile_value=zero)
+        state = EventMemoryState(
+            state.hidden + 1, state.cell + 1, state.pending, state.elapsed_ticks
+        )
+        return (
+            zero.long(),
+            state,
+            dict(branch_value=zero, tile_value=zero, valid=torch.tensor(True, device=self.device)),
+        )
 
 
 @pytest.mark.parametrize("record", [False, True])

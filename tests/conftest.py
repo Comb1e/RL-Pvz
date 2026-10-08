@@ -68,7 +68,6 @@ def smoke_cfg(per_tick_cfg):
         batch_size=32,
         n_epochs=1,
         n_envs=1,
-        hidden_sizes=[32, 32],
         eval_interval=64,
     )
     cfg["policy"]["chunk_length"] = 16

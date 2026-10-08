@@ -21,8 +21,11 @@
 ## Code structure
 
 - `src/pvz_rl/data/train.toml` is the single parameter source for train/demo overlays.
-  Both use `entity_v1` observations and `transformer_lstm_q_v2`; old inputs/weights
+  Both use `entity_v1`, `transformer_lstm_q_v3`, `public_event_history_v1` and
+  `complete_return_probe_v3`; old inputs/weights
   require fresh initialization. Keep user reward adjustments when updating defaults.
+  `training.demo.passes` controls demonstration initialization (20 by default),
+  independently of autonomous `training.n_epochs` (4 by default).
   `training.max_grad_norm` is the sole clipping limit for demo and autonomous
   fitting; historical demo clipping metadata has no effect.
 - `src/pvz_rl/envs/encoding.py` defines the shared 11-field entity schema,
@@ -52,14 +55,21 @@
   `sequential_q.py` keeps all ten branches greedy, independent of sun/cooldown;
   occupancy-only plant tiles and unrestricted dig tiles allow tile-only exploration.
   A full-board plant still proposes tile zero. `runner.py` owns recurrent state and
-  feeds rejection back as `(previous_action=0, accepted=0, ticks=1)`.
+  owns `EventMemoryState`: hidden/cell, pending gross public event facts and elapsed
+  ticks. `envs/history.py` defines `HistoryEvent`, extraction and normalization.
+  Sunlight gains/spending, zombie spawn/defeat/removal and plant addition/removal
+  write memory once using the resulting board. Quiet decisions preserve memory
+  exactly and read current board features through the shared Q fusion layer.
 - `learning/checkpoints.py` inspects saved protocols/schema before simulation.
   `cli.py` resolves fresh `--init-from` runs from current configuration, transferring
   only weights; demonstration weights require only the pinned input/output model
   interface, while autonomous transfer and recovery retain stricter saved-protocol
   checks. `--resume` and evaluation retain saved settings.
   `cuda_q.py` owns cohort lifecycle and atomic recovery; `recurrent_q.py` collects
-  chronological transitions and accumulates whole-pass gradients. `cuda_buffer.py`
+  chronological transitions and accumulates whole-pass gradients. Sparse fitting
+  packs event rows, then deterministically gathers memory onto all decisions, with
+  existing 256-decision detach boundaries. Selected losses balance nonempty groups,
+  then accepted/rejected strata 50/50 using full-cohort counts. `cuda_buffer.py`
   stores fixed metadata plus ragged entity slabs under one RAM/disk budget and
   validates offsets/counts and categories on recovery. `sequence_transport.py` owns
   ordered double-buffer prefetch; `performance.py` defines the execution-only
@@ -74,7 +84,7 @@
   Two independent scratch lanes retain per-slot feature rows; one-lane allocation
   fallback preserves every scheduled probe. EMA next-state inference is stacked;
   actual history stays isolated from every fork. Exact device deduplication
-  includes next recurrent inputs and never merges proposal/reward evidence.
+  includes event/timing inputs and never merges proposal/reward evidence.
   Collection uses public-count padding bounds and the owned-output graph wrapper;
   future schedules never determine policy inputs. Resume refreshes execution and
   logging automatically; missing execution fields use current defaults.
@@ -99,8 +109,8 @@
   `monitoring/progress.py` owns compact terminal/train.log events, independent
   terminal/JSON cadences, duplicate suppression and redirected/interactive modes.
   `cuda_diagnostics.py` pools timing events and reads them after the existing handoff.
-  `monitoring/objective_diagnostic.py` compares bounded full-objective/reward-only
-  cohorts and fixed-history sensitivity; measurements are not mastery evidence.
+  `monitoring/objective_diagnostic.py` reports one 16-game/four-pass, 30-second-cutoff
+  event-memory control and fixed-history sensitivity; measurements are not mastery evidence.
 - `tests/test_observations.py`, `test_transformer_lstm.py`, `test_entity_storage.py`
   and `test_recurrent_training.py` cover information preservation, CPU/CUDA parity,
   independent attention math, order/padding invariance, ragged recovery and training.

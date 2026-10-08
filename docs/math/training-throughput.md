@@ -2,6 +2,13 @@
 
 ## Collection execution contract
 
+Fitting packs genuine event rows into the LSTM and gathers each latest memory
+output onto all decisions. Quiet rows still supervise current-state predictions.
+The memory-read backward uses a deterministic matrix reduction rather than repeated
+index atomic accumulation, preserving exact interrupted-pass recovery. Event metadata
+and acceptance strata use the existing pinned transport and shared storage budget.
+Detach boundaries remain 256 decisions, not 256 events.
+
 Collection leaves the model, reward prices, probe schedule, recurrent feedback,
 loss denominators and fitting settings unchanged. Two independent scratch lanes
 execute the two branch probes and two tile probes in two passes. If scratch
@@ -19,10 +26,10 @@ bound exposes neither future spawn ticks nor RNG. Buckets 32/64/128/256 hold it;
 CPU/CUDA canonical ordering, multiplicity and omissions remain unchanged.
 
 Probe equivalence is scoped to the same actual game/decision and requires exact
-kept entity records, globals, executed action, acceptance and duration. All forks
-in that scope share the actual EMA hidden/cell state. Thus both observation and
+kept entity records, globals and gross public event/timing inputs. All forks
+in that scope clone the complete actual EMA event-memory state. Thus both observation and
 recurrent inputs match before an entity offset can alias. Proposals, reasons,
-components and bootstrap targets are never deduplicated. Acceptance, duration,
+components and bootstrap targets are never deduplicated. Gross-event, memory-timing,
 global or entity counterexamples keep independent offsets.
 
 Persistent feature stores and device packing replace per-probe width reads.

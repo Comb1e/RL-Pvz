@@ -22,6 +22,7 @@ from pvz_rl.envs.encoding import (
     observation_json,
     observations_equal,
 )
+from pvz_rl.envs.history import public_history_event
 from pvz_rl.envs.rewards import (
     HOME_FACT_FIELDS,
     REWARD_FACT_FIELDS,
@@ -124,8 +125,14 @@ def _verify_action_order(archive_rows: list[dict], replay_path: Path, cfg: dict)
     native_outcomes = []
     native_rewards = []
     native_terminals = []
+    history_inputs = []
+    pending = np.zeros(7, dtype=np.int64)
+    elapsed = 0
     for entry in data["entries"]:
         before = game.observe()
+        history_inputs.append(np.append(pending, elapsed))
+        if pending.any():
+            elapsed = 0
         before_tick = before.tick
         native_masks.append(codec.mask(game))
         observations.append(observation_json(encoder.encode(before)))
@@ -133,6 +140,8 @@ def _verify_action_order(archive_rows: list[dict], replay_path: Path, cfg: dict)
         native_actions.append(codec.encode(decode_action(entry["action"])))
         action = decode_action(entry["action"])
         result = game.step(action, ticks=entry["ticks"])
+        pending = public_history_event(result.events, game.rules).array()
+        elapsed += result.ticks_advanced
         native_rewards.append(
             reward_parts(
                 before,
@@ -160,7 +169,7 @@ def _verify_action_order(archive_rows: list[dict], replay_path: Path, cfg: dict)
         raise ValueError("archive and replay decision counts differ")
     reward_changes = 0
     recorded_total = recomputed_total = 0.0
-    for row, action, obs, outcome, reward, terminal, omitted, legal in zip(
+    for row, action, obs, outcome, reward, terminal, omitted, legal, history in zip(
         transitions,
         native_actions,
         observations,
@@ -169,6 +178,7 @@ def _verify_action_order(archive_rows: list[dict], replay_path: Path, cfg: dict)
         native_terminals,
         native_truncation,
         native_masks,
+        history_inputs,
         strict=True,
     ):
         if row["action"] != action:
@@ -198,6 +208,8 @@ def _verify_action_order(archive_rows: list[dict], replay_path: Path, cfg: dict)
         row["reward_parts"] = reward
         row["training_reward"] = float(training_rewards(components(reward), cfg))
         row["legal_mask"] = legal
+        row["events"] = history
+        row["memory_write"] = bool(history[:7].any())
     final_rows = [row for row in archive_rows if row.get("record_type") == "final_observation"]
     if final_rows:
         final = observation_json(encoder.encode(game.observe()))
@@ -301,15 +313,9 @@ def _training_tensors(demonstration: VerifiedDemo):
     for i in range(len(rows) - 1, -1, -1):
         running += float(rows[i]["training_reward"])
         returns[i] = running
-    previous = torch.zeros_like(actions)
-    outcomes = torch.zeros(len(rows), 2, dtype=torch.float32)
-    if len(rows) > 1:
-        previous[1:] = torch.where(
-            torch.tensor([row["accepted"] for row in rows[:-1]]), actions[:-1], 0
-        )
-        outcomes[1:, 0] = torch.tensor([float(row["accepted"]) for row in rows[:-1]])
-        outcomes[1:, 1] = torch.tensor([float(row["ticks_advanced"]) for row in rows[:-1]])
-    return observations, actions, previous, outcomes, returns
+    events = torch.as_tensor(np.stack([row["events"] for row in rows]), dtype=torch.float32)
+    writes = torch.tensor([row["memory_write"] for row in rows], dtype=torch.bool)
+    return observations, actions, events, writes, returns
 
 
 def initialize_demo(
@@ -351,24 +357,27 @@ def initialize_demo(
     torch.manual_seed(seed)
     model = TransformerLSTMPolicy(cfg).to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
-    observations, actions, previous, outcomes, returns = _training_tensors(demonstration)
+    observations, actions, events, writes, returns = _training_tensors(demonstration)
     actions = actions.to(device)
-    previous, outcomes, returns = previous.to(device), outcomes.to(device), returns.to(device)
+    events, writes, returns = events.to(device), writes.to(device), returns.to(device)
+    write_plan = np.asarray([row["memory_write"] for row in demonstration.transitions], dtype=bool)
     chunk = int(cfg["policy"].get("chunk_length", 256))
     output = Path(output)
-    output.mkdir(parents=True, exist_ok=True)
+    output.mkdir(parents=True, exist_ok=False)
     curves, coverage = [], torch.zeros(10, dtype=torch.long)
     # Initialization transfers weights only.  Keep structural and learning
     # metadata for validation, but leave execution settings to the current
     # training profile when this artifact is consumed.
     checkpoint_cfg = without_performance(cfg)
     checkpoint_cfg["training"].get("demo", {}).pop("gradient_clip", None)
-    group_counts = torch.bincount(action_groups(actions), minlength=3)
     accepted = torch.tensor([r["accepted"] for r in demonstration.transitions], device=device)
     legal = torch.as_tensor(
         np.asarray([r["legal_mask"] for r in demonstration.transitions], dtype=np.bool_),
         device=device,
     )
+    group_counts = torch.bincount(
+        action_groups(actions) * 2 + accepted.long(), minlength=6
+    ).reshape(3, 2)
     rank_counts = ranking_counts(actions, accepted, legal)[0]
     objective = cfg["training"]["objective"]
     started = time.monotonic()
@@ -386,8 +395,9 @@ def initialize_demo(
             branch_q, tile_features, contexts, state = model.forward_sequence(
                 collate_observations(observations[start:stop], device).reshape(1, stop - start),
                 state,
-                previous_actions=previous[start:stop][None],
-                execution_outcomes=outcomes[start:stop][None],
+                events=events[start:stop][None],
+                memory_write=writes[start:stop][None],
+                write_plan=write_plan[None, start:stop],
                 return_context=True,
             )
             branch_q, tile_features, contexts = branch_q[0], tile_features[0], contexts[0]
@@ -404,7 +414,13 @@ def initialize_demo(
                 tile = action_parts(selected_actions)[1]
                 second[nonwait] = tile_q.gather(1, tile[:, None]).squeeze(1)
             loss, _, _ = balanced_q_loss(
-                first, second, target, actions[start:stop], group_counts, len(actions)
+                first,
+                second,
+                target,
+                actions[start:stop],
+                group_counts,
+                accepted=accepted[start:stop],
+                accepted_share=cfg["training"]["objective"]["accepted_outcome_share"],
             )
             complete_loss = loss
             rank, accuracy = demonstration_rank_loss(

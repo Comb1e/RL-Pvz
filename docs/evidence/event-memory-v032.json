@@ -1,0 +1,29 @@
+{
+  "scope": "Bounded mechanical event-memory diagnostic; not mastery evidence",
+  "policy": "transformer_lstm_q_v3",
+  "history": "public_event_history_v1",
+  "objective": "complete_return_probe_v3",
+  "source": "runs/event-memory-diagnostic-v032/diagnostic.json",
+  "games": 16,
+  "passes": 4,
+  "cutoff_seconds": 30,
+  "decisions": 48016,
+  "event_writes": 91,
+  "event_write_frequency": 0.0018952015994668444,
+  "elapsed_seconds": 61.42174160000013,
+  "transitions_per_second": 796.4265870324396,
+  "final_actual_memory_cell_abs_over_5": 0.0,
+  "fixed_history_branch_delta": {
+    "zombie_position": 0.000006183981895446777,
+    "zombie_health": 0.0000435560941696167,
+    "cooldowns": 0.039373572915792465
+  },
+  "pass_branch_mse": [4.505825296516062, 4.339728737465345, 4.19000265517659, 4.0528256693598586],
+  "pass_tile_mse": [3.751791065303694, 3.4504120316268283, 3.1775008214340335, 2.92045096075364],
+  "limitations": [
+    "Fresh weights; no baseline comparison or win-rate claim",
+    "The cutoff truncates normal games",
+    "First fitting-chunk memory diagnostics can be zero before the first event",
+    "Dense-return variation warning is retained, not suppressed"
+  ]
+}

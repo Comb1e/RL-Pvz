@@ -63,7 +63,7 @@ win_time_weight = 0.1 # Victories relative to the current cohort's median durati
 [training]
 gamma = 1.0
 discount_clock = "simulation_ticks"
-method = "complete_return_lstm_v1"
+method = "complete_return_event_lstm_v1"
 budget_unit = "games"
 until_stage_complete = false # With --stage: stop only when its mastery gate passes.
 total_games = 10000
@@ -81,7 +81,6 @@ batch_size = 1024
 n_epochs = 4
 learning_rate = 0.0003
 max_grad_norm = 5 # Shared by autonomous training and demonstration initialization.
-hidden_sizes = [128, 128]
 eval_interval = 250000 # Used only by bounded decision-window diagnostics.
 torch_threads = 1
 
@@ -90,7 +89,8 @@ ram_gib = 6
 block_rows = 32768
 
 [training.objective]
-protocol = "complete_return_probe_v2"
+protocol = "complete_return_probe_v3"
+accepted_outcome_share = 0.5
 dense_multiplier = 10.0
 branch_probes = 2
 tile_probes = 2
@@ -146,7 +146,7 @@ curriculum = true
 hybrid = false
 
 [policy]
-kind = "transformer_lstm_q_v2"
+kind = "transformer_lstm_q_v3"
 action_distribution = "sequential_q_unmasked_penalty_v1"
 entity_width = 32
 transformer_layers = 2
@@ -154,15 +154,15 @@ transformer_heads = 4
 transformer_feedforward = 64
 scalar_width = 64
 lstm_hidden = 256
-action_embedding = 32
-outcome_width = 16
+history = "public_event_history_v1"
+event_width = 32
 chunk_length = 256
 encoder_microbatch = 128
 attention_query_chunk = 64
 encoder_token_budget = 65536
 
 [training.demo]
-passes = 5
+passes = 20
 learning_rate = 0.0003
 learner_seed = 101
 time_budget_minutes = 30

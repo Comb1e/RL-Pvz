@@ -10,7 +10,7 @@ import torch
 
 from pvz_rl.config import load_config
 from pvz_rl.envs.encoding import collate_observations
-from pvz_rl.monitoring.entity_benchmark import observation
+from pvz_rl.monitoring.entity_benchmark import observation, synthetic_event_history
 from pvz_rl.policy.transformer_lstm import TransformerLSTMPolicy
 from pvz_rl.provenance import write_json
 
@@ -22,13 +22,16 @@ def synthetic(cfg, counts):
     obs = collate_observations((raw * (1024 // len(raw))), "cuda").reshape(4, 256)
     optimizer = torch.optim.Adam(model.parameters(), lr=cfg["training"]["learning_rate"])
     branches = torch.arange(1024, device="cuda") % 9 + 1
+    events = synthetic_event_history(4, 256, "cuda")
 
     def passes():
         for _ in range(cfg["training"]["n_epochs"]):
             optimizer.zero_grad(set_to_none=True)
             precision = cfg["training"]["performance"].get("fit_precision", "fp32")
             with model.fitting_precision(precision):
-                q, tiles, contexts, _ = model.forward_sequence(obs, return_context=True)
+                q, tiles, contexts, _ = model.forward_sequence(
+                    obs, events=events, return_context=True
+                )
                 tile_q = model.tile_values(tiles.flatten(0, 1), contexts.flatten(0, 1), branches)
                 loss = (q - 0.5).square().mean() + (tile_q + 0.5).square().mean()
                 loss.backward()
@@ -53,6 +56,7 @@ def synthetic(cfg, counts):
                 seconds=seconds,
                 passes=4,
                 frames=4096,
+                synthetic_event_rows_per_pass=32,
                 frames_per_second=4096 / seconds,
                 torch_peak_allocated_mib=torch.cuda.max_memory_allocated() / 2**20,
                 host_rss_mib=psutil.Process().memory_info().rss / 2**20,

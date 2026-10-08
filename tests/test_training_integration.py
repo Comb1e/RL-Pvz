@@ -65,8 +65,8 @@ def test_real_training_serialization_and_replay(smoke_cfg, tmp_path, condition):
                 info["reward_parts"]["invalid_plant_penalty"] < 0
                 or info["reward_parts"]["empty_dig_penalty"] < 0
             )
-            state.previous_actions.zero_()
-            reloaded_state.previous_actions.zero_()
+            state.state.pending.zero_()
+            reloaded_state.state.pending.zero_()
     replay = output / "probe.json"
     env.recorder.save(replay)
     assert verify_replay(replay).state_hash() == env.game.state_hash()

@@ -1,5 +1,55 @@
 # Iteration history
 
+## 0.32.0 — 2026-10-07
+
+- Demonstration-pass adjustment: changed `training.demo.passes` from 5 to 20;
+  the existing independent autonomous `training.n_epochs` remains 4. Configuration
+  and `--passes` overrides still apply only to demonstration initialization;
+  the 30-minute budget is unchanged. Tiny replay controls verify the 20-pass
+  default, custom pass counts, the one-pass override and rejection of zero passes.
+  The demonstration suite and execution-refresh control passed all 29 cases;
+  repository-wide Ruff lint/format and whitespace checks passed before commit.
+- Problem/root cause: per-decision recurrence repeatedly stored quiet/rejected
+  decisions; branch Q had no direct current-board path. Group-only regression
+  let abundant rejected actions dominate rare accepted outcomes.
+- Improvement: deterministic gross sunlight/zombie/plant events write memory
+  once with resulting board context; initial entities are not fabricated writes.
+  Current board features reach both heads every decision through 256-wide fusion.
+  Sparse chronological event fitting preserves all decisions and 256-decision
+  detach boundaries. Whole-cohort group and probe head/branch losses balance
+  accepted/rejected strata equally when both exist. Rewards, exploration, four
+  passes, clipping, Adam settings and action timing remain unchanged.
+- Recovery/cleanup: shared pending-event/timing state, isolated complete EMA forks,
+  event-aware deduplication and versioned metadata use the existing pinned handoff
+  and RAM/disk budget. Removed action/outcome recurrent embeddings and unused
+  architecture fields. Old checkpoints cannot resume or initialize weights;
+  verified recordings remain reusable in new initialization directories.
+- Verification: independent CPU/CUDA cap, gross-flow, spawn/removal, defeat-before-
+  removal, plant-death and zero-time controls; sparse/serial gradients, hierarchical
+  losses, pending recovery, replay reconstruction and spill/corruption controls.
+  Exact recovery exposed repeated-read atomic gradient accumulation; deterministic
+  matrix reduction fixes it without loosening equality checks. Direct checkpoint
+  reload also lost online/EMA compilation state; recovery now retains both paths
+  and their bounded shape sets. Checkpoint rejection precedes the CUDA availability
+  probe as well as collector allocation.
+- Test execution: owning suites and one shared-contract full-suite run (537 passed,
+  24 failed on that initial run). Stale expectations/retired-only controls and the
+  recovery/compiler failures were then corrected or retired and rechecked with
+  focused selections; no second full-suite run. The final focused selection passed
+  all 11 cases. Ruff lint/format checks and `git diff --check` passed.
+- Bounded diagnostic: 16 games, four passes, 30-second cutoff, 48,016 decisions;
+  91 writes (0.1895%), approximately 796 transitions/second. Actual final memory
+  had no cells above absolute 5; fixed-history board interventions retained
+  measurable branch/tile Q sensitivity. Raw summary:
+  [event-memory-v032.json](evidence/event-memory-v032.json).
+- Existing demonstration: reconstructed all 15,372 decisions from the unchanged
+  human recording and completed five fitting passes in `runs/human-init-events-v032`.
+  The new initialization reloads and transfers strictly under current settings;
+  old initialization files remain untouched.
+- Limits: truncated fresh-weight games establish mechanical behavior, not a
+  win-rate improvement. Dense-return variation warning remains visible. No formal
+  training, commit or push was launched.
+
 ## 0.31.7 — 2026-09-30
 
 - Problem/root cause: collection used serial probe simulation/inference, repeated

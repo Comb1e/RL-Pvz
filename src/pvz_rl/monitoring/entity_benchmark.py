@@ -45,6 +45,17 @@ def observation(cfg, count):
     return encoded, encoder.last_truncation
 
 
+def synthetic_event_history(batch, time, device, interval=32):
+    """Periodic synthetic sun events for reproducible event-memory cost controls."""
+    events = torch.zeros(batch, time, 8, device=device)
+    events[:, 1::interval, 0] = 25
+    times = torch.arange(time, device=device)
+    latest = torch.where((times > 0) & ((times - 1) % interval == 0), times, 0).cummax(0).values
+    previous = torch.cat((latest.new_zeros(1), latest[:-1]))
+    events[..., 7] = times - previous
+    return events
+
+
 def measure(cfg, count, repeats=3):
     torch.manual_seed(101)
     model = TransformerLSTMPolicy(cfg).cuda()
@@ -65,11 +76,12 @@ def measure(cfg, count, repeats=3):
     # One chronological 128-decision sequence: encoder memory settings are the
     # defaults, gradients cross time, and both Q heads participate in the fit.
     sequence = batch.reshape(1, 128)
+    events = synthetic_event_history(1, 128, "cuda")
 
     def fitting():
         model.train()
         optimizer.zero_grad(set_to_none=True)
-        q, tiles, contexts, _ = model.forward_sequence(sequence, return_context=True)
+        q, tiles, contexts, _ = model.forward_sequence(sequence, events=events, return_context=True)
         tile_q = model.tile_values(
             tiles.flatten(0, 1),
             contexts.flatten(0, 1),
@@ -90,6 +102,7 @@ def measure(cfg, count, repeats=3):
         present=count,
         retained=len(encoded["entities"]),
         omitted=omitted,
+        synthetic_events_per_sequence=4,
     )
     for name, operation in (("inference", inference), ("fitting", fitting)):
         torch.cuda.synchronize()

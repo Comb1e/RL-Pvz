@@ -70,9 +70,11 @@ flowchart LR
     Embed --> Attention[2 masked bidirectional attention layers]
     Readout --> Attention
     Attention --> Summary[Global summary + tile features]
-    Summary --> LSTM[256-unit LSTM]
-    Feedback[Previous executed action / accepted / ticks] --> LSTM
-    LSTM --> Heads[Branch and conditional tile Q heads]
+    Summary --> Fusion[256-wide current-state and memory fusion]
+    Summary -->|context at event writes| LSTM[256-unit event LSTM]
+    Events[Gross public events and elapsed ticks] -->|32-wide projection| LSTM
+    LSTM --> Fusion
+    Fusion --> Heads[Branch and conditional tile Q heads]
 ```
 
 Each shared entity embedding sums type and state lookups and a projection of nine
@@ -85,9 +87,19 @@ join the sequence. Queries let empty tiles receive features. Padded keys are
 masked in every layer and padded entity outputs are zero. No entity-order or
 causal attention mask is added; the LSTM supplies chronological memory.
 
-Global summary, scalar features, elapsed time, previous executed action and previous
-acceptance/duration feed the LSTM. An accepted proposal is the previous executed
-action; a rejected proposal executes and feeds back as wait (`0`).
+Every decision encodes the current board. Gross sunlight gain/spend, zombie
+spawn/defeat/removal and plant addition/removal counters determine whether memory
+writes before the next decision, using the resulting board as context.
+Initial entities are not additions. Elapsed ticks accumulate since the previous
+write, but time, movement, damage, cooldown and rejection alone never write.
+Sunlight gains are actual capped gains; simultaneous additions/losses remain
+separate. Separate zero-time transitions retain their order.
+
+The 32-wide entity summary and 64-wide scalar features combine with a 32-wide
+event projection at writes through a 256-unit LSTM. Events use existing resource/
+count scales and log1p(elapsed seconds), without clipping. Every decision fuses
+its current summary/scalars with the latest event-memory output into 256 features
+for both Q heads. Quiet decisions still respond to current board changes.
 The shared Q selector compares wait, eight species and dig greedily, then
 explores only the selected branch's tile target. It chooses a tile for a
 non-wait branch. Occupancy limits plant tiles; dig can target every tile.
@@ -107,18 +119,33 @@ flowchart LR
     Validate -->|accepted| Execute[Execute proposal]
     Validate -->|rejected| Wait[Execute wait / advance one tick]
     Wait --> Penalty[Rejection reason + applicable penalty]
-    Validate -->|accepted| History[Previous action = proposal]
-    Wait --> History2[Previous action = wait (0)]
-    History --> Outcome[accepted + duration]
-    History2 --> Outcome
+    Execute --> Facts[Gross public transition events]
+    Wait --> Facts
+    Facts --> Pending[Pending event and elapsed ticks]
+    Pending -->|qualifying event| Memory[One LSTM write with resulting board]
+    Pending -->|quiet| Frozen[Preserve hidden and cell exactly]
+    Memory --> Fusion[Current board plus event memory]
+    Frozen --> Fusion
 ```
 
-The stateful policy runner owns hidden/cell state and public previous outcomes.
-It resets only new episode slots. Rejected proposals remain the action target,
-while the next recurrent input uses previous action `0`, `accepted=false` and
-the simulator duration. Accepted plants and digs take zero ticks; waits and
-rejections advance one tick. Finished collection slots are frozen. Evaluation uses
-the same runner with tile exploration disabled.
+The shared event-memory state owns hidden/cell, pending facts and elapsed ticks.
+Consumption clears pending facts once and resets timing only on a write.
+Reset clears all fields for new episode slots; inactive slots are frozen.
+Accepted plants and digs take zero ticks; waits and rejections advance one tick.
+A rejected attempt concurrent with a world event still queues a write. The same
+runner serves collection, evaluation and EMA history.
+
+```mermaid
+stateDiagram-v2
+    [*] --> Quiet: zero memory at reset
+    Quiet --> Quiet: no qualifying transition event
+    Quiet --> Pending: public transition event
+    Pending --> Quiet: consume once before next decision
+    Pending --> Pending: snapshot / restore retains facts and timing
+    Quiet --> Frozen: episode finishes
+    Pending --> Frozen: episode finishes
+    Frozen --> Quiet: new episode reset
+```
 
 ## Recording and initialization
 
@@ -160,6 +187,9 @@ reward coefficients are excluded from weight compatibility.
 Complete gamma-one returns supervise both Q heads. Whole-pass gradients are
 clipped once using the same `training.max_grad_norm` limit as autonomous fitting;
 only completed passes atomically replace `initialization.pt`.
+`training.demo.passes` independently controls initialization (20 by default);
+autonomous fitting uses `training.n_epochs` (4 by default). The initialization
+`--passes` override does not change autonomous fitting.
 
 ## Autonomous lifecycle and recovery
 
@@ -189,8 +219,10 @@ A cohort holds at most 128 games at fixed weights. Completed slots remain inacti
 until the next cohort, and the final cohort uses only the remaining game count.
 Trajectories retain fixed transition metadata and globals, entity offset/count,
 and contiguous append-only int32 entity slabs containing only real rows. Metadata
-and entities share one RAM budget with disk overflow. Proposals, executed previous
-actions, current outcomes, omission counts, rewards and boundaries remain explicit.
+and entities share one RAM budget with disk overflow. Proposals, executed actions,
+acceptance, durations, event facts/write masks/timing, omission counts, rewards and
+boundaries remain explicit. Group/outcome and probe head/branch/outcome counts
+cover the full cohort, including spilled blocks.
 Only recovery state stores private simulator snapshots and scenario RNGs.
 
 At each decision, two scratch lanes independently restore pre-decision simulator,
@@ -198,13 +230,14 @@ RNG, accounting and proximity-ledger state. The branch pair and tile pair execut
 in two simulator passes. Allocation failure releases the failed scratch allocation
 and selects one lane, executing all four scheduled probes sequentially. It never
 changes probe coverage. The frozen FP32 EMA teacher advances only on actual history;
-one stacked next-state evaluation receives four independent copies of that state.
+one stacked next-state evaluation receives four complete independent event-memory
+copies, including pending facts and timing. Probe events update only these forks.
 Probe states never enter behavior history, viewer history or journals.
 
 Device feature buffers retain each probe pass in its own rows. Canonical records
 are packed on device; duplicate probes share a slab offset only when entities,
-globals, executed action, acceptance and duration match within the same actual
-game. The latter fields are the next recurrent inputs; the forked hidden/cell
+globals and gross event/timing inputs match within the same actual game.
+Identical resulting boards alone are insufficient; the forked hidden/cell
 state is shared only within that game's decision. Proposal, rejection reason,
 reward components and bootstrap remain separate records even when offsets alias.
 Storage consumes packed offsets directly rather than repeating host deduplication.
@@ -247,8 +280,11 @@ Game and win counts update immediately; completed rewards remain provisional unt
 the cohort median is known. Finalization includes all actual durations, applies time
 shaping only to victories, fixes terminal probe rewards with that same median and
 publishes finalized records once. Saved state includes median/reference count,
-publication state, EMA weights/version/history, probe cursors and proximity ledgers.
-Selected complete returns and branch-balanced probe Huber errors share each whole-pass
+publication state, pending event/timing state, EMA weights/version/history,
+probe cursors, proximity ledgers and online/EMA compilation paths with bounded
+shape sets. Protocol/schema inspection precedes the CUDA availability probe,
+collector allocation and model transfer.
+Selected complete returns and outcome-balanced probe Huber errors share each whole-pass
 optimizer update. EMA advances once after each successful commit, never after a failed
 or interrupted attempt. Demonstrations add accepted-action ranking instead of probes.
 
@@ -258,7 +294,9 @@ The learning batch remains 1,024 decisions and each recurrent boundary remains
 single 4,096-decision transfer and forward/backward call when the environment
 count permits. State is reset between slot groups, so no episode can observe
 another episode's hidden state. Short episodes are padded; padding contributes
-no target or loss. Encoder work uses at most 128 observations and a 65,536-token
+no target or loss. Only genuine event rows enter the recurrent sequence; latest
+memory is gathered onto every current-state prediction. Nonempty action groups
+have equal weight, with accepted/rejected outcomes sharing 50/50 when both exist. Encoder work uses at most 128 observations and a 65,536-token
 budget. Allocation fallback lowers the encoder microbatch to 64, 32 and 16,
 then enables one outer checkpoint without dropping entities.
 

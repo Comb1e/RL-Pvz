@@ -156,7 +156,8 @@ def test_counterfactual_parity_history_and_simulator_isolation(per_tick_cfg, mon
     from pvz_rl.learning.host_transfer import HostHandoff
     from pvz_rl.learning.objective import components
     from pvz_rl.monitoring.cuda_diagnostics import DeviceProfiler
-    from pvz_rl.policy.transformer_lstm import RecurrentState
+    from pvz_rl.policy.runner import PolicyRunner
+    from pvz_rl.policy.transformer_lstm import EventMemoryState
 
     scenarios = [
         LevelSpec("probe-boundary", (Spawn(1, "basic", 0, x=x),), initial_sun=50)
@@ -172,10 +173,22 @@ def test_counterfactual_parity_history_and_simulator_isolation(per_tick_cfg, mon
         def tile_values(self, tiles, context, branches):
             return torch.arange(45, device="cuda").float().expand(len(branches), -1)
 
-        def forward_step(self, obs, state, *, previous_action, execution_outcome):
-            calls.append((state.clone(), previous_action.clone(), execution_outcome.clone()))
+        def initial_state(self, count, *, device):
+            return EventMemoryState(
+                torch.zeros(1, count, 1, device=device),
+                torch.zeros(1, count, 1, device=device),
+                torch.zeros(count, 7, dtype=torch.int64, device=device),
+                torch.zeros(count, dtype=torch.int64, device=device),
+            )
+
+        def forward_step(self, obs, state, *, events, memory_write):
+            calls.append((state.clone(), events.clone(), memory_write.clone()))
             return SimpleNamespace(
-                state=RecurrentState(state.hidden + 1, state.cell + 1),
+                state=state.consume(
+                    state.hidden + memory_write[None, :, None],
+                    state.cell + memory_write[None, :, None],
+                    memory_write,
+                ),
                 branch_q=torch.full((len(obs), 10), 0.5, device="cuda"),
             )
 
@@ -216,15 +229,7 @@ def test_counterfactual_parity_history_and_simulator_isolation(per_tick_cfg, mon
         monkeypatch.setattr(
             probe, "schedule", lambda *args: (proposals, active[:, None].expand(-1, 4))
         )
-        history = SimpleNamespace(
-            policy=teacher,
-            state=RecurrentState(
-                torch.zeros(1, 2, 1, device="cuda"), torch.zeros(1, 2, 1, device="cuda")
-            ),
-            previous_actions=actions.clone(),
-            outcomes=torch.zeros(2, 2, device="cuda"),
-            resets=active.clone(),
-        )
+        history = PolicyRunner(teacher, per_tick_cfg, batch.rules, 2, "cuda")
         hashes = [batch.state_hash(i) for i in range(2)]
         snapshots = [env.game.snapshot() for env in cpus]
         ledgers = [deepcopy(env.proximity.stages) for env in cpus]
@@ -264,11 +269,13 @@ def test_counterfactual_parity_history_and_simulator_isolation(per_tick_cfg, mon
                     assert row["components"][4] == pytest.approx((-0.005, -0.020)[i])
             assert env.game.snapshot() == snapshots[i]
             assert env.proximity.stages == ledgers[i]
-        # Only the actual current observation advances teacher history. Each
-        # fork starts there, and rejected forks see executed wait + rejection.
-        assert torch.all(history.state.hidden == 1)
-        assert all(torch.all(state.hidden == 1) for state, _, _ in calls[1:])
+        assert torch.all(history.state.hidden == 0)
+        assert all(torch.all(state.hidden == 0) for state, _, _ in calls[1:])
         assert len(calls) == 2
-        _, previous, outcome = calls[1]
-        assert torch.all(previous[4:] == 0)
-        torch.testing.assert_close(outcome[4:], torch.tensor([[0.0, 1.0]] * 4, device="cuda"))
+        _, event_inputs, writes = calls[1]
+        assert writes[4:].all()
+        assert (event_inputs[4:, 2] == 1).all()
+        assert not event_inputs[4:, [0, 1, 3, 4, 5, 6]].any()
+        torch.testing.assert_close(
+            event_inputs[4:, 7], torch.ones(4, device="cuda", dtype=torch.int64)
+        )

@@ -112,7 +112,7 @@ def load_demo_config(path: str | Path | None = None, *, profile: str = "demo") -
     cfg = load_config(path, profile=profile)
     if (
         cfg["encoding"]["version"] != "entity_v1"
-        or cfg["policy"]["kind"] != "transformer_lstm_q_v2"
+        or cfg["policy"]["kind"] != "transformer_lstm_q_v3"
     ):
         raise ValueError("Human demonstrations require the entity_v1 Transformer-LSTM demo profile")
     return copy.deepcopy(cfg)
@@ -121,8 +121,10 @@ def load_demo_config(path: str | Path | None = None, *, profile: str = "demo") -
 def validate_config(cfg: dict) -> None:
     objective = cfg["training"].get("objective")
     if objective is not None:
-        if objective.get("protocol") != "complete_return_probe_v2":
+        if objective.get("protocol") != "complete_return_probe_v3":
             raise ValueError("Unsupported training objective protocol")
+        if objective.get("accepted_outcome_share") != 0.5:
+            raise ValueError("objective.accepted_outcome_share must be 0.5")
         for key in ("dense_multiplier", "probe_huber_delta", "demo_rank_margin"):
             if (
                 not isinstance(objective.get(key), (int, float))
@@ -154,7 +156,7 @@ def validate_config(cfg: dict) -> None:
         raise ValueError("win_time_weight must be finite and nonnegative")
     recurrent = (
         cfg.get("encoding", {}).get("version") == "entity_v1"
-        and cfg.get("policy", {}).get("kind") == "transformer_lstm_q_v2"
+        and cfg.get("policy", {}).get("kind") == "transformer_lstm_q_v3"
     )
     if cfg["training"].get("validation_schedule", "periodic") not in (
         "periodic",
@@ -223,8 +225,7 @@ def validate_config(cfg: dict) -> None:
         "transformer_feedforward",
         "scalar_width",
         "lstm_hidden",
-        "action_embedding",
-        "outcome_width",
+        "event_width",
         "chunk_length",
         "encoder_microbatch",
         "attention_query_chunk",
@@ -232,6 +233,10 @@ def validate_config(cfg: dict) -> None:
     ):
         if type(policy.get(key)) is not int or policy[key] < 1:
             raise ValueError(f"policy.{key} must be a positive integer")
+    if policy.get("history") != "public_event_history_v1":
+        raise ValueError("Unsupported public event-history protocol")
+    if any(key in policy for key in ("action_embedding", "outcome_width")):
+        raise ValueError("Per-decision recurrent input fields are retired")
     if policy["entity_width"] % policy["transformer_heads"]:
         raise ValueError("policy.entity_width must be divisible by transformer_heads")
     sample_seconds = output_settings(cfg)["logging"]["hardware_sample_seconds"]
@@ -348,7 +353,7 @@ def validate_config(cfg: dict) -> None:
     if not math.isfinite(visual["final_hold_seconds"]) or visual["final_hold_seconds"] < 0:
         raise ValueError("Visualization final_hold_seconds must be finite and nonnegative")
     env, train = cfg["environment"], cfg["training"]
-    expected_method = "complete_return_lstm_v1"
+    expected_method = "complete_return_event_lstm_v1"
     if train.get("method") != expected_method:
         raise ValueError("Training requires a supported complete-return method and fresh models")
     if any(
@@ -443,10 +448,6 @@ def validate_config(cfg: dict) -> None:
         or len(set(seeds)) != len(seeds)
     ):
         raise ValueError("Learner seeds must be nonnegative and distinct")
-    if not train["hidden_sizes"] or any(
-        type(n) is not int or n <= 0 for n in train["hidden_sizes"]
-    ):
-        raise ValueError("Hidden layer sizes must be positive integers")
     for group, keys in (
         ("encoding", ("count_scale", "wave_scale")),
         ("training", ("learning_rate",)),

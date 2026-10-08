@@ -2,7 +2,10 @@
 
 Record a human Plants vs. Zombies game, initialize one entity Transformer–LSTM Q
 policy, then train and evaluate it on a separate, pinned 100 Hz simulator.
-Only public observations enter the model. Parameters live in
+The model reads the current board every decision; LSTM memory writes only on
+sunlight, zombie and plant events. Old checkpoints require fresh initialization
+from a verified recording in a new directory. Only public observations enter the
+model. Parameters live in
 [src/pvz_rl/data/train.toml](src/pvz_rl/data/train.toml).
 
 ## Requirements
@@ -29,7 +32,9 @@ Record one easy game using unused output paths; finish with a natural win or los
 ```
 
 Follow [recording and training](docs/training.md) to initialize, train, resume or
-recover. Fresh runs use current settings; resume retains learning parameters and
+recover. Demonstration initialization defaults to 20 passes (`training.demo.passes`);
+autonomous training stays at four (`training.n_epochs`). Fresh runs use current
+settings; resume retains learning parameters and
 rewards while applying current execution and compact-logging settings automatically.
 
 ## Common checks

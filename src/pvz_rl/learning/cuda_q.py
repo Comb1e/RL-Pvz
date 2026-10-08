@@ -45,7 +45,7 @@ def checkpoint_optimizer_protocol(path):
 
 class CudaCohortLifecycle(BaseAlgorithm):
     policy_protocol = POLICY_SIGNATURE
-    optimizer_version = "complete_return_lstm_v1"
+    optimizer_version = "complete_return_event_lstm_v1"
 
     def __init__(
         self,
@@ -125,6 +125,10 @@ class CudaCohortLifecycle(BaseAlgorithm):
             model.runtime_state = torch.load(
                 io.BytesIO(archive.read("cohort-state.pt")), map_location="cpu", weights_only=False
             )
+        from pvz_rl.learning.checkpoints import STATE_PROTOCOL
+
+        if model.runtime_state.get("protocol") != STATE_PROTOCOL:
+            raise ValueError("Unsupported recurrent recovery protocol")
         return model
 
     @property
@@ -356,6 +360,9 @@ class CudaCohortLifecycle(BaseAlgorithm):
                 "torch_rng": torch.get_rng_state(),
                 "cuda_rng": torch.cuda.get_rng_state_all(),
             }
+        from pvz_rl.learning.checkpoints import STATE_PROTOCOL
+
+        runtime["protocol"] = STATE_PROTOCOL
         runtime["execution_state"] = getattr(self, "execution_state", None)
         runtime.update(self._extra_runtime())
         # One atomic archive ties weights, optimizers, RNG and unfinished games

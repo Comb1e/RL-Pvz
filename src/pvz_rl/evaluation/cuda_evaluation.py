@@ -121,8 +121,7 @@ def refilled_games(
                 obs, _, _, _, _, infos = env.step_tensors(actions, autoreset=False)
                 runner.check()
                 runner.observe_result(
-                    env.proposed_actions,
-                    env.header_tensor[:, 12],
+                    env.features.history_tensor,
                     env.transition_ticks,
                     active=active,
                 )
@@ -218,8 +217,7 @@ def fixed_batches(
                         obs, _, _, _, _, infos = env.step_tensors(actions, autoreset=False)
                         runner.check()
                         runner.observe_result(
-                            env.proposed_actions,
-                            env.header_tensor[:, 12],
+                            env.features.history_tensor,
                             env.transition_ticks,
                             active=active,
                         )

@@ -96,12 +96,12 @@ def test_transfer_compatibility_preserves_learning_contract(stage_cfg, change):
     else:
         altered["engine_commit"] = "different"
     assert (transfer_protocol(stage_cfg, "masked") == transfer_protocol(altered, "masked")) == (
-        change not in ("policy", "engine", "reward", "discount")
+        change not in ("policy", "engine", "discount")
     )
     assert stage_cfg["curriculum"]["run_stage"] == "easy"
 
 
-def test_cli_inherits_source_config_seed_and_stage(stage_cfg, tmp_path, monkeypatch):
+def test_fresh_cli_uses_current_settings_seed_and_explicit_stage(stage_cfg, tmp_path, monkeypatch):
     write_json(
         tmp_path / "metadata.json",
         {
@@ -132,11 +132,15 @@ def test_cli_inherits_source_config_seed_and_stage(stage_cfg, tmp_path, monkeypa
     assert cfg["curriculum"]["run_stage"] == "easy"
     assert (
         cfg["training"]["total_games"] == 50
-        and cfg["training"]["max_minutes"] == stage_cfg["training"]["max_minutes"]
+        and cfg["training"]["max_minutes"] == load_config()["training"]["max_minutes"]
     )
-    assert (args.seed, args.condition, args.validation_count) == (102, "masked", 1)
+    assert (args.seed, args.condition, getattr(args, "validation_count", None)) == (
+        101,
+        "masked",
+        None,
+    )
     args.stage = None
-    assert configured(args)["curriculum"]["run_stage"] == "easy"
+    assert "run_stage" not in configured(args)["curriculum"]
     with pytest.raises(SystemExit):
         main(["train", "--resume", "one.zip", "--init-from", "two.zip", "--output", "unused"])
 
@@ -173,6 +177,7 @@ def test_incompatible_checkpoint_rejected_before_run(stage_cfg, tmp_path, monkey
             "config": saved,
             "condition": "masked",
             "family": "preset",
+            "initialization_type": "autonomous",
         },
     )
     with pytest.raises(ValueError, match="matching engine, observation encoding"):
@@ -382,26 +387,6 @@ def test_stage_interrupt_resume_retains_stage_and_budget(
     assert not (tmp_path / "bad-resume").exists()
 
 
-@pytest.mark.parametrize("retired", ["architecture", "observation"])
-def test_cli_retired_architecture_rejected_for_init_and_resume(stage_cfg, tmp_path, retired):
-    section, key, value = (
-        ("policy", "kind", "spatial_grouped_v3")
-        if retired == "architecture"
-        else ("encoding", "version", "event_v4")
-    )
-    stage_cfg[section][key] = value
-    write_json(
-        tmp_path / "metadata.json",
-        {"config": stage_cfg, "learner_seed": 101, "condition": "masked"},
-    )
-    for mode in ("init_from", "resume"):
-        with pytest.raises(ValueError, match="Retired"):
-            configured(
-                argparse.Namespace(command="train", config=None, **{mode: tmp_path / "final.zip"})
-            )
-    assert read_json(tmp_path / "metadata.json")["config"][section][key] == value
-
-
 @pytest.mark.parametrize("stage", STAGES)
 def test_new_mastery_needs_every_case_and_correct_stage_residency(stage_cfg, stage):
     state = CurriculumState(stage=STAGES.index(stage), completed_stage_games=99)
@@ -537,7 +522,7 @@ def test_shared_mastery_stops_after_update_and_is_resumable(
     )
 
 
-@pytest.mark.parametrize("option", ["games", "steps"])
+@pytest.mark.parametrize("option", ["games"])
 def test_until_mastery_cli_rejects_explicit_ceilings_before_output(tmp_path, option):
     output = tmp_path / "absent"
     with pytest.raises(ValueError, match="cannot be combined"):
@@ -613,59 +598,3 @@ def test_until_mastery_cli_saved_resume_and_unbounded_clock(stage_cfg, tmp_path,
     with pytest.raises(ValueError, match="explicit training deadline"):
         train(cfg, "masked", 101, tmp_path / "absent", deadline=1)
     assert not (tmp_path / "absent").exists()
-
-
-def test_previous_action_distribution_rejected_by_metadata_and_direct_loader(
-    stage_cfg, tmp_path, monkeypatch
-):
-    import json
-    import zipfile
-
-    from pvz_rl.learning.recurrent_q import CudaRecurrentQ
-    from pvz_rl.learning.training_requirements import current_model_config
-
-    stage_cfg["policy"].pop("action_distribution")
-    assert not current_model_config(stage_cfg)
-    write_json(tmp_path / "metadata.json", {"config": stage_cfg, "condition": "masked"})
-    with pytest.raises(ValueError, match="Retired"):
-        load_policy(tmp_path / "absent.zip")
-    import stable_baselines3.common.base_class as base
-
-    monkeypatch.setattr(
-        base, "load_from_zip_file", lambda *a, **kw: pytest.fail("retired class loaded")
-    )
-    checkpoint = tmp_path / "old.zip"
-    with zipfile.ZipFile(checkpoint, "w") as archive:
-        archive.writestr("data", json.dumps({"optimizer_protocol": "periodic_exact_kl_v1"}))
-    with pytest.raises(ValueError, match="requires fresh models"):
-        CudaRecurrentQ.load(checkpoint)
-    # A mismatched sidecar must not allow old archive weights into a new experiment.
-    stage_cfg["policy"]["action_distribution"] = "balanced_species_tiles_v1"
-    write_json(
-        tmp_path / "metadata.json",
-        {"config": stage_cfg, "condition": "masked", "exploration_protocol": "phase_floor_v1"},
-    )
-    monkeypatch.setattr(
-        "stable_baselines3.common.save_util.load_from_zip_file",
-        lambda *args, **kwargs: ({}, {"policy": {}}, {}),
-    )
-    from pvz_rl.learning.training import initial_weights
-
-    with pytest.raises(ValueError, match="Retired policy"):
-        initial_weights(checkpoint, stage_cfg)
-
-
-def test_until_stage_config_does_not_disable_benchmark_window(tmp_path):
-    source = (
-        Path("src/pvz_rl/data/train.toml")
-        .read_text()
-        .replace("until_stage_complete = false", "until_stage_complete = true")
-    )
-    source = source.replace("[curriculum]", '[curriculum]\nrun_stage = "easy"')
-    path = tmp_path / "stage.toml"
-    path.write_text(source)
-    cfg = configured(
-        argparse.Namespace(command="benchmark-gpu", config=path, profile="train", steps=16384)
-    )
-    assert cfg["training"]["until_stage_complete"]
-    assert cfg["training"]["total_steps"] == 16384

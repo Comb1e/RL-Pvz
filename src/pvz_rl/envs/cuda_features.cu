@@ -178,12 +178,8 @@ extern "C" __global__ void copy_probe_state(
   for (I j=t;j<ZCAP*2;j+=blockDim.x) dl[i*ZCAP*2+j]=sl[i*ZCAP*2+j];
 }
 
-// Probe rows are slot-major (row = slot * n + game). A valid probe reuses the
-// earliest earlier slot of the same game whose stored and recurrent inputs are
-// identical: kept records, globals, executed action, acceptance and duration.
-// source[row] is that slot, the probe's own slot when unique, or -1 if invalid.
 extern "C" __global__ void dedup_probes(const int *entities, const I *summary,
-    const float *globals, const I *executed, const I *accepted, const I *duration,
+    const float *globals, const I *history,
     const bool *valid, I *source, I n, I slots) {
   I game = blockIdx.x;
   if (game >= n) return;
@@ -193,9 +189,7 @@ extern "C" __global__ void dedup_probes(const int *entities, const I *summary,
     I chosen = valid[row] ? slot : -1;
     for (I prior = 0; prior < slot && chosen == slot; prior++) {
       I other = prior * n + game;
-      if (!valid[other] || summary[row * 4] != summary[other * 4]
-          || executed[row] != executed[other] || accepted[row] != accepted[other]
-          || duration[row] != duration[other])
+      if (!valid[other] || summary[row * 4] != summary[other * 4])
         continue;
       if (!threadIdx.x) equal = 1;
       __syncthreads();
@@ -203,6 +197,8 @@ extern "C" __global__ void dedup_probes(const int *entities, const I *summary,
       const int *b = entities + other * ENTITY_LIMIT * ENTITY_WIDTH;
       for (I k = threadIdx.x; k < summary[row * 4] * ENTITY_WIDTH; k += blockDim.x)
         if (a[k] != b[k]) atomicExch(&equal, 0);
+      for (I k = threadIdx.x; k < HISTORY_WIDTH; k += blockDim.x)
+        if (history[row * HISTORY_WIDTH + k] != history[other * HISTORY_WIDTH + k]) atomicExch(&equal, 0);
       for (I k = threadIdx.x; k < GLOBAL_WIDTH; k += blockDim.x)
         if (globals[row * GLOBAL_WIDTH + k] != globals[other * GLOBAL_WIDTH + k]) atomicExch(&equal, 0);
       __syncthreads();
@@ -269,7 +265,7 @@ reward_metrics(const I *headers, const I *old_headers, const I *old_cd,
     rewards[i] = 0;
     return;
   }
-  const I *a = accounting + i * 3;
+  const I *a = accounting + i * ACCOUNTING_WIDTH;
   v[F_terminal] = h.status == 1 ? R_win_reward : h.status == 2 ? -R_loss_penalty : 0.;
   if (h.status == 0 && h.tick >= CUTOFF_SECONDS * G_tick_rate)
     v[F_terminal] = -R_loss_penalty;

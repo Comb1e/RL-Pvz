@@ -1,8 +1,7 @@
-"""Bounded objective comparison and fixed-history sensitivity; never a mastery run."""
+"""Bounded event-memory and fixed-history sensitivity diagnostic; never a mastery run."""
 
 import argparse
 import copy
-import gc
 from pathlib import Path
 from time import perf_counter
 
@@ -16,7 +15,7 @@ from pvz_rl.envs.encoding import collate_observations
 from pvz_rl.learning.demo_initialization import load_demo_checkpoint
 from pvz_rl.learning.training import build_model, vector_env
 from pvz_rl.monitoring.entity_benchmark import observation
-from pvz_rl.policy.transformer_lstm import RecurrentState
+from pvz_rl.policy.transformer_lstm import EventMemoryState
 from pvz_rl.provenance import write_json
 
 
@@ -54,9 +53,11 @@ def sensitivity(policy, cfg, state=None):
         variants[name] = changed
     batch = collate_observations(variants.values(), next(policy.parameters()).device)
     if state is not None:
-        state = RecurrentState(
+        state = EventMemoryState(
             state.hidden[:, :1].expand(-1, len(variants), -1).contiguous(),
             state.cell[:, :1].expand(-1, len(variants), -1).contiguous(),
+            torch.zeros(len(variants), 7, dtype=torch.int64, device=batch.device),
+            torch.zeros(len(variants), dtype=torch.int64, device=batch.device),
         )
     policy.eval()
     out = policy.forward_step(batch, state)
@@ -77,7 +78,7 @@ def sensitivity(policy, cfg, state=None):
         },
         cell_abs_quantiles=torch.quantile(cell, cell.new_tensor([0.5, 0.9, 1.0])).cpu().tolist(),
         cell_over_5=float((cell > 5).float().mean()),
-        tanh_cell_over_099=float((cell.tanh() > 0.99).float().mean()),
+        tanh_cell_over_099=float((cell.tanh().abs() > 0.99).float().mean()),
     )
 
 
@@ -142,30 +143,33 @@ def run(checkpoint, output):
     output = Path(output)
     output.mkdir(parents=True, exist_ok=False)
     cfg = load_config()
-    cfg["training"].update(n_envs=16, total_games=32)
+    cfg["training"].update(n_envs=16, total_games=16, n_epochs=4)
+    cfg["environment"]["cutoff_seconds"] = 30
     cfg["visualization"].update(enabled=False, live_enabled=False)
     cfg["simulation"]["profile"] = True
     torch.set_num_threads(cfg["training"]["torch_threads"])
-    source, _ = load_demo_checkpoint(checkpoint, cfg)
-    weights = copy.deepcopy(source.state_dict())
-    del source
+    weights = None
+    if checkpoint:
+        source, _ = load_demo_checkpoint(checkpoint, cfg)
+        weights = copy.deepcopy(source.state_dict())
+        del source
     results = {}
-    for name, auxiliary in (("full_objective", 0.25), ("reward_only", 0.0)):
+    for name in ("event_memory",):
         local = copy.deepcopy(cfg)
-        local["training"]["objective"]["probe_loss_weight"] = auxiliary
         destination = output / name
         destination.mkdir()
         write_json(destination / "config.json", local)
         env = vector_env(local, "masked", 101)
         model = build_model(local, "masked", env, 101)
-        model.policy.load_state_dict(weights)
+        if weights is not None:
+            model.policy.load_state_dict(weights)
         model.trajectory_root = destination
         callback = DiagnosticCallback(local, destination)
         torch.cuda.reset_peak_memory_stats()
         started = perf_counter()
         try:
             initial = sensitivity(model.policy, local)
-            model.learn(2**63 - 1, callback=callback)
+            model.learn(16, callback=callback)
             results[name] = dict(
                 seconds=perf_counter() - started,
                 games=model.training_games,
@@ -176,20 +180,19 @@ def run(checkpoint, output):
                 peak_host_bytes=callback.peak_host_bytes,
                 compilation_status=model.policy.entity.compilation_status,
             )
-            write_json(output / "comparison.json", results)
+            write_json(output / "diagnostic.json", results)
         finally:
             if model._buffer is not None:
                 model._buffer.close()
             env.close()
         del callback, model, env
-        gc.collect()
         torch.cuda.empty_cache()
     return results
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--checkpoint", required=True)
+    parser.add_argument("--checkpoint")
     parser.add_argument("--output", required=True)
     args = parser.parse_args()
     run(args.checkpoint, args.output)

@@ -1,5 +1,14 @@
 # Sources actually used
 
+## Selective event memory
+
+- Campos et al., [Skip RNN: Learning to Skip State Updates in Recurrent Neural Networks](https://arxiv.org/abs/1708.06834)
+  and the [official project](https://imatge-upc.github.io/skiprnn-2017-telecombcn/):
+  inspected for selective recurrent-state updates on low-information sequences.
+  This project uses deterministic public sunlight/zombie/plant events, not learned
+  skip gates, periodic updates or the paper's training mechanism. Current board
+  features remain available at every decision through a separate fusion path.
+
 This index records sources used by the current implementation and the particular
 ideas adopted. Project choices such as the entity cap, embedding width, rewards
 and mastery gates are not established by these papers. Release history and local

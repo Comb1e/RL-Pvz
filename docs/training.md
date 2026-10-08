@@ -1,6 +1,6 @@
 # Recording and training
 
-The current objective is `complete_return_probe_v2`. Rejected plants and empty digs
+The current objective is `complete_return_probe_v3`. Rejected plants and empty digs
 use the small shared penalties in `train.toml`; development is multiplied only in
 learning targets. A zombie entering either of the two columns nearest the house is
 charged once per boundary. Victory time is shaped only for wins, relative to the
@@ -13,7 +13,7 @@ returns and fitting, and is recoverable without applying time rewards twice.
 
 Install with the [quick start](../README.md). Run commands from the project root.
 The default model throughout recording, initialization, training and evaluation
-is the entity Transformer–LSTM (`entity_v1`, `transformer_lstm_q_v2`).
+is the entity Transformer–LSTM (`entity_v1`, `transformer_lstm_q_v3`).
 A public observation contains an integer `[n,11]` entity matrix and 18 global
 values; each retained entity becomes a learned 32-dimensional vector.
 
@@ -24,7 +24,7 @@ values; each retained entity becomes a learned 32-dimensional vector.
   --output runs\human-1000.pvzdemo --archive runs\human-1000.jsonl
 .\.venv\Scripts\python.exe -m pvz_rl initialize-demo `
   --archive runs\human-1000.jsonl --replay runs\human-1000.pvzdemo `
-  --output runs\human-init
+  --output runs\human-init-events
 ```
 
 Recording uses one easy-stage attempt, default seed 1000. Choose unused replay,
@@ -42,8 +42,11 @@ weights does not require rerecording. The archive/replay stay unchanged, and
 Missing manifests, unsupported protocols, engine/schema mismatches and
 reconstruction failures remain errors. Optimizer settings and the retired demo
 clipping field do not affect recording verification.
-Old model weights and aggregate-observation archives require fresh initialization;
-there is no migration. Existing run files and recordings remain on disk.
+Old checkpoints are rejected for both resume and weight initialization before
+simulator allocation; there is no migration or partial-weight transfer. Existing
+verified entity_v1 archives/native replays remain reusable: initialization
+reconstructs events from native transitions under current settings. Use a new
+output directory; existing recordings, runs and weights remain on disk.
 
 Preserve the recording's input/action schema when using `--config`; learning and
 reward settings may change. `--device cpu` is the
@@ -52,7 +55,7 @@ verification. `--passes`, `--learning-rate` and `--seed` override fitting settin
 Both fitting paths read the single `training.max_grad_norm` limit (5 by default);
 there is no demo-only clipping setting or CLI override.
 Time budgets are configuration settings only: initialization
-uses `training.demo.time_budget_minutes` (30 by default). Defaults are 5 passes,
+uses `training.demo.time_budget_minutes` (30 by default). Defaults are 20 passes,
 learning rate 0.0003 and 256-decision chunks. Checkpoints are published
 only after complete passes, alongside curves, coverage and verification reports.
 
@@ -60,7 +63,7 @@ only after complete passes, alongside curves, coverage and verification reports.
 
 ```powershell
 .\.venv\Scripts\python.exe -m pvz_rl train `
-  --init-from runs\human-init\initialization.pt --output runs\human-trained
+  --init-from runs\human-init-events\initialization.pt --output runs\human-trained
 ```
 
 `--init-from` accepts demonstration `.pt` or compatible autonomous `.zip` weights.
@@ -91,9 +94,11 @@ until that stage passes. Use it only intentionally.
 Up to 128 games form a cohort at fixed weights. Finished slots stay inactive;
 the final cohort is limited to the remaining requested games. The recurrent
 collector retains the selected proposal for the trajectory and complete-return
-target. The next decision receives the resolved previous action: the proposal
-when accepted, or wait (`0`) with `accepted=false` and the simulator's duration
-when rejected. The rejection reason remains diagnostic metadata.
+target. History retains only gross sunlight gain/spend, zombie spawn/defeat/removal
+and plant addition/removal events, plus resulting board context and time since the
+last write. Rejection alone never advances memory. Current board features still
+reach both Q heads every decision. Proposal, execution, acceptance, duration and
+rejection reason remain learning/journal evidence.
 
 Each of four default fitting passes recomputes recurrent states from episode
 starts. State carries across 256-decision chunks with gradients detached at
@@ -101,7 +106,9 @@ chunk boundaries. `--batch-size` is the decision budget: 1,024 means four
 256-decision sequences; it must be a positive multiple of chunk length, at most
 1,024. Padding and inactive slots have no loss. Chunk gradients accumulate into
 one clipped Adam update per whole-cohort pass, with equal total weight for each
-nonempty wait/plant/dig group.
+nonempty wait/plant/dig group. Within each group, accepted and rejected decisions
+receive 50% each when both exist; the sole present outcome otherwise receives
+full group weight. Probe losses apply the same split inside each head/branch.
 
 Tile exploration decays from 50% to 1% over 5,000 completed stage games and stays
 fixed during each cohort. The ten-way branch choice (wait, eight plants and dig)
@@ -183,7 +190,7 @@ runs; use `fp32` for a reference comparison. BF16 applies to temporary encoder,
 embedding and auxiliary-projection computation. Parameters, optimizer state,
 LSTM, Q heads, losses and accumulated gradients remain FP32. No loss scaler is
 used. Collection/evaluation and demonstration initialization remain FP32;
-`training.demo.passes = 5` and autonomous `training.n_epochs = 4` are independent.
+`training.demo.passes = 20` and autonomous `training.n_epochs = 4` are independent.
 
 Two pinned staging buffers use the same `training.storage.ram_gib` allowance as
 trajectory slabs, spilling resident slabs when necessary. `training.performance.prefetch`
@@ -272,9 +279,9 @@ an existing verified archive, then run:
   --checkpoint runs\diagnostic-demo\initialization.pt --output runs\objective-diagnostic
 ```
 
-This runs two 16-game cohorts for each of full-objective and reward-only fitting,
-with four passes per cohort. Both collect identical types of probes; the reward-only
-arm sets their loss weight to zero. It records actual cohort medians, six reward
-components, target errors, probe coverage, recurrent saturation, fixed-history Q
-sensitivity and costs. Output directories must be unused. This is a bounded diagnostic,
-not a curriculum or long-run learning result.
+This runs one 16-game cohort with four passes and a 30-second simulator cutoff.
+The optional checkpoint must use the current event-memory framework; omitting it
+uses fresh weights. It reports event-write frequency, target errors, probe coverage,
+memory saturation, fixed-history current-state Q sensitivity and throughput.
+Output directories must be unused. Truncated diagnostic games are mechanical
+controls, not curriculum mastery or a promised win-rate improvement.

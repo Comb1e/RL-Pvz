@@ -31,8 +31,7 @@ def completed_demo(tmp_path, request):
         transformer_feedforward=16,
         scalar_width=8,
         lstm_hidden=8,
-        action_embedding=4,
-        outcome_width=4,
+        event_width=4,
         chunk_length=2,
     )
     game = ActionPhaseGame()
@@ -83,6 +82,32 @@ def completed_demo(tmp_path, request):
 
 
 @pytest.mark.parametrize(
+    "configured_passes, override, expected",
+    [(20, None, 20), (3, None, 3), (20, 1, 1), (20, 0, None)],
+)
+def test_demo_passes_are_independent_of_autonomous_epochs(
+    completed_demo, tmp_path, configured_passes, override, expected
+):
+    cfg, archive, replay = completed_demo
+    assert cfg["training"]["demo"]["passes"] == 20
+    assert cfg["training"]["n_epochs"] == load_config()["training"]["n_epochs"] == 4
+    cfg["training"]["n_epochs"] = 1
+    cfg["training"]["demo"]["passes"] = configured_passes
+    output = tmp_path / "fit"
+    if expected is None:
+        with pytest.raises(ValueError, match="settings must be positive"):
+            demo.initialize_demo(archive, replay, output, cfg=cfg, passes=override)
+        assert not output.exists()
+        return
+    result = demo.initialize_demo(archive, replay, output, cfg=cfg, passes=override)
+    assert result["state"] == "complete"
+    assert result["passes_completed"] == expected
+    curves = json.loads((output / "learning-curves.json").read_text())["curves"]
+    assert len(curves) == expected
+    assert cfg["training"]["n_epochs"] == 1
+
+
+@pytest.mark.parametrize(
     "device",
     [
         "cpu",
@@ -107,7 +132,7 @@ def test_complete_demo_fit_uses_whole_game_group_loss_and_reloads(
         clip_calls.append(max_norm)
         return original_clip(parameters, max_norm)
 
-    def observe(first, second, targets, actions, counts, batch_size):
+    def observe(first, second, targets, actions, counts, **kwargs):
         for q1, q2, target, action in zip(
             first.detach().tolist(), second.detach().tolist(), targets.tolist(), actions.tolist()
         ):
@@ -116,7 +141,7 @@ def test_complete_demo_fit_uses_whole_game_group_loss_and_reloads(
             if action:
                 error = (error + (q2 - target) ** 2) / 2
             samples[group].append(error)
-        return shared_loss(first, second, targets, actions, counts, batch_size)
+        return shared_loss(first, second, targets, actions, counts, **kwargs)
 
     monkeypatch.setattr(demo, "balanced_q_loss", observe)
     monkeypatch.setattr(torch.nn.utils, "clip_grad_norm_", observe_clip)
@@ -205,9 +230,9 @@ def test_reused_demo_fits_current_rewards_without_rewriting_recording(
     fitted_targets = []
     shared_loss = demo.balanced_q_loss
 
-    def observe(first, second, targets, *args):
+    def observe(first, second, targets, *args, **kwargs):
         fitted_targets.extend(targets.detach().cpu().tolist())
-        return shared_loss(first, second, targets, *args)
+        return shared_loss(first, second, targets, *args, **kwargs)
 
     monkeypatch.setattr(demo, "balanced_q_loss", observe)
     result = demo.initialize_demo(archive, replay, tmp_path / "fit", cfg=current, passes=1)
@@ -277,6 +302,19 @@ def test_transition_corruption_rejected_by_reconstruction(completed_demo, field)
     cfg["reward"]["win_reward"] += 1  # Changed settings must not bypass corruption checks.
     with pytest.raises(ValueError, match="mismatch"):
         demo.verify_demo(archive, replay, cfg)
+
+
+def test_replay_reconstructs_event_rows_without_initial_additions(completed_demo):
+    cfg, archive, replay = completed_demo
+    verified = demo._load_verified_demo(archive, replay, cfg)
+    _, _, events, writes, _ = demo._training_tensors(verified)
+    assert events.shape == (5, 8)
+    assert not events[0].any()
+    assert writes.tolist() == [False, True, True, True, True]
+    torch.testing.assert_close(events[:, 1], torch.tensor([0, 50, 100, 0, 0], dtype=torch.float32))
+    torch.testing.assert_close(events[:, 5], torch.tensor([0, 1, 1, 0, 0], dtype=torch.float32))
+    torch.testing.assert_close(events[:, 6], torch.tensor([0, 0, 0, 1, 1], dtype=torch.float32))
+    assert not events[:, 7].any()
 
 
 def test_checkpoint_write_failure_preserves_previous_pass(tmp_path, monkeypatch):
