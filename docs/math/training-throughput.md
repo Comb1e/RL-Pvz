@@ -10,12 +10,37 @@ and acceptance strata use the existing pinned transport and shared storage budge
 Detach boundaries remain 256 decisions, not 256 events.
 
 Collection leaves the model, reward prices, probe schedule, recurrent feedback,
-loss denominators and fitting settings unchanged. Two independent scratch lanes
-execute the two branch probes and two tile probes in two passes. If scratch
+loss denominators and fitting settings unchanged. A host `ActiveBatchPlan` uses
+the canonical live-slot mask (`enabled_envs`) and already-published public
+retained-entity counts (`summary_host`). For each public entity-width bucket,
+it gathers live observations and complete event memory into power-of-two batches,
+bounded by encoder microbatch/token budgets. Masked execution padding creates
+neither transitions nor recurrent writes. Outputs scatter to original slot IDs;
+inactive hidden/cell, pending facts and elapsed ticks stay unchanged. No live rows
+means no network call. Both online and actual-history EMA use the plan. The tile
+head processes active rows through a wrapper, while selection/exploration RNG
+keeps the original slot-shaped draw dimensions and order.
+
+For a width bucket with `m > 0` logical rows and batch capacity `K`, each chunk
+uses `B = 2^ceil(log2(min(m_remaining, K)))` rows, with `K` bounded by the
+microbatch and token allowance for entities plus 46 readout tokens. Thus chunk
+padding stays below twice its logical row count; it is not cohort capacity.
+Compaction does not promise bitwise-equal floating-point reductions across batch
+shapes. Independent serial controls still check outputs, memory and random draws
+without weakening the representation or selected-action contract.
+
+Two independent scratch lanes execute the two branch probes and two tile probes
+in two passes. Shallow batch/feature prefix views reuse the existing allocation;
+source-ID remapping copies original live slots into compact lane prefixes before
+simulation/encoding. Scheduled-role masks preserve eligibility. Public feature
+records and metadata scatter back to canonical game/probe rows before dedup and
+bootstrap. Scratch execution width follows live games, but allocation capacity
+and private simulator storage bounds remain unchanged. Neither private bounds
+nor source IDs determine policy tokens. If scratch
 allocation fails, one lane executes all scheduled slots; no probe is omitted.
 Every pass restores its own simulator RNG, accounting and proximity ledger.
-One EMA evaluation advances actual history; stacked fork inputs use that history
-without ever replacing it with a probe result.
+One compact EMA evaluation advances actual history; independently gathered fork
+inputs use that history without ever replacing it with a probe result.
 
 For public retained count `C`, pending-zombie count `Z` and present plant count `P`,
 `min(cap, C + Z + 2P + 1)` bounds one decision's retained next entities. Rejection
@@ -29,24 +54,88 @@ Probe equivalence is scoped to the same actual game/decision and requires exact
 kept entity records, globals and gross public event/timing inputs. All forks
 in that scope clone the complete actual EMA event-memory state. Thus both observation and
 recurrent inputs match before an entity offset can alias. Proposals, reasons,
-components and bootstrap targets are never deduplicated. Gross-event, memory-timing,
+components and stored bootstrap targets remain separate. Only valid nonterminal
+representatives enter compact EMA next-state inference; values scatter to every
+original probe record and terminal bootstrap is zero. Gross-event, memory-timing,
 global or entity counterexamples keep independent offsets.
 
-Persistent feature stores and device packing replace per-probe width reads.
-Behavior transfer uses its already-known bucket; probe transfer copies a bounded
-packed bucket slab. Its unused tail can still cross PCIe: exact variable-length
+Persistent canonical feature stores and device packing replace per-probe width
+reads. Behavior globals transfer active rows only; the host scatters them into
+zero-filled original-slot rows. Probe globals follow the same compact/canonical
+scatter contract; fixed metadata may retain original slot-shaped staging.
+Entity transfer uses already-published retained counts
+for behavior and summed public next-entity bounds for active probe games, not
+original slot capacity or private simulator bounds. The packed probe slab's unused
+tail can still cross PCIe: exact variable-length
 DMA would need an extra host count boundary. Deduplication reduces stored records
 and host comparison work, but does not guarantee proportional transfer savings.
-Pinned buffers are reusable and charged to trajectory RAM. All copies precede
-one collection-stream wait; headers/totals for terminal episodes use that handoff.
+Pinned buffers are reusable and charged to trajectory RAM. Behavior/probe evidence,
+dedup representatives and terminal headers/totals precede one existing
+collection-stream wait. Only then are GPU dedup results known to the host planner.
+The current canonical record appends first; compact bootstrap inference queues
+its CPU copy after that wait. The next existing handoff consumes the copy and
+`buffer.update_probe_bootstrap` patches the already-appended rows, including
+spilled blocks. Finalization, fitting entry, checkpoint, interruption and shutdown
+drains flush the last pending copy before any target or saved trajectory uses it.
+No ordinary second count/bootstrap wait is added. Pending copies cannot outlive
+their row identities or be overwritten before consumption.
 Storage checks counts/offsets before ingestion and recovery validates saved slabs.
 
-Encoder graphs use the existing tensor-only, owned-output wrapper for collection
-and fitting. Shape caches remain bounded; unavailable compilation records one
-eager fallback. CUDA timings are read only after the existing handoff. Device
+All CUDA platforms use direct no-grad `CUDAGraph` collection and the custom AOT
+owned forward/backward fitting backend, without a Windows/Inductor split.
+Each encoder separately owns a collection LRU cache and fitting captures. Defaults
+are eight live collection entries and 512 MiB headroom, configured through
+`training.performance.collection_graph_cache_entries` and
+`collection_vram_headroom_mib`. Capture keys include shape, stride, dtype/device
+and computation mode; online and EMA do not share captures. Eviction retires the
+least-recently-used capture and fences its last replay/output copies. The existing
+handoff releases completed retirees without a new wait; cache misses may also poll
+completed fences. Retirement is separately bounded by the entry limit, so resident
+counts include live entries plus not-yet-released retirees. Headroom is checked
+before and after admission.
+Capacity/headroom pressure or capture allocation failure selects the exact eager
+encoder; other capture failures record an explicit fallback. Zero entries disables
+collection capture only.
+
+At quiescent phase boundaries, collection captures/probe workspaces release before
+fitting, and fitting captures release after all delayed backwards/prefetch work
+and before collection allocation. Fitting's four-shape bound is independent of the
+collection cache. Active maps, captures and caches are execution-only, rebuilt on
+resume rather than serialized. Recovery/trajectory protocols and durable rows
+remain unchanged. Cache counters and phase-memory samples are diagnostics, not
+speed or learning-quality evidence.
+
+CUDA timings are read only after the existing handoff. Device
 spans and host storage/presentation/synchronization timings are reported separately
 and need not sum to wall time. Terminal formatting only consumes cached host
 metrics; its cadence does not control the 15-second detailed snapshot cadence.
+
+## Active collection rate controls
+
+Let `D` count committed actual live transitions in the reporting interval, `T`
+count collection seconds and `A = sum_i(a_i * delta_t_i)` count active-game
+seconds, using active games before each callback interval. The monitor reports
+
+\[
+\text{active transitions/s} = D/T,\qquad
+\text{decisions/game/s} = D/A.
+\]
+
+Padding, finished games and counterfactual simulation do not increment `D`.
+Using `A`, rather than initial cohort capacity times `T`, preserves the per-live-
+game interpretation as slots finish. Phase/cohort changes or restored counters
+restart the interval; fitting, validation and recovery downtime are excluded.
+Zero/unmeasured denominators show `n/a`. Interval rates and lifetime transition,
+collection-time and active-game-time totals remain distinct. Host counters and
+clocks are the sole inputs; sampling adds no CUDA read or wait.
+
+Benchmark controls hold 128 original simulator slots and select noncontiguous
+128/64/32/16/4/1 live-game subsets, not six different allocation sizes. They
+distinguish sparse/mixed/crowded boards, cold capture, warmed repeats and an opt-in
+bounded four-pass collect/fit/collect cycle. Evidence must report logical/padded rows, unique valid
+probe representatives, cache hit/miss/eviction/fallback counts and phase memory,
+not just nominal slot capacity. Results and verification status belong only in
+[iteration history](../iteration.md); execution controls alone establish no speedup.
 
 ## Fitting execution contract
 

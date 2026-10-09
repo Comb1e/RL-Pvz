@@ -76,6 +76,8 @@ REWARD_METRICS = (
     "home_inner_entries",
     "home_proximity",
     "victory_time",
+    "early_sun",
+    "early_sun_bonus",
 )
 
 LEDGER_METRICS = (
@@ -218,6 +220,23 @@ def defense_metrics(before: Observation, events, rules: Rules) -> dict:
     }
 
 
+def early_sun_income(before, events, fraction):
+    spawned, total = before.counts.spawned, before.counts.initial_total
+    numerator, denominator = fraction
+    income = 0
+    for event in events:
+        if event.kind == "ZombieSpawned":
+            spawned += 1
+        elif (
+            event.kind == "SunProduced"
+            and event.get("source") == "sunflower"
+            and total > 0
+            and denominator * spawned < numerator * total
+        ):
+            income += event.get("amount", 0)
+    return income
+
+
 def reward_parts(
     before: Observation,
     after: Observation,
@@ -258,7 +277,9 @@ def reward_parts(
     mower_cost = settings["mower_value"] * combat["mower_activations"]
     net = resource_delta + combat_value - mower_cost
     scale = settings["progress_weight"] / settings["value_scale"]
-    development = scale * net
+    early_sun = early_sun_income(before, events, settings["early_sun_spawn_fraction"])
+    early_bonus = scale * settings["early_sun_extra_multiplier"] * early_sun
+    development = scale * net + early_bonus
     invalid_plant = 0.0
     empty_dig = 0.0
     if action_result is not None and not action_result.accepted:
@@ -276,6 +297,8 @@ def reward_parts(
         "development": development,
         "sky_income": sky,
         "produced_sun": produced,
+        "early_sun": early_sun,
+        "early_sun_bonus": early_bonus,
         "effective_damage": damage,
         "plant_value_loss": lost_value,
         "combat_value": combat_value,

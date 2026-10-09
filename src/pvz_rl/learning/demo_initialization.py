@@ -57,9 +57,20 @@ def _verify_reward_facts(row: dict, reconstructed: dict) -> None:
     if (
         not isinstance(saved, dict)
         or set(saved)
-        not in (
-            set(reconstructed),
-            set(reconstructed) - {*HOME_FACT_FIELDS, "home_proximity", "victory_time"},
+        not in tuple(
+            set(reconstructed) - omitted
+            for omitted in (
+                set(),
+                {"early_sun", "early_sun_bonus"},
+                {*HOME_FACT_FIELDS, "home_proximity", "victory_time"},
+                {
+                    *HOME_FACT_FIELDS,
+                    "home_proximity",
+                    "victory_time",
+                    "early_sun",
+                    "early_sun_bonus",
+                },
+            )
         )
         or any(
             type(value) not in (int, float) or not math.isfinite(value) for value in saved.values()

@@ -173,7 +173,7 @@ def test_incompatible_checkpoint_rejected_before_run(stage_cfg, tmp_path, monkey
     )
     monkeypatch.setattr(
         "pvz_rl.learning.checkpoints.inspect_checkpoint",
-        lambda path: {
+        lambda path, *, weights_only=False: {
             "config": saved,
             "condition": "masked",
             "family": "preset",

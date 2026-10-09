@@ -317,6 +317,72 @@ def test_replay_reconstructs_event_rows_without_initial_additions(completed_demo
     assert not events[:, 7].any()
 
 
+def test_early_sun_reconstructed_from_previous_ledger_without_rewriting(tmp_path):
+    from pvz_game import InitialPlant, Spawn
+
+    cfg = load_demo_config()
+    cfg["reward"]["early_sun_extra_multiplier"] = 0
+    game = ActionPhaseGame()
+    game.reset(
+        LevelSpec(
+            "early-demo",
+            tuple(Spawn(2000, "basic", row, x=1) for row in range(3)),
+            plants=(InitialPlant("sunflower", 4, 0),),
+            mowers=False,
+        ),
+        seed=7,
+    )
+    recorder = ActionPhaseRecorder(game)
+    replay, archive = tmp_path / "early.pvzdemo", tmp_path / "early.jsonl"
+    writer = TransitionArchive(archive, cfg=cfg)
+    try:
+        for _ in range(3000):
+            before = game.observe()
+            result = recorder.step(Wait(), ticks=1)
+            parts = reward_parts(
+                before,
+                result.observation,
+                cfg,
+                events=result.events,
+                rules=game.rules,
+                action=Wait(),
+                action_result=result.action_result,
+            )
+            parts.pop("early_sun")
+            parts.pop("early_sun_bonus")
+            writer.append(
+                before,
+                action=0,
+                accepted=True,
+                rejection_reason=None,
+                reward=parts,
+                terminal=result.status.value,
+                tick=before.tick,
+                ticks_advanced=1,
+            )
+            if result.status.value != "running":
+                break
+        assert result.status.value == "lost"
+        recorder.save(replay)
+        writer.finalize(game.observe(), outcome="lost", replay_path=replay)
+    finally:
+        writer.close()
+    source = {
+        path: path.read_bytes()
+        for path in (archive, replay, archive.with_suffix(".jsonl.manifest.json"))
+    }
+    current = deepcopy(cfg)
+    current["reward"]["early_sun_extra_multiplier"] = 2
+    baseline = demo._load_verified_demo(archive, replay, cfg)
+    verified = demo._load_verified_demo(archive, replay, current)
+    early = sum(row["reward_parts"]["early_sun"] for row in verified.transitions)
+    assert early > 0
+    old_targets = demo._training_tensors(baseline)[-1]
+    new_targets = demo._training_tensors(verified)[-1]
+    assert float(new_targets[0] - old_targets[0]) == pytest.approx(2 * early / 3000, abs=2e-7)
+    assert all(path.read_bytes() == contents for path, contents in source.items())
+
+
 def test_checkpoint_write_failure_preserves_previous_pass(tmp_path, monkeypatch):
     checkpoint = tmp_path / "initialization.pt"
     checkpoint.write_bytes(b"previous complete pass")

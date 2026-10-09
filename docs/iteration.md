@@ -1,5 +1,158 @@
 # Iteration history
 
+## 0.34.0 — 2026-10-09
+
+- Problem/root cause: fixed slot-capacity inference kept doing encoder/tile work
+  as games finished; invalid, terminal or duplicate probe rows could still consume
+  EMA inference. Long-lived graph buffers crossed collection/fitting phases, and
+  lifetime throughput obscured shrinking active-game workloads. These are execution
+  costs, not evidence of a policy/objective defect.
+- Improvement: the host `ActiveBatchPlan` uses `enabled_envs` and published public
+  `summary_host` counts for entity-width/power-of-two buckets. Canonical gathers/
+  scatters preserve live identities and freeze inactive event memory. Online/actual
+  EMA and the tile wrapper process active rows; selection/exploration RNG keeps
+  original slot-shaped draws. Scheduled probes, model inputs, rewards, exploration,
+  loss denominators and four whole-pass optimizer updates are unchanged.
+- Scratch/transfer scope: shallow batch/feature prefix views reuse existing scratch
+  allocation. Source-ID remapping copies original live slots into compact lanes;
+  public feature/metadata rows scatter back to canonical game/probe identities.
+  Private simulator capacity/bounds remain unchanged. Behavior globals transfer
+  active rows only and rebuild zero-filled canonical host rows; probe globals use
+  the same compact/scatter contract. Compact views preserve original-slot RNG,
+  accounting and proximity state without reallocating the simulator for each live count.
+- Probe pipeline: GPU exact dedup representatives become known through the existing
+  host handoff. Current canonical rows append before valid unique nonterminal EMA
+  bootstrap is queued; its CPU copy is consumed at the next existing handoff and
+  patches stored rows through `buffer.update_probe_bootstrap` before targets/fitting.
+  Terminal bootstraps are zero. Quiescent finalization/checkpoint/interruption drains
+  flush the final copy; there is no new ordinary per-decision count/bootstrap wait.
+- Graph ownership: direct no-grad collection graphs and custom AOT owned fitting
+  graphs apply on all CUDA platforms, with no Windows/Inductor split. Separate
+  phase owners release outgoing captures/workspaces. Collection LRU defaults are
+  eight entries per encoder and 512 MiB headroom; retired captures release at the
+  existing handoff. Capacity/headroom/allocation pressure retains eager inference.
+  Active maps, captures and caches are rebuilt, not serialized; recovery/trajectory
+  contracts remain unchanged from 0.33.0.
+- Monitoring/benchmark: host-only intervals separate active games, decisions/game/s
+  and active transitions/s from lifetime totals and exclude fitting/recovery
+  downtime. Snapshot controls retain 128 original simulator slots with
+  noncontiguous 128/64/32/16/4/1 live-game subsets on sparse, mixed and crowded
+  boards, not six allocation sizes. They separate cold/warmed measurements and an
+  opt-in bounded collect/four-pass-fit/collect cycle. Default snapshot checks do no fitting.
+- Sources: inspected WarpDrive's JMLR paper/project README, NVIDIA CCCL
+  `cub/device/device_select.cuh` and PyTorch 2.8 `cuda.rst`; specific uses and the
+  DeviceSelect/NVRTC incompatibility are recorded in [references](references.md).
+  CUB is inspiration only, not a new dependency.
+- Verification: the remaining owning selection covered 185 cases:
+  183 passed initially; two new storage-fixture expectations used FP64 instead of
+  the stored FP32 dtype, and both targeted rechecks passed after correcting the
+  expectations. Shrinking 128 → 64 → 1 live games passed one control; exact compiled
+  collection recovery passed one; existing configuration controls passed eight.
+  Five compact-probe controls passed after a representation fixture checked batch
+  `n` and the accounting pointer rather than assuming `__self__` on a weak partial.
+  Additional graph/probe/progress selections passed, but overlap prevents summing
+  their counts. Independent constant-bootstrap parity and the one-row encoder limit
+  passed after updating the constant teacher fixture's execution settings. Seven
+  final width/cutoff/comparison controls and three updated probe boundaries passed.
+  Ruff lint/format and whitespace checks passed. No full suite was run.
+- Evidence: [collection-active-v034.json](evidence/collection-active-v034.json)
+  and [hardware samples](evidence/collection-active-v034.hardware.jsonl). The matrix
+  has 73 top-level records: 18 cold and 54 warmed records across three boards and
+  six live counts, plus one mixed/128-live four-pass cycle. All arms retain 128
+  original slots and use two scratch lanes. Each measured window has 16 decisions;
+  warmed arms use eight warmup decisions and three repeats. Cold means fresh
+  environment/policy, not necessarily cold process or disk kernel caches.
+  The cycle contains one post-fit cold window and three post-fit warmed windows;
+  those nested windows are not additional matrix records. Only the cycle performs
+  optimizer updates, exactly four.
+
+Warmed median decisions/game/s, with fixed 128 original slots:
+
+| Board | 128 live | 64 live | 32 live | 16 live | 4 live | 1 live |
+|---|---:|---:|---:|---:|---:|---:|
+| Sparse | 41.40 | 49.13 | 52.51 | 51.63 | 54.45 | 49.09 |
+| Mixed | 39.50 | 46.64 | 51.45 | 49.55 | 54.08 | 56.59 |
+| Crowded | 22.99 | 31.91 | 37.29 | 36.30 | 44.75 | 46.57 |
+
+- Post-fit control: mixed/128-live warmed median was 5,073.68 active transitions/s
+  against the primary warmed median of 5,055.38, a +0.36% change. There was no
+  greater-than-5% median regression in this matched control. The default model
+  completed four actual fitting passes on 2,048 cutoff transitions in 1.833 seconds.
+  The one-second cutoff terminal reward matched the configured loss penalty;
+  the actual/probe CUDA feature modules were rebuilt for that cutoff and the 1,200-second
+  setting restored afterward. This is a bounded execution control, not
+  a long formal cohort or learning-quality result.
+- Phase memory: post-fit collection-entry cleanup reduced Torch reserved memory
+  from 452 to 174 MiB, with allocation falling from 131.93 to 77.20 MiB. At FIT
+  entry, releasing probe scratch workspaces reduced CuPy pool reservation from
+  1,257.34 to 503.53 MiB. These are phase-boundary pool/allocation measurements,
+  not total process memory or promised savings for every workload.
+- Active work: mixed controls with 128 → 64 → 1 live games used online logical
+  rows 128 → 64 → 1, scratch probe rows 512 → 256 → 4 and unique bootstrap rows
+  128 → 64 → 1. Pinned staging was 1.952 → 1.154 → 0.368 MiB. Reported scratch
+  feature capacity remained 512 rows: compact execution did not replace the fixed
+  original-slot allocation with smaller simulators.
+- Limits/remaining issues: earlier short stdout-only 35/36/42 figures were not
+  fully workload-matched and are not an exact pre-feature speedup baseline. The
+  reported cohort-19 14.5× collection cliff is still not proven fixed; the bounded
+  post-fit control establishes absence of the measured regression only. Short windows
+  do not reproduce prolonged full-cohort residency. Cleanup of this session's
+  checked workspace test/cache directories was blocked by tool policy, so those
+  directories remain; no alternative deletion was attempted. Earlier denied
+  temporary-folder cleanup was not retried. The preceding 0.33.0 patch, settings,
+  recordings, runs, checkpoints and evidence were preserved. No formal training,
+  commit, push or merge was launched.
+
+## 0.33.0 — 2026-10-08
+
+- Problem/evidence: the latest recorded 128-game cohort used only Peashooters
+  and Potato Mines, produced no Sunflower sunlight and won 63 games. This shows
+  action concentration, not proof of a local optimum. Tile-only exploration could
+  not discover a different species during actual play.
+- Improvement: actual capped Sunflower income has triple development value while
+  cumulative spawns are strictly below one-third of the public total roster.
+  Event-time CPU/CUDA accounting excludes sky/discarded income and zero-total
+  scenarios. Early income/bonus are separate diagnostics, included in development
+  once; physical net-value facts and event-memory inputs are unchanged.
+- User parameters: tile exploration stays 50% to 1%, with decay extended from
+  5,000 to 10,000 stage games. Accepted-normal-plant species exploration starts at
+  10%, reaches 1% after 10,000 stage games and chooses uniformly among the other
+  seven species. Probabilities freeze per cohort and reset on stage promotion.
+  Commitments wait indefinitely for sun/cooldown/empty geometry, then use current
+  tile Q-values. Exploratory planting cannot retrigger the species coin.
+- Learning/recovery: actual waits/plants and their selected Q-values supervise
+  unchanged complete-return/outcome-balanced losses. Original policy proposals,
+  mode/pending/next species and cohort probabilities share existing trajectories,
+  journals, RAM/disk budgets and pinned transfers. Model/optimizer remain unchanged:
+  four autonomous passes, twenty demonstration passes. Removed the obsolete
+  tile-only schedule contract and unused schedule wrappers/arguments.
+- Compatibility: autonomous recovery and trajectories have new protocols;
+  malformed/missing commitments reject before simulation. Full compatible event-
+  memory weights remain usable with fresh `--init-from`, without loading old
+  optimizers/collectors. Verified old reward ledgers reconstruct the bonus without
+  rewriting recordings. Existing latest.zip transferred all 55 parameter tensors;
+  its source metadata recorded 2,048 completed games. User artifacts were preserved.
+- Presentation: compact terminal/cohort-boundary records include current-cohort
+  completed/win counts and mean raw/training returns, with explicit pending markers.
+  Host-only records persist through fitting/recovery and clear before the next
+  cohort. Narrow interactive lines prioritize these fields; durable logs stay full.
+- Verification: owning selection initially passed 201/202 cases; the omitted fitted
+  summary was fixed. Additional math/precision/journal selection passed 45/47 and
+  lifecycle/stage/settings selection passed 68/70 before fixture repairs. Repairs
+  preserve exact assertions: deterministic journal controls now disable both coins,
+  the native replay allows the independently verified 2,257-tick natural defeat,
+  and checkpoint mocks accept the explicit weights-only inspection argument.
+  Every failed case was rechecked. Final combined schedule/four-pass committed
+  recovery/preflight selection passed 11 cases; three independent corrupt-state
+  preflight controls also passed. No full suite was run. Ruff lint/format checks
+  and whitespace checks passed.
+- Limits: the bounded two-game, one-second/four-pass recovery control establishes
+  execution and exact recovery, not improved win rate. The no-timeout controller
+  can delay defence. No formal training, commit or push was launched. Only this
+  session's disposable pytest workspace cleanup was attempted but blocked by tool
+  policy; those temporary workspaces remain. Pre-existing caches and
+  recordings/runs/checkpoints/evidence remain untouched.
+
 ## 0.32.0 — 2026-10-07
 
 - Demonstration-pass adjustment: changed `training.demo.passes` from 5 to 20;

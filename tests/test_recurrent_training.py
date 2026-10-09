@@ -99,6 +99,203 @@ def test_removed_time_option_and_recurrent_batch_boundary():
         validate_config(cfg)
 
 
+def test_previous_exploration_allows_full_weights_not_recovery(
+    recurrent_cfg, tmp_path, monkeypatch
+):
+    import io
+    from zipfile import ZipFile
+
+    from pvz_game import Rules
+
+    from pvz_rl.envs.encoding import ObservationEncoder
+
+    cfg = recurrent_cfg
+    source = copy.deepcopy(cfg)
+    for name in ("early_sun_extra_multiplier", "early_sun_spawn_fraction"):
+        source["reward"].pop(name)
+    source["training"]["exploration"] = dict(
+        objective="sequential_tile_epsilon_v1",
+        epsilon_start=0.5,
+        epsilon_floor=0.01,
+        decay_games=5000,
+    )
+    policy = TransformerLSTMPolicy(cfg)
+    weights = io.BytesIO()
+    torch.save(policy.state_dict(), weights)
+    checkpoint = tmp_path / "old-exploration.zip"
+    with ZipFile(checkpoint, "w") as archive:
+        archive.writestr(
+            "protocol.json",
+            json.dumps(
+                dict(
+                    policy="transformer_lstm_q_v3",
+                    optimizer="complete_return_event_lstm_v1",
+                    exploration="sequential_tile_epsilon_v1",
+                )
+            ),
+        )
+        archive.writestr(
+            "run.json",
+            json.dumps(
+                dict(
+                    config=source,
+                    condition="masked",
+                    family="preset",
+                    learner_seed=17,
+                    validation_limit=None,
+                )
+            ),
+        )
+        archive.writestr(
+            "observation-schema.json", json.dumps(ObservationEncoder(source, Rules()).schema())
+        )
+        archive.writestr("data", json.dumps(dict(num_timesteps=99, training_games=5, _n_updates=3)))
+        archive.writestr("policy.pth", weights.getvalue())
+        archive.writestr("policy.optimizer.pth", b"must not deserialize optimizer")
+        archive.writestr("cohort-state.pt", b"must not deserialize old runtime")
+    before = checkpoint.read_bytes()
+    transferred, metadata = initial_weights(checkpoint, cfg)
+    for name, value in policy.state_dict().items():
+        torch.testing.assert_close(transferred[name], value, rtol=0, atol=0)
+    assert metadata["steps"] == 99 and metadata["games"] == 5 and metadata["updates"] == 3
+    monkeypatch.setattr(
+        "pvz_rl.learning.training.vector_env",
+        lambda *args, **kwargs: pytest.fail("allocated simulator"),
+    )
+    with pytest.raises(ValueError, match="protocol"):
+        train(cfg, "masked", 17, tmp_path / "absent", resume=checkpoint)
+    assert not (tmp_path / "absent").exists() and checkpoint.read_bytes() == before
+
+
+@pytest.mark.parametrize("corruption", ["missing", "species", "probability"])
+def test_committed_recovery_corruption_rejected_before_simulation(
+    recurrent_cfg, tmp_path, monkeypatch, corruption
+):
+    import io
+    from zipfile import ZipFile
+
+    from pvz_game import Rules
+
+    from pvz_rl.envs.encoding import ObservationEncoder
+    from pvz_rl.learning.checkpoints import AUTONOMOUS_STATE_PROTOCOL, protocol_for
+    from pvz_rl.learning.exploration import EXPLORATION_PROTOCOL, CommittedPlantExploration
+
+    cfg = recurrent_cfg
+    buffer = CompleteGameBuffer(tmp_path / "buffer", 2, cfg=cfg)
+    try:
+        buffer.exploration = dict(plant_epsilon=0.1, tile_epsilon=0.5)
+        controller = CommittedPlantExploration(2, "cpu", 0.1, 0.5)
+        runtime = dict(
+            protocol=AUTONOMOUS_STATE_PROTOCOL,
+            buffer=buffer.metadata(),
+            plant_exploration=controller.snapshot(),
+        )
+        if corruption == "missing":
+            runtime.pop("plant_exploration")
+        elif corruption == "species":
+            runtime["plant_exploration"]["pending"][0] = 9
+        else:
+            runtime["plant_exploration"]["plant_epsilon"] = 0.2
+        payload = io.BytesIO()
+        torch.save(runtime, payload)
+        checkpoint = tmp_path / "invalid.zip"
+        with ZipFile(checkpoint, "w") as archive:
+            archive.writestr("protocol.json", json.dumps(protocol_for(cfg["policy"]["kind"])))
+            archive.writestr(
+                "run.json",
+                json.dumps(
+                    dict(
+                        config=cfg,
+                        condition="masked",
+                        family="preset",
+                        learner_seed=17,
+                        validation_limit=None,
+                        exploration_protocol=EXPLORATION_PROTOCOL,
+                    )
+                ),
+            )
+            archive.writestr(
+                "observation-schema.json", json.dumps(ObservationEncoder(cfg, Rules()).schema())
+            )
+            archive.writestr(
+                "data", json.dumps(dict(plant_exploration_rate=0.1, exploration_rate=0.5))
+            )
+            archive.writestr("cohort-state.pt", payload.getvalue())
+            archive.writestr("policy.pth", b"not inspected during state rejection")
+            archive.writestr("policy.optimizer.pth", b"not inspected during state rejection")
+        monkeypatch.setattr(
+            "pvz_rl.learning.training.vector_env",
+            lambda *args, **kwargs: pytest.fail("allocated simulator"),
+        )
+        with pytest.raises(ValueError, match="committed.*recovery"):
+            train(cfg, "masked", 17, tmp_path / "absent", resume=checkpoint)
+        assert not (tmp_path / "absent").exists()
+    finally:
+        buffer.close()
+
+
+def test_cuda_committed_recovery_matches_four_pass_reference(recurrent_cfg, tmp_path):
+    cfg = recurrent_cfg
+    cfg["training"]["n_epochs"] = 4
+    cfg["training"]["exploration"].update(plant_epsilon_start=1.0, plant_epsilon_floor=1.0)
+
+    def controlled_model():
+        env = vector_env(cfg, "masked", 17)
+        model = build_model(cfg, "masked", env, 17)
+        model.trajectory_root = tmp_path
+        with torch.no_grad():
+            model.policy.branch_head[-1].weight.zero_()
+            model.policy.branch_head[-1].bias.zero_()
+            model.policy.branch_head[-1].bias[1] = 5
+        return env, model
+
+    env, reference = controlled_model()
+    try:
+        reference.learn(1, callback=Stop())
+        expected = copy.deepcopy(reference.policy.state_dict())
+        expected_optimizer = copy.deepcopy(reference.policy.optimizer.state_dict())
+        hashes = [env.batch.state_hash(index) for index in range(2)]
+        assert reference._stats["committed_wait_decisions"] > 0
+        assert reference._stats["q_optimizer_steps"] == 4
+    finally:
+        env.close()
+    env, interrupted = controlled_model()
+    checkpoint = tmp_path / "committed.zip"
+    try:
+        with pytest.raises(KeyboardInterrupt):
+            interrupted.learn(1, callback=Stop("collect"))
+        assert interrupted._plant_exploration.pending.ne(0).all()
+        rows = interrupted._buffer.take(np.arange(interrupted._buffer.size))
+        waiting = rows["exploration_mode"] == 1
+        assert waiting.any() and (rows["action"][waiting] == 0).all()
+        assert (rows["branch_value"][waiting] == 0).all()
+        assert (rows["policy_action"][waiting] > 0).all()
+        assert not rows["memory_write"][waiting][2:].any()
+        interrupted.save(checkpoint)
+        saved_pending = interrupted._plant_exploration.pending.cpu().clone()
+    finally:
+        if interrupted._buffer:
+            interrupted._buffer.close()
+        env.close()
+    restored, _ = load_policy(checkpoint, device="cuda")
+    env = vector_env(cfg, "masked", 17)
+    try:
+        restored.set_env(env)
+        restored.trajectory_root = tmp_path
+        restored._restore_runtime()
+        torch.testing.assert_close(restored._plant_exploration.pending.cpu(), saved_pending)
+        restored.learn(1, callback=Stop(), reset_num_timesteps=False)
+        from test_stage_training import assert_tensor_tree_equal
+
+        assert_tensor_tree_equal(expected, restored.policy.state_dict())
+        assert_tensor_tree_equal(expected_optimizer, restored.policy.optimizer.state_dict())
+        assert hashes == [env.batch.state_hash(index) for index in range(2)]
+    finally:
+        if restored._buffer:
+            restored._buffer.close()
+        env.close()
+
+
 @pytest.mark.parametrize("device", [None, "cpu", "cuda"])
 def test_actual_cli_keeps_recording_verification_config(
     completed_demo, monkeypatch, tmp_path, device
@@ -417,9 +614,69 @@ class Stop(BaseCallback):
                 raise KeyboardInterrupt
 
 
-@pytest.mark.parametrize("phase", ["collect", "fit", "idle"])
-def test_cuda_recovery_matches_uninterrupted(recurrent_cfg, tmp_path, phase, monkeypatch):
+def test_noncontiguous_active_collection_retains_terminal_and_empty_inactive_rows(
+    recurrent_cfg, tmp_path
+):
     cfg = recurrent_cfg
+    cfg["training"].update(n_envs=4, total_games=4)
+    env = vector_env(cfg, "masked", 17)
+    model = build_model(cfg, "masked", env, 17)
+    model.trajectory_root = tmp_path
+    model.set_logger(configure(folder=None, format_strings=[]))
+    callback = Stop()
+    callback.init_callback(model)
+    try:
+        model._begin(callback)
+        with torch.no_grad(), env.device_context():
+            model.policy.branch_head[-1].weight.zero_()
+            model.policy.branch_head[-1].bias.zero_()
+            model.policy.branch_head[-1].bias[0] = 5
+            env.batch.header[env.cp.asarray([0, 2]), 0] = 99
+            model._last_obs = env.features.encode()
+        shapes = []
+        handle = model.policy.entity.register_forward_pre_hook(
+            lambda module, args: shapes.append(args[0].shape[0])
+        )
+        model._collect_step(callback)
+        np.testing.assert_array_equal(env.enabled_envs, [False, True, False, True])
+        terminal = model._buffer.take(np.arange(4))
+        assert terminal["active"].all() and terminal["done"][[0, 2]].all()
+        assert (terminal["entity_count"] > 0).all()
+        state = model._memory.snapshot()
+        model._collect_step(callback)
+        after = model._buffer.take(np.arange(4, 8))
+        np.testing.assert_array_equal(after["active"], [False, True, False, True])
+        assert not after["entity_count"][[0, 2]].any()
+        assert not after["probes"]["valid"][[0, 2]].any()
+        assert not after["events"][[0, 2]].any()
+        assert not after["globals"][[0, 2]].any()
+        assert shapes == [4, 2]
+        for name, dimension in (("hidden", 1), ("cell", 1), ("pending", 0), ("elapsed_ticks", 0)):
+            torch.testing.assert_close(
+                state[name].index_select(dimension, torch.tensor([0, 2])),
+                model._memory.snapshot()[name].index_select(dimension, torch.tensor([0, 2])),
+                rtol=0,
+                atol=0,
+            )
+        model._drain()
+        assert model._pending_probe_bootstrap is None
+        assert np.isfinite(model._buffer.take(np.arange(8))["probes"]["bootstrap"]).all()
+        handle.remove()
+    finally:
+        model._drain()
+        model._buffer.close()
+        env.close()
+
+
+@pytest.mark.parametrize(
+    "phase,compile_kernels",
+    [("collect", False), ("fit", False), ("idle", False), ("collect", True)],
+)
+def test_cuda_recovery_matches_uninterrupted(
+    recurrent_cfg, tmp_path, phase, compile_kernels, monkeypatch
+):
+    cfg = recurrent_cfg
+    cfg["training"]["performance"]["compile_kernels"] = compile_kernels
     if phase == "idle":
         cfg["training"]["total_games"] = 4
     reference_env = vector_env(cfg, "masked", 17)
@@ -471,11 +728,15 @@ def test_cuda_recovery_matches_uninterrupted(recurrent_cfg, tmp_path, phase, mon
         checkpoint = tmp_path / "recovery.zip"
         model.save(checkpoint)
         assert inspect_checkpoint(checkpoint)["config"] == cfg
+        if compile_kernels:
+            assert model._extra_runtime()["compilation"]["policy"]["shapes"] == []
     finally:
         if model._buffer:
             model._buffer.close()
         env.close()
     restored, _ = load_policy(checkpoint, device="cuda")
+    if compile_kernels:
+        assert restored.policy.entity.collection_metrics["entries"] == 0
     if phase == "fit":
         assert restored.execution_state["precision"] == "fp32"
         assert restored.execution_state["fallbacks"] == ["nonfinite_bf16"]

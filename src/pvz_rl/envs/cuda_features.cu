@@ -66,6 +66,19 @@ extern "C" __global__ void encode_canonical(const I *headers, const I *plants,
   I i = blockIdx.x;
   if (i >= n) return;
   Header h = ((Header *)headers)[i];
+  if (!h.enabled) {
+    for (I index = threadIdx.x; index < ENTITY_LIMIT; index += blockDim.x) {
+      clear_record(entities + (i * ENTITY_LIMIT + index) * ENTITY_WIDTH);
+      mask[i * ENTITY_LIMIT + index] = false;
+    }
+    for (I index = threadIdx.x; index < GLOBAL_WIDTH; index += blockDim.x)
+      globals[i * GLOBAL_WIDTH + index] = 0;
+    if (!threadIdx.x) {
+      assets[i] = 0;
+      for (I index = 0; index < 4; index++) summary[i * 4 + index] = 0;
+    }
+    return;
+  }
   Plant *p = (Plant *)(plants + i * 45 * GAME_PLANT_WIDTH);
   Zombie *z = (Zombie *)(zombies + i * ZCAP * GAME_ZOMBIE_WIDTH);
   Shot *q = (Shot *)(projectiles + i * QCAP * GAME_PROJECTILE_WIDTH);
@@ -165,17 +178,26 @@ extern "C" __global__ void copy_probe_state(
     const Header *sh, const Plant *sp, const Zombie *sz, const Shot *sq,
     const Mower *sm, const I *sc, const I *ss, const I *sl, const double *sa,
     Header *dh, Plant *dp, Zombie *dz, Shot *dq, Mower *dm, I *dc, I *ds, I *dl,
-    double *da, const bool *active) {
+    double *da, const I *source_ids, const bool *active) {
   I i = blockIdx.x, t = threadIdx.x;
-  Header h = sh[i];
-  if (t == 0) { dh[i] = h; dh[i].enabled = h.enabled && active[i]; da[i] = sa[i]; }
-  for (I j=t;j<h.np;j+=blockDim.x) dp[i*45+j]=sp[i*45+j];
-  for (I j=t;j<h.nz;j+=blockDim.x) dz[i*ZCAP+j]=sz[i*ZCAP+j];
-  for (I j=t;j<h.nq;j+=blockDim.x) dq[i*QCAP+j]=sq[i*QCAP+j];
-  for (I j=t;j<5;j+=blockDim.x) dm[i*5+j]=sm[i*5+j];
-  for (I j=t;j<8;j+=blockDim.x) dc[i*8+j]=sc[i*8+j];
-  for (I j=t;j<ZCAP*5;j+=blockDim.x) ds[i*ZCAP*5+j]=ss[i*ZCAP*5+j];
-  for (I j=t;j<ZCAP*2;j+=blockDim.x) dl[i*ZCAP*2+j]=sl[i*ZCAP*2+j];
+  I source = source_ids[i];
+  if (!active[i] || !sh[source].enabled) {
+    if (!t) {
+      Header empty = {};
+      dh[i] = empty;
+      da[i] = 0;
+    }
+    return;
+  }
+  Header h = sh[source];
+  if (t == 0) { dh[i] = h; dh[i].enabled = h.enabled && active[i]; da[i] = sa[source]; }
+  for (I j=t;j<h.np;j+=blockDim.x) dp[i*45+j]=sp[source*45+j];
+  for (I j=t;j<h.nz;j+=blockDim.x) dz[i*ZCAP+j]=sz[source*ZCAP+j];
+  for (I j=t;j<h.nq;j+=blockDim.x) dq[i*QCAP+j]=sq[source*QCAP+j];
+  for (I j=t;j<5;j+=blockDim.x) dm[i*5+j]=sm[source*5+j];
+  for (I j=t;j<8;j+=blockDim.x) dc[i*8+j]=sc[source*8+j];
+  for (I j=t;j<ZCAP*5;j+=blockDim.x) ds[i*ZCAP*5+j]=ss[source*ZCAP*5+j];
+  for (I j=t;j<ZCAP*2;j+=blockDim.x) dl[i*ZCAP*2+j]=sl[source*ZCAP*2+j];
 }
 
 extern "C" __global__ void dedup_probes(const int *entities, const I *summary,
@@ -280,7 +302,9 @@ reward_metrics(const I *headers, const I *old_headers, const I *old_cd,
   v[F_mower_expenditure] = R_mower_value * f[5];
   v[F_net_value] = resources + v[F_combat_value] - v[F_mower_expenditure];
   double scale = R_progress_weight / R_value_scale;
-  v[F_development] = scale * v[F_net_value];
+  v[F_early_sun] = a[10];
+  v[F_early_sun_bonus] = scale * R_early_sun_extra_multiplier * a[10];
+  v[F_development] = scale * v[F_net_value] + v[F_early_sun_bonus];
   v[F_mower_activation_penalty] = -scale * v[F_mower_expenditure];
   v[F_invalid_plant_penalty] =
       action > 0 && action < ACTION_DIG_START && !h.accepted

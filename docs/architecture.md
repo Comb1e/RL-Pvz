@@ -36,8 +36,10 @@ configuration identity and weight structure before environment creation. Loading
 for evaluation retains saved learning settings. Fresh initialization uses current
 configuration; autonomous resume automatically applies current execution and
 logging settings without replacing saved learning parameters.
-Engine, complete observation encoding, timing, action algebra, reward definition
-and network structure must match for transfer. Budgets and output preferences
+Engine, complete observation encoding, timing, action algebra
+and network structure must match for autonomous weight transfer; demonstration
+weights require the public input/output model interface. Reward/exploration prices
+do not constrain weight-only reuse. Budgets and output preferences
 are execution choices. Invalid input raises an error; there is no random fallback.
 
 Environment adapters encode only public state: one int32 row per mower, plant,
@@ -101,7 +103,7 @@ count scales and log1p(elapsed seconds), without clipping. Every decision fuses
 its current summary/scalars with the latest event-memory output into 256 features
 for both Q heads. Quiet decisions still respond to current board changes.
 The shared Q selector compares wait, eight species and dig greedily, then
-explores only the selected branch's tile target. It chooses a tile for a
+explores the selected branch's tile target. It chooses a tile for a
 non-wait branch. Occupancy limits plant tiles; dig can target every tile.
 A full board gives a deterministic tile-zero plant proposal that the simulator
 may reject. Affordability and cooldown never remove a plant branch from that
@@ -110,6 +112,39 @@ to validation, so a rejected plant advances exactly one tick, carries the pinned
 reason into the transition, and receives `invalid_plant_penalty`. The proposal
 is retained for rewards, Q fitting, journals and viewers; the resolved execution
 action is exposed separately as wait.
+
+Autonomous collection adds a separate tensor-based committed-plant controller.
+After an accepted normal planting, a species coin may select uniformly from the
+other seven species. The controller issues ordinary waits until that species is
+affordable, off cooldown and has an empty tile, then selects its tile from the
+current Q features. There is no timeout, digging fallback or defensive cancellation;
+full-board commitments wait for a tile to become empty or the episode to end.
+Successful exploratory placements do not retrigger exploration. Every waiting
+decision still encodes the board and consumes genuine memory events.
+
+```mermaid
+stateDiagram-v2
+    [*] --> Normal
+    Normal --> Committed: accepted normal planting / species coin
+    Committed --> Committed: unavailable / execute one-tick wait
+    Committed --> Normal: exploratory planting accepted
+    Committed --> Committed: unexpected planting rejection
+    Committed --> [*]: episode ends
+```
+
+Both probabilities resolve from completed stage games and freeze for each cohort:
+tile 50% to 1%, species 10% to 1%, exponentially over 10,000 games. Stage changes
+restart progress. Evaluation, replay and counterfactual probes never run this
+controller. Selected-action fitting uses actual controller proposals and their
+Q-values; original policy proposals and commitment provenance remain diagnostics.
+
+Reward accounting credits actual capped Sunflower income at its production event.
+While three times cumulative spawns is less than the public total roster, its
+development value triples. Sky income, discarded sun and zero-total scenarios
+earn no bonus. CPU processes ordered public events; CUDA extends read-only counters
+without detailed event buffers. Early sun and its bonus are reported separately;
+the bonus enters development once and never changes physical net-value metrics
+or recurrent event fields. Replay reconstruction reprices the same facts.
 
 ```mermaid
 flowchart LR
@@ -217,24 +252,46 @@ stateDiagram-v2
 
 A cohort holds at most 128 games at fixed weights. Completed slots remain inactive
 until the next cohort, and the final cohort uses only the remaining game count.
+The collector builds a host `ActiveBatchPlan` from `enabled_envs` and the latest
+published public retained-entity counts in `summary_host`. It groups live slots
+by entity width and power-of-two batch size, within encoder microbatch/token
+budgets. Canonical slot IDs gather observations, hidden/cell, pending events and
+elapsed ticks; masked padding never becomes a game. Outputs scatter back to those
+same IDs, preserving inactive memory exactly. Empty active sets do no inference.
+Online and actual-history EMA inference use this plan; the tile-head wrapper
+evaluates active rows only. Selection/exploration RNG still draws in the original
+slot-shaped dimensions and order, so compaction does not reassign a live game's
+random draw, probe cursor or journal identity.
+
 Trajectories retain fixed transition metadata and globals, entity offset/count,
 and contiguous append-only int32 entity slabs containing only real rows. Metadata
 and entities share one RAM budget with disk overflow. Proposals, executed actions,
-acceptance, durations, event facts/write masks/timing, omission counts, rewards and
-boundaries remain explicit. Group/outcome and probe head/branch/outcome counts
+acceptance, durations, event facts/write masks/timing, omission counts, rewards,
+controller mode, pending/next species, original policy action, cohort probabilities
+and boundaries remain explicit. Group/outcome and probe head/branch/outcome counts
 cover the full cohort, including spilled blocks.
 Only recovery state stores private simulator snapshots and scenario RNGs.
 
 At each decision, two scratch lanes independently restore pre-decision simulator,
 RNG, accounting and proximity-ledger state. The branch pair and tile pair execute
-in two simulator passes. Allocation failure releases the failed scratch allocation
+in two simulator passes through shallow batch/feature prefix views of the existing
+scratch allocation. Source-ID remapping copies original live slots into each
+lane's compact prefix; simulator/feature work uses that prefix rather than all
+original slots. Scheduled-role masks still distinguish eligible probes. Public
+features and metadata scatter back to canonical game/probe rows before packing,
+deduplication and bootstrap. The views do not allocate a smaller simulator or
+shrink private storage bounds, and source IDs/private scratch state never become
+policy inputs. Allocation failure releases the failed scratch allocation
 and selects one lane, executing all four scheduled probes sequentially. It never
 changes probe coverage. The frozen FP32 EMA teacher advances only on actual history;
-one stacked next-state evaluation receives four complete independent event-memory
-copies, including pending facts and timing. Probe events update only these forks.
+probe next states receive complete independent event-memory copies, including
+pending facts and timing. Probe events update only these forks. Only valid,
+nonterminal representatives enter next-state inference after exact deduplication;
+their values scatter back to every original probe row. Terminal bootstraps are zero.
 Probe states never enter behavior history, viewer history or journals.
 
-Device feature buffers retain each probe pass in its own rows. Canonical records
+Persistent device feature buffers retain each compact pass in its own canonical
+rows after scatter. Canonical records
 are packed on device; duplicate probes share a slab offset only when entities,
 globals and gross event/timing inputs match within the same actual game.
 Identical resulting boards alone are insufficient; the forked hidden/cell
@@ -247,32 +304,74 @@ conservative bound from already-published public entity counts, pending-zombie
 counts, at most two shots per existing plant and one accepted new plant. No future
 schedule or RNG determines policy input. The configured entity cap still limits
 tokens, not simulator capacity; a bound violation fails instead of dropping records.
-Collection inference uses the same owned-output, fixed-shape encoder graphs as
-fitting, with a bounded four-shape cache and one recorded eager fallback.
+Collection runs direct no-grad CUDA graphs on every CUDA platform, while fitting
+uses the custom AOT owned-output forward/backward backend on every CUDA platform.
+Both copy outputs out of reusable capture buffers. Each online/EMA encoder owns
+its own collection LRU cache, configured by
+`training.performance.collection_graph_cache_entries` (8 live entries) and
+`collection_vram_headroom_mib` (512). Shape, stride, dtype/device and computation
+mode distinguish captures. Eviction fences a capture's last replay/output copies;
+the existing handoff polls those fences and releases completed retired buffers
+without another wait. Cache misses can also poll completed fences. The retired
+list is separately bounded by the same entry limit; resident metrics include
+these not-yet-released buffers. No queued replay loses its capture storage.
+Admission checks VRAM headroom before and after capture; capacity pressure,
+insufficient headroom and capture allocation failure fall back to exact eager
+inference. Other capture failures record an explicit eager fallback.
 
-One reusable pinned handoff queues behavior inputs, probe metadata/slabs, execution
-results and episode headers/totals on the collection stream. A single stream wait
-precedes host interpretation, ragged storage and journal publication. Terminal
+Collection and fitting captures have separate phase owners. Entering fitting
+drains pending collection work and releases collection captures and probe
+workspaces. Entering collection drains delayed backward/prefetch work and releases
+fitting captures before building collection workspaces. Fitting retains its own
+bounded four-shape compilation set; collection shapes do not consume that set.
+Phase memory and cache hit/miss/capture/eviction/fallback counters expose execution
+cost without changing observations, rewards, exploration or optimizer updates.
+
+Behavior globals transfer only active rows and rebuild zero-filled canonical host
+rows. Probe globals use the same live-row transfer/canonical scatter contract;
+inactive globals are not copied merely to preserve host shape. Small fixed
+metadata can retain original slot-shaped staging.
+Entity slabs use summed public bounds for active games, not full original capacity.
+This does not promise exact deduplicated-byte DMA: a bounded unused tail can still
+cross the handoff without adding another GPU count wait.
+
+One reusable pinned handoff queues behavior inputs, probe metadata/slabs, dedup
+representatives, execution results and episode headers/totals on the collection
+stream. A single existing stream wait makes those representatives available to
+the host planner. After consuming the previous decision's pending bootstrap copy,
+the collector appends the current canonical rows, runs compact next-state EMA
+inference and queues its bootstrap CPU copy. The CPU consumes that copy at the
+next existing collection handoff and patches the appended rows through
+`buffer.update_probe_bootstrap` before targets or fitting can use them. This
+pipeline adds no ordinary per-decision wait for GPU dedup counts. The last copy
+is explicitly drained at quiescent finalization, checkpoint, interruption and
+shutdown boundaries; it cannot be serialized as a half-updated trajectory. Terminal
 metrics need no separate header/totals read. Viewer staging remains read-only and
 asynchronous; reset, checkpoint and shutdown explicitly drain it. Device timing
 events are read after the existing handoff and reused, not individually waited on.
 
 ```mermaid
 flowchart LR
-    Source[Actual pre-decision state] --> Online[Online inference / proposal]
-    Source --> EMA[Advance actual EMA history once]
-    Online --> Scratch[Copy independent scratch lanes]
+    Source[Actual pre-decision state] --> Plan[Host active-slot / public-width plan]
+    Plan --> Online[Compact online inference / canonical proposal]
+    Plan --> EMA[Compact actual EMA history once]
+    Online --> Scratch[Remap live source IDs / compact scratch prefix views]
     Scratch --> Branch[Branch pair / first pass]
     Scratch --> Tile[Tile pair / second pass]
-    Branch --> Next[Owned canonical probe rows]
+    Branch --> Next[Scatter owned public features / canonical probe rows]
     Tile --> Next
-    EMA --> Fork[Stack independent EMA next-state inputs]
-    Next --> Fork
-    Fork --> Pack[Exact device deduplication / packed records]
+    EMA --> Fork[Independent probe histories]
+    Next --> Pack[Exact device deduplication / packed records]
     Online --> Actual[Execute actual proposal]
-    Actual --> Handoff[Queue public evidence / one stream wait]
+    Actual --> Handoff[Queue compact public evidence / one stream wait]
     Pack --> Handoff
-    Handoff --> Store[RAM/disk trajectories]
+    Handoff --> Previous[Patch previous bootstrap copy / release retired captures]
+    Previous --> Store[Append canonical RAM/disk rows]
+    Store --> Bootstrap[Valid unique nonterminal EMA inference]
+    Fork --> Bootstrap
+    Bootstrap --> Copy[Queue bootstrap CPU copy]
+    Copy --> Boundary[Next existing handoff / quiescent drain]
+    Boundary --> Patch[Patch appended rows before targets / fitting]
     Handoff --> Journal[Actual journal / viewer]
 ```
 
@@ -280,10 +379,19 @@ Game and win counts update immediately; completed rewards remain provisional unt
 the cohort median is known. Finalization includes all actual durations, applies time
 shaping only to victories, fixes terminal probe rewards with that same median and
 publishes finalized records once. Saved state includes median/reference count,
-publication state, pending event/timing state, EMA weights/version/history,
-probe cursors, proximity ledgers and online/EMA compilation paths with bounded
-shape sets. Protocol/schema inspection precedes the CUDA availability probe,
+publication state, pending event/timing state, committed species/cohort probabilities,
+EMA weights/version/history,
+probe cursors, proximity ledgers and online/EMA compilation diagnostics.
+Active execution maps, captures and cache entries are not serialized; resume
+rebuilds them from restored canonical state. This execution change leaves the
+recovery/trajectory contracts unchanged. Protocol/schema inspection precedes the
+CUDA availability probe,
 collector allocation and model transfer.
+Autonomous recovery and trajectories use the current combined exploration contract;
+missing or malformed controller state rejects recovery. Weight-only inspection
+accepts full structurally compatible event-memory weights without deserializing
+the old optimizer or collector. It validates the complete parameter dictionary
+against the current model and starts fresh; the demo event-memory contract is unchanged.
 Selected complete returns and outcome-balanced probe Huber errors share each whole-pass
 optimizer update. EMA advances once after each successful commit, never after a failed
 or interrupted attempt. Demonstrations add accepted-action ranking instead of probes.
@@ -301,15 +409,15 @@ budget. Allocation fallback lowers the encoder microbatch to 64, 32 and 16,
 then enables one outer checkpoint without dropping entities.
 
 Full-sequence SDPA selects the available efficient backend; an exact 64-query
-fallback attends to all keys. When compilation is enabled, fixed-shape encoder
-calls use CUDA graphs on Windows and the platform compiler elsewhere; a failed
+fallback attends to all keys. When compilation is enabled, fixed-shape CUDA encoder
+calls use the owned graph backends on all platforms; a failed
 backend is recorded once and the exact eager path remains active. CPU preparation
 caches sequence index templates,
 gathers entity slabs into reusable buffers and fills metadata in bulk. Two
 pinned buffers and one ordered worker prepare the next fused batch; transfer
 events prevent reads or host-buffer reuse before the copy completes.
 
-The Windows backend captures forward and backward separately. Every output,
+The fitting AOT backend captures forward and backward separately. Every output,
 including internal activations saved for backward and returned parameter
 gradients, is copied out of reusable graph storage. Copies retain tensor strides
 and attention alignment. Consequently, replay cannot overwrite a preceding
@@ -410,10 +518,25 @@ Phase boundaries, completed cohorts, checkpoint saves, warnings and final states
 print immediately. Routine output requires both material progress and the separate
 60-second terminal interval. Interactive output rewrites one line; redirected
 output uses timestamped lines without ANSI controls. Consecutive duplicates and
-repeated identical report-refresh notices are suppressed. Detailed `status.json`
-snapshots retain their independent 15-second cadence, alongside training and
+repeated identical report-refresh notices are suppressed. Current-cohort done/win
+counts and completed-game mean raw/training returns precede throughput and hardware;
+`n/a` means no completed games and `~` means provisional time shaping. Statistics
+come from host-side pending episode records, persist through fitting/recovery and
+clear before the next cohort starts. Interactive routine lines omit the timestamp/
+phase prefix to retain these fields at narrow widths; durable logs remain complete.
+Detailed `status.json` snapshots retain their independent 15-second cadence, alongside training and
 hardware JSONL streams. Formatting uses host-side snapshots and cached fitting
 metrics; it never reads active device accumulators.
+
+The collection interval monitor reports current active games, decisions/game/s
+and active transitions/s separately from lifetime totals. For interval active
+transitions `D`, collection seconds `T` and active-game seconds
+`A = sum(active_games_before_callback * elapsed_seconds)`, its rates are `D/A`
+and `D/T`. Completed slots, padding and counterfactuals are not transitions.
+Phase/cohort changes and restored counters reset the reporting interval;
+fitting, validation and recovery downtime do not enter collection rates. Missing
+or zero-duration intervals display `n/a`, not zero. Sampling uses host counters
+only and never changes the detailed JSON or terminal cadence.
 
 Mathematical controls and verification limits are in
 [entity inputs](math/entity-inputs.md) and [recurrent training](math/recurrent-training.md); chronological release evidence

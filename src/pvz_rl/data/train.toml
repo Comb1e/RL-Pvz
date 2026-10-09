@@ -50,7 +50,7 @@ wave_scale = 15
 [reward]
 version = "net_value_v1"
 win_reward = 1.0
-loss_penalty = 2.0
+loss_penalty = 1.0
 basic_zombie_value = 50.0 # Sun-equivalent value per basic zombie's actual HP removed.
 mower_value = 200.0
 progress_weight = 0.01
@@ -59,6 +59,8 @@ invalid_plant_penalty = 0.00001
 empty_dig_penalty = 0.000003
 home_entry_penalties = [0.005, 0.015] # First entry into the second, then first column.
 win_time_weight = 0.1 # Victories relative to the current cohort's median duration.
+early_sun_extra_multiplier = 2.0
+early_sun_spawn_fraction = [1, 3]
 
 [training]
 gamma = 1.0
@@ -75,8 +77,8 @@ n_envs = 128
 device = "cuda"
 max_minutes = 120
 finalization_minutes = 15
-# Tile-only exploration is fixed throughout each complete-game cohort.
-exploration = {objective = "sequential_tile_epsilon_v1", epsilon_start = 0.5, epsilon_floor = 0.01, decay_games = 5000}
+# Both exploration probabilities are fixed throughout each complete-game cohort.
+exploration = {objective = "committed_plant_tile_epsilon_v1", epsilon_start = 0.5, epsilon_floor = 0.01, decay_games = 10000, plant_epsilon_start = 0.1, plant_epsilon_floor = 0.01, plant_decay_games = 10000}
 batch_size = 1024
 n_epochs = 4
 learning_rate = 0.0003
@@ -107,6 +109,8 @@ telemetry = true
 fit_precision = "features_bf16"
 prefetch = true
 fit_sequence_groups = 4
+collection_graph_cache_entries = 8
+collection_vram_headroom_mib = 512
 
 [curriculum]
 mode = "teaching"

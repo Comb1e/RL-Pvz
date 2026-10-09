@@ -9,6 +9,8 @@ PERFORMANCE_SETTINGS = (
     "compile_kernels",
     "telemetry",
     "fit_sequence_groups",
+    "collection_graph_cache_entries",
+    "collection_vram_headroom_mib",
 )
 
 
@@ -28,3 +30,23 @@ def without_performance(cfg):
         result["policy"].pop(key, None)
     result["training"].pop("performance", None)
     return result
+
+
+def phase_memory(device, *, empty_cache=False):
+    """Sample memory at a quiescent boundary after releasing every phase owner."""
+    import torch
+
+    device = torch.device(device)
+    if device.type != "cuda":
+        return {}
+    torch.cuda.synchronize(device)
+    with torch.cuda.device(device):
+        if empty_cache:
+            torch.cuda.empty_cache()
+        free, total = torch.cuda.mem_get_info(device)
+        return dict(
+            allocated_mib=torch.cuda.memory_allocated(device) / 1024**2,
+            reserved_mib=torch.cuda.memory_reserved(device) / 1024**2,
+            free_mib=free / 1024**2,
+            total_mib=total / 1024**2,
+        )

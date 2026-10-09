@@ -97,3 +97,35 @@ def test_recommendation_handles_larger_batches_and_failed_trials():
     result = recommend(rows)
     assert result["n_envs"] == 256
     assert "cuda-1024" not in result["median_decisions_per_second"]
+
+
+@pytest.mark.parametrize("key", ["collection_graph_cache_entries", "collection_vram_headroom_mib"])
+@pytest.mark.parametrize("value", [-1, True, 1.5, None])
+def test_collection_graph_settings_reject_invalid_values(key, value):
+    from pvz_rl.config import validate_config
+
+    cfg = load_config()
+    cfg["training"]["performance"][key] = value
+    with pytest.raises(ValueError, match=key):
+        validate_config(cfg)
+
+
+def test_collection_graph_settings_defaults_refresh_and_zero_boundaries():
+    from pvz_rl.config import validate_config
+    from pvz_rl.learning.performance import refresh_performance, without_performance
+
+    current = load_config()
+    settings = current["training"]["performance"]
+    assert settings["collection_graph_cache_entries"] == 8
+    assert settings["collection_vram_headroom_mib"] == 512
+    saved = load_config()
+    saved["training"]["performance"].update(
+        collection_graph_cache_entries=0, collection_vram_headroom_mib=0
+    )
+    saved["training"]["learning_rate"] = 0.001
+    validate_config(saved)
+    refreshed = refresh_performance(saved, current)
+    assert refreshed["training"]["performance"] == settings
+    assert refreshed["training"]["learning_rate"] == 0.001
+    assert saved["training"]["performance"]["collection_graph_cache_entries"] == 0
+    assert "performance" not in without_performance(refreshed)["training"]

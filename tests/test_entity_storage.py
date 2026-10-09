@@ -15,6 +15,57 @@ from pvz_rl.learning.sequence_transport import SequencePrefetch
 from pvz_rl.monitoring.entity_benchmark import observation
 
 
+@pytest.mark.parametrize("ram_bytes", [0, 2**20])
+def test_pending_bootstraps_update_canonical_spilled_rows_before_finalization(tmp_path, ram_bytes):
+    buffer = CompleteGameBuffer(tmp_path / "pending", 3, block_rows=2, ram_bytes=ram_bytes)
+    try:
+        rows = np.zeros(3, buffer.dtype)
+        rows["active"] = True
+        rows["env"] = np.arange(3)
+        rows["probes"]["valid"] = True
+        buffer.append(rows, [dict(entities=[], globals=[0] * 18)] * 3)
+        expected = np.arange(12, dtype=np.float32).reshape(3, 4) / 10
+        buffer.update_probe_bootstrap([2, 0, 1], expected[[2, 0, 1]])
+        np.testing.assert_array_equal(buffer.take([0, 1, 2])["probes"]["bootstrap"], expected)
+        with pytest.raises(ValueError, match="pending"):
+            buffer.update_probe_bootstrap([3], expected[:1])
+        with pytest.raises(ValueError, match="pending"):
+            buffer.update_probe_bootstrap([0], np.full((1, 4), np.nan))
+        buffer.rewards_finalized = True
+        with pytest.raises(RuntimeError, match="finalization"):
+            buffer.update_probe_bootstrap([0], expected[:1])
+    finally:
+        buffer.close()
+
+
+def test_committed_metadata_spill_and_corruption(tmp_path):
+    buffer = CompleteGameBuffer(tmp_path / "collect", 1, block_rows=1, ram_bytes=0)
+    recovered = None
+    try:
+        buffer.exploration = dict(plant_epsilon=0.1, tile_epsilon=0.5)
+        rows = np.zeros(1, buffer.dtype)
+        rows["active"] = rows["accepted"] = True
+        rows["policy_action"] = 46
+        rows["exploration_mode"] = 1
+        rows["pending_species"] = rows["next_species"] = 1
+        buffer.append(rows, [dict(entities=[], globals=[0] * 18)])
+        buffer.finalize()
+        state = buffer.save(tmp_path / "saved")
+        recovered = CompleteGameBuffer.restore(tmp_path / "saved", state, tmp_path / "restored")
+        np.testing.assert_array_equal(recovered.take([0]), buffer.take([0]))
+        assert recovered.exploration == buffer.exploration
+        path = tmp_path / "saved/block-000000.npy"
+        corrupted = np.load(path)
+        corrupted["exploration_mode"] = 2
+        np.save(path, corrupted)
+        with pytest.raises(ValueError, match="exploration"):
+            CompleteGameBuffer.restore(tmp_path / "saved", state, tmp_path / "bad")
+    finally:
+        if recovered:
+            recovered.close()
+        buffer.close()
+
+
 @pytest.mark.parametrize("corruption", ["negative", "write_mask", "counts", "counts_mismatch"])
 def test_event_storage_corruption_is_rejected(tmp_path, corruption):
     buffer = CompleteGameBuffer(tmp_path / "collect", 1, block_rows=1, ram_bytes=0)

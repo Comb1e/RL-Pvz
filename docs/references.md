@@ -1,5 +1,16 @@
 # Sources actually used
 
+## Persistent exploration
+
+- Dabney et al., [Temporally-Extended epsilon-Greedy Exploration](https://arxiv.org/abs/2006.01782):
+  inspected temporal persistence as a way to reduce dithering. This project commits
+  to an alternative species until it can be planted; it does not sample random
+  repetition durations or claim the paper's performance results.
+- Bacon et al., [The Option-Critic Architecture](https://arxiv.org/abs/1609.05140)
+  and its [project](https://github.com/jeanharb/option_critic): inspected temporal
+  abstraction and explicit option termination. The local controller has deterministic
+  readiness/episode termination, not learned options, option critics or policy gradients.
+
 ## Selective event memory
 
 - Campos et al., [Skip RNN: Learning to Skip State Updates in Recurrent Neural Networks](https://arxiv.org/abs/1708.06834)
@@ -51,8 +62,8 @@ measurements belong in [iteration history](iteration.md).
 - Metz et al., [Discrete Sequential Prediction of Continuous Actions for Deep RL, §2.2](https://arxiv.org/html/1705.05035v3):
   assemble action components before executing one command. Its off-policy Bellman
   backups are not used. [SB3 2.7.1 QNetwork](https://github.com/DLR-RM/stable-baselines3/blob/v2.7.1/stable_baselines3/dqn/policies.py)
-  supplied the inspected raw-value/argmax reference; branch greediness and tile-only
-  exploration are local decisions.
+  supplied the inspected raw-value/argmax reference; greedy normal branches,
+  tile sampling and accepted-plant commitments are local decisions.
 
 ## Precision and device execution
 
@@ -76,11 +87,14 @@ measurements belong in [iteration history](iteration.md).
 - [CuPy 13.6 kernel guide](https://raw.githubusercontent.com/cupy/cupy/v13.6.0/docs/source/user_guide/kernel.rst)
   and [interoperability guide](https://raw.githubusercontent.com/cupy/cupy/v13.6.0/docs/source/user_guide/interoperability.rst):
   RawModule/NVRTC and DLPack/ExternalStream ownership for CUDA adapters.
-- [WarpDrive](https://jmlr.org/papers/v23/22-0185.html) and its
-  [project README](https://github.com/salesforce/warp-drive): device-resident
-  simulation/learning design, now used for independent batched scratch execution,
-  device packing and avoiding per-probe host round trips. No code or published
-  throughput claim adopted.
+- [WarpDrive: Fast End-to-End Deep Multi-Agent Reinforcement Learning on a GPU](https://jmlr.org/papers/v23/22-0185.html)
+  and its [project README](https://github.com/salesforce/warp-drive/blob/master/README.md):
+  inspected device-resident simulation/learning and reduced CPU/GPU round trips.
+  These inform independent batched scratch execution, device packing and compact
+  live-game/valid-probe inference through existing handoffs. The host active plan,
+  compact scratch prefix views over shared allocation, canonical scatter,
+  deferred bootstrap patching and graph lifetime rules are local choices; no code
+  or published throughput claim is adopted.
 
 ## Simulator, evaluation and presentation
 
@@ -134,8 +148,17 @@ throughput measurements.
 
 - [PyTorch 2.8 CUDA semantics and graphs](https://github.com/pytorch/pytorch/blob/v2.8.0/docs/source/notes/cuda.rst):
   inspected static-shape/control-flow constraints, stream synchronization and
-  long-lived capture buffers. Collection reuses the existing owned-output graph
-  wrapper; timings reuse its established host boundary rather than waiting per event.
+  long-lived static input/output buffers with stable addresses across replay.
+  These inform direct no-grad collection graphs, the owned AOT fitting backend on
+  all CUDA platforms, separate phase owners and handoff-safe release of retired
+  captures. Outputs are copied before reuse; timing uses the existing host boundary
+  rather than waiting per event. LRU limits and headroom values are local controls.
+- [NVIDIA CCCL CUB `DeviceSelect`](https://github.com/NVIDIA/cccl/blob/main/cub/cub/device/device_select.cuh):
+  inspected selected-item compaction as inspiration for canonical gather/scatter.
+  This header explicitly does not support NVRTC, which the local CuPy adapter uses;
+  it is not imported, compiled or adopted as an implementation dependency. The host
+  planner uses published live flags/counts; GPU probe representatives cross only
+  the existing handoff.
 - [PyTorch pinned/nonblocking tutorial](https://github.com/pytorch/tutorials/blob/main/intermediate_source/pinmem_nonblock.py):
   inspected pinned transfer ownership and copy-completion requirements. The single
   reusable handoff waits before CPU consumption and before a named buffer is reused.

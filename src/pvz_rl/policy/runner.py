@@ -20,16 +20,25 @@ class PolicyRunner:
         self.state = self.policy.reset_state(self.state, reset)
 
     @torch.no_grad()
-    def advance(self, obs, active):
+    def advance(self, obs, active, *, plan=None):
         events = self.state.inputs()
         writes = events[:, :7].ne(0).any(-1) & active
-        output = self.policy.forward_step(obs, self.state, events=events, memory_write=writes)
+        if plan is None:
+            output = self.policy.forward_step(obs, self.state, events=events, memory_write=writes)
+        else:
+            from pvz_rl.policy.active_batch import forward_active
+
+            output = forward_active(
+                self.policy, obs, self.state, plan, events=events, memory_write=writes
+            )
         self.state = output.state
         self.resets &= ~active
         return output, events, writes
 
     @torch.no_grad()
-    def decide(self, obs, masks, ticks, *, active=None, deterministic=True, defer_check=False):
+    def decide(
+        self, obs, masks, ticks, *, active=None, deterministic=True, defer_check=False, plan=None
+    ):
         if active is None:
             active = torch.ones(len(obs), dtype=torch.bool, device=self.device)
         self.policy.train(False)
@@ -43,6 +52,7 @@ class PolicyRunner:
             memory_write=writes,
             deterministic=deterministic,
             active=active,
+            active_plan=plan,
         )
         self.state = state
         self.resets &= ~active

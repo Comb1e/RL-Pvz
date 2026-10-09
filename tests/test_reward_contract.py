@@ -4,6 +4,7 @@ from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
+import torch
 from pvz_game import Dig, LevelSpec, Place, Rules, Spawn, Status
 from pvz_game.config import PLANT_TYPES, InitialPlant
 from pvz_game.types import Event
@@ -11,7 +12,98 @@ from pvz_game.types import Event
 from pvz_rl.config import load_config
 from pvz_rl.envs.env import PvZEnv
 from pvz_rl.envs.rewards import HomeProximityLedger, asset_value, reward_parts
-from pvz_rl.learning.objective import victory_time
+from pvz_rl.learning.objective import components, training_rewards, victory_time
+
+
+@pytest.mark.parametrize(
+    "total,spawned,ordered,expected",
+    [
+        (15, 4, [("sunflower", 25)], 25),
+        (15, 5, [("sunflower", 25)], 0),
+        (14, 4, [("sunflower", 25)], 25),
+        (0, 0, [("sunflower", 25)], 0),
+        (15, 4, [("spawn", 0), ("sunflower", 25)], 0),
+        (15, 4, [("sunflower", 25), ("spawn", 0), ("sunflower", 25)], 25),
+        (15, 0, [("sky", 25), ("sunflower", 10), ("sunflower", 0)], 10),
+        (15, 0, [("sky", 25), ("sunflower", 0)], 0),
+    ],
+)
+def test_early_sun_independent_event_order_cap_and_training_scale(
+    total, spawned, ordered, expected
+):
+    cfg = load_config()
+    env = PvZEnv(cfg)
+    try:
+        env.reset(seed=3)
+        before = replace(
+            env.public, counts=replace(env.public.counts, initial_total=total, spawned=spawned)
+        )
+        events = tuple(
+            Event("ZombieSpawned", 1, 99)
+            if source == "spawn"
+            else Event(
+                "SunProduced", 1, 1, (("source", source), ("amount", amount), ("produced", 25))
+            )
+            for source, amount in ordered
+        )
+        income = sum(amount for source, amount in ordered if source != "spawn")
+        sky = sum(amount for source, amount in ordered if source == "sky")
+        after = replace(before, sun=before.sun + income)
+        parts = reward_parts(before, after, cfg, events=events)
+        assert parts["early_sun"] == expected
+        assert parts["net_value"] == income - sky
+        assert parts["early_sun_bonus"] == pytest.approx(2 * expected / 30000)
+        assert parts["development"] == pytest.approx((income - sky + 2 * expected) / 30000)
+        assert training_rewards(components(parts), cfg) == pytest.approx(
+            (income - sky + 2 * expected) / 3000
+        )
+    finally:
+        env.close()
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA unavailable")
+@pytest.mark.parametrize(
+    "sun,total,spawn_tick,expected",
+    [(9990, 3, 99, 0), (9980, 3, 99, 10), (0, 3, 1, 0), (0, 4, 1, 25), (0, 0, 99, 0)],
+)
+def test_early_sun_cuda_controls_at_production(sun, total, spawn_tick, expected):
+    from pvz_game import Game
+
+    from pvz_rl.envs.cuda_accounting import AccountingCudaBatch
+    from pvz_rl.envs.cuda_features import REWARD_FIELDS, CudaFeatures
+
+    cfg = load_config()
+    game = Game()
+    game.reset(
+        LevelSpec(
+            "early-control",
+            tuple(
+                Spawn(spawn_tick if index == 0 else 9999, "basic", index % 5)
+                for index in range(total)
+            ),
+            initial_sun=sun,
+            plants=(InitialPlant("sunflower", 4, 0),),
+        ),
+        7,
+    )
+    snapshot = game.snapshot()
+    snapshot["plants"][0]["due"] = 1
+    game.restore(snapshot)
+    before = game.observe()
+    result = game.step(ticks=1)
+    cpu = reward_parts(before, result.observation, cfg, events=result.events)
+    batch = AccountingCudaBatch(1, zombie_capacity=max(1, total), max_step_ticks=1)
+    batch.restore([snapshot])
+    with batch.cp.cuda.ExternalStream(torch.cuda.current_stream().cuda_stream):
+        features = CudaFeatures(batch, cfg, "masked")
+        features.encode()
+        features.step(batch.cp.asarray([0], dtype=batch.cp.int64))
+        parts = dict(zip(REWARD_FIELDS, features.parts.get()[0], strict=True))
+        assert parts["early_sun"] == cpu["early_sun"] == expected
+        for name in REWARD_FIELDS:
+            assert parts[name] == pytest.approx(cpu[name], abs=1e-10), name
+        assert features.history.get().shape == (1, 7)
+        assert features.history.get()[0, 0] == cpu["produced_sun"]
 
 
 @pytest.mark.parametrize("kind", PLANT_TYPES)

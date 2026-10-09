@@ -1,6 +1,7 @@
 """Device encoders/rewards from the versioned public-observation schema."""
 
 from contextlib import nullcontext
+from copy import copy
 from importlib.resources import files
 
 import torch
@@ -41,6 +42,7 @@ class CudaFeatures:
 
     def __init__(self, batch, cfg, condition, *, store_rows=None):
         self.batch, self.cfg = batch, cfg
+        batch.sun_spawn_fraction = tuple(cfg["reward"]["early_sun_spawn_fraction"])
         cp = batch.cp
         self.profiler = None
         encoder = self.encoder = ObservationEncoder(cfg, batch.rules)
@@ -85,6 +87,7 @@ class CudaFeatures:
             "value_scale",
             "invalid_plant_penalty",
             "empty_dig_penalty",
+            "early_sun_extra_multiplier",
         )
         params.update({f"R_{k}": float(cfg["reward"].get(k, 0)) for k in reward_keys})
         for index, value in enumerate(cfg["reward"].get("home_entry_penalties", (0, 0))):
@@ -135,6 +138,31 @@ class CudaFeatures:
         self.enabled = cp.zeros(batch.n, cp.bool_)
         self.reward_tensor = torch.from_dlpack(self.rewards)
         self.mask_tensor = torch.from_dlpack(batch.masks)
+
+    def compact_view(self, batch):
+        """Alias transient scratch rows while retaining the full canonical store."""
+        if not 0 < batch.n <= self.batch.n:
+            raise ValueError("Compact feature batch must fit within the scratch allocation")
+        view = copy(self)
+        view.batch = batch
+        for name in (
+            "records",
+            "truncation_counts",
+            "home_ledger",
+            "home_entries",
+            "assets",
+            "rewards",
+            "parts",
+            "totals",
+            "before_header",
+            "before_cooldowns",
+            "before_assets",
+            "enabled",
+            "reward_tensor",
+            "mask_tensor",
+        ):
+            setattr(view, name, getattr(self, name)[: batch.n])
+        return view
 
     def _track(self, phase):
         return self.profiler.track(phase) if self.profiler is not None else nullcontext()
@@ -220,10 +248,14 @@ class CudaFeatures:
             cp.copyto(self.before_cooldowns, b.cooldowns)
             b.step_device(actions, ticks=ticks, per_tick=per_tick)
         with self._track("encoding"):
-            observation = self.encode(offset=offset, publish=publish)
-            cp.copyto(self.history[offset : offset + b.n], b.accounting[:, 3:])
-        with self._track(phase):
             cp.copyto(self.enabled, b.header[:, 17], casting="unsafe")
+            observation = self.encode(offset=offset, publish=publish)
+            cp.multiply(
+                b.accounting[:, 3:10],
+                self.enabled[:, None],
+                out=self.history[offset : offset + b.n],
+            )
+        with self._track(phase):
             self.home_kernel(
                 ((b.n + 63) // 64,),
                 (64,),

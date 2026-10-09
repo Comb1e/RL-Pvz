@@ -23,7 +23,7 @@ from pvz_rl.learning.exploration import EXPLORATION_PROTOCOL, configure_explorat
 from pvz_rl.policy.sequential_q import ACTION_DISTRIBUTION, POLICY_SIGNATURE
 
 
-def checkpoint_metadata(path):
+def checkpoint_metadata(path, *, weights_only=False):
     """Read plain JSON before any SB3/cloudpickle or torch model deserialization."""
     path = Path(path)
     if not path.suffix:
@@ -34,8 +34,17 @@ def checkpoint_metadata(path):
         metadata = json.loads(archive.read("protocol.json"))
     from pvz_rl.learning.checkpoints import protocol_for
 
-    if metadata != protocol_for(metadata.get("policy")):
-        raise ValueError("Incompatible model/optimizer checkpoint protocol")
+    expected = protocol_for(metadata.get("policy"))
+    comparable = {
+        key: value for key, value in metadata.items() if not weights_only or key != "exploration"
+    }
+    if comparable != {
+        key: value for key, value in expected.items() if not weights_only or key != "exploration"
+    }:
+        raise ValueError(
+            "Incompatible model/optimizer/exploration checkpoint protocol; use --init-from "
+            "in a new directory for structurally compatible event-memory weights"
+        )
     return metadata
 
 
@@ -125,9 +134,9 @@ class CudaCohortLifecycle(BaseAlgorithm):
             model.runtime_state = torch.load(
                 io.BytesIO(archive.read("cohort-state.pt")), map_location="cpu", weights_only=False
             )
-        from pvz_rl.learning.checkpoints import STATE_PROTOCOL
+        from pvz_rl.learning.checkpoints import AUTONOMOUS_STATE_PROTOCOL
 
-        if model.runtime_state.get("protocol") != STATE_PROTOCOL:
+        if model.runtime_state.get("protocol") != AUTONOMOUS_STATE_PROTOCOL:
             raise ValueError("Unsupported recurrent recovery protocol")
         return model
 
@@ -179,6 +188,8 @@ class CudaCohortLifecycle(BaseAlgorithm):
             from pvz_rl.learning.training import TrainingGamesComplete
 
             raise TrainingGamesComplete
+        self._pending_episodes = {}
+        self.cohort_number = self._n_updates + 1
         self._last_obs = self.env.reset_cohort(count)
         self._memory = self._new_memory()
         self._first = True
@@ -360,9 +371,9 @@ class CudaCohortLifecycle(BaseAlgorithm):
                 "torch_rng": torch.get_rng_state(),
                 "cuda_rng": torch.cuda.get_rng_state_all(),
             }
-        from pvz_rl.learning.checkpoints import STATE_PROTOCOL
+        from pvz_rl.learning.checkpoints import AUTONOMOUS_STATE_PROTOCOL
 
-        runtime["protocol"] = STATE_PROTOCOL
+        runtime["protocol"] = AUTONOMOUS_STATE_PROTOCOL
         runtime["execution_state"] = getattr(self, "execution_state", None)
         runtime.update(self._extra_runtime())
         # One atomic archive ties weights, optimizers, RNG and unfinished games
