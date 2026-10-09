@@ -95,6 +95,18 @@ def balanced_q_loss(branch, tile, targets, actions, counts, *, accepted, accepte
     return loss, branch_error, tile_error
 
 
+def select_q_tiles(board, pooled, tile_values, action_masks, branches, epsilon):
+    rows = torch.arange(len(branches), device=branches.device)
+    tile_q = tile_values(board, pooled, branches)
+    tile_legal = A.tile_masks(action_masks)[rows, (branches - 1).clamp_min(0)]
+    first_tile = torch.zeros_like(tile_legal)
+    first_tile[:, 0] = True
+    candidates = torch.where(tile_legal.any(-1, keepdim=True), tile_legal, first_tile)
+    preferred = greedy_choice(tile_q, candidates)
+    selected, fired = explore(preferred, candidates, epsilon)
+    return selected, preferred, fired, tile_q
+
+
 def select_q_actions(
     values,
     board,
@@ -133,17 +145,10 @@ def select_q_actions(
         legal = torch.where(active[:, None], legal, wait_only)
     branches = greedy_choice(values, legal)
     nonwait = branches > 0
-    rows = torch.arange(len(values), device=values.device)
-    tile_q = tile_values(board, pooled, branches)
-    tile_legal = A.tile_masks(action_masks)[rows, (branches - 1).clamp_min(0)]
-    # Full-board proposals deterministically target tile zero.  The simulator
-    # rejects them and advances time.
-    first_tile = torch.zeros_like(tile_legal)
-    first_tile[:, 0] = True
-    tile_candidates = torch.where(tile_legal.any(-1, keepdim=True), tile_legal, first_tile)
-    preferred = greedy_choice(tile_q, tile_candidates)
     tile_epsilon = 0.0 if deterministic else tile_exploration_epsilon
-    selected, fired = explore(preferred, tile_candidates, tile_epsilon)
+    selected, preferred, fired, tile_q = select_q_tiles(
+        board, pooled, tile_values, action_masks, branches, tile_epsilon
+    )
     tiles = torch.where(nonwait, selected, 0)
     coins = torch.stack((torch.zeros_like(nonwait), fired & nonwait), -1)
     actions = assemble(branches, tiles)

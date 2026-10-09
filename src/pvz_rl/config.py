@@ -183,6 +183,8 @@ def validate_config(cfg: dict) -> None:
         "value_scale",
         "invalid_plant_penalty",
         "empty_dig_penalty",
+        "early_sun_extra_multiplier",
+        "early_sun_spawn_fraction",
     }
     if set(cfg["reward"]) not in (
         reward_keys,
@@ -193,8 +195,8 @@ def validate_config(cfg: dict) -> None:
         )
     if "actor_objective" in cfg["training"] or "ent_coef" in cfg["training"]:
         raise ValueError("Retired PPO objective; use sequential Q fitting")
-    if cfg["training"]["exploration"].get("objective") != "sequential_tile_epsilon_v1":
-        raise ValueError("Only conditional tile exploration is supported")
+    if cfg["training"]["exploration"].get("objective") != "committed_plant_tile_epsilon_v1":
+        raise ValueError("Only committed plant and conditional tile exploration is supported")
     for key in (
         "win_reward",
         "loss_penalty",
@@ -203,10 +205,21 @@ def validate_config(cfg: dict) -> None:
         "progress_weight",
         "invalid_plant_penalty",
         "empty_dig_penalty",
+        "early_sun_extra_multiplier",
     ):
         value = cfg["reward"][key]
         if type(value) not in (int, float) or not math.isfinite(value) or value < 0:
             raise ValueError(f"reward.{key} must be finite and nonnegative")
+    fraction = cfg["reward"]["early_sun_spawn_fraction"]
+    if (
+        not isinstance(fraction, (list, tuple))
+        or len(fraction) != 2
+        or any(type(value) is not int or value < 1 for value in fraction)
+        or fraction[0] > fraction[1]
+    ):
+        raise ValueError(
+            "reward.early_sun_spawn_fraction must be positive numerator/denominator <= 1"
+        )
     for group, keys in (
         ("reward", ("value_scale",)),
         ("training", ("max_grad_norm",)),
@@ -247,14 +260,17 @@ def validate_config(cfg: dict) -> None:
     ):
         raise ValueError("hardware_sample_seconds must be finite and at least 0.1")
     exploration = cfg["training"]["exploration"]
-    for key in ("epsilon_start", "epsilon_floor"):
+    for key in ("epsilon_start", "epsilon_floor", "plant_epsilon_start", "plant_epsilon_floor"):
         value = exploration.get(key)
         if type(value) not in (int, float) or not math.isfinite(value) or not 0 < value <= 1:
             raise ValueError(f"exploration.{key} must be finite and in (0, 1]")
     if exploration["epsilon_floor"] > exploration["epsilon_start"]:
         raise ValueError("exploration floor exceeds start")
-    if type(exploration.get("decay_games")) is not int or exploration["decay_games"] < 1:
-        raise ValueError("exploration.decay_games must be a positive integer")
+    if exploration["plant_epsilon_floor"] > exploration["plant_epsilon_start"]:
+        raise ValueError("plant exploration floor exceeds start")
+    for key in ("decay_games", "plant_decay_games"):
+        if type(exploration.get(key)) is not int or exploration[key] < 1:
+            raise ValueError(f"exploration.{key} must be a positive integer")
     minutes = cfg["training"].get("max_minutes")
     reserve = cfg["training"].get("finalization_minutes", 15)
     if minutes is not None and (
@@ -387,6 +403,13 @@ def validate_config(cfg: dict) -> None:
     fit_sequence_groups = performance.get("fit_sequence_groups", 1)
     if type(fit_sequence_groups) is not int or fit_sequence_groups < 1 or fit_sequence_groups > 16:
         raise ValueError("training.performance.fit_sequence_groups must be an integer from 1 to 16")
+    for key, default in (
+        ("collection_graph_cache_entries", 8),
+        ("collection_vram_headroom_mib", 512),
+    ):
+        value = performance.get(key, default)
+        if type(value) is not int or value < 0:
+            raise ValueError(f"training.performance.{key} must be a nonnegative integer")
     if train.get("budget_unit") not in ("games", "decisions"):
         raise ValueError("training.budget_unit must be games or decisions")
     if env.get("action_timing") not in ("fixed", "per_tick"):

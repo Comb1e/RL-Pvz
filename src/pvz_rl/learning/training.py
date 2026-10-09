@@ -55,7 +55,7 @@ from pvz_rl.learning.training_requirements import (
     transfer_protocol,
 )
 from pvz_rl.monitoring.metrics import episode_task, mean_agent_actions, task_statistics
-from pvz_rl.monitoring.progress import Phase, ProgressReporter
+from pvz_rl.monitoring.progress import CollectionProgress, Phase, ProgressReporter
 from pvz_rl.monitoring.timing import TrainingTimings
 from pvz_rl.provenance import append_jsonl, file_hash, metadata, verify_engine, write_json
 
@@ -154,6 +154,7 @@ class ResearchCallback(BaseCallback):
         self.settings = output_settings(cfg)
         self.owns_progress = progress is None
         self.progress = progress or ProgressReporter.from_settings(self.output / "train.log", cfg)
+        self.collection_progress = CollectionProgress(clock=self.progress.clock)
         self.recent = deque(maxlen=self.settings["logging"]["rolling_window"])
         self.recent_by_task = {}
         self.initial_task_counts = {}
@@ -268,7 +269,22 @@ class ResearchCallback(BaseCallback):
             budget_target(self.cfg),
             self.cfg["conditions"][self.condition]["curriculum"],
         )
+        self.observe_collection_progress()
+        execution = getattr(self.model, "collection_execution", None)
+        if execution is None:
+            execution = getattr(self.model, "_stats", {}).get("collection_execution", {})
         return {
+            "collection_progress": self.collection_progress.snapshot(),
+            "collection_execution": copy.deepcopy(execution),
+            "lifetime_throughput": {
+                "scope": "current_session",
+                "denominator": "wall time excluding validation and reporting; includes fitting",
+                "transitions_per_second": rate,
+                "games_per_second": game_rate,
+                "simulation_ticks_per_second": self.simulation_ticks / active,
+                "end_to_end_transitions_per_second": collected / max(elapsed, 1e-9),
+            },
+            "current_cohort": self.cohort_summary(),
             **self.q_status(),
             "live_view": dict(self.model.env.live_view.stats)
             if getattr(getattr(self.model, "env", None), "live_view", None)
@@ -310,6 +326,9 @@ class ResearchCallback(BaseCallback):
             "q_prefit": getattr(self.model, "prefit_errors", {}),
             "exploration_rate": getattr(self.model, "exploration_rate", 0.0),
             "tile_exploration_epsilon": getattr(self.model, "exploration_rate", 0.0),
+            "plant_exploration_epsilon": getattr(self.model, "plant_exploration_rate", 0.0),
+            "plant_exploration_progress": getattr(self.model, "plant_exploration_progress", 0.0),
+            "plant_exploration_at_floor": getattr(self.model, "plant_exploration_at_floor", False),
             "exploration_phase": getattr(self.model, "exploration_phase", None),
             "exploration_progress": getattr(self.model, "exploration_progress", 0.0),
             "exploration_at_floor": getattr(self.model, "exploration_at_floor", False),
@@ -398,6 +417,36 @@ class ResearchCallback(BaseCallback):
             "cohort": getattr(self.model, "cohort_metrics", {}),
         }
 
+    def cohort_summary(self):
+        rows = [item["metrics"] for item in getattr(self.model, "_pending_episodes", {}).values()]
+        count = len(rows)
+        multiplier = self.cfg["training"]["objective"]["dense_multiplier"]
+        return dict(
+            games=getattr(self.model, "cohort_games", 0),
+            completed=count,
+            wins=sum(bool(row["win"]) for row in rows),
+            raw_return=sum(row["return"] for row in rows) / count if count else None,
+            training_return=sum(
+                row["return"] + (multiplier - 1) * row["development"] for row in rows
+            )
+            / count
+            if count
+            else None,
+            provisional=any(row.get("time_reward_pending", False) for row in rows),
+        )
+
+    def cohort_text(self):
+        summary = self.cohort_summary()
+        raw = "n/a" if summary["raw_return"] is None else f"{summary['raw_return']:.3g}"
+        fitted = (
+            "n/a" if summary["training_return"] is None else f"{summary['training_return']:.3g}"
+        )
+        marker = "~" if summary["provisional"] else ""
+        return (
+            f"done {summary['completed']}/{summary['games']} wins {summary['wins']}/{summary['games']} "
+            f"Rraw={raw} Rtrain={fitted}{marker}"
+        )
+
     def log_progress(self, *, force=False):
         """Write the detailed status snapshot; offer one compact line to the terminal."""
         if not force and not self.progress.due():
@@ -407,12 +456,27 @@ class ResearchCallback(BaseCallback):
         write_json(self.output / "status.json", row)
         text, change = self.compact_status(row)
         self.progress.emit(text, force=force, change=change)
+        self.collection_progress.advance()
+
+    def observe_collection_progress(self):
+        """Measure live work using only the already-materialized host counters."""
+        model = self.model
+        phase = str(getattr(model, "phase", "starting"))
+        enabled = getattr(getattr(model, "env", None), "enabled_envs", None)
+        size = getattr(model, "cohort_games", 0)
+        active = int(enabled[:size].sum()) if phase == "collect" and enabled is not None else 0
+        self.collection_progress.observe(
+            transitions=model.num_timesteps,
+            active_games=active,
+            cohort=getattr(model, "cohort_number", getattr(model, "_n_updates", 0) + 1),
+            phase=phase,
+        )
 
     def compact_status(self, row):
         """Terminal summary from host-side status; never reads device tensors."""
         model = self.model
         phase = str(row["training_phase"])
-        cohort = getattr(model, "_n_updates", 0) + 1
+        cohort = getattr(model, "cohort_number", getattr(model, "_n_updates", 0) + 1)
         if phase == "collect" and getattr(model, "env", None) is not None:
             size = getattr(model, "cohort_games", 0)
             finished = max(0, size - int(model.env.enabled_envs[:size].sum()))
@@ -423,15 +487,16 @@ class ResearchCallback(BaseCallback):
             )
         else:
             marker = phase
-        games = f"games {row['training_games']:,}"
+        games = f"games total {row['training_games']:,}"
         if row["target_games"] is not None:
             games += f"/{row['target_games']:,}"
         step = optimizer_step(model)
         parts = [
-            f"cohort {cohort} {marker}",
+            f"cohort {cohort} {self.cohort_text()}",
+            CollectionProgress.text(row["collection_progress"], getattr(model, "cohort_games", 0)),
+            marker,
             games,
-            f"transitions {row['training_steps']:,}",
-            f"{row['decisions_per_second']:,.0f}/s",
+            f"transitions total {row['training_steps']:,}",
             "collect "
             + seconds_text(row["last_collection_seconds"])
             + " fit "
@@ -448,7 +513,16 @@ class ResearchCallback(BaseCallback):
             parts.append(" ".join(usage))
         if self.progress.warning:
             parts.append(f"warning: {self.progress.warning[:96]}")
-        change = (phase, cohort, marker, row["training_games"], row["training_steps"], step)
+        change = (
+            phase,
+            cohort,
+            marker,
+            row["training_games"],
+            row["training_steps"],
+            step,
+            tuple(row["current_cohort"].values()),
+            row["collection_progress"]["active_games"],
+        )
         return " | ".join(parts), change
 
     def cohort_phase(self, previous, phase):
@@ -456,6 +530,7 @@ class ResearchCallback(BaseCallback):
         from pvz_rl.learning.cohort import CohortPhase
 
         self.progress.phase(Phase.COLLECTING if phase == CohortPhase.COLLECT else Phase.UPDATING)
+        self.observe_collection_progress()
         if phase == CohortPhase.COLLECT:
             self.log_progress(force=True)
         elif previous == CohortPhase.COLLECT:
@@ -465,7 +540,7 @@ class ResearchCallback(BaseCallback):
             self.progress.emit(
                 f"Cohort {model._n_updates + 1} collected: {getattr(model, 'cohort_games', 0)} "
                 f"games, {transitions:,} transitions in {seconds:.1f}s "
-                f"({transitions / max(seconds, 1e-9):,.0f}/s)",
+                f"({transitions / max(seconds, 1e-9):,.0f}/s); {self.cohort_text()}",
                 force=True,
             )
         else:
@@ -556,6 +631,7 @@ class ResearchCallback(BaseCallback):
         self.log_progress(force=True)
 
     def _on_step(self):
+        self.observe_collection_progress()
         completed = 0
         for info in self.locals["infos"]:
             self.simulation_ticks += info["ticks_advanced"]
@@ -654,8 +730,8 @@ class ResearchCallback(BaseCallback):
             if self.curriculum
             else getattr(self.model, "training_games", 0)
         )
-        state = exploration_state(self.cfg, stage_games, staged=self.curriculum is not None)
-        apply_exploration_state(self.model, self.cfg, state)
+        state = exploration_state(self.cfg, stage_games)
+        apply_exploration_state(self.model, state)
         self.hardware_context("training")
         self.progress.phase(Phase.COLLECTING)
 
@@ -714,7 +790,7 @@ class ResearchCallback(BaseCallback):
         self.model.save(self.output / name)
         self.progress.emit(
             f"Checkpoint saved: {name}; transitions {self.model.num_timesteps:,}; "
-            f"optimizer step {optimizer_step(self.model):,}",
+            f"optimizer step {optimizer_step(self.model):,}; {self.cohort_text()}",
             force=True,
         )
 
@@ -841,7 +917,7 @@ class ResearchCallback(BaseCallback):
             f"Cohort {self.model._n_updates} fitted: {cohort.get('q_optimizer_steps', 0)} passes "
             f"in {cohort['fit_seconds']:.1f}s after {cohort['collection_seconds']:.1f}s "
             f"collection; {cohort['transitions_per_second']:,.0f} transitions/s; "
-            f"optimizer step {optimizer_step(self.model):,}",
+            f"optimizer step {optimizer_step(self.model):,}; {self.cohort_text()}",
             force=True,
         )
         write_json(self.output / "status.json", self.snapshot())
@@ -967,7 +1043,12 @@ def initial_weights(checkpoint, cfg):
     from pvz_rl.learning.checkpoints import compatible_config, inspect_checkpoint
 
     require_supported_policy(cfg)
-    saved = inspect_checkpoint(checkpoint)
+    from pvz_rl.policy.transformer_lstm import TransformerLSTMPolicy
+
+    checkpoint = Path(checkpoint).resolve()
+    if not checkpoint.suffix:
+        checkpoint = checkpoint.with_suffix(".zip")
+    saved = inspect_checkpoint(checkpoint, weights_only=True)
     source_cfg = saved["config"]
     compatible_config(
         source_cfg,
@@ -975,8 +1056,25 @@ def initial_weights(checkpoint, cfg):
         weights_only=saved["initialization_type"] == "demonstration",
     )
     verify_engine(source_cfg)
-    model, _ = load_policy(checkpoint, "cpu")
-    weights = {key: value.detach().clone() for key, value in model.policy.state_dict().items()}
+    if saved["initialization_type"] == "demonstration":
+        weights = saved["payload"]["model"]
+    else:
+        import io
+        from zipfile import ZipFile
+
+        with ZipFile(checkpoint) as archive:
+            weights = torch.load(
+                io.BytesIO(archive.read("policy.pth")), map_location="cpu", weights_only=True
+            )
+    if not isinstance(weights, dict) or any(
+        not isinstance(value, torch.Tensor) or not torch.isfinite(value).all()
+        for value in weights.values()
+    ):
+        raise ValueError("Checkpoint contains invalid or non-finite model weights")
+    with torch.random.fork_rng(devices=[]):
+        model = TransformerLSTMPolicy(cfg)
+    model.load_state_dict(weights, strict=True)
+    weights = {key: value.detach().clone() for key, value in model.state_dict().items()}
     return weights, {
         "mode": "weights_only",
         "type": saved["initialization_type"],
@@ -984,9 +1082,7 @@ def initial_weights(checkpoint, cfg):
         "checkpoint": str(Path(checkpoint).resolve()),
         "checkpoint_sha256": file_hash(checkpoint),
         "source_learner_seed": saved["learner_seed"],
-        "steps": model.num_timesteps,
-        "games": getattr(model, "training_games", 0),
-        "updates": model._n_updates,
+        **saved.get("source_counters", {"steps": 0, "games": 0, "updates": 0}),
         "source_structural_signature": transfer_protocol(source_cfg),
         "parameter_changes": parameter_changes(source_cfg, cfg),
     }
@@ -1172,7 +1268,9 @@ def train(
     )
     progress.emit(f"Reward settings: {cfg['reward']}", force=True)
     progress.emit(
-        f"Tile-only exploration {cfg['training']['exploration']}; greedy wait/plant/dig values",
+        f"Committed plant/tile exploration {cfg['training']['exploration']}; "
+        "normal branches greedy; accepted planting can commit to another species; "
+        "Rraw/Rtrain are completed-cohort means (~ provisional)",
         force=True,
     )
     if validation_after_stage(cfg, family):

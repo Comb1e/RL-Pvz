@@ -7,9 +7,10 @@ class DeviceProfiler:
     """Stream-ordered device phase spans plus host phase timings.
 
     CUDA events bracket device phases on the recording stream. :meth:`flush`
-    runs after the caller's existing host synchronization, when every recorded
-    event has completed, so reading elapsed times does not add a wait. Event
-    objects are pooled; disabled profilers record no events.
+    reads only completed spans, normally after the caller's existing host
+    handoff. Pending events stay queued rather than adding a wait. Event objects
+    are pooled; disabled profilers record no events. ``snapshot`` reads only
+    cached host totals and never queries the device.
     """
 
     def __init__(self, cp, enabled=False):
@@ -36,13 +37,29 @@ class DeviceProfiler:
         self.seconds[phase] = self.seconds.get(phase, 0.0) + seconds
 
     def flush(self):
+        pending = []
         for phase, start, end in self.pending:
+            if not end.done:
+                pending.append((phase, start, end))
+                continue
             self.seconds[phase] = (
                 self.seconds.get(phase, 0.0) + self.cp.cuda.get_elapsed_time(start, end) / 1000
             )
             self._pool.extend((start, end))
-        self.pending.clear()
+        self.pending[:] = pending
         return dict(self.seconds)
+
+    def snapshot(self):
+        """Cached cohort-cumulative timings for ``model.collection_execution``.
+
+        CuPy 13.6's Event.done uses nonblocking cudaEventQuery; flush must never
+        call synchronize. Source: https://github.com/cupy/cupy/blob/v13.6.0/cupy/cuda/stream.pyx
+        """
+        return dict(
+            scope="current_cohort",
+            completed_phase_seconds=dict(self.seconds),
+            pending_device_spans=len(self.pending),
+        )
 
 
 def cuda_doctor():

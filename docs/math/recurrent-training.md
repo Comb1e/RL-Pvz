@@ -100,17 +100,27 @@ defaults stay 256 decisions, four whole-cohort passes, Adam learning rate 0.0003
 and clipping limit 5. Quiet chunks carry state forward. Deterministic memory-read
 backward avoids repeated-index atomic accumulation during recovery.
 
-Tile exploration uses epsilon(g)=0.5*(0.01/0.5)^min(g/5000,1).
-The ten-way branch remains greedy; this single coin applies only to the selected
+Tile exploration uses epsilon(g)=0.5*(0.01/0.5)^min(g/10000,1).
+Outside commitments the ten-way branch remains greedy; the tile coin applies only to the selected
 non-wait tile and can still select the greedy tile. Evaluation sets the tile
 probability to zero. The proposal remains the action selected for Q fitting.
 For n candidate tiles and greedy tile t*, the conditional probability is
 `p(t|s,b) = (1-epsilon) 1[t=t*] + epsilon/n`. Plants use empty tiles and digs
 use all tiles. Waiting has no tile coin; a full-board plant uses tile zero.
-Thus epsilon zero is greedy, epsilon one is uniform over the selected branch's
-tiles, and exploration never replaces the greedy branch.
+Thus epsilon zero is greedy and epsilon one is uniform over the selected branch's
+tiles.
 
-Resolve epsilon once per cohort from completed stage games and retain it through
+After each accepted normal planting, a separate coin uses
+epsilon_plant(g)=0.1*(0.01/0.1)^min(g/10000,1). On firing, choose uniformly from
+the other seven species, independent of sun/cooldown. Commit until it can be
+planted or the episode ends: resource, cooldown and geometry blockers cause actual
+one-tick waits, never a paused simulator or timeout. Select its tile from current
+features with tile epsilon. An exploratory success does not fire another species
+coin. Original policy proposals are diagnostic; waits and exploratory proposals
+supervise their actual branch/tile Q-values with ordinary complete returns.
+The controller is not part of LSTM input or the network's action schema.
+
+Resolve both probabilities once per cohort from completed stage games and retain them through
 fitting and recovery. Stage promotion resets that progress. Deterministic
 evaluation temporarily disables exploration without advancing training counters.
 Entity encoder microbatching preserves frame order when reconstructing the LSTM

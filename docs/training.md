@@ -92,8 +92,11 @@ resets only. `--stage easy --until-stage-complete` requests an unbounded run
 until that stage passes. Use it only intentionally.
 
 Up to 128 games form a cohort at fixed weights. Finished slots stay inactive;
-the final cohort is limited to the remaining requested games. The recurrent
-collector retains the selected proposal for the trajectory and complete-return
+the final cohort is limited to the remaining requested games. Online and actual
+EMA inference process live slots only, with public entity-width and power-of-two
+batch buckets. Canonical slot identities, inactive memory and original slot-shaped
+selection RNG draws are preserved. Padding is execution-only, not another game.
+The recurrent collector retains the selected proposal for the trajectory and complete-return
 target. History retains only gross sunlight gain/spend, zombie spawn/defeat/removal
 and plant addition/removal events, plus resulting board context and time since the
 last write. Rejection alone never advances memory. Current board features still
@@ -110,15 +113,32 @@ nonempty wait/plant/dig group. Within each group, accepted and rejected decision
 receive 50% each when both exist; the sole present outcome otherwise receives
 full group weight. Probe losses apply the same split inside each head/branch.
 
-Tile exploration decays from 50% to 1% over 5,000 completed stage games and stays
-fixed during each cohort. The ten-way branch choice (wait, eight plants and dig)
-is always greedy; the budget is spent only when choosing the selected branch's
-tile. Evaluation disables the tile coin. Plant tiles use occupancy only;
+Tile exploration decays from 50% to 1% over 10,000 completed stage games and stays
+fixed during each cohort. Normal ten-way branch choice (wait, eight plants and dig)
+remains greedy. After accepted normal planting, a separate 10% to 1% species coin,
+also decaying over 10,000 stage games, may choose uniformly from the other seven
+plants. The agent then waits until sunlight, cooldown and an empty tile permit
+that plant; there is no timeout or defensive cancellation. The world and event
+memory continue advancing. Its tile is chosen from the current board with tile
+exploration. Exploratory planting does not retrigger the species coin. Both
+schedules reset on stage promotion. Evaluation disables both exploration behaviors.
+Plant tiles use occupancy only;
 affordability and cooldown do not hide a branch. Dig tiles are unrestricted; a
 full-board plant proposal targets tile zero and receives the simulator's
 rejection outcome and configured invalid-plant penalty. The viewer and action
 journal show that proposal while labeling its resolved execution as an automatic
 wait.
+
+Actual Sunflower sunlight earns triple development value before cumulative
+zombie spawns reach one-third of the public total. The exact default comparison
+is `3 * spawned < total`; cap-discarded sunlight, sky income and zero-total
+scenarios receive no bonus. See [reward accounting](math/training-objective.md).
+
+Compact progress shows completed games and wins out of the current cohort size,
+plus mean raw return (`Rraw`) and training return (`Rtrain`) of completed games.
+They are `n/a` before any finish; `~` marks provisional victory-time shaping.
+These are not the rolling 100-game statistics. Finalized means remain visible
+during fitting and recovery; the next cohort starts empty.
 
 The default budget is 10,000 games with `training.max_minutes = 120` and a
 15-minute finalization reserve. `--games`, `--n-envs`, `--batch-size` and
@@ -171,11 +191,29 @@ and learning quality. Run resource measurements only when the device is availabl
 An autonomous ZIP embeds configuration and run metadata. Resume restores model,
 optimizer, counters, curriculum, exploration, RNGs, unfinished trajectories and
 collection state. Collection resumes at its saved decision boundary. An
+unfinished plant commitment resumes with the same species and frozen probabilities.
+The autonomous recovery/trajectory contracts are versioned; older recovery state
+is rejected before allocating a simulator. Compatible event-memory weights remain
+reusable through `--init-from` under current defaults, with a new output directory,
+fresh optimizer/counters and no pending commitments. For example:
+
+```powershell
+.\.venv\Scripts\python.exe -m pvz_rl train `
+  --init-from runs\compact-stages-101\easy\latest.zip --stage easy `
+  --output runs\early-sun-101\easy --seed 101 --games 128
+```
+
+Earlier per-decision model weights remain incompatible; no partial-weight migration
+or legacy collector is provided. An
 interrupted fitting pass restarts from its beginning with cleared gradients;
 completed optimizer updates are retained. `interrupted.zip` is the recovery
 artifact after interruption; `latest.zip` and `final.zip` are written on normal
 completion. In-place resume appends training history. Budgets may be extended;
-changing model structure or the active collection shape is rejected.
+changing model structure or the configured simulator slot count is rejected.
+Live-slot bucket shapes may change as games finish. Active maps and graph caches
+are rebuilt on resume, not serialized; active-only execution does not change the
+recovery or trajectory protocol. Checkpoint/finalization drains apply every queued
+probe bootstrap before saving or constructing fitting targets.
 
 Evaluation accepts either checkpoint format and uses the shared stateful runner.
 CUDA batches reset only replaced episode slots. A configuration with
@@ -184,6 +222,50 @@ contract. Recording traces are checked against the CPU simulator before export.
 Choose a fresh evaluation directory. Validation and test seeds remain separate.
 
 ## Training throughput and precision
+
+### Active-only collection
+
+The host planner uses `enabled_envs` and already-published `summary_host` entity
+counts, never future schedules or a new GPU count read. It gathers each live slot's
+board and complete event memory, then scatters outputs to its canonical identity.
+The tile-head wrapper evaluates live rows while selection/exploration random
+draws retain their original slot-shaped dimensions and order. Entity caps, action
+timing, rewards, scheduled probes and loss denominators are unchanged.
+
+Scratch simulation/encoding uses shallow batch and feature prefix views over the
+existing allocation. Original live slot IDs map into compact lane prefixes; public
+features and probe metadata scatter back to canonical rows. Two independent lanes
+and the one-lane allocation fallback keep every scheduled probe. This reduces
+execution width, not private simulator capacity or its storage bounds.
+Behavior globals transfer active rows only and rebuild zero-filled canonical host
+rows; probe globals use the same compact/scatter contract. Fixed metadata may
+retain original slot-shaped staging. Packed probe
+slabs are bounded by active games' public counts, not all original slots; a bounded
+unused tail can still transfer without an extra GPU count wait.
+
+Probe deduplication includes entities, globals and gross event/timing inputs within
+one actual game/decision. Only valid nonterminal representatives need next-state
+EMA inference; terminal bootstrap is zero. The dedup representatives reach the
+host through the existing handoff. Current rows append first, then compact EMA
+inference queues its CPU copy; the next existing handoff patches those rows before
+fitting. The final pending copy drains at finalization/checkpoint/interruption.
+There is no extra ordinary wait just to learn GPU dedup counts, and forked history
+never replaces actual EMA history.
+
+Each online/EMA encoder has a separate collection LRU graph cache. Defaults under
+`training.performance` are `collection_graph_cache_entries = 8` live entries and
+`collection_vram_headroom_mib = 512`. Cache eviction fences retired replay/output
+copies; the existing handoff releases completed retirees without a new wait.
+Retirement is separately bounded by the entry limit. Capacity pressure, insufficient headroom
+before/after admission or allocation failure retains exact eager inference.
+Setting cache entries to zero disables collection captures without disabling
+the fitting backend. Collection/fitting phase owners release outgoing captures
+and workspaces at quiescent boundaries; this avoids treating stale buffers as
+needed by the next phase. These settings refresh on resume as execution controls,
+not learning parameters. Cache counters and phase memory explain cost; they are
+not evidence of a speedup or improved policy quality.
+
+### Fitting precision
 
 The `training.performance.fit_precision` setting is `features_bf16` for new CUDA
 runs; use `fp32` for a reference comparison. BF16 applies to temporary encoder,
@@ -200,11 +282,12 @@ phase durations must not be added to infer wall time. Fitting synchronizes
 timing and device summaries at pass boundaries, checkpointing, interruption or
 shutdown; intermediate progress uses cached host metrics. Fixed-shape encoder
 compilation is optional and records its backend plus `compiled`, `fallback` or
-`unavailable` before reverting to eager execution. The Windows CUDA build uses
-the `cudagraphs_owned` backend: activations and gradients are copied out of
+`unavailable` before reverting to eager execution. On every CUDA platform,
+no-grad collection uses direct `CUDAGraph` captures and fitting uses the custom
+AOT `cudagraphs_owned` backend: activations and gradients are copied out of
 reusable graph buffers, preserving them through delayed backward and whole-pass
 accumulation. It does not trace simulator pybind objects or invoke Inductor's
-max-autotune SM check. Other platforms use Inductor when available. A backward
+max-autotune SM check. There is no Windows/Inductor platform split. A backward
 capture failure records `encoder_compilation`, discards uncommitted gradients
 and retries the pass eagerly at the same precision; optimizer counters advance
 only after a successful pass.
@@ -240,13 +323,27 @@ For a bounded four-pass throughput check with fixed model dimensions:
   --output artifacts\throughput-collection.json
 ```
 
-The collection check executes no optimizer steps: 128 environments, eight warmup
-decisions and three 32-decision trials on sparse, mixed, crowded, rejection-heavy
-and accepted-action snapshots. It compares two-lane execution with the current
-one-lane memory fallback, not a historical trainer. It records simulator, probe,
+The default collection check executes no optimizer steps. It covers
+128/64/32/16/4/1 live games in fixed 128 original simulator slots on sparse, mixed
+and crowded snapshots. Live IDs are noncontiguous, including the one-game arm;
+these are not six differently sized simulator allocations. It separates cold
+measurements, eight warmup decisions and three warmed 32-decision trials.
+`--cases` can also select rejection-heavy and accepted-action boundaries;
+`--live-games` (alias `--env-counts`) and `--scratch-lanes` select a smaller matrix.
+It compares two-lane execution with the current one-lane memory fallback, not a
+historical trainer. For an explicitly requested post-fit check, add `--fit-cycle`:
+each selected cycle arm collects complete one-second-cutoff games, performs four
+fitting passes, then
+measures collection again. This opt-in cycle does update diagnostic weights;
+it is not formal training, mastery evaluation or a saved production checkpoint.
+`--cycle-seconds` bounds each cycle (120 by default, at most 300).
+Cycle defaults select 128 live games on mixed boards; `--fit-live-games` and
+`--fit-cases` choose other cycle controls without changing original slot capacity.
+Cold, warmed and post-fit results must remain distinct. It records simulator, probe,
 encoding, online/EMA inference, synchronization, transfer, storage and presentation
 timings, separate memory pools and coarse hardware samples. Subsecond trials can
-have no hardware sample; null is not zero utilization. Matching completed trials
+have no hardware sample; null is not zero utilization. Rates count committed
+active transitions, not padded capacity or simulated probes. Matching completed trials
 are retained if the same evidence command is continued. Use a fresh output path
 after changing implementation or settings. Viewer startup/history belongs to the
 viewer integration controls, not this headless benchmark.
@@ -263,6 +360,14 @@ collection/fitting times, optimizer step, available GPU/CPU utilization and the
 latest warning. Interactive terminals reuse one line; redirected stdout and
 `train.log` receive timestamped compact lines. Detailed telemetry remains in
 `status.json`, `training-metrics.jsonl` and `hardware-metrics.jsonl`.
+
+Collection adds `active N/cohort`, `decisions/game/s` and `active transitions/s`.
+The interval uses only collection time and time-weighted live games, so a shrinking
+cohort is not divided by the original slot capacity. Lifetime transition/time
+totals remain separate. Phase/cohort changes and restored counters restart the
+interval and exclude fitting, validation and recovery downtime; an unmeasured
+interval is `n/a`, not zero. These host-only rates add no device synchronization
+and do not alter the existing reporting cadences.
 
 Transfer/per-probe and multiline dashboard implementations are removed. The
 explicit performance-refresh flag, historical execution defaults and replay

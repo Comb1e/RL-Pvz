@@ -26,6 +26,9 @@
   require fresh initialization. Keep user reward adjustments when updating defaults.
   `training.demo.passes` controls demonstration initialization (20 by default),
   independently of autonomous `training.n_epochs` (4 by default).
+  Tile (50% to 1%) and accepted-plant species (10% to 1%) probabilities decay over
+  10,000 stage games and freeze per cohort. `reward.early_sun_spawn_fraction=[1,3]`
+  and `early_sun_extra_multiplier=2` triple early actual Sunflower income value.
   `training.max_grad_norm` is the sole clipping limit for demo and autonomous
   fitting; historical demo clipping metadata has no effect.
 - `src/pvz_rl/envs/encoding.py` defines the shared 11-field entity schema,
@@ -33,27 +36,47 @@
   is mowers, plants, zombies, projectiles; overflow drops from the end, with nearest
   zombies first. CUDA features encode the same public facts on device. Reserved
   simulator slots never become policy tokens. Globals count all present entities.
+- `policy/active_batch.py` owns host `ActiveBatchPlan` construction from
+  `enabled_envs` and published `summary_host` counts, public entity-width and
+  power-of-two batch buckets, canonical gathers/scatters and the active-only tile
+  wrapper. Original slot identities and inactive memory are preserved; selection
+  RNG draws keep their original slot-shaped dimensions and order.
 - `envs/` owns simulator adapters, geometry masks and rewards; `cuda_accounting.py`
   supplies read-only counters. The shared execution contract retains the proposal,
   reason and penalty, exposes `executed_action=0` for rejection and advances one tick.
   `rewards.py` also tracks one-time zombie entries into the two house-side columns;
   complete-game fitting finalizes victory-time shaping against the current cohort median.
   `envs/probes.py` owns isolated CPU/CUDA counterfactual execution and round-robin
-  schedules; `learning/objective.py` owns six-component targets, probe Huber loss
+  schedules. Shallow batch/feature prefix views reuse existing scratch allocation;
+  source-ID remapping copies original live slots into compact lane prefixes and
+  scatters public features/metadata back to canonical game/probe rows.
+  `learning/objective.py` owns six-component targets, probe Huber loss
   and accepted-demonstration ranking. EMA history follows actual behavior, while
   forked probe histories never reach actual gameplay or journals.
 - `policy/entity_attention.py` owns shared embeddings, readout tokens, padding masks,
   full efficient attention, exact query fallback and optional outer checkpointing.
-  Fixed-shape compilation uses CUDA graphs on Windows and records a one-time eager
-  fallback when unavailable. `policy/cudagraph_backend.py` captures AOT forward/backward
-  separately and copies their outputs, including saved activations and gradients,
+  Fixed-shape CUDA execution uses direct no-grad collection graphs and an owned
+  AOT fitting backend on all platforms, with an explicit eager fallback.
+  `policy/cudagraph_backend.py` owns separate collection/fitting captures and
+  per-encoder collection LRU caches: eight live entries and 512 MiB VRAM headroom
+  by default. Replay/output-copy fences protect retired captures; the existing
+  handoff releases completed retirees without a new wait. Retirement is separately
+  bounded by the entry limit;
+  capacity/headroom/capture failures retain exact eager execution. Phase boundaries
+  release the outgoing captures before allocating the next phase's workspaces.
+  It captures AOT forward/backward separately and copies their outputs, including
+  saved activations and gradients,
   out of graph storage with SDPA strides intact. A backward capture failure restarts
   the uncommitted pass eagerly. The compiled path stays tensor-only so simulator pybind
   objects are never traced. Fitting uses BF16 temporary features with FP32
   master weights, LSTM and Q heads. `transformer_lstm.py`
   owns LSTM and Q heads; `recurrent_policy.py` adapts the training lifecycle.
   `sequential_q.py` keeps all ten branches greedy, independent of sun/cooldown;
-  occupancy-only plant tiles and unrestricted dig tiles allow tile-only exploration.
+  occupancy-only plant tiles and unrestricted dig tiles constrain tile exploration.
+  `learning/exploration.py` owns the separate committed-plant state machine:
+  accepted normal plants can select another species uniformly; actual waits persist
+  until resources/cooldown/geometry permit planting or the episode ends, without a timeout.
+  Exploration provenance and original policy proposals are diagnostics, never LSTM inputs.
   A full-board plant still proposes tile zero. `runner.py` owns recurrent state and
   owns `EventMemoryState`: hidden/cell, pending gross public event facts and elapsed
   ticks. `envs/history.py` defines `HistoryEvent`, extraction and normalization.
@@ -63,8 +86,10 @@
 - `learning/checkpoints.py` inspects saved protocols/schema before simulation.
   `cli.py` resolves fresh `--init-from` runs from current configuration, transferring
   only weights; demonstration weights require only the pinned input/output model
-  interface, while autonomous transfer and recovery retain stricter saved-protocol
-  checks. `--resume` and evaluation retain saved settings.
+  interface; autonomous weight transfer also checks timing/returns, while recovery
+  requires the current committed exploration/trajectory protocols. `--resume`
+  and evaluation retain saved settings. Weight-only reuse never loads a retired
+  optimizer or collector.
   `cuda_q.py` owns cohort lifecycle and atomic recovery; `recurrent_q.py` collects
   chronological transitions and accumulates whole-pass gradients. Sparse fitting
   packs event rows, then deterministically gathers memory onto all decisions, with
@@ -79,15 +104,26 @@
   Demonstration initialization checkpoints omit those fields
   and hydrate them from the current train profile when loaded. `host_transfer.py`
   owns the sole reusable pinned `HostHandoff`. Device-packed behavior/probe slabs,
-  metadata and terminal headers/totals queue before one stream wait.
+  metadata, dedup representatives and terminal headers/totals queue before one
+  stream wait. Valid nonterminal representatives bootstrap only after that wait;
+  their queued CPU copy is consumed at the next existing handoff. Current rows
+  append first, then `cuda_buffer.py` patches their bootstrap values before
+  finalization/fitting; quiescent checkpoint/finalization drains flush the last copy.
   `PackedEntityBatch` carries validated slab offsets directly into storage.
-  Two independent scratch lanes retain per-slot feature rows; one-lane allocation
-  fallback preserves every scheduled probe. EMA next-state inference is stacked;
+  Behavior globals transfer active rows only and reconstruct zero-filled canonical
+  host rows; probe globals follow the same compact/scatter contract. Fixed metadata
+  may retain original slot-shaped staging.
+  Two independent scratch lanes execute compact live-slot prefix views while
+  persistent feature rows retain canonical identities; one-lane allocation
+  fallback preserves every scheduled probe. Scratch capacity and private simulator
+  bounds are not reduced or exposed as policy inputs. EMA next-state inference is compact;
   actual history stays isolated from every fork. Exact device deduplication
   includes event/timing inputs and never merges proposal/reward evidence.
   Collection uses public-count padding bounds and the owned-output graph wrapper;
-  future schedules never determine policy inputs. Resume refreshes execution and
-  logging automatically; missing execution fields use current defaults.
+  future schedules never determine policy inputs. Active maps, graph captures and
+  caches are rebuilt, never serialized; recovery contracts are unchanged by these
+  execution controls. Resume refreshes execution and logging automatically;
+  missing execution fields use current defaults.
   Fitting retries whole uncommitted passes on BF16/memory failure.
   Curriculum stages are easy, standard, shared.
 - `presentation/demo_recording.py` records structured v2 archives and compact viewer
@@ -102,12 +138,16 @@
   resolved run config; the read-only viewer strip never reloads TOML or device values.
 - `evaluation/` uses the same runner and checks CUDA traces against CPU replay.
   `monitoring/entity_benchmark.py` measures cap-dependent inference/fitting cost;
-  `throughput_benchmark.py` compares fixed 1,024-frame/four-pass execution and
-  short collection windows with and without the viewer.
-  `collection_benchmark.py` owns three warmed 128-environment snapshot controls
-  with no fitting; `throughput_benchmark.py` owns only four-pass fitting.
+  `throughput_benchmark.py` measures fixed 1,024-frame/four-pass execution.
+  `collection_benchmark.py` owns cold/warmed sparse/mixed/crowded snapshots at
+  128/64/32/16/4/1 live games within fixed 128 original simulator slots, with
+  noncontiguous original IDs, one-/two-lane controls and an opt-in bounded
+  collect/four-pass-fit/collect cycle. Its default performs no fitting;
+  `throughput_benchmark.py` owns synthetic four-pass fitting, not snapshot collection.
   `monitoring/progress.py` owns compact terminal/train.log events, independent
   terminal/JSON cadences, duplicate suppression and redirected/interactive modes.
+  Its host-only interval monitor distinguishes active games, decisions/game/s and
+  active transitions/s from lifetime totals, excluding fitting/recovery downtime.
   `cuda_diagnostics.py` pools timing events and reads them after the existing handoff.
   `monitoring/objective_diagnostic.py` reports one 16-game/four-pass, 30-second-cutoff
   event-memory control and fixed-history sensitivity; measurements are not mastery evidence.
@@ -116,13 +156,19 @@
   independent attention math, order/padding invariance, ragged recovery and training.
 - `test_q_math.py` owns selected-Q gradient and atomic interruption controls;
   `test_collection.py` owns serial/batched equivalence, allocation fallback,
-  deduplication counterexamples and compiled inference buckets. Independent
-  constant-bootstrap CPU/CUDA controls remain in `test_q_selection_fallback.py`.
+  deduplication counterexamples and compiled inference buckets. The
+  active-bucket/slot/RNG math and graph LRU/headroom/phase ownership controls belong
+  in `test_transformer_lstm.py`; storage owns delayed bootstrap patching/spill.
+  Interval-rate, shrinking-cohort and phase/reset controls belong in
+  `test_progress.py`, with callback snapshot isolation in its context suite.
+  Independent constant-bootstrap CPU/CUDA controls remain in
+  `test_q_selection_fallback.py`.
   `test_progress.py` owns terminal cadence/modes; callback telemetry and active
   accumulator isolation belong in `test_training_progress_context.py`.
   `test_training_lifecycle.py` owns validation/finalization integration.
   `test_reward_contract.py` owns asset conservation and reward-mode boundaries;
-  `test_exploration_schedule.py` checks the current tile-only schedule.
+  `test_exploration_schedule.py` checks both schedules and persistent species commitments.
+  Reward controls include exact event-time early Sunflower eligibility and CPU/CUDA caps.
 - `docs/architecture.md` traces ownership and failures; `docs/training.md` documents
   recording, fresh initialization, training and recovery. `docs/math/entity-inputs.md`
   and `recurrent-training.md` define encoding, attention and the complete-return objective.

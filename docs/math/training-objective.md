@@ -24,11 +24,12 @@ actual body and armor damage from plants/projectiles, capped at remaining HP;
 autonomous headless decay and mower damage do not earn plant-damage value.
 With basic body HP 270, damage valuation is 50/270 per effective HP.
 
-For asset value A, actual sky income S, effective damage D and mower activations M,
+For asset value A, actual sky income S, effective damage D, mower activations M,
+and eligible actual Sunflower income E,
 the development reward is
 
 \[
-R_{development}=\frac{A_{after}-A_{before}-S+(50/270)D-200M}{30000}.
+R_{development}=\frac{A_{after}-A_{before}-S+(50/270)D-200M+2E}{30000}.
 \]
 
 Subtracting actual sky income prevents free ambient sun from earning development
@@ -36,10 +37,21 @@ reward. Plant-produced sun remains valuable only when it fits below the sun cap.
 Asset losses and mower expenditure are each charged once; diagnostic kill counts
 are not another reward term.
 
+Eligibility is evaluated at each production event: total roster must be positive
+and `3 * cumulative_spawned < total`. Defeat/removal never reopens eligibility;
+spawns earlier in the same tick count before production. The configurable exact
+fraction is `reward.early_sun_spawn_fraction=[1,3]`, with
+`reward.early_sun_extra_multiplier=2`. Count only actual credited sunlight, not
+requested production, and never sky income. `early_sun_bonus` is a reported subset
+of development, not a seventh component. The dense multiplier applies once:
+25 eligible sun earns 75/30,000 raw development and 0.025 training reward;
+late income earns 25/30,000 and approximately 0.00833 respectively.
+
 | Control | Development reward |
 |---|---:|
 | Remove a healthy 100-sun shooter | -100/30,000 |
-| Produce 25 uncapped sun | 25/30,000 |
+| Produce 25 uncapped early Sunflower sun | 75/30,000 |
+| Produce 25 uncapped late Sunflower sun | 25/30,000 |
 | Remove 20 effective HP | (20*50/270)/30,000 |
 | Activate one mower | -200/30,000 |
 | Empty cherry | -150/30,000 |
@@ -53,9 +65,10 @@ levels are conservative; they are not claims of training success or optimal valu
 For the pinned normal levels, 50 initial sun and the 120,000-tick cutoff,
 independent controls bound final assets by 18,990 and actual sky income by 3,525.
 The largest roster has 38,130 body-plus-armor HP. Cumulative net value therefore
-lies between -4,575 and 26,001.111111 sun-equivalents. Outcome plus development
+lies between -4,575 and 26,001.111111 sun-equivalents. Outcome plus physical development
 is at least 0.8475 on a natural win and at most -1.1332962963 on a natural loss.
-These bounds cover only terminal plus **unscaled development**, excluding rejection
+These bounds cover only terminal plus **unscaled physical development**, excluding
+the early Sunflower bonus and rejection
 costs, proximity, time shaping, custom scenarios and incomplete games. They do not
 bound the full raw or fitting return.
 

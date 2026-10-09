@@ -3,8 +3,9 @@
 Record a human Plants vs. Zombies game, initialize one entity Transformer–LSTM Q
 policy, then train and evaluate it on a separate, pinned 100 Hz simulator.
 The model reads the current board every decision; LSTM memory writes only on
-sunlight, zombie and plant events. Old checkpoints require fresh initialization
-from a verified recording in a new directory. Only public observations enter the
+sunlight, zombie and plant events. Structurally compatible event-memory checkpoints
+can initialize a new run; earlier model frameworks require fresh fitting from a
+verified recording. Only public observations enter the
 model. Parameters live in
 [src/pvz_rl/data/train.toml](src/pvz_rl/data/train.toml).
 
@@ -36,6 +37,11 @@ recover. Demonstration initialization defaults to 20 passes (`training.demo.pass
 autonomous training stays at four (`training.n_epochs`). Fresh runs use current
 settings; resume retains learning parameters and
 rewards while applying current execution and compact-logging settings automatically.
+Current defaults triple early Sunflower income value and add accepted-plant species
+commitments. Tile (50%) and species (10%) exploration both reach a 1% floor after
+10,000 stage games. See the training guide for waiting behavior and checkpoint reuse.
+Collection uses active-only inference and scratch views, public-count buckets and
+phase-owned CUDA graph caches; these execution controls do not change learning settings.
 
 ## Common checks
 

@@ -6,6 +6,8 @@ import sys
 import warnings
 from datetime import datetime, timezone
 from enum import StrEnum
+from math import isfinite
+from numbers import Integral, Real
 from pathlib import Path
 from time import perf_counter
 
@@ -19,6 +21,82 @@ class Phase(StrEnum):
     COMPLETE = "complete"
     INTERRUPTED = "interrupted"
     FAILED = "failed"
+
+
+class CollectionProgress:
+    """Host-counter interval rates, weighted by games active before each callback.
+
+    Observe every committed collection callback and each phase boundary. Sampling
+    does not advance the interval; call :meth:`advance` after publishing a status
+    snapshot. Phase/cohort changes and restored counters start a fresh interval,
+    excluding fitting, validation and recovery downtime. No device values are read.
+    """
+
+    def __init__(self, *, clock=perf_counter):
+        self.clock = clock
+        self._last = None
+        self._totals = [0, 0.0, 0.0]
+        self._baseline = tuple(self._totals)
+
+    def observe(self, *, transitions, active_games, cohort, phase):
+        for name, value in (("transitions", transitions), ("active_games", active_games)):
+            if not isinstance(value, Integral) or isinstance(value, bool) or value < 0:
+                raise ValueError(f"{name} must be a nonnegative host integer")
+        now = self.clock()
+        if not isinstance(now, Real) or not isfinite(now):
+            raise ValueError("Collection clock must return a finite host time")
+        phase = str(phase)
+        current = (now, int(transitions), int(active_games), cohort, phase)
+        if self._last is not None:
+            before, steps, games, previous_cohort, previous_phase = self._last
+            reset = now < before or transitions < steps or cohort != previous_cohort
+            if not reset and previous_phase == "collect":
+                seconds = now - before
+                self._totals[0] += int(transitions) - steps
+                self._totals[1] += seconds
+                self._totals[2] += seconds * games
+            if reset or phase != previous_phase:
+                self.advance()
+        self._last = current
+
+    def advance(self):
+        """Start the next reporting interval without reading the clock or device."""
+        self._baseline = tuple(self._totals)
+
+    def snapshot(self):
+        transitions, seconds, game_seconds = (
+            total - baseline for total, baseline in zip(self._totals, self._baseline)
+        )
+        collecting = self._last is not None and self._last[-1] == "collect"
+        return dict(
+            active_games=self._last[2] if collecting else 0,
+            interval_seconds=seconds,
+            interval_active_transitions=transitions,
+            interval_active_game_seconds=game_seconds,
+            interval_mean_active_games=game_seconds / seconds if seconds > 0 else None,
+            interval_decisions_per_game_per_second=(
+                transitions / game_seconds if collecting and game_seconds > 0 else None
+            ),
+            interval_active_transitions_per_second=(
+                transitions / seconds if collecting and seconds > 0 else None
+            ),
+            lifetime_active_transitions=self._totals[0],
+            lifetime_collection_seconds=self._totals[1],
+            lifetime_active_game_seconds=self._totals[2],
+        )
+
+    @staticmethod
+    def text(row, games):
+        """Format explicit units; an unmeasured interval is not a zero rate."""
+        per_game = row["interval_decisions_per_game_per_second"]
+        transitions = row["interval_active_transitions_per_second"]
+        return (
+            f"active {row['active_games']}/{games} | "
+            + ("n/a" if per_game is None else f"{per_game:,.2f}")
+            + " decisions/game/s | "
+            + ("n/a" if transitions is None else f"{transitions:,.0f}")
+            + " active transitions/s"
+        )
 
 
 class ProgressReporter:
@@ -134,7 +212,12 @@ class ProgressReporter:
     def _print(self, line, *, routine):
         if self.interactive and routine:
             width = max(20, shutil.get_terminal_size((120, 20)).columns - 1)
-            visible = line[:width]
+            visible = line.split("] ", 1)[-1]
+            if len(visible) > width:
+                visible = visible.replace("decisions/game/s", "dec/g/s").replace(
+                    "active transitions/s", "active t/s"
+                )
+            visible = visible[:width]
             self.stream.write("\r" + visible + " " * max(0, self._open_width - len(visible)))
             self.stream.flush()
             self._open_width = len(visible)

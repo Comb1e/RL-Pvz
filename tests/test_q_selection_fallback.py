@@ -170,6 +170,13 @@ def test_counterfactual_parity_history_and_simulator_isolation(per_tick_cfg, mon
     calls = []
 
     class Teacher:
+        hidden_size = 1
+        entity = SimpleNamespace(
+            width=1,
+            microbatch=per_tick_cfg["policy"]["encoder_microbatch"],
+            token_budget=per_tick_cfg["policy"]["encoder_token_budget"],
+        )
+
         def tile_values(self, tiles, context, branches):
             return torch.arange(45, device="cuda").float().expand(len(branches), -1)
 
@@ -190,6 +197,8 @@ def test_counterfactual_parity_history_and_simulator_isolation(per_tick_cfg, mon
                     memory_write,
                 ),
                 branch_q=torch.full((len(obs), 10), 0.5, device="cuda"),
+                tile_features=torch.zeros(len(obs), 45, 1, device="cuda"),
+                context=torch.zeros(len(obs), 1, device="cuda"),
             )
 
     teacher = Teacher()
@@ -237,7 +246,10 @@ def test_counterfactual_parity_history_and_simulator_isolation(per_tick_cfg, mon
         totals = features.totals.copy()
         host = probe.collect(teacher, history, obs, actions, details, features.mask_tensor, active)
         probe.env.handoff.wait()
+        bootstrap = probe.bootstrap(host)
+        probe.env.handoff.wait()
         rows, observations = probe.materialize(host)
+        rows["bootstrap"] = bootstrap.numpy().reshape(4, 2).T
         assert hashes == [batch.state_hash(i) for i in range(2)]
         np.testing.assert_array_equal(home.get(), features.home_ledger.get())
         np.testing.assert_array_equal(totals.get(), features.totals.get())
@@ -273,9 +285,11 @@ def test_counterfactual_parity_history_and_simulator_isolation(per_tick_cfg, mon
         assert all(torch.all(state.hidden == 0) for state, _, _ in calls[1:])
         assert len(calls) == 2
         _, event_inputs, writes = calls[1]
-        assert writes[4:].all()
-        assert (event_inputs[4:, 2] == 1).all()
-        assert not event_inputs[4:, [0, 1, 3, 4, 5, 6]].any()
+        assert len(event_inputs) == 4 and writes.all()
+        assert (event_inputs[:2, 2] == 1).all()
+        assert not event_inputs[:2, [0, 1, 3, 4, 5, 6]].any()
         torch.testing.assert_close(
-            event_inputs[4:, 7], torch.ones(4, device="cuda", dtype=torch.int64)
+            event_inputs[:2, 7], torch.ones(2, device="cuda", dtype=torch.int64)
         )
+        assert (event_inputs[2:, 1] == 50).all()
+        assert (event_inputs[2:, 5] == 1).all()

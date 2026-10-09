@@ -273,8 +273,20 @@ class TransformerLSTMPolicy(nn.Module):
         active=None,
         events=None,
         memory_write=None,
+        active_plan=None,
     ):
-        result = self.forward_step(observations, state, events=events, memory_write=memory_write)
+        if active_plan is None:
+            result = self.forward_step(
+                observations, state, events=events, memory_write=memory_write
+            )
+            tile_values = self.tile_values
+        else:
+            from pvz_rl.policy.active_batch import active_tile_values, forward_active
+
+            result = forward_active(
+                self, observations, state, active_plan, events=events, memory_write=memory_write
+            )
+            tile_values = active_tile_values(self, active_plan)
         batch = result.branch_q.shape[0]
         if action_masks is None:
             action_masks = observation_tile_masks(
@@ -286,7 +298,7 @@ class TransformerLSTMPolicy(nn.Module):
             result.branch_q,
             result.tile_features,
             result.context,
-            self.tile_values,
+            tile_values,
             action_masks,
             deterministic=deterministic,
             exploration_epsilon=getattr(self, "exploration_epsilon", 0.0),

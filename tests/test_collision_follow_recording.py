@@ -31,7 +31,7 @@ def test_single_config_train_and_demo_profiles():
     assert configured(SimpleNamespace(command="initialize-demo", config=None)) == demo
     assert demo["encoding"]["version"] == "entity_v1"
     assert exploration_state(demo, 0).tile_epsilon == 0.5
-    assert exploration_state(demo, 5000).tile_epsilon == pytest.approx(0.01)
+    assert exploration_state(demo, 10000).tile_epsilon == pytest.approx(0.01)
     with pytest.raises(ValueError, match="not available"):
         load_demo_config("src/pvz_rl/data/train.toml", profile="event-memory")
     for invalid in (0, -1, float("inf"), float("nan"), True):

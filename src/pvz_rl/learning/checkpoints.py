@@ -1,6 +1,7 @@
 """Inspect checkpoint identity and dispatch models before starting environments."""
 
 import copy
+import io
 import json
 from pathlib import Path
 from zipfile import ZipFile
@@ -13,6 +14,7 @@ from pvz_rl.learning.training_requirements import transfer_protocol, weight_tran
 
 DEMO_PROTOCOL = "pvz-rl/demo-initialization-checkpoint-v3"
 STATE_PROTOCOL = "pvz-rl/event-lstm-state-v1"
+AUTONOMOUS_STATE_PROTOCOL = "pvz-rl/committed-event-lstm-state-v2"
 
 
 def protocol_for(kind):
@@ -50,7 +52,7 @@ def execution_config(cfg):
     return cfg
 
 
-def inspect_checkpoint(path):
+def inspect_checkpoint(path, *, weights_only=False):
     path = Path(path).resolve()
     if not path.suffix:
         path = path.with_suffix(".zip")
@@ -94,7 +96,7 @@ def inspect_checkpoint(path):
     else:
         from pvz_rl.learning.cuda_q import checkpoint_metadata
 
-        protocol = checkpoint_metadata(path)
+        protocol = checkpoint_metadata(path, weights_only=weights_only)
         with ZipFile(path) as archive:
             if not {"data", "policy.pth", "policy.optimizer.pth", "cohort-state.pt"} <= set(
                 archive.namelist()
@@ -122,9 +124,49 @@ def inspect_checkpoint(path):
                 != ObservationEncoder(cfg, Rules()).schema()
             ):
                 raise ValueError("Checkpoint entity schema disagrees with configuration")
-        if protocol != protocol_for(cfg["policy"]["kind"]):
+            stored = json.loads(archive.read("data"))
+            if weights_only:
+                metadata["source_counters"] = {
+                    key: stored.get(field, 0)
+                    for key, field in (
+                        ("steps", "num_timesteps"),
+                        ("games", "training_games"),
+                        ("updates", "_n_updates"),
+                    )
+                }
+            else:
+                runtime = torch.load(
+                    io.BytesIO(archive.read("cohort-state.pt")),
+                    map_location="cpu",
+                    weights_only=False,
+                )
+                if runtime.get("protocol") != AUTONOMOUS_STATE_PROTOCOL:
+                    raise ValueError("Unsupported autonomous recovery protocol; use --init-from")
+                if runtime.get("buffer") is not None:
+                    from pvz_rl.learning.exploration import CommittedPlantExploration
+
+                    controller = runtime.get("plant_exploration")
+                    if not isinstance(controller, dict):
+                        raise ValueError("Incomplete committed plant recovery state")
+                    state = CommittedPlantExploration(
+                        cfg["training"]["n_envs"],
+                        "cpu",
+                        stored.get("plant_exploration_rate", float("nan")),
+                        stored.get("exploration_rate", float("nan")),
+                    )
+                    state.restore(controller)
+                    from pvz_rl.learning.cuda_buffer import CompleteGameBuffer
+
+                    CompleteGameBuffer.validate_metadata(runtime["buffer"])
+                    if runtime["buffer"]["exploration"] != dict(
+                        plant_epsilon=state.plant_epsilon, tile_epsilon=state.tile_epsilon
+                    ):
+                        raise ValueError("Trajectory exploration differs from recovery state")
+        if not weights_only and protocol != protocol_for(cfg["policy"]["kind"]):
             raise ValueError("Checkpoint model family disagrees with saved configuration")
         metadata["initialization_type"] = "autonomous"
+    if weights_only:
+        return metadata
     # Demonstration checkpoints are weights-only artifacts.  Their structural
     # configuration is retained for schema and transfer validation, but every
     # execution-only setting comes from the current training profile.  This
@@ -142,6 +184,9 @@ def inspect_checkpoint(path):
         source.setdefault("reward", {}).setdefault(
             "win_time_weight", current["reward"]["win_time_weight"]
         )
+        for key in ("early_sun_extra_multiplier", "early_sun_spawn_fraction"):
+            source["reward"].setdefault(key, copy.deepcopy(current["reward"][key]))
+        source["training"]["exploration"] = copy.deepcopy(current["training"]["exploration"])
         source.setdefault("training", {})["objective"] = copy.deepcopy(
             current["training"]["objective"]
         )

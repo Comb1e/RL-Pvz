@@ -1,13 +1,14 @@
 """Shared entity embeddings and exact, bounded bidirectional attention."""
 
 import re
-import sys
 import warnings
 
 import torch
 from torch import nn
 from torch.nn import functional as F
 from torch.utils.checkpoint import checkpoint
+
+from pvz_rl.policy.cudagraph_backend import CollectionGraphCache, FittingGraphBackend
 
 
 def feature_dtype(device):
@@ -83,6 +84,12 @@ class EntityTransformer(nn.Module):
         self.activation_checkpointing = False
         self._compiled_encode = None
         self._compiled_shapes = {}
+        self._fitting_backend = None
+        performance = layout.cfg["training"].get("performance", {})
+        self._collection_cache = CollectionGraphCache(
+            performance.get("collection_graph_cache_entries", 8),
+            performance.get("collection_vram_headroom_mib", 512),
+        )
         self.compilation_backend = None
         self.compilation_status = "disabled"
         self.compilation_error = None
@@ -158,22 +165,49 @@ class EntityTransformer(nn.Module):
             self.compilation_status = "unavailable"
             self.compilation_error = "CUDA is unavailable"
             return
-        # The Windows wheel does not ship Triton, so Inductor cannot compile
-        # even though CUDA graphs are available.  CUDA graphs still capture
-        # the fixed-shape tensor-only encoder and avoid both the pybind11 trace
-        # warning and Inductor's max-autotune SM heuristic. AOT outputs must
-        # outlive replay for the sequence's delayed backward. Keep Inductor as
-        # the default on platforms where its compiler toolchain is available.
-        from pvz_rl.policy.cudagraph_backend import cudagraph_backend
-
-        backend = cudagraph_backend if sys.platform == "win32" else "inductor"
+        if self._compiled_encode is not None:
+            return
+        self._fitting_backend = FittingGraphBackend()
         self._compiled_encode = torch.compile(
-            self._encode, backend=backend, dynamic=False, fullgraph=True
+            self._encode, backend=self._fitting_backend, dynamic=False, fullgraph=True
         )
         self._compiled_shapes.clear()
-        self.compilation_backend = "cudagraphs_owned" if sys.platform == "win32" else backend
+        self.compilation_backend = "cudagraphs_owned"
         self.compilation_status = "requested"
         self.compilation_error = None
+
+    @property
+    def collection_metrics(self):
+        """Cumulative admission/fallback counters plus the current live entry count."""
+        return self._collection_cache.metrics
+
+    def configure_collection(self, performance):
+        """Refresh execution settings at a quiescent boundary, including after resume."""
+        entries = performance.get("collection_graph_cache_entries", 8)
+        headroom = performance.get("collection_vram_headroom_mib", 512)
+        if any(type(value) is not int or value < 0 for value in (entries, headroom)):
+            raise ValueError("Collection graph settings must be nonnegative integers")
+        cache = self._collection_cache
+        if (entries, headroom * 1024**2) != (cache.limit, cache.headroom_bytes):
+            self.release_collection()
+            cache.limit = entries
+            cache.headroom_bytes = headroom * 1024**2
+
+    def release_collection(self):
+        """Quiescent FIT entry: release collection buffers without disabling compilation."""
+        self._collection_cache.release()
+
+    def release_retired(self):
+        """Drain completed evictions after the existing collection handoff, without waiting."""
+        return self._collection_cache.release_retired()
+
+    def release_fitting(self):
+        """Quiescent collection entry, after all fitting backwards and stream work finish."""
+        if self._fitting_backend is not None:
+            self._fitting_backend.release()
+        self._compiled_shapes.clear()
+        if self._compiled_encode is not None:
+            self.compilation_status = "requested"
 
     def disable_compilation(self, exc):
         """Record one backend failure and retain the exact eager encoder."""
@@ -181,6 +215,7 @@ class EntityTransformer(nn.Module):
             return
         self._compiled_encode = None
         self._compiled_shapes.clear()
+        self.release_collection()
         self.compilation_status = "fallback"
         detail = str(exc).splitlines()[0] if str(exc) else "backend compilation failed"
         self.compilation_error = re.sub(r"https?://\S+", "<url>", detail)[:256]
@@ -192,6 +227,19 @@ class EntityTransformer(nn.Module):
 
     def _encode_with_optional_compile(self, args):
         if self._compiled_encode is None:
+            return self._encode(*args)
+        if not torch.is_grad_enabled():
+            if not args[0].is_cuda:
+                return self._encode(*args)
+            try:
+                value = self._collection_cache(self._encode, args)
+                if self._collection_cache.captures:
+                    self.compilation_status = "compiled"
+                return value
+            except Exception as exc:
+                if isinstance(exc, torch.cuda.OutOfMemoryError):
+                    raise
+                self.disable_compilation(exc)
             return self._encode(*args)
         shape = (int(args[0].shape[0]), int(args[0].shape[1]))
         # Dynamic ragged shapes would trigger an unbounded stream of compiler

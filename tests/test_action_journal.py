@@ -207,7 +207,7 @@ def test_cohort_interruption_restores_actual_scores_and_optimizer(tmp_path):
             model.set_logger(configure(format_strings=[]))
             from pvz_rl.learning.exploration import set_exploration_rate
 
-            set_exploration_rate(model, 0.0)
+            set_exploration_rate(model, 0.0, plant_rate=0.0)
             with torch.no_grad():
                 model.policy.branch_head[-1].weight.zero_()
                 model.policy.branch_head[-1].bias.zero_()

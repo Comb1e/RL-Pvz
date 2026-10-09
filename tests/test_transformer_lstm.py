@@ -42,6 +42,112 @@ def inputs(count=2, device="cpu"):
     return cfg, collate_observations([obs] * count, device)
 
 
+@pytest.mark.parametrize("live", [128, 64, 32, 16, 4, 1, 0])
+def test_active_plan_buckets_preserve_original_ids_and_public_widths(live):
+    from pvz_rl.policy.active_batch import ActiveBatchPlan
+
+    active = np.zeros(128, dtype=bool)
+    order = np.random.default_rng(17).permutation(128)
+    active[order[:live]] = True
+    counts = np.resize([0, 32, 33, 64, 65, 128, 129, 256], 128)
+    plan = ActiveBatchPlan.from_counts(active, counts, 256)
+    np.testing.assert_array_equal(plan.original_slot_ids, np.flatnonzero(active))
+    assert plan.logical_rows == live
+    assert sorted(slot for bucket in plan.buckets for slot in bucket.slot_ids) == list(
+        plan.original_slot_ids
+    )
+    for bucket in plan.buckets:
+        assert bucket.padded_size & (bucket.padded_size - 1) == 0
+        assert bucket.padded_size <= 128
+        assert np.all(counts[bucket.slot_ids] <= bucket.entity_width)
+        np.testing.assert_array_equal(bucket.compact_indices, plan.compact_indices[bucket.slot_ids])
+        assert bucket.padding_mask.sum() == bucket.padded_size - len(bucket.slot_ids)
+    assert np.all(plan.compact_indices[~active] == -1)
+
+
+@pytest.mark.parametrize("device", ["cpu", "cuda"])
+@torch.no_grad()
+def test_compact_memory_matches_independent_serial_and_preserves_random_draws(device):
+    from pvz_rl.learning.exploration import CommittedPlantExploration
+    from pvz_rl.policy.active_batch import ActiveBatchPlan, forward_active
+    from pvz_rl.policy.runner import PolicyRunner
+
+    torch.manual_seed(19)
+    cfg = load_config()
+    counts = [5, 40, 6, 70, 70, 9, 40]
+    obs = collate_observations([observation(cfg, count)[0] for count in counts], device)
+    policy = TransformerLSTMPolicy(cfg).to(device).eval()
+    policy.tile_exploration_epsilon = 0.5
+    with torch.no_grad():
+        policy.branch_head[-1].weight.zero_()
+        policy.branch_head[-1].bias.zero_()
+        policy.branch_head[-1].bias[1] = 2
+    state = policy.initial_state(len(counts), device=device)
+    state.hidden.normal_()
+    state.cell.normal_()
+    state.pending[[0, 3, 4], 0] = 25
+    state.elapsed_ticks[:] = 17
+    active_host = np.array([True, False, True, True, True, True, False])
+    active = torch.tensor(active_host, device=device)
+    plan = ActiveBatchPlan.from_counts(active_host, counts, cfg["encoding"]["max_entities"])
+    compact = forward_active(policy, obs, state, plan)
+    for slot in plan.original_slot_ids:
+        single = policy.forward_step(
+            obs[slot : slot + 1],
+            type(state)(
+                state.hidden[:, slot : slot + 1],
+                state.cell[:, slot : slot + 1],
+                state.pending[slot : slot + 1],
+                state.elapsed_ticks[slot : slot + 1],
+            ),
+        )
+        torch.testing.assert_close(compact.branch_q[slot], single.branch_q[0], atol=2e-6, rtol=1e-5)
+        for left, right, dimension in zip(
+            compact.state.tensors(), single.state.tensors(), (1, 1, 0, 0), strict=True
+        ):
+            torch.testing.assert_close(
+                left.select(dimension, int(slot)), right.select(dimension, 0), atol=2e-6, rtol=1e-5
+            )
+    for before, after, dimension in zip(
+        state.tensors(), compact.state.tensors(), (1, 1, 0, 0), strict=True
+    ):
+        inactive = torch.as_tensor(np.flatnonzero(~active_host), device=device)
+        assert torch.equal(
+            before.index_select(dimension, inactive), after.index_select(dimension, inactive)
+        )
+    masks = observation_tile_masks(obs)
+    masks[~active] = False
+    outputs = []
+    for execution in (None, plan):
+        runner = PolicyRunner(policy, cfg, policy.layout.rules, len(counts), device)
+        runner.state = state.clone()
+        controller = CommittedPlantExploration(len(counts), device, 0.1, 0.5)
+        controller.pending[3] = 2
+        torch.manual_seed(27)
+        actions, _, _, details = runner.decide(
+            obs, masks, None, active=active, deterministic=False, plan=execution
+        )
+        chosen, _, _, details = controller.apply(
+            policy,
+            actions,
+            details,
+            masks,
+            torch.ones(len(counts), device=device) * 1000,
+            torch.zeros(len(counts), 8, device=device),
+            torch.ones(8, device=device) * 50,
+            active,
+            plan=execution,
+        )
+        controller.observe(
+            chosen, active, details["exploration_mode"], active, torch.zeros_like(active)
+        )
+        outputs.append((chosen, details, controller.pending.clone(), torch.rand(8, device=device)))
+    for field in (0, 2, 3):
+        assert torch.equal(outputs[0][field], outputs[1][field])
+    for name in ("coins", "greedy_actions", "exploration_mode", "pending_species", "policy_action"):
+        assert torch.equal(outputs[0][1][name], outputs[1][1][name])
+
+
 @pytest.mark.parametrize("device", ["cpu", "cuda"])
 def test_permutation_padding_batching_and_empty_entities(device):
     cfg, batch = inputs(3, device)
@@ -82,6 +188,57 @@ def test_permutation_padding_batching_and_empty_entities(device):
         result = p.forward_step(empty)
         assert torch.isfinite(result.branch_q).all() and result.tile_features.shape == (1, 45, 32)
         assert p.entity.embed(batch).shape == (3, 9, 32)
+
+
+@torch.no_grad()
+def test_shrinking_128_slot_memory_matches_full_batch_without_inactive_or_reset_leaks():
+    from pvz_rl.policy.active_batch import ActiveBatchPlan, forward_active
+
+    cfg, obs = inputs(128, "cuda")
+    cfg["policy"].update(
+        entity_width=8,
+        transformer_heads=2,
+        transformer_layers=1,
+        transformer_feedforward=16,
+        scalar_width=8,
+        lstm_hidden=8,
+        event_width=4,
+    )
+    policy = TransformerLSTMPolicy(cfg).cuda().eval()
+    state = policy.initial_state(128, device="cuda")
+    state.hidden.normal_()
+    state.cell.normal_()
+    order = np.random.default_rng(19).permutation(128)
+    seen = []
+    handle = policy.entity.register_forward_pre_hook(lambda module, args: seen.append(len(args[0])))
+    try:
+        for live in (128, 64, 1):
+            active_host = np.zeros(128, dtype=bool)
+            active_host[order[:live]] = True
+            active = torch.as_tensor(active_host, device="cuda")
+            state = state.observe(
+                torch.ones(128, 7, device="cuda", dtype=torch.int64),
+                torch.ones(128, device="cuda", dtype=torch.int64),
+                active,
+            )
+            plan = ActiveBatchPlan.from_counts(active_host, np.full(128, 9), 256)
+            compact = forward_active(policy, obs, state, plan)
+            full = policy.forward_step(obs, state, memory_write=active)
+            slots = torch.as_tensor(plan.original_slot_ids, device="cuda")
+            torch.testing.assert_close(
+                compact.branch_q[slots], full.branch_q[slots], atol=2e-6, rtol=1e-5
+            )
+            for left, right in zip(compact.state.tensors(), full.state.tensors(), strict=True):
+                torch.testing.assert_close(left, right, atol=2e-6, rtol=1e-5)
+            state = compact.state
+        assert seen == [128, 128, 64, 128, 1, 128]
+        reset = torch.zeros(128, device="cuda", dtype=torch.bool)
+        reset[order[0]] = True
+        state = policy.reset_state(state, reset)
+        for value, dimension in zip(state.tensors(), (1, 1, 0, 0), strict=True):
+            assert not value.select(dimension, int(order[0])).any()
+    finally:
+        handle.remove()
 
 
 def test_event_normalization_preserves_large_public_values_and_time():
@@ -536,3 +693,258 @@ def test_fp32_batching_attention_gradients_and_update_match_reference():
         updates.append(deltas)
     for a, b, da, db in zip(reference.parameters(), optimized.parameters(), *updates):
         assert torch.all((a - b).abs() <= (da - db).abs() + 2e-7)
+
+
+@torch.no_grad()
+def test_collection_graph_cache_is_per_encoder_bounded_and_owns_replays(monkeypatch):
+    cfg = load_config()
+    first = TransformerLSTMPolicy(cfg).cuda().train().entity
+    second = TransformerLSTMPolicy(cfg).cuda().eval().entity
+    for encoder in (first, second):
+        encoder.enable_compilation()
+
+    def unexpected_fitting(*args):
+        raise AssertionError("Collection must not invoke the fitting compiler")
+
+    first._compiled_encode = unexpected_fitting
+    batches = [collate_observations([observation(cfg, count)[0]], "cuda") for count in range(5, 14)]
+    retained = None
+    for index, batch in enumerate(batches):
+        expected = first._encode(*batch.tensors())
+        summary, tiles = first(batch)
+        actual = torch.cat((summary[:, None], tiles), 1)
+        torch.testing.assert_close(actual, expected, rtol=2e-5, atol=2e-6)
+        if index == 0:
+            retained, saved = actual, actual.clone()
+    assert first.collection_metrics["entries"] == first.collection_metrics["cache_entries"] == 8
+    assert first.collection_metrics["evictions"] == 1
+    assert first.collection_metrics["resident_entries"] <= 16
+    assert first._compiled_shapes == {}
+    assert second.collection_metrics["entries"] == 0
+    second(batches[0])
+    assert second.collection_metrics["entries"] == 1
+    before_hits = first.collection_metrics["hits"]
+
+    def unexpected_poll(*args):
+        raise AssertionError("A replay hit must not synchronize or poll memory")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(torch.cuda, "mem_get_info", unexpected_poll)
+        patch.setattr(torch.cuda, "synchronize", unexpected_poll)
+        batches[1].globals[:, 0] += 0.75
+        first.tile_marker.add_(0.1)
+        expected = first._encode(*batches[1].tensors())
+        summary, tiles = first(batches[1])
+        torch.testing.assert_close(torch.cat((summary[:, None], tiles), 1), expected)
+    assert first.collection_metrics["hits"] == before_hits + 1
+    torch.testing.assert_close(retained, saved, rtol=0, atol=0)
+    torch.cuda.synchronize()
+    assert first.release_retired() == 1
+    assert first.collection_metrics["retired_entries"] == 0
+    first.release_collection()
+    first.release_collection()
+    assert first.collection_metrics["entries"] == 0
+    assert second.collection_metrics["entries"] == 1
+    second.release_collection()
+
+
+@torch.no_grad()
+def test_collection_graph_lru_deferred_retirement_and_transient_bound(monkeypatch):
+    from pvz_rl.policy import cudagraph_backend as backend
+
+    created = []
+    free_mib = [512]
+
+    class Fence:
+        ready = False
+
+        def query(self):
+            return self.ready
+
+    class Capture:
+        def __init__(self, encode):
+            self.encode = encode
+            self.device = torch.device("cuda", 0)
+            self.fence = Fence()
+            self.released = False
+            created.append(self)
+
+        def __call__(self, inputs):
+            return self.encode(*inputs).clone()
+
+        def retire(self):
+            return self.fence
+
+        def release(self):
+            assert self.fence.ready
+            self.released = True
+
+    def unexpected_wait(*args):
+        raise AssertionError("Ordinary LRU eviction and fence queries must not synchronize")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(backend, "GraphCapture", Capture)
+        patch.setattr(torch.cuda, "synchronize", unexpected_wait)
+        patch.setattr(torch.cuda, "mem_get_info", lambda device: (free_mib[0] * 1024**2, 2**30))
+        cache = backend.CollectionGraphCache(2, 512)
+        batches = [
+            (torch.arange(count, device="cuda", dtype=torch.float32),) for count in range(1, 7)
+        ]
+
+        def encode(value):
+            return value.square() + 3
+
+        for batch in batches[:2]:
+            torch.testing.assert_close(cache(encode, batch), encode(*batch))
+        cache(encode, batches[0])
+        cache(encode, batches[2])
+        assert cache.retired[0][0] is created[1]
+        assert not created[1].released
+        free_mib[0] = 511
+        torch.testing.assert_close(cache(encode, batches[3]), encode(*batches[3]))
+        assert cache.retired[1][0] is created[0]
+        assert cache.metrics["headroom_fallbacks"] == 1
+        free_mib[0] = 512
+        cache(encode, batches[4])
+        torch.testing.assert_close(cache(encode, batches[5]), encode(*batches[5]))
+        assert cache.metrics["capacity_fallbacks"] == 1
+        assert cache.metrics["evictions"] == 2
+        assert cache.metrics["entries"] == cache.metrics["retired_entries"] == 2
+        assert cache.metrics["resident_entries"] == 4
+        assert cache.release_retired() == 0
+        created[1].fence.ready = True
+        assert cache.release_retired() == 1
+        assert created[1].released and not created[0].released
+        for capture in created:
+            capture.fence.ready = True
+        assert cache.release_retired() == 1
+        assert cache.metrics["retired_entries"] == 0
+        assert cache.metrics["retired_releases"] == 2
+    cache.release()
+
+
+@pytest.mark.parametrize("free_mib", [(511, 511), (512, 511), (512, 512)])
+@torch.no_grad()
+def test_collection_graph_headroom_before_and_after_admission(monkeypatch, free_mib):
+    cfg, batch = inputs(1, "cuda")
+    encoder = TransformerLSTMPolicy(cfg).cuda().entity
+    encoder.enable_compilation()
+    expected = encoder._encode(*batch.tensors())
+    readings = iter(free_mib)
+    monkeypatch.setattr(
+        torch.cuda, "mem_get_info", lambda device: (next(readings) * 1024**2, 2**30)
+    )
+    summary, tiles = encoder(batch)
+    torch.testing.assert_close(torch.cat((summary[:, None], tiles), 1), expected)
+    admitted = int(free_mib == (512, 512))
+    assert encoder.collection_metrics["entries"] == admitted
+    assert encoder.collection_metrics["captures"] == admitted
+    assert encoder.collection_metrics["headroom_fallbacks"] == 1 - admitted
+    assert encoder.compilation_status == ("compiled" if admitted else "requested")
+    assert encoder._compiled_encode is not None
+    encoder.release_collection()
+
+
+@torch.no_grad()
+def test_collection_graph_oom_releases_cache_and_retries_eager(monkeypatch):
+    from pvz_rl.policy.cudagraph_backend import GraphCapture
+
+    cfg, batch = inputs(1, "cuda")
+    encoder = TransformerLSTMPolicy(cfg).cuda().entity
+    encoder.enable_compilation()
+    summary, tiles = encoder(batch)
+    owned = torch.cat((summary[:, None], tiles), 1)
+    saved = owned.clone()
+    captures = list(encoder._collection_cache.captures.values())
+    calls = []
+
+    def failed(self, inputs):
+        calls.append(True)
+        raise torch.cuda.OutOfMemoryError("forced graph allocation failure")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(GraphCapture, "__call__", failed)
+        batch.globals[:, 0] += 1
+        expected = encoder._encode(*batch.tensors())
+        summary, tiles = encoder(batch)
+        torch.testing.assert_close(torch.cat((summary[:, None], tiles), 1), expected)
+    assert len(calls) == 1
+    assert encoder.collection_metrics["oom_fallbacks"] == 1
+    assert encoder.collection_metrics["entries"] == 0
+    assert encoder.collection_metrics["capture_failures"] == 0
+    assert all(capture.graph is None and capture.outputs is None for capture in captures)
+    assert encoder._compiled_encode is not None
+    torch.testing.assert_close(owned, saved, atol=0, rtol=0)
+    encoder(batch)
+    assert encoder.collection_metrics["entries"] == 1
+    encoder.release_collection()
+
+
+def test_collection_settings_refresh_and_disabled_phase_helpers(monkeypatch):
+    from pvz_rl.learning.performance import phase_memory
+
+    cfg, batch = inputs(1)
+    encoder = TransformerLSTMPolicy(cfg).entity
+
+    def unexpected_cuda(*args):
+        raise AssertionError("Disabled or CPU phase cleanup must not touch CUDA")
+
+    monkeypatch.setattr(torch.cuda, "synchronize", unexpected_cuda)
+    encoder.release_collection()
+    encoder.release_fitting()
+    assert encoder.compilation_status == "disabled"
+    assert encoder.collection_metrics["entries"] == 0
+    assert phase_memory("cpu", empty_cache=True) == {}
+    cfg["training"]["performance"].update(
+        collection_graph_cache_entries=3, collection_vram_headroom_mib=64
+    )
+    encoder.configure_collection(cfg["training"]["performance"])
+    assert encoder.collection_metrics["cache_entries"] == 3
+    assert encoder.collection_metrics["vram_headroom_mib"] == 64
+    encoder.configure_collection(
+        dict(collection_graph_cache_entries=0, collection_vram_headroom_mib=0)
+    )
+    assert encoder.collection_metrics["cache_entries"] == 0
+    encoder(batch)[0].sum().backward()
+    assert encoder.numeric.weight.grad is not None
+
+
+@pytest.mark.parametrize("precision", [torch.float32, torch.bfloat16])
+def test_graph_phase_release_preserves_request_and_recaptures_fitting(precision):
+    from pvz_rl.learning.performance import phase_memory
+
+    torch._dynamo.reset()
+    cfg, batch = inputs(2, "cuda")
+    encoder = TransformerLSTMPolicy(cfg).cuda().train().entity
+    encoder.enable_compilation()
+    with torch.no_grad():
+        encoder(batch)
+    assert encoder.collection_metrics["entries"] == 1
+    encoder.release_collection()
+    for iteration in range(2):
+        with torch.autocast("cuda", dtype=precision, enabled=precision == torch.bfloat16):
+            summary, tiles = encoder(batch)
+            (summary.square().mean() + tiles.square().mean()).backward()
+        assert encoder.collection_metrics["entries"] == 0
+        captures = list(encoder._fitting_backend.captures)
+        assert len(captures) == 2
+        assert all(capture.graph is not None for capture in captures)
+        encoder.zero_grad(set_to_none=True)
+        encoder.release_fitting()
+        assert all(
+            capture.graph is None and capture.static_inputs is None and capture.outputs is None
+            for capture in captures
+        )
+        assert encoder._fitting_backend.captures == []
+        assert encoder._compiled_shapes == {}
+        assert encoder.compilation_status == "requested"
+        assert encoder._compiled_encode is not None
+        batch.globals[:, 0] += iteration / 10
+    with torch.no_grad():
+        encoder(batch)
+    assert encoder._fitting_backend.captures == []
+    assert encoder.collection_metrics["entries"] == 1
+    encoder.release_collection()
+    memory = phase_memory("cuda", empty_cache=True)
+    assert 0 < memory["allocated_mib"] <= memory["reserved_mib"] <= memory["total_mib"]
+    assert 0 <= memory["free_mib"] <= memory["total_mib"]

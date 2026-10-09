@@ -17,7 +17,7 @@ from pvz_rl.envs.encoding import (
 )
 from pvz_rl.learning.objective import COMPONENTS, MAX_PROBES, training_rewards, victory_time
 
-TRAJECTORY_PROTOCOL = "pvz-rl/entity-event-probe-trajectory-v3"
+TRAJECTORY_PROTOCOL = "pvz-rl/entity-event-probe-trajectory-v4"
 
 
 def probe_dtype():
@@ -70,6 +70,10 @@ def trajectory_dtype():
             ("branch_value", "<f4"),
             ("tile_value", "<f4"),
             ("greedy_action", "<u2"),
+            ("policy_action", "<u2"),
+            ("exploration_mode", "u1"),
+            ("pending_species", "u1"),
+            ("next_species", "u1"),
             ("species_coin", "?"),
             ("tile_coin", "?"),
             ("target", "<f4"),
@@ -92,6 +96,7 @@ class CompleteGameBuffer:
         self.cfg = cfg
         self.rewards_finalized = False
         self.reward_summary = {}
+        self.exploration = {}
         self.probe_counts = np.zeros((2, 10, 2), np.int64)
         self.outcome_counts = np.zeros((3, 2), np.int64)
         self.blocks, self.entity_blocks = [], []
@@ -192,6 +197,24 @@ class CompleteGameBuffer:
             selected = blocks == b
             result[selected] = self.blocks[b][offsets[selected]]
         return result
+
+    def update_probe_bootstrap(self, indices, values):
+        if self.finalized or self.rewards_finalized:
+            raise RuntimeError("Cannot update probes after return finalization")
+        indices = np.asarray(indices, dtype=np.int64)
+        values = np.asarray(values)
+        if (
+            indices.ndim != 1
+            or values.shape != (len(indices), MAX_PROBES)
+            or not np.isfinite(values).all()
+            or np.any(indices < 0)
+            or np.any(indices >= self.size)
+        ):
+            raise ValueError("Invalid pending probe bootstrap rows")
+        blocks, offsets = np.divmod(indices, self.block_rows)
+        for block in np.unique(blocks):
+            selected = blocks == block
+            self.blocks[block]["probes"]["bootstrap"][offsets[selected]] = values[selected]
 
     def observations(self, rows, device=None, *, destination=None):
         flat = rows.reshape(-1)
@@ -484,6 +507,7 @@ class CompleteGameBuffer:
             reward_summary=self.reward_summary,
             probe_counts=self.probe_counts,
             outcome_counts=self.outcome_counts,
+            exploration=dict(self.exploration),
         )
 
     def save(self, destination):
@@ -506,6 +530,18 @@ class CompleteGameBuffer:
     def validate_metadata(state):
         if state.get("protocol") != TRAJECTORY_PROTOCOL:
             raise ValueError("Retired trajectory schema; fresh initialization is required")
+        exploration = state.get("exploration")
+        if not isinstance(exploration, dict) or (
+            exploration
+            and (
+                set(exploration) != {"plant_epsilon", "tile_epsilon"}
+                or any(
+                    type(value) not in (int, float) or not np.isfinite(value) or not 0 <= value <= 1
+                    for value in exploration.values()
+                )
+            )
+        ):
+            raise ValueError("Corrupt trajectory exploration probabilities")
         for name, minimum in (
             ("n_envs", 1),
             ("block_rows", 1),
@@ -581,6 +617,26 @@ class CompleteGameBuffer:
                     ):
                         raise ValueError("Corrupt trajectory event facts or write mask")
                 actual = rows[rows["active"]]
+                if (
+                    np.any(rows["policy_action"] >= A.size)
+                    or np.any(rows["exploration_mode"] > 2)
+                    or np.any(rows["pending_species"] > A.plant_types)
+                    or np.any(rows["next_species"] > A.plant_types)
+                    or np.any((actual["exploration_mode"] > 0) != (actual["pending_species"] > 0))
+                    or np.any((actual["exploration_mode"] == 1) & (actual["action"] != 0))
+                    or np.any(
+                        (actual["exploration_mode"] == 2)
+                        & (
+                            (actual["action"] == 0)
+                            | (actual["action"] >= A.dig_start)
+                            | (
+                                (actual["action"].astype(np.int64) - 1) // A.tiles + 1
+                                != actual["pending_species"]
+                            )
+                        )
+                    )
+                ):
+                    raise ValueError("Corrupt trajectory exploration provenance")
                 groups = np.where(
                     actual["action"] == 0, 0, np.where(actual["action"] < A.dig_start, 1, 2)
                 )
@@ -623,6 +679,7 @@ class CompleteGameBuffer:
             for key in ("finalized", "group_counts", "species_counts"):
                 setattr(obj, key, state[key])
             obj.transport_metrics.update(state.get("transport_metrics", {}))
+            obj.exploration = dict(state["exploration"])
             for key in ("rewards_finalized", "reward_summary", "probe_counts", "outcome_counts"):
                 setattr(obj, key, state[key])
             return obj
