@@ -79,9 +79,12 @@ def test_compact_memory_matches_independent_serial_and_preserves_random_draws(de
     policy = TransformerLSTMPolicy(cfg).to(device).eval()
     policy.tile_exploration_epsilon = 0.5
     with torch.no_grad():
-        policy.branch_head[-1].weight.zero_()
-        policy.branch_head[-1].bias.zero_()
-        policy.branch_head[-1].bias[1] = 2
+        policy.wait_head[-1].weight.zero_()
+        policy.wait_head[-1].bias.zero_()
+        policy.tile_head[-1].weight.zero_()
+        policy.tile_head[-1].bias.zero_()
+        policy.tile_offsets.zero_()
+        policy.tile_offsets[(1) - 1] = 2
     state = policy.initial_state(len(counts), device=device)
     state.hidden.normal_()
     state.cell.normal_()
@@ -101,7 +104,7 @@ def test_compact_memory_matches_independent_serial_and_preserves_random_draws(de
                 state.elapsed_ticks[slot : slot + 1],
             ),
         )
-        torch.testing.assert_close(compact.branch_q[slot], single.branch_q[0], atol=2e-6, rtol=1e-5)
+        torch.testing.assert_close(compact.wait_q[slot], single.wait_q[0], atol=2e-6, rtol=1e-5)
         for left, right, dimension in zip(
             compact.state.tensors(), single.state.tensors(), (1, 1, 0, 0), strict=True
         ):
@@ -167,7 +170,7 @@ def test_permutation_padding_batching_and_empty_entities(device):
         extra = p.forward_step(padded)
         single = [p.forward_step(batch[i : i + 1]) for i in range(3)]
         for other in (shuffled, extra):
-            torch.testing.assert_close(reference.branch_q, other.branch_q, atol=1e-6, rtol=1e-5)
+            torch.testing.assert_close(reference.wait_q, other.wait_q, atol=1e-6, rtol=1e-5)
             torch.testing.assert_close(
                 reference.tile_features, other.tile_features, atol=2e-6, rtol=1e-5
             )
@@ -182,11 +185,11 @@ def test_permutation_padding_batching_and_empty_entities(device):
                 rtol=1e-5,
             )
         torch.testing.assert_close(
-            reference.branch_q, torch.cat([x.branch_q for x in single]), atol=1e-6, rtol=1e-5
+            reference.wait_q, torch.cat([x.wait_q for x in single]), atol=1e-6, rtol=1e-5
         )
         empty = collate_observations({"entities": [], "globals": [0] * 18}, device)
         result = p.forward_step(empty)
-        assert torch.isfinite(result.branch_q).all() and result.tile_features.shape == (1, 45, 32)
+        assert torch.isfinite(result.wait_q).all() and result.tile_features.shape == (1, 45, 32)
         assert p.entity.embed(batch).shape == (3, 9, 32)
 
 
@@ -226,7 +229,7 @@ def test_shrinking_128_slot_memory_matches_full_batch_without_inactive_or_reset_
             full = policy.forward_step(obs, state, memory_write=active)
             slots = torch.as_tensor(plan.original_slot_ids, device="cuda")
             torch.testing.assert_close(
-                compact.branch_q[slots], full.branch_q[slots], atol=2e-6, rtol=1e-5
+                compact.wait_q[slots], full.wait_q[slots], atol=2e-6, rtol=1e-5
             )
             for left, right in zip(compact.state.tensors(), full.state.tensors(), strict=True):
                 torch.testing.assert_close(left, right, atol=2e-6, rtol=1e-5)
@@ -307,11 +310,11 @@ def test_controlled_current_state_changes_q_without_memory_write(field):
         policy.fusion[0].weight.zero_()
         policy.fusion[0].bias.fill_(2)
         policy.fusion[0].weight[0, 32] = 1
-        policy.branch_head[0].weight.zero_()
-        policy.branch_head[0].bias.fill_(2)
-        policy.branch_head[0].weight[0, 0] = 1
-        policy.branch_head[2].weight.zero_()
-        policy.branch_head[2].weight[:, 0] = 1
+        policy.wait_head[0].weight.zero_()
+        policy.wait_head[0].bias.fill_(2)
+        policy.wait_head[0].weight[0, 0] = 1
+        policy.wait_head[2].weight.zero_()
+        policy.wait_head[2].weight[:, 0] = 1
         policy.tile_head[0].weight.zero_()
         policy.tile_head[0].bias.fill_(2)
         policy.tile_head[0].weight[0, 32] = 1
@@ -337,7 +340,7 @@ def test_controlled_current_state_changes_q_without_memory_write(field):
         initial = policy.initial_state(1)
         original = policy.forward_step(observations, initial)
         changed = policy.forward_step(altered, initial)
-        assert not torch.equal(original.branch_q, changed.branch_q)
+        assert not torch.equal(original.wait_q, changed.wait_q)
         branch = torch.ones(1, dtype=torch.long)
         assert not torch.equal(
             policy.tile_values(original.tile_features, original.context, branch),
@@ -376,7 +379,7 @@ def test_sparse_events_match_serial_gradients_at_decision_detach_boundaries():
                 memory_write=writes[:, decision],
             )
             serial_state = output.state
-            controls.append(output.branch_q)
+            controls.append(output.wait_q)
         reference = torch.stack(controls, 1)
         torch.testing.assert_close(q, reference, atol=1e-6, rtol=1e-5)
         q.square().sum().backward()
@@ -402,7 +405,7 @@ def test_step_sequence_causality_and_reset():
             carried,
             events=events[:, t],
         )
-        outputs.append(out.branch_q)
+        outputs.append(out.wait_q)
         carried = out.state
     torch.testing.assert_close(q, torch.stack(outputs, 1))
     torch.testing.assert_close(state.hidden, carried.hidden)
@@ -450,7 +453,7 @@ def test_cpu_cuda_model_outputs_gradients_and_adam():
             out.context,
             torch.ones(len(obs), device=obs.device, dtype=torch.long),
         )
-        loss = out.branch_q.square().sum() + tiles.square().sum()
+        loss = out.wait_q.square().sum() + tiles.square().sum()
         loss.backward()
     for a, b in zip(cpu.parameters(), gpu.parameters()):
         assert a.grad is not None and torch.isfinite(a.grad).all()
@@ -466,9 +469,12 @@ def test_greedy_branch_and_only_selected_tiles_explore(dig):
     cfg, batch = inputs(100)
     p = TransformerLSTMPolicy(cfg).eval()
     with torch.no_grad():
-        p.branch_head[-1].weight.zero_()
-        p.branch_head[-1].bias.zero_()
-        p.branch_head[-1].bias[9 if dig else 2] = 5
+        p.wait_head[-1].weight.zero_()
+        p.wait_head[-1].bias.zero_()
+        p.tile_head[-1].weight.zero_()
+        p.tile_head[-1].bias.zero_()
+        p.tile_offsets.zero_()
+        p.tile_offsets[(9 if dig else 2) - 1] = 5
     p.tile_exploration_epsilon = 1
     actions, _, details = p.decide(batch, deterministic=False)
     assert ((actions >= 361) if dig else ((actions >= 46) & (actions <= 90))).all()
@@ -489,9 +495,12 @@ def test_occupancy_masks_and_full_board_proposal():
     assert not masks[0, 1:361].any() and masks[:, 361:].all() and masks[1].all()
     p = TransformerLSTMPolicy(cfg)
     with torch.no_grad():
-        p.branch_head[-1].weight.zero_()
-        p.branch_head[-1].bias.zero_()
-        p.branch_head[-1].bias[1] = 5
+        p.wait_head[-1].weight.zero_()
+        p.wait_head[-1].bias.zero_()
+        p.tile_head[-1].weight.zero_()
+        p.tile_head[-1].bias.zero_()
+        p.tile_offsets.zero_()
+        p.tile_offsets[(1) - 1] = 5
     assert p.decide(batch)[0][0] == 1
 
 
@@ -524,7 +533,7 @@ def test_bf16_features_fp32_core_and_gradient_control(count):
     results, gradients = [], []
     seen = {}
     hooks = []
-    for name in ("lstm", "branch_head", "tile_head"):
+    for name in ("lstm", "wait_head", "tile_head"):
         hooks.append(
             getattr(mixed, name).register_forward_pre_hook(
                 lambda module, args, name=name: seen.update({name: args[0].data.dtype})
@@ -571,7 +580,7 @@ def test_bf16_features_fp32_core_and_gradient_control(count):
     )
     assert relative < 0.02
     assert seen == dict(
-        lstm=torch.float32, branch_head=torch.float32, tile_head=torch.float32, qkv=torch.bfloat16
+        lstm=torch.float32, wait_head=torch.float32, tile_head=torch.float32, qkv=torch.bfloat16
     )
     assert torch.isfinite(gradients[1]).all()
     for hook in hooks:

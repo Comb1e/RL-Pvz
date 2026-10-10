@@ -328,7 +328,7 @@ def test_benchmark_matrix_cli_headless_controls(tmp_path, monkeypatch):
             "1",
             "--cases",
             "mixed",
-            "--scratch-lanes",
+            "--probe-capacities",
             "1",
             "--eager",
             "--no-telemetry",
@@ -341,13 +341,15 @@ def test_benchmark_matrix_cli_headless_controls(tmp_path, monkeypatch):
     assert calls[0][1] == dict(
         env_counts=[4, 1],
         cases=["mixed"],
-        scratch_lanes=[1],
+        probe_capacities=[1],
         fit=True,
         fit_live_games=[128],
         fit_cases=["mixed"],
         cycle_seconds=20.0,
         eager=True,
         telemetry=False,
+        tile_probes=None,
+        probe_rollout_seconds=None,
     )
 
 
@@ -405,22 +407,6 @@ def test_benchmark_reset_keeps_128_original_noncontiguous_slots(live_games, monk
     assert np.array_equal(header[:, HEADER.index("enabled")], enabled)
 
 
-def test_benchmark_probe_lane_control_survives_reallocation(monkeypatch):
-    from pvz_rl.envs.probes import CounterfactualCollector
-    from pvz_rl.monitoring.collection_benchmark import CollectionProbes
-
-    calls = []
-    monkeypatch.setattr(
-        CounterfactualCollector, "_allocate", lambda probe: calls.append(probe.lanes)
-    )
-    probe = CollectionProbes.__new__(CollectionProbes)
-    probe.requested_lanes = 1
-    for _ in range(2):
-        probe.lanes = 2
-        probe._allocate()
-    assert calls == [1, 1]
-
-
 def test_benchmark_quiescent_wait_belongs_to_last_live_batch(monkeypatch):
     from pvz_rl.monitoring import collection_benchmark
     from pvz_rl.monitoring.progress import CollectionProgress
@@ -473,7 +459,7 @@ def test_benchmark_rebuilds_actual_and_probe_cutoff_features(monkeypatch):
         events.append("release")
         probes.features = None
 
-    def allocate():
+    def allocate(teacher):
         events.append("allocate")
         probes.features = Features(env.batch, env.cfg, env.condition)
         probes.features.profiler = env.profiler
@@ -481,9 +467,11 @@ def test_benchmark_rebuilds_actual_and_probe_cutoff_features(monkeypatch):
     probes = SimpleNamespace(
         features=Features(env.batch, cfg, env.condition),
         release_workspaces=release,
-        _ensure_workspaces=allocate,
+        _ensure=allocate,
     )
-    model = SimpleNamespace(env=env, _probes=probes, _drain=lambda: events.append("drain"))
+    model = SimpleNamespace(
+        env=env, _teacher=object(), _probes=probes, _drain=lambda: events.append("drain")
+    )
     monkeypatch.setattr(collection_benchmark, "CudaFeatures", Features)
     for cutoff in (1, 1200):
         collection_benchmark.rebuild_cutoff_features(model, cutoff)
@@ -527,8 +515,9 @@ def test_benchmark_cycle_guards_timeout_reward_and_restores_cutoff(
         _phase=lambda *args: None,
         _synchronize=lambda callback: None,
         cohort_metrics={},
+        logger=SimpleNamespace(name_to_value={}),
     )
-    cutoffs, resets, passes, warmups = [], [], [], []
+    cutoffs, resets, passes, warmups, measured_decisions = [], [], [], [], []
 
     def rebuild(model, cutoff):
         cutoffs.append(cutoff)
@@ -537,16 +526,31 @@ def test_benchmark_cycle_guards_timeout_reward_and_restores_cutoff(
     def fit(callback):
         model._fit_epoch += 1
         passes.append(model._fit_epoch)
+        model.logger.name_to_value.update(
+            {"train/selected_action_error": 1.25, "train/probe_loss": 0.4}
+        )
+        model.cohort_metrics["prefit_errors"] = {"wait": {"mse": 4.0}}
+
+    def reset(*args, **kwargs):
+        resets.append(cfg["environment"]["cutoff_seconds"])
+        model.logger.name_to_value.clear()
+        model.cohort_metrics.clear()
+
+    def measure(model, callback, hardware, process, decisions, **kwargs):
+        measured_decisions.append(decisions)
+        return dict(
+            kwargs,
+            seconds=1.0,
+            terminal_records=[dict(env=int(slots[0]), terminal=terminal, timed_out=timed_out)],
+        )
 
     monkeypatch.setattr(collection_benchmark, "rebuild_cutoff_features", rebuild)
     monkeypatch.setattr(
         collection_benchmark,
         "reset",
-        lambda *args, **kwargs: resets.append(cfg["environment"]["cutoff_seconds"]),
+        reset,
     )
-    monkeypatch.setattr(
-        collection_benchmark, "measure", lambda *args, **kwargs: dict(kwargs, seconds=1.0)
-    )
+    monkeypatch.setattr(collection_benchmark, "measure", measure)
     monkeypatch.setattr(
         collection_benchmark,
         "collect",
@@ -563,7 +567,12 @@ def test_benchmark_cycle_guards_timeout_reward_and_restores_cutoff(
         assert [row["repeat"] for row in row["after_warmed"]] == [0, 1, 2]
         assert all(trial["activity"] == "after-fit-warm" for trial in row["after_warmed"])
         assert row["before"]["cutoff_terminal_reward"] == -2.5
+        assert row["before"]["cutoff_decision_budget"] == 61
+        assert measured_decisions == [61, 16, 16, 16, 16]
         assert row["before"]["cutoff_terminal_games"] == 1
+        assert row["prefit_errors"] == {"wait": {"mse": 4.0}}
+        assert row["last_pass_selected_action_error"] == 1.25
+        assert row["last_pass_probe_huber_error"] == 0.4
         assert "setup_seconds" in row["before"] and "setup_seconds" in row["after"]
     else:
         with pytest.raises(RuntimeError, match="configured terminal loss"):
@@ -613,7 +622,7 @@ def test_benchmark_cycle_budget_exact_boundary(monkeypatch):
         dict(env_counts=[]),
         dict(env_counts=[1, 1]),
         dict(cases=["unknown"]),
-        dict(scratch_lanes=[3]),
+        dict(probe_capacities=[3]),
         dict(cycle_seconds=0),
     ],
 )

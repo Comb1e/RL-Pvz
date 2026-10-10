@@ -503,6 +503,13 @@ class ResearchCallback(BaseCallback):
             + seconds_text(row["last_optimization_seconds"]),
             f"optimizer step {step:,}",
         ]
+        execution = row.get("collection_execution", {})
+        if phase == "collect" and "active_auxiliary_lanes" in execution:
+            parts.insert(
+                2,
+                f"aux {execution['active_auxiliary_lanes']}/{execution['auxiliary_capacity']} "
+                f"queued {execution['queued_probes']} blocked {execution['capacity_blocked_slots']}",
+            )
         hardware = row["hardware"]
         usage = [
             f"{name} {hardware[key]:.0f}%"
@@ -553,8 +560,8 @@ class ResearchCallback(BaseCallback):
         values = self.model.logger.name_to_value
         keys = (
             "q_loss",
-            "branch_loss",
-            "tile_loss",
+            "selected_action_error",
+            "placement_gap",
             "q_grad_norm",
             "q_optimizer_steps",
             "species_exploration_coins",

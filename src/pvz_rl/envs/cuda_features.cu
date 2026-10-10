@@ -178,19 +178,12 @@ extern "C" __global__ void copy_probe_state(
     const Header *sh, const Plant *sp, const Zombie *sz, const Shot *sq,
     const Mower *sm, const I *sc, const I *ss, const I *sl, const double *sa,
     Header *dh, Plant *dp, Zombie *dz, Shot *dq, Mower *dm, I *dc, I *ds, I *dl,
-    double *da, const I *source_ids, const bool *active) {
-  I i = blockIdx.x, t = threadIdx.x;
-  I source = source_ids[i];
-  if (!active[i] || !sh[source].enabled) {
-    if (!t) {
-      Header empty = {};
-      dh[i] = empty;
-      da[i] = 0;
-    }
-    return;
-  }
+    double *da, const I *source_ids, const I *target_ids, const bool *active) {
+  I row = blockIdx.x, t = threadIdx.x;
+  I source = source_ids[row], i = target_ids[row];
+  if (!active[row] || !sh[source].enabled) return;
   Header h = sh[source];
-  if (t == 0) { dh[i] = h; dh[i].enabled = h.enabled && active[i]; da[i] = sa[source]; }
+  if (t == 0) { dh[i] = h; da[i] = sa[source]; }
   for (I j=t;j<h.np;j+=blockDim.x) dp[i*45+j]=sp[source*45+j];
   for (I j=t;j<h.nz;j+=blockDim.x) dz[i*ZCAP+j]=sz[source*ZCAP+j];
   for (I j=t;j<h.nq;j+=blockDim.x) dq[i*QCAP+j]=sq[source*QCAP+j];
@@ -202,7 +195,8 @@ extern "C" __global__ void copy_probe_state(
 
 extern "C" __global__ void dedup_probes(const int *entities, const I *summary,
     const float *globals, const I *history,
-    const bool *valid, I *source, I n, I slots) {
+    const bool *valid, I *source, I n, I slots,
+    const float *hidden, const float *cell, I memory_width) {
   I game = blockIdx.x;
   if (game >= n) return;
   __shared__ int equal;
@@ -223,6 +217,9 @@ extern "C" __global__ void dedup_probes(const int *entities, const I *summary,
         if (history[row * HISTORY_WIDTH + k] != history[other * HISTORY_WIDTH + k]) atomicExch(&equal, 0);
       for (I k = threadIdx.x; k < GLOBAL_WIDTH; k += blockDim.x)
         if (globals[row * GLOBAL_WIDTH + k] != globals[other * GLOBAL_WIDTH + k]) atomicExch(&equal, 0);
+      for (I k = threadIdx.x; k < memory_width; k += blockDim.x)
+        if (hidden[row * memory_width + k] != hidden[other * memory_width + k]
+            || cell[row * memory_width + k] != cell[other * memory_width + k]) atomicExch(&equal, 0);
       __syncthreads();
       if (equal) chosen = source[other];
       __syncthreads();

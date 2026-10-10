@@ -21,9 +21,9 @@
 ## Code structure
 
 - `src/pvz_rl/data/train.toml` is the single parameter source for train/demo overlays.
-  Both use `entity_v1`, `transformer_lstm_q_v3`, `public_event_history_v1` and
-  `complete_return_probe_v3`; old inputs/weights
-  require fresh initialization. Keep user reward adjustments when updating defaults.
+  Both use `entity_v1`, `transformer_lstm_q_v4`, `public_event_history_v1` and
+  `complete_return_joint_tile_probe_v1`; old weights/resumes
+  require fresh initialization; verified recordings are reconstructed without changes. Keep user reward adjustments when updating defaults.
   `training.demo.passes` controls demonstration initialization (20 by default),
   independently of autonomous `training.n_epochs` (4 by default).
   Tile (50% to 1%) and accepted-plant species (10% to 1%) probabilities decay over
@@ -50,7 +50,7 @@
   schedules. Shallow batch/feature prefix views reuse existing scratch allocation;
   source-ID remapping copies original live slots into compact lane prefixes and
   scatters public features/metadata back to canonical game/probe rows.
-  `learning/objective.py` owns six-component targets, probe Huber loss
+  `learning/objective.py` owns six-component targets, unified complete-action probe Huber loss
   and accepted-demonstration ranking. EMA history follows actual behavior, while
   forked probe histories never reach actual gameplay or journals.
 - `policy/entity_attention.py` owns shared embeddings, readout tokens, padding masks,
@@ -66,19 +66,23 @@
   release the outgoing captures before allocating the next phase's workspaces.
   It captures AOT forward/backward separately and copies their outputs, including
   saved activations and gradients,
-  out of graph storage with SDPA strides intact. A backward capture failure restarts
+  out of graph storage with SDPA strides intact. Mutable capture storage is allocated
+  outside inference mode so evaluation/collection mode switches remain safe.
+  A backward capture failure restarts
   the uncommitted pass eagerly. The compiled path stays tensor-only so simulator pybind
   objects are never traced. Fitting uses BF16 temporary features with FP32
   master weights, LSTM and Q heads. `transformer_lstm.py`
-  owns LSTM and Q heads; `recurrent_policy.py` adapts the training lifecycle.
-  `sequential_q.py` keeps all ten branches greedy, independent of sun/cooldown;
+  owns event LSTM, one wait head and conditional joint-tile values; `recurrent_policy.py` adapts the training lifecycle.
+  `sequential_q.py` owns shared `ActionQValues` and derives species/dig values
+  from candidate-tile maxima; all ten branches remain greedy, independent of sun/cooldown;
   occupancy-only plant tiles and unrestricted dig tiles constrain tile exploration.
   `learning/exploration.py` owns the separate committed-plant state machine:
   accepted normal plants can select another species uniformly; actual waits persist
   until resources/cooldown/geometry permit planting or the episode ends, without a timeout.
   Exploration provenance and original policy proposals are diagnostics, never LSTM inputs.
-  A full-board plant still proposes tile zero. `runner.py` owns recurrent state and
-  owns `EventMemoryState`: hidden/cell, pending gross public event facts and elapsed
+  A full-board plant still proposes tile zero. `runner.py` owns recurrent lifecycle;
+  `transformer_lstm.py` defines `EventMemoryState`: hidden/cell, pending gross public
+  event facts and elapsed
   ticks. `envs/history.py` defines `HistoryEvent`, extraction and normalization.
   Sunlight gains/spending, zombie spawn/defeat/removal and plant addition/removal
   write memory once using the resulting board. Quiet decisions preserve memory
@@ -93,7 +97,7 @@
   `cuda_q.py` owns cohort lifecycle and atomic recovery; `recurrent_q.py` collects
   chronological transitions and accumulates whole-pass gradients. Sparse fitting
   packs event rows, then deterministically gathers memory onto all decisions, with
-  existing 256-decision detach boundaries. Selected losses balance nonempty groups,
+  existing 256-decision detach boundaries. Selected complete-action losses (no duplicated branch-return regression) balance nonempty groups,
   then accepted/rejected strata 50/50 using full-cohort counts. `cuda_buffer.py`
   stores fixed metadata plus ragged entity slabs under one RAM/disk budget and
   validates offsets/counts and categories on recovery. `sequence_transport.py` owns
@@ -103,27 +107,42 @@
   device timing event per pass, and uses cached intermediate telemetry.
   Demonstration initialization checkpoints omit those fields
   and hydrate them from the current train profile when loaded. `host_transfer.py`
-  owns the sole reusable pinned `HostHandoff`. Device-packed behavior/probe slabs,
-  metadata, dedup representatives and terminal headers/totals queue before one
-  stream wait. Valid nonterminal representatives bootstrap only after that wait;
-  their queued CPU copy is consumed at the next existing handoff. Current rows
-  append first, then `cuda_buffer.py` patches their bootstrap values before
-  finalization/fitting; quiescent checkpoint/finalization drains flush the last copy.
+  owns the sole reusable pinned `HostHandoff`. Behavior evidence, auxiliary
+  control and terminal headers/totals share each stream wait. Owned endpoint
+  transfers precede complete-state CPU deduplication and compact nonterminal
+  bootstrap inference; the queued copy is consumed at the next handoff.
+  Actual rows append immediately, then `cuda_buffer.py` patches complete endpoint
+  evidence exactly once before finalization/fitting; saving drains every patch.
   `PackedEntityBatch` carries validated slab offsets directly into storage.
   Behavior globals transfer active rows only and reconstruct zero-filled canonical
   host rows; probe globals follow the same compact/scatter contract. Fixed metadata
   may retain original slot-shaped staging.
-  Two independent scratch lanes execute compact live-slot prefix views while
-  persistent feature rows retain canonical identities; one-lane allocation
-  fallback preserves every scheduled probe. Scratch capacity and private simulator
-  bounds are not reduced or exposed as policy inputs. EMA next-state inference is compact;
-  actual history stays isolated from every fork. Exact device deduplication
-  includes event/timing inputs and never merges proposal/reward evidence.
-  Collection uses public-count padding bounds and the owned-output graph wrapper;
-  future schedules never determine policy inputs. Active maps, graph captures and
-  caches are rebuilt, never serialized; recovery contracts are unchanged by these
-  execution controls. Resume refreshes execution and logging automatically;
-  missing execution fields use current defaults.
+  `learning/probe_layout.py` owns 1–44 tile-only probe shapes. Every accepted
+  actual normal/exploratory planting queues up to four distinct other empty tiles
+  of that species; branches are not probed. `collection_scheduler.py` retains
+  canonical decision tickets, per-slot actual counters/reset markers and behavior
+  draws under local source-capacity backpressure. `envs/probes.py` owns `ProbeJob`
+  and `ProbePool`: immutable pre-action sources, FIFO work, persistent independent
+  lanes, immediate retirement and exact-once delayed endpoint patches.
+  Real slots, including a planting owner, continue alongside auxiliary games.
+  Defaults allow 256 auxiliary lanes, 128 pending source jobs and one auxiliary
+  transition per scheduler round. Allocation fallback halves capacities to one
+  source/lane; it never drops a probe. Frozen greedy EMA stops at true
+  terminal/cutoff, 30 simulated seconds or 4096 transitions; no recursive probes
+  or exploratory commitments run in forks. Heavy reporting stays at 64 rounds.
+  Complete-state endpoint dedup precedes tail inference; proposal/reward evidence
+  is never merged. Sources, retained tickets, states, endpoints and handoff buffers
+  participate in memory accounting. Source IDs/schedules never enter policy inputs.
+  Cohort reward finalization and fitting require all expected patches. Saving
+  stops new selection, finishes issued tickets and drains auxiliary work before
+  serializing canonical recovery state; pools/maps/caches rebuild on restore.
+  New demo/objective/trajectory/recovery protocols reject previous checkpoints
+  before allocation. No migration or legacy collector is supported.
+  Sequence fitting gathers actual decisions per original slot, ignores capacity
+  gaps and keeps 256-actual-decision detach boundaries. Its chronological maps
+  share staging budgets, spill to temporary disk maps and release on early close.
+  Current execution/logging
+  defaults refresh on compatible recovery.
   Fitting retries whole uncommitted passes on BF16/memory failure.
   Curriculum stages are easy, standard, shared.
 - `presentation/demo_recording.py` records structured v2 archives and compact viewer
@@ -141,8 +160,10 @@
   `throughput_benchmark.py` measures fixed 1,024-frame/four-pass execution.
   `collection_benchmark.py` owns cold/warmed sparse/mixed/crowded snapshots at
   128/64/32/16/4/1 live games within fixed 128 original simulator slots, with
-  noncontiguous original IDs, one-/two-lane controls and an opt-in bounded
-  collect/four-pass-fit/collect cycle. Its default performs no fitting;
+  noncontiguous original IDs, bounded auxiliary-capacity controls and an opt-in bounded
+  collect/four-pass-fit/collect cycle. Cutoff controls allow bounded extra ordinary
+  decisions for zero-time placements/digs; snapshot windows stay unchanged.
+  Its default performs no fitting;
   `throughput_benchmark.py` owns synthetic four-pass fitting, not snapshot collection.
   `monitoring/progress.py` owns compact terminal/train.log events, independent
   terminal/JSON cadences, duplicate suppression and redirected/interactive modes.
@@ -158,7 +179,7 @@
   `test_collection.py` owns serial/batched equivalence, allocation fallback,
   deduplication counterexamples and compiled inference buckets. The
   active-bucket/slot/RNG math and graph LRU/headroom/phase ownership controls belong
-  in `test_transformer_lstm.py`; storage owns delayed bootstrap patching/spill.
+  in `test_transformer_lstm.py`; storage owns exact-once endpoint patching/spill.
   Interval-rate, shrinking-cohort and phase/reset controls belong in
   `test_progress.py`, with callback snapshot isolation in its context suite.
   Independent constant-bootstrap CPU/CUDA controls remain in

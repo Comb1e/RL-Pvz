@@ -1,5 +1,7 @@
 """Shared legality, exploration and regression algebra for sequential Q control."""
 
+from dataclasses import dataclass
+
 import torch
 from pvz_game import Rules
 
@@ -7,8 +9,28 @@ from pvz_rl.envs.actions import ActionSchema as A
 
 UNITS_PER_TILE = Rules().game["units_per_tile"]
 
-POLICY_SIGNATURE = "transformer_lstm_q_v3"
-ACTION_DISTRIBUTION = "sequential_q_unmasked_penalty_v1"
+POLICY_SIGNATURE = "transformer_lstm_q_v4"
+ACTION_DISTRIBUTION = "joint_q_unmasked_penalty_v1"
+
+
+@dataclass
+class ActionQValues:
+    wait: torch.Tensor
+    tiles: torch.Tensor
+    branches: torch.Tensor
+
+    @classmethod
+    def derive(cls, wait, tiles, masks):
+        candidates = A.tile_masks(masks).clone()
+        candidates[..., 0] |= ~candidates.any(-1)
+        maxima = tiles.masked_fill(~candidates, -torch.inf).max(-1).values
+        return cls(wait.reshape(-1), tiles, torch.cat((wait.reshape(-1, 1), maxima), -1))
+
+    def selected(self, actions):
+        branches, locations = action_parts(actions)
+        rows = torch.arange(len(actions), device=actions.device)
+        tile = self.tiles[rows, (branches - 1).clamp_min(0), locations]
+        return torch.where(branches == 0, self.wait, tile)
 
 
 def observation_tile_masks(obs):
@@ -83,21 +105,19 @@ def outcome_weights(counts, *, device, dtype, accepted_share=0.5):
     return shares / counts.clamp_min(1) / represented
 
 
-def balanced_q_loss(branch, tile, targets, actions, counts, *, accepted, accepted_share=0.5):
+def balanced_q_loss(selected, targets, actions, counts, *, accepted, accepted_share=0.5):
     """Equal nonempty wait/plant/dig groups, then equal accepted/rejected outcomes."""
-    branch_error = (branch - targets).square()
-    tile_error = (tile - targets).square()
-    errors = torch.where(actions == 0, branch_error, (branch_error + tile_error) / 2)
+    errors = (selected - targets).square()
     weights = outcome_weights(
-        counts, device=branch.device, dtype=branch.dtype, accepted_share=accepted_share
+        counts, device=selected.device, dtype=selected.dtype, accepted_share=accepted_share
     )
     loss = (errors * weights[action_groups(actions), accepted.long()]).sum()
-    return loss, branch_error, tile_error
+    return loss, errors
 
 
-def select_q_tiles(board, pooled, tile_values, action_masks, branches, epsilon):
+def select_q_tiles(values, action_masks, branches, epsilon):
     rows = torch.arange(len(branches), device=branches.device)
-    tile_q = tile_values(board, pooled, branches)
+    tile_q = values.tiles[rows, (branches - 1).clamp_min(0)]
     tile_legal = A.tile_masks(action_masks)[rows, (branches - 1).clamp_min(0)]
     first_tile = torch.zeros_like(tile_legal)
     first_tile[:, 0] = True
@@ -109,9 +129,6 @@ def select_q_tiles(board, pooled, tile_values, action_masks, branches, epsilon):
 
 def select_q_actions(
     values,
-    board,
-    pooled,
-    tile_values,
     action_masks,
     *,
     deterministic=False,
@@ -137,17 +154,17 @@ def select_q_actions(
     # cooldown are simulator outcomes.  Empty rows stay illegal and invalidate
     # the decision unless the caller marks them inactive for batched collection.
     legal = selection_masks(action_masks)
-    if values.shape != legal.shape:
+    if values.branches.shape != legal.shape:
         raise ValueError("Q values and boolean legal masks must have matching shapes")
     if active is not None:
         wait_only = torch.zeros_like(legal)
         wait_only[:, 0] = True
         legal = torch.where(active[:, None], legal, wait_only)
-    branches = greedy_choice(values, legal)
+    branches = greedy_choice(values.branches, legal)
     nonwait = branches > 0
     tile_epsilon = 0.0 if deterministic else tile_exploration_epsilon
     selected, preferred, fired, tile_q = select_q_tiles(
-        board, pooled, tile_values, action_masks, branches, tile_epsilon
+        values, action_masks, branches, tile_epsilon
     )
     tiles = torch.where(nonwait, selected, 0)
     coins = torch.stack((torch.zeros_like(nonwait), fired & nonwait), -1)
@@ -155,10 +172,19 @@ def select_q_actions(
     details = dict(
         greedy_actions=assemble(branches, torch.where(nonwait, preferred, 0)),
         coins=coins,
-        branch_q=values,
-        valid=torch.isfinite(values).all()
+        branch_q=values.branches,
+        action_q=values,
+        selected_value=values.selected(actions),
+        placement_gap=values.branches.gather(1, branches[:, None]).flatten()
+        - values.selected(actions),
+        valid=torch.isfinite(values.branches).all()
         & legal.any(-1).all()
         & (torch.isfinite(tile_q) | ~nonwait[:, None]).all(),
     )
     selected_tile_values = torch.where(nonwait, tile_q.gather(1, tiles[:, None]).flatten(), 0)
-    return actions, values.gather(1, branches[:, None]).flatten(), selected_tile_values, details
+    return (
+        actions,
+        values.branches.gather(1, branches[:, None]).flatten(),
+        selected_tile_values,
+        details,
+    )

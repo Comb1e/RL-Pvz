@@ -11,6 +11,9 @@ PERFORMANCE_SETTINGS = (
     "fit_sequence_groups",
     "collection_graph_cache_entries",
     "collection_vram_headroom_mib",
+    "probe_active_capacity",
+    "probe_pending_capacity",
+    "probe_steps_per_round",
 )
 
 

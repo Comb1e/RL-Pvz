@@ -240,7 +240,17 @@ class CudaFeatures:
         self.obs_tensor = self.view(0, self.batch.n, self.width)
         return self.obs_tensor
 
-    def step(self, actions, *, ticks=1, per_tick=True, offset=0, publish=True, phase="simulation"):
+    def step(
+        self,
+        actions,
+        *,
+        ticks=1,
+        per_tick=True,
+        offset=0,
+        publish=True,
+        phase="simulation",
+        observation_active=None,
+    ):
         b, cp = self.batch, self.batch.cp
         with self._track(phase):
             cp.copyto(self.before_assets, self.assets)
@@ -249,6 +259,8 @@ class CudaFeatures:
             b.step_device(actions, ticks=ticks, per_tick=per_tick)
         with self._track("encoding"):
             cp.copyto(self.enabled, b.header[:, 17], casting="unsafe")
+            if observation_active is not None:
+                b.header[:, 17] = observation_active
             observation = self.encode(offset=offset, publish=publish)
             cp.multiply(
                 b.accounting[:, 3:10],
@@ -282,7 +294,7 @@ class CudaFeatures:
             )
         return observation, self.reward_tensor
 
-    def dedup(self, events, valid, source, slots):
+    def dedup(self, events, valid, source, slots, *, state=None):
         """Mark probe rows whose stored and recurrent inputs repeat an earlier slot."""
         cp = self.batch.cp
         n = len(self.entities) // slots
@@ -298,6 +310,17 @@ class CudaFeatures:
                 cp.from_dlpack(source),
                 n,
                 slots,
+                cp.from_dlpack(
+                    events.new_zeros(1, dtype=torch.float32)
+                    if state is None
+                    else state.hidden[0].contiguous()
+                ),
+                cp.from_dlpack(
+                    events.new_zeros(1, dtype=torch.float32)
+                    if state is None
+                    else state.cell[0].contiguous()
+                ),
+                0 if state is None else state.hidden.shape[-1],
             ),
         )
 

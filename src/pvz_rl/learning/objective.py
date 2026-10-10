@@ -6,7 +6,7 @@ from torch.nn import functional as F
 
 from pvz_rl.policy.sequential_q import action_parts, outcome_weights
 
-OBJECTIVE_PROTOCOL = "complete_return_probe_v3"
+OBJECTIVE_PROTOCOL = "complete_return_joint_tile_probe_v1"
 COMPONENTS = (
     "terminal",
     "development",
@@ -15,7 +15,6 @@ COMPONENTS = (
     "home_proximity",
     "victory_time",
 )
-MAX_PROBES = 4
 
 
 def components(parts):
@@ -70,42 +69,26 @@ def finalize_episode_metrics(rows, cfg, *, median=None):
 
 
 def probe_loss(policy, q, tiles, context, probes, counts, delta):
-    """probes[..., :] = valid, branch-role, proposal, target, accepted."""
+    """probes[..., :] = valid, proposal, target, initial acceptance."""
     valid = probes[..., 0].bool()
     source, slot = valid.nonzero(as_tuple=True)
     if not len(source):
         return q.sum() * 0
     chosen = probes[source, slot]
-    branch, location = action_parts(chosen[:, 2].long())
-    target = chosen[:, 3]
-    branch_role = chosen[:, 1].bool()
-    # Cohort denominators are host metadata; inspecting them must not wait on
-    # active device work in every recurrent chunk.
-    represented = np.count_nonzero(np.asarray(counts).sum(-1), axis=1)
-    weights = [
-        outcome_weights(
-            head,
-            device=q.device,
-            dtype=q.dtype,
-            accepted_share=policy.cfg["training"]["objective"]["accepted_outcome_share"],
-        )
-        for head in counts
-    ]
-    accepted = chosen[:, 4].long()
-    terms = []
-    if represented[0]:
-        error = F.huber_loss(q[source, branch], target, reduction="none", delta=delta)
-        terms.append((error * branch_role * weights[0][branch, accepted]).sum())
-    nonwait = branch != 0
-    if represented[1] and len(source[nonwait]):
-        predicted = (
-            policy.tile_values(tiles[source[nonwait]], context[source[nonwait]], branch[nonwait])
-            .gather(1, location[nonwait, None])
-            .flatten()
-        )
-        error = F.huber_loss(predicted, target[nonwait], reduction="none", delta=delta)
-        terms.append((error * weights[1][branch[nonwait], accepted[nonwait]]).sum())
-    return sum(terms, q.sum() * 0) / max(1, sum(bool(value) for value in represented))
+    branch, _ = action_parts(chosen[:, 1].long())
+    target = chosen[:, 2]
+    weights = outcome_weights(
+        counts,
+        device=q.device,
+        dtype=q.dtype,
+        accepted_share=policy.cfg["training"]["objective"]["accepted_outcome_share"],
+    )
+    accepted = chosen[:, 3].long()
+    predicted = policy.selected_values(
+        q[source], tiles[source], context[source], chosen[:, 1].long()
+    )
+    error = F.huber_loss(predicted, target, reduction="none", delta=delta)
+    return (error * weights[branch, accepted]).sum()
 
 
 def ranking_counts(actions, accepted, masks):
@@ -131,21 +114,24 @@ def ranking_counts(actions, accepted, masks):
 
 
 def demonstration_rank_loss(policy, q, tiles, context, actions, accepted, masks, counts, margin):
+    from pvz_rl.policy.transformer_lstm import RecurrentOutput
+
     branch, tile = action_parts(actions)
     _, alternatives, geometry = ranking_counts(actions, accepted, masks)
     result = q.sum() * 0
     accuracy = q.new_zeros(4)
+    values_all = policy.action_values(RecurrentOutput(q, tiles, context, None), masks)
+    anchor = values_all.selected(actions)
     for head, candidates in enumerate((alternatives, geometry)):
         active = accepted & candidates.any(-1) & ((branch != 0) if head else True)
         if not bool(active.any()):
             continue
         values = (
-            policy.tile_values(tiles[active], context[active], branch[active])
+            values_all.tiles[active, (branch[active] - 1).clamp_min(0)]
             if head
-            else q[active]
+            else values_all.branches[active]
         )
-        indices = tile[active] if head else branch[active]
-        selected = values.gather(1, indices[:, None])
+        selected = anchor[active, None]
         mask = candidates[active]
         losses = (F.softplus(margin - selected + values) * mask).sum(-1) / mask.sum(-1)
         denominator = counts[head].to(q.device)

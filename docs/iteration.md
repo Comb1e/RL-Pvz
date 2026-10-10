@@ -1,5 +1,294 @@
 # Iteration history
 
+## 0.37.0 — 2026-10-10
+
+- Problem/root cause: collection ran every post-plant counterfactual to completion
+  before the next real decision. A single planting therefore parked all real
+  games, including its owner. Branch alternatives also mixed species comparisons
+  with the requested same-species placement evidence.
+- Improvement: remove branch probes and their cursors/categories/configuration.
+  Accepted normal/exploratory planting queues up to four distinct other empty
+  tiles of that species, excluding its actual tile. Separate zero-time placements
+  remain separate jobs. Frozen greedy EMA continuations may choose ordinary
+  actions but never spawn probes or commitments. Rewards, event memory, joint
+  network, 128-game cohorts, four autonomous/twenty demonstration passes and
+  optimizer settings stay unchanged.
+- Execution: `CollectionScheduler`, `ProbeJob` and `ProbePool` retain selected
+  decisions, immutable pre-action sources and independent occupied auxiliary
+  lanes. Each round advances ready real slots and one auxiliary transition by
+  default; the planting owner continues. FIFO admission reserves source capacity
+  before eligible execution. Only a source-limited slot holds its original
+  proposal/draws, without invented waits or ticks. Defaults are 256 auxiliary
+  lanes and 128 outstanding sources. Headroom/budget fallback reduces allocations
+  to one source/lane, retaining every probe; minimum failure is explicit and
+  occurs before behavior inference/RNG consumption. Heavy reporting remains at
+  64 continuation rounds.
+- Evidence/recovery: actual transitions append immediately with stable row IDs
+  and pending counts. Owned endpoints, exact full-state deduplication and compact
+  tail inference patch RAM/spilled rows exactly once, including out-of-order
+  completions and multiple jobs from one slot. Real terminal games do not cancel
+  their jobs or count auxiliary victories as cohort games. Finalization/fitting/
+  EMA updates require complete evidence. Interruption/save stops new selection,
+  finishes issued decisions and drains every job/transfer/patch; no fork is
+  serialized. Canonical counters/cursors recover; pool/maps rebuild.
+- Sequence/memory: chronological per-slot maps omit capacity gaps and keep
+  256-actual-decision detach boundaries. Maps share staging accounting, spill to
+  temporary disk maps and release on early close. Reusable pinned views are
+  consumed before reuse. Retained tickets, source/lane recurrent state, endpoints
+  and private workspaces are charged/reported. Publishing a larger reservation
+  now follows spilling, and prefetch establishes its initial map reservation
+  before returning, fixing an independently caught budget-publication race.
+- Contract/cleanup: objective/method `complete_return_joint_tile_probe_v1`, demo
+  v6, trajectory v7 and autonomous recovery v5 reject previous weights/resumes
+  before simulator allocation. Network `transformer_lstm_q_v4` and public
+  event-memory interfaces stay unchanged. Verified recordings can be refitted
+  into a fresh directory. Synchronous collectors, branch-probe paths and the
+  obsolete bootstrap-only patch interface are removed. Recordings, runs,
+  checkpoints, evidence and prior uncommitted work remain untouched.
+- Monitoring/documentation: report active lanes, queued jobs, blocked slots,
+  queue-only age, oldest outstanding-job age, workspace, rollout work/stops and
+  drain duration. Auxiliary/tail inference has separate device profiler labels.
+  `rollout_enqueue_seconds` is host enqueue overhead, not GPU wall time.
+  Quick start, training/math/validation and repository ownership instructions
+  describe the sole framework; architecture remains 217 lines and three diagrams.
+  Sample Factory and EnvPool papers/projects inform independent batched scheduling
+  only; sources inspected are recorded in [references](references.md).
+- Verification: seven owning suites ran once, initially producing 150 passes
+  and eight fixture/retired-API failures. Corrected controls passed ten and then
+  fourteen selected cases. Fixtures now respect Sunflower/Peashooter ordering,
+  initial sun/cooldown and saved exploration settings; retired benchmark assumptions
+  were replaced rather than weakening constraints. Final focused storage/map/
+  minimum-allocation/queue-age/preflight controls passed twelve cases. Subsequent
+  prefetch/fallback checks caught the budget-publication race above; after repair,
+  three prefetch layouts and the independent partition-gradient control passed
+  four cases. Selections overlap and are not a unique suite total. No full suite
+  was repeated. Ruff lint/format and whitespace checks pass. Prior unrelated
+  assertions recorded under 0.35 remain outside this change; full-suite success
+  is not claimed.
+
+Bounded eager controls use the default network and 128 original simulator slots,
+noncontiguous one/four live games, four auxiliary lanes, eight actual decisions per
+window and **0.05 simulated seconds**, not the default 30-second horizon. Setup,
+actual-window and remaining drain time are separate; three warmed trials give:
+
+| Case | Live games | Median actual window seconds | Median drain seconds | Decisions/game/s |
+|---|---:|---:|---:|---:|
+| Sparse | 4 | 0.14106 | <0.00001 | 56.72 |
+| Sparse | 1 | 0.14588 | <0.00001 | 54.85 |
+| Planting | 4 | 0.19221 | 0.22931 | 41.63 |
+| Planting | 1 | 0.19099 | 0.00535 | 41.89 |
+
+- The bounded collect/four-pass-fit/collect cycle committed exactly four updates;
+  fitting took 0.34851 seconds and maximum reported workspace was 271,353,588
+  bytes. See [short control](evidence/collection-background-v037-short.json) and
+  its hardware stream. This earlier artifact's `rollout_wall_seconds` field
+  measured enqueue overhead; the implementation now names that quantity accurately.
+- A final one-lane, one-live-game, four-decision control after map/ownership fixes
+  also completed exactly four updates. Median warmed actual window was 0.08931
+  seconds, versus 0.08920 after 0.32412 seconds of fitting. Last selected-action
+  error was 3.94696 and probe Huber error 1.48699. See
+  [final control](evidence/collection-background-v037-final.json) and hardware
+  stream. This is another 0.05-second-horizon check, not a full benchmark matrix.
+- These measurements and serial references establish bounded execution and
+  continued real-slot progress, not default-30-second/full-cohort speed, a proven
+  fix for every historical slowdown, mastery or improved win rate. Shared GPU
+  contention and source-capacity backpressure remain. No formal training or Git
+  publication was launched.
+
+## 0.36.0 — 2026-10-10
+
+- Problem/root cause: periodic probes spent work on quiet/rejected decisions and
+  did not compare every successful placement with same-species alternatives.
+  Architecture mixed workflow explanations with low-level inventories and
+  duplicated owning documents. The approved replacement changes probe triggering,
+  coverage and horizon, not the joint network or ordinary gameplay.
+- Improvement: each actual accepted normal/exploratory planting triggers exactly
+  once, including separate zero-time placements. Four distinct other branches
+  rotate through nine alternatives; up to four distinct other empty tiles keep
+  the planted species fixed and exclude its actual tile. Only accepted triggers
+  advance cursors. Waits, digs, rejected plants, initial entities and probe-only
+  plants trigger none. Selection consumes no behavior RNG and retains ordinary
+  resource/cooldown rejection for alternative branches.
+- Execution: the pinned simulator's read-only legality mask gates pre-action
+  source copies on device without changing policy geometry. Real acceptance from
+  the existing actual-transition handoff authorizes forks. An immutable source
+  bank includes simulator/accounting state; forks gather complete pre-action EMA
+  memory after consuming source events. Frozen greedy EMA continuations stop at
+  real terminal/cutoff, 30 simulated seconds or 4096 transitions. Existing pinned
+  control boundaries compact survivors every 64 continuation rounds; serial lane
+  fallback retains all valid proposals. Sources, scratch and endpoint memory are
+  accounted/reported. Fork events and rewards never enter actual histories.
+- Learning/recovery: gamma-one accumulated-reward-plus-EMA-tail targets, initial
+  acceptance strata, exact endpoint deduplication and probe coefficient 0.25 stay
+  unchanged. Once an actual decision starts, bounded probes/storage finish and
+  bootstrap drains before checkpointing. Transient forks are never serialized.
+  The selected complete-action objective, reward settings, event memory, exploration,
+  128-game cohorts, four autonomous/twenty demo passes and optimizer are unchanged.
+- Contract/cleanup: shared `ProbeLayout` supplies storage/transport/execution
+  shapes for 0–9 branches and 0–44 tiles, with at least one enabled. Objective
+  `complete_return_joint_probe_v2`, demo v5, trajectory v6 and autonomous recovery
+  v4 reject previous weights/resumes before simulator allocation, despite unchanged
+  `transformer_lstm_q_v4` network structure. Periodic scheduling, decision cursors,
+  fixed four-probe shapes, obsolete rollback and historical checkpoint hydration
+  are removed; current demo loading refreshes execution settings only. Verified
+  recordings remain reusable through fresh initialization into an unused directory.
+  User recordings, runs, checkpoints, evidence and prior uncommitted work remain.
+- Documentation/sources: architecture is 207 lines with three focused diagrams,
+  linking field/math/execution detail to owning documents. Quick start, training,
+  validation and repository ownership instructions describe the sole framework.
+  Re-inspected MVE definition 3.1 and its project README, recorded in
+  [references](references.md). Bounded rollout-plus-tail comes from that source;
+  accepted-plant triggering and coverage are local decisions.
+- Verification: seven owning suites ran once (153 passed and one fixture failure).
+  Follow-up demonstration/math/rejection controls produced 58 passes and one
+  fixture failure. Corrected preflight/interruption/fallback checks passed eight
+  cases; the consecutive zero-time control passed separately. Final nondefault
+  spill/recovery/prefetch, CPU/CUDA demo reload and cutoff-budget checks passed nine
+  cases. These selections overlap and are not a unique suite total. Fixtures were
+  corrected for initial cooldowns, distinct zero-time tiles and lane batch counts;
+  production constraints were not weakened. No full suite was repeated. Ruff
+  lint/format and whitespace checks pass. The unrelated assertions recorded under
+  0.35 remain outside this change; the full suite is not claimed green.
+
+Bounded eager planting controls use one noncontiguous live game in 128 original
+slots, two scratch lanes, two actual decisions/window and three warmed trials.
+A forced Sunflower-dominant policy yields one accepted planting/window. Setup/cold
+work is separate; these are not steady-state or full-cohort training rates.
+
+| Coverage | Horizon | Warm median window seconds | Probe transitions/window | Stops/window |
+|---|---:|---:|---:|---|
+| 2 branches + 2 tiles | 20 s | 15.6841 | 8,013 | 4 horizon |
+| 4 branches + 4 tiles | 20 s | 16.2540 | 16,025 | 8 horizon |
+| 4 branches + 4 tiles | 30 s | 23.1315 | 24,033 | 8 horizon |
+
+- Evidence: [lighter coverage](evidence/collection-plant-v036-coverage-20s.json),
+  [wide coverage](evidence/collection-plant-v036-wide-20s.json) and
+  [default horizon/four-pass cycle](evidence/collection-plant-v036-default-30s.json),
+  each with matching hardware JSONL. The default case records one trigger, four
+  branch/four tile probes, 96 rollout event writes and 24,832 padded inference rows.
+  Eight endpoints reduce to six nonterminal bootstrap representatives.
+- Four-pass cycle: three actual transitions finish one natural one-second cutoff
+  game, with eight cutoff probes totaling 25 transitions. Exactly four optimizer
+  commits take 0.349 seconds; prefit plant MSE is 4.0001, last-pass selected-action
+  error is 3.9469 and probe Huber error is 0.6878. The post-fit warm median window
+  is 22.3971 seconds, versus 23.1315 beforehand (+3.28% active transition rate).
+  This tiny matched eager control shows no repeatable greater-than-5% regression;
+  it does not establish default full-cohort or compiled performance.
+- Control correction: the first cycle attempt assumed every decision advanced a
+  tick and stopped one tick before cutoff after accepted zero-time planting, before
+  any optimizer update. Cutoff collection now allows a bounded additional 45
+  ordinary decisions and stops at completion, without forced waits or changed
+  snapshot windows. Only the missing cycle was rerun; completed trials were retained.
+- Memory: reported default source/scratch/endpoint workspace is 818,833,152 bytes,
+  including the immutable bank. Torch peak is 47.35 MiB before fitting and 60.64 MiB
+  afterward. FIT entry drops CuPy pool reservation from 772.75 to 254.58 MiB and
+  Torch reservation to 24 MiB. These are separate pools/workspaces, not total process
+  VRAM. Small accounting additions occurred between coverage controls, so tiny
+  workspace differences are not an isolated coverage-cost measurement.
+- Limits: crowded/default 128-live cost and learning quality remain unmeasured.
+  Longer and more frequent probes materially increase collection work; no faster
+  learning, win-rate improvement or previous throughput is promised. No formal
+  training, commit, push, PR or merge was performed. Benchmark-owned temporary
+  trajectory directories were closed/removed; durable measurements are preserved.
+
+## 0.35.0 — 2026-10-09
+
+- Problem/root cause: independent species and tile predictions both received the
+  sampled placement's return, directly blaming a good species for a bad tile.
+  One-transition probes could not observe delayed shooting, mine arming or
+  Sunflower production. The approved replacement changes attribution and probe
+  consequences, not reward coefficients, event memory, exploration or optimization.
+- Improvement: the sole `transformer_lstm_q_v4` model predicts wait and conditional
+  joint-tile values. Shared `ActionQValues` derives species/dig values from candidate
+  maxima; only the actual complete action receives selected-return regression.
+  Occupancy, full-board tile-zero fallback, resource/cooldown rejection and original
+  slot-shaped exploration draws retain their semantics. Tile tables are computed
+  once and head temporaries obey the encoder microbatch bound.
+- Objective: `complete_return_joint_probe_v1` retains complete gamma-one returns,
+  whole-cohort wait/plant/dig group weights and accepted/rejected 50/50 strata.
+  Each probe contributes one initial complete-action Huber error, equally weighted
+  across represented branches and balanced outcomes, with coefficient 0.25.
+  Demonstration ranking anchors the demonstrated complete action against other
+  branches' best executable placements and other tiles; coefficient 0.10, margin
+  0.05 and normalization remain unchanged. Autonomous/demo passes stay four/twenty.
+  Selected-action error and placement gap replace duplicated head-return metrics.
+- Probes: original games schedule alternatives at decisions 0, 512, 1024, ...
+  Every valid initial proposal forks simulator/accounting and complete consumed
+  EMA event memory. Frozen greedy continuations stop at real terminal/cutoff,
+  20 simulated seconds or 4096 executed transitions, including the initial action.
+  Horizon/cap endpoints bootstrap; terminal/cutoff endpoints do not. No exploration,
+  forced wait, synthetic time advance or fabricated defeat is introduced.
+- Execution/recovery: bounded scratch lanes retain valid forks only, with one-lane
+  allocation fallback. Device masks stop finished forks; reusable pinned controls
+  compact survivors every 64 continuation rounds. Public growth bounds include
+  pending spawns, possible plant additions and projectile bursts without inspecting
+  future schedules. Only endpoint evidence persists. Final bootstrap dedup compares
+  public inputs and complete hidden/cell/event/timing state, never merging ongoing
+  simulations. Probe interruption rewinds source memory, RNG and scheduling cursors;
+  actual execution completes its handoff/storage before checkpointing.
+- Compatibility/cleanup: demonstration, trajectory and recurrent recovery contracts
+  are versioned. All earlier weights/resumes fail before CUDA probing or simulator
+  allocation; no partial migration exists. Verified archives/native replays remain
+  reusable by refitting into a new directory. Replaced independent-head losses,
+  one-step helpers and previous-contract-only tests were removed. Existing recordings,
+  runs, checkpoints and prior evidence were preserved.
+- Graph ownership: switching evaluation inference mode and ordinary no-grad
+  collection exposed mutable CUDA graph/RNG buffers allocated as inference tensors.
+  Capture-owned storage is now allocated outside inference mode. The explicit
+  mode-switch, capture-cache reuse and owned-output control passes.
+- Verification: the shared-contract full suite ran once: 661 passed, 22 failed and
+  one setup error. New-contract failures were repaired and targeted rechecks passed
+  26 cases; no second full run was made. Final shared-selector/growth-bound,
+  microbatch value/gradient and v3 preflight checks passed 25 cases. Benchmark
+  controls passed 27 cases, including retaining fit metrics across collection reset;
+  the mode-switch ownership check passed separately. These selections overlap and
+  must not be added into a unique suite total. Ruff lint/format and whitespace
+  checks passed.
+- Remaining unrelated assertions: ten reward/timing controls expect the retired
+  loss penalty 2 although unchanged HEAD/default configuration uses 1; one viewer
+  test expects timestamped durable lines in compact interactive output. Reward and
+  progress behavior were not altered to satisfy these assertions. The full suite
+  is not claimed green.
+- Sources: inspected SDQN section 2.2 equations 7/8 and Model-Based Value Expansion
+  definition 3.1/project README, recorded in [references](references.md). Conditional
+  maxima and bounded rollout-plus-tail ideas are used; learned dynamics, SDQN's
+  component networks and its off-policy algorithm are not adopted.
+
+Bounded eager snapshot controls retain 128 original slots, two scratch lanes,
+two actual decisions per measured window and three warmed trials. They use a
+forced wait-dominant teacher on a sparse board, with two valid branch alternatives
+at each scheduled source. They are not formal training or steady-state rates.
+
+| Live games | Horizon | Cadence | Warm median window seconds | Actual transitions/s | Probe transitions/window |
+|---|---:|---:|---:|---:|---:|
+| 128 | 0.02 s | 512 | 0.7510 | 340.87 | 768 |
+| 1 | 0.02 s | 512 | 0.4355 | 4.59 | 6 |
+| 1 | 20 s | 512 | 12.9570 | 0.154 | 4002 |
+| 1 | 0.02 s | 1 | 0.8560 | 2.34 | 10 |
+
+- Evidence: [final short-horizon/cycle](evidence/collection-joint-v035-final.json),
+  [default-horizon cost](evidence/collection-joint-v035-default-horizon.json) and
+  [dense-cadence control](evidence/collection-joint-v035-dense-cadence.json), each
+  with its matching hardware JSONL. All snapshot forks stopped at their horizons.
+  The first decision schedules probes; these short windows intentionally emphasize
+  their cost and must not be extrapolated to a 512-decision average or a full-cohort
+  default-horizon workload. Longer probes are substantially more expensive.
+- Four-pass cycle: 256 complete cutoff transitions from 128 games, exactly four
+  optimizer commits in 0.685 seconds. Wait prefit MSE was 4; last-pass selected MSE
+  was 3.970 and probe Huber error 0.4875. Warm median post-fit throughput was 353.86
+  versus 340.87 active transitions/s (+3.81%); this matched short-horizon control
+  shows no greater-than-5% median regression, not a guarantee for 20-second probes.
+- Memory: cycle collection cleanup reduced Torch reservation from 166 to 24 MiB;
+  FIT entry reduced CuPy pool reservation from 771.75 to 255.17 MiB. Retained probe
+  workspace was 544,196,608 bytes; default-horizon one-live Torch peak was 36.70 MiB.
+  These pool/workspace measurements are not total process VRAM or promised savings.
+  The earlier isolated short-horizon artifact remains intact but its selected-error
+  field was lost at collection reset; final evidence fixes that measurement bug.
+  Two newly generated overlapping benchmark files were discarded, not user evidence.
+- Limits: no formal/unbounded training, commit, push or merge was performed. No
+  improved win rate or unchanged collection throughput is promised; crowded/default
+  full-cohort rollout cost remains unmeasured in these bounded controls.
+
 ## 0.34.0 — 2026-10-09
 
 - Problem/root cause: fixed slot-capacity inference kept doing encoder/tile work

@@ -21,40 +21,29 @@ from stable_baselines3.common.callbacks import BaseCallback
 from stable_baselines3.common.logger import configure
 
 from pvz_rl.config import load_config
-from pvz_rl.envs.cuda_features import REWARD_FIELDS, CudaFeatures
-from pvz_rl.envs.probes import CounterfactualCollector
-from pvz_rl.learning.cohort import CohortPhase
+from pvz_rl.envs.actions import ActionSchema as A
+from pvz_rl.envs.cuda_features import CudaFeatures
+from pvz_rl.envs.probes import ProbePool
+from pvz_rl.learning.cohort import CohortPhase, atomic_transition
 from pvz_rl.learning.training import build_model, vector_env
 from pvz_rl.monitoring.hardware import HardwareMonitor
 from pvz_rl.monitoring.progress import CollectionProgress
 from pvz_rl.provenance import write_json
 
-CASES = ("sparse", "mixed", "crowded", "rejection-heavy", "accepted-action")
+CASES = ("sparse", "mixed", "crowded", "rejection-heavy", "accepted-action", "planting")
 DEFAULT_CASES = CASES[:3]
 ENVIRONMENT_COUNTS = (128, 64, 32, 16, 4, 1)
 ORIGINAL_ENVIRONMENTS = ENVIRONMENT_COUNTS[0]
-SCRATCH_LANES = (1, 2)
+PROBE_CAPACITIES = (1, 4, 16, 64, 128, 256)
 WARMUP_DECISIONS = 8
 REPETITIONS = 3
 FIT_PASSES = 4
-PROTOCOL = "collection-active-snapshot-v4"
+PROTOCOL = "collection-background-tile-snapshot-v7"
 
 
 class CollectionCallback(BaseCallback):
     def _on_step(self):
         return True
-
-
-class CollectionProbes(CounterfactualCollector):
-    """Retain the requested scratch control across fit workspace release."""
-
-    def __init__(self, env, lanes):
-        self.requested_lanes = lanes
-        super().__init__(env)
-
-    def _allocate(self):
-        self.lanes = self.requested_lanes
-        super()._allocate()
 
 
 def active_slots(live_count, environments=ORIGINAL_ENVIRONMENTS):
@@ -130,7 +119,8 @@ def collect(model, callback, decisions, *, quiesce=None):
     for decision in range(decisions):
         if not model.env.enabled_envs.any():
             break
-        model._collect_step(callback)
+        with atomic_transition():
+            model._collect_step(callback)
         if quiesce is not None and (decision == decisions - 1 or not model.env.enabled_envs.any()):
             quiesce()
         progress.observe(
@@ -158,8 +148,12 @@ def measure(model, callback, hardware, process, decisions, **context):
     cpu_before = process.cpu_times()
     capture_before = capture_setup_seconds(model)
     started = perf_counter()
-    work = collect(model, callback, decisions, quiesce=model._drain)
+    work = collect(model, callback, decisions)
     elapsed = perf_counter() - started
+    execution = copy.deepcopy(getattr(model, "collection_execution", {}))
+    drain_started = perf_counter()
+    model._drain()
+    drain_seconds = perf_counter() - drain_started
     capture_after = capture_setup_seconds(model)
     cpu_after = process.cpu_times()
     phases = env.profiler.flush()
@@ -176,11 +170,23 @@ def measure(model, callback, hardware, process, decisions, **context):
     import cupy
 
     transitions = work["lifetime_active_transitions"]
-    execution = copy.deepcopy(getattr(model, "collection_execution", {}))
     execution["timings"] = env.profiler.snapshot()
+    terminal_rows = model._buffer.take(model._buffer.valid_indices())
+    terminal_rows = terminal_rows[terminal_rows["done"]]
+    terminal_records = [
+        dict(
+            env=int(row["env"]),
+            terminal=float(row["components"][0]),
+            timed_out=bool(env._episode_host["header"][int(row["env"]), 1] == 0),
+        )
+        for row in terminal_rows
+    ]
     return dict(
         **context,
         seconds=elapsed,
+        drain_seconds=drain_seconds,
+        terminal_records=terminal_records,
+        phases_seconds_scope="actual window plus separately measured drain",
         capture_setup_seconds={
             name: value - capture_before[name] for name, value in capture_after.items()
         },
@@ -217,7 +223,7 @@ def rebuild_cutoff_features(model, cutoff):
         env.features = CudaFeatures(env.batch, env.cfg, env.condition)
         env.features.profiler = env.profiler
         probes.copy_kernel = env.features.module.get_function("copy_probe_state")
-        probes._ensure_workspaces()
+        probes._ensure(model._teacher)
 
 
 def release_benchmark_model(model):
@@ -278,18 +284,27 @@ def fit_cycle(model, callback, raw, decisions, hardware, process, context, secon
         setup_before = perf_counter() - started
         check_cycle_budget(deadline)
         before = measure(
-            model, callback, hardware, process, decisions, **context, activity="before-fit"
+            model,
+            callback,
+            hardware,
+            process,
+            decisions + A.tiles,
+            **context,
+            activity="before-fit",
         )
         check_cycle_budget(deadline)
         if env.enabled_envs.any():
             raise RuntimeError("Bounded cycle did not collect complete cutoff games")
         slots = active_slots(context["live_games"])
-        terminal = env.last_reward_parts_host[slots, REWARD_FIELDS.index("terminal")]
+        records = before["terminal_records"]
         loss = -env.cfg["reward"]["loss_penalty"]
-        if not np.all(env.last_transition_host[slots, 1]) or not np.all(terminal == loss):
+        if {row["env"] for row in records} != set(slots.tolist()) or not all(
+            row["timed_out"] and row["terminal"] == loss for row in records
+        ):
             raise RuntimeError("Bounded cutoff games must receive the configured terminal loss")
         before.update(
             setup_seconds=setup_before,
+            cutoff_decision_budget=decisions + A.tiles,
             cutoff_terminal_reward=loss,
             cutoff_terminal_games=len(slots),
         )
@@ -309,6 +324,9 @@ def fit_cycle(model, callback, raw, decisions, hardware, process, context, secon
         model._synchronize(callback)
         fitting = perf_counter() - started
         phase_memory = copy.deepcopy(model.cohort_metrics.get("phase_memory", []))
+        prefit_errors = copy.deepcopy(model.cohort_metrics.get("prefit_errors", {}))
+        selected_error = model.logger.name_to_value.get("train/selected_action_error")
+        probe_error = model.logger.name_to_value.get("train/probe_loss")
     finally:
         started = perf_counter()
         rebuild_cutoff_features(model, previous_cutoff)
@@ -348,6 +366,9 @@ def fit_cycle(model, callback, raw, decisions, hardware, process, context, secon
         setup_scope="actual/probe cutoff feature rebuild and reset; excluded from collection and fit timings",
         preparation_seconds=preparation,
         fit_seconds=fitting,
+        prefit_errors=prefit_errors,
+        last_pass_selected_action_error=selected_error,
+        last_pass_probe_huber_error=probe_error,
         phase_memory=phase_memory,
         before=before,
         after=after,
@@ -362,13 +383,15 @@ def benchmark(
     *,
     env_counts=ENVIRONMENT_COUNTS,
     cases=DEFAULT_CASES,
-    scratch_lanes=SCRATCH_LANES,
+    probe_capacities=(1, 256),
     fit=False,
     fit_live_games=(ORIGINAL_ENVIRONMENTS,),
     fit_cases=("mixed",),
     cycle_seconds=120,
     eager=False,
     telemetry=True,
+    tile_probes=None,
+    probe_rollout_seconds=None,
 ):
     output = Path(output)
     if type(decisions) is not int or not 1 <= decisions <= 40:
@@ -376,7 +399,7 @@ def benchmark(
     for values, choices in (
         (env_counts, ENVIRONMENT_COUNTS),
         (cases, CASES),
-        (scratch_lanes, SCRATCH_LANES),
+        (probe_capacities, PROBE_CAPACITIES),
         (fit_live_games, ENVIRONMENT_COUNTS),
         (fit_cases, CASES),
     ):
@@ -390,6 +413,15 @@ def benchmark(
         raise ValueError("Use a cycle wall budget in (0, 300] seconds")
     output.parent.mkdir(parents=True, exist_ok=True)
     cfg = load_config()
+    for key, value in (
+        ("tile_probes", tile_probes),
+        ("probe_rollout_seconds", probe_rollout_seconds),
+    ):
+        if value is not None:
+            cfg["training"]["objective"][key] = value
+    from pvz_rl.config import validate_config
+
+    validate_config(cfg)
     cfg["visualization"].update(enabled=False, live_enabled=False, demos=False, videos=False)
     cfg["training"].update(until_stage_complete=False, total_games=10000, n_epochs=FIT_PASSES)
     cfg["training"]["n_envs"] = ORIGINAL_ENVIRONMENTS
@@ -406,7 +438,7 @@ def benchmark(
         environments=ORIGINAL_ENVIRONMENTS,
         live_games=list(env_counts),
         cases=list(cases),
-        scratch_lanes=list(scratch_lanes),
+        probe_capacities=list(probe_capacities),
         fit_cycle=fit,
         fit_live_games=list(fit_live_games),
         fit_cases=list(fit_cases),
@@ -416,7 +448,7 @@ def benchmark(
         repetitions=REPETITIONS,
         config=copy.deepcopy(cfg),
         measurements=[],
-        comparison="two-lane versus the current one-lane memory fallback, not a historical trainer",
+        comparison="bounded background pool versus one auxiliary lane; actual window and drain measured separately",
         cold_scope="fresh environment and policy; process and disk kernel caches may already be warm",
         references=[
             "https://github.com/pytorch/pytorch/blob/v2.8.0/torch/utils/benchmark/utils/timer.py",
@@ -432,7 +464,7 @@ def benchmark(
             "environments",
             "live_games",
             "cases",
-            "scratch_lanes",
+            "probe_capacities",
             "fit_cycle",
             "fit_live_games",
             "fit_cases",
@@ -446,14 +478,14 @@ def benchmark(
         for count in env_counts:
             for case in cases:
                 raw = snapshot(case)
-                for lanes in scratch_lanes:
+                for lanes in probe_capacities:
                     cycle = fit and count in fit_live_games and case in fit_cases
                     context = dict(
                         phase=case,
                         case=case,
                         environments=ORIGINAL_ENVIRONMENTS,
                         live_games=count,
-                        scratch_lanes=lanes,
+                        probe_capacities=lanes,
                     )
                     completed = {
                         (row["sample_type"], row["repeat"])
@@ -478,18 +510,25 @@ def benchmark(
                         model.set_logger(configure(folder=None, format_strings=[]))
                         callback = CollectionCallback()
                         callback.init_callback(model)
-                        model._probes = CollectionProbes(env, lanes)
+                        case_cfg["training"]["performance"]["probe_active_capacity"] = lanes
+                        model._probes = ProbePool(env)
                         branch = (
                             9
                             if case == "accepted-action"
                             else 1
-                            if case == "rejection-heavy"
+                            if case in ("rejection-heavy", "planting")
                             else 0
                         )
                         with torch.no_grad():
-                            model.policy.branch_head[-1].weight.zero_()
-                            model.policy.branch_head[-1].bias.zero_()
-                            model.policy.branch_head[-1].bias[branch] = 1
+                            model.policy.wait_head[-1].weight.zero_()
+                            model.policy.wait_head[-1].bias.zero_()
+                            model.policy.tile_head[-1].weight.zero_()
+                            model.policy.tile_head[-1].bias.zero_()
+                            model.policy.tile_offsets.zero_()
+                            if branch == 0:
+                                model.policy.wait_head[-1].bias[0] = 1
+                            else:
+                                model.policy.tile_offsets[branch - 1] = 1
                         reset(model, callback, raw, 101, live_count=count)
                         setup = perf_counter() - started
 
@@ -587,7 +626,7 @@ def main():
     )
     parser.add_argument("--cases", nargs="+", choices=CASES, default=list(DEFAULT_CASES))
     parser.add_argument(
-        "--scratch-lanes", type=int, nargs="+", choices=SCRATCH_LANES, default=list(SCRATCH_LANES)
+        "--probe-capacities", type=int, nargs="+", choices=PROBE_CAPACITIES, default=[1, 256]
     )
     parser.add_argument("--fit-cycle", action="store_true")
     parser.add_argument(
@@ -601,6 +640,8 @@ def main():
     parser.add_argument("--cycle-seconds", type=float, default=120)
     parser.add_argument("--eager", action="store_true")
     parser.add_argument("--no-telemetry", action="store_true")
+    parser.add_argument("--tile-probes", type=int)
+    parser.add_argument("--probe-rollout-seconds", type=float)
     args = parser.parse_args()
     try:
         benchmark(
@@ -608,13 +649,15 @@ def main():
             args.decisions,
             env_counts=args.env_counts,
             cases=args.cases,
-            scratch_lanes=args.scratch_lanes,
+            probe_capacities=args.probe_capacities,
             fit=args.fit_cycle,
             fit_live_games=args.fit_live_games,
             fit_cases=args.fit_cases,
             cycle_seconds=args.cycle_seconds,
             eager=args.eager,
             telemetry=not args.no_telemetry,
+            tile_probes=args.tile_probes,
+            probe_rollout_seconds=args.probe_rollout_seconds,
         )
     except ValueError as exc:
         parser.error(str(exc))

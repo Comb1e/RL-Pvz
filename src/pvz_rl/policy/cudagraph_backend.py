@@ -41,7 +41,7 @@ class GraphCapture:
         self.device = None
 
     def __call__(self, inputs):
-        with torch.no_grad():
+        with torch.inference_mode(False), torch.no_grad():
             if self.graph is None:
                 if not inputs or not all(
                     isinstance(value, torch.Tensor) and value.is_cuda for value in inputs

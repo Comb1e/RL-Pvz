@@ -439,8 +439,12 @@ def test_view_decisions_match_q_values_without_rng_changes(smoke_cfg):
         obs, mask = env.reset(), env.action_masks()
         for winner in (0, 1, 3, 9):
             with torch.no_grad():
-                model.policy.branch_head[-1].bias.zero_()
-                model.policy.branch_head[-1].bias[winner] = 1
+                model.policy.wait_head[-1].bias.zero_()
+                model.policy.tile_offsets.zero_()
+                if winner == 0:
+                    model.policy.wait_head[-1].bias[0] = 1
+                else:
+                    model.policy.tile_offsets[winner - 1] = 1
                 mask[:] = True
                 state = torch.cuda.get_rng_state()
                 plain = model.policy.decide(obs, action_masks=mask)
@@ -452,7 +456,8 @@ def test_view_decisions_match_q_values_without_rng_changes(smoke_cfg):
                 torch.testing.assert_close(plain[1].hidden, watched[1].hidden, rtol=0, atol=0)
                 diagnostic = watched[2]
                 torch.testing.assert_close(
-                    diagnostic["branch_q"], model.policy.forward_step(obs).branch_q
+                    diagnostic["branch_q"],
+                    model.policy.action_values(model.policy.forward_step(obs), mask).branches,
                 )
                 assert selection_masks(mask).all()
                 assert "tiles" not in diagnostic

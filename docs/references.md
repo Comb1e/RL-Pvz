@@ -21,9 +21,10 @@
   features remain available at every decision through a separate fusion path.
 
 This index records sources used by the current implementation and the particular
-ideas adopted. Project choices such as the entity cap, embedding width, rewards
-and mastery gates are not established by these papers. Release history and local
-measurements belong in [iteration history](iteration.md).
+ideas adopted, plus explicitly labelled research discussions that do not change
+the implementation. Project choices such as the entity cap, embedding width,
+rewards and mastery gates are not established by these papers. Release history
+and local measurements belong in [iteration history](iteration.md).
 
 ## Entities and recurrent decisions
 
@@ -51,7 +52,7 @@ measurements belong in [iteration history](iteration.md).
   hindsight goals or the HER algorithm.
 - Hausknecht and Stone, [Deep Recurrent Q-Learning](https://arxiv.org/abs/1507.06527):
   abstract inspected for memory under partial observation. The local objective
-  uses complete returns for selected actions and one-step EMA bootstrap for isolated
+  uses complete returns for selected actions and bounded rollout plus EMA tail for isolated
   alternative-action probes; it makes no claimed recurrence advantage.
 - [SB3-Contrib 2.7.1 recurrent policies](https://github.com/Stable-Baselines-Team/stable-baselines3-contrib/blob/v2.7.1/sb3_contrib/common/recurrent/policies.py)
   and [buffers](https://github.com/Stable-Baselines-Team/stable-baselines3-contrib/blob/v2.7.1/sb3_contrib/common/recurrent/buffers.py):
@@ -61,9 +62,44 @@ measurements belong in [iteration history](iteration.md).
   and `b1c5632149bfe8db3472f8608ed0f28e0686d8bb937aec05890ca2cee57ef75c`.
 - Metz et al., [Discrete Sequential Prediction of Continuous Actions for Deep RL, §2.2](https://arxiv.org/html/1705.05035v3):
   assemble action components before executing one command. Its off-policy Bellman
-  backups are not used. [SB3 2.7.1 QNetwork](https://github.com/DLR-RM/stable-baselines3/blob/v2.7.1/stable_baselines3/dqn/policies.py)
+  backups are not used. For the 2026-10-09 species/tile credit discussion, inspected
+  equation 7's internal maximization backup and equation 8's terminal-component
+  consistency, rather than assigning the sampled placement return to both heads.
+  These conditional-max ideas now inform exact species maxima from joint tile values;
+  SDQN's component networks and off-policy learning algorithm are not adopted.
+  [SB3 2.7.1 QNetwork](https://github.com/DLR-RM/stable-baselines3/blob/v2.7.1/stable_baselines3/dqn/policies.py)
   supplied the inspected raw-value/argmax reference; greedy normal branches,
   tile sampling and accepted-plant commitments are local decisions.
+
+## Species/tile credit research — 2026-10-09
+
+SDQN conditional maxima and bounded value expansion inform the implemented joint
+species-tile objective and isolated bounded greedy-EMA probes. COMA and action
+branching remain comparisons only, not adopted actors, advantages or privileged inputs.
+
+- Foerster et al., [Counterfactual Multi-Agent Policy Gradients](https://arxiv.org/html/1705.08926v3)
+  and [PyMARL's COMA learner](https://github.com/oxwhirl/pymarl/blob/c971afdceb34635d31b778021b0ef90d7af51e86/src/learners/coma_learner.py):
+  inspected the conditional counterfactual baseline, detached advantage and actor
+  loss. Holding species fixed while comparing tiles can inform placement-specific
+  credit. This is an adaptation of the comparison idea: action components are not
+  independent agents, and advantages cannot replace absolute Q-return targets
+  without a matching objective. The paper's privileged critic inputs are not
+  proposed as policy inputs here.
+- Feinberg et al., [Model-Based Value Estimation for Efficient Model-Free Reinforcement Learning](https://arxiv.org/html/1803.00101v1)
+  and its [project README](https://github.com/vlad17/mve/blob/19835bba87a2e5abc9bca653d011bf2eed68dd62/README.md):
+  inspected definition 3.1's bounded rollout rewards plus terminal value estimate.
+  Bounded isolated probes expose delayed placement effects before EMA
+  bootstrap. The project already has a simulator; this implementation does not use
+  learned dynamics or old dependencies, nor does it treat one-step neural
+  estimates as observed counterfactual outcomes. Re-inspected definition 3.1 and
+  the project README on 2026-10-10 for accepted-plant 30-second probes. The
+  planting trigger and four-branch/four-tile coverage are local design choices,
+  not claims from the paper.
+- Tavakoli et al., [Action Branching Architectures for Deep Reinforcement Learning](https://arxiv.org/abs/1711.08946)
+  and the [authors' project](https://github.com/atavakol/action-branching-agents/tree/1e026011505779e0ad30060ab3422f97eff08300):
+  inspected the abstract and project README as a contrasting factorized-action
+  design. Independent branches alone do not establish which component caused a
+  poor result; species-dependent placement interactions must remain represented.
 
 ## Precision and device execution
 
@@ -157,10 +193,26 @@ throughput measurements.
   inspected selected-item compaction as inspiration for canonical gather/scatter.
   This header explicitly does not support NVRTC, which the local CuPy adapter uses;
   it is not imported, compiled or adopted as an implementation dependency. The host
-  planner uses published live flags/counts; GPU probe representatives cross only
+  planner uses published live flags/counts; probe endpoint facts cross only
   the existing handoff.
 - [PyTorch pinned/nonblocking tutorial](https://github.com/pytorch/tutorials/blob/main/intermediate_source/pinmem_nonblock.py):
   inspected pinned transfer ownership and copy-completion requirements. The single
   reusable handoff waits before CPU consumption and before a named buffer is reused.
 - The compact terminal cadence, duplicate keys and separation from detailed JSON
   snapshots are local implementation decisions, not research-derived claims.
+
+## Independent background tile probes
+
+- [Sample Factory paper](https://arxiv.org/abs/2006.11751) and
+  [project README](https://github.com/alex-petrenko/sample-factory):
+  inspected the abstract and synchronous/asynchronous sampling and multi-policy
+  descriptions. They inspire separating runnable environment work from a long
+  counterfactual task. No PPO, off-policy correction, dependency or claimed
+  throughput is adopted; both local policies remain frozen within each cohort.
+- [EnvPool paper](https://arxiv.org/abs/2206.10558) and
+  [project README](https://github.com/sail-sg/envpool):
+  inspected the abstract and batched pool/asynchronous API descriptions.
+  Reusable independent lanes and stable environment identities inform the local
+  scheduler; EnvPool itself is not integrated. GPU contention, local FIFO source
+  backpressure, retained decisions, exact-once endpoint patches and drain-before-save
+  are project choices, not performance guarantees from these sources.

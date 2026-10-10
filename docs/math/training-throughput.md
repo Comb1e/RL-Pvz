@@ -29,18 +29,21 @@ Compaction does not promise bitwise-equal floating-point reductions across batch
 shapes. Independent serial controls still check outputs, memory and random draws
 without weakening the representation or selected-action contract.
 
-Two independent scratch lanes execute the two branch probes and two tile probes
-in two passes. Shallow batch/feature prefix views reuse the existing allocation;
-source-ID remapping copies original live slots into compact lane prefixes before
-simulation/encoding. Scheduled-role masks preserve eligibility. Public feature
-records and metadata scatter back to canonical game/probe rows before dedup and
-bootstrap. Scratch execution width follows live games, but allocation capacity
-and private simulator storage bounds remain unchanged. Neither private bounds
-nor source IDs determine policy tokens. If scratch
-allocation fails, one lane executes all scheduled slots; no probe is omitted.
-Every pass restores its own simulator RNG, accounting and proximity ledger.
-One compact EMA evaluation advances actual history; independently gathered fork
-inputs use that history without ever replacing it with a probe result.
+An immutable source bank retains eligible pre-plant simulator rows before actual
+execution. The existing handoff authorizes same-species alternative placements
+from actual acceptance. FIFO jobs use a bounded pool of independent auxiliary
+games: 256 lanes and 128 outstanding sources by default. Each scheduler round
+advances ready real slots, then `probe_steps_per_round` transitions in occupied
+lanes (one by default). Vacant allocation rows execute nothing. Shallow prefix
+views and canonical source identities keep inference compact without moving real
+episodes. Allocation fallback halves capacities down to one source/lane, keeping
+every probe; failure at the minimum stops explicitly.
+
+If source capacity is full, only another eligible planting holds its selected
+proposal/draws. Other ready slots, including previous planting owners, continue.
+Unfinished, ready, blocked and terminal masks remain distinct. Independent fork
+RNG/accounting/event memory never replace actual EMA history. Neither source IDs
+nor private simulator storage bounds determine policy tokens.
 
 For public retained count `C`, pending-zombie count `Z` and present plant count `P`,
 `min(cap, C + Z + 2P + 1)` bounds one decision's retained next entities. Rejection
@@ -50,36 +53,38 @@ at most one plant. When already capped, the bound remains the cap. This count-on
 bound exposes neither future spawn ticks nor RNG. Buckets 32/64/128/256 hold it;
 CPU/CUDA canonical ordering, multiplicity and omissions remain unchanged.
 
-Probe equivalence is scoped to the same actual game/decision and requires exact
-kept entity records, globals and gross public event/timing inputs. All forks
-in that scope clone the complete actual EMA event-memory state. Thus both observation and
-recurrent inputs match before an entity offset can alias. Proposals, reasons,
+Endpoint equivalence is scoped to the same source job and requires exact kept
+entity records, globals, hidden/cell state and gross public event/timing inputs.
+Ongoing games never merge; equal boards alone are insufficient. Proposals, reasons,
 components and stored bootstrap targets remain separate. Only valid nonterminal
 representatives enter compact EMA next-state inference; values scatter to every
 original probe record and terminal bootstrap is zero. Gross-event, memory-timing,
 global or entity counterexamples keep independent offsets.
 
-Persistent canonical feature stores and device packing replace per-probe width
-reads. Behavior globals transfer active rows only; the host scatters them into
-zero-filled original-slot rows. Probe globals follow the same compact/canonical
-scatter contract; fixed metadata may retain original slot-shaped staging.
-Entity transfer uses already-published retained counts
-for behavior and summed public next-entity bounds for active probe games, not
-original slot capacity or private simulator bounds. The packed probe slab's unused
-tail can still cross PCIe: exact variable-length
-DMA would need an extra host count boundary. Deduplication reduces stored records
-and host comparison work, but does not guarantee proportional transfer savings.
-Pinned buffers are reusable and charged to trajectory RAM. Behavior/probe evidence,
-dedup representatives and terminal headers/totals precede one existing
-collection-stream wait. Only then are GPU dedup results known to the host planner.
-The current canonical record appends first; compact bootstrap inference queues
-its CPU copy after that wait. The next existing handoff consumes the copy and
-`buffer.update_probe_bootstrap` patches the already-appended rows, including
-spilled blocks. Finalization, fitting entry, checkpoint, interruption and shutdown
-drains flush the last pending copy before any target or saved trajectory uses it.
-No ordinary second count/bootstrap wait is added. Pending copies cannot outlive
-their row identities or be overwritten before consumption.
-Storage checks counts/offsets before ingestion and recovery validates saved slabs.
+Behavior globals transfer issued rows and reconstruct zero-filled canonical host
+rows. Actual metadata remains slot-shaped, with inactive gaps. Entity packing
+uses executing rows and already-published public counts. Auxiliary inference uses
+conservative public growth bounds, never private allocation bounds. Endpoints own
+their public boards and full memory before lanes retire, so later lane reuse
+cannot overwrite evidence. Width padding may still transfer; deduplication does
+not promise proportional PCIe savings.
+
+Actual transitions append immediately with stable row identities and expected/
+pending counts. Auxiliary control records share each existing handoff; heavier
+reporting stays at 64 continuation rounds. Completed endpoint transfers precede
+CPU exact deduplication and compact EMA-tail inference. Its bootstrap copy is
+consumed at the next handoff; `buffer.patch_probe_endpoints` attaches complete
+owned evidence exactly once, including to spilled rows. There is no extra ordinary
+bootstrap wait. Reusable pinned views must be consumed before reuse.
+
+Saving/interruption stops new selection, finishes issued decisions and drains
+queued/running jobs, endpoint/bootstrap copies and patches. Finalization, fitting
+and EMA updates require no pending evidence. Checkpoints serialize no forks.
+Sequence preparation gathers actual chronological decisions per original slot;
+capacity gaps neither end sequences nor count toward 256-decision detach
+boundaries. Sequence maps share the staging budget and spill to temporary disk
+maps when necessary; early close releases them. Recovery validates layout,
+counts/offsets and exact evidence completeness.
 
 All CUDA platforms use direct no-grad `CUDAGraph` collection and the custom AOT
 owned forward/backward fitting backend, without a Windows/Inductor split.
@@ -101,8 +106,8 @@ At quiescent phase boundaries, collection captures/probe workspaces release befo
 fitting, and fitting captures release after all delayed backwards/prefetch work
 and before collection allocation. Fitting's four-shape bound is independent of the
 collection cache. Active maps, captures and caches are execution-only, rebuilt on
-resume rather than serialized. Recovery/trajectory protocols and durable rows
-remain unchanged. Cache counters and phase-memory samples are diagnostics, not
+resume rather than serialized. Joint-policy trajectories and recovery use new
+contracts, rejecting earlier weights/resumes. Cache counters and phase-memory samples are diagnostics, not
 speed or learning-quality evidence.
 
 CUDA timings are read only after the existing handoff. Device
@@ -136,6 +141,11 @@ bounded four-pass collect/fit/collect cycle. Evidence must report logical/padded
 probe representatives, cache hit/miss/eviction/fallback counts and phase memory,
 not just nominal slot capacity. Results and verification status belong only in
 [iteration history](../iteration.md); execution controls alone establish no speedup.
+
+The cycle's cutoff collection allows at most the measured decision budget plus
+45 ordinary decisions, stopping as soon as all control games finish. This covers
+zero-time planting/digging before clock advancement; it does not force waits or
+change normal snapshot window lengths. Fitting still uses exactly four passes.
 
 ## Fitting execution contract
 
@@ -218,3 +228,17 @@ transfer wait, transfer device time, fitting, optimizer time and total wall time
 Preparation and transfer can overlap computation, so their durations are not
 additive. Memory reports distinguish Torch allocation, CuPy pools and host RAM.
 Short throughput checks are not formal training or learning-quality estimates.
+
+## Background-probe measurements
+
+Each accepted planting queues up to four other tiles of its species by default,
+bounded by 30 simulated seconds or 4096 transitions. Independence removes the
+full-rollout barrier, not shared-GPU contention. Benchmarks distinguish actual
+window latency from probe drain time, active/queued
+auxiliaries, source-blocked slots, queue age, completed rollout work and workspace
+usage. Compare zero/one/simultaneous triggers and cold collection with a bounded
+collect/four-pass-fit/collect cycle. Throughput and win-rate improvement are not
+promised. `rollout_enqueue_seconds` is host enqueue overhead, not GPU wall time.
+Device profiler phases distinguish online, actual EMA, auxiliary inference and
+endpoint bootstrap. Reports add queue-only age separately from oldest outstanding
+job age, using host records without additional device synchronization.

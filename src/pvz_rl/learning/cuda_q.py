@@ -42,8 +42,7 @@ def checkpoint_metadata(path, *, weights_only=False):
         key: value for key, value in expected.items() if not weights_only or key != "exploration"
     }:
         raise ValueError(
-            "Incompatible model/optimizer/exploration checkpoint protocol; use --init-from "
-            "in a new directory for structurally compatible event-memory weights"
+            "Retired model/optimizer/exploration checkpoint protocol; fresh initialization is required"
         )
     return metadata
 
@@ -54,7 +53,7 @@ def checkpoint_optimizer_protocol(path):
 
 class CudaCohortLifecycle(BaseAlgorithm):
     policy_protocol = POLICY_SIGNATURE
-    optimizer_version = "complete_return_event_lstm_v1"
+    optimizer_version = "complete_return_joint_tile_probe_v1"
 
     def __init__(
         self,
@@ -200,7 +199,7 @@ class CudaCohortLifecycle(BaseAlgorithm):
         self._device_seconds = 0.0
         self._simulation_ticks = 0
         self._planting_samples = 0
-        for key in ("q_loss", "branch_loss", "tile_loss", "q_grad_norm"):
+        for key in ("q_loss", "selected_action_error", "placement_gap", "q_grad_norm"):
             self.logger.record("train/" + key, None)
         self._stats = dict(
             q_optimizer_steps=0,
@@ -301,7 +300,7 @@ class CudaCohortLifecycle(BaseAlgorithm):
                             self.logger.record("train/action_count_" + name, values["count"])
                             self.logger.record("train/value_target_error_" + name, values["mse"])
                             self.logger.record(
-                                "train/tile_target_error_" + name, values["tile_mse"]
+                                "train/placement_gap_" + name, values["placement_gap"]
                             )
                         self._phase(CohortPhase.FIT, callback)
                     elif phase == CohortPhase.FIT:

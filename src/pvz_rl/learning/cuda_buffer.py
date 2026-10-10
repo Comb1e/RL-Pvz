@@ -15,21 +15,26 @@ from pvz_rl.envs.encoding import (
     collate_observations,
     validate_entity_records,
 )
-from pvz_rl.learning.objective import COMPONENTS, MAX_PROBES, training_rewards, victory_time
+from pvz_rl.learning.objective import COMPONENTS, training_rewards, victory_time
+from pvz_rl.learning.probe_layout import ProbeLayout
 
-TRAJECTORY_PROTOCOL = "pvz-rl/entity-event-probe-trajectory-v4"
+TRAJECTORY_PROTOCOL = "pvz-rl/async-tile-event-rollout-trajectory-v7"
 
 
 def probe_dtype():
     return np.dtype(
         [
             ("valid", "?"),
-            ("branch_role", "?"),
             ("action", "<u2"),
             ("executed_action", "<u2"),
             ("accepted", "?"),
             ("reason", "u1"),
-            ("duration", "<u2"),
+            ("duration", "<u4"),
+            ("initial_duration", "<u2"),
+            ("transitions", "<u4"),
+            ("event_writes", "<u4"),
+            ("stop_reason", "u1"),
+            ("ema_version", "<u4"),
             ("tick", "<u4"),
             ("done", "?"),
             ("won", "?"),
@@ -45,7 +50,7 @@ def probe_dtype():
     )
 
 
-def trajectory_dtype():
+def trajectory_dtype(cfg=None):
     return np.dtype(
         [
             ("entity_offset", "<u8"),
@@ -66,7 +71,9 @@ def trajectory_dtype():
             ("components_valid", "?"),
             ("won", "?"),
             ("home_entries", "<u4", 2),
-            ("probes", probe_dtype(), MAX_PROBES),
+            ("probe_expected", "u1"),
+            ("probe_pending", "u1"),
+            ("probes", probe_dtype(), ProbeLayout.from_config(cfg).count),
             ("branch_value", "<f4"),
             ("tile_value", "<f4"),
             ("greedy_action", "<u2"),
@@ -90,19 +97,21 @@ class CompleteGameBuffer:
     ):
         self.path = Path(path)
         self.path.mkdir(parents=True, exist_ok=True)
-        self.dtype = trajectory_dtype()
+        self.layout = ProbeLayout.from_config(cfg)
+        self.dtype = trajectory_dtype(cfg)
         self.n_envs, self.ram_bytes, self.block_rows = n_envs, int(ram_bytes), int(block_rows)
         self.schema = schema
         self.cfg = cfg
         self.rewards_finalized = False
         self.reward_summary = {}
         self.exploration = {}
-        self.probe_counts = np.zeros((2, 10, 2), np.int64)
+        self.probe_counts = np.zeros((10, 2), np.int64)
         self.outcome_counts = np.zeros((3, 2), np.int64)
         self.blocks, self.entity_blocks = [], []
         self.size = self.entity_size = self.ram_used = 0
         self.staging_bytes = 0
         self.finalized = False
+        self.pending_probes = 0
         self._position_cache = {}
         self._entity_gather_workspace = None
         self.transport_metrics = dict(
@@ -128,10 +137,10 @@ class CompleteGameBuffer:
         """Charge reusable pinned buffers to the same budget, spilling RAM if needed."""
         if amount > self.ram_bytes:
             return False
-        self.staging_bytes = amount
         for prefix, blocks in (("entities", self.entity_blocks), ("block", self.blocks)):
             for i, block in enumerate(blocks):
                 if self.ram_used + amount <= self.ram_bytes:
+                    self.staging_bytes = amount
                     return True
                 if isinstance(block, np.memmap):
                     continue
@@ -144,6 +153,7 @@ class CompleteGameBuffer:
                 mapped[:] = block
                 blocks[i] = mapped
                 self.ram_used -= block.nbytes
+        self.staging_bytes = amount
         return True
 
     def _append(self, values, entity=False):
@@ -159,7 +169,7 @@ class CompleteGameBuffer:
             setattr(self, key, getattr(self, key) + take)
             at += take
 
-    def append(self, records, observations, probe_observations=None):
+    def append(self, records, observations):
         if self.finalized or self.rewards_finalized:
             raise RuntimeError("Cannot append after complete-return finalization")
         records = np.array(records, dtype=self.dtype, copy=True)
@@ -173,19 +183,11 @@ class CompleteGameBuffer:
         observations.validate()
         if observations.counts.shape != (len(records),):
             raise ValueError("Each transition needs one public observation")
-        if probe_observations is not None:
-            probe_observations.validate()
-            if probe_observations.counts.shape != (len(records), MAX_PROBES):
-                raise ValueError("Each transition needs its scheduled probe observations")
         records["entity_offset"] = self.entity_size + observations.offsets
         records["entity_count"], records["globals"] = observations.counts, observations.globals
         self._append(observations.entities, entity=True)
-        if probe_observations is not None:
-            records["probes"]["entity_offset"] = self.entity_size + probe_observations.offsets
-            records["probes"]["entity_count"] = probe_observations.counts
-            records["probes"]["globals"] = probe_observations.globals
-            self._append(probe_observations.entities, entity=True)
         self._append(records)
+        self.pending_probes += int(records["probe_pending"].sum())
 
     def take(self, indices):
         indices = np.asarray(indices, dtype=np.int64)
@@ -198,23 +200,49 @@ class CompleteGameBuffer:
             result[selected] = self.blocks[b][offsets[selected]]
         return result
 
-    def update_probe_bootstrap(self, indices, values):
+    def patch_probe_endpoints(self, indices, slots, records, observations):
+        """Attach owned endpoints exactly once, including to spilled source rows."""
         if self.finalized or self.rewards_finalized:
-            raise RuntimeError("Cannot update probes after return finalization")
-        indices = np.asarray(indices, dtype=np.int64)
-        values = np.asarray(values)
+            raise RuntimeError("Cannot patch finalized trajectories")
+        indices, slots = np.asarray(indices, np.int64), np.asarray(slots, np.int64)
+        records = np.array(records, dtype=probe_dtype(), copy=True)
+        observations.validate()
         if (
             indices.ndim != 1
-            or values.shape != (len(indices), MAX_PROBES)
-            or not np.isfinite(values).all()
-            or np.any(indices < 0)
-            or np.any(indices >= self.size)
+            or slots.shape != indices.shape
+            or records.shape != indices.shape
+            or observations.counts.shape != indices.shape
         ):
-            raise ValueError("Invalid pending probe bootstrap rows")
-        blocks, offsets = np.divmod(indices, self.block_rows)
-        for block in np.unique(blocks):
-            selected = blocks == block
-            self.blocks[block]["probes"]["bootstrap"][offsets[selected]] = values[selected]
+            raise ValueError("Invalid endpoint patch shapes")
+        if any(
+            not np.isfinite(records[name]).all() for name in ("components", "bootstrap", "target")
+        ):
+            raise ValueError("Non-finite probe endpoint values")
+        if len(set(zip(indices.tolist(), slots.tolist()))) != len(indices):
+            raise ValueError("Duplicate endpoint patch")
+        rows = self.take(indices)
+        if (
+            np.any(slots < 0)
+            or np.any(slots >= rows["probe_expected"])
+            or np.any(rows["probes"]["valid"][np.arange(len(slots)), slots])
+            or not records["valid"].all()
+        ):
+            raise ValueError("Unexpected or already-patched probe endpoint")
+        unique, counts = np.unique(indices, return_counts=True)
+        if np.any(self.take(unique)["probe_pending"] < counts):
+            raise ValueError("Probe pending count underflow")
+        records["entity_offset"] = self.entity_size + observations.offsets
+        records["entity_count"], records["globals"] = observations.counts, observations.globals
+        self._append(observations.entities, entity=True)
+        for index, slot, record in zip(indices, slots, records, strict=True):
+            block, offset = divmod(int(index), self.block_rows)
+            self.blocks[block]["probes"][offset, slot] = record
+            self.blocks[block]["probe_pending"][offset] -= 1
+        self.pending_probes -= len(records)
+
+    def require_complete_probes(self):
+        if self.pending_probes:
+            raise RuntimeError("Pending probe evidence must drain before finalization or saving")
 
     def observations(self, rows, device=None, *, destination=None):
         flat = rows.reshape(-1)
@@ -264,6 +292,7 @@ class CompleteGameBuffer:
         return np.concatenate(parts) if parts else np.empty(0, np.int64)
 
     def finalize_rewards(self):
+        self.require_complete_probes()
         if self.rewards_finalized:
             return self.reward_summary
         terminal = []
@@ -336,7 +365,7 @@ class CompleteGameBuffer:
         self.outcome_counts[:] = 0
         counts = np.zeros(3, np.int64)
         species_counts = np.zeros(A.plant_types, np.int64)
-        sums = np.zeros((3, 4), np.float64)
+        sums = np.zeros((3, 3), np.float64)
         for b in reversed(range(len(self.blocks))):
             rows = self.blocks[b][: min(self.block_rows, self.size - b * self.block_rows)]
             for env in range(self.n_envs):
@@ -374,19 +403,15 @@ class CompleteGameBuffer:
             branch = np.where(
                 probes["action"] == 0, 0, 1 + (probes["action"].astype(np.int64) - 1) // A.tiles
             )
-            for head, valid in enumerate(
-                (probes["valid"] & probes["branch_role"], probes["valid"] & (branch > 0))
-            ):
-                for accepted in (0, 1):
-                    selected = valid & (probes["accepted"] == accepted)
-                    self.probe_counts[head, :, accepted] += np.bincount(
-                        branch[selected], minlength=10
-                    )
+            for accepted in (0, 1):
+                selected = probes["valid"] & (probes["accepted"] == accepted)
+                self.probe_counts[:, accepted] += np.bincount(branch[selected], minlength=10)
             kinds = np.where(rows["action"] == 0, 0, np.where(rows["action"] < A.dig_start, 1, 2))
             for group in range(3):
                 ix = rows["active"] & (kinds == group)
-                first = rows["branch_value"][ix].astype(np.float64) - rows["target"][ix]
-                second = rows["tile_value"][ix].astype(np.float64) - rows["target"][ix]
+                selected = rows["branch_value"][ix] if group == 0 else rows["tile_value"][ix]
+                first = selected.astype(np.float64) - rows["target"][ix]
+                second = rows["branch_value"][ix].astype(np.float64) - selected
                 counts[group] += len(first)
                 self.outcome_counts[group] += np.bincount(
                     rows["accepted"][ix].astype(np.int64), minlength=2
@@ -394,7 +419,6 @@ class CompleteGameBuffer:
                 sums[group] += [
                     np.square(first).sum(),
                     first.sum(),
-                    np.square(second).sum(),
                     second.sum(),
                 ]
             planted = rows["active"] & (kinds == 1)
@@ -472,8 +496,7 @@ class CompleteGameBuffer:
                 count=int(counts[i]),
                 mse=float(sums[i, 0] / counts[i]) if counts[i] else None,
                 signed_error=float(sums[i, 1] / counts[i]) if counts[i] else None,
-                tile_mse=float(sums[i, 2] / counts[i]) if i and counts[i] else None,
-                tile_signed_error=float(sums[i, 3] / counts[i]) if i and counts[i] else None,
+                placement_gap=float(sums[i, 2] / counts[i]) if i and counts[i] else None,
             )
             for i, name in enumerate(("wait", "plant", "dig"))
         }
@@ -508,9 +531,12 @@ class CompleteGameBuffer:
             probe_counts=self.probe_counts,
             outcome_counts=self.outcome_counts,
             exploration=dict(self.exploration),
+            probe_layout=self.layout.metadata(),
+            pending_probes=self.pending_probes,
         )
 
     def save(self, destination):
+        self.require_complete_probes()
         destination = Path(destination)
         destination.mkdir(parents=True, exist_ok=True)
         for name, array in self._arrays():
@@ -522,6 +548,7 @@ class CompleteGameBuffer:
         return self.metadata()
 
     def write_archive(self, archive):
+        self.require_complete_probes()
         for name, array in self._arrays():
             with archive.open("cohort/" + name, "w", force_zip64=True) as stream:
                 np.save(stream, array, allow_pickle=False)
@@ -530,6 +557,10 @@ class CompleteGameBuffer:
     def validate_metadata(state):
         if state.get("protocol") != TRAJECTORY_PROTOCOL:
             raise ValueError("Retired trajectory schema; fresh initialization is required")
+        if state.get("pending_probes") != 0:
+            raise ValueError("Incomplete trajectory probe evidence; drain before saving")
+        if state.get("probe_layout") != ProbeLayout.from_config(state.get("cfg")).metadata():
+            raise ValueError("Corrupt trajectory probe layout")
         exploration = state.get("exploration")
         if not isinstance(exploration, dict) or (
             exploration
@@ -551,7 +582,7 @@ class CompleteGameBuffer:
         ):
             if type(state.get(name)) is not int or state[name] < minimum:
                 raise ValueError(f"Corrupt trajectory metadata: {name}")
-        for name, shape in (("outcome_counts", (3, 2)), ("probe_counts", (2, 10, 2))):
+        for name, shape in (("outcome_counts", (3, 2)), ("probe_counts", (10, 2))):
             counts = np.asarray(state.get(name))
             if counts.shape != shape or counts.dtype.kind not in "iu" or np.any(counts < 0):
                 raise ValueError(f"Corrupt trajectory acceptance counts: {name}")
@@ -599,8 +630,9 @@ class CompleteGameBuffer:
                         raise ValueError("Non-finite trajectory globals")
                     obj._append(array, entity)
             expected = 0
+            entity_intervals = []
             actual_counts = np.zeros((3, 2), np.int64)
-            probe_counts = np.zeros((2, 10, 2), np.int64)
+            probe_counts = np.zeros((10, 2), np.int64)
             # Align metadata reads to collection steps: each step appends source
             # records then its probe records. Sorting one bounded block suffices.
             width = max(1, obj.block_rows // obj.n_envs) * obj.n_envs
@@ -616,6 +648,12 @@ class CompleteGameBuffer:
                         records["memory_write"] != records["events"][:, :7].any(-1)
                     ):
                         raise ValueError("Corrupt trajectory event facts or write mask")
+                if (
+                    np.any(rows["probe_pending"])
+                    or np.any(rows["probe_expected"] > obj.layout.count)
+                    or np.any(rows["probe_expected"] != rows["probes"]["valid"].sum(-1))
+                ):
+                    raise ValueError("Incomplete trajectory probe evidence")
                 actual = rows[rows["active"]]
                 if (
                     np.any(rows["policy_action"] >= A.size)
@@ -644,12 +682,16 @@ class CompleteGameBuffer:
                 branches = np.where(
                     probes["action"] == 0, 0, 1 + (probes["action"].astype(np.int64) - 1) // A.tiles
                 )
-                for head, selected in enumerate((probes["branch_role"], branches > 0)):
-                    np.add.at(
-                        probe_counts[head],
-                        (branches[selected], probes["accepted"][selected].astype(np.int64)),
-                        1,
-                    )
+                np.add.at(probe_counts, (branches, probes["accepted"].astype(np.int64)), 1)
+                if (
+                    np.any(probes["transitions"] < 1)
+                    or np.any(probes["event_writes"] > probes["transitions"])
+                    or np.any((probes["stop_reason"] < 1) | (probes["stop_reason"] > 4))
+                    or np.any(probes["done"] != (probes["stop_reason"] <= 2))
+                    or np.any(probes["initial_duration"] > probes["duration"])
+                    or np.any(probes["won"] & (probes["stop_reason"] != 1))
+                ):
+                    raise ValueError("Corrupt probe rollout evidence")
                 starts = np.concatenate((rows["entity_offset"], probes["entity_offset"]))
                 counts = np.concatenate((rows["entity_count"], probes["entity_count"]))
                 if (
@@ -664,10 +706,11 @@ class CompleteGameBuffer:
                 intervals = np.unique(
                     np.stack((starts[counts > 0], (starts + counts)[counts > 0]), -1), axis=0
                 )
-                if len(intervals):
-                    if intervals[0, 0] != expected or np.any(intervals[1:, 0] != intervals[:-1, 1]):
-                        raise ValueError("Corrupt trajectory entity offset/count")
-                    expected = int(intervals[-1, 1])
+                entity_intervals.extend(map(tuple, intervals.tolist()))
+            for begin, end in sorted(set(entity_intervals)):
+                if begin != expected:
+                    raise ValueError("Corrupt trajectory entity offset/count")
+                expected = end
             if expected != obj.entity_size:
                 raise ValueError("Orphan entity records in trajectory")
             if state["finalized"] and (

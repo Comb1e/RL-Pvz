@@ -87,7 +87,7 @@ def measure(cfg, count, repeats=3):
             contexts.flatten(0, 1),
             torch.ones(128, device="cuda", dtype=torch.long),
         )
-        loss = (q[..., 1] - 1).square().mean() + (tile_q[:, 0] - 1).square().mean()
+        loss = (q[..., 0] - 1).square().mean() + (tile_q[:, 0] - 1).square().mean()
         loss.backward()
         if not torch.isfinite(loss) or any(
             p.grad is not None and not torch.isfinite(p.grad).all() for p in model.parameters()

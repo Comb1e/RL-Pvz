@@ -66,7 +66,10 @@ def sensitivity(policy, cfg, state=None):
         out.context,
         torch.full((len(variants),), 2, device=batch.device, dtype=torch.long),
     )
-    q, tile = out.branch_q.cpu().numpy(), tiles.cpu().numpy()
+    q, tile = (
+        policy.action_values(out, observations=batch).branches.cpu().numpy(),
+        tiles.cpu().numpy(),
+    )
     cell = out.state.cell.abs().flatten()
     return dict(
         branch_q={name: values.tolist() for name, values in zip(variants, q)},
