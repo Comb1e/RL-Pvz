@@ -13,7 +13,12 @@ from pvz_rl.envs.actions import ActionSchema as A
 from pvz_rl.envs.encoding import ObservationEncoder, collate_observations
 from pvz_rl.envs.history import EVENT_WIDTH, normalize_events
 from pvz_rl.policy.entity_attention import EntityTransformer
-from pvz_rl.policy.sequential_q import observation_tile_masks, select_q_actions
+from pvz_rl.policy.sequential_q import (
+    ActionQValues,
+    action_parts,
+    observation_tile_masks,
+    select_q_actions,
+)
 
 
 @dataclass
@@ -55,7 +60,7 @@ class EventMemoryState:
 
 @dataclass
 class RecurrentOutput:
-    branch_q: torch.Tensor
+    wait_q: torch.Tensor
     tile_features: torch.Tensor
     context: torch.Tensor
     state: EventMemoryState
@@ -76,7 +81,7 @@ class EventMemoryRead(torch.autograd.Function):
 
 
 class TransformerLSTMPolicy(nn.Module):
-    protocol = "transformer_lstm_q_v3"
+    protocol = "transformer_lstm_q_v4"
 
     def __init__(self, cfg: dict):
         super().__init__()
@@ -93,7 +98,7 @@ class TransformerLSTMPolicy(nn.Module):
         hidden = spec["lstm_hidden"]
         self.lstm = nn.LSTM(current_width + spec["event_width"], hidden, batch_first=True)
         self.fusion = nn.Sequential(nn.Linear(current_width + hidden, hidden), nn.ReLU())
-        self.branch_head = nn.Sequential(nn.Linear(hidden, 128), nn.ReLU(), nn.Linear(128, 10))
+        self.wait_head = nn.Sequential(nn.Linear(hidden, 128), nn.ReLU(), nn.Linear(128, 1))
         self.tile_head = nn.Sequential(
             nn.Linear(spec["entity_width"] + hidden + A.tile_groups, 128),
             nn.ReLU(),
@@ -167,7 +172,7 @@ class TransformerLSTMPolicy(nn.Module):
         cell = torch.where(writes[None, :, None], cell, state.cell)
         context = self.fusion(torch.cat((current, hidden[0]), -1))
         return RecurrentOutput(
-            self.branch_head(context), tiles, context, state.consume(hidden, cell, writes, events)
+            self.wait_head(context), tiles, context, state.consume(hidden, cell, writes, events)
         )
 
     def forward_sequence(
@@ -242,7 +247,7 @@ class TransformerLSTMPolicy(nn.Module):
             torch.where(live[:, None], consumed.pending, state.pending),
             torch.where(live, consumed.elapsed_ticks, state.elapsed_ticks),
         )
-        result = (self.branch_head(contexts), tiles.reshape(batch, time, A.tiles, -1), next_state)
+        result = (self.wait_head(contexts), tiles.reshape(batch, time, A.tiles, -1), next_state)
         return (*result[:2], contexts, result[2]) if return_context else result
 
     def tile_values(self, tile_features, context, branches):
@@ -263,6 +268,40 @@ class TransformerLSTMPolicy(nn.Module):
             + self.tile_offsets[(branches - 1).clamp(0, A.tile_groups - 1), None]
         )
 
+    def selected_values(self, wait, tile_features, context, actions):
+        branches, locations = action_parts(actions)
+        rows = torch.arange(len(actions), device=actions.device)
+        category = torch.nn.functional.one_hot((branches - 1).clamp_min(0), A.tile_groups).to(
+            context.dtype
+        )
+        combined = torch.cat((tile_features[rows, locations], context, category), -1)
+        tiles = self.tile_head(combined).flatten() + self.tile_offsets[(branches - 1).clamp_min(0)]
+        return torch.where(branches == 0, wait.flatten(), tiles)
+
+    def action_values(self, output, masks=None, *, observations=None, plan=None):
+        if masks is None:
+            masks = observation_tile_masks(observations)
+        count = len(output.wait_q)
+        slots = (
+            torch.arange(count, device=output.wait_q.device)
+            if plan is None
+            else torch.as_tensor(plan.original_slot_ids, device=output.wait_q.device)
+        )
+        tables = output.wait_q.new_zeros(count, A.tile_groups, A.tiles)
+        for first in range(0, len(slots), self.entity.microbatch):
+            selected = slots[first : first + self.entity.microbatch]
+            tiles = output.tile_features[selected]
+            context = output.context[selected]
+            branches = torch.arange(1, A.tile_groups + 1, device=slots.device)
+            tables[selected] = self.tile_values(
+                tiles[:, None]
+                .expand(-1, A.tile_groups, -1, -1)
+                .reshape(-1, A.tiles, tiles.shape[-1]),
+                context[:, None].expand(-1, A.tile_groups, -1).reshape(-1, context.shape[-1]),
+                branches.expand(len(selected), -1).reshape(-1),
+            ).reshape(len(selected), A.tile_groups, A.tiles)
+        return ActionQValues.derive(output.wait_q, tables, masks)
+
     def decide(
         self,
         observations,
@@ -279,26 +318,21 @@ class TransformerLSTMPolicy(nn.Module):
             result = self.forward_step(
                 observations, state, events=events, memory_write=memory_write
             )
-            tile_values = self.tile_values
         else:
-            from pvz_rl.policy.active_batch import active_tile_values, forward_active
+            from pvz_rl.policy.active_batch import forward_active
 
             result = forward_active(
                 self, observations, state, active_plan, events=events, memory_write=memory_write
             )
-            tile_values = active_tile_values(self, active_plan)
-        batch = result.branch_q.shape[0]
+        batch = result.wait_q.shape[0]
         if action_masks is None:
             action_masks = observation_tile_masks(
-                collate_observations(observations, result.branch_q.device)
+                collate_observations(observations, result.wait_q.device)
             )
         if action_masks.shape != (batch, A.size):
             raise ValueError(f"action_masks must have shape ({batch}, {A.size})")
         actions, first, second, details = select_q_actions(
-            result.branch_q,
-            result.tile_features,
-            result.context,
-            tile_values,
+            self.action_values(result, action_masks, plan=active_plan),
             action_masks,
             deterministic=deterministic,
             exploration_epsilon=getattr(self, "exploration_epsilon", 0.0),

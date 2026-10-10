@@ -99,15 +99,8 @@ class CommittedPlantExploration:
         species = (pending - 1).clamp_min(0)
         empty = A.tile_masks(masks)[rows, species].any(-1)
         ready = committed & empty & (sun >= costs[species]) & (cooldowns[rows, species] == 0)
-        tile_values = policy.tile_values
-        if plan is not None:
-            from pvz_rl.policy.active_batch import active_tile_values
-
-            tile_values = active_tile_values(policy, plan)
         tiles, _, fired, tile_q = select_q_tiles(
-            details["tile_features"],
-            details["context"],
-            tile_values,
+            details["action_q"],
             masks,
             pending.clamp_min(1),
             self.tile_epsilon,
@@ -128,10 +121,12 @@ class CommittedPlantExploration:
             committed, torch.where(ready, selected_tile, 0), details["tile_value"]
         )
         details["valid"] &= (torch.isfinite(tile_q) | ~ready[:, None]).all()
+        details["selected_value"] = details["action_q"].selected(chosen)
+        details["placement_gap"] = details["branch_value"] - details["selected_value"]
         return chosen, details["branch_value"], details["tile_value"], details
 
     @torch.no_grad()
-    def observe(self, actions, accepted, mode, active, done):
+    def observe(self, actions, accepted, mode, active, done, *, draws=None):
         branches, _ = action_parts(actions)
         eligible = (
             active
@@ -142,8 +137,16 @@ class CommittedPlantExploration:
             & (branches > 0)
             & (branches <= A.plant_types)
         )
-        fired = eligible & (torch.rand(len(actions), device=actions.device) < self.plant_epsilon)
-        alternative = torch.randint(1, A.plant_types, actions.shape, device=actions.device)
+        coin, alternative = (
+            draws
+            if draws is not None
+            else (
+                torch.rand(len(actions), device=actions.device),
+                torch.randint(1, A.plant_types, actions.shape, device=actions.device),
+            )
+        )
+        fired = eligible & (coin < self.plant_epsilon)
+        alternative = alternative.clone()
         alternative += alternative >= branches
         completed = active & accepted & (mode == PlantExplorationMode.PLANTING)
         self.pending = torch.where(completed | done, 0, self.pending)

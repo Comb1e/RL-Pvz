@@ -403,7 +403,7 @@ def initialize_demo(
         ranking_total = 0.0
         for start in range(0, len(observations), chunk):
             stop = min(start + chunk, len(observations))
-            branch_q, tile_features, contexts, state = model.forward_sequence(
+            wait_q, tile_features, contexts, state = model.forward_sequence(
                 collate_observations(observations[start:stop], device).reshape(1, stop - start),
                 state,
                 events=events[start:stop][None],
@@ -411,22 +411,11 @@ def initialize_demo(
                 write_plan=write_plan[None, start:stop],
                 return_context=True,
             )
-            branch_q, tile_features, contexts = branch_q[0], tile_features[0], contexts[0]
-            branch = action_parts(actions[start:stop])[0]
-            first = branch_q.gather(1, branch[:, None]).squeeze(1)
+            wait_q, tile_features, contexts = wait_q[0], tile_features[0], contexts[0]
+            selected = model.selected_values(wait_q, tile_features, contexts, actions[start:stop])
             target = returns[start:stop]
-            second = torch.zeros_like(first)
-            nonwait = branch != 0
-            if nonwait.any():
-                tile_q = model.tile_values(
-                    tile_features[nonwait], contexts[nonwait], branch[nonwait]
-                )
-                selected_actions = actions[start:stop][nonwait]
-                tile = action_parts(selected_actions)[1]
-                second[nonwait] = tile_q.gather(1, tile[:, None]).squeeze(1)
-            loss, _, _ = balanced_q_loss(
-                first,
-                second,
+            loss, _ = balanced_q_loss(
+                selected,
                 target,
                 actions[start:stop],
                 group_counts,
@@ -436,7 +425,7 @@ def initialize_demo(
             complete_loss = loss
             rank, accuracy = demonstration_rank_loss(
                 model,
-                branch_q,
+                wait_q,
                 tile_features,
                 contexts,
                 actions[start:stop],

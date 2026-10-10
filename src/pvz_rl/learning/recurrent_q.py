@@ -1,5 +1,6 @@
 """Chronological complete-episode fitting on the shared CUDA cohort lifecycle."""
 
+from contextlib import closing
 from time import perf_counter
 
 import numpy as np
@@ -7,8 +8,9 @@ import torch
 
 from pvz_rl.envs.cuda_features import REWARD_FIELDS
 from pvz_rl.envs.encoding import ENTITY_WIDTH, PackedEntityBatch
-from pvz_rl.envs.probes import CounterfactualCollector
-from pvz_rl.learning.cohort import CohortPhase
+from pvz_rl.envs.probes import ProbePool
+from pvz_rl.learning.cohort import CohortPhase, atomic_transition, check_transition_interruption
+from pvz_rl.learning.collection_scheduler import CollectionScheduler
 from pvz_rl.learning.cuda_q import CudaCohortLifecycle
 from pvz_rl.learning.exploration import CommittedPlantExploration
 from pvz_rl.learning.objective import COMPONENTS, finalize_episode_metrics, probe_loss
@@ -22,8 +24,9 @@ from pvz_rl.policy.transformer_lstm import TransformerLSTMPolicy
 
 def sequence_batches(buffer, chunk_length, decision_budget):
     """Chronological reference path, also used when staging cannot fit in RAM."""
-    for reset, rows in sequence_rows(buffer, chunk_length, decision_budget):
-        yield reset, rows, buffer.observations(rows)
+    with closing(sequence_rows(buffer, chunk_length, decision_budget)) as source:
+        for reset, rows in source:
+            yield reset, rows, buffer.observations(rows)
 
 
 def sequence_loss(
@@ -58,10 +61,11 @@ def sequence_loss(
         active_plan=rows["active"],
         return_context=True,
     )
-    branches, locations = action_parts(actions)
+    branches, _ = action_parts(actions)
+    predicted = policy.selected_values(q[active], tiles[active], context[active], actions)
     if capture_diagnostics:
         selected = torch.zeros_like(q, dtype=torch.bool)
-        selected[active] = torch.nn.functional.one_hot(branches, 10).bool()
+        selected[active] = (branches == 0)[:, None]
         live = active[..., None].expand_as(selected)
 
         def capture(gradient):
@@ -70,6 +74,9 @@ def sequence_loss(
             )
 
         q.register_hook(capture)
+        predicted.register_hook(
+            lambda gradient: setattr(policy, "_selected_gradient_norm", gradient.norm())
+        )
         live_sequences = active[:, -1]
         cell = state.cell[:, live_sequences].detach().abs().flatten()
         policy._cell_diagnostics = (
@@ -82,18 +89,8 @@ def sequence_loss(
             if cell.numel()
             else q.new_zeros(4)
         )
-    first = q[active].gather(1, branches[:, None]).flatten()
-    second = torch.zeros_like(first)
-    nonwait = branches != 0
-    if np.any((rows["action"] != 0) & rows["active"]):
-        second[nonwait] = (
-            policy.tile_values(tiles[active][nonwait], context[active][nonwait], branches[nonwait])
-            .gather(1, locations[nonwait, None])
-            .flatten()
-        )
-    loss, branch_error, tile_error = balanced_q_loss(
-        first,
-        second,
+    loss, selected_error = balanced_q_loss(
+        predicted,
         tensor("target", torch.float32)[active],
         actions,
         counts,
@@ -109,10 +106,7 @@ def sequence_loss(
             probe_rows = rows["probes"]
             probes = torch.as_tensor(
                 np.stack(
-                    [
-                        probe_rows[k]
-                        for k in ("valid", "branch_role", "action", "target", "accepted")
-                    ],
+                    [probe_rows[k] for k in ("valid", "action", "target", "accepted")],
                     -1,
                 ),
                 device=device,
@@ -129,12 +123,17 @@ def sequence_loss(
         )
         loss = loss + objective["probe_loss_weight"] * auxiliary
     policy._last_probe_loss = auxiliary.detach()
-    return loss, state.detach(), branch_error, tile_error[nonwait]
+    gap = tensor("branch_value", torch.float32)[active] - torch.where(
+        branches == 0,
+        tensor("branch_value", torch.float32)[active],
+        tensor("tile_value", torch.float32)[active],
+    )
+    return loss, state.detach(), selected_error, gap[branches != 0]
 
 
 class CudaRecurrentQ(CudaCohortLifecycle):
-    policy_protocol = "transformer_lstm_q_v3"
-    optimizer_version = "complete_return_event_lstm_v1"
+    policy_protocol = "transformer_lstm_q_v4"
+    optimizer_version = "complete_return_joint_tile_probe_v1"
 
     def _setup_model(self):
         super()._setup_model()
@@ -183,10 +182,10 @@ class CudaRecurrentQ(CudaCohortLifecycle):
             self._teacher, self.cfg, self.env.batch.rules, self.n_envs, self.device
         )
         if getattr(self, "_probes", None) is None:
-            self._probes = CounterfactualCollector(self.env)
-        self._probes.branch_cursor.zero_()
+            self._probes = ProbePool(self.env)
+        self._scheduler = CollectionScheduler(self.n_envs, self.device)
         self._probes.tile_cursor.zero_()
-        self._probes.decision_cursor.zero_()
+        self._probes.plant_cursor.zero_()
         self._probes.profiler.flush()
         self._probes.profiler.seconds.clear()
         if self.cfg["training"]["performance"]["compile_kernels"]:
@@ -215,7 +214,7 @@ class CudaRecurrentQ(CudaCohortLifecycle):
         self._teacher_version += 1
 
     def _finalize_rewards(self, callback):
-        self._flush_probe_bootstrap(wait=True)
+        self._drain_probes()
         self.env.handoff.clear()
         self._buffer.reserve_staging(0)
         summary = self._buffer.finalize_rewards()
@@ -244,79 +243,95 @@ class CudaRecurrentQ(CudaCohortLifecycle):
 
     def _phase(self, phase, callback):
         if phase == CohortPhase.FIT:
-            self._flush_probe_bootstrap(wait=True)
+            self._drain_probes()
             self.policy.entity.release_collection()
             if getattr(self, "_teacher", None) is not None:
                 self._teacher.entity.release_collection()
             if hasattr(self, "_collection_packed"):
                 del self._collection_packed
             if getattr(self, "_probes", None) is not None:
+                self._stats["probe_auxiliary_capacity"] = self._probes.capacity
                 self._probes.release_workspaces()
             torch.cuda.empty_cache()
             self.env.cp.get_default_memory_pool().free_all_blocks()
             self._stats.setdefault("phase_memory", []).append(self._phase_memory("fit_entry"))
         super()._phase(phase, callback)
 
-    def _flush_probe_bootstrap(self, *, wait=False):
-        pending = getattr(self, "_pending_probe_bootstrap", None)
-        if pending is None:
+    def _drain_probes(self):
+        scheduler = getattr(self, "_scheduler", None)
+        probes = getattr(self, "_probes", None)
+        if scheduler is None or probes is None or getattr(self, "_draining_probes", False):
             return
-        if wait:
-            self.env.handoff.wait()
-        indices, host = pending
-        self._buffer.update_probe_bootstrap(indices, host.numpy().reshape(-1, self.n_envs).T)
-        self._pending_probe_bootstrap = None
+        if not scheduler.pending.any() and not probes.has_work:
+            return
+        self._draining_probes = scheduler.draining = True
+        started = perf_counter()
+        callback = self._collection_callback
+        reporter = getattr(callback, "progress", None)
+        if reporter is not None:
+            reporter.emit("Draining background tile probes before saving/fitting", force=True)
+        try:
+            with atomic_transition():
+                while scheduler.pending.any() or probes.has_work:
+                    self._collect_step(callback, draining=True)
+        finally:
+            scheduler.draining = self._draining_probes = False
+        self._stats["probe_drain_seconds"] = (
+            self._stats.get("probe_drain_seconds", 0.0) + perf_counter() - started
+        )
+        if reporter is not None:
+            reporter.emit("Background tile probe drain complete", force=True)
 
-    def _collect_step(self, callback):
+    def _collect_step(self, callback, *, draining=False):
+        if not draining:
+            check_transition_interruption()
+        self._collection_callback = callback
         env = self.env
+        self._probes.inference_metrics = self._probes._empty_metrics()
         with torch.no_grad(), env.device_context():
-            active = env.enabled_envs.copy()
-            enabled = torch.as_tensor(active, device=self.device)
+            self._probes._ensure(self._teacher)
+            unfinished = env.enabled_envs.copy()
+            new = self._scheduler.ready(unfinished)
+            issued_host = new | self._scheduler.pending
+            enabled = torch.as_tensor(new, device=self.device)
             plan = ActiveBatchPlan.from_counts(
-                active,
+                new,
                 env.features.summary_host[:, 0],
                 env.features.limit,
                 self.policy.entity.microbatch,
                 self.policy.entity.token_budget,
             )
-            live_slots = torch.as_tensor(plan.original_slot_ids, device=self.device)
+            live_slots = torch.as_tensor(np.flatnonzero(issued_host), device=self.device)
             rows = np.zeros(self.n_envs, dtype=self._buffer.dtype)
-            rows["reset"] = self._first
-            rows["active"], rows["env"] = active, np.arange(self.n_envs)
+            rows["reset"] = self._scheduler.resets
+            rows["env"] = np.arange(self.n_envs)
             masks = env.action_masks().clone()
-            with env.profiler.track("online_inference"):
-                result = self._memory.decide(
-                    self._last_obs,
+            if new.any():
+                with env.profiler.track("online_inference"):
+                    result = self._memory.decide(
+                        self._last_obs,
+                        masks,
+                        env.header_tensor[:, 0],
+                        active=enabled,
+                        deterministic=False,
+                        defer_check=True,
+                        plan=plan,
+                    )
+                actions, values, tile_values, details = result
+                actions, values, tile_values, details = self._plant_exploration.apply(
+                    self.policy,
+                    actions,
+                    details,
                     masks,
-                    env.header_tensor[:, 0],
-                    active=enabled,
-                    deterministic=False,
-                    defer_check=True,
+                    env.header_tensor[:, 2],
+                    torch.from_dlpack(env.batch.cooldowns),
+                    self._plant_costs,
+                    enabled,
                     plan=plan,
                 )
-            actions, values, tile_values, details = result
-            actions, values, tile_values, details = self._plant_exploration.apply(
-                self.policy,
-                actions,
-                details,
-                masks,
-                env.header_tensor[:, 2],
-                torch.from_dlpack(env.batch.cooldowns),
-                self._plant_costs,
-                enabled,
-                plan=plan,
-            )
-            self._memory.valid &= details["valid"]
-            probe_host = self._probes.collect(
-                self.policy,
-                self._teacher_memory,
-                self._last_obs,
-                actions,
-                details,
-                masks,
-                enabled,
-                plan=plan,
-            )
+                self._memory.valid &= details["valid"]
+                with env.profiler.track("ema_inference"):
+                    self._teacher_memory.advance(self._last_obs, enabled, plan=plan)
             if not hasattr(self, "_collection_packed"):
                 self._collection_packed = torch.empty(
                     self.n_envs * env.features.limit,
@@ -325,66 +340,108 @@ class CudaRecurrentQ(CudaCohortLifecycle):
                     device=self.device,
                 )
             # Queue immutable public inputs and decision evidence before simulation.
-            columns = torch.cat(
-                (
-                    details["events"].float(),
-                    details["memory_write"][:, None].float(),
-                    env.header_tensor[:, :1].float(),
-                    actions[:, None].float(),
-                    values[:, None],
-                    tile_values[:, None],
-                    details["greedy_actions"][:, None].float(),
-                    details["coins"].float(),
-                    details["branch_q"],
-                    torch.from_dlpack(env.features.truncation_counts).float(),
-                    details["policy_action"][:, None].float(),
-                    details["exploration_mode"][:, None].float(),
-                    details["pending_species"][:, None].float(),
-                ),
-                dim=1,
+            if new.any():
+                columns = torch.cat(
+                    (
+                        details["events"].float(),
+                        details["memory_write"][:, None].float(),
+                        env.header_tensor[:, :1].float(),
+                        actions[:, None].float(),
+                        values[:, None],
+                        tile_values[:, None],
+                        details["greedy_actions"][:, None].float(),
+                        details["coins"].float(),
+                        details["branch_q"],
+                        torch.from_dlpack(env.features.truncation_counts).float(),
+                        details["policy_action"][:, None].float(),
+                        details["exploration_mode"][:, None].float(),
+                        details["pending_species"][:, None].float(),
+                    ),
+                    dim=1,
+                )
+                self._scheduler.retain_species_draws(
+                    new,
+                    torch.rand(self.n_envs, device=self.device),
+                    torch.randint(
+                        1,
+                        len(self.cfg["environment"]["plants"]),
+                        (self.n_envs,),
+                        device=self.device,
+                    ),
+                )
+            else:
+                columns = torch.zeros(self.n_envs, 32, device=self.device)
+            columns, issued = self._scheduler.retain(columns, new)
+            actions = columns[:, 10].long()
+            self._probes.ema_version = self._teacher_version
+            executing = self._probes.reserve(
+                self._teacher,
+                self._teacher_memory.state,
+                actions,
+                masks,
+                issued,
+                self._scheduler.order,
             )
             with env.profiler.track("encoding"):
-                counts = torch.where(enabled, env.features.summary_tensor[: self.n_envs, 0], 0)
+                counts = torch.where(executing, env.features.summary_tensor[: self.n_envs, 0], 0)
                 offsets = counts.cumsum(0) - counts
-                env.features.pack(enabled, offsets, self._collection_packed)
+                env.features.pack(executing, offsets, self._collection_packed)
             with env.profiler.track("transfer"):
                 host = env.handoff.enqueue_fields(
                     "behavior",
                     dict(
                         entities=self._collection_packed[
-                            : int(env.features.summary_host[active, 0].sum())
+                            : int(env.features.summary_host[issued_host, 0].sum())
                         ],
                         counts=counts,
                         offsets=offsets,
                         globals=self._last_obs.globals.index_select(0, live_slots),
-                        action_masks=masks & enabled[:, None],
+                        action_masks=masks & executing[:, None],
                         columns=columns,
                         valid=self._memory.valid,
                     ),
                 )
-            env.step_device(actions)
+            env.step_device(actions, active=executing)
             species_coin = self._plant_exploration.observe(
                 actions,
                 env.header_tensor[:, 12].bool(),
-                details["exploration_mode"],
-                enabled,
+                columns[:, 30].long(),
+                executing,
                 env._step_device_result[1],
+                draws=(self._scheduler.species_coins, self._scheduler.species_choices),
             )
             with env.profiler.track("transfer"):
                 exploration_host = env.handoff.enqueue_fields(
                     "exploration", dict(coins=species_coin, pending=self._plant_exploration.pending)
                 )
+            self._probes.advance()
             previous_wait = env.handoff.wait_seconds
             env.handoff.wait()
-            self._flush_probe_bootstrap()
+            self._probes.consume_transfers(self._buffer)
+            self._probes.finish_slice()
             self.policy.entity.release_retired()
             self._teacher.entity.release_retired()
             env.profiler.host("host_synchronization", env.handoff.wait_seconds - previous_wait)
-            next_obs, _, dones, _, _, infos = env.step_host(autoreset=False)
+            active = self._probes._prepared["executing"].numpy().copy()
+            next_obs, _, dones, _, _, infos = env.step_host(autoreset=False, active=active)
+            rows["active"] = active
+            start_row = self._buffer.size
+            expected = self._probes.commit(
+                active,
+                env.last_action_result_host[:, 0].astype(bool),
+                host["columns"].numpy()[:, 10],
+                host["counts"].numpy(),
+                start_row + np.arange(self.n_envs),
+                cohort=self.cohort_number,
+                decisions=self._scheduler.decisions,
+            )
+            rows["probe_expected"] = rows["probe_pending"] = expected
+            self._scheduler.commit(issued_host, active)
             if not bool(host["valid"]):
                 raise ValueError("Q values must be finite and every decision needs a legal action")
             globals_host = np.zeros((self.n_envs, self._last_obs.globals.shape[-1]), np.float32)
-            globals_host[active] = host["globals"].numpy()
+            globals_host[issued_host] = host["globals"].numpy()
+            globals_host[~active] = 0
             observations = PackedEntityBatch(
                 host["entities"].numpy()[: int(host["counts"].sum())],
                 host["offsets"].numpy(),
@@ -417,19 +474,20 @@ class CudaRecurrentQ(CudaCohortLifecycle):
             rows["home_entries"] = env.last_reward_parts_host[
                 :, [REWARD_FIELDS.index(k) for k in ("home_outer_entries", "home_inner_entries")]
             ]
-            rows["probes"], probe_observations = self._probes.materialize(probe_host)
             if len(self._probes.profiler.pending) >= 128:
                 self._probes.profiler.flush()
-            staging = env.handoff.nbytes
+            staging = (
+                env.handoff.nbytes + self._scheduler.retained_bytes + self._probes.workspace_bytes
+            )
             if not self._buffer.reserve_staging(staging):
                 raise MemoryError("RAM budget cannot hold counterfactual collection staging")
             self._memory.observe_result(
                 env.features.history_tensor,
                 env.transition_ticks,
-                active=enabled,
+                active=executing,
             )
             self._teacher_memory.observe_result(
-                env.features.history_tensor, env.transition_ticks, active=enabled
+                env.features.history_tensor, env.transition_ticks, active=executing
             )
             presentation_started = perf_counter()
             env.action_journal.record_batch_safe(
@@ -443,14 +501,8 @@ class CudaRecurrentQ(CudaCohortLifecycle):
             rows[~active] = np.zeros((), dtype=rows.dtype)
             rows["env"] = np.arange(self.n_envs)
             storage_started = perf_counter()
-            start_row = self._buffer.size
-            self._buffer.append(rows, observations, probe_observations)
-            self._pending_probe_bootstrap = (
-                start_row + np.arange(self.n_envs),
-                self._probes.bootstrap(probe_host),
-            )
-            if not self._buffer.reserve_staging(env.handoff.nbytes):
-                raise MemoryError("RAM budget cannot hold compact probe bootstrap staging")
+            if active.any():
+                self._buffer.append(rows, observations)
             env.profiler.host("storage", perf_counter() - storage_started)
             self._stats["collection_logical_rows"] = (
                 self._stats.get("collection_logical_rows", 0) + plan.logical_rows
@@ -467,7 +519,40 @@ class CudaRecurrentQ(CudaCohortLifecycle):
             )
             for key in probe_totals:
                 probe_totals[key] += self._probes.inference_metrics[key]
+            rollout_totals = self._stats.setdefault(
+                "probe_rollout_work",
+                dict(
+                    rollout_transitions=0,
+                    rollout_event_writes=0,
+                    rollout_logical_rows=0,
+                    rollout_padded_rows=0,
+                    rollout_enqueue_seconds=0.0,
+                    stop_reasons={},
+                    accepted_plant_triggers=0,
+                    tile_probes=0,
+                ),
+            )
+            for key in (
+                "rollout_transitions",
+                "rollout_event_writes",
+                "rollout_logical_rows",
+                "rollout_padded_rows",
+                "rollout_enqueue_seconds",
+                "accepted_plant_triggers",
+                "tile_probes",
+            ):
+                rollout_totals[key] += self._probes.inference_metrics[key]
+            for reason, count in self._probes.inference_metrics["stop_reasons"].items():
+                rollout_totals["stop_reasons"][reason] = (
+                    rollout_totals["stop_reasons"].get(reason, 0) + count
+                )
+            self._probes.inference_metrics["workspace_bytes"] = self._probes.workspace_bytes
+            self._stats["probe_workspace_bytes"] = max(
+                self._stats.get("probe_workspace_bytes", 0), self._probes.workspace_bytes
+            )
             self.collection_execution = dict(
+                **self._probes.telemetry(),
+                capacity_blocked_slots=int(self._scheduler.pending.sum()),
                 scope="current_cohort",
                 active_games=int(env.enabled_envs.sum()),
                 logical_rows=self._stats["collection_logical_rows"],
@@ -483,6 +568,10 @@ class CudaRecurrentQ(CudaCohortLifecycle):
                 },
                 probe_inference=dict(self._probes.inference_metrics),
                 probe_inference_totals=dict(probe_totals),
+                probe_rollout_work={
+                    **rollout_totals,
+                    "stop_reasons": dict(rollout_totals["stop_reasons"]),
+                },
                 phase_memory=list(self._stats.get("phase_memory", [])),
                 timings=env.profiler.snapshot(),
             )
@@ -518,9 +607,13 @@ class CudaRecurrentQ(CudaCohortLifecycle):
                 self.training_games += sum("episode_metrics" in info for info in active_infos)
             callback.update_locals({"infos": active_infos, "dones": dones})
             # Publish the phase before callbacks may request an interruption.
-            if not env.enabled_envs.any():
+            if (
+                not env.enabled_envs.any()
+                and not self._probes.has_work
+                and not self._scheduler.pending.any()
+            ):
                 self._phase(CohortPhase.FINALIZE_REWARDS, callback)
-            if not callback.on_step():
+            if not callback.on_step() and not draining:
                 raise KeyboardInterrupt
 
     def _reset_execution(self):
@@ -571,7 +664,7 @@ class CudaRecurrentQ(CudaCohortLifecycle):
             layer.query_chunk = cfg["policy"]["attention_query_chunk"]
 
     def _drain(self):
-        self._flush_probe_bootstrap(wait=True)
+        self._drain_probes()
         iterator = getattr(self, "_sequence_iterator", None)
         if isinstance(iterator, SequencePrefetch):
             for future in iterator.futures:
@@ -588,7 +681,7 @@ class CudaRecurrentQ(CudaCohortLifecycle):
 
     def _close_sequences(self):
         iterator = getattr(self, "_sequence_iterator", None)
-        if isinstance(iterator, SequencePrefetch):
+        if iterator is not None:
             iterator.close()
         self._sequence_iterator = self._sequence_state = None
 
@@ -673,14 +766,14 @@ class CudaRecurrentQ(CudaCohortLifecycle):
 
     def _publish_fit_metrics(self, *, final=False):
         if final:
-            loss, branch_sum, branch_n, tile_sum, tile_n, probe = self._pass_metrics.cpu().tolist()
+            loss, selected_sum, selected_n, gap_sum, gap_n, probe = (
+                self._pass_metrics.cpu().tolist()
+            )
             self.logger.record("train/probe_loss", probe)
             if getattr(self.policy, "_output_gradient_norms", None) is not None:
-                diagnostic = (
-                    torch.cat((self.policy._output_gradient_norms, self.policy._cell_diagnostics))
-                    .cpu()
-                    .tolist()
-                )
+                norms = self.policy._output_gradient_norms.clone()
+                norms[0] = self.policy._selected_gradient_norm
+                diagnostic = torch.cat((norms, self.policy._cell_diagnostics)).cpu().tolist()
                 for key, value in zip(
                     (
                         "selected_output_gradient_norm",
@@ -695,15 +788,15 @@ class CudaRecurrentQ(CudaCohortLifecycle):
                     self.logger.record("train/" + key, value)
             self._cached_metrics = (
                 loss,
-                branch_sum / branch_n if branch_n else None,
-                tile_sum / tile_n if tile_n else None,
+                selected_sum / selected_n if selected_n else None,
+                gap_sum / gap_n if gap_n else None,
             )
-            _, branch_loss, tile_loss = self._cached_metrics
+            _, selected_error, placement_gap = self._cached_metrics
         else:
-            loss, branch_loss, tile_loss = self._cached_metrics
+            loss, selected_error, placement_gap = self._cached_metrics
         self.logger.record("train/q_loss", loss)
-        self.logger.record("train/branch_loss", branch_loss)
-        self.logger.record("train/tile_loss", tile_loss)
+        self.logger.record("train/selected_action_error", selected_error)
+        self.logger.record("train/placement_gap", placement_gap)
         self._last_metrics_at = perf_counter()
 
     def _fit_chunk(self, callback):
@@ -749,7 +842,7 @@ class CudaRecurrentQ(CudaCohortLifecycle):
                 self._sequence_state = None
             self.policy.set_training_mode(True)
             with self.policy.fitting_precision(self.execution_state["precision"]):
-                loss, state, branch_error, tile_error = sequence_loss(
+                loss, state, selected_error, placement_gap = sequence_loss(
                     self.policy,
                     rows,
                     self._sequence_state,
@@ -765,10 +858,10 @@ class CudaRecurrentQ(CudaCohortLifecycle):
             self._pass_metrics += torch.stack(
                 (
                     loss.detach().double(),
-                    branch_error.detach().double().sum(),
-                    loss.new_tensor(branch_error.numel()).double(),
-                    tile_error.detach().double().sum(),
-                    loss.new_tensor(tile_error.numel()).double(),
+                    selected_error.detach().double().sum(),
+                    loss.new_tensor(selected_error.numel()).double(),
+                    placement_gap.detach().double().sum(),
+                    loss.new_tensor(placement_gap.numel()).double(),
                     self.policy._last_probe_loss.double(),
                 )
             )
@@ -785,7 +878,10 @@ class CudaRecurrentQ(CudaCohortLifecycle):
         )
         self._stats["trajectory_ram_bytes"] = self._buffer.ram_used
         self._stats["ema_version"] = self._teacher_version
-        self._stats["probe_scratch_lanes"] = self._probes.lanes
+        self._stats["probe_auxiliary_capacity"] = self._probes.capacity
+        self._stats["probe_workspace_bytes"] = max(
+            self._probes.workspace_bytes, self._stats.get("probe_workspace_bytes", 0)
+        )
         self._stats["ema_compilation_status"] = self._teacher.entity.compilation_status
         self._stats["optimizer_seconds"] = self._optimizer_seconds
         self._stats["fit_precision"] = self.execution_state["precision"]
@@ -802,8 +898,9 @@ class CudaRecurrentQ(CudaCohortLifecycle):
         super()._synchronize(callback)
 
     def save(self, *args, **kwargs):
-        self._drain()
-        return super().save(*args, **kwargs)
+        with atomic_transition():
+            self._drain()
+            return super().save(*args, **kwargs)
 
     def learn(self, *args, **kwargs):
         try:
@@ -826,6 +923,7 @@ class CudaRecurrentQ(CudaCohortLifecycle):
                     "pending_episodes",
                     "compilation",
                     "plant_exploration",
+                    "collection_scheduler",
                 )
             ):
                 raise ValueError("Incomplete objective recovery state")
@@ -863,7 +961,7 @@ class CudaRecurrentQ(CudaCohortLifecycle):
                 )
                 self._teacher_memory.restore(extra["teacher_memory"])
             if extra.get("probe_schedule") is not None:
-                self._probes = CounterfactualCollector(self.env)
+                self._probes = ProbePool(self.env)
                 self._probes.restore(extra["probe_schedule"])
             for name, network in (("policy", self.policy), ("teacher", self._teacher)):
                 compilation = extra["compilation"][name]
@@ -889,6 +987,9 @@ class CudaRecurrentQ(CudaCohortLifecycle):
                     network.entity.enable_compilation()
                 elif compilation["status"] == "fallback":
                     network.entity.disable_compilation(compilation["error"])
+        self._scheduler = CollectionScheduler(self.n_envs, self.device)
+        if extra and extra.get("collection_scheduler") is not None:
+            self._scheduler.restore(extra["collection_scheduler"])
         self.policy.optimizer.zero_grad(set_to_none=True)
         self._sequence_iterator = self._sequence_state = None
         if not getattr(self, "execution_state", None):
@@ -898,7 +999,6 @@ class CudaRecurrentQ(CudaCohortLifecycle):
         self._last_metrics_at = 0.0
         self._optimizer_seconds = getattr(self, "_optimizer_seconds", 0.0)
         self._fit_pass_start = None
-        self._pending_probe_bootstrap = None
         self.collection_execution = {}
         if self.phase == CohortPhase.COLLECT:
             for network in (self.policy, getattr(self, "_teacher", None)):
@@ -913,6 +1013,9 @@ class CudaRecurrentQ(CudaCohortLifecycle):
         if getattr(self, "_teacher", None) is None:
             return {}
         return dict(
+            collection_scheduler=self._scheduler.snapshot()
+            if getattr(self, "_scheduler", None)
+            else None,
             plant_exploration=self._plant_exploration.snapshot()
             if getattr(self, "_plant_exploration", None) is not None
             else None,
@@ -944,7 +1047,9 @@ class CudaRecurrentQ(CudaCohortLifecycle):
             "_optimizer_events",
             "_fit_pass_start",
             "_collection_packed",
-            "_pending_probe_bootstrap",
+            "_scheduler",
+            "_collection_callback",
+            "_draining_probes",
             "_teacher",
             "_teacher_memory",
             "_plant_exploration",

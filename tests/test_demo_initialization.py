@@ -123,6 +123,7 @@ def test_complete_demo_fit_uses_whole_game_group_loss_and_reloads(
     cfg, archive, replay = completed_demo
     cfg["training"]["demo"].pop("gradient_clip")
     cfg["training"]["max_grad_norm"] = 1.25
+    cfg["training"]["objective"].update(tile_probes=1)
     samples = defaultdict(list)
     shared_loss = demo.balanced_q_loss
     clip_calls = []
@@ -132,16 +133,12 @@ def test_complete_demo_fit_uses_whole_game_group_loss_and_reloads(
         clip_calls.append(max_norm)
         return original_clip(parameters, max_norm)
 
-    def observe(first, second, targets, actions, counts, **kwargs):
-        for q1, q2, target, action in zip(
-            first.detach().tolist(), second.detach().tolist(), targets.tolist(), actions.tolist()
-        ):
+    def observe(first, targets, actions, counts, **kwargs):
+        for q1, target, action in zip(first.detach().tolist(), targets.tolist(), actions.tolist()):
             group = "wait" if action == 0 else "plant" if action < 361 else "dig"
             error = (q1 - target) ** 2
-            if action:
-                error = (error + (q2 - target) ** 2) / 2
             samples[group].append(error)
-        return shared_loss(first, second, targets, actions, counts, **kwargs)
+        return shared_loss(first, targets, actions, counts, **kwargs)
 
     monkeypatch.setattr(demo, "balanced_q_loss", observe)
     monkeypatch.setattr(torch.nn.utils, "clip_grad_norm_", observe_clip)
@@ -160,6 +157,8 @@ def test_complete_demo_fit_uses_whole_game_group_loss_and_reloads(
     inspected = inspect_checkpoint(result["checkpoint"])
     current = load_config()
     assert inspected["config"]["training"]["performance"] == current["training"]["performance"]
+    assert inspected["config"]["training"]["objective"] == cfg["training"]["objective"]
+    assert inspected["config"]["reward"] == cfg["reward"]
     assert (
         inspected["config"]["policy"]["encoder_microbatch"]
         == current["policy"]["encoder_microbatch"]
@@ -172,7 +171,7 @@ def test_complete_demo_fit_uses_whole_game_group_loss_and_reloads(
     model, saved = demo.load_demo_checkpoint(result["checkpoint"], cfg)
     assert saved["source_replay_sha256"] == demo.file_hash(replay)
     observations, *_ = demo._training_tensors(demo._load_verified_demo(archive, replay, cfg))
-    assert torch.isfinite(model.forward_step(observations[:1]).branch_q).all()
+    assert torch.isfinite(model.forward_step(observations[:1]).wait_q).all()
     assert not list((tmp_path / "fit").glob("*.tmp"))
     saved["recurrent_storage_protocol"] = "unknown"
     torch.save(saved, tmp_path / "invalid.pt")
@@ -230,9 +229,9 @@ def test_reused_demo_fits_current_rewards_without_rewriting_recording(
     fitted_targets = []
     shared_loss = demo.balanced_q_loss
 
-    def observe(first, second, targets, *args, **kwargs):
+    def observe(first, targets, *args, **kwargs):
         fitted_targets.extend(targets.detach().cpu().tolist())
-        return shared_loss(first, second, targets, *args, **kwargs)
+        return shared_loss(first, targets, *args, **kwargs)
 
     monkeypatch.setattr(demo, "balanced_q_loss", observe)
     result = demo.initialize_demo(archive, replay, tmp_path / "fit", cfg=current, passes=1)

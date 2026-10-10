@@ -63,16 +63,16 @@ def test_previous_model_rejected_before_cuda_probe_or_simulator(
 
     path = tmp_path / ("previous" + suffix)
     if suffix == ".pt":
-        torch.save({"protocol": "pvz-rl/demo-initialization-checkpoint-v2"}, path)
+        torch.save({"protocol": "pvz-rl/demo-initialization-checkpoint-v3"}, path)
     else:
         with ZipFile(path, "w") as archive:
             archive.writestr(
                 "protocol.json",
                 json.dumps(
                     dict(
-                        policy="transformer_lstm_q_v2",
-                        optimizer="complete_return_lstm_v1",
-                        exploration="sequential_tile_epsilon_v1",
+                        policy="transformer_lstm_q_v3",
+                        optimizer="complete_return_event_lstm_v1",
+                        exploration="committed_plant_tile_epsilon_v1",
                     )
                 ),
             )
@@ -97,74 +97,6 @@ def test_removed_time_option_and_recurrent_batch_boundary():
     cfg["training"]["batch_size"] = 257
     with pytest.raises(ValueError, match="multiple"):
         validate_config(cfg)
-
-
-def test_previous_exploration_allows_full_weights_not_recovery(
-    recurrent_cfg, tmp_path, monkeypatch
-):
-    import io
-    from zipfile import ZipFile
-
-    from pvz_game import Rules
-
-    from pvz_rl.envs.encoding import ObservationEncoder
-
-    cfg = recurrent_cfg
-    source = copy.deepcopy(cfg)
-    for name in ("early_sun_extra_multiplier", "early_sun_spawn_fraction"):
-        source["reward"].pop(name)
-    source["training"]["exploration"] = dict(
-        objective="sequential_tile_epsilon_v1",
-        epsilon_start=0.5,
-        epsilon_floor=0.01,
-        decay_games=5000,
-    )
-    policy = TransformerLSTMPolicy(cfg)
-    weights = io.BytesIO()
-    torch.save(policy.state_dict(), weights)
-    checkpoint = tmp_path / "old-exploration.zip"
-    with ZipFile(checkpoint, "w") as archive:
-        archive.writestr(
-            "protocol.json",
-            json.dumps(
-                dict(
-                    policy="transformer_lstm_q_v3",
-                    optimizer="complete_return_event_lstm_v1",
-                    exploration="sequential_tile_epsilon_v1",
-                )
-            ),
-        )
-        archive.writestr(
-            "run.json",
-            json.dumps(
-                dict(
-                    config=source,
-                    condition="masked",
-                    family="preset",
-                    learner_seed=17,
-                    validation_limit=None,
-                )
-            ),
-        )
-        archive.writestr(
-            "observation-schema.json", json.dumps(ObservationEncoder(source, Rules()).schema())
-        )
-        archive.writestr("data", json.dumps(dict(num_timesteps=99, training_games=5, _n_updates=3)))
-        archive.writestr("policy.pth", weights.getvalue())
-        archive.writestr("policy.optimizer.pth", b"must not deserialize optimizer")
-        archive.writestr("cohort-state.pt", b"must not deserialize old runtime")
-    before = checkpoint.read_bytes()
-    transferred, metadata = initial_weights(checkpoint, cfg)
-    for name, value in policy.state_dict().items():
-        torch.testing.assert_close(transferred[name], value, rtol=0, atol=0)
-    assert metadata["steps"] == 99 and metadata["games"] == 5 and metadata["updates"] == 3
-    monkeypatch.setattr(
-        "pvz_rl.learning.training.vector_env",
-        lambda *args, **kwargs: pytest.fail("allocated simulator"),
-    )
-    with pytest.raises(ValueError, match="protocol"):
-        train(cfg, "masked", 17, tmp_path / "absent", resume=checkpoint)
-    assert not (tmp_path / "absent").exists() and checkpoint.read_bytes() == before
 
 
 @pytest.mark.parametrize("corruption", ["missing", "species", "probability"])
@@ -244,9 +176,12 @@ def test_cuda_committed_recovery_matches_four_pass_reference(recurrent_cfg, tmp_
         model = build_model(cfg, "masked", env, 17)
         model.trajectory_root = tmp_path
         with torch.no_grad():
-            model.policy.branch_head[-1].weight.zero_()
-            model.policy.branch_head[-1].bias.zero_()
-            model.policy.branch_head[-1].bias[1] = 5
+            model.policy.wait_head[-1].weight.zero_()
+            model.policy.wait_head[-1].bias.zero_()
+            model.policy.tile_head[-1].weight.zero_()
+            model.policy.tile_head[-1].bias.zero_()
+            model.policy.tile_offsets.zero_()
+            model.policy.tile_offsets[(1) - 1] = 5
         return env, model
 
     env, reference = controlled_model()
@@ -436,7 +371,7 @@ def test_step_chunk_equivalence_with_real_outcomes(recurrent_cfg, device):
                 events=events[:, index],
             )
             state = out.state
-            expected.append(out.branch_q)
+            expected.append(out.wait_q)
         chunk_state, actual = None, []
         for start in (0, 3, 6):
             q, _, chunk_state = model.forward_sequence(
@@ -580,9 +515,8 @@ def test_returns_group_loss_padding_and_partition_gradients(recurrent_cfg, tmp_p
                     0,
                     np.where(chunk["action"][chunk["active"]] < 361, 1, 2),
                 )
-                tile = iter(second.detach().tolist())
                 for group, error in zip(groups, first.detach().tolist()):
-                    errors[group].append(error if group == 0 else (error + next(tile)) / 2)
+                    errors[group].append(error)
             assert total == pytest.approx(sum(np.mean(v) for v in errors.values()) / 3, rel=1e-6)
             losses.append(total)
             gradients.append(
@@ -628,9 +562,12 @@ def test_noncontiguous_active_collection_retains_terminal_and_empty_inactive_row
     try:
         model._begin(callback)
         with torch.no_grad(), env.device_context():
-            model.policy.branch_head[-1].weight.zero_()
-            model.policy.branch_head[-1].bias.zero_()
-            model.policy.branch_head[-1].bias[0] = 5
+            model.policy.wait_head[-1].weight.zero_()
+            model.policy.wait_head[-1].bias.zero_()
+            model.policy.tile_head[-1].weight.zero_()
+            model.policy.tile_head[-1].bias.zero_()
+            model.policy.tile_offsets.zero_()
+            model.policy.wait_head[-1].bias[0] = 5
             env.batch.header[env.cp.asarray([0, 2]), 0] = 99
             model._last_obs = env.features.encode()
         shapes = []

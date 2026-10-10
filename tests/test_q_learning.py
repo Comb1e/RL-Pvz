@@ -25,17 +25,8 @@ def policy_and_state():
 
 
 def selected_values(policy, obs, actions):
-    from pvz_rl.policy.sequential_q import action_parts
-
     result = policy.forward_step(obs)
-    branch, tile = action_parts(actions)
-    first = result.branch_q.gather(1, branch[:, None]).flatten()
-    second = (
-        policy.tile_values(result.tile_features, result.context, branch)
-        .gather(1, tile[:, None])
-        .flatten()
-    )
-    return first, second
+    return (policy.selected_values(result.wait_q, result.tile_features, result.context, actions),)
 
 
 def test_one_optimizer_owns_entire_shared_network():
@@ -47,8 +38,8 @@ def test_one_optimizer_owns_entire_shared_network():
     actions = torch.tensor([1])
     before = tuple(q.detach().clone() for q in selected_values(policy, obs, actions))
     for _ in range(3):
-        first, second = selected_values(policy, obs, actions)
-        loss = ((first - 1).square() + (second - 1).square()).mean() / 2
+        (selected,) = selected_values(policy, obs, actions)
+        loss = (selected - 1).square().mean()
         policy.optimizer.zero_grad()
         loss.backward()
         policy.optimizer.step()

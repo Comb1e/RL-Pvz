@@ -1,19 +1,38 @@
 # Recording and training
 
-The current objective is `complete_return_probe_v3`. Rejected plants and empty digs
+Fresh weights are required; existing verified archives/native replays remain reusable.
+Refit into a new output directory, never overwrite recordings or previous runs.
+The current objective is `complete_return_joint_tile_probe_v1`. Rejected plants and empty digs
 use the small shared penalties in `train.toml`; development is multiplied only in
 learning targets. A zombie entering either of the two columns nearest the house is
 charged once per boundary. Victory time is shaped only for wins, relative to the
 median duration of the current completed cohort.
 
-Each decision probes two unselected branches and up to two alternative tiles. The
-EMA teacher supplies fixed one-step targets. Probes run from scratch simulator state
-and never alter the behavior game. Cohort reward finalization occurs before complete
+Every accepted planting, including committed exploration, queues up to four other
+tiles of its species. Real games continue alongside forks retaining the pre-plant
+board and complete EMA history; actual acceptance authorizes execution.
+Each valid probe runs a frozen greedy EMA policy for up to 30 simulated seconds or 4096 transitions,
+then bootstraps unless truly terminal/cutoff. Longer probes increase collection cost.
+Auxiliary games retain independent simulator state and never alter the behavior game.
+Cohort reward finalization occurs before complete
 returns and fitting, and is recoverable without applying time rewards twice.
+
+Probe settings live under `training.objective`: `probe_trigger = "accepted_plant"`,
+`tile_probes = 4`, `probe_rollout_seconds = 30`,
+`probe_rollout_max_decisions = 4096` and 64-transition heavy control reporting.
+Only same-species placements on different empty tiles are probed; counts can be
+1–44, limited by available alternatives. Branch probes are removed.
+Real games, including the planting slot, continue while isolated auxiliary games
+advance. Execution defaults allow 256 active auxiliary lanes and 128 outstanding
+source jobs, with one auxiliary transition per scheduler round.
+A full source bank pauses only another eligible planting decision, retaining its
+proposal/draws until FIFO admission. No waits or discarded probes are substituted.
+Saving stops new decisions, finishes issued tickets and drains all probes before
+writing the checkpoint; drain latency is reported separately.
 
 Install with the [quick start](../README.md). Run commands from the project root.
 The default model throughout recording, initialization, training and evaluation
-is the entity Transformer–LSTM (`entity_v1`, `transformer_lstm_q_v3`).
+is the entity Transformer–LSTM (`entity_v1`, `transformer_lstm_q_v4`).
 A public observation contains an integer `[n,11]` entity matrix and 18 global
 values; each retained entity becomes a learned 32-dimensional vector.
 
@@ -24,7 +43,7 @@ values; each retained entity becomes a learned 32-dimensional vector.
   --output runs\human-1000.pvzdemo --archive runs\human-1000.jsonl
 .\.venv\Scripts\python.exe -m pvz_rl initialize-demo `
   --archive runs\human-1000.jsonl --replay runs\human-1000.pvzdemo `
-  --output runs\human-init-events
+  --output runs\human-init-tile
 ```
 
 Recording uses one easy-stage attempt, default seed 1000. Choose unused replay,
@@ -63,7 +82,7 @@ only after complete passes, alongside curves, coverage and verification reports.
 
 ```powershell
 .\.venv\Scripts\python.exe -m pvz_rl train `
-  --init-from runs\human-init-events\initialization.pt --output runs\human-trained
+  --init-from runs\human-init-tile\initialization.pt --output runs\tile-trained
 ```
 
 `--init-from` accepts demonstration `.pt` or compatible autonomous `.zip` weights.
@@ -77,8 +96,9 @@ explicit `--config`), including rewards, clipping, learning rate and performance
 The source checkpoint supplies weights only. Demonstration weight transfer
 validates the pinned engine, observation encoding, action semantics and network
 dimensions; reward, objective, optimizer, return, recurrent chunk and performance
-settings are supplied by the new run. Changed settings therefore do not require a
-new demonstration initialization. Autonomous weight transfer keeps its stricter
+settings are supplied by the new run. Within the current contract, changed numerical
+settings do not require another initialization. A new objective contract requires
+fresh weights. Autonomous weight transfer keeps its stricter
 saved-protocol checks.
 Without `--config`, autonomous resume uses the checkpoint's saved configuration
 plus missing execution defaults. Resume retains learning settings and rewards
@@ -100,7 +120,8 @@ The recurrent collector retains the selected proposal for the trajectory and com
 target. History retains only gross sunlight gain/spend, zombie spawn/defeat/removal
 and plant addition/removal events, plus resulting board context and time since the
 last write. Rejection alone never advances memory. Current board features still
-reach both Q heads every decision. Proposal, execution, acceptance, duration and
+reach wait/joint-tile values every decision. Species values are best candidate-tile
+maxima. Only the actual complete action receives return regression. Proposal, execution, acceptance, duration and
 rejection reason remain learning/journal evidence.
 
 Each of four default fitting passes recomputes recurrent states from episode
@@ -111,7 +132,8 @@ chunk boundaries. `--batch-size` is the decision budget: 1,024 means four
 one clipped Adam update per whole-cohort pass, with equal total weight for each
 nonempty wait/plant/dig group. Within each group, accepted and rejected decisions
 receive 50% each when both exist; the sole present outcome otherwise receives
-full group weight. Probe losses apply the same split inside each head/branch.
+full group weight. Probe losses apply the same split within each represented
+branch, with one initial complete-action error per probe.
 
 Tile exploration decays from 50% to 1% over 10,000 completed stage games and stays
 fixed during each cohort. Normal ten-way branch choice (wait, eight plants and dig)
@@ -193,17 +215,17 @@ optimizer, counters, curriculum, exploration, RNGs, unfinished trajectories and
 collection state. Collection resumes at its saved decision boundary. An
 unfinished plant commitment resumes with the same species and frozen probabilities.
 The autonomous recovery/trajectory contracts are versioned; older recovery state
-is rejected before allocating a simulator. Compatible event-memory weights remain
+is rejected before allocating a simulator. Only current objective-v2 checkpoints remain
 reusable through `--init-from` under current defaults, with a new output directory,
 fresh optimizer/counters and no pending commitments. For example:
 
 ```powershell
 .\.venv\Scripts\python.exe -m pvz_rl train `
-  --init-from runs\compact-stages-101\easy\latest.zip --stage easy `
-  --output runs\early-sun-101\easy --seed 101 --games 128
+  --init-from runs\joint-stages-101\easy\latest.zip --stage easy `
+  --output runs\joint-restart-101\easy --seed 101 --games 128
 ```
 
-Earlier per-decision model weights remain incompatible; no partial-weight migration
+All previous checkpoints, including joint objective-v1 weights, are incompatible; no migration
 or legacy collector is provided. An
 interrupted fitting pass restarts from its beginning with cleared gradients;
 completed optimizer updates are retained. `interrupted.zip` is the recovery
@@ -212,8 +234,8 @@ completion. In-place resume appends training history. Budgets may be extended;
 changing model structure or the configured simulator slot count is rejected.
 Live-slot bucket shapes may change as games finish. Active maps and graph caches
 are rebuilt on resume, not serialized; active-only execution does not change the
-recovery or trajectory protocol. Checkpoint/finalization drains apply every queued
-probe bootstrap before saving or constructing fitting targets.
+canonical episode identities. Checkpoint/finalization drains finish issued decisions
+and apply every endpoint/bootstrap patch before saving or constructing fitting targets.
 
 Evaluation accepts either checkpoint format and uses the shared stateful runner.
 CUDA batches reset only replaced episode slots. A configuration with
@@ -232,25 +254,21 @@ The tile-head wrapper evaluates live rows while selection/exploration random
 draws retain their original slot-shaped dimensions and order. Entity caps, action
 timing, rewards, scheduled probes and loss denominators are unchanged.
 
-Scratch simulation/encoding uses shallow batch and feature prefix views over the
-existing allocation. Original live slot IDs map into compact lane prefixes; public
-features and probe metadata scatter back to canonical rows. Two independent lanes
-and the one-lane allocation fallback keep every scheduled probe. This reduces
-execution width, not private simulator capacity or its storage bounds.
-Behavior globals transfer active rows only and rebuild zero-filled canonical host
-rows; probe globals use the same compact/scatter contract. Fixed metadata may
-retain original slot-shaped staging. Packed probe
-slabs are bounded by active games' public counts, not all original slots; a bounded
-unused tail can still transfer without an extra GPU count wait.
+Auxiliary simulation/encoding uses occupied shallow prefix views over a bounded
+allocation. Immutable sources map to independent lanes; endpoint evidence attaches
+to stable canonical source rows. A one-lane/source fallback keeps every probe.
+Behavior metadata remains original-slot-shaped while execution/global transfers
+follow ready/issued slots, not terminal rows. Capacity-blocked decisions retain
+their proposals and random draws without artificial waits or simulation time.
 
-Probe deduplication includes entities, globals and gross event/timing inputs within
-one actual game/decision. Only valid nonterminal representatives need next-state
-EMA inference; terminal bootstrap is zero. The dedup representatives reach the
-host through the existing handoff. Current rows append first, then compact EMA
-inference queues its CPU copy; the next existing handoff patches those rows before
-fitting. The final pending copy drains at finalization/checkpoint/interruption.
-There is no extra ordinary wait just to learn GPU dedup counts, and forked history
-never replaces actual EMA history.
+Endpoint deduplication includes entities, globals, hidden/cell and gross event/
+timing inputs within one source job. Ongoing games never merge. Only unique
+nonterminal endpoints need EMA-tail inference; terminal bootstrap is zero.
+Actual rows append immediately; subsequent handoffs patch complete owned endpoints
+exactly once before fitting, including spilled storage. Interruption stops new
+selection, finishes issued decisions, then drains all jobs and transfers before
+saving. No transient source or unfinished fork is serialized. Forked history
+never replaces actual EMA history. See [execution details](math/training-throughput.md).
 
 Each online/EMA encoder has a separate collection LRU graph cache. Defaults under
 `training.performance` are `collection_graph_cache_entries = 8` live entries and
@@ -329,8 +347,8 @@ and crowded snapshots. Live IDs are noncontiguous, including the one-game arm;
 these are not six differently sized simulator allocations. It separates cold
 measurements, eight warmup decisions and three warmed 32-decision trials.
 `--cases` can also select rejection-heavy and accepted-action boundaries;
-`--live-games` (alias `--env-counts`) and `--scratch-lanes` select a smaller matrix.
-It compares two-lane execution with the current one-lane memory fallback, not a
+`--live-games` (alias `--env-counts`) and `--probe-capacities` select a smaller matrix.
+It compares bounded background pools with the one-lane memory fallback, not a
 historical trainer. For an explicitly requested post-fit check, add `--fit-cycle`:
 each selected cycle arm collects complete one-second-cutoff games, performs four
 fitting passes, then

@@ -90,7 +90,7 @@ def forward_active(policy, observations, state, plan, *, events=None, memory_wri
     events = state.inputs() if events is None else events
     memory_write = events[:, :7].ne(0).any(-1) if memory_write is None else memory_write
     count = len(observations)
-    branch = state.hidden.new_zeros(count, A.tile_groups + 1)
+    wait = state.hidden.new_zeros(count, 1)
     tiles = state.hidden.new_zeros(count, A.tiles, policy.entity.width)
     context = state.hidden.new_zeros(count, policy.hidden_size)
     next_state = state.clone()
@@ -124,24 +124,11 @@ def forward_active(policy, observations, state, plan, *, events=None, memory_wri
             memory_write=gather_padded(memory_write, slots, size),
         )
         logical = len(bucket.slot_ids)
-        branch.index_copy_(0, slots, output.branch_q[:logical])
+        wait.index_copy_(0, slots, output.wait_q[:logical])
         tiles.index_copy_(0, slots, output.tile_features[:logical])
         context.index_copy_(0, slots, output.context[:logical])
         for target, source, dimension in zip(
             next_state.tensors(), output.state.tensors(), (1, 1, 0, 0), strict=True
         ):
             target.index_copy_(dimension, slots, source.narrow(dimension, 0, logical))
-    return RecurrentOutput(branch, tiles, context, next_state)
-
-
-def active_tile_values(policy, plan):
-    def values(board, context, branches):
-        slots = torch.as_tensor(plan.original_slot_ids, device=branches.device)
-        result = context.new_zeros(len(branches), board.shape[1])
-        if len(plan.original_slot_ids):
-            result.index_copy_(
-                0, slots, policy.tile_values(board[slots], context[slots], branches[slots])
-            )
-        return result
-
-    return values
+    return RecurrentOutput(wait, tiles, context, next_state)

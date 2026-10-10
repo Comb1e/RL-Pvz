@@ -209,9 +209,12 @@ def test_cohort_interruption_restores_actual_scores_and_optimizer(tmp_path):
 
             set_exploration_rate(model, 0.0, plant_rate=0.0)
             with torch.no_grad():
-                model.policy.branch_head[-1].weight.zero_()
-                model.policy.branch_head[-1].bias.zero_()
-                model.policy.branch_head[-1].bias[1] = 0.1
+                model.policy.wait_head[-1].weight.zero_()
+                model.policy.wait_head[-1].bias.zero_()
+                model.policy.tile_head[-1].weight.zero_()
+                model.policy.tile_head[-1].bias.zero_()
+                model.policy.tile_offsets.zero_()
+                model.policy.tile_offsets[(1) - 1] = 0.1
             if interrupted:
                 with pytest.raises(KeyboardInterrupt):
                     model.learn(1, callback=Interrupt())

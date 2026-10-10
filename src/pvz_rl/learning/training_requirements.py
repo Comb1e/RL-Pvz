@@ -19,7 +19,7 @@ def current_model_config(cfg):
     return (
         identity
         in {
-            ("transformer_lstm_q_v3", "entity_v1", "complete_return_event_lstm_v1"),
+            ("transformer_lstm_q_v4", "entity_v1", "complete_return_joint_tile_probe_v1"),
         }
         and cfg.get("policy", {}).get("action_distribution") == ACTION_DISTRIBUTION
         and cfg.get("reward", {}).get("version") == "net_value_v1"
@@ -36,7 +36,7 @@ def require_supported_policy(cfg, condition="masked"):
         or not current_model_config(cfg)
     ):
         raise ValueError(
-            "Retired policy or scheduler. Models require the entity_v1 recurrent protocol, net_value_v1, the sequential_q_unmasked_penalty_v1 distribution and complete-game collection. Start fresh with the bundled train profile."
+            "Retired policy or scheduler. Models require the entity_v1 recurrent protocol, net_value_v1, the joint_q_unmasked_penalty_v1 distribution and complete-game collection. Start fresh with the bundled train profile."
         )
 
 
@@ -56,7 +56,10 @@ def _cuda_probe():
 def require_cuda_training(cfg, condition="masked", *, runtime=True):
     """Reject unsupported runs before creating output or allocating collectors."""
     validate_config(cfg)
-    if cfg["training"].get("objective", {}).get("protocol") != "complete_return_probe_v3":
+    if (
+        cfg["training"].get("objective", {}).get("protocol")
+        != "complete_return_joint_tile_probe_v1"
+    ):
         raise ValueError(
             "Old-objective checkpoints cannot resume or initialize weights. Refit a verified demonstration in a new directory."
         )

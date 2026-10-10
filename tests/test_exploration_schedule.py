@@ -75,10 +75,15 @@ def test_commitment_waits_or_uses_current_tile_and_actual_q(blocker):
     original = torch.tensor([46, 46])
 
     def evidence():
+        from pvz_rl.policy.sequential_q import ActionQValues
+
         return dict(
             tile_features=tiles,
             context=torch.zeros(2, 1),
             branch_q=branch_values,
+            action_q=ActionQValues(
+                branch_values[:, 0], (tiles + 1)[:, None].expand(-1, 9, -1), branch_values
+            ),
             branch_value=branch_values[:, 2],
             tile_value=torch.zeros(2),
             coins=torch.zeros(2, 2, dtype=torch.bool),

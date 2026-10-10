@@ -112,7 +112,7 @@ def load_demo_config(path: str | Path | None = None, *, profile: str = "demo") -
     cfg = load_config(path, profile=profile)
     if (
         cfg["encoding"]["version"] != "entity_v1"
-        or cfg["policy"]["kind"] != "transformer_lstm_q_v3"
+        or cfg["policy"]["kind"] != "transformer_lstm_q_v4"
     ):
         raise ValueError("Human demonstrations require the entity_v1 Transformer-LSTM demo profile")
     return copy.deepcopy(cfg)
@@ -121,7 +121,7 @@ def load_demo_config(path: str | Path | None = None, *, profile: str = "demo") -
 def validate_config(cfg: dict) -> None:
     objective = cfg["training"].get("objective")
     if objective is not None:
-        if objective.get("protocol") != "complete_return_probe_v3":
+        if objective.get("protocol") != "complete_return_joint_tile_probe_v1":
             raise ValueError("Unsupported training objective protocol")
         if objective.get("accepted_outcome_share") != 0.5:
             raise ValueError("objective.accepted_outcome_share must be 0.5")
@@ -139,11 +139,25 @@ def validate_config(cfg: dict) -> None:
                 or not 0 <= objective[key] < 1
             ):
                 raise ValueError(f"objective.{key} must be finite and in [0, 1)")
-        if any(
-            objective.get(k) != v
-            for k, v in (("branch_probes", 2), ("tile_probes", 2), ("probe_interval_decisions", 1))
+        from pvz_rl.learning.probe_layout import ProbeLayout
+
+        ProbeLayout.from_config(cfg)
+        if (
+            objective.get("probe_trigger") != "accepted_plant"
+            or "probe_interval_decisions" in objective
         ):
-            raise ValueError("The objective requires two branch/tile probes every decision")
+            raise ValueError(
+                "The objective requires accepted-plant probes without a periodic scheduler"
+            )
+        for key in (
+            "probe_rollout_max_decisions",
+            "probe_rollout_control_interval_decisions",
+        ):
+            if type(objective.get(key)) is not int or objective[key] < 1:
+                raise ValueError(f"objective.{key} must be a positive integer")
+        seconds = objective.get("probe_rollout_seconds")
+        if type(seconds) not in (int, float) or not math.isfinite(seconds) or seconds <= 0:
+            raise ValueError("objective.probe_rollout_seconds must be finite and positive")
     penalties = cfg["reward"].get("home_entry_penalties", [0, 0])
     if (
         len(penalties) != 2
@@ -156,7 +170,7 @@ def validate_config(cfg: dict) -> None:
         raise ValueError("win_time_weight must be finite and nonnegative")
     recurrent = (
         cfg.get("encoding", {}).get("version") == "entity_v1"
-        and cfg.get("policy", {}).get("kind") == "transformer_lstm_q_v3"
+        and cfg.get("policy", {}).get("kind") == "transformer_lstm_q_v4"
     )
     if cfg["training"].get("validation_schedule", "periodic") not in (
         "periodic",
@@ -369,7 +383,7 @@ def validate_config(cfg: dict) -> None:
     if not math.isfinite(visual["final_hold_seconds"]) or visual["final_hold_seconds"] < 0:
         raise ValueError("Visualization final_hold_seconds must be finite and nonnegative")
     env, train = cfg["environment"], cfg["training"]
-    expected_method = "complete_return_event_lstm_v1"
+    expected_method = "complete_return_joint_tile_probe_v1"
     if train.get("method") != expected_method:
         raise ValueError("Training requires a supported complete-return method and fresh models")
     if any(
@@ -410,6 +424,9 @@ def validate_config(cfg: dict) -> None:
         value = performance.get(key, default)
         if type(value) is not int or value < 0:
             raise ValueError(f"training.performance.{key} must be a nonnegative integer")
+    for key in ("probe_active_capacity", "probe_pending_capacity", "probe_steps_per_round"):
+        if type(performance.get(key)) is not int or performance[key] < 1:
+            raise ValueError(f"training.performance.{key} must be a positive integer")
     if train.get("budget_unit") not in ("games", "decisions"):
         raise ValueError("training.budget_unit must be games or decisions")
     if env.get("action_timing") not in ("fixed", "per_tick"):

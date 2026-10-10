@@ -12,14 +12,14 @@ from pvz_rl.config import digest, load_config, validate_config
 from pvz_rl.learning.performance import refresh_performance
 from pvz_rl.learning.training_requirements import transfer_protocol, weight_transfer_protocol
 
-DEMO_PROTOCOL = "pvz-rl/demo-initialization-checkpoint-v3"
-STATE_PROTOCOL = "pvz-rl/event-lstm-state-v1"
-AUTONOMOUS_STATE_PROTOCOL = "pvz-rl/committed-event-lstm-state-v2"
+DEMO_PROTOCOL = "pvz-rl/demo-initialization-checkpoint-v6"
+STATE_PROTOCOL = "pvz-rl/joint-event-lstm-state-v2"
+AUTONOMOUS_STATE_PROTOCOL = "pvz-rl/tile-probe-event-lstm-state-v5"
 
 
 def protocol_for(kind):
     methods = {
-        "transformer_lstm_q_v3": "complete_return_event_lstm_v1",
+        "transformer_lstm_q_v4": "complete_return_joint_tile_probe_v1",
     }
     if kind not in methods:
         raise ValueError(
@@ -60,7 +60,7 @@ def inspect_checkpoint(path, *, weights_only=False):
         saved = torch.load(path, map_location="cpu", weights_only=True)
         if saved.get("protocol") != DEMO_PROTOCOL:
             raise ValueError(
-                "Unsupported demonstration checkpoint protocol; record a fresh entity_v1 demonstration"
+                "Unsupported demonstration checkpoint protocol; refit a verified recording in a new directory"
             )
         if saved.get("recurrent_storage_protocol") != STATE_PROTOCOL:
             raise ValueError("Unsupported recurrent storage protocol")
@@ -82,7 +82,7 @@ def inspect_checkpoint(path, *, weights_only=False):
 
         if saved.get("observation_schema") != ObservationEncoder(cfg, Rules()).schema():
             raise ValueError("Checkpoint entity schema disagrees with configuration")
-        if cfg["policy"]["kind"] != "transformer_lstm_q_v3":
+        if cfg["policy"]["kind"] != "transformer_lstm_q_v4":
             raise ValueError("Demonstration checkpoint requires Transformer-LSTM weights")
         metadata = dict(
             config=cfg,
@@ -143,8 +143,24 @@ def inspect_checkpoint(path, *, weights_only=False):
                 if runtime.get("protocol") != AUTONOMOUS_STATE_PROTOCOL:
                     raise ValueError("Unsupported autonomous recovery protocol; use --init-from")
                 if runtime.get("buffer") is not None:
+                    from pvz_rl.learning.collection_scheduler import CollectionScheduler
                     from pvz_rl.learning.exploration import CommittedPlantExploration
 
+                    if any(
+                        runtime.get(key) is None
+                        for key in (
+                            "collection_scheduler",
+                            "teacher",
+                            "teacher_memory",
+                            "probe_schedule",
+                            "compilation",
+                            "pending_episodes",
+                        )
+                    ):
+                        raise ValueError("Incomplete background tile probe recovery state")
+                    CollectionScheduler(cfg["training"]["n_envs"], "cpu").restore(
+                        runtime["collection_scheduler"]
+                    )
                     controller = runtime.get("plant_exploration")
                     if not isinstance(controller, dict):
                         raise ValueError("Incomplete committed plant recovery state")
@@ -165,32 +181,16 @@ def inspect_checkpoint(path, *, weights_only=False):
         if not weights_only and protocol != protocol_for(cfg["policy"]["kind"]):
             raise ValueError("Checkpoint model family disagrees with saved configuration")
         metadata["initialization_type"] = "autonomous"
+    if (
+        cfg["training"].get("method") != "complete_return_joint_tile_probe_v1"
+        or cfg["training"].get("objective", {}).get("protocol")
+        != "complete_return_joint_tile_probe_v1"
+    ):
+        raise ValueError("Retired planting-probe checkpoint; fresh initialization is required")
     if weights_only:
         return metadata
-    # Demonstration checkpoints are weights-only artifacts.  Their structural
-    # configuration is retained for schema and transfer validation, but every
-    # execution-only setting comes from the current training profile.  This
-    # keeps an old initialization useful after a BF16, batching or prefetch
-    # change without requiring a refresh flag or another recording.
     if metadata["initialization_type"] == "demonstration":
-        current = load_config()
-        source = copy.deepcopy(metadata["config"])
-        # Demonstration weights are structural artifacts. Historical reward files
-        # may predate the current optional shaping fields; hydrate those fields
-        # from today's profile while retaining the source's architecture.
-        source.setdefault("reward", {}).setdefault(
-            "home_entry_penalties", current["reward"]["home_entry_penalties"]
-        )
-        source.setdefault("reward", {}).setdefault(
-            "win_time_weight", current["reward"]["win_time_weight"]
-        )
-        for key in ("early_sun_extra_multiplier", "early_sun_spawn_fraction"):
-            source["reward"].setdefault(key, copy.deepcopy(current["reward"][key]))
-        source["training"]["exploration"] = copy.deepcopy(current["training"]["exploration"])
-        source.setdefault("training", {})["objective"] = copy.deepcopy(
-            current["training"]["objective"]
-        )
-        cfg = refresh_performance(source, current)
+        cfg = refresh_performance(metadata["config"], load_config())
     else:
         cfg = execution_config(metadata["config"])
     validate_config(cfg)
@@ -199,7 +199,7 @@ def inspect_checkpoint(path, *, weights_only=False):
 
 
 def model_class(cfg):
-    if cfg["policy"]["kind"] != "transformer_lstm_q_v3":
+    if cfg["policy"]["kind"] != "transformer_lstm_q_v4":
         raise ValueError("Retired model; entity_v1 requires fresh initialization")
     from pvz_rl.learning.recurrent_q import CudaRecurrentQ
 

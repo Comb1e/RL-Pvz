@@ -1,206 +1,183 @@
-# Recurrent complete-return Q regression and alternative-action supervision
+# Joint action values, complete returns and bounded probes
 
-Demonstration initialization and autonomous training use the `complete_return_probe_v3`
-objective. The raw ledger keeps terminal, development, rejection, house-entry and
-victory-time components separately. Fitting multiplies only development by the
-configured dense multiplier before constructing complete returns.
+The sole model is `transformer_lstm_q_v4`, with objective
+`complete_return_joint_tile_probe_v1`. The public observation/action schemas and
+deterministic event-memory rules are unchanged. All older weights require fresh
+demonstration fitting; recordings remain reusable.
 
-Each living zombie is charged once when it first enters the second house-side column
-and once again when it enters the innermost column. Victory time shaping is applied
-only after a cohort median is known, so every victory and counterfactual terminal
-transition uses the same median.
-A verified demonstration supplies one naturally completed episode; autonomous
-collection supplies a cohort of completed games. Both visit chronological chunks
-with fixed weights for the whole pass and publish only completed optimizer updates.
+## Complete-action attribution
 
-For an episode of T decisions, including rejected proposals and zero-tick
-operations, the target is
+The network predicts a scalar wait value and a conditional table for eight plant
+species plus dig. There is no independent species prediction. For branch b:
 
 \[
-G_t = \sum_{u=t}^{T-1} r^{train}_u, \qquad G_T=0.
+Q_b(s,h)=\max_{\ell\in C_b(s)}Q_{\rm joint}(s,h,b,\ell).
 \]
 
-Gamma is one. A simulator cutoff receives its configured terminal penalty once;
-there is no bootstrap. Different episode slots never share a return accumulator.
-For rewards [1, 2, -1, 4] and [3, -1], independent targets are [6, 5, 3, 4]
-and [2, -1]. Inactive rows with arbitrary rewards cannot alter these targets.
+Plant candidates are empty tiles, dig candidates are all tiles. A full-board
+plant compares tile zero, retaining the rejection fallback. Sun and cooldown
+do not hide branches. Choose the greedy branch, then apply tile exploration or
+the existing committed-species controller. Exploration may sample a worse tile
+without lowering the species' best-tile value.
 
-The branch value estimates remaining return after choosing a branch and following
-the collecting tile policy. For a fixed continuation policy,
-`Q_branch(s,b) = sum_t p(t|s,b) Q_tile(s,b,t)`. During tile exploration this is an
-expectation, not necessarily the best tile value. Shared targets do not enforce
-exact equality between heads or provide information about unvisited alternatives.
-
-Let N_{g,o} count decisions in group g (wait, plant or dig), with outcome o
-(accepted or rejected), over the complete cohort. Let K count nonempty groups.
-If both strata exist alpha_{g,o}=0.5 each; the sole represented stratum otherwise
-gets alpha=1. Missing strata get zero. Selected predictions are q_b and q_l. Define
+Actual decisions, including waits/rejections and zero-time actions, have targets:
 
 \[
-e_i = \begin{cases}
-(q_b-G_i)^2 & a_i=\mathrm{wait},\\
-\tfrac12\big((q_b-G_i)^2+(q_l-G_i)^2\big) & \text{otherwise}.
-\end{cases}
-\qquad
-L=\frac1K\sum_{g:N_g>0}\sum_{o:N_{g,o}>0}
-\frac{\alpha_{g,o}}{N_{g,o}}\sum_{i\in(g,o)}e_i.
+G_t=\sum_{u=t}^{T-1}r^{\rm train}_u,\qquad G_T=0.
 \]
 
-Each chunk contributes real decisions with coefficient alpha_{g,o}/(K N_{g,o}).
-Denominators cover the complete cohort, never individual chunks. Summing chunks
-recovers L regardless of episode partitioning. Padding creates neither wait samples
-nor outcome counts. Empty groups and missing strata do not dilute the objective.
-Demonstration selected-action regression uses this rule too; accepted-only ranking
-is unchanged.
+Gamma is one. The six components are terminal, development, invalid plant,
+empty dig, house proximity and victory time. Only development receives the
+dense multiplier (10), exactly once. Actual cutoff penalties occur once.
+Victories finalize against the median duration of actual cohort games; probe
+durations never contribute to that median.
 
-At the start of every pass h_0=c_0=0 independently for each episode. Forward
-memory crosses chunk boundaries, but gradients treat the carried h,c as constants
-at each boundary. Chunk gradients sum before clipping and one Adam step:
+For groups g = wait/plant/dig and initial acceptance strata o, count all actual
+decisions in the complete cohort as N(g,o). Let K count represented groups.
+Both outcome strata get alpha=0.5 when both exist; a sole stratum gets alpha=1.
+The selected complete action alone receives return regression:
+
+\[
+L_{\rm selected}=\frac1K\sum_g\sum_{o:N(g,o)>0}
+ \frac{\alpha_{g,o}}{N(g,o)}
+ \sum_{i\in(g,o)}(Q(s_i,h_i,a_i)-G_i)^2.
+\]
+
+Chunk contributions use these global denominators. Padding has no counts or
+loss. A bad sampled tile does not directly regress its species maximum toward
+that tile's return; shared parameters still allow indirect coupling. Report
+selected-action MSE and best-tile minus sampled-tile Q as separate quantities.
+
+## Event-only memory and fitting
+
+Gross public sunlight gains/spending, zombie spawns/defeats/removals and plant
+additions/removals write memory once, before the next decision, using the
+resulting board. Initial entities are not fabricated events. Capped gains count;
+simultaneous gains/losses do not cancel. Separate zero-time transitions retain
+their order. Movement, nonlethal damage, cooldown, elapsed time and rejection
+alone preserve hidden/cell exactly.
+
+At writes, concatenate 32-wide entity summary, 64-wide scalar features and
+32-wide event projection into the 256-unit LSTM. Normalize events with existing
+public resource/count scales and log1p(elapsed seconds), without clipping.
+Every decision fuses its current board features with memory into 256 features
+for wait/tile values. Quiet decisions still supervise current-state predictions.
+
+Fitting packs real event rows chronologically and gathers the latest memory
+onto every real decision. Episode states are independent. Gradients detach at
+256-decision boundaries, not event boundaries, while forward memory continues.
+Whole-pass gradients accumulate before one clipping and Adam update:
 
 \[
 D=\sum_j\nabla_\theta L_j(\theta;\operatorname{stopgrad}(h_j,c_j)),
-\quad \bar D=D\min(1,C/\lVert D\rVert_2).
+\quad \bar D=D\min(1,5/\lVert D\rVert_2).
 \]
 
-Both fitting paths use `C = training.max_grad_norm`, with default 5.
-PyTorch applies a small denominator epsilon and leaves gradients below the
-limit unamplified. Clipping occurs once after the complete pass accumulation.
+Autonomous training makes four passes; demonstration fitting makes twenty.
+Adam learning rate remains 0.0003. BF16 feature controls, FP32 core and existing
+execution grouping remain unchanged. An interrupted uncommitted pass restarts
+from episode beginnings. Different chunk lengths can change truncated gradients,
+even when the forward loss agrees.
 
-The test compares accumulated gradients when two episodes are processed together
-versus separately with the same two-decision detach boundaries. Changing chunk
-length preserves the scalar forward objective at fixed weights (within numeric
-precision), but generally changes truncated gradients; it is not claimed to equal
-full-episode backpropagation. An uncommitted interrupted pass must clear its
-partial gradient before recomputing from episode starts.
+## Persistent exploration
 
-## Event-only recurrent memory
-
-Transitions supply seven gross public facts: actual sunlight gained/spent, zombies
-spawned/defeated/physically removed, and plants added/removed. Any positive counter
-triggers a write. Actual capped gains, additions and losses remain separate.
-Initial entities are not fabricated events. One transition makes one entry;
-separate zero-time operations at the same tick remain separate entries.
-
-An entry is consumed once before the next decision, using the resulting board.
-Otherwise hidden/cell remain exactly unchanged. Time, movement, nonlethal damage,
-cooldown and rejection alone never write; a rejection concurrent with a qualifying
-world event does. Memory resets to zero. Recovery includes pending facts and time
-since the previous write, preventing lost or repeated event consumption.
-
-At writes, the 32-wide entity summary, 64-wide scalar features and 32-wide event
-projection feed the 256-unit LSTM. Sun uses the existing cost scale, counts the
-public count scale, and elapsed time log1p(ticks/tick_rate), without clipping.
-Every decision fuses its current summary/scalars with latest memory into 256 Q-head
-features. Action/outcome embeddings are absent; evidence remains in trajectories.
-
-Fitting packs genuine event rows per episode chronologically, excludes padding,
-then gathers latest memory onto all decision rows. Quiet rows still supervise
-current-state predictions. Detach boundaries count decisions, not events:
-defaults stay 256 decisions, four whole-cohort passes, Adam learning rate 0.0003
-and clipping limit 5. Quiet chunks carry state forward. Deterministic memory-read
-backward avoids repeated-index atomic accumulation during recovery.
-
-Tile exploration uses epsilon(g)=0.5*(0.01/0.5)^min(g/10000,1).
-Outside commitments the ten-way branch remains greedy; the tile coin applies only to the selected
-non-wait tile and can still select the greedy tile. Evaluation sets the tile
-probability to zero. The proposal remains the action selected for Q fitting.
-For n candidate tiles and greedy tile t*, the conditional probability is
-`p(t|s,b) = (1-epsilon) 1[t=t*] + epsilon/n`. Plants use empty tiles and digs
-use all tiles. Waiting has no tile coin; a full-board plant uses tile zero.
-Thus epsilon zero is greedy and epsilon one is uniform over the selected branch's
-tiles.
-
-After each accepted normal planting, a separate coin uses
-epsilon_plant(g)=0.1*(0.01/0.1)^min(g/10000,1). On firing, choose uniformly from
-the other seven species, independent of sun/cooldown. Commit until it can be
-planted or the episode ends: resource, cooldown and geometry blockers cause actual
-one-tick waits, never a paused simulator or timeout. Select its tile from current
-features with tile epsilon. An exploratory success does not fire another species
-coin. Original policy proposals are diagnostic; waits and exploratory proposals
-supervise their actual branch/tile Q-values with ordinary complete returns.
-The controller is not part of LSTM input or the network's action schema.
-
-Resolve both probabilities once per cohort from completed stage games and retain them through
-fitting and recovery. Stage promotion resets that progress. Deterministic
-evaluation temporarily disables exploration without advancing training counters.
-Entity encoder microbatching preserves frame order when reconstructing the LSTM
-sequence; it changes neither the group denominators nor optimizer boundaries.
-
-## Counterfactual supervision
-
-At every active decision, deterministic round-robin cursors select two distinct
-nonselected branches and up to two alternative tiles of the behavior branch.
-Alternative branch tiles are greedy under occupancy-only geometry; dig considers
-all tiles and a full-board plant proposes tile zero. Waiting has no tile probes.
-Sun and cooldown never filter these branches, and probing consumes no behavior RNG.
-
-An isolated simulator copies pre-decision state, RNG and proximity ledger for each
-probe. The frozen FP32 EMA teacher maintains its own history along actual execution.
-Each probe clones complete event-memory state after consuming actual pending facts,
-then observes only its own public events and duration. Its current board remains
-available even without a write. Forks are discarded, never updating actual or EMA
-history. Deduplication requires matching boards and event/timing inputs.
+Both exponential probabilities freeze throughout each cohort and restart on
+curriculum promotion. After g stage games:
 
 \[
-y_p=r^{train}_p+(1-d_p)\gamma^{\Delta t_p}
-       \max_b Q^-_b(s'_p,h'_p).
+\epsilon_{\rm tile}=0.5(0.01/0.5)^{\min(g/10000,1)},\qquad
+\epsilon_{\rm species}=0.1(0.01/0.1)^{\min(g/10000,1)}.
 \]
 
-Both probe roles bootstrap from the next **branch** head. Terminal probes have no
-bootstrap, including cutoffs; their time component uses the actual cohort median.
-Bootstrap values are collected with fixed EMA weights, and finalized targets remain
-fixed through all four passes. A branch probe supervises its branch and non-wait
-tile; a tile probe supervises only its proposed tile.
+The tile coin samples uniformly among candidate tiles. After an accepted normal
+planting, a species coin may choose uniformly among the other seven species.
+Ordinary one-tick waits persist until sun, cooldown and geometry permit planting.
+There is no timeout or defensive cancellation. Exploratory success never triggers
+another commitment. Actual controller proposals receive regression; original
+policy proposals remain diagnostic. Evaluation, demonstrations and probes do not
+run commitments or tile randomness.
 
-For head \(h\), let \(P_{h,b}\) contain all cohort probes supervising branch \(b\),
-and let \(B_h\) be its represented branches. Within each head/branch split outcomes
-50/50 when both exist; otherwise the sole stratum receives full weight. Define
-alpha_{h,b,o} accordingly, then average across represented branches and heads:
+## Bounded counterfactuals
+
+Every accepted planting, normal or exploratory, queues up to four distinct other
+tiles of its actual species. There are no alternative-species probes. Alternative
+tiles exclude the actual tile. Waits, digs, rejected plants and initial entities
+do not trigger probes. Separate zero-time plantings retain their order.
+Invalid rows execute nothing and consume no behavior RNG.
+
+Retain pre-plant simulator state, accounting/proximity ledgers and complete EMA
+memory after consuming source events. Gate copies with the pinned read-only
+legality mask, then authorize probes using actual acceptance after execution.
+Execute each alternative initial proposal ordinarily from the immutable source.
+Continue greedily with frozen EMA weights, without exploration. Stop on true
+terminal/cutoff, 30 simulated seconds from the pre-action tick (3000 ticks), or
+4096 executed transitions including the initial proposal. Limits do not invent
+defeat, force waits, or advance time. Horizon/cap endpoints bootstrap:
 
 \[
-L_{probe}=\frac1{|H|}\sum_{h\in H}\frac1{|B_h|}
-\sum_{b\in B_h}\sum_{o:|P_{h,b,o}|>0}
-\frac{\alpha_{h,b,o}}{|P_{h,b,o}|}
-\sum_{p\in P_{h,b,o}}\operatorname{Huber}_{1}(q_{h,p}-y_p),\qquad
-L_{auto}=L+0.25L_{probe}.
+y_p=\sum_{k=0}^{K_p-1}r^{\rm train}_{p,k}
+       +(1-d_p)\max_aQ^-_{\rm joint}(s_{p,K_p},h_{p,K_p},a).
 \]
 
-All denominators cover the whole cohort, so summing chunk contributions preserves
-weights when execution groups change. After one successful FP32 optimizer commit,
-\(\theta^-\leftarrow0.95\theta^-+0.05\theta\), exactly once. Its half-life is about
-14 updates; failed attempts never advance the EMA version. No optimizer owns EMA.
+Rewards accumulate in transition order; terminal penalties occur once and
+early Sunflower eligibility remains event-local. True terminal/cutoff endpoints
+do not bootstrap. Probe victories use the actual cohort's median.
+
+Each valid probe supervises its initial complete action once. Initial proposal
+acceptance determines its stratum, never continuation acceptance. For represented
+branches B and cohort counts P(b,o):
+
+\[
+L_{\rm probe}=\frac1{|B|}\sum_{b\in B}\sum_{o:P(b,o)>0}
+ \frac{\alpha_{b,o}}{P(b,o)}
+ \sum_{p\in(b,o)}{\rm Huber}_1(Q(s_p,h_p,a_p)-y_p),\qquad
+L_{\rm auto}=L_{\rm selected}+0.25L_{\rm probe}.
+\]
+
+After each successful Adam commit, EMA updates once as
+theta-minus = 0.95 theta-minus + 0.05 theta. Its own history follows actual
+execution; fork events never reach actual histories or trajectories.
+
+Auxiliary environments advance in short slices between real-decision rounds;
+their events and rewards never enter actual histories. Completed lanes retire
+immediately, with heavy control reporting every 64 continuation rounds.
+No ongoing simulations merge. Endpoint deduplication compares exact public
+entities/globals, gross events and elapsed timing, hidden and cell states before
+tail inference. Each proposal/outcome retains its own evidence and loss.
+
+Only another eligible planting lacking source capacity is held, with its
+preselected action and random draws unchanged. Canonical inactive storage rows
+during such gaps carry no supervision. Sequence preparation gathers each slot's
+actual decisions first; detach boundaries remain every 256 actual decisions,
+not scheduler rounds. Missing activity cannot end an unfinished history.
+
+Endpoint patches are exact-once by source row and tile-probe slot. Cohort targets
+and optimizer updates require all expected endpoints to be complete. Saving
+finishes issued decisions and drains auxiliary work; no temporary fork is saved.
 
 ## Demonstration preferences
 
-Verified replay facts are repriced with current coefficients; a single replay has
-zero time adjustment. For each accepted demonstration, compare the chosen branch
-against executable alternatives, and its tile against other executable tiles:
+Verified replay facts are repriced under current rewards without rewriting the
+recording. Regress the demonstrated complete-action value and compare that same
+value against other branches' best executable actions and other executable tiles
+of its branch:
 
 \[
 \ell_{i,h}=\frac1{|C_{i,h}|}\sum_{a\in C_{i,h}}
-\operatorname{softplus}(0.05-q_{i,h,selected}+q_{i,h,a}),\qquad
-L_{demo}=L+0.10(L_{rank,branch}+L_{rank,tile}).
+ {\rm softplus}(0.05-Q(s_i,h_i,a_i)+Q(s_i,h_i,a)),
+\qquad L_{\rm demo}=L_{\rm selected}+0.10(L_{\rm rank,branch}+L_{\rm rank,tile}).
 \]
 
-Each ranking head averages decisions within each demonstrated branch, then averages
-the represented branches. Empty competitor sets and rejected actions contribute
-zero; rejected actions retain complete-return regression. Ranking masks affect
-supervision only. Behavior branches remain unmasked and greedy. With both auxiliary
-weights zero, the shared selected-action loss remains exactly \(L\).
+Each ranking category averages decisions within demonstrated branches, then
+represented branches. Rejected demonstrations and empty competitor sets contribute
+no ranking; they retain selected regression. This normalization is unchanged.
 
-`tests/test_recurrent_training.py` checks hand-computed returns, independently
-computed group means, episode-batch gradient invariance, unequal lengths,
-inactive rewards, quiet/event/zero-tick inputs, isolated resets, exact weight
-transfer and exact collection/fitting recovery. The existing step/sequence and
-future-input controls check causality and forward agreement. These are numerical
-and implementation controls, not evidence of learning quality.
+## Controls
 
-Demonstration controls independently average wait/plant/dig errors over a
-five-decision, three-chunk episode and compare the published loss. Replay
-verification checks observation, action, outcome, public reward facts and terminal
-reconstruction; manifest identity, count and hash must agree. Initialization
-recomputes rewards from native replay observations/events using current coefficients
-before summing returns. Independent controls check asset losses of 50 and 100 sun,
-new rejection prices on a terminal tick, and changed win/loss rewards. Historical
-ledger prices never supply targets. Failed writes preserve the previous
-completed pass. Recording and verification commands are in [training](../training.md).
+`test_joint_q.py` independently checks maxima, species/placement attribution,
+gradient routing, unified probe strata, partition invariance and ranking anchors.
+`test_probe_rollouts.py` compares serial CPU with CUDA delayed shooting, mine
+arming, Sunflower production, limits, initial rejection, isolation and interrupted
+replay. Event recurrence, sparse gradients and current-board responsiveness belong
+in `test_transformer_lstm.py`; returns, optimizer/recovery and storage have
+their own suites. Passing controls establish semantics, not win-rate improvement.

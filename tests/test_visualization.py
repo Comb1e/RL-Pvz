@@ -193,10 +193,10 @@ def test_shared_checkpoint_reports_and_videos(smoke_cfg, tmp_path, monkeypatch):
     assert [m["completed_updates"] for m in metrics] == [1, 2]
     assert all(m["optimization"]["q_loss"] is not None for m in metrics)
     assert all(m["optimization"]["q_optimizer_steps"] > 0 for m in metrics)
-    assert all(m["optimization"]["branch_loss"] is not None for m in metrics)
+    assert all(m["optimization"]["selected_action_error"] is not None for m in metrics)
     for m in metrics:
         opt = m["optimization"]
-        assert (opt["tile_loss"] is not None) == (
+        assert (opt["placement_gap"] is not None) == (
             m["q_prefit"]["plant"]["count"] + m["q_prefit"]["dig"]["count"] > 0
         )
     assert metrics[-1]["rolling_by_task"]["easy"]["completed_games"] > 0

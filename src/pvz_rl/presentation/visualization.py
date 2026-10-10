@@ -363,8 +363,8 @@ def build_run_report(run, cfg=None):
 
     optimizer_panels = [
         ("q_loss", "Balanced Q loss"),
-        ("branch_loss", "First-level MSE"),
-        ("tile_loss", "Conditional tile MSE"),
+        ("selected_action_error", "Complete-action MSE"),
+        ("placement_gap", "Best-tile minus sampled-tile Q"),
         ("q_grad_norm", "Q gradient norm before clipping"),
         ("q_optimizer_steps", "Q optimizer steps per cohort"),
     ]

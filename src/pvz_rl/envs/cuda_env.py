@@ -17,7 +17,6 @@ from stable_baselines3.common.vec_env import VecEnv
 from pvz_rl.envs.actions import ActionSchema as A
 from pvz_rl.envs.cuda_accounting import AccountingCudaBatch
 from pvz_rl.envs.cuda_features import LEDGER_INDICES, METRIC_INDICES, CudaFeatures
-from pvz_rl.envs.encoding import width_bucket
 from pvz_rl.envs.rewards import REWARD_METRICS
 from pvz_rl.envs.scenarios import difficulty_weights, scenario
 from pvz_rl.learning.budget import budget_target
@@ -125,7 +124,6 @@ class CudaVecEnv(VecEnv):
         self.active_tasks, self._tasks = Counter(), {}
         self.enabled_envs = np.ones(cfg["training"]["n_envs"], dtype=bool)
         self._pending_spawns = np.zeros(cfg["training"]["n_envs"], dtype=np.int64)
-        self._plant_counts = np.zeros_like(self._pending_spawns)
         # All shipped scenario families preserve roster size. Lessons use smaller
         # rosters. Custom batches derive their capacity from the supplied cases.
         game = Game()
@@ -262,15 +260,8 @@ class CudaVecEnv(VecEnv):
             header[indices, HEADER.index("total_spawns")]
             - header[indices, HEADER.index("spawn_index")]
         )
-        self._plant_counts[indices] = header[indices, HEADER.index("np")]
 
-    def probe_width(self):
-        """Public-count bound: one new plant, pending zombies and two shots per plant."""
-        kept = self.features.summary_host[:, 0]
-        bound = kept + self._pending_spawns + 2 * self._plant_counts + 1
-        return width_bucket(int(bound[self.enabled_envs].max(initial=0)), self.features.limit)
-
-    def step_device(self, actions):
+    def step_device(self, actions, *, active=None):
         """Queue one decision's simulation, encoding and host record without waiting.
 
         Callers add their own copies to :attr:`handoff`, wait once, then call
@@ -287,11 +278,15 @@ class CudaVecEnv(VecEnv):
             except Exception as exc:
                 viewer.fail(exc)
             self.profiler.host("presentation", perf_counter() - presentation_started)
-        if self.training:
-            self.task_transitions.update(self._tasks[i] for i in np.flatnonzero(self.enabled_envs))
         self._step_active = self.enabled_envs.copy()
+        self._device_active = (
+            torch.as_tensor(self.enabled_envs, device=actions.device) if active is None else active
+        )
+        self.header_tensor[:, 17].copy_(self._device_active.long())
         _, reward = self.features.step(
-            self.cp.from_dlpack(actions.detach().contiguous()), publish=False
+            self.cp.from_dlpack(actions.detach().contiguous()),
+            publish=False,
+            observation_active=self.cp.asarray(self.enabled_envs),
         )
         h = self.header_tensor
         self.proposed_actions.copy_(actions)
@@ -305,7 +300,7 @@ class CudaVecEnv(VecEnv):
                 h[:, 0]
                 >= self.cfg["environment"]["cutoff_seconds"] * self.batch.rules.game["tick_rate"]
             )
-        ) & (h[:, 17] != 0)
+        ) & self._device_active
         timed_out = done & (h[:, 1] == 0)
         with self.profiler.track("transfer"):
             record = torch.cat(
@@ -330,9 +325,13 @@ class CudaVecEnv(VecEnv):
             )
         self._step_device_result = reward, done, timed_out
 
-    def step_host(self, *, autoreset=True):
+    def step_host(self, *, autoreset=True, active=None):
         """Interpret the completed step record after the handoff wait."""
         host = self._record.numpy()
+        if active is not None:
+            self._step_active = np.asarray(active, dtype=bool).copy()
+        if self.training:
+            self.task_transitions.update(self._tasks[i] for i in np.flatnonzero(self._step_active))
         self._update_public_counts(self._episode_host["header"].numpy(), slice(None))
         compact = host[:, RECORD_OUTCOME]
         self.last_transition_host = compact
@@ -351,7 +350,7 @@ class CudaVecEnv(VecEnv):
             raise RuntimeError("Invalid CUDA reward accounting or exhausted proximity ledger")
         summary = host[:, RECORD_SUMMARY].astype(np.int64)
         # Every game active during this step keeps its complete terminal record.
-        obs = self.features.publish(summary, self._step_active)
+        obs = self.features.publish(summary, self._step_active | self.enabled_envs)
         truncation = summary[:, 1:]
         infos = []
         for index, row in enumerate(compact):

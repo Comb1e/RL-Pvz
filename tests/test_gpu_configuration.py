@@ -18,10 +18,116 @@ def test_new_shared_run_defaults_and_explicit_parallelism():
     cfg = configured(args())
     assert simulator(cfg) == "cuda"
     assert cfg["training"]["n_envs"] == 128
-    assert cfg["training"]["method"] == "complete_return_event_lstm_v1"
+    assert cfg["training"]["method"] == "complete_return_joint_tile_probe_v1"
     for count in (3, 32, 64, 128, 256, 512, 1024):
         cfg = configured(args(n_envs=count))
         assert cfg["training"]["n_envs"] == count
+
+
+@pytest.mark.parametrize("artifact", ["autonomous", "demonstration"])
+@pytest.mark.parametrize("mode", ["init_from", "resume"])
+def test_previous_plant_probe_checkpoints_reject_before_cuda(tmp_path, monkeypatch, artifact, mode):
+    from zipfile import ZipFile
+
+    import torch
+
+    from pvz_rl.learning.exploration import EXPLORATION_PROTOCOL
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("Retired checkpoint reached simulator allocation")
+
+    monkeypatch.setattr("pvz_rl.learning.training_requirements._cuda_probe", forbidden)
+    monkeypatch.setattr("pvz_rl.envs.cuda_env.CudaVecEnv.__init__", forbidden)
+    if artifact == "autonomous":
+        path = tmp_path / "previous.zip"
+        with ZipFile(path, "w") as archive:
+            archive.writestr(
+                "protocol.json",
+                json.dumps(
+                    dict(
+                        policy="transformer_lstm_q_v4",
+                        optimizer="complete_return_joint_probe_v1",
+                        exploration=EXPLORATION_PROTOCOL,
+                    )
+                ),
+            )
+    else:
+        path = tmp_path / "previous.pt"
+        torch.save(dict(protocol="pvz-rl/demo-initialization-checkpoint-v4"), path)
+    with pytest.raises(ValueError, match="Retired|Unsupported|fresh|refit"):
+        if mode == "init_from":
+            from pvz_rl.learning.training import initial_weights
+
+            initial_weights(path, load_config())
+        else:
+            configured(args(resume=path))
+
+
+@pytest.mark.parametrize("fault", ["missing_scheduler", "scheduler_counts", "pending_evidence"])
+def test_incomplete_background_recovery_rejected_before_allocation(tmp_path, monkeypatch, fault):
+    from io import BytesIO
+    from zipfile import ZipFile
+
+    import numpy as np
+    import torch
+    from pvz_game import Rules
+
+    from pvz_rl.envs.encoding import ObservationEncoder
+    from pvz_rl.learning.checkpoints import (
+        AUTONOMOUS_STATE_PROTOCOL,
+        inspect_checkpoint,
+        protocol_for,
+    )
+    from pvz_rl.learning.collection_scheduler import CollectionScheduler
+    from pvz_rl.learning.cuda_buffer import CompleteGameBuffer
+    from pvz_rl.learning.exploration import CommittedPlantExploration
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("Incomplete checkpoint reached simulator allocation")
+
+    monkeypatch.setattr("pvz_rl.learning.training_requirements._cuda_probe", forbidden)
+    monkeypatch.setattr("pvz_rl.envs.cuda_env.CudaVecEnv.__init__", forbidden)
+    cfg = load_config()
+    count = cfg["training"]["n_envs"]
+    controller = CommittedPlantExploration(count, "cpu", 0.1, 0.5)
+    buffer = CompleteGameBuffer(tmp_path / "buffer", count, cfg=cfg)
+    try:
+        buffer.exploration = dict(plant_epsilon=0.1, tile_epsilon=0.5)
+        metadata = buffer.save(tmp_path / "saved")
+    finally:
+        buffer.close()
+    runtime = dict(
+        protocol=AUTONOMOUS_STATE_PROTOCOL,
+        buffer=metadata,
+        collection_scheduler=CollectionScheduler(count, "cpu").snapshot(),
+        teacher={},
+        teacher_memory={},
+        probe_schedule={},
+        compilation={},
+        pending_episodes={},
+        plant_exploration=controller.snapshot(),
+    )
+    if fault == "missing_scheduler":
+        runtime.pop("collection_scheduler")
+    elif fault == "scheduler_counts":
+        runtime["collection_scheduler"]["decisions"] = np.array([-1] * count)
+    else:
+        runtime["buffer"]["pending_probes"] = 1
+    stream = BytesIO()
+    torch.save(runtime, stream)
+    path = tmp_path / "incomplete.zip"
+    with ZipFile(path, "w") as archive:
+        archive.writestr("protocol.json", json.dumps(protocol_for(cfg["policy"]["kind"])))
+        archive.writestr("run.json", json.dumps(dict(config=cfg)))
+        archive.writestr("data", json.dumps(dict(plant_exploration_rate=0.1, exploration_rate=0.5)))
+        archive.writestr(
+            "observation-schema.json", json.dumps(ObservationEncoder(cfg, Rules()).schema())
+        )
+        archive.writestr("cohort-state.pt", stream.getvalue())
+        for name in ("policy.pth", "policy.optimizer.pth"):
+            archive.writestr(name, b"unread weights")
+    with pytest.raises(ValueError, match="Incomplete|Invalid collection"):
+        inspect_checkpoint(path)
 
 
 @pytest.mark.parametrize(

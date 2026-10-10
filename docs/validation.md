@@ -16,8 +16,10 @@ of incompatible input; do not exercise retired models as supported methods.
 | Public records, categories, caps and private-state exclusion | `test_observations.py`, `test_cuda_learning.py` |
 | Attention math, permutation/padding, recurrence, precision | `test_transformer_lstm.py` |
 | Active buckets, canonical slot/RNG controls, owned graph cache/phase lifetime | `test_transformer_lstm.py` |
-| Scratch isolation, valid-only probes, exact deduplication and bootstrap | `test_collection.py` |
-| Ragged storage, offsets, disk spill, pending bootstrap patches, ordered prefetch | `test_entity_storage.py` |
+| Public event parity, complete-state deduplication, inference graphs | `test_collection.py` |
+| Joint attribution, gradient routing, unified probe/ranking math | `test_joint_q.py` |
+| Background independence, source/lane isolation, FIFO backpressure, drain/recovery | `test_probe_rollouts.py` |
+| Ragged storage, exact-once endpoint patches, gap-free sequence maps and prefetch | `test_entity_storage.py` |
 | Proposals, execution, timing and event-only memory | `test_q_selection_fallback.py`, `test_environment.py`, `test_action_timing.py`, `test_recurrent_training.py` |
 | Reward arithmetic and attribution | `test_net_value.py`, `test_reward_contract.py`, `test_kill_rewards.py` |
 | Combined schedules, accepted triggers and persistent plant commitments | `test_exploration_schedule.py` |
@@ -35,14 +37,17 @@ values are intentional cases, not duplicate functionality.
 
 ## Running checks
 
-Collection ownership is `tests/test_collection.py`: serial/batched state and RNG
-isolation, gross CPU/CUDA public-event controls, unchanged EMA history,
-one-lane allocation fallback, exact device
-deduplication counterexamples, valid nonterminal representative inference and
-compiled inference buckets. Independent CPU/CUDA
-danger-zone/bootstrap controls live in `test_q_selection_fallback.py`; packed
-offset/spill/recovery controls live in `test_entity_storage.py`. Recurrent lifecycle
-tests cover interrupted collection and reconstruction without repeating probe math.
+Probe rollouts belong in `test_probe_rollouts.py`: independent serial CPU/CUDA
+controls cover delayed shooting, mine arming, Sunflower income, strict stops,
+zero-time ordering, initial rejection, isolated histories and source-decision
+interruption/replay. Actual accepted normal/exploratory plants authorize immutable
+pre-plant forks; waits, digs and rejections run none. Include zero-time placement
+ordering, configurable layouts, limited alternative tiles and post-execution
+Ctrl+C completion without missing or duplicated evidence.
+`test_joint_q.py` owns derived maxima, selected-action
+gradient routing, unified strata, missing strata and ranking anchors.
+Collection graphs and complete-memory dedup counterexamples belong in
+`test_collection.py`; storage/spill/recovery remains in `test_entity_storage.py`.
 Event-only identity/pending recovery, controlled current-state sensitivity and
 independent serial sparse gradients belong in `test_transformer_lstm.py`.
 Hierarchical outcome weights and missing strata belong in `test_q_math.py`;
@@ -53,9 +58,12 @@ events; `test_training_progress_context.py` covers detailed snapshot preservatio
 and prohibition on reading active fitting accumulators. Early Sunflower CPU/CUDA
 threshold, ordered production and cap controls belong in `test_reward_contract.py`;
 demonstration repricing remains in its initialization suite. Committed recovery and
-old-framework weight-only reuse belong in recurrent integration; storage owns
+fresh-framework weight rejection belong in recurrent integration; storage owns
 controller provenance corruption/spill. Terminal ownership includes current-cohort
 reward means, finalization, reset and narrow-width retention.
+Storage controls cover single, default-eight and maximum-53 layouts through spill,
+recovery and pinned prefetch, including interrupted buffer reuse. Benchmark cutoff
+controls retain zero-time successes rather than assuming every decision advances time.
 
 ### Active-only execution controls
 
@@ -67,8 +75,8 @@ together; do not establish parity by weakening constraints:
   outputs/event memory against independent serial calls, freeze inactive memory,
   and check original slot-shaped RNG draws. Include empty/capped entity lists,
   non-power-of-two batches and active-only tile-head behavior.
-- The collection suite owns unchanged proposals/RNG/probe schedules, one-lane
-  allocation fallback, compact scratch prefix views and valid-only dedup before
+- Collection/probe controls own unchanged proposals/RNG/tile schedules, one-lane
+  allocation fallback, occupied prefix views and exact endpoint dedup before
   bootstrap. Source-ID controls must copy the correct original RNG/accounting/
   proximity state and scatter public features/metadata to canonical rows for
   noncontiguous live slots, without reducing private capacity or probe coverage.
@@ -76,19 +84,22 @@ together; do not establish parity by weakening constraints:
   host rows without copying inactive globals just to preserve shape. Equal boards with
   different globals, gross events or elapsed timing remain distinct. Disabled,
   inactive and terminal probes must not cause next-state network work; terminal
-  bootstrap remains zero. GPU representatives become host-visible at the existing
-  handoff, not through a new ordinary count wait.
+  bootstrap remains zero. Owned endpoints and auxiliary control records share
+  existing handoffs; heavy reporting occurs every 64 continuation rounds.
 - The model suite owns per-encoder LRU hits/eviction, owned replay outputs, retired
   capture release at the existing handoff and separate fitting/collection owners.
   Cover zero entries, cache limits, headroom before/after admission, allocation
   failure and capture failure without stale-buffer reuse or changed eager math.
   Collection/fitting/collection boundaries must release the outgoing captures;
   no-grad direct graphs and fitting AOT graphs use the same all-platform contract.
-- Storage owns canonical delayed bootstrap patching in RAM and spilled blocks,
+- Storage owns canonical exact-once endpoint patching in RAM and spilled blocks,
   invalid/nonfinite updates and rejection after target finalization. Recurrent
   integration owns last-copy checkpoint/finalization drains, resumed state with
   rebuilt execution maps/caches and saved compilation-status failure handling,
-  including unavailable status. Those controls must not change recovery protocols.
+  including unavailable status. Sequence maps must charge/spill their indices and
+  release on early close; capacity gaps count as neither decisions nor resets.
+  Protocol inspection rejects missing scheduler counters and pending evidence
+  before simulator allocation, as well as older weights/resumes.
 - Progress owns independent host-clock controls for shrinking games, interval
   versus lifetime counts, phase/cohort changes, restored counters and zero-duration
   `n/a`. Compare transitions/collection seconds and transitions/active-game seconds
@@ -107,7 +118,8 @@ When test execution is authorized and the GPU is available, select owning suites
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest -q `
-  tests/test_collection.py tests/test_transformer_lstm.py tests/test_entity_storage.py `
+  tests/test_collection.py tests/test_probe_rollouts.py tests/test_joint_q.py `
+  tests/test_transformer_lstm.py tests/test_entity_storage.py `
   tests/test_progress.py tests/test_training_progress_context.py tests/test_recurrent_training.py
 ```
 
@@ -137,3 +149,15 @@ Default snapshot checks do no fitting. Separate setup, cold capture, warmed tria
 post-fit trials, active/padded/unique work counts and phase memory; never infer
 improvement from configured capacity or an unexecuted benchmark matrix. Publish
 new verification and raw evidence only after the parent implementation's results.
+
+
+## Background scheduling controls
+
+The rollout suite owns independent CPU/CUDA endpoints, continued real/planting
+slot progress, local FIFO backpressure, retained proposals/draws, repeated
+zero-time jobs, no recursive triggering and source/lane allocation fallback.
+Storage controls own out-of-order patches, spilled rows, missing/duplicate evidence,
+and actual-decision sequence gathering across inactive gaps.
+Recovery controls drain before saving, compare restored execution and reject
+incomplete contracts before simulator allocation. Benchmark actual windows and
+drain time separately; passing short controls is not a throughput guarantee.
