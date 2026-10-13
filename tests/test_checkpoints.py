@@ -29,6 +29,7 @@ def demo_payload():
     return dict(
         protocol=DEMO_PROTOCOL,
         model_storage_protocol=MODEL_STATE_PROTOCOL,
+        precision_contract="bf16_master",
         config=compact,
         config_digest=digest(compact),
         model=policy.state_dict(),
@@ -78,7 +79,11 @@ def test_demo_rejects_incomplete_protocol_and_invalid_weights(tmp_path, demo_pay
 
 @pytest.mark.parametrize("fault", ["old_autonomous", "missing_model", "hidden", "teacher_hidden"])
 def test_runtime_has_no_recurrent_state_and_requires_both_protocols(fault):
-    state = dict(protocol=AUTONOMOUS_STATE_PROTOCOL, model_storage_protocol=MODEL_STATE_PROTOCOL)
+    state = dict(
+        protocol=AUTONOMOUS_STATE_PROTOCOL,
+        model_storage_protocol=MODEL_STATE_PROTOCOL,
+        precision_contract="bf16_master",
+    )
     validate_runtime_identity(state)
     if fault == "old_autonomous":
         state["protocol"] = "pvz-rl/tile-probe-event-lstm-state-v5"

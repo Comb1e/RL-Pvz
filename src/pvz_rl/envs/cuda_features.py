@@ -32,7 +32,7 @@ class CudaFeatures:
     """Canonical observations, geometry masks and rewards for one simulator batch.
 
     Records are written into a persistent ``[rows, max_entities]`` store; ``rows``
-    may exceed the batch so successive probe passes keep their observations
+    may exceed the batch so successive active passes keep their observations
     (``offset`` selects the destination rows). Encoding never reads the device:
     the per-row summary (kept count and truncations) reaches the host through
     the caller's step handoff, and :meth:`publish` then chooses a fixed padding

@@ -2,8 +2,9 @@
 
 The six signed components are terminal, development, invalid planting, empty
 digging, home proximity and victory time. All component accounting and return
-accumulation use FP64; finalized fitting targets use FP32. Reporting sums the six
-components. Fitting changes only the development coefficient:
+accumulation use FP64; trajectory targets are stored in FP32 and cast to BF16 for
+model fitting. Reporting sums the six components. Fitting changes only the
+development coefficient:
 
 \[
 r^{raw}=r^{terminal}+r^{development}+r^{invalid\ plant}+r^{empty\ dig}
@@ -16,7 +17,7 @@ The shipped terminal rewards are +1 for victory and -1 for defeat or cutoff
 (`reward.loss_penalty=1.0`); this architecture change does not alter them. The multiplier
 is `training.objective.dense_multiplier=10`. The same interface builds demonstration
 and autonomous targets. [Sequential Q learning](sequential-training.md) specifies the
-selected-action, counterfactual and demonstration losses. Maximum net value and
+selected-action, consistency and demonstration losses. Maximum net value and
 drawdown remain diagnostics.
 
 Assets are available sun plus each living plant's purchase cost times its
@@ -91,8 +92,7 @@ The ledger remembers the deepest stage by zombie ID. Initial entities start at
 their initial stages; new spawns start uncharged. Only threats surviving the
 transition are considered. Death never refunds a charge; headless zombies cannot
 breach and incur none. Maximum cost is -0.020 per zombie, or -0.30 for fifteen.
-IDs remain private accounting metadata. Recovery restores the ledger, and each
-isolated probe copies it before execution.
+IDs remain private accounting metadata. Recovery restores the ledger.
 
 ## Cohort victory time
 

@@ -33,6 +33,7 @@ from pvz_rl.learning.checkpoints import MODEL_STATE_PROTOCOL
 from pvz_rl.learning.flat_q import batch_loss
 from pvz_rl.learning.objective import (
     components,
+    consistency_diagnostics,
     demonstration_rank_loss,
     ranking_counts,
     training_rewards,
@@ -358,8 +359,8 @@ def initialize_demo(
         devices=[torch.device(device)] if str(device).startswith("cuda") else []
     ):
         teacher = TwoStageTransformerPolicy(cfg).to(device).eval().requires_grad_(False)
-    teacher.load_state_dict(model.state_dict())
-    optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
+    teacher.load_state_dict(model.runtime_state_dict())
+    optimizer = torch.optim.Adam(model.master_parameters(), lr=learning_rate)
     observations, actions, returns = _training_tensors(demonstration)
     actions = actions.to(device)
     returns = returns.to(device)
@@ -397,13 +398,9 @@ def initialize_demo(
     for pass_index in range(passes):
         if time.monotonic() - started >= time_budget_minutes * 60:
             break
-        optimizer.zero_grad(set_to_none=True)
-        pass_loss = 0.0
+        model.zero_grad(set_to_none=True)
         rank_accuracy = torch.zeros(4, device=device)
-        ranking_total = 0.0
-        consistency_total = 0.0
-        total_loss = 0.0
-        gaps = []
+        pass_metrics = torch.zeros(10, device=device, dtype=torch.float64)
         for start in range(0, len(observations), batch_size):
             stop = min(start + batch_size, len(observations))
             current = collate_observations(observations[start:stop], device)
@@ -426,28 +423,44 @@ def initialize_demo(
             )
             loss = loss + objective["demo_rank_loss_weight"] * rank
             rank_accuracy += accuracy.detach()
-            ranking_total += float(rank.detach())
             loss.backward()
-            pass_loss += float(model._last_selected_loss)
-            consistency_total += float(model._last_species_consistency_loss)
-            total_loss += float(loss.detach())
-            gaps.extend(gap.cpu().tolist())
-        torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
+            model.accumulate_master_gradients()
+            model.clear_runtime_grad(set_to_none=True)
+            pass_metrics += torch.cat(
+                (
+                    torch.stack(
+                        (
+                            model._last_selected_loss.double(),
+                            model._last_species_consistency_loss.double(),
+                            rank.detach().double(),
+                            loss.detach().double(),
+                            gap.double().sum(),
+                            gap.new_tensor(gap.numel(), dtype=torch.float64),
+                        )
+                    ),
+                    model._last_species_consistency_metrics,
+                )
+            )
+        torch.nn.utils.clip_grad_norm_(model.master_parameters(), max_grad_norm)
         optimizer.step()
+        model.sync_runtime_from_masters()
         with torch.no_grad():
             for target, source in zip(teacher.parameters(), model.parameters(), strict=True):
                 target.lerp_(source, 1 - objective["ema_decay"])
         completed += 1
         coverage += torch.bincount(action_parts(actions)[0].detach().cpu(), minlength=10)
         scores = rank_accuracy.cpu().tolist()
+        pass_loss, consistency_total, ranking_total, total_loss, gap_sum, gap_n, *totals = (
+            pass_metrics.cpu().tolist()
+        )
         curves.append(
             {
                 "pass": completed,
                 "loss": pass_loss,
                 "ranking_loss": ranking_total,
-                "species_consistency_loss": consistency_total,
+                **consistency_diagnostics(consistency_total, totals),
                 "total_loss": total_loss,
-                "placement_gap": float(np.mean(gaps)) if gaps else None,
+                "placement_gap": gap_sum / gap_n if gap_n else None,
                 "branch_ranking_accuracy": scores[0] / scores[1] if scores[1] else None,
                 "tile_ranking_accuracy": scores[2] / scores[3] if scores[3] else None,
                 "decisions": len(actions),
@@ -457,6 +470,7 @@ def initialize_demo(
             {
                 "protocol": CHECKPOINT_PROTOCOL,
                 "model_storage_protocol": MODEL_STATE_PROTOCOL,
+                "precision_contract": "bf16_master",
                 "observation_schema": model.layout.schema(),
                 "config_digest": digest(checkpoint_cfg),
                 "config": checkpoint_cfg,

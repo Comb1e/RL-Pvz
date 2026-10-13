@@ -4,9 +4,16 @@ import numpy as np
 import torch
 from torch.nn import functional as F
 
-from pvz_rl.policy.sequential_q import action_groups, action_parts, outcome_weights
+from pvz_rl.policy.sequential_q import (
+    action_groups,
+    action_parts,
+    candidate_maxima,
+    greedy_choice,
+    outcome_weights,
+    tile_candidates,
+)
 
-OBJECTIVE_PROTOCOL = "complete_return_sequential_tile_probe_v1"
+OBJECTIVE_PROTOCOL = "complete_return_sequential_no_probe_v1"
 COMPONENTS = (
     "terminal",
     "development",
@@ -68,35 +75,33 @@ def finalize_episode_metrics(rows, cfg, *, median=None):
     return median
 
 
-def probe_loss(policy, observations, probes, counts, delta, *, predictions=None):
-    """probes[..., :] = valid, proposal, target, initial acceptance."""
-    valid = probes[..., 0].bool()
-    source, slot = valid.nonzero(as_tuple=True)
-    if not len(source):
-        return next(policy.parameters()).sum() * 0
-    chosen = probes[source, slot]
-    branch, _ = action_parts(chosen[:, 1].long())
-    target = chosen[:, 2]
-    if predictions is None:
-        tiles = policy.conditional_tiles(observations, branch, rows=source)
-        _, positions = action_parts(chosen[:, 1].long())
-        predictions = tiles.gather(1, positions[:, None]).flatten()
-    weights = outcome_weights(
-        counts,
-        device=predictions.device,
-        dtype=predictions.dtype,
-        accepted_share=policy.cfg["training"]["objective"]["accepted_outcome_share"],
-    )
-    accepted = chosen[:, 3].long()
-    error = F.huber_loss(predictions, target, reduction="none", delta=delta)
-    return (error * weights[branch, accepted]).sum()
+@torch.no_grad()
+def species_consistency_targets(online_tiles, ema_tiles, masks, branches):
+    """Select with online geometry values and evaluate with the frozen EMA."""
+    selected = greedy_choice(online_tiles.detach(), tile_candidates(masks, branches))
+    targets = ema_tiles.detach().gather(1, selected[:, None]).flatten()
+    gaps = candidate_maxima(ema_tiles.detach(), masks, branches) - targets
+    return targets, selected, gaps
 
 
-def species_consistency_loss(species, targets, actions, accepted, counts, *, accepted_share=0.5):
-    """Non-wait branch regression toward detached conditional EMA maxima."""
+def consistency_diagnostics(loss, totals):
+    """Publish pass totals only; undefined non-wait statistics remain absent."""
+    absolute, saturated, gaps, count = totals
+    return {
+        "species_consistency_loss": loss if count else None,
+        "species_consistency_mae": absolute / count if count else None,
+        "species_consistency_saturation_fraction": saturated / count if count else None,
+        "species_selection_evaluation_gap": gaps / count if count else None,
+    }
+
+
+def species_consistency_loss(
+    species, targets, actions, accepted, counts, *, delta=1.0, accepted_share=0.5
+):
+    """Balanced MSE-matched Huber toward detached double-estimator targets."""
     branches, _ = action_parts(actions)
     predictions = species.gather(1, branches[:, None]).flatten()
-    errors = (predictions - targets.detach()).square()
+    errors = 2 * F.huber_loss(predictions, targets.detach(), reduction="none", delta=delta)
     weights = outcome_weights(
         counts, device=species.device, dtype=species.dtype, accepted_share=accepted_share
     )

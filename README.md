@@ -1,20 +1,21 @@
 # PVZ plant research
 
 Record a human Plants vs. Zombies game, initialize a stateless two-stage
-Transformer Q policy, then train and evaluate it on a separate, pinned 100 Hz
-simulator. One Transformer selects a species, wait or dig; an independent
-Transformer scores 45 tiles for the selected plant/dig branch. Both read only
-the current public board. Accepted plantings create same-species background
-tile probes while real games continue.
+Transformer Q policy, then train and evaluate it with the pinned simulator.
+The species Transformer selects a plant, wait or dig; the independent tile
+Transformer scores 45 tiles for the selected branch. Both read only the current
+public board. Planting creates no counterfactual rollout.
 
-Fresh weights are required. Existing verified recordings can produce a new
-initialization; previous checkpoints cannot be reused. Parameters live in
+Fresh weights are required for `complete_return_sequential_no_probe_v1`.
+Existing verified recordings can produce a new initialization in an unused directory;
+previous checkpoints, including earlier two-stage `human-init\initialization.pt`,
+cannot initialize or resume this objective. Preserve their files. Parameters live in
 [src/pvz_rl/data/train.toml](src/pvz_rl/data/train.toml).
 
 ## Requirements
 
 Python 3.12, Git and the pinned game package. Recording needs pygame.
-Autonomous training requires NVIDIA CUDA; demonstration fitting defaults to CPU.
+Autonomous training requires NVIDIA CUDA with BF16 support.
 
 ## Installation
 
@@ -34,11 +35,11 @@ Record one easy game using unused output paths; finish with a natural win or los
   --output runs\human-1000.pvzdemo --archive runs\human-1000.jsonl
 ```
 
-Follow [recording and training](docs/training.md) to initialize, train, resume or
-evaluate. Demonstrations use 20 fitting passes; autonomous cohorts use four.
-Fresh runs use current settings. Current-version resume retains learning/reward
-settings and refreshes execution/logging controls. Background probes and both
-Transformers share GPU resources; no throughput or win-rate improvement is promised.
+Use [recording and training](docs/training.md) to initialize, train, resume or
+evaluate. Demonstration fitting uses 20 passes; autonomous cohorts use four.
+Runtime inference and fitting use BF16 model parameters; optimization uses
+separate FP32 master weights and FP32 Adam state. INT8/INT4 paths are not
+implemented.
 
 ## Common checks
 

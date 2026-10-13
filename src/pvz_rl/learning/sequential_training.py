@@ -8,29 +8,37 @@ import torch
 
 from pvz_rl.envs.cuda_features import REWARD_FIELDS
 from pvz_rl.envs.encoding import ENTITY_WIDTH, PackedEntityBatch
-from pvz_rl.envs.probes import ProbePool
-from pvz_rl.learning.batch_transport import BatchPrefetch, batch_rows
+from pvz_rl.learning.batch_transport import BatchPrefetch, FittingSpool, batch_rows
 from pvz_rl.learning.cohort import CohortPhase, atomic_transition, check_transition_interruption
 from pvz_rl.learning.collection_scheduler import CollectionScheduler
 from pvz_rl.learning.cuda_q import CudaCohortLifecycle
 from pvz_rl.learning.exploration import CommittedPlantExploration
 from pvz_rl.learning.flat_q import batch_loss
-from pvz_rl.learning.objective import COMPONENTS, finalize_episode_metrics
+from pvz_rl.learning.objective import (
+    COMPONENTS,
+    OBJECTIVE_PROTOCOL,
+    consistency_diagnostics,
+    finalize_episode_metrics,
+)
 from pvz_rl.policy.active_batch import ActiveBatchPlan
 from pvz_rl.policy.cudagraph_backend import EncoderCompilationError
 from pvz_rl.policy.runner import PolicyRunner
 from pvz_rl.policy.two_stage_transformer import TwoStageTransformerPolicy
 
 
-def flat_batches(buffer, decision_budget):
-    with closing(batch_rows(buffer, decision_budget)) as source:
+def flat_batches(buffer, decision_budget, spool=None):
+    if spool is not None:
+        for rows, packed in spool.iter_batches(decision_budget):
+            yield rows, buffer.observations_from_packed(packed)
+        return
+    with closing(batch_rows(buffer, decision_budget, spool=spool)) as source:
         for rows in source:
             yield rows, buffer.observations(rows)
 
 
 class CudaSequentialQ(CudaCohortLifecycle):
     policy_protocol = "two_stage_transformer_q_v1"
-    optimizer_version = "complete_return_sequential_tile_probe_v1"
+    optimizer_version = OBJECTIVE_PROTOCOL
 
     def _setup_model(self):
         super()._setup_model()
@@ -78,18 +86,13 @@ class CudaSequentialQ(CudaCohortLifecycle):
             device=self.device,
         )
         self._ensure_teacher()
-        if getattr(self, "_probes", None) is None:
-            self._probes = ProbePool(self.env)
         self._scheduler = CollectionScheduler(self.n_envs, self.device)
-        self._probes.tile_cursor.zero_()
-        self._probes.plant_cursor.zero_()
-        self._probes.profiler.flush()
-        self._probes.profiler.seconds.clear()
         if self.cfg["training"]["performance"]["compile_kernels"]:
             for encoder in self._teacher.encoders:
                 if encoder.compilation_status == "disabled":
                     encoder.enable_compilation()
         self._batch_iterator = None
+        self._fitting_spool = None
         self._reset_execution()
 
     def _ensure_teacher(self):
@@ -98,7 +101,7 @@ class CudaSequentialQ(CudaCohortLifecycle):
                 self._teacher = (
                     TwoStageTransformerPolicy(self.cfg).to(self.device).eval().requires_grad_(False)
                 )
-            self._teacher.load_state_dict(self.policy.state_dict())
+            self._teacher.load_state_dict(self.policy.runtime_state_dict())
             self._teacher_version = getattr(self, "_teacher_version", 0)
 
     @torch.no_grad()
@@ -106,13 +109,12 @@ class CudaSequentialQ(CudaCohortLifecycle):
         self._ensure_teacher()
         decay = self.cfg["training"]["objective"]["ema_decay"]
         for target, source in zip(
-            self._teacher.parameters(), self.policy.parameters(), strict=True
+            self._teacher.runtime_parameters(), self.policy.runtime_parameters(), strict=True
         ):
             target.lerp_(source, 1 - decay)
         self._teacher_version += 1
 
     def _finalize_rewards(self, callback):
-        self._drain_probes()
         self.env.handoff.clear()
         self._buffer.reserve_staging(0)
         summary = self._buffer.finalize_rewards()
@@ -141,7 +143,6 @@ class CudaSequentialQ(CudaCohortLifecycle):
 
     def _phase(self, phase, callback):
         if phase == CohortPhase.FIT:
-            self._drain_probes()
             for encoder in self.policy.encoders:
                 encoder.release_collection()
             if getattr(self, "_teacher", None) is not None:
@@ -149,47 +150,17 @@ class CudaSequentialQ(CudaCohortLifecycle):
                     encoder.release_collection()
             if hasattr(self, "_collection_packed"):
                 del self._collection_packed
-            if getattr(self, "_probes", None) is not None:
-                self._stats["probe_auxiliary_capacity"] = self._probes.capacity
-                self._probes.release_workspaces()
             torch.cuda.empty_cache()
             self.env.cp.get_default_memory_pool().free_all_blocks()
             self._stats.setdefault("phase_memory", []).append(self._phase_memory("fit_entry"))
         super()._phase(phase, callback)
-
-    def _drain_probes(self):
-        scheduler = getattr(self, "_scheduler", None)
-        probes = getattr(self, "_probes", None)
-        if scheduler is None or probes is None or getattr(self, "_draining_probes", False):
-            return
-        if not scheduler.pending.any() and not probes.has_work:
-            return
-        self._draining_probes = scheduler.draining = True
-        started = perf_counter()
-        callback = self._collection_callback
-        reporter = getattr(callback, "progress", None)
-        if reporter is not None:
-            reporter.emit("Draining background tile probes before saving/fitting", force=True)
-        try:
-            with atomic_transition():
-                while scheduler.pending.any() or probes.has_work:
-                    self._collect_step(callback, draining=True)
-        finally:
-            scheduler.draining = self._draining_probes = False
-        self._stats["probe_drain_seconds"] = (
-            self._stats.get("probe_drain_seconds", 0.0) + perf_counter() - started
-        )
-        if reporter is not None:
-            reporter.emit("Background tile probe drain complete", force=True)
 
     def _collect_step(self, callback, *, draining=False):
         if not draining:
             check_transition_interruption()
         self._collection_callback = callback
         env = self.env
-        self._probes.inference_metrics = self._probes._empty_metrics()
         with torch.no_grad(), env.device_context():
-            self._probes._ensure(self._teacher)
             unfinished = env.enabled_envs.copy()
             new = self._scheduler.ready(unfinished)
             issued_host = new | self._scheduler.pending
@@ -269,14 +240,7 @@ class CudaSequentialQ(CudaCohortLifecycle):
                 columns = torch.zeros(self.n_envs, 24, device=self.device)
             columns, issued = self._scheduler.retain(columns, new)
             actions = columns[:, 1].long()
-            self._probes.ema_version = self._teacher_version
-            executing = self._probes.reserve(
-                self._teacher,
-                actions,
-                masks,
-                issued,
-                self._scheduler.order,
-            )
+            executing = issued
             with env.profiler.track("encoding"):
                 counts = torch.where(executing, env.features.summary_tensor[: self.n_envs, 0], 0)
                 offsets = counts.cumsum(0) - counts
@@ -309,30 +273,16 @@ class CudaSequentialQ(CudaCohortLifecycle):
                 exploration_host = env.handoff.enqueue_fields(
                     "exploration", dict(coins=species_coin, pending=self._plant_exploration.pending)
                 )
-            self._probes.advance()
             previous_wait = env.handoff.wait_seconds
             env.handoff.wait()
-            self._probes.consume_transfers(self._buffer)
-            self._probes.finish_slice()
             for encoder in self.policy.encoders:
                 encoder.release_retired()
             for encoder in self._teacher.encoders:
                 encoder.release_retired()
             env.profiler.host("host_synchronization", env.handoff.wait_seconds - previous_wait)
-            active = self._probes._prepared["executing"].numpy().copy()
+            active = executing.cpu().numpy().copy()
             next_obs, _, dones, _, _, infos = env.step_host(autoreset=False, active=active)
             rows["active"] = active
-            start_row = self._buffer.size
-            expected = self._probes.commit(
-                active,
-                env.last_action_result_host[:, 0].astype(bool),
-                host["columns"].numpy()[:, 1],
-                host["counts"].numpy(),
-                start_row + np.arange(self.n_envs),
-                cohort=self.cohort_number,
-                decisions=self._scheduler.decisions,
-            )
-            rows["probe_expected"] = rows["probe_pending"] = expected
             self._scheduler.commit(issued_host, active)
             if not bool(host["valid"]):
                 raise ValueError("Q values must be finite and every decision needs a legal action")
@@ -371,13 +321,9 @@ class CudaSequentialQ(CudaCohortLifecycle):
             rows["home_entries"] = env.last_reward_parts_host[
                 :, [REWARD_FIELDS.index(k) for k in ("home_outer_entries", "home_inner_entries")]
             ]
-            if len(self._probes.profiler.pending) >= 128:
-                self._probes.profiler.flush()
-            staging = (
-                env.handoff.nbytes + self._scheduler.retained_bytes + self._probes.workspace_bytes
-            )
+            staging = env.handoff.nbytes + self._scheduler.retained_bytes
             if not self._buffer.reserve_staging(staging):
-                raise MemoryError("RAM budget cannot hold counterfactual collection staging")
+                raise MemoryError("RAM budget cannot hold actual collection staging")
             presentation_started = perf_counter()
             env.action_journal.record_batch_safe(
                 rows,
@@ -403,42 +349,7 @@ class CudaSequentialQ(CudaCohortLifecycle):
             for bucket in plan.buckets:
                 key = str(bucket.entity_width)
                 widths[key] = widths.get(key, 0) + len(bucket.slot_ids)
-            probe_totals = self._stats.setdefault(
-                "probe_inference_rows", dict(logical_rows=0, unique_rows=0, padded_rows=0)
-            )
-            for key in probe_totals:
-                probe_totals[key] += self._probes.inference_metrics[key]
-            rollout_totals = self._stats.setdefault(
-                "probe_rollout_work",
-                dict(
-                    rollout_transitions=0,
-                    rollout_logical_rows=0,
-                    rollout_padded_rows=0,
-                    rollout_enqueue_seconds=0.0,
-                    stop_reasons={},
-                    accepted_plant_triggers=0,
-                    tile_probes=0,
-                ),
-            )
-            for key in (
-                "rollout_transitions",
-                "rollout_logical_rows",
-                "rollout_padded_rows",
-                "rollout_enqueue_seconds",
-                "accepted_plant_triggers",
-                "tile_probes",
-            ):
-                rollout_totals[key] += self._probes.inference_metrics[key]
-            for reason, count in self._probes.inference_metrics["stop_reasons"].items():
-                rollout_totals["stop_reasons"][reason] = (
-                    rollout_totals["stop_reasons"].get(reason, 0) + count
-                )
-            self._probes.inference_metrics["workspace_bytes"] = self._probes.workspace_bytes
-            self._stats["probe_workspace_bytes"] = max(
-                self._stats.get("probe_workspace_bytes", 0), self._probes.workspace_bytes
-            )
             self.collection_execution = dict(
-                **self._probes.telemetry(),
                 capacity_blocked_slots=int(self._scheduler.pending.sum()),
                 scope="current_cohort",
                 active_games=int(env.enabled_envs.sum()),
@@ -457,12 +368,6 @@ class CudaSequentialQ(CudaCohortLifecycle):
                         )
                     }
                     for name, network in (("online", self.policy), ("ema", self._teacher))
-                },
-                probe_inference=dict(self._probes.inference_metrics),
-                probe_inference_totals=dict(probe_totals),
-                probe_rollout_work={
-                    **rollout_totals,
-                    "stop_reasons": dict(rollout_totals["stop_reasons"]),
                 },
                 phase_memory=list(self._stats.get("phase_memory", [])),
                 timings=env.profiler.snapshot(),
@@ -499,23 +404,19 @@ class CudaSequentialQ(CudaCohortLifecycle):
                 self.training_games += sum("episode_metrics" in info for info in active_infos)
             callback.update_locals({"infos": active_infos, "dones": dones})
             # Publish the phase before callbacks may request an interruption.
-            if (
-                not env.enabled_envs.any()
-                and not self._probes.has_work
-                and not self._scheduler.pending.any()
-            ):
+            if not env.enabled_envs.any() and not self._scheduler.pending.any():
                 self._phase(CohortPhase.FINALIZE_REWARDS, callback)
             if not callback.on_step() and not draining:
                 raise KeyboardInterrupt
 
     def _reset_execution(self):
-        precision = self.cfg["training"].get("performance", {}).get("fit_precision", "fp32")
+        precision = self.cfg["training"].get("performance", {}).get("fit_precision", "bf16_master")
         performance = self.cfg["training"].get("performance", {})
         self.execution_state = dict(
             requested_precision=precision,
             precision=precision,
-            microbatch=self.cfg["policy"]["encoder_microbatch"],
-            token_budget=self.cfg["policy"]["encoder_token_budget"],
+            microbatch=performance.get("fit_encoder_microbatch", 192),
+            token_budget=performance.get("fit_token_budget", 65536),
             fit_batch_groups=performance.get("fit_batch_groups", 1),
             checkpointing=False,
             fallbacks=[],
@@ -539,7 +440,7 @@ class CudaSequentialQ(CudaCohortLifecycle):
         self.policy_kwargs["features_extractor_kwargs"]["layout_cfg"] = self.policy.cfg
         if (
             getattr(self, "execution_state", {}).get("requested_precision")
-            != cfg["training"]["performance"].get("fit_precision", "fp32")
+            != cfg["training"]["performance"].get("fit_precision", "bf16_master")
             or previous["policy"]["encoder_microbatch"] != cfg["policy"]["encoder_microbatch"]
             or previous["policy"]["encoder_token_budget"] != cfg["policy"]["encoder_token_budget"]
             or previous["training"].get("performance", {}).get("fit_batch_groups", 1)
@@ -559,7 +460,6 @@ class CudaSequentialQ(CudaCohortLifecycle):
                 layer.query_chunk = cfg["policy"]["attention_query_chunk"]
 
     def _drain(self):
-        self._drain_probes()
         iterator = getattr(self, "_batch_iterator", None)
         if isinstance(iterator, BatchPrefetch):
             for future in iterator.futures:
@@ -582,7 +482,7 @@ class CudaSequentialQ(CudaCohortLifecycle):
 
     def _restart_pass(self, reason):
         self._close_batches()
-        self.policy.optimizer.zero_grad(set_to_none=True)
+        self.policy.zero_grad(set_to_none=True)
         self.execution_state["fallbacks"].append(reason)
         self._fit_pass_start = None
         self._drain()
@@ -602,9 +502,8 @@ class CudaSequentialQ(CudaCohortLifecycle):
                 raise
             retry = "memory"
         except FloatingPointError:
-            if self.execution_state["precision"] == "fp32":
-                raise
-            retry = "nonfinite_bf16"
+            self._restart_pass("nonfinite_bf16")
+            raise
         except EncoderCompilationError as exc:
             if (
                 self._optimizer_committing
@@ -616,9 +515,7 @@ class CudaSequentialQ(CudaCohortLifecycle):
             retry = "encoder_compilation"
         # Retry outside the exception frame, after failed activation graphs are released.
         if retry:
-            if retry == "nonfinite_bf16":
-                self.execution_state["precision"] = "fp32"
-            elif retry == "encoder_compilation":
+            if retry == "encoder_compilation":
                 pass  # Replay the uncommitted pass eagerly with the same precision.
             elif self.execution_state["microbatch"] > 16:
                 self.execution_state["microbatch"] = max(
@@ -637,13 +534,12 @@ class CudaSequentialQ(CudaCohortLifecycle):
 
     def _start_pass(self):
         self._ensure_teacher()
-        if (
-            self.execution_state["precision"] == "features_bf16"
-            and not torch.cuda.is_bf16_supported()
-        ):
-            raise RuntimeError("BF16 fitting is unavailable; choose fit_precision=fp32")
-        self.policy.optimizer.zero_grad(set_to_none=True)
-        self._pass_metrics = torch.zeros(7, device=self.device, dtype=torch.float64)
+        if self.execution_state["precision"] != "bf16_master":
+            raise RuntimeError("BF16 master-weight fitting is required")
+        if self.device.type == "cuda" and not torch.cuda.is_bf16_supported():
+            raise RuntimeError("BF16 runtime inference is unavailable on this CUDA device")
+        self.policy.zero_grad(set_to_none=True)
+        self._pass_metrics = torch.zeros(10, device=self.device, dtype=torch.float64)
         for encoder in self.policy.encoders:
             encoder.microbatch = self.execution_state["microbatch"]
             encoder.token_budget = self.execution_state["token_budget"]
@@ -652,13 +548,19 @@ class CudaSequentialQ(CudaCohortLifecycle):
             encoder.microbatch = self.execution_state["microbatch"]
             encoder.token_budget = self.execution_state["token_budget"]
         groups = self.execution_state["fit_batch_groups"]
-        args = self._buffer, self.batch_size * groups
+        if getattr(self, "_fitting_spool", None) is None:
+            self._fitting_spool = FittingSpool(self._buffer)
+        args = self._buffer, self.batch_size * groups, self._fitting_spool
         self._fit_pass_start = torch.cuda.Event(enable_timing=True)
         self._fit_pass_start.record()
         if self.cfg["training"].get("performance", {}).get("prefetch", False):
             try:
                 self._batch_iterator = BatchPrefetch(
-                    *args, self.device, self.cfg["encoding"]["max_entities"]
+                    args[0],
+                    args[1],
+                    self.device,
+                    self.cfg["encoding"]["max_entities"],
+                    spool=args[2],
                 )
             except MemoryError:
                 self._batch_iterator = iter(flat_batches(*args))
@@ -667,11 +569,11 @@ class CudaSequentialQ(CudaCohortLifecycle):
 
     def _publish_fit_metrics(self, *, final=False):
         if final:
-            loss, selected_sum, selected_n, gap_sum, gap_n, probe, consistency = (
+            loss, selected_sum, selected_n, gap_sum, gap_n, consistency, *totals = (
                 self._pass_metrics.cpu().tolist()
             )
-            self.logger.record("train/probe_loss", probe)
-            self.logger.record("train/species_consistency_error", consistency)
+            for key, value in consistency_diagnostics(consistency, totals).items():
+                self.logger.record("train/" + key, value)
             self._cached_metrics = (
                 loss,
                 selected_sum / selected_n if selected_n else None,
@@ -701,7 +603,7 @@ class CudaSequentialQ(CudaCohortLifecycle):
                 raise FloatingPointError("Non-finite two-stage Q loss")
             try:
                 norm = torch.nn.utils.clip_grad_norm_(
-                    self.policy.parameters(), self.max_grad_norm, error_if_nonfinite=True
+                    self.policy.master_parameters(), self.max_grad_norm, error_if_nonfinite=True
                 )
             except RuntimeError as exc:
                 if "non-finite" not in str(exc):
@@ -711,11 +613,12 @@ class CudaSequentialQ(CudaCohortLifecycle):
             start.record()
             self._optimizer_committing = True
             self.policy.optimizer.step()
+            self.policy.sync_runtime_from_masters()
             self._update_teacher()
             self._optimizer_committing = False
             end.record()
             self._optimizer_events.append((start, end))
-            self.policy.optimizer.zero_grad(set_to_none=True)
+            self.policy.zero_grad(set_to_none=True)
             self._stats["q_optimizer_steps"] += 1
             self._fit_epoch += 1
             self._close_batches()
@@ -723,27 +626,31 @@ class CudaSequentialQ(CudaCohortLifecycle):
         else:
             rows, observations, *metadata = item
             self.policy.set_training_mode(True)
-            with self.policy.fitting_precision(self.execution_state["precision"]):
-                loss, selected_error, placement_gap = batch_loss(
-                    self.policy,
-                    rows,
-                    self._buffer.outcome_counts,
-                    observations,
-                    metadata[0] if metadata else None,
-                    teacher=self._teacher,
-                    probe_counts=self._buffer.probe_counts,
-                    consistency_counts=self._buffer.outcome_counts[1:],
-                )
-                loss.backward()
-            self._pass_metrics += torch.stack(
+            loss, selected_error, placement_gap = batch_loss(
+                self.policy,
+                rows,
+                self._buffer.outcome_counts,
+                observations,
+                metadata[0] if metadata else None,
+                teacher=self._teacher,
+                consistency_counts=self._buffer.outcome_counts[1:],
+            )
+            loss.backward()
+            self.policy.accumulate_master_gradients()
+            self.policy.clear_runtime_grad(set_to_none=True)
+            self._pass_metrics += torch.cat(
                 (
-                    loss.detach().double(),
-                    selected_error.detach().double().sum(),
-                    loss.new_tensor(selected_error.numel()).double(),
-                    placement_gap.detach().double().sum(),
-                    loss.new_tensor(placement_gap.numel()).double(),
-                    self.policy._last_probe_loss.double(),
-                    self.policy._last_species_consistency_loss.double(),
+                    torch.stack(
+                        (
+                            loss.detach().double(),
+                            selected_error.detach().double().sum(),
+                            loss.new_tensor(selected_error.numel()).double(),
+                            placement_gap.detach().double().sum(),
+                            loss.new_tensor(placement_gap.numel()).double(),
+                            self.policy._last_species_consistency_loss.double(),
+                        )
+                    ),
+                    self.policy._last_species_consistency_metrics,
                 )
             )
             if perf_counter() - self._last_metrics_at >= self.cfg["logging"]["progress_seconds"]:
@@ -753,16 +660,11 @@ class CudaSequentialQ(CudaCohortLifecycle):
 
     def _synchronize(self, callback):
         self._drain()
-        self._stats.update(getattr(self, "_probes").profiler.flush())
         self._stats["trajectory_bytes"] = (
             self._buffer.size * self._buffer.dtype.itemsize + self._buffer.entity_size * 44
         )
         self._stats["trajectory_ram_bytes"] = self._buffer.ram_used
         self._stats["ema_version"] = self._teacher_version
-        self._stats["probe_auxiliary_capacity"] = self._probes.capacity
-        self._stats["probe_workspace_bytes"] = max(
-            self._probes.workspace_bytes, self._stats.get("probe_workspace_bytes", 0)
-        )
         self._stats["ema_compilation_status"] = self._teacher.compilation_status
         self._stats["optimizer_seconds"] = self._optimizer_seconds
         self._stats["fit_precision"] = self.execution_state["precision"]
@@ -770,6 +672,7 @@ class CudaSequentialQ(CudaCohortLifecycle):
         self._stats["encoder_microbatch"] = self.execution_state["microbatch"]
         self._stats["encoder_token_budget"] = self.execution_state["token_budget"]
         self._stats["execution_fallbacks"] = list(self.execution_state["fallbacks"])
+        self._stats["fitting_spool_rows"] = len(getattr(self, "_fitting_spool", None) or ())
         self._stats["compilation_status"] = getattr(self.policy, "compilation_status", "disabled")
         self._stats["compilation_backend"] = getattr(self.policy, "compilation_backend", None)
         self._stats["collection_graphs"] = {
@@ -779,11 +682,20 @@ class CudaSequentialQ(CudaCohortLifecycle):
             }
             for name, network in (("online", self.policy), ("ema", self._teacher))
         }
+        if getattr(self, "_fitting_spool", None) is not None:
+            self._fitting_spool.close()
+            self._fitting_spool = None
         super()._synchronize(callback)
 
     def save(self, *args, **kwargs):
         with atomic_transition():
             self._drain()
+            if self.phase == CohortPhase.FIT:
+                self._close_batches()
+                self.policy.zero_grad(set_to_none=True)
+                if getattr(self, "_fitting_spool", None) is not None:
+                    self._fitting_spool.close()
+                    self._fitting_spool = None
             return super().save(*args, **kwargs)
 
     def learn(self, *args, **kwargs):
@@ -792,6 +704,9 @@ class CudaSequentialQ(CudaCohortLifecycle):
         finally:
             self._drain()
             self._close_batches()
+            if getattr(self, "_fitting_spool", None) is not None:
+                self._fitting_spool.close()
+                self._fitting_spool = None
 
     def _restore_runtime(self):
         extra = self.runtime_state
@@ -802,7 +717,6 @@ class CudaSequentialQ(CudaCohortLifecycle):
                 extra.get(key) is None
                 for key in (
                     "teacher",
-                    "probe_schedule",
                     "pending_episodes",
                     "compilation",
                     "plant_exploration",
@@ -838,9 +752,6 @@ class CudaSequentialQ(CudaCohortLifecycle):
             self._ensure_teacher()
             self._teacher.load_state_dict(extra["teacher"])
             self._teacher_version = extra["teacher_version"]
-            if extra.get("probe_schedule") is not None:
-                self._probes = ProbePool(self.env)
-                self._probes.restore(extra["probe_schedule"])
             for name, network in (("policy", self.policy), ("teacher", self._teacher)):
                 for stage, encoder in zip(("species", "tile"), network.encoders, strict=True):
                     compilation = extra["compilation"][name][stage]
@@ -859,7 +770,7 @@ class CudaSequentialQ(CudaCohortLifecycle):
         self._scheduler = CollectionScheduler(self.n_envs, self.device)
         if extra and extra.get("collection_scheduler") is not None:
             self._scheduler.restore(extra["collection_scheduler"])
-        self.policy.optimizer.zero_grad(set_to_none=True)
+        self.policy.zero_grad(set_to_none=True)
         self._batch_iterator = None
         if not getattr(self, "execution_state", None):
             self._reset_execution()
@@ -876,8 +787,6 @@ class CudaSequentialQ(CudaCohortLifecycle):
                         encoder.microbatch = self.cfg["policy"]["encoder_microbatch"]
                         encoder.token_budget = self.cfg["policy"]["encoder_token_budget"]
                         encoder.activation_checkpointing = False
-        if self.phase == CohortPhase.FIT and getattr(self, "_probes", None) is not None:
-            self._probes.release_workspaces()
 
     def _extra_runtime(self):
         if getattr(self, "_teacher", None) is None:
@@ -889,9 +798,8 @@ class CudaSequentialQ(CudaCohortLifecycle):
             plant_exploration=self._plant_exploration.snapshot()
             if getattr(self, "_plant_exploration", None) is not None
             else None,
-            teacher={k: v.cpu() for k, v in self._teacher.state_dict().items()},
+            teacher={k: v.cpu() for k, v in self._teacher.runtime_state_dict().items()},
             teacher_version=self._teacher_version,
-            probe_schedule=self._probes.snapshot() if getattr(self, "_probes", None) else None,
             pending_episodes=getattr(self, "_pending_episodes", {}),
             objective=dict(self.cfg["training"]["objective"]),
             compilation={
@@ -907,6 +815,7 @@ class CudaSequentialQ(CudaCohortLifecycle):
         return [
             *super()._excluded_save_params(),
             "_batch_iterator",
+            "_fitting_spool",
             "_pass_metrics",
             "_device_events",
             "_optimizer_events",
@@ -914,10 +823,8 @@ class CudaSequentialQ(CudaCohortLifecycle):
             "_collection_packed",
             "_scheduler",
             "_collection_callback",
-            "_draining_probes",
             "_teacher",
             "_plant_exploration",
             "_plant_costs",
-            "_probes",
             "_pending_episodes",
         ]

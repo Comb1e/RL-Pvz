@@ -20,6 +20,7 @@ from pvz_rl.learning.cohort import (
 )
 from pvz_rl.learning.cuda_buffer import CompleteGameBuffer
 from pvz_rl.learning.exploration import EXPLORATION_PROTOCOL, configure_exploration
+from pvz_rl.learning.objective import OBJECTIVE_PROTOCOL
 from pvz_rl.policy.sequential_q import ACTION_DISTRIBUTION, POLICY_SIGNATURE
 
 
@@ -53,7 +54,7 @@ def checkpoint_optimizer_protocol(path):
 
 class CudaCohortLifecycle(BaseAlgorithm):
     policy_protocol = POLICY_SIGNATURE
-    optimizer_version = "complete_return_sequential_tile_probe_v1"
+    optimizer_version = OBJECTIVE_PROTOCOL
 
     def __init__(
         self,
@@ -201,8 +202,10 @@ class CudaCohortLifecycle(BaseAlgorithm):
         for key in (
             "q_loss",
             "selected_action_error",
-            "species_consistency_error",
-            "probe_loss",
+            "species_consistency_loss",
+            "species_consistency_mae",
+            "species_consistency_saturation_fraction",
+            "species_selection_evaluation_gap",
             "placement_gap",
             "q_grad_norm",
         ):
@@ -378,6 +381,7 @@ class CudaCohortLifecycle(BaseAlgorithm):
 
         runtime["protocol"] = AUTONOMOUS_STATE_PROTOCOL
         runtime["model_storage_protocol"] = MODEL_STATE_PROTOCOL
+        runtime["precision_contract"] = "bf16_master"
         runtime["execution_state"] = getattr(self, "execution_state", None)
         runtime.update(self._extra_runtime())
         # One atomic archive ties weights, optimizers, RNG and unfinished games

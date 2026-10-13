@@ -20,6 +20,38 @@ class ActiveAccumulator:
         raise AssertionError(f"terminal progress read an active accumulator: {name}")
 
 
+@pytest.mark.parametrize("nonwait", [0, 4])
+def test_consistency_diagnostics_transfer_only_at_pass_boundary(nonwait, monkeypatch):
+    from pvz_rl.learning.sequential_training import CudaSequentialQ
+
+    values = {}
+    model = SimpleNamespace(
+        logger=SimpleNamespace(record=lambda key, value: values.update({key: value})),
+        _pass_metrics=torch.tensor([10, 12, 4, 6, 2, 0.25, 3, 8, 2, 12], dtype=torch.float64),
+        _cached_metrics=(None, None, None),
+    )
+    original_cpu = torch.Tensor.cpu
+    transfers = []
+
+    def publish(tensor, *args, **kwargs):
+        transfers.append(tensor.shape)
+        return original_cpu(tensor, *args, **kwargs)
+
+    monkeypatch.setattr(torch.Tensor, "cpu", publish)
+    CudaSequentialQ._publish_fit_metrics(model, final=True)
+    assert transfers == [torch.Size([10])]
+    assert values["train/species_consistency_loss"] == 0.25
+    assert values["train/species_consistency_mae"] == 3 / 12
+    assert values["train/species_consistency_saturation_fraction"] == 8 / 12
+    assert values["train/species_selection_evaluation_gap"] == 2 / 12
+    assert values["train/selected_action_error"] == 3
+    assert values["train/placement_gap"] == 3
+    assert "train/species_consistency_error" not in values
+    model._pass_metrics = ActiveAccumulator()
+    CudaSequentialQ._publish_fit_metrics(model)
+    assert len(transfers) == 1
+
+
 def test_compact_summary_events_and_unchanged_detailed_snapshot(tmp_path):
     cfg = load_config()
     now, stream = [0.0], io.StringIO()
@@ -328,8 +360,6 @@ def test_benchmark_matrix_cli_headless_controls(tmp_path, monkeypatch):
             "1",
             "--cases",
             "mixed",
-            "--probe-capacities",
-            "1",
             "--eager",
             "--no-telemetry",
             "--fit-cycle",
@@ -341,15 +371,12 @@ def test_benchmark_matrix_cli_headless_controls(tmp_path, monkeypatch):
     assert calls[0][1] == dict(
         env_counts=[4, 1],
         cases=["mixed"],
-        probe_capacities=[1],
         fit=True,
         fit_live_games=[128],
         fit_cases=["mixed"],
         cycle_seconds=20.0,
         eager=True,
         telemetry=False,
-        tile_probes=None,
-        probe_rollout_seconds=None,
     )
 
 
@@ -438,7 +465,7 @@ def test_benchmark_quiescent_wait_belongs_to_last_live_batch(monkeypatch):
     assert row["interval_active_transitions_per_second"] == 0.5
 
 
-def test_benchmark_rebuilds_actual_and_probe_cutoff_features(monkeypatch):
+def test_benchmark_rebuilds_actual_cutoff_features(monkeypatch):
     from contextlib import nullcontext
 
     from pvz_rl.monitoring import collection_benchmark
@@ -455,30 +482,14 @@ def test_benchmark_rebuilds_actual_and_probe_cutoff_features(monkeypatch):
             self.profiler = None
             self.module = SimpleNamespace(get_function=lambda name: (name, self.cutoff))
 
-    def release():
-        events.append("release")
-        probes.features = None
-
-    def allocate(teacher):
-        events.append("allocate")
-        probes.features = Features(env.batch, env.cfg, env.condition)
-        probes.features.profiler = env.profiler
-
-    probes = SimpleNamespace(
-        features=Features(env.batch, cfg, env.condition),
-        release_workspaces=release,
-        _ensure=allocate,
-    )
-    model = SimpleNamespace(
-        env=env, _teacher=object(), _probes=probes, _drain=lambda: events.append("drain")
-    )
+    env.features = Features(env.batch, cfg, env.condition)
+    model = SimpleNamespace(env=env, _drain=lambda: events.append("drain"))
     monkeypatch.setattr(collection_benchmark, "CudaFeatures", Features)
     for cutoff in (1, 1200):
         collection_benchmark.rebuild_cutoff_features(model, cutoff)
-        assert env.features.cutoff == probes.features.cutoff == cutoff
-        assert env.features.profiler is probes.features.profiler is env.profiler
-        assert probes.copy_kernel == ("copy_probe_state", cutoff)
-    assert events == ["drain", "release", "allocate"] * 2
+        assert env.features.cutoff == cutoff
+        assert env.features.profiler is env.profiler
+    assert events == ["drain"] * 2
 
 
 @pytest.mark.parametrize(
@@ -527,7 +538,13 @@ def test_benchmark_cycle_guards_timeout_reward_and_restores_cutoff(
         model._fit_epoch += 1
         passes.append(model._fit_epoch)
         model.logger.name_to_value.update(
-            {"train/selected_action_error": 1.25, "train/probe_loss": 0.4}
+            {
+                "train/selected_action_error": 1.25,
+                "train/species_consistency_loss": 0.8,
+                "train/species_consistency_mae": 0.6,
+                "train/species_consistency_saturation_fraction": 0.2,
+                "train/species_selection_evaluation_gap": 0.3,
+            }
         )
         model.cohort_metrics["prefit_errors"] = {"wait": {"mse": 4.0}}
 
@@ -572,7 +589,11 @@ def test_benchmark_cycle_guards_timeout_reward_and_restores_cutoff(
         assert row["before"]["cutoff_terminal_games"] == 1
         assert row["prefit_errors"] == {"wait": {"mse": 4.0}}
         assert row["last_pass_selected_action_error"] == 1.25
-        assert row["last_pass_probe_huber_error"] == 0.4
+        assert row["last_pass_species_consistency_loss"] == 0.8
+        assert row["last_pass_species_consistency_mae"] == 0.6
+        assert row["last_pass_species_consistency_saturation_fraction"] == 0.2
+        assert row["last_pass_species_selection_evaluation_gap"] == 0.3
+        assert "last_pass_species_consistency_error" not in row
         assert "setup_seconds" in row["before"] and "setup_seconds" in row["after"]
     else:
         with pytest.raises(RuntimeError, match="configured terminal loss"):
@@ -622,7 +643,6 @@ def test_benchmark_cycle_budget_exact_boundary(monkeypatch):
         dict(env_counts=[]),
         dict(env_counts=[1, 1]),
         dict(cases=["unknown"]),
-        dict(probe_capacities=[3]),
         dict(cycle_seconds=0),
     ],
 )

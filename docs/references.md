@@ -1,12 +1,56 @@
 # Sources actually used
 
+## Tile-to-species target reliability — research inspection, 2026-10-13
+
+The current objective adopts online selection/EMA evaluation and robust Huber
+consistency below. Other inspected directions remain research comparisons, not
+supported runtime alternatives. None establishes target correctness or a guaranteed
+learning improvement; implementation verification is tracked in iteration history.
+
+- van Hasselt et al., [Deep Reinforcement Learning with Double Q-learning](https://arxiv.org/html/1509.06461v3):
+  inspected equation 4 and the Double DQN selection/evaluation separation. A local
+  adaptation selects a geometry-candidate tile using detached online tile values,
+  then evaluates that tile with frozen EMA weights for detached species consistency
+  targets. Existing online tables and the EMA forward are reused; the architecture,
+  complete returns, exploration and probes are unchanged. Correlated estimators can
+  still share errors; this is not a correctness guarantee or adoption of DQN.
+- [PyTorch 2.8 `HuberLoss` implementation](https://github.com/pytorch/pytorch/blob/v2.8.0/torch/nn/modules/loss.py):
+  inspected its piecewise half-squared/linear formula. Species consistency uses
+  twice unreduced Huber with delta 1.0 to retain MSE loss/gradients for small errors
+  and bound large-error influence. Global group/outcome balancing remains unchanged.
+  Delta is in training-return units; targets/rewards are not clipped and samples
+  are not gated or excluded. Robust gradients do not establish target correctness.
+- Lan et al., [Maxmin Q-learning: Controlling the Estimation Bias of Q-learning, section 4](https://arxiv.org/html/2002.06487v2):
+  inspected the minimum across estimators for each action before maximization,
+  and random data subsampling to reduce estimator dependence. Two independently
+  trained tile estimators could supply a conservative species target. Additional
+  memory/inference and underestimation are tradeoffs; the paper's tabular results
+  do not guarantee accuracy for this project's Transformers.
+- Anschel et al., [Averaged-DQN, section 3](https://arxiv.org/html/1611.01929v4):
+  inspected averaging previous value predictions to reduce target variance.
+  Averaging tile predictions before selecting a maximum is an alternative to a
+  hard minimum, not a cure for shared systematic error. Averaging network weights
+  is not generally equivalent to averaging nonlinear network predictions.
+- Feinberg et al., [Model-Based Value Estimation, definition 3.1](https://arxiv.org/html/1803.00101v1):
+  re-inspected bounded rewards plus a tail value. A project-specific adaptation
+  could reserve same-species probes for predicted winner tiles and use completed
+  rollout evidence to check species targets. Rotating four tiles does not verify
+  the maximum over all candidates; actual exploratory returns and frozen-policy
+  probe returns also have different continuation policies. With gamma one, a
+  longer rollout does not discount away endpoint value error. The planting trigger
+  and winner verification are local proposals, not claims of the paper.
+- [Explorer project README](https://github.com/qlan3/Explorer): inspected its
+  documented Double DQN, Maxmin DQN, Averaged DQN and ensemble implementations as
+  implementation references. The project is no longer actively maintained; no
+  dependency, code, replay algorithm or benchmark claim is adopted.
+
 ## Stateless two-stage attention — 2026-10-13
 
 - Metz et al., [Discrete Sequential Prediction of Continuous Actions for Deep RL, §2.2](https://arxiv.org/html/1705.05035v3):
   inspected equation 7's internal conditional-max consistency and equation 8's
   final-action consistency. The species network learns a stopped-gradient target
-  from the EMA tile network's best geometry candidate, rather than a sampled poor
-  tile's return. The two local networks, complete-return regression, EMA balancing
+  from EMA evaluation of the online-selected best geometry candidate, rather than
+  a sampled poor tile's return. The two local networks, complete-return regression, EMA balancing
   and tile-probe schedule are project choices; SDQN's off-policy algorithm is not
   implemented. This is a learned consistency target, not an exact species maximum
   substituted into normal branch selection.
@@ -92,7 +136,7 @@ established by these papers.
   backups are not used. For the 2026-10-09 species/tile credit discussion, inspected
   equation 7's internal maximization backup and equation 8's terminal-component
   consistency, rather than assigning the sampled placement return to both heads.
-  These conditional-max ideas now inform stopped-gradient EMA tile targets for
+  These conditional-max ideas now inform stopped-gradient, online-selected/EMA-evaluated tile targets for
   independent species predictions; normal inference does not derive species Q
   values from maxima. The current inspection/adoption is detailed above; the
   paper's off-policy algorithm is not adopted.
@@ -103,7 +147,7 @@ established by these papers.
 ## Species/tile credit research — 2026-10-09
 
 This earlier comparison motivated conditional species/tile attribution and bounded
-greedy-EMA probes. The current objective uses two-stage EMA consistency, described
+greedy-EMA probes. The current objective uses double-estimator two-stage consistency, described
 above, not exact derived branch maxima. COMA and action
 branching remain comparisons only, not adopted actors, advantages or privileged inputs.
 
@@ -247,3 +291,12 @@ throughput measurements.
   scheduler; EnvPool itself is not integrated. GPU contention, local FIFO source
   backpressure, retained decisions, exact-once endpoint patches and drain-before-save
   are project choices, not performance guarantees from these sources.
+# Current implementation sources
+
+- PyTorch, [BF16 CUDA semantics](https://pytorch.org/docs/stable/notes/amp_examples.html)
+  and [Adam](https://pytorch.org/docs/stable/generated/torch.optim.Adam.html):
+  informed the BF16 runtime / FP32-master separation and explicit nonfinite
+  handling. No INT8 or INT4 runtime path was adopted.
+- The accepted-plant counterfactual rollout design was removed rather than
+  retained as a zero-count compatibility path; earlier historical measurements
+  remain evidence only and are not current performance claims.

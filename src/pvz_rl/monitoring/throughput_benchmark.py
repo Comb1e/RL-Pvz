@@ -20,22 +20,23 @@ def synthetic(cfg, counts):
     model = TwoStageTransformerPolicy(cfg).cuda().train()
     raw = [observation(cfg, count)[0] for count in counts]
     obs = collate_observations((raw * (1024 // len(raw))), "cuda")
-    optimizer = torch.optim.Adam(model.parameters(), lr=cfg["training"]["learning_rate"])
+    optimizer = torch.optim.Adam(model.master_parameters(), lr=cfg["training"]["learning_rate"])
     branches = torch.arange(1024, device="cuda") % 9 + 1
 
     def passes():
         for _ in range(cfg["training"]["n_epochs"]):
-            optimizer.zero_grad(set_to_none=True)
-            precision = cfg["training"]["performance"].get("fit_precision", "fp32")
-            with model.fitting_precision(precision):
-                q = model.species_values(obs)
-                tile_q = model.conditional_tiles(obs, branches)
-                loss = (q - 0.5).square().mean() + (tile_q + 0.5).square().mean()
-                loss.backward()
+            model.zero_grad(set_to_none=True)
+            q = model.species_values(obs)
+            tile_q = model.conditional_tiles(obs, branches)
+            loss = (q - 0.5).square().mean() + (tile_q + 0.5).square().mean()
+            loss.backward()
+            model.accumulate_master_gradients()
+            model.clear_runtime_grad(set_to_none=True)
             torch.nn.utils.clip_grad_norm_(
-                model.parameters(), cfg["training"]["max_grad_norm"], error_if_nonfinite=True
+                model.master_parameters(), cfg["training"]["max_grad_norm"], error_if_nonfinite=True
             )
             optimizer.step()
+            model.sync_runtime_from_masters()
 
     passes()
     torch.cuda.synchronize()

@@ -24,7 +24,7 @@ class TwoStageQPolicy(TwoStageTransformerPolicy):
         self.features_extractor = SimpleNamespace(cfg=self.cfg, layout=self.layout)
         self.exploration_epsilon = exploration_epsilon
         self.tile_exploration_epsilon = tile_exploration_epsilon
-        self.optimizer = torch.optim.Adam(self.parameters(), lr=lr_schedule(1), eps=1e-8)
+        self.optimizer = torch.optim.Adam(self.master_parameters(), lr=lr_schedule(1), eps=1e-8)
 
     def set_training_mode(self, mode):
         self.train(mode)

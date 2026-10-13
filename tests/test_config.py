@@ -3,9 +3,13 @@
 import pytest
 
 from pvz_rl.config import load_config, load_demo_config, validate_config
-from pvz_rl.learning.checkpoints import execution_config
+from pvz_rl.learning.checkpoints import compatible_config, execution_config
 from pvz_rl.learning.performance import refresh_performance, without_performance
-from pvz_rl.learning.training_requirements import transfer_protocol, weight_transfer_protocol
+from pvz_rl.learning.training_requirements import (
+    current_model_config,
+    transfer_protocol,
+    weight_transfer_protocol,
+)
 
 
 @pytest.mark.parametrize(
@@ -60,10 +64,12 @@ def test_flat_batch_groups_refresh_without_changing_learning():
     assert current["training"]["performance"]["fit_batch_groups"] == 4
     saved["training"]["performance"]["fit_batch_groups"] = 1
     saved["training"]["objective"]["species_consistency_weight"] = 2.0
+    saved["training"]["objective"]["species_consistency_huber_delta"] = 0.25
     saved["training"]["n_epochs"] = 3
     refreshed = refresh_performance(saved, current)
     assert refreshed["training"]["performance"]["fit_batch_groups"] == 4
     assert refreshed["training"]["objective"]["species_consistency_weight"] == 2.0
+    assert refreshed["training"]["objective"]["species_consistency_huber_delta"] == 0.25
     assert refreshed["training"]["n_epochs"] == 3
     saved["training"]["performance"]["fit_sequence_groups"] = 4
     with pytest.raises(ValueError, match="unsupported execution"):
@@ -77,6 +83,71 @@ def test_consistency_weight_requires_finite_nonnegative_number(value):
     cfg["training"]["objective"]["species_consistency_weight"] = value
     with pytest.raises(ValueError, match="species_consistency_weight"):
         validate_config(cfg)
+
+
+def test_double_estimator_defaults_and_storage_contracts():
+    from pvz_rl.learning.checkpoints import (
+        AUTONOMOUS_STATE_PROTOCOL,
+        DEMO_PROTOCOL,
+        MODEL_STATE_PROTOCOL,
+        protocol_for,
+    )
+    from pvz_rl.learning.cuda_buffer import TRAJECTORY_PROTOCOL
+
+    for cfg in (load_config(), load_demo_config()):
+        objective = cfg["training"]["objective"]
+        assert cfg["policy"]["kind"] == "two_stage_transformer_q_v1"
+        assert cfg["training"]["method"] == "complete_return_sequential_no_probe_v1"
+        assert objective["protocol"] == "complete_return_sequential_no_probe_v1"
+        assert objective["species_consistency_huber_delta"] == 1.0
+        assert objective["species_consistency_weight"] == 1.0
+        assert current_model_config(cfg)
+        assert protocol_for(cfg["policy"]["kind"])["optimizer"] == objective["protocol"]
+    assert DEMO_PROTOCOL == "pvz-rl/demo-initialization-checkpoint-v9"
+    assert AUTONOMOUS_STATE_PROTOCOL == "pvz-rl/stateless-no-probe-state-v1"
+    assert MODEL_STATE_PROTOCOL == "pvz-rl/stateless-two-stage-bf16-master-state-v2"
+    assert TRAJECTORY_PROTOCOL == "pvz-rl/stateless-no-probe-trajectory-v1"
+
+
+@pytest.mark.parametrize(
+    "value", [0, -1, True, False, float("nan"), float("inf"), -float("inf"), None, "1.0"]
+)
+def test_consistency_huber_delta_requires_finite_positive_nonboolean_number(value):
+    cfg = load_config()
+    cfg["training"]["objective"]["species_consistency_huber_delta"] = value
+    with pytest.raises(ValueError, match="species_consistency_huber_delta"):
+        validate_config(cfg)
+
+
+@pytest.mark.parametrize("value", [1, 0.25, 1e-12, 1e12])
+def test_consistency_huber_delta_accepts_positive_return_unit_scales(value):
+    cfg = load_config()
+    cfg["training"]["objective"]["species_consistency_huber_delta"] = value
+    validate_config(cfg)
+
+
+def test_consistency_huber_delta_is_mandatory_without_hydration():
+    compact = without_performance(load_demo_config())
+    compact["training"]["objective"].pop("species_consistency_huber_delta")
+    with pytest.raises(ValueError, match="species_consistency_huber_delta"):
+        validate_config(execution_config(compact))
+
+
+@pytest.mark.parametrize("field", ["method", "objective"])
+@pytest.mark.parametrize("weights_only", [False, True])
+def test_previous_objective_is_rejected_even_for_structurally_identical_weights(
+    field, weights_only
+):
+    source, target = load_config(), load_config()
+    if field == "method":
+        source["training"]["method"] = "complete_return_sequential_tile_probe_v1"
+    else:
+        source["training"]["objective"]["protocol"] = "complete_return_sequential_tile_probe_v1"
+    assert not current_model_config(source)
+    with pytest.raises(ValueError, match="objective protocol|complete-return method"):
+        validate_config(source)
+    with pytest.raises(ValueError, match="Old-objective"):
+        compatible_config(source, target, weights_only=weights_only)
 
 
 def test_compact_demo_config_hydrates_only_execution_settings():

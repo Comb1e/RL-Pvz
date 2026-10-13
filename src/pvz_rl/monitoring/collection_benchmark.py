@@ -23,7 +23,6 @@ from stable_baselines3.common.logger import configure
 from pvz_rl.config import load_config
 from pvz_rl.envs.actions import ActionSchema as A
 from pvz_rl.envs.cuda_features import CudaFeatures
-from pvz_rl.envs.probes import ProbePool
 from pvz_rl.learning.cohort import CohortPhase, atomic_transition
 from pvz_rl.learning.training import build_model, vector_env
 from pvz_rl.monitoring.hardware import HardwareMonitor
@@ -34,7 +33,6 @@ CASES = ("sparse", "mixed", "crowded", "rejection-heavy", "accepted-action", "pl
 DEFAULT_CASES = CASES[:3]
 ENVIRONMENT_COUNTS = (128, 64, 32, 16, 4, 1)
 ORIGINAL_ENVIRONMENTS = ENVIRONMENT_COUNTS[0]
-PROBE_CAPACITIES = (1, 4, 16, 64, 128, 256)
 WARMUP_DECISIONS = 8
 REPETITIONS = 3
 FIT_PASSES = 4
@@ -108,7 +106,7 @@ def reset(model, callback, raw, seed, live_count=ORIGINAL_ENVIRONMENTS):
 
 
 def collect(model, callback, decisions, *, quiesce=None):
-    """Count committed live transitions, never padded slots or counterfactuals."""
+    """Count committed live transitions, never padded slots or padding rows."""
     progress = CollectionProgress()
     progress.observe(
         transitions=model.num_timesteps,
@@ -216,17 +214,13 @@ def measure(model, callback, hardware, process, decisions, **context):
 
 
 def rebuild_cutoff_features(model, cutoff):
-    """Recompile actual and probe cutoff/reward kernels outside timed collection."""
+    """Recompile actual cutoff/reward kernels outside timed collection."""
     model._drain()
     env = model.env
-    probes = model._probes
-    probes.release_workspaces()
     env.cfg["environment"]["cutoff_seconds"] = cutoff
     with env.device_context():
         env.features = CudaFeatures(env.batch, env.cfg, env.condition)
         env.features.profiler = env.profiler
-        probes.copy_kernel = env.features.module.get_function("copy_probe_state")
-        probes._ensure(model._teacher)
 
 
 def release_benchmark_model(model):
@@ -238,9 +232,6 @@ def release_benchmark_model(model):
             for encoder in network.encoders:
                 encoder.release_collection()
                 encoder.release_fitting()
-    probes = getattr(model, "_probes", None)
-    if probes is not None:
-        probes.release_workspaces()
     if model._buffer is not None:
         model._buffer.close()
 
@@ -329,10 +320,19 @@ def fit_cycle(model, callback, raw, decisions, hardware, process, context, secon
         fitting = perf_counter() - started
         phase_memory = copy.deepcopy(model.cohort_metrics.get("phase_memory", []))
         prefit_errors = copy.deepcopy(model.cohort_metrics.get("prefit_errors", {}))
+        peak_bytes = model.cohort_metrics.get("peak_cuda_memory_bytes")
+        cycle_peak_cuda_allocated_mib = peak_bytes / 2**20 if peak_bytes is not None else None
         selected_error = model.logger.name_to_value.get("train/selected_action_error")
-        consistency_error = model.logger.name_to_value.get("train/species_consistency_error")
+        consistency = {
+            "last_pass_" + key: model.logger.name_to_value.get("train/" + key)
+            for key in (
+                "species_consistency_loss",
+                "species_consistency_mae",
+                "species_consistency_saturation_fraction",
+                "species_selection_evaluation_gap",
+            )
+        }
         placement_gap = model.logger.name_to_value.get("train/placement_gap")
-        probe_error = model.logger.name_to_value.get("train/probe_loss")
     finally:
         started = perf_counter()
         rebuild_cutoff_features(model, previous_cutoff)
@@ -369,14 +369,14 @@ def fit_cycle(model, callback, raw, decisions, hardware, process, context, secon
         optimizer_steps=FIT_PASSES,
         passes=FIT_PASSES,
         cutoff_seconds=1,
-        setup_scope="actual/probe cutoff feature rebuild and reset; excluded from collection and fit timings",
+        setup_scope="actual cutoff feature rebuild and reset; excluded from collection and fit timings",
         preparation_seconds=preparation,
         fit_seconds=fitting,
+        cycle_peak_cuda_allocated_mib=cycle_peak_cuda_allocated_mib,
         prefit_errors=prefit_errors,
         last_pass_selected_action_error=selected_error,
-        last_pass_species_consistency_error=consistency_error,
+        **consistency,
         last_pass_placement_gap=placement_gap,
-        last_pass_probe_huber_error=probe_error,
         phase_memory=phase_memory,
         before=before,
         after=after,
@@ -391,15 +391,12 @@ def benchmark(
     *,
     env_counts=ENVIRONMENT_COUNTS,
     cases=DEFAULT_CASES,
-    probe_capacities=(1, 256),
     fit=False,
     fit_live_games=(ORIGINAL_ENVIRONMENTS,),
     fit_cases=("mixed",),
     cycle_seconds=120,
     eager=False,
     telemetry=True,
-    tile_probes=None,
-    probe_rollout_seconds=None,
 ):
     output = Path(output)
     if type(decisions) is not int or not 1 <= decisions <= 40:
@@ -407,7 +404,6 @@ def benchmark(
     for values, choices in (
         (env_counts, ENVIRONMENT_COUNTS),
         (cases, CASES),
-        (probe_capacities, PROBE_CAPACITIES),
         (fit_live_games, ENVIRONMENT_COUNTS),
         (fit_cases, CASES),
     ):
@@ -421,12 +417,6 @@ def benchmark(
         raise ValueError("Use a cycle wall budget in (0, 300] seconds")
     output.parent.mkdir(parents=True, exist_ok=True)
     cfg = load_config()
-    for key, value in (
-        ("tile_probes", tile_probes),
-        ("probe_rollout_seconds", probe_rollout_seconds),
-    ):
-        if value is not None:
-            cfg["training"]["objective"][key] = value
     from pvz_rl.config import validate_config
 
     validate_config(cfg)
@@ -446,7 +436,6 @@ def benchmark(
         environments=ORIGINAL_ENVIRONMENTS,
         live_games=list(env_counts),
         cases=list(cases),
-        probe_capacities=list(probe_capacities),
         fit_cycle=fit,
         fit_live_games=list(fit_live_games),
         fit_cases=list(fit_cases),
@@ -456,7 +445,7 @@ def benchmark(
         repetitions=REPETITIONS,
         config=copy.deepcopy(cfg),
         measurements=[],
-        comparison="bounded background pool versus one auxiliary lane; actual window and drain measured separately",
+        comparison="active-only actual collection across live-slot counts",
         cold_scope="fresh environment and policy; process and disk kernel caches may already be warm",
         references=[
             "https://github.com/pytorch/pytorch/blob/v2.8.0/torch/utils/benchmark/utils/timer.py",
@@ -472,7 +461,6 @@ def benchmark(
             "environments",
             "live_games",
             "cases",
-            "probe_capacities",
             "fit_cycle",
             "fit_live_games",
             "fit_cases",
@@ -486,14 +474,13 @@ def benchmark(
         for count in env_counts:
             for case in cases:
                 raw = snapshot(case)
-                for lanes in probe_capacities:
+                for _ in (1,):
                     cycle = fit and count in fit_live_games and case in fit_cases
                     context = dict(
                         phase=case,
                         case=case,
                         environments=ORIGINAL_ENVIRONMENTS,
                         live_games=count,
-                        probe_capacities=lanes,
                     )
                     completed = {
                         (row["sample_type"], row["repeat"])
@@ -518,8 +505,6 @@ def benchmark(
                         model.set_logger(configure(folder=None, format_strings=[]))
                         callback = CollectionCallback()
                         callback.init_callback(model)
-                        case_cfg["training"]["performance"]["probe_active_capacity"] = lanes
-                        model._probes = ProbePool(env)
                         branch = (
                             9
                             if case == "accepted-action"
@@ -543,7 +528,7 @@ def benchmark(
                             )
                             write_json(output, result)
                             print(
-                                f"{case} {count}/{ORIGINAL_ENVIRONMENTS} live games {lanes}-lane {row['sample_type']} "
+                                f"{case} {count}/{ORIGINAL_ENVIRONMENTS} live games {row['sample_type']} "
                                 f"repeat {row['repeat']}: {row.get('transitions_per_second', 'cycle')} "
                                 "active transitions/s",
                                 flush=True,
@@ -629,9 +614,6 @@ def main():
         help="Live games in the fixed 128 original simulator slots",
     )
     parser.add_argument("--cases", nargs="+", choices=CASES, default=list(DEFAULT_CASES))
-    parser.add_argument(
-        "--probe-capacities", type=int, nargs="+", choices=PROBE_CAPACITIES, default=[1, 256]
-    )
     parser.add_argument("--fit-cycle", action="store_true")
     parser.add_argument(
         "--fit-live-games",
@@ -644,8 +626,6 @@ def main():
     parser.add_argument("--cycle-seconds", type=float, default=120)
     parser.add_argument("--eager", action="store_true")
     parser.add_argument("--no-telemetry", action="store_true")
-    parser.add_argument("--tile-probes", type=int)
-    parser.add_argument("--probe-rollout-seconds", type=float)
     args = parser.parse_args()
     try:
         benchmark(
@@ -653,15 +633,12 @@ def main():
             args.decisions,
             env_counts=args.env_counts,
             cases=args.cases,
-            probe_capacities=args.probe_capacities,
             fit=args.fit_cycle,
             fit_live_games=args.fit_live_games,
             fit_cases=args.fit_cases,
             cycle_seconds=args.cycle_seconds,
             eager=args.eager,
             telemetry=not args.no_telemetry,
-            tile_probes=args.tile_probes,
-            probe_rollout_seconds=args.probe_rollout_seconds,
         )
     except ValueError as exc:
         parser.error(str(exc))

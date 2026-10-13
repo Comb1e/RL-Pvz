@@ -9,7 +9,7 @@ from time import perf_counter
 import numpy as np
 import torch
 
-from pvz_rl.envs.encoding import ENTITY_WIDTH, GLOBAL_WIDTH, EntityBatch
+from pvz_rl.envs.encoding import ENTITY_WIDTH, GLOBAL_WIDTH, EntityBatch, PackedEntityBatch
 
 
 @dataclass(frozen=True)
@@ -21,13 +21,109 @@ class BatchMetadata:
     branch_value: torch.Tensor
     tile_value: torch.Tensor
     placement_gap: torch.Tensor
-    probes: torch.Tensor
 
     def __getitem__(self, name):
         return getattr(self, name)
 
 
-def batch_rows(buffer, batch_size):
+class FittingSpool:
+    """Reusable active rows and ragged public inputs for every fitting pass."""
+
+    def __init__(self, buffer):
+        self.buffer = buffer
+        indices = buffer.valid_indices()
+        if len(indices):
+            rows = buffer.take(indices)
+            indices = indices[np.argsort(rows["entity_count"], kind="stable")]
+        self.indices = np.asarray(indices, dtype=np.int64)
+        self._ram_arrays = []
+        self._temp_paths = []
+        self.rows = self._allocate("rows", (len(self.indices),), buffer.dtype)
+        if len(self.indices):
+            self.rows[:] = buffer.take(self.indices)
+        entity_count = int(self.rows["entity_count"].sum())
+        self.entities = self._allocate("entities", (entity_count, ENTITY_WIDTH), np.dtype("<i4"))
+        cursor = 0
+        for row in self.rows:
+            count = int(row["entity_count"])
+            if count:
+                source = int(row["entity_offset"])
+                positions = np.arange(source, source + count, dtype=np.int64)
+                blocks, offsets = np.divmod(positions, buffer.block_rows)
+                for block in np.unique(blocks):
+                    selected = blocks == block
+                    start = cursor + int(np.flatnonzero(selected)[0])
+                    stop = start + int(selected.sum())
+                    self.entities[start:stop] = buffer.entity_blocks[block][offsets[selected]]
+                row["entity_offset"] = cursor
+                cursor += count
+            else:
+                row["entity_offset"] = cursor
+        self.widths = self.rows["entity_count"].copy()
+        self._closed = False
+
+    def __len__(self):
+        return len(self.rows)
+
+    def _allocate(self, name, shape, dtype):
+        amount = int(np.prod(shape, dtype=np.int64)) * np.dtype(dtype).itemsize
+        if self.buffer.ram_used + self.buffer.staging_bytes + amount <= self.buffer.ram_bytes:
+            value = np.empty(shape, dtype=dtype)
+            self.buffer.ram_used += amount
+            self._ram_arrays.append(value)
+            return value
+        path = self.buffer.path / f"fitting-spool-{name}.npy"
+        path.unlink(missing_ok=True)
+        value = np.lib.format.open_memmap(path, mode="w+", dtype=dtype, shape=shape)
+        self._temp_paths.append(path)
+        return value
+
+    def iter_batches(self, batch_size):
+        if type(batch_size) is not int or batch_size < 1:
+            raise ValueError("Flat batch_size must be a positive integer")
+        for start in range(0, len(self), batch_size):
+            stop = min(start + batch_size, len(self))
+            rows = self.rows[start:stop]
+            counts = rows["entity_count"].astype(np.int64, copy=False)
+            offsets = np.empty(len(rows), dtype=np.int64)
+            if len(rows):
+                offsets[0] = 0
+                if len(rows) > 1:
+                    offsets[1:] = np.cumsum(counts[:-1], dtype=np.int64)
+            entity_start = int(rows[0]["entity_offset"]) if len(rows) else 0
+            entity_stop = entity_start + int(counts.sum())
+            yield (
+                rows,
+                PackedEntityBatch(
+                    np.asarray(self.entities[entity_start:entity_stop]),
+                    offsets,
+                    counts,
+                    np.asarray(rows["globals"]),
+                ),
+            )
+
+    def close(self):
+        if self._closed:
+            return
+        self._closed = True
+        for value in self._ram_arrays:
+            self.buffer.ram_used -= value.nbytes
+        self._ram_arrays.clear()
+        for value in (self.rows, self.entities):
+            if isinstance(value, np.memmap):
+                value.flush()
+                value._mmap.close()
+        for path in self._temp_paths:
+            path.unlink(missing_ok=True)
+        self._temp_paths.clear()
+        self.rows = np.empty(0, dtype=self.buffer.dtype)
+        self.entities = np.empty((0, ENTITY_WIDTH), dtype=np.int32)
+        self.indices = np.empty(0, np.int64)
+        self.widths = np.empty(0, np.uint32)
+        self.widths = np.empty(0, np.uint32)
+
+
+def batch_rows(buffer, batch_size, *, spool=None):
     """Yield every genuine decision once, without slot gaps or recurrent padding."""
     if type(batch_size) is not int or batch_size < 1:
         raise ValueError("Flat batch_size must be a positive integer")
@@ -43,6 +139,10 @@ def batch_rows(buffer, batch_size):
                 Path(temporary.name) / "indices.npy", mode="w+", dtype=np.int64, shape=(batch_size,)
             )
         used = 0
+        if spool is not None:
+            for rows, _ in spool.iter_batches(batch_size):
+                yield rows
+            return
         for block_index, block in enumerate(buffer.blocks):
             size = min(buffer.block_rows, buffer.size - block_index * buffer.block_rows)
             for start in range(0, size, batch_size):
@@ -70,16 +170,16 @@ def batch_rows(buffer, batch_size):
 class BatchPrefetch:
     """One ordered producer and two pinned slots with explicit reuse fences."""
 
-    def __init__(self, buffer, batch_size, device, max_entities):
+    def __init__(self, buffer, batch_size, device, max_entities, *, spool=None):
         self.buffer, self.device = buffer, torch.device(device)
-        self.layout = buffer.layout
+        self.spool = spool
         self.base_staging = buffer.staging_bytes
         amount = (
             2
             * batch_size
             * (
                 max_entities * (ENTITY_WIDTH * 4 + 1)
-                + (GLOBAL_WIDTH + self.layout.metadata_width) * 4
+                + (GLOBAL_WIDTH + 7) * 4
                 + buffer.dtype.itemsize
             )
         )
@@ -88,7 +188,11 @@ class BatchPrefetch:
         self.closed = False
         self.worker = None
         self.stream = None
-        self.source = iter(batch_rows(buffer, batch_size))
+        self.source = (
+            iter(spool.iter_batches(batch_size))
+            if spool is not None
+            else iter(batch_rows(buffer, batch_size))
+        )
         self.slots, self.events, self.timings, self.futures = [], [None, None], [], []
         try:
             self.stream = torch.cuda.Stream(device=self.device)
@@ -109,7 +213,7 @@ class BatchPrefetch:
                             torch.empty(batch_size, GLOBAL_WIDTH, pin_memory=True),
                             validated=True,
                         ),
-                        torch.empty(batch_size, self.layout.metadata_width, pin_memory=True),
+                        torch.empty(batch_size, 7, pin_memory=True),
                     )
                 )
             self.worker = ThreadPoolExecutor(max_workers=1, thread_name_prefix="pvz-batches")
@@ -125,11 +229,15 @@ class BatchPrefetch:
         if event is not None:
             event.synchronize()
         started = perf_counter()
-        rows = next(self.source, None)
-        if rows is None:
+        item = next(self.source, None)
+        if item is None:
             return None
+        rows, packed = item if self.spool is not None else (item, None)
         host, metadata = self.slots[slot]
-        observations = self.buffer.observations(rows, destination=host)
+        if packed is None:
+            observations = self.buffer.observations(rows, destination=host)
+        else:
+            observations = self.buffer.observations_from_packed(packed, destination=host)
         fields = metadata[: len(rows)]
         array = fields.numpy()
         for column, name in enumerate(
@@ -144,10 +252,6 @@ class BatchPrefetch:
             )
         ):
             array[:, column] = rows[name]
-        probes = rows["probes"]
-        array[:, 7:] = np.stack(
-            [probes[name] for name in ("valid", "action", "target", "accepted")], -1
-        ).reshape(len(rows), -1)
         self.buffer.transport_metrics["preparation_seconds"] += perf_counter() - started
         return rows, observations, fields
 
@@ -190,7 +294,6 @@ class BatchPrefetch:
                 branch_value=fields[:, 4],
                 tile_value=fields[:, 5],
                 placement_gap=fields[:, 6],
-                probes=fields[:, 7:].reshape(len(rows), self.layout.count, 4),
             ),
         )
 

@@ -147,8 +147,8 @@ class CudaVecEnv(VecEnv):
             diagnostic=False,
         )
         self.cp = self.batch.cp
-        # Collection telemetry is shared by the environment, its features and
-        # the counterfactual collector; evaluation leaves it disabled.
+        # Collection telemetry is shared by the environment and its features;
+        # evaluation leaves it disabled.
         self.profiler = DeviceProfiler(
             self.cp,
             training and cfg["training"].get("performance", {}).get("telemetry", False),

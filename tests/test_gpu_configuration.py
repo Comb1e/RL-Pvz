@@ -18,7 +18,7 @@ def test_new_shared_run_defaults_and_explicit_parallelism():
     cfg = configured(args())
     assert simulator(cfg) == "cuda"
     assert cfg["training"]["n_envs"] == 128
-    assert cfg["training"]["method"] == "complete_return_sequential_tile_probe_v1"
+    assert cfg["training"]["method"] == "complete_return_sequential_no_probe_v1"
     for count in (3, 32, 64, 128, 256, 512, 1024):
         cfg = configured(args(n_envs=count))
         assert cfg["training"]["n_envs"] == count
@@ -46,7 +46,7 @@ def test_previous_plant_probe_checkpoints_reject_before_cuda(tmp_path, monkeypat
                 json.dumps(
                     dict(
                         policy="transformer_lstm_q_v4",
-                        optimizer="complete_return_joint_tile_probe_v1",
+                        optimizer="complete_return_sequential_no_probe_v1",
                         exploration=EXPLORATION_PROTOCOL,
                     )
                 ),
@@ -109,6 +109,7 @@ def test_incomplete_background_recovery_rejected_before_allocation(tmp_path, mon
     runtime = dict(
         protocol=AUTONOMOUS_STATE_PROTOCOL,
         model_storage_protocol=MODEL_STATE_PROTOCOL,
+        precision_contract="bf16_master",
         buffer=metadata,
         collection_scheduler=CollectionScheduler(count, "cpu").snapshot(),
         teacher={},
@@ -141,7 +142,7 @@ def test_incomplete_background_recovery_rejected_before_allocation(tmp_path, mon
         for name in ("policy.pth", "policy.optimizer.pth"):
             archive.writestr(name, b"unread weights")
     with pytest.raises(
-        ValueError, match="Incomplete|Invalid collection|Unsupported|learned-history"
+        ValueError, match="Incomplete|Invalid collection|Unsupported|learned-history|Counterfactual"
     ):
         inspect_checkpoint(path)
 

@@ -15,11 +15,17 @@ def current_model_config(cfg):
         cfg.get("policy", {}).get("kind"),
         cfg.get("encoding", {}).get("version"),
         cfg.get("training", {}).get("method"),
+        cfg.get("training", {}).get("objective", {}).get("protocol"),
     )
     return (
         identity
         in {
-            ("two_stage_transformer_q_v1", "entity_v1", "complete_return_sequential_tile_probe_v1"),
+            (
+                "two_stage_transformer_q_v1",
+                "entity_v1",
+                "complete_return_sequential_no_probe_v1",
+                "complete_return_sequential_no_probe_v1",
+            ),
         }
         and cfg.get("policy", {}).get("action_distribution") == ACTION_DISTRIBUTION
         and cfg.get("reward", {}).get("version") == "net_value_v1"
@@ -60,7 +66,7 @@ def require_cuda_training(cfg, condition="masked", *, runtime=True):
     validate_config(cfg)
     if (
         cfg["training"].get("objective", {}).get("protocol")
-        != "complete_return_sequential_tile_probe_v1"
+        != "complete_return_sequential_no_probe_v1"
     ):
         raise ValueError(
             "Old-objective checkpoints cannot resume or initialize weights. Refit a verified demonstration in a new directory."
@@ -99,12 +105,9 @@ def require_cuda_training(cfg, condition="masked", *, runtime=True):
                 "CUDA training is unavailable. Run pvz-rl doctor and install the locked CUDA "
                 "dependencies with tools/bootstrap.ps1; CPU training is no longer supported."
             )
-        if (
-            cfg["training"].get("performance", {}).get("fit_precision", "fp32") == "features_bf16"
-            and not torch.cuda.is_bf16_supported()
-        ):
+        if not torch.cuda.is_bf16_supported():
             raise RuntimeError(
-                "BF16 fitting is unavailable; set training.performance.fit_precision=fp32"
+                "BF16 runtime inference and fitting are unavailable on this CUDA device"
             )
         _cuda_probe()
     require_supported_policy(cfg, condition)
@@ -123,7 +126,7 @@ def resume_protocol(cfg, condition):
 
 
 def transfer_protocol(cfg, condition="masked"):
-    """Only the engine and input/action/network structure constrain weight reuse."""
+    """Compare engine, model interface and objective identity after checkpoint validation."""
     env, p = cfg["environment"], cfg["policy"]
     return {
         "engine": [cfg[k] for k in ("engine_commit", "engine_version", "engine_package_version")],
@@ -166,8 +169,8 @@ def transfer_protocol(cfg, condition="masked"):
 def weight_transfer_protocol(cfg):
     """Describe only the public model interface required by demo weights.
 
-    A demonstration is re-fit under the current objective and execution
-    profile. Its weights require the same entity/action representation and
+    Checkpoint validation separately requires the current objective. Its
+    demonstration weights require the same entity/action representation and
     network dimensions, but do not require matching reward, return, optimizer,
     or execution batch settings.
     """

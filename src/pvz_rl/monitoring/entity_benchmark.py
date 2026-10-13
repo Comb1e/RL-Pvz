@@ -50,7 +50,7 @@ def measure(cfg, count, repeats=3):
     model = TwoStageTransformerPolicy(cfg).cuda()
     encoded, omitted = observation(cfg, count)
     batch = collate_observations([encoded] * 128, "cuda")
-    optimizer = torch.optim.Adam(model.parameters(), lr=cfg["training"]["learning_rate"])
+    optimizer = torch.optim.Adam(model.master_parameters(), lr=cfg["training"]["learning_rate"])
     branches = torch.ones(128, device="cuda", dtype=torch.long)
 
     def stage_values(stage):
@@ -67,14 +67,16 @@ def measure(cfg, count, repeats=3):
 
     def stage_fitting(stage):
         model.train()
-        optimizer.zero_grad(set_to_none=True)
-        with model.fitting_precision(cfg["training"]["performance"]["fit_precision"]):
-            loss = (stage_values(stage)[:, 0] - 1).square().mean()
-            loss.backward()
+        model.zero_grad(set_to_none=True)
+        loss = (stage_values(stage)[:, 0] - 1).square().mean()
+        loss.backward()
+        model.accumulate_master_gradients()
+        model.clear_runtime_grad(set_to_none=True)
         torch.nn.utils.clip_grad_norm_(
-            model.parameters(), cfg["training"]["max_grad_norm"], error_if_nonfinite=True
+            model.master_parameters(), cfg["training"]["max_grad_norm"], error_if_nonfinite=True
         )
         optimizer.step()
+        model.sync_runtime_from_masters()
 
     def inference():
         model.eval()
@@ -84,16 +86,19 @@ def measure(cfg, count, repeats=3):
 
     def fitting():
         model.train()
-        optimizer.zero_grad(set_to_none=True)
+        model.zero_grad(set_to_none=True)
         q = model.species_values(batch)
         tile_q = model.conditional_tiles(batch, torch.ones(128, device="cuda", dtype=torch.long))
         loss = (q[:, 0] - 1).square().mean() + (tile_q[:, 0] - 1).square().mean()
         loss.backward()
+        model.accumulate_master_gradients()
+        model.clear_runtime_grad(set_to_none=True)
         if not torch.isfinite(loss) or any(
             p.grad is not None and not torch.isfinite(p.grad).all() for p in model.parameters()
         ):
             raise FloatingPointError("Nonfinite crowded-entity fitting")
         optimizer.step()
+        model.sync_runtime_from_masters()
 
     inference()
     fitting()

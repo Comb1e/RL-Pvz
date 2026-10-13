@@ -19,7 +19,14 @@ def stable_norm(layer, value):
     # Preserve float64 mathematical controls; BF16 reductions use FP32.
     dtype = value.dtype
     with torch.autocast(value.device.type, enabled=False):
-        return layer(value.float() if dtype == torch.bfloat16 else value).to(dtype)
+        norm_dtype = torch.float32 if dtype == torch.bfloat16 else dtype
+        return F.layer_norm(
+            value.to(norm_dtype),
+            layer.normalized_shape,
+            layer.weight.to(norm_dtype),
+            layer.bias.to(norm_dtype),
+            layer.eps,
+        ).to(dtype)
 
 
 class AttentionBlock(nn.Module):
@@ -289,7 +296,7 @@ class SpatialTransformer(nn.Module):
             + self.state_embedding(state).to(dtype).to(accumulation)
             + self.numeric(numeric.to(self.numeric.weight.dtype)).to(accumulation),
         )
-        return result.masked_fill(~entity_mask[..., None], 0)
+        return result.to(dtype).masked_fill(~entity_mask[..., None], 0)
 
     def embed(self, batch):
         """Embed a public EntityBatch; retained for diagnostics and math tests."""
@@ -302,7 +309,7 @@ class SpatialTransformer(nn.Module):
                 :, None
             ]
         if self.stage == "tile":
-            tiles = self.numeric(self.tile_coordinates)
+            tiles = self.numeric(self.tile_coordinates.to(self.numeric.weight.dtype))
             tiles = tiles + self.tile_marker.to(tiles.dtype)
             readouts = torch.cat(
                 (

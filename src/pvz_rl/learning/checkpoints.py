@@ -10,16 +10,20 @@ import torch
 
 from pvz_rl.config import digest, load_config, validate_config
 from pvz_rl.learning.performance import ENCODER_SETTINGS, refresh_performance
-from pvz_rl.learning.training_requirements import transfer_protocol, weight_transfer_protocol
+from pvz_rl.learning.training_requirements import (
+    current_model_config,
+    transfer_protocol,
+    weight_transfer_protocol,
+)
 
-DEMO_PROTOCOL = "pvz-rl/demo-initialization-checkpoint-v7"
-MODEL_STATE_PROTOCOL = "pvz-rl/stateless-two-stage-state-v1"
-AUTONOMOUS_STATE_PROTOCOL = "pvz-rl/stateless-tile-probe-state-v6"
+DEMO_PROTOCOL = "pvz-rl/demo-initialization-checkpoint-v9"
+MODEL_STATE_PROTOCOL = "pvz-rl/stateless-two-stage-bf16-master-state-v2"
+AUTONOMOUS_STATE_PROTOCOL = "pvz-rl/stateless-no-probe-state-v1"
 
 
 def protocol_for(kind):
     methods = {
-        "two_stage_transformer_q_v1": "complete_return_sequential_tile_probe_v1",
+        "two_stage_transformer_q_v1": "complete_return_sequential_no_probe_v1",
     }
     if kind not in methods:
         raise ValueError(
@@ -31,6 +35,11 @@ def protocol_for(kind):
 
 
 def compatible_config(source, target, *, weights_only=False):
+    if not current_model_config(source) or not current_model_config(target):
+        raise ValueError(
+            "Old-objective checkpoints cannot resume or initialize weights. "
+            "Refit a verified demonstration in a new directory."
+        )
     protocol = weight_transfer_protocol if weights_only else transfer_protocol
     if protocol(source) != protocol(target):
         raise ValueError(
@@ -65,6 +74,12 @@ def validate_runtime_identity(runtime):
         )
     if any(key in runtime for key in ("memory", "teacher_memory")):
         raise ValueError("Stateless recovery cannot contain learned-history state")
+    if any(
+        key in runtime for key in ("probe_schedule", "probe_pool", "probe_jobs", "pending_probes")
+    ):
+        raise ValueError("Counterfactual rollout recovery is no longer supported")
+    if runtime.get("precision_contract") != "bf16_master":
+        raise ValueError("Unsupported runtime precision contract; fresh initialization is required")
 
 
 def inspect_checkpoint(path, *, weights_only=False):
@@ -77,7 +92,10 @@ def inspect_checkpoint(path, *, weights_only=False):
             raise ValueError(
                 "Unsupported demonstration checkpoint protocol; refit a verified recording in a new directory"
             )
-        if saved.get("model_storage_protocol") != MODEL_STATE_PROTOCOL:
+        if (
+            saved.get("model_storage_protocol") != MODEL_STATE_PROTOCOL
+            or saved.get("precision_contract") != "bf16_master"
+        ):
             raise ValueError(
                 "Unsupported stateless model storage protocol; fresh weights are required"
             )
@@ -167,12 +185,11 @@ def inspect_checkpoint(path, *, weights_only=False):
                         for key in (
                             "collection_scheduler",
                             "teacher",
-                            "probe_schedule",
                             "compilation",
                             "pending_episodes",
                         )
                     ):
-                        raise ValueError("Incomplete background tile probe recovery state")
+                        raise ValueError("Incomplete no-probe recovery state")
                     CollectionScheduler(cfg["training"]["n_envs"], "cpu").restore(
                         runtime["collection_scheduler"]
                     )

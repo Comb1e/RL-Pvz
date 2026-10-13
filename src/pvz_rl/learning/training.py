@@ -503,13 +503,6 @@ class ResearchCallback(BaseCallback):
             + seconds_text(row["last_optimization_seconds"]),
             f"optimizer step {step:,}",
         ]
-        execution = row.get("collection_execution", {})
-        if phase == "collect" and "active_auxiliary_lanes" in execution:
-            parts.insert(
-                2,
-                f"aux {execution['active_auxiliary_lanes']}/{execution['auxiliary_capacity']} "
-                f"queued {execution['queued_probes']} blocked {execution['capacity_blocked_slots']}",
-            )
         hardware = row["hardware"]
         usage = [
             f"{name} {hardware[key]:.0f}%"
@@ -561,8 +554,10 @@ class ResearchCallback(BaseCallback):
         keys = (
             "q_loss",
             "selected_action_error",
-            "species_consistency_error",
-            "probe_loss",
+            "species_consistency_loss",
+            "species_consistency_mae",
+            "species_consistency_saturation_fraction",
+            "species_selection_evaluation_gap",
             "placement_gap",
             "q_grad_norm",
             "fit_batch_groups",
@@ -1247,6 +1242,8 @@ def train(
             "adam_epsilon": 1e-8,
             "batch_size": cfg["training"]["batch_size"],
             "independent_encoders": True,
+            "runtime_dtype": "bf16",
+            "master_dtype": "fp32",
         },
         collection_method=cfg["training"]["method"],
     )

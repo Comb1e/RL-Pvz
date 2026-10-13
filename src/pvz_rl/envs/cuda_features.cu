@@ -173,27 +173,6 @@ extern "C" __global__ void policy_masks(const I *headers, const I *plants,
   masks[index] = available;
 }
 
-// Copy only occupied simulator slots, never the reserved projectile capacity.
-extern "C" __global__ void copy_probe_state(
-    const Header *sh, const Plant *sp, const Zombie *sz, const Shot *sq,
-    const Mower *sm, const I *sc, const I *ss, const I *sl, const double *sa,
-    Header *dh, Plant *dp, Zombie *dz, Shot *dq, Mower *dm, I *dc, I *ds, I *dl,
-    double *da, const I *source_ids, const I *target_ids, const bool *active) {
-  I row = blockIdx.x, t = threadIdx.x;
-  I source = source_ids[row], i = target_ids[row];
-  if (!active[row] || !sh[source].enabled) return;
-  Header h = sh[source];
-  if (t == 0) { dh[i] = h; da[i] = sa[source]; }
-  for (I j=t;j<h.np;j+=blockDim.x) dp[i*45+j]=sp[source*45+j];
-  for (I j=t;j<h.nz;j+=blockDim.x) dz[i*ZCAP+j]=sz[source*ZCAP+j];
-  for (I j=t;j<h.nq;j+=blockDim.x) dq[i*QCAP+j]=sq[source*QCAP+j];
-  for (I j=t;j<5;j+=blockDim.x) dm[i*5+j]=sm[source*5+j];
-  for (I j=t;j<8;j+=blockDim.x) dc[i*8+j]=sc[source*8+j];
-  for (I j=t;j<ZCAP*5;j+=blockDim.x) ds[i*ZCAP*5+j]=ss[source*ZCAP*5+j];
-  for (I j=t;j<ZCAP*2;j+=blockDim.x) dl[i*ZCAP*2+j]=sl[source*ZCAP*2+j];
-}
-
-
 // Copy each selected row's kept canonical records to its exclusive-scan offset.
 extern "C" __global__ void pack_entities(const int *entities, const I *summary,
     const I *offsets, const bool *selected, int *packed, I rows) {

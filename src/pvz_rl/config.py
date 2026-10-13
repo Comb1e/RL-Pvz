@@ -123,8 +123,25 @@ def validate_config(cfg: dict) -> None:
     if not isinstance(objective, dict):
         raise ValueError("training.objective must describe the stateless two-stage objective")
     if objective is not None:
-        if objective.get("protocol") != "complete_return_sequential_tile_probe_v1":
-            raise ValueError("Unsupported training objective protocol")
+        objective_keys = {
+            "protocol",
+            "accepted_outcome_share",
+            "species_consistency_weight",
+            "species_consistency_huber_delta",
+            "dense_multiplier",
+            "ema_decay",
+            "demo_rank_loss_weight",
+            "demo_rank_margin",
+        }
+        if set(objective) != objective_keys:
+            raise ValueError(
+                "training.objective contains retired or missing settings, including "
+                "species_consistency_huber_delta"
+            )
+        if objective.get("protocol") != "complete_return_sequential_no_probe_v1":
+            raise ValueError(
+                "Unsupported training objective protocol; fresh initialization is required"
+            )
         if objective.get("accepted_outcome_share") != 0.5:
             raise ValueError("objective.accepted_outcome_share must be 0.5")
         consistency_weight = objective.get("species_consistency_weight")
@@ -134,39 +151,29 @@ def validate_config(cfg: dict) -> None:
             or consistency_weight < 0
         ):
             raise ValueError("objective.species_consistency_weight must be finite and nonnegative")
-        for key in ("dense_multiplier", "probe_huber_delta", "demo_rank_margin"):
+        consistency_delta = objective.get("species_consistency_huber_delta")
+        if (
+            type(consistency_delta) not in (int, float)
+            or not math.isfinite(consistency_delta)
+            or consistency_delta <= 0
+        ):
+            raise ValueError(
+                "objective.species_consistency_huber_delta must be finite and positive"
+            )
+        for key in ("dense_multiplier", "demo_rank_margin"):
             if (
                 not isinstance(objective.get(key), (int, float))
                 or not math.isfinite(objective[key])
                 or objective[key] <= 0
             ):
                 raise ValueError(f"objective.{key} must be finite and positive")
-        for key in ("probe_loss_weight", "demo_rank_loss_weight", "ema_decay"):
+        for key in ("demo_rank_loss_weight", "ema_decay"):
             if (
                 not isinstance(objective.get(key), (int, float))
                 or not math.isfinite(objective[key])
                 or not 0 <= objective[key] < 1
             ):
                 raise ValueError(f"objective.{key} must be finite and in [0, 1)")
-        from pvz_rl.learning.probe_layout import ProbeLayout
-
-        ProbeLayout.from_config(cfg)
-        if (
-            objective.get("probe_trigger") != "accepted_plant"
-            or "probe_interval_decisions" in objective
-        ):
-            raise ValueError(
-                "The objective requires accepted-plant probes without a periodic scheduler"
-            )
-        for key in (
-            "probe_rollout_max_decisions",
-            "probe_rollout_control_interval_decisions",
-        ):
-            if type(objective.get(key)) is not int or objective[key] < 1:
-                raise ValueError(f"objective.{key} must be a positive integer")
-        seconds = objective.get("probe_rollout_seconds")
-        if type(seconds) not in (int, float) or not math.isfinite(seconds) or seconds <= 0:
-            raise ValueError("objective.probe_rollout_seconds must be finite and positive")
     penalties = cfg["reward"].get("home_entry_penalties", [0, 0])
     if (
         len(penalties) != 2
@@ -406,7 +413,7 @@ def validate_config(cfg: dict) -> None:
     if not math.isfinite(visual["final_hold_seconds"]) or visual["final_hold_seconds"] < 0:
         raise ValueError("Visualization final_hold_seconds must be finite and nonnegative")
     env, train = cfg["environment"], cfg["training"]
-    expected_method = "complete_return_sequential_tile_probe_v1"
+    expected_method = "complete_return_sequential_no_probe_v1"
     if train.get("method") != expected_method:
         raise ValueError("Training requires a supported complete-return method and fresh models")
     if any(
@@ -433,8 +440,8 @@ def validate_config(cfg: dict) -> None:
     for key in ("compile_kernels", "telemetry"):
         if type(performance.get(key, False)) is not bool:
             raise ValueError(f"training.performance.{key} must be a boolean")
-    if performance.get("fit_precision", "fp32") not in ("fp32", "features_bf16"):
-        raise ValueError("training.performance.fit_precision must be fp32 or features_bf16")
+    if performance.get("fit_precision", "fp32") != "bf16_master":
+        raise ValueError("training.performance.fit_precision must be bf16_master")
     if type(performance.get("prefetch", False)) is not bool:
         raise ValueError("training.performance.prefetch must be a boolean")
     if set(performance) - {
@@ -443,11 +450,10 @@ def validate_config(cfg: dict) -> None:
         "fit_precision",
         "prefetch",
         "fit_batch_groups",
+        "fit_encoder_microbatch",
+        "fit_token_budget",
         "collection_graph_cache_entries",
         "collection_vram_headroom_mib",
-        "probe_active_capacity",
-        "probe_pending_capacity",
-        "probe_steps_per_round",
     }:
         raise ValueError("training.performance contains unsupported execution settings")
     fit_batch_groups = performance.get("fit_batch_groups", 4)
@@ -460,7 +466,7 @@ def validate_config(cfg: dict) -> None:
         value = performance.get(key, default)
         if type(value) is not int or value < 0:
             raise ValueError(f"training.performance.{key} must be a nonnegative integer")
-    for key in ("probe_active_capacity", "probe_pending_capacity", "probe_steps_per_round"):
+    for key in ("fit_encoder_microbatch", "fit_token_budget"):
         if type(performance.get(key)) is not int or performance[key] < 1:
             raise ValueError(f"training.performance.{key} must be a positive integer")
     if train.get("budget_unit") not in ("games", "decisions"):

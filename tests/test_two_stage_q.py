@@ -1,6 +1,5 @@
 """Independent two-stage attribution, consistency, strata and ranking controls."""
 
-import numpy as np
 import pytest
 import torch
 
@@ -8,10 +7,11 @@ from pvz_rl.config import load_config
 from pvz_rl.envs.actions import ActionSchema as A
 from pvz_rl.envs.encoding import collate_observations
 from pvz_rl.learning.objective import (
+    consistency_diagnostics,
     demonstration_rank_loss,
-    probe_loss,
     ranking_counts,
     species_consistency_loss,
+    species_consistency_targets,
 )
 from pvz_rl.monitoring.entity_benchmark import observation
 from pvz_rl.policy.sequential_q import (
@@ -74,7 +74,12 @@ def test_bad_tile_return_does_not_blame_species_and_consistency_stops_target_gra
     assert policy.species.grad is None
     assert policy.tiles.grad[0, 0, 0] == 0 and policy.tiles.grad[0, 0, 1] == -2
     policy.zero_grad(set_to_none=True)
-    target = policy.tiles[:, 0].max(-1).values
+    target, _, _ = species_consistency_targets(
+        policy.tiles[:, 0],
+        policy.tiles[:, 0],
+        torch.ones(1, A.size, dtype=torch.bool),
+        torch.tensor([1]),
+    )
     consistency = species_consistency_loss(
         policy.species,
         target,
@@ -102,26 +107,86 @@ def test_full_board_candidate_fallback_and_unrestricted_dig_consistency():
     assert select_q_actions(species, tiles, masks, deterministic=True)[0].tolist() == [46, 405]
 
 
-@pytest.mark.parametrize("partition", [[slice(None)], [slice(0, 1), slice(1, 4)]])
-def test_probe_strata_and_gradients_are_independent_of_flat_batches(partition):
-    counts = np.zeros((10, 2), np.int64)
-    counts[2] = [3, 1]
-    probes = torch.tensor(
-        [[[1, 46, target, accepted]] for target, accepted in ((1, 1), (3, 0), (5, 0), (7, 0))],
-        dtype=torch.float32,
+@pytest.mark.parametrize(
+    "online,ema,occupied,branch,selected,target,gap",
+    [
+        ([3, 8, 1], [9, -4, 2], [], 1, 1, -4, 13),
+        ([1, 5, 2], [1, 5, 2], [], 2, 1, 5, 0),
+        ([4, 4, 1], [0, 9, 1], [], 3, 0, 0, 9),
+        ([100, 2, 7], [999, 12, -1], [0], 4, 2, -1, 13),
+        ([1, 8, 1], [-2, 9, 1], list(range(45)), 5, 0, -2, 0),
+        ([1, 2, 8], [9, 1, -3], list(range(45)), 9, 2, -3, 12),
+    ],
+    ids=["disagreement", "identical", "tie", "occupied", "full-board", "dig"],
+)
+def test_double_estimator_targets_use_online_geometry_selection_and_ema_evaluation(
+    online, ema, occupied, branch, selected, target, gap
+):
+    online_tiles = torch.full((1, A.tiles), -100.0)
+    ema_tiles = torch.full((1, A.tiles), -100.0)
+    online_tiles[0, :3] = torch.tensor(online)
+    ema_tiles[0, :3] = torch.tensor(ema)
+    online_tiles.requires_grad_()
+    ema_tiles.requires_grad_()
+    masks = torch.ones(1, A.size, dtype=torch.bool)
+    for tile in occupied:
+        masks[0, 1 + torch.arange(A.plant_types) * A.tiles + tile] = False
+    targets, selections, gaps = species_consistency_targets(
+        online_tiles, ema_tiles, masks, torch.tensor([branch])
     )
-    policy = TablePolicy(4)
-    predictions = policy.tiles[:, 1, 0]
-    loss = sum(
-        probe_loss(policy, None, probes[chunk], counts, 1, predictions=predictions[chunk])
-        for chunk in partition
+    torch.testing.assert_close(targets, torch.tensor([float(target)]))
+    assert selections.tolist() == [selected] and selections.dtype == torch.long
+    torch.testing.assert_close(gaps, torch.tensor([float(gap)]))
+    assert all(not tensor.requires_grad and tensor.grad_fn is None for tensor in (targets, gaps))
+    species = torch.zeros(1, 10, requires_grad=True)
+    actions = torch.tensor([1 + (branch - 1) * A.tiles + selected])
+    counts = [[0, int(branch != 9)], [0, int(branch == 9)]]
+    species_consistency_loss(species, targets, actions, torch.tensor([True]), counts).backward()
+    assert online_tiles.grad is None and ema_tiles.grad is None
+    assert species.grad[0, branch] == -2 * max(-1, min(1, target))
+    assert species.grad.count_nonzero() == int(target != 0)
+
+
+def test_double_estimator_target_helper_accepts_empty_nonwait_batch():
+    tiles = torch.empty(0, A.tiles, requires_grad=True)
+    targets, selected, gaps = species_consistency_targets(
+        tiles, tiles, torch.empty(0, A.size, dtype=torch.bool), torch.empty(0, dtype=torch.long)
     )
-    assert loss.item() == pytest.approx(2.5)
+    assert targets.shape == selected.shape == gaps.shape == (0,)
+    assert selected.dtype == torch.long
+    assert not targets.requires_grad and not gaps.requires_grad
+
+
+@pytest.mark.parametrize("delta", [0.25, 1.0, 2.5])
+def test_mse_matched_huber_values_and_derivatives_follow_independent_piecewise_control(delta):
+    residuals = [0.0]
+    residuals += [sign * ratio * delta for ratio in (0.25, 0.99, 1, 1.01, 20) for sign in (-1, 1)]
+    residuals += [-1e8, 1e8]
+    species = torch.zeros(len(residuals), 10, dtype=torch.float64)
+    species[:, 1] = torch.tensor(residuals, dtype=torch.float64)
+    species.requires_grad_()
+    targets = torch.zeros(len(residuals), dtype=torch.float64, requires_grad=True)
+    actions = torch.ones(len(residuals), dtype=torch.long)
+    accepted = torch.ones(len(residuals), dtype=torch.bool)
+    counts = [[0, len(residuals)], [0, 0]]
+    expected_values = [
+        residual**2 if abs(residual) <= delta else 2 * delta * abs(residual) - delta**2
+        for residual in residuals
+    ]
+    expected_gradients = [
+        2 * max(-delta, min(delta, residual)) / len(residuals) for residual in residuals
+    ]
+    loss = species_consistency_loss(species, targets, actions, accepted, counts, delta=delta)
+    assert loss.item() == pytest.approx(sum(expected_values) / len(residuals), rel=1e-12)
     loss.backward()
     torch.testing.assert_close(
-        policy.tiles.grad[:, 1, 0], torch.tensor([-0.5, -1 / 6, -1 / 6, -1 / 6])
+        species.grad[:, 1],
+        torch.tensor(expected_gradients, dtype=torch.float64),
+        atol=0,
+        rtol=1e-12,
     )
-    assert policy.species.grad is None and policy.tiles.grad.count_nonzero() == 4
+    assert not species.grad[:, [0, *range(2, 10)]].any()
+    assert targets.grad is None
 
 
 @pytest.mark.parametrize("partition", [[slice(None)], [slice(0, 1), slice(1, 4)]])
@@ -137,12 +202,54 @@ def test_consistency_uses_complete_cohort_group_and_outcome_denominators(partiti
         )
         for part in partition
     )
-    assert loss.item() == pytest.approx(9.875)
+    assert loss.item() == pytest.approx(1 / 4 + 3 / 8 + 5 / 8 + 7 / 2)
     loss.backward()
     torch.testing.assert_close(
-        species.grad[[0, 1, 2, 3], [1, 1, 2, 9]], torch.tensor([-0.5, -0.5, -0.75, -4.0])
+        species.grad[[0, 1, 2, 3], [1, 1, 2, 9]], torch.tensor([-0.5, -0.25, -0.25, -1.0])
     )
     assert targets.grad is None
+
+
+@pytest.mark.parametrize("accepted_share", [0.2, 0.5, 0.8])
+@pytest.mark.parametrize("include_dig", [False, True])
+def test_consistency_missing_groups_and_outcomes_receive_their_full_weight(
+    accepted_share, include_dig
+):
+    residuals = [0.2, 4.0, -2.0] if include_dig else [0.2, 4.0]
+    species = torch.zeros(len(residuals), 10, dtype=torch.float64, requires_grad=True)
+    targets = -torch.tensor(residuals, dtype=torch.float64, requires_grad=True)
+    targets.retain_grad()
+    actions = torch.tensor([1, 46, 361] if include_dig else [1, 46])
+    accepted = torch.tensor([True, True, False] if include_dig else [True, True])
+    counts = [[0, 2], [int(include_dig), 0]]
+    weights = [0.25, 0.25, 0.5] if include_dig else [0.5, 0.5]
+    values = [0.04, 7, 3] if include_dig else [0.04, 7]
+    loss = species_consistency_loss(
+        species, targets, actions, accepted, counts, accepted_share=accepted_share
+    )
+    assert loss.item() == pytest.approx(
+        sum(weight * value for weight, value in zip(weights, values))
+    )
+    loss.backward()
+    branches = [1, 2, 9] if include_dig else [1, 2]
+    expected = torch.tensor(
+        [2 * max(-1, min(1, residual)) * weight for residual, weight in zip(residuals, weights)],
+        dtype=torch.float64,
+    )
+    torch.testing.assert_close(species.grad[torch.arange(len(residuals)), branches], expected)
+    assert targets.grad is None
+
+
+@pytest.mark.parametrize("totals", [[7.5, 2, 6, 3], [0, 0, 0, 0]])
+def test_species_consistency_diagnostics_use_raw_totals_and_none_without_proposals(totals):
+    metrics = consistency_diagnostics(3.25, totals)
+    expected = {
+        "species_consistency_loss": 3.25 if totals[-1] else None,
+        "species_consistency_mae": 2.5 if totals[-1] else None,
+        "species_consistency_saturation_fraction": 2 / 3 if totals[-1] else None,
+        "species_selection_evaluation_gap": 2.0 if totals[-1] else None,
+    }
+    assert metrics == expected
 
 
 def test_demo_ranking_separates_species_and_tile_preferences_and_excludes_rejections():
@@ -195,40 +302,3 @@ def test_requested_pairs_equal_direct_selected_values_and_update_only_their_stag
     assert all(parameter.grad is None for parameter in policy.species_encoder.parameters())
     assert all(parameter.grad is None for parameter in policy.species_head.parameters())
     assert cfg["training"]["n_epochs"] == 4 and cfg["training"]["demo"]["passes"] == 20
-    assert cfg["training"]["objective"]["tile_probes"] == 4
-    assert cfg["training"]["objective"]["probe_rollout_seconds"] == 30
-
-
-@pytest.mark.parametrize("tiles", [1, 4, 44])
-def test_configurable_probe_layout_is_shared_with_storage(tiles):
-    from pvz_rl.config import validate_config
-    from pvz_rl.learning.cuda_buffer import trajectory_dtype
-    from pvz_rl.learning.probe_layout import ProbeLayout
-
-    cfg = load_config()
-    cfg["training"]["objective"].update(tile_probes=tiles)
-    validate_config(cfg)
-    layout = ProbeLayout.from_config(cfg)
-    assert trajectory_dtype(cfg)["probes"].shape == (tiles,)
-    assert layout.metadata_width == 7 + tiles * 4
-
-
-@pytest.mark.parametrize(
-    "changes",
-    [
-        {"branch_probes": 10},
-        {"tile_probes": 45},
-        {"branch_probes": -1},
-        {"tile_probes": True},
-        {"branch_probes": 0, "tile_probes": 0},
-        {"probe_trigger": "periodic"},
-        {"probe_interval_decisions": 512},
-    ],
-)
-def test_retired_and_invalid_probe_settings_are_rejected(changes):
-    from pvz_rl.config import validate_config
-
-    cfg = load_config()
-    cfg["training"]["objective"].update(changes)
-    with pytest.raises(ValueError):
-        validate_config(cfg)

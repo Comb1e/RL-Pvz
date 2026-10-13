@@ -28,7 +28,7 @@ class TwoStageTransformerPolicy(nn.Module):
 
         self.cfg = cfg
         self.layout = ObservationEncoder(cfg, Rules())
-        self.fit_precision = "fp32"
+        self.fit_precision = "bf16_master"
         spec = cfg["policy"]
         self.species_encoder = SpatialTransformer(self.layout, spec, "species")
         self.tile_encoder = SpatialTransformer(self.layout, spec, "tile")
@@ -38,6 +38,10 @@ class TwoStageTransformerPolicy(nn.Module):
         self.tile_head = nn.Sequential(
             nn.Linear(spec["tile_width"], 128), nn.ReLU(), nn.Linear(128, 1)
         )
+        self._master_parameters = []
+        self._master_names = []
+        self._initialize_masters()
+        self._set_runtime_dtype(torch.bfloat16)
 
     @property
     def encoders(self):
@@ -77,24 +81,120 @@ class TwoStageTransformerPolicy(nn.Module):
         for encoder in self.encoders:
             encoder.enable_compilation()
 
+    def _initialize_masters(self):
+        self._master_names = []
+        self._master_parameters = []
+        for name, parameter in self.named_parameters():
+            self._master_names.append(name)
+            self._master_parameters.append(parameter.detach().float().clone().requires_grad_(True))
+
+    def _set_runtime_dtype(self, dtype):
+        if dtype is not torch.bfloat16:
+            raise ValueError("The two-stage policy only supports BF16 runtime parameters")
+        for parameter in super().parameters():
+            parameter.data = parameter.data.to(dtype)
+
+    def _apply(self, fn):
+        result = super()._apply(fn)
+        for master in getattr(self, "_master_parameters", ()):
+            master.data = fn(master.data).float()
+            if master.grad is not None:
+                master.grad = fn(master.grad).float()
+        return result
+
+    def master_parameters(self):
+        return tuple(self._master_parameters)
+
+    def requires_grad_(self, requires_grad=True):
+        super().requires_grad_(requires_grad)
+        for master in self._master_parameters:
+            master.requires_grad_(requires_grad)
+        return self
+
+    def runtime_parameters(self):
+        return tuple(super().parameters())
+
+    def master_state_dict(self):
+        return {
+            name: master.detach().clone()
+            for name, master in zip(self._master_names, self._master_parameters, strict=True)
+        }
+
+    def runtime_state_dict(self):
+        return super().state_dict()
+
+    def state_dict(self, *args, **kwargs):
+        state = super().state_dict(*args, **kwargs)
+        for name, master in zip(self._master_names, self._master_parameters, strict=True):
+            if name in state:
+                state[name] = master.detach().clone()
+        return state
+
+    @torch.no_grad()
+    def load_state_dict(self, state_dict, strict=True, assign=False):
+        result = super().load_state_dict(state_dict, strict=strict, assign=assign)
+        # Weight-only initialization carries authoritative FP32 masters.  Do
+        # not round-trip those values through BF16 runtime parameters; teacher
+        # and recovery runtime states are BF16 and intentionally follow the
+        # cast runtime values instead.
+        for name, master, parameter in zip(
+            self._master_names, self._master_parameters, super().parameters(), strict=True
+        ):
+            source = state_dict.get(name)
+            if isinstance(source, torch.Tensor) and source.dtype == torch.float32:
+                master.copy_(source.to(device=master.device))
+            else:
+                master.copy_(parameter.float())
+        return result
+
+    @torch.no_grad()
+    def _sync_masters_from_runtime(self):
+        for master, parameter in zip(self._master_parameters, super().parameters(), strict=True):
+            master.copy_(parameter.float())
+
+    @torch.no_grad()
+    def sync_runtime_from_masters(self):
+        for master, parameter in zip(self._master_parameters, super().parameters(), strict=True):
+            parameter.copy_(master.to(dtype=torch.bfloat16))
+
+    def zero_grad(self, set_to_none=True):
+        super().zero_grad(set_to_none=set_to_none)
+        for master in self._master_parameters:
+            if set_to_none:
+                master.grad = None
+            elif master.grad is None:
+                master.grad = torch.zeros_like(master)
+            else:
+                master.grad.zero_()
+
+    def clear_runtime_grad(self, set_to_none=True):
+        super().zero_grad(set_to_none=set_to_none)
+
+    @torch.no_grad()
+    def accumulate_master_gradients(self):
+        for master, parameter in zip(self._master_parameters, super().parameters(), strict=True):
+            if parameter.grad is None:
+                continue
+            if master.grad is None:
+                master.grad = torch.zeros_like(master)
+            master.grad.add_(parameter.grad.float())
+
+    @property
+    def runtime_dtype(self):
+        return torch.bfloat16
+
     @contextmanager
     def fitting_precision(self, precision):
-        previous = self.fit_precision
-        self.fit_precision = precision
-        try:
-            yield
-        finally:
-            self.fit_precision = previous
+        if precision != "bf16_master":
+            raise ValueError("Only bf16_master fitting is supported")
+        yield
 
     def _encode(self, encoder, observations, branches=None, plan=None):
-        mixed = self.fit_precision == "features_bf16"
-        with torch.autocast(observations.device.type, dtype=torch.bfloat16, enabled=mixed):
-            value = (
-                encoder(observations, branches)
-                if plan is None
-                else encode_active(encoder, observations, plan, branches)
-            )
-        return value.to(next(self.parameters()).dtype)
+        return (
+            encoder(observations, branches)
+            if plan is None
+            else encode_active(encoder, observations, plan, branches)
+        )
 
     def species_values(self, observations, *, plan=None):
         observations = collate_observations(observations, self.device)
