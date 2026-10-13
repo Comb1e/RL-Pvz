@@ -9,9 +9,8 @@ from pvz_game import Rules
 
 from pvz_rl.config import load_config
 from pvz_rl.envs.encoding import ObservationEncoder, PackedEntityBatch, observations_equal
+from pvz_rl.learning.batch_transport import BatchPrefetch, batch_rows
 from pvz_rl.learning.cuda_buffer import CompleteGameBuffer, probe_dtype
-from pvz_rl.learning.recurrent_q import sequence_batches
-from pvz_rl.learning.sequence_transport import SequencePrefetch
 from pvz_rl.monitoring.entity_benchmark import observation
 
 
@@ -78,14 +77,15 @@ def test_committed_metadata_spill_and_corruption(tmp_path):
         buffer.close()
 
 
-@pytest.mark.parametrize("corruption", ["negative", "write_mask", "counts", "counts_mismatch"])
-def test_event_storage_corruption_is_rejected(tmp_path, corruption):
+@pytest.mark.parametrize(
+    "corruption", ["gap", "counts", "counts_mismatch", "consistency", "consistency_mismatch"]
+)
+def test_stateless_storage_corruption_is_rejected(tmp_path, corruption):
     buffer = CompleteGameBuffer(tmp_path / "collect", 1, block_rows=1, ram_bytes=0)
     try:
         rows = np.zeros(1, buffer.dtype)
         rows["active"] = True
-        rows["events"][0, 0] = 25
-        rows["memory_write"] = True
+        rows["action"] = 1
         buffer.append(rows, [dict(entities=[], globals=[0] * 18)])
         buffer.finalize()
         state = buffer.save(tmp_path / "saved")
@@ -96,12 +96,15 @@ def test_event_storage_corruption_is_rejected(tmp_path, corruption):
         elif corruption == "counts_mismatch":
             state["outcome_counts"] = state["outcome_counts"].copy()
             state["outcome_counts"][0, 0] += 1
-        elif corruption == "negative":
-            stored["events"][0, 7] = -1
+        elif corruption == "consistency":
+            state["consistency_counts"] = np.zeros((2, 1), dtype=np.int64)
+        elif corruption == "consistency_mismatch":
+            state["consistency_counts"] = state["consistency_counts"].copy()
+            state["consistency_counts"][0, 0] += 1
         else:
-            stored["memory_write"] = False
+            stored["placement_gap"] = np.nan
         np.save(path, stored)
-        with pytest.raises(ValueError, match="event|acceptance"):
+        with pytest.raises(ValueError, match="placement gap|acceptance"):
             CompleteGameBuffer.restore(tmp_path / "saved", state, tmp_path / "bad")
     finally:
         buffer.close()
@@ -197,9 +200,7 @@ def test_ragged_round_trip_shared_budget_and_empty_rows(tmp_path, ram_bytes):
         rows = np.zeros(5, buf.dtype)
         rows["active"] = True
         rows["reward"] = [1, 2, 3, 4, 5]
-        rows["events"][1, [0, 1, 7]] = [25, 25, 1000]
-        rows["events"][3, [5, 6]] = [1, 1]
-        rows["memory_write"][[1, 3]] = True
+        rows["placement_gap"] = np.arange(5) / 10
         rows["accepted"] = [1, 0, 0, 1, 1]
         buf.append(rows[:2], observations[:2])
         buf.append(rows[2:], observations[2:])
@@ -217,7 +218,9 @@ def test_ragged_round_trip_shared_budget_and_empty_rows(tmp_path, ram_bytes):
         with ZipFile(tmp_path / "saved.zip") as archive:
             restored = CompleteGameBuffer.restore_archive(archive, buf.metadata(), workspace)
         assert restored.entity_size == 20 and restored.ram_used <= ram_bytes
-        np.testing.assert_array_equal(restored.take(np.arange(5))["events"], rows["events"])
+        np.testing.assert_array_equal(
+            restored.take(np.arange(5))["placement_gap"], rows["placement_gap"]
+        )
         restored.finalize()
         np.testing.assert_array_equal(restored.outcome_counts, [[2, 3], [0, 0], [0, 0]])
         np.testing.assert_array_equal(restored.take(np.arange(5))["target"], [15, 14, 12, 9, 5])
@@ -279,7 +282,7 @@ def test_prefetch_order_spill_and_buffer_reuse(tmp_path, tiles, interrupt):
     cfg = load_config()
     cfg["training"]["objective"].update(tile_probes=tiles)
     raw, _ = observation(cfg, 5)
-    buffer = CompleteGameBuffer(tmp_path / "buffer", 2, ram_bytes=24000, block_rows=8, cfg=cfg)
+    buffer = CompleteGameBuffer(tmp_path / "buffer", 2, ram_bytes=18000, block_rows=8, cfg=cfg)
     prefetch = None
     recovered = None
     try:
@@ -303,18 +306,18 @@ def test_prefetch_order_spill_and_buffer_reuse(tmp_path, tiles, interrupt):
         recovered = CompleteGameBuffer.restore(tmp_path / "saved", state, tmp_path / "restored")
         assert recovered.layout == buffer.layout
         np.testing.assert_array_equal(recovered.take(np.arange(40)), buffer.take(np.arange(40)))
-        reference = list(sequence_batches(recovered, 4, 8))
-        prefetch = SequencePrefetch(recovered, 4, 8, "cuda", 5)
+        reference = [(rows, recovered.observations(rows)) for rows in batch_rows(recovered, 8)]
+        prefetch = BatchPrefetch(recovered, 8, "cuda", 5)
         assert recovered.ram_used + recovered.staging_bytes <= recovered.ram_bytes
         assert any(isinstance(block, np.memmap) for block in recovered.blocks)
         collected = []
-        for i, (reset, actual, obs, fields) in enumerate(prefetch):
-            exp_reset, exp_rows, exp_obs = reference[i]
-            assert reset == exp_reset
+        for i, (actual, obs, fields) in enumerate(prefetch):
+            exp_rows, exp_obs = reference[i]
             np.testing.assert_array_equal(actual, exp_rows)
             for a, b in zip(obs.tensors(), exp_obs.tensors()):
                 torch.testing.assert_close(a.cpu(), b)
             np.testing.assert_array_equal(fields["action"].cpu(), actual["action"])
+            np.testing.assert_array_equal(fields["placement_gap"].cpu(), actual["placement_gap"])
             expected_probes = np.stack(
                 [actual["probes"][name] for name in ("valid", "action", "target", "accepted")],
                 -1,
@@ -326,7 +329,7 @@ def test_prefetch_order_spill_and_buffer_reuse(tmp_path, tiles, interrupt):
         prefetch.close()
         assert recovered.staging_bytes == 0
         # Old device batches still own their values after repeated host-slot reuse.
-        for actual, (_, _, expected) in zip(collected, reference):
+        for actual, (_, expected) in zip(collected, reference):
             torch.testing.assert_close(actual.entities.cpu(), expected.entities)
         assert len(collected) == (2 if interrupt else len(reference))
     finally:
@@ -389,11 +392,7 @@ def test_out_of_order_endpoint_patches_are_owned_exact_once_and_recover_spill(tm
 
 
 @pytest.mark.parametrize("budget", [256, 512])
-def test_actual_decision_sequences_ignore_long_capacity_gaps_and_keep_256_boundaries(
-    tmp_path, budget
-):
-    from pvz_rl.learning.sequence_transport import sequence_rows
-
+def test_flat_actual_batches_ignore_capacity_gaps_without_detach_boundaries(tmp_path, budget):
     cfg = load_config()
     raw, _ = observation(cfg, 5)
     buffer = CompleteGameBuffer(tmp_path / "gaps", 2, ram_bytes=0, block_rows=64, cfg=cfg)
@@ -407,52 +406,50 @@ def test_actual_decision_sequences_ignore_long_capacity_gaps_and_keep_256_bounda
         rows["reset"][[0, 1001]] = True
         buffer.append(rows, [raw] * len(rows))
         buffer.finalize()
-        chunks = list(sequence_rows(buffer, 256, budget))
-        histories = {0: [], 1: []}
-        counts = []
-        for reset, chunk in chunks:
-            counts.append(chunk["active"].sum(-1).tolist())
-            for sequence in chunk:
-                actual = sequence[sequence["active"]]
-                if len(actual):
-                    histories[int(actual["env"][0])].extend(actual["target"].tolist())
-                    assert len(actual) <= 256
-            if reset:
-                assert all(
-                    sequence[sequence["active"]][0]["reset"]
-                    for sequence in chunk
-                    if sequence["active"].any()
-                )
-        np.testing.assert_array_equal(histories[0], np.arange(300, 0, -1))
-        np.testing.assert_array_equal(histories[1], [4, 2])
-        assert counts == ([[256], [44], [2]] if budget == 256 else [[256, 2], [44, 0]])
+        chunks = list(batch_rows(buffer, budget))
+        actual = np.concatenate(chunks)
+        assert actual.ndim == 1 and actual["active"].all()
+        np.testing.assert_array_equal(actual, buffer.take(np.flatnonzero(rows["active"])))
+        np.testing.assert_array_equal(actual["target"][actual["env"] == 0], np.arange(300, 0, -1))
+        np.testing.assert_array_equal(actual["target"][actual["env"] == 1], [4, 2])
+        assert list(map(len, chunks)) == ([256, 46] if budget == 256 else [302])
     finally:
         buffer.close()
 
 
-@pytest.mark.parametrize("ram_bytes", [0, 4096])
-def test_sequence_maps_share_budget_spill_and_release_on_early_close(tmp_path, ram_bytes):
-    from pvz_rl.learning.sequence_transport import sequence_rows
+def test_stateless_schema_and_conditional_placement_gap_are_independent_of_species_values(tmp_path):
+    from pvz_rl.learning.cuda_buffer import TRAJECTORY_PROTOCOL
 
-    buffer = CompleteGameBuffer(tmp_path / "maps", 2, ram_bytes=ram_bytes, block_rows=2)
-    source = None
+    buffer = CompleteGameBuffer(tmp_path / "stateless", 2, ram_bytes=0, block_rows=2)
     try:
-        rows = np.zeros(6, buffer.dtype)
+        assert TRAJECTORY_PROTOCOL.endswith("v8")
+        assert buffer.layout.metadata_width == 7 + 4 * buffer.layout.count
+        assert not {"events", "memory_write"} & set(buffer.dtype.names)
+        assert not {"events", "memory_write", "event_writes"} & set(probe_dtype().names)
+        rows = np.zeros(4, buffer.dtype)
         rows["active"] = True
-        rows["env"] = [1, 0, 1, 0, 1, 0]
-        rows["action"] = np.arange(6)
-        buffer.append(rows, [dict(entities=[], globals=[0] * 18)] * 6)
-        source = sequence_rows(buffer, 2, 4)
-        reset, actual = next(source)
-        assert reset and actual["action"].tolist() == [[1, 3], [0, 2]]
-        if ram_bytes:
-            assert buffer.staging_bytes == (6 + 3 * 2) * 8
-            assert buffer.ram_used + buffer.staging_bytes <= ram_bytes
-        else:
-            assert buffer.staging_bytes == 0 and list(buffer.path.glob("sequence-*/history.npy"))
-        source.close()
-        assert buffer.staging_bytes == 0 and not list(buffer.path.glob("sequence-*"))
+        rows["env"] = [0, 1, 0, 1]
+        rows["action"] = [0, 1, 361, 2]
+        rows["accepted"] = [True, False, True, True]
+        rows["branch_value"] = [5, 100, -200, 1]
+        rows["tile_value"] = [0, -4, 6, 0.5]
+        rows["placement_gap"] = [0, 0.125, 0.5, 0.375]
+        buffer.append(rows, [dict(entities=[], globals=[0] * 18)] * 4)
+        errors = buffer.finalize()
+        assert errors["plant"]["placement_gap"] == 0.25
+        assert errors["dig"]["placement_gap"] == 0.5
+        np.testing.assert_array_equal(buffer.consistency_counts, [[1, 1], [0, 1]])
     finally:
-        if source is not None:
-            source.close()
+        buffer.close()
+
+
+def test_previous_trajectory_contract_is_rejected_before_reading_arrays(tmp_path):
+    buffer = CompleteGameBuffer(tmp_path / "contract", 1, ram_bytes=0)
+    try:
+        state = buffer.metadata()
+        state["protocol"] = "pvz-rl/async-tile-event-rollout-trajectory-v7"
+        with pytest.raises(ValueError, match="fresh initialization"):
+            CompleteGameBuffer.restore(tmp_path / "absent", state, tmp_path / "unused")
+        assert not (tmp_path / "unused").exists()
+    finally:
         buffer.close()

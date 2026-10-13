@@ -185,7 +185,7 @@ def test_cohort_interruption_restores_actual_scores_and_optimizer(tmp_path):
     from stable_baselines3.common.logger import configure
 
     from pvz_rl.config import load_config
-    from pvz_rl.learning.recurrent_q import CudaRecurrentQ
+    from pvz_rl.learning.sequential_training import CudaSequentialQ
     from pvz_rl.learning.training import build_model, vector_env
     from pvz_rl.monitoring.benchmark import policy_digest
 
@@ -209,12 +209,11 @@ def test_cohort_interruption_restores_actual_scores_and_optimizer(tmp_path):
 
             set_exploration_rate(model, 0.0, plant_rate=0.0)
             with torch.no_grad():
-                model.policy.wait_head[-1].weight.zero_()
-                model.policy.wait_head[-1].bias.zero_()
+                model.policy.species_head[-1].weight.zero_()
+                model.policy.species_head[-1].bias.zero_()
                 model.policy.tile_head[-1].weight.zero_()
                 model.policy.tile_head[-1].bias.zero_()
-                model.policy.tile_offsets.zero_()
-                model.policy.tile_offsets[(1) - 1] = 0.1
+                model.policy.species_head[-1].bias[1] = 0.1
             if interrupted:
                 with pytest.raises(KeyboardInterrupt):
                     model.learn(1, callback=Interrupt())
@@ -225,7 +224,7 @@ def test_cohort_interruption_restores_actual_scores_and_optimizer(tmp_path):
                 assert page["rows"][0]["q"][1] == pytest.approx(0.1)
                 assert page["rows"][1]["q"] == page["rows"][0]["q"]
                 model.save(tmp_path / "interrupted.zip")
-                model = CudaRecurrentQ.load(tmp_path / "interrupted.zip", env=env)
+                model = CudaSequentialQ.load(tmp_path / "interrupted.zip", env=env)
                 model.set_logger(configure(format_strings=[]))
                 model.learn(1, reset_num_timesteps=False)
             else:

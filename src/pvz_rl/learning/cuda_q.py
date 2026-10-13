@@ -53,7 +53,7 @@ def checkpoint_optimizer_protocol(path):
 
 class CudaCohortLifecycle(BaseAlgorithm):
     policy_protocol = POLICY_SIGNATURE
-    optimizer_version = "complete_return_joint_tile_probe_v1"
+    optimizer_version = "complete_return_sequential_tile_probe_v1"
 
     def __init__(
         self,
@@ -63,7 +63,7 @@ class CudaCohortLifecycle(BaseAlgorithm):
         learning_rate=3e-4,
         batch_size=1024,
         n_epochs=4,
-        max_grad_norm=0.5,
+        max_grad_norm=5,
         policy_kwargs=None,
         seed=None,
         device="cuda",
@@ -90,7 +90,7 @@ class CudaCohortLifecycle(BaseAlgorithm):
         self.training_games = self._n_updates = 0
         self.cohort_metrics = {}
         self.runtime_state = None
-        self._buffer = self._memory = None
+        self._buffer = self._runner = None
         self._fit_epoch = 0
         if _init_setup_model:
             self._setup_model()
@@ -133,10 +133,9 @@ class CudaCohortLifecycle(BaseAlgorithm):
             model.runtime_state = torch.load(
                 io.BytesIO(archive.read("cohort-state.pt")), map_location="cpu", weights_only=False
             )
-        from pvz_rl.learning.checkpoints import AUTONOMOUS_STATE_PROTOCOL
+        from pvz_rl.learning.checkpoints import validate_runtime_identity
 
-        if model.runtime_state.get("protocol") != AUTONOMOUS_STATE_PROTOCOL:
-            raise ValueError("Unsupported recurrent recovery protocol")
+        validate_runtime_identity(model.runtime_state)
         return model
 
     @property
@@ -190,7 +189,7 @@ class CudaCohortLifecycle(BaseAlgorithm):
         self._pending_episodes = {}
         self.cohort_number = self._n_updates + 1
         self._last_obs = self.env.reset_cohort(count)
-        self._memory = self._new_memory()
+        self._runner = self._new_runner()
         self._first = True
         self._buffer = self._new_buffer()
         self._fit_epoch = 0
@@ -199,7 +198,14 @@ class CudaCohortLifecycle(BaseAlgorithm):
         self._device_seconds = 0.0
         self._simulation_ticks = 0
         self._planting_samples = 0
-        for key in ("q_loss", "selected_action_error", "placement_gap", "q_grad_norm"):
+        for key in (
+            "q_loss",
+            "selected_action_error",
+            "species_consistency_error",
+            "probe_loss",
+            "placement_gap",
+            "q_grad_norm",
+        ):
             self.logger.record("train/" + key, None)
         self._stats = dict(
             q_optimizer_steps=0,
@@ -239,7 +245,7 @@ class CudaCohortLifecycle(BaseAlgorithm):
         self._n_updates += 1
         self.logger.record("train/n_updates", self._n_updates)
         self._buffer.close()
-        self._buffer = self._memory = None
+        self._buffer = self._runner = None
         self.phase = CohortPhase.IDLE
         callback.on_rollout_end()
 
@@ -327,8 +333,7 @@ class CudaCohortLifecycle(BaseAlgorithm):
             self._restore_rng(state)
             self.runtime_state = None
             return
-        self._memory = self._new_memory()
-        self._memory.restore(state["memory"])
+        self._runner = self._new_runner()
         self._buffer = self._new_buffer()
         workspace = self._buffer.path
         with ZipFile(self._checkpoint_source) as archive:
@@ -363,16 +368,16 @@ class CudaCohortLifecycle(BaseAlgorithm):
             torch.cuda.synchronize(self.device)
             runtime = {
                 "environment": self.env.snapshot_training(),
-                "memory": self._memory.snapshot(),
                 "buffer": self._buffer.metadata(),
                 "python_rng": random.getstate(),
                 "numpy_rng": np.random.get_state(),
                 "torch_rng": torch.get_rng_state(),
                 "cuda_rng": torch.cuda.get_rng_state_all(),
             }
-        from pvz_rl.learning.checkpoints import AUTONOMOUS_STATE_PROTOCOL
+        from pvz_rl.learning.checkpoints import AUTONOMOUS_STATE_PROTOCOL, MODEL_STATE_PROTOCOL
 
         runtime["protocol"] = AUTONOMOUS_STATE_PROTOCOL
+        runtime["model_storage_protocol"] = MODEL_STATE_PROTOCOL
         runtime["execution_state"] = getattr(self, "execution_state", None)
         runtime.update(self._extra_runtime())
         # One atomic archive ties weights, optimizers, RNG and unfinished games
@@ -453,7 +458,7 @@ class CudaCohortLifecycle(BaseAlgorithm):
         return [
             *super()._excluded_save_params(),
             "_buffer",
-            "_memory",
+            "_runner",
             "_checkpoint_source",
             "runtime_state",
         ]

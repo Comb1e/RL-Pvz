@@ -1,4 +1,4 @@
-"""Bounded event-memory and fixed-history sensitivity diagnostic; never a mastery run."""
+"""Bounded two-stage current-board sensitivity diagnostic; never a mastery run."""
 
 import argparse
 import copy
@@ -15,13 +15,12 @@ from pvz_rl.envs.encoding import collate_observations
 from pvz_rl.learning.demo_initialization import load_demo_checkpoint
 from pvz_rl.learning.training import build_model, vector_env
 from pvz_rl.monitoring.entity_benchmark import observation
-from pvz_rl.policy.transformer_lstm import EventMemoryState
 from pvz_rl.provenance import write_json
 
 
 @torch.no_grad()
-def sensitivity(policy, cfg, state=None):
-    """Change one public fact at a time with identical recurrent history."""
+def sensitivity(policy, cfg):
+    """Change one current public fact at a time without any historical inputs."""
     base, _ = observation(cfg, 85)
     variants = {"original": base}
     for name in (
@@ -52,25 +51,15 @@ def sensitivity(policy, cfg, state=None):
             changed["globals"][14] -= 1 / cfg["encoding"]["count_scale"]
         variants[name] = changed
     batch = collate_observations(variants.values(), next(policy.parameters()).device)
-    if state is not None:
-        state = EventMemoryState(
-            state.hidden[:, :1].expand(-1, len(variants), -1).contiguous(),
-            state.cell[:, :1].expand(-1, len(variants), -1).contiguous(),
-            torch.zeros(len(variants), 7, dtype=torch.int64, device=batch.device),
-            torch.zeros(len(variants), dtype=torch.int64, device=batch.device),
-        )
     policy.eval()
-    out = policy.forward_step(batch, state)
-    tiles = policy.tile_values(
-        out.tile_features,
-        out.context,
+    tiles = policy.conditional_tiles(
+        batch,
         torch.full((len(variants),), 2, device=batch.device, dtype=torch.long),
     )
     q, tile = (
-        policy.action_values(out, observations=batch).branches.cpu().numpy(),
+        policy.species_values(batch).cpu().numpy(),
         tiles.cpu().numpy(),
     )
-    cell = out.state.cell.abs().flatten()
     return dict(
         branch_q={name: values.tolist() for name, values in zip(variants, q)},
         max_branch_delta={
@@ -79,9 +68,6 @@ def sensitivity(policy, cfg, state=None):
         max_tile_delta={
             name: float(np.max(np.abs(values - tile[0]))) for name, values in zip(variants, tile)
         },
-        cell_abs_quantiles=torch.quantile(cell, cell.new_tensor([0.5, 0.9, 1.0])).cpu().tolist(),
-        cell_over_5=float((cell > 5).float().mean()),
-        tanh_cell_over_099=float((cell.tanh().abs() > 0.99).float().mean()),
     )
 
 
@@ -92,12 +78,9 @@ class DiagnosticCallback(BaseCallback):
         self.rows, self.passes = [], []
         self.last_report = perf_counter()
         self.last_pass = (0, 0)
-        self.final_history = None
         self.peak_host_bytes = 0
 
     def _on_step(self):
-        if not self.model.env.enabled_envs.any():
-            self.final_history = self.model._memory.state.clone()
         self.log_progress()
         return True
 
@@ -131,10 +114,7 @@ class DiagnosticCallback(BaseCallback):
             dict(
                 cohort=self.model._n_updates,
                 metrics=copy.deepcopy(self.model.cohort_metrics),
-                sensitivity_zero_history=sensitivity(self.model.policy, self.cfg_diagnostic),
-                sensitivity_final_history=sensitivity(
-                    self.model.policy, self.cfg_diagnostic, self.final_history
-                ),
+                current_board_sensitivity=sensitivity(self.model.policy, self.cfg_diagnostic),
                 host_rss_bytes=psutil.Process().memory_info().rss,
                 cupy_pool_bytes=self.model.env.cp.get_default_memory_pool().used_bytes(),
             )
@@ -157,7 +137,7 @@ def run(checkpoint, output):
         weights = copy.deepcopy(source.state_dict())
         del source
     results = {}
-    for name in ("event_memory",):
+    for name in ("two_stage_transformer",):
         local = copy.deepcopy(cfg)
         destination = output / name
         destination.mkdir()
@@ -181,7 +161,12 @@ def run(checkpoint, output):
                 initial_sensitivity=initial,
                 peak_torch_bytes=torch.cuda.max_memory_allocated(),
                 peak_host_bytes=callback.peak_host_bytes,
-                compilation_status=model.policy.entity.compilation_status,
+                compilation_status={
+                    stage: encoder.compilation_status
+                    for stage, encoder in zip(
+                        ("species", "tile"), model.policy.encoders, strict=True
+                    )
+                },
             )
             write_json(output / "diagnostic.json", results)
         finally:

@@ -18,7 +18,6 @@ from pvz_rl.envs.encoding import (
     ObservationEncoder,
     width_bucket,
 )
-from pvz_rl.envs.history import EVENT_WIDTH
 from pvz_rl.envs.rewards import LEDGER_METRICS, REWARD_METRICS
 
 REWARD_FIELDS = (*REWARD_METRICS, "total")
@@ -50,7 +49,6 @@ class CudaFeatures:
         params = {
             "ENTITY_WIDTH": ENTITY_WIDTH,
             "ACCOUNTING_WIDTH": ACCOUNTING_WIDTH,
-            "HISTORY_WIDTH": EVENT_WIDTH,
             "ENTITY_LIMIT": self.limit,
             "RECORD_CAPACITY": 50 + batch.zcap,
             "GLOBAL_WIDTH": GLOBAL_WIDTH,
@@ -107,7 +105,6 @@ class CudaFeatures:
         self.policy_mask_kernel = self.module.get_function("policy_masks")
         self.reward_kernel = self.module.get_function("reward_metrics")
         self.home_kernel = self.module.get_function("home_entries")
-        self.dedup_kernel = self.module.get_function("dedup_probes")
         self.pack_kernel = self.module.get_function("pack_entities")
         rows = batch.n if store_rows is None else store_rows
         self.entities = cp.zeros((rows, self.limit, ENTITY_WIDTH), cp.int32)
@@ -115,8 +112,6 @@ class CudaFeatures:
         self.globals = cp.zeros((rows, GLOBAL_WIDTH), cp.float32)
         # Kept count, then plants/zombies/projectiles omitted by the entity cap.
         self.summary = cp.zeros((rows, 4), cp.int64)
-        self.history = cp.zeros((rows, 7), cp.int64)
-        self.history_tensor = torch.from_dlpack(self.history)
         self.records = cp.zeros((batch.n, 50 + batch.zcap, ENTITY_WIDTH), cp.int32)
         self.truncation_counts = self.summary[: batch.n, 1:]
         self.entity_tensor = torch.from_dlpack(self.entities)
@@ -262,11 +257,6 @@ class CudaFeatures:
             if observation_active is not None:
                 b.header[:, 17] = observation_active
             observation = self.encode(offset=offset, publish=publish)
-            cp.multiply(
-                b.accounting[:, 3:10],
-                self.enabled[:, None],
-                out=self.history[offset : offset + b.n],
-            )
         with self._track(phase):
             self.home_kernel(
                 ((b.n + 63) // 64,),
@@ -293,36 +283,6 @@ class CudaFeatures:
                 ),
             )
         return observation, self.reward_tensor
-
-    def dedup(self, events, valid, source, slots, *, state=None):
-        """Mark probe rows whose stored and recurrent inputs repeat an earlier slot."""
-        cp = self.batch.cp
-        n = len(self.entities) // slots
-        self.dedup_kernel(
-            (n,),
-            (128,),
-            (
-                self.entities,
-                self.summary,
-                self.globals,
-                cp.from_dlpack(events.contiguous()),
-                cp.from_dlpack(valid),
-                cp.from_dlpack(source),
-                n,
-                slots,
-                cp.from_dlpack(
-                    events.new_zeros(1, dtype=torch.float32)
-                    if state is None
-                    else state.hidden[0].contiguous()
-                ),
-                cp.from_dlpack(
-                    events.new_zeros(1, dtype=torch.float32)
-                    if state is None
-                    else state.cell[0].contiguous()
-                ),
-                0 if state is None else state.hidden.shape[-1],
-            ),
-        )
 
     def pack(self, selected, offsets, destination):
         """Copy selected rows' kept records contiguously; sizes come from the host."""

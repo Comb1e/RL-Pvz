@@ -70,7 +70,6 @@ def smoke_cfg(per_tick_cfg):
         n_envs=1,
         eval_interval=64,
     )
-    cfg["policy"]["chunk_length"] = 16
     return cfg
 
 
@@ -84,6 +83,5 @@ def tiny_cli_config(tmp_path):
         .read_text()
         .replace("live_enabled = true", "live_enabled = false")
         .replace("cutoff_seconds = 1200", "cutoff_seconds = 1")
-        .replace("chunk_length = 256", "chunk_length = 16")
     )
     return path

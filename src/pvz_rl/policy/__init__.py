@@ -1,13 +1,7 @@
 """Policy components of the shared CUDA training method."""
 
-from pvz_rl.policy.transformer_lstm import (
-    EventMemoryState,
-    RecurrentOutput,
-    TransformerLSTMPolicy,
-)
+from pvz_rl.policy.two_stage_transformer import TwoStageTransformerPolicy
 
 __all__ = [
-    "RecurrentOutput",
-    "EventMemoryState",
-    "TransformerLSTMPolicy",
+    "TwoStageTransformerPolicy",
 ]

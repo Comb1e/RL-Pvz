@@ -22,14 +22,12 @@ from pvz_rl.envs.encoding import (
     PackedEntityBatch,
     collate_observations,
 )
-from pvz_rl.envs.history import public_history_event
 from pvz_rl.envs.rewards import reward_parts
 from pvz_rl.learning.cuda_buffer import probe_dtype
 from pvz_rl.learning.objective import COMPONENTS, training_rewards
 from pvz_rl.learning.probe_layout import ProbeLayout
-from pvz_rl.policy.active_batch import ActiveBatchPlan, forward_active
-from pvz_rl.policy.sequential_q import action_parts, assemble, select_q_actions
-from pvz_rl.policy.transformer_lstm import EventMemoryState
+from pvz_rl.policy.active_batch import ActiveBatchPlan
+from pvz_rl.policy.sequential_q import action_parts, assemble
 
 
 class ProbeStop(IntEnum):
@@ -41,8 +39,8 @@ class ProbeStop(IntEnum):
 
 
 @torch.no_grad()
-def cpu_probe(game, proximity, proposal, cfg, policy, memory=None):
-    """Independent serial reference; memory has already consumed the source board."""
+def cpu_probe(game, proximity, proposal, cfg, policy):
+    """Independent serial reference using only each fork's current public board."""
     scratch = ActionPhaseGame(game.rules)
     scratch.restore(game.snapshot())
     ledger = copy.deepcopy(proximity)
@@ -51,10 +49,8 @@ def cpu_probe(game, proximity, proposal, cfg, policy, memory=None):
     tick_rate = game.rules.game["tick_rate"]
     start = scratch.observe().tick
     device = next(policy.parameters()).device
-    memory = policy.initial_state(1, device=device) if memory is None else memory.clone()
     accumulated = {}
     initial = None
-    writes = 0
     current = int(proposal)
     for transitions in range(1, objective["probe_rollout_max_decisions"] + 1):
         before = scratch.observe()
@@ -86,14 +82,6 @@ def cpu_probe(game, proximity, proposal, cfg, policy, memory=None):
                 reason=result.action_result.reason,
                 initial_duration=result.ticks_advanced,
             )
-        event = public_history_event(result.events, game.rules)
-        writes += int(event.writes)
-        facts = torch.as_tensor(event.array(), device=device)[None]
-        memory = memory.observe(
-            facts,
-            torch.tensor([result.ticks_advanced], device=device),
-            torch.ones(1, dtype=torch.bool, device=device),
-        )
         elapsed = result.observation.tick - start
         stop = (
             ProbeStop.TERMINAL
@@ -109,12 +97,11 @@ def cpu_probe(game, proximity, proposal, cfg, policy, memory=None):
         observation = encoder.encode(result.observation)
         if stop:
             break
-        actions, memory, _ = policy.decide(collate_observations([observation], device), memory)
+        actions, _ = policy.decide(collate_observations([observation], device))
         current = int(actions[0])
     bootstrap = 0.0
     if stop in (ProbeStop.HORIZON, ProbeStop.DECISION_CAP):
-        output = policy.forward_step(collate_observations([observation], device), memory)
-        bootstrap = float(policy.action_values(output, observations=[observation]).branches.max())
+        bootstrap = float(policy.species_values(collate_observations([observation], device)).max())
     return dict(
         **initial,
         duration=elapsed,
@@ -123,17 +110,13 @@ def cpu_probe(game, proximity, proposal, cfg, policy, memory=None):
         won=result.status.value == "won",
         components=accumulated,
         observation=observation,
-        events=memory.inputs()[0].cpu().numpy(),
-        memory_write=bool(memory.pending.any()),
         transitions=transitions,
-        event_writes=writes,
         stop_reason=int(stop),
         bootstrap=bootstrap,
         target=float(
             training_rewards(np.array([accumulated.get(key, 0) for key in COMPONENTS]), cfg)
         )
         + bootstrap,
-        state=memory,
     )
 
 
@@ -160,20 +143,18 @@ class ProbeJob:
     patched: set[int] = field(default_factory=set)
 
 
-def gather_memory(state, indices):
-    return EventMemoryState(
-        state.hidden[:, indices].contiguous(),
-        state.cell[:, indices].contiguous(),
-        state.pending[indices].contiguous(),
-        state.elapsed_ticks[indices].contiguous(),
-    )
-
-
-def scatter_memory(target, indices, source):
-    for destination, value, dimension in zip(
-        target.tensors(), source.tensors(), (1, 1, 0, 0), strict=True
-    ):
-        destination.index_copy_(dimension, indices, value)
+def endpoint_representatives(entities, globals_, counts, ema_versions, done):
+    """Deduplicate tail requests by exact public inputs and frozen weight version."""
+    representatives, seen = np.arange(len(counts)), {}
+    for index, count in enumerate(counts):
+        key = (
+            entities[index, :count].tobytes(),
+            globals_[index].tobytes(),
+            int(ema_versions[index]),
+            bool(done[index]),
+        )
+        representatives[index] = seen.setdefault(key, index)
+    return representatives
 
 
 class ProbePool:
@@ -197,7 +178,7 @@ class ProbePool:
         self.source_capacity = performance["probe_pending_capacity"]
         self.steps_per_round = performance["probe_steps_per_round"]
         self.batch = self.features = self.source_batch = self.source_features = None
-        self.state = self.source_state = self.teacher = None
+        self.teacher = None
         self.jobs, self.queue, self.lanes = {}, deque(), []
         self.free_sources = deque()
         self._prepared = self._control = self._endpoint = self._bootstrap = None
@@ -211,7 +192,6 @@ class ProbePool:
             padded_rows=0,
             bucket_widths=(),
             rollout_transitions=0,
-            rollout_event_writes=0,
             rollout_logical_rows=0,
             rollout_padded_rows=0,
             rollout_enqueue_seconds=0.0,
@@ -237,14 +217,10 @@ class ProbePool:
                     if isinstance(value, self.env.batch.cp.ndarray) and value.data.ptr not in seen:
                         seen.add(value.data.ptr)
                         amount += value.nbytes
-        for value in (self.state, self.source_state):
-            if value is not None:
-                amount += sum(tensor.numel() * tensor.element_size() for tensor in value.tensors())
         for name in (
             "start",
             "accumulated",
             "counts",
-            "writes",
             "initial",
             "reason",
             "tile_cursor",
@@ -253,7 +229,7 @@ class ProbePool:
             value = getattr(self, name, None)
             if value is not None:
                 amount += value.numel() * value.element_size()
-        for name in ("counts_host", "writes_host", "entity_counts"):
+        for name in ("counts_host", "entity_counts"):
             value = getattr(self, name, None)
             if value is not None:
                 amount += value.nbytes
@@ -317,20 +293,14 @@ class ProbePool:
                 )
                 self.features = CudaFeatures(self.batch, self.env.cfg, self.env.condition)
                 self.features.profiler = self.profiler
-                self.state = teacher.initial_state(self.capacity, device=source.device)
-                self.source_state = teacher.initial_state(
-                    self.source_capacity, device=source.device
-                )
                 self.start = torch.zeros(self.capacity, dtype=torch.long, device=source.device)
                 self.counts = self.start.clone()
-                self.writes = self.start.clone()
                 self.reason = self.start.clone()
                 self.accumulated = torch.zeros(
                     self.capacity, len(COMPONENTS), dtype=torch.float64, device=source.device
                 )
                 self.initial = torch.zeros(self.capacity, 5, dtype=torch.long, device=source.device)
                 self.counts_host = np.zeros(self.capacity, np.int64)
-                self.writes_host = np.zeros(self.capacity, np.int64)
                 self.entity_counts = np.zeros(self.capacity, np.int64)
                 if (
                     self.workspace_bytes + self.env.handoff.nbytes
@@ -355,16 +325,13 @@ class ProbePool:
                 MemoryError,
             ):
                 self.batch = self.features = self.source_batch = self.source_features = None
-                self.state = self.source_state = None
                 for name in (
                     "start",
                     "counts",
-                    "writes",
                     "reason",
                     "accumulated",
                     "initial",
                     "counts_host",
-                    "writes_host",
                     "entity_counts",
                 ):
                     setattr(self, name, None)
@@ -454,7 +421,7 @@ class ProbePool:
         ]
 
     @torch.no_grad()
-    def reserve(self, teacher, state, actions, masks, issued, order):
+    def reserve(self, teacher, actions, masks, issued, order):
         self._ensure(teacher)
         if self._prepared is not None:
             raise RuntimeError("Commit the previous source reservation first")
@@ -485,28 +452,6 @@ class ProbePool:
                 bank_ids,
                 admitted,
             )
-            selected = priority[
-                needs_source[priority].long().argsort(descending=True, stable=True)
-            ][: min(len(free), len(actions))]
-            destinations = free[: len(selected)]
-            selected_state = gather_memory(state, selected)
-            previous = gather_memory(self.source_state, destinations)
-            used = admitted[selected]
-            selected_state = EventMemoryState(
-                *[
-                    torch.where(
-                        used[None, :, None]
-                        if dimension == 1
-                        else used.reshape(-1, *([1] * (value.ndim - 1))),
-                        value,
-                        old,
-                    )
-                    for value, old, dimension in zip(
-                        selected_state.tensors(), previous.tensors(), (1, 1, 0, 0), strict=True
-                    )
-                ]
-            )
-            scatter_memory(self.source_state, destinations, selected_state)
         host = self.env.handoff.enqueue_fields(
             "probe_admission",
             dict(
@@ -574,15 +519,14 @@ class ProbePool:
         self._copy(
             self.source_batch, self.source_features, self.batch, self.features, sources, targets
         )
-        scatter_memory(self.state, targets, gather_memory(self.source_state, sources))
         header = torch.from_dlpack(self.batch.header)
         self.start[targets] = header[targets, 0]
-        self.counts[targets] = self.writes[targets] = self.reason[targets] = 0
+        self.counts[targets] = self.reason[targets] = 0
         self.accumulated[targets] = self.initial[targets] = 0
         self.features.totals[self.env.batch.cp.from_dlpack(targets)] = 0
         for lane, (bank, slot) in enumerate(starting, first):
             self.jobs[bank].phase = ProbePhase.RUNNING
-            self.counts_host[lane] = self.writes_host[lane] = 0
+            self.counts_host[lane] = 0
             self.entity_counts[lane] = min(self.features.limit, self.jobs[bank].source_count + 1)
         self.lanes.extend(starting)
         batch = self.batch.compact_view(len(self.lanes))
@@ -602,34 +546,38 @@ class ProbePool:
             self.features.compact_view(self.batch.compact_view(count)),
         )
         header = torch.from_dlpack(batch.header)
-        state = gather_memory(self.state, torch.arange(count, device=header.device))
         bounds = self.entity_counts[:count].copy()
+        observation_rows = batch.cp.ones(count, batch.cp.bool_)
         for step in range(self.steps_per_round):
             continuing = self.counts_host[:count] > 0 if not step else np.ones(count, bool)
             plan = ActiveBatchPlan.from_counts(
                 continuing,
                 bounds,
                 features.limit,
-                self.teacher.entity.microbatch,
-                self.teacher.entity.token_budget,
+                self.teacher.species_encoder.microbatch,
+                self.teacher.species_encoder.token_budget,
             )
             live = self.reason[:count] == 0
             with self.profiler.track("probe_inference"):
                 obs = features.view(0, count, features.limit)
-                output = forward_active(
-                    self.teacher, obs, state, plan, memory_write=state.pending.ne(0).any(-1) & live
+                actions, _ = self.teacher.decide(
+                    obs,
+                    action_masks=features.mask_tensor,
+                    deterministic=True,
+                    active=live,
+                    active_plan=plan,
                 )
-                values = self.teacher.action_values(output, features.mask_tensor, plan=plan)
-                actions, _, _, _ = select_q_actions(
-                    values, features.mask_tensor, deterministic=True, active=live
-                )
-            state = output.state
             initial_actions = torch.tensor(
                 [self.jobs[bank].proposals[slot] for bank, slot in self.lanes], device=header.device
             )
             actions = torch.where(self.counts[:count] == 0, initial_actions, actions)
             header[:, 17].copy_(live.long())
-            features.step(batch.cp.from_dlpack(actions), publish=False, phase="probe_simulation")
+            features.step(
+                batch.cp.from_dlpack(actions),
+                publish=False,
+                phase="probe_simulation",
+                observation_active=observation_rows,
+            )
             first = self.counts[:count] == 0
             initial = torch.stack(
                 (
@@ -646,9 +594,6 @@ class ProbePool:
                 :, [REWARD_FIELDS.index(name) for name in COMPONENTS]
             ]
             self.counts[:count] += live.long()
-            facts = features.history_tensor[:count]
-            self.writes[:count] += (facts.ne(0).any(-1) & live).long()
-            state = state.observe(facts, header[:, 14], live)
             elapsed = header[:, 0] - self.start[:count]
             cutoff = (
                 header[:, 0]
@@ -675,7 +620,6 @@ class ProbePool:
             self.inference_metrics["rollout_logical_rows"] += plan.logical_rows
             self.inference_metrics["rollout_padded_rows"] += plan.padded_rows
             bounds[:] = features.limit
-        scatter_memory(self.state, torch.arange(count, device=header.device), state)
         ema_versions = torch.tensor(
             [self.jobs[bank].ema_version for bank, _ in self.lanes], device=header.device
         )
@@ -702,7 +646,6 @@ class ProbePool:
                         elapsed * 0,
                         initial[:, 4],
                         self.counts[:count],
-                        self.writes[:count],
                         self.reason[:count],
                         ema_versions,
                     ),
@@ -727,12 +670,9 @@ class ProbePool:
         self.inference_metrics["rollout_transitions"] += int(
             (metadata[:, 17] - self.counts_host[:count]).sum()
         )
-        self.inference_metrics["rollout_event_writes"] += int(
-            (metadata[:, 18] - self.writes_host[:count]).sum()
-        )
-        self.counts_host[:count], self.writes_host[:count] = metadata[:, 17], metadata[:, 18]
+        self.counts_host[:count] = metadata[:, 17]
         self.entity_counts[:count] = summary[:, 0]
-        finished = np.flatnonzero(metadata[:, 19])
+        finished = np.flatnonzero(metadata[:, 18])
         if len(finished):
             if self._endpoint is not None:
                 raise RuntimeError(
@@ -748,36 +688,30 @@ class ProbePool:
                 self.features.globals_tensor[indices].clone(),
                 validated=True,
             )
-            state = gather_memory(self.state, indices)
             packets = [self.lanes[index] for index in finished]
             fields = dict(
                 entities=observation.entities,
                 globals=observation.globals,
-                events=state.inputs(),
-                hidden=state.hidden[0],
-                cell=state.cell[0],
             )
             self._endpoint = dict(
                 packets=packets,
                 metadata=metadata[finished].copy(),
                 counts=summary[finished, 0].copy(),
                 observation=observation,
-                state=state,
                 host=self.env.handoff.enqueue_fields("auxiliary_endpoint", fields),
                 owned_bytes=sum(
-                    value.numel() * value.element_size()
-                    for value in (*observation.tensors(), *state.tensors())
+                    value.numel() * value.element_size() for value in observation.tensors()
                 ),
             )
             for bank, _ in packets:
                 self.jobs[bank].phase = ProbePhase.ENDPOINT
             for reason in ProbeStop:
                 if reason:
-                    number = int(np.count_nonzero(metadata[finished, 19] == reason))
+                    number = int(np.count_nonzero(metadata[finished, 18] == reason))
                     if number:
                         totals = self.inference_metrics["stop_reasons"]
                         totals[reason.name.lower()] = totals.get(reason.name.lower(), 0) + number
-            self._compact(np.flatnonzero(metadata[:, 19] == 0))
+            self._compact(np.flatnonzero(metadata[:, 18] == 0))
         if self.rounds % self.control_interval == 0:
             self.profiler.flush()
 
@@ -813,15 +747,10 @@ class ProbePool:
             for name in names:
                 tensor = torch.from_dlpack(getattr(owner, name))
                 tensor[: len(indices)].copy_(tensor.index_select(0, indices))
-        scatter_memory(
-            self.state,
-            torch.arange(len(indices), device=indices.device),
-            gather_memory(self.state, indices),
-        )
-        for name in ("start", "counts", "writes", "reason", "accumulated", "initial"):
+        for name in ("start", "counts", "reason", "accumulated", "initial"):
             tensor = getattr(self, name)
             tensor[: len(indices)].copy_(tensor.index_select(0, indices))
-        for name in ("counts_host", "writes_host", "entity_counts"):
+        for name in ("counts_host", "entity_counts"):
             array = getattr(self, name)
             array[: len(surviving)] = array[surviving]
         self.lanes = [self.lanes[index] for index in surviving]
@@ -861,27 +790,16 @@ class ProbePool:
         ):
             records[field_name] = metadata[:, column]
         records["components"] = metadata[:, 9:15]
-        records["events"] = host["events"].numpy()
-        records["memory_write"] = records["events"][:, :7].any(-1)
         for column, field_name in enumerate(
-            ("initial_duration", "transitions", "event_writes", "stop_reason", "ema_version"), 16
+            ("initial_duration", "transitions", "stop_reason", "ema_version"), 16
         ):
             records[field_name] = metadata[:, column]
         if not np.isfinite(metadata).all():
             raise RuntimeError("Invalid auxiliary reward accounting")
         entities, globals_ = host["entities"].numpy(), host["globals"].numpy()
-        representatives, seen = np.arange(len(counts)), {}
-        for index, (bank, _) in enumerate(packet["packets"]):
-            key = (
-                bank,
-                entities[index, : counts[index]].tobytes(),
-                globals_[index].tobytes(),
-                host["events"][index].numpy().tobytes(),
-                host["hidden"][index].numpy().tobytes(),
-                host["cell"][index].numpy().tobytes(),
-                bool(records["done"][index]),
-            )
-            representatives[index] = seen.setdefault(key, index)
+        representatives = endpoint_representatives(
+            entities, globals_, counts, records["ema_version"], records["done"]
+        )
         unique = representatives == np.arange(len(counts))
         offsets = np.cumsum(np.where(unique, counts, 0)) - np.where(unique, counts, 0)
         observations = PackedEntityBatch(
@@ -898,19 +816,14 @@ class ProbePool:
             needed,
             counts,
             self.features.limit,
-            self.teacher.entity.microbatch,
-            self.teacher.entity.token_budget,
+            self.teacher.species_encoder.microbatch,
+            self.teacher.species_encoder.token_budget,
         )
-        bootstrap = packet["state"].hidden.new_zeros(len(counts))
+        bootstrap = torch.zeros(len(counts), device=self.env.batch.device)
         if plan.logical_rows:
             with self.profiler.track("probe_bootstrap_inference"):
-                output = forward_active(self.teacher, packet["observation"], packet["state"], plan)
                 values = (
-                    self.teacher.action_values(
-                        output, observations=packet["observation"], plan=plan
-                    )
-                    .branches.max(-1)
-                    .values
+                    self.teacher.species_values(packet["observation"], plan=plan).max(-1).values
                 )
                 bootstrap = torch.where(
                     torch.as_tensor(records["done"], device=values.device),
@@ -937,16 +850,14 @@ class ProbePool:
         if self.has_work:
             raise RuntimeError("Drain background probes before releasing their workspaces")
         self.batch = self.features = self.source_batch = self.source_features = None
-        self.state = self.source_state = self.teacher = None
+        self.teacher = None
         for name in (
             "start",
             "counts",
-            "writes",
             "initial",
             "reason",
             "accumulated",
             "counts_host",
-            "writes_host",
             "entity_counts",
         ):
             setattr(self, name, None)

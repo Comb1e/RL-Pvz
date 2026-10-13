@@ -7,14 +7,14 @@ from pvz_game.cuda.schema import REASONS
 
 from pvz_rl.envs.actions import ActionSchema as A
 from pvz_rl.envs.env import PvZEnv
-from pvz_rl.policy.sequential_q import ActionQValues, select_q_actions
+from pvz_rl.policy.sequential_q import select_q_actions
 
 
 def _select(values, mask):
     masks = torch.as_tensor(mask, dtype=torch.bool)[None]
     values = torch.tensor([values], dtype=torch.float32)
-    joint = ActionQValues.derive(values[:, 0], values[:, 1:, None].expand(-1, -1, A.tiles), masks)
-    return int(select_q_actions(joint, masks, deterministic=True)[0][0])
+    tiles = torch.zeros(1, A.tiles)
+    return int(select_q_actions(values, tiles, masks, deterministic=True)[0][0])
 
 
 def test_high_q_unaffordable_plant_stays_selected_and_is_rejected(per_tick_cfg):

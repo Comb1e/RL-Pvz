@@ -8,7 +8,7 @@ PERFORMANCE_SETTINGS = (
     "prefetch",
     "compile_kernels",
     "telemetry",
-    "fit_sequence_groups",
+    "fit_batch_groups",
     "collection_graph_cache_entries",
     "collection_vram_headroom_mib",
     "probe_active_capacity",

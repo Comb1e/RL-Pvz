@@ -1,4 +1,4 @@
-"""Batched scratch isolation, device deduplication and collection boundaries."""
+"""Batched scratch isolation, endpoint deduplication and collection boundaries."""
 
 import numpy as np
 import pytest
@@ -8,10 +8,9 @@ from pvz_game import Game, InitialPlant, LevelSpec, Spawn
 from pvz_rl.config import load_config
 from pvz_rl.envs.cuda_env import CudaVecEnv
 from pvz_rl.envs.encoding import collate_observations
-from pvz_rl.envs.probes import ProbePool
+from pvz_rl.envs.probes import ProbePool, endpoint_representatives
 from pvz_rl.monitoring.entity_benchmark import observation
-from pvz_rl.policy.runner import PolicyRunner
-from pvz_rl.policy.transformer_lstm import TransformerLSTMPolicy
+from pvz_rl.policy.two_stage_transformer import TwoStageTransformerPolicy
 
 pytestmark = pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA unavailable")
 
@@ -23,13 +22,14 @@ def collection_env():
     cfg["training"]["performance"].update(compile_kernels=False, telemetry=True)
     cfg["visualization"].update(enabled=False, live_enabled=False)
     cfg["policy"].update(
-        entity_width=8,
-        transformer_heads=2,
-        transformer_layers=1,
-        transformer_feedforward=16,
-        scalar_width=8,
-        lstm_hidden=8,
-        event_width=4,
+        species_width=16,
+        species_heads=1,
+        species_layers=1,
+        species_feedforward=32,
+        tile_width=16,
+        tile_heads=1,
+        tile_layers=1,
+        tile_feedforward=32,
     )
     env = CudaVecEnv(cfg, "masked", 101)
     env.reset()
@@ -59,179 +59,56 @@ def collection_env():
         env.close()
 
 
-@pytest.mark.parametrize(
-    "case, expected",
-    [
-        ("cap", [0, 0, 0, 0, 0, 0, 0]),
-        ("gross_sun", [50, 50, 0, 0, 0, 1, 0]),
-        ("spawn_remove", [0, 0, 1, 1, 1, 0, 1]),
-        ("head_loss", [0, 0, 1, 1, 0, 0, 0]),
-        ("plant_death", [0, 0, 0, 0, 0, 0, 1]),
-        ("plant", [0, 50, 0, 0, 0, 1, 0]),
-        ("dig", [0, 0, 0, 0, 0, 0, 1]),
-        ("rejected_spawn", [0, 0, 1, 0, 0, 0, 0]),
-    ],
-)
-def test_independent_cpu_cuda_public_event_accounting(case, expected):
-    from pvz_game import Dig, Place, Rules, Wait
-
-    from pvz_rl.envs.action_timing import ActionPhaseGame
-    from pvz_rl.envs.actions import ActionCodec
-    from pvz_rl.envs.cuda_accounting import AccountingCudaBatch
-    from pvz_rl.envs.cuda_features import CudaFeatures
-    from pvz_rl.envs.history import public_history_event
-
-    action, per_tick, plants = Wait(), True, ()
-    spawns = (Spawn(1000, "basic", 4),)
-    if case == "gross_sun":
-        action, per_tick = Place("sunflower", 0, 0), False
-        plants = (InitialPlant("sunflower", 0, 1),)
-    elif case == "spawn_remove":
-        plants = (InitialPlant("cherry_bomb", 2, 1),)
-        spawns = (Spawn(1, "basic", 2, x=1500), *spawns)
-    elif case == "head_loss":
-        spawns = (Spawn(1, "basic", 0, x=1000), *spawns)
-    elif case == "plant_death":
-        plants = (InitialPlant("sunflower", 0, 0),)
-        spawns = (Spawn(1, "basic", 0, x=100), *spawns)
-    elif case == "plant":
-        action = Place("sunflower", 0, 0)
-    elif case == "dig":
-        plants, action = (InitialPlant("sunflower", 0, 0),), Dig(0, 0)
-    elif case == "rejected_spawn":
-        plants, action = (InitialPlant("sunflower", 0, 0),), Place("sunflower", 0, 0)
-        spawns = (Spawn(1, "basic", 4), *spawns)
-    rules = Rules()
-    scenario = LevelSpec(case, spawns, initial_sun=100, plants=plants, mowers=False)
-    cpu = ActionPhaseGame(rules)
-    cpu.reset(scenario, seed=101)
-    if case == "plant_death":
-        cpu.step(ticks=3)
-    snapshot = cpu.snapshot()
-    snapshot["sky_due"] = 9999
-    if case == "cap":
-        snapshot["sun"], snapshot["sky_due"] = rules.game["sun_cap"], 1
-    elif case == "gross_sun":
-        snapshot["sky_due"] = snapshot["plants"][0]["due"] = 1
-    elif case == "spawn_remove":
-        snapshot["plants"][0]["due"] = 1
-    elif case == "head_loss":
-        snapshot["projectiles"] = [
-            dict(id=1, row=0, x=1000, damage=200, icy=False, move_remainder=0)
-        ]
-        snapshot["next_id"] = 2
-    elif case == "plant_death":
-        snapshot["plants"][0]["health"] = 1
-    cpu.restore(snapshot)
-    duration = (
-        0
-        if per_tick and not isinstance(action, Wait) and cpu.validate_action(action).accepted
-        else 1
-    )
-    result = cpu.step(action, ticks=duration)
-    facts = public_history_event(result.events, rules)
-    np.testing.assert_array_equal(facts.array(), expected)
-    assert facts.writes == any(expected)
-    batch = AccountingCudaBatch(1, zombie_capacity=2)
-    with batch.cp.cuda.ExternalStream(torch.cuda.current_stream().cuda_stream):
-        batch.restore([snapshot])
-        features = CudaFeatures(batch, load_config(), "masked")
-        features.encode()
-        proposal = ActionCodec(load_config()).encode(action)
-        features.step(batch.cp.asarray([proposal], batch.cp.int64), per_tick=per_tick)
-        np.testing.assert_array_equal(features.history.get()[0], expected)
-        assert batch.state_hash(0) == cpu.state_hash()
-        assert not batch.diagnostic
-
-
-def inputs(env):
-    torch.manual_seed(9)
-    policy = TransformerLSTMPolicy(env.cfg).cuda().eval()
-    runner = PolicyRunner(policy, env.cfg, env.batch.rules, 3, "cuda")
-    runner.state.hidden.normal_()
-    runner.state.cell.normal_()
-    runner.state.pending[:, 0] = torch.tensor([0, 50, 0], device="cuda")
-    runner.state.pending[2, 6] = 1
-    runner.state.elapsed_ticks[:] = 1
-    output = policy.forward_step(
-        env.features.obs_tensor,
-        runner.state,
-    )
-    details = dict(
-        tile_features=output.tile_features,
-        context=output.context,
-        action_q=policy.action_values(output, env.action_masks()),
-    )
-    return policy, runner, details
-
-
-@pytest.mark.parametrize(
-    "different", [None, "entity", "globals", "gross", "timing", "hidden", "cell"]
-)
-def test_device_dedup_counterexamples(collection_env, different):
-    env = collection_env
-    with env.device_context():
-        from types import SimpleNamespace
-
-        from pvz_rl.envs.cuda_features import CudaFeatures
-        from pvz_rl.learning.probe_layout import ProbeLayout
-
-        layout = ProbeLayout.from_config(env.cfg)
-        collector = SimpleNamespace(
-            layout=layout, source=torch.empty(3 * layout.count, dtype=torch.long, device="cuda")
-        )
-        features = CudaFeatures(env.batch, env.cfg, env.condition, store_rows=3 * layout.count)
-        features.entity_tensor[:] = env.features.entity_tensor.repeat(collector.layout.count, 1, 1)
-        features.globals_tensor[:] = env.features.globals_tensor.repeat(collector.layout.count, 1)
-        features.summary_tensor[:] = env.features.summary_tensor.repeat(collector.layout.count, 1)
-        events = torch.zeros(3 * collector.layout.count, 8, dtype=torch.long, device="cuda")
-        valid = torch.ones(3 * collector.layout.count, dtype=torch.bool, device="cuda")
-        state = (
-            TransformerLSTMPolicy(env.cfg)
-            .cuda()
-            .initial_state(3 * collector.layout.count, device="cuda")
-        )
-        if different == "entity":
-            features.entity_tensor[3:6, 0, 3] += 1
-        elif different == "globals":
-            features.globals_tensor[3:6, 0] += 1
-        elif different in ("hidden", "cell"):
-            getattr(state, different)[:, 3:6] += 1
-        elif different is not None:
-            events[3:6, 0 if different == "gross" else 7] += 1
-        features.dedup(events, valid, collector.source, collector.layout.count, state=state)
-        result = collector.source.cpu().reshape(collector.layout.count, 3)
-        assert result[0].tolist() == [0, 0, 0]
-        assert result[1].tolist() == ([0, 0, 0] if different is None else [1, 1, 1])
-        assert result[2:].tolist() == [[0, 0, 0]] * (collector.layout.count - 2)
-
-
 @torch.no_grad()
 def test_compiled_inference_buckets_and_owned_outputs(collection_env):
     torch._dynamo.reset()
     env = collection_env
-    policy = TransformerLSTMPolicy(env.cfg).cuda().eval()
-    eager = TransformerLSTMPolicy(env.cfg).cuda().eval()
+    policy = TwoStageTransformerPolicy(env.cfg).cuda().eval()
+    eager = TwoStageTransformerPolicy(env.cfg).cuda().eval()
     eager.load_state_dict(policy.state_dict())
-    policy.entity.enable_compilation()
+    policy.species_encoder.enable_compilation()
     owned = original = None
     for index, count in enumerate((5, 40, 100, 256, 5, 5)):
         batch = collate_observations([observation(env.cfg, count)[0]], "cuda")
-        expected = eager.forward_step(batch)
-        saved = expected.wait_q.clone()
+        expected = eager.species_values(batch)
+        saved = expected.clone()
         with torch.inference_mode(index == 0), torch.no_grad():
-            compiled = policy.forward_step(batch)
+            compiled = policy.species_values(batch)
         if index == 0:
-            owned, original = compiled.wait_q, compiled.wait_q.clone()
-        torch.testing.assert_close(compiled.wait_q, saved, rtol=2e-5, atol=2e-6)
-        torch.testing.assert_close(expected.wait_q, saved, rtol=0, atol=0)
+            owned, original = compiled, compiled.clone()
+        torch.testing.assert_close(compiled, saved, rtol=2e-5, atol=2e-6)
+        torch.testing.assert_close(expected, saved, rtol=0, atol=0)
     torch.testing.assert_close(owned, original, rtol=0, atol=0)
-    assert policy.entity._compiled_shapes == {}
-    assert policy.entity.collection_metrics["entries"] == 5
-    assert policy.entity.collection_metrics["hits"] == 1
-    policy.entity.release_collection()
-    assert policy.entity.collection_metrics["entries"] == 0
-    assert policy.entity.compilation_status == "compiled", policy.entity.compilation_error
+    assert policy.species_encoder._compiled_shapes == {}
+    assert policy.species_encoder.collection_metrics["entries"] == 5
+    assert policy.species_encoder.collection_metrics["hits"] == 1
+    policy.species_encoder.release_collection()
+    assert policy.species_encoder.collection_metrics["entries"] == 0
+    assert policy.species_encoder.compilation_status == "compiled", (
+        policy.species_encoder.compilation_error
+    )
+
+
+@pytest.mark.parametrize("different", [None, "entity", "globals", "version", "terminal", "count"])
+def test_stateless_endpoint_dedup_uses_exact_public_inputs_and_ema_version(different):
+    entities = np.tile([[[16, 17, 0, -500, 0, 0, 0, 0, 0, 0, 0]]], (3, 2, 1)).astype(np.int32)
+    globals_ = np.zeros((3, 18), np.float32)
+    counts = np.ones(3, np.int64)
+    versions = np.ones(3, np.int64)
+    done = np.zeros(3, bool)
+    if different == "entity":
+        entities[1, 0, 3] += 1
+    elif different == "globals":
+        globals_[1, 0] = np.nextafter(np.float32(0), np.float32(1))
+    elif different == "version":
+        versions[1] += 1
+    elif different == "terminal":
+        done[1] = True
+    elif different == "count":
+        counts[1] += 1
+    entities[2, 1, 3] += 1
+    actual = endpoint_representatives(entities, globals_, counts, versions, done)
+    np.testing.assert_array_equal(actual, [0, 0 if different is None else 1, 0])
 
 
 @torch.no_grad()
@@ -289,23 +166,23 @@ def test_tile_schedule_limited_candidates_and_nonplant_exclusion(collection_env)
 def test_inference_compilation_failure_is_warned_once_and_keeps_eager_math(collection_env):
     torch._dynamo.reset()
     env = collection_env
-    policy = TransformerLSTMPolicy(env.cfg).cuda().eval()
-    expected = policy.forward_step(env.features.obs_tensor).wait_q.clone()
+    policy = TwoStageTransformerPolicy(env.cfg).cuda().eval()
+    expected = policy.species_values(env.features.obs_tensor).clone()
     calls = []
 
     def failed(self, *args):
         calls.append(True)
         raise RuntimeError("forced inference compiler failure")
 
-    policy.entity.enable_compilation()
+    policy.species_encoder.enable_compilation()
     with pytest.MonkeyPatch.context() as patch:
         from pvz_rl.policy.cudagraph_backend import GraphCapture
 
         patch.setattr(GraphCapture, "__call__", failed)
         with pytest.warns(RuntimeWarning, match="using eager execution") as captured:
-            first = policy.forward_step(env.features.obs_tensor)
-            second = policy.forward_step(env.features.obs_tensor)
+            first = policy.species_values(env.features.obs_tensor)
+            second = policy.species_values(env.features.obs_tensor)
     assert len(captured) == 1 and len(calls) == 1
-    assert policy.entity.compilation_status == "fallback"
-    torch.testing.assert_close(first.wait_q, expected, rtol=0, atol=0)
-    torch.testing.assert_close(second.wait_q, expected, rtol=0, atol=0)
+    assert policy.species_encoder.compilation_status == "fallback"
+    torch.testing.assert_close(first, expected, rtol=0, atol=0)
+    torch.testing.assert_close(second, expected, rtol=0, atol=0)

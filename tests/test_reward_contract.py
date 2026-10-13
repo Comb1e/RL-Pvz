@@ -102,8 +102,7 @@ def test_early_sun_cuda_controls_at_production(sun, total, spawn_tick, expected)
         assert parts["early_sun"] == cpu["early_sun"] == expected
         for name in REWARD_FIELDS:
             assert parts[name] == pytest.approx(cpu[name], abs=1e-10), name
-        assert features.history.get().shape == (1, 7)
-        assert features.history.get()[0, 0] == cpu["produced_sun"]
+        assert not hasattr(features, "history") and not hasattr(features, "history_tensor")
 
 
 @pytest.mark.parametrize("kind", PLANT_TYPES)

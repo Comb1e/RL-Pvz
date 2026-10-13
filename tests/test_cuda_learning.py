@@ -24,7 +24,6 @@ def gpu_cfg():
         device="cuda",
         batch_size=64,
     )
-    cfg["policy"]["chunk_length"] = 16
     cfg["visualization"].update(enabled=False, demos=False, videos=False)
     return cfg
 

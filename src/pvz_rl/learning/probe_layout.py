@@ -30,7 +30,7 @@ class ProbeLayout:
 
     @property
     def metadata_width(self):
-        return 15 + self.count * 4
+        return 7 + self.count * 4
 
     def metadata(self):
         return asdict(self)

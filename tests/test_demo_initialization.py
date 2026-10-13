@@ -12,6 +12,7 @@ from pvz_rl.config import load_config, load_demo_config
 from pvz_rl.envs.action_timing import ActionPhaseGame
 from pvz_rl.envs.rewards import reward_parts
 from pvz_rl.learning import demo_initialization as demo
+from pvz_rl.learning import flat_q
 from pvz_rl.learning.checkpoints import inspect_checkpoint
 from pvz_rl.learning.objective import components, training_rewards
 from pvz_rl.presentation.demo_recording import TransitionArchive
@@ -24,16 +25,6 @@ def completed_demo(tmp_path, request):
     cfg["environment"]["cutoff_seconds"] = 1
     # A recording made before clipping was shared must remain reusable.
     cfg["training"]["demo"]["gradient_clip"] = 0.5
-    cfg["policy"].update(
-        entity_width=8,
-        transformer_heads=2,
-        transformer_layers=1,
-        transformer_feedforward=16,
-        scalar_width=8,
-        lstm_hidden=8,
-        event_width=4,
-        chunk_length=2,
-    )
     game = ActionPhaseGame()
     game.reset(LevelSpec("tiny-fit", initial_sun=200), seed=1000)
     recorder = ActionPhaseRecorder(game)
@@ -107,6 +98,53 @@ def test_demo_passes_are_independent_of_autonomous_epochs(
     assert cfg["training"]["n_epochs"] == 1
 
 
+def test_demo_teacher_is_frozen_per_pass_and_updates_once_after_adam(
+    completed_demo, tmp_path, monkeypatch
+):
+    cfg, archive, replay = completed_demo
+    cfg["training"].update(batch_size=2)
+    cfg["training"]["performance"]["fit_batch_groups"] = 1
+    snapshots, committed = [], []
+    original_loss, original_step = demo.batch_loss, torch.optim.Adam.step
+    teacher_ref = None
+
+    def observe_loss(policy, *args, teacher, **kwargs):
+        nonlocal teacher_ref
+        teacher_ref = teacher
+        snapshots.append([parameter.detach().clone() for parameter in teacher.parameters()])
+        return original_loss(policy, *args, teacher=teacher, **kwargs)
+
+    def observe_step(optimizer, *args, **kwargs):
+        result = original_step(optimizer, *args, **kwargs)
+        committed.append(
+            [
+                parameter.detach().clone()
+                for group in optimizer.param_groups
+                for parameter in group["params"]
+            ]
+        )
+        return result
+
+    monkeypatch.setattr(demo, "batch_loss", observe_loss)
+    monkeypatch.setattr(torch.optim.Adam, "step", observe_step)
+    result = demo.initialize_demo(archive, replay, tmp_path / "ema-fit", cfg=cfg, passes=2)
+    assert result["passes_completed"] == len(committed) == 2
+    assert len(snapshots) == 6
+    for before, within, within_last in zip(*snapshots[:3], strict=True):
+        torch.testing.assert_close(before, within, atol=0, rtol=0)
+        torch.testing.assert_close(before, within_last, atol=0, rtol=0)
+    for old, online, expected in zip(snapshots[0], committed[0], snapshots[3], strict=True):
+        torch.testing.assert_close(expected, old * 0.95 + online * 0.05)
+    for before, within, within_last in zip(*snapshots[3:], strict=True):
+        torch.testing.assert_close(before, within, atol=0, rtol=0)
+        torch.testing.assert_close(before, within_last, atol=0, rtol=0)
+    for old, online, final in zip(
+        snapshots[3], committed[1], teacher_ref.parameters(), strict=True
+    ):
+        torch.testing.assert_close(final, old * 0.95 + online * 0.05)
+        assert final.grad is None and not final.requires_grad
+
+
 @pytest.mark.parametrize(
     "device",
     [
@@ -125,7 +163,7 @@ def test_complete_demo_fit_uses_whole_game_group_loss_and_reloads(
     cfg["training"]["max_grad_norm"] = 1.25
     cfg["training"]["objective"].update(tile_probes=1)
     samples = defaultdict(list)
-    shared_loss = demo.balanced_q_loss
+    shared_loss = flat_q.balanced_q_loss
     clip_calls = []
     original_clip = torch.nn.utils.clip_grad_norm_
 
@@ -140,7 +178,7 @@ def test_complete_demo_fit_uses_whole_game_group_loss_and_reloads(
             samples[group].append(error)
         return shared_loss(first, targets, actions, counts, **kwargs)
 
-    monkeypatch.setattr(demo, "balanced_q_loss", observe)
+    monkeypatch.setattr(flat_q, "balanced_q_loss", observe)
     monkeypatch.setattr(torch.nn.utils, "clip_grad_norm_", observe_clip)
     result = demo.initialize_demo(
         archive, replay, tmp_path / "fit", cfg=cfg, passes=1, device=device
@@ -171,11 +209,11 @@ def test_complete_demo_fit_uses_whole_game_group_loss_and_reloads(
     model, saved = demo.load_demo_checkpoint(result["checkpoint"], cfg)
     assert saved["source_replay_sha256"] == demo.file_hash(replay)
     observations, *_ = demo._training_tensors(demo._load_verified_demo(archive, replay, cfg))
-    assert torch.isfinite(model.forward_step(observations[:1]).wait_q).all()
+    assert torch.isfinite(model.species_values(observations[:1])).all()
     assert not list((tmp_path / "fit").glob("*.tmp"))
-    saved["recurrent_storage_protocol"] = "unknown"
+    saved["model_storage_protocol"] = "unknown"
     torch.save(saved, tmp_path / "invalid.pt")
-    with pytest.raises(ValueError, match="recurrent storage"):
+    with pytest.raises(ValueError, match="model storage"):
         demo.load_demo_checkpoint(tmp_path / "invalid.pt", cfg)
 
 
@@ -205,8 +243,7 @@ def test_reused_demo_fits_current_rewards_without_rewriting_recording(
     tensors = demo._training_tensors(verified)
     original_tensors = demo._training_tensors(original)
     assert tensors[0] == original_tensors[0]
-    for actual, expected in zip(tensors[1:4], original_tensors[1:4], strict=True):
-        torch.testing.assert_close(actual, expected, rtol=0, atol=0)
+    torch.testing.assert_close(tensors[1], original_tensors[1], rtol=0, atol=0)
     # Independent control: dig loses 50 and 100 sun of plant assets; rejected
     # proposals cost their new price, including when the same tick ends the game.
     last = verified.transitions[-1]
@@ -227,13 +264,13 @@ def test_reused_demo_fits_current_rewards_without_rewriting_recording(
     assert last["executed_action"] == 0  # Wait or rejected proposal.
     assert last["ticks_advanced"] == 1
     fitted_targets = []
-    shared_loss = demo.balanced_q_loss
+    shared_loss = flat_q.balanced_q_loss
 
     def observe(first, targets, *args, **kwargs):
         fitted_targets.extend(targets.detach().cpu().tolist())
         return shared_loss(first, targets, *args, **kwargs)
 
-    monkeypatch.setattr(demo, "balanced_q_loss", observe)
+    monkeypatch.setattr(flat_q, "balanced_q_loss", observe)
     result = demo.initialize_demo(archive, replay, tmp_path / "fit", cfg=current, passes=1)
     torch.testing.assert_close(torch.tensor(fitted_targets), expected_returns)
     assert result["state"] == "complete"
@@ -303,17 +340,13 @@ def test_transition_corruption_rejected_by_reconstruction(completed_demo, field)
         demo.verify_demo(archive, replay, cfg)
 
 
-def test_replay_reconstructs_event_rows_without_initial_additions(completed_demo):
+def test_replay_reconstructs_only_current_boards_actions_and_returns(completed_demo):
     cfg, archive, replay = completed_demo
     verified = demo._load_verified_demo(archive, replay, cfg)
-    _, _, events, writes, _ = demo._training_tensors(verified)
-    assert events.shape == (5, 8)
-    assert not events[0].any()
-    assert writes.tolist() == [False, True, True, True, True]
-    torch.testing.assert_close(events[:, 1], torch.tensor([0, 50, 100, 0, 0], dtype=torch.float32))
-    torch.testing.assert_close(events[:, 5], torch.tensor([0, 1, 1, 0, 0], dtype=torch.float32))
-    torch.testing.assert_close(events[:, 6], torch.tensor([0, 0, 0, 1, 1], dtype=torch.float32))
-    assert not events[:, 7].any()
+    observations, actions, returns = demo._training_tensors(verified)
+    assert len(observations) == len(actions) == len(returns) == 5
+    assert all("events" not in row and "memory_write" not in row for row in verified.transitions)
+    assert [len(row["entities"]) for row in observations] == [5, 6, 7, 6, 5]
 
 
 def test_early_sun_reconstructed_from_previous_ledger_without_rewriting(tmp_path):

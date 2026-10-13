@@ -1,0 +1,101 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="2" skipped="0" tests="7" time="13.527" timestamp="2026-10-13T17:50:36.177271+09:00" hostname="R"><testcase classname="tests.test_two_stage_transformer" name="test_bf16_encoder_features_keep_fp32_heads_master_weights_and_gradients[0]" time="1.518"><failure message="AssertionError: assert tensor(0.0469, device='cuda:0') &lt; 0.02">count = 0
+
+    @pytest.mark.parametrize("count", [0, 40, 256])
+    def test_bf16_encoder_features_keep_fp32_heads_master_weights_and_gradients(count):
+        cfg = small_config()
+        raw, _ = observation(cfg, count)
+        if count == 0:
+            raw["entities"] = raw["entities"][:0]
+            raw["globals"][-4:] = 0
+        observations = collate_observations([raw] * 3, "cuda")
+        torch.manual_seed(101)
+        reference = TwoStageTransformerPolicy(cfg).cuda()
+        mixed = TwoStageTransformerPolicy(cfg).cuda()
+        mixed.load_state_dict(reference.state_dict())
+        seen, hooks = {}, []
+        for stage in ("species", "tile"):
+            head = getattr(mixed, f"{stage}_head")
+            encoder = getattr(mixed, f"{stage}_encoder")
+            hooks.append(
+                head.register_forward_pre_hook(
+                    lambda module, args, stage=stage: seen.update({f"{stage}_head": args[0].dtype})
+                )
+            )
+            hooks.append(
+                encoder.layers[0].qkv.register_forward_hook(
+                    lambda module, args, output, stage=stage: seen.update(
+                        {f"{stage}_qkv": output.dtype}
+                    )
+                )
+            )
+        outputs, gradients = [], []
+        for policy, precision in ((reference, "fp32"), (mixed, "features_bf16")):
+            with policy.fitting_precision(precision):
+                species = policy.species_values(observations)
+                tiles = policy.conditional_tiles(observations, torch.tensor([1, 8, 9], device="cuda"))
+                ((species - 0.5).square().mean() + (tiles + 0.5).square().mean()).backward()
+            outputs.append((species, tiles))
+            assert all(
+                parameter.dtype == parameter.grad.dtype == torch.float32
+                for parameter in policy.parameters()
+            )
+            gradients.append(torch.cat([parameter.grad.flatten() for parameter in policy.parameters()]))
+        for actual, expected in zip(*outputs, strict=True):
+            torch.testing.assert_close(actual, expected, atol=0.002, rtol=0.01)
+        relative_error = torch.linalg.vector_norm(
+            gradients[0] - gradients[1]
+        ) / torch.linalg.vector_norm(gradients[0])
+&gt;       assert relative_error &lt; 0.02
+E       AssertionError: assert tensor(0.0469, device='cuda:0') &lt; 0.02
+
+tests\test_two_stage_transformer.py:443: AssertionError</failure></testcase><testcase classname="tests.test_two_stage_transformer" name="test_bf16_encoder_features_keep_fp32_heads_master_weights_and_gradients[40]" time="0.046"><failure message="AssertionError: assert tensor(0.0253, device='cuda:0') &lt; 0.02">count = 40
+
+    @pytest.mark.parametrize("count", [0, 40, 256])
+    def test_bf16_encoder_features_keep_fp32_heads_master_weights_and_gradients(count):
+        cfg = small_config()
+        raw, _ = observation(cfg, count)
+        if count == 0:
+            raw["entities"] = raw["entities"][:0]
+            raw["globals"][-4:] = 0
+        observations = collate_observations([raw] * 3, "cuda")
+        torch.manual_seed(101)
+        reference = TwoStageTransformerPolicy(cfg).cuda()
+        mixed = TwoStageTransformerPolicy(cfg).cuda()
+        mixed.load_state_dict(reference.state_dict())
+        seen, hooks = {}, []
+        for stage in ("species", "tile"):
+            head = getattr(mixed, f"{stage}_head")
+            encoder = getattr(mixed, f"{stage}_encoder")
+            hooks.append(
+                head.register_forward_pre_hook(
+                    lambda module, args, stage=stage: seen.update({f"{stage}_head": args[0].dtype})
+                )
+            )
+            hooks.append(
+                encoder.layers[0].qkv.register_forward_hook(
+                    lambda module, args, output, stage=stage: seen.update(
+                        {f"{stage}_qkv": output.dtype}
+                    )
+                )
+            )
+        outputs, gradients = [], []
+        for policy, precision in ((reference, "fp32"), (mixed, "features_bf16")):
+            with policy.fitting_precision(precision):
+                species = policy.species_values(observations)
+                tiles = policy.conditional_tiles(observations, torch.tensor([1, 8, 9], device="cuda"))
+                ((species - 0.5).square().mean() + (tiles + 0.5).square().mean()).backward()
+            outputs.append((species, tiles))
+            assert all(
+                parameter.dtype == parameter.grad.dtype == torch.float32
+                for parameter in policy.parameters()
+            )
+            gradients.append(torch.cat([parameter.grad.flatten() for parameter in policy.parameters()]))
+        for actual, expected in zip(*outputs, strict=True):
+            torch.testing.assert_close(actual, expected, atol=0.002, rtol=0.01)
+        relative_error = torch.linalg.vector_norm(
+            gradients[0] - gradients[1]
+        ) / torch.linalg.vector_norm(gradients[0])
+&gt;       assert relative_error &lt; 0.02
+E       AssertionError: assert tensor(0.0253, device='cuda:0') &lt; 0.02
+
+tests\test_two_stage_transformer.py:443: AssertionError</failure></testcase><testcase classname="tests.test_two_stage_transformer" name="test_bf16_encoder_features_keep_fp32_heads_master_weights_and_gradients[256]" time="0.855" /><testcase classname="tests.test_two_stage_transformer" name="test_compiled_microbatches_delayed_backward_matches_eager[fp32]" time="3.745" /><testcase classname="tests.test_two_stage_transformer" name="test_compiled_microbatches_delayed_backward_matches_eager[features_bf16]" time="3.515" /><testcase classname="tests.test_two_stage_transformer" name="test_graph_phase_release_preserves_request_and_recaptures_fitting[precision0]" time="1.235" /><testcase classname="tests.test_two_stage_transformer" name="test_graph_phase_release_preserves_request_and_recaptures_fitting[precision1]" time="1.231" /></testsuite></testsuites>

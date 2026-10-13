@@ -12,9 +12,10 @@ r^{train}=r^{raw}+9r^{development}.
 \]
 
 Gamma is one; selected-action targets sum the complete episode without bootstrap.
-Terminal rewards remain +1 for victory and -2 for defeat or cutoff. The multiplier
+The shipped terminal rewards are +1 for victory and -1 for defeat or cutoff
+(`reward.loss_penalty=1.0`); this architecture change does not alter them. The multiplier
 is `training.objective.dense_multiplier=10`. The same interface builds demonstration
-and autonomous targets. [Recurrent training](recurrent-training.md) specifies the
+and autonomous targets. [Sequential Q learning](sequential-training.md) specifies the
 selected-action, counterfactual and demonstration losses. Maximum net value and
 drawdown remain diagnostics.
 
@@ -66,7 +67,7 @@ For the pinned normal levels, 50 initial sun and the 120,000-tick cutoff,
 independent controls bound final assets by 18,990 and actual sky income by 3,525.
 The largest roster has 38,130 body-plus-armor HP. Cumulative net value therefore
 lies between -4,575 and 26,001.111111 sun-equivalents. Outcome plus physical development
-is at least 0.8475 on a natural win and at most -1.1332962963 on a natural loss.
+is at least 0.8475 on a natural win and at most -0.1332962963 on a natural loss.
 These bounds cover only terminal plus **unscaled physical development**, excluding
 the early Sunflower bonus and rejection
 costs, proximity, time shaping, custom scenarios and incomplete games. They do not

@@ -137,7 +137,7 @@ def learning_settings(cfg):
                 f"{key}={training[key]}"
                 for key in ("learning_rate", "max_grad_norm", "batch_size", "n_epochs", "gamma")
             )
-            + (f"chunk_length={cfg['policy']['chunk_length']}",),
+            + (f"fit_batch_groups={training['performance']['fit_batch_groups']}",),
         ),
         (
             "Rewards",

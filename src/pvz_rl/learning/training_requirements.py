@@ -19,7 +19,7 @@ def current_model_config(cfg):
     return (
         identity
         in {
-            ("transformer_lstm_q_v4", "entity_v1", "complete_return_joint_tile_probe_v1"),
+            ("two_stage_transformer_q_v1", "entity_v1", "complete_return_sequential_tile_probe_v1"),
         }
         and cfg.get("policy", {}).get("action_distribution") == ACTION_DISTRIBUTION
         and cfg.get("reward", {}).get("version") == "net_value_v1"
@@ -36,7 +36,9 @@ def require_supported_policy(cfg, condition="masked"):
         or not current_model_config(cfg)
     ):
         raise ValueError(
-            "Retired policy or scheduler. Models require the entity_v1 recurrent protocol, net_value_v1, the joint_q_unmasked_penalty_v1 distribution and complete-game collection. Start fresh with the bundled train profile."
+            "Retired policy or scheduler. Use the stateless two-stage Transformer, entity_v1, "
+            "net_value_v1, sequential_q_unmasked_penalty_v1 and complete-game collection. "
+            "Start fresh with the bundled train profile."
         )
 
 
@@ -58,7 +60,7 @@ def require_cuda_training(cfg, condition="masked", *, runtime=True):
     validate_config(cfg)
     if (
         cfg["training"].get("objective", {}).get("protocol")
-        != "complete_return_joint_tile_probe_v1"
+        != "complete_return_sequential_tile_probe_v1"
     ):
         raise ValueError(
             "Old-objective checkpoints cannot resume or initialize weights. Refit a verified demonstration in a new directory."
@@ -129,7 +131,6 @@ def transfer_protocol(cfg, condition="masked"):
         "timing": {k: env[k] for k in ("action_timing", "decision_ticks", "cutoff_seconds")},
         "actions": ActionSchema.version,
         "action_distribution": p.get("action_distribution"),
-        "event_history": p["history"],
         "board": {
             k: env[k]
             for k in (
@@ -146,14 +147,14 @@ def transfer_protocol(cfg, condition="masked"):
             k: p[k]
             for k in (
                 "kind",
-                "entity_width",
-                "transformer_layers",
-                "transformer_heads",
-                "transformer_feedforward",
-                "scalar_width",
-                "lstm_hidden",
-                "event_width",
-                "chunk_length",
+                "species_width",
+                "species_layers",
+                "species_heads",
+                "species_feedforward",
+                "tile_width",
+                "tile_layers",
+                "tile_heads",
+                "tile_feedforward",
             )
             if k in p
         },
@@ -168,12 +169,11 @@ def weight_transfer_protocol(cfg):
     A demonstration is re-fit under the current objective and execution
     profile. Its weights require the same entity/action representation and
     network dimensions, but do not require matching reward, return, optimizer,
-    or recurrent chunk settings.
+    or execution batch settings.
     """
     result = transfer_protocol(cfg)
     for name in ("timing", "method", "return"):
         result.pop(name)
-    result["policy"].pop("chunk_length", None)
     return result
 
 

@@ -21,60 +21,43 @@ from pvz_rl.envs.rewards import HomeProximityLedger
 from pvz_rl.learning.host_transfer import HostHandoff
 from pvz_rl.learning.objective import components
 from pvz_rl.monitoring.cuda_diagnostics import DeviceProfiler
-from pvz_rl.policy.runner import PolicyRunner
-from pvz_rl.policy.sequential_q import ActionQValues, select_q_actions
-from pvz_rl.policy.transformer_lstm import EventMemoryState, RecurrentOutput
+from pvz_rl.policy.sequential_q import observation_tile_masks, select_q_actions
 
 
 class FrozenControl(nn.Module):
     def __init__(self, cfg, *, dig=False):
         super().__init__()
         self.anchor = nn.Parameter(torch.zeros(()), requires_grad=False)
-        self.entity = SimpleNamespace(width=1, microbatch=128, token_budget=65536)
-        self.hidden_size = 2
+        self.species_encoder = SimpleNamespace(microbatch=128, token_budget=65536)
         self.dig = dig
         self.cfg = cfg
 
-    def initial_state(self, batch_size, *, device=None):
-        return EventMemoryState(
-            torch.zeros(1, batch_size, 2, device=device),
-            torch.zeros(1, batch_size, 2, device=device),
-            torch.zeros(batch_size, 7, dtype=torch.long, device=device),
-            torch.zeros(batch_size, dtype=torch.long, device=device),
-        )
-
-    def forward_step(self, observations, state=None, *, events=None, memory_write=None):
-        if state is None:
-            state = self.initial_state(len(observations), device=observations.device)
-        events = state.inputs() if events is None else events
-        memory_write = events[:, :7].ne(0).any(-1) if memory_write is None else memory_write
-        increment = events[:, :7].sum(-1)[None, :, None] * memory_write[None, :, None]
-        next_state = state.consume(state.hidden + increment, state.cell + increment, memory_write)
-        return RecurrentOutput(
-            torch.full((len(observations), 1), 0.5, device=observations.device),
-            torch.zeros(len(observations), 45, 1, device=observations.device),
-            torch.zeros(len(observations), 2, device=observations.device),
-            next_state,
-        )
-
-    def action_values(self, output, masks=None, *, observations=None, plan=None):
-        from pvz_rl.policy.sequential_q import observation_tile_masks
-
-        masks = observation_tile_masks(observations) if masks is None else masks
-        tiles = torch.full((len(output.wait_q), 9, 45), -1.0, device=output.wait_q.device)
+    def species_values(self, observations, *, plan=None):
+        values = torch.full((len(observations), 10), -1.0, device=observations.device)
+        values[:, 0] = 0.5
         if self.dig:
-            tiles[:, 8] = 2
-        return ActionQValues.derive(output.wait_q, tiles, masks)
+            values[:, 9] = 2
+        return values
 
-    def decide(self, observations, state=None):
-        from pvz_rl.policy.sequential_q import observation_tile_masks
+    def conditional_tiles(self, observations, branches, *, rows=None, plan=None):
+        return torch.full((len(branches), 45), -1.0, device=observations.device)
 
-        output = self.forward_step(observations, state)
-        masks = observation_tile_masks(observations)
+    def decide(
+        self,
+        observations,
+        *,
+        action_masks=None,
+        deterministic=True,
+        active=None,
+        active_plan=None,
+    ):
+        masks = observation_tile_masks(observations) if action_masks is None else action_masks
+        species = self.species_values(observations, plan=active_plan)
+        tiles = self.conditional_tiles(observations, species.argmax(-1))
         actions, _, _, details = select_q_actions(
-            self.action_values(output, masks), masks, deterministic=True
+            species, tiles, masks, deterministic=True, active=active
         )
-        return actions, output.state, details
+        return actions, details
 
 
 def probe_fixture(case, cfg):
@@ -95,6 +78,8 @@ def probe_fixture(case, cfg):
         cfg["environment"]["cutoff_seconds"] = 1
     elif case == "cap":
         cfg["training"]["objective"]["probe_rollout_max_decisions"] = 2
+    elif case == "horizon":
+        cfg["training"]["objective"]["probe_rollout_seconds"] = 0.02
     elif case == "rejection":
         initial_sun = 50
     game = ActionPhaseGame()
@@ -117,14 +102,23 @@ def service(pool, buffer):
 
 
 @pytest.mark.parametrize(
-    "case", ["sunflower", "mine", "shooting", "terminal", "cutoff", "cap", "rejection"]
+    "case,steps_per_round",
+    [
+        (case, 1)
+        for case in ("sunflower", "mine", "shooting", "terminal", "cutoff", "cap", "rejection")
+    ]
+    + [(case, 3) for case in ("terminal", "cutoff", "cap", "horizon")],
 )
-def test_cpu_cuda_background_endpoints_match_independent_serial(case, monkeypatch, tmp_path):
+def test_cpu_cuda_background_endpoints_match_independent_serial(
+    case, steps_per_round, monkeypatch, tmp_path
+):
     from pvz_rl.learning.cuda_buffer import CompleteGameBuffer
 
     cfg = load_config()
     cfg["training"]["objective"]["tile_probes"] = 1
-    cfg["training"]["performance"].update(probe_active_capacity=1, probe_pending_capacity=1)
+    cfg["training"]["performance"].update(
+        probe_active_capacity=1, probe_pending_capacity=1, probe_steps_per_round=steps_per_round
+    )
     game = probe_fixture(case, cfg)
     cpu_teacher = FrozenControl(cfg, dig=case == "cap")
     proposal = 1 if case == "cap" else 46 if case == "rejection" else 0
@@ -144,6 +138,8 @@ def test_cpu_cuda_background_endpoints_match_independent_serial(case, monkeypatc
         assert expected["transitions"] == 2 and expected["duration"] == 0
     elif case == "cutoff":
         assert expected["stop_reason"] == ProbeStop.CUTOFF and expected["tick"] == 100
+    elif case == "horizon":
+        assert expected["stop_reason"] == ProbeStop.HORIZON and expected["duration"] == 2
     else:
         assert expected["stop_reason"] == ProbeStop.TERMINAL and expected["won"]
     teacher = FrozenControl(cfg, dig=case == "cap").cuda()
@@ -153,7 +149,7 @@ def test_cpu_cuda_background_endpoints_match_independent_serial(case, monkeypatc
         with batch.cp.cuda.ExternalStream(torch.cuda.current_stream().cuda_stream):
             batch.restore([before])
             features = CudaFeatures(batch, cfg, "masked")
-            obs = features.encode()
+            features.encode()
             source_count = features.summary_host[:, 0].copy()
             features.initialize_home([0])
             env = SimpleNamespace(
@@ -174,12 +170,9 @@ def test_cpu_cuda_background_endpoints_match_independent_serial(case, monkeypatc
                     torch.ones(1, 1, dtype=torch.bool, device="cuda"),
                 ),
             )
-            memory = PolicyRunner(teacher, cfg, batch.rules, 1, "cuda")
-            memory.advance(obs, torch.ones(1, dtype=torch.bool, device="cuda"))
             rng = torch.cuda.get_rng_state().clone()
             executing = pool.reserve(
                 teacher,
-                memory.state,
                 torch.tensor([45], device="cuda"),
                 features.mask_tensor,
                 torch.ones(1, dtype=torch.bool, device="cuda"),
@@ -211,7 +204,6 @@ def test_cpu_cuda_background_endpoints_match_independent_serial(case, monkeypatc
                 "done",
                 "won",
                 "transitions",
-                "event_writes",
                 "stop_reason",
             ):
                 assert actual[name] == expected[name], name
@@ -222,7 +214,6 @@ def test_cpu_cuda_background_endpoints_match_independent_serial(case, monkeypatc
                 actual["components"], components(expected["components"]), atol=2e-12
             )
             assert actual["bootstrap"] == expected["bootstrap"]
-            np.testing.assert_array_equal(actual["events"], expected["events"])
             endpoint = buffer.observations(np.array([actual]))[0]
             assert observations_equal(
                 dict(entities=endpoint.entities.numpy(), globals=endpoint.globals.numpy()),
@@ -230,7 +221,6 @@ def test_cpu_cuda_background_endpoints_match_independent_serial(case, monkeypatc
             )
             assert source_hash == batch.state_hash(0)
             torch.testing.assert_close(rng, torch.cuda.get_rng_state(), atol=0, rtol=0)
-            assert not memory.state.hidden.any() and not memory.state.pending.any()
             pool.release_workspaces()
     finally:
         buffer.close()
@@ -248,16 +238,6 @@ def make_model(tmp_path, *, count=3, sources=2, lanes=4, cap=12, cutoff=600):
 
     cfg = load_config()
     cfg["training"].update(n_envs=count, batch_size=16)
-    cfg["policy"].update(
-        chunk_length=8,
-        entity_width=8,
-        scalar_width=8,
-        transformer_heads=2,
-        transformer_layers=1,
-        transformer_feedforward=16,
-        lstm_hidden=8,
-        event_width=4,
-    )
     cfg["training"]["performance"].update(
         compile_kernels=False,
         fit_precision="fp32",
@@ -276,12 +256,11 @@ def make_model(tmp_path, *, count=3, sources=2, lanes=4, cap=12, cutoff=600):
     callback = Continue()
     callback.init_callback(model)
     with torch.no_grad():
-        model.policy.wait_head[-1].weight.zero_()
-        model.policy.wait_head[-1].bias.zero_()
+        model.policy.species_head[-1].weight.zero_()
+        model.policy.species_head[-1].bias.zero_()
+        model.policy.species_head[-1].bias[1] = 1
         model.policy.tile_head[-1].weight.zero_()
         model.policy.tile_head[-1].bias.zero_()
-        model.policy.tile_offsets.zero_()
-        model.policy.tile_offsets[0] = 1
     model._begin(callback)
     with env.device_context():
         env.batch.cooldowns[:, 0] = 0
@@ -330,14 +309,10 @@ def test_capacity_pauses_only_eligible_slots_and_preserves_fifo_tickets(tmp_path
         model._collect_step(callback)
         assert model._scheduler.pending.tolist() == [False, True, True]
         tickets = model._scheduler.columns.clone()
-        states = model._memory.state.clone()
         for _ in range(2):
             model._collect_step(callback)
         assert model._scheduler.pending.tolist() == [False, True, True]
         torch.testing.assert_close(model._scheduler.columns[1:], tickets[1:], atol=0, rtol=0)
-        torch.testing.assert_close(
-            model._memory.state.hidden[:, 1:], states.hidden[:, 1:], atol=0, rtol=0
-        )
         torch.testing.assert_close(env.header_tensor[1:, 0], before[1:], atol=0, rtol=0)
         assert env.header_tensor[0, 0] > before[0]
         rng = torch.cuda.get_rng_state().clone()
@@ -348,9 +323,9 @@ def test_capacity_pauses_only_eligible_slots_and_preserves_fifo_tickets(tmp_path
         assert plants["env"].tolist() == [0, 1, 2]
         for slot in (1, 2):
             first = actual[actual["env"] == slot][0]
-            assert first["action"] == tickets[slot, 10]
+            assert first["action"] == tickets[slot, 1]
             assert first["tick"] == 0 and first["duration"] == 0 and first["reset"]
-            assert first["tile_coin"] == tickets[slot, 15]
+            assert first["tile_coin"] == tickets[slot, 6]
         assert len(plants) == 3 and plants["probes"]["valid"].sum() == 12
         assert model._probes.plant_cursor.cpu().tolist() == [1, 1, 1]
     finally:
@@ -396,7 +371,6 @@ def test_interruption_drains_then_fresh_reload_continues_exactly(
         model._collect_step(callback)
         model._drain()
         expected = model._buffer.take(np.arange(model._buffer.size))
-        memory = model._memory.snapshot()
         cursor = model._probes.snapshot()
         cfg = copy.deepcopy(model.cfg)
     finally:
@@ -412,9 +386,6 @@ def test_interruption_drains_then_fresh_reload_continues_exactly(
         np.testing.assert_array_equal(
             restored._buffer.take(np.arange(restored._buffer.size)), expected
         )
-        for key, value in memory.items():
-            if isinstance(value, torch.Tensor):
-                torch.testing.assert_close(restored._memory.snapshot()[key], value, atol=0, rtol=0)
         for key in ("tile_cursor", "plant_cursor"):
             torch.testing.assert_close(restored._probes.snapshot()[key], cursor[key])
     finally:
@@ -469,7 +440,7 @@ def test_allocation_fallback_keeps_all_alternatives(tmp_path, monkeypatch):
         close_model(model, env)
 
 
-def test_minimum_pool_failure_preserves_real_board_rng_and_memory(tmp_path, monkeypatch):
+def test_minimum_pool_failure_preserves_real_board_and_rng(tmp_path, monkeypatch):
     model, env, callback = make_model(tmp_path, count=1, sources=1, lanes=1, cap=2)
 
     def unavailable(*args, **kwargs):
@@ -478,14 +449,11 @@ def test_minimum_pool_failure_preserves_real_board_rng_and_memory(tmp_path, monk
     try:
         before = env.batch.state_hash(0)
         rng = torch.cuda.get_rng_state().clone()
-        memory = model._memory.snapshot()
         monkeypatch.setattr("pvz_rl.envs.probes.AccountingCudaBatch", unavailable)
         with pytest.raises(MemoryError, match="minimum isolated"):
             model._collect_step(callback)
         assert before == env.batch.state_hash(0) and model._buffer.size == model.num_timesteps == 0
         torch.testing.assert_close(torch.cuda.get_rng_state(), rng, atol=0, rtol=0)
-        for name in ("hidden", "cell", "pending", "elapsed_ticks"):
-            torch.testing.assert_close(model._memory.snapshot()[name], memory[name], atol=0, rtol=0)
     finally:
         close_model(model, env)
 
@@ -509,7 +477,7 @@ def test_queue_age_excludes_running_jobs(monkeypatch):
     assert ProbePool.telemetry(pool)["oldest_queue_seconds"] == 0.0
 
 
-def test_auxiliary_batching_does_not_change_real_actions_rewards_memory_or_rng(tmp_path):
+def test_auxiliary_batching_does_not_change_real_actions_rewards_or_rng(tmp_path):
     traces = []
     for lanes in (1, 4):
         model, env, callback = make_model(tmp_path, count=3, sources=16, lanes=lanes, cap=3)
@@ -521,7 +489,6 @@ def test_auxiliary_batching_does_not_change_real_actions_rewards_memory_or_rng(t
             traces.append(
                 (
                     records,
-                    model._memory.snapshot(),
                     torch.cuda.get_rng_state().clone(),
                     [env.batch.state_hash(index) for index in range(3)],
                 )
@@ -535,8 +502,6 @@ def test_auxiliary_batching_does_not_change_real_actions_rewards_memory_or_rng(t
         "accepted",
         "reward",
         "duration",
-        "events",
-        "memory_write",
         "exploration_mode",
         "species_coin",
         "tile_coin",
@@ -544,11 +509,9 @@ def test_auxiliary_batching_does_not_change_real_actions_rewards_memory_or_rng(t
         "next_species",
     ):
         np.testing.assert_array_equal(first[0][name], second[0][name])
-    for name in ("hidden", "cell", "pending", "elapsed_ticks"):
-        torch.testing.assert_close(first[1][name], second[1][name], atol=0, rtol=0)
-    torch.testing.assert_close(first[2], second[2], atol=0, rtol=0)
-    assert first[3] == second[3]
-    for name in ("components", "duration", "transitions", "events", "accepted", "bootstrap"):
+    torch.testing.assert_close(first[1], second[1], atol=0, rtol=0)
+    assert first[2] == second[2]
+    for name in ("components", "duration", "transitions", "accepted", "bootstrap"):
         np.testing.assert_allclose(first[0]["probes"][name], second[0]["probes"][name], atol=2e-6)
 
 
@@ -566,7 +529,6 @@ def test_noncontiguous_slots_simultaneous_finishes_and_exploratory_sources(tmp_p
             env.features.encode()
             model._last_obs = env.features.obs_tensor
         model._plant_exploration.pending[slots] = 1
-        initial = model._memory.state.hidden.clone()
         model._collect_step(callback)
         first = model._buffer.take(model._buffer.valid_indices())
         assert first["env"].tolist() == slots.tolist()
@@ -582,9 +544,7 @@ def test_noncontiguous_slots_simultaneous_finishes_and_exploratory_sources(tmp_p
         assert rows["probes"]["valid"].sum() == 12
         inactive = np.ones(128, bool)
         inactive[slots] = False
-        torch.testing.assert_close(
-            model._memory.state.hidden[:, inactive], initial[:, inactive], atol=0, rtol=0
-        )
+        assert not model._scheduler.pending[inactive].any()
         assert set(model._pending_episodes) == set(slots.tolist())
     finally:
         close_model(model, env)

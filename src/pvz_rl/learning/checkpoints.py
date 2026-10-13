@@ -9,17 +9,17 @@ from zipfile import ZipFile
 import torch
 
 from pvz_rl.config import digest, load_config, validate_config
-from pvz_rl.learning.performance import refresh_performance
+from pvz_rl.learning.performance import ENCODER_SETTINGS, refresh_performance
 from pvz_rl.learning.training_requirements import transfer_protocol, weight_transfer_protocol
 
-DEMO_PROTOCOL = "pvz-rl/demo-initialization-checkpoint-v6"
-STATE_PROTOCOL = "pvz-rl/joint-event-lstm-state-v2"
-AUTONOMOUS_STATE_PROTOCOL = "pvz-rl/tile-probe-event-lstm-state-v5"
+DEMO_PROTOCOL = "pvz-rl/demo-initialization-checkpoint-v7"
+MODEL_STATE_PROTOCOL = "pvz-rl/stateless-two-stage-state-v1"
+AUTONOMOUS_STATE_PROTOCOL = "pvz-rl/stateless-tile-probe-state-v6"
 
 
 def protocol_for(kind):
     methods = {
-        "transformer_lstm_q_v4": "complete_return_joint_tile_probe_v1",
+        "two_stage_transformer_q_v1": "complete_return_sequential_tile_probe_v1",
     }
     if kind not in methods:
         raise ValueError(
@@ -43,6 +43,8 @@ def execution_config(cfg):
     """Fill optional execution settings; never replace recorded protocol parameters."""
     cfg = copy.deepcopy(cfg)
     defaults = load_config()
+    for key in ENCODER_SETTINGS:
+        cfg["policy"].setdefault(key, copy.deepcopy(defaults["policy"][key]))
     for key in ("logging", "visualization", "runtime", "simulation"):
         cfg.setdefault(key, copy.deepcopy(defaults[key]))
     for key in ("storage", "performance", "batch_size", "n_epochs", "max_grad_norm"):
@@ -50,6 +52,19 @@ def execution_config(cfg):
     for key, value in defaults["training"]["performance"].items():
         cfg["training"]["performance"].setdefault(key, copy.deepcopy(value))
     return cfg
+
+
+def validate_runtime_identity(runtime):
+    if (
+        not isinstance(runtime, dict)
+        or runtime.get("protocol") != AUTONOMOUS_STATE_PROTOCOL
+        or runtime.get("model_storage_protocol") != MODEL_STATE_PROTOCOL
+    ):
+        raise ValueError(
+            "Unsupported autonomous recovery protocol; fresh initialization is required"
+        )
+    if any(key in runtime for key in ("memory", "teacher_memory")):
+        raise ValueError("Stateless recovery cannot contain learned-history state")
 
 
 def inspect_checkpoint(path, *, weights_only=False):
@@ -62,8 +77,10 @@ def inspect_checkpoint(path, *, weights_only=False):
             raise ValueError(
                 "Unsupported demonstration checkpoint protocol; refit a verified recording in a new directory"
             )
-        if saved.get("recurrent_storage_protocol") != STATE_PROTOCOL:
-            raise ValueError("Unsupported recurrent storage protocol")
+        if saved.get("model_storage_protocol") != MODEL_STATE_PROTOCOL:
+            raise ValueError(
+                "Unsupported stateless model storage protocol; fresh weights are required"
+            )
         if not isinstance(saved.get("config"), dict) or saved.get("config_digest") != digest(
             saved["config"]
         ):
@@ -76,14 +93,13 @@ def inspect_checkpoint(path, *, weights_only=False):
         ):
             raise ValueError("Demonstration checkpoint contains invalid or non-finite weights")
         cfg = saved["config"]
+        validate_config(execution_config(cfg))
         from pvz_game import Rules
 
         from pvz_rl.envs.encoding import ObservationEncoder
 
         if saved.get("observation_schema") != ObservationEncoder(cfg, Rules()).schema():
             raise ValueError("Checkpoint entity schema disagrees with configuration")
-        if cfg["policy"]["kind"] != "transformer_lstm_q_v4":
-            raise ValueError("Demonstration checkpoint requires Transformer-LSTM weights")
         metadata = dict(
             config=cfg,
             condition="masked",
@@ -110,6 +126,7 @@ def inspect_checkpoint(path, *, weights_only=False):
                 else json.loads((path.parent / "metadata.json").read_text("utf-8"))
             )
         cfg = metadata["config"]
+        validate_config(execution_config(cfg))
         from pvz_game import Rules
 
         from pvz_rl.envs.encoding import ObservationEncoder
@@ -134,14 +151,13 @@ def inspect_checkpoint(path, *, weights_only=False):
                         ("updates", "_n_updates"),
                     )
                 }
-            else:
-                runtime = torch.load(
-                    io.BytesIO(archive.read("cohort-state.pt")),
-                    map_location="cpu",
-                    weights_only=False,
-                )
-                if runtime.get("protocol") != AUTONOMOUS_STATE_PROTOCOL:
-                    raise ValueError("Unsupported autonomous recovery protocol; use --init-from")
+            runtime = torch.load(
+                io.BytesIO(archive.read("cohort-state.pt")),
+                map_location="cpu",
+                weights_only=False,
+            )
+            validate_runtime_identity(runtime)
+            if not weights_only:
                 if runtime.get("buffer") is not None:
                     from pvz_rl.learning.collection_scheduler import CollectionScheduler
                     from pvz_rl.learning.exploration import CommittedPlantExploration
@@ -151,7 +167,6 @@ def inspect_checkpoint(path, *, weights_only=False):
                         for key in (
                             "collection_scheduler",
                             "teacher",
-                            "teacher_memory",
                             "probe_schedule",
                             "compilation",
                             "pending_episodes",
@@ -181,12 +196,6 @@ def inspect_checkpoint(path, *, weights_only=False):
         if not weights_only and protocol != protocol_for(cfg["policy"]["kind"]):
             raise ValueError("Checkpoint model family disagrees with saved configuration")
         metadata["initialization_type"] = "autonomous"
-    if (
-        cfg["training"].get("method") != "complete_return_joint_tile_probe_v1"
-        or cfg["training"].get("objective", {}).get("protocol")
-        != "complete_return_joint_tile_probe_v1"
-    ):
-        raise ValueError("Retired planting-probe checkpoint; fresh initialization is required")
     if weights_only:
         return metadata
     if metadata["initialization_type"] == "demonstration":
@@ -199,8 +208,8 @@ def inspect_checkpoint(path, *, weights_only=False):
 
 
 def model_class(cfg):
-    if cfg["policy"]["kind"] != "transformer_lstm_q_v4":
+    if cfg["policy"]["kind"] != "two_stage_transformer_q_v1":
         raise ValueError("Retired model; entity_v1 requires fresh initialization")
-    from pvz_rl.learning.recurrent_q import CudaRecurrentQ
+    from pvz_rl.learning.sequential_training import CudaSequentialQ
 
-    return CudaRecurrentQ
+    return CudaSequentialQ

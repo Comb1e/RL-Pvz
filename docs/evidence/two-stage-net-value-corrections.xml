@@ -1,0 +1,72 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="3" skipped="0" tests="3" time="2.069" timestamp="2026-10-13T17:37:45.762571+09:00" hostname="R"><testcase classname="tests.test_net_value" name="test_shipped_objective_bounds_independent_of_reward_implementation" time="0.662"><failure message="assert (1.0 == 1 and 1.0 == 2)">def test_shipped_objective_bounds_independent_of_reward_implementation():
+        from collections import Counter
+
+        from pvz_game import Rules
+        from pvz_game.config import bundled
+
+        rules = Rules()
+        cfg = load_config()
+        assert cfg["training"]["gamma"] == 1
+        assert cfg["reward"]["progress_weight"] / cfg["reward"]["value_scale"] == 1 / 30000
+        assert cfg["reward"]["mower_value"] == 200
+        assert cfg["reward"]["basic_zombie_value"] == 50
+&gt;       assert cfg["reward"]["win_reward"] == 1 and cfg["reward"]["loss_penalty"] == 2
+E       assert (1.0 == 1 and 1.0 == 2)
+
+tests\test_net_value.py:28: AssertionError</failure></testcase><testcase classname="tests.test_net_value" name="test_rejection_penalties_are_separate_from_economy_and_terminal[insufficient_sun]" time="0.005"><failure message="assert -1.0 == -2">reason = 'insufficient_sun'
+
+    @pytest.mark.parametrize(
+        "reason",
+        ["insufficient_sun", "card_recharging", "occupied_tile", "outside_board", "unknown_plant"],
+    )
+    def test_rejection_penalties_are_separate_from_economy_and_terminal(reason):
+        from dataclasses import replace
+
+        from pvz_game import ActionResult, Dig, Game, Place, Status
+
+        from pvz_rl.config import load_config
+
+        cfg = load_config()
+        before = Game().reset("easy", 101)
+        for outcome, terminal in ((Status.RUNNING, 0), (Status.WON, 1), (Status.LOST, -2)):
+            after = replace(before, status=outcome)
+            parts = reward_parts(
+                before,
+                after,
+                cfg,
+                action=Place("sunflower", 0, 0),
+                action_result=ActionResult(False, reason),
+            )
+            assert parts["net_value"] == parts["development"] == 0
+&gt;           assert parts["terminal"] == terminal
+E           assert -1.0 == -2
+
+tests\test_net_value.py:298: AssertionError</failure></testcase><testcase classname="tests.test_net_value" name="test_rejection_penalties_are_separate_from_economy_and_terminal[card_recharging]" time="0.003"><failure message="assert -1.0 == -2">reason = 'card_recharging'
+
+    @pytest.mark.parametrize(
+        "reason",
+        ["insufficient_sun", "card_recharging", "occupied_tile", "outside_board", "unknown_plant"],
+    )
+    def test_rejection_penalties_are_separate_from_economy_and_terminal(reason):
+        from dataclasses import replace
+
+        from pvz_game import ActionResult, Dig, Game, Place, Status
+
+        from pvz_rl.config import load_config
+
+        cfg = load_config()
+        before = Game().reset("easy", 101)
+        for outcome, terminal in ((Status.RUNNING, 0), (Status.WON, 1), (Status.LOST, -2)):
+            after = replace(before, status=outcome)
+            parts = reward_parts(
+                before,
+                after,
+                cfg,
+                action=Place("sunflower", 0, 0),
+                action_result=ActionResult(False, reason),
+            )
+            assert parts["net_value"] == parts["development"] == 0
+&gt;           assert parts["terminal"] == terminal
+E           assert -1.0 == -2
+
+tests\test_net_value.py:298: AssertionError</failure></testcase></testsuite></testsuites>

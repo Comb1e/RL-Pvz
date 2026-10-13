@@ -18,7 +18,7 @@ def test_new_shared_run_defaults_and_explicit_parallelism():
     cfg = configured(args())
     assert simulator(cfg) == "cuda"
     assert cfg["training"]["n_envs"] == 128
-    assert cfg["training"]["method"] == "complete_return_joint_tile_probe_v1"
+    assert cfg["training"]["method"] == "complete_return_sequential_tile_probe_v1"
     for count in (3, 32, 64, 128, 256, 512, 1024):
         cfg = configured(args(n_envs=count))
         assert cfg["training"]["n_envs"] == count
@@ -46,14 +46,14 @@ def test_previous_plant_probe_checkpoints_reject_before_cuda(tmp_path, monkeypat
                 json.dumps(
                     dict(
                         policy="transformer_lstm_q_v4",
-                        optimizer="complete_return_joint_probe_v1",
+                        optimizer="complete_return_joint_tile_probe_v1",
                         exploration=EXPLORATION_PROTOCOL,
                     )
                 ),
             )
     else:
         path = tmp_path / "previous.pt"
-        torch.save(dict(protocol="pvz-rl/demo-initialization-checkpoint-v4"), path)
+        torch.save(dict(protocol="pvz-rl/demo-initialization-checkpoint-v6"), path)
     with pytest.raises(ValueError, match="Retired|Unsupported|fresh|refit"):
         if mode == "init_from":
             from pvz_rl.learning.training import initial_weights
@@ -63,7 +63,16 @@ def test_previous_plant_probe_checkpoints_reject_before_cuda(tmp_path, monkeypat
             configured(args(resume=path))
 
 
-@pytest.mark.parametrize("fault", ["missing_scheduler", "scheduler_counts", "pending_evidence"])
+@pytest.mark.parametrize(
+    "fault",
+    [
+        "missing_scheduler",
+        "scheduler_counts",
+        "pending_evidence",
+        "model_protocol",
+        "history_state",
+    ],
+)
 def test_incomplete_background_recovery_rejected_before_allocation(tmp_path, monkeypatch, fault):
     from io import BytesIO
     from zipfile import ZipFile
@@ -75,6 +84,7 @@ def test_incomplete_background_recovery_rejected_before_allocation(tmp_path, mon
     from pvz_rl.envs.encoding import ObservationEncoder
     from pvz_rl.learning.checkpoints import (
         AUTONOMOUS_STATE_PROTOCOL,
+        MODEL_STATE_PROTOCOL,
         inspect_checkpoint,
         protocol_for,
     )
@@ -98,10 +108,10 @@ def test_incomplete_background_recovery_rejected_before_allocation(tmp_path, mon
         buffer.close()
     runtime = dict(
         protocol=AUTONOMOUS_STATE_PROTOCOL,
+        model_storage_protocol=MODEL_STATE_PROTOCOL,
         buffer=metadata,
         collection_scheduler=CollectionScheduler(count, "cpu").snapshot(),
         teacher={},
-        teacher_memory={},
         probe_schedule={},
         compilation={},
         pending_episodes={},
@@ -111,8 +121,12 @@ def test_incomplete_background_recovery_rejected_before_allocation(tmp_path, mon
         runtime.pop("collection_scheduler")
     elif fault == "scheduler_counts":
         runtime["collection_scheduler"]["decisions"] = np.array([-1] * count)
-    else:
+    elif fault == "pending_evidence":
         runtime["buffer"]["pending_probes"] = 1
+    elif fault == "model_protocol":
+        runtime["model_storage_protocol"] = "pvz-rl/joint-event-lstm-state-v2"
+    else:
+        runtime["teacher_memory"] = {}
     stream = BytesIO()
     torch.save(runtime, stream)
     path = tmp_path / "incomplete.zip"
@@ -126,7 +140,9 @@ def test_incomplete_background_recovery_rejected_before_allocation(tmp_path, mon
         archive.writestr("cohort-state.pt", stream.getvalue())
         for name in ("policy.pth", "policy.optimizer.pth"):
             archive.writestr(name, b"unread weights")
-    with pytest.raises(ValueError, match="Incomplete|Invalid collection"):
+    with pytest.raises(
+        ValueError, match="Incomplete|Invalid collection|Unsupported|learned-history"
+    ):
         inspect_checkpoint(path)
 
 

@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="1" skipped="0" tests="40" time="17.178" timestamp="2026-10-13T17:43:11.384644+09:00" hostname="R"><testcase classname="tests.test_two_stage_transformer" name="test_confirmed_dimensions_independent_parameters_and_no_history" time="0.680" /><testcase classname="tests.test_two_stage_transformer" name="test_active_plan_buckets_preserve_original_ids_and_stage_overheads[128]" time="0.006" /><testcase classname="tests.test_two_stage_transformer" name="test_active_plan_buckets_preserve_original_ids_and_stage_overheads[64]" time="0.001" /><testcase classname="tests.test_two_stage_transformer" name="test_active_plan_buckets_preserve_original_ids_and_stage_overheads[32]" time="0.001" /><testcase classname="tests.test_two_stage_transformer" name="test_active_plan_buckets_preserve_original_ids_and_stage_overheads[16]" time="0.001" /><testcase classname="tests.test_two_stage_transformer" name="test_active_plan_buckets_preserve_original_ids_and_stage_overheads[4]" time="0.001" /><testcase classname="tests.test_two_stage_transformer" name="test_active_plan_buckets_preserve_original_ids_and_stage_overheads[1]" time="0.001" /><testcase classname="tests.test_two_stage_transformer" name="test_active_plan_buckets_preserve_original_ids_and_stage_overheads[0]" time="0.001" /><testcase classname="tests.test_two_stage_transformer" name="test_active_only_outputs_serial_control_and_original_slot_randomness[cpu]" time="0.084" /><testcase classname="tests.test_two_stage_transformer" name="test_active_only_outputs_serial_control_and_original_slot_randomness[cuda]" time="0.940" /><testcase classname="tests.test_two_stage_transformer" name="test_permutation_padding_batching_and_empty_entities[cpu]" time="0.027" /><testcase classname="tests.test_two_stage_transformer" name="test_permutation_padding_batching_and_empty_entities[cuda]" time="0.056" /><testcase classname="tests.test_two_stage_transformer" name="test_stateless_conditioning_and_duplicate_pair_gradient_accumulation" time="0.031" /><testcase classname="tests.test_two_stage_transformer" name="test_current_public_board_responsiveness[position]" time="0.014" /><testcase classname="tests.test_two_stage_transformer" name="test_current_public_board_responsiveness[health]" time="0.015" /><testcase classname="tests.test_two_stage_transformer" name="test_current_public_board_responsiveness[sun]" time="0.014" /><testcase classname="tests.test_two_stage_transformer" name="test_current_public_board_responsiveness[cooldown]" time="0.015" /><testcase classname="tests.test_two_stage_transformer" name="test_wait_skips_tile_encoder_and_geometry_fallback_does_not_hide_species" time="0.015" /><testcase classname="tests.test_two_stage_transformer" name="test_only_selected_branch_tiles_explore_and_gap_is_conditional[False]" time="0.038" /><testcase classname="tests.test_two_stage_transformer" name="test_only_selected_branch_tiles_explore_and_gap_is_conditional[True]" time="0.028" /><testcase classname="tests.test_two_stage_transformer" name="test_attention_independent_values_and_gradients[cpu]" time="0.005" /><testcase classname="tests.test_two_stage_transformer" name="test_attention_independent_values_and_gradients[cuda]" time="0.065" /><testcase classname="tests.test_two_stage_transformer" name="test_serial_batched_transformer_values_and_gradients[species]" time="0.026" /><testcase classname="tests.test_two_stage_transformer" name="test_serial_batched_transformer_values_and_gradients[tile]" time="0.031" /><testcase classname="tests.test_two_stage_transformer" name="test_cpu_cuda_both_stage_gradients_and_adam_match" time="0.923" /><testcase classname="tests.test_two_stage_transformer" name="test_compact_viewer_history_remains_recording_only" time="0.005" /><testcase classname="tests.test_two_stage_transformer" name="test_bf16_encoder_features_keep_fp32_heads_master_weights_and_gradients[0]" time="0.139"><failure message="AssertionError: Tensor-likes are not close!&#10;&#10;Mismatched elements: 3 / 30 (10.0%)&#10;Greatest absolute difference: 0.002499707043170929 at index (0, 3) (up to 0.002 allowed)&#10;Greatest relative difference: 0.06552917510271072 at index (0, 3) (up to 0.01 allowed)">count = 0
+
+    @pytest.mark.parametrize("count", [0, 40, 256])
+    def test_bf16_encoder_features_keep_fp32_heads_master_weights_and_gradients(count):
+        cfg = small_config()
+        raw, _ = observation(cfg, count)
+        if count == 0:
+            raw["entities"] = raw["entities"][:0]
+            raw["globals"][-4:] = 0
+        observations = collate_observations([raw] * 3, "cuda")
+        torch.manual_seed(101)
+        reference = TwoStageTransformerPolicy(cfg).cuda()
+        mixed = TwoStageTransformerPolicy(cfg).cuda()
+        mixed.load_state_dict(reference.state_dict())
+        seen, hooks = {}, []
+        for stage in ("species", "tile"):
+            head = getattr(mixed, f"{stage}_head")
+            encoder = getattr(mixed, f"{stage}_encoder")
+            hooks.append(
+                head.register_forward_pre_hook(
+                    lambda module, args, stage=stage: seen.update({f"{stage}_head": args[0].dtype})
+                )
+            )
+            hooks.append(
+                encoder.layers[0].qkv.register_forward_hook(
+                    lambda module, args, output, stage=stage: seen.update(
+                        {f"{stage}_qkv": output.dtype}
+                    )
+                )
+            )
+        outputs, gradients = [], []
+        for policy, precision in ((reference, "fp32"), (mixed, "features_bf16")):
+            with policy.fitting_precision(precision):
+                species = policy.species_values(observations)
+                tiles = policy.conditional_tiles(observations, torch.tensor([1, 8, 9], device="cuda"))
+                ((species - 0.5).square().mean() + (tiles + 0.5).square().mean()).backward()
+            outputs.append((species, tiles))
+            assert all(
+                parameter.dtype == parameter.grad.dtype == torch.float32
+                for parameter in policy.parameters()
+            )
+            gradients.append(torch.cat([parameter.grad.flatten() for parameter in policy.parameters()]))
+        for actual, expected in zip(*outputs, strict=True):
+&gt;           torch.testing.assert_close(actual, expected, atol=0.002, rtol=0.01)
+E           AssertionError: Tensor-likes are not close!
+E
+E           Mismatched elements: 3 / 30 (10.0%)
+E           Greatest absolute difference: 0.002499707043170929 at index (0, 3) (up to 0.002 allowed)
+E           Greatest relative difference: 0.06552917510271072 at index (0, 3) (up to 0.01 allowed)
+
+tests\test_two_stage_transformer.py:439: AssertionError</failure></testcase><testcase classname="tests.test_two_stage_transformer" name="test_bf16_encoder_features_keep_fp32_heads_master_weights_and_gradients[40]" time="0.067" /><testcase classname="tests.test_two_stage_transformer" name="test_bf16_encoder_features_keep_fp32_heads_master_weights_and_gradients[256]" time="0.053" /><testcase classname="tests.test_two_stage_transformer" name="test_compiled_microbatches_delayed_backward_matches_eager[fp32]" time="4.081" /><testcase classname="tests.test_two_stage_transformer" name="test_compiled_microbatches_delayed_backward_matches_eager[features_bf16]" time="3.876" /><testcase classname="tests.test_two_stage_transformer" name="test_collection_graph_cache_is_per_encoder_bounded_and_owns_replays" time="1.224" /><testcase classname="tests.test_two_stage_transformer" name="test_collection_graph_lru_deferred_retirement_and_transient_bound" time="0.003" /><testcase classname="tests.test_two_stage_transformer" name="test_collection_graph_headroom_before_and_after_admission[free_mib0]" time="0.016" /><testcase classname="tests.test_two_stage_transformer" name="test_collection_graph_headroom_before_and_after_admission[free_mib1]" time="0.123" /><testcase classname="tests.test_two_stage_transformer" name="test_collection_graph_headroom_before_and_after_admission[free_mib2]" time="0.114" /><testcase classname="tests.test_two_stage_transformer" name="test_collection_graph_oom_releases_cache_and_retries_eager" time="0.209" /><testcase classname="tests.test_two_stage_transformer" name="test_collection_settings_refresh_and_disabled_phase_helpers" time="0.011" /><testcase classname="tests.test_two_stage_transformer" name="test_graph_phase_release_preserves_request_and_recaptures_fitting[precision0]" time="1.354" /><testcase classname="tests.test_two_stage_transformer" name="test_graph_phase_release_preserves_request_and_recaptures_fitting[precision1]" time="1.371" /></testsuite></testsuites>

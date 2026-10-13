@@ -38,7 +38,7 @@ PROBE_CAPACITIES = (1, 4, 16, 64, 128, 256)
 WARMUP_DECISIONS = 8
 REPETITIONS = 3
 FIT_PASSES = 4
-PROTOCOL = "collection-background-tile-snapshot-v7"
+PROTOCOL = "collection-two-stage-tile-snapshot-v8"
 
 
 class CollectionCallback(BaseCallback):
@@ -86,7 +86,7 @@ def snapshot(case):
 
 def reset(model, callback, raw, seed, live_count=ORIGINAL_ENVIRONMENTS):
     model._drain()
-    model._close_sequences()
+    model._close_batches()
     if model._buffer is not None:
         model._buffer.close()
     torch.manual_seed(seed)
@@ -135,7 +135,10 @@ def collect(model, callback, decisions, *, quiesce=None):
 def capture_setup_seconds(model):
     """Read cumulative capture setup counters without device queries."""
     return {
-        name: network.entity.collection_metrics.get("capture_setup_seconds", 0.0)
+        name: sum(
+            encoder.collection_metrics.get("capture_setup_seconds", 0.0)
+            for encoder in network.encoders
+        )
         for name, network in (("online", model.policy), ("ema", getattr(model, "_teacher", None)))
         if network is not None
     }
@@ -229,11 +232,12 @@ def rebuild_cutoff_features(model, cutoff):
 def release_benchmark_model(model):
     """Release captured bound encoders at quiescence, before deleting the model."""
     model._drain()
-    model._close_sequences()
+    model._close_batches()
     for network in (model.policy, getattr(model, "_teacher", None)):
         if network is not None:
-            network.entity.release_collection()
-            network.entity.release_fitting()
+            for encoder in network.encoders:
+                encoder.release_collection()
+                encoder.release_fitting()
     probes = getattr(model, "_probes", None)
     if probes is not None:
         probes.release_workspaces()
@@ -326,6 +330,8 @@ def fit_cycle(model, callback, raw, decisions, hardware, process, context, secon
         phase_memory = copy.deepcopy(model.cohort_metrics.get("phase_memory", []))
         prefit_errors = copy.deepcopy(model.cohort_metrics.get("prefit_errors", {}))
         selected_error = model.logger.name_to_value.get("train/selected_action_error")
+        consistency_error = model.logger.name_to_value.get("train/species_consistency_error")
+        placement_gap = model.logger.name_to_value.get("train/placement_gap")
         probe_error = model.logger.name_to_value.get("train/probe_loss")
     finally:
         started = perf_counter()
@@ -368,6 +374,8 @@ def fit_cycle(model, callback, raw, decisions, hardware, process, context, secon
         fit_seconds=fitting,
         prefit_errors=prefit_errors,
         last_pass_selected_action_error=selected_error,
+        last_pass_species_consistency_error=consistency_error,
+        last_pass_placement_gap=placement_gap,
         last_pass_probe_huber_error=probe_error,
         phase_memory=phase_memory,
         before=before,
@@ -520,15 +528,11 @@ def benchmark(
                             else 0
                         )
                         with torch.no_grad():
-                            model.policy.wait_head[-1].weight.zero_()
-                            model.policy.wait_head[-1].bias.zero_()
+                            model.policy.species_head[-1].weight.zero_()
+                            model.policy.species_head[-1].bias.zero_()
                             model.policy.tile_head[-1].weight.zero_()
                             model.policy.tile_head[-1].bias.zero_()
-                            model.policy.tile_offsets.zero_()
-                            if branch == 0:
-                                model.policy.wait_head[-1].bias[0] = 1
-                            else:
-                                model.policy.tile_offsets[branch - 1] = 1
+                            model.policy.species_head[-1].bias[branch] = 1
                         reset(model, callback, raw, 101, live_count=count)
                         setup = perf_counter() - started
 

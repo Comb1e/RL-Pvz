@@ -1,0 +1,236 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="5" skipped="0" tests="14" time="5.465" timestamp="2026-10-13T18:01:21.353525+09:00" hostname="R"><testcase classname="tests.test_reward_contract" name="test_early_sun_independent_event_order_cap_and_training_scale[15-4-ordered0-25]" time="0.602" /><testcase classname="tests.test_reward_contract" name="test_early_sun_independent_event_order_cap_and_training_scale[15-5-ordered1-0]" time="0.006" /><testcase classname="tests.test_reward_contract" name="test_early_sun_independent_event_order_cap_and_training_scale[14-4-ordered2-25]" time="0.005" /><testcase classname="tests.test_reward_contract" name="test_early_sun_independent_event_order_cap_and_training_scale[0-0-ordered3-0]" time="0.005" /><testcase classname="tests.test_reward_contract" name="test_early_sun_independent_event_order_cap_and_training_scale[15-4-ordered4-0]" time="0.005" /><testcase classname="tests.test_reward_contract" name="test_early_sun_independent_event_order_cap_and_training_scale[15-4-ordered5-25]" time="0.005" /><testcase classname="tests.test_reward_contract" name="test_early_sun_independent_event_order_cap_and_training_scale[15-0-ordered6-10]" time="0.005" /><testcase classname="tests.test_reward_contract" name="test_early_sun_independent_event_order_cap_and_training_scale[15-0-ordered7-0]" time="0.005" /><testcase classname="tests.test_reward_contract" name="test_early_sun_cuda_controls_at_production[9990-3-99-0]" time="2.156"><failure message="AttributeError: 'CudaFeatures' object has no attribute 'history'">sun = 9990, total = 3, spawn_tick = 99, expected = 0
+
+    @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA unavailable")
+    @pytest.mark.parametrize(
+        "sun,total,spawn_tick,expected",
+        [(9990, 3, 99, 0), (9980, 3, 99, 10), (0, 3, 1, 0), (0, 4, 1, 25), (0, 0, 99, 0)],
+    )
+    def test_early_sun_cuda_controls_at_production(sun, total, spawn_tick, expected):
+        from pvz_game import Game
+
+        from pvz_rl.envs.cuda_accounting import AccountingCudaBatch
+        from pvz_rl.envs.cuda_features import REWARD_FIELDS, CudaFeatures
+
+        cfg = load_config()
+        game = Game()
+        game.reset(
+            LevelSpec(
+                "early-control",
+                tuple(
+                    Spawn(spawn_tick if index == 0 else 9999, "basic", index % 5)
+                    for index in range(total)
+                ),
+                initial_sun=sun,
+                plants=(InitialPlant("sunflower", 4, 0),),
+            ),
+            7,
+        )
+        snapshot = game.snapshot()
+        snapshot["plants"][0]["due"] = 1
+        game.restore(snapshot)
+        before = game.observe()
+        result = game.step(ticks=1)
+        cpu = reward_parts(before, result.observation, cfg, events=result.events)
+        batch = AccountingCudaBatch(1, zombie_capacity=max(1, total), max_step_ticks=1)
+        batch.restore([snapshot])
+        with batch.cp.cuda.ExternalStream(torch.cuda.current_stream().cuda_stream):
+            features = CudaFeatures(batch, cfg, "masked")
+            features.encode()
+            features.step(batch.cp.asarray([0], dtype=batch.cp.int64))
+            parts = dict(zip(REWARD_FIELDS, features.parts.get()[0], strict=True))
+            assert parts["early_sun"] == cpu["early_sun"] == expected
+            for name in REWARD_FIELDS:
+                assert parts[name] == pytest.approx(cpu[name], abs=1e-10), name
+&gt;           assert features.history.get().shape == (1, 7)
+                   ^^^^^^^^^^^^^^^^
+E           AttributeError: 'CudaFeatures' object has no attribute 'history'
+
+tests\test_reward_contract.py:105: AttributeError</failure></testcase><testcase classname="tests.test_reward_contract" name="test_early_sun_cuda_controls_at_production[9980-3-99-10]" time="0.016"><failure message="AttributeError: 'CudaFeatures' object has no attribute 'history'">sun = 9980, total = 3, spawn_tick = 99, expected = 10
+
+    @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA unavailable")
+    @pytest.mark.parametrize(
+        "sun,total,spawn_tick,expected",
+        [(9990, 3, 99, 0), (9980, 3, 99, 10), (0, 3, 1, 0), (0, 4, 1, 25), (0, 0, 99, 0)],
+    )
+    def test_early_sun_cuda_controls_at_production(sun, total, spawn_tick, expected):
+        from pvz_game import Game
+
+        from pvz_rl.envs.cuda_accounting import AccountingCudaBatch
+        from pvz_rl.envs.cuda_features import REWARD_FIELDS, CudaFeatures
+
+        cfg = load_config()
+        game = Game()
+        game.reset(
+            LevelSpec(
+                "early-control",
+                tuple(
+                    Spawn(spawn_tick if index == 0 else 9999, "basic", index % 5)
+                    for index in range(total)
+                ),
+                initial_sun=sun,
+                plants=(InitialPlant("sunflower", 4, 0),),
+            ),
+            7,
+        )
+        snapshot = game.snapshot()
+        snapshot["plants"][0]["due"] = 1
+        game.restore(snapshot)
+        before = game.observe()
+        result = game.step(ticks=1)
+        cpu = reward_parts(before, result.observation, cfg, events=result.events)
+        batch = AccountingCudaBatch(1, zombie_capacity=max(1, total), max_step_ticks=1)
+        batch.restore([snapshot])
+        with batch.cp.cuda.ExternalStream(torch.cuda.current_stream().cuda_stream):
+            features = CudaFeatures(batch, cfg, "masked")
+            features.encode()
+            features.step(batch.cp.asarray([0], dtype=batch.cp.int64))
+            parts = dict(zip(REWARD_FIELDS, features.parts.get()[0], strict=True))
+            assert parts["early_sun"] == cpu["early_sun"] == expected
+            for name in REWARD_FIELDS:
+                assert parts[name] == pytest.approx(cpu[name], abs=1e-10), name
+&gt;           assert features.history.get().shape == (1, 7)
+                   ^^^^^^^^^^^^^^^^
+E           AttributeError: 'CudaFeatures' object has no attribute 'history'
+
+tests\test_reward_contract.py:105: AttributeError</failure></testcase><testcase classname="tests.test_reward_contract" name="test_early_sun_cuda_controls_at_production[0-3-1-0]" time="0.015"><failure message="AttributeError: 'CudaFeatures' object has no attribute 'history'">sun = 0, total = 3, spawn_tick = 1, expected = 0
+
+    @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA unavailable")
+    @pytest.mark.parametrize(
+        "sun,total,spawn_tick,expected",
+        [(9990, 3, 99, 0), (9980, 3, 99, 10), (0, 3, 1, 0), (0, 4, 1, 25), (0, 0, 99, 0)],
+    )
+    def test_early_sun_cuda_controls_at_production(sun, total, spawn_tick, expected):
+        from pvz_game import Game
+
+        from pvz_rl.envs.cuda_accounting import AccountingCudaBatch
+        from pvz_rl.envs.cuda_features import REWARD_FIELDS, CudaFeatures
+
+        cfg = load_config()
+        game = Game()
+        game.reset(
+            LevelSpec(
+                "early-control",
+                tuple(
+                    Spawn(spawn_tick if index == 0 else 9999, "basic", index % 5)
+                    for index in range(total)
+                ),
+                initial_sun=sun,
+                plants=(InitialPlant("sunflower", 4, 0),),
+            ),
+            7,
+        )
+        snapshot = game.snapshot()
+        snapshot["plants"][0]["due"] = 1
+        game.restore(snapshot)
+        before = game.observe()
+        result = game.step(ticks=1)
+        cpu = reward_parts(before, result.observation, cfg, events=result.events)
+        batch = AccountingCudaBatch(1, zombie_capacity=max(1, total), max_step_ticks=1)
+        batch.restore([snapshot])
+        with batch.cp.cuda.ExternalStream(torch.cuda.current_stream().cuda_stream):
+            features = CudaFeatures(batch, cfg, "masked")
+            features.encode()
+            features.step(batch.cp.asarray([0], dtype=batch.cp.int64))
+            parts = dict(zip(REWARD_FIELDS, features.parts.get()[0], strict=True))
+            assert parts["early_sun"] == cpu["early_sun"] == expected
+            for name in REWARD_FIELDS:
+                assert parts[name] == pytest.approx(cpu[name], abs=1e-10), name
+&gt;           assert features.history.get().shape == (1, 7)
+                   ^^^^^^^^^^^^^^^^
+E           AttributeError: 'CudaFeatures' object has no attribute 'history'
+
+tests\test_reward_contract.py:105: AttributeError</failure></testcase><testcase classname="tests.test_reward_contract" name="test_early_sun_cuda_controls_at_production[0-4-1-25]" time="0.816"><failure message="AttributeError: 'CudaFeatures' object has no attribute 'history'">sun = 0, total = 4, spawn_tick = 1, expected = 25
+
+    @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA unavailable")
+    @pytest.mark.parametrize(
+        "sun,total,spawn_tick,expected",
+        [(9990, 3, 99, 0), (9980, 3, 99, 10), (0, 3, 1, 0), (0, 4, 1, 25), (0, 0, 99, 0)],
+    )
+    def test_early_sun_cuda_controls_at_production(sun, total, spawn_tick, expected):
+        from pvz_game import Game
+
+        from pvz_rl.envs.cuda_accounting import AccountingCudaBatch
+        from pvz_rl.envs.cuda_features import REWARD_FIELDS, CudaFeatures
+
+        cfg = load_config()
+        game = Game()
+        game.reset(
+            LevelSpec(
+                "early-control",
+                tuple(
+                    Spawn(spawn_tick if index == 0 else 9999, "basic", index % 5)
+                    for index in range(total)
+                ),
+                initial_sun=sun,
+                plants=(InitialPlant("sunflower", 4, 0),),
+            ),
+            7,
+        )
+        snapshot = game.snapshot()
+        snapshot["plants"][0]["due"] = 1
+        game.restore(snapshot)
+        before = game.observe()
+        result = game.step(ticks=1)
+        cpu = reward_parts(before, result.observation, cfg, events=result.events)
+        batch = AccountingCudaBatch(1, zombie_capacity=max(1, total), max_step_ticks=1)
+        batch.restore([snapshot])
+        with batch.cp.cuda.ExternalStream(torch.cuda.current_stream().cuda_stream):
+            features = CudaFeatures(batch, cfg, "masked")
+            features.encode()
+            features.step(batch.cp.asarray([0], dtype=batch.cp.int64))
+            parts = dict(zip(REWARD_FIELDS, features.parts.get()[0], strict=True))
+            assert parts["early_sun"] == cpu["early_sun"] == expected
+            for name in REWARD_FIELDS:
+                assert parts[name] == pytest.approx(cpu[name], abs=1e-10), name
+&gt;           assert features.history.get().shape == (1, 7)
+                   ^^^^^^^^^^^^^^^^
+E           AttributeError: 'CudaFeatures' object has no attribute 'history'
+
+tests\test_reward_contract.py:105: AttributeError</failure></testcase><testcase classname="tests.test_reward_contract" name="test_early_sun_cuda_controls_at_production[0-0-99-0]" time="0.018"><failure message="AttributeError: 'CudaFeatures' object has no attribute 'history'">sun = 0, total = 0, spawn_tick = 99, expected = 0
+
+    @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA unavailable")
+    @pytest.mark.parametrize(
+        "sun,total,spawn_tick,expected",
+        [(9990, 3, 99, 0), (9980, 3, 99, 10), (0, 3, 1, 0), (0, 4, 1, 25), (0, 0, 99, 0)],
+    )
+    def test_early_sun_cuda_controls_at_production(sun, total, spawn_tick, expected):
+        from pvz_game import Game
+
+        from pvz_rl.envs.cuda_accounting import AccountingCudaBatch
+        from pvz_rl.envs.cuda_features import REWARD_FIELDS, CudaFeatures
+
+        cfg = load_config()
+        game = Game()
+        game.reset(
+            LevelSpec(
+                "early-control",
+                tuple(
+                    Spawn(spawn_tick if index == 0 else 9999, "basic", index % 5)
+                    for index in range(total)
+                ),
+                initial_sun=sun,
+                plants=(InitialPlant("sunflower", 4, 0),),
+            ),
+            7,
+        )
+        snapshot = game.snapshot()
+        snapshot["plants"][0]["due"] = 1
+        game.restore(snapshot)
+        before = game.observe()
+        result = game.step(ticks=1)
+        cpu = reward_parts(before, result.observation, cfg, events=result.events)
+        batch = AccountingCudaBatch(1, zombie_capacity=max(1, total), max_step_ticks=1)
+        batch.restore([snapshot])
+        with batch.cp.cuda.ExternalStream(torch.cuda.current_stream().cuda_stream):
+            features = CudaFeatures(batch, cfg, "masked")
+            features.encode()
+            features.step(batch.cp.asarray([0], dtype=batch.cp.int64))
+            parts = dict(zip(REWARD_FIELDS, features.parts.get()[0], strict=True))
+            assert parts["early_sun"] == cpu["early_sun"] == expected
+            for name in REWARD_FIELDS:
+                assert parts[name] == pytest.approx(cpu[name], abs=1e-10), name
+&gt;           assert features.history.get().shape == (1, 7)
+                   ^^^^^^^^^^^^^^^^
+E           AttributeError: 'CudaFeatures' object has no attribute 'history'
+
+tests\test_reward_contract.py:105: AttributeError</failure></testcase><testcase classname="tests.test_reward_contract" name="test_purchase_conserves_assets_and_dig_removes_remaining_value[sunflower]" time="0.307" /></testsuite></testsuites>

@@ -1,0 +1,125 @@
+{
+  "date": "2026-10-13",
+  "policy": "two_stage_transformer_q_v1",
+  "objective": "complete_return_sequential_tile_probe_v1",
+  "scope": "Owning targeted suites and focused corrections; no formal training or repeated full suite",
+  "owning_controls": [
+    {
+      "scope": "Configuration, checkpoints, GPU settings, recording, reporting, CUDA-only and non-learning lifecycle",
+      "passed": 125,
+      "source": "Completed contract sub-agent report"
+    },
+    {
+      "scope": "Flat fitting and demonstrations",
+      "initial_tests": 43,
+      "initial_passed": 41,
+      "initial_failures": 2,
+      "corrected_nodes_passed": 2,
+      "additional_q_math_passed": 7,
+      "additional_demo_ema_passed": 1,
+      "source": "Completed fitting sub-agent report"
+    },
+    {
+      "scope": "Probe and storage controls",
+      "source": "Completed probe/storage sub-agent report; owning controls and focused corrections completed"
+    },
+    {
+      "scope": "Observation, actions, progress, stage training and viewer integration",
+      "initial_tests": 185,
+      "initial_passed": 183,
+      "initial_failures": 2,
+      "correction": "Retired entity_width fixture mutations now use species_width",
+      "corrected_nodes_passed": 2
+    },
+    {
+      "scope": "Two-stage model",
+      "initial_tests": 40,
+      "initial_passed": 39,
+      "initial_failures": 1,
+      "correction": "Global-token projection preserves FP32; strict original-head Q checks remain, stable-region gradient checks are supplemented by independent ReLU-boundary controls",
+      "boundary_controls_passed": 5,
+      "activation_checkpointing_controls_passed": 8,
+      "compiled_backward_and_phase_controls_passed": 5,
+      "corrected_precision_nodes_passed": 3
+    },
+    {
+      "scope": "Reward event accounting",
+      "initial_tests": 14,
+      "initial_passed": 9,
+      "initial_failures": 5,
+      "correction": "Removed assertions on deleted model-history counters; reward assertions unchanged",
+      "corrected_nodes_passed": 5
+    }
+  ],
+  "final_focused_controls": {
+    "regressions": {
+      "passed": 14,
+      "evidence": "two-stage-final-regressions.xml",
+      "coverage": [
+        "Serial CPU/CUDA terminal, cutoff, cap and horizon endpoints with one or three auxiliary transitions per round",
+        "EMA tile OOM reduces both network microbatches and commits each optimizer/EMA update once",
+        "Existing nonfinite, allocation and compiled-backward whole-pass retries",
+        "Empty, mixed and crowded FP32/BF16 Q and stable-region gradient controls"
+      ]
+    },
+    "evaluation_and_journal": {
+      "passed": 13,
+      "evidence": "two-stage-evaluation-journal-controls.xml"
+    },
+    "exploration_and_learning": {
+      "passed": 19,
+      "evidence": "two-stage-exploration-controls.xml"
+    },
+    "default_twenty_pass_demo": {
+      "passed": 1,
+      "evidence": "two-stage-default-demo-control.xml"
+    },
+    "learning_lifecycle": {
+      "passed": 2,
+      "evidence": "two-stage-demo-lifecycle-controls.xml"
+    }
+  },
+  "bounded_controls": [
+    {
+      "evidence": "two-stage-collection-control.json",
+      "live_counts": [128, 64, 1],
+      "original_simulator_slots": 128,
+      "scope": "Eager sparse/mixed collection and one completed wait-only four-pass fit cycle",
+      "fit_seconds": 0.3035807000001114,
+      "postfit_warmed_median_change_percent": -1.6
+    },
+    {
+      "evidence": "two-stage-plant-fit-control.json",
+      "scope": "Four live planting games, four auxiliary lanes, completed four-pass fitting",
+      "probe_horizon_seconds": 0.25,
+      "accepted_triggers": 4,
+      "executed_tile_probes": 16,
+      "fit_seconds": 0.39832750000005035,
+      "selected_action_mse": 0.8830511073271433,
+      "species_consistency_mse": 0.905092716217041,
+      "conditional_placement_gap": 0.0014751435567935307,
+      "postfit_warmed_median_change_percent": -8.3
+    },
+    {
+      "evidence": "two-stage-default-probe-control.json",
+      "scope": "One tile probe/lane at the default horizon, with continued real-slot progress and both-stage timings",
+      "probe_horizon_seconds": 30,
+      "real_decisions_while_probe_pending": 9,
+      "probe_transitions": 3001,
+      "probe_elapsed_ticks": 3000,
+      "probe_stop_reason": "horizon",
+      "probe_bootstrap": 1.0,
+      "workspace_bytes": 4124461,
+      "wall_seconds": 29.892100500000197,
+      "drain_seconds": 29.49210049999965
+    }
+  ],
+  "limitations": [
+    "No full-suite pass, guaranteed throughput, mastery or win-rate improvement is claimed",
+    "The shortened-horizon planting control shows an 8.3% warmed postfit median slowdown; the control is too small to establish general performance",
+    "Existing test_net_value expectations assume loss_penalty=2.0 while HEAD and current configuration ship 1.0; rewards and those unrelated expectations remain unchanged",
+    "Long default-horizon probes retain material drain and shared-GPU costs"
+  ],
+  "formal_training": false,
+  "commit_push_merge": false
+}

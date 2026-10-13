@@ -1,4 +1,4 @@
-"""Bounded metadata and ragged entity storage for complete recurrent games."""
+"""Bounded metadata and ragged entity storage for complete stateless games."""
 
 import shutil
 from pathlib import Path
@@ -18,7 +18,7 @@ from pvz_rl.envs.encoding import (
 from pvz_rl.learning.objective import COMPONENTS, training_rewards, victory_time
 from pvz_rl.learning.probe_layout import ProbeLayout
 
-TRAJECTORY_PROTOCOL = "pvz-rl/async-tile-event-rollout-trajectory-v7"
+TRAJECTORY_PROTOCOL = "pvz-rl/async-tile-stateless-rollout-trajectory-v8"
 
 
 def probe_dtype():
@@ -32,15 +32,12 @@ def probe_dtype():
             ("duration", "<u4"),
             ("initial_duration", "<u2"),
             ("transitions", "<u4"),
-            ("event_writes", "<u4"),
             ("stop_reason", "u1"),
             ("ema_version", "<u4"),
             ("tick", "<u4"),
             ("done", "?"),
             ("won", "?"),
             ("components", "<f8", len(COMPONENTS)),
-            ("events", "<i8", 8),
-            ("memory_write", "?"),
             ("bootstrap", "<f4"),
             ("target", "<f4"),
             ("entity_offset", "<u8"),
@@ -59,8 +56,6 @@ def trajectory_dtype(cfg=None):
             ("globals", "<f4", GLOBAL_WIDTH),
             ("mask", "u1", (A.size + 7) // 8),
             ("action", "<u2"),
-            ("events", "<i8", 8),
-            ("memory_write", "?"),
             ("tick", "<u4"),
             ("reset", "?"),
             ("active", "?"),
@@ -76,6 +71,7 @@ def trajectory_dtype(cfg=None):
             ("probes", probe_dtype(), ProbeLayout.from_config(cfg).count),
             ("branch_value", "<f4"),
             ("tile_value", "<f4"),
+            ("placement_gap", "<f4"),
             ("greedy_action", "<u2"),
             ("policy_action", "<u2"),
             ("exploration_mode", "u1"),
@@ -107,6 +103,7 @@ class CompleteGameBuffer:
         self.exploration = {}
         self.probe_counts = np.zeros((10, 2), np.int64)
         self.outcome_counts = np.zeros((3, 2), np.int64)
+        self.consistency_counts = np.zeros((2, 2), np.int64)
         self.blocks, self.entity_blocks = [], []
         self.size = self.entity_size = self.ram_used = 0
         self.staging_bytes = 0
@@ -360,7 +357,6 @@ class CompleteGameBuffer:
         episode_square = np.zeros(self.n_envs, np.float64)
         episode_count = np.zeros(self.n_envs, np.int64)
         quantile_sample = []
-        event_writes = 0
         self.probe_counts[:] = 0
         self.outcome_counts[:] = 0
         counts = np.zeros(3, np.int64)
@@ -398,7 +394,6 @@ class CompleteGameBuffer:
                 episode_count[env] += len(values)
                 # Deterministic bounded sample, separately labeled from exact moments.
                 quantile_sample.extend(values[:: max(1, self.size // 8192)].tolist())
-            event_writes += np.count_nonzero(rows["memory_write"] & rows["active"])
             probes = rows["probes"]
             branch = np.where(
                 probes["action"] == 0, 0, 1 + (probes["action"].astype(np.int64) - 1) // A.tiles
@@ -411,7 +406,7 @@ class CompleteGameBuffer:
                 ix = rows["active"] & (kinds == group)
                 selected = rows["branch_value"][ix] if group == 0 else rows["tile_value"][ix]
                 first = selected.astype(np.float64) - rows["target"][ix]
-                second = rows["branch_value"][ix].astype(np.float64) - selected
+                second = rows["placement_gap"][ix].astype(np.float64)
                 counts[group] += len(first)
                 self.outcome_counts[group] += np.bincount(
                     rows["accepted"][ix].astype(np.int64), minlength=2
@@ -428,11 +423,10 @@ class CompleteGameBuffer:
         if not np.isfinite(sums).all() or not np.isfinite(running).all():
             raise FloatingPointError("Non-finite complete returns or collection Q values")
         self.finalized, self.group_counts, self.species_counts = True, counts, species_counts
+        self.consistency_counts[:] = self.outcome_counts[1:]
         n = max(1, counts.sum())
         variance = max(0, target_square / n - (target_sum / n) ** 2)
         self.reward_summary.update(
-            event_writes=int(event_writes),
-            event_write_frequency=float(event_writes / n),
             target_std=float(np.sqrt(variance)),
             constant_predictor_mse=float(variance),
             component_return_mean=dict(zip(COMPONENTS, (component_sum / n).tolist())),
@@ -446,6 +440,7 @@ class CompleteGameBuffer:
             ),
             probe_counts=self.probe_counts.tolist(),
             outcome_counts=self.outcome_counts.tolist(),
+            consistency_counts=self.consistency_counts.tolist(),
         )
         live = episode_count > 0
         self.reward_summary["within_episode_target_variance"] = (
@@ -530,6 +525,7 @@ class CompleteGameBuffer:
             reward_summary=self.reward_summary,
             probe_counts=self.probe_counts,
             outcome_counts=self.outcome_counts,
+            consistency_counts=self.consistency_counts,
             exploration=dict(self.exploration),
             probe_layout=self.layout.metadata(),
             pending_probes=self.pending_probes,
@@ -582,7 +578,11 @@ class CompleteGameBuffer:
         ):
             if type(state.get(name)) is not int or state[name] < minimum:
                 raise ValueError(f"Corrupt trajectory metadata: {name}")
-        for name, shape in (("outcome_counts", (3, 2)), ("probe_counts", (10, 2))):
+        for name, shape in (
+            ("outcome_counts", (3, 2)),
+            ("consistency_counts", (2, 2)),
+            ("probe_counts", (10, 2)),
+        ):
             counts = np.asarray(state.get(name))
             if counts.shape != shape or counts.dtype.kind not in "iu" or np.any(counts < 0):
                 raise ValueError(f"Corrupt trajectory acceptance counts: {name}")
@@ -644,10 +644,11 @@ class CompleteGameBuffer:
                         records["executed_action"] >= A.size
                     ):
                         raise ValueError("Corrupt trajectory action")
-                    if np.any(records["events"] < 0) or np.any(
-                        records["memory_write"] != records["events"][:, :7].any(-1)
-                    ):
-                        raise ValueError("Corrupt trajectory event facts or write mask")
+                if not all(
+                    np.isfinite(rows[name]).all()
+                    for name in ("branch_value", "tile_value", "placement_gap")
+                ):
+                    raise ValueError("Non-finite trajectory Q values or placement gap")
                 if (
                     np.any(rows["probe_pending"])
                     or np.any(rows["probe_expected"] > obj.layout.count)
@@ -685,7 +686,6 @@ class CompleteGameBuffer:
                 np.add.at(probe_counts, (branches, probes["accepted"].astype(np.int64)), 1)
                 if (
                     np.any(probes["transitions"] < 1)
-                    or np.any(probes["event_writes"] > probes["transitions"])
                     or np.any((probes["stop_reason"] < 1) | (probes["stop_reason"] > 4))
                     or np.any(probes["done"] != (probes["stop_reason"] <= 2))
                     or np.any(probes["initial_duration"] > probes["duration"])
@@ -715,6 +715,7 @@ class CompleteGameBuffer:
                 raise ValueError("Orphan entity records in trajectory")
             if state["finalized"] and (
                 not np.array_equal(actual_counts, state["outcome_counts"])
+                or not np.array_equal(actual_counts[1:], state["consistency_counts"])
                 or not np.array_equal(probe_counts, state["probe_counts"])
                 or not np.array_equal(actual_counts.sum(-1), state["group_counts"])
             ):
@@ -723,7 +724,13 @@ class CompleteGameBuffer:
                 setattr(obj, key, state[key])
             obj.transport_metrics.update(state.get("transport_metrics", {}))
             obj.exploration = dict(state["exploration"])
-            for key in ("rewards_finalized", "reward_summary", "probe_counts", "outcome_counts"):
+            for key in (
+                "rewards_finalized",
+                "reward_summary",
+                "probe_counts",
+                "outcome_counts",
+                "consistency_counts",
+            ):
                 setattr(obj, key, state[key])
             return obj
         except Exception:

@@ -389,7 +389,7 @@ def test_benchmark_reset_keeps_128_original_noncontiguous_slots(live_games, monk
         env=env,
         _buffer=SimpleNamespace(close=lambda: order.append("close")),
         _drain=lambda: order.append("drain"),
-        _close_sequences=lambda: order.append("close-sequences"),
+        _close_batches=lambda: order.append("close-batches"),
     )
 
     def begin(callback):
@@ -401,7 +401,7 @@ def test_benchmark_reset_keeps_128_original_noncontiguous_slots(live_games, monk
     monkeypatch.setattr(torch, "manual_seed", lambda seed: None)
     monkeypatch.setattr(torch.cuda, "synchronize", lambda: None)
     reset(model, None, {}, 101, live_count=live_games)
-    assert order == ["drain", "close-sequences", "close", "begin"]
+    assert order == ["drain", "close-batches", "close", "begin"]
     assert model.cohort_games == 128 and env.num_envs == 128
     assert np.array_equal(np.flatnonzero(enabled), np.sort(slots))
     assert np.array_equal(header[:, HEADER.index("enabled")], enabled)

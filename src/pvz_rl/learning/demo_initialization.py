@@ -1,4 +1,4 @@
-"""Verify and fit a Transformer--LSTM policy from one complete demonstration."""
+"""Verify and fit a stateless two-stage policy from one complete demonstration."""
 
 from __future__ import annotations
 
@@ -22,7 +22,6 @@ from pvz_rl.envs.encoding import (
     observation_json,
     observations_equal,
 )
-from pvz_rl.envs.history import public_history_event
 from pvz_rl.envs.rewards import (
     HOME_FACT_FIELDS,
     REWARD_FACT_FIELDS,
@@ -30,7 +29,8 @@ from pvz_rl.envs.rewards import (
     reward_parts,
 )
 from pvz_rl.learning.checkpoints import DEMO_PROTOCOL as CHECKPOINT_PROTOCOL
-from pvz_rl.learning.checkpoints import STATE_PROTOCOL as RECURRENT_STORAGE_PROTOCOL
+from pvz_rl.learning.checkpoints import MODEL_STATE_PROTOCOL
+from pvz_rl.learning.flat_q import batch_loss
 from pvz_rl.learning.objective import (
     components,
     demonstration_rank_loss,
@@ -38,8 +38,8 @@ from pvz_rl.learning.objective import (
     training_rewards,
 )
 from pvz_rl.learning.performance import without_performance
-from pvz_rl.policy.sequential_q import action_groups, action_parts, balanced_q_loss
-from pvz_rl.policy.transformer_lstm import TransformerLSTMPolicy
+from pvz_rl.policy.sequential_q import action_groups, action_parts
+from pvz_rl.policy.two_stage_transformer import TwoStageTransformerPolicy
 from pvz_rl.presentation.recordings import open_playback, verify_replay
 from pvz_rl.provenance import file_hash, write_json
 
@@ -136,14 +136,8 @@ def _verify_action_order(archive_rows: list[dict], replay_path: Path, cfg: dict)
     native_outcomes = []
     native_rewards = []
     native_terminals = []
-    history_inputs = []
-    pending = np.zeros(7, dtype=np.int64)
-    elapsed = 0
     for entry in data["entries"]:
         before = game.observe()
-        history_inputs.append(np.append(pending, elapsed))
-        if pending.any():
-            elapsed = 0
         before_tick = before.tick
         native_masks.append(codec.mask(game))
         observations.append(observation_json(encoder.encode(before)))
@@ -151,8 +145,6 @@ def _verify_action_order(archive_rows: list[dict], replay_path: Path, cfg: dict)
         native_actions.append(codec.encode(decode_action(entry["action"])))
         action = decode_action(entry["action"])
         result = game.step(action, ticks=entry["ticks"])
-        pending = public_history_event(result.events, game.rules).array()
-        elapsed += result.ticks_advanced
         native_rewards.append(
             reward_parts(
                 before,
@@ -180,7 +172,7 @@ def _verify_action_order(archive_rows: list[dict], replay_path: Path, cfg: dict)
         raise ValueError("archive and replay decision counts differ")
     reward_changes = 0
     recorded_total = recomputed_total = 0.0
-    for row, action, obs, outcome, reward, terminal, omitted, legal, history in zip(
+    for row, action, obs, outcome, reward, terminal, omitted, legal in zip(
         transitions,
         native_actions,
         observations,
@@ -189,7 +181,6 @@ def _verify_action_order(archive_rows: list[dict], replay_path: Path, cfg: dict)
         native_terminals,
         native_truncation,
         native_masks,
-        history_inputs,
         strict=True,
     ):
         if row["action"] != action:
@@ -219,8 +210,6 @@ def _verify_action_order(archive_rows: list[dict], replay_path: Path, cfg: dict)
         row["reward_parts"] = reward
         row["training_reward"] = float(training_rewards(components(reward), cfg))
         row["legal_mask"] = legal
-        row["events"] = history
-        row["memory_write"] = bool(history[:7].any())
     final_rows = [row for row in archive_rows if row.get("record_type") == "final_observation"]
     if final_rows:
         final = observation_json(encoder.encode(game.observe()))
@@ -324,9 +313,7 @@ def _training_tensors(demonstration: VerifiedDemo):
     for i in range(len(rows) - 1, -1, -1):
         running += float(rows[i]["training_reward"])
         returns[i] = running
-    events = torch.as_tensor(np.stack([row["events"] for row in rows]), dtype=torch.float32)
-    writes = torch.tensor([row["memory_write"] for row in rows], dtype=torch.bool)
-    return observations, actions, events, writes, returns
+    return observations, actions, returns
 
 
 def initialize_demo(
@@ -366,13 +353,19 @@ def initialize_demo(
         raise ValueError("demo initialization settings must be positive")
     torch.set_num_threads(cfg["training"]["torch_threads"])
     torch.manual_seed(seed)
-    model = TransformerLSTMPolicy(cfg).to(device)
+    model = TwoStageTransformerPolicy(cfg).to(device)
+    with torch.random.fork_rng(
+        devices=[torch.device(device)] if str(device).startswith("cuda") else []
+    ):
+        teacher = TwoStageTransformerPolicy(cfg).to(device).eval().requires_grad_(False)
+    teacher.load_state_dict(model.state_dict())
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
-    observations, actions, events, writes, returns = _training_tensors(demonstration)
+    observations, actions, returns = _training_tensors(demonstration)
     actions = actions.to(device)
-    events, writes, returns = events.to(device), writes.to(device), returns.to(device)
-    write_plan = np.asarray([row["memory_write"] for row in demonstration.transitions], dtype=bool)
-    chunk = int(cfg["policy"].get("chunk_length", 256))
+    returns = returns.to(device)
+    batch_size = int(cfg["training"]["batch_size"]) * int(
+        cfg["training"]["performance"]["fit_batch_groups"]
+    )
     output = Path(output)
     output.mkdir(parents=True, exist_ok=False)
     curves, coverage = [], torch.zeros(10, dtype=torch.long)
@@ -391,43 +384,40 @@ def initialize_demo(
     ).reshape(3, 2)
     rank_counts = ranking_counts(actions, accepted, legal)[0]
     objective = cfg["training"]["objective"]
+    rows = np.zeros(
+        len(actions),
+        dtype=[("active", "?"), ("action", "<i8"), ("accepted", "?"), ("target", "<f4")],
+    )
+    rows["active"] = True
+    rows["action"] = actions.cpu().numpy()
+    rows["accepted"] = accepted.cpu().numpy()
+    rows["target"] = returns.cpu().numpy()
     started = time.monotonic()
     completed = 0
     for pass_index in range(passes):
         if time.monotonic() - started >= time_budget_minutes * 60:
             break
         optimizer.zero_grad(set_to_none=True)
-        state = model.initial_state(1, device=device)
         pass_loss = 0.0
         rank_accuracy = torch.zeros(4, device=device)
         ranking_total = 0.0
-        for start in range(0, len(observations), chunk):
-            stop = min(start + chunk, len(observations))
-            wait_q, tile_features, contexts, state = model.forward_sequence(
-                collate_observations(observations[start:stop], device).reshape(1, stop - start),
-                state,
-                events=events[start:stop][None],
-                memory_write=writes[start:stop][None],
-                write_plan=write_plan[None, start:stop],
-                return_context=True,
-            )
-            wait_q, tile_features, contexts = wait_q[0], tile_features[0], contexts[0]
-            selected = model.selected_values(wait_q, tile_features, contexts, actions[start:stop])
-            target = returns[start:stop]
-            loss, _ = balanced_q_loss(
-                selected,
-                target,
-                actions[start:stop],
+        consistency_total = 0.0
+        total_loss = 0.0
+        gaps = []
+        for start in range(0, len(observations), batch_size):
+            stop = min(start + batch_size, len(observations))
+            current = collate_observations(observations[start:stop], device)
+            loss, _, gap = batch_loss(
+                model,
+                rows[start:stop],
                 group_counts,
-                accepted=accepted[start:stop],
-                accepted_share=cfg["training"]["objective"]["accepted_outcome_share"],
+                current,
+                teacher=teacher,
+                consistency_counts=group_counts[1:],
             )
-            complete_loss = loss
             rank, accuracy = demonstration_rank_loss(
                 model,
-                wait_q,
-                tile_features,
-                contexts,
+                current,
                 actions[start:stop],
                 accepted[start:stop],
                 legal[start:stop],
@@ -438,10 +428,15 @@ def initialize_demo(
             rank_accuracy += accuracy.detach()
             ranking_total += float(rank.detach())
             loss.backward()
-            pass_loss += float(complete_loss.detach())
-            state = state.detach()
+            pass_loss += float(model._last_selected_loss)
+            consistency_total += float(model._last_species_consistency_loss)
+            total_loss += float(loss.detach())
+            gaps.extend(gap.cpu().tolist())
         torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
         optimizer.step()
+        with torch.no_grad():
+            for target, source in zip(teacher.parameters(), model.parameters(), strict=True):
+                target.lerp_(source, 1 - objective["ema_decay"])
         completed += 1
         coverage += torch.bincount(action_parts(actions)[0].detach().cpu(), minlength=10)
         scores = rank_accuracy.cpu().tolist()
@@ -450,6 +445,9 @@ def initialize_demo(
                 "pass": completed,
                 "loss": pass_loss,
                 "ranking_loss": ranking_total,
+                "species_consistency_loss": consistency_total,
+                "total_loss": total_loss,
+                "placement_gap": float(np.mean(gaps)) if gaps else None,
                 "branch_ranking_accuracy": scores[0] / scores[1] if scores[1] else None,
                 "tile_ranking_accuracy": scores[2] / scores[3] if scores[3] else None,
                 "decisions": len(actions),
@@ -458,7 +456,7 @@ def initialize_demo(
         _save_checkpoint(
             {
                 "protocol": CHECKPOINT_PROTOCOL,
-                "recurrent_storage_protocol": RECURRENT_STORAGE_PROTOCOL,
+                "model_storage_protocol": MODEL_STATE_PROTOCOL,
                 "observation_schema": model.layout.schema(),
                 "config_digest": digest(checkpoint_cfg),
                 "config": checkpoint_cfg,
@@ -509,6 +507,6 @@ def load_demo_checkpoint(path: str | Path, cfg: dict | None = None, *, device="c
     saved = info["payload"]
     if cfg is not None:
         compatible_config(saved["config"], cfg, weights_only=True)
-    model = TransformerLSTMPolicy(cfg or info["config"]).to(device)
+    model = TwoStageTransformerPolicy(cfg or info["config"]).to(device)
     model.load_state_dict(saved["model"], strict=True)
     return model, saved

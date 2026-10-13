@@ -1,217 +1,192 @@
 # System architecture
 
-One joint-value Transformer–LSTM supports human initialization, autonomous
-collection and evaluation on a separate, pinned 100 Hz Plants vs. Zombies
-simulator. The policy reads public current state and public event history only.
+A stateless two-stage Transformer Q policy supports human initialization,
+autonomous collection and evaluation on a separate, pinned 100 Hz simulator.
+Both networks read only the current public board; there is no learned history.
 
-## Boundaries and ownership
+## Boundaries and responsibilities
 
 The bundled training profile is the sole parameter source. Fresh runs use
-current defaults; current-version recovery retains saved learning settings and
-refreshes execution/logging settings. Previous checkpoints fail before simulator
-allocation. There is no migration or historical collector.
+current defaults. Current-contract resume retains learning/reward settings and
+refreshes execution/logging controls. Previous weights and recovery fail before
+simulator allocation; there is no migration or historical collector.
 
 | Component | Responsibility and owned data |
 |---|---|
-| Environment adapters | Public observations, actual action outcomes, timing and reward ledgers |
-| Policy and runner | Joint action values and independent per-episode event memory |
-| Exploration controller | Persistent species commitments, separate from learned memory |
-| Scheduler and probe pool | Retained decisions, immutable sources, background EMA games and endpoint patches |
-| Cohort learner | Complete returns, whole-pass optimization and actual-behavior EMA history |
-| Storage and transport | Canonical slots, ragged entities, bounded RAM/disk spill and pinned transfers |
-| Checkpoint inspection/recovery | Protocol validation and atomic model/optimizer/episode restoration |
+| Environment adapters | Public boards, action outcomes, timing and reward ledgers |
+| Two-stage policy and runner | Direct species Q values and requested conditional tile Q values |
+| Exploration controller | Persistent species commitments, separate from the model |
+| Scheduler and probe pool | Retained decisions, immutable sources and independent auxiliary games |
+| Cohort learner | Complete returns, EMA consistency, balanced losses and whole-pass updates |
+| Storage and transport | Canonical slots, ragged entities, RAM/disk spill and exact-once patches |
+| Checkpoint inspection/recovery | Contract validation and atomic execution/model restoration |
 | Monitoring/presentation | Host-side reports, read-only journals and viewer snapshots |
 
-The simulator stays pinned and unmodified. Private snapshots and schedules may
-be copied into forks or checkpoints; they never become policy inputs.
+Private simulator snapshots, seeds and schedules are execution/recovery data,
+never model inputs. Reward accounting is retained, not a learned memory stream.
+
+## Current-board decision flow
+
+Each board contains individual mowers, plants, zombies and projectiles, plus
+resource, elapsed-time, cooldown and population globals. Normalization and the
+256-entity cap are shared. Globals count entities before truncation, and omission
+diagnostics disclose information lost above the cap. Attention is invariant to
+entity permutation within numerical tolerance.
 
 ```mermaid
 flowchart LR
-    Human[Human recording] --> Verify[Replay verification and current rewards]
-    Verify --> Demo[20-pass initialization]
-    Demo --> Weights[Fresh current-version checkpoint]
-    Weights --> Collect[128-game CUDA cohort]
-    Collect --> Records[Canonical trajectories and probe endpoints]
-    Records --> Fit[Complete returns / four whole-cohort passes]
-    Fit --> Collect
-    Fit --> Save[Atomic checkpoint]
-    Save --> Evaluate[Greedy evaluation / CPU-verified replay]
+    Board[Current public entities and globals] --> Species[Species Transformer / 128 width / 4 layers / 8 heads]
+    Species --> Branch[10 direct Q values / greedy branch]
+    Branch -->|plant or dig| Tile[Conditional Transformer / 192 width / 6 layers / 12 heads]
+    Board --> Tile
+    Tile --> Values[45 tile Q values / geometry and exploration]
+    Values --> Action[Actual proposal / controller]
+    Branch -->|wait| Action
+    Action --> Simulator[Ordinary simulator transition]
 ```
 
-## Decisions and event memory
+The species network uses one global readout token. The tile network independently
+embeds the same raw board, one global token, the requested branch and 45 spatial
+queries. It receives no species-network features or scores. Discrete branch
+selection carries no gradient between stages; no scalar bypass or fusion exists.
+Only requested board/branch pairs are scored, reusing duplicates within a call.
+Wait requires no tile inference.
 
-Encoding preserves individual mowers, plants, zombies and projectiles, plus
-resource, cooldown and population globals. Canonical ordering makes storage
-reproducible; attention is independent of entity row order. Truncation is
-diagnosed, and globals count entities before truncation. CPU and CUDA encoding
-represent the same public facts.
+Normal selection compares all ten species/wait/dig scores. Plants choose empty
+tiles; dig considers all tiles. Full-board plants keep tile-zero rejection
+fallback. Resources and cooldown never hide ordinary branches.
 
-Every decision encodes its current board. Attention supplies a global summary
-and tile features; scalar features and event memory join the current summary
-through a shared fusion layer. Position, health and cooldown can therefore
-affect Q values without a memory write.
+Accepted planting/digging takes zero ticks; waits and rejected proposals advance
+one tick. Storage retains the actual proposal, acceptance, execution, duration
+and reward. Separate zero-time decisions retain their order.
 
-Memory writes only for gross sunlight gain/spend, zombie spawn/defeat/removal
-and plant addition/removal. A write consumes one transition's facts exactly once
-with its resulting board and time since the preceding write. Initial entities
-are not additions; simultaneous gains/losses stay separate. Quiet decisions
-preserve hidden/cell state. Reset clears only the replaced episode's memory;
-inactive slots remain frozen.
+After accepted normal planting, an exploration coin can commit to another
+species. The controller issues ordinary waits until resources, cooldown and
+geometry permit it, without a timeout. Successful exploratory planting clears
+the commitment without recursively drawing a new coin. Its requested tile values
+come from the current board. Original policy proposals remain diagnostic.
+Both exploration schedules freeze per cohort and restart on stage promotion.
 
-The network predicts wait and species-conditioned tile values. Species/dig
-branch values are candidate-tile maxima, not independent predictions.
-Normal branch selection is greedy; existing tile exploration follows it.
-Plant candidates are empty tiles; dig candidates include every tile.
-A full-board plant retains tile-zero rejection fallback. Resources and cooldown
-never hide normal policy branches.
+See [entity inputs](math/entity-inputs.md), [selection penalties](math/invalid-action-penalties.md)
+and [the objective](math/sequential-training.md) for field definitions and math.
 
-Accepted planting/digging takes zero ticks. Waits and rejected proposals advance
-one tick. Trajectories retain actual proposal, acceptance, execution, duration
-and reward; fitting supervises the actual complete action. Original policy
-proposals and exploration provenance are diagnostics, never memory inputs.
+## Background placement comparisons
 
-After accepted normal planting, a separate exploration coin may commit to
-another species. Ordinary waits persist until resources, cooldown and geometry
-permit it, without a timeout. Successful exploratory planting clears the
-commitment without recursively triggering that coin.
-Exploration schedules freeze per cohort and reset on stage promotion.
+Every accepted actual planting, normal or exploratory, creates up to four probes
+of the same species on distinct other empty tiles. Waits, digs, rejected plants,
+initial plants and auxiliary plants never trigger probes. Separate zero-time
+placements remain separate jobs; there are no alternative-species probes.
 
-Reward ledgers track actual physical changes. Eligible early Sunflower income
-receives its development bonus; sky income and cap-discarded sun do not.
-Development scaling applies once. Cohort finalization supplies a shared duration
-median for actual and counterfactual victory-time shaping.
-
-Field definitions and formulas belong in [entity inputs](math/entity-inputs.md),
-[recurrent training](math/recurrent-training.md) and
-[reward accounting](math/training-objective.md).
-
-## Plant-triggered counterfactuals
-
-Every actual accepted planting, including exploratory placement, triggers
-counterfactuals. Waits, digs, rejected plants and initial plants do not.
-Separate zero-time placements remain separate triggers.
-
-Before execution, the pinned simulator's read-only legality mask gates copies
-into a pre-plant source bank. This execution-only mask never replaces policy
-geometry masks. The immutable source includes simulator state, accounting
-ledgers and complete EMA memory after consuming pending source-board events.
-The existing actual-transition handoff authorizes rollouts using real acceptance.
+Before eligible execution, a pinned read-only legality mask gates reservation of
+an immutable pre-action simulator/accounting source. This execution-only mask
+does not replace policy geometry. Actual acceptance authorizes the alternatives
+and advances deterministic tile-selection cursors without behavior RNG.
 
 ```mermaid
-flowchart LR
-    Source[Retain eligible pre-plant source] --> Actual[Execute actual proposal]
-    Actual --> Gate{Accepted planting?}
-    Gate -->|no| Store[Store ordinary transition]
-    Gate -->|yes| Fork[Queue same-species alternative tiles]
-    Source --> Fork
-    Fork --> Rollout[Background auxiliary games / frozen greedy EMA]
-    Rollout --> Endpoint[Endpoint board, memory and accumulated rewards]
-    Endpoint --> Tail[Exact deduplication / nonterminal EMA bootstrap]
-    Tail --> Store
-    Actual --> Continue[Real games continue independently]
-    Store --> Continue
+stateDiagram-v2
+    [*] --> Queued: accepted planting / retained pre-action source
+    Queued --> Running: FIFO admission to a vacant auxiliary lane
+    Running --> Running: one greedy EMA transition per round
+    Running --> Endpoint: terminal / cutoff / horizon / transition cap
+    Endpoint --> Bootstrap: owned public endpoint / exact deduplication
+    Bootstrap --> Patched: nonterminal species tail / exact-once storage patch
+    Patched --> [*]: source evidence complete
 ```
 
-Defaults are up to four same-species alternative tiles with a 30-second simulated
-horizon. Alternative tiles exclude the actual tile. A shared tile-only layout
-determines storage and fitting shapes; selection advances only on acceptance and
-consumes no behavior RNG. There are no alternative-branch probes.
+Scheduler rounds advance ready real slots, then occupied auxiliary lanes. Real
+games, including the planting owner, continue before probes finish. Defaults are
+256 active lanes, 128 outstanding source jobs and one auxiliary transition per
+round. Capacity pressure holds only a slot whose next eligible planting cannot
+be retained, preserving its selected action/draws and simulation time. Older
+held decisions receive admission first; blocked slots are not completed games.
 
-The scheduler advances ready real slots and occupied auxiliary lanes in short,
-fair rounds. Frozen greedy EMA forks never trigger further probes or exploration.
-Stops are true terminal/cutoff, horizon or the 4,096-transition cap. Horizon/cap
-stops bootstrap; true terminal/cutoff stops do not. Limits invent no waits/defeat.
+Forks follow frozen greedy EMA without exploration or recursive probes. Stops
+are true terminal/cutoff, 30 simulated seconds or 4,096 transitions including the
+initial alternative. Horizon/cap stops bootstrap with maximum EMA species Q;
+true terminal/cutoff stops do not. Limits fabricate neither waits nor defeat.
 
-The pool defaults to 256 active lanes and 128 immutable source jobs; unused
-allocation rows execute nothing. FIFO admission and one-lane/source fallback
-retain every probe. Capacity pressure holds only another eligible planting,
-including its proposal/draws; other slots and the original planting game continue.
-Unfinished, ready, source-blocked and terminal states are distinct.
+Vacant allocation rows execute nothing. Headroom/budget fallback reduces source
+and lane capacities to one without dropping alternatives; minimum failure is an
+explicit error. Independence removes the rollout barrier, not GPU contention.
+Auxiliary rewards and states never enter actual gameplay or count as cohort games.
 
-Completed endpoints leave their lane immediately. Owned public boards, memory,
-reward components and bootstrap results patch their source trajectory rows
-exactly once through subsequent pinned handoffs. Deduplication compares complete
-public/recurrent/event/timing inputs; ongoing games never merge.
-Heavy control reporting occurs every 64 continuation rounds.
+Endpoints own public boards, reward components and initial-action evidence before
+lane reuse. Exact endpoint-input/EMA-version dedup saves bootstrap work only;
+ongoing simulations never merge. Conditional requests also compare branch.
+Each proposal/outcome remains a separate supervision record. Heavier control
+reporting occurs every 64 continuation rounds.
 
-Only endpoint evidence is retained, not rollout frames. Fork events, rewards
-and memory never reach actual histories. Actual EMA history follows actual
-execution, including committed exploration.
+## Cohort learning and storage
 
-## Cohorts, storage and recovery
+Up to 128 games form a fixed-weight cohort. Finished slots are not refilled.
+Active plans compact boards and restore canonical slot identities; padding has
+no episode state, RNG or supervision. Species/tile encoders use separate token
+overheads (1/47), active buckets and owned graph caches.
 
-A cohort contains up to 128 complete games at fixed weights. Finished slots
-remain inactive and are not refilled. Active-only plans gather boards/memory,
-infer compact batches and restore original slot identities. Padding carries
-no episode state or supervision. Behavior RNG retains original-slot order.
+Actual rows append immediately with stable identities and pending probe counts.
+Later handoffs patch endpoints exactly once in RAM or spilled storage. Reusable
+pinned views are consumed before reuse. Trajectory slabs, staging, retained
+decisions, source/lane workspaces, EMA and endpoints share memory accounting.
 
-Canonical decision metadata and ragged entity slabs share one RAM/disk budget,
-including pinned staging, retained decisions, sequence maps, private workspaces
-and endpoints. Auxiliary/source workspace usage is reported separately.
-Insufficient minimum memory fails explicitly
-rather than dropping evidence. Recovery validates layout, offsets, entities
-and outcome counts.
+Reward finalization waits for all evidence. Development applies early Sunflower
+bonus and dense scaling once; victory-time shaping uses the actual cohort's
+duration median for actual games and probes. Complete actual returns remain
+chronological per episode, even across capacity gaps.
 
-Each fitting pass reconstructs memory from zero, processes genuine event rows
-and gathers latest memory onto every decision. Sequence preparation ignores
-capacity gaps; existing 256-actual-decision detach boundaries remain. Quiet
-decisions still supervise current-state values.
-Nonempty wait/plant/dig groups receive equal weight, with accepted/rejected
-strata split equally when both exist. Probe Huber loss balances represented
-branches and initial outcomes. EMA updates once per committed optimizer update.
+Flat fitting includes only active decisions. Wait regression trains the species
+wait output; plant/dig regression trains the actual conditional tile. Species
+consistency trains only the first network toward detached frozen-EMA candidate
+tile maxima. Balanced probe Huber trains the initial alternative tile. Bad
+sampled tiles therefore do not directly regress species toward their return.
+
+Each pass accumulates whole-cohort gradients using global group/outcome counts,
+clips once and commits one Adam update. Then both EMA networks update with decay
+0.95. Autonomous training uses four passes; demonstrations use twenty. Batches
+are flat, with no recurrent state or temporal detach boundaries. Four-batch
+execution grouping does not create additional optimizer steps.
+
+## Recovery and failure paths
 
 ```mermaid
 stateDiagram-v2
     [*] --> Collect
-    Collect --> Finalize: complete cohort
-    Finalize --> Fit: rewards and complete returns finalized
-    Fit --> Fit: next whole-cohort pass
-    Fit --> Fit: discard failed pass / bounded execution retry
+    Collect --> Drain: cohort complete / interruption / save
+    Drain --> Finalize: every issued decision and endpoint patched
+    Finalize --> Fit: finalized complete returns
+    Fit --> Fit: next pass / retry uncommitted pass
     Fit --> Collect: four updates committed
-    Collect --> Save: finish issued tickets and drain background probes
-    Fit --> Save: retain committed updates; discard unfinished pass
+    Drain --> Save: interruption / save request
+    Fit --> Save: discard uncommitted pass
     Save --> [*]
 ```
 
-Actual execution and storage are atomic. Saving stops new selection, finishes
-issued capacity-waiting decisions, and drains every background endpoint/bootstrap
-patch. Checkpoints contain no unfinished probe evidence; private forks are transient.
-Atomic ZIP replacement couples model, optimizer, counters, curriculum, RNG,
-commitments, event memory, probe cursors and trajectories. Failed saving leaves
-the preceding checkpoint intact.
+Saving stops new selection, finishes issued tickets and drains probes, bootstrap
+copies and patches. No unfinished evidence or transient fork is serialized.
+Atomic replacement couples weights, EMA, optimizer, counters, curriculum, RNG,
+simulator/accounting, commitments, scheduler/cursors and trajectories. A failed
+save leaves the preceding checkpoint intact. Recovery rebuilds compact maps,
+auxiliary pools and caches; committed updates are not repeated.
 
-Recovery restores a canonical decision boundary. Uncommitted fitting passes
-recompute from evidence; committed updates are not repeated. Compact maps and
-graph caches rebuild rather than serialize. Protocol/schema inspection precedes
-CUDA probing and simulator allocation. Previous weights/resumes require fresh
-initialization.
+Collection/fitting captures have separate phase owners. Quiescent transitions
+drain transfers and release outgoing resources. Cache/headroom/capture failure
+uses exact eager inference. Nonfinite/failed uncommitted fitting passes discard
+gradients before bounded precision/allocation retry; exhaustion commits nothing.
+See [execution controls](math/training-throughput.md).
 
-Collection and fitting own separate bounded graph captures and workspaces.
-Quiescent transitions drain transfers and release outgoing resources before
-the next phase. Headroom/capture failure preserves exact eager inference.
-Fitting owns activations/gradients and bounded precision/allocation retries;
-exhaustion stops without an optimizer commit.
-See [execution and throughput](math/training-throughput.md).
+## Demonstrations, evaluation and observability
 
-## Demonstrations, evaluation and monitoring
+Demonstrations verify archive/replay facts, outcomes and timing, then reprice
+rewards without modifying recordings. They fit the same separated losses plus
+accepted branch/tile preferences, with EMA for both networks; no probes run.
+Evaluation uses the stateless runner without exploration, probes or updates,
+and CUDA traces are checked against CPU replay. Curriculum uses held-out gates.
 
-Demonstrations verify archive/replay hashes, public facts, outcomes and timing,
-then recompute rewards without rewriting recordings. Verified transitions
-supply complete returns and accepted-action preferences. Twenty demonstration
-passes are independent of four autonomous passes; demonstrations run no probes.
+Viewers/journals are read-only. Host reports show current-cohort wins/returns,
+interval active throughput, auxiliary queues/backpressure/drain, workspace use,
+both-stage timing, selected-action and consistency errors, and conditional
+best-tile minus sampled-tile placement gap. Detailed telemetry crosses existing
+handoffs, not additional hot-loop device synchronization.
 
-Curriculum gates use held-out cases. Promotion changes future resets only.
-Evaluation uses the same policy/runner without exploration, probes or updates;
-CUDA action traces are checked against CPU replay.
-
-Viewers and journals are read-only. Episode identities reject stale responses.
-Terminal reports use host records for cohort wins/returns and interval active
-throughput, distinguishing provisional and finalized rewards. Detailed reports
-include accepted planting triggers, tile counts, queued/active lanes, blocked slots,
-queue age, drain duration, stop reasons, timing,
-graph activity and workspace use without new telemetry device synchronization.
-
-[Training](training.md) owns commands/configuration; [validation](validation.md)
-owns test coverage. Version history and measurements belong only in
-[iteration history](iteration.md). Correctness controls do not establish mastery
-or promise improved win rate.
+[Training](training.md) owns commands, [validation](validation.md) test ownership,
+and [iteration history](iteration.md) measured results. Correctness controls are
+not evidence of mastery or guaranteed speed/win-rate improvement.

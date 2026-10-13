@@ -1,5 +1,87 @@
 # Iteration history
 
+## 0.38.0 — 2026-10-13
+
+- Problem/root cause: the preceding joint Transformer–LSTM added learned event
+  history and derived species values from tile maxima. The requested replacement
+  separates species and placement prediction using the current public board only.
+  Poor sampled-tile returns must not directly train species toward that placement's
+  outcome. Recent-run observations motivate the change but do not establish a causal
+  recurrence defect or guarantee that removing memory improves learning.
+- Model: independent species Transformer (width 128, 4 layers, 8 heads, FF 512)
+  and conditional tile Transformer (width 192, 6 layers, 12 heads, FF 768), with
+  pre-normalized spatial attention, zero dropout and 16 features per head. Species
+  uses one global token and a direct ten-output head; tiles use the same raw board,
+  global/branch tokens and 45 coordinate queries. Only requested board/branch
+  pairs execute, with duplicate reuse. No scalar bypass, LSTM, event encoder,
+  learned-history state, fusion or cross-network feature path remains.
+- Learning: actual complete returns supervise species wait or actual non-wait tile
+  only. Species consistency (weight 1.0) targets detached frozen-EMA candidate-tile
+  maxima, with full-cohort plant/dig outcome denominators. Probe Huber coefficient
+  0.25 and demonstration ranking coefficient 0.10/margin 0.05 remain. Branch demo
+  ranking uses species values; tile ranking uses conditional values. Both networks
+  have EMA copies, updated with decay 0.95 after committed steps. Four autonomous
+  and twenty demonstration passes, Adam 0.0003 and clipping 5 remain unchanged.
+- Execution/storage: flat active-decision batches replace sequence fitting and
+  temporal detach boundaries. Chronological episode returns and canonical slot
+  evidence remain. Ordered double-buffer transport, whole-pass accumulation and
+  `fit_batch_groups=4` use base batch size 1024. Both encoders use active packing,
+  token overheads 1/47 and phase-owned graph/headroom fallback. Source/lane/recovery
+  accounting no longer contains model memory. Background same-species tile probes,
+  local retained-decision backpressure, exact-once RAM/spill endpoint patches and
+  drain-before-save/fitting remain; endpoint bootstrap uses maximum EMA species Q.
+- Contracts/cleanup: policy `two_stage_transformer_q_v1`, objective
+  `complete_return_sequential_tile_probe_v1`, demo v7, trajectory v8, autonomous
+  recovery v6 and stateless model-state v1 require fresh weights and reject all
+  earlier weights/resumes before simulator allocation. There is no conversion,
+  partial transfer or historical collector. Verified recordings can be refitted
+  under current rewards into a new directory. User recordings, runs, checkpoints
+  and raw evidence are preserved. Obsolete recurrent code/tests/current-framework
+  documentation and memory diagnostics are removed.
+- Defaults/documentation: preserve existing rewards and both exploration schedules,
+  including shipped `reward.loss_penalty=1.0`. Correct the current reward guide's
+  stale -2 terminal-loss description/bound to match that unchanged setting. README,
+  repository ownership, lean architecture, training/math/validation and viewer
+  settings guidance describe stateless execution. Learning math moves to
+  `docs/math/sequential-training.md`. Placement gap means conditional candidate
+  maximum minus actual sampled tile, not species Q minus tile Q. Record inspected
+  SDQN §2.2, Relational DRL and Set Transformer paper/project in references; adopt
+  conditional consistency and spatial set attention, not their algorithms.
+- Verification: coordinated owning controls cover both-stage attention/gradients,
+  stateless inputs, attribution, global loss denominators, flat transport/spill,
+  demonstration reconstruction, checkpoint rejection, background scheduling and
+  interrupted recovery. Initial stale fixture/history assertions were corrected
+  with focused reruns rather than repeated full suites. Precision controls retain
+  strict original-head Q tolerances; stable-region gradient comparisons supplement
+  independent ReLU-boundary controls instead of treating gate flips as numerical
+  gradient failures. Final 14 focused controls pass, including multi-step auxiliary
+  endpoint retention and EMA allocation retry. Evaluation/journal controls pass
+  (13); checkpoint/configuration owners report 125 passing controls. Lint,
+  formatting and whitespace checks pass. Detailed scope and corrections are in
+  [verification evidence](evidence/two-stage-verification.json). No full-suite
+  success is claimed: baseline reward tests expecting loss penalty 2.0 disagree
+  with the unchanged shipped 1.0 default.
+- Bounded measurements: eager sparse/mixed collection uses fixed 128 simulator
+  slots with 128/64/1 live games. A completed wait-only cohort fits four passes in
+  0.304 s; warmed post-fit median throughput changes -1.6%. A separate four-live
+  planting control uses an explicitly shortened 0.25 s probe horizon, retains
+  four triggers/16 alternatives, and fits four passes in 0.398 s. Its last selected
+  MSE is 0.8831, species consistency MSE 0.9051 and conditional placement gap
+  0.001475; warmed post-fit median throughput changes -8.3%, so no general
+  no-regression claim is supported. One default 30 s horizon probe independently
+  completes 3,001 transitions/3,000 ticks while its real planting owner executes
+  nine more decisions before drain. Horizon bootstrap is 1.0, workspace 4.12 MB,
+  wall time 29.9 s and drain 29.49 s. At 128 boards/40 entities, measured species/
+  tile inference takes 5.10/23.49 ms and separate fitting controls 139.75/40.98 ms;
+  these single bounded measurements are not mastery or broad throughput evidence.
+  Raw controls are [collection](evidence/two-stage-collection-control.json),
+  [plant/fit](evidence/two-stage-plant-fit-control.json) and
+  [default probe](evidence/two-stage-default-probe-control.json).
+- Remaining issues: correctness, recovery and bounded fair scheduling are the
+  acceptance criteria, not promised throughput or win-rate improvement. GPU
+  contention and long probe drain costs remain. No formal training, commit, push
+  or merge is part of this work.
+
 ## 0.37.0 — 2026-10-10
 
 - Problem/root cause: collection ran every post-plant counterfactual to completion

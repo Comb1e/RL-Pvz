@@ -11,10 +11,10 @@ from pvz_rl.config import load_config, research_config, validate_config
 from pvz_rl.envs.env import PvZEnv
 from pvz_rl.envs.rewards import REWARD_METRICS
 from pvz_rl.evaluation.cuda_evaluation import batched_games, deterministic_validation
-from pvz_rl.policy.transformer_lstm import EventMemoryState, TransformerLSTMPolicy
+from pvz_rl.policy.two_stage_transformer import TwoStageTransformerPolicy
 
 
-class WaitingPolicy(TransformerLSTMPolicy):
+class WaitingPolicy(TwoStageTransformerPolicy):
     def __init__(self):
         super().__init__(load_config())
         self.cuda()
@@ -26,19 +26,10 @@ class WaitingPolicy(TransformerLSTMPolicy):
     def set_training_mode(self, mode):
         self.train(mode)
 
-    def decide(self, obs, state=None, **kwargs):
+    def decide(self, obs, **kwargs):
         zero = torch.zeros(len(obs), device=self.device)
-        initial = state.hidden[0, :, 0] == 0
-        initial &= kwargs.get("active", torch.ones_like(initial))
-        assert (obs.globals[initial, 1] == 0).all(), (
-            "refilled slots must receive fresh observations"
-        )
-        state = EventMemoryState(
-            state.hidden + 1, state.cell + 1, state.pending, state.elapsed_ticks
-        )
         return (
             zero.long(),
-            state,
             dict(branch_value=zero, tile_value=zero, valid=torch.tensor(True, device=self.device)),
         )
 
@@ -51,7 +42,6 @@ def test_refill_matches_fixed_batches_and_cpu(record, monkeypatch):
     cfg = load_config()
     cfg["simulation"] = {"backend": "cuda"}
     cfg["training"].update(n_envs=2, device="cuda", batch_size=128)
-    cfg["policy"]["chunk_length"] = 16
     cfg["environment"]["cutoff_seconds"] = 4
 
     def scenario(level, family, seed, *args):
@@ -105,7 +95,6 @@ def test_plant_and_mower_kills_survive_cuda_episode_reset(monkeypatch):
     cfg = load_config()
     cfg["simulation"] = {"backend": "cuda"}
     cfg["training"].update(n_envs=1, device="cuda", batch_size=128)
-    cfg["policy"]["chunk_length"] = 16
 
     def scenario(*args):
         return LevelSpec(

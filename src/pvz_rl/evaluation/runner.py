@@ -41,15 +41,11 @@ def select_action(env: PvZEnv, obs, *, policy=None, baseline=None, rng=None, mas
         from pvz_rl.envs.encoding import collate_observations
 
         if env.metrics["decisions"] == 0:
-            env._policy_memory = PolicyRunner(network, env.cfg, env.rules, 1, network.device)
-        runner = env._policy_memory
-        if env.metrics["decisions"]:
-            ticks = env.last_policy_outcome[2]
-            runner.observe_result(env.last_history_event.array()[None], [ticks])
+            env._policy_runner = PolicyRunner(network)
+        runner = env._policy_runner
         actions = runner.decide(
             collate_observations(obs, network.device),
             torch.as_tensor(env.action_masks(), device=network.device).reshape(1, -1),
-            torch.tensor([env.public.tick], device=network.device),
         )[0]
         return int(actions[0])
     kwargs = {"action_masks": env.action_masks()} if masked else {}
