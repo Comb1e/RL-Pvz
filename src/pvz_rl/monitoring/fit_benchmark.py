@@ -16,6 +16,17 @@ from pvz_rl.monitoring.entity_benchmark import observation
 from pvz_rl.policy.two_stage_transformer import TwoStageTransformerPolicy
 from pvz_rl.provenance import write_json
 
+# Keep the workload labels explicit in the artifact.  The sparse and exact
+# bucket-boundary cases exercise the observed fit distribution and padding
+# transitions; medium and dense cases fill in the interior up to the public
+# 256-entity cap so a preset is not selected from sparse boards alone.
+WORKLOAD_WIDTHS = {
+    "sparse": (0, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 21),
+    "medium": (24, 32, 48, 64, 80, 96, 112, 128, 144, 160, 176, 192),
+    "dense": (200, 208, 216, 224, 232, 240, 248, 252, 255, 256),
+    "boundary": (31, 32, 33, 63, 64, 65, 127, 128, 129, 255, 256),
+}
+
 
 def measure(cfg, *, repeats=3, rows_per_width=16):
     """Each repetition commits four complete passes with fixed cohort denominators."""
@@ -36,12 +47,8 @@ def measure(cfg, *, repeats=3, rows_per_width=16):
         if performance["compile_kernels"]:
             network.enable_compilation()
     optimizer = torch.optim.Adam(model.master_parameters(), lr=cfg["training"]["learning_rate"])
-    cases = {
-        "sparse": [0, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 21],
-        "boundary": [31, 32, 33, 63, 64, 65, 127, 128, 129, 255, 256],
-    }
     measurements = []
-    for name, widths in cases.items():
+    for name, widths in WORKLOAD_WIDTHS.items():
         for action_mix in ("wait", "mixed", "tile"):
             with TemporaryDirectory(prefix="pvz-fit-benchmark-") as temporary:
                 buffer = CompleteGameBuffer(temporary, 1, cfg=cfg)
@@ -111,8 +118,13 @@ def measure(cfg, *, repeats=3, rows_per_width=16):
                     spool_seconds=spool_seconds, cold_seconds=cold_seconds,
                     repetitions=repetitions, transport=dict(buffer.transport_metrics),
                     encoders=[dict(stage=e.stage, network=n,
-                        compiled_shapes=list(e._compiled_shapes), collection=e.collection_metrics,
-                        status=e.compilation_status) for n, net in (("online", model), ("ema", teacher))
+                        compiled_shapes=list(e._compiled_shapes),
+                        collection=e.collection_metrics,
+                        fitting=e._fitting_inference_cache.metrics,
+                        status=e.compilation_status,
+                        compilation_backend=e.compilation_backend,
+                        compilation_error=e.compilation_error)
+                        for n, net in (("online", model), ("ema", teacher))
                         for e in net.encoders]))
                 spool.close()
                 buffer.close()
