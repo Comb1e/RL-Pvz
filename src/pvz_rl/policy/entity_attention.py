@@ -345,11 +345,23 @@ class SpatialTransformer(nn.Module):
         for start in range(0, len(observations), size):
             part = observations[start : start + size]
             args = (*part.tensors(), branches[start : start + size])
+            logical = len(part)
+            compile_args = args
+            if (
+                self._compiled_encode is not None
+                and torch.is_grad_enabled()
+                and logical < size
+            ):
+                padding = size - logical
+                compile_args = tuple(
+                    torch.cat((value, value.new_zeros((padding, *value.shape[1:]))), dim=0)
+                    for value in args
+                )
             if self.activation_checkpointing and self.training and torch.is_grad_enabled():
                 value = checkpoint(self._encode, *args, use_reentrant=False)
             elif self._compiled_encode is not None:
-                value = self._encode_with_optional_compile(args)
+                value = self._encode_with_optional_compile(compile_args)
             else:
                 value = self._encode(*args)
-            results.append(value)
+            results.append(value[:logical])
         return torch.cat(results, 0)
