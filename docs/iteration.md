@@ -1,3 +1,10 @@
+## GPU fitting and viewer implementation — 2026-10-14
+
+- Problem: cloud fitting spent most wall time in eager shape fallbacks, collection-cache churn and row preparation; GPU identity and headless viewing were also machine-specific.
+- Improvement: fitting rows now use bounded masked entity buckets, CPU-owned selections, vectorized spool/pinned preparation, a fitting-only EMA graph owner, capability-based GPU/profile selection, isolated calibration trials and an optional CPU web viewer through Jupyter Server Proxy.
+- Verification: local 4070 baseline was captured before edits; bucketed fitting, storage, math, GPU-profile, web-history and live-view controls pass. The existing interruption journal control still reports BF16 readout quantization and a resume digest mismatch on the current baseline, so it is retained as an unresolved recovery signal rather than a speed or quality claim.
+- Remaining limits: no cloud machine is available in this environment; learning-rate promotion and final per-device presets require paired two-cohort studies on the returned measurements. The interruption mismatch needs a separate recovery investigation before claiming exact resumed-training parity.
+
 # Iteration history
 
 ## Cloud fitting diagnostics — 2026-10-14

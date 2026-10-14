@@ -48,6 +48,15 @@ Record one easy game using unused output paths; finish with a natural win or los
 
 Use [recording and training](docs/training.md) to initialize, train, resume or
 evaluate. Demonstration fitting uses 20 passes; autonomous cohorts use four.
+Select a physical CUDA GPU independently from execution and learning presets. Native BF16 devices are detected by capability; the catalogue includes measured/provisional presets for the 4070 Laptop, 4090, 5090, RTX PRO 6000 and RTX 6000D, while arbitrary user profiles remain supported:
+
+```powershell
+.\.venv\Scripts\python.exe -m pvz_rl train --output runs\fit --gpu 0 --gpu-profile auto --learning-profile current --viewer off
+.\.venv\Scripts\python.exe tools\tune_gpu.py --gpu 0 --output artifacts\tune-4070 --minutes 60
+```
+
+For JupyterLab, install `pip install -e .[web]` (or `jupyter-server-proxy`) and use `--viewer web`; training prints a relative `./proxy/<port>/` URL. Checkpoint weights remain portable; destination GPU execution caches rebuild.
+
 Runtime inference and fitting use BF16 model parameters; optimization uses
 separate FP32 master weights and FP32 Adam state. INT8/INT4 paths are not
 implemented.

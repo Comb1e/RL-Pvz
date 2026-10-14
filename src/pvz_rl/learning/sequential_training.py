@@ -8,7 +8,12 @@ import torch
 
 from pvz_rl.envs.cuda_features import REWARD_FIELDS
 from pvz_rl.envs.encoding import ENTITY_WIDTH, PackedEntityBatch
-from pvz_rl.learning.batch_transport import BatchPrefetch, FittingSpool, batch_rows
+from pvz_rl.learning.batch_transport import (
+    BatchPrefetch,
+    FittingSpool,
+    batch_rows,
+    fitting_metadata,
+)
 from pvz_rl.learning.cohort import CohortPhase, atomic_transition, check_transition_interruption
 from pvz_rl.learning.collection_scheduler import CollectionScheduler
 from pvz_rl.learning.cuda_q import CudaCohortLifecycle
@@ -29,7 +34,8 @@ from pvz_rl.policy.two_stage_transformer import TwoStageTransformerPolicy
 def flat_batches(buffer, decision_budget, spool=None):
     if spool is not None:
         for rows, packed in spool.iter_batches(decision_budget):
-            yield rows, buffer.observations_from_packed(packed)
+            width = spool.buckets[np.searchsorted(spool.buckets, int(packed.counts.max(initial=0)))]
+            yield rows, buffer.observations_from_packed(packed, validated=True, width=width), fitting_metadata(rows, "cpu")
         return
     with closing(batch_rows(buffer, decision_budget, spool=spool)) as source:
         for rows in source:
@@ -415,7 +421,10 @@ class CudaSequentialQ(CudaCohortLifecycle):
         self.execution_state = dict(
             requested_precision=precision,
             precision=precision,
-            microbatch=performance.get("fit_encoder_microbatch", 192),
+            microbatch=max(performance.get("fit_species_microbatch", performance.get("fit_encoder_microbatch", 192)),
+                           performance.get("fit_tile_microbatch", performance.get("fit_encoder_microbatch", 192))),
+            species_microbatch=performance.get("fit_species_microbatch", performance.get("fit_encoder_microbatch", 192)),
+            tile_microbatch=performance.get("fit_tile_microbatch", performance.get("fit_encoder_microbatch", 192)),
             token_budget=performance.get("fit_token_budget", 65536),
             fit_batch_groups=performance.get("fit_batch_groups", 1),
             checkpointing=False,
@@ -441,6 +450,7 @@ class CudaSequentialQ(CudaCohortLifecycle):
         if (
             getattr(self, "execution_state", {}).get("requested_precision")
             != cfg["training"]["performance"].get("fit_precision", "bf16_master")
+            or previous["training"].get("performance") != cfg["training"].get("performance")
             or previous["policy"]["encoder_microbatch"] != cfg["policy"]["encoder_microbatch"]
             or previous["policy"]["encoder_token_budget"] != cfg["policy"]["encoder_token_budget"]
             or previous["training"].get("performance", {}).get("fit_batch_groups", 1)
@@ -541,11 +551,15 @@ class CudaSequentialQ(CudaCohortLifecycle):
         self.policy.zero_grad(set_to_none=True)
         self._pass_metrics = torch.zeros(10, device=self.device, dtype=torch.float64)
         for encoder in self.policy.encoders:
-            encoder.microbatch = self.execution_state["microbatch"]
+            encoder.fitting = True
+            encoder.microbatch = min(self.execution_state["microbatch"], self.execution_state.get(
+                f"{encoder.stage}_microbatch", self.execution_state["microbatch"]))
             encoder.token_budget = self.execution_state["token_budget"]
             encoder.activation_checkpointing = self.execution_state["checkpointing"]
         for encoder in self._teacher.encoders:
-            encoder.microbatch = self.execution_state["microbatch"]
+            encoder.fitting = True
+            encoder.microbatch = min(self.execution_state["microbatch"], self.execution_state.get(
+                f"{encoder.stage}_microbatch", self.execution_state["microbatch"]))
             encoder.token_budget = self.execution_state["token_budget"]
         groups = self.execution_state["fit_batch_groups"]
         if getattr(self, "_fitting_spool", None) is None:
@@ -586,6 +600,10 @@ class CudaSequentialQ(CudaCohortLifecycle):
         self._last_metrics_at = perf_counter()
 
     def _fit_chunk(self, callback):
+        viewer = getattr(self.env, "live_view", None)
+        if viewer is not None and viewer.session.enabled:
+            viewer.session.poll()
+            viewer.session.publish()
         if self._fit_epoch >= self.n_epochs:
             self._phase(CohortPhase.SYNCHRONIZE, callback)
             return

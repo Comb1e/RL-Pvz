@@ -582,6 +582,10 @@ class CudaVecEnv(VecEnv):
         if self.live_view is not None or not settings["live_enabled"]:
             return
         session = LiveSession(self.num_envs, settings, cfg=self.cfg, notify=notify)
+        if session.viewer in ("web", "auto"):
+            session.ready.wait(timeout=2)
+            if session.proxy_url:
+                print(f"Jupyter viewer: {session.proxy_url}", flush=True)
         try:
             with self.device_context():
                 self.live_view = CudaLiveCapture(self, settings, session=session)

@@ -38,3 +38,12 @@ Focused suites are run once per change; full-suite repetition is avoided.
 
 These controls establish contract and numerical correctness. They do not promise
 training speed, win-rate improvement or mastery.
+
+
+## Optimization and portability controls
+
+- `test_entity_storage.py` and `test_flat_training.py` verify bucket boundaries, row ordering, partial batches, RAM/disk spill, CPU selection parity and recovery.
+- `test_two_stage_transformer.py` verifies collection cache limits separately from fitting graph ownership and masked partial-batch padding.
+- `test_gpu_configuration.py` verifies profile overlays, resume learning retention and device-independent execution settings.
+- `test_live_view.py` remains the shared mailbox/reconnect/history owner; `web_viewer.py` is CPU-only and uses the same command protocol.
+- `tools/tune_gpu.py` records three repetitions, cold setup, transfer/preparation/graph metrics and memory headroom; learning recommendations require paired seeds and completed cohorts before promotion.

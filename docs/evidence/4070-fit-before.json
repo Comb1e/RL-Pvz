@@ -1,0 +1,1333 @@
+{
+  "complete": true,
+  "config": {
+    "conditions": {
+      "masked": {
+        "curriculum": true,
+        "hybrid": false,
+        "masked": true,
+        "shaped": true
+      }
+    },
+    "curriculum": {
+      "boundaries": [
+        0.1,
+        0.4
+      ],
+      "consecutive_passes": 1,
+      "easy_weights": [
+        1.0,
+        0.0,
+        0.0
+      ],
+      "final_weights": [
+        0.2,
+        0.4,
+        0.4
+      ],
+      "intermediate_weights": [
+        0.5,
+        0.5,
+        0.0
+      ],
+      "minimum_stage_games": 100,
+      "minimum_stage_steps": 16384,
+      "mode": "teaching",
+      "probe_cases": 100,
+      "probe_interval": 16384,
+      "probe_interval_games": 2000,
+      "residency": "episode_start_stage",
+      "stages": {
+        "easy": {
+          "requirements": {
+            "easy": 100
+          },
+          "tasks": [
+            "easy"
+          ],
+          "weights": [
+            1.0
+          ]
+        },
+        "shared": {
+          "requirements": {
+            "easy": 100,
+            "hard": 100,
+            "standard": 100
+          },
+          "tasks": [
+            "easy",
+            "standard",
+            "hard"
+          ],
+          "weights": [
+            0.2,
+            0.4,
+            0.4
+          ]
+        },
+        "standard": {
+          "requirements": {
+            "easy": 100,
+            "standard": 100
+          },
+          "tasks": [
+            "easy",
+            "standard"
+          ],
+          "weights": [
+            0.5,
+            0.5
+          ]
+        }
+      }
+    },
+    "diagnostics": {
+      "early_dig_seconds": 5
+    },
+    "encoding": {
+      "count_scale": 75,
+      "max_entities": 256,
+      "version": "entity_v1",
+      "wave_scale": 15
+    },
+    "engine_commit": "1424b4d802e783a36772091c49d96aa7c6036d7a",
+    "engine_package_version": "1.7.0",
+    "engine_version": "1.4.0",
+    "environment": {
+      "action_timing": "per_tick",
+      "cols": 9,
+      "cutoff_seconds": 1200,
+      "decision_ticks": 1,
+      "mower_states": [
+        "ready",
+        "moving",
+        "spent"
+      ],
+      "plant_states": [
+        "ready",
+        "arming",
+        "armed",
+        "fusing",
+        "digesting",
+        "exploding",
+        "detonating",
+        "rising",
+        "biting",
+        "biting_got_one",
+        "recovering"
+      ],
+      "plants": [
+        "sunflower",
+        "peashooter",
+        "wall_nut",
+        "cherry_bomb",
+        "potato_mine",
+        "snow_pea",
+        "chomper",
+        "repeater"
+      ],
+      "rows": 5,
+      "zombie_states": [
+        "walking",
+        "carrying_pole",
+        "vaulting",
+        "biting",
+        "dead"
+      ],
+      "zombies": [
+        "basic",
+        "flag",
+        "conehead",
+        "buckethead",
+        "pole_vaulting"
+      ]
+    },
+    "evaluation": {
+      "bootstrap_replicates": 2000,
+      "bootstrap_seed": 1739,
+      "levels": [
+        "easy",
+        "standard",
+        "hard"
+      ],
+      "ood_families": [
+        "redistributed",
+        "faster",
+        "concentrated"
+      ],
+      "ood_levels": [
+        "standard",
+        "hard"
+      ],
+      "replays_per_outcome": 10,
+      "targets": [
+        0.95,
+        0.9,
+        0.75
+      ]
+    },
+    "logging": {
+      "hardware_sample_seconds": 1.0,
+      "progress_seconds": 15,
+      "rolling_window": 100,
+      "terminal_mode": "compact",
+      "terminal_progress_seconds": 60
+    },
+    "policy": {
+      "action_distribution": "sequential_q_unmasked_penalty_v1",
+      "attention_query_chunk": 64,
+      "encoder_microbatch": 128,
+      "encoder_token_budget": 65536,
+      "kind": "two_stage_transformer_q_v1",
+      "species_feedforward": 512,
+      "species_heads": 8,
+      "species_layers": 4,
+      "species_width": 128,
+      "tile_feedforward": 768,
+      "tile_heads": 12,
+      "tile_layers": 6,
+      "tile_width": 192
+    },
+    "profile": "complete-game",
+    "reward": {
+      "basic_zombie_value": 50.0,
+      "early_sun_extra_multiplier": 2.0,
+      "early_sun_spawn_fraction": [
+        1,
+        3
+      ],
+      "empty_dig_penalty": 3e-06,
+      "home_entry_penalties": [
+        0.005,
+        0.015
+      ],
+      "invalid_plant_penalty": 1e-05,
+      "loss_penalty": 1.0,
+      "mower_value": 200.0,
+      "progress_weight": 0.01,
+      "value_scale": 300.0,
+      "version": "net_value_v1",
+      "win_reward": 1.0,
+      "win_time_weight": 0.1
+    },
+    "runtime": {
+      "cache_legal_actions": true,
+      "refill_evaluation": true
+    },
+    "schema_version": 1,
+    "simulation": {
+      "backend": "cuda"
+    },
+    "splits": {
+      "curriculum": [
+        100050,
+        100149
+      ],
+      "ood": [
+        300000,
+        300099
+      ],
+      "test": [
+        200000,
+        200299
+      ],
+      "train": [
+        1000,
+        99999
+      ],
+      "validation": [
+        100000,
+        100049
+      ]
+    },
+    "training": {
+      "batch_size": 64,
+      "budget_unit": "games",
+      "demo": {
+        "learner_seed": 101,
+        "learning_rate": 0.0003,
+        "passes": 20,
+        "time_budget_minutes": 30
+      },
+      "device": "cuda",
+      "discount_clock": "simulation_ticks",
+      "eval_interval": 250000,
+      "eval_interval_games": 2000,
+      "exploration": {
+        "decay_games": 10000,
+        "epsilon_floor": 0.01,
+        "epsilon_start": 0.5,
+        "objective": "committed_plant_tile_epsilon_v1",
+        "plant_decay_games": 10000,
+        "plant_epsilon_floor": 0.01,
+        "plant_epsilon_start": 0.1
+      },
+      "finalization_minutes": 15,
+      "gamma": 1.0,
+      "learner_seeds": [
+        101,
+        102
+      ],
+      "learning_rate": 0.0003,
+      "max_grad_norm": 5,
+      "max_minutes": 120,
+      "method": "complete_return_sequential_no_probe_v1",
+      "n_envs": 128,
+      "n_epochs": 4,
+      "objective": {
+        "accepted_outcome_share": 0.5,
+        "demo_rank_loss_weight": 0.1,
+        "demo_rank_margin": 0.05,
+        "dense_multiplier": 10.0,
+        "ema_decay": 0.95,
+        "protocol": "complete_return_sequential_no_probe_v1",
+        "species_consistency_huber_delta": 1.0,
+        "species_consistency_weight": 1.0
+      },
+      "performance": {
+        "collection_graph_cache_entries": 8,
+        "collection_vram_headroom_mib": 512,
+        "compile_kernels": true,
+        "fit_batch_groups": 4,
+        "fit_encoder_microbatch": 32,
+        "fit_precision": "bf16_master",
+        "fit_token_budget": 65536,
+        "prefetch": true,
+        "telemetry": true
+      },
+      "storage": {
+        "block_rows": 32768,
+        "ram_gib": 6
+      },
+      "torch_threads": 1,
+      "total_games": 10000,
+      "total_steps": 3000000,
+      "until_stage_complete": false,
+      "validation_schedule": "stage_success"
+    },
+    "visualization": {
+      "crf": 23,
+      "demos": true,
+      "enabled": true,
+      "ffmpeg": "",
+      "final_hold_seconds": 2,
+      "live_enabled": true,
+      "live_fps": 5,
+      "live_history_ram_mib": 16,
+      "live_window_size": [
+        1600,
+        1050
+      ],
+      "video_fps": 25,
+      "video_size": [
+        1280,
+        820
+      ],
+      "videos": false
+    }
+  },
+  "device": "NVIDIA GeForce RTX 4070 Laptop GPU",
+  "measurements": [
+    {
+      "actions": "wait",
+      "cold_seconds": 1.7697423000063282,
+      "encoders": [
+        {
+          "collection": {
+            "cache_entries": 8,
+            "capacity_fallbacks": 0,
+            "capture_failures": 0,
+            "capture_setup_seconds": 0.0,
+            "captures": 0,
+            "entries": 0,
+            "evictions": 0,
+            "headroom_fallbacks": 0,
+            "hits": 0,
+            "last_free_mib": null,
+            "misses": 0,
+            "oom_fallbacks": 0,
+            "releases": 0,
+            "resident_entries": 0,
+            "retired_entries": 0,
+            "retired_releases": 0,
+            "vram_headroom_mib": 512
+          },
+          "compiled_shapes": [
+            [
+              32,
+              21
+            ]
+          ],
+          "network": "online",
+          "stage": "species",
+          "status": "compiled"
+        },
+        {
+          "collection": {
+            "cache_entries": 8,
+            "capacity_fallbacks": 0,
+            "capture_failures": 0,
+            "capture_setup_seconds": 0.0,
+            "captures": 0,
+            "entries": 0,
+            "evictions": 0,
+            "headroom_fallbacks": 0,
+            "hits": 0,
+            "last_free_mib": null,
+            "misses": 0,
+            "oom_fallbacks": 0,
+            "releases": 0,
+            "resident_entries": 0,
+            "retired_entries": 0,
+            "retired_releases": 0,
+            "vram_headroom_mib": 512
+          },
+          "compiled_shapes": [],
+          "network": "online",
+          "stage": "tile",
+          "status": "requested"
+        },
+        {
+          "collection": {
+            "cache_entries": 8,
+            "capacity_fallbacks": 0,
+            "capture_failures": 0,
+            "capture_setup_seconds": 0.0,
+            "captures": 0,
+            "entries": 0,
+            "evictions": 0,
+            "headroom_fallbacks": 0,
+            "hits": 0,
+            "last_free_mib": null,
+            "misses": 0,
+            "oom_fallbacks": 0,
+            "releases": 0,
+            "resident_entries": 0,
+            "retired_entries": 0,
+            "retired_releases": 0,
+            "vram_headroom_mib": 512
+          },
+          "compiled_shapes": [],
+          "network": "ema",
+          "stage": "species",
+          "status": "requested"
+        },
+        {
+          "collection": {
+            "cache_entries": 8,
+            "capacity_fallbacks": 0,
+            "capture_failures": 0,
+            "capture_setup_seconds": 0.0,
+            "captures": 0,
+            "entries": 0,
+            "evictions": 0,
+            "headroom_fallbacks": 0,
+            "hits": 0,
+            "last_free_mib": null,
+            "misses": 0,
+            "oom_fallbacks": 0,
+            "releases": 0,
+            "resident_entries": 0,
+            "retired_entries": 0,
+            "retired_releases": 0,
+            "vram_headroom_mib": 512
+          },
+          "compiled_shapes": [],
+          "network": "ema",
+          "stage": "tile",
+          "status": "requested"
+        }
+      ],
+      "passes": 4,
+      "repetitions": [
+        {
+          "free_mib": 6724.0,
+          "peak_allocated_mib": 212.57373046875,
+          "peak_reserved_mib": 284.0,
+          "seconds": 0.15982449999137316,
+          "total_mib": 8187.5
+        },
+        {
+          "free_mib": 6716.0,
+          "peak_allocated_mib": 212.57373046875,
+          "peak_reserved_mib": 292.0,
+          "seconds": 0.15346810000482947,
+          "total_mib": 8187.5
+        },
+        {
+          "free_mib": 6708.0,
+          "peak_allocated_mib": 212.57373046875,
+          "peak_reserved_mib": 300.0,
+          "seconds": 0.15432970000256319,
+          "total_mib": 8187.5
+        }
+      ],
+      "rows": 136,
+      "spool_seconds": 0.007903200006694533,
+      "transport": {
+        "preparation_seconds": 0.02224710000155028,
+        "transfer_stream_seconds": 0.006618399977684021,
+        "transfer_wait_seconds": 8.719999459572136e-05
+      },
+      "widths": [
+        0,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        18,
+        19,
+        21
+      ],
+      "workload": "sparse"
+    },
+    {
+      "actions": "mixed",
+      "cold_seconds": 1.7671210000116844,
+      "encoders": [
+        {
+          "collection": {
+            "cache_entries": 8,
+            "capacity_fallbacks": 0,
+            "capture_failures": 0,
+            "capture_setup_seconds": 0.0,
+            "captures": 0,
+            "entries": 0,
+            "evictions": 0,
+            "headroom_fallbacks": 0,
+            "hits": 0,
+            "last_free_mib": null,
+            "misses": 0,
+            "oom_fallbacks": 0,
+            "releases": 0,
+            "resident_entries": 0,
+            "retired_entries": 0,
+            "retired_releases": 0,
+            "vram_headroom_mib": 512
+          },
+          "compiled_shapes": [
+            [
+              32,
+              21
+            ]
+          ],
+          "network": "online",
+          "stage": "species",
+          "status": "compiled"
+        },
+        {
+          "collection": {
+            "cache_entries": 8,
+            "capacity_fallbacks": 0,
+            "capture_failures": 0,
+            "capture_setup_seconds": 0.0,
+            "captures": 0,
+            "entries": 0,
+            "evictions": 0,
+            "headroom_fallbacks": 0,
+            "hits": 0,
+            "last_free_mib": null,
+            "misses": 0,
+            "oom_fallbacks": 0,
+            "releases": 0,
+            "resident_entries": 0,
+            "retired_entries": 0,
+            "retired_releases": 0,
+            "vram_headroom_mib": 512
+          },
+          "compiled_shapes": [
+            [
+              32,
+              21
+            ]
+          ],
+          "network": "online",
+          "stage": "tile",
+          "status": "compiled"
+        },
+        {
+          "collection": {
+            "cache_entries": 8,
+            "capacity_fallbacks": 0,
+            "capture_failures": 0,
+            "capture_setup_seconds": 0.0,
+            "captures": 0,
+            "entries": 0,
+            "evictions": 0,
+            "headroom_fallbacks": 0,
+            "hits": 0,
+            "last_free_mib": null,
+            "misses": 0,
+            "oom_fallbacks": 0,
+            "releases": 0,
+            "resident_entries": 0,
+            "retired_entries": 0,
+            "retired_releases": 0,
+            "vram_headroom_mib": 512
+          },
+          "compiled_shapes": [],
+          "network": "ema",
+          "stage": "species",
+          "status": "requested"
+        },
+        {
+          "collection": {
+            "cache_entries": 8,
+            "capacity_fallbacks": 0,
+            "capture_failures": 0,
+            "capture_setup_seconds": 0.073692599995411,
+            "captures": 1,
+            "entries": 1,
+            "evictions": 0,
+            "headroom_fallbacks": 0,
+            "hits": 15,
+            "last_free_mib": 6452.0,
+            "misses": 1,
+            "oom_fallbacks": 0,
+            "releases": 0,
+            "resident_entries": 1,
+            "retired_entries": 0,
+            "retired_releases": 0,
+            "vram_headroom_mib": 512
+          },
+          "compiled_shapes": [],
+          "network": "ema",
+          "stage": "tile",
+          "status": "compiled"
+        }
+      ],
+      "passes": 4,
+      "repetitions": [
+        {
+          "free_mib": 6212.0,
+          "peak_allocated_mib": 622.67578125,
+          "peak_reserved_mib": 788.0,
+          "seconds": 0.23048209999979008,
+          "total_mib": 8187.5
+        },
+        {
+          "free_mib": 6206.0,
+          "peak_allocated_mib": 622.67578125,
+          "peak_reserved_mib": 794.0,
+          "seconds": 0.22098449998884462,
+          "total_mib": 8187.5
+        },
+        {
+          "free_mib": 6198.0,
+          "peak_allocated_mib": 622.67578125,
+          "peak_reserved_mib": 802.0,
+          "seconds": 0.22614969999995083,
+          "total_mib": 8187.5
+        }
+      ],
+      "rows": 136,
+      "spool_seconds": 0.0011463999981060624,
+      "transport": {
+        "preparation_seconds": 0.023538099994766526,
+        "transfer_stream_seconds": 0.006737760022282599,
+        "transfer_wait_seconds": 0.00010209994798060507
+      },
+      "widths": [
+        0,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        18,
+        19,
+        21
+      ],
+      "workload": "sparse"
+    },
+    {
+      "actions": "tile",
+      "cold_seconds": 0.6089588000031654,
+      "encoders": [
+        {
+          "collection": {
+            "cache_entries": 8,
+            "capacity_fallbacks": 0,
+            "capture_failures": 0,
+            "capture_setup_seconds": 0.0,
+            "captures": 0,
+            "entries": 0,
+            "evictions": 0,
+            "headroom_fallbacks": 0,
+            "hits": 0,
+            "last_free_mib": null,
+            "misses": 0,
+            "oom_fallbacks": 0,
+            "releases": 0,
+            "resident_entries": 0,
+            "retired_entries": 0,
+            "retired_releases": 0,
+            "vram_headroom_mib": 512
+          },
+          "compiled_shapes": [
+            [
+              32,
+              21
+            ]
+          ],
+          "network": "online",
+          "stage": "species",
+          "status": "compiled"
+        },
+        {
+          "collection": {
+            "cache_entries": 8,
+            "capacity_fallbacks": 0,
+            "capture_failures": 0,
+            "capture_setup_seconds": 0.0,
+            "captures": 0,
+            "entries": 0,
+            "evictions": 0,
+            "headroom_fallbacks": 0,
+            "hits": 0,
+            "last_free_mib": null,
+            "misses": 0,
+            "oom_fallbacks": 0,
+            "releases": 0,
+            "resident_entries": 0,
+            "retired_entries": 0,
+            "retired_releases": 0,
+            "vram_headroom_mib": 512
+          },
+          "compiled_shapes": [
+            [
+              32,
+              21
+            ]
+          ],
+          "network": "online",
+          "stage": "tile",
+          "status": "compiled"
+        },
+        {
+          "collection": {
+            "cache_entries": 8,
+            "capacity_fallbacks": 0,
+            "capture_failures": 0,
+            "capture_setup_seconds": 0.0,
+            "captures": 0,
+            "entries": 0,
+            "evictions": 0,
+            "headroom_fallbacks": 0,
+            "hits": 0,
+            "last_free_mib": null,
+            "misses": 0,
+            "oom_fallbacks": 0,
+            "releases": 0,
+            "resident_entries": 0,
+            "retired_entries": 0,
+            "retired_releases": 0,
+            "vram_headroom_mib": 512
+          },
+          "compiled_shapes": [],
+          "network": "ema",
+          "stage": "species",
+          "status": "requested"
+        },
+        {
+          "collection": {
+            "cache_entries": 8,
+            "capacity_fallbacks": 0,
+            "capture_failures": 0,
+            "capture_setup_seconds": 0.238112099992577,
+            "captures": 3,
+            "entries": 3,
+            "evictions": 0,
+            "headroom_fallbacks": 0,
+            "hits": 93,
+            "last_free_mib": 5626.0,
+            "misses": 3,
+            "oom_fallbacks": 0,
+            "releases": 0,
+            "resident_entries": 3,
+            "retired_entries": 0,
+            "retired_releases": 0,
+            "vram_headroom_mib": 512
+          },
+          "compiled_shapes": [],
+          "network": "ema",
+          "stage": "tile",
+          "status": "compiled"
+        }
+      ],
+      "passes": 4,
+      "repetitions": [
+        {
+          "free_mib": 5608.0,
+          "peak_allocated_mib": 1160.10546875,
+          "peak_reserved_mib": 1388.0,
+          "seconds": 0.4051529999997001,
+          "total_mib": 8187.5
+        },
+        {
+          "free_mib": 5600.0,
+          "peak_allocated_mib": 1160.10546875,
+          "peak_reserved_mib": 1396.0,
+          "seconds": 0.4326991999987513,
+          "total_mib": 8187.5
+        },
+        {
+          "free_mib": 5592.0,
+          "peak_allocated_mib": 1160.10546875,
+          "peak_reserved_mib": 1404.0,
+          "seconds": 0.39633399999001995,
+          "total_mib": 8187.5
+        }
+      ],
+      "rows": 136,
+      "spool_seconds": 0.0013552000018535182,
+      "transport": {
+        "preparation_seconds": 0.023421300036716275,
+        "transfer_stream_seconds": 0.006994559943675994,
+        "transfer_wait_seconds": 9.929999941959977e-05
+      },
+      "widths": [
+        0,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        18,
+        19,
+        21
+      ],
+      "workload": "sparse"
+    },
+    {
+      "actions": "wait",
+      "cold_seconds": 1.298234899993986,
+      "encoders": [
+        {
+          "collection": {
+            "cache_entries": 8,
+            "capacity_fallbacks": 0,
+            "capture_failures": 0,
+            "capture_setup_seconds": 0.0,
+            "captures": 0,
+            "entries": 0,
+            "evictions": 0,
+            "headroom_fallbacks": 0,
+            "hits": 0,
+            "last_free_mib": null,
+            "misses": 0,
+            "oom_fallbacks": 0,
+            "releases": 0,
+            "resident_entries": 0,
+            "retired_entries": 0,
+            "retired_releases": 0,
+            "vram_headroom_mib": 512
+          },
+          "compiled_shapes": [
+            [
+              32,
+              21
+            ],
+            [
+              32,
+              256
+            ]
+          ],
+          "network": "online",
+          "stage": "species",
+          "status": "compiled"
+        },
+        {
+          "collection": {
+            "cache_entries": 8,
+            "capacity_fallbacks": 0,
+            "capture_failures": 0,
+            "capture_setup_seconds": 0.0,
+            "captures": 0,
+            "entries": 0,
+            "evictions": 0,
+            "headroom_fallbacks": 0,
+            "hits": 0,
+            "last_free_mib": null,
+            "misses": 0,
+            "oom_fallbacks": 0,
+            "releases": 0,
+            "resident_entries": 0,
+            "retired_entries": 0,
+            "retired_releases": 0,
+            "vram_headroom_mib": 512
+          },
+          "compiled_shapes": [
+            [
+              32,
+              21
+            ]
+          ],
+          "network": "online",
+          "stage": "tile",
+          "status": "compiled"
+        },
+        {
+          "collection": {
+            "cache_entries": 8,
+            "capacity_fallbacks": 0,
+            "capture_failures": 0,
+            "capture_setup_seconds": 0.0,
+            "captures": 0,
+            "entries": 0,
+            "evictions": 0,
+            "headroom_fallbacks": 0,
+            "hits": 0,
+            "last_free_mib": null,
+            "misses": 0,
+            "oom_fallbacks": 0,
+            "releases": 0,
+            "resident_entries": 0,
+            "retired_entries": 0,
+            "retired_releases": 0,
+            "vram_headroom_mib": 512
+          },
+          "compiled_shapes": [],
+          "network": "ema",
+          "stage": "species",
+          "status": "requested"
+        },
+        {
+          "collection": {
+            "cache_entries": 8,
+            "capacity_fallbacks": 0,
+            "capture_failures": 0,
+            "capture_setup_seconds": 0.238112099992577,
+            "captures": 3,
+            "entries": 3,
+            "evictions": 0,
+            "headroom_fallbacks": 0,
+            "hits": 93,
+            "last_free_mib": 5626.0,
+            "misses": 3,
+            "oom_fallbacks": 0,
+            "releases": 0,
+            "resident_entries": 3,
+            "retired_entries": 0,
+            "retired_releases": 0,
+            "vram_headroom_mib": 512
+          },
+          "compiled_shapes": [],
+          "network": "ema",
+          "stage": "tile",
+          "status": "compiled"
+        }
+      ],
+      "passes": 4,
+      "repetitions": [
+        {
+          "free_mib": 5128.0,
+          "peak_allocated_mib": 1415.47021484375,
+          "peak_reserved_mib": 1862.0,
+          "seconds": 0.2029536000045482,
+          "total_mib": 8187.5
+        },
+        {
+          "free_mib": 5120.0,
+          "peak_allocated_mib": 1415.47021484375,
+          "peak_reserved_mib": 1870.0,
+          "seconds": 0.20508670000708662,
+          "total_mib": 8187.5
+        },
+        {
+          "free_mib": 5112.0,
+          "peak_allocated_mib": 1415.47021484375,
+          "peak_reserved_mib": 1878.0,
+          "seconds": 0.21008689999871422,
+          "total_mib": 8187.5
+        }
+      ],
+      "rows": 88,
+      "spool_seconds": 0.0010609000019030645,
+      "transport": {
+        "preparation_seconds": 0.018577499969978817,
+        "transfer_stream_seconds": 0.007100223958492278,
+        "transfer_wait_seconds": 9.649999265093356e-05
+      },
+      "widths": [
+        31,
+        32,
+        33,
+        63,
+        64,
+        65,
+        127,
+        128,
+        129,
+        255,
+        256
+      ],
+      "workload": "boundary"
+    },
+    {
+      "actions": "mixed",
+      "cold_seconds": 1.975678600007086,
+      "encoders": [
+        {
+          "collection": {
+            "cache_entries": 8,
+            "capacity_fallbacks": 0,
+            "capture_failures": 0,
+            "capture_setup_seconds": 0.0,
+            "captures": 0,
+            "entries": 0,
+            "evictions": 0,
+            "headroom_fallbacks": 0,
+            "hits": 0,
+            "last_free_mib": null,
+            "misses": 0,
+            "oom_fallbacks": 0,
+            "releases": 0,
+            "resident_entries": 0,
+            "retired_entries": 0,
+            "retired_releases": 0,
+            "vram_headroom_mib": 512
+          },
+          "compiled_shapes": [
+            [
+              32,
+              21
+            ],
+            [
+              32,
+              256
+            ]
+          ],
+          "network": "online",
+          "stage": "species",
+          "status": "compiled"
+        },
+        {
+          "collection": {
+            "cache_entries": 8,
+            "capacity_fallbacks": 0,
+            "capture_failures": 0,
+            "capture_setup_seconds": 0.0,
+            "captures": 0,
+            "entries": 0,
+            "evictions": 0,
+            "headroom_fallbacks": 0,
+            "hits": 0,
+            "last_free_mib": null,
+            "misses": 0,
+            "oom_fallbacks": 0,
+            "releases": 0,
+            "resident_entries": 0,
+            "retired_entries": 0,
+            "retired_releases": 0,
+            "vram_headroom_mib": 512
+          },
+          "compiled_shapes": [
+            [
+              32,
+              21
+            ],
+            [
+              32,
+              256
+            ]
+          ],
+          "network": "online",
+          "stage": "tile",
+          "status": "compiled"
+        },
+        {
+          "collection": {
+            "cache_entries": 8,
+            "capacity_fallbacks": 0,
+            "capture_failures": 0,
+            "capture_setup_seconds": 0.0,
+            "captures": 0,
+            "entries": 0,
+            "evictions": 0,
+            "headroom_fallbacks": 0,
+            "hits": 0,
+            "last_free_mib": null,
+            "misses": 0,
+            "oom_fallbacks": 0,
+            "releases": 0,
+            "resident_entries": 0,
+            "retired_entries": 0,
+            "retired_releases": 0,
+            "vram_headroom_mib": 512
+          },
+          "compiled_shapes": [],
+          "network": "ema",
+          "stage": "species",
+          "status": "requested"
+        },
+        {
+          "collection": {
+            "cache_entries": 8,
+            "capacity_fallbacks": 0,
+            "capture_failures": 0,
+            "capture_setup_seconds": 0.33240429998841137,
+            "captures": 4,
+            "entries": 4,
+            "evictions": 0,
+            "headroom_fallbacks": 0,
+            "hits": 108,
+            "last_free_mib": 4000.0,
+            "misses": 4,
+            "oom_fallbacks": 0,
+            "releases": 0,
+            "resident_entries": 4,
+            "retired_entries": 0,
+            "retired_releases": 0,
+            "vram_headroom_mib": 512
+          },
+          "compiled_shapes": [],
+          "network": "ema",
+          "stage": "tile",
+          "status": "compiled"
+        }
+      ],
+      "passes": 4,
+      "repetitions": [
+        {
+          "free_mib": 3244.0,
+          "peak_allocated_mib": 2953.24169921875,
+          "peak_reserved_mib": 3738.0,
+          "seconds": 0.36996799999906216,
+          "total_mib": 8187.5
+        },
+        {
+          "free_mib": 3236.0,
+          "peak_allocated_mib": 2953.24169921875,
+          "peak_reserved_mib": 3746.0,
+          "seconds": 0.3660339999914868,
+          "total_mib": 8187.5
+        },
+        {
+          "free_mib": 3228.0,
+          "peak_allocated_mib": 2953.24169921875,
+          "peak_reserved_mib": 3754.0,
+          "seconds": 0.38335940000251867,
+          "total_mib": 8187.5
+        }
+      ],
+      "rows": 88,
+      "spool_seconds": 0.0009690000006230548,
+      "transport": {
+        "preparation_seconds": 0.018817699994542636,
+        "transfer_stream_seconds": 0.007179775983095169,
+        "transfer_wait_seconds": 0.00011460002860985696
+      },
+      "widths": [
+        31,
+        32,
+        33,
+        63,
+        64,
+        65,
+        127,
+        128,
+        129,
+        255,
+        256
+      ],
+      "workload": "boundary"
+    },
+    {
+      "actions": "tile",
+      "cold_seconds": 0.8837984999991022,
+      "encoders": [
+        {
+          "collection": {
+            "cache_entries": 8,
+            "capacity_fallbacks": 0,
+            "capture_failures": 0,
+            "capture_setup_seconds": 0.0,
+            "captures": 0,
+            "entries": 0,
+            "evictions": 0,
+            "headroom_fallbacks": 0,
+            "hits": 0,
+            "last_free_mib": null,
+            "misses": 0,
+            "oom_fallbacks": 0,
+            "releases": 0,
+            "resident_entries": 0,
+            "retired_entries": 0,
+            "retired_releases": 0,
+            "vram_headroom_mib": 512
+          },
+          "compiled_shapes": [
+            [
+              32,
+              21
+            ],
+            [
+              32,
+              256
+            ]
+          ],
+          "network": "online",
+          "stage": "species",
+          "status": "compiled"
+        },
+        {
+          "collection": {
+            "cache_entries": 8,
+            "capacity_fallbacks": 0,
+            "capture_failures": 0,
+            "capture_setup_seconds": 0.0,
+            "captures": 0,
+            "entries": 0,
+            "evictions": 0,
+            "headroom_fallbacks": 0,
+            "hits": 0,
+            "last_free_mib": null,
+            "misses": 0,
+            "oom_fallbacks": 0,
+            "releases": 0,
+            "resident_entries": 0,
+            "retired_entries": 0,
+            "retired_releases": 0,
+            "vram_headroom_mib": 512
+          },
+          "compiled_shapes": [
+            [
+              32,
+              21
+            ],
+            [
+              32,
+              256
+            ]
+          ],
+          "network": "online",
+          "stage": "tile",
+          "status": "compiled"
+        },
+        {
+          "collection": {
+            "cache_entries": 8,
+            "capacity_fallbacks": 0,
+            "capture_failures": 0,
+            "capture_setup_seconds": 0.0,
+            "captures": 0,
+            "entries": 0,
+            "evictions": 0,
+            "headroom_fallbacks": 0,
+            "hits": 0,
+            "last_free_mib": null,
+            "misses": 0,
+            "oom_fallbacks": 0,
+            "releases": 0,
+            "resident_entries": 0,
+            "retired_entries": 0,
+            "retired_releases": 0,
+            "vram_headroom_mib": 512
+          },
+          "compiled_shapes": [],
+          "network": "ema",
+          "stage": "species",
+          "status": "requested"
+        },
+        {
+          "collection": {
+            "cache_entries": 8,
+            "capacity_fallbacks": 0,
+            "capture_failures": 0,
+            "capture_setup_seconds": 0.5353718999976991,
+            "captures": 6,
+            "entries": 6,
+            "evictions": 0,
+            "headroom_fallbacks": 0,
+            "hits": 154,
+            "last_free_mib": 1840.0,
+            "misses": 6,
+            "oom_fallbacks": 0,
+            "releases": 0,
+            "resident_entries": 6,
+            "retired_entries": 0,
+            "retired_releases": 0,
+            "vram_headroom_mib": 512
+          },
+          "compiled_shapes": [],
+          "network": "ema",
+          "stage": "tile",
+          "status": "compiled"
+        }
+      ],
+      "passes": 4,
+      "repetitions": [
+        {
+          "free_mib": 1794.0,
+          "peak_allocated_mib": 4071.6044921875,
+          "peak_reserved_mib": 5184.0,
+          "seconds": 0.67168679999304,
+          "total_mib": 8187.5
+        },
+        {
+          "free_mib": 1786.0,
+          "peak_allocated_mib": 4071.6044921875,
+          "peak_reserved_mib": 5192.0,
+          "seconds": 0.6919058000057703,
+          "total_mib": 8187.5
+        },
+        {
+          "free_mib": 1778.0,
+          "peak_allocated_mib": 4071.6044921875,
+          "peak_reserved_mib": 5200.0,
+          "seconds": 0.6745537999959197,
+          "total_mib": 8187.5
+        }
+      ],
+      "rows": 88,
+      "spool_seconds": 0.0009725000127218664,
+      "transport": {
+        "preparation_seconds": 0.019680099983816035,
+        "transfer_stream_seconds": 0.012955936022102833,
+        "transfer_wait_seconds": 0.00013110008148942143
+      },
+      "widths": [
+        31,
+        32,
+        33,
+        63,
+        64,
+        65,
+        127,
+        128,
+        129,
+        255,
+        256
+      ],
+      "workload": "boundary"
+    }
+  ],
+  "torch": "2.8.0+cu128"
+}

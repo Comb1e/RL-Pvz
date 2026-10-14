@@ -150,3 +150,8 @@
   `training-objective.md` reward economics, `invalid-action-penalties.md` rejection,
   and `training-throughput.md` execution. `docs/validation.md` maps verification;
   results/history belong in `docs/iteration.md`, raw measurements in `docs/evidence/`.
+- `gpu.py` resolves a visible index or CUDA UUID and applies execution-only native-BF16
+  profiles; `monitoring/fit_benchmark.py` measures the complete fitting path and
+  `tools/tune_gpu.py` runs isolated bounded calibration trials. `presentation/web_viewer.py`
+  serves the existing bounded live-view mailboxes from a CPU process for JupyterLab
+  Server Proxy; it does not own model or simulator state.

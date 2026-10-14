@@ -20,6 +20,9 @@ from pvz_rl.provenance import file_hash, metadata, write_json
 
 def common(parser):
     parser.add_argument("--config", type=Path)
+    parser.add_argument("--gpu", help="visible CUDA index or complete GPU UUID")
+    parser.add_argument("--gpu-profile", default="auto", help="auto or extensible execution profile name")
+    parser.add_argument("--learning-profile", default="current", help="fresh-run learning profile name")
     parser.add_argument(
         "--profile",
         choices=("train",),
@@ -67,6 +70,16 @@ def configured(args):
         cfg = load_demo_config(args.config)
     else:
         cfg = load_config(args.config)
+    from pvz_rl.gpu import apply_gpu_profile, apply_learning_profile
+
+    gpu_profile = getattr(args, "gpu_profile", None)
+    learning_profile = getattr(args, "learning_profile", "current")
+    if getattr(args, "resume", None) and learning_profile != "current":
+        raise ValueError("Resume retains saved learning settings; learning profiles apply to fresh runs")
+    if learning_profile != "current":
+        cfg = apply_learning_profile(cfg, learning_profile, path=args.config)
+    if gpu_profile is not None:
+        cfg, _ = apply_gpu_profile(cfg, gpu_profile, device=getattr(args, "gpu_info", None), path=args.config)
     # Weight initialization starts a new run under the current configuration.
     # Only recovery/evaluation inherit the source checkpoint's run settings.
     checkpoint = getattr(args, "resume", None)
@@ -88,10 +101,18 @@ def configured(args):
             ):
                 if getattr(args, name, None) is None:
                     setattr(args, name, saved.get(field))
+    if args.command == "evaluate" and gpu_profile is not None:
+        from pvz_rl.learning.performance import refresh_performance
+
+        current, _ = apply_gpu_profile(load_config(args.config), gpu_profile,
+                                      device=getattr(args, "gpu_info", None), path=args.config)
+        cfg = refresh_performance(cfg, current)
     if args.command == "train":
         from pvz_rl.learning.performance import refresh_performance
 
         current = load_config(args.config)
+        if gpu_profile is not None:
+            current, _ = apply_gpu_profile(current, gpu_profile, device=getattr(args, "gpu_info", None), path=args.config)
         cfg = refresh_performance(cfg, current)
         cfg["logging"] = copy.deepcopy(current["logging"])
         args.seed = 101 if getattr(args, "seed", None) is None else args.seed
@@ -138,6 +159,10 @@ def configured(args):
         cfg.setdefault("visualization", {})["videos"] = args.videos
     if getattr(args, "live_view", None) is not None:
         cfg.setdefault("visualization", {})["live_enabled"] = args.live_view
+        cfg["visualization"]["viewer"] = "auto" if args.live_view else "off"
+    if getattr(args, "viewer", None) is not None:
+        cfg["visualization"]["viewer"] = args.viewer
+        cfg["visualization"]["live_enabled"] = args.viewer != "off"
     validate_config(cfg)
     if args.command in ("train", "suite", "benchmark-gpu"):
         require_cuda_training(cfg, getattr(args, "condition", "masked"), runtime=False)
@@ -153,6 +178,7 @@ def main(argv=None):
     training = subs.add_parser("train", help="train one shared policy across all difficulties")
     training_options(training)
     live = training.add_mutually_exclusive_group()
+    live.add_argument("--viewer", choices=("auto", "desktop", "web", "off"))
     live.add_argument(
         "--live-view",
         action="store_true",
@@ -309,6 +335,13 @@ def main(argv=None):
             export_replay(args.path, args.video, load_config(args.config))
         return
 
+    if args.command in ("train", "suite", "evaluate", "benchmark-gpu", "initialize-demo", "doctor"):
+        import torch
+
+        if args.gpu is not None or torch.cuda.is_available():
+            from pvz_rl.gpu import select_gpu
+
+            args.gpu_info = select_gpu(args.gpu or "0")
     cfg = configured(args)
     if args.command == "record-demo":
         from pvz_rl.presentation.demo_recording import record_demo

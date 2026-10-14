@@ -17,6 +17,7 @@ rolling_window = 100
 
 [visualization]
 live_enabled = true
+viewer = "auto"
 live_fps = 5
 live_history_ram_mib = 16
 live_window_size = [1600, 1050]
@@ -107,6 +108,9 @@ fit_precision = "bf16_master"
 prefetch = true
 fit_batch_groups = 4
 fit_encoder_microbatch = 192
+fit_species_microbatch = 192
+fit_tile_microbatch = 192
+fit_entity_buckets = [8, 16, 32, 64, 128, 256]
 fit_token_budget = 65536
 collection_graph_cache_entries = 8
 collection_vram_headroom_mib = 512
@@ -199,3 +203,68 @@ device = "cuda"
 n_envs = 128
 benchmark_env_counts = [128]
 benchmark_min_cohorts = 1
+
+
+# Exact optional matches select presets; unlisted native-BF16 devices use generic.
+# Calibrate locally on every new GPU/driver combination; names do not gate support.
+[gpu_profiles.generic-bf16]
+status = "conservative-unmeasured"
+torch_threads = 1
+performance = {fit_species_microbatch = 32, fit_tile_microbatch = 32, fit_token_budget = 8192, fit_batch_groups = 1, collection_vram_headroom_mib = 1024}
+
+[gpu_profiles.rtx4070-laptop]
+device_names = ["NVIDIA GeForce RTX 4070 Laptop GPU"]
+status = "local-calibration-pending"
+torch_threads = 1
+performance = {fit_species_microbatch = 32, fit_tile_microbatch = 32, fit_token_budget = 8192, fit_batch_groups = 1, collection_vram_headroom_mib = 1638}
+
+[gpu_profiles.rtx5090]
+device_names = ["NVIDIA GeForce RTX 5090"]
+status = "provisional-cloud-calibration-required"
+torch_threads = 1
+performance = {fit_species_microbatch = 128, fit_tile_microbatch = 128, fit_token_budget = 32768, fit_batch_groups = 4, collection_vram_headroom_mib = 6554}
+
+[gpu_profiles.rtx4090]
+device_names = ["NVIDIA GeForce RTX 4090"]
+status = "provisional-cloud-calibration-required"
+torch_threads = 1
+performance = {fit_species_microbatch = 96, fit_tile_microbatch = 96, fit_token_budget = 24576, fit_batch_groups = 4, collection_vram_headroom_mib = 4916}
+
+[gpu_profiles.rtx-pro6000]
+device_names = ["NVIDIA RTX PRO 6000 Blackwell Workstation Edition", "NVIDIA RTX PRO 6000 Blackwell Server Edition"]
+status = "provisional-cloud-calibration-required"
+torch_threads = 1
+performance = {fit_species_microbatch = 192, fit_tile_microbatch = 192, fit_token_budget = 65536, fit_batch_groups = 4, collection_vram_headroom_mib = 19661}
+
+[gpu_profiles.rtx6000d]
+device_names = ["NVIDIA RTX 6000D"]
+status = "provisional-cloud-calibration-required"
+torch_threads = 1
+performance = {fit_species_microbatch = 192, fit_tile_microbatch = 192, fit_token_budget = 65536, fit_batch_groups = 4, collection_vram_headroom_mib = 17204}
+
+[learning_profiles.lr-half]
+learning_rate = 0.00015
+
+[learning_profiles.lr-double]
+learning_rate = 0.0006
+
+[tuning]
+repetitions = 3
+within_fastest_fraction = 0.05
+minimum_headroom_fraction = 0.20
+minimum_headroom_mib = 1024
+rows_per_width = 8
+learner_seeds = [101, 102]
+learning_rate_multipliers = [1.0, 0.5, 2.0]
+cohorts = 2
+# Change one execution dimension at a time; bound trials by the shared deadline.
+candidates = [
+  {species = 32, tile = 32, tokens = 8192, groups = 1, threads = 1},
+  {species = 64, tile = 32, tokens = 16384, groups = 1, threads = 1},
+  {species = 64, tile = 64, tokens = 16384, groups = 2, threads = 1},
+  {species = 128, tile = 64, tokens = 32768, groups = 4, threads = 1},
+  {species = 128, tile = 128, tokens = 32768, groups = 4, threads = 1},
+  {species = 192, tile = 192, tokens = 65536, groups = 4, threads = 1},
+  {species = 64, tile = 64, tokens = 16384, groups = 2, threads = 2},
+  {species = 64, tile = 64, tokens = 16384, groups = 2, threads = 4},
+]

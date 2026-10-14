@@ -29,8 +29,11 @@ def accounting_kernel_source(source):
 
 class AccountingCudaBatch(CudaBatch):
     def __init__(self, *args, sun_spawn_fraction=None, **kwargs):
+        import torch
+
         from pvz_rl.config import load_config
 
+        kwargs.setdefault("device", torch.cuda.current_device())
         super().__init__(*args, **kwargs)
         self.sun_spawn_fraction = tuple(
             sun_spawn_fraction or load_config()["reward"]["early_sun_spawn_fraction"]

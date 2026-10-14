@@ -13,6 +13,9 @@ PERFORMANCE_SETTINGS = (
     "collection_vram_headroom_mib",
     "fit_encoder_microbatch",
     "fit_token_budget",
+    "fit_species_microbatch",
+    "fit_tile_microbatch",
+    "fit_entity_buckets",
 )
 
 
@@ -22,7 +25,11 @@ def refresh_performance(cfg, current):
         result["policy"][key] = current["policy"][key]
     target = result["training"].setdefault("performance", {})
     for key in PERFORMANCE_SETTINGS:
-        target[key] = current["training"]["performance"][key]
+        if key in current["training"]["performance"]:
+            target[key] = current["training"]["performance"][key]
+        else:
+            target.pop(key, None)
+    result["training"]["torch_threads"] = current["training"]["torch_threads"]
     return result
 
 

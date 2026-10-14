@@ -156,3 +156,19 @@ Demonstration replay verification checks historical facts and reprices rewards
 under current settings without rewriting recordings. Evaluation disables both
 exploration mechanisms and performs no fitting. Curriculum mastery probes are
 evaluation controls only; they are unrelated to counterfactual gameplay.
+
+## Device portability and browser viewing
+
+```mermaid
+flowchart LR
+  CLI[GPU index or UUID] --> Select[Capability selection]
+  Select --> Torch[PyTorch device]
+  Select --> CuPy[CuPy and simulator]
+  Select --> Telemetry[UUID telemetry]
+  Fit[CPU bucketed fitting rows] --> Graph[Fitting-owned bounded graphs]
+  EMA[EMA fitting inference] --> Graph
+  Frames[Latest frame queue] --> Web[CPU web process]
+  Web --> Proxy[Jupyter Server Proxy]
+```
+
+GPU names are matching hints, not a model whitelist. Any installed native-BF16 NVIDIA device can use `generic-bf16` or a user-defined TOML profile. Graphs, device identity and execution settings are rebuilt for the destination GPU; model weights retain the existing architecture and compatibility contract. The browser process consumes bounded latest-frame packets and sends the existing selection/history commands, so a slow browser cannot block collection or fitting.

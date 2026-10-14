@@ -7,6 +7,7 @@ uses a private RNG; commands change subscriptions, never game state.
 from __future__ import annotations
 
 import multiprocessing as mp
+import os
 import random
 import warnings
 from dataclasses import dataclass
@@ -170,8 +171,17 @@ class LiveSession:
         self.closed = ctx.Event()
         self.ready = ctx.Event()
         self.activity = ctx.Value("i", int(Activity.STARTING))
+        self.web_port = ctx.Value("i", 0)
+        self.viewer = settings.get("viewer", "auto")
+        target = viewer_main
+        if self.viewer == "web" or (
+            self.viewer == "auto" and os.name != "nt" and not os.environ.get("DISPLAY")
+        ):
+            from pvz_rl.presentation.web_viewer import web_viewer_main
+
+            target = web_viewer_main
         self.process = ctx.Process(
-            target=viewer_main,
+            target=target,
             args=(
                 self.frames,
                 self.commands,
@@ -183,6 +193,7 @@ class LiveSession:
                 settings["live_window_size"],
                 count,
                 learning_settings(cfg) if cfg is not None else (),
+                self.web_port,
             ),
             name="pvz-live-view",
             daemon=True,
@@ -196,6 +207,11 @@ class LiveSession:
             self.process.start()
         except Exception as exc:
             self.fail(exc)
+
+    @property
+    def proxy_url(self):
+        """Relative path suitable for Jupyter Server Proxy and JupyterHub."""
+        return f"./proxy/{self.web_port.value}/" if self.web_port.value else None
 
     @property
     def enabled(self):

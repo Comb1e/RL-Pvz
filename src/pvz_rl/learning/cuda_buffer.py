@@ -204,11 +204,21 @@ class CompleteGameBuffer:
         return result.reshape(*rows.shape).to(device) if device else result.reshape(*rows.shape)
 
     @staticmethod
-    def observations_from_packed(packed, *, destination=None, device=None):
+    def observations_from_packed(packed, *, destination=None, device=None, validated=False, width=None):
         """Pad a fitting-spool packed batch into the transport shape."""
-        packed.validate()
-        counts = packed.counts
-        width = int(counts.max(initial=0))
+        if not validated:
+            packed.validate()
+        counts = np.asarray(packed.counts, dtype=np.int64)
+        offsets = np.asarray(packed.offsets, dtype=np.int64)
+        if (np.any(counts < 0) or np.any(offsets < 0)
+                or np.any(offsets + counts > len(packed.entities))):
+            raise ValueError("Corrupt packed entity offset/count")
+        required = int(counts.max(initial=0))
+        width = required if width is None else int(width)
+        if width < required:
+            raise ValueError("Fitting width cannot truncate entities")
+        if destination is not None and (len(counts) > len(destination) or width > destination.entities.shape[-2]):
+            raise ValueError("Fitting batch exceeds pinned capacity")
         if destination is None:
             result = EntityBatch(
                 torch.empty(len(counts), width, ENTITY_WIDTH, dtype=torch.int32),
@@ -224,16 +234,12 @@ class CompleteGameBuffer:
                 validated=True,
             )
         entities, mask, globals_ = result.tensors()
-        entities.zero_()
-        mask.zero_()
-        globals_[:] = torch.as_tensor(np.ascontiguousarray(packed.globals))
-        for index, (offset, count) in enumerate(zip(packed.offsets, counts, strict=True)):
-            count = int(count)
-            if count:
-                entities[index, :count] = torch.as_tensor(
-                    packed.entities[int(offset) : int(offset) + count]
-                )
-                mask[index, :count] = True
+        host_entities, host_mask, host_globals = (value.numpy() for value in result.tensors())
+        host_entities.fill(0)
+        host_mask[:] = np.arange(width)[None, :] < counts[:, None]
+        host_globals[:] = packed.globals
+        positions = offsets[:, None] + np.arange(width)[None, :]
+        host_entities[host_mask] = packed.entities[positions[host_mask]]
         return result.to(device) if device else result
 
     def valid_indices(self):
