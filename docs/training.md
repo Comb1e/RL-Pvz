@@ -84,3 +84,7 @@ probes remain separate evaluation controls and are not counterfactual gameplay.
 
 See [architecture](architecture.md), [sequential-training](math/sequential-training.md),
 [throughput](math/training-throughput.md) and [validation](validation.md).
+For cloud GPU stalls during fitting, wrap the same training command with
+[`tools/collect_fit_diagnostics.py`](../tools/collect_fit_diagnostics.py);
+[the diagnostic workflow](math/training-throughput.md#diagnose-cloud-fitting-stalls)
+explains lightweight collection, bounded CPU/CUDA traces and the files to share.

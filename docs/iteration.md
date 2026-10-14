@@ -1,5 +1,66 @@
 # Iteration history
 
+## Cloud fitting diagnostics — 2026-10-14
+
+- Problem: the reported 164 one-second fitting GPU samples average 21.72%,
+  with median 4.5%, 77 zero samples (46.95%) and a longest zero run of 14 samples.
+  Utilization alone cannot attribute those gaps to preparation, compilation,
+  synchronization, eager execution, storage or cloud CPU limits.
+- Inspection: CPU preparation validates/pads packed inputs row by row. Exact
+  transport widths can exceed the four fitting shapes admitted per encoder;
+  subsequent shapes take eager BF16. CUDA nonzero/boolean selections occur
+  outside the compiled encoders. No-grad teacher tile forwards use collection
+  graph caches during fit. These are code-supported suspects, not established
+  causes of the cloud observations. Existing whole-pass CUDA-event time also
+  includes stream idle gaps and cannot prove device busy time.
+- Improvement: `tools/collect_fit_diagnostics.py` forwards the existing train
+  arguments and temporarily records inclusive host spans, streaming batch/worker
+  events, exact widths, compiler paths, graph state, storage/fallback settings
+  and memory. Reuse the hardware sampler with an optional failure-isolated host
+  detail provider for thread CPU, process I/O/faults, pressure and Linux cgroup
+  quota counters. GPU startup snapshots identify the device, driver and limits.
+  An opt-in finite CPU/CUDA trace records one warmup plus requested active batches.
+  Training/recovery behavior, weights, objective and user parameters are unchanged.
+- Sources: NVIDIA utilization documentation and PyTorch's profiler project/recipe
+  and explicit CUDA nonzero synchronization contract, recorded in references.
+- Verification: 39 distinct focused controls pass across the collector, hardware
+  sampler and existing Bash/staging change. The final 16 collector cases pass
+  in 7.52 seconds, including exact CPU loss/master-gradient parity, exception and
+  hook restoration, bounded/partial CPU traces, output preservation, invalid
+  options and independently calculated CPU/throttle deltas. A short real CUDA
+  control verifies compiled/eager loss and gradient parity and exports CUDA kernel
+  events. Optional sampler/export failures remain diagnostic data. Bash controls
+  preserve pinned/dirty source facts and clean temporary archives on success/failure.
+  Repository Ruff lint/format, collector help and diff whitespace checks pass.
+- Remaining limits: no formal training or cloud 5090 measurements were run.
+  Detailed profiling adds overhead and may synchronize; lightweight host wrappers
+  add logging overhead but no CUDA waits/readbacks/events. Nested host spans
+  overlap, platform facts may be unavailable, CUDA Graph trace visibility depends
+  on the build, and early interruption can leave a partial trace. Actual cloud
+  data is required before choosing a performance change.
+
+## Bash CUDA environment installation — 2026-10-14
+
+- Problem/root cause: the verified local game installer was exposed only through
+  PowerShell, leaving Linux/WSL and Git Bash without an equivalent setup command.
+- Improvement: add `tools/bootstrap.sh` with explicit game-checkout and Python
+  options, Python 3.12 validation, POSIX/Windows virtual-environment detection,
+  the existing dependency locks and PyTorch `2.8.0+cu128`. Reuse `stage_game.py`
+  to verify the pinned commit and source hashes before dependency installation.
+  Never change the game checkout. Temporary archive cleanup runs on success,
+  errors and handled interruption; dependency failures stop subsequent commands.
+- Sources: pip local-project installation and Bash exit-trap documentation,
+  recorded in `references.md`. No training or model changes.
+- Verification: 17 focused installation/staging controls passed in 20.26 seconds.
+  Controls use real Git archives with independent pinned/dirty source facts and
+  mocked package commands: fresh/reused POSIX and Windows virtual environments,
+  paths containing spaces, execution outside the project, missing commits,
+  mismatched manifests, argument errors and failure cleanup. Bash syntax/help,
+  focused Ruff lint/format and diff whitespace checks pass.
+- Remaining limits: no dependency downloads, real Linux GPU installation or
+  formal training were performed. An existing game checkout containing the
+  pinned commit is required; cloning and changing the game branch are not included.
+
 ## Encoder compiler cache ownership — 2026-10-14
 
 - Problem/root cause: padding partial fitting microbatches removed one shape

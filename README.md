@@ -24,6 +24,17 @@ Autonomous training requires NVIDIA CUDA with BF16 support.
 .\.venv\Scripts\python.exe -m pvz_rl doctor --output artifacts\availability.json
 ```
 
+For Linux/WSL or Git Bash, use an existing `pvz-cuda-work` checkout:
+
+```bash
+bash tools/bootstrap.sh --game-repo ../pvz-cuda-work --python python3.12
+```
+
+Use `--python /path/to/python` if Python 3.12 has a different executable name.
+Both installers verify and install the pinned game without changing its checkout,
+install PyTorch `2.8.0+cu128` / CUDA `12.8`, and run the availability check.
+The Bash installer removes its temporary game archive on success or failure.
+
 The [engine lock](src/pvz_rl/data/engine-lock.json) fixes source and package hashes.
 
 ## First useful command
@@ -57,5 +68,6 @@ Static checks do not start the simulator or training:
 - [Sequential Q objective](docs/math/sequential-training.md)
 - [Reward accounting](docs/math/training-objective.md)
 - [Execution, compiler troubleshooting and throughput](docs/math/training-throughput.md)
+- [Collect cloud fitting diagnostics](docs/math/training-throughput.md#diagnose-cloud-fitting-stalls)
 - [Sources used](docs/references.md)
 - [Iteration history and measurements](docs/iteration.md)

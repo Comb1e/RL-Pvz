@@ -19,6 +19,12 @@ frame stack or counterfactual simulator is part of the policy or collector.
 Seeds, schedules and simulator snapshots stay in execution state and never enter
 policy inputs. `src/pvz_rl/data/train.toml` is the sole parameter source.
 
+PowerShell and Bash bootstrap tools install the same pinned CUDA environment.
+They share archive/hash verification, install the game non-editably and never
+change its checkout. A missing commit or mismatched manifest fails installation;
+the Bash entry point removes its temporary source archive even on failure.
+See [installation](../README.md#installation).
+
 ## Decision flow
 
 ```mermaid
@@ -94,6 +100,35 @@ BF16 EMA tile stage. Its MSE-matched Huber loss updates only the species stage.
 Accepted/rejected and wait/plant/dig weighting uses whole-cohort denominators.
 Four autonomous passes and twenty demonstration passes commit one optimizer
 step per pass, then update the EMA with decay 0.95.
+
+## Optional fitting diagnostics
+
+```mermaid
+flowchart LR
+    Train[Existing train command] --> Wrappers[Temporary host timing wrappers]
+    Wrappers --> Learner[Same cohort learner and optimizer]
+    Wrappers --> Events[Streaming fit and worker events]
+    Sampler[Independent hardware sampler] --> Hardware[GPU and host resource samples]
+    Learner --> Trace[Optional bounded CPU and CUDA trace]
+    Events --> Summary[Diagnostic summary and effective settings]
+```
+
+The diagnostic script in `tools/` forwards the normal training arguments and
+records fitting startup, CPU preparation, compilation/capture, loss/backward
+and weight updates without replacing any training operation. Chunk metadata
+uses host records and tensor shapes; the lightweight path issues no new CUDA
+events or waits. The existing independent hardware sampler accepts optional
+host detail collection for thread CPU, process I/O and container quotas.
+Raw samples/events stream to a separate unused directory, with a bounded set
+of slow chunks in the summary. Temporary wrappers are restored on exit.
+
+The optional profiler captures one finite window counted by fitting data batches.
+It can perturb execution and add synchronization, so its trace explains the
+timeline while lightweight samples describe ordinary utilization. Unsupported
+resource facts and trace failures are reported without dropping samples or
+changing fitting. Host spans overlap and CUDA-event pass duration includes idle
+gaps; neither is an estimate of GPU busy time. See the
+[diagnostic workflow](math/training-throughput.md#diagnose-cloud-fitting-stalls).
 
 ## Recovery and failures
 

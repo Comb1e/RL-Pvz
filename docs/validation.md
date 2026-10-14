@@ -10,6 +10,8 @@ Focused suites are run once per change; full-suite repetition is avoided.
 | Observation schema, reward accounting and exploration | Their existing owning suites |
 | Demonstration reconstruction and checkpoint contracts | `test_demo_initialization.py`, checkpoint suites |
 | Active-only collection and throughput telemetry | Collection benchmark controls |
+| Pinned game staging and Bash installation/cleanup | `test_cuda_only.py` |
+| Optional fit collector transparency, bounded traces and host resource deltas | `test_fit_diagnostics.py`, hardware cases in `test_reporting_config.py` |
 
 ## Required controls
 
