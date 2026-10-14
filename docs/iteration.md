@@ -2028,3 +2028,9 @@ unperformed.
   fresh weights/resumes. No migration or FP32 inference fallback exists.
 - Verification: configuration/model import checks, owning stateless-Q, BF16,
   storage, checkpoint and progress suites passed; no formal training was launched.
+## RTX 4080 SUPER execution profile — 2026-10-15
+
+- Problem: the cloud 4080 SUPER needed a portable execution preset without changing the measured local 4070 Laptop settings.
+- Evidence: `artifacts/tune-4080-super/recommendation.json` covered sparse, medium, dense and bucket-boundary widths with wait, mixed and tile-heavy actions across three repetitions. The 64/64, 16,384-token, two-group candidate completed all 12 workloads with no fitting capture failures or OOM fallbacks; the 192/192 stress candidate failed the 20% headroom gate, so the artifact remains globally incomplete.
+- Improvement: added `gpu_profiles.rtx4080-super` with compilation enabled, 64 species/tile microbatches, 16,384 tokens, two groups, one CPU thread and a 6,554 MiB collection reserve for the measured 32 GiB device. The existing 4070 Laptop profile is unchanged.
+- Remaining limits: this is execution calibration only; learning quality, full end-to-end training and cross-device checkpoint inference still require their separate gates.

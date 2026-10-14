@@ -91,7 +91,7 @@ explains lightweight collection, bounded CPU/CUDA traces and the files to share.
 
 ## GPU presets and bounded calibration
 
-`--gpu` accepts a visible index or complete CUDA UUID. The selected device is applied to PyTorch, CuPy, the simulator and telemetry, and must provide native BF16. `--gpu-profile auto` matches an exact device name when a measured/provisional preset exists; otherwise `generic-bf16` is used. Presets only alter execution settings. `--learning-profile` applies a fresh-run learning overlay; resume keeps the checkpoint's learning settings while refreshing execution settings.
+`--gpu` accepts a visible index or complete CUDA UUID. The selected device is applied to PyTorch, CuPy, the simulator and telemetry, and must provide native BF16. `--gpu-profile auto` matches an exact device name when a measured/provisional preset exists; otherwise `generic-bf16` is used. The RTX 4080 SUPER profile is calibrated on the reported 32 GiB cloud device and retains a 6,554 MiB collection reserve. Presets only alter execution settings. `--learning-profile` applies a fresh-run learning overlay; resume keeps the checkpoint's learning settings while refreshing execution settings.
 
 Fitting uses masked entity buckets `[8, 16, 32, 64, 128, 256]`, CPU-owned row selections and a fitting-only EMA graph owner. The architecture, entity cap, objective, action semantics and checkpoint weight contract are unchanged. Calibrate a new machine with:
 

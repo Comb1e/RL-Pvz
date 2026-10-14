@@ -48,7 +48,7 @@ Record one easy game using unused output paths; finish with a natural win or los
 
 Use [recording and training](docs/training.md) to initialize, train, resume or
 evaluate. Demonstration fitting uses 20 passes; autonomous cohorts use four.
-Select a physical CUDA GPU independently from execution and learning presets. Native BF16 devices are detected by capability; the catalogue includes measured/provisional presets for the 4070 Laptop, 4090, 5090, RTX PRO 6000 and RTX 6000D, while arbitrary user profiles remain supported:
+Select a physical CUDA GPU independently from execution and learning presets. Native BF16 devices are detected by capability; the catalogue includes measured/provisional presets for the 4070 Laptop, 4080 SUPER, 4090, 5090, RTX PRO 6000 and RTX 6000D, while arbitrary user profiles remain supported:
 
 ```powershell
 .\.venv\Scripts\python.exe -m pvz_rl train --output runs\fit --gpu 0 --gpu-profile auto --learning-profile current --viewer off

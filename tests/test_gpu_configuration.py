@@ -43,6 +43,17 @@ def test_gpu_profiles_are_capability_hints_with_generic_and_custom_fallbacks(tmp
     assert laptop["training"]["performance"]["fit_batch_groups"] == 2
     assert laptop["training"]["performance"]["compile_kernels"] is False
     assert laptop["training"]["torch_threads"] == 2
+    cloud, name = apply_gpu_profile(
+        cfg, "auto", device={"name": "NVIDIA GeForce RTX 4080 SUPER"}
+    )
+    assert name == "rtx4080-super"
+    assert cloud["training"]["performance"]["compile_kernels"] is True
+    assert cloud["training"]["performance"]["fit_species_microbatch"] == 64
+    assert cloud["training"]["performance"]["fit_tile_microbatch"] == 64
+    assert cloud["training"]["performance"]["fit_token_budget"] == 16384
+    assert cloud["training"]["performance"]["fit_batch_groups"] == 2
+    assert cloud["training"]["performance"]["collection_vram_headroom_mib"] == 6554
+    assert cloud["training"]["torch_threads"] == 1
 
     empty = tmp_path / "minimal.toml"
     empty.write_text("", encoding="utf-8")
