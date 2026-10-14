@@ -74,14 +74,17 @@ class HardwareMonitor:
 
     System/per-core CPU are 0..100%; process CPU uses psutil's one-core units
     and can exceed 100%. GPU fields are device-wide, not process attribution.
+    Optional sample_details(process) runs on this thread; errors become sample
+    diagnostics. Providers must collect host facts without issuing CUDA work.
     No CUDA work is issued by the sampler.
     """
 
-    def __init__(self, path, *, seconds=1.0, device=None, gpu_id=None):
+    def __init__(self, path, *, seconds=1.0, device=None, gpu_id=None, sample_details=None):
         if not math.isfinite(seconds) or seconds < 0.1:
             raise ValueError("Hardware sampling interval must be at least 0.1 seconds")
         self.path, self.interval = Path(path), seconds
         self.gpu_id = training_gpu_id(device) if gpu_id is None else gpu_id
+        self.sample_details = sample_details
         self.session = uuid.uuid4().hex
         self.samples = deque(maxlen=max(1, math.ceil(600 / seconds)))
         self.stop = threading.Event()
@@ -164,6 +167,11 @@ class HardwareMonitor:
                         )
                     except (OSError, psutil.Error) as exc:
                         row["cpu_error"] = str(exc)
+                    if self.sample_details is not None:
+                        try:
+                            row.update(self.sample_details(process))
+                        except Exception as exc:
+                            row["details_error"] = repr(exc)
                     row.update(gpu_sample(self.gpu_id, min(4.0, self.interval)))
                     row["sampling_seconds"] = perf_counter() - started
                     stream.write(json.dumps(row, allow_nan=False) + "\n")

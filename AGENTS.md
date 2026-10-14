@@ -20,6 +20,20 @@
 
 ## Code structure
 
+- `tools/bootstrap.ps1` and `tools/bootstrap.sh` install the CUDA environment from
+  an existing game checkout. Both reuse `tools/stage_game.py` for verified,
+  non-editable installation of the engine lock, without changing the game checkout.
+  Bash accepts `--game-repo` / `--python`, handles POSIX and Windows virtual
+  environments, and cleans its temporary archive on exit. Installation controls
+  belong to `test_cuda_only.py`; do not download dependencies in regression tests.
+- `tools/collect_fit_diagnostics.py` wraps the existing autonomous train command
+  with temporary host-timing wrappers and an optional bounded CPU/CUDA profiler.
+  It reuses `monitoring/hardware.py` with an optional independent detail sampler
+  for thread CPU, process I/O and Linux cgroup throttling. Streaming chunk/worker
+  events retain exact batch shapes, compiler paths, graph state and fallbacks.
+  The lightweight collector adds no CUDA waits/readbacks or learning changes;
+  detailed profiler overhead is explicit. `test_fit_diagnostics.py` owns wrapper
+  transparency and trace bounds; hardware sampling remains in its reporting suite.
 - `src/pvz_rl/data/train.toml` is the single parameter source for train/demo overlays.
   Both use `entity_v1`, `two_stage_transformer_q_v1` and
   `complete_return_sequential_no_probe_v1`. Old weights/resumes require fresh

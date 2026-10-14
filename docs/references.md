@@ -302,6 +302,27 @@ throughput measurements.
   are project choices, not performance guarantees from these sources.
 # Current implementation sources
 
+- [NVIDIA `nvidia-smi` documentation](https://docs.nvidia.com/deploy/nvidia-smi/index.html):
+  inspected GPU utilization's kernel-active sample-window definition (product
+  dependent, roughly 1 second to 1/6 second) and device/process queries. This
+  informs device-wide utilization interpretation and UUID-targeted snapshots,
+  rather than treating utilization as SM occupancy or achieved compute rate.
+- [PyTorch profiler recipe source](https://github.com/pytorch/tutorials/blob/main/recipes_source/recipes/profiler_recipe.py)
+  and [PyTorch 2.8 profiler implementation](https://github.com/pytorch/pytorch/blob/v2.8.0/torch/profiler/profiler.py):
+  inspected CPU/CUDA activities, user ranges, finite warmup/active schedules,
+  compressed Chrome trace export and profiler overhead. The fitting collector
+  wraps the existing learner with host timings and enables one bounded trace
+  only on request; shapes, allocation profiling and stacks stay disabled.
+- [PyTorch 2.8 `nonzero` documentation source](https://github.com/pytorch/pytorch/blob/v2.8.0/torch/_torch_docs.py):
+  inspected its explicit CUDA host/device synchronization note. Existing
+  fitting boolean selections/nonzero and variable request sizes are profiling
+  suspects, not a confirmed cloud bottleneck or a reason to change attribution.
+
+- [pip local project installs](https://pip.pypa.io/en/stable/topics/local-project-installs/)
+  and [Bash builtins / traps](https://www.gnu.org/software/bash/manual/html_node/Bourne-Shell-Builtins.html):
+  inspected regular versus editable local installs and exit-trap cleanup. The Bash
+  bootstrap uses the existing verified archive installer for a non-editable pinned
+  game, an editable research checkout and temporary-source cleanup on exit.
 - PyTorch, [BF16 CUDA semantics](https://pytorch.org/docs/stable/notes/amp_examples.html)
   and [Adam](https://pytorch.org/docs/stable/generated/torch.optim.Adam.html):
   informed the BF16 runtime / FP32-master separation and explicit nonfinite

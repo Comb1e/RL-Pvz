@@ -64,6 +64,25 @@ def test_gpu_query_targets_uuid_and_exposes_missing_data(monkeypatch, response):
     assert row["gpu_percent"] == (40 if response == "partial" else None)
 
 
+def test_hardware_detail_failure_keeps_sampling(tmp_path, monkeypatch):
+    from pvz_rl.monitoring.hardware import HardwareMonitor
+
+    sampled = threading.Event()
+
+    def details(process):
+        sampled.set()
+        raise RuntimeError("optional detail unavailable")
+
+    monkeypatch.setattr("pvz_rl.monitoring.hardware.gpu_sample", lambda *args: {"gpu_percent": 25})
+    with HardwareMonitor(
+        tmp_path / "details.jsonl", seconds=0.1, gpu_id="GPU-test", sample_details=details
+    ) as monitor:
+        assert sampled.wait(3)
+    assert monitor.latest["gpu_percent"] == 25
+    assert "optional detail unavailable" in monitor.latest["details_error"]
+    assert monitor.error is None
+
+
 @pytest.mark.parametrize(
     "group,key,value",
     [

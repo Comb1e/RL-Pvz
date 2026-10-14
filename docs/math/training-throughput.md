@@ -74,3 +74,83 @@ Independent controls cover 128/64/32/16/4/1 live slots, sparse/mixed/crowded
 boards, zero/one planting and recovery. Bounded collect → four-pass-fit → collect
 checks establish implementation correctness only, not a speed or win-rate
 guarantee.
+
+## Diagnose cloud fitting stalls
+
+Wrap the ordinary autonomous training command with the collector. Keep the same
+training arguments, checkpoint, configuration and output directory; choose an
+unused diagnostic directory:
+
+```bash
+.venv/bin/python tools/collect_fit_diagnostics.py --output artifacts/fit-profile -- \
+  train --output runs/easy --resume runs/easy/latest.zip --no-live-view
+```
+
+The lightweight run records all fitting chunks. Let at least one whole fitting
+pass finish so both startup and repeated batch work are visible. Training keeps
+its normal budget and interruption/recovery behavior. The collector neither
+ends training after collecting data nor changes execution or learning settings.
+On Windows, use `.\.venv\Scripts\python.exe` with the same script arguments.
+
+For a second diagnostic run, add `--trace-batches 6` before `--`. The profiler
+skips 20 fitting data batches, warms up for one batch, then traces six batches
+once. Adjust `--trace-skip-batches` if the interesting pause occurs elsewhere.
+Pass-boundary work between those batches may also appear. Early interruption
+can yield a partial trace, reported in the summary. Profiling startup/export
+can synchronize CUDA and alter timing; compare hardware utilization against
+the lightweight run. The lightweight wrappers add host timing/logging overhead
+but no CUDA waits, device tensor readbacks or new CUDA events. Shapes, stacks and
+allocation tracing are disabled to bound profiler overhead. CUDA trace support
+depends on the cloud build/driver; unavailable CUDA profiling is reported and
+the CPU trace remains useful. CUDA Graph kernel visibility is build dependent.
+
+The collector reuses the hardware sampler and temporarily wraps the existing
+learner; it does not introduce another training framework. Host labels distinguish
+spool construction, prefetch startup/next-batch waits, encoder forwards,
+compilation backend work, new graph setup, backward, master-gradient accumulation,
+pass metrics and weight/EMA updates. Each chunk records actual rows, non-wait
+fraction, exact transport width, compilation paths/shapes, graph cache counters,
+effective settings/fallbacks and PyTorch allocated/reserved memory. Worker
+preparation events include slot-reuse waits; their separately recorded preparation
+time excludes those waits. CPU thread rates, process I/O/fault counters, available
+RAM/swap, host pressure/CPU steal counters and cgroup v2 throttling deltas help
+detect CPU/container limits and disk-backed storage. Unsupported platform facts
+remain absent/null. GPU snapshots record device UUID, driver, limits, clock
+reasons and competing process allocations; these snapshots are startup facts,
+not continuous process-attributed GPU utilization.
+
+Send `summary.json`, `metadata.json`, `hardware-metrics.jsonl` and
+`fit-events.jsonl`, plus `fit-trace.json.gz` / `operators-*.txt` when tracing.
+The diagnostic directory also contains GPU startup snapshots. Package it with:
+
+```bash
+tar -czf artifacts/fit-profile.tar.gz -C artifacts fit-profile
+```
+
+Interpret measurements using these controls:
+
+| Observation | Candidate bottleneck / next evidence |
+|---|---|
+| Long `next_batch` and busy `pvz-batches` thread | Row-by-row validation/padding in CPU preparation; compare worker preparation events |
+| Long `spool_build`, major faults or increasing read bytes | First-pass materialization or RAM-budget spill; inspect RAM and process I/O together |
+| Long compile/backend or graph-setup spans at new widths | Lazy compilation/capture; compare subsequent chunks of the same shape |
+| Frequent `extra_shape_eager` microbatches | Exact transport maxima exceed the four fitting shapes admitted per encoder; inspect kernel-launch gaps |
+| CUDA runtime waits around `aten::nonzero` / indexing | Device-dependent output sizes synchronize the host; locate waits in the trace |
+| Many short kernels and gaps with small effective microbatches | Host launch/control overhead; inspect forward/backward/master-gradient spans |
+| Increasing cgroup `throttled_usec`, CPU pressure or steal time | Cloud CPU quota or contention; total CPU percentage can hide a saturated thread |
+| High GPU utilization with long kernels/copies | GPU compute, memory or transfer work; distinguish kernels from memory copies in the trace |
+
+These are hypotheses, not automatic tuning recommendations. In particular,
+4,096 transported rows still execute in microbatches capped at 192 by default.
+The spool is sorted by entity count, while each transport batch uses its exact
+maximum entity count; sorting does not by itself guarantee four fixed widths.
+Teacher tile inference takes the no-grad collection-graph path even during fit.
+Increasing transport groups alone does not enlarge encoder microbatches.
+
+Host spans are inclusive and nested; producer work overlaps the main thread.
+Do not sum those spans or treat them as GPU kernel durations. The existing
+`device_compute_seconds` brackets a whole fitting pass with CUDA events, so
+idle gaps between enqueued operations contribute too. It cannot establish
+GPU busy time. NVIDIA utilization measures whether any kernel ran during a
+device sample window, not SM occupancy, achieved FLOPs or training throughput.
+A one-second poll can miss shorter bursts and is device-wide.
