@@ -171,7 +171,9 @@ class LiveSession:
         self.closed = ctx.Event()
         self.ready = ctx.Event()
         self.activity = ctx.Value("i", int(Activity.STARTING))
-        self.web_port = ctx.Value("i", 0)
+        # A requested nonzero port is retained until the web child binds. A
+        # zero value preserves the existing ephemeral-port behavior.
+        self.web_port = ctx.Value("i", int(settings.get("viewer_port", 0)))
         self.viewer = settings.get("viewer", "auto")
         target = viewer_main
         if self.viewer == "web" or (
