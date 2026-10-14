@@ -181,9 +181,7 @@ class SpatialTransformer(nn.Module):
         if self._compiled_encode is not None:
             return
         self._fitting_backend = FittingGraphBackend()
-        self._compiled_encode = torch.compile(
-            self._encode, backend=self._fitting_backend, dynamic=False, fullgraph=True
-        )
+        self._compiled_encode = self._fitting_backend.compile(self._encode)
         self._compiled_shapes.clear()
         self.compilation_backend = "cudagraphs_owned"
         self.compilation_status = "requested"
@@ -220,6 +218,7 @@ class SpatialTransformer(nn.Module):
             self._fitting_backend.release()
         self._compiled_shapes.clear()
         if self._compiled_encode is not None:
+            self._compiled_encode = self._fitting_backend.compile(self._encode)
             self.compilation_status = "requested"
 
     def disable_compilation(self, exc):
@@ -256,7 +255,7 @@ class SpatialTransformer(nn.Module):
             return self._encode(*args)
         shape = (int(args[0].shape[0]), int(args[0].shape[1]))
         # Dynamic ragged shapes would trigger an unbounded stream of compiler
-        # graphs.  Compile at most four observed fixed shapes per run and use
+        # graphs.  Compile at most four observed fixed shapes per phase and use
         # eager execution for additional buckets.
         if shape not in self._compiled_shapes and len(self._compiled_shapes) >= 4:
             return self._encode(*args)
@@ -347,11 +346,7 @@ class SpatialTransformer(nn.Module):
             args = (*part.tensors(), branches[start : start + size])
             logical = len(part)
             compile_args = args
-            if (
-                self._compiled_encode is not None
-                and torch.is_grad_enabled()
-                and logical < size
-            ):
+            if self._compiled_encode is not None and torch.is_grad_enabled() and logical < size:
                 padding = size - logical
                 compile_args = tuple(
                     torch.cat((value, value.new_zeros((padding, *value.shape[1:]))), dim=0)

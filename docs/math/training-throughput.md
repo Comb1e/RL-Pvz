@@ -48,6 +48,19 @@ headroom. Collection and fitting captures have separate ownership; quiescent
 phase changes release outgoing captures. Capture failure uses eager BF16
 execution. Recovery rebuilds captures, prefetch workers, maps and fitting spools.
 
+Fitting compiler caches are private to each encoder and fitting phase: separate
+Python code objects prevent species/tile stages or different model instances from
+sharing Dynamo's recompilation allowance. Up to four observed fitting shapes are
+compiled per phase; additional shapes use eager BF16. Partial compiled microbatches
+are padded and trimmed before supervision. Quiescent fitting release renews that
+encoder's compiler cache as well as releasing captures, so changed microbatch
+limits do not accumulate stale specializations across cohorts. Global compiler
+limits are not increased and unrelated compiler caches are not reset.
+
+After updating compiler code, restart the training process from its coherent
+current-contract recovery checkpoint. Existing weights and recordings remain
+compatible; fresh demonstration initialization is not needed for this execution fix.
+
 ## Rates and evidence
 
 Report active decisions/game/s and active transitions/s from host-side interval

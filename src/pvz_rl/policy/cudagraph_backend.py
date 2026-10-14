@@ -2,6 +2,7 @@
 
 from collections import OrderedDict
 from time import perf_counter
+from types import FunctionType, MethodType
 
 import torch
 from torch.utils._pytree import tree_map
@@ -229,6 +230,21 @@ class FittingGraphBackend:
 
     def __init__(self):
         self.captures = []
+
+    def compile(self, encode):
+        """Give one encoder phase its own Dynamo code-object cache."""
+        function = encode.__func__
+        owned = FunctionType(
+            function.__code__.replace(),
+            function.__globals__,
+            function.__name__,
+            function.__defaults__,
+            function.__closure__,
+        )
+        owned.__kwdefaults__ = function.__kwdefaults__
+        return torch.compile(
+            MethodType(owned, encode.__self__), backend=self, dynamic=False, fullgraph=True
+        )
 
     def __call__(self, graph_module, example_inputs):
         return cudagraph_backend(graph_module, example_inputs, owner=self)

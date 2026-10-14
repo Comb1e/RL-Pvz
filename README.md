@@ -56,6 +56,6 @@ Static checks do not start the simulator or training:
 - [Entity schema and attention](docs/math/entity-inputs.md)
 - [Sequential Q objective](docs/math/sequential-training.md)
 - [Reward accounting](docs/math/training-objective.md)
-- [Execution and throughput](docs/math/training-throughput.md)
+- [Execution, compiler troubleshooting and throughput](docs/math/training-throughput.md)
 - [Sources used](docs/references.md)
 - [Iteration history and measurements](docs/iteration.md)

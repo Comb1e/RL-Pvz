@@ -81,6 +81,11 @@ and capacity gaps contribute nothing. Width-bucketed flat batches are prefetched
 through the existing double buffer and reused across all fitting passes; padding
 is excluded from losses and denominators.
 
+Compiler caches and CUDA captures belong to individual encoders. Fitting uses
+phase-local code objects and bounded static shapes; collection uses its separate
+LRU. Quiescent phase changes release fitting captures and renew only the owner's
+compiler cache, without changing global limits or policy inputs.
+
 Wait values regress against the complete remaining return through the species
 stage. Plant and dig values regress only the actual proposed tile through the
 conditional stage. Species consistency selects a geometry candidate with

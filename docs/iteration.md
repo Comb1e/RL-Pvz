@@ -1,5 +1,43 @@
 # Iteration history
 
+## Encoder compiler cache ownership — 2026-10-14
+
+- Problem/root cause: padding partial fitting microbatches removed one shape
+  variation but did not isolate Dynamo caches. Both stages and subsequent model
+  instances compiled the same `_encode` code object. Their guarded stage/shape
+  variants shared the default eight-entry recompilation allowance; clearing the
+  local shape ledger at a phase boundary did not clear that compiler cache.
+- Improvement: the shared fitting backend compiles an independently copied code
+  object bound to each encoder. Quiescent fitting release renews only that owner's
+  compiler wrapper after releasing its captures. Keep four admitted static shapes,
+  trimmed microbatch padding, eager BF16 for additional shapes and explicit backend
+  failure handling. No global compiler-limit increase or unrelated cache reset.
+  Model structure, checkpoint contracts, rewards, exploration and optimizer cadence
+  are unchanged; current-contract weights/recovery do not need regeneration.
+- Sources: inspected PyTorch 2.8's compile API and Dynamo cache-size source for
+  code-object ownership, and Python 3.12's `code.replace()` contract for isolated
+  bytecode copies. These are execution ideas only, recorded in the references.
+- Verification: the independent CUDA regression first reproduced the eight-entry
+  warning on the preceding code. After the fix, 15 focused compiler/graph and
+  checkpointing controls pass in 37.24 seconds. They cover both stages, four entity
+  widths, partial batches, three changing-microbatch phases, extra-shape eager
+  execution, cache replay, output/gradient parity, owned release, memory fallback
+  and injected compiler failure. Ruff lint/format and `git diff --check` pass.
+- Bounded integration: [planting collection/fitting control](evidence/compiler-cache-collection-20261014.json)
+  uses four noncontiguous live games in 128 slots, the default architecture/BF16
+  runtime, four decisions per measurement and a one-second cutoff for fitting.
+  All four optimizer commits finish without compilation-limit warnings; fitting
+  takes 3.354 seconds and the cycle peaks at 1,859.79 MiB of PyTorch allocations.
+  Last-pass selected error is 0.008298, consistency Huber loss 0.019043, consistency
+  MAE 0.132202, saturation fraction zero, estimator gap 0.006042 and placement gap
+  0.025781. The expected short-cutoff dense-return diagnostic remains unchanged.
+- Remaining limits: this tiny control measures 468.46 warmed actual transitions/s
+  before fitting versus 315.42 after (-32.67%). The policy changes during fitting,
+  so this is not an identical-action performance comparison or evidence of a causal
+  compiler regression. No throughput or learning-quality improvement is claimed.
+  Restart a running process to load the fix. No full suite or formal training was
+  run for this compiler change.
+
 ## 0.39.0 (unreleased) — 2026-10-13
 
 - Problem/root cause: a species target selected and evaluated by the same EMA tile

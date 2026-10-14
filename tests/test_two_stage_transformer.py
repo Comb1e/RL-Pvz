@@ -620,6 +620,80 @@ def test_compiled_microbatches_delayed_backward_matches_eager():
         encoder.release_fitting()
 
 
+def test_compilation_cache_isolated_by_stage_and_fitting_phase():
+    torch._dynamo.reset()
+    cfg, observations = inputs(5, "cuda")
+    eager = TwoStageTransformerPolicy(cfg).cuda().train()
+    compiled = TwoStageTransformerPolicy(cfg).cuda().train()
+    compiled.load_state_dict(eager.state_dict())
+    compiled.enable_compilation()
+    branches = torch.arange(len(observations), device="cuda") % 9 + 1
+    compiler_limit = torch._dynamo.config.recompile_limit
+    codes = [
+        encoder._compiled_encode._torchdynamo_orig_callable.__func__.__code__
+        for encoder in compiled.encoders
+    ]
+    assert codes[0] is not codes[1]
+    with warnings.catch_warnings(record=True) as recorded:
+        for microbatch in (4, 3, 2):
+            for model in (eager, compiled):
+                model.zero_grad(set_to_none=True)
+                for encoder in model.encoders:
+                    encoder.microbatch = microbatch
+            for width in (32, 64, 128, 256, 16, 32):
+                padding = width - observations.entities.shape[1]
+                batch = EntityBatch(
+                    torch.nn.functional.pad(observations.entities, (0, 0, 0, padding)),
+                    torch.nn.functional.pad(observations.entity_mask, (0, padding)),
+                    observations.globals,
+                    True,
+                )
+                outputs = []
+                for model in (eager, compiled):
+                    species = model.species_values(batch)
+                    tiles = model.conditional_tiles(batch, branches)
+                    (species.float().square().mean() + tiles.float().square().mean()).backward()
+                    outputs.append((species, tiles))
+                for actual, expected in zip(*outputs, strict=True):
+                    torch.testing.assert_close(actual, expected, atol=0.005, rtol=0.02)
+            for actual, expected in zip(compiled.parameters(), eager.parameters(), strict=True):
+                torch.testing.assert_close(actual.grad, expected.grad, atol=0.02, rtol=0.05)
+            for encoder in compiled.encoders:
+                assert encoder.compilation_status == "compiled"
+                assert set(encoder._compiled_shapes) == {
+                    (microbatch, width) for width in (32, 64, 128, 256)
+                }
+                encoder.release_fitting()
+                assert encoder._fitting_backend.captures == []
+                code = encoder._compiled_encode._torchdynamo_orig_callable.__func__.__code__
+                assert all(code is not previous for previous in codes)
+                codes.append(code)
+    assert torch._dynamo.config.recompile_limit == compiler_limit
+    assert not any("Encoder compilation failed" in str(record.message) for record in recorded)
+
+
+def test_fitting_compiler_failure_remains_eager_after_phase_release(monkeypatch):
+    cfg, batch = inputs(3, "cuda")
+    encoder = TwoStageTransformerPolicy(cfg).cuda().train().tile_encoder
+    encoder.enable_compilation()
+    branches = torch.ones(len(batch), device="cuda", dtype=torch.long)
+
+    def failed(*args):
+        raise RuntimeError("forced fitting compilation failure")
+
+    monkeypatch.setattr(encoder, "_compiled_encode", failed)
+    with pytest.warns(RuntimeWarning, match="forced fitting compilation failure"):
+        actual = encoder(batch, branches)
+    expected = encoder._encode(*batch.tensors(), branches)
+    torch.testing.assert_close(actual, expected)
+    actual.float().square().mean().backward()
+    assert encoder.numeric.weight.grad is not None
+    encoder.release_fitting()
+    assert encoder._compiled_encode is None
+    assert encoder.compilation_status == "fallback"
+    torch.testing.assert_close(encoder(batch, branches), expected)
+
+
 @torch.no_grad()
 def test_collection_graph_cache_is_per_encoder_bounded_and_owns_replays(monkeypatch):
     cfg = small_config()

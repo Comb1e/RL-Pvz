@@ -240,6 +240,15 @@ branching remain comparisons only, not adopted actors, advantages or privileged 
 - [PyTorch `torch.compile` documentation](https://pytorch.org/docs/stable/torch.compiler.html):
   fixed-shape encoder compilation with a bounded eager fallback. Flat transport,
   accounting and ragged storage remain outside the compiled region.
+- [PyTorch 2.8 compile API/source](https://github.com/pytorch/pytorch/blob/v2.8.0/torch/__init__.py)
+  and [Dynamo cache limits](https://github.com/pytorch/pytorch/blob/v2.8.0/torch/_dynamo/cache_size.py):
+  inspected code-object cache ownership and the per-cache recompilation limits.
+  Species/tile fitting caches must not share their shape allowance; quiescent
+  phase releases renew the owner's cache instead of raising global limits.
+- [Python 3.12 code objects](https://docs.python.org/3.12/reference/datamodel.html#codeobject.replace):
+  inspected `code.replace()` to create an independent code object while preserving
+  encoder bytecode, globals, defaults and bound model parameters. This is an
+  execution-cache boundary, not a model or checkpoint-format change.
 - [PyTorch 2.8 CUDA-graphs backend](https://github.com/pytorch/pytorch/blob/v2.8.0/torch/_dynamo/backends/cudagraphs.py):
   inspected AOT forward/backward compilation and `cudagraphs_inner`'s static
   input copies, side-stream warmup and output cloning. The local backend extends

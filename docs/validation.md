@@ -15,6 +15,10 @@ Focused suites are run once per change; full-suite repetition is avoided.
 
 - The species and tile stages independently reproduce serial values, gradients,
   padding invariance and current-board responsiveness.
+- Compiler controls cover both stages, all four public width buckets, partial
+  microbatches and changed fitting microbatch limits across phase releases. CUDA
+  values/gradients match eager BF16, capture cleanup is owned, excess shapes stay
+  eager and compiler failure remains an explicit fallback without global resets.
 - Runtime parameters/activations are BF16; FP32 masters and Adam moments receive
   updates; checkpoints restore BF16 runtime state from FP32 masters.
 - Poor sampled-tile return does not directly update species values. Detached

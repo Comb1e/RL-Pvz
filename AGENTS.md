@@ -59,7 +59,10 @@
   outputs/activations/gradients. Every online/EMA encoder has a bounded collection
   LRU: 8 entries and 512 MiB VRAM headroom by default. Eviction fences copies and
   releases retirees through existing handoffs; pressure/failure uses exact eager
-  execution. Quiescent phase changes release outgoing captures before new allocation.
+  execution. Fitting compilation owns a separate code object per encoder/phase,
+  admits up to four shapes and pads partial microbatches before trimming readouts.
+  Quiescent phase changes release outgoing captures and renew only the owner's
+  fitting compiler cache; never raise global Dynamo limits or reset unrelated caches.
 - `envs/` owns simulator adapters, action outcomes and reward ledgers;
   `cuda_accounting.py` supplies read-only reward counters. Rejection retains its
   proposal/reason/penalty, executes wait and advances one tick; accepted plant/dig
