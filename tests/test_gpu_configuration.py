@@ -24,6 +24,39 @@ def test_new_shared_run_defaults_and_explicit_parallelism():
         assert cfg["training"]["n_envs"] == count
 
 
+def test_gpu_profiles_are_capability_hints_with_generic_and_custom_fallbacks(tmp_path):
+    from pvz_rl.gpu import apply_gpu_profile
+
+    cfg = load_config()
+    laptop, name = apply_gpu_profile(
+        cfg, "auto", device={"name": "NVIDIA GeForce RTX 4070 Laptop GPU"}
+    )
+    assert name == "rtx4070-laptop"
+    desktop, name = apply_gpu_profile(
+        cfg, "auto", device={"name": "NVIDIA GeForce RTX 4070"}
+    )
+    assert name == "generic-bf16"
+    assert desktop["training"]["performance"]["fit_species_microbatch"] == 32
+    assert laptop["training"]["performance"]["fit_species_microbatch"] == 32
+
+    empty = tmp_path / "minimal.toml"
+    empty.write_text("", encoding="utf-8")
+    _, name = apply_gpu_profile(cfg, "auto", device={"name": "future NVIDIA GPU"}, path=empty)
+    assert name == "generic-bf16"
+
+    custom = tmp_path / "custom.toml"
+    custom.write_text(
+        "[gpu_profiles.my-card]\n"
+        "status = 'user-defined'\n"
+        "performance = {fit_species_microbatch = 24, fit_tile_microbatch = 24, "
+        "fit_token_budget = 4096, fit_batch_groups = 1, collection_vram_headroom_mib = 1024}\n",
+        encoding="utf-8",
+    )
+    result, name = apply_gpu_profile(cfg, "my-card", path=custom)
+    assert name == "my-card"
+    assert result["training"]["performance"]["fit_tile_microbatch"] == 24
+
+
 @pytest.mark.parametrize("artifact", ["autonomous", "demonstration"])
 @pytest.mark.parametrize("mode", ["init_from", "resume"])
 def test_previous_plant_probe_checkpoints_reject_before_cuda(tmp_path, monkeypatch, artifact, mode):

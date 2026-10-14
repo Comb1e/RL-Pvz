@@ -86,6 +86,8 @@ def _read_config(path: str | Path | None) -> dict:
 def _resolve_profile(raw: dict, profile: str) -> dict:
     raw = copy.deepcopy(raw)
     profiles = raw.pop("profiles", {})
+    for catalogue in ("gpu_profiles", "learning_profiles", "tuning"):
+        raw.pop(catalogue, None)
     selected = profiles.get(profile)
     if selected is None:
         if not profiles:
@@ -451,6 +453,9 @@ def validate_config(cfg: dict) -> None:
         "prefetch",
         "fit_batch_groups",
         "fit_encoder_microbatch",
+        "fit_species_microbatch",
+        "fit_tile_microbatch",
+        "fit_entity_buckets",
         "fit_token_budget",
         "collection_graph_cache_entries",
         "collection_vram_headroom_mib",
@@ -469,6 +474,13 @@ def validate_config(cfg: dict) -> None:
     for key in ("fit_encoder_microbatch", "fit_token_budget"):
         if type(performance.get(key)) is not int or performance[key] < 1:
             raise ValueError(f"training.performance.{key} must be a positive integer")
+    for key in ("fit_species_microbatch", "fit_tile_microbatch"):
+        if key in performance and (type(performance[key]) is not int or performance[key] < 1):
+            raise ValueError(f"training.performance.{key} must be a positive integer")
+    if performance.get("fit_entity_buckets", [8, 16, 32, 64, 128, 256]) != [8, 16, 32, 64, 128, 256]:
+        raise ValueError("Fitting buckets must cover 8,16,32,64,128,256 without truncation")
+    if visual.get("viewer", "auto") not in ("auto", "desktop", "web", "off"):
+        raise ValueError("visualization.viewer must be auto, desktop, web or off")
     if train.get("budget_unit") not in ("games", "decisions"):
         raise ValueError("training.budget_unit must be games or decisions")
     if env.get("action_timing") not in ("fixed", "per_tick"):

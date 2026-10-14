@@ -246,6 +246,11 @@ class TwoStageTransformerPolicy(nn.Module):
         values = self.tile_head(encoded).squeeze(-1)
         return result.index_copy(0, requested, values[inverse])
 
+    def fitting_tiles(self, observations, branches, *, rows):
+        """Internal transport plan: one positive branch per distinct, validated row."""
+        encoded = self.tile_encoder(observations[rows], branches)[:, 2:]
+        return self.tile_head(encoded).squeeze(-1)
+
     def selected_values(self, observations, actions, *, species=None, tiles=None):
         observations = collate_observations(observations, self.device)
         actions = torch.as_tensor(actions, device=self.device, dtype=torch.long)

@@ -88,3 +88,30 @@ For cloud GPU stalls during fitting, wrap the same training command with
 [`tools/collect_fit_diagnostics.py`](../tools/collect_fit_diagnostics.py);
 [the diagnostic workflow](math/training-throughput.md#diagnose-cloud-fitting-stalls)
 explains lightweight collection, bounded CPU/CUDA traces and the files to share.
+
+## GPU presets and bounded calibration
+
+`--gpu` accepts a visible index or complete CUDA UUID. The selected device is applied to PyTorch, CuPy, the simulator and telemetry, and must provide native BF16. `--gpu-profile auto` matches an exact device name when a measured/provisional preset exists; otherwise `generic-bf16` is used. Presets only alter execution settings. `--learning-profile` applies a fresh-run learning overlay; resume keeps the checkpoint's learning settings while refreshing execution settings.
+
+Fitting uses masked entity buckets `[8, 16, 32, 64, 128, 256]`, CPU-owned row selections and a fitting-only EMA graph owner. The architecture, entity cap, objective, action semantics and checkpoint weight contract are unchanged. Calibrate a new machine with:
+
+```bash
+python tools/tune_gpu.py --gpu 0 --output artifacts/tune --minutes 60 --stage easy
+```
+
+For an 8 GiB laptop card, use `--no-compile` for the first one-hour rehearsal
+if warming all compiled workload shapes exceeds the available memory. The
+eager path still measures preparation, transfers and complete fitting work;
+remove the flag on a larger card when calibrating graph reuse and compilation.
+
+Trials are isolated and incomplete trials cannot be recommended. Use the resulting raw JSON to decide whether a preset is measured for the tested initialization and stage; cloud presets shipped in TOML remain provisional until calibrated.
+
+After execution calibration, an explicit short learning pilot can compare the
+current, half and double learning rates with paired seeds 101/102 and equal
+two-cohort budgets: append `--learning-study --initial-weights <checkpoint>`.
+The script records incomplete pilots but never promotes a rate from fitting loss;
+win-rate evidence and confirmation cases are required.
+
+## JupyterLab viewer
+
+Use `--viewer web` for a CPU viewer process. It shares panel selection, latest-frame delivery and paged history mailboxes with the desktop viewer; the browser can reconnect without stopping training. Install the optional proxy package in the Jupyter environment, then open the printed relative `./proxy/<port>/` path. `--viewer auto` uses the desktop window where a display exists and the browser viewer on headless Linux; `--no-live-view` remains an alias for `--viewer off`.

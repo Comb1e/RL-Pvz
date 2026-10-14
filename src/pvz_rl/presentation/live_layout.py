@@ -419,7 +419,8 @@ def draw_view(surface, packets, activity, *, renderers, boards, pending=(), coun
 
 
 def viewer_main(
-    frames, commands, history_responses, errors, closed, ready, activity, size, count, settings=()
+    frames, commands, history_responses, errors, closed, ready, activity, size, count, settings=(),
+    port_value=None,
 ):
     import pygame
 

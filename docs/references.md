@@ -330,3 +330,10 @@ throughput measurements.
 - The accepted-plant counterfactual rollout design was removed rather than
   retained as a zero-count compatibility path; earlier historical measurements
   remain evidence only and are not current performance claims.
+
+
+## Execution calibration and web delivery — 2026-10-14
+
+- [PyTorch 2.8 CUDA Graph notes](https://raw.githubusercontent.com/pytorch/pytorch/v2.8.0/docs/source/notes/cuda.rst): static shapes, owned pointers and reduced CPU launch overhead guide the bounded fitting graph owners.
+- [Jupyter Server Proxy](https://github.com/jupyterhub/jupyter-server-proxy): authenticated loopback proxying and prefix-safe relative URLs guide the optional browser viewer.
+- Agarwal et al., [Deep Reinforcement Learning at the Edge of the Statistical Precipice](https://arxiv.org/abs/2108.13264), with the [rliable project](https://github.com/google-research/rliable): paired seeds, uncertainty and equal-game comparisons guide the bounded learning study; no new evaluation dependency is added.

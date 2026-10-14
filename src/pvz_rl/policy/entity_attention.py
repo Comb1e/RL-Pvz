@@ -93,6 +93,8 @@ class SpatialTransformer(nn.Module):
         self.microbatch = spec["encoder_microbatch"]
         self.token_budget = spec["encoder_token_budget"]
         self.activation_checkpointing = False
+        self.fitting = False
+        self._fitting_inference_cache = CollectionGraphCache(6, 1024)
         self._compiled_encode = None
         self._compiled_shapes = {}
         self._fitting_backend = None
@@ -217,6 +219,8 @@ class SpatialTransformer(nn.Module):
         if self._fitting_backend is not None:
             self._fitting_backend.release()
         self._compiled_shapes.clear()
+        self._fitting_inference_cache.release()
+        self.fitting = False
         if self._compiled_encode is not None:
             self._compiled_encode = self._fitting_backend.compile(self._encode)
             self.compilation_status = "requested"
@@ -244,8 +248,9 @@ class SpatialTransformer(nn.Module):
             if not args[0].is_cuda:
                 return self._encode(*args)
             try:
-                value = self._collection_cache(self._encode, args)
-                if self._collection_cache.captures:
+                cache = self._fitting_inference_cache if self.fitting else self._collection_cache
+                value = cache(self._encode, args)
+                if cache.captures:
                     self.compilation_status = "compiled"
                 return value
             except Exception as exc:
@@ -255,9 +260,10 @@ class SpatialTransformer(nn.Module):
             return self._encode(*args)
         shape = (int(args[0].shape[0]), int(args[0].shape[1]))
         # Dynamic ragged shapes would trigger an unbounded stream of compiler
-        # graphs.  Compile at most four observed fixed shapes per phase and use
+        # graphs.  Compile at most six masked entity buckets per phase and use
         # eager execution for additional buckets.
-        if shape not in self._compiled_shapes and len(self._compiled_shapes) >= 4:
+        limit = 6 if self.fitting else 4
+        if shape not in self._compiled_shapes and len(self._compiled_shapes) >= limit:
             return self._encode(*args)
         try:
             value = self._compiled_encode(*args)
@@ -346,7 +352,7 @@ class SpatialTransformer(nn.Module):
             args = (*part.tensors(), branches[start : start + size])
             logical = len(part)
             compile_args = args
-            if self._compiled_encode is not None and torch.is_grad_enabled() and logical < size:
+            if self._compiled_encode is not None and (torch.is_grad_enabled() or self.fitting) and logical < size:
                 padding = size - logical
                 compile_args = tuple(
                     torch.cat((value, value.new_zeros((padding, *value.shape[1:]))), dim=0)

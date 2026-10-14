@@ -76,6 +76,15 @@ Output-only settings are `visualization.live_enabled`, `live_fps`,
 `live_window_size` and `live_history_ram_mib`. Zero history RAM uses disk storage.
 `train --live-view` and `--no-live-view` override only window visibility.
 
+## Browser mode in JupyterLab
+
+Use `--viewer web` (or `--viewer auto` on headless Linux). Install the optional
+dependency in the Jupyter environment with `pip install -e .[web]`, then open
+the relative `./proxy/<port>/` URL printed when training starts. The server is a
+separate CPU process and uses the same bounded latest-frame, selection and
+history mailboxes as the desktop viewer. Jupyter Server Proxy supplies the
+authenticated prefix; reconnecting or closing a browser never pauses training.
+
 Selecting a row preserves the page and its absolute offsets. Scrolling may
 replace the visible page but keeps the selected record and its scores until
 Follow latest or a destination board arrives. Responses must match panel,
