@@ -74,10 +74,10 @@ def build_model(cfg, condition, env, seed, log_dir=None):
     if not isinstance(env, CudaVecEnv):
         raise ValueError("Training requires the CUDA tensor environment")
     t = cfg["training"]
-    from pvz_rl.learning.recurrent_q import CudaRecurrentQ
-    from pvz_rl.policy.recurrent_policy import RecurrentQPolicy
+    from pvz_rl.learning.sequential_training import CudaSequentialQ
+    from pvz_rl.policy.two_stage_policy import TwoStageQPolicy
 
-    algorithm, policy_class = CudaRecurrentQ, RecurrentQPolicy
+    algorithm, policy_class = CudaSequentialQ, TwoStageQPolicy
     policy_kwargs = {"features_extractor_kwargs": {"layout_cfg": cfg}}
     model = algorithm(
         policy_class,
@@ -503,13 +503,6 @@ class ResearchCallback(BaseCallback):
             + seconds_text(row["last_optimization_seconds"]),
             f"optimizer step {step:,}",
         ]
-        execution = row.get("collection_execution", {})
-        if phase == "collect" and "active_auxiliary_lanes" in execution:
-            parts.insert(
-                2,
-                f"aux {execution['active_auxiliary_lanes']}/{execution['auxiliary_capacity']} "
-                f"queued {execution['queued_probes']} blocked {execution['capacity_blocked_slots']}",
-            )
         hardware = row["hardware"]
         usage = [
             f"{name} {hardware[key]:.0f}%"
@@ -561,8 +554,13 @@ class ResearchCallback(BaseCallback):
         keys = (
             "q_loss",
             "selected_action_error",
+            "species_consistency_loss",
+            "species_consistency_mae",
+            "species_consistency_saturation_fraction",
+            "species_selection_evaluation_gap",
             "placement_gap",
             "q_grad_norm",
+            "fit_batch_groups",
             "q_optimizer_steps",
             "species_exploration_coins",
             "tile_exploration_coins",
@@ -573,7 +571,7 @@ class ResearchCallback(BaseCallback):
         keys += tuple(
             f"{metric}_{action}"
             for action in ("wait", "plant", "dig")
-            for metric in ("action_count", "value_target_error", "tile_target_error")
+            for metric in ("action_count", "value_target_error", "placement_gap")
         )
         metrics = {}
         for key in keys:
@@ -1050,7 +1048,7 @@ def initial_weights(checkpoint, cfg):
     from pvz_rl.learning.checkpoints import compatible_config, inspect_checkpoint
 
     require_supported_policy(cfg)
-    from pvz_rl.policy.transformer_lstm import TransformerLSTMPolicy
+    from pvz_rl.policy.two_stage_transformer import TwoStageTransformerPolicy
 
     checkpoint = Path(checkpoint).resolve()
     if not checkpoint.suffix:
@@ -1079,7 +1077,7 @@ def initial_weights(checkpoint, cfg):
     ):
         raise ValueError("Checkpoint contains invalid or non-finite model weights")
     with torch.random.fork_rng(devices=[]):
-        model = TransformerLSTMPolicy(cfg)
+        model = TwoStageTransformerPolicy(cfg)
     model.load_state_dict(weights, strict=True)
     weights = {key: value.detach().clone() for key, value in model.state_dict().items()}
     return weights, {
@@ -1102,7 +1100,7 @@ def load_policy(checkpoint, device="cpu", *, for_resume=False):
     from pvz_rl.envs.actions import ActionSchema
     from pvz_rl.envs.encoding import ObservationEncoder
     from pvz_rl.learning.checkpoints import inspect_checkpoint, model_class
-    from pvz_rl.policy.recurrent_policy import RecurrentQPolicy
+    from pvz_rl.policy.two_stage_policy import TwoStageQPolicy
 
     data = inspect_checkpoint(checkpoint)
     cfg = data["config"]
@@ -1111,7 +1109,7 @@ def load_policy(checkpoint, device="cpu", *, for_resume=False):
     torch.set_num_threads(cfg["training"]["torch_threads"])
     if data["initialization_type"] == "demonstration":
         model = model_class(cfg)(
-            RecurrentQPolicy,
+            TwoStageQPolicy,
             device=device,
             _init_setup_model=False,
             policy_kwargs={"features_extractor_kwargs": {"layout_cfg": cfg}},
@@ -1243,7 +1241,9 @@ def train(
             "learning_rate": cfg["training"]["learning_rate"],
             "adam_epsilon": 1e-8,
             "batch_size": cfg["training"]["batch_size"],
-            "shared_encoder": True,
+            "independent_encoders": True,
+            "runtime_dtype": "bf16",
+            "master_dtype": "fp32",
         },
         collection_method=cfg["training"]["method"],
     )

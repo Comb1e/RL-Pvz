@@ -1,7 +1,5 @@
 """Shared legality, exploration and regression algebra for sequential Q control."""
 
-from dataclasses import dataclass
-
 import torch
 from pvz_game import Rules
 
@@ -9,28 +7,8 @@ from pvz_rl.envs.actions import ActionSchema as A
 
 UNITS_PER_TILE = Rules().game["units_per_tile"]
 
-POLICY_SIGNATURE = "transformer_lstm_q_v4"
-ACTION_DISTRIBUTION = "joint_q_unmasked_penalty_v1"
-
-
-@dataclass
-class ActionQValues:
-    wait: torch.Tensor
-    tiles: torch.Tensor
-    branches: torch.Tensor
-
-    @classmethod
-    def derive(cls, wait, tiles, masks):
-        candidates = A.tile_masks(masks).clone()
-        candidates[..., 0] |= ~candidates.any(-1)
-        maxima = tiles.masked_fill(~candidates, -torch.inf).max(-1).values
-        return cls(wait.reshape(-1), tiles, torch.cat((wait.reshape(-1, 1), maxima), -1))
-
-    def selected(self, actions):
-        branches, locations = action_parts(actions)
-        rows = torch.arange(len(actions), device=actions.device)
-        tile = self.tiles[rows, (branches - 1).clamp_min(0), locations]
-        return torch.where(branches == 0, self.wait, tile)
+POLICY_SIGNATURE = "two_stage_transformer_q_v1"
+ACTION_DISTRIBUTION = "sequential_q_unmasked_penalty_v1"
 
 
 def observation_tile_masks(obs):
@@ -115,24 +93,31 @@ def balanced_q_loss(selected, targets, actions, counts, *, accepted, accepted_sh
     return loss, errors
 
 
-def select_q_tiles(values, action_masks, branches, epsilon):
+def tile_candidates(action_masks, branches):
     rows = torch.arange(len(branches), device=branches.device)
-    tile_q = values.tiles[rows, (branches - 1).clamp_min(0)]
     tile_legal = A.tile_masks(action_masks)[rows, (branches - 1).clamp_min(0)]
     first_tile = torch.zeros_like(tile_legal)
     first_tile[:, 0] = True
-    candidates = torch.where(tile_legal.any(-1, keepdim=True), tile_legal, first_tile)
+    return torch.where(tile_legal.any(-1, keepdim=True), tile_legal, first_tile)
+
+
+def candidate_maxima(tile_q, action_masks, branches):
+    return tile_q.masked_fill(~tile_candidates(action_masks, branches), -torch.inf).max(-1).values
+
+
+def select_q_tiles(tile_q, action_masks, branches, epsilon):
+    candidates = tile_candidates(action_masks, branches)
     preferred = greedy_choice(tile_q, candidates)
     selected, fired = explore(preferred, candidates, epsilon)
     return selected, preferred, fired, tile_q
 
 
 def select_q_actions(
-    values,
+    species_q,
+    tile_q,
     action_masks,
     *,
     deterministic=False,
-    exploration_epsilon=0.0,
     tile_exploration_epsilon=0.0,
     active=None,
 ):
@@ -144,47 +129,45 @@ def select_q_actions(
     simulator must receive the highest-Q proposal even when it later rejects
     it for affordability or cooldown.
 
-    Selection never waits for the device: tile values are evaluated for every
-    row and waits discard theirs. ``details["valid"]`` is a device flag (finite
-    values and a legal choice in every row) that callers check at their next
-    host boundary.
+    Tile values are conditional on the independently selected branch.
+    Wait/inactive rows carry zero placeholders, retaining canonical RNG draws.
     """
     # Every active environment compares all ten first-level outputs.  The
     # transport mask is used only for the selected tile; affordability and
     # cooldown are simulator outcomes.  Empty rows stay illegal and invalidate
     # the decision unless the caller marks them inactive for batched collection.
     legal = selection_masks(action_masks)
-    if values.branches.shape != legal.shape:
+    if species_q.shape != legal.shape or tile_q.shape != (len(species_q), A.tiles):
         raise ValueError("Q values and boolean legal masks must have matching shapes")
     if active is not None:
         wait_only = torch.zeros_like(legal)
         wait_only[:, 0] = True
         legal = torch.where(active[:, None], legal, wait_only)
-    branches = greedy_choice(values.branches, legal)
+    branches = greedy_choice(species_q, legal)
     nonwait = branches > 0
     tile_epsilon = 0.0 if deterministic else tile_exploration_epsilon
     selected, preferred, fired, tile_q = select_q_tiles(
-        values, action_masks, branches, tile_epsilon
+        tile_q, action_masks, branches, tile_epsilon
     )
     tiles = torch.where(nonwait, selected, 0)
     coins = torch.stack((torch.zeros_like(nonwait), fired & nonwait), -1)
     actions = assemble(branches, tiles)
+    branch_value = species_q.gather(1, branches[:, None]).flatten()
+    tile_value = torch.where(nonwait, tile_q.gather(1, tiles[:, None]).flatten(), 0)
+    selected_value = torch.where(nonwait, tile_value, species_q[:, 0])
     details = dict(
         greedy_actions=assemble(branches, torch.where(nonwait, preferred, 0)),
         coins=coins,
-        branch_q=values.branches,
-        action_q=values,
-        selected_value=values.selected(actions),
-        placement_gap=values.branches.gather(1, branches[:, None]).flatten()
-        - values.selected(actions),
-        valid=torch.isfinite(values.branches).all()
+        branch_q=species_q,
+        tile_q=tile_q,
+        branch_value=branch_value,
+        tile_value=tile_value,
+        selected_value=selected_value,
+        placement_gap=torch.where(
+            nonwait, candidate_maxima(tile_q, action_masks, branches) - tile_value, 0
+        ),
+        valid=torch.isfinite(species_q).all()
         & legal.any(-1).all()
         & (torch.isfinite(tile_q) | ~nonwait[:, None]).all(),
     )
-    selected_tile_values = torch.where(nonwait, tile_q.gather(1, tiles[:, None]).flatten(), 0)
-    return (
-        actions,
-        values.branches.gather(1, branches[:, None]).flatten(),
-        selected_tile_values,
-        details,
-    )
+    return actions, branch_value, tile_value, details

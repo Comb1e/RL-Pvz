@@ -173,62 +173,6 @@ extern "C" __global__ void policy_masks(const I *headers, const I *plants,
   masks[index] = available;
 }
 
-// Copy only occupied simulator slots, never the reserved projectile capacity.
-extern "C" __global__ void copy_probe_state(
-    const Header *sh, const Plant *sp, const Zombie *sz, const Shot *sq,
-    const Mower *sm, const I *sc, const I *ss, const I *sl, const double *sa,
-    Header *dh, Plant *dp, Zombie *dz, Shot *dq, Mower *dm, I *dc, I *ds, I *dl,
-    double *da, const I *source_ids, const I *target_ids, const bool *active) {
-  I row = blockIdx.x, t = threadIdx.x;
-  I source = source_ids[row], i = target_ids[row];
-  if (!active[row] || !sh[source].enabled) return;
-  Header h = sh[source];
-  if (t == 0) { dh[i] = h; da[i] = sa[source]; }
-  for (I j=t;j<h.np;j+=blockDim.x) dp[i*45+j]=sp[source*45+j];
-  for (I j=t;j<h.nz;j+=blockDim.x) dz[i*ZCAP+j]=sz[source*ZCAP+j];
-  for (I j=t;j<h.nq;j+=blockDim.x) dq[i*QCAP+j]=sq[source*QCAP+j];
-  for (I j=t;j<5;j+=blockDim.x) dm[i*5+j]=sm[source*5+j];
-  for (I j=t;j<8;j+=blockDim.x) dc[i*8+j]=sc[source*8+j];
-  for (I j=t;j<ZCAP*5;j+=blockDim.x) ds[i*ZCAP*5+j]=ss[source*ZCAP*5+j];
-  for (I j=t;j<ZCAP*2;j+=blockDim.x) dl[i*ZCAP*2+j]=sl[source*ZCAP*2+j];
-}
-
-extern "C" __global__ void dedup_probes(const int *entities, const I *summary,
-    const float *globals, const I *history,
-    const bool *valid, I *source, I n, I slots,
-    const float *hidden, const float *cell, I memory_width) {
-  I game = blockIdx.x;
-  if (game >= n) return;
-  __shared__ int equal;
-  for (I slot = 0; slot < slots; slot++) {
-    I row = slot * n + game;
-    I chosen = valid[row] ? slot : -1;
-    for (I prior = 0; prior < slot && chosen == slot; prior++) {
-      I other = prior * n + game;
-      if (!valid[other] || summary[row * 4] != summary[other * 4])
-        continue;
-      if (!threadIdx.x) equal = 1;
-      __syncthreads();
-      const int *a = entities + row * ENTITY_LIMIT * ENTITY_WIDTH;
-      const int *b = entities + other * ENTITY_LIMIT * ENTITY_WIDTH;
-      for (I k = threadIdx.x; k < summary[row * 4] * ENTITY_WIDTH; k += blockDim.x)
-        if (a[k] != b[k]) atomicExch(&equal, 0);
-      for (I k = threadIdx.x; k < HISTORY_WIDTH; k += blockDim.x)
-        if (history[row * HISTORY_WIDTH + k] != history[other * HISTORY_WIDTH + k]) atomicExch(&equal, 0);
-      for (I k = threadIdx.x; k < GLOBAL_WIDTH; k += blockDim.x)
-        if (globals[row * GLOBAL_WIDTH + k] != globals[other * GLOBAL_WIDTH + k]) atomicExch(&equal, 0);
-      for (I k = threadIdx.x; k < memory_width; k += blockDim.x)
-        if (hidden[row * memory_width + k] != hidden[other * memory_width + k]
-            || cell[row * memory_width + k] != cell[other * memory_width + k]) atomicExch(&equal, 0);
-      __syncthreads();
-      if (equal) chosen = source[other];
-      __syncthreads();
-    }
-    if (!threadIdx.x) source[row] = chosen;
-    __syncthreads();
-  }
-}
-
 // Copy each selected row's kept canonical records to its exclusive-scan offset.
 extern "C" __global__ void pack_entities(const int *entities, const I *summary,
     const I *offsets, const bool *selected, int *packed, I rows) {
@@ -299,8 +243,8 @@ reward_metrics(const I *headers, const I *old_headers, const I *old_cd,
   v[F_mower_expenditure] = R_mower_value * f[5];
   v[F_net_value] = resources + v[F_combat_value] - v[F_mower_expenditure];
   double scale = R_progress_weight / R_value_scale;
-  v[F_early_sun] = a[10];
-  v[F_early_sun_bonus] = scale * R_early_sun_extra_multiplier * a[10];
+  v[F_early_sun] = a[3];
+  v[F_early_sun_bonus] = scale * R_early_sun_extra_multiplier * a[3];
   v[F_development] = scale * v[F_net_value] + v[F_early_sun_bonus];
   v[F_mower_activation_penalty] = -scale * v[F_mower_expenditure];
   v[F_invalid_plant_penalty] =

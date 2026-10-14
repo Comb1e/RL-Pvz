@@ -1,0 +1,2503 @@
+{
+  "cases": [
+    "planting"
+  ],
+  "cold_scope": "fresh environment and policy; process and disk kernel caches may already be warm",
+  "comparison": "bounded background pool versus one auxiliary lane; actual window and drain measured separately",
+  "config": {
+    "conditions": {
+      "masked": {
+        "curriculum": true,
+        "hybrid": false,
+        "masked": true,
+        "shaped": true
+      }
+    },
+    "curriculum": {
+      "boundaries": [
+        0.1,
+        0.4
+      ],
+      "consecutive_passes": 1,
+      "easy_weights": [
+        1.0,
+        0.0,
+        0.0
+      ],
+      "final_weights": [
+        0.2,
+        0.4,
+        0.4
+      ],
+      "intermediate_weights": [
+        0.5,
+        0.5,
+        0.0
+      ],
+      "minimum_stage_games": 100,
+      "minimum_stage_steps": 16384,
+      "mode": "teaching",
+      "probe_cases": 100,
+      "probe_interval": 16384,
+      "probe_interval_games": 2000,
+      "residency": "episode_start_stage",
+      "stages": {
+        "easy": {
+          "requirements": {
+            "easy": 100
+          },
+          "tasks": [
+            "easy"
+          ],
+          "weights": [
+            1.0
+          ]
+        },
+        "shared": {
+          "requirements": {
+            "easy": 100,
+            "hard": 100,
+            "standard": 100
+          },
+          "tasks": [
+            "easy",
+            "standard",
+            "hard"
+          ],
+          "weights": [
+            0.2,
+            0.4,
+            0.4
+          ]
+        },
+        "standard": {
+          "requirements": {
+            "easy": 100,
+            "standard": 100
+          },
+          "tasks": [
+            "easy",
+            "standard"
+          ],
+          "weights": [
+            0.5,
+            0.5
+          ]
+        }
+      }
+    },
+    "diagnostics": {
+      "early_dig_seconds": 5
+    },
+    "encoding": {
+      "count_scale": 75,
+      "max_entities": 256,
+      "version": "entity_v1",
+      "wave_scale": 15
+    },
+    "engine_commit": "1424b4d802e783a36772091c49d96aa7c6036d7a",
+    "engine_package_version": "1.7.0",
+    "engine_version": "1.4.0",
+    "environment": {
+      "action_timing": "per_tick",
+      "cols": 9,
+      "cutoff_seconds": 1200,
+      "decision_ticks": 1,
+      "mower_states": [
+        "ready",
+        "moving",
+        "spent"
+      ],
+      "plant_states": [
+        "ready",
+        "arming",
+        "armed",
+        "fusing",
+        "digesting",
+        "exploding",
+        "detonating",
+        "rising",
+        "biting",
+        "biting_got_one",
+        "recovering"
+      ],
+      "plants": [
+        "sunflower",
+        "peashooter",
+        "wall_nut",
+        "cherry_bomb",
+        "potato_mine",
+        "snow_pea",
+        "chomper",
+        "repeater"
+      ],
+      "rows": 5,
+      "zombie_states": [
+        "walking",
+        "carrying_pole",
+        "vaulting",
+        "biting",
+        "dead"
+      ],
+      "zombies": [
+        "basic",
+        "flag",
+        "conehead",
+        "buckethead",
+        "pole_vaulting"
+      ]
+    },
+    "evaluation": {
+      "bootstrap_replicates": 2000,
+      "bootstrap_seed": 1739,
+      "levels": [
+        "easy",
+        "standard",
+        "hard"
+      ],
+      "ood_families": [
+        "redistributed",
+        "faster",
+        "concentrated"
+      ],
+      "ood_levels": [
+        "standard",
+        "hard"
+      ],
+      "replays_per_outcome": 10,
+      "targets": [
+        0.95,
+        0.9,
+        0.75
+      ]
+    },
+    "logging": {
+      "hardware_sample_seconds": 1.0,
+      "progress_seconds": 15,
+      "rolling_window": 100,
+      "terminal_mode": "compact",
+      "terminal_progress_seconds": 60
+    },
+    "policy": {
+      "action_distribution": "sequential_q_unmasked_penalty_v1",
+      "attention_query_chunk": 64,
+      "encoder_microbatch": 128,
+      "encoder_token_budget": 65536,
+      "kind": "two_stage_transformer_q_v1",
+      "species_feedforward": 512,
+      "species_heads": 8,
+      "species_layers": 4,
+      "species_width": 128,
+      "tile_feedforward": 768,
+      "tile_heads": 12,
+      "tile_layers": 6,
+      "tile_width": 192
+    },
+    "profile": "complete-game",
+    "reward": {
+      "basic_zombie_value": 50.0,
+      "early_sun_extra_multiplier": 2.0,
+      "early_sun_spawn_fraction": [
+        1,
+        3
+      ],
+      "empty_dig_penalty": 3e-06,
+      "home_entry_penalties": [
+        0.005,
+        0.015
+      ],
+      "invalid_plant_penalty": 1e-05,
+      "loss_penalty": 1.0,
+      "mower_value": 200.0,
+      "progress_weight": 0.01,
+      "value_scale": 300.0,
+      "version": "net_value_v1",
+      "win_reward": 1.0,
+      "win_time_weight": 0.1
+    },
+    "runtime": {
+      "cache_legal_actions": true,
+      "refill_evaluation": true
+    },
+    "schema_version": 1,
+    "simulation": {
+      "backend": "cuda"
+    },
+    "splits": {
+      "curriculum": [
+        100050,
+        100149
+      ],
+      "ood": [
+        300000,
+        300099
+      ],
+      "test": [
+        200000,
+        200299
+      ],
+      "train": [
+        1000,
+        99999
+      ],
+      "validation": [
+        100000,
+        100049
+      ]
+    },
+    "training": {
+      "batch_size": 1024,
+      "budget_unit": "games",
+      "demo": {
+        "learner_seed": 101,
+        "learning_rate": 0.0003,
+        "passes": 20,
+        "time_budget_minutes": 30
+      },
+      "device": "cuda",
+      "discount_clock": "simulation_ticks",
+      "eval_interval": 250000,
+      "eval_interval_games": 2000,
+      "exploration": {
+        "decay_games": 10000,
+        "epsilon_floor": 0.01,
+        "epsilon_start": 0.5,
+        "objective": "committed_plant_tile_epsilon_v1",
+        "plant_decay_games": 10000,
+        "plant_epsilon_floor": 0.01,
+        "plant_epsilon_start": 0.1
+      },
+      "finalization_minutes": 15,
+      "gamma": 1.0,
+      "learner_seeds": [
+        101,
+        102
+      ],
+      "learning_rate": 0.0003,
+      "max_grad_norm": 5,
+      "max_minutes": 120,
+      "method": "complete_return_sequential_tile_probe_v2",
+      "n_envs": 128,
+      "n_epochs": 4,
+      "objective": {
+        "accepted_outcome_share": 0.5,
+        "demo_rank_loss_weight": 0.1,
+        "demo_rank_margin": 0.05,
+        "dense_multiplier": 10.0,
+        "ema_decay": 0.95,
+        "probe_huber_delta": 1.0,
+        "probe_loss_weight": 0.25,
+        "probe_rollout_control_interval_decisions": 64,
+        "probe_rollout_max_decisions": 4096,
+        "probe_rollout_seconds": 0.1,
+        "probe_trigger": "accepted_plant",
+        "protocol": "complete_return_sequential_tile_probe_v2",
+        "species_consistency_huber_delta": 1.0,
+        "species_consistency_weight": 1.0,
+        "tile_probes": 4
+      },
+      "performance": {
+        "collection_graph_cache_entries": 8,
+        "collection_vram_headroom_mib": 512,
+        "compile_kernels": false,
+        "fit_batch_groups": 4,
+        "fit_precision": "features_bf16",
+        "prefetch": true,
+        "probe_active_capacity": 256,
+        "probe_pending_capacity": 128,
+        "probe_steps_per_round": 1,
+        "telemetry": true
+      },
+      "storage": {
+        "block_rows": 32768,
+        "ram_gib": 6
+      },
+      "torch_threads": 1,
+      "total_games": 10000,
+      "total_steps": 3000000,
+      "until_stage_complete": false,
+      "validation_schedule": "stage_success"
+    },
+    "visualization": {
+      "crf": 23,
+      "demos": false,
+      "enabled": false,
+      "ffmpeg": "",
+      "final_hold_seconds": 2,
+      "live_enabled": false,
+      "live_fps": 5,
+      "live_history_ram_mib": 16,
+      "live_window_size": [
+        1600,
+        1050
+      ],
+      "video_fps": 25,
+      "video_size": [
+        1280,
+        820
+      ],
+      "videos": false
+    }
+  },
+  "cycle_seconds": 300.0,
+  "decisions_per_repeat": 8,
+  "device": "NVIDIA GeForce RTX 4070 Laptop GPU",
+  "environments": 128,
+  "fit_cases": [
+    "planting"
+  ],
+  "fit_cycle": true,
+  "fit_live_games": [
+    4
+  ],
+  "formal_training": false,
+  "headless": true,
+  "live_games": [
+    4
+  ],
+  "measured_at_utc": "2026-10-13T10:53:12+00:00",
+  "measurements": [
+    {
+      "active_game_seconds": 3.0045443999997588,
+      "active_games": 4,
+      "active_slot_ids": [
+        17,
+        54,
+        91,
+        0
+      ],
+      "activity": "collect",
+      "capture_setup_seconds": {
+        "ema": 0.0,
+        "online": 0.0
+      },
+      "case": "planting",
+      "collection_execution": {
+        "active_auxiliary_lanes": 1,
+        "active_games": 4,
+        "actual_ema_rows": {
+          "logical": 0,
+          "padded": 0
+        },
+        "auxiliary_capacity": 1,
+        "capacity_blocked_slots": 0,
+        "current_logical_rows": 4,
+        "current_padded_rows": 4,
+        "entity_widths": {
+          "32": 32
+        },
+        "graph_cache": {
+          "ema": {
+            "species": {
+              "cache_entries": 8,
+              "capacity_fallbacks": 0,
+              "capture_failures": 0,
+              "capture_setup_seconds": 0.0,
+              "captures": 0,
+              "entries": 0,
+              "evictions": 0,
+              "headroom_fallbacks": 0,
+              "hits": 0,
+              "last_free_mib": null,
+              "misses": 0,
+              "oom_fallbacks": 0,
+              "releases": 0,
+              "resident_entries": 0,
+              "retired_entries": 0,
+              "retired_releases": 0,
+              "vram_headroom_mib": 512
+            },
+            "tile": {
+              "cache_entries": 8,
+              "capacity_fallbacks": 0,
+              "capture_failures": 0,
+              "capture_setup_seconds": 0.0,
+              "captures": 0,
+              "entries": 0,
+              "evictions": 0,
+              "headroom_fallbacks": 0,
+              "hits": 0,
+              "last_free_mib": null,
+              "misses": 0,
+              "oom_fallbacks": 0,
+              "releases": 0,
+              "resident_entries": 0,
+              "retired_entries": 0,
+              "retired_releases": 0,
+              "vram_headroom_mib": 512
+            }
+          },
+          "online": {
+            "species": {
+              "cache_entries": 8,
+              "capacity_fallbacks": 0,
+              "capture_failures": 0,
+              "capture_setup_seconds": 0.0,
+              "captures": 0,
+              "entries": 0,
+              "evictions": 0,
+              "headroom_fallbacks": 0,
+              "hits": 0,
+              "last_free_mib": null,
+              "misses": 0,
+              "oom_fallbacks": 0,
+              "releases": 0,
+              "resident_entries": 0,
+              "retired_entries": 0,
+              "retired_releases": 0,
+              "vram_headroom_mib": 512
+            },
+            "tile": {
+              "cache_entries": 8,
+              "capacity_fallbacks": 0,
+              "capture_failures": 0,
+              "capture_setup_seconds": 0.0,
+              "captures": 0,
+              "entries": 0,
+              "evictions": 0,
+              "headroom_fallbacks": 0,
+              "hits": 0,
+              "last_free_mib": null,
+              "misses": 0,
+              "oom_fallbacks": 0,
+              "releases": 0,
+              "resident_entries": 0,
+              "retired_entries": 0,
+              "retired_releases": 0,
+              "vram_headroom_mib": 512
+            }
+          }
+        },
+        "logical_rows": 32,
+        "oldest_pending_job_seconds": 0.19091260000004695,
+        "oldest_queue_seconds": 0.19091260000004695,
+        "online_rows": {
+          "logical": 4,
+          "padded": 4
+        },
+        "padded_rows": 32,
+        "pending_probe_jobs": 4,
+        "phase_memory": [
+          {
+            "boundary": "before_collection_release",
+            "cupy_reserved_mib": 252.93212890625,
+            "free_mib": 6780.0,
+            "torch_allocated_mib": 13.49755859375,
+            "torch_reserved_mib": 14.0,
+            "total_mib": 8187.5
+          },
+          {
+            "boundary": "after_collection_release",
+            "cupy_reserved_mib": 252.927734375,
+            "free_mib": 6780.0,
+            "torch_allocated_mib": 13.49755859375,
+            "torch_reserved_mib": 14.0,
+            "total_mib": 8187.5
+          }
+        ],
+        "probe_inference": {
+          "accepted_plant_triggers": 0,
+          "bucket_widths": [],
+          "logical_rows": 0,
+          "padded_rows": 0,
+          "rollout_enqueue_seconds": 0.009796700000038072,
+          "rollout_logical_rows": 1,
+          "rollout_padded_rows": 1,
+          "rollout_transitions": 1,
+          "stop_reasons": {},
+          "tile_probes": 0,
+          "unique_rows": 0,
+          "workspace_bytes": 264852159
+        },
+        "probe_inference_totals": {
+          "logical_rows": 0,
+          "padded_rows": 0,
+          "unique_rows": 0
+        },
+        "probe_rollout_work": {
+          "accepted_plant_triggers": 4,
+          "rollout_enqueue_seconds": 0.07951300000001993,
+          "rollout_logical_rows": 6,
+          "rollout_padded_rows": 6,
+          "rollout_transitions": 7,
+          "stop_reasons": {},
+          "tile_probes": 16
+        },
+        "queued_probes": 15,
+        "scope": "current_cohort",
+        "source_capacity": 128,
+        "timings": {
+          "completed_phase_seconds": {
+            "encoding": 0.08954454420506948,
+            "host_synchronization": 0.0007186000009369309,
+            "online_inference": 0.5495181570053099,
+            "presentation": 0.00775150000015401,
+            "probe_bootstrap_inference": 0.05257740759849548,
+            "probe_inference": 1.409992611289025,
+            "probe_simulation": 0.023596288038417686,
+            "simulation": 0.01749708794802432,
+            "storage": 0.0013346000005185488,
+            "transfer": 0.0865736960303038
+          },
+          "pending_device_spans": 0,
+          "scope": "current_cohort"
+        },
+        "workspace_bytes": 264852159
+      },
+      "cupy_reserved_mib": 506.41015625,
+      "decisions_per_game_per_second": 10.65053323891721,
+      "drain_seconds": 2.4662074000000302,
+      "environments": 128,
+      "host_rss_mib": 1411.94921875,
+      "live_games": 4,
+      "mean_active_games": 4.0,
+      "phase": "planting",
+      "phases_seconds": {
+        "encoding": 0.08954454420506948,
+        "host_synchronization": 0.0007186000009369309,
+        "online_inference": 0.5495181570053099,
+        "presentation": 0.00775150000015401,
+        "probe_bootstrap_inference": 0.05257740759849548,
+        "probe_inference": 1.409992611289025,
+        "probe_simulation": 0.023596288038417686,
+        "simulation": 0.01749708794802432,
+        "storage": 0.0013346000005185488,
+        "transfer": 0.0865736960303038
+      },
+      "phases_seconds_scope": "actual window plus separately measured drain",
+      "pinned_transfer_mib": 0.23189258575439453,
+      "probe_capacities": 1,
+      "process_cpu_percent": 395.21248087336596,
+      "repeat": null,
+      "sample_type": "cold",
+      "seconds": 0.7511782000000267,
+      "setup_seconds": 4.170521299999905,
+      "terminal_records": [],
+      "torch_peak_allocated_mib": 40.77978515625,
+      "trajectory_bytes": 962768,
+      "transitions": 32,
+      "transitions_per_second": 42.59974530677123,
+      "utilization": {
+        "gpu_percent": 23.333333333333332,
+        "process_cpu_percent": 93.33333333333333,
+        "system_cpu_percent": 13.933333333333332
+      }
+    },
+    {
+      "active_game_seconds": 0.7539464000001317,
+      "active_games": 4,
+      "active_slot_ids": [
+        17,
+        54,
+        91,
+        0
+      ],
+      "activity": "collect",
+      "capture_setup_seconds": {
+        "ema": 0.0,
+        "online": 0.0
+      },
+      "case": "planting",
+      "collection_execution": {
+        "active_auxiliary_lanes": 1,
+        "active_games": 4,
+        "actual_ema_rows": {
+          "logical": 0,
+          "padded": 0
+        },
+        "auxiliary_capacity": 1,
+        "capacity_blocked_slots": 0,
+        "current_logical_rows": 4,
+        "current_padded_rows": 4,
+        "entity_widths": {
+          "32": 32
+        },
+        "graph_cache": {
+          "ema": {
+            "species": {
+              "cache_entries": 8,
+              "capacity_fallbacks": 0,
+              "capture_failures": 0,
+              "capture_setup_seconds": 0.0,
+              "captures": 0,
+              "entries": 0,
+              "evictions": 0,
+              "headroom_fallbacks": 0,
+              "hits": 0,
+              "last_free_mib": null,
+              "misses": 0,
+              "oom_fallbacks": 0,
+              "releases": 0,
+              "resident_entries": 0,
+              "retired_entries": 0,
+              "retired_releases": 0,
+              "vram_headroom_mib": 512
+            },
+            "tile": {
+              "cache_entries": 8,
+              "capacity_fallbacks": 0,
+              "capture_failures": 0,
+              "capture_setup_seconds": 0.0,
+              "captures": 0,
+              "entries": 0,
+              "evictions": 0,
+              "headroom_fallbacks": 0,
+              "hits": 0,
+              "last_free_mib": null,
+              "misses": 0,
+              "oom_fallbacks": 0,
+              "releases": 0,
+              "resident_entries": 0,
+              "retired_entries": 0,
+              "retired_releases": 0,
+              "vram_headroom_mib": 512
+            }
+          },
+          "online": {
+            "species": {
+              "cache_entries": 8,
+              "capacity_fallbacks": 0,
+              "capture_failures": 0,
+              "capture_setup_seconds": 0.0,
+              "captures": 0,
+              "entries": 0,
+              "evictions": 0,
+              "headroom_fallbacks": 0,
+              "hits": 0,
+              "last_free_mib": null,
+              "misses": 0,
+              "oom_fallbacks": 0,
+              "releases": 0,
+              "resident_entries": 0,
+              "retired_entries": 0,
+              "retired_releases": 0,
+              "vram_headroom_mib": 512
+            },
+            "tile": {
+              "cache_entries": 8,
+              "capacity_fallbacks": 0,
+              "capture_failures": 0,
+              "capture_setup_seconds": 0.0,
+              "captures": 0,
+              "entries": 0,
+              "evictions": 0,
+              "headroom_fallbacks": 0,
+              "hits": 0,
+              "last_free_mib": null,
+              "misses": 0,
+              "oom_fallbacks": 0,
+              "releases": 0,
+              "resident_entries": 0,
+              "retired_entries": 0,
+              "retired_releases": 0,
+              "vram_headroom_mib": 512
+            }
+          }
+        },
+        "logical_rows": 32,
+        "oldest_pending_job_seconds": 0.17290570000000116,
+        "oldest_queue_seconds": 0.17290570000000116,
+        "online_rows": {
+          "logical": 4,
+          "padded": 4
+        },
+        "padded_rows": 32,
+        "pending_probe_jobs": 4,
+        "phase_memory": [
+          {
+            "boundary": "before_collection_release",
+            "cupy_reserved_mib": 508.3466796875,
+            "free_mib": 6474.0,
+            "torch_allocated_mib": 36.50341796875,
+            "torch_reserved_mib": 54.0,
+            "total_mib": 8187.5
+          },
+          {
+            "boundary": "after_collection_release",
+            "cupy_reserved_mib": 506.41015625,
+            "free_mib": 6482.0,
+            "torch_allocated_mib": 36.50341796875,
+            "torch_reserved_mib": 48.0,
+            "total_mib": 8187.5
+          }
+        ],
+        "probe_inference": {
+          "accepted_plant_triggers": 0,
+          "bucket_widths": [],
+          "logical_rows": 0,
+          "padded_rows": 0,
+          "rollout_enqueue_seconds": 0.009800900000072943,
+          "rollout_logical_rows": 1,
+          "rollout_padded_rows": 1,
+          "rollout_transitions": 1,
+          "stop_reasons": {},
+          "tile_probes": 0,
+          "unique_rows": 0,
+          "workspace_bytes": 264852159
+        },
+        "probe_inference_totals": {
+          "logical_rows": 0,
+          "padded_rows": 0,
+          "unique_rows": 0
+        },
+        "probe_rollout_work": {
+          "accepted_plant_triggers": 4,
+          "rollout_enqueue_seconds": 0.06424800000002051,
+          "rollout_logical_rows": 6,
+          "rollout_padded_rows": 6,
+          "rollout_transitions": 7,
+          "stop_reasons": {},
+          "tile_probes": 16
+        },
+        "queued_probes": 15,
+        "scope": "current_cohort",
+        "source_capacity": 128,
+        "timings": {
+          "completed_phase_seconds": {
+            "encoding": 0.08308003208786244,
+            "host_synchronization": 0.0006978999997500068,
+            "online_inference": 0.06909417533874512,
+            "presentation": 0.007981400000744543,
+            "probe_bootstrap_inference": 0.05126444792747499,
+            "probe_inference": 1.372957568168639,
+            "probe_simulation": 0.023372319985181095,
+            "simulation": 0.01841036802623422,
+            "storage": 0.0012950999997656254,
+            "transfer": 0.08776639988739042
+          },
+          "pending_device_spans": 0,
+          "scope": "current_cohort"
+        },
+        "workspace_bytes": 264852159
+      },
+      "cupy_reserved_mib": 508.3466796875,
+      "decisions_per_game_per_second": 42.443335494399086,
+      "drain_seconds": 2.424909599999978,
+      "environments": 128,
+      "host_rss_mib": 1454.57421875,
+      "live_games": 4,
+      "mean_active_games": 4.0,
+      "phase": "planting",
+      "phases_seconds": {
+        "encoding": 0.08308003208786244,
+        "host_synchronization": 0.0006978999997500068,
+        "online_inference": 0.06909417533874512,
+        "presentation": 0.007981400000744543,
+        "probe_bootstrap_inference": 0.05126444792747499,
+        "probe_inference": 1.372957568168639,
+        "probe_simulation": 0.023372319985181095,
+        "simulation": 0.01841036802623422,
+        "storage": 0.0012950999997656254,
+        "transfer": 0.08776639988739042
+      },
+      "phases_seconds_scope": "actual window plus separately measured drain",
+      "pinned_transfer_mib": 0.23189258575439453,
+      "probe_capacities": 1,
+      "process_cpu_percent": 1342.7598389479467,
+      "repeat": 0,
+      "sample_type": "warm",
+      "seconds": 0.18851100000006227,
+      "terminal_records": [],
+      "torch_peak_allocated_mib": 40.77978515625,
+      "trajectory_bytes": 962768,
+      "transitions": 32,
+      "transitions_per_second": 169.7513672941602,
+      "utilization": {
+        "gpu_percent": 32.5,
+        "process_cpu_percent": 94.6,
+        "system_cpu_percent": 13.95
+      }
+    },
+    {
+      "active_game_seconds": 0.8233672000001206,
+      "active_games": 4,
+      "active_slot_ids": [
+        17,
+        54,
+        91,
+        0
+      ],
+      "activity": "collect",
+      "capture_setup_seconds": {
+        "ema": 0.0,
+        "online": 0.0
+      },
+      "case": "planting",
+      "collection_execution": {
+        "active_auxiliary_lanes": 1,
+        "active_games": 4,
+        "actual_ema_rows": {
+          "logical": 0,
+          "padded": 0
+        },
+        "auxiliary_capacity": 1,
+        "capacity_blocked_slots": 0,
+        "current_logical_rows": 4,
+        "current_padded_rows": 4,
+        "entity_widths": {
+          "32": 32
+        },
+        "graph_cache": {
+          "ema": {
+            "species": {
+              "cache_entries": 8,
+              "capacity_fallbacks": 0,
+              "capture_failures": 0,
+              "capture_setup_seconds": 0.0,
+              "captures": 0,
+              "entries": 0,
+              "evictions": 0,
+              "headroom_fallbacks": 0,
+              "hits": 0,
+              "last_free_mib": null,
+              "misses": 0,
+              "oom_fallbacks": 0,
+              "releases": 0,
+              "resident_entries": 0,
+              "retired_entries": 0,
+              "retired_releases": 0,
+              "vram_headroom_mib": 512
+            },
+            "tile": {
+              "cache_entries": 8,
+              "capacity_fallbacks": 0,
+              "capture_failures": 0,
+              "capture_setup_seconds": 0.0,
+              "captures": 0,
+              "entries": 0,
+              "evictions": 0,
+              "headroom_fallbacks": 0,
+              "hits": 0,
+              "last_free_mib": null,
+              "misses": 0,
+              "oom_fallbacks": 0,
+              "releases": 0,
+              "resident_entries": 0,
+              "retired_entries": 0,
+              "retired_releases": 0,
+              "vram_headroom_mib": 512
+            }
+          },
+          "online": {
+            "species": {
+              "cache_entries": 8,
+              "capacity_fallbacks": 0,
+              "capture_failures": 0,
+              "capture_setup_seconds": 0.0,
+              "captures": 0,
+              "entries": 0,
+              "evictions": 0,
+              "headroom_fallbacks": 0,
+              "hits": 0,
+              "last_free_mib": null,
+              "misses": 0,
+              "oom_fallbacks": 0,
+              "releases": 0,
+              "resident_entries": 0,
+              "retired_entries": 0,
+              "retired_releases": 0,
+              "vram_headroom_mib": 512
+            },
+            "tile": {
+              "cache_entries": 8,
+              "capacity_fallbacks": 0,
+              "capture_failures": 0,
+              "capture_setup_seconds": 0.0,
+              "captures": 0,
+              "entries": 0,
+              "evictions": 0,
+              "headroom_fallbacks": 0,
+              "hits": 0,
+              "last_free_mib": null,
+              "misses": 0,
+              "oom_fallbacks": 0,
+              "releases": 0,
+              "resident_entries": 0,
+              "retired_entries": 0,
+              "retired_releases": 0,
+              "vram_headroom_mib": 512
+            }
+          }
+        },
+        "logical_rows": 32,
+        "oldest_pending_job_seconds": 0.18843110000000252,
+        "oldest_queue_seconds": 0.18843110000000252,
+        "online_rows": {
+          "logical": 4,
+          "padded": 4
+        },
+        "padded_rows": 32,
+        "pending_probe_jobs": 4,
+        "phase_memory": [
+          {
+            "boundary": "before_collection_release",
+            "cupy_reserved_mib": 508.3466796875,
+            "free_mib": 6474.0,
+            "torch_allocated_mib": 36.50341796875,
+            "torch_reserved_mib": 54.0,
+            "total_mib": 8187.5
+          },
+          {
+            "boundary": "after_collection_release",
+            "cupy_reserved_mib": 506.41015625,
+            "free_mib": 6482.0,
+            "torch_allocated_mib": 36.50341796875,
+            "torch_reserved_mib": 48.0,
+            "total_mib": 8187.5
+          }
+        ],
+        "probe_inference": {
+          "accepted_plant_triggers": 0,
+          "bucket_widths": [],
+          "logical_rows": 0,
+          "padded_rows": 0,
+          "rollout_enqueue_seconds": 0.010849399999983689,
+          "rollout_logical_rows": 1,
+          "rollout_padded_rows": 1,
+          "rollout_transitions": 1,
+          "stop_reasons": {},
+          "tile_probes": 0,
+          "unique_rows": 0,
+          "workspace_bytes": 264852159
+        },
+        "probe_inference_totals": {
+          "logical_rows": 0,
+          "padded_rows": 0,
+          "unique_rows": 0
+        },
+        "probe_rollout_work": {
+          "accepted_plant_triggers": 4,
+          "rollout_enqueue_seconds": 0.06807990000004338,
+          "rollout_logical_rows": 6,
+          "rollout_padded_rows": 6,
+          "rollout_transitions": 7,
+          "stop_reasons": {},
+          "tile_probes": 16
+        },
+        "queued_probes": 15,
+        "scope": "current_cohort",
+        "source_capacity": 128,
+        "timings": {
+          "completed_phase_seconds": {
+            "encoding": 0.08418716796487577,
+            "host_synchronization": 0.0006910999998126499,
+            "online_inference": 0.0763947525024414,
+            "presentation": 0.007942100000946084,
+            "probe_bootstrap_inference": 0.050237407922744746,
+            "probe_inference": 1.3836368985176086,
+            "probe_simulation": 0.02378355197981,
+            "simulation": 0.01832483198307457,
+            "storage": 0.0013723000006393704,
+            "transfer": 0.08699920004978773
+          },
+          "pending_device_spans": 0,
+          "scope": "current_cohort"
+        },
+        "workspace_bytes": 264852159
+      },
+      "cupy_reserved_mib": 508.3466796875,
+      "decisions_per_game_per_second": 38.86479811194241,
+      "drain_seconds": 2.4295736999999917,
+      "environments": 128,
+      "host_rss_mib": 1487.54296875,
+      "live_games": 4,
+      "mean_active_games": 4.0,
+      "phase": "planting",
+      "phases_seconds": {
+        "encoding": 0.08418716796487577,
+        "host_synchronization": 0.0006910999998126499,
+        "online_inference": 0.0763947525024414,
+        "presentation": 0.007942100000946084,
+        "probe_bootstrap_inference": 0.050237407922744746,
+        "probe_inference": 1.3836368985176086,
+        "probe_simulation": 0.02378355197981,
+        "simulation": 0.01832483198307457,
+        "storage": 0.0013723000006393704,
+        "transfer": 0.08699920004978773
+      },
+      "phases_seconds_scope": "actual window plus separately measured drain",
+      "pinned_transfer_mib": 0.23189258575439453,
+      "probe_capacities": 1,
+      "process_cpu_percent": 1244.7441437518087,
+      "repeat": 1,
+      "sample_type": "warm",
+      "seconds": 0.20586560000003828,
+      "terminal_records": [],
+      "torch_peak_allocated_mib": 40.77978515625,
+      "trajectory_bytes": 962768,
+      "transitions": 32,
+      "transitions_per_second": 155.4412199026649,
+      "utilization": {
+        "gpu_percent": 21.666666666666668,
+        "process_cpu_percent": 97.96666666666665,
+        "system_cpu_percent": 16.533333333333335
+      }
+    },
+    {
+      "active_game_seconds": 0.7376391999996486,
+      "active_games": 4,
+      "active_slot_ids": [
+        17,
+        54,
+        91,
+        0
+      ],
+      "activity": "collect",
+      "capture_setup_seconds": {
+        "ema": 0.0,
+        "online": 0.0
+      },
+      "case": "planting",
+      "collection_execution": {
+        "active_auxiliary_lanes": 1,
+        "active_games": 4,
+        "actual_ema_rows": {
+          "logical": 0,
+          "padded": 0
+        },
+        "auxiliary_capacity": 1,
+        "capacity_blocked_slots": 0,
+        "current_logical_rows": 4,
+        "current_padded_rows": 4,
+        "entity_widths": {
+          "32": 32
+        },
+        "graph_cache": {
+          "ema": {
+            "species": {
+              "cache_entries": 8,
+              "capacity_fallbacks": 0,
+              "capture_failures": 0,
+              "capture_setup_seconds": 0.0,
+              "captures": 0,
+              "entries": 0,
+              "evictions": 0,
+              "headroom_fallbacks": 0,
+              "hits": 0,
+              "last_free_mib": null,
+              "misses": 0,
+              "oom_fallbacks": 0,
+              "releases": 0,
+              "resident_entries": 0,
+              "retired_entries": 0,
+              "retired_releases": 0,
+              "vram_headroom_mib": 512
+            },
+            "tile": {
+              "cache_entries": 8,
+              "capacity_fallbacks": 0,
+              "capture_failures": 0,
+              "capture_setup_seconds": 0.0,
+              "captures": 0,
+              "entries": 0,
+              "evictions": 0,
+              "headroom_fallbacks": 0,
+              "hits": 0,
+              "last_free_mib": null,
+              "misses": 0,
+              "oom_fallbacks": 0,
+              "releases": 0,
+              "resident_entries": 0,
+              "retired_entries": 0,
+              "retired_releases": 0,
+              "vram_headroom_mib": 512
+            }
+          },
+          "online": {
+            "species": {
+              "cache_entries": 8,
+              "capacity_fallbacks": 0,
+              "capture_failures": 0,
+              "capture_setup_seconds": 0.0,
+              "captures": 0,
+              "entries": 0,
+              "evictions": 0,
+              "headroom_fallbacks": 0,
+              "hits": 0,
+              "last_free_mib": null,
+              "misses": 0,
+              "oom_fallbacks": 0,
+              "releases": 0,
+              "resident_entries": 0,
+              "retired_entries": 0,
+              "retired_releases": 0,
+              "vram_headroom_mib": 512
+            },
+            "tile": {
+              "cache_entries": 8,
+              "capacity_fallbacks": 0,
+              "capture_failures": 0,
+              "capture_setup_seconds": 0.0,
+              "captures": 0,
+              "entries": 0,
+              "evictions": 0,
+              "headroom_fallbacks": 0,
+              "hits": 0,
+              "last_free_mib": null,
+              "misses": 0,
+              "oom_fallbacks": 0,
+              "releases": 0,
+              "resident_entries": 0,
+              "retired_entries": 0,
+              "retired_releases": 0,
+              "vram_headroom_mib": 512
+            }
+          }
+        },
+        "logical_rows": 32,
+        "oldest_pending_job_seconds": 0.16762930000004417,
+        "oldest_queue_seconds": 0.16762930000004417,
+        "online_rows": {
+          "logical": 4,
+          "padded": 4
+        },
+        "padded_rows": 32,
+        "pending_probe_jobs": 4,
+        "phase_memory": [
+          {
+            "boundary": "before_collection_release",
+            "cupy_reserved_mib": 508.3466796875,
+            "free_mib": 6474.0,
+            "torch_allocated_mib": 36.50341796875,
+            "torch_reserved_mib": 54.0,
+            "total_mib": 8187.5
+          },
+          {
+            "boundary": "after_collection_release",
+            "cupy_reserved_mib": 506.41015625,
+            "free_mib": 6482.0,
+            "torch_allocated_mib": 36.50341796875,
+            "torch_reserved_mib": 48.0,
+            "total_mib": 8187.5
+          }
+        ],
+        "probe_inference": {
+          "accepted_plant_triggers": 0,
+          "bucket_widths": [],
+          "logical_rows": 0,
+          "padded_rows": 0,
+          "rollout_enqueue_seconds": 0.009777599999893027,
+          "rollout_logical_rows": 1,
+          "rollout_padded_rows": 1,
+          "rollout_transitions": 1,
+          "stop_reasons": {},
+          "tile_probes": 0,
+          "unique_rows": 0,
+          "workspace_bytes": 264852159
+        },
+        "probe_inference_totals": {
+          "logical_rows": 0,
+          "padded_rows": 0,
+          "unique_rows": 0
+        },
+        "probe_rollout_work": {
+          "accepted_plant_triggers": 4,
+          "rollout_enqueue_seconds": 0.0618299999998726,
+          "rollout_logical_rows": 6,
+          "rollout_padded_rows": 6,
+          "rollout_transitions": 7,
+          "stop_reasons": {},
+          "tile_probes": 16
+        },
+        "queued_probes": 15,
+        "scope": "current_cohort",
+        "source_capacity": 128,
+        "timings": {
+          "completed_phase_seconds": {
+            "encoding": 0.08436614401638506,
+            "host_synchronization": 0.0007303000003275884,
+            "online_inference": 0.06848716878890991,
+            "presentation": 0.007884599999897546,
+            "probe_bootstrap_inference": 0.05172435259819031,
+            "probe_inference": 1.3820399367809293,
+            "probe_simulation": 0.023543744074180716,
+            "simulation": 0.0185023040082306,
+            "storage": 0.0013700999996899554,
+            "transfer": 0.08756259210780273
+          },
+          "pending_device_spans": 0,
+          "scope": "current_cohort"
+        },
+        "workspace_bytes": 264852159
+      },
+      "cupy_reserved_mib": 508.3466796875,
+      "decisions_per_game_per_second": 43.38164240731139,
+      "drain_seconds": 2.445953300000042,
+      "environments": 128,
+      "host_rss_mib": 1499.7421875,
+      "live_games": 4,
+      "mean_active_games": 4.0,
+      "phase": "planting",
+      "phases_seconds": {
+        "encoding": 0.08436614401638506,
+        "host_synchronization": 0.0007303000003275884,
+        "online_inference": 0.06848716878890991,
+        "presentation": 0.007884599999897546,
+        "probe_bootstrap_inference": 0.05172435259819031,
+        "probe_inference": 1.3820399367809293,
+        "probe_simulation": 0.023543744074180716,
+        "simulation": 0.0185023040082306,
+        "storage": 0.0013700999996899554,
+        "transfer": 0.08756259210780273
+      },
+      "phases_seconds_scope": "actual window plus separately measured drain",
+      "pinned_transfer_mib": 0.23189258575439453,
+      "probe_capacities": 1,
+      "process_cpu_percent": 1423.2702792972423,
+      "repeat": 2,
+      "sample_type": "warm",
+      "seconds": 0.18443439999998645,
+      "terminal_records": [],
+      "torch_peak_allocated_mib": 40.77978515625,
+      "trajectory_bytes": 962768,
+      "transitions": 32,
+      "transitions_per_second": 173.50342452385428,
+      "utilization": {
+        "gpu_percent": 38.0,
+        "process_cpu_percent": 99.46666666666665,
+        "system_cpu_percent": 16.099999999999998
+      }
+    },
+    {
+      "after": {
+        "active_game_seconds": 0.7718552000001182,
+        "active_games": 4,
+        "active_slot_ids": [
+          17,
+          54,
+          91,
+          0
+        ],
+        "activity": "after-fit",
+        "capture_setup_seconds": {
+          "ema": 0.0,
+          "online": 0.0
+        },
+        "case": "planting",
+        "collection_execution": {
+          "active_auxiliary_lanes": 1,
+          "active_games": 4,
+          "actual_ema_rows": {
+            "logical": 0,
+            "padded": 0
+          },
+          "auxiliary_capacity": 1,
+          "capacity_blocked_slots": 0,
+          "current_logical_rows": 4,
+          "current_padded_rows": 4,
+          "entity_widths": {
+            "32": 32
+          },
+          "graph_cache": {
+            "ema": {
+              "species": {
+                "cache_entries": 8,
+                "capacity_fallbacks": 0,
+                "capture_failures": 0,
+                "capture_setup_seconds": 0.0,
+                "captures": 0,
+                "entries": 0,
+                "evictions": 0,
+                "headroom_fallbacks": 0,
+                "hits": 0,
+                "last_free_mib": null,
+                "misses": 0,
+                "oom_fallbacks": 0,
+                "releases": 1,
+                "resident_entries": 0,
+                "retired_entries": 0,
+                "retired_releases": 0,
+                "vram_headroom_mib": 512
+              },
+              "tile": {
+                "cache_entries": 8,
+                "capacity_fallbacks": 0,
+                "capture_failures": 0,
+                "capture_setup_seconds": 0.0,
+                "captures": 0,
+                "entries": 0,
+                "evictions": 0,
+                "headroom_fallbacks": 0,
+                "hits": 0,
+                "last_free_mib": null,
+                "misses": 0,
+                "oom_fallbacks": 0,
+                "releases": 1,
+                "resident_entries": 0,
+                "retired_entries": 0,
+                "retired_releases": 0,
+                "vram_headroom_mib": 512
+              }
+            },
+            "online": {
+              "species": {
+                "cache_entries": 8,
+                "capacity_fallbacks": 0,
+                "capture_failures": 0,
+                "capture_setup_seconds": 0.0,
+                "captures": 0,
+                "entries": 0,
+                "evictions": 0,
+                "headroom_fallbacks": 0,
+                "hits": 0,
+                "last_free_mib": null,
+                "misses": 0,
+                "oom_fallbacks": 0,
+                "releases": 1,
+                "resident_entries": 0,
+                "retired_entries": 0,
+                "retired_releases": 0,
+                "vram_headroom_mib": 512
+              },
+              "tile": {
+                "cache_entries": 8,
+                "capacity_fallbacks": 0,
+                "capture_failures": 0,
+                "capture_setup_seconds": 0.0,
+                "captures": 0,
+                "entries": 0,
+                "evictions": 0,
+                "headroom_fallbacks": 0,
+                "hits": 0,
+                "last_free_mib": null,
+                "misses": 0,
+                "oom_fallbacks": 0,
+                "releases": 1,
+                "resident_entries": 0,
+                "retired_entries": 0,
+                "retired_releases": 0,
+                "vram_headroom_mib": 512
+              }
+            }
+          },
+          "logical_rows": 32,
+          "oldest_pending_job_seconds": 0.17715469999996003,
+          "oldest_queue_seconds": 0.17715469999996003,
+          "online_rows": {
+            "logical": 4,
+            "padded": 4
+          },
+          "padded_rows": 32,
+          "pending_probe_jobs": 4,
+          "phase_memory": [
+            {
+              "boundary": "before_collection_release",
+              "cupy_reserved_mib": 506.921875,
+              "free_mib": 6290.0,
+              "torch_allocated_mib": 70.20947265625,
+              "torch_reserved_mib": 212.0,
+              "total_mib": 8187.5
+            },
+            {
+              "boundary": "after_collection_release",
+              "cupy_reserved_mib": 506.921875,
+              "free_mib": 6392.0,
+              "torch_allocated_mib": 70.20947265625,
+              "torch_reserved_mib": 110.0,
+              "total_mib": 8187.5
+            }
+          ],
+          "probe_inference": {
+            "accepted_plant_triggers": 0,
+            "bucket_widths": [],
+            "logical_rows": 0,
+            "padded_rows": 0,
+            "rollout_enqueue_seconds": 0.010027000000036423,
+            "rollout_logical_rows": 1,
+            "rollout_padded_rows": 1,
+            "rollout_transitions": 1,
+            "stop_reasons": {},
+            "tile_probes": 0,
+            "unique_rows": 0,
+            "workspace_bytes": 264852159
+          },
+          "probe_inference_totals": {
+            "logical_rows": 0,
+            "padded_rows": 0,
+            "unique_rows": 0
+          },
+          "probe_rollout_work": {
+            "accepted_plant_triggers": 4,
+            "rollout_enqueue_seconds": 0.06291360000000168,
+            "rollout_logical_rows": 6,
+            "rollout_padded_rows": 6,
+            "rollout_transitions": 7,
+            "stop_reasons": {},
+            "tile_probes": 16
+          },
+          "queued_probes": 15,
+          "scope": "current_cohort",
+          "source_capacity": 128,
+          "timings": {
+            "completed_phase_seconds": {
+              "encoding": 0.08224198398739102,
+              "host_synchronization": 0.0007014000005938215,
+              "online_inference": 0.07193900775909425,
+              "presentation": 0.007775699999115204,
+              "probe_bootstrap_inference": 0.05004464054107666,
+              "probe_inference": 1.376388162970543,
+              "probe_simulation": 0.023139360135421127,
+              "simulation": 0.018124159970320804,
+              "storage": 0.0013625000011643351,
+              "transfer": 0.08870675201807168
+            },
+            "pending_device_spans": 0,
+            "scope": "current_cohort"
+          },
+          "workspace_bytes": 264852159
+        },
+        "cupy_reserved_mib": 508.8583984375,
+        "decisions_per_game_per_second": 41.45855336596178,
+        "drain_seconds": 2.426963199999932,
+        "environments": 128,
+        "host_rss_mib": 2159.62890625,
+        "live_games": 4,
+        "mean_active_games": 4.0,
+        "phase": "planting",
+        "phases_seconds": {
+          "encoding": 0.08224198398739102,
+          "host_synchronization": 0.0007014000005938215,
+          "online_inference": 0.07193900775909425,
+          "presentation": 0.007775699999115204,
+          "probe_bootstrap_inference": 0.05004464054107666,
+          "probe_inference": 1.376388162970543,
+          "probe_simulation": 0.023139360135421127,
+          "simulation": 0.018124159970320804,
+          "storage": 0.0013625000011643351,
+          "transfer": 0.08870675201807168
+        },
+        "phases_seconds_scope": "actual window plus separately measured drain",
+        "pinned_transfer_mib": 0.23189258575439453,
+        "probe_capacities": 1,
+        "process_cpu_percent": 1360.1917222620982,
+        "repeat": null,
+        "sample_type": "cycle",
+        "seconds": 0.19298749999995835,
+        "setup_seconds": 1.1427733000000444,
+        "terminal_records": [],
+        "torch_peak_allocated_mib": 75.861328125,
+        "trajectory_bytes": 962768,
+        "transitions": 32,
+        "transitions_per_second": 165.8138480471891,
+        "utilization": {
+          "gpu_percent": 31.0,
+          "process_cpu_percent": 100.8,
+          "system_cpu_percent": 11.95
+        }
+      },
+      "after_warmed": [
+        {
+          "active_game_seconds": 0.7589587999996183,
+          "active_games": 4,
+          "active_slot_ids": [
+            17,
+            54,
+            91,
+            0
+          ],
+          "activity": "after-fit-warm",
+          "capture_setup_seconds": {
+            "ema": 0.0,
+            "online": 0.0
+          },
+          "case": "planting",
+          "collection_execution": {
+            "active_auxiliary_lanes": 1,
+            "active_games": 4,
+            "actual_ema_rows": {
+              "logical": 0,
+              "padded": 0
+            },
+            "auxiliary_capacity": 1,
+            "capacity_blocked_slots": 0,
+            "current_logical_rows": 4,
+            "current_padded_rows": 4,
+            "entity_widths": {
+              "32": 32
+            },
+            "graph_cache": {
+              "ema": {
+                "species": {
+                  "cache_entries": 8,
+                  "capacity_fallbacks": 0,
+                  "capture_failures": 0,
+                  "capture_setup_seconds": 0.0,
+                  "captures": 0,
+                  "entries": 0,
+                  "evictions": 0,
+                  "headroom_fallbacks": 0,
+                  "hits": 0,
+                  "last_free_mib": null,
+                  "misses": 0,
+                  "oom_fallbacks": 0,
+                  "releases": 1,
+                  "resident_entries": 0,
+                  "retired_entries": 0,
+                  "retired_releases": 0,
+                  "vram_headroom_mib": 512
+                },
+                "tile": {
+                  "cache_entries": 8,
+                  "capacity_fallbacks": 0,
+                  "capture_failures": 0,
+                  "capture_setup_seconds": 0.0,
+                  "captures": 0,
+                  "entries": 0,
+                  "evictions": 0,
+                  "headroom_fallbacks": 0,
+                  "hits": 0,
+                  "last_free_mib": null,
+                  "misses": 0,
+                  "oom_fallbacks": 0,
+                  "releases": 1,
+                  "resident_entries": 0,
+                  "retired_entries": 0,
+                  "retired_releases": 0,
+                  "vram_headroom_mib": 512
+                }
+              },
+              "online": {
+                "species": {
+                  "cache_entries": 8,
+                  "capacity_fallbacks": 0,
+                  "capture_failures": 0,
+                  "capture_setup_seconds": 0.0,
+                  "captures": 0,
+                  "entries": 0,
+                  "evictions": 0,
+                  "headroom_fallbacks": 0,
+                  "hits": 0,
+                  "last_free_mib": null,
+                  "misses": 0,
+                  "oom_fallbacks": 0,
+                  "releases": 1,
+                  "resident_entries": 0,
+                  "retired_entries": 0,
+                  "retired_releases": 0,
+                  "vram_headroom_mib": 512
+                },
+                "tile": {
+                  "cache_entries": 8,
+                  "capacity_fallbacks": 0,
+                  "capture_failures": 0,
+                  "capture_setup_seconds": 0.0,
+                  "captures": 0,
+                  "entries": 0,
+                  "evictions": 0,
+                  "headroom_fallbacks": 0,
+                  "hits": 0,
+                  "last_free_mib": null,
+                  "misses": 0,
+                  "oom_fallbacks": 0,
+                  "releases": 1,
+                  "resident_entries": 0,
+                  "retired_entries": 0,
+                  "retired_releases": 0,
+                  "vram_headroom_mib": 512
+                }
+              }
+            },
+            "logical_rows": 32,
+            "oldest_pending_job_seconds": 0.17394660000002204,
+            "oldest_queue_seconds": 0.17394660000002204,
+            "online_rows": {
+              "logical": 4,
+              "padded": 4
+            },
+            "padded_rows": 32,
+            "pending_probe_jobs": 4,
+            "phase_memory": [
+              {
+                "boundary": "before_collection_release",
+                "cupy_reserved_mib": 508.8583984375,
+                "free_mib": 6390.0,
+                "torch_allocated_mib": 71.5849609375,
+                "torch_reserved_mib": 110.0,
+                "total_mib": 8187.5
+              },
+              {
+                "boundary": "after_collection_release",
+                "cupy_reserved_mib": 506.921875,
+                "free_mib": 6392.0,
+                "torch_allocated_mib": 71.5849609375,
+                "torch_reserved_mib": 110.0,
+                "total_mib": 8187.5
+              }
+            ],
+            "probe_inference": {
+              "accepted_plant_triggers": 0,
+              "bucket_widths": [],
+              "logical_rows": 0,
+              "padded_rows": 0,
+              "rollout_enqueue_seconds": 0.009444599999937964,
+              "rollout_logical_rows": 1,
+              "rollout_padded_rows": 1,
+              "rollout_transitions": 1,
+              "stop_reasons": {},
+              "tile_probes": 0,
+              "unique_rows": 0,
+              "workspace_bytes": 264852159
+            },
+            "probe_inference_totals": {
+              "logical_rows": 0,
+              "padded_rows": 0,
+              "unique_rows": 0
+            },
+            "probe_rollout_work": {
+              "accepted_plant_triggers": 4,
+              "rollout_enqueue_seconds": 0.05943149999984598,
+              "rollout_logical_rows": 6,
+              "rollout_padded_rows": 6,
+              "rollout_transitions": 7,
+              "stop_reasons": {},
+              "tile_probes": 16
+            },
+            "queued_probes": 15,
+            "scope": "current_cohort",
+            "source_capacity": 128,
+            "timings": {
+              "completed_phase_seconds": {
+                "encoding": 0.08246940824389457,
+                "host_synchronization": 0.0007822999995141799,
+                "online_inference": 0.07493017578125,
+                "presentation": 0.008119500000475455,
+                "probe_bootstrap_inference": 0.05012684798240661,
+                "probe_inference": 1.3738178157806398,
+                "probe_simulation": 0.023991296049207404,
+                "simulation": 0.01840559992287311,
+                "storage": 0.0013988999999128282,
+                "transfer": 0.08748953617922967
+              },
+              "pending_device_spans": 0,
+              "scope": "current_cohort"
+            },
+            "workspace_bytes": 264852159
+          },
+          "cupy_reserved_mib": 508.8583984375,
+          "decisions_per_game_per_second": 42.1630265042267,
+          "drain_seconds": 2.4350581999999577,
+          "environments": 128,
+          "host_rss_mib": 2175.8046875,
+          "live_games": 4,
+          "mean_active_games": 4.0,
+          "phase": "planting",
+          "phases_seconds": {
+            "encoding": 0.08246940824389457,
+            "host_synchronization": 0.0007822999995141799,
+            "online_inference": 0.07493017578125,
+            "presentation": 0.008119500000475455,
+            "probe_bootstrap_inference": 0.05012684798240661,
+            "probe_inference": 1.3738178157806398,
+            "probe_simulation": 0.023991296049207404,
+            "simulation": 0.01840559992287311,
+            "storage": 0.0013988999999128282,
+            "transfer": 0.08748953617922967
+          },
+          "phases_seconds_scope": "actual window plus separately measured drain",
+          "pinned_transfer_mib": 0.23189258575439453,
+          "probe_capacities": 1,
+          "process_cpu_percent": 1342.129711847191,
+          "repeat": 0,
+          "sample_type": "cycle",
+          "seconds": 0.18976369999995768,
+          "terminal_records": [],
+          "torch_peak_allocated_mib": 75.861328125,
+          "trajectory_bytes": 962768,
+          "transitions": 32,
+          "transitions_per_second": 168.63077606521762,
+          "utilization": {
+            "gpu_percent": 34.0,
+            "process_cpu_percent": 98.45,
+            "system_cpu_percent": 15.65
+          }
+        },
+        {
+          "active_game_seconds": 0.768269600000167,
+          "active_games": 4,
+          "active_slot_ids": [
+            17,
+            54,
+            91,
+            0
+          ],
+          "activity": "after-fit-warm",
+          "capture_setup_seconds": {
+            "ema": 0.0,
+            "online": 0.0
+          },
+          "case": "planting",
+          "collection_execution": {
+            "active_auxiliary_lanes": 1,
+            "active_games": 4,
+            "actual_ema_rows": {
+              "logical": 0,
+              "padded": 0
+            },
+            "auxiliary_capacity": 1,
+            "capacity_blocked_slots": 0,
+            "current_logical_rows": 4,
+            "current_padded_rows": 4,
+            "entity_widths": {
+              "32": 32
+            },
+            "graph_cache": {
+              "ema": {
+                "species": {
+                  "cache_entries": 8,
+                  "capacity_fallbacks": 0,
+                  "capture_failures": 0,
+                  "capture_setup_seconds": 0.0,
+                  "captures": 0,
+                  "entries": 0,
+                  "evictions": 0,
+                  "headroom_fallbacks": 0,
+                  "hits": 0,
+                  "last_free_mib": null,
+                  "misses": 0,
+                  "oom_fallbacks": 0,
+                  "releases": 1,
+                  "resident_entries": 0,
+                  "retired_entries": 0,
+                  "retired_releases": 0,
+                  "vram_headroom_mib": 512
+                },
+                "tile": {
+                  "cache_entries": 8,
+                  "capacity_fallbacks": 0,
+                  "capture_failures": 0,
+                  "capture_setup_seconds": 0.0,
+                  "captures": 0,
+                  "entries": 0,
+                  "evictions": 0,
+                  "headroom_fallbacks": 0,
+                  "hits": 0,
+                  "last_free_mib": null,
+                  "misses": 0,
+                  "oom_fallbacks": 0,
+                  "releases": 1,
+                  "resident_entries": 0,
+                  "retired_entries": 0,
+                  "retired_releases": 0,
+                  "vram_headroom_mib": 512
+                }
+              },
+              "online": {
+                "species": {
+                  "cache_entries": 8,
+                  "capacity_fallbacks": 0,
+                  "capture_failures": 0,
+                  "capture_setup_seconds": 0.0,
+                  "captures": 0,
+                  "entries": 0,
+                  "evictions": 0,
+                  "headroom_fallbacks": 0,
+                  "hits": 0,
+                  "last_free_mib": null,
+                  "misses": 0,
+                  "oom_fallbacks": 0,
+                  "releases": 1,
+                  "resident_entries": 0,
+                  "retired_entries": 0,
+                  "retired_releases": 0,
+                  "vram_headroom_mib": 512
+                },
+                "tile": {
+                  "cache_entries": 8,
+                  "capacity_fallbacks": 0,
+                  "capture_failures": 0,
+                  "capture_setup_seconds": 0.0,
+                  "captures": 0,
+                  "entries": 0,
+                  "evictions": 0,
+                  "headroom_fallbacks": 0,
+                  "hits": 0,
+                  "last_free_mib": null,
+                  "misses": 0,
+                  "oom_fallbacks": 0,
+                  "releases": 1,
+                  "resident_entries": 0,
+                  "retired_entries": 0,
+                  "retired_releases": 0,
+                  "vram_headroom_mib": 512
+                }
+              }
+            },
+            "logical_rows": 32,
+            "oldest_pending_job_seconds": 0.1763531999999941,
+            "oldest_queue_seconds": 0.1763531999999941,
+            "online_rows": {
+              "logical": 4,
+              "padded": 4
+            },
+            "padded_rows": 32,
+            "pending_probe_jobs": 4,
+            "phase_memory": [
+              {
+                "boundary": "before_collection_release",
+                "cupy_reserved_mib": 508.8583984375,
+                "free_mib": 6390.0,
+                "torch_allocated_mib": 71.5849609375,
+                "torch_reserved_mib": 110.0,
+                "total_mib": 8187.5
+              },
+              {
+                "boundary": "after_collection_release",
+                "cupy_reserved_mib": 506.921875,
+                "free_mib": 6392.0,
+                "torch_allocated_mib": 71.5849609375,
+                "torch_reserved_mib": 110.0,
+                "total_mib": 8187.5
+              }
+            ],
+            "probe_inference": {
+              "accepted_plant_triggers": 0,
+              "bucket_widths": [],
+              "logical_rows": 0,
+              "padded_rows": 0,
+              "rollout_enqueue_seconds": 0.010571099999992839,
+              "rollout_logical_rows": 1,
+              "rollout_padded_rows": 1,
+              "rollout_transitions": 1,
+              "stop_reasons": {},
+              "tile_probes": 0,
+              "unique_rows": 0,
+              "workspace_bytes": 264852159
+            },
+            "probe_inference_totals": {
+              "logical_rows": 0,
+              "padded_rows": 0,
+              "unique_rows": 0
+            },
+            "probe_rollout_work": {
+              "accepted_plant_triggers": 4,
+              "rollout_enqueue_seconds": 0.06430830000010701,
+              "rollout_logical_rows": 6,
+              "rollout_padded_rows": 6,
+              "rollout_transitions": 7,
+              "stop_reasons": {},
+              "tile_probes": 16
+            },
+            "queued_probes": 15,
+            "scope": "current_cohort",
+            "source_capacity": 128,
+            "timings": {
+              "completed_phase_seconds": {
+                "encoding": 0.08383983986079697,
+                "host_synchronization": 0.0007060999996610917,
+                "online_inference": 0.07069184112548828,
+                "presentation": 0.00796320000108608,
+                "probe_bootstrap_inference": 0.05495945620536804,
+                "probe_inference": 1.4021733382940291,
+                "probe_simulation": 0.023957023967057494,
+                "simulation": 0.018366528076119742,
+                "storage": 0.0013698000007025257,
+                "transfer": 0.0863716159369796
+              },
+              "pending_device_spans": 0,
+              "scope": "current_cohort"
+            },
+            "workspace_bytes": 264852159
+          },
+          "cupy_reserved_mib": 508.8583984375,
+          "decisions_per_game_per_second": 41.6520450633385,
+          "drain_seconds": 2.4763792999999623,
+          "environments": 128,
+          "host_rss_mib": 2175.82421875,
+          "live_games": 4,
+          "mean_active_games": 4.0,
+          "phase": "planting",
+          "phases_seconds": {
+            "encoding": 0.08383983986079697,
+            "host_synchronization": 0.0007060999996610917,
+            "online_inference": 0.07069184112548828,
+            "presentation": 0.00796320000108608,
+            "probe_bootstrap_inference": 0.05495945620536804,
+            "probe_inference": 1.4021733382940291,
+            "probe_simulation": 0.023957023967057494,
+            "simulation": 0.018366528076119742,
+            "storage": 0.0013698000007025257,
+            "transfer": 0.0863716159369796
+          },
+          "phases_seconds_scope": "actual window plus separately measured drain",
+          "pinned_transfer_mib": 0.23189258575439453,
+          "probe_capacities": 1,
+          "process_cpu_percent": 1399.0589994244124,
+          "repeat": 1,
+          "sample_type": "cycle",
+          "seconds": 0.1920933999999761,
+          "terminal_records": [],
+          "torch_peak_allocated_mib": 75.861328125,
+          "trajectory_bytes": 962768,
+          "transitions": 32,
+          "transitions_per_second": 166.58562969890679,
+          "utilization": {
+            "gpu_percent": 35.666666666666664,
+            "process_cpu_percent": 99.5,
+            "system_cpu_percent": 13.966666666666667
+          }
+        },
+        {
+          "active_game_seconds": 0.7955968000001121,
+          "active_games": 4,
+          "active_slot_ids": [
+            17,
+            54,
+            91,
+            0
+          ],
+          "activity": "after-fit-warm",
+          "capture_setup_seconds": {
+            "ema": 0.0,
+            "online": 0.0
+          },
+          "case": "planting",
+          "collection_execution": {
+            "active_auxiliary_lanes": 1,
+            "active_games": 4,
+            "actual_ema_rows": {
+              "logical": 0,
+              "padded": 0
+            },
+            "auxiliary_capacity": 1,
+            "capacity_blocked_slots": 0,
+            "current_logical_rows": 4,
+            "current_padded_rows": 4,
+            "entity_widths": {
+              "32": 32
+            },
+            "graph_cache": {
+              "ema": {
+                "species": {
+                  "cache_entries": 8,
+                  "capacity_fallbacks": 0,
+                  "capture_failures": 0,
+                  "capture_setup_seconds": 0.0,
+                  "captures": 0,
+                  "entries": 0,
+                  "evictions": 0,
+                  "headroom_fallbacks": 0,
+                  "hits": 0,
+                  "last_free_mib": null,
+                  "misses": 0,
+                  "oom_fallbacks": 0,
+                  "releases": 1,
+                  "resident_entries": 0,
+                  "retired_entries": 0,
+                  "retired_releases": 0,
+                  "vram_headroom_mib": 512
+                },
+                "tile": {
+                  "cache_entries": 8,
+                  "capacity_fallbacks": 0,
+                  "capture_failures": 0,
+                  "capture_setup_seconds": 0.0,
+                  "captures": 0,
+                  "entries": 0,
+                  "evictions": 0,
+                  "headroom_fallbacks": 0,
+                  "hits": 0,
+                  "last_free_mib": null,
+                  "misses": 0,
+                  "oom_fallbacks": 0,
+                  "releases": 1,
+                  "resident_entries": 0,
+                  "retired_entries": 0,
+                  "retired_releases": 0,
+                  "vram_headroom_mib": 512
+                }
+              },
+              "online": {
+                "species": {
+                  "cache_entries": 8,
+                  "capacity_fallbacks": 0,
+                  "capture_failures": 0,
+                  "capture_setup_seconds": 0.0,
+                  "captures": 0,
+                  "entries": 0,
+                  "evictions": 0,
+                  "headroom_fallbacks": 0,
+                  "hits": 0,
+                  "last_free_mib": null,
+                  "misses": 0,
+                  "oom_fallbacks": 0,
+                  "releases": 1,
+                  "resident_entries": 0,
+                  "retired_entries": 0,
+                  "retired_releases": 0,
+                  "vram_headroom_mib": 512
+                },
+                "tile": {
+                  "cache_entries": 8,
+                  "capacity_fallbacks": 0,
+                  "capture_failures": 0,
+                  "capture_setup_seconds": 0.0,
+                  "captures": 0,
+                  "entries": 0,
+                  "evictions": 0,
+                  "headroom_fallbacks": 0,
+                  "hits": 0,
+                  "last_free_mib": null,
+                  "misses": 0,
+                  "oom_fallbacks": 0,
+                  "releases": 1,
+                  "resident_entries": 0,
+                  "retired_entries": 0,
+                  "retired_releases": 0,
+                  "vram_headroom_mib": 512
+                }
+              }
+            },
+            "logical_rows": 32,
+            "oldest_pending_job_seconds": 0.18319830000007187,
+            "oldest_queue_seconds": 0.18319830000007187,
+            "online_rows": {
+              "logical": 4,
+              "padded": 4
+            },
+            "padded_rows": 32,
+            "pending_probe_jobs": 4,
+            "phase_memory": [
+              {
+                "boundary": "before_collection_release",
+                "cupy_reserved_mib": 508.8583984375,
+                "free_mib": 6390.0,
+                "torch_allocated_mib": 71.5849609375,
+                "torch_reserved_mib": 110.0,
+                "total_mib": 8187.5
+              },
+              {
+                "boundary": "after_collection_release",
+                "cupy_reserved_mib": 506.921875,
+                "free_mib": 6392.0,
+                "torch_allocated_mib": 71.5849609375,
+                "torch_reserved_mib": 110.0,
+                "total_mib": 8187.5
+              }
+            ],
+            "probe_inference": {
+              "accepted_plant_triggers": 0,
+              "bucket_widths": [],
+              "logical_rows": 0,
+              "padded_rows": 0,
+              "rollout_enqueue_seconds": 0.010198100000025079,
+              "rollout_logical_rows": 1,
+              "rollout_padded_rows": 1,
+              "rollout_transitions": 1,
+              "stop_reasons": {},
+              "tile_probes": 0,
+              "unique_rows": 0,
+              "workspace_bytes": 264852159
+            },
+            "probe_inference_totals": {
+              "logical_rows": 0,
+              "padded_rows": 0,
+              "unique_rows": 0
+            },
+            "probe_rollout_work": {
+              "accepted_plant_triggers": 4,
+              "rollout_enqueue_seconds": 0.06779859999983273,
+              "rollout_logical_rows": 6,
+              "rollout_padded_rows": 6,
+              "rollout_transitions": 7,
+              "stop_reasons": {},
+              "tile_probes": 16
+            },
+            "queued_probes": 15,
+            "scope": "current_cohort",
+            "source_capacity": 128,
+            "timings": {
+              "completed_phase_seconds": {
+                "encoding": 0.08289820807427176,
+                "host_synchronization": 0.0007164999998394705,
+                "online_inference": 0.07565312004089356,
+                "presentation": 0.007805699999380522,
+                "probe_bootstrap_inference": 0.05224230384826659,
+                "probe_inference": 1.4077484172582628,
+                "probe_simulation": 0.023815904002636664,
+                "simulation": 0.018316671991720813,
+                "storage": 0.0013484000003245455,
+                "transfer": 0.09122752006165681
+              },
+              "pending_device_spans": 0,
+              "scope": "current_cohort"
+            },
+            "workspace_bytes": 264852159
+          },
+          "cupy_reserved_mib": 508.8583984375,
+          "decisions_per_game_per_second": 40.22137846707716,
+          "drain_seconds": 2.4791615999999976,
+          "environments": 128,
+          "host_rss_mib": 2175.88671875,
+          "live_games": 4,
+          "mean_active_games": 4.0,
+          "phase": "planting",
+          "phases_seconds": {
+            "encoding": 0.08289820807427176,
+            "host_synchronization": 0.0007164999998394705,
+            "online_inference": 0.07565312004089356,
+            "presentation": 0.007805699999380522,
+            "probe_bootstrap_inference": 0.05224230384826659,
+            "probe_inference": 1.4077484172582628,
+            "probe_simulation": 0.023815904002636664,
+            "simulation": 0.018316671991720813,
+            "storage": 0.0013484000003245455,
+            "transfer": 0.09122752006165681
+          },
+          "phases_seconds_scope": "actual window plus separately measured drain",
+          "pinned_transfer_mib": 0.23189258575439453,
+          "probe_capacities": 1,
+          "process_cpu_percent": 1311.7374328327812,
+          "repeat": 2,
+          "sample_type": "cycle",
+          "seconds": 0.19892509999999675,
+          "terminal_records": [],
+          "torch_peak_allocated_mib": 75.861328125,
+          "trajectory_bytes": 962768,
+          "transitions": 32,
+          "transitions_per_second": 160.86456661326562,
+          "utilization": {
+            "gpu_percent": 28.0,
+            "process_cpu_percent": 97.43333333333334,
+            "system_cpu_percent": 12.5
+          }
+        }
+      ],
+      "before": {
+        "active_game_seconds": 0.9522744000000785,
+        "active_games": 0,
+        "active_slot_ids": [
+          17,
+          54,
+          91,
+          0
+        ],
+        "activity": "before-fit",
+        "capture_setup_seconds": {
+          "ema": 0.0,
+          "online": 0.0
+        },
+        "case": "planting",
+        "collection_execution": {
+          "active_auxiliary_lanes": 1,
+          "active_games": 0,
+          "actual_ema_rows": {
+            "logical": 0,
+            "padded": 0
+          },
+          "auxiliary_capacity": 1,
+          "capacity_blocked_slots": 0,
+          "current_logical_rows": 4,
+          "current_padded_rows": 4,
+          "entity_widths": {
+            "32": 36
+          },
+          "graph_cache": {
+            "ema": {
+              "species": {
+                "cache_entries": 8,
+                "capacity_fallbacks": 0,
+                "capture_failures": 0,
+                "capture_setup_seconds": 0.0,
+                "captures": 0,
+                "entries": 0,
+                "evictions": 0,
+                "headroom_fallbacks": 0,
+                "hits": 0,
+                "last_free_mib": null,
+                "misses": 0,
+                "oom_fallbacks": 0,
+                "releases": 0,
+                "resident_entries": 0,
+                "retired_entries": 0,
+                "retired_releases": 0,
+                "vram_headroom_mib": 512
+              },
+              "tile": {
+                "cache_entries": 8,
+                "capacity_fallbacks": 0,
+                "capture_failures": 0,
+                "capture_setup_seconds": 0.0,
+                "captures": 0,
+                "entries": 0,
+                "evictions": 0,
+                "headroom_fallbacks": 0,
+                "hits": 0,
+                "last_free_mib": null,
+                "misses": 0,
+                "oom_fallbacks": 0,
+                "releases": 0,
+                "resident_entries": 0,
+                "retired_entries": 0,
+                "retired_releases": 0,
+                "vram_headroom_mib": 512
+              }
+            },
+            "online": {
+              "species": {
+                "cache_entries": 8,
+                "capacity_fallbacks": 0,
+                "capture_failures": 0,
+                "capture_setup_seconds": 0.0,
+                "captures": 0,
+                "entries": 0,
+                "evictions": 0,
+                "headroom_fallbacks": 0,
+                "hits": 0,
+                "last_free_mib": null,
+                "misses": 0,
+                "oom_fallbacks": 0,
+                "releases": 0,
+                "resident_entries": 0,
+                "retired_entries": 0,
+                "retired_releases": 0,
+                "vram_headroom_mib": 512
+              },
+              "tile": {
+                "cache_entries": 8,
+                "capacity_fallbacks": 0,
+                "capture_failures": 0,
+                "capture_setup_seconds": 0.0,
+                "captures": 0,
+                "entries": 0,
+                "evictions": 0,
+                "headroom_fallbacks": 0,
+                "hits": 0,
+                "last_free_mib": null,
+                "misses": 0,
+                "oom_fallbacks": 0,
+                "releases": 0,
+                "resident_entries": 0,
+                "retired_entries": 0,
+                "retired_releases": 0,
+                "vram_headroom_mib": 512
+              }
+            }
+          },
+          "logical_rows": 36,
+          "oldest_pending_job_seconds": 0.2222966000000497,
+          "oldest_queue_seconds": 0.2222966000000497,
+          "online_rows": {
+            "logical": 4,
+            "padded": 4
+          },
+          "padded_rows": 36,
+          "pending_probe_jobs": 4,
+          "phase_memory": [
+            {
+              "boundary": "before_collection_release",
+              "cupy_reserved_mib": 508.3466796875,
+              "free_mib": 6474.0,
+              "torch_allocated_mib": 36.50341796875,
+              "torch_reserved_mib": 54.0,
+              "total_mib": 8187.5
+            },
+            {
+              "boundary": "after_collection_release",
+              "cupy_reserved_mib": 508.3466796875,
+              "free_mib": 6480.0,
+              "torch_allocated_mib": 36.50341796875,
+              "torch_reserved_mib": 48.0,
+              "total_mib": 8187.5
+            }
+          ],
+          "probe_inference": {
+            "accepted_plant_triggers": 0,
+            "bucket_widths": [],
+            "logical_rows": 0,
+            "padded_rows": 0,
+            "rollout_enqueue_seconds": 0.009895400000004884,
+            "rollout_logical_rows": 1,
+            "rollout_padded_rows": 1,
+            "rollout_transitions": 1,
+            "stop_reasons": {},
+            "tile_probes": 0,
+            "unique_rows": 0,
+            "workspace_bytes": 264852159
+          },
+          "probe_inference_totals": {
+            "logical_rows": 0,
+            "padded_rows": 0,
+            "unique_rows": 0
+          },
+          "probe_rollout_work": {
+            "accepted_plant_triggers": 4,
+            "rollout_enqueue_seconds": 0.0829084999998031,
+            "rollout_logical_rows": 7,
+            "rollout_padded_rows": 7,
+            "rollout_transitions": 8,
+            "stop_reasons": {},
+            "tile_probes": 16
+          },
+          "queued_probes": 15,
+          "scope": "current_cohort",
+          "source_capacity": 128,
+          "timings": {
+            "completed_phase_seconds": {
+              "encoding": 0.06727375978231427,
+              "host_synchronization": 0.0005744000000049709,
+              "online_inference": 0.08250675106048584,
+              "presentation": 0.006501200000798235,
+              "probe_inference": 1.1333005750179286,
+              "probe_simulation": 0.01908665603399278,
+              "simulation": 0.015134208041243295,
+              "storage": 0.0013542999997753213,
+              "transfer": 0.07237996792234491
+            },
+            "pending_device_spans": 0,
+            "scope": "current_cohort"
+          },
+          "workspace_bytes": 264852159
+        },
+        "cupy_reserved_mib": 510.283203125,
+        "cutoff_decision_budget": 53,
+        "cutoff_terminal_games": 4,
+        "cutoff_terminal_reward": -1.0,
+        "decisions_per_game_per_second": 37.80422953719751,
+        "drain_seconds": 1.9262711000000081,
+        "environments": 128,
+        "host_rss_mib": 1501.23046875,
+        "live_games": 4,
+        "mean_active_games": 4.0,
+        "phase": "planting",
+        "phases_seconds": {
+          "encoding": 0.06727375978231427,
+          "host_synchronization": 0.0005744000000049709,
+          "online_inference": 0.08250675106048584,
+          "presentation": 0.006501200000798235,
+          "probe_inference": 1.1333005750179286,
+          "probe_simulation": 0.01908665603399278,
+          "simulation": 0.015134208041243295,
+          "storage": 0.0013542999997753213,
+          "transfer": 0.07237996792234491
+        },
+        "phases_seconds_scope": "actual window plus separately measured drain",
+        "pinned_transfer_mib": 0.23189258575439453,
+        "probe_capacities": 1,
+        "process_cpu_percent": 892.5050158778864,
+        "repeat": null,
+        "sample_type": "cycle",
+        "seconds": 0.2380939000000808,
+        "setup_seconds": 1.1902360999999928,
+        "terminal_records": [
+          {
+            "env": 0,
+            "terminal": -1.0,
+            "timed_out": true
+          },
+          {
+            "env": 17,
+            "terminal": -1.0,
+            "timed_out": true
+          },
+          {
+            "env": 54,
+            "terminal": -1.0,
+            "timed_out": true
+          },
+          {
+            "env": 91,
+            "terminal": -1.0,
+            "timed_out": true
+          }
+        ],
+        "torch_peak_allocated_mib": 40.77978515625,
+        "trajectory_bytes": 1082608,
+        "transitions": 36,
+        "transitions_per_second": 151.20084974872427,
+        "utilization": {
+          "gpu_percent": 28.5,
+          "process_cpu_percent": 98.5,
+          "system_cpu_percent": 17.799999999999997
+        }
+      },
+      "case": "planting",
+      "comparison_scope": "primary normal-snapshot warmed trials versus after_warmed; excludes before and after cold",
+      "cutoff_seconds": 1,
+      "cycle_peak_cuda_allocated_mib": 185.68115234375,
+      "environments": 128,
+      "fit_seconds": 0.574031800000057,
+      "last_pass_placement_gap": 0.0010091912829213673,
+      "last_pass_probe_huber_error": 0.4411013126373291,
+      "last_pass_selected_action_error": 0.8828031801515155,
+      "last_pass_species_consistency_loss": 0.9050078392028809,
+      "last_pass_species_consistency_mae": 0.9513191199964948,
+      "last_pass_species_consistency_saturation_fraction": 0.0,
+      "last_pass_species_selection_evaluation_gap": 4.317656728542513e-05,
+      "live_games": 4,
+      "optimizer_steps": 4,
+      "passes": 4,
+      "phase": "planting",
+      "phase_memory": [
+        {
+          "boundary": "before_collection_release",
+          "cupy_reserved_mib": 508.3466796875,
+          "free_mib": 6474.0,
+          "torch_allocated_mib": 36.50341796875,
+          "torch_reserved_mib": 54.0,
+          "total_mib": 8187.5
+        },
+        {
+          "boundary": "after_collection_release",
+          "cupy_reserved_mib": 508.3466796875,
+          "free_mib": 6480.0,
+          "torch_allocated_mib": 36.50341796875,
+          "torch_reserved_mib": 48.0,
+          "total_mib": 8187.5
+        },
+        {
+          "boundary": "fit_entry",
+          "cupy_reserved_mib": 255.24609375,
+          "free_mib": 6734.0,
+          "torch_allocated_mib": 35.1259765625,
+          "torch_reserved_mib": 48.0,
+          "total_mib": 8187.5
+        }
+      ],
+      "prefit_errors": {
+        "dig": {
+          "count": 0,
+          "mse": null,
+          "placement_gap": null,
+          "signed_error": null
+        },
+        "plant": {
+          "count": 36,
+          "mse": 1.0000977810852447,
+          "placement_gap": 0.0,
+          "signed_error": 1.0000488890541925
+        },
+        "wait": {
+          "count": 0,
+          "mse": null,
+          "placement_gap": null,
+          "signed_error": null
+        }
+      },
+      "preparation_seconds": 0.005846099999985199,
+      "probe_capacities": 1,
+      "repeat": null,
+      "sample_type": "cycle",
+      "setup_scope": "actual/probe cutoff feature rebuild and reset; excluded from collection and fit timings",
+      "warmed_comparison": {
+        "after_warmed_median": 166.58562969890679,
+        "all_after_trials_over_5_percent_slower": false,
+        "median_regression_over_5_percent": false,
+        "metric": "active_transitions_per_second",
+        "primary_warmed_median": 169.7513672941602,
+        "relative_change": -0.018649261244344073
+      }
+    }
+  ],
+  "optimizer_steps": 4,
+  "probe_capacities": [
+    1
+  ],
+  "protocol": "collection-two-stage-tile-snapshot-v8",
+  "references": [
+    "https://github.com/pytorch/pytorch/blob/v2.8.0/torch/utils/benchmark/utils/timer.py",
+    "https://github.com/cupy/cupy/blob/v13.6.0/cupy/cuda/stream.pyx"
+  ],
+  "repetitions": 3,
+  "torch": "2.8.0+cu128",
+  "warmup_decisions": 8
+}

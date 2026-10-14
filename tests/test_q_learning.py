@@ -1,4 +1,4 @@
-"""Independent controls for shared encoder, deferred values and weight transfer."""
+"""Independent controls for whole-policy optimization and episode task counts."""
 
 import torch
 
@@ -6,16 +6,16 @@ from pvz_rl.config import load_config
 from pvz_rl.envs.encoding import collate_observations
 from pvz_rl.envs.env import PvZEnv
 from pvz_rl.monitoring.metrics import task_statistics
-from pvz_rl.policy.recurrent_policy import RecurrentQPolicy
+from pvz_rl.policy.two_stage_policy import TwoStageQPolicy
 
 
-def policy_and_state():
+def policy_and_observation():
     torch.set_num_threads(1)
     torch.manual_seed(14)
     cfg = load_config()
     env = PvZEnv(cfg, level="easy")
     obs, _ = env.reset(seed=4)
-    policy = RecurrentQPolicy(
+    policy = TwoStageQPolicy(
         env.observation_space,
         env.action_space,
         lambda _: 3e-4,
@@ -25,12 +25,11 @@ def policy_and_state():
 
 
 def selected_values(policy, obs, actions):
-    result = policy.forward_step(obs)
-    return (policy.selected_values(result.wait_q, result.tile_features, result.context, actions),)
+    return (policy.selected_values(obs, actions),)
 
 
-def test_one_optimizer_owns_entire_shared_network():
-    policy, obs, _, _ = policy_and_state()
+def test_one_optimizer_owns_both_independent_networks():
+    policy, obs, _, _ = policy_and_observation()
     assert {id(p) for g in policy.optimizer.param_groups for p in g["params"]} == {
         id(p) for p in policy.parameters()
     }
@@ -72,7 +71,6 @@ def test_task_counts_track_partial_games_and_reset_at_episode_boundaries():
 
     cfg = load_config()
     cfg["training"].update(n_envs=3, batch_size=128)
-    cfg["policy"]["chunk_length"] = 16
     cfg["environment"]["cutoff_seconds"] = 1
     env = vector_env(cfg, "masked", 101)
     try:

@@ -15,7 +15,7 @@ from pvz_game.types import ProjectileView, ZombieView
 
 from pvz_rl.config import load_config
 from pvz_rl.envs.encoding import ObservationEncoder, collate_observations
-from pvz_rl.policy.transformer_lstm import TransformerLSTMPolicy
+from pvz_rl.policy.two_stage_transformer import TwoStageTransformerPolicy
 from pvz_rl.provenance import write_json
 
 
@@ -45,55 +45,60 @@ def observation(cfg, count):
     return encoded, encoder.last_truncation
 
 
-def synthetic_event_history(batch, time, device, interval=32):
-    """Periodic synthetic sun events for reproducible event-memory cost controls."""
-    events = torch.zeros(batch, time, 8, device=device)
-    events[:, 1::interval, 0] = 25
-    times = torch.arange(time, device=device)
-    latest = torch.where((times > 0) & ((times - 1) % interval == 0), times, 0).cummax(0).values
-    previous = torch.cat((latest.new_zeros(1), latest[:-1]))
-    events[..., 7] = times - previous
-    return events
-
-
 def measure(cfg, count, repeats=3):
     torch.manual_seed(101)
-    model = TransformerLSTMPolicy(cfg).cuda()
+    model = TwoStageTransformerPolicy(cfg).cuda()
     encoded, omitted = observation(cfg, count)
     batch = collate_observations([encoded] * 128, "cuda")
-    optimizer = torch.optim.Adam(model.parameters(), lr=cfg["training"]["learning_rate"])
+    optimizer = torch.optim.Adam(model.master_parameters(), lr=cfg["training"]["learning_rate"])
+    branches = torch.ones(128, device="cuda", dtype=torch.long)
+
+    def stage_values(stage):
+        return (
+            model.species_values(batch)
+            if stage == "species"
+            else model.conditional_tiles(batch, branches)
+        )
+
+    def stage_inference(stage):
+        model.eval()
+        with torch.no_grad():
+            stage_values(stage)
+
+    def stage_fitting(stage):
+        model.train()
+        model.zero_grad(set_to_none=True)
+        loss = (stage_values(stage)[:, 0] - 1).square().mean()
+        loss.backward()
+        model.accumulate_master_gradients()
+        model.clear_runtime_grad(set_to_none=True)
+        torch.nn.utils.clip_grad_norm_(
+            model.master_parameters(), cfg["training"]["max_grad_norm"], error_if_nonfinite=True
+        )
+        optimizer.step()
+        model.sync_runtime_from_masters()
 
     def inference():
         model.eval()
         with torch.no_grad():
-            result = model.forward_step(batch)
-            model.tile_values(
-                result.tile_features,
-                result.context,
-                torch.ones(128, device="cuda", dtype=torch.long),
-            )
-
-    # One chronological 128-decision sequence: encoder memory settings are the
-    # defaults, gradients cross time, and both Q heads participate in the fit.
-    sequence = batch.reshape(1, 128)
-    events = synthetic_event_history(1, 128, "cuda")
+            model.species_values(batch)
+            model.conditional_tiles(batch, torch.ones(128, device="cuda", dtype=torch.long))
 
     def fitting():
         model.train()
-        optimizer.zero_grad(set_to_none=True)
-        q, tiles, contexts, _ = model.forward_sequence(sequence, events=events, return_context=True)
-        tile_q = model.tile_values(
-            tiles.flatten(0, 1),
-            contexts.flatten(0, 1),
-            torch.ones(128, device="cuda", dtype=torch.long),
-        )
-        loss = (q[..., 0] - 1).square().mean() + (tile_q[:, 0] - 1).square().mean()
+        model.zero_grad(set_to_none=True)
+        q = model.species_values(batch)
+        tile_q = model.conditional_tiles(batch, torch.ones(128, device="cuda", dtype=torch.long))
+        loss = (q[:, 0] - 1).square().mean() + (tile_q[:, 0] - 1).square().mean()
         loss.backward()
+        model.accumulate_master_gradients()
+        model.clear_runtime_grad(set_to_none=True)
         if not torch.isfinite(loss) or any(
             p.grad is not None and not torch.isfinite(p.grad).all() for p in model.parameters()
         ):
             raise FloatingPointError("Nonfinite crowded-entity fitting")
         optimizer.step()
+        model.sync_runtime_from_masters()
 
     inference()
     fitting()
@@ -102,9 +107,15 @@ def measure(cfg, count, repeats=3):
         present=count,
         retained=len(encoded["entities"]),
         omitted=omitted,
-        synthetic_events_per_sequence=4,
     )
-    for name, operation in (("inference", inference), ("fitting", fitting)):
+    for name, operation in (
+        ("inference", inference),
+        ("species_inference", lambda: stage_inference("species")),
+        ("tile_inference", lambda: stage_inference("tile")),
+        ("species_fitting", lambda: stage_fitting("species")),
+        ("tile_fitting", lambda: stage_fitting("tile")),
+        ("fitting", fitting),
+    ):
         torch.cuda.synchronize()
         torch.cuda.reset_peak_memory_stats()
         start = perf_counter()

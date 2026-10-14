@@ -1,0 +1,103 @@
+{
+  "both_stage_measurement": {
+    "cap": 256,
+    "fitting": {
+      "observations": 128,
+      "observations_per_second": 930.4300040443021,
+      "peak_allocated_mib": 1104.447265625,
+      "peak_reserved_mib": 1304.0,
+      "seconds": 0.13757079999959387
+    },
+    "inference": {
+      "observations": 128,
+      "observations_per_second": 4426.9212146386335,
+      "peak_allocated_mib": 228.19091796875,
+      "peak_reserved_mib": 1304.0,
+      "seconds": 0.028913999999986117
+    },
+    "omitted": {
+      "plants": 0,
+      "projectiles": 0,
+      "total": 0,
+      "zombies": 0
+    },
+    "present": 40,
+    "retained": 40,
+    "species_fitting": {
+      "observations": 128,
+      "observations_per_second": 915.9527482868983,
+      "peak_allocated_mib": 204.11279296875,
+      "peak_reserved_mib": 1304.0,
+      "seconds": 0.1397452000001067
+    },
+    "species_inference": {
+      "observations": 128,
+      "observations_per_second": 25116.75365946422,
+      "peak_allocated_mib": 138.39501953125,
+      "peak_reserved_mib": 1304.0,
+      "seconds": 0.005096200000025419
+    },
+    "tile_fitting": {
+      "observations": 128,
+      "observations_per_second": 3123.2386032503855,
+      "peak_allocated_mib": 583.19482421875,
+      "peak_reserved_mib": 1304.0,
+      "seconds": 0.04098309999972116
+    },
+    "tile_inference": {
+      "observations": 128,
+      "observations_per_second": 5448.338682351798,
+      "peak_allocated_mib": 228.18994140625,
+      "peak_reserved_mib": 1304.0,
+      "seconds": 0.02349340000000666
+    }
+  },
+  "formal_training": false,
+  "policy_dimensions": {
+    "action_distribution": "sequential_q_unmasked_penalty_v1",
+    "attention_query_chunk": 64,
+    "encoder_microbatch": 128,
+    "encoder_token_budget": 65536,
+    "kind": "two_stage_transformer_q_v1",
+    "species_feedforward": 512,
+    "species_heads": 8,
+    "species_layers": 4,
+    "species_width": 128,
+    "tile_feedforward": 768,
+    "tile_heads": 12,
+    "tile_layers": 6,
+    "tile_width": 192
+  },
+  "probe": {
+    "bootstrap": 1.0,
+    "components": [
+      0.0,
+      0.0025,
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ],
+    "drain_seconds": 29.49210049999965,
+    "elapsed_ticks": 3000,
+    "seconds": 29.892100500000197,
+    "stop_reason": "horizon",
+    "telemetry": {
+      "active_auxiliary_lanes": 0,
+      "auxiliary_capacity": 1,
+      "oldest_pending_job_seconds": 0.0,
+      "oldest_queue_seconds": 0.0,
+      "pending_probe_jobs": 0,
+      "queued_probes": 0,
+      "source_capacity": 1,
+      "workspace_bytes": 4124461
+    },
+    "transitions": 3001,
+    "workspace_bytes": 4124461
+  },
+  "ready_slot_progress": {
+    "actual_decisions": 9,
+    "pending_probes": 1
+  },
+  "scope": "Bounded mechanical control, default 30-second horizon, one tile probe; no learning-quality claim"
+}

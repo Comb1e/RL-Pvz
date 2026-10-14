@@ -102,7 +102,7 @@ def refilled_games(
         started = [perf_counter()] * count
         inference_start = [0.0] * count
         obs = env.reset()
-        runner = PolicyRunner(policy.policy, cfg, env.batch.rules, count, policy.policy.device)
+        runner = PolicyRunner(policy.policy)
         with env.device_context():
             while finished < len(cases):
                 check_deadline(deadline)
@@ -112,7 +112,6 @@ def refilled_games(
                         actions = runner.decide(
                             obs,
                             env.action_masks(),
-                            env.header_tensor[:, 0],
                             active=active,
                             defer_check=True,
                         )[0]
@@ -120,11 +119,6 @@ def refilled_games(
                     buffered.append(actions)
                 obs, _, _, _, _, infos = env.step_tensors(actions, autoreset=False)
                 runner.check()
-                runner.observe_result(
-                    env.features.history_tensor,
-                    env.transition_ticks,
-                    active=active,
-                )
                 done = [i for i, info in enumerate(infos) if "episode_metrics" in info]
                 if record and (done or len(buffered) >= 128):
                     raw = torch.stack(buffered).cpu().numpy()
@@ -156,7 +150,6 @@ def refilled_games(
                 if reset:
                     env.reset_indices(reset, assigned)
                     obs = env.features.obs_tensor
-                    runner.reset(reset)
                 if progress:
                     progress.emit(f"GPU evaluation: {finished}/{len(cases)} games complete")
                 while next_yield in completed:
@@ -194,9 +187,7 @@ def fixed_batches(
             started = perf_counter()
             try:
                 obs = env.reset()
-                runner = PolicyRunner(
-                    policy.policy, cfg, env.batch.rules, len(chunk), policy.policy.device
-                )
+                runner = PolicyRunner(policy.policy)
                 with env.device_context():
                     while len(completed) < len(chunk):
                         check_deadline(deadline)
@@ -208,7 +199,6 @@ def fixed_batches(
                                 actions = runner.decide(
                                     obs,
                                     env.action_masks(),
-                                    env.header_tensor[:, 0],
                                     active=active,
                                     defer_check=True,
                                 )[0]
@@ -216,11 +206,6 @@ def fixed_batches(
                             buffered.append(actions)
                         obs, _, _, _, _, infos = env.step_tensors(actions, autoreset=False)
                         runner.check()
-                        runner.observe_result(
-                            env.features.history_tensor,
-                            env.transition_ticks,
-                            active=active,
-                        )
                         # The compact completion transfer has already waited for
                         # inference. Bound event storage and measure execution,
                         # rather than reporting host enqueue time as GPU latency.

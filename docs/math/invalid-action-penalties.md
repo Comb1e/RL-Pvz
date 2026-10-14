@@ -44,11 +44,14 @@ the indicators from the public action result; CUDA uses the same action index,
 accepted flag, and pinned rejection reason (`empty_tile`, reason 4). Independent
 controls cover zero-sun and cooldown plants, occupied/full-board proposals, empty
 digs, one-tick advancement, terminal conservation, and CPU/CUDA equality.
-The trajectory stores the selected proposal so its complete-return target learns
-the penalty. Recurrent input stores the resolved execution action separately:
-the proposal after acceptance, or wait (`0`) after rejection, together with
-`accepted` and `ticks_advanced`. Rejection therefore produces `(0, 0, 1)`
-for the next recurrent input. The cap does not change branch selection or penalties.
+The trajectory stores the actual selected proposal so its complete-return target
+learns the penalty. Execution evidence separately retains the proposal after
+acceptance, or wait (`0`) after rejection, together with `accepted` and
+`ticks_advanced`. These are learning/diagnostic facts, not historical model inputs:
+the next decision reads only the resulting current board. The entity cap does not
+change branch selection or penalties. Non-wait regression trains the proposed tile;
+species consistency uses a detached EMA best-candidate target instead of assigning
+the sampled tile's return directly to the species network.
 
 These defaults are experimental costs, not learned calibration. At 100 decisions
 per simulated second, repeatedly selecting an invalid plant costs 0.001 reward per

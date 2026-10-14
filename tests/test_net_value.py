@@ -218,7 +218,6 @@ def test_mixed_cuda_resets_preserve_duration_and_episode_ledgers():
 
     cfg = load_config()
     cfg["training"].update(n_envs=2, batch_size=128)
-    cfg["policy"]["chunk_length"] = 16
     cfg["environment"]["cutoff_seconds"] = 1
     cases = [("easy", "diagnostic", 4), ("easy", "diagnostic", 5)]
     gpu = CudaVecEnv(cfg, "masked", 0, training=False, cases=cases)

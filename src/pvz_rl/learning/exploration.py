@@ -7,7 +7,12 @@ from enum import IntEnum
 import torch
 
 from pvz_rl.envs.actions import ActionSchema as A
-from pvz_rl.policy.sequential_q import action_parts, assemble, select_q_tiles
+from pvz_rl.policy.sequential_q import (
+    action_parts,
+    assemble,
+    candidate_maxima,
+    select_q_tiles,
+)
 
 EXPLORATION_PROTOCOL = "committed_plant_tile_epsilon_v1"
 CONTROLLER_PROTOCOL = "pvz-rl/committed-plant-state-v1"
@@ -99,8 +104,13 @@ class CommittedPlantExploration:
         species = (pending - 1).clamp_min(0)
         empty = A.tile_masks(masks)[rows, species].any(-1)
         ready = committed & empty & (sun >= costs[species]) & (cooldowns[rows, species] == 0)
+        policy_branches, _ = action_parts(actions)
+        reuse = ready & (policy_branches == pending)
+        requests = torch.where(ready & ~reuse, pending, 0)
+        conditional = policy.conditional_tiles(details["observations"], requests, plan=plan)
+        conditional = torch.where(reuse[:, None], details["tile_q"], conditional)
         tiles, _, fired, tile_q = select_q_tiles(
-            details["action_q"],
+            conditional,
             masks,
             pending.clamp_min(1),
             self.tile_epsilon,
@@ -120,9 +130,16 @@ class CommittedPlantExploration:
         details["tile_value"] = torch.where(
             committed, torch.where(ready, selected_tile, 0), details["tile_value"]
         )
+        details["tile_q"] = torch.where(committed[:, None], conditional, details["tile_q"])
         details["valid"] &= (torch.isfinite(tile_q) | ~ready[:, None]).all()
-        details["selected_value"] = details["action_q"].selected(chosen)
-        details["placement_gap"] = details["branch_value"] - details["selected_value"]
+        details["selected_value"] = torch.where(
+            branches > 0, details["tile_value"], details["branch_q"][:, 0]
+        )
+        details["placement_gap"] = torch.where(
+            branches > 0,
+            candidate_maxima(details["tile_q"], masks, branches) - details["tile_value"],
+            0,
+        )
         return chosen, details["branch_value"], details["tile_value"], details
 
     @torch.no_grad()

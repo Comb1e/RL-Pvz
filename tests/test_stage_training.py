@@ -29,7 +29,6 @@ def stage_cfg():
         max_minutes=2,
     )
     cfg["visualization"].update(enabled=False, demos=False)
-    cfg["policy"]["chunk_length"] = 16
     return cfg
 
 
@@ -88,7 +87,7 @@ def test_transfer_compatibility_preserves_learning_contract(stage_cfg, change):
     elif change == "discount":
         altered["training"]["gamma"] = 0.9999
     elif change == "policy":
-        altered["policy"]["entity_width"] = 64
+        altered["policy"]["species_width"] = 64
     elif change == "tasks":
         altered["curriculum"]["stages"]["standard"]["weights"] = [0.6, 0.4]
     elif change == "optimizer":
@@ -167,7 +166,7 @@ def test_invalid_stage_requests_leave_no_run(stage_cfg, tmp_path, case):
 
 def test_incompatible_checkpoint_rejected_before_run(stage_cfg, tmp_path, monkeypatch):
     saved = copy.deepcopy(stage_cfg)
-    saved["policy"]["entity_width"] = 64
+    saved["policy"]["species_width"] = 64
     write_json(
         tmp_path / "metadata.json", {"config": saved, "condition": "masked", "family": "preset"}
     )
@@ -593,7 +592,6 @@ def test_until_mastery_cli_saved_resume_and_unbounded_clock(stage_cfg, tmp_path,
     assert restored == cfg
     target = copy.deepcopy(stage_cfg)
     target["environment"] = cfg["environment"]
-    target["policy"]["chunk_length"] = cfg["policy"]["chunk_length"]
     assert transfer_protocol(cfg) == transfer_protocol(target)
     with pytest.raises(ValueError, match="explicit training deadline"):
         train(cfg, "masked", 101, tmp_path / "absent", deadline=1)

@@ -112,52 +112,68 @@ def load_demo_config(path: str | Path | None = None, *, profile: str = "demo") -
     cfg = load_config(path, profile=profile)
     if (
         cfg["encoding"]["version"] != "entity_v1"
-        or cfg["policy"]["kind"] != "transformer_lstm_q_v4"
+        or cfg["policy"]["kind"] != "two_stage_transformer_q_v1"
     ):
-        raise ValueError("Human demonstrations require the entity_v1 Transformer-LSTM demo profile")
+        raise ValueError("Human demonstrations require the stateless two-stage Transformer profile")
     return copy.deepcopy(cfg)
 
 
 def validate_config(cfg: dict) -> None:
     objective = cfg["training"].get("objective")
+    if not isinstance(objective, dict):
+        raise ValueError("training.objective must describe the stateless two-stage objective")
     if objective is not None:
-        if objective.get("protocol") != "complete_return_joint_tile_probe_v1":
-            raise ValueError("Unsupported training objective protocol")
+        objective_keys = {
+            "protocol",
+            "accepted_outcome_share",
+            "species_consistency_weight",
+            "species_consistency_huber_delta",
+            "dense_multiplier",
+            "ema_decay",
+            "demo_rank_loss_weight",
+            "demo_rank_margin",
+        }
+        if set(objective) != objective_keys:
+            raise ValueError(
+                "training.objective contains retired or missing settings, including "
+                "species_consistency_huber_delta"
+            )
+        if objective.get("protocol") != "complete_return_sequential_no_probe_v1":
+            raise ValueError(
+                "Unsupported training objective protocol; fresh initialization is required"
+            )
         if objective.get("accepted_outcome_share") != 0.5:
             raise ValueError("objective.accepted_outcome_share must be 0.5")
-        for key in ("dense_multiplier", "probe_huber_delta", "demo_rank_margin"):
+        consistency_weight = objective.get("species_consistency_weight")
+        if (
+            type(consistency_weight) not in (int, float)
+            or not math.isfinite(consistency_weight)
+            or consistency_weight < 0
+        ):
+            raise ValueError("objective.species_consistency_weight must be finite and nonnegative")
+        consistency_delta = objective.get("species_consistency_huber_delta")
+        if (
+            type(consistency_delta) not in (int, float)
+            or not math.isfinite(consistency_delta)
+            or consistency_delta <= 0
+        ):
+            raise ValueError(
+                "objective.species_consistency_huber_delta must be finite and positive"
+            )
+        for key in ("dense_multiplier", "demo_rank_margin"):
             if (
                 not isinstance(objective.get(key), (int, float))
                 or not math.isfinite(objective[key])
                 or objective[key] <= 0
             ):
                 raise ValueError(f"objective.{key} must be finite and positive")
-        for key in ("probe_loss_weight", "demo_rank_loss_weight", "ema_decay"):
+        for key in ("demo_rank_loss_weight", "ema_decay"):
             if (
                 not isinstance(objective.get(key), (int, float))
                 or not math.isfinite(objective[key])
                 or not 0 <= objective[key] < 1
             ):
                 raise ValueError(f"objective.{key} must be finite and in [0, 1)")
-        from pvz_rl.learning.probe_layout import ProbeLayout
-
-        ProbeLayout.from_config(cfg)
-        if (
-            objective.get("probe_trigger") != "accepted_plant"
-            or "probe_interval_decisions" in objective
-        ):
-            raise ValueError(
-                "The objective requires accepted-plant probes without a periodic scheduler"
-            )
-        for key in (
-            "probe_rollout_max_decisions",
-            "probe_rollout_control_interval_decisions",
-        ):
-            if type(objective.get(key)) is not int or objective[key] < 1:
-                raise ValueError(f"objective.{key} must be a positive integer")
-        seconds = objective.get("probe_rollout_seconds")
-        if type(seconds) not in (int, float) or not math.isfinite(seconds) or seconds <= 0:
-            raise ValueError("objective.probe_rollout_seconds must be finite and positive")
     penalties = cfg["reward"].get("home_entry_penalties", [0, 0])
     if (
         len(penalties) != 2
@@ -168,9 +184,9 @@ def validate_config(cfg: dict) -> None:
     weight = cfg["reward"].get("win_time_weight", 0)
     if not math.isfinite(weight) or weight < 0:
         raise ValueError("win_time_weight must be finite and nonnegative")
-    recurrent = (
+    current_policy = (
         cfg.get("encoding", {}).get("version") == "entity_v1"
-        and cfg.get("policy", {}).get("kind") == "transformer_lstm_q_v4"
+        and cfg.get("policy", {}).get("kind") == "two_stage_transformer_q_v1"
     )
     if cfg["training"].get("validation_schedule", "periodic") not in (
         "periodic",
@@ -179,7 +195,7 @@ def validate_config(cfg: dict) -> None:
         raise ValueError("training.validation_schedule must be periodic or stage_success")
     if simulator(cfg) not in ("cpu", "cuda"):
         raise ValueError("simulation.backend must be cpu or cuda")
-    if not recurrent:
+    if not current_policy:
         raise ValueError(
             "Retired observation/policy format; entity_v1 requires fresh initialization"
         )
@@ -245,27 +261,41 @@ def validate_config(cfg: dict) -> None:
     if type(cfg["encoding"].get("max_entities")) is not int or cfg["encoding"]["max_entities"] < 5:
         raise ValueError("encoding.max_entities must be an integer of at least 5")
     policy = cfg["policy"]
-    for key in (
-        "entity_width",
-        "transformer_layers",
-        "transformer_heads",
-        "transformer_feedforward",
-        "scalar_width",
-        "lstm_hidden",
-        "event_width",
-        "chunk_length",
+    model_settings = {
+        "species_width": 128,
+        "species_layers": 4,
+        "species_heads": 8,
+        "species_feedforward": 512,
+        "tile_width": 192,
+        "tile_layers": 6,
+        "tile_heads": 12,
+        "tile_feedforward": 768,
+    }
+    execution_settings = (
         "encoder_microbatch",
         "attention_query_chunk",
         "encoder_token_budget",
+    )
+    if set(policy) != set(model_settings) | set(execution_settings) | {
+        "kind",
+        "action_distribution",
+    }:
+        raise ValueError(
+            "policy must contain only the stateless two-stage model and execution settings"
+        )
+    if policy["action_distribution"] != "sequential_q_unmasked_penalty_v1":
+        raise ValueError("Unsupported sequential action-value distribution")
+    for key in (
+        *model_settings,
+        *execution_settings,
     ):
         if type(policy.get(key)) is not int or policy[key] < 1:
             raise ValueError(f"policy.{key} must be a positive integer")
-    if policy.get("history") != "public_event_history_v1":
-        raise ValueError("Unsupported public event-history protocol")
-    if any(key in policy for key in ("action_embedding", "outcome_width")):
-        raise ValueError("Per-decision recurrent input fields are retired")
-    if policy["entity_width"] % policy["transformer_heads"]:
-        raise ValueError("policy.entity_width must be divisible by transformer_heads")
+    for key, expected in model_settings.items():
+        if policy[key] != expected:
+            raise ValueError(
+                f"policy.{key} must be {expected} for the two-stage Transformer contract"
+            )
     sample_seconds = output_settings(cfg)["logging"]["hardware_sample_seconds"]
     if (
         type(sample_seconds) not in (int, float)
@@ -383,7 +413,7 @@ def validate_config(cfg: dict) -> None:
     if not math.isfinite(visual["final_hold_seconds"]) or visual["final_hold_seconds"] < 0:
         raise ValueError("Visualization final_hold_seconds must be finite and nonnegative")
     env, train = cfg["environment"], cfg["training"]
-    expected_method = "complete_return_joint_tile_probe_v1"
+    expected_method = "complete_return_sequential_no_probe_v1"
     if train.get("method") != expected_method:
         raise ValueError("Training requires a supported complete-return method and fresh models")
     if any(
@@ -410,13 +440,25 @@ def validate_config(cfg: dict) -> None:
     for key in ("compile_kernels", "telemetry"):
         if type(performance.get(key, False)) is not bool:
             raise ValueError(f"training.performance.{key} must be a boolean")
-    if performance.get("fit_precision", "fp32") not in ("fp32", "features_bf16"):
-        raise ValueError("training.performance.fit_precision must be fp32 or features_bf16")
+    if performance.get("fit_precision", "fp32") != "bf16_master":
+        raise ValueError("training.performance.fit_precision must be bf16_master")
     if type(performance.get("prefetch", False)) is not bool:
         raise ValueError("training.performance.prefetch must be a boolean")
-    fit_sequence_groups = performance.get("fit_sequence_groups", 1)
-    if type(fit_sequence_groups) is not int or fit_sequence_groups < 1 or fit_sequence_groups > 16:
-        raise ValueError("training.performance.fit_sequence_groups must be an integer from 1 to 16")
+    if set(performance) - {
+        "compile_kernels",
+        "telemetry",
+        "fit_precision",
+        "prefetch",
+        "fit_batch_groups",
+        "fit_encoder_microbatch",
+        "fit_token_budget",
+        "collection_graph_cache_entries",
+        "collection_vram_headroom_mib",
+    }:
+        raise ValueError("training.performance contains unsupported execution settings")
+    fit_batch_groups = performance.get("fit_batch_groups", 4)
+    if type(fit_batch_groups) is not int or not 1 <= fit_batch_groups <= 16:
+        raise ValueError("training.performance.fit_batch_groups must be an integer from 1 to 16")
     for key, default in (
         ("collection_graph_cache_entries", 8),
         ("collection_vram_headroom_mib", 512),
@@ -424,7 +466,7 @@ def validate_config(cfg: dict) -> None:
         value = performance.get(key, default)
         if type(value) is not int or value < 0:
             raise ValueError(f"training.performance.{key} must be a nonnegative integer")
-    for key in ("probe_active_capacity", "probe_pending_capacity", "probe_steps_per_round"):
+    for key in ("fit_encoder_microbatch", "fit_token_budget"):
         if type(performance.get(key)) is not int or performance[key] < 1:
             raise ValueError(f"training.performance.{key} must be a positive integer")
     if train.get("budget_unit") not in ("games", "decisions"):
@@ -462,8 +504,6 @@ def validate_config(cfg: dict) -> None:
             raise ValueError(f"{key} must be a positive integer")
     if train.get("discount_clock") != "simulation_ticks" or train["gamma"] != 1:
         raise ValueError("Complete actual returns require gamma 1; start fresh")
-    if train["batch_size"] % policy["chunk_length"]:
-        raise ValueError("Recurrent batch_size must be a positive multiple of chunk_length")
     if train["batch_size"] > 1024:
         raise ValueError("Bounded minibatches must not exceed 1024")
     demo = train.get("demo", {})

@@ -1,0 +1,265 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="3" skipped="0" tests="16" time="4.393" timestamp="2026-10-13T18:04:35.026114+09:00" hostname="R"><testcase classname="tests.test_two_stage_transformer" name="test_bf16_encoder_features_keep_fp32_heads_master_weights_and_gradients[0]" time="1.197"><failure message="AssertionError: Tensor-likes are not close!&#10;&#10;Mismatched elements: 8 / 135 (5.9%)&#10;Greatest absolute difference: 0.003396660089492798 at index (0, 4) (up to 0.002 allowed)&#10;Greatest relative difference: 0.9132609963417053 at index (0, 15) (up to 0.01 allowed)">count = 0
+
+    @pytest.mark.parametrize("count", [0, 40, 256])
+    def test_bf16_encoder_features_keep_fp32_heads_master_weights_and_gradients(count):
+        cfg = small_config()
+        raw, _ = observation(cfg, count)
+        if count == 0:
+            raw["entities"] = raw["entities"][:0]
+            raw["globals"][-4:] = 0
+        observations = collate_observations([raw] * 3, "cuda")
+        torch.manual_seed(101)
+        reference = TwoStageTransformerPolicy(cfg).cuda()
+        mixed = TwoStageTransformerPolicy(cfg).cuda()
+        mixed.load_state_dict(reference.state_dict())
+        seen, hooks = {}, []
+        for stage in ("species", "tile"):
+            head = getattr(mixed, f"{stage}_head")
+            encoder = getattr(mixed, f"{stage}_encoder")
+            hooks.append(
+                head.register_forward_pre_hook(
+                    lambda module, args, stage=stage: seen.update({f"{stage}_head": args[0].dtype})
+                )
+            )
+            hooks.append(
+                encoder.layers[0].qkv.register_forward_hook(
+                    lambda module, args, output, stage=stage: seen.update(
+                        {f"{stage}_qkv": output.dtype}
+                    )
+                )
+            )
+
+        def values_and_regions(policy, precision):
+            regions = {}
+            handles = [
+                getattr(policy, f"{stage}_head")[0].register_forward_hook(
+                    lambda module, args, output, stage=stage: regions.update(
+                        {stage: output.detach().clone()}
+                    )
+                )
+                for stage in ("species", "tile")
+            ]
+            try:
+                with policy.fitting_precision(precision):
+                    species = policy.species_values(observations)
+                    tiles = policy.conditional_tiles(
+                        observations, torch.tensor([1, 8, 9], device="cuda")
+                    )
+                return species, tiles, regions
+            finally:
+                for handle in handles:
+                    handle.remove()
+
+        with torch.no_grad():
+            original = [
+                values_and_regions(policy, precision)
+                for policy, precision in ((reference, "fp32"), (mixed, "features_bf16"))
+            ]
+            for actual, expected in zip(original[0][:2], original[1][:2], strict=True):
+                torch.testing.assert_close(actual, expected, atol=0.002, rtol=0.01)
+            margin = 0.5
+            for stage in ("species", "tile"):
+                reference_head = getattr(reference, f"{stage}_head")[0]
+                mixed_head = getattr(mixed, f"{stage}_head")[0]
+                minimum = torch.minimum(
+                    original[0][2][stage].reshape(-1, reference_head.out_features).amin(0),
+                    original[1][2][stage].reshape(-1, mixed_head.out_features).amin(0),
+                )
+                reference_head.bias.add_((margin - minimum).clamp_min(0))
+                mixed_head.bias.copy_(reference_head.bias)
+        outputs, gradients = [], []
+        for policy, precision in ((reference, "fp32"), (mixed, "features_bf16")):
+            species, tiles, regions = values_and_regions(policy, precision)
+            assert all((region &gt; margin / 2).all() for region in regions.values())
+            ((species - 0.5).square().mean() + (tiles + 0.5).square().mean()).backward()
+            outputs.append((species, tiles))
+            assert all(
+                parameter.dtype == parameter.grad.dtype == torch.float32
+                for parameter in policy.parameters()
+            )
+            gradients.append(torch.cat([parameter.grad.flatten() for parameter in policy.parameters()]))
+        for actual, expected in zip(*outputs, strict=True):
+&gt;           torch.testing.assert_close(actual, expected, atol=0.002, rtol=0.01)
+E           AssertionError: Tensor-likes are not close!
+E
+E           Mismatched elements: 8 / 135 (5.9%)
+E           Greatest absolute difference: 0.003396660089492798 at index (0, 4) (up to 0.002 allowed)
+E           Greatest relative difference: 0.9132609963417053 at index (0, 15) (up to 0.01 allowed)
+
+tests\test_two_stage_transformer.py:477: AssertionError</failure></testcase><testcase classname="tests.test_two_stage_transformer" name="test_bf16_encoder_features_keep_fp32_heads_master_weights_and_gradients[40]" time="0.065"><failure message="AssertionError: Tensor-likes are not close!&#10;&#10;Mismatched elements: 2 / 135 (1.5%)&#10;Greatest absolute difference: 0.0029361695051193237 at index (0, 14) (up to 0.002 allowed)&#10;Greatest relative difference: 0.12675876915454865 at index (0, 4) (up to 0.01 allowed)">count = 40
+
+    @pytest.mark.parametrize("count", [0, 40, 256])
+    def test_bf16_encoder_features_keep_fp32_heads_master_weights_and_gradients(count):
+        cfg = small_config()
+        raw, _ = observation(cfg, count)
+        if count == 0:
+            raw["entities"] = raw["entities"][:0]
+            raw["globals"][-4:] = 0
+        observations = collate_observations([raw] * 3, "cuda")
+        torch.manual_seed(101)
+        reference = TwoStageTransformerPolicy(cfg).cuda()
+        mixed = TwoStageTransformerPolicy(cfg).cuda()
+        mixed.load_state_dict(reference.state_dict())
+        seen, hooks = {}, []
+        for stage in ("species", "tile"):
+            head = getattr(mixed, f"{stage}_head")
+            encoder = getattr(mixed, f"{stage}_encoder")
+            hooks.append(
+                head.register_forward_pre_hook(
+                    lambda module, args, stage=stage: seen.update({f"{stage}_head": args[0].dtype})
+                )
+            )
+            hooks.append(
+                encoder.layers[0].qkv.register_forward_hook(
+                    lambda module, args, output, stage=stage: seen.update(
+                        {f"{stage}_qkv": output.dtype}
+                    )
+                )
+            )
+
+        def values_and_regions(policy, precision):
+            regions = {}
+            handles = [
+                getattr(policy, f"{stage}_head")[0].register_forward_hook(
+                    lambda module, args, output, stage=stage: regions.update(
+                        {stage: output.detach().clone()}
+                    )
+                )
+                for stage in ("species", "tile")
+            ]
+            try:
+                with policy.fitting_precision(precision):
+                    species = policy.species_values(observations)
+                    tiles = policy.conditional_tiles(
+                        observations, torch.tensor([1, 8, 9], device="cuda")
+                    )
+                return species, tiles, regions
+            finally:
+                for handle in handles:
+                    handle.remove()
+
+        with torch.no_grad():
+            original = [
+                values_and_regions(policy, precision)
+                for policy, precision in ((reference, "fp32"), (mixed, "features_bf16"))
+            ]
+            for actual, expected in zip(original[0][:2], original[1][:2], strict=True):
+                torch.testing.assert_close(actual, expected, atol=0.002, rtol=0.01)
+            margin = 0.5
+            for stage in ("species", "tile"):
+                reference_head = getattr(reference, f"{stage}_head")[0]
+                mixed_head = getattr(mixed, f"{stage}_head")[0]
+                minimum = torch.minimum(
+                    original[0][2][stage].reshape(-1, reference_head.out_features).amin(0),
+                    original[1][2][stage].reshape(-1, mixed_head.out_features).amin(0),
+                )
+                reference_head.bias.add_((margin - minimum).clamp_min(0))
+                mixed_head.bias.copy_(reference_head.bias)
+        outputs, gradients = [], []
+        for policy, precision in ((reference, "fp32"), (mixed, "features_bf16")):
+            species, tiles, regions = values_and_regions(policy, precision)
+            assert all((region &gt; margin / 2).all() for region in regions.values())
+            ((species - 0.5).square().mean() + (tiles + 0.5).square().mean()).backward()
+            outputs.append((species, tiles))
+            assert all(
+                parameter.dtype == parameter.grad.dtype == torch.float32
+                for parameter in policy.parameters()
+            )
+            gradients.append(torch.cat([parameter.grad.flatten() for parameter in policy.parameters()]))
+        for actual, expected in zip(*outputs, strict=True):
+&gt;           torch.testing.assert_close(actual, expected, atol=0.002, rtol=0.01)
+E           AssertionError: Tensor-likes are not close!
+E
+E           Mismatched elements: 2 / 135 (1.5%)
+E           Greatest absolute difference: 0.0029361695051193237 at index (0, 14) (up to 0.002 allowed)
+E           Greatest relative difference: 0.12675876915454865 at index (0, 4) (up to 0.01 allowed)
+
+tests\test_two_stage_transformer.py:477: AssertionError</failure></testcase><testcase classname="tests.test_two_stage_transformer" name="test_bf16_encoder_features_keep_fp32_heads_master_weights_and_gradients[256]" time="0.076"><failure message="AssertionError: Tensor-likes are not close!&#10;&#10;Mismatched elements: 2 / 135 (1.5%)&#10;Greatest absolute difference: 0.0030849575996398926 at index (1, 24) (up to 0.002 allowed)&#10;Greatest relative difference: 0.09030846506357193 at index (1, 13) (up to 0.01 allowed)">count = 256
+
+    @pytest.mark.parametrize("count", [0, 40, 256])
+    def test_bf16_encoder_features_keep_fp32_heads_master_weights_and_gradients(count):
+        cfg = small_config()
+        raw, _ = observation(cfg, count)
+        if count == 0:
+            raw["entities"] = raw["entities"][:0]
+            raw["globals"][-4:] = 0
+        observations = collate_observations([raw] * 3, "cuda")
+        torch.manual_seed(101)
+        reference = TwoStageTransformerPolicy(cfg).cuda()
+        mixed = TwoStageTransformerPolicy(cfg).cuda()
+        mixed.load_state_dict(reference.state_dict())
+        seen, hooks = {}, []
+        for stage in ("species", "tile"):
+            head = getattr(mixed, f"{stage}_head")
+            encoder = getattr(mixed, f"{stage}_encoder")
+            hooks.append(
+                head.register_forward_pre_hook(
+                    lambda module, args, stage=stage: seen.update({f"{stage}_head": args[0].dtype})
+                )
+            )
+            hooks.append(
+                encoder.layers[0].qkv.register_forward_hook(
+                    lambda module, args, output, stage=stage: seen.update(
+                        {f"{stage}_qkv": output.dtype}
+                    )
+                )
+            )
+
+        def values_and_regions(policy, precision):
+            regions = {}
+            handles = [
+                getattr(policy, f"{stage}_head")[0].register_forward_hook(
+                    lambda module, args, output, stage=stage: regions.update(
+                        {stage: output.detach().clone()}
+                    )
+                )
+                for stage in ("species", "tile")
+            ]
+            try:
+                with policy.fitting_precision(precision):
+                    species = policy.species_values(observations)
+                    tiles = policy.conditional_tiles(
+                        observations, torch.tensor([1, 8, 9], device="cuda")
+                    )
+                return species, tiles, regions
+            finally:
+                for handle in handles:
+                    handle.remove()
+
+        with torch.no_grad():
+            original = [
+                values_and_regions(policy, precision)
+                for policy, precision in ((reference, "fp32"), (mixed, "features_bf16"))
+            ]
+            for actual, expected in zip(original[0][:2], original[1][:2], strict=True):
+                torch.testing.assert_close(actual, expected, atol=0.002, rtol=0.01)
+            margin = 0.5
+            for stage in ("species", "tile"):
+                reference_head = getattr(reference, f"{stage}_head")[0]
+                mixed_head = getattr(mixed, f"{stage}_head")[0]
+                minimum = torch.minimum(
+                    original[0][2][stage].reshape(-1, reference_head.out_features).amin(0),
+                    original[1][2][stage].reshape(-1, mixed_head.out_features).amin(0),
+                )
+                reference_head.bias.add_((margin - minimum).clamp_min(0))
+                mixed_head.bias.copy_(reference_head.bias)
+        outputs, gradients = [], []
+        for policy, precision in ((reference, "fp32"), (mixed, "features_bf16")):
+            species, tiles, regions = values_and_regions(policy, precision)
+            assert all((region &gt; margin / 2).all() for region in regions.values())
+            ((species - 0.5).square().mean() + (tiles + 0.5).square().mean()).backward()
+            outputs.append((species, tiles))
+            assert all(
+                parameter.dtype == parameter.grad.dtype == torch.float32
+                for parameter in policy.parameters()
+            )
+            gradients.append(torch.cat([parameter.grad.flatten() for parameter in policy.parameters()]))
+        for actual, expected in zip(*outputs, strict=True):
+&gt;           torch.testing.assert_close(actual, expected, atol=0.002, rtol=0.01)
+E           AssertionError: Tensor-likes are not close!
+E
+E           Mismatched elements: 2 / 135 (1.5%)
+E           Greatest absolute difference: 0.0030849575996398926 at index (1, 24) (up to 0.002 allowed)
+E           Greatest relative difference: 0.09030846506357193 at index (1, 13) (up to 0.01 allowed)
+
+tests\test_two_stage_transformer.py:477: AssertionError</failure></testcase><testcase classname="tests.test_two_stage_transformer" name="test_quantized_readout_relu_boundary_has_independent_piecewise_gradients[positive]" time="0.002" /><testcase classname="tests.test_two_stage_transformer" name="test_quantized_readout_relu_boundary_has_independent_piecewise_gradients[rounded-negative]" time="0.002" /><testcase classname="tests.test_two_stage_transformer" name="test_quantized_readout_relu_boundary_has_independent_piecewise_gradients[rounded-positive]" time="0.002" /><testcase classname="tests.test_two_stage_transformer" name="test_quantized_readout_relu_boundary_has_independent_piecewise_gradients[negative]" time="0.001" /><testcase classname="tests.test_two_stage_transformer" name="test_quantized_readout_relu_boundary_has_independent_piecewise_gradients[exact-boundary]" time="0.001" /><testcase classname="tests.test_two_stage_transformer" name="test_outer_activation_checkpointing_matches_direct_loss_and_gradients[fp32-2-species]" time="0.891" /><testcase classname="tests.test_two_stage_transformer" name="test_outer_activation_checkpointing_matches_direct_loss_and_gradients[fp32-2-tile]" time="0.117" /><testcase classname="tests.test_two_stage_transformer" name="test_outer_activation_checkpointing_matches_direct_loss_and_gradients[fp32-4-species]" time="0.085" /><testcase classname="tests.test_two_stage_transformer" name="test_outer_activation_checkpointing_matches_direct_loss_and_gradients[fp32-4-tile]" time="0.090" /><testcase classname="tests.test_two_stage_transformer" name="test_outer_activation_checkpointing_matches_direct_loss_and_gradients[features_bf16-2-species]" time="0.113" /><testcase classname="tests.test_two_stage_transformer" name="test_outer_activation_checkpointing_matches_direct_loss_and_gradients[features_bf16-2-tile]" time="0.113" /><testcase classname="tests.test_two_stage_transformer" name="test_outer_activation_checkpointing_matches_direct_loss_and_gradients[features_bf16-4-species]" time="0.085" /><testcase classname="tests.test_two_stage_transformer" name="test_outer_activation_checkpointing_matches_direct_loss_and_gradients[features_bf16-4-tile]" time="0.098" /></testsuite></testsuites>

@@ -8,12 +8,11 @@ PERFORMANCE_SETTINGS = (
     "prefetch",
     "compile_kernels",
     "telemetry",
-    "fit_sequence_groups",
+    "fit_batch_groups",
     "collection_graph_cache_entries",
     "collection_vram_headroom_mib",
-    "probe_active_capacity",
-    "probe_pending_capacity",
-    "probe_steps_per_round",
+    "fit_encoder_microbatch",
+    "fit_token_budget",
 )
 
 

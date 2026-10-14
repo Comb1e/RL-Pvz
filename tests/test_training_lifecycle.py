@@ -1,4 +1,4 @@
-"""Validation scheduling, finalization, and recurrent checkpoint compatibility."""
+"""Validation scheduling, finalization, and stateless checkpoint compatibility."""
 
 from time import perf_counter
 
@@ -26,7 +26,6 @@ def small_cfg():
         total_games=12,
         max_minutes=2,
     )
-    cfg["policy"]["chunk_length"] = 16
     return cfg
 
 
@@ -189,7 +188,7 @@ def test_retired_checkpoint_rejected_before_deserialization(smoke_cfg, tmp_path,
 
     from pvz_rl.config import validate_config
     from pvz_rl.envs.env import PvZEnv
-    from pvz_rl.learning.recurrent_q import CudaRecurrentQ
+    from pvz_rl.learning.sequential_training import CudaSequentialQ
     from pvz_rl.learning.training import initial_weights
 
     old = copy.deepcopy(smoke_cfg)
@@ -221,7 +220,7 @@ def test_retired_checkpoint_rejected_before_deserialization(smoke_cfg, tmp_path,
     for operation in (
         lambda: load_policy(archive_path),
         lambda: initial_weights(archive_path, smoke_cfg),
-        lambda: CudaRecurrentQ.load(archive_path),
+        lambda: CudaSequentialQ.load(archive_path),
         lambda: validate_config(old),
         lambda: PvZEnv(old),
     ):

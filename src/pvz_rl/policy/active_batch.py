@@ -5,7 +5,6 @@ from dataclasses import dataclass
 import numpy as np
 import torch
 
-from pvz_rl.envs.actions import ActionSchema as A
 from pvz_rl.envs.encoding import EntityBatch, width_bucket
 
 
@@ -25,7 +24,9 @@ class ActiveBatchPlan:
     buckets: tuple[ActiveBucket, ...]
 
     @classmethod
-    def from_counts(cls, active, counts, entity_cap, microbatch=None, token_budget=None):
+    def from_counts(
+        cls, active, counts, entity_cap, microbatch=None, token_budget=None, *, token_overhead=1
+    ):
         if microbatch is None or token_budget is None:
             from pvz_rl.config import load_config
 
@@ -38,7 +39,7 @@ class ActiveBatchPlan:
         counts = np.asarray(counts, dtype=np.int64)
         if active.ndim != 1 or counts.shape != active.shape or np.any(counts < 0):
             raise ValueError("Active counts must be nonnegative canonical slot vectors")
-        if entity_cap < 1 or microbatch < 1 or token_budget < 1:
+        if entity_cap < 1 or microbatch < 1 or token_budget < 1 or token_overhead < 1:
             raise ValueError("Inference limits must be positive")
         if np.any(counts[active] > entity_cap):
             raise ValueError("Public inference counts exceed the retained entity cap")
@@ -49,7 +50,7 @@ class ActiveBatchPlan:
         buckets = []
         for width in np.unique(widths):
             slots = original[widths == width]
-            capacity = max(1, min(microbatch, token_budget // (int(width) + 46)))
+            capacity = max(1, min(microbatch, token_budget // (int(width) + token_overhead)))
             capacity = 1 << (capacity.bit_length() - 1)
             for start in range(0, len(slots), capacity):
                 selected = slots[start : start + capacity]
@@ -73,6 +74,19 @@ class ActiveBatchPlan:
     def padded_rows(self):
         return sum(bucket.padded_size for bucket in self.buckets)
 
+    def for_encoder(self, encoder):
+        counts = np.zeros(len(self.compact_indices), dtype=np.int64)
+        for bucket in self.buckets:
+            counts[bucket.slot_ids] = bucket.entity_width
+        return self.from_counts(
+            self.compact_indices >= 0,
+            counts,
+            encoder.layout.max_entities,
+            encoder.microbatch,
+            encoder.token_budget,
+            token_overhead=encoder.token_overhead,
+        )
+
 
 def gather_padded(value, slots, size, *, dimension=0):
     selected = value.index_select(dimension, slots)
@@ -83,17 +97,10 @@ def gather_padded(value, slots, size, *, dimension=0):
     return torch.cat((selected, value.new_zeros(shape)), dimension)
 
 
-@torch.no_grad()
-def forward_active(policy, observations, state, plan, *, events=None, memory_write=None):
-    from pvz_rl.policy.transformer_lstm import EventMemoryState, RecurrentOutput
-
-    events = state.inputs() if events is None else events
-    memory_write = events[:, :7].ne(0).any(-1) if memory_write is None else memory_write
-    count = len(observations)
-    wait = state.hidden.new_zeros(count, 1)
-    tiles = state.hidden.new_zeros(count, A.tiles, policy.entity.width)
-    context = state.hidden.new_zeros(count, policy.hidden_size)
-    next_state = state.clone()
+def encode_active(encoder, observations, plan, branches=None):
+    plan = plan.for_encoder(encoder)
+    parameter = next(encoder.parameters())
+    result = parameter.new_zeros(len(observations), encoder.token_overhead, encoder.width)
     for bucket in plan.buckets:
         slots = torch.as_tensor(bucket.slot_ids, device=observations.device)
         size = bucket.padded_size
@@ -111,24 +118,8 @@ def forward_active(policy, observations, state, plan, *, events=None, memory_wri
                 batch.globals,
                 batch.validated,
             )
-        memory = EventMemoryState(
-            gather_padded(state.hidden, slots, size, dimension=1),
-            gather_padded(state.cell, slots, size, dimension=1),
-            gather_padded(state.pending, slots, size),
-            gather_padded(state.elapsed_ticks, slots, size),
-        )
-        output = policy.forward_step(
-            batch,
-            memory,
-            events=gather_padded(events, slots, size),
-            memory_write=gather_padded(memory_write, slots, size),
-        )
+        requested = None if branches is None else gather_padded(branches, slots, size)
+        output = encoder(batch, requested)
         logical = len(bucket.slot_ids)
-        wait.index_copy_(0, slots, output.wait_q[:logical])
-        tiles.index_copy_(0, slots, output.tile_features[:logical])
-        context.index_copy_(0, slots, output.context[:logical])
-        for target, source, dimension in zip(
-            next_state.tensors(), output.state.tensors(), (1, 1, 0, 0), strict=True
-        ):
-            target.index_copy_(dimension, slots, source.narrow(dimension, 0, logical))
-    return RecurrentOutput(wait, tiles, context, next_state)
+        result = result.index_copy(0, slots, output[:logical].to(result.dtype))
+    return result

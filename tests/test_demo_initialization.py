@@ -12,6 +12,7 @@ from pvz_rl.config import load_config, load_demo_config
 from pvz_rl.envs.action_timing import ActionPhaseGame
 from pvz_rl.envs.rewards import reward_parts
 from pvz_rl.learning import demo_initialization as demo
+from pvz_rl.learning import flat_q
 from pvz_rl.learning.checkpoints import inspect_checkpoint
 from pvz_rl.learning.objective import components, training_rewards
 from pvz_rl.presentation.demo_recording import TransitionArchive
@@ -24,16 +25,6 @@ def completed_demo(tmp_path, request):
     cfg["environment"]["cutoff_seconds"] = 1
     # A recording made before clipping was shared must remain reusable.
     cfg["training"]["demo"]["gradient_clip"] = 0.5
-    cfg["policy"].update(
-        entity_width=8,
-        transformer_heads=2,
-        transformer_layers=1,
-        transformer_feedforward=16,
-        scalar_width=8,
-        lstm_hidden=8,
-        event_width=4,
-        chunk_length=2,
-    )
     game = ActionPhaseGame()
     game.reset(LevelSpec("tiny-fit", initial_sun=200), seed=1000)
     recorder = ActionPhaseRecorder(game)
@@ -107,6 +98,125 @@ def test_demo_passes_are_independent_of_autonomous_epochs(
     assert cfg["training"]["n_epochs"] == 1
 
 
+def test_demo_teacher_is_frozen_per_pass_and_updates_once_after_adam(
+    completed_demo, tmp_path, monkeypatch
+):
+    cfg, archive, replay = completed_demo
+    cfg["training"].update(batch_size=2)
+    cfg["training"]["performance"]["fit_batch_groups"] = 1
+    cfg["training"]["objective"]["species_consistency_huber_delta"] = 0.2
+    snapshots, committed = [], []
+    consistency_metrics, target_calls, loss_deltas = [], [], []
+    original_loss, original_step = demo.batch_loss, torch.optim.Adam.step
+    original_targets = flat_q.species_consistency_targets
+    original_consistency = flat_q.species_consistency_loss
+    teacher_ref = None
+
+    def observe_loss(policy, *args, teacher, **kwargs):
+        nonlocal teacher_ref
+        teacher_ref = teacher
+        snapshots.append([parameter.detach().clone() for parameter in teacher.parameters()])
+        result = original_loss(policy, *args, teacher=teacher, **kwargs)
+        totals = policy._last_species_consistency_metrics
+        assert totals.dtype == torch.float64 and not totals.requires_grad
+        consistency_metrics.append((policy._last_species_consistency_loss.item(), totals.tolist()))
+        return result
+
+    def observe_targets(online_tiles, ema_tiles, masks, branches):
+        targets, selected, gaps = original_targets(online_tiles, ema_tiles, masks, branches)
+        target_calls.append(len(branches))
+        assert not targets.requires_grad and not gaps.requires_grad
+        online_values = online_tiles.detach().cpu().tolist()
+        ema_values = ema_tiles.detach().cpu().tolist()
+        public_masks = masks.cpu().tolist()
+        expected_selected, expected_targets, expected_gaps = [], [], []
+        for index, branch in enumerate(branches.cpu().tolist()):
+            candidate_mask = public_masks[index][1 + (branch - 1) * 45 : 1 + branch * 45]
+            candidates = [tile for tile, available in enumerate(candidate_mask) if available] or [0]
+            best = max(candidates, key=lambda tile: online_values[index][tile])
+            target = ema_values[index][best]
+            expected_selected.append(best)
+            expected_targets.append(target)
+            expected_gaps.append(max(ema_values[index][tile] for tile in candidates) - target)
+        assert selected.cpu().tolist() == expected_selected
+        assert targets.cpu().tolist() == pytest.approx(expected_targets)
+        assert gaps.cpu().tolist() == pytest.approx(expected_gaps, abs=1e-7)
+        return targets, selected, gaps
+
+    def observe_consistency(species, targets, actions, accepted, counts, *, delta, **kwargs):
+        loss_deltas.append(delta)
+        result = original_consistency(
+            species, targets, actions, accepted, counts, delta=delta, **kwargs
+        )
+        present_groups = sum(any(group) for group in counts.cpu().tolist())
+        expected = 0.0
+        for index, action in enumerate(actions.cpu().tolist()):
+            branch = 1 + (action - 1) // 45
+            group = 1 if branch == 9 else 0
+            outcome = int(accepted[index])
+            group_counts = counts[group].cpu().tolist()
+            share = 0.5 if all(group_counts) else 1
+            residual = float(species[index, branch].detach()) - float(targets[index])
+            value = residual**2 if abs(residual) <= delta else 2 * delta * abs(residual) - delta**2
+            expected += value * share / group_counts[outcome] / present_groups
+        assert result.item() == pytest.approx(expected, rel=5e-3, abs=1e-4)
+        return result
+
+    def observe_step(optimizer, *args, **kwargs):
+        result = original_step(optimizer, *args, **kwargs)
+        committed.append(
+            [
+                parameter.detach().clone()
+                for group in optimizer.param_groups
+                for parameter in group["params"]
+            ]
+        )
+        return result
+
+    monkeypatch.setattr(demo, "batch_loss", observe_loss)
+    monkeypatch.setattr(flat_q, "species_consistency_targets", observe_targets)
+    monkeypatch.setattr(flat_q, "species_consistency_loss", observe_consistency)
+    monkeypatch.setattr(torch.optim.Adam, "step", observe_step)
+    result = demo.initialize_demo(archive, replay, tmp_path / "ema-fit", cfg=cfg, passes=2)
+    assert result["passes_completed"] == len(committed) == 2
+    assert len(snapshots) == 6
+    assert target_calls == [2, 2, 2, 2] and loss_deltas == [0.2] * 4
+    curves = json.loads((tmp_path / "ema-fit/learning-curves.json").read_text())["curves"]
+    for pass_index, curve in enumerate(curves):
+        current = consistency_metrics[pass_index * 3 : (pass_index + 1) * 3]
+        loss_total = sum(loss for loss, _ in current)
+        totals = [sum(metrics[column] for _, metrics in current) for column in range(4)]
+        assert totals[3] == 4
+        assert curve["species_consistency_loss"] == pytest.approx(loss_total)
+        assert curve["species_consistency_mae"] == pytest.approx(totals[0] / 4)
+        assert curve["species_consistency_saturation_fraction"] == pytest.approx(totals[1] / 4)
+        assert curve["species_selection_evaluation_gap"] == pytest.approx(totals[2] / 4)
+        assert "species_consistency_error" not in curve
+    for before, within, within_last in zip(*snapshots[:3], strict=True):
+        torch.testing.assert_close(before, within, atol=0, rtol=0)
+        torch.testing.assert_close(before, within_last, atol=0, rtol=0)
+    for old, online, expected in zip(snapshots[0], committed[0], snapshots[3], strict=True):
+        torch.testing.assert_close(
+            expected.float(),
+            old.float() * 0.95 + online.bfloat16().float() * 0.05,
+            atol=0.002,
+            rtol=0.005,
+        )
+    for before, within, within_last in zip(*snapshots[3:], strict=True):
+        torch.testing.assert_close(before, within, atol=0, rtol=0)
+        torch.testing.assert_close(before, within_last, atol=0, rtol=0)
+    for old, online, final in zip(
+        snapshots[3], committed[1], teacher_ref.parameters(), strict=True
+    ):
+        torch.testing.assert_close(
+            final.float(),
+            old.float() * 0.95 + online.bfloat16().float() * 0.05,
+            atol=0.002,
+            rtol=0.005,
+        )
+        assert final.grad is None and not final.requires_grad
+
+
 @pytest.mark.parametrize(
     "device",
     [
@@ -123,9 +233,8 @@ def test_complete_demo_fit_uses_whole_game_group_loss_and_reloads(
     cfg, archive, replay = completed_demo
     cfg["training"]["demo"].pop("gradient_clip")
     cfg["training"]["max_grad_norm"] = 1.25
-    cfg["training"]["objective"].update(tile_probes=1)
     samples = defaultdict(list)
-    shared_loss = demo.balanced_q_loss
+    shared_loss = flat_q.balanced_q_loss
     clip_calls = []
     original_clip = torch.nn.utils.clip_grad_norm_
 
@@ -140,7 +249,7 @@ def test_complete_demo_fit_uses_whole_game_group_loss_and_reloads(
             samples[group].append(error)
         return shared_loss(first, targets, actions, counts, **kwargs)
 
-    monkeypatch.setattr(demo, "balanced_q_loss", observe)
+    monkeypatch.setattr(flat_q, "balanced_q_loss", observe)
     monkeypatch.setattr(torch.nn.utils, "clip_grad_norm_", observe_clip)
     result = demo.initialize_demo(
         archive, replay, tmp_path / "fit", cfg=cfg, passes=1, device=device
@@ -165,17 +274,17 @@ def test_complete_demo_fit_uses_whole_game_group_loss_and_reloads(
     )
     expected = sum(sum(errors) / len(errors) for errors in samples.values()) / len(samples)
     curves = json.loads((tmp_path / "fit/learning-curves.json").read_text())
-    assert curves["curves"][0]["loss"] == pytest.approx(expected, rel=1e-6)
+    assert curves["curves"][0]["loss"] == pytest.approx(expected, rel=5e-3)
     coverage = json.loads((tmp_path / "fit/action-coverage.json").read_text())["branches"]
     assert coverage == [1, 1, 1, 0, 0, 0, 0, 0, 0, 2]
     model, saved = demo.load_demo_checkpoint(result["checkpoint"], cfg)
     assert saved["source_replay_sha256"] == demo.file_hash(replay)
     observations, *_ = demo._training_tensors(demo._load_verified_demo(archive, replay, cfg))
-    assert torch.isfinite(model.forward_step(observations[:1]).wait_q).all()
+    assert torch.isfinite(model.species_values(observations[:1])).all()
     assert not list((tmp_path / "fit").glob("*.tmp"))
-    saved["recurrent_storage_protocol"] = "unknown"
+    saved["model_storage_protocol"] = "unknown"
     torch.save(saved, tmp_path / "invalid.pt")
-    with pytest.raises(ValueError, match="recurrent storage"):
+    with pytest.raises(ValueError, match="model storage"):
         demo.load_demo_checkpoint(tmp_path / "invalid.pt", cfg)
 
 
@@ -205,8 +314,7 @@ def test_reused_demo_fits_current_rewards_without_rewriting_recording(
     tensors = demo._training_tensors(verified)
     original_tensors = demo._training_tensors(original)
     assert tensors[0] == original_tensors[0]
-    for actual, expected in zip(tensors[1:4], original_tensors[1:4], strict=True):
-        torch.testing.assert_close(actual, expected, rtol=0, atol=0)
+    torch.testing.assert_close(tensors[1], original_tensors[1], rtol=0, atol=0)
     # Independent control: dig loses 50 and 100 sun of plant assets; rejected
     # proposals cost their new price, including when the same tick ends the game.
     last = verified.transitions[-1]
@@ -227,13 +335,13 @@ def test_reused_demo_fits_current_rewards_without_rewriting_recording(
     assert last["executed_action"] == 0  # Wait or rejected proposal.
     assert last["ticks_advanced"] == 1
     fitted_targets = []
-    shared_loss = demo.balanced_q_loss
+    shared_loss = flat_q.balanced_q_loss
 
     def observe(first, targets, *args, **kwargs):
         fitted_targets.extend(targets.detach().cpu().tolist())
         return shared_loss(first, targets, *args, **kwargs)
 
-    monkeypatch.setattr(demo, "balanced_q_loss", observe)
+    monkeypatch.setattr(flat_q, "balanced_q_loss", observe)
     result = demo.initialize_demo(archive, replay, tmp_path / "fit", cfg=current, passes=1)
     torch.testing.assert_close(torch.tensor(fitted_targets), expected_returns)
     assert result["state"] == "complete"
@@ -303,17 +411,13 @@ def test_transition_corruption_rejected_by_reconstruction(completed_demo, field)
         demo.verify_demo(archive, replay, cfg)
 
 
-def test_replay_reconstructs_event_rows_without_initial_additions(completed_demo):
+def test_replay_reconstructs_only_current_boards_actions_and_returns(completed_demo):
     cfg, archive, replay = completed_demo
     verified = demo._load_verified_demo(archive, replay, cfg)
-    _, _, events, writes, _ = demo._training_tensors(verified)
-    assert events.shape == (5, 8)
-    assert not events[0].any()
-    assert writes.tolist() == [False, True, True, True, True]
-    torch.testing.assert_close(events[:, 1], torch.tensor([0, 50, 100, 0, 0], dtype=torch.float32))
-    torch.testing.assert_close(events[:, 5], torch.tensor([0, 1, 1, 0, 0], dtype=torch.float32))
-    torch.testing.assert_close(events[:, 6], torch.tensor([0, 0, 0, 1, 1], dtype=torch.float32))
-    assert not events[:, 7].any()
+    observations, actions, returns = demo._training_tensors(verified)
+    assert len(observations) == len(actions) == len(returns) == 5
+    assert all("events" not in row and "memory_write" not in row for row in verified.transitions)
+    assert [len(row["entities"]) for row in observations] == [5, 6, 7, 6, 5]
 
 
 def test_early_sun_reconstructed_from_previous_ledger_without_rewriting(tmp_path):

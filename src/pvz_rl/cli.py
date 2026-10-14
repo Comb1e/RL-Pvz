@@ -199,7 +199,7 @@ def main(argv=None):
     demo.add_argument("--seed", type=int, default=1000)
     demo.add_argument("--speed", type=float, choices=(1, 2, 4), default=1)
     initialize = subs.add_parser(
-        "initialize-demo", help="verify one completed demo and fit the recurrent policy"
+        "initialize-demo", help="verify one completed demo and fit the two-stage policy"
     )
     common(initialize)
     initialize.add_argument("--archive", type=Path, required=True)

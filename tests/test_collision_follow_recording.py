@@ -18,7 +18,7 @@ def test_single_config_train_and_demo_profiles():
     assert demo["reward"]["invalid_plant_penalty"] == training["reward"]["invalid_plant_penalty"]
     assert demo["training"]["max_grad_norm"] == training["training"]["max_grad_norm"] == 5
     assert "gradient_clip" not in demo["training"]["demo"]
-    assert training["policy"]["kind"] == "transformer_lstm_q_v4"
+    assert training["policy"]["kind"] == "two_stage_transformer_q_v1"
     assert tuple(training["curriculum"]["stages"]) == ("easy", "standard", "shared")
     assert "lessons" not in training["curriculum"] and "run_stage" not in training["curriculum"]
     require_supported_policy(training)
@@ -33,7 +33,7 @@ def test_single_config_train_and_demo_profiles():
     assert exploration_state(demo, 0).tile_epsilon == 0.5
     assert exploration_state(demo, 10000).tile_epsilon == pytest.approx(0.01)
     with pytest.raises(ValueError, match="not available"):
-        load_demo_config("src/pvz_rl/data/train.toml", profile="event-memory")
+        load_demo_config("src/pvz_rl/data/train.toml", profile="unavailable")
     for invalid in (0, -1, float("inf"), float("nan"), True):
         training["training"]["max_grad_norm"] = invalid
         with pytest.raises(ValueError, match="training.max_grad_norm"):

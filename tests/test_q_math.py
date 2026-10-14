@@ -8,14 +8,13 @@ import torch
 
 from pvz_rl.config import load_config
 from pvz_rl.learning.cuda_buffer import CompleteGameBuffer
-from pvz_rl.learning.recurrent_q import CudaRecurrentQ
+from pvz_rl.learning.sequential_training import CudaSequentialQ
 from pvz_rl.learning.training import build_model, vector_env
 
 
 def tiny_config():
     c = load_config()
     c["training"].update(n_envs=2, n_epochs=1, batch_size=128)
-    c["policy"]["chunk_length"] = 16
     c["environment"]["cutoff_seconds"] = 1
     c["visualization"].update(live_enabled=False, enabled=False, demos=False)
     c["training"]["performance"].update(compile_kernels=False, telemetry=False)
@@ -47,8 +46,6 @@ def test_interrupted_optimizer_phase_resumes_exactly(tmp_path, monkeypatch):
     def make():
         env = vector_env(cfg, "masked", 103)
         m = build_model(cfg, "masked", env, 103)
-        with torch.no_grad():
-            m.policy.tile_offsets[0] = 0.1
         return env, m
 
     env, full = make()
@@ -74,7 +71,7 @@ def test_interrupted_optimizer_phase_resumes_exactly(tmp_path, monkeypatch):
     partial.save(tmp_path / "partial.zip")
     env.close()
     env = vector_env(cfg, "masked", 103)
-    m = CudaRecurrentQ.load(tmp_path / "partial.zip", env=env, device="cuda")
+    m = CudaSequentialQ.load(tmp_path / "partial.zip", env=env, device="cuda")
     m.learn(0, reset_num_timesteps=False)
     assert_state_equal(expected, m.policy.state_dict())
     assert_state_equal(optimizer, m.policy.optimizer.state_dict())
@@ -102,7 +99,7 @@ def test_atomic_checkpoint_failure_preserves_previous_archive(tmp_path, monkeypa
     assert path.read_bytes() == before
     assert list(tmp_path.glob("*.zip")) == [path]
     monkeypatch.undo()
-    CudaRecurrentQ.load(path, device="cuda")
+    CudaSequentialQ.load(path, device="cuda")
     # Incomplete/corrupt archives cannot silently start a different RNG stream.
     damaged = tmp_path / "damaged.zip"
     with ZipFile(path) as inp, ZipFile(damaged, "w") as out:
@@ -110,7 +107,7 @@ def test_atomic_checkpoint_failure_preserves_previous_archive(tmp_path, monkeypa
             if name != "cohort-state.pt":
                 out.writestr(name, inp.read(name))
     with pytest.raises(ValueError, match="runtime state"):
-        CudaRecurrentQ.load(damaged, device="cuda")
+        CudaSequentialQ.load(damaged, device="cuda")
     env.close()
 
 
@@ -123,7 +120,7 @@ def test_resume_at_game_ceiling_finishes_pending_optimization(tmp_path, monkeypa
     cfg["training"]["total_games"] = 2
     train(cfg, "masked", 101, tmp_path / "full", validation_limit=1)
     expected, _ = load_policy(tmp_path / "full/final.zip", "cuda")
-    original = CudaRecurrentQ._fit_chunk
+    original = CudaSequentialQ._fit_chunk
     triggered = []
 
     def interrupt(self, data):
@@ -132,10 +129,10 @@ def test_resume_at_game_ceiling_finishes_pending_optimization(tmp_path, monkeypa
             triggered.append(True)
             signal.raise_signal(signal.SIGINT)
 
-    monkeypatch.setattr(CudaRecurrentQ, "_fit_chunk", interrupt)
+    monkeypatch.setattr(CudaSequentialQ, "_fit_chunk", interrupt)
     with pytest.raises(KeyboardInterrupt):
         train(cfg, "masked", 101, tmp_path / "partial", validation_limit=1)
-    monkeypatch.setattr(CudaRecurrentQ, "_fit_chunk", original)
+    monkeypatch.setattr(CudaSequentialQ, "_fit_chunk", original)
     train(
         cfg,
         "masked",

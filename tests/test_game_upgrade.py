@@ -165,7 +165,6 @@ assert cfg['visualization']['demos'] and not cfg['visualization']['videos']
 cfg['training']['validation_schedule'] = 'periodic'
 cfg['environment']['cutoff_seconds'] = 1
 cfg['training'].update(budget_unit='decisions', device='cuda', total_steps=64, batch_size=32, n_envs=1, n_epochs=1, eval_interval=64)
-cfg['policy']['chunk_length'] = 16
 cfg['visualization']['ffmpeg'] = 'missing-ffmpeg'
 original = builtins.__import__
 def checked(name, *args, **kwargs):

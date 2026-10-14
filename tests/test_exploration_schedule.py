@@ -71,19 +71,16 @@ def test_commitment_waits_or_uses_current_tile_and_actual_q(blocker):
     active = torch.tensor([True, False])
     branch_values = torch.arange(20).reshape(2, 10).float()
     tiles = torch.arange(45).float().expand(2, -1)
-    policy = SimpleNamespace(tile_values=lambda board, context, branches: board + branches[:, None])
+    policy = SimpleNamespace(
+        conditional_tiles=lambda board, branches, plan=None: board + branches[:, None]
+    )
     original = torch.tensor([46, 46])
 
     def evidence():
-        from pvz_rl.policy.sequential_q import ActionQValues
-
         return dict(
-            tile_features=tiles,
-            context=torch.zeros(2, 1),
+            observations=tiles,
             branch_q=branch_values,
-            action_q=ActionQValues(
-                branch_values[:, 0], (tiles + 1)[:, None].expand(-1, 9, -1), branch_values
-            ),
+            tile_q=tiles + 2,
             branch_value=branch_values[:, 2],
             tile_value=torch.zeros(2),
             coins=torch.zeros(2, 2, dtype=torch.bool),

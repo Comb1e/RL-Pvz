@@ -49,7 +49,6 @@ def test_cuda_counts_and_games_survive_128_waits():
         pytest.skip("CUDA unavailable")
     cfg = load_config()
     cfg["training"].update(n_envs=1, batch_size=128)
-    cfg["policy"]["chunk_length"] = 16
     env = vector_env(cfg, "masked", 101, family="diagnostic")
     try:
         env.reset()

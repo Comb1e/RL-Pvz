@@ -19,7 +19,14 @@ def stable_norm(layer, value):
     # Preserve float64 mathematical controls; BF16 reductions use FP32.
     dtype = value.dtype
     with torch.autocast(value.device.type, enabled=False):
-        return layer(value.float() if dtype == torch.bfloat16 else value).to(dtype)
+        norm_dtype = torch.float32 if dtype == torch.bfloat16 else dtype
+        return F.layer_norm(
+            value.to(norm_dtype),
+            layer.normalized_shape,
+            layer.weight.to(norm_dtype),
+            layer.bias.to(norm_dtype),
+            layer.eps,
+        ).to(dtype)
 
 
 class AttentionBlock(nn.Module):
@@ -72,13 +79,17 @@ class AttentionBlock(nn.Module):
         return x.masked_fill(~valid[..., None], 0)
 
 
-class EntityTransformer(nn.Module):
-    """n physical entities plus one global and 45 coordinate readout tokens."""
+class SpatialTransformer(nn.Module):
+    """Independent public-board encoder with stage-specific readout tokens."""
 
-    def __init__(self, layout, spec):
+    def __init__(self, layout, spec, stage):
         super().__init__()
+        if stage not in ("species", "tile"):
+            raise ValueError("Unknown spatial Transformer stage")
         self.layout = layout
-        self.width = width = spec["entity_width"]
+        self.stage = stage
+        self.token_overhead = 1 if stage == "species" else 47
+        self.width = width = spec[f"{stage}_width"]
         self.microbatch = spec["encoder_microbatch"]
         self.token_budget = spec["encoder_token_budget"]
         self.activation_checkpointing = False
@@ -128,24 +139,26 @@ class EntityTransformer(nn.Module):
         self.numeric = nn.Linear(9, width)
         self.input_norm = nn.LayerNorm(width)
         self.global_projection = nn.Linear(layout.global_width, width)
-        self.tile_marker = nn.Parameter(torch.zeros(width))
-        coordinates = torch.zeros(layout.rows * layout.cols, 9)
-        index = torch.arange(len(coordinates))
-        coordinates[:, 0] = (index // layout.cols) / max(1, layout.rows - 1)
-        units = layout.rules.game["units_per_tile"]
-        coordinates[:, 1] = (
-            (index % layout.cols) * units + units // 2 - layout.rules.game["house_x"]
-        ) / layout.position_scale
-        self.register_buffer("tile_coordinates", coordinates)
+        if stage == "tile":
+            self.branch_embedding = nn.Embedding(10, width, padding_idx=0)
+            self.tile_marker = nn.Parameter(torch.zeros(width))
+            coordinates = torch.zeros(layout.rows * layout.cols, 9)
+            indices = torch.arange(len(coordinates))
+            coordinates[:, 0] = (indices // layout.cols) / max(1, layout.rows - 1)
+            units = layout.rules.game["units_per_tile"]
+            coordinates[:, 1] = (
+                (indices % layout.cols) * units + units // 2 - layout.rules.game["house_x"]
+            ) / layout.position_scale
+            self.register_buffer("tile_coordinates", coordinates)
         self.layers = nn.ModuleList(
             [
                 AttentionBlock(
                     width,
-                    spec["transformer_heads"],
-                    spec["transformer_feedforward"],
+                    spec[f"{stage}_heads"],
+                    spec[f"{stage}_feedforward"],
                     spec["attention_query_chunk"],
                 )
-                for _ in range(spec["transformer_layers"])
+                for _ in range(spec[f"{stage}_layers"])
             ]
         )
         self.norm = nn.LayerNorm(width)
@@ -154,7 +167,7 @@ class EntityTransformer(nn.Module):
         """Request lazy compilation for fixed encoder shapes.
 
         Compilation is deliberately limited to the tensor-only encoder.  Ragged
-        storage, recurrent state management and simulator code stay eager.  A
+        storage, action selection and simulator code stay eager.  A
         backend failure disables the wrapper and keeps the exact eager path.
         """
         if not hasattr(torch, "compile"):
@@ -168,9 +181,7 @@ class EntityTransformer(nn.Module):
         if self._compiled_encode is not None:
             return
         self._fitting_backend = FittingGraphBackend()
-        self._compiled_encode = torch.compile(
-            self._encode, backend=self._fitting_backend, dynamic=False, fullgraph=True
-        )
+        self._compiled_encode = self._fitting_backend.compile(self._encode)
         self._compiled_shapes.clear()
         self.compilation_backend = "cudagraphs_owned"
         self.compilation_status = "requested"
@@ -207,6 +218,7 @@ class EntityTransformer(nn.Module):
             self._fitting_backend.release()
         self._compiled_shapes.clear()
         if self._compiled_encode is not None:
+            self._compiled_encode = self._fitting_backend.compile(self._encode)
             self.compilation_status = "requested"
 
     def disable_compilation(self, exc):
@@ -243,7 +255,7 @@ class EntityTransformer(nn.Module):
             return self._encode(*args)
         shape = (int(args[0].shape[0]), int(args[0].shape[1]))
         # Dynamic ragged shapes would trigger an unbounded stream of compiler
-        # graphs.  Compile at most four observed fixed shapes per run and use
+        # graphs.  Compile at most four observed fixed shapes per phase and use
         # eager execution for additional buckets.
         if shape not in self._compiled_shapes and len(self._compiled_shapes) >= 4:
             return self._encode(*args)
@@ -283,50 +295,68 @@ class EntityTransformer(nn.Module):
             + self.state_embedding(state).to(dtype).to(accumulation)
             + self.numeric(numeric.to(self.numeric.weight.dtype)).to(accumulation),
         )
-        return result.masked_fill(~entity_mask[..., None], 0)
+        return result.to(dtype).masked_fill(~entity_mask[..., None], 0)
 
     def embed(self, batch):
         """Embed a public EntityBatch; retained for diagnostics and math tests."""
         return self._embed_tensors(batch.entities, batch.entity_mask)
 
-    def _encode(self, entities, mask, globals_):
-        # Keep this function tensor-only so torch.compile can trace it.  Public
-        # validation happens once in forward() before this method is called.
+    def _encode(self, entities, mask, globals_, branches):
         embedded = self._embed_tensors(entities, mask)
-        tiles = self.numeric(self.tile_coordinates)
-        tiles = tiles + self.tile_marker.to(tiles.dtype)
-        readouts = torch.cat(
-            (
-                self.global_projection(globals_.to(self.global_projection.weight.dtype))[:, None],
-                tiles[None].expand(entities.shape[0], -1, -1),
-            ),
-            1,
-        )
+        with torch.autocast(globals_.device.type, enabled=False):
+            readouts = self.global_projection(globals_.to(self.global_projection.weight.dtype))[
+                :, None
+            ]
+        if self.stage == "tile":
+            tiles = self.numeric(self.tile_coordinates.to(self.numeric.weight.dtype))
+            tiles = tiles + self.tile_marker.to(tiles.dtype)
+            readouts = torch.cat(
+                (
+                    readouts,
+                    self.branch_embedding(branches).to(readouts.dtype)[:, None],
+                    tiles[None].expand(entities.shape[0], -1, -1),
+                ),
+                1,
+            )
         x = torch.cat((readouts, embedded), 1)
         valid = torch.cat(
             (torch.ones(readouts.shape[:2], dtype=torch.bool, device=x.device), mask), 1
         )
         for layer in self.layers:
             x = layer(x, valid)
-        # Only these outputs cross the recurrent boundary; entity activations
-        # are reconstructed during backward by the outer checkpoint.
         return stable_norm(self.norm, x[:, : readouts.shape[1]])
 
-    def forward(self, observations):
+    def forward(self, observations, branches=None):
         self.layout.validate(observations)
-        length = observations.entities.shape[-2] + 46
+        if len(observations.shape) != 1:
+            raise ValueError("Spatial inference requires flat board batches")
+        if branches is None:
+            if self.stage == "tile":
+                raise ValueError("Tile inference requires selected branches")
+            branches = torch.zeros(len(observations), dtype=torch.long, device=observations.device)
+        if branches.shape != (len(observations),) or branches.dtype != torch.long:
+            raise ValueError("Branches must be an int64 board vector")
+        if not len(observations):
+            return self.numeric.weight.new_empty(0, self.token_overhead, self.width)
+        length = observations.entities.shape[-2] + self.token_overhead
         size = max(1, min(self.microbatch, self.token_budget // length))
         results = []
         for start in range(0, len(observations), size):
             part = observations[start : start + size]
-            # Collation determines padding once; never read GPU lengths in this loop.
-            args = part.tensors()
+            args = (*part.tensors(), branches[start : start + size])
+            logical = len(part)
+            compile_args = args
+            if self._compiled_encode is not None and torch.is_grad_enabled() and logical < size:
+                padding = size - logical
+                compile_args = tuple(
+                    torch.cat((value, value.new_zeros((padding, *value.shape[1:]))), dim=0)
+                    for value in args
+                )
             if self.activation_checkpointing and self.training and torch.is_grad_enabled():
                 value = checkpoint(self._encode, *args, use_reentrant=False)
             elif self._compiled_encode is not None:
-                value = self._encode_with_optional_compile(args)
+                value = self._encode_with_optional_compile(compile_args)
             else:
                 value = self._encode(*args)
-            results.append(value)
-        readouts = torch.cat(results, 0)
-        return readouts[:, 0], readouts[:, 1:]
+            results.append(value[:logical])
+        return torch.cat(results, 0)
