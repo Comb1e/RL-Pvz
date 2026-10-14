@@ -62,8 +62,12 @@ def choose(trials, tolerance):
         return None
     fastest = min(trial["median_seconds"] for trial in valid)
     eligible = [trial for trial in valid if trial["median_seconds"] <= fastest * (1 + tolerance)]
-    return min(eligible, key=lambda trial: max(r["peak_allocated_mib"]
-        for m in trial["raw"]["measurements"] for r in m["repetitions"]))
+    def memory_then_time(trial):
+        peak = max(r["peak_allocated_mib"]
+                   for m in trial["raw"]["measurements"] for r in m["repetitions"])
+        return peak, trial["median_seconds"]
+
+    return min(eligible, key=memory_then_time)
 
 
 def run_learning_study(args, root, timeout):
