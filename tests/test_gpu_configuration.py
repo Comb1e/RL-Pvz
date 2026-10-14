@@ -37,7 +37,12 @@ def test_gpu_profiles_are_capability_hints_with_generic_and_custom_fallbacks(tmp
     )
     assert name == "generic-bf16"
     assert desktop["training"]["performance"]["fit_species_microbatch"] == 32
-    assert laptop["training"]["performance"]["fit_species_microbatch"] == 32
+    assert laptop["training"]["performance"]["fit_species_microbatch"] == 64
+    assert laptop["training"]["performance"]["fit_tile_microbatch"] == 64
+    assert laptop["training"]["performance"]["fit_token_budget"] == 16384
+    assert laptop["training"]["performance"]["fit_batch_groups"] == 2
+    assert laptop["training"]["performance"]["compile_kernels"] is False
+    assert laptop["training"]["torch_threads"] == 2
 
     empty = tmp_path / "minimal.toml"
     empty.write_text("", encoding="utf-8")
