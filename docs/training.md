@@ -114,4 +114,4 @@ win-rate evidence and confirmation cases are required.
 
 ## JupyterLab viewer
 
-Use `--viewer web` for a CPU viewer process. It shares panel selection, latest-frame delivery and paged history mailboxes with the desktop viewer; the browser can reconnect without stopping training. Install the optional proxy package in the Jupyter environment, then open the printed relative `./proxy/<port>/` path. `--viewer auto` uses the desktop window where a display exists and the browser viewer on headless Linux; `--no-live-view` remains an alias for `--viewer off`.
+Use `--viewer web` for a CPU viewer process. It shares panel selection, latest-frame delivery and paged history mailboxes with the desktop viewer; the browser can reconnect without stopping training. Install the optional proxy package in the Jupyter environment, then open the printed relative `./proxy/<port>/` path. Use `--viewer-port 6006` when the cloud port-forwarding service requires a fixed remote port; omit it to keep the default ephemeral port. `--viewer auto` uses the desktop window where a display exists and the browser viewer on headless Linux; `--no-live-view` remains an alias for `--viewer off`.

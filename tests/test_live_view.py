@@ -88,6 +88,8 @@ def test_bounded_delivery_replaces_old_frames():
         ("live_fps", 31),
         ("live_window_size", [639, 480]),
         ("live_window_size", [640]),
+        ("viewer_port", -1),
+        ("viewer_port", 65536),
     ],
 )
 def test_view_settings_invalid(key, value):
@@ -110,6 +112,20 @@ def test_cli_live_view_flags(tmp_path, monkeypatch):
     assert seen == [True, False, True]
     with pytest.raises(SystemExit):
         main(["train", "--output", str(tmp_path), "--live-view", "--no-live-view"])
+
+
+def test_cli_viewer_port_is_forwarded_to_web_settings(tmp_path, monkeypatch):
+    from pvz_rl.cli import main
+
+    seen = []
+    monkeypatch.setattr(
+        "pvz_rl.learning.training.train",
+        lambda cfg, *a, **kw: seen.append(
+            (cfg["visualization"]["viewer"], cfg["visualization"]["viewer_port"])
+        ),
+    )
+    main(["train", "--output", str(tmp_path), "--viewer", "web", "--viewer-port", "6006"])
+    assert seen == [("web", 6006)]
 
 
 def attach_capture(env):

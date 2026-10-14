@@ -481,6 +481,9 @@ def validate_config(cfg: dict) -> None:
         raise ValueError("Fitting buckets must cover 8,16,32,64,128,256 without truncation")
     if visual.get("viewer", "auto") not in ("auto", "desktop", "web", "off"):
         raise ValueError("visualization.viewer must be auto, desktop, web or off")
+    viewer_port = visual.get("viewer_port", 0)
+    if type(viewer_port) is not int or not 0 <= viewer_port <= 65535:
+        raise ValueError("visualization.viewer_port must be an integer from 0 to 65535")
     if train.get("budget_unit") not in ("games", "decisions"):
         raise ValueError("training.budget_unit must be games or decisions")
     if env.get("action_timing") not in ("fixed", "per_tick"):

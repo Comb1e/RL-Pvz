@@ -180,7 +180,9 @@ def web_viewer_main(frames, commands, history_responses, errors, closed, ready, 
                     size, count, settings=(), port_value=None):
     """Process target; all frame conversion and HTTP work stays on CPU."""
     try:
-        server = _Server(("127.0.0.1", 0), commands, history_responses, activity, settings)
+        requested_port = int(port_value.value) if port_value is not None else 0
+        server = _Server(("127.0.0.1", requested_port), commands, history_responses, activity,
+                         settings)
         if port_value is not None:
             port_value.value = server.server_port
         ready.set()

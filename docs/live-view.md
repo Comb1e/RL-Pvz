@@ -80,7 +80,9 @@ Output-only settings are `visualization.live_enabled`, `live_fps`,
 
 Use `--viewer web` (or `--viewer auto` on headless Linux). Install the optional
 dependency in the Jupyter environment with `pip install -e .[web]`, then open
-the relative `./proxy/<port>/` URL printed when training starts. The server is a
+the relative `./proxy/<port>/` URL printed when training starts. If a cloud
+port-forwarding service requires a fixed port, pass `--viewer-port 6006` to
+bind the remote viewer to that loopback port. The server is a
 separate CPU process and uses the same bounded latest-frame, selection and
 history mailboxes as the desktop viewer. Jupyter Server Proxy supplies the
 authenticated prefix; reconnecting or closing a browser never pauses training.

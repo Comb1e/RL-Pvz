@@ -1,5 +1,6 @@
 """CPU browser viewer protocol controls."""
 
+import socket
 from multiprocessing import Queue, Value
 from threading import Thread
 
@@ -34,3 +35,21 @@ def test_history_forwarding_keeps_request_identity():
         assert s.state()["learning_settings"] == [["Learning", ["lr=1"]]]
     finally:
         s.server_close()
+
+
+def test_web_viewer_binds_requested_loopback_port():
+    from pvz_rl.config import load_config, output_settings
+    from pvz_rl.presentation.live_view import LiveSession
+
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+    settings = output_settings(load_config())["visualization"]
+    settings.update(viewer="web", viewer_port=port)
+    session = LiveSession(1, settings)
+    try:
+        assert session.ready.wait(12)
+        assert session.web_port.value == port
+        assert session.proxy_url == f"./proxy/{port}/"
+    finally:
+        session.close()

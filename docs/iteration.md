@@ -2034,3 +2034,8 @@ unperformed.
 - Evidence: `artifacts/tune-4080-super/recommendation.json` covered sparse, medium, dense and bucket-boundary widths with wait, mixed and tile-heavy actions across three repetitions. The 64/64, 16,384-token, two-group candidate completed all 12 workloads with no fitting capture failures or OOM fallbacks; the 192/192 stress candidate failed the 20% headroom gate, so the artifact remains globally incomplete.
 - Improvement: added `gpu_profiles.rtx4080-super` with compilation enabled, 64 species/tile microbatches, 16,384 tokens, two groups, one CPU thread and a 6,554 MiB collection reserve for the measured 32 GiB device. The existing 4070 Laptop profile is unchanged.
 - Remaining limits: this is execution calibration only; learning quality, full end-to-end training and cross-device checkpoint inference still require their separate gates.
+## Fixed web viewer port — 2026-10-15
+
+- Problem: cloud port forwarding needed the browser viewer to bind a known loopback port instead of an ephemeral port.
+- Improvement: added `train --viewer-port PORT`; the web viewer binds `127.0.0.1:PORT` and retains ephemeral allocation when the option is omitted. Port values are validated from 0 through 65,535.
+- Verification: CLI forwarding and invalid-port controls cover the new setting; existing viewer process and browser protocol controls remain unchanged.

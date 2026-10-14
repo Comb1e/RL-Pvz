@@ -163,6 +163,8 @@ def configured(args):
     if getattr(args, "viewer", None) is not None:
         cfg["visualization"]["viewer"] = args.viewer
         cfg["visualization"]["live_enabled"] = args.viewer != "off"
+    if getattr(args, "viewer_port", None) is not None:
+        cfg.setdefault("visualization", {})["viewer_port"] = args.viewer_port
     validate_config(cfg)
     if args.command in ("train", "suite", "benchmark-gpu"):
         require_cuda_training(cfg, getattr(args, "condition", "masked"), runtime=False)
@@ -179,6 +181,11 @@ def main(argv=None):
     training_options(training)
     live = training.add_mutually_exclusive_group()
     live.add_argument("--viewer", choices=("auto", "desktop", "web", "off"))
+    training.add_argument(
+        "--viewer-port",
+        type=int,
+        help="fixed loopback TCP port for the web viewer (0 or omitted selects an ephemeral port)",
+    )
     live.add_argument(
         "--live-view",
         action="store_true",

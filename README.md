@@ -55,7 +55,7 @@ Select a physical CUDA GPU independently from execution and learning presets. Na
 .\.venv\Scripts\python.exe tools\tune_gpu.py --gpu 0 --output artifacts\tune-4070 --minutes 60
 ```
 
-For JupyterLab, install `pip install -e .[web]` (or `jupyter-server-proxy`) and use `--viewer web`; training prints a relative `./proxy/<port>/` URL. Checkpoint weights remain portable; destination GPU execution caches rebuild.
+For JupyterLab, install `pip install -e .[web]` (or `jupyter-server-proxy`) and use `--viewer web`; training prints a relative `./proxy/<port>/` URL. Add `--viewer-port 6006` when the cloud port-forwarding service needs a fixed port. Checkpoint weights remain portable; destination GPU execution caches rebuild.
 
 Runtime inference and fitting use BF16 model parameters; optimization uses
 separate FP32 master weights and FP32 Adam state. INT8/INT4 paths are not
