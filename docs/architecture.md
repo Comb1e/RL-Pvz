@@ -169,6 +169,14 @@ flowchart LR
   EMA[EMA fitting inference] --> Graph
   Frames[Latest frame queue] --> Web[CPU web process]
   Web --> Proxy[Jupyter Server Proxy]
+  Proxy --> Browser[Browser JSON client]
+  Browser --> Canvas[Canvas board renderer]
 ```
 
 GPU names are matching hints, not a model whitelist. Any installed native-BF16 NVIDIA device can use `generic-bf16` or a user-defined TOML profile. Graphs, device identity and execution settings are rebuilt for the destination GPU; model weights retain the existing architecture and compatibility contract. The browser process consumes bounded latest-frame packets and sends the existing selection/history commands, so a slow browser cannot block collection or fitting. Web training uses an ephemeral loopback port by default; `--viewer-port` can reserve a fixed loopback port for cloud forwarding.
+
+The browser-side renderer consumes only the JSON public observation contract.
+It normalizes empty or partial frames before drawing and keeps the raw frame and
+learning settings behind expandable diagnostics. Canvas rendering is procedural
+and portable; it intentionally does not import the simulator or create a GPU
+context in the browser.

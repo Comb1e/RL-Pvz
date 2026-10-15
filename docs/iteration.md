@@ -1,3 +1,24 @@
+## Extended fitting underfeeding calibration — 2026-10-15
+
+- Finding: 4080 SUPER telemetry shows low sustained busy intervals, low temperature/power and a training process near one CPU core, so the observed utilization is a pipeline/workload signal rather than a GPU thermal or power limit.
+- Improvement: kept all existing `tune_gpu.py` candidates and combined ten larger species/tile microbatch, grouped-batch and 1/2/4 CPU-thread cases into the default candidate list. A run with `--rows-per-width 32` makes preparation overhead visible.
+- Remaining limits: existing 4080 results are execution calibration on synthetic fitting rows; only a cloud run with the extended cases and matched full-training telemetry can determine whether the larger settings improve end-to-end cohort time.
+
+## Client-side web board rendering — 2026-10-15
+
+- Problem: the Jupyter browser viewer exposed the live JSON payload directly,
+  making board state, entities and decisions difficult to inspect remotely.
+- Improvement: kept the JSON/state and history APIs unchanged and added a
+  dependency-free Canvas 2D renderer in the page. It draws normalized public
+  observations, cards, entities, HUD/outcomes and readable action history while
+  retaining raw frame/settings diagnostics in expandable sections.
+- Verification: existing web viewer protocol and fixed-port controls pass;
+  the inline JavaScript passes Node syntax checking and focused HTML tests cover
+  canvas, normalization, entity fields, relative proxy API paths and diagnostics.
+- Remaining limits: procedural browser artwork is a portable visual equivalent,
+  not pixel-identical to the pygame desktop renderer; malformed snapshots are
+  displayed with safe defaults and remain inspectable in raw diagnostics.
+
 ## GPU fitting and viewer implementation — 2026-10-14
 
 - Problem: cloud fitting spent most wall time in eager shape fallbacks, collection-cache churn and row preparation; GPU identity and headless viewing were also machine-specific.

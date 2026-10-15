@@ -99,6 +99,17 @@ Fitting uses masked entity buckets `[8, 16, 32, 64, 128, 256]`, CPU-owned row se
 python tools/tune_gpu.py --gpu 0 --output artifacts/tune --minutes 60 --stage easy
 ```
 
+When telemetry shows spare VRAM, short GPU busy intervals and a saturated
+training CPU thread, run the full candidate set with larger grouped cases:
+
+```bash
+python tools/tune_gpu.py --gpu 0 --output artifacts/tune-extended --minutes 60 \
+  --stage easy --rows-per-width 32
+```
+
+This diagnoses fitting underfeeding; it does not select a learning rate or
+turn utilization into a training objective.
+
 For an 8 GiB laptop card, use `--no-compile` for the first one-hour rehearsal
 if warming all compiled workload shapes exceeds the available memory. The
 eager path still measures preparation, transfers and complete fitting work;
