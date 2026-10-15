@@ -1,3 +1,21 @@
+## Provisional RTX 5090 execution preset — 2026-10-15
+
+- Finding: the complete local 4070 calibration favored the stable 64/64,
+  16,384-token, four-group family; the larger 192/192 cases were not used
+  because their extended run was incomplete and the synthetic tuner does not
+  represent a full training cohort.
+- Improvement: set the RTX 5090 profile to compiled 128/128 fitting,
+  32,768 tokens, four grouped batches, one CPU thread and a 6,554 MiB
+  collection reserve. This is one bounded doubling of the validated 4070
+  family for the 5090's 32 GiB device, while preserving the provisional
+  status until native 5090 measurements complete.
+- Verification: GPU-profile configuration tests cover automatic RTX 5090
+  selection and every execution value. No learning, model architecture or
+  checkpoint contract changed.
+- Remaining limits: this is a scaled recommendation from the 4070, not a
+  measured 5090 preset. Confirm it with an actual-cohort fit run after the
+  cloud compiler and data-flow behavior are available.
+
 ## Extended fitting underfeeding calibration — 2026-10-15
 
 - Finding: 4080 SUPER telemetry shows low sustained busy intervals, low temperature/power and a training process near one CPU core, so the observed utilization is a pipeline/workload signal rather than a GPU thermal or power limit.

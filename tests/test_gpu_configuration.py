@@ -54,6 +54,17 @@ def test_gpu_profiles_are_capability_hints_with_generic_and_custom_fallbacks(tmp
     assert cloud["training"]["performance"]["fit_batch_groups"] == 2
     assert cloud["training"]["performance"]["collection_vram_headroom_mib"] == 6554
     assert cloud["training"]["torch_threads"] == 1
+    rtx5090, name = apply_gpu_profile(
+        cfg, "auto", device={"name": "NVIDIA GeForce RTX 5090"}
+    )
+    assert name == "rtx5090"
+    assert rtx5090["training"]["performance"]["compile_kernels"] is True
+    assert rtx5090["training"]["performance"]["fit_species_microbatch"] == 128
+    assert rtx5090["training"]["performance"]["fit_tile_microbatch"] == 128
+    assert rtx5090["training"]["performance"]["fit_token_budget"] == 32768
+    assert rtx5090["training"]["performance"]["fit_batch_groups"] == 4
+    assert rtx5090["training"]["performance"]["collection_vram_headroom_mib"] == 6554
+    assert rtx5090["training"]["torch_threads"] == 1
 
     empty = tmp_path / "minimal.toml"
     empty.write_text("", encoding="utf-8")
