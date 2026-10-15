@@ -87,6 +87,14 @@ separate CPU process and uses the same bounded latest-frame, selection and
 history mailboxes as the desktop viewer. Jupyter Server Proxy supplies the
 authenticated prefix; reconnecting or closing a browser never pauses training.
 
+The cloud endpoint sends public observations as JSON. The page renders those
+snapshots in the browser with a dependency-free Canvas 2D board: lawn tiles,
+plants, zombies, projectiles, mowers, cards, sun, waves, outcomes and current
+decision diagnostics are drawn locally. The browser does not need the simulator
+package, CUDA or the training GPU. Action history is a table, while the frame
+JSON and effective learning settings remain available in expandable diagnostics
+sections for troubleshooting.
+
 Selecting a row preserves the page and its absolute offsets. Scrolling may
 replace the visible page but keeps the selected record and its scores until
 Follow latest or a destination board arrives. Responses must match panel,

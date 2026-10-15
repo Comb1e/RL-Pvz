@@ -46,4 +46,4 @@ training speed, win-rate improvement or mastery.
 - `test_two_stage_transformer.py` verifies collection cache limits separately from fitting graph ownership and masked partial-batch padding.
 - `test_gpu_configuration.py` verifies profile overlays, resume learning retention and device-independent execution settings.
 - `test_live_view.py` remains the shared mailbox/reconnect/history owner; `web_viewer.py` is CPU-only and uses the same command protocol.
-- `tools/tune_gpu.py` records three repetitions, cold setup, transfer/preparation/graph metrics and memory headroom; learning recommendations require paired seeds and completed cohorts before promotion.
+- `tools/tune_gpu.py` records three repetitions, cold setup, transfer/preparation/graph metrics and memory headroom across the original and larger grouped microbatch/thread cases. Learning recommendations require paired seeds and completed cohorts before promotion.

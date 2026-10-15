@@ -17,6 +17,27 @@ from time import monotonic
 
 from pvz_rl.config import _read_config
 
+REQUIRED_CANDIDATE_KEYS = {"species", "tile", "tokens", "groups", "threads"}
+
+
+def tuning_candidates(tuning):
+    """Return validated, de-duplicated execution candidates."""
+    candidates = [dict(candidate) for candidate in tuning.get("candidates", [])]
+    if not candidates:
+        raise ValueError("tuning.candidates must contain at least one execution candidate")
+    if any(set(candidate) != REQUIRED_CANDIDATE_KEYS for candidate in candidates):
+        raise ValueError(
+            "each tuning candidate must define species, tile, tokens, groups and threads"
+        )
+    unique = []
+    seen = set()
+    for candidate in candidates:
+        key = tuple(candidate[name] for name in sorted(REQUIRED_CANDIDATE_KEYS))
+        if key not in seen:
+            unique.append(candidate)
+            seen.add(key)
+    return unique
+
 
 def _median(result):
     values = [r["seconds"] for m in result["measurements"] for r in m["repetitions"]]
@@ -150,12 +171,7 @@ def main():
     args.headroom_mib = (args.headroom_mib if args.headroom_mib is not None
                          else float(tuning.get("minimum_headroom_mib", 1024)))
     args.tuning = tuning
-    candidates = [dict(candidate) for candidate in tuning.get("candidates", [])]
-    required = {"species", "tile", "tokens", "groups", "threads"}
-    if not candidates:
-        raise ValueError("tuning.candidates must contain at least one execution candidate")
-    if any(set(candidate) != required for candidate in candidates):
-        raise ValueError("each tuning candidate must define species, tile, tokens, groups and threads")
+    candidates = tuning_candidates(tuning)
     started = monotonic()
     trials = []
     for index, candidate in enumerate(candidates):

@@ -57,6 +57,10 @@ Select a physical CUDA GPU independently from execution and learning presets. Na
 
 For JupyterLab, install `pip install -e .[web]` (or `jupyter-server-proxy`) and use `--viewer web`; training prints a relative `./proxy/<port>/` URL. Add `--viewer-port 6006` when the cloud port-forwarding service needs a fixed port. Checkpoint weights remain portable; destination GPU execution caches rebuild.
 
+The browser viewer receives the same JSON snapshots used by the live protocol and
+renders the boards locally with Canvas 2D. It needs no simulator package or GPU;
+expand the raw diagnostics sections when inspecting the original JSON.
+
 Runtime inference and fitting use BF16 model parameters; optimization uses
 separate FP32 master weights and FP32 Adam state. INT8/INT4 paths are not
 implemented.
