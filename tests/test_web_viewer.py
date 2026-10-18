@@ -69,6 +69,7 @@ def test_browser_renders_public_snapshots_with_canvas_and_diagnostics():
         "devicePixelRatio",
         "historyTable",
         "Raw frame JSON",
+        "Raw history JSON",
         "Learning settings",
     ):
         assert token in HTML

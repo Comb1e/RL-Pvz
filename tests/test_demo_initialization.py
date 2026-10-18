@@ -305,8 +305,6 @@ def test_reused_demo_fits_current_rewards_without_rewriting_recording(
         value_scale=200.0,
         basic_zombie_value=100.0,
         mower_value=500.0,
-        invalid_plant_penalty=0.09,
-        empty_dig_penalty=0.07,
     )
     current["training"]["max_grad_norm"] = 2.0
     verified = demo._load_verified_demo(archive, replay, current)
@@ -343,7 +341,13 @@ def test_reused_demo_fits_current_rewards_without_rewriting_recording(
 
     monkeypatch.setattr(flat_q, "balanced_q_loss", observe)
     result = demo.initialize_demo(archive, replay, tmp_path / "fit", cfg=current, passes=1)
-    torch.testing.assert_close(torch.tensor(fitted_targets), expected_returns)
+    expected_fitting = expected_returns.clone()
+    for index, row in enumerate(verified.transitions):
+        if not row["accepted"] and row["action"] != 0:
+            expected_fitting[index] = -1
+    torch.testing.assert_close(
+        torch.tensor(fitted_targets).sort().values, expected_fitting.sort().values
+    )
     assert result["state"] == "complete"
     assert all(path.read_bytes() == contents for path, contents in before.items())
 

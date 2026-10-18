@@ -70,8 +70,7 @@ The largest roster has 38,130 body-plus-armor HP. Cumulative net value therefore
 lies between -4,575 and 26,001.111111 sun-equivalents. Outcome plus physical development
 is at least 0.8475 on a natural win and at most -0.1332962963 on a natural loss.
 These bounds cover only terminal plus **unscaled physical development**, excluding
-the early Sunflower bonus and rejection
-costs, proximity, time shaping, custom scenarios and incomplete games. They do not
+the early Sunflower bonus, proximity, time shaping, custom scenarios and incomplete games. They do not
 bound the full raw or fitting return.
 
 ## One-time house entries
@@ -108,14 +107,15 @@ r^{time}(T)=\begin{cases}0.1(m-T)/(m+T)&\text{victory and }m+T>0,\\
 
 At a 160-second median, victories lasting 80, 160, 240 and 320 seconds receive
 +0.03333, 0, -0.02000 and -0.03333. A faster defeat receives no bonus. A single-game
-demonstration has \(m=T\) and zero adjustment. The same median finalizes terminal
-probes; nonterminal probes bootstrap separately. Median is context, never an input.
+demonstration has \(m=T\) and zero adjustment. Median is cohort context, never
+a policy input.
 
 Collection marks completed rewards provisional. `FINALIZE_REWARDS` writes terminal
-adjustments and fixed probe targets before `RETURNS` and `FIT`. Saved finalization
+adjustments before `RETURNS` and `FIT`. Saved finalization
 state prevents applying adjustments or publishing episode records twice on resume.
 Curriculum counts victories independently of shaped rewards.
 
 These shaping terms intentionally change the objective and do not claim to preserve
-every ordering induced by terminal rewards. Reduced [rejection costs](invalid-action-penalties.md)
-still penalize invalid proposals without multiplying them by the development scale.
+every ordering induced by terminal rewards. [Invalid proposals](invalid-action-penalties.md) execute ordinary wait with zero
+rejection charges. Their fixed -1 targets apply only to fitting and do not alter
+this reward ledger or earlier chronological returns.

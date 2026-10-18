@@ -36,11 +36,20 @@ def checkpoint_metadata(path, *, weights_only=False):
     from pvz_rl.learning.checkpoints import protocol_for
 
     expected = protocol_for(metadata.get("policy"))
+    if weights_only and metadata.get("optimizer") not in (
+        OBJECTIVE_PROTOCOL,
+        "complete_return_sequential_no_probe_v1",
+    ):
+        raise ValueError("Unsupported weight checkpoint objective protocol")
     comparable = {
-        key: value for key, value in metadata.items() if not weights_only or key != "exploration"
+        key: value
+        for key, value in metadata.items()
+        if not weights_only or key not in ("exploration", "optimizer")
     }
     if comparable != {
-        key: value for key, value in expected.items() if not weights_only or key != "exploration"
+        key: value
+        for key, value in expected.items()
+        if not weights_only or key not in ("exploration", "optimizer")
     }:
         raise ValueError(
             "Retired model/optimizer/exploration checkpoint protocol; fresh initialization is required"

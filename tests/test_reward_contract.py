@@ -149,7 +149,7 @@ def test_independent_damage_death_terminal_and_timeout_formula():
     after = replace(damaged, plants=())
     assert reward_parts(damaged, after, cfg)["total"] == pytest.approx(-50 / 30000)
     assert asset_value(after) == 600
-    for status, terminal in ((Status.WON, 1), (Status.LOST, -2)):
+    for status, terminal in ((Status.WON, 1), (Status.LOST, -1)):
         end = replace(after, status=status)
         assert asset_value(end) == 600
         assert reward_parts(damaged, end, cfg)["total"] == pytest.approx(terminal - 50 / 30000)
@@ -309,3 +309,68 @@ def test_retired_report_is_rejected_without_loading_model(tmp_path, monkeypatch,
     result = visualize_run(tmp_path, videos=False)
     assert result["state"] == "failed"
     assert "current engine and model protocol" in result["error"]
+
+
+@pytest.mark.parametrize(
+    "case", ["sun", "cooldown", "occupied", "empty_dig", "full", "terminal_tick"]
+)
+def test_invalid_wait_equivalence_cpu_and_cuda(case):
+    from pvz_rl.envs.cuda_accounting import AccountingCudaBatch
+    from pvz_rl.envs.cuda_features import REWARD_FIELDS, CudaFeatures
+
+    cfg = load_config()
+    if case == "terminal_tick":
+        cfg["environment"]["cutoff_seconds"] = 1
+    plants = ()
+    if case == "occupied":
+        plants = (InitialPlant("sunflower", 0, 0),)
+    elif case == "full":
+        plants = tuple(InitialPlant("sunflower", row, col) for row in range(5) for col in range(9))
+    level = LevelSpec(
+        "invalid-wait",
+        (Spawn(9999, "basic", 0),),
+        initial_sun=0 if case in ("sun", "terminal_tick") else 1000,
+        plants=plants,
+    )
+    proposed, waiting = PvZEnv(cfg), PvZEnv(cfg)
+    try:
+        for env in (proposed, waiting):
+            env.reset(seed=101, options={"scenario": level})
+            if case == "terminal_tick":
+                for _ in range(99):
+                    env.step(0)
+        snapshot = proposed.game.snapshot()
+        command = (
+            Dig(4, 8)
+            if case == "empty_dig"
+            else Place("wall_nut" if case == "cooldown" else "sunflower", 0, 0)
+        )
+        action = proposed.codec.encode(command)
+        result = proposed.step(action)
+        control = waiting.step(0)
+        assert proposed.public == waiting.public
+        assert result[1:4] == control[1:4]
+        info, reference = result[-1], control[-1]
+        assert not info["accepted"] and info["executed_action"] == 0
+        assert info["proposal_action"] == action and info["ticks_advanced"] == 1
+        assert info["reward_parts"] == reference["reward_parts"]
+        assert (
+            info["reward_parts"]["invalid_plant_penalty"]
+            == info["reward_parts"]["empty_dig_penalty"]
+            == 0
+        )
+        if torch.cuda.is_available():
+            batch = AccountingCudaBatch(2, zombie_capacity=1, max_step_ticks=1)
+            batch.restore([snapshot, snapshot])
+            with batch.cp.cuda.ExternalStream(torch.cuda.current_stream().cuda_stream):
+                features = CudaFeatures(batch, cfg, "masked")
+                features.encode()
+                features.step(batch.cp.asarray([action, 0], dtype=batch.cp.int64))
+                parts = features.parts.get()
+                assert parts[0].tolist() == parts[1].tolist()
+                for key, value in zip(REWARD_FIELDS, parts[0], strict=True):
+                    assert value == pytest.approx(info["reward_parts"][key], abs=1e-10), key
+                assert batch.state_hash(0) == batch.state_hash(1) == proposed.game.state_hash()
+    finally:
+        proposed.close()
+        waiting.close()

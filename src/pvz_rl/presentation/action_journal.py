@@ -7,8 +7,6 @@ from pathlib import Path
 
 import numpy as np
 
-from pvz_rl.envs.actions import ActionSchema as A
-
 PAGE_ROWS = 64
 RECORD = np.dtype(
     [
@@ -132,17 +130,7 @@ class ActionJournal:
         # resolved simulator command independently for viewer diagnostics.
         records["executed_action"] = np.where(records["accepted"], records["action"], 0)
         records["legal"][:] = rows["active"][:, None]
-        rejected = ~records["accepted"]
-        records["penalty"][
-            rejected & (rows["action"] > 0) & (rows["action"] < A.dig_start)
-        ] = -self.reward_settings.get("invalid_plant_penalty", 0)
-        from pvz_game.cuda.schema import REASONS
-
-        records["penalty"][
-            rejected
-            & (rows["action"] >= A.dig_start)
-            & (records["reason"] == REASONS.index("empty_tile"))
-        ] = -self.reward_settings.get("empty_dig_penalty", 0)
+        records["penalty"] = 0  # Audit field; fixed invalid targets are fitting-only.
         for env in np.flatnonzero(rows["active"]):
             if self.episodes[env] != episodes[env]:
                 self.reset(env, episodes[env])

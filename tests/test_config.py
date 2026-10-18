@@ -97,16 +97,16 @@ def test_double_estimator_defaults_and_storage_contracts():
     for cfg in (load_config(), load_demo_config()):
         objective = cfg["training"]["objective"]
         assert cfg["policy"]["kind"] == "two_stage_transformer_q_v1"
-        assert cfg["training"]["method"] == "complete_return_sequential_no_probe_v1"
-        assert objective["protocol"] == "complete_return_sequential_no_probe_v1"
+        assert cfg["training"]["method"] == "complete_return_selective_invalid_v2"
+        assert objective["protocol"] == "complete_return_selective_invalid_v2"
         assert objective["species_consistency_huber_delta"] == 1.0
         assert objective["species_consistency_weight"] == 1.0
         assert current_model_config(cfg)
         assert protocol_for(cfg["policy"]["kind"])["optimizer"] == objective["protocol"]
     assert DEMO_PROTOCOL == "pvz-rl/demo-initialization-checkpoint-v9"
-    assert AUTONOMOUS_STATE_PROTOCOL == "pvz-rl/stateless-no-probe-state-v1"
+    assert AUTONOMOUS_STATE_PROTOCOL == "pvz-rl/selective-invalid-state-v2"
     assert MODEL_STATE_PROTOCOL == "pvz-rl/stateless-two-stage-bf16-master-state-v2"
-    assert TRAJECTORY_PROTOCOL == "pvz-rl/stateless-no-probe-trajectory-v1"
+    assert TRAJECTORY_PROTOCOL == "pvz-rl/selective-invalid-trajectory-v2"
 
 
 @pytest.mark.parametrize(
@@ -146,7 +146,7 @@ def test_previous_objective_is_rejected_even_for_structurally_identical_weights(
     assert not current_model_config(source)
     with pytest.raises(ValueError, match="objective protocol|complete-return method"):
         validate_config(source)
-    with pytest.raises(ValueError, match="Old-objective"):
+    with pytest.raises(ValueError, match="model or objective is incompatible"):
         compatible_config(source, target, weights_only=weights_only)
 
 

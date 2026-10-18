@@ -8,6 +8,7 @@ import torch
 
 from pvz_rl.envs.cuda_features import REWARD_FIELDS
 from pvz_rl.envs.encoding import ENTITY_WIDTH, PackedEntityBatch
+from pvz_rl.learning.action_routing import classify_actions
 from pvz_rl.learning.batch_transport import (
     BatchPrefetch,
     FittingSpool,
@@ -35,7 +36,11 @@ def flat_batches(buffer, decision_budget, spool=None):
     if spool is not None:
         for rows, packed in spool.iter_batches(decision_budget):
             width = spool.buckets[np.searchsorted(spool.buckets, int(packed.counts.max(initial=0)))]
-            yield rows, buffer.observations_from_packed(packed, validated=True, width=width), fitting_metadata(rows, "cpu")
+            yield (
+                rows,
+                buffer.observations_from_packed(packed, validated=True, width=width),
+                fitting_metadata(rows, "cpu"),
+            )
         return
     with closing(batch_rows(buffer, decision_budget, spool=spool)) as source:
         for rows in source:
@@ -262,6 +267,8 @@ class CudaSequentialQ(CudaCohortLifecycle):
                         offsets=offsets,
                         globals=self._last_obs.globals.index_select(0, live_slots),
                         action_masks=masks & executing[:, None],
+                        plant_available=(env.header_tensor[:, 2, None] >= self._plant_costs)
+                        & (torch.from_dlpack(env.batch.cooldowns) == 0),
                         columns=columns,
                         valid=self._runner.valid,
                     ),
@@ -319,6 +326,17 @@ class CudaSequentialQ(CudaCohortLifecycle):
             rows["duration"] = env.last_transition_host[:, 2]
             rows["done"] = env.last_transition_host[:, 0].astype(bool)
             rows["accepted"] = env.last_action_result_host[:, 0].astype(bool)
+            rows["rejection_reason"] = env.last_action_result_host[:, 1]
+            # Policy masks remain geometry-only. Attribution uses immutable
+            # pre-action card facts captured through the existing stream fence.
+            legal = host["action_masks"].numpy().copy()
+            plant_geometry = legal[:, 1:361].reshape(self.n_envs, 8, 45)
+            occupied = ~plant_geometry[:, 0].copy()
+            plant_geometry &= host["plant_available"].numpy()[:, :, None]
+            legal[:, 361:] = occupied & active[:, None]
+            rows["route"], rows["branch_usable"] = classify_actions(
+                rows["action"], rows["accepted"], legal, rows["rejection_reason"]
+            )
             rows["components"] = env.last_reward_parts_host[
                 :, [REWARD_FIELDS.index(k) for k in COMPONENTS]
             ]
@@ -421,10 +439,20 @@ class CudaSequentialQ(CudaCohortLifecycle):
         self.execution_state = dict(
             requested_precision=precision,
             precision=precision,
-            microbatch=max(performance.get("fit_species_microbatch", performance.get("fit_encoder_microbatch", 192)),
-                           performance.get("fit_tile_microbatch", performance.get("fit_encoder_microbatch", 192))),
-            species_microbatch=performance.get("fit_species_microbatch", performance.get("fit_encoder_microbatch", 192)),
-            tile_microbatch=performance.get("fit_tile_microbatch", performance.get("fit_encoder_microbatch", 192)),
+            microbatch=max(
+                performance.get(
+                    "fit_species_microbatch", performance.get("fit_encoder_microbatch", 192)
+                ),
+                performance.get(
+                    "fit_tile_microbatch", performance.get("fit_encoder_microbatch", 192)
+                ),
+            ),
+            species_microbatch=performance.get(
+                "fit_species_microbatch", performance.get("fit_encoder_microbatch", 192)
+            ),
+            tile_microbatch=performance.get(
+                "fit_tile_microbatch", performance.get("fit_encoder_microbatch", 192)
+            ),
             token_budget=performance.get("fit_token_budget", 65536),
             fit_batch_groups=performance.get("fit_batch_groups", 1),
             checkpointing=False,
@@ -552,14 +580,22 @@ class CudaSequentialQ(CudaCohortLifecycle):
         self._pass_metrics = torch.zeros(10, device=self.device, dtype=torch.float64)
         for encoder in self.policy.encoders:
             encoder.fitting = True
-            encoder.microbatch = min(self.execution_state["microbatch"], self.execution_state.get(
-                f"{encoder.stage}_microbatch", self.execution_state["microbatch"]))
+            encoder.microbatch = min(
+                self.execution_state["microbatch"],
+                self.execution_state.get(
+                    f"{encoder.stage}_microbatch", self.execution_state["microbatch"]
+                ),
+            )
             encoder.token_budget = self.execution_state["token_budget"]
             encoder.activation_checkpointing = self.execution_state["checkpointing"]
         for encoder in self._teacher.encoders:
             encoder.fitting = True
-            encoder.microbatch = min(self.execution_state["microbatch"], self.execution_state.get(
-                f"{encoder.stage}_microbatch", self.execution_state["microbatch"]))
+            encoder.microbatch = min(
+                self.execution_state["microbatch"],
+                self.execution_state.get(
+                    f"{encoder.stage}_microbatch", self.execution_state["microbatch"]
+                ),
+            )
             encoder.token_budget = self.execution_state["token_budget"]
         groups = self.execution_state["fit_batch_groups"]
         if getattr(self, "_fitting_spool", None) is None:
@@ -651,7 +687,7 @@ class CudaSequentialQ(CudaCohortLifecycle):
                 observations,
                 metadata[0] if metadata else None,
                 teacher=self._teacher,
-                consistency_counts=self._buffer.outcome_counts[1:],
+                consistency_counts=self._buffer.consistency_counts,
             )
             loss.backward()
             self.policy.accumulate_master_gradients()

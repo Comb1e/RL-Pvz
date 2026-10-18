@@ -1,70 +1,39 @@
-# Ten-way selection and rejection penalties
+# Invalid-action execution and selective fitting
 
-The controller compares the ten first-level values
+The controller still compares all ten species outputs. Plant proposals consider
+empty tiles; digging considers all 45 tiles. Sun and cooldown do not hide a
+branch. A full-board plant uses tile zero so rejection remains observable.
 
-\[
- Q_0(s), Q_{sunflower}(s),\ldots,Q_{repeater}(s),Q_{dig}(s)
-\]
+Every rejected proposal executes exactly one ordinary wait tick. The original
+proposal, actual reason and executed action `0` are retained separately.
+Terminal, development, proximity and victory-time rewards remain those of that
+tick. `invalid_plant_penalty` and `empty_dig_penalty` are zero audit fields;
+there are no active rejection-price settings.
 
-for every active state. The controller applies deterministic tie order (wait,
-the configured plant order, then dig), then selects a tile. A plant tile mask
-contains empty board tiles only; digging considers all 45 tiles. The branch
-comparison therefore never changes merely because sun is insufficient or a card
-is cooling down. The selected plant proposal is kept through CPU and CUDA
-validation. On a full board it still gets the deterministic tile-zero proposal,
-so the pinned simulator reports occupancy rejection rather than a lower-Q
-fallback and advances one per-tick wait when the command cannot execute.
+The shared classifier uses full **pre-action** public legality and actual outcome.
+Policy geometry alone cannot distinguish an occupied tile from an unusable card.
+Branch impossibility takes precedence, including cooldown plus occupancy.
 
-Rejection prices have one shared definition in `train.toml`, used by autonomous
-training, demonstration reward reconstruction and reporting:
+| Proposal/outcome | Species supervision | Tile supervision | EMA tiles |
+|---|---|---|---|
+| Ordinary wait | Complete return | None | None |
+| Accepted plant/dig | Detached consistency | Complete return at proposed tile | Yes |
+| Unavailable/cooldown/unaffordable/restricted/full-board plant | Proposed branch to -1 | None | None |
+| Occupied plant tile with usable branch | None | Proposed tile to -1 | None |
+| Empty dig with plants elsewhere | None | Proposed tile to -1 | None |
+| Dig with no plants | Dig branch to -1 | None | None |
 
-\[
- p_{plant}=0.00001,
-\]
+`training.objective.invalid_action_target=-1.0` supplies the squared-error target.
+It is fitting-only: chronological complete returns still include actual tick
+rewards, and earlier decisions never receive an artificial -1 reward. Invalid
+proposals do not train the wait output just because their execution was wait.
 
-and
+Wait/plant/dig groups and their accepted/rejected strata retain whole-cohort
+balancing. EMA consistency uses accepted plant/dig denominators only. CPU row
+plans and route-separated width buckets skip irrelevant online stages and EMA.
+Verified demonstrations use the same classifier after reconstructing pre-action
+legality; historical penalties are verified as recorded facts, then repriced to
+zero in memory without modifying recording files.
 
-\[
- p_{empty\ dig}=0.000003.
-\]
-
-For an action result, these signed components are
-
-\[
- R_{invalid\ plant}=-p_{plant}\,1[Place\land\neg accepted],\qquad
- R_{empty\ dig}=-p_{empty\ dig}\,1[Dig\land reason=empty\_tile].
-\]
-
-The penalty is independent of net-value accounting: it does not alter assets,
-sky income, effective damage, mower expenditure, terminal rewards, or the
-discounted-return identity. With gamma one, fitting sums the six signed components
-defined in [reward accounting](training-objective.md), multiplying only development
-by ten. Rejection costs are never multiplied. CPU computes
-the indicators from the public action result; CUDA uses the same action index,
-accepted flag, and pinned rejection reason (`empty_tile`, reason 4). Independent
-controls cover zero-sun and cooldown plants, occupied/full-board proposals, empty
-digs, one-tick advancement, terminal conservation, and CPU/CUDA equality.
-The trajectory stores the actual selected proposal so its complete-return target
-learns the penalty. Execution evidence separately retains the proposal after
-acceptance, or wait (`0`) after rejection, together with `accepted` and
-`ticks_advanced`. These are learning/diagnostic facts, not historical model inputs:
-the next decision reads only the resulting current board. The entity cap does not
-change branch selection or penalties. Non-wait regression trains the proposed tile;
-species consistency uses a detached EMA best-candidate target instead of assigning
-the sampled tile's return directly to the species network.
-
-These defaults are experimental costs, not learned calibration. At 100 decisions
-per simulated second, repeatedly selecting an invalid plant costs 0.001 reward per
-second, and repeated empty digs cost 0.0003 per second. A 1,200-second cutoff
-permits at most 120,000 rejected actions because every rejection advances a tick;
-therefore the combined default rejection cost is bounded below by -1.2 reward
-units (the larger plant charge), independently of the economic bounds. Successful
-instantaneous commands receive neither rejection charge.
-
-The normal-level positive-win/negative-loss reward separation applies
-only to outcome plus economic development, or to trajectories with no penalties.
-It is **not a guarantee for total reward**: repeated invalid proposals can
-make a win's total reward negative. Outcome reward itself and the bounds on
-assets/net value remain unchanged. The design asks regression to learn rejection
-cost from complete returns; it does not guarantee that immediate digging or
-other learning failures will disappear.
+The saved-weight contract and action dimensions are unchanged. The objective,
+trajectory and recovery versions prevent resuming old optimizer/reward semantics.

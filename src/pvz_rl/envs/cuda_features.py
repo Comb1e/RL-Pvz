@@ -83,8 +83,6 @@ class CudaFeatures:
             "mower_value",
             "progress_weight",
             "value_scale",
-            "invalid_plant_penalty",
-            "empty_dig_penalty",
             "early_sun_extra_multiplier",
         )
         params.update({f"R_{k}": float(cfg["reward"].get(k, 0)) for k in reward_keys})

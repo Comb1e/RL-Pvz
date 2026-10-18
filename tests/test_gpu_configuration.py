@@ -18,7 +18,7 @@ def test_new_shared_run_defaults_and_explicit_parallelism():
     cfg = configured(args())
     assert simulator(cfg) == "cuda"
     assert cfg["training"]["n_envs"] == 128
-    assert cfg["training"]["method"] == "complete_return_sequential_no_probe_v1"
+    assert cfg["training"]["method"] == "complete_return_selective_invalid_v2"
     for count in (3, 32, 64, 128, 256, 512, 1024):
         cfg = configured(args(n_envs=count))
         assert cfg["training"]["n_envs"] == count
@@ -32,9 +32,7 @@ def test_gpu_profiles_are_capability_hints_with_generic_and_custom_fallbacks(tmp
         cfg, "auto", device={"name": "NVIDIA GeForce RTX 4070 Laptop GPU"}
     )
     assert name == "rtx4070-laptop"
-    desktop, name = apply_gpu_profile(
-        cfg, "auto", device={"name": "NVIDIA GeForce RTX 4070"}
-    )
+    desktop, name = apply_gpu_profile(cfg, "auto", device={"name": "NVIDIA GeForce RTX 4070"})
     assert name == "generic-bf16"
     assert desktop["training"]["performance"]["fit_species_microbatch"] == 32
     assert laptop["training"]["performance"]["fit_species_microbatch"] == 64
@@ -43,9 +41,7 @@ def test_gpu_profiles_are_capability_hints_with_generic_and_custom_fallbacks(tmp
     assert laptop["training"]["performance"]["fit_batch_groups"] == 2
     assert laptop["training"]["performance"]["compile_kernels"] is False
     assert laptop["training"]["torch_threads"] == 2
-    cloud, name = apply_gpu_profile(
-        cfg, "auto", device={"name": "NVIDIA GeForce RTX 4080 SUPER"}
-    )
+    cloud, name = apply_gpu_profile(cfg, "auto", device={"name": "NVIDIA GeForce RTX 4080 SUPER"})
     assert name == "rtx4080-super"
     assert cloud["training"]["performance"]["compile_kernels"] is True
     assert cloud["training"]["performance"]["fit_species_microbatch"] == 64
@@ -54,9 +50,7 @@ def test_gpu_profiles_are_capability_hints_with_generic_and_custom_fallbacks(tmp
     assert cloud["training"]["performance"]["fit_batch_groups"] == 2
     assert cloud["training"]["performance"]["collection_vram_headroom_mib"] == 6554
     assert cloud["training"]["torch_threads"] == 1
-    rtx5090, name = apply_gpu_profile(
-        cfg, "auto", device={"name": "NVIDIA GeForce RTX 5090"}
-    )
+    rtx5090, name = apply_gpu_profile(cfg, "auto", device={"name": "NVIDIA GeForce RTX 5090"})
     assert name == "rtx5090"
     assert rtx5090["training"]["performance"]["compile_kernels"] is True
     assert rtx5090["training"]["performance"]["fit_species_microbatch"] == 128
@@ -106,7 +100,7 @@ def test_previous_plant_probe_checkpoints_reject_before_cuda(tmp_path, monkeypat
                 json.dumps(
                     dict(
                         policy="transformer_lstm_q_v4",
-                        optimizer="complete_return_sequential_no_probe_v1",
+                        optimizer="complete_return_selective_invalid_v2",
                         exploration=EXPLORATION_PROTOCOL,
                     )
                 ),

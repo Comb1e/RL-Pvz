@@ -192,7 +192,7 @@ class CudaVecEnv(VecEnv):
             ]
         # Branch restrictions are intentionally absent from policy masks and
         # simulator setup.  Invalid plant proposals are retained as actions
-        # and receive the configured rejection penalty.
+        # and execute as wait with zero rejection reward penalties.
         for index, level, family, seed, spec in staged:
             self.finished_outcomes.pop(index, None)
             task = task_name(level, family)

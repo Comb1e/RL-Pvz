@@ -50,7 +50,7 @@ def test_high_q_unaffordable_plant_stays_selected_and_is_rejected(per_tick_cfg):
     assert not info["accepted"] and info["rejection_reason"] == "insufficient_sun"
     assert info["proposal_action"] == peashooter and info["executed_action"] == 0
     assert info["ticks_advanced"] == 1
-    assert reward == pytest.approx(-per_tick_cfg["reward"]["invalid_plant_penalty"])
+    assert reward == pytest.approx(-per_tick_cfg["reward"].get("invalid_plant_penalty", 0))
 
 
 def test_high_q_cooling_plant_stays_selected_and_is_rejected(per_tick_cfg):
@@ -83,7 +83,7 @@ def test_high_q_cooling_plant_stays_selected_and_is_rejected(per_tick_cfg):
     assert not info["accepted"] and info["rejection_reason"] == "card_recharging"
     assert info["proposal_action"] == cooling and info["executed_action"] == 0
     assert info["ticks_advanced"] == 1
-    assert reward == pytest.approx(-per_tick_cfg["reward"]["invalid_plant_penalty"])
+    assert reward == pytest.approx(-per_tick_cfg["reward"].get("invalid_plant_penalty", 0))
 
 
 @pytest.mark.parametrize(

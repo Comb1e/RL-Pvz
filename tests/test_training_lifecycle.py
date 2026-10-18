@@ -196,8 +196,8 @@ def test_retired_checkpoint_rejected_before_deserialization(smoke_cfg, tmp_path,
         kind="event_sequential_q_v1", action_distribution="sequential_plant_epsilon_v1"
     )
     old["training"]["method"] = "sequential_q_mc_v1"
-    old["reward"].pop("invalid_plant_penalty")
-    old["reward"].pop("empty_dig_penalty")
+    old["reward"].pop("invalid_plant_penalty", None)
+    old["reward"].pop("empty_dig_penalty", None)
     archive_path = tmp_path / "old.zip"
     with ZipFile(archive_path, "w") as archive:
         archive.writestr(

@@ -337,3 +337,24 @@ throughput measurements.
 - [PyTorch 2.8 CUDA Graph notes](https://raw.githubusercontent.com/pytorch/pytorch/v2.8.0/docs/source/notes/cuda.rst): static shapes, owned pointers and reduced CPU launch overhead guide the bounded fitting graph owners.
 - [Jupyter Server Proxy](https://github.com/jupyterhub/jupyter-server-proxy): authenticated loopback proxying and prefix-safe relative URLs guide the optional browser viewer.
 - Agarwal et al., [Deep Reinforcement Learning at the Edge of the Statistical Precipice](https://arxiv.org/abs/2108.13264), with the [rliable project](https://github.com/google-research/rliable): paired seeds, uncertainty and equal-game comparisons guide the bounded learning study; no new evaluation dependency is added.
+
+## Reachable tile annotation — 2026-10-18
+
+- [Python random sequence sampling](https://docs.python.org/3/library/random.html#random.choice): reviewed the single-element sequence draw for equal wait/eight-species proposals. Availability is checked after this draw, with failed choices becoming wait rather than resampling; sorted legal tile IDs preserve seeded replay across public-board iteration orders.
+- [MDN conditional requests: optimistic locking](https://developer.mozilla.org/en-US/docs/Web/HTTP/Guides/Conditional_requests#avoiding_the_lost_update_problem_with_optimistic_locking): reviewed the lost-update failure between concurrent editors. Annotation edits carry the loaded record revision in the JSON protocol and reject mismatches under the session lock; the application does not introduce ETag headers or change model inputs.
+- [Procgen project](https://github.com/openai/procgen): reviewed its procedural
+  environment diversity and generalization motivation. This informs seeded
+  episode and rollout-time variation; the local 0–20,000-step limits, legal
+  planting intervals and sparse cap are application choices, not Procgen
+  algorithms or a new dependency. The pinned game's public observation and
+  legal action APIs supply all combat, sun, cooldown and mower state.
+
+- Settles, [Active Learning Literature Survey](https://burrsettles.com/pub/settles.activelearning.pdf): reviewed pool-based selection and label-budget tradeoffs. The annotator keeps discarded states for audit and leaves active selection as a later data-reduction step; no active-learning dependency is added.
+- [W3C Pointer Events Level 3](https://www.w3.org/TR/pointerevents3/): reviewed pointer capture and interrupted-drag behavior. The browser annotator uses pointer capture for left-button painting and keeps all state changes behind the relative HTTP API.
+
+
+## Top-1 annotation convergence and selective fitting — 2026-10-18
+
+- Cour, Sapp and Taskar, [Learning from Partial Labels](https://www.jmlr.org/papers/v12/cour11a.html), JMLR 2011: candidate-label supervision informed accepting any annotated tile. Their ambiguity setting assumes one hidden correct label; here several placements can actually be acceptable. The local best-positive versus best-legal-negative hinge is an application-specific adaptation, not their published algorithm or a guarantee of held-out accuracy.
+- [PyTorch 2.8 MarginRankingLoss source](https://raw.githubusercontent.com/pytorch/pytorch/v2.8.0/torch/nn/modules/loss.py): checked `max(0, -y*(x1-x2)+margin)`. Local fitting sets `y=1`, `x1=max annotated`, `x2=max legal unannotated`, margin 1, and normalizes records across the full training split. Complete legal top-1 evaluation, rather than margin satisfaction or validation score, gates publication.
+- The existing Double-Q reference remains applicable only to accepted non-wait consistency. Fixed invalid targets use direct supervised attribution and require no EMA evaluation; no invalid-action policy masking is introduced.

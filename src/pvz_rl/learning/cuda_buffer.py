@@ -15,9 +15,10 @@ from pvz_rl.envs.encoding import (
     collate_observations,
     validate_entity_records,
 )
+from pvz_rl.learning.action_routing import FitRoute, validate_routes
 from pvz_rl.learning.objective import COMPONENTS, training_rewards, victory_time
 
-TRAJECTORY_PROTOCOL = "pvz-rl/stateless-no-probe-trajectory-v1"
+TRAJECTORY_PROTOCOL = "pvz-rl/selective-invalid-trajectory-v2"
 
 
 def trajectory_dtype(cfg=None):
@@ -51,6 +52,9 @@ def trajectory_dtype(cfg=None):
             ("tile_coin", "?"),
             ("target", "<f4"),
             ("accepted", "?"),
+            ("route", "u1"),
+            ("branch_usable", "?"),
+            ("rejection_reason", "u1"),
             ("done", "?"),
             ("executed_action", "<u2"),
         ]
@@ -144,6 +148,9 @@ class CompleteGameBuffer:
             observations = PackedEntityBatch(
                 entities[mask], np.cumsum(counts) - counts, counts, globals_
             )
+        validate_routes(records[records["active"]])
+        if np.any(records["rejection_reason"] > 7):
+            raise ValueError("Unknown trajectory rejection reason")
         observations.validate()
         if observations.counts.shape != (len(records),):
             raise ValueError("Each transition needs one public observation")
@@ -204,20 +211,27 @@ class CompleteGameBuffer:
         return result.reshape(*rows.shape).to(device) if device else result.reshape(*rows.shape)
 
     @staticmethod
-    def observations_from_packed(packed, *, destination=None, device=None, validated=False, width=None):
+    def observations_from_packed(
+        packed, *, destination=None, device=None, validated=False, width=None
+    ):
         """Pad a fitting-spool packed batch into the transport shape."""
         if not validated:
             packed.validate()
         counts = np.asarray(packed.counts, dtype=np.int64)
         offsets = np.asarray(packed.offsets, dtype=np.int64)
-        if (np.any(counts < 0) or np.any(offsets < 0)
-                or np.any(offsets + counts > len(packed.entities))):
+        if (
+            np.any(counts < 0)
+            or np.any(offsets < 0)
+            or np.any(offsets + counts > len(packed.entities))
+        ):
             raise ValueError("Corrupt packed entity offset/count")
         required = int(counts.max(initial=0))
         width = required if width is None else int(width)
         if width < required:
             raise ValueError("Fitting width cannot truncate entities")
-        if destination is not None and (len(counts) > len(destination) or width > destination.entities.shape[-2]):
+        if destination is not None and (
+            len(counts) > len(destination) or width > destination.entities.shape[-2]
+        ):
             raise ValueError("Fitting batch exceeds pinned capacity")
         if destination is None:
             result = EntityBatch(
@@ -311,10 +325,17 @@ class CompleteGameBuffer:
         quantile_sample = []
         self.outcome_counts[:] = 0
         counts = np.zeros(3, np.int64)
+        routed_counts = np.zeros(4, np.int64)
+        from pvz_rl.config import load_config
+
+        invalid_target = (self.cfg or load_config())["training"]["objective"][
+            "invalid_action_target"
+        ]
         species_counts = np.zeros(A.plant_types, np.int64)
         sums = np.zeros((3, 3), np.float64)
         for b in reversed(range(len(self.blocks))):
             rows = self.blocks[b][: min(self.block_rows, self.size - b * self.block_rows)]
+            routed_counts += np.bincount(rows["route"][rows["active"]], minlength=4)
             for env in range(self.n_envs):
                 ix = np.flatnonzero(rows["active"] & (rows["env"] == env))
                 rewards = rows["reward"][ix]
@@ -348,8 +369,16 @@ class CompleteGameBuffer:
             kinds = np.where(rows["action"] == 0, 0, np.where(rows["action"] < A.dig_start, 1, 2))
             for group in range(3):
                 ix = rows["active"] & (kinds == group)
-                selected = rows["branch_value"][ix] if group == 0 else rows["tile_value"][ix]
-                first = selected.astype(np.float64) - rows["target"][ix]
+                species_only = (rows["route"][ix] == FitRoute.WAIT_RETURN) | (
+                    rows["route"][ix] == FitRoute.SPECIES_INVALID
+                )
+                selected = np.where(species_only, rows["branch_value"][ix], rows["tile_value"][ix])
+                target = np.where(
+                    rows["route"][ix] >= FitRoute.SPECIES_INVALID,
+                    invalid_target,
+                    rows["target"][ix],
+                )
+                first = selected.astype(np.float64) - target
                 second = rows["placement_gap"][ix].astype(np.float64)
                 counts[group] += len(first)
                 self.outcome_counts[group] += np.bincount(
@@ -368,6 +397,7 @@ class CompleteGameBuffer:
             raise FloatingPointError("Non-finite complete returns or collection Q values")
         self.finalized, self.group_counts, self.species_counts = True, counts, species_counts
         self.consistency_counts[:] = self.outcome_counts[1:]
+        self.consistency_counts[:, 0] = 0
         n = max(1, counts.sum())
         variance = max(0, target_square / n - (target_sum / n) ** 2)
         self.reward_summary.update(
@@ -384,6 +414,17 @@ class CompleteGameBuffer:
             ),
             outcome_counts=self.outcome_counts.tolist(),
             consistency_counts=self.consistency_counts.tolist(),
+            routed_workload=dict(
+                routes={route.name.lower(): int(routed_counts[route]) for route in FitRoute},
+                online_species_rows=int(routed_counts.sum() - routed_counts[FitRoute.TILE_INVALID]),
+                online_tile_rows=int(
+                    routed_counts[FitRoute.ACCEPTED] + routed_counts[FitRoute.TILE_INVALID]
+                ),
+                ema_tile_rows=int(routed_counts[FitRoute.ACCEPTED]),
+                skipped_ema_rows=int(
+                    routed_counts[FitRoute.SPECIES_INVALID] + routed_counts[FitRoute.TILE_INVALID]
+                ),
+            ),
         )
         live = episode_count > 0
         self.reward_summary["within_episode_target_variance"] = (
@@ -580,6 +621,9 @@ class CompleteGameBuffer:
                 ):
                     raise ValueError("Non-finite trajectory Q values or placement gap")
                 actual = rows[rows["active"]]
+                validate_routes(actual)
+                if np.any(actual["rejection_reason"] > 7):
+                    raise ValueError("Unknown trajectory rejection reason")
                 if (
                     np.any(rows["policy_action"] >= A.size)
                     or np.any(rows["exploration_mode"] > 2)
@@ -624,7 +668,9 @@ class CompleteGameBuffer:
                 raise ValueError("Orphan entity records in trajectory")
             if state["finalized"] and (
                 not np.array_equal(actual_counts, state["outcome_counts"])
-                or not np.array_equal(actual_counts[1:], state["consistency_counts"])
+                or not np.array_equal(
+                    actual_counts[1:] * np.array([0, 1]), state["consistency_counts"]
+                )
                 or not np.array_equal(actual_counts.sum(-1), state["group_counts"])
             ):
                 raise ValueError("Corrupt trajectory acceptance counts disagree with records")

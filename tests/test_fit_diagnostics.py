@@ -85,11 +85,16 @@ def tiny_fit_case(cfg, device="cpu"):
             ("action", "i8"),
             ("accepted", "?"),
             ("target", "f4"),
+            ("route", "u1"),
+            ("branch_usable", "?"),
             ("entity_count", "i4"),
         ],
     )
     rows["active"] = rows["accepted"] = True
     rows["action"], rows["target"] = [0, 1, 361], [1, -2, 3]
+    from pvz_rl.learning.action_routing import route_outcomes
+
+    rows["route"] = route_outcomes(rows["action"], rows["accepted"], rows["branch_usable"])
     observations = EntityBatch(
         torch.zeros(3, 0, 11, dtype=torch.int32),
         torch.zeros(3, 0, dtype=torch.bool),

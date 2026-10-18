@@ -13,7 +13,7 @@ from pvz_rl.policy.sequential_q import (
     tile_candidates,
 )
 
-OBJECTIVE_PROTOCOL = "complete_return_sequential_no_probe_v1"
+OBJECTIVE_PROTOCOL = "complete_return_selective_invalid_v2"
 COMPONENTS = (
     "terminal",
     "development",

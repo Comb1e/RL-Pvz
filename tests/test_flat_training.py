@@ -10,6 +10,7 @@ import torch
 
 from pvz_rl.config import load_config, validate_config
 from pvz_rl.envs.encoding import collate_observations
+from pvz_rl.learning.action_routing import route_outcomes
 from pvz_rl.learning.batch_transport import BatchPrefetch, batch_rows
 from pvz_rl.learning.cuda_buffer import CompleteGameBuffer
 from pvz_rl.learning.flat_q import batch_loss
@@ -60,11 +61,96 @@ def loss_rows(actions, accepted, targets):
             ("action", "<i8"),
             ("accepted", "?"),
             ("target", "<f4"),
+            ("route", "u1"),
+            ("branch_usable", "?"),
         ],
     )
     rows["active"] = True
     rows["action"], rows["accepted"], rows["target"] = actions, accepted, targets
+    rows["branch_usable"] = True
+    rows["route"] = route_outcomes(rows["action"], rows["accepted"], rows["branch_usable"])
     return rows
+
+
+@pytest.mark.parametrize(
+    "route,action,accepted,usable,head",
+    [
+        (0, 0, True, True, "species"),
+        (1, 2, True, True, "both"),
+        (2, 2, False, False, "species"),
+        (3, 2, False, True, "tiles"),
+        (2, 361, False, False, "species"),
+        (3, 361, False, True, "tiles"),
+    ],
+)
+def test_routed_head_gradients_and_exact_forward_counts(route, action, accepted, usable, head):
+    cfg = load_config()
+    model = IndependentValues(cfg)
+    teacher = deepcopy(model).requires_grad_(False)
+    rows = loss_rows([action], [accepted], [4])
+    rows["route"], rows["branch_usable"] = route, usable
+    counts = np.zeros((3, 2), np.int64)
+    group = 0 if action == 0 else 1 if action < 361 else 2
+    counts[group, int(accepted)] = 1
+    loss, errors, _ = batch_loss(model, rows, counts, boards(1), teacher=teacher)
+    loss.backward()
+    assert rows["target"][0] == 4  # fixed -1 never replaces chronological returns
+    assert errors.item() == (1 if route in (2, 3) else 16)
+    assert model.species_calls == int(head in ("species", "both"))
+    assert len(model.tile_calls) == int(head in ("tiles", "both"))
+    assert len(teacher.tile_calls) == int(route == 1)
+    assert teacher.species_calls == 0
+    if head == "species":
+        assert model.tiles.grad is None
+        branch = 0 if action == 0 else 1 + (action - 1) // 45
+        assert model.species.grad[0, branch] == (-8 if route == 0 else 2)
+        assert model.species.grad.count_nonzero() == 1
+    if head == "tiles":
+        assert model.species.grad is None
+        assert model.tiles.grad.count_nonzero() == 1
+        assert model.tiles.grad[0, (action - 1) // 45, (action - 1) % 45] == 2
+    assert all(p.grad is None for p in teacher.parameters())
+
+
+def test_public_classifier_branch_precedence_and_boundaries():
+    from pvz_game import Game, LevelSpec, Place, Spawn
+    from pvz_game.config import InitialPlant
+
+    from pvz_rl.envs.actions import ActionCodec
+    from pvz_rl.learning.action_routing import classify_actions
+
+    codec = ActionCodec()
+    game = Game()
+    game.reset(
+        LevelSpec(
+            "routing",
+            (Spawn(9999, "basic", 0),),
+            initial_sun=100,
+            plants=(InitialPlant("peashooter", 0, 0),),
+        ),
+        101,
+    )
+    action = codec.encode(Place("peashooter", 0, 0))
+    snapshot = game.snapshot()
+    snapshot["cooldowns"]["peashooter"] = 1
+    game.restore(snapshot)
+    # Branch-level failure wins even on an occupied tile.
+    route, usable = classify_actions([action], [False], codec.mask(game)[None], ["occupied_tile"])
+    assert route.tolist() == [2] and not usable[0]
+    snapshot = game.snapshot()
+    snapshot["cooldowns"]["peashooter"] = 0
+    game.restore(snapshot)
+    # Exactly the purchase cost with cooldown zero is usable elsewhere.
+    route, usable = classify_actions([action], [False], codec.mask(game)[None], ["occupied_tile"])
+    assert route.tolist() == [3] and usable[0]
+    masks = codec.mask(game)
+    route, _ = classify_actions([action], [False], masks[None], ["task_restriction"])
+    assert route.tolist() == [2]
+    route, _ = classify_actions([362], [False], masks[None], ["empty_tile"])
+    assert route.tolist() == [3]
+    masks[361:] = False
+    route, _ = classify_actions([362], [False], masks[None], ["empty_tile"])
+    assert route.tolist() == [2]
 
 
 @pytest.mark.parametrize("consistency", [0.0, 1.0])
@@ -141,16 +227,17 @@ def test_selected_and_consistency_losses_match_independent_global_control(partit
     loss = sum(losses)
     torch.testing.assert_close(loss, reference_loss)
     totals = torch.stack(metric_totals).sum(0)
-    assert totals[3] == 4
+    assert totals[3] == 2
     assert all(not total.requires_grad for total in metric_totals)
     diagnostics = consistency_diagnostics(sum(consistency_losses).item(), totals.tolist())
     assert diagnostics["species_consistency_loss"] is not None
     assert diagnostics["species_consistency_mae"] == pytest.approx(totals[0] / totals[3])
-    assert model.species_calls == len(partition)
-    assert (
-        len(model.tile_calls)
-        == len(teacher.tile_calls)
-        == sum(bool((rows["action"][part] != 0).any()) for part in partition)
+    assert model.species_calls == sum(bool((rows["route"][part] != 3).any()) for part in partition)
+    assert len(model.tile_calls) == sum(
+        bool((rows["action"][part] != 0).any()) for part in partition
+    )
+    assert len(teacher.tile_calls) == sum(
+        bool(((rows["action"][part] != 0) & rows["accepted"][part]).any()) for part in partition
     )
 
 
@@ -180,6 +267,8 @@ def test_candidate_geometry_full_board_and_missing_outcome_strata():
         teacher.tiles[2, 8, 0] = 99
         teacher.tiles[2, 8, 44] = 7
     rows = loss_rows([2, 1, 361], [1, 0, 0], [4, 0, 0])
+    rows["branch_usable"][1] = False  # full board: species error
+    rows["route"] = route_outcomes(rows["action"], rows["accepted"], rows["branch_usable"])
     loss, *_ = batch_loss(
         model,
         rows,
@@ -188,14 +277,15 @@ def test_candidate_geometry_full_board_and_missing_outcome_strata():
         teacher=teacher,
         consistency_counts=[[1, 1], [1, 0]],
     )
-    assert float(model._last_species_consistency_loss) == pytest.approx((5 / 2 + 9 / 2 + 13) / 2)
-    assert loss.item() == pytest.approx(20)
+    assert float(model._last_species_consistency_loss) == pytest.approx(5)
+    assert loss.item() == pytest.approx(10.75)
     torch.testing.assert_close(
-        model._last_species_consistency_metrics, torch.tensor([15, 3, 98, 3], dtype=torch.float64)
+        model._last_species_consistency_metrics, torch.tensor([3, 1, 6, 1], dtype=torch.float64)
     )
     loss.backward()
-    assert model.species.grad[2, 9] == -2
-    assert model.tiles.grad.count_nonzero() == 0
+    assert model.species.grad[2, 9] == 0
+    assert model.species.grad[1, 1] == 0.5
+    assert model.tiles.grad[2, 8, 0] == 1
 
 
 def test_actual_commitment_and_rejection_branches_reuse_online_tables_without_extra_forwards():
@@ -221,11 +311,11 @@ def test_actual_commitment_and_rejection_branches_reuse_online_tables_without_ex
     )
     assert model.species_calls == 1
     assert model.tile_calls == [([1, 2], [2, 5], True)]
-    assert teacher.species_calls == 0 and teacher.tile_calls == [([1, 2], [2, 5], False)]
+    assert teacher.species_calls == 0 and teacher.tile_calls == [([2], [5], False)]
     assert model._last_species_consistency_loss.item() > 0
-    assert model._last_species_consistency_metrics[3] == 2
+    assert model._last_species_consistency_metrics[3] == 1
     loss.backward()
-    assert model.species.grad[1, 2] == -0.5 and model.species.grad[2, 5] == 0.5
+    assert model.species.grad[1, 2] == 0 and model.species.grad[2, 5] == 1
     assert model.species.grad[1, 1] == model.species.grad[2, 9] == 0
     assert all(parameter.grad is None for parameter in teacher.parameters())
 
@@ -299,6 +389,7 @@ def test_flat_batches_exclude_capacity_gaps_preserve_returns_and_release_maps(tm
         rows["active"] = [True, True, False, True, True, False, True, False]
         rows["reward"] = [1, 2, 999, 3, 4, 999, 5, 999]
         rows["done"][[3, 6]] = True
+        rows["route"] = route_outcomes(rows["action"], rows["accepted"], rows["branch_usable"])
         buffer.append(rows, [{"entities": [], "globals": [0] * 18}] * len(rows))
         buffer.finalize()
         with closing(batch_rows(buffer, 2)) as source:
@@ -340,10 +431,11 @@ def test_ram_and_spilled_fitting_match_independent_losses_gradients_and_metrics(
         rows["accepted"] = [True, False, False, True, False, True]
         rows["reward"] = [0.5, 999, 1, -0.5, 999, 2]
         rows["done"][-1] = True
+        rows["route"] = route_outcomes(rows["action"], rows["accepted"], rows["branch_usable"])
         buffer.append(rows, boards(6).observations())
         buffer.finalize()
         np.testing.assert_array_equal(buffer.outcome_counts, [[0, 1], [1, 1], [0, 1]])
-        np.testing.assert_array_equal(buffer.consistency_counts, [[1, 1], [0, 1]])
+        np.testing.assert_array_equal(buffer.consistency_counts, [[0, 1], [0, 1]])
         assert any(isinstance(block, np.memmap) for block in buffer.blocks) == (ram_bytes == 1)
         losses, metrics, consistency_losses, selected_errors, gaps = [], [], [], [], []
         with closing(batch_rows(buffer, batch_size)) as source:
@@ -362,28 +454,28 @@ def test_ram_and_spilled_fitting_match_independent_losses_gradients_and_metrics(
                 selected_errors.append(errors)
                 gaps.append(gap)
         loss = sum(losses)
-        expected_selected = 3**2 / 3 + 2.5**2 / 6 + 1.5**2 / 3 + 2**2 / 6
-        expected_consistency = 0.25**2 / 4 + 5 / 2 + 7 / 4
+        expected_selected = 3**2 / 3 + 1**2 / 6 + 1.5**2 / 3 + 2**2 / 6
+        expected_consistency = 5 / 2 + 7 / 2
         assert loss.item() == pytest.approx(expected_selected + expected_consistency)
-        torch.testing.assert_close(torch.cat(selected_errors), torch.tensor([9, 6.25, 2.25, 4]))
-        torch.testing.assert_close(torch.cat(gaps), torch.tensor([6.0, 6.0, 6.0]))
+        torch.testing.assert_close(torch.cat(selected_errors), torch.tensor([9, 1, 2.25, 4]))
+        torch.testing.assert_close(torch.cat(gaps), torch.tensor([6.0, 6.0]))
         totals = torch.stack(metrics).sum(0)
-        torch.testing.assert_close(totals, torch.tensor([7.25, 2, 6, 3], dtype=torch.float64))
+        torch.testing.assert_close(totals, torch.tensor([7, 2, 4, 2], dtype=torch.float64))
         assert consistency_diagnostics(
             sum(consistency_losses).item(), totals.tolist()
         ) == pytest.approx(
             {
                 "species_consistency_loss": expected_consistency,
-                "species_consistency_mae": 7.25 / 3,
-                "species_consistency_saturation_fraction": 2 / 3,
+                "species_consistency_mae": 7 / 2,
+                "species_consistency_saturation_fraction": 1,
                 "species_selection_evaluation_gap": 2,
             }
         )
         loss.backward()
         expected_species = torch.zeros_like(model.species)
-        expected_species[[0, 2, 3, 5], [0, 1, 9, 2]] = torch.tensor([-2.0, -0.125, -1.0, 0.5])
+        expected_species[[0, 2, 3, 5], [0, 1, 9, 2]] = torch.tensor([-2.0, 1 / 3, -1.0, 1.0])
         expected_tiles = torch.zeros_like(model.tiles)
-        expected_tiles[[2, 3, 5], [0, 8, 1], 0] = torch.tensor([-5 / 6, -1, -2 / 3])
+        expected_tiles[[3, 5], [8, 1], 0] = torch.tensor([-1, -2 / 3])
         torch.testing.assert_close(model.species.grad, expected_species)
         torch.testing.assert_close(model.tiles.grad, expected_tiles)
         assert all(parameter.grad is None for parameter in teacher.parameters())
@@ -403,6 +495,7 @@ def test_double_buffer_transport_matches_serial_rows_and_owns_device_outputs(tmp
         rows["reward"] = [1, 2, 3, 4, 5]
         rows["done"][-1] = True
         rows["placement_gap"] = np.arange(5)
+        rows["route"] = route_outcomes(rows["action"], rows["accepted"], rows["branch_usable"])
         buffer.append(rows, boards(5).observations())
         buffer.finalize()
         snapshots = []
@@ -621,6 +714,7 @@ def test_failed_flat_pass_restarts_without_skipping_updates(tmp_path, monkeypatc
     rows["active"] = True
     rows["reward"][-1] = 1
     rows["done"][-1] = True
+    rows["route"] = route_outcomes(rows["action"], rows["accepted"], rows["branch_usable"])
     model._buffer.append(rows, boards(3).observations())
     model._buffer.finalize()
     model._stats = {"q_optimizer_steps": 0}
@@ -703,12 +797,13 @@ def test_ema_tile_allocation_failure_reduces_both_network_microbatches(tmp_path,
     rows["action"] = 1
     rows["reward"][-1] = 1
     rows["done"][-1] = True
+    rows["route"] = route_outcomes(rows["action"], rows["accepted"], rows["branch_usable"])
     model._buffer.append(rows, boards(3).observations())
     model._buffer.finalize()
     model._stats = {"q_optimizer_steps": 0}
     model.phase = CohortPhase.FIT
     model._ensure_teacher()
-    original = model._teacher.conditional_tiles
+    original = model._teacher.fitting_tiles
     attempts = []
 
     def failing_once(*args, **kwargs):
@@ -721,7 +816,7 @@ def test_ema_tile_allocation_failure_reduces_both_network_microbatches(tmp_path,
             raise torch.cuda.OutOfMemoryError("injected EMA tile allocation failure")
         return original(*args, **kwargs)
 
-    monkeypatch.setattr(model._teacher, "conditional_tiles", failing_once)
+    monkeypatch.setattr(model._teacher, "fitting_tiles", failing_once)
     try:
         for _ in range(15):
             model._fit_step(object())

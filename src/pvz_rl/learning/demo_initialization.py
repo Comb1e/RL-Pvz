@@ -28,8 +28,11 @@ from pvz_rl.envs.rewards import (
     HomeProximityLedger,
     reward_parts,
 )
+from pvz_rl.learning.action_routing import classify_actions
+from pvz_rl.learning.batch_transport import collate_fitting_observations, fitting_metadata
 from pvz_rl.learning.checkpoints import DEMO_PROTOCOL as CHECKPOINT_PROTOCOL
 from pvz_rl.learning.checkpoints import MODEL_STATE_PROTOCOL
+from pvz_rl.learning.cuda_buffer import trajectory_dtype
 from pvz_rl.learning.flat_q import batch_loss
 from pvz_rl.learning.objective import (
     components,
@@ -211,6 +214,8 @@ def _verify_action_order(archive_rows: list[dict], replay_path: Path, cfg: dict)
         row["reward_parts"] = reward
         row["training_reward"] = float(training_rewards(components(reward), cfg))
         row["legal_mask"] = legal
+        routes, usable = classify_actions([action], [outcome[1]], legal[None], [outcome[2]])
+        row["route"], row["branch_usable"] = int(routes[0]), bool(usable[0])
     final_rows = [row for row in archive_rows if row.get("record_type") == "final_observation"]
     if final_rows:
         final = observation_json(encoder.encode(game.observe()))
@@ -387,12 +392,37 @@ def initialize_demo(
     objective = cfg["training"]["objective"]
     rows = np.zeros(
         len(actions),
-        dtype=[("active", "?"), ("action", "<i8"), ("accepted", "?"), ("target", "<f4")],
+        dtype=trajectory_dtype(cfg),
     )
     rows["active"] = True
     rows["action"] = actions.cpu().numpy()
     rows["accepted"] = accepted.cpu().numpy()
     rows["target"] = returns.cpu().numpy()
+    rows["route"] = [r["route"] for r in demonstration.transitions]
+    rows["branch_usable"] = [r["branch_usable"] for r in demonstration.transitions]
+    # Returns were computed in episode order. Reorder only fitting work, with
+    # all real rows and complete-cohort denominators retained unchanged.
+    widths = np.asarray([len(obs["entities"]) for obs in observations])
+    order = np.lexsort(
+        (
+            rows["route"],
+            np.searchsorted(cfg["training"]["performance"]["fit_entity_buckets"], widths),
+        )
+    )
+    rows = rows[order]
+    observations = [observations[i] for i in order]
+    selection = torch.as_tensor(order, device=device)
+    actions, accepted, legal = actions[selection], accepted[selection], legal[selection]
+    keys = (
+        np.searchsorted(cfg["training"]["performance"]["fit_entity_buckets"], widths[order]) * 4
+        + rows["route"]
+    )
+    boundaries = np.r_[0, np.flatnonzero(keys[1:] != keys[:-1]) + 1, len(rows)]
+    chunks = [
+        (start, min(start + batch_size, int(upper)))
+        for lower, upper in zip(boundaries[:-1], boundaries[1:], strict=True)
+        for start in range(int(lower), int(upper), batch_size)
+    ]
     started = time.monotonic()
     completed = 0
     for pass_index in range(passes):
@@ -401,26 +431,30 @@ def initialize_demo(
         model.zero_grad(set_to_none=True)
         rank_accuracy = torch.zeros(4, device=device)
         pass_metrics = torch.zeros(10, device=device, dtype=torch.float64)
-        for start in range(0, len(observations), batch_size):
-            stop = min(start + batch_size, len(observations))
-            current = collate_observations(observations[start:stop], device)
+        for start, stop in chunks:
+            current = collate_fitting_observations(observations[start:stop], cfg, device)
             loss, _, gap = batch_loss(
                 model,
                 rows[start:stop],
                 group_counts,
                 current,
+                fitting_metadata(rows[start:stop], device),
                 teacher=teacher,
-                consistency_counts=group_counts[1:],
+                consistency_counts=group_counts[1:] * torch.tensor([0, 1], device=device),
             )
-            rank, accuracy = demonstration_rank_loss(
-                model,
-                current,
-                actions[start:stop],
-                accepted[start:stop],
-                legal[start:stop],
-                rank_counts,
-                objective["demo_rank_margin"],
-            )
+            selected = torch.as_tensor(np.flatnonzero(rows["accepted"][start:stop]), device=device)
+            if len(selected):
+                rank, accuracy = demonstration_rank_loss(
+                    model,
+                    current[selected],
+                    actions[start:stop][selected],
+                    accepted[start:stop][selected],
+                    legal[start:stop][selected],
+                    rank_counts,
+                    objective["demo_rank_margin"],
+                )
+            else:
+                rank, accuracy = loss.detach() * 0, loss.new_zeros(4)
             loss = loss + objective["demo_rank_loss_weight"] * rank
             rank_accuracy += accuracy.detach()
             loss.backward()

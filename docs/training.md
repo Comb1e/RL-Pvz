@@ -1,10 +1,11 @@
 # Recording and training
 
-The official objective is `complete_return_sequential_no_probe_v1`. Previous
-weights and resumes are rejected before simulator allocation. Verified replay
-archives remain reusable and can be repriced into a new initialization directory.
-The current protocols are demo checkpoint v9, autonomous state v1 and
-`stateless-no-probe-trajectory-v1`.
+The objective is `complete_return_selective_invalid_v2`. Old-objective optimizer
+resume is rejected. Structurally compatible previous BF16-master two-stage
+checkpoints remain valid for inference and fresh weight-only initialization.
+Current recovery uses `selective-invalid-state-v2` and
+`selective-invalid-trajectory-v2`; the model weight protocol remains v2.
+Verified recordings remain reusable and are repriced without rewriting files.
 
 ## Record and initialize
 
@@ -55,7 +56,8 @@ demonstrations do not use exploration commitments.
 
 Plant and dig candidates are geometry-only: empty tiles for plants and all tiles
 for dig. Full-board plants use tile zero for the ordinary rejection fallback;
-sunlight and cooldown do not hide branches. Rejected proposals advance one tick,
+sunlight and cooldown do not hide branches. Rejected proposals execute ordinary
+wait with zero rejection reward penalties and advance one tick,
 accepted plants/digs advance zero ticks. Planting immediately returns to normal
 collection. No simulator state is copied, no 30-second rollout is scheduled and
 no probe evidence is stored or learned.
@@ -68,12 +70,17 @@ batches. A fitting spool can be materialized once and reused across all passes;
 it is RAM/disk-budgeted and never serialized as simulator state. Padding and
 inactive rows are excluded from denominators and diagnostics.
 
-Wait values regress through the species stage. Plant/dig values regress only the
-actual proposed tile through the tile stage. Species consistency selects a
-geometry candidate with detached online tile values and evaluates it with the
-frozen EMA tile values. Its MSE-matched Huber loss updates only the species stage;
-the poor sampled tile's return does not directly train species values. Accepted /
-rejected and wait/plant/dig weights use whole-cohort denominators.
+Ordinary wait regresses the complete return through species. Accepted plant/dig
+regresses the complete return at the proposed tile, and detached online selection /
+EMA evaluation supplies species consistency. Invalid proposals instead use the
+[attribution table](math/invalid-action-penalties.md): branch impossibility trains
+species to `-1`; an invalid tile in a usable branch trains only that tile to
+`-1`. No rejected row performs EMA inference. The fixed target never changes
+episode rewards or earlier returns. Whole-cohort wait/plant/dig and accepted /
+rejected balancing remains; consistency uses accepted plant/dig counts only.
+CPU plans group by entity bucket and route before transfer, skipping irrelevant
+online encoders as well as EMA. Diagnostics report routed counts and actual
+online/EMA row workloads.
 
 Saving or interruption stops new selection and keeps only complete actual-game
 state. An uncommitted fit pass discards gradients and restarts; committed steps
@@ -88,6 +95,111 @@ For cloud GPU stalls during fitting, wrap the same training command with
 [`tools/collect_fit_diagnostics.py`](../tools/collect_fit_diagnostics.py);
 [the diagnostic workflow](math/training-throughput.md#diagnose-cloud-fitting-stalls)
 explains lightweight collection, bounded CPU/CUDA traces and the files to share.
+
+## Tile annotation warm-start
+
+The optional annotation workflow trains the existing conditional tile Transformer
+before complete-return learning. `annotate-tiles` is the single on-demand
+workflow: it starts a CPU web server, prints the relative JupyterLab entry point,
+and lets the browser choose `easy`, `standard`, or `hard`. It advances the
+pinned simulator until a complete reachable observation contains a present,
+affordable, cooled-down plant card with at least one legal placement. Seeds,
+levels, and generation metadata are audit fields and never enter policy tensors.
+
+```bash
+python -m pvz_rl annotate-tiles --port 6006
+```
+
+Records are stored in `data/tile-annotations.jsonl` by default. The current map
+is persisted as `pending`, so a restart resumes it exactly. Hold the left mouse
+button while dragging to paint feasible plots, then choose **Save and next**.
+The next map is generated automatically at the selected difficulty. Use
+**Discard state** for a meaningless board; discarded records remain available for
+audit but are never fitted. A difficulty change is applied to the next map only
+after the current map is handled. The server accepts `--data-dir`, `--seed`,
+`--family`, `--max-steps`, and `--max-attempts` overrides.
+
+Use **Previous** and **Next** to browse earlier maps and edit their feasible
+plots with the same Paint/Erase/Clear controls. **Save changes** updates the
+displayed record in place and stays on that map. A discarded map can be restored
+by painting and saving it; a labeled map can also be discarded. **Return to
+current** resumes the pending map. Reviewing or editing a completed record does
+not generate a map or change the pending record. Leaving unsaved edits requires
+a browser confirmation. Difficulty changes preserve the current painted draft
+and still apply only to the next generated map. Stale saves from another browser
+tab are rejected; use **Reload map** to fetch the saved labels before retrying.
+Saved edits survive restart and update the annotation digest and label counts;
+they affect subsequent annotation fits, not existing initialization artifacts.
+
+Annotation generation draws an inclusive uniform limit of 0–20,000 actions per
+attempt. It simulates exactly that many actions, then accepts only a running
+game with a usable plant card. Lost, won, truncated, or unusable endpoints are
+discarded and retried within the attempt limit. Each planting attempt is spaced
+500–1,500 steps after the previous attempt. Each interval chooses equally from
+wait and all eight configured plant types (1/9 each), before checking availability.
+A plant on cooldown, with insufficient sun, without a card or legal plot, or
+blocked by the eight-plant cap becomes wait without drawing another choice.
+Usable choices select uniformly among their legal plots. Actual wait probability
+therefore rises above 1/9 when some plants are unavailable. Sun has time
+to accumulate instead of being spent at every opportunity. The sampling settings
+live in `training.annotation` in the central TOML. `--max-steps` changes the upper
+bound of the random limit. Plant actions need not advance time, so action steps
+and simulator ticks can differ.
+
+Later endpoints preserve actual zombie health/armor, mower use, sunlight, and
+card cooldown progress from the simulator. Early endpoints, including zero,
+can have no zombies or plants. Accepted maps are conditioned on survival and
+card availability; they are not a uniform sample of all possible board states.
+
+Fit the unordered feasible-tile sets with a fresh or compatible weight
+initialization:
+
+```bash
+python -m pvz_rl fit-tile-annotations \
+  --annotations data/tile-annotations.jsonl \
+  --output artifacts/tile-initialization.pt \
+  --init-from runs/initialization.pt
+```
+
+The fit freezes the species encoder/head and trains the existing tile branch
+with a top-1 margin hinge: only the best annotated legal tile must beat the
+best legal unannotated tile. Margin stays `1.0`; Adam uses `0.0003`, batch size
+`256`, FP32 masters, BF16 runtime and shared clipping. Every training record
+has equal weight across partial batches. Empty labeled sets and contradictory
+identical inputs identify their record IDs and fail before fitting. Pending and
+discarded records remain excluded. All-legal-positive states are correct at zero
+loss. Grouped 80/10/10 splits prevent source leakage.
+
+`training.annotation.passes=0` means unlimited. Every completed pass prints its
+update count, full-training hits/total, remaining failures, loss and validation
+metrics. Training completion requires exact 100% legal top-1 membership using
+BF16 runtime and lowest-index ties. Validation is diagnostic; test is evaluated
+only after convergence. `--passes N` adds a total pass cap; reaching it short of
+100% is incomplete. This training-set requirement does not establish held-out
+accuracy or game performance.
+
+Progress is atomically saved to `artifacts/tile-initialization.progress.pt` after
+each pass. Metrics stream to `.history.jsonl`; the bounded summary is `.report.json`.
+Interrupting discards uncommitted gradients and retains the last saved pass.
+Resume with the same data and fitting settings (repeat any explicit overrides):
+
+```bash
+.venv/bin/python -m pvz_rl fit-tile-annotations \
+  --annotations data/tile-annotations.jsonl \
+  --output artifacts/tile-initialization.pt \
+  --resume-from artifacts/tile-initialization.progress.pt
+```
+
+`--resume-from` restores annotation weights, Adam, RNG and pass counters and is
+mutually exclusive with `--init-from`. Incomplete progress cannot initialize
+formal training. The requested initialization is published only after reloading
+saved weights and freshly verifying all training records at 100%. Already-correct
+initial weights may qualify with zero completed passes. A previous output file
+is preserved during an incomplete refit; use the report to identify the current
+result. The final artifact uses `stateless-two-stage-bf16-master-state-v2` and
+loads via `train --init-from`, with fresh autonomous optimizer and EMA initialized
+from transferred weights. It teaches spatial choices; formal complete-return
+training still learns timing, resources and long-term values.
 
 ## GPU presets and bounded calibration
 

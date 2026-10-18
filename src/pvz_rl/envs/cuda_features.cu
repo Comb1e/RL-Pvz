@@ -247,12 +247,8 @@ reward_metrics(const I *headers, const I *old_headers, const I *old_cd,
   v[F_early_sun_bonus] = scale * R_early_sun_extra_multiplier * a[3];
   v[F_development] = scale * v[F_net_value] + v[F_early_sun_bonus];
   v[F_mower_activation_penalty] = -scale * v[F_mower_expenditure];
-  v[F_invalid_plant_penalty] =
-      action > 0 && action < ACTION_DIG_START && !h.accepted
-      ? -R_invalid_plant_penalty : 0.;
-  v[F_empty_dig_penalty] =
-      action >= ACTION_DIG_START && action < ACTION_COUNT && !h.accepted
-      && h.reason == EMPTY_TILE_REASON ? -R_empty_dig_penalty : 0.;
+  v[F_invalid_plant_penalty] = 0.;
+  v[F_empty_dig_penalty] = 0.;
   v[F_home_outer_entries] = home_entries[i * 2];
   v[F_home_inner_entries] = home_entries[i * 2 + 1];
   v[F_home_proximity] = -HOME_PENALTY_0 * home_entries[i * 2]

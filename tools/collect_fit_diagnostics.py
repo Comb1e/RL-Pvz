@@ -27,6 +27,7 @@ import psutil
 import torch
 
 from pvz_rl.learning import sequential_training
+from pvz_rl.learning.action_routing import workload_counts
 from pvz_rl.learning.batch_transport import BatchPrefetch, FittingSpool
 from pvz_rl.monitoring.hardware import HardwareMonitor
 from pvz_rl.policy.cudagraph_backend import FittingGraphBackend, GraphCapture
@@ -444,6 +445,7 @@ class FitDiagnostics:
                 rows=len(rows),
                 active_rows=int(active.sum()),
                 nonwait_rows=int(np.count_nonzero(actions)),
+                routed_workload=workload_counts(rows[active]),
                 entity_width=int(observations.entities.shape[-2]),
                 entity_count_min=int(widths.min()) if len(widths) else None,
                 entity_count_max=int(widths.max()) if len(widths) else None,

@@ -2,7 +2,7 @@
 
 from functools import lru_cache
 
-from pvz_game import Dig, Observation, Place, Rules, Status
+from pvz_game import Observation, Rules, Status
 
 # Public facts in the reward ledger are independent of configurable reward prices.
 REWARD_FACT_FIELDS = (
@@ -280,13 +280,8 @@ def reward_parts(
     early_sun = early_sun_income(before, events, settings["early_sun_spawn_fraction"])
     early_bonus = scale * settings["early_sun_extra_multiplier"] * early_sun
     development = scale * net + early_bonus
-    invalid_plant = 0.0
-    empty_dig = 0.0
-    if action_result is not None and not action_result.accepted:
-        if isinstance(action, Place):
-            invalid_plant = -float(settings.get("invalid_plant_penalty", 0))
-        elif isinstance(action, Dig) and action_result.reason == "empty_tile":
-            empty_dig = -float(settings.get("empty_dig_penalty", 0))
+    # Rejection is an ordinary simulated wait; fitting attribution is separate.
+    invalid_plant = empty_dig = 0.0
     proximity = proximity if proximity is not None else HomeProximityLedger(before, rules)
     home = proximity.advance(after, settings.get("home_entry_penalties", (0, 0)))
     return {

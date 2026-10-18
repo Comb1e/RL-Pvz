@@ -1,3 +1,126 @@
+## Annotation convergence and selective invalid fitting — 2026-10-18
+
+- Problem/root cause: all-positive-versus-negative ranking overconstrained loose
+  tile labels, while a fixed pass count could publish incorrect training choices.
+  Rejected proposals also incurred reward penalties and paid for irrelevant
+  online/EMA tile inference during fitting.
+- Improvement: annotation fitting uses the best-positive/best-legal-negative
+  margin hinge, equal record weights and complete BF16 legal top-1 evaluation.
+  Unlimited passes stop only at exact training-set success; explicit caps and
+  interruptions retain separate atomic weights/Adam/RNG/pass progress. Resume
+  requires matching data, splits and settings. Freshly reloaded verification gates
+  initialization publication, including honestly reported zero-pass success.
+- Formal fitting: rejected proposals execute ordinary wait with zero rejection
+  audit penalties. Shared pre-action availability/outcome routing sends fixed
+  `-1` supervision only to the responsible species or tile output and skips EMA.
+  Accepted actions retain detached consistency and chronological complete returns.
+  CPU-prepared indices, bucket/route grouping and pinned transport share this path
+  with verified demonstrations. Four formal passes, one commit per pass, clipping
+  and EMA decay remain unchanged. The objective and recovery/trajectory identities
+  are versioned; old-objective resume fails, while compatible BF16-master weights
+  still support inference and fresh initialization.
+- Verification: focused mathematical, annotation, storage, fitting/recovery,
+  reward-equivalence, demonstration, checkpoint, configuration, viewer and tuner
+  controls passed. The final owning runs included 136 fitting/annotation cases,
+  60 checkpoint/configuration/tuner/interruption cases and eight precision/compiler/
+  graph-ownership controls. No repeated full-suite run or formal game training was
+  launched. The local 4070 rehearsal completed 24 action/width cases with three
+  warmed repetitions; rejected-only work performed zero EMA inference. A generated
+  reachable annotation converged in seven passes, survived resume and reloaded
+  through the CPU weight-initialization path. See
+  [the bounded evidence](evidence/selective-invalid-4070.md).
+- Remaining limits: the existing user dataset has three identical-input wall-nut
+  pairs with disjoint labels (JSONL lines 29/51, 34/56 and 36/58). All affected IDs
+  are reported before fitting; the original records were not modified. These
+  labels need reconciliation or explicit discard before 100% deterministic
+  fitting is possible. Training convergence does not establish held-out accuracy,
+  game quality, production speedup or cloud-GPU performance; those were not tested.
+
+## Equal annotation rollout proposals — 2026-10-18
+
+- Problem/root cause: rollout selection filtered to currently legal species before
+  drawing, favoring available plants and omitting an explicit wait choice.
+- Improvement: every 500–1,500-step interval draws wait or one of the eight
+  configured plant types with probability 1/9 each. Cooldown, insufficient sun,
+  missing cards, no legal plots or the existing sparse cap convert the selected
+  plant to wait without resampling. Usable plants select a uniform legal plot.
+  Live and batch generation share this path; snapshot-card filtering is unchanged.
+- Verification: 20 focused sampler and random-choice cases passed, covering all nine draw
+  options, availability boundaries, no-redraw failures, interval timing, sparse
+  caps, terminal/unusable retries and exact independent simulator replay. Ruff
+  lint and formatting checks passed; no training was launched.
+- Limits: executed wait frequency exceeds 1/9 when choices are unavailable; final
+  maps remain conditioned on survival and at least one usable annotation card.
+
+## Editable annotation history — 2026-10-18
+
+- Problem/root cause: the live session exposed only the pending record and its
+  resolution API refused completed records, so earlier labels could not be
+  corrected from the browser.
+- Improvement: Previous/Next browse persisted maps; Save changes revises labels
+  in place, Discard can exclude a labeled map, and saving a discarded map restores
+  it. Return to current resumes the pending map. Historical edits preserve the
+  snapshot, pending record, generation count and selected next-map difficulty.
+  Revision checks reject conflicting edits; request checks prevent stale browser
+  responses from replacing the board, and difficulty changes preserve drafts.
+- Verification: 47 focused annotation cases passed, including persistence/restart,
+  history boundaries, invalid/conflicting saves, HTTP protocol, legacy records,
+  generation failure, and Node.js browser-state controls. Existing generation
+  and CPU weight-initialization controls also pass. Ruff and formatting passed.
+- Limitations: unsaved drafts are browser-local; navigation/reload warns before
+  discarding them. Saved revisions replace the previous labels rather than
+  preserving a separate version archive. Existing fitted artifacts are unchanged.
+
+## Annotation rollout diversity — 2026-10-18
+
+- Problem/root cause: the short 2,000-step horizon sampled easy preparation
+  before zombies appeared. Frequent planting spent new sun immediately and
+  favored cheap plants; frozenset action order also defeated cross-process seeds.
+- Improvement: both annotation entry paths share one sampler. Each fresh game
+  draws an inclusive uniform 0–20,000-action endpoint. Terminal or unusable
+  endpoints are abandoned within bounded retries. Random planting attempts occur
+  every 500–1,500 steps, choose uniformly among usable species and then legal
+  plots, and retain at most eight plants. Defaults belong to `training.annotation`.
+  Source metadata records action steps separately from simulator ticks.
+- Longer rollouts exposed valid negative zombie X coordinates near the house.
+  Snapshot validation now accepts signed integer coordinates while continuing
+  to reject booleans, fractional values, strings and nonfinite values. Combat
+  health, sun, cooldowns and mower states are still taken from the simulator.
+- Verification: 32 focused annotation and 45 configuration cases passed,
+  including inclusive endpoints, final-step termination, retry exhaustion,
+  endpoint availability, interval timing, plant caps, species coverage, hash-order
+  independence and exact replay through a separate simulator. Ruff and formatting
+  checks passed. Eight easy samples at seed 4070 had 1–8 plants, zombie health
+  values 150/190/270, sun values 75/100/125/175/250, and ready/spent mowers.
+- Limits: zero/early endpoints can legitimately lack zombies or plants. Accepted
+  maps are conditioned on survival and usable cards. Individual random samples
+  do not guarantee every species, health value or mower state. No formal training
+  was launched, and no model, learning or browser-rendering behavior changed.
+
+## Reachable tile annotation warm-start — 2026-10-18
+
+- Problem: random board snapshots can be semantically meaningless, and manually
+  judging placement plots needs the complete public state and a fast way to mark
+  many cells. Unavailable cards must not become training examples.
+- Improvement: added reachable simulator snapshot sampling and validation for
+  full sun/card/cooldown/entity/projectile/mower/wave observations. The standalone
+  CPU web annotator paints feasible tile sets with left-button drag, supports
+  add/erase/clear, and durably records a discard reason so unusable states remain
+  audit-only. Relative proxy APIs and the shared Canvas renderer work without a
+  simulator or GPU in the browser.
+- Learning: added grouped 80/10/10 annotation splits and a permutation-invariant
+  tile-only margin fit. The species stage is frozen, BF16 runtime/FP32 master
+  storage remains unchanged, and the output is accepted only through fresh
+  weight-only `--init-from`; autonomous complete-return fitting is unchanged.
+- Verification: sampler generation, annotation persistence/discard, full-state
+  validation, browser drag/discard protocol, relative API checks, focused web
+  tests, Python compilation, Ruff checks, and Node syntax checks pass. A one-row
+  CPU smoke fit produced a compatible annotation initialization artifact and was
+  accepted by the existing weight-transfer validator.
+- Remaining limits: human label quality and the value of the pretraining stage
+  require a held-out annotation set and equal-budget game comparison. Empty or
+  all-positive sets provide coverage metrics but no pairwise ranking gradient.
+
 ## Provisional RTX 5090 execution preset — 2026-10-15
 
 - Finding: the complete local 4070 calibration favored the stable 64/64,
@@ -2078,3 +2201,18 @@ unperformed.
 - Problem: cloud port forwarding needed the browser viewer to bind a known loopback port instead of an ephemeral port.
 - Improvement: added `train --viewer-port PORT`; the web viewer binds `127.0.0.1:PORT` and retains ephemeral allocation when the option is omitted. Port values are validated from 0 through 65,535.
 - Verification: CLI forwarding and invalid-port controls cover the new setting; existing viewer process and browser protocol controls remain unchanged.
+## On-demand tile annotation session — 2026-10-18
+
+- Problem: annotation required a pre-generated snapshot JSONL and a separate
+  server invocation, which made difficulty selection and continuous labeling
+  cumbersome.
+- Improvement: `annotate-tiles` now starts a CPU session that generates one
+  reachable `easy`, `standard`, or `hard` state at a time. The browser selects
+  difficulty, paints legal plots by drag, persists pending/labeled/discarded
+  records under `data/`, resumes pending maps after restart, and generates the
+  next map automatically after Save or Discard.
+- Verification: focused annotation tests cover live generation, durable pending
+  recovery, automatic progression, rich observation validation, relative APIs,
+  drag controls, and tile-only fitting with pending/discarded rows excluded.
+- Remaining issue: map generation is bounded by the configured step and retry
+  limits; a rare difficulty/session exhaustion reports a retryable browser error.
