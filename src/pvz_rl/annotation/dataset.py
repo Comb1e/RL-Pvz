@@ -350,6 +350,39 @@ def dataset_digest(rows: Iterable[dict]) -> str:
     return hashlib.sha256(payload).hexdigest()
 
 
+def annotation_input_key(record: dict) -> str:
+    """Return the model-input identity used for duplicate annotation checks."""
+    encoded = record["encoded_observation"]
+    payload = {
+        "plant": record["plant_type"],
+        "entities": np.asarray(encoded["entities"], np.int32).reshape(-1, 11).tolist(),
+        "globals": np.asarray(encoded["globals"], np.float32).tolist(),
+    }
+    return hashlib.sha256(
+        json.dumps(payload, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
+    ).hexdigest()
+
+
+def annotation_conflict_groups(records: Iterable[dict]) -> list[dict]:
+    """Group labeled records whose identical inputs have no common label."""
+    grouped = {}
+    for record in records:
+        if record.get("status", "labeled") != "labeled":
+            continue
+        grouped.setdefault(annotation_input_key(record), []).append(record)
+    conflicts = []
+    for key, rows in grouped.items():
+        if len(rows) < 2:
+            continue
+        intersection = set(rows[0].get("feasible_tiles", []))
+        for row in rows[1:]:
+            intersection.intersection_update(row.get("feasible_tiles", []))
+        if intersection:
+            continue
+        conflicts.append({"key": key, "records": list(rows)})
+    return conflicts
+
+
 class AnnotationStore:
     """Atomic latest-record store used by the standalone annotator."""
 
@@ -541,6 +574,32 @@ class LiveAnnotationStore:
     def counts(self):
         return self._counts()
 
+    def conflict_groups(self):
+        """Return deterministic, user-facing groups of contradictory labels."""
+        result = []
+        for group in annotation_conflict_groups(self.records):
+            rows = group["records"]
+            result.append(
+                {
+                    "key": group["key"],
+                    "record": dict(rows[0]),
+                    "record_ids": [row["id"] for row in rows],
+                    "members": [
+                        {
+                            "id": row["id"],
+                            "revision": row.get("revision", 0),
+                            "status": row.get("status"),
+                            "feasible_tiles": list(row.get("feasible_tiles", [])),
+                            "source": dict(row.get("source", {})),
+                        }
+                        for row in rows
+                    ],
+                    "plant_type": rows[0]["plant_type"],
+                    "legal_tiles": list(rows[0]["availability"]["legal_tiles"]),
+                }
+            )
+        return result
+
     def _persist(self, *, last_difficulty=None):
         if last_difficulty is not None:
             self.manifest["last_difficulty"] = last_difficulty
@@ -603,6 +662,57 @@ class LiveAnnotationStore:
         if row["status"] == "pending":
             raise ValueError("pending annotations must be resolved before revision")
         return self._save_resolution(row, status, tiles, reason, revision)
+
+    def revise_conflict(self, key, members, tiles):
+        """Atomically apply one corrected label set to a conflict group."""
+        groups = self.conflict_groups()
+        group = next((item for item in groups if item["key"] == key), None)
+        if group is None:
+            raise ValueError("stale annotation conflict")
+        if not isinstance(members, list) or any(not isinstance(item, dict) for item in members):
+            raise ValueError("conflict members must be a list of objects")
+        expected = {
+            item.get("id"): item.get("revision")
+            for item in members
+            if isinstance(item.get("id"), str)
+        }
+        if set(expected) != set(group["record_ids"]) or len(expected) != len(members):
+            raise ValueError("stale annotation conflict members")
+        for member in group["members"]:
+            revision = expected[member["id"]]
+            if type(revision) is not int or revision != member["revision"]:
+                raise ValueError("stale annotation conflict revision")
+        if not isinstance(tiles, list) or any(type(tile) is not int for tile in tiles):
+            raise ValueError("conflict feasible tiles must be a list of integers")
+        tiles = sorted(set(tiles))
+        if not tiles:
+            raise ValueError("conflict correction must contain at least one tile")
+        legal = set(group["legal_tiles"])
+        if not set(tiles).issubset(legal):
+            raise ValueError("conflict feasible tiles must be legal for the selected plant")
+
+        updates = {}
+        for row in self.records:
+            if row["id"] not in group["record_ids"]:
+                continue
+            updated = dict(row)
+            updated.update(
+                status="labeled",
+                feasible_tiles=tiles,
+                discard_reason=None,
+                revision=row.get("revision", 0) + 1,
+            )
+            validate_record(updated, annotation=True, plant_types=self.plant_types or None)
+            updates[row["id"]] = updated
+        old_records, old_by_id = self.records, self.by_id
+        self.records = [updates.get(row["id"], row) for row in self.records]
+        self.by_id = {row["id"]: row for row in self.records}
+        try:
+            self._persist(last_difficulty=self.last_difficulty)
+        except Exception:
+            self.records, self.by_id = old_records, old_by_id
+            raise
+        return [updates[record_id] for record_id in group["record_ids"]]
 
     def _save_resolution(self, row, status, tiles, reason, revision):
         if type(revision) is not int or revision != row.get("revision", 0):

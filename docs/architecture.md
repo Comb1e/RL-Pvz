@@ -154,6 +154,15 @@ complete sun/card/entity/mower/wave state and paints a set by holding the left
 mouse button and dragging across tiles. Discarded states remain audit records
 and are excluded from fitting.
 
+At startup, completed labeled rows are grouped by plant type and their canonical
+encoded entities/globals. A group with no common feasible tile is a duplicate
+conflict. Conflict review takes priority over map generation and shows the first
+group directly in the browser. One corrected label set is committed atomically to
+all group members, then the next group is shown. Any pending map remains durable
+and is resumed after the final conflict. **Save and exit** commits only the
+currently displayed map or conflict group and requests an asynchronous server
+shutdown.
+
 History navigation is local to each browser request, rather than a shared server
 cursor. Previous/Next can select any persisted map while the single pending map
 remains unchanged. Saving a completed record updates only its labels/status and
@@ -171,6 +180,10 @@ stateDiagram-v2
     Pending --> Review: Previous
     Review --> Review: Previous/Next or save/discard in place
     Review --> Pending: Return to current or Next
+    [*] --> Conflict: Contradictory duplicate labels
+    Conflict --> Conflict: Save corrected group; show next
+    Conflict --> Pending: Queue empty; resume pending map
+    Conflict --> [*]: Save and exit
 ```
 
 Reviewing can restore a discarded record to labeled status. Closing the browser

@@ -15,6 +15,7 @@ import torch
 
 from pvz_rl.annotation.dataset import (
     ANNOTATION_PROTOCOL,
+    annotation_conflict_groups,
     dataset_digest,
     load_records,
     write_manifest,
@@ -95,26 +96,13 @@ def _metrics(values, feasible_tiles, legal_masks=None):
 
 
 def _validate_labels(records):
-    identical = {}
     for row in records:
         if not row["feasible_tiles"]:
             raise ValueError(f"empty labeled feasible set: {row['id']}")
-        encoded = row["encoded_observation"]
-        key = digest(
-            dict(
-                plant=row["plant_type"],
-                entities=np.asarray(encoded["entities"], np.int32).reshape(-1, 11).tolist(),
-                globals=np.asarray(encoded["globals"], np.float32).tolist(),
-            )
-        )
-        identical.setdefault(key, []).append(row)
-    conflicts = []
-    for rows in identical.values():
-        intersection = set(rows[0]["feasible_tiles"])
-        for row in rows[1:]:
-            intersection.intersection_update(row["feasible_tiles"])
-        if not intersection:
-            conflicts.append(", ".join(row["id"] for row in rows))
+    conflicts = [
+        ", ".join(row["id"] for row in group["records"])
+        for group in annotation_conflict_groups(records)
+    ]
     if conflicts:
         raise ValueError("contradictory identical board/plant inputs: " + "; ".join(conflicts))
 

@@ -120,6 +120,9 @@ def test_browser_annotation_has_drag_discard_and_relative_protocol():
         "setPointerCapture",
         "tileIndexAt",
         "Save and next",
+        "Save and exit",
+        "Duplicate annotation conflict",
+        "./api/conflict/resolve",
         "Discard state",
         "./api/difficulty",
         "./api/resolve",
@@ -180,9 +183,20 @@ def test_history_can_restore_discarded_maps_and_discard_or_clear_labels(history_
     session.resolve({"id": "two", "revision": 1, "status": "labeled", "tiles": [44]})
     assert session.store.record("two")["discard_reason"] is None
     assert session.store.counts["labeled"] == 2
-    session.resolve({"id": "one", "revision": 1, "status": "discarded", "reason": "rechecked"})
+    conflict = session.store.conflict_groups()[0]
+    session.resolve_conflict(
+        {
+            "key": conflict["key"],
+            "members": [
+                {"id": member["id"], "revision": member["revision"]}
+                for member in conflict["members"]
+            ],
+            "tiles": [44],
+        }
+    )
+    session.resolve({"id": "one", "revision": 2, "status": "discarded", "reason": "rechecked"})
     assert session.store.record("one")["feasible_tiles"] == []
-    session.resolve({"id": "two", "revision": 2, "status": "labeled", "tiles": []})
+    session.resolve({"id": "two", "revision": 3, "status": "labeled", "tiles": []})
     assert session.store.record("two")["feasible_tiles"] == []
     assert session.store.manifest["annotation_digest"] != digest_before
     resumed = AnnotationSession(load_config(), session.store.output_path, max_steps=1)
@@ -241,6 +255,100 @@ def test_history_remains_editable_after_generation_failure(history_session):
     assert session.state()["error"] == "generation attempt limit reached"
 
 
+def _live_annotation_row(identifier, status, tiles):
+    row = record(identifier)
+    row.update(
+        protocol=ANNOTATION_PROTOCOL, status=status, feasible_tiles=list(tiles), discard_reason=None
+    )
+    if status == "pending":
+        row["difficulty"] = "easy"
+    return row
+
+
+def test_conflict_groups_are_deterministic_and_exclude_compatible_or_inactive_rows(tmp_path):
+    output = tmp_path / "annotations.jsonl"
+    rows = [
+        _live_annotation_row("a", "labeled", [0]),
+        _live_annotation_row("b", "labeled", [1]),
+        _live_annotation_row("c", "labeled", [44]),
+        _live_annotation_row("shared-a", "labeled", [0]),
+        _live_annotation_row("shared-b", "labeled", [0, 1]),
+        _live_annotation_row("pending", "pending", []),
+        _live_annotation_row("discarded", "discarded", []),
+    ]
+    rows[3]["encoded_observation"]["globals"][0] = 1.0
+    rows[4]["encoded_observation"]["globals"][0] = 1.0
+    output.write_text("\n".join(json.dumps(row) for row in rows) + "\n", "utf-8")
+    store = LiveAnnotationStore(output, plant_types=("peashooter",))
+    groups = store.conflict_groups()
+    assert [group["record_ids"] for group in groups] == [["a", "b", "c"]]
+    assert groups[0]["members"][0]["feasible_tiles"] == [0]
+
+
+def test_conflict_revision_is_atomic_and_applies_one_label_set_to_all_members(tmp_path):
+    output = tmp_path / "annotations.jsonl"
+    rows = [_live_annotation_row("a", "labeled", [0]), _live_annotation_row("b", "labeled", [1])]
+    output.write_text("\n".join(json.dumps(row) for row in rows) + "\n", "utf-8")
+    store = LiveAnnotationStore(output, plant_types=("peashooter",))
+    group = store.conflict_groups()[0]
+    members = [{"id": item["id"], "revision": item["revision"]} for item in group["members"]]
+    store.revise_conflict(group["key"], members, [44, 44, 0])
+    assert store.conflict_groups() == []
+    assert [store.record(identifier)["feasible_tiles"] for identifier in ("a", "b")] == [
+        [0, 44],
+        [0, 44],
+    ]
+    assert [store.record(identifier)["revision"] for identifier in ("a", "b")] == [1, 1]
+    before = output.read_bytes(), store.manifest_path.read_bytes()
+    with pytest.raises(ValueError, match="stale annotation conflict"):
+        store.revise_conflict(group["key"], members, [0])
+    assert before == (output.read_bytes(), store.manifest_path.read_bytes())
+
+
+def test_conflict_session_starts_with_queue_and_advances_to_pending(tmp_path):
+    output = tmp_path / "annotations.jsonl"
+    rows = [_live_annotation_row("a", "labeled", [0]), _live_annotation_row("b", "labeled", [1])]
+    pending = _live_annotation_row("pending", "pending", [])
+    rows.append(pending)
+    output.write_text("\n".join(json.dumps(row) for row in rows) + "\n", "utf-8")
+    session = AnnotationSession(load_config(), output, max_steps=1)
+    session.sampler.sample = Mock(side_effect=AssertionError("conflict review sampled a map"))
+    state = session.state()
+    assert state["mode"] == "conflict" and state["record"]["id"] == "a"
+    conflict = state["conflict"]
+    session.resolve_conflict(
+        {
+            "key": conflict["key"],
+            "members": [
+                {"id": member["id"], "revision": member["revision"]}
+                for member in conflict["members"]
+            ],
+            "tiles": [0],
+        }
+    )
+    state = session.state()
+    assert state["mode"] == "pending" and state["record"]["id"] == "pending"
+
+
+def test_save_and_exit_persists_current_record_without_generating_next(history_session):
+    session = history_session
+    pending = session.store.pending
+    calls = session.sampler.sample.call_count
+    session.resolve(
+        {
+            "id": pending["id"],
+            "revision": pending.get("revision", 0),
+            "status": "labeled",
+            "tiles": [0],
+            "exit": True,
+        }
+    )
+    assert session.exit_requested
+    assert session.store.pending is None
+    assert session.sampler.sample.call_count == calls
+    assert session.store.record(pending["id"])["status"] == "labeled"
+
+
 def test_legacy_completed_record_without_revision_can_be_edited(tmp_path):
     output = tmp_path / "annotations.jsonl"
     old = record()
@@ -283,6 +391,47 @@ def test_history_http_protocol_and_stale_save(history_session):
         active = post("api/navigate", id="one", direction="current", request=15)
         assert active["record"]["id"] == "three" and active["record"]["difficulty"] == "easy"
         assert history_session.sampler.sample.call_count == 3
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
+
+
+def test_conflict_http_resolution_and_save_exit_shuts_down_server(tmp_path):
+    output = tmp_path / "annotations.jsonl"
+    rows = [_live_annotation_row("a", "labeled", [0]), _live_annotation_row("b", "labeled", [1])]
+    output.write_text("\n".join(json.dumps(row) for row in rows) + "\n", "utf-8")
+    session = AnnotationSession(load_config(), output)
+    server = _AnnotationServer(("127.0.0.1", 0), session)
+    thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01})
+    thread.start()
+    base = f"http://127.0.0.1:{server.server_port}/"
+    try:
+        conflict = session.state()["conflict"]
+        body = {
+            "key": conflict["key"],
+            "members": [
+                {"id": member["id"], "revision": member["revision"]}
+                for member in conflict["members"]
+            ],
+            "tiles": [0],
+            "exit": True,
+            "request": 1,
+        }
+        with urlopen(
+            Request(
+                base + "api/conflict/resolve",
+                json.dumps(body).encode(),
+                {"Content-Type": "application/json"},
+            ),
+            timeout=5,
+        ) as response:
+            assert json.load(response)["request"] == 1
+        thread.join(timeout=5)
+        assert not thread.is_alive()
+        reloaded = LiveAnnotationStore(output)
+        assert reloaded.conflict_groups() == []
+        assert reloaded.record("a")["feasible_tiles"] == [0]
     finally:
         server.shutdown()
         thread.join(timeout=5)

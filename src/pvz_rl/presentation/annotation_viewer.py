@@ -30,41 +30,43 @@ canvas.board{display:block;width:100%;height:auto;aspect-ratio:1280/820;touch-ac
 details{margin-top:.6rem;color:#bdceb9}summary{cursor:pointer;color:#d8e6d6}.raw{white-space:pre-wrap;max-height:22rem;overflow:auto;color:#d5e4d7;font:12px Consolas,monospace}
 @media(max-width:760px){body{margin:.55rem}#facts{grid-template-columns:1fr}.board-wrap{width:100%}}
 </style><h1>PVZ tile annotator</h1><div id=activity>Choose a difficulty to generate a reachable map.</div>
-<div id=toolbar><button id=previous disabled>Previous</button><button id=next disabled>Next</button><button id=current disabled>Return to current</button><button id=reload disabled>Reload map</button><label>Difficulty <select id=difficulty><option value="">Choose…</option></select></label><label>Plant <select id=plant disabled></select></label><button id=add class=active disabled>Paint feasible</button><button id=erase disabled>Erase</button><button id=clear disabled>Clear</button><button id=save disabled>Save and next</button><button id=discard disabled>Discard state</button><button id=retry hidden>Retry generation</button><span id=status></span></div>
+<div id=toolbar><button id=previous disabled>Previous</button><button id=next disabled>Next</button><button id=current disabled>Return to current</button><button id=reload disabled>Reload map</button><label>Difficulty <select id=difficulty><option value="">Choose…</option></select></label><label>Plant <select id=plant disabled></select></label><button id=add class=active disabled>Paint feasible</button><button id=erase disabled>Erase</button><button id=clear disabled>Clear</button><button id=save disabled>Save and next</button><button id=save-exit disabled>Save and exit</button><button id=discard disabled>Discard state</button><button id=retry hidden>Retry generation</button><span id=status></span></div>
 <div class=board-wrap id=board-wrap hidden><canvas class=board id=board></canvas></div><div id=facts></div>
 <details><summary>Raw current record JSON</summary><pre class=raw id=raw></pre></details>
 <script>"""
     + BOARD_RENDERER_JS
     + r"""
-const app={state:null,draft:new Set(),mode:'add',dirty:false,busy:false,error:null,request:0,lastTile:null};
+const app={state:null,draft:new Set(),mode:'add',dirty:false,busy:false,error:null,request:0,lastTile:null,exiting:false};
 const $=id=>document.getElementById(id);
 function setActivity(value){$('activity').textContent=value}
 function currentRecord(){return app.state&&app.state.record||null}
 function selected(){return [...app.draft].sort((a,b)=>a-b)}
-function setDisabled(disabled){for(let id of ['plant','add','erase','clear','save','discard'])$(id).disabled=disabled}
+function setDisabled(disabled){for(let id of ['plant','add','erase','clear','save','save-exit','discard'])$(id).disabled=disabled}
 function render(){
- let s=app.state||{},r=currentRecord(),nav=s.navigation||{},select=$('difficulty');
+ let s=app.state||{},r=currentRecord(),nav=s.navigation||{},mode=s.mode||'idle',conflict=s.conflict,select=$('difficulty');
  select.textContent='';let placeholder=document.createElement('option');placeholder.value='';placeholder.textContent='Choose…';select.appendChild(placeholder);
  for(let level of list(s.difficulties)){let option=document.createElement('option');option.value=level;option.textContent=level;select.appendChild(option)}
- select.value=s.difficulty||'';select.disabled=app.busy;
- let counts=s.counts||{};$('status').textContent=`generated ${n(counts.generated)} · labeled ${n(counts.labeled)} · discarded ${n(counts.discarded)}`;
- $('previous').disabled=app.busy||!nav.previous_id;$('next').disabled=app.busy||!nav.next_id;
- $('current').disabled=app.busy||!nav.pending_id||!!r&&r.id===nav.pending_id;
+ select.value=s.difficulty||'';select.disabled=app.busy||mode==='conflict';
+ let counts=s.counts||{};$('status').textContent=`generated ${n(counts.generated)} · labeled ${n(counts.labeled)} · discarded ${n(counts.discarded)}${n(s.conflicts_remaining)?' · conflicts '+n(s.conflicts_remaining):''}`;
+ $('previous').disabled=app.busy||mode==='conflict'||!nav.previous_id;$('next').disabled=app.busy||mode==='conflict'||!nav.next_id;
+ $('current').disabled=app.busy||mode==='conflict'||!nav.pending_id||!!r&&r.id===nav.pending_id;
  $('reload').disabled=app.busy||!r;$('retry').hidden=!s.error;$('retry').disabled=app.busy;
  setDisabled(app.busy||!r);$('board-wrap').hidden=!r;
  if(!r){$('facts').textContent='';$('raw').textContent='';setActivity(app.error||s.error||(s.difficulty?'Generating a reachable map…':'Choose a difficulty to generate a reachable map.'));return}
  let a=r.availability||{},current=r.difficulty||r.observation&&r.observation.level;
  $('plant').textContent='';let option=document.createElement('option');option.value=r.plant_type;option.textContent=r.plant_type;$('plant').appendChild(option);
- $('save').textContent=nav.reviewing?'Save changes':'Save and next';$('save').disabled=app.busy||!availabilityValid();
- setActivity(app.error||`Map ${n(nav.index)+1} / ${n(nav.total)} · ${current} · ${r.status||'pending'}${app.dirty?' · unsaved changes':''}${nav.reviewing?' · reviewing saved map':''}${s.difficulty!==current?' · next '+s.difficulty:''}${s.error?' · generation paused: '+s.error:''}`);
+ $('save').textContent=mode==='conflict'?'Save correction':nav.reviewing?'Save changes':'Save and next';$('save').disabled=app.busy||!availabilityValid();$('save-exit').disabled=app.busy||!availabilityValid();$('discard').disabled=app.busy||!r||mode==='conflict';
+ let title=mode==='conflict'?`Duplicate annotation conflict ${n(s.conflicts_index)} / ${n(s.conflicts_remaining)}`:`Map ${n(nav.index)+1} / ${n(nav.total)}`;
+ setActivity(app.error||`${title} · ${current} · ${r.status||'pending'}${app.dirty?' · unsaved changes':''}${nav.reviewing?' · reviewing saved map':''}${s.difficulty!==current?' · next '+s.difficulty:''}${s.error?' · generation paused: '+s.error:''}`);
  drawBoard($('board'),r.observation,{outcome:r.observation&&r.observation.status},{annotation:true,selected:selected(),legal:list(a.legal_tiles),mode:app.mode});
- $('facts').innerHTML=`<div class=fact><b>Plant</b><br>${esc(r.plant_type)}<br>cost ${n(a.cost)} · sun ${n(a.sun)}</div><div class=fact><b>Availability</b><br>${a.available?'available':'unavailable'} · cooldown ${n(a.cooldown_ticks)}<br>legal plots ${list(a.legal_tiles).length}</div><div class=fact><b>Board</b><br>${n(r.observation&&r.observation.sun)} sun · wave ${n(r.observation&&r.observation.wave)}/${n(r.observation&&r.observation.total_waves)}<br>${list(r.observation&&r.observation.plants).length} plants · ${list(r.observation&&r.observation.zombies).length} zombies</div>`;$('raw').textContent=json(r)
+ let memberFact=conflict?`<div class=fact><b>Existing annotations</b><br>${list(conflict.members).map(member=>`${esc(member.id)}: [${list(member.feasible_tiles).join(', ')}]`).join('<br>')}</div>`:'';
+ $('facts').innerHTML=`<div class=fact><b>Plant</b><br>${esc(r.plant_type)}<br>cost ${n(a.cost)} · sun ${n(a.sun)}</div><div class=fact><b>Availability</b><br>${a.available?'available':'unavailable'} · cooldown ${n(a.cooldown_ticks)}<br>legal plots ${list(a.legal_tiles).length}</div><div class=fact><b>Board</b><br>${n(r.observation&&r.observation.sun)} sun · wave ${n(r.observation&&r.observation.wave)}/${n(r.observation&&r.observation.total_waves)}<br>${list(r.observation&&r.observation.plants).length} plants · ${list(r.observation&&r.observation.zombies).length} zombies</div>${memberFact}`;$('raw').textContent=json(conflict?{record:r,conflict}:r)
 }
 function applyState(data,request,preserveDraft){
  if(data.request!==request||request!==app.request)return;
  let previous=currentRecord(),record=data.record;
- let keep=preserveDraft&&previous&&record&&previous.id===record.id&&n(previous.revision)===n(record.revision);
- app.state=data;if(!keep){app.draft=new Set(list(record&&record.feasible_tiles));app.dirty=false;app.lastTile=null}
+ let keep=preserveDraft&&previous&&record&&previous.id===record.id&&n(previous.revision)===n(record.revision)&&data.mode!=='conflict';
+ app.state=data;if(!keep){app.draft=data.mode==='conflict'?new Set():new Set(list(record&&record.feasible_tiles));app.dirty=false;app.lastTile=null}
 }
 async function request(path,body=null,preserveDraft=false){
  if(app.busy)return;let request=++app.request;app.busy=true;app.error=null;render();
@@ -79,18 +81,19 @@ async function request(path,body=null,preserveDraft=false){
 }
 function refresh(){let r=currentRecord();return request('./api/state'+(r?'?id='+encodeURIComponent(r.id):''))}
 function canLeave(){return !app.dirty||window.confirm('Leave this map and discard unsaved changes?')}
-function navigate(direction){let r=currentRecord();if(r&&canLeave())request('./api/navigate',{id:r.id,direction})}
+function navigate(direction){let r=currentRecord();if(r&&app.state.mode!=='conflict'&&canLeave())request('./api/navigate',{id:r.id,direction})}
 function paintTile(tile,legal){if(tile===null||!legal.has(tile))return;if(app.mode==='erase')app.draft.delete(tile);else app.draft.add(tile)}
 function paint(event){let r=currentRecord();if(!r||app.busy||event.buttons!==1)return;let tile=tileIndexAt($('board'),r.observation,event),legal=new Set(list(r.availability&&r.availability.legal_tiles));if(tile===null)return;let previous=app.lastTile===null?tile:app.lastTile,cols=Math.max(1,n(r.observation&&r.observation.cols,9)),r0=Math.floor(previous/cols),c0=previous%cols,r1=Math.floor(tile/cols),c1=tile%cols,steps=Math.max(Math.abs(r1-r0),Math.abs(c1-c0));for(let step=0;step<=steps;step++){let fraction=steps?step/steps:0;paintTile(Math.round(r0+(r1-r0)*fraction)*cols+Math.round(c0+(c1-c0)*fraction),legal)}app.lastTile=tile;app.dirty=true;render()}
 function setMode(mode){app.mode=mode;$('add').classList.toggle('active',mode==='add');$('erase').classList.toggle('active',mode==='erase');render()}
-function availabilityValid(){let r=currentRecord(),a=r&&r.availability||{};return a.available===true&&list(a.legal_tiles).length>0&&n(a.cooldown_ticks,1)===0&&n(a.sun,-1)>=n(a.cost,Infinity)&&$('plant').value===r.plant_type}
+function availabilityValid(){let r=currentRecord(),a=r&&r.availability||{};return selected().length>0&&a.available===true&&list(a.legal_tiles).length>0&&n(a.cooldown_ticks,1)===0&&n(a.sun,-1)>=n(a.cost,Infinity)&&$('plant').value===r.plant_type}
 for(let [id,mode] of [['add','add'],['erase','erase']])$(id).onclick=()=>setMode(mode);
 $('difficulty').onchange=()=>{let level=$('difficulty').value,r=currentRecord();if(level)request('./api/difficulty',{difficulty:level,...(r?{id:r.id}:{})},true)};$('clear').onclick=()=>{app.draft.clear();app.dirty=true;render()};
-$('save').onclick=()=>{if(!availabilityValid()){setActivity('Cannot save: plant availability metadata is invalid');return}let r=currentRecord();request('./api/resolve',{id:r.id,revision:n(r.revision),status:'labeled',tiles:selected()})};
+ function saveCurrent(exit){if(!availabilityValid()){setActivity('Cannot save: choose at least one legal tile and verify plant availability');return}let r=currentRecord();app.exiting=exit;if(app.state.mode==='conflict'){let c=app.state.conflict;request('./api/conflict/resolve',{key:c.key,members:list(c.members).map(member=>({id:member.id,revision:n(member.revision)})),tiles:selected(),exit})}else request('./api/resolve',{id:r.id,revision:n(r.revision),status:'labeled',tiles:selected(),exit})}
+ $('save').onclick=()=>saveCurrent(false);$('save-exit').onclick=()=>saveCurrent(true);
 $('discard').onclick=()=>{let r=currentRecord(),reason=window.prompt('Optional discard reason:','');if(reason!==null)request('./api/resolve',{id:r.id,revision:n(r.revision),status:'discarded',reason:reason||null})};$('retry').onclick=()=>{if(canLeave())request('./api/retry')};
 for(let direction of ['previous','next','current'])$(direction).onclick=()=>navigate(direction);
 $('reload').onclick=()=>{if(canLeave())refresh()};
-let canvas=$('board');canvas.addEventListener('pointerdown',event=>{if(event.button!==0)return;canvas.setPointerCapture(event.pointerId);app.lastTile=null;paint(event)});canvas.addEventListener('pointermove',paint);canvas.addEventListener('pointerup',event=>{app.lastTile=null;if(canvas.hasPointerCapture(event.pointerId))canvas.releasePointerCapture(event.pointerId)});canvas.addEventListener('pointercancel',event=>{app.lastTile=null;if(canvas.hasPointerCapture(event.pointerId))canvas.releasePointerCapture(event.pointerId)});window.addEventListener('resize',()=>{if(app.state)render()});window.addEventListener('beforeunload',event=>{if(app.dirty){event.preventDefault();event.returnValue=''}});refresh();
+let canvas=$('board');canvas.addEventListener('pointerdown',event=>{if(event.button!==0)return;canvas.setPointerCapture(event.pointerId);app.lastTile=null;paint(event)});canvas.addEventListener('pointermove',paint);canvas.addEventListener('pointerup',event=>{app.lastTile=null;if(canvas.hasPointerCapture(event.pointerId))canvas.releasePointerCapture(event.pointerId)});canvas.addEventListener('pointercancel',event=>{app.lastTile=null;if(canvas.hasPointerCapture(event.pointerId))canvas.releasePointerCapture(event.pointerId)});window.addEventListener('resize',()=>{if(app.state)render()});window.addEventListener('beforeunload',event=>{if(app.dirty&&!app.exiting){event.preventDefault();event.returnValue=''}});refresh();
 </script>"""
 )
 
@@ -115,11 +118,17 @@ class AnnotationSession:
         if self.difficulty not in self.levels:
             self.difficulty = None
         self.error = None
-        if pending is None and self.difficulty is not None:
+        self.conflicts_seen = 0
+        if pending is None and not self.store.conflict_groups() and self.difficulty is not None:
             self._generate()
+        self.exit_requested = False
 
     def _generate(self):
-        if self.store.pending is not None or self.difficulty is None:
+        if (
+            self.store.pending is not None
+            or self.store.conflict_groups()
+            or self.difficulty is None
+        ):
             return
         try:
             self.store.add_pending(self.sampler.sample(self.difficulty), difficulty=self.difficulty)
@@ -128,16 +137,50 @@ class AnnotationSession:
             self.error = str(exc)
 
     def state(self, request=0, *, record_id=None):
+        conflicts = self.store.conflict_groups()
+        if conflicts:
+            group = conflicts[0]
+            record = group["record"]
+            index = self.store.index(record["id"])
+            return {
+                "request": int(request),
+                "mode": "conflict",
+                "difficulties": list(self.levels),
+                "difficulty": self.difficulty,
+                "current_difficulty": record.get("difficulty"),
+                "record": record,
+                "conflict": group,
+                "conflicts_index": self.conflicts_seen + 1,
+                "conflicts_remaining": len(conflicts),
+                "navigation": {
+                    "index": index,
+                    "total": self.store.total,
+                    "previous_id": None,
+                    "next_id": None,
+                    "pending_id": self.store.pending["id"] if self.store.pending else None,
+                    "reviewing": False,
+                },
+                "counts": self.store.counts,
+                "error": self.error,
+            }
         record = self.store.record(record_id) if record_id is not None else self.store.pending
         if record is None and self.store.records:
             record = self.store.records[-1]
         index = self.store.index(record["id"]) if record else -1
         return {
             "request": int(request),
+            "mode": "pending"
+            if record and record["status"] == "pending"
+            else "review"
+            if record
+            else "idle",
             "difficulties": list(self.levels),
             "difficulty": self.difficulty,
             "current_difficulty": record.get("difficulty") if record else None,
             "record": record,
+            "conflict": None,
+            "conflicts_index": 0,
+            "conflicts_remaining": 0,
             "navigation": {
                 "index": index,
                 "total": self.store.total,
@@ -155,6 +198,8 @@ class AnnotationSession:
         }
 
     def choose_difficulty(self, difficulty):
+        if self.store.conflict_groups():
+            raise ValueError("resolve duplicate annotation conflicts before changing difficulty")
         if difficulty not in self.levels:
             raise ValueError(f"unknown annotation difficulty: {difficulty}")
         self.difficulty = difficulty
@@ -163,10 +208,14 @@ class AnnotationSession:
         self._generate()
 
     def retry(self):
+        if self.store.conflict_groups():
+            raise ValueError("resolve duplicate annotation conflicts before retrying generation")
         self.error = None
         self._generate()
 
     def navigate(self, body):
+        if self.store.conflict_groups():
+            raise ValueError("resolve duplicate annotation conflicts before browsing history")
         direction = body.get("direction")
         if direction not in ("previous", "next", "current"):
             raise ValueError("unknown annotation navigation direction")
@@ -180,6 +229,8 @@ class AnnotationSession:
         return record_id
 
     def resolve(self, body):
+        if self.store.conflict_groups():
+            raise ValueError("resolve the displayed duplicate annotation conflict first")
         if not isinstance(body.get("id"), str) or body["id"] not in self.store.by_id:
             raise ValueError("stale annotation record")
         record = self.store.record(body["id"])
@@ -198,10 +249,30 @@ class AnnotationSession:
             revision=body.get("revision", 0),
         )
         if reviewing:
+            if body.get("exit"):
+                self.exit_requested = True
             return record["id"]
         self.error = None
-        self._generate()
+        if body.get("exit"):
+            self.exit_requested = True
+        else:
+            self._generate()
         return None
+
+    def resolve_conflict(self, body):
+        if not self.store.conflict_groups():
+            raise ValueError("no duplicate annotation conflict is pending")
+        key = body.get("key")
+        self.store.revise_conflict(key, body.get("members"), body.get("tiles"))
+        self.conflicts_seen += 1
+        if body.get("exit"):
+            self.exit_requested = True
+        else:
+            self.error = None
+            self._generate()
+
+    def exit(self):
+        self.exit_requested = True
 
 
 class _AnnotationHandler(BaseHTTPRequestHandler):
@@ -237,7 +308,14 @@ class _AnnotationHandler(BaseHTTPRequestHandler):
 
     def do_POST(self):  # noqa: N802
         path = urlparse(self.path).path.rstrip("/")
-        if path not in ("/api/difficulty", "/api/resolve", "/api/retry", "/api/navigate"):
+        if path not in (
+            "/api/difficulty",
+            "/api/resolve",
+            "/api/conflict/resolve",
+            "/api/retry",
+            "/api/navigate",
+            "/api/exit",
+        ):
             return self._reply(404, json.dumps({"error": "not found"}))
         try:
             body = self._body()
@@ -251,16 +329,23 @@ class _AnnotationHandler(BaseHTTPRequestHandler):
                     if record_id is not None:
                         self.server.session.store.record(record_id)
                     self.server.session.choose_difficulty(body.get("difficulty"))
+                elif path == "/api/conflict/resolve":
+                    self.server.session.resolve_conflict(body)
                 elif path == "/api/resolve":
                     record_id = self.server.session.resolve(body)
                 elif path == "/api/navigate":
                     record_id = self.server.session.navigate(body)
+                elif path == "/api/exit":
+                    self.server.session.exit()
                 else:
                     self.server.session.retry()
                 result = self.server.session.state(request, record_id=record_id)
         except (ValueError, TypeError, KeyError, json.JSONDecodeError, RuntimeError) as exc:
             return self._reply(400, json.dumps({"error": str(exc)}))
-        return self._reply(200, json.dumps(result))
+        response = self._reply(200, json.dumps(result))
+        if self.server.session.exit_requested:
+            threading.Thread(target=self.server.shutdown, daemon=True).start()
+        return response
 
     def log_message(self, *_args):
         return

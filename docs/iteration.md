@@ -2216,3 +2216,20 @@ unperformed.
   drag controls, and tile-only fitting with pending/discarded rows excluded.
 - Remaining issue: map generation is bounded by the configured step and retry
   limits; a rare difficulty/session exhaustion reports a retryable browser error.
+
+## Conflict-first annotation review — 2026-10-19
+
+- Problem/root cause: repeated annotation of an identical board/plant input could
+  leave disjoint feasible-tile labels in the JSONL file. Fitting correctly rejected
+  those records, but the browser did not help identify or repair them.
+- Improvement: shared canonical-input conflict grouping now opens the first
+  contradictory group at annotator startup, displays all existing member labels,
+  applies one corrected label set atomically to every member, and advances through
+  the queue. Pending maps remain durable. **Save and exit** commits the current
+  map/group and asynchronously stops the CPU server without generating another map.
+- Verification: focused tile-annotation tests cover grouped conflicts, compatible
+  duplicates, pending/discarded exclusion, atomic revisions, stale protection,
+  conflict-first startup, automatic queue progression, relative APIs, and browser
+  controls. The current data set exposes three conflict groups for correction.
+- Remaining issue: conflicts must be corrected before tile fitting; this workflow
+  does not infer the intended labels automatically.

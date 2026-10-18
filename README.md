@@ -82,6 +82,13 @@ pending map; reviewing earlier maps does not generate another one.
 Pending maps are resumed after a restart. Fit only completed labels, then use the
 resulting weight-only file with a fresh training run:
 
+If saved labels contain contradictory duplicates, the annotator opens the first
+duplicate conflict before generating a new map. It shows every member's old label
+set and lets one corrected set be applied to the whole identical-input group;
+groups are handled in order. Resolve these conflicts before fitting. **Save and
+exit** saves only the displayed map or conflict group and stops the annotator
+without generating another map.
+
 ```powershell
 .\.venv\Scripts\python.exe -m pvz_rl fit-tile-annotations `
   --annotations data\tile-annotations.jsonl `

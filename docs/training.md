@@ -131,6 +131,17 @@ tab are rejected; use **Reload map** to fetch the saved labels before retrying.
 Saved edits survive restart and update the annotation digest and label counts;
 they affect subsequent annotation fits, not existing initialization artifacts.
 
+Before normal annotation resumes, the server checks completed labels for
+contradictory duplicate inputs. Records are grouped by plant type plus their
+canonical encoded entities and globals. If a group has no tile common to every
+member, the browser opens it as **Duplicate annotation conflict** and shows the
+existing label sets. Paint one corrected non-empty legal set; saving applies that
+set atomically to every member, increments their revisions, and advances to the
+next conflict. Groups with a common tile are already compatible and are not
+queued. A pending map is preserved while conflicts are reviewed and resumes when
+the queue is empty. **Save and exit** persists only the displayed map or group and
+stops the annotator without generating another map.
+
 Annotation generation draws an inclusive uniform limit of 0–20,000 actions per
 attempt. It simulates exactly that many actions, then accepts only a running
 game with a usable plant card. Lost, won, truncated, or unusable endpoints are

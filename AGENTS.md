@@ -138,9 +138,12 @@
   `presentation/web_assets.py` owns the shared
   Canvas renderer; `presentation/annotation_viewer.py` serves the one-map-at-a-time
   CPU annotator with difficulty selection, pointer-drag painting, restart recovery,
-  and relative APIs. Browser-local history navigation revisits completed maps;
-  revision-checked edits persist in place without consuming the pending map or
-  invoking the sampler. Pending resolution alone generates the next map.
+  and relative APIs. `dataset.py` also groups contradictory labeled records by
+  canonical plant/entity/global inputs; the annotator shows that conflict queue
+  before generation, applies one revision atomically to every group member, and
+  supports Save and exit. Browser-local history navigation revisits completed
+  maps; revision-checked edits persist in place without consuming the pending map
+  or invoking the sampler. Pending resolution alone generates the next map.
   `learning/annotation_fit.py` freezes the species stage and produces a compatible
   tile-only initialization only after exact full-training legal top-1 convergence.
   Its top-1 hinge ignores other positive ordering, defaults to unlimited passes,
@@ -176,7 +179,8 @@
   `test_entity_storage.py` owns flat active rows and spill/prefetch. Observation, reward,
   exploration, demonstration, evaluation and presentation suites retain their owners.
   `test_tile_annotations.py` owns snapshot validation, live annotation persistence,
-  difficulty progression, discard behavior and browser annotation controls.
+  conflict grouping/revision, difficulty progression, discard behavior and browser
+  annotation controls.
 - `docs/architecture.md` traces current ownership/workflows/failures.
   `docs/training.md` owns commands and recovery; `docs/math/entity-inputs.md` owns
   encoding/attention, `sequential-training.md` learning/attribution,
