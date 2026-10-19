@@ -1,3 +1,23 @@
+## Canvas action-card annotation controls — 2026-10-20
+
+- Problem/root cause: action annotation rendered plant cards as graphics but
+  required separate HTML buttons for every action label, so the board and the
+  annotation interaction did not match tile mode. The command name also
+  described only the tile branch even though the workflow supports action
+  annotations.
+- Improvement: shared Canvas card hit testing now maps responsive and high-DPI
+  pointer coordinates to plant actions. Feasible, absolute-infeasible, and
+  erase modes update the same synchronized action sets as the fallback controls;
+  automatic absolute labels remain locked and action clicks cannot enter the
+  tile painter. The CLI is now `annotate --kind tile|action`.
+- Verification: focused annotation tests cover card bounds, mode transitions,
+  locked labels, no accidental tile writes, synchronized controls, and the
+  removed command name. Browser JavaScript syntax and static checks are run with
+  the owning annotation suite.
+- Remaining limits: wait and dig have no plant cards and remain HTML controls;
+  visual acceptance through a live Jupyter proxy still requires a manual browser
+  check.
+
 ## Annotation convergence and selective invalid fitting — 2026-10-18
 
 - Problem/root cause: all-positive-versus-negative ranking overconstrained loose

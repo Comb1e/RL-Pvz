@@ -74,7 +74,7 @@ it does not replay the same map sequence. Pass `--seed N` when a reproducible
 sequence is needed.
 
 ```powershell
-.\.venv\Scripts\python.exe -m pvz_rl annotate-tiles --port 6006
+.\.venv\Scripts\python.exe -m pvz_rl annotate --port 6006
 ```
 
 Use `--kind action` to label the species/action head; those records are kept in
@@ -90,7 +90,9 @@ weights, so annotation pretraining may precede human/demo initialization:
 ```
 
 Open the printed `./proxy/6006/` path in JupyterLab, hold the left mouse button
-while dragging to paint feasible plots, then choose **Save and next**. The next
+while dragging to paint feasible plots, then choose **Save and next**. In action
+mode, click plant cards directly to mark feasible or absolute-infeasible actions;
+wait and dig remain available in the action controls. The next
 map is generated at the same difficulty. Use **Discard state** for a meaningless
 map; discarded states stay in the audit file and are excluded from fitting.
 Use **Previous** and **Next** to revisit maps, edit labels, and **Save changes**

@@ -109,7 +109,7 @@ explains lightweight collection, bounded CPU/CUDA traces and the files to share.
 
 ## Tile annotation warm-start
 
-The same annotator can label either output branch. `annotate-tiles --kind tile`
+The same annotator can label either output branch. `annotate --kind tile`
 writes `data/tile-annotations.jsonl`; `--kind action` writes
 `data/action-annotations.jsonl`. Tile labels contain an unordered feasible set
 and an unordered absolute-bottom set over all 45 outputs. Action labels use
@@ -126,7 +126,7 @@ annotation artifact and creates a fresh demo optimizer and EMA state, enabling
 annotation before human/demo initialization.
 
 The optional annotation workflow trains the existing conditional tile Transformer
-before complete-return learning. `annotate-tiles` is the single on-demand
+before complete-return learning. `annotate` is the single on-demand
 workflow: it starts a CPU web server, prints the relative JupyterLab entry point,
 and lets the browser choose `easy`, `standard`, or `hard`. It advances the
 pinned simulator until a complete reachable observation contains a present,
@@ -134,7 +134,7 @@ affordable, cooled-down plant card with at least one legal placement. Seeds,
 levels, and generation metadata are audit fields and never enter policy tensors.
 
 ```bash
-python -m pvz_rl annotate-tiles --port 6006
+python -m pvz_rl annotate --port 6006
 ```
 
 Records are stored in `data/tile-annotations.jsonl` by default. The current map

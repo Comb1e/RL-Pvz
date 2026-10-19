@@ -131,12 +131,26 @@ def test_browser_annotation_has_drag_discard_and_relative_protocol():
         "Save changes",
         "Reload map",
         "drawTileOverlay",
+        "actionCardAt",
+        "drawActionCardOverlay",
+        "toggleAction",
         "availability",
         "select id=plant",
         "Raw current record JSON",
     ):
         assert token in ANNOTATION_HTML
     assert "fetch('/api/" not in ANNOTATION_HTML
+
+
+def test_cli_uses_short_annotation_command():
+    from pvz_rl.cli import main
+
+    with pytest.raises(SystemExit) as accepted:
+        main(["annotate", "--help"])
+    assert accepted.value.code == 0
+    with pytest.raises(SystemExit) as removed:
+        main(["annotate-tiles", "--help"])
+    assert removed.value.code == 2
 
 
 @pytest.fixture
@@ -470,6 +484,23 @@ vm.runInContext(`
  app.state.record={id:'two',revision:1,status:'discarded',feasible_tiles:[]};
  applyState({request:12,record:{id:'two',revision:1,status:'discarded',feasible_tiles:[]}},12,false);
  if(app.draft.size!==0)throw Error('discarded map did not start empty');
+ app.state={annotation_kind:'action',record:{id:'action',annotation_kind:'action',action_availability:{sunflower:{},wait:{},dig:{}},automatic_absolute_infeasible_actions:['wait']}};
+ app.draft=new Set();app.absolute=new Set();app.dirty=false;render=()=>{};
+ let cardCanvas={getBoundingClientRect(){return {left:0,top:0,width:1280,height:820}}};
+ let cardObs={cards:[{plant_type:'sunflower'}]};
+ if(actionCardAt(cardCanvas,cardObs,{clientX:40,clientY:90})!=='sunflower')throw Error('plant card hit test failed');
+ if(actionCardAt(cardCanvas,cardObs,{clientX:250,clientY:90})!==null)throw Error('card hit escaped plant bounds');
+ toggleAction('sunflower','add');
+ if(!app.draft.has('sunflower')||app.absolute.has('sunflower'))throw Error('feasible card selection failed');
+ toggleAction('sunflower','absolute');
+ if(app.draft.has('sunflower')||!app.absolute.has('sunflower'))throw Error('absolute card selection failed');
+ toggleAction('sunflower','erase');
+ if(app.draft.has('sunflower')||app.absolute.has('sunflower'))throw Error('card erase failed');
+ toggleAction('wait','add');
+ if(app.draft.has('wait'))throw Error('automatic absolute action was editable');
+ app.draft=new Set(['wait']);app.absolute=new Set();app.dirty=false;
+ paint({buttons:1,clientX:500,clientY:400});
+ if(!app.draft.has('wait')||app.draft.size!==1)throw Error('action canvas triggered tile painting');
  `,context);
 """
     result = subprocess.run(

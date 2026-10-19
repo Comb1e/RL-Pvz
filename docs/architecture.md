@@ -166,7 +166,7 @@ flowchart LR
     Init --> Train[Existing complete-return learner]
 ```
 
-`annotate-tiles` owns one pending map at a time. Selecting `easy`, `standard`,
+`annotate` owns one pending map at a time. Selecting `easy`, `standard`,
 or `hard` starts a fresh simulator episode and advances it through legal actions
 for a seeded uniform limit of 0–20,000 actions. Planting attempts are separated
 by random 500–1,500-step intervals. Every interval draws equally from wait and
@@ -185,6 +185,13 @@ A staged difficulty change applies only to that next map. The browser shows the
 complete sun/card/entity/mower/wave state and paints a set by holding the left
 mouse button and dragging across tiles. Discarded states remain audit records
 and are excluded from fitting.
+
+In action mode, the same Canvas board exposes each rendered plant card as a hit
+target. The active feasible, absolute-infeasible, or erase mode determines what
+a card click does; locked automatic absolute labels cannot be changed. The
+HTML action controls remain synchronized for wait, dig, and keyboard-accessible
+fallback selection. Card hit testing uses the board's design coordinates, so
+browser resizing and high-DPI displays do not change the selected plant.
 
 At startup, completed labeled rows are grouped by plant type and their canonical
 encoded entities/globals. A group with no common feasible tile is a duplicate

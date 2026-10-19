@@ -241,7 +241,7 @@ def main(argv=None):
         "--init-from", type=Path, help="load compatible weights into a fresh experiment or stage"
     )
     annotate = subs.add_parser(
-        "annotate-tiles", help="open the on-demand reachable-state tile annotator"
+        "annotate", help="open the on-demand reachable-state annotation studio"
     )
     common(annotate)
     annotate.add_argument(
@@ -457,7 +457,7 @@ def main(argv=None):
                 indent=2,
             )
         )
-    elif args.command == "annotate-tiles":
+    elif args.command == "annotate":
         from pvz_rl.presentation.annotation_viewer import serve_annotations
 
         settings = cfg["training"].get("annotation", {})
