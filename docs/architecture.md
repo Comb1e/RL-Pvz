@@ -189,8 +189,8 @@ and are excluded from fitting.
 In action mode, the same Canvas board exposes each rendered plant card as a hit
 target. The active feasible, absolute-infeasible, or erase mode determines what
 a card click does; locked automatic absolute labels cannot be changed. The
-HTML action controls remain synchronized for wait, dig, and keyboard-accessible
-fallback selection. Card hit testing uses the board's design coordinates, so
+toolbar no longer duplicates every plant action as HTML buttons. Card hit
+testing uses the board's design coordinates, so
 browser resizing and high-DPI displays do not change the selected plant.
 
 At startup, completed labeled rows are grouped by plant type and their canonical

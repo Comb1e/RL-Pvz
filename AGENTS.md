@@ -205,4 +205,4 @@
   serves the existing bounded live-view mailboxes from a CPU process for JupyterLab
   Server Proxy; it does not own model or simulator state.
 
-- Annotation protocol v2 supports `annotate --kind tile|action`, separate JSONL stores, feasible and locked absolute-infeasible labels, shared conflict detection, and head-specific fitters. The action annotator exposes plant cards as Canvas hit targets while retaining synchronized wait/dig controls. `initialize-demo --init-from` creates fresh demo optimizer/EMA state from either annotation artifact.
+- Annotation protocol v2 supports `annotate --kind tile|action`, separate JSONL stores, feasible and locked absolute-infeasible labels, shared conflict detection, and head-specific fitters. The action annotator exposes plant cards as Canvas hit targets; the duplicated per-action HTML button strip is removed. `initialize-demo --init-from` creates fresh demo optimizer/EMA state from either annotation artifact.

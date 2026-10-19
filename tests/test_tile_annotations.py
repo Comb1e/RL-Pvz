@@ -134,11 +134,14 @@ def test_browser_annotation_has_drag_discard_and_relative_protocol():
         "actionCardAt",
         "drawActionCardOverlay",
         "toggleAction",
+        "absolute_infeasible_tiles",
         "availability",
         "select id=plant",
         "Raw current record JSON",
     ):
         assert token in ANNOTATION_HTML
+    assert "id=action-controls" not in ANNOTATION_HTML
+    assert "class=\"action-label\"" not in ANNOTATION_HTML
     assert "fetch('/api/" not in ANNOTATION_HTML
 
 
@@ -501,6 +504,14 @@ vm.runInContext(`
  app.draft=new Set(['wait']);app.absolute=new Set();app.dirty=false;
  paint({buttons:1,clientX:500,clientY:400});
  if(!app.draft.has('wait')||app.draft.size!==1)throw Error('action canvas triggered tile painting');
+ app.state={annotation_kind:'tile',record:{id:'tile',revision:1,annotation_kind:'tile',plant_type:'peashooter',observation:{rows:5,cols:9},availability:{available:true,cost:0,sun:0,cooldown_ticks:0,legal_tiles:[0]},automatic_absolute_infeasible_tiles:[1,2]}};
+ app.draft=new Set();app.absolute=new Set([1,2]);app.mode='absolute';app.busy=false;
+ $('board').getBoundingClientRect=()=>({left:0,top:0,width:1280,height:820});
+ app.draft.add(0);
+ paint({buttons:1,clientX:113,clientY:281});
+ if(!app.absolute.has(0)||app.draft.has(0))throw Error('tile absolute label was not painted');
+ paint({buttons:1,clientX:211,clientY:281});
+ if(!app.absolute.has(1))throw Error('automatic tile absolute label was removed');
  `,context);
 """
     result = subprocess.run(

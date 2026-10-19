@@ -78,8 +78,8 @@ sequence is needed.
 ```
 
 Use `--kind action` to label the species/action head; those records are kept in
-`data/action-annotations.jsonl`. Tile mode supports feasible and locked
-absolute-infeasible plots. Action mode supports feasible action types plus
+`data/action-annotations.jsonl`. Tile mode supports feasible plots plus
+manual and locked automatic absolute-infeasible plots. Action mode supports feasible action types plus
 locked simulator-impossible branches. Both fitters can start from random
 weights, so annotation pretraining may precede human/demo initialization:
 
@@ -92,7 +92,7 @@ weights, so annotation pretraining may precede human/demo initialization:
 Open the printed `./proxy/6006/` path in JupyterLab, hold the left mouse button
 while dragging to paint feasible plots, then choose **Save and next**. In action
 mode, click plant cards directly to mark feasible or absolute-infeasible actions;
-wait and dig remain available in the action controls. The next
+the board toolbar no longer duplicates each card as a separate button. The next
 map is generated at the same difficulty. Use **Discard state** for a meaningless
 map; discarded states stay in the audit file and are excluded from fitting.
 Use **Previous** and **Next** to revisit maps, edit labels, and **Save changes**

@@ -7,14 +7,17 @@
   annotations.
 - Improvement: shared Canvas card hit testing now maps responsive and high-DPI
   pointer coordinates to plant actions. Feasible, absolute-infeasible, and
-  erase modes update the same synchronized action sets as the fallback controls;
-  automatic absolute labels remain locked and action clicks cannot enter the
-  tile painter. The CLI is now `annotate --kind tile|action`.
+  erase modes update the action sets directly; the duplicate per-action HTML
+  button strip is removed, automatic absolute labels remain locked, and action
+  clicks cannot enter the tile painter. Tile absolute labels are rendered,
+  editable when manual, and included in save payloads. The CLI is now
+  `annotate --kind tile|action`.
 - Verification: focused annotation tests cover card bounds, mode transitions,
   locked labels, no accidental tile writes, synchronized controls, and the
   removed command name. Browser JavaScript syntax and static checks are run with
   the owning annotation suite.
-- Remaining limits: wait and dig have no plant cards and remain HTML controls;
+- Remaining limits: wait and dig have no plant cards and therefore require a
+  follow-up non-card control if those labels must be selected in action mode;
   visual acceptance through a live Jupyter proxy still requires a manual browser
   check.
 
