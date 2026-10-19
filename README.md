@@ -77,6 +77,18 @@ sequence is needed.
 .\.venv\Scripts\python.exe -m pvz_rl annotate-tiles --port 6006
 ```
 
+Use `--kind action` to label the species/action head; those records are kept in
+`data/action-annotations.jsonl`. Tile mode supports feasible and locked
+absolute-infeasible plots. Action mode supports feasible action types plus
+locked simulator-impossible branches. Both fitters can start from random
+weights, so annotation pretraining may precede human/demo initialization:
+
+```powershell
+.\.venv\Scripts\python.exe -m pvz_rl fit-tile-annotations --annotations data\tile-annotations.jsonl --output runs\tile.pt
+.\.venv\Scripts\python.exe -m pvz_rl fit-action-annotations --annotations data\action-annotations.jsonl --output runs\action.pt --init-from runs\tile.pt
+.\.venv\Scripts\python.exe -m pvz_rl initialize-demo --init-from runs\action.pt --archive runs\human-1000.jsonl --replay runs\human-1000.pvzdemo --output runs\human-init
+```
+
 Open the printed `./proxy/6006/` path in JupyterLab, hold the left mouse button
 while dragging to paint feasible plots, then choose **Save and next**. The next
 map is generated at the same difficulty. Use **Discard state** for a meaningless
@@ -102,8 +114,9 @@ without generating another map.
   --init-from artifacts\tile-initialization.pt --gpu 0 --viewer off
 ```
 
-Annotation fitting defaults to unlimited passes until every training board's
-highest-scoring legal tile is annotated. `--passes N` adds an explicit cap;
+Annotation fitting defaults to unlimited passes until every training record's
+highest-scoring feasible label and exact absolute-bottom set are correct.
+`--passes N` adds an explicit cap;
 incomplete runs save `tile-initialization.progress.pt` without publishing an
 initialization. Resume with `--resume-from artifacts\tile-initialization.progress.pt`
 using the same dataset and fitting settings. Training accuracy is separate from

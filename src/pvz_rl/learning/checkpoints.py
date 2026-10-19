@@ -20,7 +20,8 @@ from pvz_rl.learning.training_requirements import (
 
 DEMO_PROTOCOL = "pvz-rl/demo-initialization-checkpoint-v10"
 LEGACY_DEMO_PROTOCOL = "pvz-rl/demo-initialization-checkpoint-v9"
-ANNOTATION_CHECKPOINT_PROTOCOL = "pvz-rl/tile-annotation-initialization-v1"
+ANNOTATION_CHECKPOINT_PROTOCOL = "pvz-rl/annotation-initialization-v2"
+LEGACY_ANNOTATION_CHECKPOINT_PROTOCOL = "pvz-rl/tile-annotation-initialization-v1"
 MODEL_STATE_PROTOCOL = "pvz-rl/stateless-two-stage-bf16-master-state-v2"
 AUTONOMOUS_STATE_PROTOCOL = "pvz-rl/action-global-state-v1"
 
@@ -98,6 +99,7 @@ def inspect_checkpoint(path, *, weights_only=False):
             DEMO_PROTOCOL: "demonstration",
             LEGACY_DEMO_PROTOCOL: "demonstration",
             ANNOTATION_CHECKPOINT_PROTOCOL: "annotation",
+            LEGACY_ANNOTATION_CHECKPOINT_PROTOCOL: "annotation",
         }.get(saved.get("protocol"))
         if initialization_type is None:
             raise ValueError(

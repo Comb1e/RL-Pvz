@@ -161,7 +161,7 @@ flowchart LR
     Session -->|legal simulator actions| Game[Reachable simulator state]
     Game -->|one pending map| Session
     Session -->|save or discard| Labels[Annotation JSONL in data/]
-    Labels --> WarmStart[Tile-only supervised fit]
+    Labels --> WarmStart[Tile or action supervised fit]
     WarmStart --> Init[Weight-only initialization]
     Init --> Train[Existing complete-return learner]
 ```
@@ -227,11 +227,18 @@ facts evolve through simulator actions, and later endpoints include combat and
 spent mowers. Zero and other early limits remain valid preparation states. The
 source records the sampled action-step count separately from simulator ticks.
 
-The warm-start fit reuses the 45-query tile output and freezes species.
-Its per-record hinge compares only the best annotated legal tile against the
-best legal negative. Empty labels and contradictory identical model inputs fail
-before fitting. All-positive legal sets have zero loss. Source metadata, seeds
-and discard reasons never enter model inputs.
+Tile mode labels all 45 query outputs; action mode labels the ten species/action
+outputs (`wait`, eight plants, `dig`). Each record has an unordered feasible set
+and optional unordered absolute-bottom set. The top-1/bottom-k margin objective
+requires one feasible label to win and all absolute labels to occupy the lowest
+slots, without ordering labels within either set. Automatic simulator-impossible
+labels are persisted and locked in the browser. Tile fitting freezes species;
+action fitting freezes tiles. Both can start from random weights. The optional
+`initialize-demo --init-from` loads either artifact and creates fresh
+optimizer/EMA state. Runtime gameplay masks remain unchanged. Empty labels,
+overlaps, missing automatic labels and contradictory identical model inputs fail
+before fitting. Source metadata, seeds and discard reasons never enter model
+inputs.
 
 The on-demand annotator uses a system-entropy session seed when `--seed` is
 omitted, while each record stores its actual simulator seed for audit and replay.

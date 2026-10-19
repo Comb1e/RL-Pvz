@@ -40,6 +40,11 @@ Focused suites are run once per change; full-suite repetition is avoided.
 These controls establish contract and numerical correctness. They do not promise
 training speed, win-rate improvement or mastery.
 
+Annotation controls additionally cover action-mode records, automatic locked
+absolute labels, all-output tile fitting without runtime masks, bottom-k ties and
+permutation invariance, action-only gradient routing, conflict recovery, and
+loading an annotation artifact before fresh demo initialization.
+
 
 ## Optimization and portability controls
 

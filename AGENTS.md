@@ -204,3 +204,5 @@
   `tools/tune_gpu.py` runs isolated bounded calibration trials. `presentation/web_viewer.py`
   serves the existing bounded live-view mailboxes from a CPU process for JupyterLab
   Server Proxy; it does not own model or simulator state.
+
+- Annotation protocol v2 supports `annotate-tiles --kind tile|action`, separate JSONL stores, feasible and locked absolute-infeasible labels, shared conflict detection, and head-specific fitters. `initialize-demo --init-from` creates fresh demo optimizer/EMA state from either annotation artifact.

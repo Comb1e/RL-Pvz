@@ -15,7 +15,9 @@ import torch
 
 from pvz_rl.annotation.dataset import (
     ANNOTATION_PROTOCOL,
+    action_names,
     annotation_conflict_groups,
+    annotation_kind,
     dataset_digest,
     load_records,
     write_manifest,
@@ -29,12 +31,12 @@ from pvz_rl.policy.sequential_q import observation_tile_masks
 from pvz_rl.policy.two_stage_transformer import TwoStageTransformerPolicy
 from pvz_rl.provenance import write_json
 
-ANNOTATION_CHECKPOINT_PROTOCOL = "pvz-rl/tile-annotation-initialization-v1"
-ANNOTATION_PROGRESS_PROTOCOL = "pvz-rl/tile-annotation-progress-v1"
+ANNOTATION_CHECKPOINT_PROTOCOL = "pvz-rl/annotation-initialization-v2"
+ANNOTATION_PROGRESS_PROTOCOL = "pvz-rl/annotation-progress-v2"
 
 
-def set_ranking_loss(values, feasible_tiles, *, margin=1.0, legal_masks=None):
-    """Hinge between the best acceptable tile and the best legal negative.
+def set_ranking_loss(values, feasible_tiles, absolute_labels=None, *, margin=1.0, legal_masks=None):
+    """Two-set top/bottom hinge with equal per-record weighting.
 
     Each record has equal weight, including automatically correct all-positive
     boards. Argmax selects the lowest index on ties, as in the normal policy.
@@ -42,8 +44,10 @@ def set_ranking_loss(values, feasible_tiles, *, margin=1.0, legal_masks=None):
     if not math.isfinite(margin) or margin <= 0:
         raise ValueError("margin must be finite and positive")
     legal = torch.ones_like(values, dtype=torch.bool) if legal_masks is None else legal_masks
+    if absolute_labels is None:
+        absolute_labels = [[] for _ in feasible_tiles]
     losses = []
-    for row, tiles, mask in zip(values, feasible_tiles, legal, strict=True):
+    for row, tiles, absolute, mask in zip(values, feasible_tiles, absolute_labels, legal, strict=True):
         positives = sorted(set(int(tile) for tile in tiles))
         if not positives:
             raise ValueError("empty labeled feasible set")
@@ -51,27 +55,52 @@ def set_ranking_loss(values, feasible_tiles, *, margin=1.0, legal_masks=None):
         positive[positives] = True
         if bool((positive & ~mask).any()):
             raise ValueError("annotated tiles must be legal")
+        absolute_mask = torch.zeros_like(mask)
+        if any(type(label) is not int or label < 0 or label >= row.numel() for label in absolute):
+            raise ValueError("absolute labels must be in range")
+        absolute_mask[list(absolute)] = True
+        if bool((positive & absolute_mask).any()):
+            raise ValueError("feasible and absolute labels overlap")
         negative = mask & ~positive
-        if not bool(negative.any()):
-            losses.append(row.sum() * 0)
-        else:
+        top = row.new_zeros(())
+        if bool(negative.any()):
             best_positive = row.masked_fill(~positive, -torch.inf).max(dim=0).values
             best_negative = row.masked_fill(~negative, -torch.inf).max(dim=0).values
-            losses.append(torch.relu(row.new_tensor(margin) + best_negative - best_positive))
+            top = torch.relu(row.new_tensor(margin) + best_negative - best_positive)
+        bottom = row.new_zeros(())
+        if bool(absolute_mask.any()):
+            non_absolute = mask & ~absolute_mask
+            if not bool(non_absolute.any()):
+                raise ValueError("absolute labels leave no non-absolute outputs")
+            worst_absolute = row.masked_fill(~absolute_mask, -torch.inf).max(dim=0).values
+            best_non_absolute = row.masked_fill(~non_absolute, torch.inf).min(dim=0).values
+            bottom = torch.relu(row.new_tensor(margin) + worst_absolute - best_non_absolute)
+        losses.append(top + bottom)
     return torch.stack(losses).mean() if losses else values.sum() * 0
 
 
-def _metrics(values, feasible_tiles, legal_masks=None):
+def _metrics(values, feasible_tiles, absolute_labels=None, legal_masks=None):
+    if torch.is_tensor(absolute_labels):
+        legal_masks, absolute_labels = absolute_labels, None
     values = values.detach().float().cpu()
     legal = torch.ones_like(values, dtype=torch.bool) if legal_masks is None else legal_masks.cpu()
-    hits = count = all_positive = 0
+    if absolute_labels is None:
+        absolute_labels = [[] for _ in feasible_tiles]
+    hits = bottom_hits = count = all_positive = no_absolute = 0
     precision = recall = 0.0
-    for row, tiles, mask in zip(values, feasible_tiles, legal, strict=True):
+    for row, tiles, absolute, mask in zip(values, feasible_tiles, absolute_labels, legal, strict=True):
         positive = set(tiles)
         if not positive:
             raise ValueError("empty labeled feasible set")
         masked = row.masked_fill(~mask, -torch.inf)
         hits += int(int(masked.argmax()) in positive)
+        k = len(absolute)
+        if k == 0:
+            no_absolute += 1
+            bottom_hits += 1
+        else:
+            ranked = masked.argsort(descending=True, stable=True)
+            bottom_hits += int(set(ranked[-k:].tolist()) == set(absolute))
         count += len(positive)
         all_positive += int(len(positive) == int(mask.sum()))
         # Set recovery is diagnostic only; convergence is top-1 membership.
@@ -86,19 +115,32 @@ def _metrics(values, feasible_tiles, legal_masks=None):
         failures=total - hits,
         top1_feasible_rate=hits / total if total else None,
         top1_feasible_hit_rate=hits / total if total else None,
+        top1_feasible_accuracy=hits / total if total else None,
         feasible_set_precision=precision / total if total else None,
         feasible_set_recall=recall / total if total else None,
         feasible_set_size=count / total if total else None,
         all_positive_records=all_positive,
+        absolute_bottom_hits=bottom_hits,
+        absolute_bottom_rate=bottom_hits / len(feasible_tiles) if feasible_tiles else None,
+        absolute_bottom_accuracy=bottom_hits / len(feasible_tiles) if feasible_tiles else None,
+        no_absolute_records=no_absolute,
         empty_records=0,
         numerically_stable=bool(torch.isfinite(values).all()),
     )
 
 
-def _validate_labels(records):
+def _validate_labels(records, kind="tile"):
     for row in records:
-        if not row["feasible_tiles"]:
-            raise ValueError(f"empty labeled feasible set: {row['id']}")
+        if kind == "tile":
+            if not row.get("feasible_tiles"):
+                raise ValueError(f"empty labeled feasible set: {row['id']}")
+            feasible, absolute = row.get("feasible_tiles", []), row.get("absolute_infeasible_tiles", [])
+        else:
+            if not row.get("feasible_actions"):
+                raise ValueError(f"empty labeled feasible action set: {row['id']}")
+            feasible, absolute = row.get("feasible_actions", []), row.get("absolute_infeasible_actions", [])
+        if set(feasible) & set(absolute):
+            raise ValueError(f"feasible and absolute labels overlap: {row['id']}")
     conflicts = [
         ", ".join(row["id"] for row in group["records"])
         for group in annotation_conflict_groups(records)
@@ -139,19 +181,23 @@ def _load_initial_model(cfg, device, init_from):
     return model
 
 
-def _batch(model, rows, cfg, device):
+def _batch(model, rows, cfg, device, *, kind="tile", include_absolute=False):
     observations = collate_fitting_observations(
         [row["encoded_observation"] for row in rows], cfg, device
     )
     plants = cfg["environment"]["plants"]
-    branches = torch.as_tensor(
-        [plants.index(row["plant_type"]) + 1 for row in rows], device=device, dtype=torch.long
-    )
-    values = model.fitting_tiles(
-        observations, branches, rows=torch.arange(len(rows), device=device)
-    )
-    feasible = [row["feasible_tiles"] for row in rows]
-    return values, feasible
+    if kind == "action":
+        values = model.species_values(observations)
+        feasible = [[action_names(plants).index(name) for name in row["feasible_actions"]] for row in rows]
+        absolute = [[action_names(plants).index(name) for name in row["absolute_infeasible_actions"]] for row in rows]
+    else:
+        branches = torch.as_tensor(
+            [plants.index(row["plant_type"]) + 1 for row in rows], device=device, dtype=torch.long
+        )
+        values = model.fitting_tiles(observations, branches, rows=torch.arange(len(rows), device=device))
+        feasible = [row["feasible_tiles"] for row in rows]
+        absolute = [row.get("absolute_infeasible_tiles", []) for row in rows]
+    return (values, feasible, absolute) if include_absolute else (values, feasible)
 
 
 def _legal_masks(rows, device):
@@ -163,8 +209,8 @@ def _legal_masks(rows, device):
     return geometry & public
 
 
-def _run_split(model, records, cfg, device, *, batch_size, margin, train=False, optimizer=None):
-    total_loss, hits, all_positive = 0.0, 0, 0
+def _run_split(model, records, cfg, device, *, batch_size, margin, train=False, optimizer=None, kind="tile"):
+    total_loss, hits, bottom_hits, all_positive = 0.0, 0, 0, 0
     precision = recall = size = 0.0
     if train:
         if optimizer is None:
@@ -174,9 +220,9 @@ def _run_split(model, records, cfg, device, *, batch_size, margin, train=False, 
     with torch.set_grad_enabled(train):
         for start in range(0, len(records), batch_size):
             rows = records[start : start + batch_size]
-            values, feasible = _batch(model, rows, cfg, device)
-            legal = _legal_masks(rows, device)
-            loss = set_ranking_loss(values.float(), feasible, margin=margin, legal_masks=legal)
+            values, feasible, absolute = _batch(model, rows, cfg, device, kind=kind, include_absolute=True)
+            legal = None
+            loss = set_ranking_loss(values.float(), feasible, absolute, margin=margin)
             if not bool(torch.isfinite(loss)) or not bool(torch.isfinite(values).all()):
                 raise FloatingPointError("non-finite annotation values/loss")
             if train:
@@ -184,8 +230,9 @@ def _run_split(model, records, cfg, device, *, batch_size, margin, train=False, 
                 model.accumulate_master_gradients()
                 model.clear_runtime_grad(set_to_none=True)
             total_loss += float(loss.detach()) * len(rows)
-            metrics = _metrics(values, feasible, legal)
+            metrics = _metrics(values, feasible, absolute, legal)
             hits += metrics["hits"]
+            bottom_hits += metrics["absolute_bottom_hits"]
             all_positive += metrics["all_positive_records"]
             precision += metrics["feasible_set_precision"] * len(rows)
             recall += metrics["feasible_set_recall"] * len(rows)
@@ -198,10 +245,16 @@ def _run_split(model, records, cfg, device, *, batch_size, margin, train=False, 
         failures=n - hits,
         loss=total_loss / n if n else None,
         top1_feasible_hit_rate=hits / n if n else None,
+        top1_feasible_accuracy=hits / n if n else None,
+        absolute_bottom_hits=bottom_hits,
+        absolute_bottom_rate=bottom_hits / n if n else None,
+        absolute_bottom_accuracy=bottom_hits / n if n else None,
         feasible_set_precision=precision / n if n else None,
         feasible_set_recall=recall / n if n else None,
         feasible_set_size=size / n if n else None,
+        absolute_set_size=sum(len(row.get("absolute_infeasible_tiles" if kind == "tile" else "absolute_infeasible_actions", [])) for row in records) / n if n else None,
         all_positive_records=all_positive,
+        no_absolute_records=sum(not row.get("absolute_infeasible_tiles" if kind == "tile" else "absolute_infeasible_actions") for row in records),
         empty_records=0,
         numerically_stable=True,
     )
@@ -253,6 +306,7 @@ def fit_annotations(
     batch_size=None,
     margin=None,
     seed=None,
+    kind="tile",
 ):
     """Publish only freshly verified convergence; incomplete progress is separate."""
     if init_from is not None and resume_from is not None:
@@ -271,6 +325,8 @@ def fit_annotations(
         raise ValueError("invalid annotation learning rate/seed")
     if not math.isfinite(margin) or margin <= 0:
         raise ValueError("annotation margin must be finite and positive")
+    if kind not in ("tile", "action"):
+        raise ValueError("annotation kind must be tile or action")
     fit_settings = dict(
         passes=passes,
         learning_rate=learning_rate,
@@ -278,7 +334,9 @@ def fit_annotations(
         margin=margin,
         max_grad_norm=cfg["training"]["max_grad_norm"],
         learner_seed=seed,
-        objective="legal-top1-hinge-v1",
+        objective="top1-bottomk-hinge-v2",
+        annotation_kind=kind,
+        head_scope="tile" if kind == "tile" else "species",
         reward_protocol=cfg["reward"]["version"],
         objective_protocol=cfg["training"]["objective"]["protocol"],
     )
@@ -288,7 +346,9 @@ def fit_annotations(
     records = [row for row in all_records if row["status"] == "labeled"]
     if not records:
         raise ValueError("annotation file contains no labeled records")
-    _validate_labels(records)
+    if any(annotation_kind(row) != kind for row in records):
+        raise ValueError("annotation dataset kind does not match fitter")
+    _validate_labels(records, kind)
     split = _groups(records)
     partitions = {
         name: [row for row in records if split[row["group_id"]] == name]
@@ -314,11 +374,12 @@ def fit_annotations(
         if row.get("rules_hash") not in (None, schema["rules_hash"]):
             raise ValueError("annotation rules hash disagrees with current game")
     model.requires_grad_(False)
+    train_prefix = ("tile_encoder.", "tile_head.") if kind == "tile" else ("species_encoder.", "species_head.")
     for name, parameter in model.named_parameters():
-        parameter.requires_grad_(name.startswith(("tile_encoder.", "tile_head.")))
+        parameter.requires_grad_(name.startswith(train_prefix))
     trainable = []
     for name, parameter in zip(model._master_names, model.master_parameters(), strict=True):
-        parameter.requires_grad_(name.startswith(("tile_encoder.", "tile_head.")))
+        parameter.requires_grad_(name.startswith(train_prefix))
         if parameter.requires_grad:
             trainable.append(parameter)
     optimizer = torch.optim.Adam(trainable, lr=learning_rate)
@@ -347,7 +408,7 @@ def fit_annotations(
 
     def evaluate(name):
         return _run_split(
-            model, partitions[name], cfg, device, batch_size=batch_size, margin=margin
+            model, partitions[name], cfg, device, batch_size=batch_size, margin=margin, kind=kind
         )
 
     def save_progress(training, validation):
@@ -382,11 +443,12 @@ def fit_annotations(
         save_progress(training, validation)
         print(
             f"pass={completed} updates={completed} train={training['hits']}/{training['rows']} "
-            f"remaining={training['failures']} loss={training['loss']:.6g} "
+            f"remaining={training['failures']} bottom={training.get('absolute_bottom_hits', 0)}/{training['rows']} loss={training['loss']:.6g} "
             f"validation={validation['hits']}/{validation['rows']} validation_loss={validation['loss']}",
             flush=True,
         )
-        while training["hits"] != len(partitions["train"]) and (passes == 0 or completed < passes):
+        while (training["hits"] != len(partitions["train"])
+               or training.get("absolute_bottom_hits", len(partitions["train"])) != len(partitions["train"])) and (passes == 0 or completed < passes):
             model.train()
             _run_split(
                 model,
@@ -397,6 +459,7 @@ def fit_annotations(
                 margin=margin,
                 train=True,
                 optimizer=optimizer,
+                kind=kind,
             )
             torch.nn.utils.clip_grad_norm_(
                 trainable, fit_settings["max_grad_norm"], error_if_nonfinite=True
@@ -425,7 +488,7 @@ def fit_annotations(
                     stream.flush()
                 print(
                     f"pass={completed} updates={completed} train={training['hits']}/{training['rows']} "
-                    f"remaining={training['failures']} loss={training['loss']:.6g} "
+                    f"remaining={training['failures']} bottom={training.get('absolute_bottom_hits', 0)}/{training['rows']} loss={training['loss']:.6g} "
                     f"validation={validation['hits']}/{validation['rows']} "
                     f"validation_loss={validation['loss']}",
                     flush=True,
@@ -442,7 +505,10 @@ def fit_annotations(
         _restore_rng(saved["rng"], device)
 
     converged = (
-        training is not None and training["hits"] == len(partitions["train"]) and not interrupted
+        training is not None
+        and training["hits"] == len(partitions["train"])
+        and training.get("absolute_bottom_hits", len(partitions["train"])) == len(partitions["train"])
+        and not interrupted
     )
     test = None
     if converged:
@@ -470,6 +536,8 @@ def fit_annotations(
             convergence=dict(verified=True, hits=training["hits"], records=training["rows"]),
             annotation=dict(
                 protocol=ANNOTATION_PROTOCOL,
+                annotation_kind=kind,
+                head_scope=kind,
                 reward_protocol=cfg["reward"]["version"],
                 objective_protocol=cfg["training"]["objective"]["protocol"],
                 **identity,
@@ -512,7 +580,15 @@ def fit_annotations(
         train=training,
         validation=validation,
         test=test,
-        tile_parameters_only=True,
+        tile_parameters_only=kind == "tile",
+        species_parameters_only=kind == "action",
+        annotation_kind=kind,
     )
     write_json(report_path, report)
     return report
+
+
+def fit_action_annotations(annotations, output, **kwargs):
+    """Fit the species/action head from action-type annotations."""
+    kwargs["kind"] = "action"
+    return fit_annotations(annotations, output, **kwargs)

@@ -376,3 +376,8 @@ throughput measurements.
 - Cour, Sapp and Taskar, [Learning from Partial Labels](https://www.jmlr.org/papers/v12/cour11a.html), JMLR 2011: candidate-label supervision informed accepting any annotated tile. Their ambiguity setting assumes one hidden correct label; here several placements can actually be acceptable. The local best-positive versus best-legal-negative hinge is an application-specific adaptation, not their published algorithm or a guarantee of held-out accuracy.
 - [PyTorch 2.8 MarginRankingLoss source](https://raw.githubusercontent.com/pytorch/pytorch/v2.8.0/torch/nn/modules/loss.py): checked `max(0, -y*(x1-x2)+margin)`. Local fitting sets `y=1`, `x1=max annotated`, `x2=max legal unannotated`, margin 1, and normalizes records across the full training split. Complete legal top-1 evaluation, rather than margin satisfaction or validation score, gates publication.
 - The existing Double-Q reference remains applicable only to accepted non-wait consistency. Fixed invalid targets use direct supervised attribution and require no EMA evaluation; no invalid-action policy masking is introduced.
+
+## Set and partial-label annotation — 2026-10-19
+
+- [PyTorch `MarginRankingLoss`](https://pytorch.org/docs/stable/generated/torch.nn.MarginRankingLoss.html): used as the finite margin reference for the local two-set top-1/bottom-k hinge. The implementation takes a maximum over each unordered label set, so it does not impose an order inside feasible or absolute-infeasible labels.
+- [Hester et al., Deep Q-learning from Demonstrations](https://arxiv.org/abs/1704.03732): used as the supervision/initialization reference for fitting a head from human labels before fresh reinforcement-learning optimization. No demonstration loss or architecture is copied.

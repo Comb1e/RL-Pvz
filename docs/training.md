@@ -109,6 +109,22 @@ explains lightweight collection, bounded CPU/CUDA traces and the files to share.
 
 ## Tile annotation warm-start
 
+The same annotator can label either output branch. `annotate-tiles --kind tile`
+writes `data/tile-annotations.jsonl`; `--kind action` writes
+`data/action-annotations.jsonl`. Tile labels contain an unordered feasible set
+and an unordered absolute-bottom set over all 45 outputs. Action labels use
+`wait`, the eight configured plant names, and `dig`. A feasible set must be
+non-empty. Simulator-impossible branches and tiles are automatically absolute
+and locked; human labels may add more absolute entries. Runtime gameplay masks
+are unchanged, while annotation fitting deliberately scores every output.
+
+Tile fitting freezes the species stage and action fitting freezes the tile
+stage. Both use the top-1/bottom-k margin objective, require exact feasible
+membership and exact absolute-bottom membership on the training split, and can
+start from random weights. `initialize-demo --init-from` accepts either
+annotation artifact and creates a fresh demo optimizer and EMA state, enabling
+annotation before human/demo initialization.
+
 The optional annotation workflow trains the existing conditional tile Transformer
 before complete-return learning. `annotate-tiles` is the single on-demand
 workflow: it starts a CPU web server, prints the relative JupyterLab entry point,
@@ -184,13 +200,14 @@ python -m pvz_rl fit-tile-annotations \
 ```
 
 The fit freezes the species encoder/head and trains the existing tile branch
-with a top-1 margin hinge: only the best annotated legal tile must beat the
-best legal unannotated tile. Margin stays `1.0`; Adam uses `0.0003`, batch size
+with a top-1/bottom-k margin hinge over all 45 outputs: one feasible tile must
+beat every non-feasible tile and the absolute set must occupy the bottom k.
+Action fitting applies the same objective to the ten species outputs while
+freezing the tile stage. Margin stays `1.0`; Adam uses `0.0003`, batch size
 `256`, FP32 masters, BF16 runtime and shared clipping. Every training record
 has equal weight across partial batches. Empty labeled sets and contradictory
 identical inputs identify their record IDs and fail before fitting. Pending and
-discarded records remain excluded. All-legal-positive states are correct at zero
-loss. Grouped 80/10/10 splits prevent source leakage.
+discarded records remain excluded. Grouped 80/10/10 splits prevent source leakage.
 
 `training.annotation.passes=0` means unlimited. Every completed pass prints its
 update count, full-training hits/total, remaining failures, loss and validation

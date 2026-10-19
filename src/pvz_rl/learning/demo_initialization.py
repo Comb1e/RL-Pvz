@@ -15,9 +15,9 @@ from pvz_game.cuda.schema import REASONS
 from pvz_game.replay import decode_action, read_recording
 
 from pvz_rl.config import digest, load_demo_config
+from pvz_rl.envs.action_credit import CausalCreditLedger
 from pvz_rl.envs.action_timing import ActionPhaseGame
 from pvz_rl.envs.actions import ActionCodec, ActionSchema
-from pvz_rl.envs.action_credit import CausalCreditLedger
 from pvz_rl.envs.encoding import (
     ObservationEncoder,
     collate_observations,
@@ -454,6 +454,7 @@ def initialize_demo(
     seed: int | None = None,
     time_budget_minutes: float | None = None,
     device: str = "cpu",
+    init_from: str | Path | None = None,
 ) -> dict:
     """Fit one complete game and publish a checkpoint only after whole passes."""
     cfg = cfg or load_demo_config()
@@ -481,6 +482,11 @@ def initialize_demo(
     torch.set_num_threads(cfg["training"]["torch_threads"])
     torch.manual_seed(seed)
     model = TwoStageTransformerPolicy(cfg).to(device)
+    if init_from is not None:
+        from pvz_rl.learning.training import initial_weights
+
+        weights, _ = initial_weights(init_from, cfg)
+        model.load_state_dict(weights, strict=True)
     with torch.random.fork_rng(
         devices=[torch.device(device)] if str(device).startswith("cuda") else []
     ):

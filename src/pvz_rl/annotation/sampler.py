@@ -14,6 +14,7 @@ from pvz_rl.annotation.dataset import (
     SNAPSHOT_PROTOCOL,
     _atomic_jsonl,
     _jsonable,
+    action_names,
     dataset_digest,
     validate_record,
     write_manifest,
@@ -72,7 +73,7 @@ class ReachableSnapshotSampler:
     def levels(self):
         return tuple(self.cfg["evaluation"]["levels"])
 
-    def sample(self, level):
+    def sample(self, level, *, annotation_kind="tile"):
         """Return one validated record for ``level`` or raise a bounded error."""
         if level not in self.levels:
             raise ValueError(f"unknown annotation difficulty: {level}")
@@ -108,6 +109,7 @@ class ReachableSnapshotSampler:
                     plant_type=candidate["plant_type"],
                     group_id=group_id,
                     record_id=f"annotation-{uuid.uuid4().hex}",
+                    annotation_kind=annotation_kind,
                 )
                 record["difficulty"] = level
                 record["source"]["simulation_steps"] = target_steps
@@ -172,7 +174,29 @@ def _rollout_action(env, rng, *, max_plants=None):
     return Place(kind, *divmod(tile, env.codec.cols))
 
 
-def snapshot_record(env, *, plant_type, group_id, record_id):
+def _action_availability(env):
+    cards = {card.plant_type: card for card in env.public.cards}
+    usable = {row["plant_type"] for row in _available(env)}
+    result = {"wait": {"feasible": True, "absolute_infeasible": False, "reason": None}}
+    for kind in env.codec.plants:
+        card = cards.get(kind)
+        if card is None:
+            reason = "absent_card"
+        elif card.cooldown_ticks:
+            reason = "cooldown"
+        elif env.public.sun < card.cost:
+            reason = "insufficient_sun"
+        elif kind not in usable:
+            reason = "no_legal_placement"
+        else:
+            reason = None
+        legal_tiles = sorted(set(next((row["legal_tiles"] for row in _available(env) if row["plant_type"] == kind), [])))
+        result[kind] = {"feasible": reason is None, "absolute_infeasible": reason is not None, "reason": reason, "legal_tiles": legal_tiles, "cost": int(card.cost) if card else None, "cooldown_ticks": int(card.cooldown_ticks) if card else None}
+    result["dig"] = {"feasible": bool(env.public.plants), "absolute_infeasible": not bool(env.public.plants), "reason": None if env.public.plants else "empty_board"}
+    return result
+
+
+def snapshot_record(env, *, plant_type, group_id, record_id, annotation_kind="tile"):
     if env.state != "running" or env.public.status != Status.RUNNING:
         raise ValueError("tile annotation snapshots must come from a running game")
     available = {row["plant_type"]: row for row in _available(env)}
@@ -198,6 +222,24 @@ def snapshot_record(env, *, plant_type, group_id, record_id):
             "tick": int(observation.tick),
         },
     }
+    if annotation_kind == "action":
+        record["annotation_kind"] = "action"
+        record["plant_type"] = plant_type
+        metadata = _action_availability(env)
+        record["action_availability"] = metadata
+        record["branch_availability"] = metadata
+        record["automatic_absolute_infeasible_actions"] = sorted(
+            [name for name, item in metadata.items() if item["absolute_infeasible"]],
+            key=action_names(env.codec.plants).index,
+        )
+        record["absolute_infeasible_actions"] = list(record["automatic_absolute_infeasible_actions"])
+        record["feasible_actions"] = []
+    else:
+        record["annotation_kind"] = "tile"
+        legal_tiles = set(record["availability"]["legal_tiles"])
+        record["automatic_absolute_infeasible_tiles"] = sorted(set(range(45)) - legal_tiles)
+        record["absolute_infeasible_tiles"] = list(record["automatic_absolute_infeasible_tiles"])
+        record["feasible_tiles"] = []
     validate_record(record, plant_types=env.codec.plants)
     return record
 

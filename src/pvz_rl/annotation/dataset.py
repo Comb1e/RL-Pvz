@@ -1,4 +1,4 @@
-"""Versioned snapshot and tile-annotation storage.
+"""Versioned snapshot and dual tile/action annotation storage.
 
 The browser stores rich public observations for display and the canonical entity
 observation separately for fitting.  Source metadata is intentionally kept out
@@ -18,7 +18,10 @@ from typing import Iterable
 import numpy as np
 
 SNAPSHOT_PROTOCOL = "pvz-rl/tile-annotation-snapshot-v1"
-ANNOTATION_PROTOCOL = "pvz-rl/tile-annotation-v1"
+# v2 adds action records and explicit absolute-infeasible labels.  v1 records
+# remain readable; their absolute tile set is derived from the legal complement.
+ANNOTATION_PROTOCOL = "pvz-rl/annotation-v2"
+LEGACY_ANNOTATION_PROTOCOL = "pvz-rl/tile-annotation-v1"
 TILES = 45
 ROWS, COLS = 5, 9
 
@@ -194,20 +197,62 @@ def validate_encoded_observation(encoded):
         raise ValueError("encoded_observation.entities must contain integer fields")
 
 
+def annotation_kind(record):
+    """Return the annotation kind, accepting legacy tile records."""
+    kind = record.get("annotation_kind", "tile")
+    if kind not in ("tile", "action"):
+        raise ValueError("annotation_kind must be tile or action")
+    return kind
+
+
+def action_names(plant_types):
+    return ("wait", *tuple(plant_types or ()), "dig")
+
+
+def _validate_labels(values, label, *, upper):
+    if not isinstance(values, list) or any(type(value) is not int for value in values):
+        raise ValueError(f"{label} must be a list of integers")
+    if len(set(values)) != len(values) or any(value < 0 or value >= upper for value in values):
+        raise ValueError(f"{label} must contain unique in-range labels")
+    if values != sorted(values):
+        raise ValueError(f"{label} must be sorted")
+
+
+def _action_metadata(record, plant_types):
+    metadata = record.get("action_availability", record.get("branch_availability"))
+    if not isinstance(metadata, dict):
+        raise ValueError("action records require action_availability metadata")
+    inferred = tuple(name for name in metadata if name not in ("wait", "dig")) if plant_types is None else plant_types
+    names = action_names(inferred)
+    if set(metadata) != set(names):
+        raise ValueError("action_availability must contain wait, every plant, and dig")
+    for name in names:
+        item = metadata[name]
+        _required(item, ("feasible", "absolute_infeasible", "reason"), f"action_availability.{name}")
+        if type(item["feasible"]) is not bool or type(item["absolute_infeasible"]) is not bool:
+            raise ValueError("action availability flags must be boolean")
+        if not isinstance(item["reason"], (str, type(None))):
+            raise ValueError("action availability reason must be a string or null")
+    if metadata["wait"]["feasible"] is not True or metadata["wait"]["absolute_infeasible"] is not False:
+        raise ValueError("wait must be feasible in a running annotation snapshot")
+    expected_dig = bool(record["observation"]["plants"])
+    if metadata["dig"]["feasible"] is not expected_dig or metadata["dig"]["absolute_infeasible"] is expected_dig:
+        raise ValueError("dig availability does not match the board")
+    return metadata
+
+
 def validate_record(record, *, annotation=False, plant_types=None):
     if not isinstance(record, dict):
         raise ValueError("annotation record must be an object")
     protocol = record.get("protocol")
     expected = ANNOTATION_PROTOCOL if annotation else SNAPSHOT_PROTOCOL
-    if protocol not in (expected, None):
+    if protocol not in (expected, LEGACY_ANNOTATION_PROTOCOL if annotation else None, None):
         raise ValueError(f"unsupported annotation protocol: {protocol!r}")
     for key in (
         "id",
         "group_id",
-        "plant_type",
         "observation",
         "encoded_observation",
-        "availability",
     ):
         if key not in record:
             raise ValueError(f"record is missing {key}")
@@ -215,35 +260,48 @@ def validate_record(record, *, annotation=False, plant_types=None):
         raise ValueError("record.id must be a non-empty string")
     if not isinstance(record["group_id"], str) or not record["group_id"]:
         raise ValueError("record.group_id must be a non-empty string")
-    if not isinstance(record["plant_type"], str) or not record["plant_type"]:
-        raise ValueError("record.plant_type must be a non-empty string")
-    if plant_types is not None and record["plant_type"] not in plant_types:
+    kind = annotation_kind(record) if annotation else "tile"
+    if kind == "tile":
+        if not isinstance(record.get("plant_type"), str) or not record["plant_type"]:
+            raise ValueError("tile records require a non-empty plant_type")
+        if plant_types is not None and record["plant_type"] not in plant_types:
+            raise ValueError(f"unknown plant type: {record['plant_type']}")
+    elif record.get("plant_type") not in (None, "") and plant_types is not None and record.get("plant_type") not in plant_types:
         raise ValueError(f"unknown plant type: {record['plant_type']}")
     if "rules_hash" in record:
         _string(record["rules_hash"], "record.rules_hash")
     if "observation_schema" in record and not isinstance(record["observation_schema"], dict):
         raise ValueError("record.observation_schema must be an object")
     validate_observation(record["observation"])
+    if annotation and record["observation"]["status"] != "running":
+        raise ValueError("annotation records must use a running snapshot")
     validate_encoded_observation(record["encoded_observation"])
-    availability = record["availability"]
-    _required(
-        availability,
-        ("available", "cost", "sun", "cooldown_ticks", "legal_tiles"),
-        "availability",
-    )
-    if availability["available"] is not True:
+    availability = record.get("availability", {})
+    if kind == "action":
+        _action_metadata(record, plant_types)
+        availability = availability if isinstance(availability, dict) else {}
+    else:
+        _required(
+            availability,
+            ("available", "cost", "sun", "cooldown_ticks", "legal_tiles"),
+            "availability",
+        )
+    if not annotation and "availability" not in record:
+        raise ValueError("record is missing availability")
+    if kind == "tile" and availability["available"] is not True:
         raise ValueError("annotation records must select an available plant")
-    for key in ("cost", "sun", "cooldown_ticks"):
-        _nonnegative_int(availability[key], f"availability.{key}")
+    if kind == "tile":
+        for key in ("cost", "sun", "cooldown_ticks"):
+            _nonnegative_int(availability[key], f"availability.{key}")
     cards = [
         card
         for card in record["observation"]["cards"]
-        if card["plant_type"] == record["plant_type"]
+        if kind == "tile" and card["plant_type"] == record["plant_type"]
     ]
-    if len(cards) != 1:
+    if kind == "tile" and len(cards) != 1:
         raise ValueError("annotation plant must have exactly one matching card")
-    card = cards[0]
-    if (
+    card = cards[0] if cards else None
+    if kind == "tile" and (
         availability["cost"] != card["cost"]
         or availability["cooldown_ticks"] != card["cooldown_ticks"]
         or availability["sun"] != record["observation"]["sun"]
@@ -251,15 +309,15 @@ def validate_record(record, *, annotation=False, plant_types=None):
         or card["cooldown_ticks"] != 0
     ):
         raise ValueError("annotation plant availability metadata is inconsistent")
-    legal = availability["legal_tiles"]
-    if not isinstance(legal, list) or any(
+    legal = availability.get("legal_tiles", [])
+    if kind == "tile" and (not isinstance(legal, list) or any(
         type(tile) is not int or not 0 <= tile < TILES for tile in legal
-    ):
+    )):
         raise ValueError("availability.legal_tiles must contain valid tile indices")
-    if len(set(legal)) != len(legal) or legal != sorted(legal) or not legal:
+    if kind == "tile" and (len(set(legal)) != len(legal) or legal != sorted(legal) or not legal):
         raise ValueError("availability.legal_tiles must contain at least one unique tile")
     occupied = {plant["row"] * COLS + plant["col"] for plant in record["observation"]["plants"]}
-    if occupied.intersection(legal):
+    if kind == "tile" and occupied.intersection(legal):
         raise ValueError("availability.legal_tiles contains an occupied tile")
     if annotation:
         if "revision" in record:
@@ -267,19 +325,54 @@ def validate_record(record, *, annotation=False, plant_types=None):
         status = record.get("status")
         if status not in ("pending", "labeled", "discarded"):
             raise ValueError("annotation status must be pending, labeled, or discarded")
-        tiles = record.get("feasible_tiles", [])
-        if not isinstance(tiles, list) or any(type(tile) is not int for tile in tiles):
-            raise ValueError("feasible_tiles must be a list of integers")
-        if len(set(tiles)) != len(tiles) or any(not 0 <= tile < TILES for tile in tiles):
-            raise ValueError("feasible_tiles must contain unique in-range tile indices")
-        if tiles != sorted(tiles):
-            raise ValueError("feasible_tiles must be sorted")
-        if not set(tiles).issubset(set(legal)):
-            raise ValueError(
-                "feasible_tiles contains a tile that is not legal for the selected plant"
-            )
-        if status in ("pending", "discarded") and tiles:
-            raise ValueError(f"{status} records cannot contain feasible tiles")
+        if kind == "tile":
+            tiles = record.get("feasible_tiles", [])
+            absolute = record.get("absolute_infeasible_tiles")
+            automatic = record.get("automatic_absolute_infeasible_tiles")
+            _validate_labels(tiles, "feasible_tiles", upper=TILES)
+            if absolute is None:
+                absolute = sorted(set(range(TILES)) - set(legal))
+            _validate_labels(absolute, "absolute_infeasible_tiles", upper=TILES)
+            if automatic is None:
+                automatic = sorted(set(range(TILES)) - set(legal))
+            _validate_labels(automatic, "automatic_absolute_infeasible_tiles", upper=TILES)
+            derived_automatic = sorted(set(range(TILES)) - set(legal))
+            if set(automatic) != set(derived_automatic):
+                raise ValueError("automatic absolute tile labels must equal the legal complement")
+            if not set(automatic).issubset(set(absolute)):
+                raise ValueError("automatic absolute tile labels cannot be removed")
+            if set(tiles) & set(automatic):
+                raise ValueError("feasible_tiles contains a tile that is not legal for the selected plant")
+            if set(tiles) & set(absolute):
+                raise ValueError("feasible_tiles and absolute_infeasible_tiles overlap")
+            if status in ("pending", "discarded") and (tiles or set(absolute) - set(automatic)):
+                raise ValueError(f"{status} records cannot contain human tile labels")
+            record["absolute_infeasible_tiles"] = sorted(set(absolute))
+            record["automatic_absolute_infeasible_tiles"] = sorted(set(automatic))
+        else:
+            metadata = record.get("action_availability", {})
+            inferred = tuple(name for name in metadata if name not in ("wait", "dig")) if plant_types is None else plant_types
+            names = action_names(inferred)
+            feasible = record.get("feasible_actions", [])
+            absolute = record.get("absolute_infeasible_actions", [])
+            automatic = record.get("automatic_absolute_infeasible_actions", [])
+            for value, label in ((feasible, "feasible_actions"), (absolute, "absolute_infeasible_actions"), (automatic, "automatic_absolute_infeasible_actions")):
+                if not isinstance(value, list) or any(item not in names for item in value) or len(set(value)) != len(value) or value != sorted(value, key=names.index):
+                    raise ValueError(f"{label} must contain unique known action names in canonical order")
+            derived_automatic = [name for name in names if _action_metadata(record, plant_types)[name]["absolute_infeasible"]]
+            if set(automatic) != set(derived_automatic):
+                raise ValueError("automatic absolute action labels do not match availability")
+            if not set(automatic).issubset(set(absolute)):
+                raise ValueError("automatic absolute action labels cannot be removed")
+            if set(feasible) & set(absolute):
+                raise ValueError("feasible_actions and absolute_infeasible_actions overlap")
+            if not feasible and status == "labeled":
+                raise ValueError("labeled action records require at least one feasible action")
+            if status in ("pending", "discarded") and (feasible or set(absolute) - set(automatic)):
+                raise ValueError(f"{status} records cannot contain human action labels")
+            record["feasible_actions"] = list(feasible)
+            record["absolute_infeasible_actions"] = list(absolute)
+            record["automatic_absolute_infeasible_actions"] = list(automatic)
         if status == "pending" and record.get("discard_reason") is not None:
             raise ValueError("pending records cannot contain a discard reason")
         if (
@@ -353,8 +446,10 @@ def dataset_digest(rows: Iterable[dict]) -> str:
 def annotation_input_key(record: dict) -> str:
     """Return the model-input identity used for duplicate annotation checks."""
     encoded = record["encoded_observation"]
+    kind = annotation_kind(record)
     payload = {
-        "plant": record["plant_type"],
+        "kind": kind,
+        "plant": record.get("plant_type", "") if kind == "tile" else "",
         "entities": np.asarray(encoded["entities"], np.int32).reshape(-1, 11).tolist(),
         "globals": np.asarray(encoded["globals"], np.float32).tolist(),
     }
@@ -364,7 +459,7 @@ def annotation_input_key(record: dict) -> str:
 
 
 def annotation_conflict_groups(records: Iterable[dict]) -> list[dict]:
-    """Group labeled records whose identical inputs have no common label."""
+    """Group labeled records whose identical inputs have incompatible sets."""
     grouped = {}
     for record in records:
         if record.get("status", "labeled") != "labeled":
@@ -374,10 +469,39 @@ def annotation_conflict_groups(records: Iterable[dict]) -> list[dict]:
     for key, rows in grouped.items():
         if len(rows) < 2:
             continue
-        intersection = set(rows[0].get("feasible_tiles", []))
+        kind = annotation_kind(rows[0])
+        feasible_key = "feasible_tiles" if kind == "tile" else "feasible_actions"
+        absolute_key = "absolute_infeasible_tiles" if kind == "tile" else "absolute_infeasible_actions"
+        intersection = set(rows[0].get(feasible_key, []))
         for row in rows[1:]:
-            intersection.intersection_update(row.get("feasible_tiles", []))
-        if intersection:
+            intersection.intersection_update(row.get(feasible_key, []))
+        incompatible = not intersection
+        # Every absolute label must rank below every non-absolute label. A
+        # cycle in the combined constraints is unsatisfiable.
+        universe = set(range(TILES)) if kind == "tile" else set(action_names(rows[0].get("action_availability", {}).keys()))
+        edges = set()
+        for row in rows:
+            absolute = set(row.get(absolute_key, []))
+            for low in absolute:
+                for high in universe - absolute:
+                    edges.add((low, high))
+        graph = {}
+        for low, high in edges:
+            graph.setdefault(low, set()).add(high)
+        visiting, visited = set(), set()
+        def has_cycle(node):
+            if node in visiting:
+                return True
+            if node in visited:
+                return False
+            visiting.add(node)
+            if any(has_cycle(child) for child in graph.get(node, ())):
+                return True
+            visiting.remove(node)
+            visited.add(node)
+            return False
+        incompatible = incompatible or any(has_cycle(node) for node in graph)
+        if not incompatible:
             continue
         conflicts.append({"key": key, "records": list(rows)})
     return conflicts
@@ -516,13 +640,17 @@ class LiveAnnotationStore:
     """
 
     def __init__(
-        self, output: str | Path, *, plant_types=None, config_digest=None, rules_hash=None
+        self, output: str | Path, *, plant_types=None, config_digest=None, rules_hash=None,
+        kind="tile"
     ):
         self.output_path = Path(output)
         self.manifest_path = self.output_path.with_suffix(
             self.output_path.suffix + ".manifest.json"
         )
         self.plant_types = tuple(plant_types or ())
+        if kind not in ("tile", "action"):
+            raise ValueError("annotation kind must be tile or action")
+        self.kind = kind
         self.config_digest = config_digest
         self.rules_hash = rules_hash
         self.records = (
@@ -530,6 +658,8 @@ class LiveAnnotationStore:
             if self.output_path.is_file()
             else []
         )
+        if any(annotation_kind(row) != self.kind for row in self.records):
+            raise ValueError("annotation dataset kind does not match the annotator mode")
         self.by_id = {row["id"]: row for row in self.records}
         pending = [row for row in self.records if row.get("status") == "pending"]
         if len(pending) > 1:
@@ -589,13 +719,17 @@ class LiveAnnotationStore:
                             "id": row["id"],
                             "revision": row.get("revision", 0),
                             "status": row.get("status"),
-                            "feasible_tiles": list(row.get("feasible_tiles", [])),
+                    "feasible_tiles": list(row.get("feasible_tiles", [])),
+                    "absolute_infeasible_tiles": list(row.get("absolute_infeasible_tiles", [])),
+                    "feasible_actions": list(row.get("feasible_actions", [])),
+                    "absolute_infeasible_actions": list(row.get("absolute_infeasible_actions", [])),
                             "source": dict(row.get("source", {})),
                         }
                         for row in rows
                     ],
-                    "plant_type": rows[0]["plant_type"],
-                    "legal_tiles": list(rows[0]["availability"]["legal_tiles"]),
+                    "annotation_kind": annotation_kind(rows[0]),
+                    "plant_type": rows[0].get("plant_type", ""),
+                    "legal_tiles": list(rows[0].get("availability", {}).get("legal_tiles", range(TILES))),
                 }
             )
         return result
@@ -609,13 +743,15 @@ class LiveAnnotationStore:
         manifest = {
             **self.manifest,
             "protocol": ANNOTATION_PROTOCOL,
+            "annotation_kind": self.kind,
             "snapshot_protocol": SNAPSHOT_PROTOCOL,
-            "counts": counts,
+            "counts": {**counts, "usable_training": counts["labeled"]},
             "total_snapshots": counts["generated"],
             "generated": counts["generated"],
             "labeled": counts["labeled"],
             "discarded": counts["discarded"],
             "pending": counts["pending"],
+            "usable_training": counts["labeled"],
             "annotation_digest": dataset_digest(self.records),
             "source_digest": self.manifest.get("source_digest"),
             "split_digest": self.manifest.get("split_digest"),
@@ -639,11 +775,15 @@ class LiveAnnotationStore:
         row = dict(record)
         row.update(
             protocol=ANNOTATION_PROTOCOL,
+            annotation_kind=self.kind,
             status="pending",
-            feasible_tiles=[],
             discard_reason=None,
             difficulty=difficulty,
         )
+        if self.kind == "tile":
+            row.update(feasible_tiles=[])
+        else:
+            row.update(feasible_actions=[], absolute_infeasible_actions=list(row.get("automatic_absolute_infeasible_actions", [])))
         validate_record(row, annotation=True, plant_types=self.plant_types or None)
         if row["id"] in self.by_id:
             raise ValueError(f"duplicate annotation record id: {row['id']}")
@@ -653,19 +793,19 @@ class LiveAnnotationStore:
         self._persist(last_difficulty=difficulty, sampler_seed=sampler_seed)
         return row
 
-    def resolve(self, record_id, *, status, tiles=None, reason=None, revision=0):
+    def resolve(self, record_id, *, status, tiles=None, reason=None, revision=0, feasible=None, absolute=None):
         row = self.pending
         if row is None or row["id"] != record_id:
             raise ValueError("stale annotation record")
-        return self._save_resolution(row, status, tiles, reason, revision)
+        return self._save_resolution(row, status, tiles, reason, revision, feasible=feasible, absolute=absolute)
 
-    def revise(self, record_id, *, status, tiles=None, reason=None, revision):
+    def revise(self, record_id, *, status, tiles=None, reason=None, revision, feasible=None, absolute=None):
         row = self.record(record_id)
         if row["status"] == "pending":
             raise ValueError("pending annotations must be resolved before revision")
-        return self._save_resolution(row, status, tiles, reason, revision)
+        return self._save_resolution(row, status, tiles, reason, revision, feasible=feasible, absolute=absolute)
 
-    def revise_conflict(self, key, members, tiles):
+    def revise_conflict(self, key, members, tiles=None, *, feasible=None, absolute=None):
         """Atomically apply one corrected label set to a conflict group."""
         groups = self.conflict_groups()
         group = next((item for item in groups if item["key"] == key), None)
@@ -684,26 +824,41 @@ class LiveAnnotationStore:
             revision = expected[member["id"]]
             if type(revision) is not int or revision != member["revision"]:
                 raise ValueError("stale annotation conflict revision")
-        if not isinstance(tiles, list) or any(type(tile) is not int for tile in tiles):
-            raise ValueError("conflict feasible tiles must be a list of integers")
-        tiles = sorted(set(tiles))
-        if not tiles:
-            raise ValueError("conflict correction must contain at least one tile")
-        legal = set(group["legal_tiles"])
-        if not set(tiles).issubset(legal):
-            raise ValueError("conflict feasible tiles must be legal for the selected plant")
+        kind = group.get("annotation_kind", self.kind)
+        if kind == "action":
+            names = action_names(self.plant_types)
+            feasible = [] if feasible is None else feasible
+            absolute = [] if absolute is None else absolute
+            if not isinstance(feasible, list) or not feasible:
+                raise ValueError("conflict correction must contain a feasible action")
+            if any(item not in names for item in (*feasible, *absolute)):
+                raise ValueError("unknown conflict action label")
+            feasible = sorted(set(feasible), key=names.index)
+            absolute = sorted(set(absolute), key=names.index)
+        else:
+            if not isinstance(tiles, list) or any(type(tile) is not int for tile in tiles):
+                raise ValueError("conflict feasible tiles must be a list of integers")
+            tiles = sorted(set(tiles))
+            if not tiles:
+                raise ValueError("conflict correction must contain at least one tile")
+            legal = set(group["legal_tiles"])
+            if not set(tiles).issubset(legal):
+                raise ValueError("conflict feasible tiles must be legal for the selected plant")
+            absolute = [] if absolute is None else absolute
+            if not isinstance(absolute, list) or any(type(tile) is not int or not 0 <= tile < TILES for tile in absolute):
+                raise ValueError("conflict absolute tiles must be valid indices")
 
         updates = {}
         for row in self.records:
             if row["id"] not in group["record_ids"]:
                 continue
             updated = dict(row)
-            updated.update(
-                status="labeled",
-                feasible_tiles=tiles,
-                discard_reason=None,
-                revision=row.get("revision", 0) + 1,
-            )
+            updated.update(status="labeled", discard_reason=None, revision=row.get("revision", 0) + 1)
+            if kind == "action":
+                updated.update(feasible_actions=feasible, absolute_infeasible_actions=sorted(set(absolute) | set(row.get("automatic_absolute_infeasible_actions", [])), key=action_names(self.plant_types).index))
+            else:
+                automatic = set(row.get("automatic_absolute_infeasible_tiles", []))
+                updated.update(feasible_tiles=tiles, absolute_infeasible_tiles=sorted(set(absolute) | automatic))
             validate_record(updated, annotation=True, plant_types=self.plant_types or None)
             updates[row["id"]] = updated
         old_records, old_by_id = self.records, self.by_id
@@ -716,27 +871,35 @@ class LiveAnnotationStore:
             raise
         return [updates[record_id] for record_id in group["record_ids"]]
 
-    def _save_resolution(self, row, status, tiles, reason, revision):
+    def _save_resolution(self, row, status, tiles, reason, revision, *, feasible=None, absolute=None):
         if type(revision) is not int or revision != row.get("revision", 0):
             raise ValueError("stale annotation revision; reload the map before saving")
         if status not in ("labeled", "discarded"):
             raise ValueError("resolution status must be labeled or discarded")
-        if tiles is None:
-            tiles = []
-        if not isinstance(tiles, (list, tuple, set)) or any(
-            type(tile) is not int for tile in tiles
-        ):
-            raise ValueError("feasible tiles must be integers")
-        tiles = sorted(set(tiles))
-        if status == "discarded":
-            tiles = []
-        updated = dict(row)
-        updated.update(
-            status=status,
-            feasible_tiles=tiles,
-            discard_reason=reason if status == "discarded" else None,
-            revision=revision + 1,
-        )
+        if self.kind == "action":
+            feasible = [] if feasible is None else feasible
+            absolute = list(row.get("automatic_absolute_infeasible_actions", [])) if absolute is None else absolute
+            if not isinstance(feasible, list) or not isinstance(absolute, list):
+                raise ValueError("action labels must be lists")
+            if status == "discarded":
+                feasible, absolute = [], list(row.get("automatic_absolute_infeasible_actions", []))
+            absolute = sorted(set(absolute) | set(row.get("automatic_absolute_infeasible_actions", [])), key=action_names(self.plant_types).index)
+            updated = dict(row)
+            updated.update(status=status, feasible_actions=sorted(set(feasible), key=action_names(self.plant_types).index), absolute_infeasible_actions=sorted(set(absolute), key=action_names(self.plant_types).index), discard_reason=reason if status == "discarded" else None, revision=revision + 1)
+        else:
+            if tiles is None:
+                tiles = []
+            if not isinstance(tiles, (list, tuple, set)) or any(
+                type(tile) is not int for tile in tiles
+            ):
+                raise ValueError("feasible tiles must be integers")
+            tiles = sorted(set(tiles))
+            if status == "discarded":
+                tiles = []
+            updated = dict(row)
+            automatic = set(row.get("automatic_absolute_infeasible_tiles", []))
+            chosen_absolute = automatic if absolute is None else set(absolute) | automatic
+            updated.update(status=status, feasible_tiles=tiles, absolute_infeasible_tiles=sorted(chosen_absolute), discard_reason=reason if status == "discarded" else None, revision=revision + 1)
         validate_record(updated, annotation=True, plant_types=self.plant_types or None)
         index = self.index(row["id"])
         self.records[index] = updated

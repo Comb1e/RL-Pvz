@@ -2280,3 +2280,10 @@ unperformed.
   detailed device-side source-row provenance is available through the shared
   host mutation API when an event adapter supplies it. Initial simulator plants
   and environmental events remain explicitly unattributable to a learner action.
+
+## Dual annotation heads — 2026-10-19
+
+- Problem: tile-only annotation could express neither action-branch feasibility nor the distinction between a preferred label and a simulator-impossible output. It also required a human/demo artifact before supervised fitting.
+- Improvement: annotation protocol v2 stores separate tile/action datasets, feasible and absolute-bottom sets, locked automatic impossibility labels, and a shared conflict detector. `fit-tile-annotations` trains only the tile stage; `fit-action-annotations` trains only the species stage; both support fresh weights. `initialize-demo --init-from` starts a new demo optimizer/EMA from either artifact.
+- Verification: existing tile annotation controls remain green; action sampler records validate and a CPU action-head fit publishes a compatible weight-only artifact. Runtime action masks and the model/checkpoint layout remain unchanged.
+- Remaining issue: visual action controls are intentionally compact; held-out and game-quality effects still require an equal-budget training comparison.
