@@ -6,7 +6,7 @@ branch. A full-board plant uses tile zero so rejection remains observable.
 
 Every rejected proposal executes exactly one ordinary wait tick. The original
 proposal, actual reason and executed action `0` are retained separately.
-Terminal, development, proximity and victory-time rewards remain those of that
+Global terminal/asset and action rewards remain those of that
 tick. `invalid_plant_penalty` and `empty_dig_penalty` are zero audit fields;
 there are no active rejection-price settings.
 

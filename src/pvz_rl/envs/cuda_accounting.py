@@ -6,7 +6,10 @@ from weakref import proxy
 
 from pvz_game.cuda import CudaBatch
 
-ACCOUNTING_WIDTH = 4
+# damage, sky income, plant-produced income, early income, then bite damage
+# split by the eight plant kinds.  The extra facts stay in the private
+# accounting slab and never enter model observations.
+ACCOUNTING_WIDTH = 12
 
 
 def accounting_kernel_source(source):
@@ -15,6 +18,7 @@ def accounting_kernel_source(source):
         "I ticks, I per_tick) {": "I ticks, I per_tick, I *accounting, I sun_numerator, I sun_denominator) {",
         "facts + i * 9};": f"facts + i * 9, accounting + i * {ACCOUNTING_WIDTH}, sun_numerator, sun_denominator}};",
         "    emit(5, a.id, source, dh, da);": "    if (source > 0) accounting[0] += dh + da;\n    emit(5, a.id, source, dh, da);",
+        "        emit(14, b.id, a.id, d);": "        accounting[4 + b.kind] += d;\n        emit(14, b.id, a.id, d);",
         "    emit(4, id, source, h->sun - before, amount);": "    accounting[source == 0 ? 1 : 2] += h->sun - before;\n"
         "    if (source == 1 && h->total_spawns > 0 && sun_denominator * h->spawn_index < sun_numerator * h->total_spawns) accounting[3] += h->sun - before;\n"
         "    emit(4, id, source, h->sun - before, amount);",

@@ -18,15 +18,16 @@ from pvz_rl.learning.training_requirements import (
     weight_transfer_protocol,
 )
 
-DEMO_PROTOCOL = "pvz-rl/demo-initialization-checkpoint-v9"
+DEMO_PROTOCOL = "pvz-rl/demo-initialization-checkpoint-v10"
+LEGACY_DEMO_PROTOCOL = "pvz-rl/demo-initialization-checkpoint-v9"
 ANNOTATION_CHECKPOINT_PROTOCOL = "pvz-rl/tile-annotation-initialization-v1"
 MODEL_STATE_PROTOCOL = "pvz-rl/stateless-two-stage-bf16-master-state-v2"
-AUTONOMOUS_STATE_PROTOCOL = "pvz-rl/selective-invalid-state-v2"
+AUTONOMOUS_STATE_PROTOCOL = "pvz-rl/action-global-state-v1"
 
 
 def protocol_for(kind):
     methods = {
-        "two_stage_transformer_q_v1": "complete_return_selective_invalid_v3",
+        "two_stage_transformer_q_v1": "complete_return_action_global_v1",
     }
     if kind not in methods:
         raise ValueError(
@@ -95,6 +96,7 @@ def inspect_checkpoint(path, *, weights_only=False):
         saved = torch.load(path, map_location="cpu", weights_only=True)
         initialization_type = {
             DEMO_PROTOCOL: "demonstration",
+            LEGACY_DEMO_PROTOCOL: "demonstration",
             ANNOTATION_CHECKPOINT_PROTOCOL: "annotation",
         }.get(saved.get("protocol"))
         if initialization_type is None:
@@ -196,7 +198,11 @@ def inspect_checkpoint(path, *, weights_only=False):
             if weights_only:
                 if (
                     runtime.get("protocol")
-                    not in (AUTONOMOUS_STATE_PROTOCOL, "pvz-rl/stateless-no-probe-state-v1")
+                    not in (
+                        AUTONOMOUS_STATE_PROTOCOL,
+                        "pvz-rl/stateless-no-probe-state-v1",
+                        "pvz-rl/selective-invalid-state-v2",
+                    )
                     or runtime.get("model_storage_protocol") != MODEL_STATE_PROTOCOL
                     or runtime.get("precision_contract") != "bf16_master"
                 ):

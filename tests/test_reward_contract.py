@@ -54,8 +54,10 @@ def test_early_sun_independent_event_order_cap_and_training_scale(
         assert parts["net_value"] == income - sky
         assert parts["early_sun_bonus"] == pytest.approx(2 * expected / 30000)
         assert parts["development"] == pytest.approx((income - sky + 2 * expected) / 30000)
+        # The current objective keeps the resource delta and the
+        # source-action sun credit as separate physical channels.
         assert training_rewards(components(parts), cfg) == pytest.approx(
-            (income - sky + 2 * expected) / 3000
+            (2 * (income - sky) + 2 * expected) / 3000
         )
     finally:
         env.close()
@@ -174,7 +176,7 @@ def test_mower_cost_once_independent_of_sun_and_kills(sun, kills):
     assert reward_parts(before, before, cfg)["mower_activation_penalty"] == 0
 
 
-def test_empty_explosion_and_nut_bite_are_only_diagnostics():
+def test_empty_explosion_and_nut_bite_have_signed_blocking_credit():
     cfg = load_config()
     env = PvZEnv(cfg)
     env.reset(
@@ -192,7 +194,8 @@ def test_empty_explosion_and_nut_bite_are_only_diagnostics():
     )
     part = reward_parts(before, before, cfg, events=events)
     assert part["wall_nut_damage"] == 25 and part["empty_explosions"] == 1
-    assert part["total"] == 0
+    assert part["action_blocking"] == pytest.approx(25 * 0.025)
+    assert part["total"] == pytest.approx(25 * 0.025 / 30000)
 
 
 def test_house_entries_are_staged_once_and_victory_time_is_win_only():
@@ -246,25 +249,23 @@ def test_house_entries_are_staged_once_and_victory_time_is_win_only():
     assert victory_time([0, 10, 300], 160, False, 0.1).tolist() == [0, 0, 0]
 
 
-def test_six_component_targets_only_scale_development():
+def test_six_component_targets_scale_all_physical_channels_once():
     from pvz_rl.learning.objective import components, training_rewards
 
     cfg = load_config()
-    # One effective HP, full basic HP, mower, invalid planting and empty digging.
-    raw = [1.0, -2.0, 50 / 270 / 30000, 50 / 30000, -200 / 30000, -0.00001, -0.000003, -0.02, 0.03]
-    keys = (
-        ["terminal"] * 2
-        + ["development"] * 3
-        + ["invalid_plant_penalty", "empty_dig_penalty", "home_proximity", "victory_time"]
-    )
-    got = [float(training_rewards(components({k: v}), cfg)) for k, v in zip(keys, raw)]
-    assert got == pytest.approx(
-        [1, -2, 50 / 270 / 3000, 50 / 3000, -200 / 3000, -0.00001, -0.000003, -0.02, 0.03]
-    )
-    assert training_rewards(components({"terminal": 1, "development": 0.01}), cfg) == pytest.approx(
-        1.1
-    )
-    assert training_rewards(components({"terminal": 1}), cfg) == 1
+    values = {
+        "global_terminal": 1.0,
+        "global_asset_value": -2.0,
+        "action_damage": 50 / 270,
+        "action_blocking": 50.0,
+        "action_sun": -200.0,
+        "action_mower": -3.0,
+    }
+    expected = 1 + 10 * (-2 + 50 / 270 + 50 - 200 - 3) / 30000
+    assert training_rewards(components(values), cfg) == pytest.approx(expected)
+    # Diagnostic-only aliases never enter the learning vector.
+    assert training_rewards(components({"terminal": 1, "development": 100}), cfg) == 0
+    assert training_rewards(components({"global_terminal": 1}), cfg) == 1
 
 
 @pytest.mark.parametrize("setting", ["shaped", "curriculum", "masked", "fixed"])

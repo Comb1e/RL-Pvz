@@ -1,21 +1,23 @@
 # Training objective
 
-The six signed components are terminal, development, invalid planting, empty
-digging, home proximity and victory time. All component accounting and return
-accumulation use FP64; trajectory targets are stored in FP32 and cast to BF16 for
-model fitting. Reporting sums the six components. Fitting changes only the
-development coefficient:
+The six signed learning components are global terminal, global asset value,
+action damage, action blocking, action sun and action mower. All component
+accounting and return accumulation use FP64; trajectory targets are stored in
+FP32 and cast to BF16 for model fitting. Legacy combat, rejection, proximity and
+victory-time fields remain diagnostics only:
 
 \[
-r^{raw}=r^{terminal}+r^{development}+r^{invalid\ plant}+r^{empty\ dig}
-       +r^{home}+r^{time},\qquad
-r^{train}=r^{raw}+9r^{development}.
+r^{physical}=r^{global\ asset}+r^{action\ damage}+r^{action\ blocking}
+             +r^{action\ sun}+r^{action\ mower},
+\qquad r^{raw}=r^{global\ terminal}+s r^{physical},
+\qquad r^{train}=r^{global\ terminal}+10s r^{physical}.
 \]
 
 Gamma is one; selected-action targets sum the complete episode without bootstrap.
 The shipped terminal rewards are +1 for victory and -1 for defeat or cutoff
-(`reward.loss_penalty=1.0`); this architecture change does not alter them. The multiplier
-is `training.objective.dense_multiplier=10`. The same interface builds demonstration
+(`reward.loss_penalty=1.0`). Here `s=progress_weight/value_scale` and the
+multiplier is `training.objective.dense_multiplier=10`; scaling is applied once
+to the combined physical terms. The same interface builds demonstration
 and autonomous targets. [Sequential Q learning](sequential-training.md) specifies the
 selected-action, consistency and demonstration losses. Maximum net value and
 drawdown remain diagnostics.
@@ -27,38 +29,46 @@ autonomous headless decay and mower damage do not earn plant-damage value.
 With basic body HP 270, damage valuation is 50/270 per effective HP.
 
 For asset value A, actual sky income S, effective damage D, mower activations M,
-and eligible actual Sunflower income E,
-the development reward is
+and eligible actual Sunflower income E, the physical ledger is
 
 \[
-R_{development}=\frac{A_{after}-A_{before}-S+(50/270)D-200M+2E}{30000}.
+R_{physical}=(A_{after}-A_{before}-S)+(50/270)D+B+C-200M,
 \]
 
-Subtracting actual sky income prevents free ambient sun from earning development
-reward. Plant-produced sun remains valuable only when it fits below the sun cap.
-Asset losses and mower expenditure are each charged once; diagnostic kill counts
-are not another reward term.
+where `B` is the signed per-plant blocking credit and `C` is produced sunlight
+credit (including the configured early-sun source bonus). Subtracting actual sky
+income prevents free ambient sun from earning global asset reward. Plant-produced
+sun remains valuable only when it fits below the sun cap. Asset losses and mower
+expenditure are each charged once; diagnostic kill counts are not another reward
+term. Damage and delayed source events are assigned to their placement action by
+the causal ledger; no separate kill bonus is added.
+
+The default blocker coefficients are raw sun-equivalent value per health point:
+ordinary plants are `-cost/max_health`, while Wall-nut is `+2*cost/max_health`.
+Thus a Peashooter bite has a negative combined local signal, whereas a Wall-nut
+can receive positive blocking credit despite losing health. A terminal defeat
+still contributes the global loss penalty.
 
 Eligibility is evaluated at each production event: total roster must be positive
 and `3 * cumulative_spawned < total`. Defeat/removal never reopens eligibility;
 spawns earlier in the same tick count before production. The configurable exact
 fraction is `reward.early_sun_spawn_fraction=[1,3]`, with
 `reward.early_sun_extra_multiplier=2`. Count only actual credited sunlight, not
-requested production, and never sky income. `early_sun_bonus` is a reported subset
-of development, not a seventh component. The dense multiplier applies once:
-25 eligible sun earns 75/30,000 raw development and 0.025 training reward;
-late income earns 25/30,000 and approximately 0.00833 respectively.
+requested production, and never sky income. `early_sun_bonus` is a diagnostic
+subset of action sun, not a seventh component. The dense multiplier applies once
+to all five physical terms; source sunlight and the separate global asset delta
+are intentionally both retained.
 
-| Control | Development reward |
+| Control | Physical ledger effect |
 |---|---:|
-| Remove a healthy 100-sun shooter | -100/30,000 |
-| Produce 25 uncapped early Sunflower sun | 75/30,000 |
-| Produce 25 uncapped late Sunflower sun | 25/30,000 |
-| Remove 20 effective HP | (20*50/270)/30,000 |
-| Activate one mower | -200/30,000 |
-| Empty cherry | -150/30,000 |
-| Cherry against three full basics | 0 |
-| Cherry against one full conehead | (640*50/270-150)/30,000 |
+| Lose a healthy 100-sun shooter | global asset `-100` plus its signed bite credit |
+| Produce 25 uncapped early Sunflower sun | global asset `+25` plus source action sun |
+| Produce 25 uncapped late Sunflower sun | global asset `+25` plus source action sun |
+| Remove 20 effective HP | action damage `(20*50/270)` |
+| Activate one mower | action mower `-200` |
+| Empty cherry | no combat credit |
+| Cherry against three full basics | action damage from actual body/armor damage |
+| Cherry against one full conehead | action damage from actual body/armor damage |
 
 Head loss can stop a game before all body HP disappears. These explosion controls
 use actual damage, and never award the unremoved remainder. Bounds for normal

@@ -6,7 +6,8 @@ The species Transformer selects a plant, wait or dig; the independent tile
 Transformer scores 45 tiles for the selected branch. Both read only the current
 public board. Planting creates no counterfactual rollout.
 
-Training uses `complete_return_selective_invalid_v3`. Previous compatible
+Training uses `complete_return_action_global_v1` with a causal action/global
+reward ledger. Previous compatible
 BF16-master two-stage weights remain usable for inference and fresh `--init-from`;
 previous-objective runs cannot resume. Parameters live in
 [src/pvz_rl/data/train.toml](src/pvz_rl/data/train.toml).

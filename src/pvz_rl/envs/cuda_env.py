@@ -372,6 +372,15 @@ class CudaVecEnv(VecEnv):
                     "accepted": accepted,
                     "rejection_reason": reason,
                     "ticks_advanced": int(row[2]),
+                    # The device backend exposes aggregate causal components
+                    # in ``last_reward_parts_host``.  Detailed source rows are
+                    # optional event-adapter data and remain empty here until
+                    # a backend publishes entity provenance.
+                    "causal_credits": {},
+                    "causal_diagnostics": {
+                        "source_action_credited_rows": 0,
+                        "unattributable_events": 0,
+                    },
                 }
             )
         reward, done, timed_out = self._step_device_result

@@ -18,6 +18,7 @@ from pvz_rl.config import (
 )
 from pvz_rl.envs.action_timing import ActionPhaseGame, per_tick_actions
 from pvz_rl.envs.actions import ActionCodec
+from pvz_rl.envs.action_credit import CausalCreditLedger
 from pvz_rl.envs.encoding import ObservationEncoder
 from pvz_rl.envs.rewards import LEDGER_METRICS, REWARD_METRICS, HomeProximityLedger, reward_parts
 from pvz_rl.envs.scenarios import difficulty_weights, scenario
@@ -90,6 +91,7 @@ class PvZEnv(gym.Env):
         self._direct_mask = None
         self.cache_legal_actions = runtime_settings(self.cfg)["cache_legal_actions"]
         self._candidates = None
+        self.causal_credit = CausalCreditLedger(self.cfg, self.rules)
 
     def set_progress(self, decisions: int):
         self.progress = int(decisions)
@@ -133,6 +135,15 @@ class PvZEnv(gym.Env):
         if self.game.rules.digest != rules.digest:
             self.game = ActionPhaseGame(rules) if self.per_tick else Game(rules)
         self.public = self.game.reset(resolved, game_seed)
+        self.causal_credit.reset((level, family, game_seed))
+        self.causal_credit.seed_observation(self.public)
+        self.causal_summary = {
+            "source_action_credited_rows": 0,
+            "unattributable_events": 0,
+            "damage_by_source_plant": Counter(),
+            "blocking_by_plant": Counter(),
+            "produced_sun_by_source_plant": Counter(),
+        }
         self.proximity = HomeProximityLedger(self.public, self.rules)
         self.episode_level, self.episode_family, self.episode_seed = level, family, game_seed
         self.episode_stage = self.curriculum_stage
@@ -264,6 +275,23 @@ class PvZEnv(gym.Env):
             ticks = min(self.cfg["environment"]["decision_ticks"], self.cutoff_ticks - before.tick)
         result = (self.recorder or self.game).step(concrete, ticks=ticks)
         self.public = result.observation
+        causal_credits = self.causal_credit.attribute(
+            result.events, action_id=self.metrics["decisions"]
+        )
+        self.causal_credit.register_plant_kinds(self.public)
+        current_action_id = self.metrics["decisions"]
+        delayed = {key: value for key, value in causal_credits.items() if key != current_action_id}
+        self.causal_summary["source_action_credited_rows"] += len(delayed)
+        diagnostics = self.causal_credit.last_diagnostics
+        self.causal_summary["unattributable_events"] += int(
+            diagnostics.get("unattributable_events", 0)
+        )
+        for name, target in (
+            ("damage_by_plant", "damage_by_source_plant"),
+            ("blocking_by_plant", "blocking_by_plant"),
+            ("sun_by_plant", "produced_sun_by_source_plant"),
+        ):
+            self.causal_summary[target].update(diagnostics.get(name, {}))
         self.maximum_sun = max(self.maximum_sun, before.sun, self.public.sun)
         # The policy mask depends only on occupancy, so invalidate its cached
         # tile geometry after every simulator transition.  (The engine legal
@@ -290,9 +318,30 @@ class PvZEnv(gym.Env):
             action=concrete,
             action_result=result.action_result,
             proximity=self.proximity,
+            # Keep aggregate event accounting for effects from unowned
+            # initial plants.  Only an origin row present in this transition
+            # switches the action fields to the causal ledger values.
+            # An explicitly empty mapping means the transition has no
+            # source-owned action effects (for example an initial plant).
+            # Do not fall back to aggregate event shaping in that case.
+            causal_credits=causal_credits.get(self.metrics["decisions"], {}),
         )
+        # ``parts`` is the reward returned for the current transition.  A
+        # delayed event may belong to an earlier source row; include that
+        # source credit in episode totals without changing this tick's return.
+        for origin, credit in causal_credits.items():
+            if origin == current_action_id:
+                continue
+            for field, metric in (
+                ("damage", "action_damage"),
+                ("blocking", "action_blocking"),
+                ("sun", "action_sun"),
+                ("mower", "action_mower"),
+            ):
+                self.metrics[metric] += float(credit.get(field, 0.0))
         if truncated:
             parts["terminal"] = -self.cfg["reward"]["loss_penalty"]
+            parts["global_terminal"] = parts["terminal"]
             parts["total"] += parts["terminal"]
         for key in REWARD_METRICS:
             self.metrics[key] += parts[key]
@@ -364,6 +413,8 @@ class PvZEnv(gym.Env):
             "accepted": result.action_result.accepted and not rejected_strategy,
             "rejection_reason": result.action_result.reason,
             "ticks_advanced": result.ticks_advanced,
+            "causal_credits": causal_credits,
+            "causal_diagnostics": self.causal_credit.last_diagnostics,
         }
         if terminated or truncated:
             if self.recorder:
@@ -405,6 +456,7 @@ class PvZEnv(gym.Env):
             if self.first_attacker_tick is None
             else self.first_attacker_tick / obs.tick_rate,
             "maximum_sun": self.maximum_sun,
+            **self.causal_summary,
             "plant_spending": dict(self.plant_spending),
             "affordable_attacker_opportunities": self.metrics["affordable_attacker_opportunities"],
             "invalid_actions": self.metrics["invalid_actions"],

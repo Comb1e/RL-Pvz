@@ -1,11 +1,22 @@
 # Recording and training
 
-The objective is `complete_return_selective_invalid_v3`. Old-objective optimizer
+The objective is `complete_return_action_global_v1`. Old-objective optimizer
 resume is rejected. Structurally compatible previous BF16-master two-stage
 checkpoints remain valid for inference and fresh weight-only initialization.
-Current recovery uses `selective-invalid-state-v2` and
-`selective-invalid-trajectory-v2`; the model weight protocol remains v2.
+Current recovery uses `action-global-state-v1` and
+`action-global-trajectory-v1`; the model weight protocol remains v2.
 Verified recordings remain reusable and are repriced without rewriting files.
+
+The learning reward has two channels. Global reward contains only the terminal
+win/loss pair and the change in `sun + living-plant value`, with sky-generated
+sun removed. Action reward credits plant/projectile body and armor damage,
+plant-produced sun, authoritative plant-bite blocking and mower activation cost
+to the action that caused them. Provenance stays private and never enters an
+observation. Ordinary plants receive a signed bite penalty, while Wall-nut's
+configured positive blocker coefficient can outweigh its lost asset value.
+Home proximity and victory-time remain diagnostics only. A reward protocol
+change invalidates autonomous and optimizer recovery, while weight-only model
+transfer remains portable across supported GPUs.
 
 ## Record and initialize
 

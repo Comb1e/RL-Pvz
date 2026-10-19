@@ -249,6 +249,23 @@ reward_metrics(const I *headers, const I *old_headers, const I *old_cd,
   v[F_mower_activation_penalty] = -scale * v[F_mower_expenditure];
   v[F_invalid_plant_penalty] = 0.;
   v[F_empty_dig_penalty] = 0.;
+  // New action/global objective.  The CUDA accounting stream currently
+  // exposes authoritative wall-nut bite facts; host-side CPU collection can
+  // refine the per-plant provenance through the shared causal ledger.
+  v[F_global_terminal] = v[F_terminal];
+  v[F_global_asset_value] = resources;
+  v[F_action_damage] = v[F_combat_value];
+  v[F_action_blocking] = R_action_block_0 * a[4]
+      + R_action_block_1 * a[5]
+      + R_action_block_2 * a[6]
+      + R_action_block_3 * a[7]
+      + R_action_block_4 * a[8]
+      + R_action_block_5 * a[9]
+      + R_action_block_6 * a[10]
+      + R_action_block_7 * a[11];
+  v[F_action_sun] = R_action_sun_credit_multiplier * v[F_produced_sun]
+      + R_early_sun_extra_multiplier * v[F_early_sun];
+  v[F_action_mower] = -v[F_mower_expenditure];
   v[F_home_outer_entries] = home_entries[i * 2];
   v[F_home_inner_entries] = home_entries[i * 2 + 1];
   v[F_home_proximity] = -HOME_PENALTY_0 * home_entries[i * 2]
@@ -256,7 +273,9 @@ reward_metrics(const I *headers, const I *old_headers, const I *old_cd,
   // A corrupted/exhausted ledger must fail at the existing host boundary,
   // never turn the negative overflow sentinel into a positive reward.
   if (home_entries[i * 2] < 0) v[F_home_proximity] = 0.0 / 0.0;
-  double total = v[F_terminal] + v[F_development] + v[F_home_proximity]
+  double physical = v[F_global_asset_value] + v[F_action_damage]
+      + v[F_action_blocking] + v[F_action_sun] + v[F_action_mower];
+  double total = v[F_global_terminal] + scale * physical
       + v[F_invalid_plant_penalty] + v[F_empty_dig_penalty];
   v[F_total] = total;
   rewards[i] = (float)total;

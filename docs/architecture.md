@@ -19,6 +19,38 @@ frame stack or counterfactual simulator is part of the policy or collector.
 Seeds, schedules and simulator snapshots stay in execution state and never enter
 policy inputs. `src/pvz_rl/data/train.toml` is the sole parameter source.
 
+## Reward and causal credit flow
+
+```mermaid
+flowchart LR
+    Before[Public state before action] --> Step[Simulator transition]
+    Step --> Global[Global: terminal + asset delta - sky sun]
+    Step --> Events[Ordered public events]
+    Events --> Ledger[Private causal ledger]
+    Ledger --> Source[Placement/source action row]
+    Source --> Action[Damage, blocking, produced sun, mower cost]
+    Global --> Return[Chronological complete return]
+    Action --> Return
+```
+
+The global channel contains only the terminal outcome and the change in
+`sun + living-plant value`, with sky-generated sunlight excluded. The ordered
+event stream retains plant IDs, projectile source IDs and environment/episode
+identity privately. Plant/projectile damage, lethal damage, Sunflower income,
+Chomper swallowing and authoritative bites are credited to the originating
+placement action; mower activation has no placement origin and is charged to its
+transition. `PlantRemoved` is processed after earlier events in the same stream.
+Initial plants and events without an origin are reported as unattributable and
+cannot leak IDs into observations. The trajectory buffer can apply host source
+credits retroactively before returns are finalized. CUDA emits the same six
+learning components and private aggregate accounting; detailed device source
+rows are optional adapter data.
+
+Wall-nut uses a positive signed blocking coefficient while ordinary plant bites
+are negative. A Wall-nut can therefore earn local blocking value while losing
+asset health, but terminal defeat remains globally negative. Proximity and
+victory-time values remain diagnostics and are not learning targets.
+
 PowerShell and Bash bootstrap tools install the same pinned CUDA environment.
 They share archive/hash verification, install the game non-editably and never
 change its checkout. A missing commit or mismatched manifest fails installation;

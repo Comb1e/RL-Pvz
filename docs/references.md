@@ -1,5 +1,23 @@
 # Sources actually used
 
+## Causal reward attribution — 2026-10-19
+
+- Sutton, Richard S., [Learning to Predict by the Methods of Temporal
+  Differences](https://www.cs.utexas.edu/~shivaram/readings/b2hd-Sutton1988.html):
+  used as the credit-assignment reference for keeping chronological complete
+  returns while recording delayed physical effects against their source action.
+  The implementation uses explicit simulator event provenance rather than a
+  learned eligibility trace.
+- Ng, Harada and Russell, [Policy Invariance Under Reward Transformations](https://ai.stanford.edu/~ang/papers/icml99-shaping.pdf):
+  used to separate diagnostic proximity/time shaping from the changed learning
+  objective and to document that the new signed action terms are an intentional
+  objective change, not a claim of policy invariance.
+- The pinned [`pvz_game` event schema](../.venv/Lib/site-packages/pvz_game/cuda/schema.py)
+  and engine event implementation were used directly for ordering guarantees:
+  projectile source IDs, Sunflower entity IDs, `ZombieSwallowed`,
+  `PlantDamaged`, `PlantRemoved` and mower activation events. IDs remain private
+  accounting metadata and never enter observations.
+
 ## Tile-to-species target reliability — research inspection, 2026-10-13
 
 The current objective adopts online selection/EMA evaluation and robust Huber

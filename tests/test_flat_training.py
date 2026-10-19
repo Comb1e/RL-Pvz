@@ -134,6 +134,28 @@ def test_fitting_spool_compacts_invalid_rows_but_returns_keep_raw_counts(tmp_pat
         buffer.close()
 
 
+def test_causal_source_credit_updates_origin_row_before_returns(tmp_path):
+    cfg = load_config()
+    buffer = CompleteGameBuffer(tmp_path / "causal", 1, block_rows=2, cfg=cfg)
+    rows = np.zeros(2, dtype=buffer.dtype)
+    rows["active"] = True
+    rows["reset"][0] = True
+    rows["done"][1] = True
+    rows["components_valid"] = True
+    rows["route"] = FitRoute.WAIT_RETURN
+    rows["components"][1, 0] = 1.0
+    buffer.append(rows, [{"entities": [], "globals": [0] * 18}] * 2)
+    try:
+        buffer.apply_causal_credits({0: {"damage": 270 * 50 / 270}})
+        buffer.finalize()
+        actual = buffer.take([0, 1])
+        assert actual[0]["components"][2] == pytest.approx(50)
+        assert actual[0]["target"] > actual[1]["target"]
+        assert buffer.reward_summary["source_action_credited_rows"] == 1
+    finally:
+        buffer.close()
+
+
 def boards(count):
     observations = [{"entities": [], "globals": [index] + [0] * 17} for index in range(count)]
     return collate_observations(observations)

@@ -49,7 +49,7 @@ count_scale = 75
 wave_scale = 15
 
 [reward]
-version = "net_value_v1"
+version = "action_global_value_v1"
 win_reward = 1.0
 loss_penalty = 1.0
 basic_zombie_value = 50.0 # Sun-equivalent value per basic zombie's actual HP removed.
@@ -61,10 +61,17 @@ win_time_weight = 0.1 # Victories relative to the current cohort's median durati
 early_sun_extra_multiplier = 2.0
 early_sun_spawn_fraction = [1, 3]
 
+[reward.action]
+sun_credit_multiplier = 1.0
+# Raw sun-equivalent blocker credit per health point.  Ordinary plants receive
+# an additional signed bite penalty; Wall-nut receives a bonus larger than its
+# asset-value loss so absorbing bites remains locally beneficial.
+block_value_by_plant = { sunflower = -0.1666666667, peashooter = -0.3333333333, wall_nut = 0.025, cherry_bomb = -0.5, potato_mine = -0.0833333333, snow_pea = -0.5833333333, chomper = -0.5, repeater = -0.6666666667 }
+
 [training]
 gamma = 1.0
 discount_clock = "simulation_ticks"
-method = "complete_return_selective_invalid_v3"
+method = "complete_return_action_global_v1"
 budget_unit = "games"
 until_stage_complete = false # With --stage: stop only when its mastery gate passes.
 total_games = 10000
@@ -90,7 +97,7 @@ ram_gib = 6
 block_rows = 32768
 
 [training.objective]
-protocol = "complete_return_selective_invalid_v3"
+protocol = "complete_return_action_global_v1"
 accepted_outcome_share = 0.5
 species_consistency_weight = 1.0
 species_consistency_huber_delta = 1.0

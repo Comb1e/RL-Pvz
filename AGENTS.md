@@ -36,7 +36,7 @@
   transparency and trace bounds; hardware sampling remains in its reporting suite.
 - `src/pvz_rl/data/train.toml` is the single parameter source for train/demo overlays.
   Both use `entity_v1`, `two_stage_transformer_q_v1` and
-  `complete_return_selective_invalid_v2`. Old-objective resumes are rejected; structurally compatible
+  `complete_return_action_global_v1`. Old-objective resumes are rejected; structurally compatible
   BF16-master weights support inference/fresh initialization; verified recordings are reconstructed without changes. Preserve
   user reward adjustments. `training.demo.passes` is 20, independently of autonomous
   `training.n_epochs` (4). Tile (50% to 1%) and accepted-plant species (10% to 1%)
@@ -78,9 +78,15 @@
   Quiescent phase changes release outgoing captures and renew only the owner's
   fitting compiler cache; never raise global Dynamo limits or reset unrelated caches.
 - `envs/` owns simulator adapters, action outcomes and reward ledgers;
-  `cuda_accounting.py` supplies read-only reward counters. Rejection retains its
+  `action_credit.py` maps ordered plant/projectile events back to source actions
+  without entering observations, while `cuda_accounting.py` supplies read-only
+  aggregate reward counters. Rejection retains its
   proposal/reason and zero penalty audit fields, executes wait and advances one tick; accepted plant/dig
-  advances zero ticks. Accounting is not a model input. `rewards.py` owns early
+  advances zero ticks. Accounting is not a model input. `rewards.py` owns the
+  six-component global terminal/asset and action damage/blocking/sun/mower
+  objective plus diagnostic proximity/time fields. `CompleteGameBuffer` can
+  apply validated source credits before chronological return finalization.
+  `rewards.py` owns early
   Sunflower eligibility, physical conservation, proximity penalties and cohort-median
   victory finalization. Recording fact checks remain configuration-independent.
 - `learning/exploration.py` owns persistent accepted-plant species commitments.
@@ -111,8 +117,8 @@
   action/route/reason runs into first-row representatives per 100-row window
   for fitting only. `host_transfer.py` owns reusable pinned
   `HostHandoff`; views are consumed before reuse.
-- `learning/checkpoints.py` validates model/objective/schema and demo v9,
-  selective-invalid recovery v2 and trajectory v2 contracts before simulator allocation;
+- `learning/checkpoints.py` validates model/objective/schema and demo v10,
+  action-global recovery/trajectory contracts before simulator allocation;
   the objective protocol is v3 because fitting representative weighting changed.
   Model-state `stateless-two-stage-bf16-master-state-v2` stores FP32 online
   masters, FP32 Adam state and BF16 EMA runtime weights. No migration or

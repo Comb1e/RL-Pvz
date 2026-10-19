@@ -2252,3 +2252,31 @@ unperformed.
 - Remaining issue: compaction intentionally samples the first state in each
   repeated 100-row run; it is an execution reduction, not a claim that all
   intermediate invalid states are equivalent.
+## Causal action/global rewards — 2026-10-19
+
+- Problem/root cause: the former development reward mixed terminal, resource,
+  combat, proximity and victory-time shaping in one channel. Delayed damage and
+  sunlight were paid on the transition where the event arrived, so a placement
+  could not receive causal credit; Wall-nut and ordinary plant bites also had no
+  signed local distinction.
+- Improvement: the new `action_global_value_v1` ledger keeps global terminal and
+  `sun + living-plant value` (minus sky income) separate from action damage,
+  blocking, produced sun and mower cost. CPU events retain private plant,
+  projectile and source-action identities, while CUDA emits the same aggregate
+  physical fields. Source credits can be applied retroactively to trajectory
+  rows before complete returns. Home proximity and victory-time remain reports.
+  Peashooter bites are negative; Wall-nut blocking can be positive while its
+  global health value falls. Invalid execution and 100-row fitting compaction are
+  unchanged. Demonstration recording and replay verification now use the same
+  ledger, replacing only in-memory fitting rows so source credits reach the
+  original placement before returns are accumulated.
+- Verification: reward contract, CUDA/CPU parity, source-ledger controls,
+  demonstration reconstruction, retroactive buffer updates, nonfinite checks,
+  and compile checks were run once. Focused configuration, checkpoint, demo,
+  flat-fitting and causal-ledger suites pass under the new protocol.
+  Weight-only compatibility remains available, while autonomous and optimizer
+  recovery identities reject the old reward protocol.
+- Remaining limits: CUDA collection currently publishes aggregate action fields;
+  detailed device-side source-row provenance is available through the shared
+  host mutation API when an event adapter supplies it. Initial simulator plants
+  and environmental events remain explicitly unattributable to a learner action.

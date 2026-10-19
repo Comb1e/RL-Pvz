@@ -17,6 +17,7 @@ from pvz_game.replay import decode_action, read_recording
 from pvz_rl.config import digest, load_demo_config
 from pvz_rl.envs.action_timing import ActionPhaseGame
 from pvz_rl.envs.actions import ActionCodec, ActionSchema
+from pvz_rl.envs.action_credit import CausalCreditLedger
 from pvz_rl.envs.encoding import (
     ObservationEncoder,
     collate_observations,
@@ -36,10 +37,12 @@ from pvz_rl.learning.checkpoints import MODEL_STATE_PROTOCOL
 from pvz_rl.learning.cuda_buffer import trajectory_dtype
 from pvz_rl.learning.flat_q import batch_loss
 from pvz_rl.learning.objective import (
+    COMPONENTS,
     components,
     consistency_diagnostics,
     demonstration_rank_loss,
     ranking_counts,
+    raw_rewards,
     training_rewards,
 )
 from pvz_rl.learning.performance import without_performance
@@ -55,7 +58,7 @@ class VerifiedDemo:
     transitions: list[dict]
 
 
-def _verify_reward_facts(row: dict, reconstructed: dict) -> None:
+def _verify_reward_facts(row: dict, reconstructed: dict, cfg=None) -> None:
     """Validate historical facts/accounting, never historical reward coefficients."""
     saved = row.get("reward_parts")
     error = f"reward ledger mismatch at decision {row['decision_index']}"
@@ -75,6 +78,27 @@ def _verify_reward_facts(row: dict, reconstructed: dict) -> None:
                     "early_sun",
                     "early_sun_bonus",
                 },
+                {
+                    "global_terminal",
+                    "global_asset_value",
+                    "action_damage",
+                    "action_blocking",
+                    "action_sun",
+                    "action_mower",
+                },
+                {
+                    *HOME_FACT_FIELDS,
+                    "home_proximity",
+                    "victory_time",
+                    "early_sun",
+                    "early_sun_bonus",
+                    "global_terminal",
+                    "global_asset_value",
+                    "action_damage",
+                    "action_blocking",
+                    "action_sun",
+                    "action_mower",
+                },
             )
         )
         or any(
@@ -82,27 +106,66 @@ def _verify_reward_facts(row: dict, reconstructed: dict) -> None:
         )
         or any(saved[key] != reconstructed[key] for key in REWARD_FACT_FIELDS)
         or any(saved[key] != reconstructed[key] for key in HOME_FACT_FIELDS if key in saved)
+            or (
+                "global_asset_value" in saved
+                and not math.isclose(
+                    float(saved["global_asset_value"]),
+                    float(reconstructed.get("global_asset_value", 0.0)),
+                    rel_tol=1e-12,
+                    abs_tol=1e-12,
+                )
+            )
     ):
         raise ValueError(error)
     # Even old v2 archives without their reward configuration can verify these
     # identities. Historical prices are diagnostics; only replay rewards train.
-    total = (
-        saved["terminal"]
-        + saved["development"]
-        + saved["invalid_plant_penalty"]
-        + saved["empty_dig_penalty"]
-        + saved.get("home_proximity", 0)
-        + saved.get("victory_time", 0)
-    )
+    has_current_components = all(key in saved for key in COMPONENTS)
+    if not has_current_components:
+        total = (
+            saved["terminal"]
+            + saved["development"]
+            + saved["invalid_plant_penalty"]
+            + saved["empty_dig_penalty"]
+            + saved.get("home_proximity", 0)
+            + saved.get("victory_time", 0)
+        )
     net = (
         saved["produced_sun"]
         - saved["plant_value_loss"]
         + saved["combat_value"]
         - saved["mower_expenditure"]
     )
-    if not math.isclose(saved["total"], total, rel_tol=1e-12, abs_tol=1e-12) or not math.isclose(
-        saved["net_value"], net, rel_tol=1e-12, abs_tol=1e-12
-    ):
+    # New archives may have been recorded with a different reward coefficient
+    # profile. Their fact fields remain verifiable, but their historical total
+    # is deliberately not compared with the current profile; replay below
+    # recomputes the current six-component reward before fitting.
+    total_matches = has_current_components or math.isclose(
+        saved["total"], total, rel_tol=1e-12, abs_tol=1e-12
+    )
+    if has_current_components:
+        # Current archives retain enough scalar facts to recover the scale
+        # used when their immediate reward was written.  This catches a
+        # tampered ``total`` even when the caller deliberately changes the
+        # current reward coefficients to reprice a verified demonstration.
+        net_value = float(saved.get("net_value", 0.0))
+        development = float(saved.get("development", 0.0))
+        early_bonus = float(saved.get("early_sun_bonus", 0.0))
+        if abs(net_value) > 1e-15:
+            scale = (development - early_bonus) / net_value
+            physical = sum(float(saved.get(key, 0.0)) for key in COMPONENTS[1:])
+            expected = float(saved["terminal"]) + scale * physical
+            total_matches = total_matches and math.isclose(
+                float(saved["total"]), expected, rel_tol=1e-9, abs_tol=1e-9
+            )
+        elif abs(development) <= 1e-15 and abs(early_bonus) <= 1e-15:
+            # A completely idle transition has no scale-dependent term; its
+            # total must therefore be exactly the terminal component.
+            physical = sum(float(saved.get(key, 0.0)) for key in COMPONENTS[1:])
+            if abs(physical) <= 1e-15:
+                total_matches = total_matches and math.isclose(
+                    float(saved["total"]), float(saved["terminal"]), rel_tol=1e-12, abs_tol=1e-12
+                )
+    if not total_matches or not math.isclose(saved["net_value"], net, rel_tol=1e-12, abs_tol=1e-12):
         raise ValueError(error)
     invalid_plant = not row["accepted"] and 0 < row["action"] < ActionSchema.dig_start
     empty_dig = (
@@ -134,11 +197,19 @@ def _verify_action_order(archive_rows: list[dict], replay_path: Path, cfg: dict)
     encoder = ObservationEncoder(cfg, game.rules)
     codec = ActionCodec(cfg)
     proximity = HomeProximityLedger(game.observe(), game.rules)
+    # Reconstruct the same causal source ledger used by the live CPU adapter.
+    # Replay facts are authoritative, but provenance is deliberately kept out
+    # of the observation and archive schema.  Delayed effects are applied to
+    # their source transition only after the complete replay has been checked.
+    causal = CausalCreditLedger(cfg, game.rules)
+    causal.seed_observation(game.observe())
+    source_credits = {}
     native_masks = []
     observations = []
     native_truncation = []
     native_actions = []
     native_outcomes = []
+    native_immediate_rewards = []
     native_rewards = []
     native_terminals = []
     for entry in data["entries"]:
@@ -148,8 +219,34 @@ def _verify_action_order(archive_rows: list[dict], replay_path: Path, cfg: dict)
         observations.append(observation_json(encoder.encode(before)))
         native_truncation.append(dict(encoder.last_truncation))
         native_actions.append(codec.encode(decode_action(entry["action"])))
+        action_id = len(native_actions) - 1
         action = decode_action(entry["action"])
         result = game.step(action, ticks=entry["ticks"])
+        credits = causal.attribute(result.events, action_id=action_id)
+        causal.register_plant_kinds(result.observation)
+        for source, values in credits.items():
+            # The current transition is already supplied to reward_parts via
+            # ``causal_credits`` below.  Only retain credits that must be
+            # moved back to an earlier source row.
+            if source is None or int(source) == action_id:
+                continue
+            bucket = source_credits.setdefault(
+                int(source), {"damage": 0.0, "blocking": 0.0, "sun": 0.0, "mower": 0.0}
+            )
+            for field in bucket:
+                bucket[field] += float(values.get(field, 0.0))
+        native_immediate_rewards.append(
+            reward_parts(
+                before,
+                result.observation,
+                cfg,
+                events=result.events,
+                rules=game.rules,
+                action=action,
+                action_result=result.action_result,
+                proximity=proximity,
+            )
+        )
         native_rewards.append(
             reward_parts(
                 before,
@@ -160,6 +257,7 @@ def _verify_action_order(archive_rows: list[dict], replay_path: Path, cfg: dict)
                 action=action,
                 action_result=result.action_result,
                 proximity=proximity,
+                causal_credits=credits.get(action_id),
             )
         )
         native_terminals.append(result.status.value)
@@ -177,11 +275,12 @@ def _verify_action_order(archive_rows: list[dict], replay_path: Path, cfg: dict)
         raise ValueError("archive and replay decision counts differ")
     reward_changes = 0
     recorded_total = recomputed_total = 0.0
-    for row, action, obs, outcome, reward, terminal, omitted, legal in zip(
+    for row, action, obs, outcome, immediate, reward, terminal, omitted, legal in zip(
         transitions,
         native_actions,
         observations,
         native_outcomes,
+        native_immediate_rewards,
         native_rewards,
         native_terminals,
         native_truncation,
@@ -207,9 +306,27 @@ def _verify_action_order(archive_rows: list[dict], replay_path: Path, cfg: dict)
             raise ValueError(f"action outcome mismatch at decision {row['decision_index']}")
         if row["terminal"] != terminal:
             raise ValueError(f"terminal mismatch at decision {row['decision_index']}")
-        _verify_reward_facts(row, reward)
-        reward_changes += row["reward_parts"] != reward
+        # Validate the archived, immediate event facts before applying
+        # retroactive source credits.  Older archives may have used a
+        # different coefficient profile, but their public event accounting
+        # must still agree with the replay.
+        _verify_reward_facts(row, immediate, cfg)
         recorded_total += row["reward_parts"]["total"]
+        # Replace only the in-memory fitting data, never the user's recording.
+        # A source row can receive several delayed effects over later replay
+        # entries; update all six learning components atomically and derive the
+        # scalar reward from that final component vector.
+        source = source_credits.get(int(row["decision_index"]))
+        if source:
+            for field, component in (
+                ("damage", "action_damage"),
+                ("blocking", "action_blocking"),
+                ("sun", "action_sun"),
+                ("mower", "action_mower"),
+            ):
+                reward[component] = float(reward.get(component, 0.0)) + float(source[field])
+            reward["total"] = float(raw_rewards(components(reward), cfg))
+        reward_changes += row["reward_parts"] != reward
         recomputed_total += reward["total"]
         # Replace only the in-memory fitting data, never the user's recording.
         row["reward_parts"] = reward
@@ -233,6 +350,9 @@ def _verify_action_order(archive_rows: list[dict], replay_path: Path, cfg: dict)
         "recorded_reward_total": recorded_total,
         "recomputed_reward_total": recomputed_total,
         "reward_settings": dict(cfg["reward"]),
+        "causal_source_credited_rows": len(source_credits),
+        "causal_source_credits": source_credits,
+        "causal_unattributable_events": int(causal.last_diagnostics.get("unattributable_events", 0)),
     }
 
 

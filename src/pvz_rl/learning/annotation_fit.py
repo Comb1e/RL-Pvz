@@ -279,6 +279,8 @@ def fit_annotations(
         max_grad_norm=cfg["training"]["max_grad_norm"],
         learner_seed=seed,
         objective="legal-top1-hinge-v1",
+        reward_protocol=cfg["reward"]["version"],
+        objective_protocol=cfg["training"]["objective"]["protocol"],
     )
     all_records = load_records(
         annotations, annotation=True, plant_types=cfg["environment"]["plants"]
@@ -354,6 +356,8 @@ def fit_annotations(
                 protocol=ANNOTATION_PROGRESS_PROTOCOL,
                 identity=identity,
                 model_storage_protocol=MODEL_STATE_PROTOCOL,
+                reward_protocol=cfg["reward"]["version"],
+                objective_protocol=cfg["training"]["objective"]["protocol"],
                 observation_schema=schema,
                 model=model.state_dict(),
                 optimizer=optimizer.state_dict(),
@@ -466,6 +470,8 @@ def fit_annotations(
             convergence=dict(verified=True, hits=training["hits"], records=training["rows"]),
             annotation=dict(
                 protocol=ANNOTATION_PROTOCOL,
+                reward_protocol=cfg["reward"]["version"],
+                objective_protocol=cfg["training"]["objective"]["protocol"],
                 **identity,
                 split={r["id"]: split[r["group_id"]] for r in records},
                 source_digest=manifest.get("source_digest"),

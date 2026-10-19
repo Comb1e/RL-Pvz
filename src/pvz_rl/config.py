@@ -142,7 +142,7 @@ def validate_config(cfg: dict) -> None:
                 "training.objective contains retired or missing settings, including "
                 "species_consistency_huber_delta"
             )
-        if objective.get("protocol") != "complete_return_selective_invalid_v3":
+        if objective.get("protocol") != "complete_return_action_global_v1":
             raise ValueError(
                 "Unsupported training objective protocol; fresh initialization is required"
             )
@@ -213,9 +213,9 @@ def validate_config(cfg: dict) -> None:
         raise ValueError(
             "Retired observation/policy format; entity_v1 requires fresh initialization"
         )
-    if cfg["reward"].get("version") != "net_value_v1":
+    if cfg["reward"].get("version") != "action_global_value_v1":
         raise ValueError(
-            "Retired reward format; 0.11.0 requires fresh training with the bundled train profile"
+            "Retired reward format; causal action/global rewards require fresh training with the bundled train profile"
         )
     reward_keys = {
         "version",
@@ -228,11 +228,36 @@ def validate_config(cfg: dict) -> None:
         "early_sun_extra_multiplier",
         "early_sun_spawn_fraction",
     }
-    if set(cfg["reward"]) not in (
+    reward_keys_with_optional = (
         reward_keys,
         reward_keys | {"home_entry_penalties", "win_time_weight"},
+        reward_keys | {"action"},
+        reward_keys | {"action", "home_entry_penalties"},
+        reward_keys | {"action", "win_time_weight"},
+        reward_keys | {"action", "home_entry_penalties", "win_time_weight"},
+    )
+    if set(cfg["reward"]) not in reward_keys_with_optional:
+        raise ValueError("reward must contain the outcome, asset-value, and action settings")
+    action_reward = cfg["reward"].get("action", {})
+    if not isinstance(action_reward, dict):
+        raise ValueError("reward.action must be a table")
+    if set(action_reward) != {"sun_credit_multiplier", "block_value_by_plant"}:
+        raise ValueError("reward.action must contain sun_credit_multiplier and block_value_by_plant")
+    sun_credit_multiplier = action_reward["sun_credit_multiplier"]
+    if (
+        type(sun_credit_multiplier) not in (int, float)
+        or not math.isfinite(sun_credit_multiplier)
+        or sun_credit_multiplier < 0
     ):
-        raise ValueError("reward must contain the outcome and net-value settings")
+        raise ValueError("reward.action.sun_credit_multiplier must be finite and nonnegative")
+    block_values = action_reward["block_value_by_plant"]
+    if not isinstance(block_values, dict) or set(block_values) != set(PLANT_TYPES):
+        raise ValueError("reward.action.block_value_by_plant must cover every configured plant")
+    if any(
+        type(value) not in (int, float) or not math.isfinite(value)
+        for value in block_values.values()
+    ):
+        raise ValueError("reward.action.block_value_by_plant values must be finite numbers")
     if "actor_objective" in cfg["training"] or "ent_coef" in cfg["training"]:
         raise ValueError("Retired PPO objective; use sequential Q fitting")
     if cfg["training"]["exploration"].get("objective") != "committed_plant_tile_epsilon_v1":
@@ -421,7 +446,7 @@ def validate_config(cfg: dict) -> None:
     if not math.isfinite(visual["final_hold_seconds"]) or visual["final_hold_seconds"] < 0:
         raise ValueError("Visualization final_hold_seconds must be finite and nonnegative")
     env, train = cfg["environment"], cfg["training"]
-    expected_method = "complete_return_selective_invalid_v3"
+    expected_method = "complete_return_action_global_v1"
     if train.get("method") != expected_method:
         raise ValueError("Training requires a supported complete-return method and fresh models")
     if any(

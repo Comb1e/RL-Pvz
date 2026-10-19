@@ -1,6 +1,6 @@
 # Sequential complete-return training
 
-The official objective is `complete_return_selective_invalid_v3`. It uses
+The official objective is `complete_return_action_global_v1`. It uses
 complete remaining returns with gamma one and no counterfactual rollouts.
 
 For each actual decision (t),

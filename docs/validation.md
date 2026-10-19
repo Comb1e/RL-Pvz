@@ -7,7 +7,7 @@ Focused suites are run once per change; full-suite repetition is avoided.
 | Transformer dimensions, statelessness, BF16 runtime and master lifecycle | `test_two_stage_transformer.py` |
 | Action attribution, detached consistency, Huber and weighting math | `test_two_stage_q.py`, `test_q_math.py` |
 | Flat fitting, spool/padding parity and recovery | `test_flat_training.py`, `test_entity_storage.py` |
-| Observation schema, reward accounting and exploration | Their existing owning suites |
+| Observation schema, reward accounting and exploration | Their existing owning suites; `test_reward_contract.py`, `test_net_value.py`, `test_cuda_learning.py` |
 | Demonstration reconstruction and checkpoint contracts | `test_demo_initialization.py`, checkpoint suites |
 | Active-only collection and throughput telemetry | Collection benchmark controls |
 | Pinned game staging and Bash installation/cleanup | `test_cuda_only.py` |
@@ -66,6 +66,10 @@ training speed, win-rate improvement or mastery.
   rejected-vs-wait CPU/CUDA resulting state, one tick, terminal/development rewards,
   zero audit charges, retained proposals/reasons. Demo suite verifies historical
   facts and current repricing without rewriting recordings.
+- Reward controls also verify the six-component global/action split, sky-sun
+  exclusion, source-action damage/sun/blocking credit, Chomper and mower event
+  handling, Wall-nut-positive and ordinary-plant-negative bite signals, no
+  duplicate kill credit, finite CPU/CUDA parity, and complete-return accounting.
 - Checkpoint/config suites verify changed-objective resume rejection while
   compatible BF16-master weights remain loadable for inference/fresh starts.
   `test_tune_gpu.py` verifies coherent routed cases at all existing widths;
