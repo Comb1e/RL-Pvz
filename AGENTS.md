@@ -107,10 +107,13 @@
 - `learning/cuda_buffer.py` stores canonical slot-shaped metadata and ragged entity
   slabs under one RAM/disk budget. Active flat batches exclude capacity gaps/padding;
   complete returns remain chronological per episode. `batch_transport.py` owns
-  ordered double-buffer `BatchPrefetch`. `host_transfer.py` owns reusable pinned
+  ordered double-buffer `BatchPrefetch` and compacts consecutive invalid
+  action/route/reason runs into first-row representatives per 100-row window
+  for fitting only. `host_transfer.py` owns reusable pinned
   `HostHandoff`; views are consumed before reuse.
 - `learning/checkpoints.py` validates model/objective/schema and demo v9,
-  selective-invalid recovery v2 and trajectory v2 contracts before simulator allocation.
+  selective-invalid recovery v2 and trajectory v2 contracts before simulator allocation;
+  the objective protocol is v3 because fitting representative weighting changed.
   Model-state `stateless-two-stage-bf16-master-state-v2` stores FP32 online
   masters, FP32 Adam state and BF16 EMA runtime weights. No migration or
   partial transfer exists. Fresh compatible `--init-from` transfers full weights
@@ -131,7 +134,8 @@
   `annotation/sampler.py` samples reachable simulator states and selects only
   currently usable plant cards. Live and batch generation share uniform
   0–20,000-step endpoints, bounded terminal/unusable retries, 500–1,500-step
-  planting intervals and an eight-plant cap from `training.annotation`.
+  planting intervals and an eight-plant cap from `training.annotation`. Omitted
+  annotation seeds use system entropy; explicit seeds remain reproducible.
   Each interval draws equally from wait and the eight configured plant types;
   unavailable choices become wait without redrawing. Usable choices select random
   legal plots; only engine actions change sun, health, cooldowns or mowers.
@@ -158,8 +162,10 @@
   tiles only, accepted non-wait adds both online stages and EMA tile inference.
   Invalid regression uses `training.objective.invalid_action_target=-1.0`, never
   episode rewards; rejection penalty settings are removed and audit fields are zero.
-  Consistency balances accepted plant/dig counts only. Verified demos reprice
-  historical rewards and share these routes without rewriting recordings.
+  Consecutive invalid runs are compacted by this shared module, while complete
+  returns retain every row. Consistency balances accepted plant/dig counts only.
+  Verified demos reprice historical rewards and share these routes without
+  rewriting recordings.
 - `evaluation/` uses the stateless runner and CPU-verifies CUDA action traces.
   `monitoring/` owns availability, both-stage entity/throughput benchmarks, bounded
   collection/four-pass-fit/collection controls and objective diagnostics. Progress

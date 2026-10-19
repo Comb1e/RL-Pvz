@@ -254,7 +254,7 @@ def main(argv=None):
         "--port", type=int, default=0, help="loopback port; 0 selects an ephemeral port"
     )
     annotate.add_argument(
-        "--seed", type=int, help="sampler seed; defaults to the annotation profile"
+        "--seed", type=int, help="sampler seed; omitted means fresh system entropy"
     )
     annotate.add_argument(
         "--family",
@@ -444,11 +444,14 @@ def main(argv=None):
         from pvz_rl.presentation.annotation_viewer import serve_annotations
 
         settings = cfg["training"].get("annotation", {})
+        profile_seed = settings.get("sampling_seed", "random")
         serve_annotations(
             args.data_dir / "tile-annotations.jsonl",
             cfg=cfg,
             port=args.port,
-            seed=settings.get("sampling_seed", 101) if args.seed is None else args.seed,
+            seed=args.seed
+            if args.seed is not None
+            else (None if profile_seed == "random" else profile_seed),
             family=settings.get("sampling_family", "preset")
             if args.family is None
             else args.family,

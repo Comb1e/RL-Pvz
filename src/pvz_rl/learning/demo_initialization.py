@@ -11,6 +11,7 @@ from pathlib import Path
 import numpy as np
 import torch
 from pvz_game import Rules
+from pvz_game.cuda.schema import REASONS
 from pvz_game.replay import decode_action, read_recording
 
 from pvz_rl.config import digest, load_demo_config
@@ -28,7 +29,7 @@ from pvz_rl.envs.rewards import (
     HomeProximityLedger,
     reward_parts,
 )
-from pvz_rl.learning.action_routing import classify_actions
+from pvz_rl.learning.action_routing import classify_actions, compact_invalid_rows
 from pvz_rl.learning.batch_transport import collate_fitting_observations, fitting_metadata
 from pvz_rl.learning.checkpoints import DEMO_PROTOCOL as CHECKPOINT_PROTOCOL
 from pvz_rl.learning.checkpoints import MODEL_STATE_PROTOCOL
@@ -42,7 +43,7 @@ from pvz_rl.learning.objective import (
     training_rewards,
 )
 from pvz_rl.learning.performance import without_performance
-from pvz_rl.policy.sequential_q import action_groups, action_parts
+from pvz_rl.policy.sequential_q import action_parts
 from pvz_rl.policy.two_stage_transformer import TwoStageTransformerPolicy
 from pvz_rl.presentation.recordings import open_playback, verify_replay
 from pvz_rl.provenance import file_hash, write_json
@@ -385,11 +386,8 @@ def initialize_demo(
         np.asarray([r["legal_mask"] for r in demonstration.transitions], dtype=np.bool_),
         device=device,
     )
-    group_counts = torch.bincount(
-        action_groups(actions) * 2 + accepted.long(), minlength=6
-    ).reshape(3, 2)
-    rank_counts = ranking_counts(actions, accepted, legal)[0]
     objective = cfg["training"]["objective"]
+    raw_decisions = len(actions)
     rows = np.zeros(
         len(actions),
         dtype=trajectory_dtype(cfg),
@@ -400,8 +398,33 @@ def initialize_demo(
     rows["target"] = returns.cpu().numpy()
     rows["route"] = [r["route"] for r in demonstration.transitions]
     rows["branch_usable"] = [r["branch_usable"] for r in demonstration.transitions]
+    rows["env"] = 0
+    if len(rows):
+        rows["reset"][0] = True
+    rows["tick"] = [int(r.get("tick", index)) for index, r in enumerate(demonstration.transitions)]
+    rows["done"] = [r.get("terminal") not in (None, "running") for r in demonstration.transitions]
+    for index, transition in enumerate(demonstration.transitions):
+        reason = transition.get("rejection_reason")
+        if reason is None:
+            reason = 0
+        elif isinstance(reason, str):
+            try:
+                reason = REASONS.index(reason)
+            except ValueError as exc:
+                raise ValueError(f"unknown demonstration rejection reason: {reason}") from exc
+        rows["rejection_reason"][index] = int(reason)
+    compact_positions, compact_counts, compaction = compact_invalid_rows(
+        rows,
+        group_size=objective.get("invalid_fit_group_size", 100),
+    )
+    rows = rows[compact_positions]
+    observations = [observations[index] for index in compact_positions]
+    selection = torch.as_tensor(compact_positions, device=device)
+    actions, accepted, legal = actions[selection], accepted[selection], legal[selection]
+    group_counts = torch.as_tensor(compact_counts, device=device)
+    rank_counts = ranking_counts(actions, accepted, legal)[0]
     # Returns were computed in episode order. Reorder only fitting work, with
-    # all real rows and complete-cohort denominators retained unchanged.
+    # all real rows and complete-cohort returns retained unchanged.
     widths = np.asarray([len(obs["entities"]) for obs in observations])
     order = np.lexsort(
         (
@@ -498,6 +521,7 @@ def initialize_demo(
                 "branch_ranking_accuracy": scores[0] / scores[1] if scores[1] else None,
                 "tile_ranking_accuracy": scores[2] / scores[3] if scores[3] else None,
                 "decisions": len(actions),
+                "raw_decisions": raw_decisions,
             }
         )
         _save_checkpoint(
@@ -520,6 +544,7 @@ def initialize_demo(
         output / "learning-curves.json",
         {"fit_scope": "one completed demonstration", "curves": curves},
     )
+    write_json(output / "fitting-compaction.json", compaction)
     write_json(output / "action-coverage.json", {"branches": coverage.tolist()})
     write_json(output / "replay-verification.json", verification)
     write_json(
@@ -534,6 +559,7 @@ def initialize_demo(
         "passes_completed": completed,
         "checkpoint": str((output / "initialization.pt").resolve()) if completed else None,
         "verification": verification,
+        "fitting_compaction": compaction,
     }
 
 

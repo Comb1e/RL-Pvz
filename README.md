@@ -6,7 +6,7 @@ The species Transformer selects a plant, wait or dig; the independent tile
 Transformer scores 45 tiles for the selected branch. Both read only the current
 public board. Planting creates no counterfactual rollout.
 
-Training uses `complete_return_selective_invalid_v2`. Previous compatible
+Training uses `complete_return_selective_invalid_v3`. Previous compatible
 BF16-master two-stage weights remain usable for inference and fresh `--init-from`;
 previous-objective runs cannot resume. Parameters live in
 [src/pvz_rl/data/train.toml](src/pvz_rl/data/train.toml).
@@ -68,6 +68,10 @@ equally from wait and the eight plant types (1/9 each). Unavailable plant choice
 become wait without redrawing; usable choices select a random legal plot, with
 at most eight plants on the board:
 
+The annotator uses a fresh entropy-derived session seed by default, so restarting
+it does not replay the same map sequence. Pass `--seed N` when a reproducible
+sequence is needed.
+
 ```powershell
 .\.venv\Scripts\python.exe -m pvz_rl annotate-tiles --port 6006
 ```
@@ -107,6 +111,11 @@ held-out accuracy and game performance.
 Illegal proposals execute ordinary wait with zero rejection reward penalty.
 Fitting targets only their responsible output at `-1`, skipping EMA inference.
 See [the routing table and convergence workflow](docs/training.md).
+
+Repeated illegal proposals are compacted only for fitting: consecutive identical
+`(action, route, rejection_reason)` runs are split into windows of 100 and the
+first row of each window is fitted once. Complete returns and reward accounting
+still retain every collected row.
 
 Annotation fitting preserves the existing two-stage architecture and checkpoint
 contract. It initializes placement values only; complete-return training still

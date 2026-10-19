@@ -1,6 +1,6 @@
 # Sequential complete-return training
 
-The official objective is `complete_return_selective_invalid_v2`. It uses
+The official objective is `complete_return_selective_invalid_v3`. It uses
 complete remaining returns with gamma one and no counterfactual rollouts.
 
 For each actual decision (t),
@@ -14,6 +14,11 @@ and dig proposals regress the tile value at the actual proposed tile. Invalid
 proposals use the [shared attribution table](invalid-action-penalties.md): an
 impossible branch trains species to -1; a bad tile in a usable branch trains
 only that tile to -1. This target never enters episode rewards or returns.
+
+Repeated invalid proposals are compacted only in the fitting input. Within each
+environment episode, consecutive rows with the same action, route, and rejection
+reason are partitioned into 100-row windows and the first row of each window is
+used once. Complete returns remain chronological over every actual row.
 
 ## Species consistency
 

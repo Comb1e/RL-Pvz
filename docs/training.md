@@ -1,6 +1,6 @@
 # Recording and training
 
-The objective is `complete_return_selective_invalid_v2`. Old-objective optimizer
+The objective is `complete_return_selective_invalid_v3`. Old-objective optimizer
 resume is rejected. Structurally compatible previous BF16-master two-stage
 checkpoints remain valid for inference and fresh weight-only initialization.
 Current recovery uses `selective-invalid-state-v2` and
@@ -188,6 +188,17 @@ BF16 runtime and lowest-index ties. Validation is diagnostic; test is evaluated
 only after convergence. `--passes N` adds a total pass cap; reaching it short of
 100% is incomplete. This training-set requirement does not establish held-out
 accuracy or game performance.
+
+Formal fitting keeps all collected rows for complete-return targets and reward
+statistics. To avoid spending encoder work on repeated invalid proposals, the
+shared fitting spool groups consecutive invalid `(action, route, rejection_reason)`
+runs per environment episode into windows of 100 and retains only each window's
+first row. A run shorter than 100 contributes one representative; a run of 201
+contributes three. The representative rows define fitting denominators, so no
+dropped invalid row receives an implicit frequency weight. Accepted actions and
+waits are unchanged, and invalid proposals still train only their responsible
+head at `-1` without EMA inference. Raw and representative counts are reported
+in fitting diagnostics.
 
 Progress is atomically saved to `artifacts/tile-initialization.progress.pt` after
 each pass. Metrics stream to `.history.jsonl`; the bounded summary is `.report.json`.

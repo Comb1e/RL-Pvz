@@ -26,7 +26,7 @@ AUTONOMOUS_STATE_PROTOCOL = "pvz-rl/selective-invalid-state-v2"
 
 def protocol_for(kind):
     methods = {
-        "two_stage_transformer_q_v1": "complete_return_selective_invalid_v2",
+        "two_stage_transformer_q_v1": "complete_return_selective_invalid_v3",
     }
     if kind not in methods:
         raise ValueError(

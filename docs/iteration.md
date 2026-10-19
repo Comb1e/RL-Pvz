@@ -2233,3 +2233,22 @@ unperformed.
   controls. The current data set exposes three conflict groups for correction.
 - Remaining issue: conflicts must be corrected before tile fitting; this workflow
   does not infer the intended labels automatically.
+
+## Invalid fitting compaction and entropy-seeded annotation — 2026-10-19
+
+- Problem/root cause: repeated invalid proposals can dominate fitting work even
+  though every such row has the same fixed responsible-head target; the default
+  annotation session seed also replayed the same map sequence after restart.
+- Improvement: fitting now keeps all waits and accepted actions, but partitions
+  consecutive invalid action/route/reason runs per environment episode into
+  100-row windows and fits the first row of each window. Complete-return
+  accounting remains unchanged. On-demand annotation uses a system-entropy
+  session seed unless `--seed` is supplied, and records the session seed in the
+  manifest.
+- Verification: added boundary, interleaving, storage, representative-count,
+  protocol/configuration, and explicit-versus-entropy seed controls; focused
+  routing, storage, annotation, checkpoint, configuration, and demo suites were
+  run. No formal training or PR was started.
+- Remaining issue: compaction intentionally samples the first state in each
+  repeated 100-row run; it is an execution reduction, not a claim that all
+  intermediate invalid states are equivalent.

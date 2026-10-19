@@ -600,9 +600,11 @@ class LiveAnnotationStore:
             )
         return result
 
-    def _persist(self, *, last_difficulty=None):
+    def _persist(self, *, last_difficulty=None, sampler_seed=None):
         if last_difficulty is not None:
             self.manifest["last_difficulty"] = last_difficulty
+        if sampler_seed is not None:
+            self.manifest["sampler_seed"] = int(sampler_seed)
         counts = self._counts()
         manifest = {
             **self.manifest,
@@ -631,7 +633,7 @@ class LiveAnnotationStore:
             raise ValueError("difficulty must be a non-empty string")
         self._persist(last_difficulty=difficulty)
 
-    def add_pending(self, record, *, difficulty):
+    def add_pending(self, record, *, difficulty, sampler_seed=None):
         if self.pending is not None:
             raise ValueError("an annotation map is already pending")
         row = dict(record)
@@ -648,7 +650,7 @@ class LiveAnnotationStore:
         self.records.append(row)
         self.by_id[row["id"]] = row
         self._pending_id = row["id"]
-        self._persist(last_difficulty=difficulty)
+        self._persist(last_difficulty=difficulty, sampler_seed=sampler_seed)
         return row
 
     def resolve(self, record_id, *, status, tiles=None, reason=None, revision=0):

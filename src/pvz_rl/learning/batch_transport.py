@@ -16,7 +16,7 @@ from pvz_rl.envs.encoding import (
     PackedEntityBatch,
     collate_observations,
 )
-from pvz_rl.learning.action_routing import route_indices
+from pvz_rl.learning.action_routing import compact_invalid_rows, route_indices
 
 
 @dataclass(frozen=True)
@@ -111,12 +111,33 @@ class FittingSpool:
         self.buckets = (buffer.cfg or load_config())["training"]["performance"].get(
             "fit_entity_buckets", [8, 16, 32, 64, 128, 256]
         )
+        self.compaction = {
+            "raw_rows": int(len(indices)),
+            "selected_rows": int(len(indices)),
+            "raw_invalid_rows": 0,
+            "retained_invalid_rows": 0,
+            "invalid_runs": 0,
+            "invalid_windows": 0,
+            "invalid_reduction": 0.0,
+        }
         if len(indices):
-            rows = buffer.take(indices)
+            source_rows = buffer.take(indices)
+            compact_positions, self.outcome_counts, self.compaction = compact_invalid_rows(
+                source_rows,
+                group_size=(buffer.cfg or load_config())["training"]["objective"].get(
+                    "invalid_fit_group_size", 100
+                ),
+            )
+            indices = indices[compact_positions]
+            rows = source_rows[compact_positions]
             if np.any(rows["entity_count"] > self.buckets[-1]):
                 raise ValueError("Fitting entities exceed the unchanged encoding cap")
             bucket = np.searchsorted(self.buckets, rows["entity_count"])
-            indices = indices[np.lexsort((rows["route"], bucket))]
+            order = np.lexsort((rows["route"], bucket))
+            indices = indices[order]
+            rows = rows[order]
+        else:
+            self.outcome_counts = np.zeros((3, 2), dtype=np.int64)
         self.indices = np.asarray(indices, dtype=np.int64)
         self._ram_arrays = []
         self._temp_paths = []
@@ -150,6 +171,12 @@ class FittingSpool:
         keys = np.searchsorted(self.buckets, counts) * 4 + self.rows["route"]
         self.boundaries = np.r_[0, np.flatnonzero(keys[1:] != keys[:-1]) + 1, len(self.rows)]
         self._closed = False
+
+    @property
+    def consistency_counts(self):
+        result = self.outcome_counts[1:].copy()
+        result[:, 0] = 0
+        return result
 
     def __len__(self):
         return len(self.rows)

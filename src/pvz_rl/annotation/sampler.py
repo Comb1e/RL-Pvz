@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import dataclasses
 import random
+import secrets
 import uuid
 from pathlib import Path
 
@@ -29,7 +30,7 @@ class ReachableSnapshotSampler:
         self,
         cfg=None,
         *,
-        seed=101,
+        seed=None,
         family="preset",
         max_steps=None,
         max_attempts=100,
@@ -48,7 +49,12 @@ class ReachableSnapshotSampler:
             raise ValueError("max_steps must be a positive integer")
         if type(max_attempts) is not int or max_attempts < 1:
             raise ValueError("max_attempts must be a positive integer")
-        self.rng = random.Random(seed)
+        if seed is None:
+            seed = secrets.randbits(64)
+        if type(seed) is not int or seed < 0:
+            raise ValueError("seed must be a nonnegative integer or None")
+        self.seed = int(seed)
+        self.rng = random.Random(self.seed)
         self.family = family
         self.max_steps = max_steps
         self.max_attempts = max_attempts

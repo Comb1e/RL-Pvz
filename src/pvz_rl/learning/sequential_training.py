@@ -600,6 +600,8 @@ class CudaSequentialQ(CudaCohortLifecycle):
         groups = self.execution_state["fit_batch_groups"]
         if getattr(self, "_fitting_spool", None) is None:
             self._fitting_spool = FittingSpool(self._buffer)
+        self._fit_outcome_counts = self._fitting_spool.outcome_counts
+        self._fit_consistency_counts = self._fitting_spool.consistency_counts
         args = self._buffer, self.batch_size * groups, self._fitting_spool
         self._fit_pass_start = torch.cuda.Event(enable_timing=True)
         self._fit_pass_start.record()
@@ -683,11 +685,11 @@ class CudaSequentialQ(CudaCohortLifecycle):
             loss, selected_error, placement_gap = batch_loss(
                 self.policy,
                 rows,
-                self._buffer.outcome_counts,
+                self._fit_outcome_counts,
                 observations,
                 metadata[0] if metadata else None,
                 teacher=self._teacher,
-                consistency_counts=self._buffer.consistency_counts,
+                consistency_counts=self._fit_consistency_counts,
             )
             loss.backward()
             self.policy.accumulate_master_gradients()
@@ -727,6 +729,8 @@ class CudaSequentialQ(CudaCohortLifecycle):
         self._stats["encoder_token_budget"] = self.execution_state["token_budget"]
         self._stats["execution_fallbacks"] = list(self.execution_state["fallbacks"])
         self._stats["fitting_spool_rows"] = len(getattr(self, "_fitting_spool", None) or ())
+        spool = getattr(self, "_fitting_spool", None)
+        self._stats["fitting_compaction"] = dict(spool.compaction) if spool is not None else {}
         self._stats["compilation_status"] = getattr(self.policy, "compilation_status", "disabled")
         self._stats["compilation_backend"] = getattr(self.policy, "compilation_backend", None)
         self._stats["collection_graphs"] = {

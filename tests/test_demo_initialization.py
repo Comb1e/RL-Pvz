@@ -80,7 +80,7 @@ def test_demo_passes_are_independent_of_autonomous_epochs(
     completed_demo, tmp_path, configured_passes, override, expected
 ):
     cfg, archive, replay = completed_demo
-    assert cfg["training"]["demo"]["passes"] == 20
+    assert cfg["training"]["demo"]["passes"] == load_config()["training"]["demo"]["passes"]
     assert cfg["training"]["n_epochs"] == load_config()["training"]["n_epochs"] == 4
     cfg["training"]["n_epochs"] = 1
     cfg["training"]["demo"]["passes"] = configured_passes

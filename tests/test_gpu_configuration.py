@@ -18,7 +18,7 @@ def test_new_shared_run_defaults_and_explicit_parallelism():
     cfg = configured(args())
     assert simulator(cfg) == "cuda"
     assert cfg["training"]["n_envs"] == 128
-    assert cfg["training"]["method"] == "complete_return_selective_invalid_v2"
+    assert cfg["training"]["method"] == "complete_return_selective_invalid_v3"
     for count in (3, 32, 64, 128, 256, 512, 1024):
         cfg = configured(args(n_envs=count))
         assert cfg["training"]["n_envs"] == count
@@ -100,7 +100,7 @@ def test_previous_plant_probe_checkpoints_reject_before_cuda(tmp_path, monkeypat
                 json.dumps(
                     dict(
                         policy="transformer_lstm_q_v4",
-                        optimizer="complete_return_selective_invalid_v2",
+                        optimizer="complete_return_selective_invalid_v3",
                         exploration=EXPLORATION_PROTOCOL,
                     )
                 ),

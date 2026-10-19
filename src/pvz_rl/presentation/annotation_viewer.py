@@ -99,7 +99,9 @@ let canvas=$('board');canvas.addEventListener('pointerdown',event=>{if(event.but
 
 
 class AnnotationSession:
-    def __init__(self, cfg, output, *, seed=101, family="preset", max_steps=None, max_attempts=100):
+    def __init__(
+        self, cfg, output, *, seed=None, family="preset", max_steps=None, max_attempts=100
+    ):
         levels = tuple(cfg["evaluation"]["levels"])
         self.levels = tuple(level for level in DIFFICULTIES if level in levels)
         if not self.levels:
@@ -131,7 +133,11 @@ class AnnotationSession:
         ):
             return
         try:
-            self.store.add_pending(self.sampler.sample(self.difficulty), difficulty=self.difficulty)
+            self.store.add_pending(
+                self.sampler.sample(self.difficulty),
+                difficulty=self.difficulty,
+                sampler_seed=self.sampler.seed,
+            )
             self.error = None
         except RuntimeError as exc:
             self.error = str(exc)
@@ -365,7 +371,7 @@ def serve_annotations(
     *,
     cfg=None,
     port=0,
-    seed=101,
+    seed=None,
     family="preset",
     max_steps=None,
     max_attempts=100,

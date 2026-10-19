@@ -131,6 +131,7 @@ def validate_config(cfg: dict) -> None:
             "species_consistency_weight",
             "species_consistency_huber_delta",
             "invalid_action_target",
+            "invalid_fit_group_size",
             "dense_multiplier",
             "ema_decay",
             "demo_rank_loss_weight",
@@ -141,7 +142,7 @@ def validate_config(cfg: dict) -> None:
                 "training.objective contains retired or missing settings, including "
                 "species_consistency_huber_delta"
             )
-        if objective.get("protocol") != "complete_return_selective_invalid_v2":
+        if objective.get("protocol") != "complete_return_selective_invalid_v3":
             raise ValueError(
                 "Unsupported training objective protocol; fresh initialization is required"
             )
@@ -152,6 +153,11 @@ def validate_config(cfg: dict) -> None:
             or objective["invalid_action_target"] != -1.0
         ):
             raise ValueError("objective.invalid_action_target must be -1.0")
+        if (
+            type(objective.get("invalid_fit_group_size")) is not int
+            or objective["invalid_fit_group_size"] < 1
+        ):
+            raise ValueError("objective.invalid_fit_group_size must be a positive integer")
         consistency_weight = objective.get("species_consistency_weight")
         if (
             type(consistency_weight) not in (int, float)
@@ -415,7 +421,7 @@ def validate_config(cfg: dict) -> None:
     if not math.isfinite(visual["final_hold_seconds"]) or visual["final_hold_seconds"] < 0:
         raise ValueError("Visualization final_hold_seconds must be finite and nonnegative")
     env, train = cfg["environment"], cfg["training"]
-    expected_method = "complete_return_selective_invalid_v2"
+    expected_method = "complete_return_selective_invalid_v3"
     if train.get("method") != expected_method:
         raise ValueError("Training requires a supported complete-return method and fresh models")
     if any(
@@ -569,11 +575,11 @@ def validate_config(cfg: dict) -> None:
         or annotation.get("learner_seed", 101) < 0
     ):
         raise ValueError("training.annotation.learner_seed must be a nonnegative integer")
-    if (
-        type(annotation.get("sampling_seed", 101)) is not int
-        or annotation.get("sampling_seed", 101) < 0
-    ):
-        raise ValueError("training.annotation.sampling_seed must be a nonnegative integer")
+    sampling_seed = annotation.get("sampling_seed", "random")
+    if sampling_seed != "random" and (type(sampling_seed) is not int or sampling_seed < 0):
+        raise ValueError(
+            "training.annotation.sampling_seed must be 'random' or a nonnegative integer"
+        )
     if annotation.get("sampling_family", "preset") not in (
         "preset",
         "diagnostic",

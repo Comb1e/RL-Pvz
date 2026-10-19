@@ -10,8 +10,8 @@ import torch
 
 from pvz_rl.config import load_config, validate_config
 from pvz_rl.envs.encoding import collate_observations
-from pvz_rl.learning.action_routing import route_outcomes
-from pvz_rl.learning.batch_transport import BatchPrefetch, batch_rows
+from pvz_rl.learning.action_routing import FitRoute, compact_invalid_rows, route_outcomes
+from pvz_rl.learning.batch_transport import BatchPrefetch, FittingSpool, batch_rows
 from pvz_rl.learning.cuda_buffer import CompleteGameBuffer
 from pvz_rl.learning.flat_q import batch_loss
 from pvz_rl.learning.objective import (
@@ -46,6 +46,92 @@ class IndependentValues(torch.nn.Module):
         return torch.where(
             branches == 0, species[:, 0], tiles.gather(1, locations[:, None]).flatten()
         )
+
+
+@pytest.mark.parametrize(
+    "length,expected", [(0, 0), (1, 1), (99, 1), (100, 1), (101, 2), (199, 2), (200, 2), (201, 3)]
+)
+def test_compact_invalid_rows_uses_first_row_of_each_hundred_window(length, expected):
+    dtype = np.dtype(
+        [
+            ("active", "?"),
+            ("action", "<i8"),
+            ("accepted", "?"),
+            ("route", "u1"),
+            ("branch_usable", "?"),
+            ("rejection_reason", "u1"),
+            ("env", "<i2"),
+            ("reset", "?"),
+            ("done", "?"),
+        ]
+    )
+    rows = np.zeros(length, dtype=dtype)
+    rows["active"] = True
+    rows["action"] = 1
+    rows["route"] = FitRoute.SPECIES_INVALID
+    rows["rejection_reason"] = 2
+    if length:
+        rows["reset"][0] = True
+    selected, counts, stats = compact_invalid_rows(rows)
+    np.testing.assert_array_equal(selected, np.arange(0, length, 100))
+    assert len(selected) == expected
+    assert counts.tolist() == [[0, 0], [expected, 0], [0, 0]]
+    assert stats["raw_invalid_rows"] == length
+    assert stats["retained_invalid_rows"] == expected
+
+
+def test_compact_invalid_rows_keeps_episode_slots_and_operation_boundaries():
+    dtype = np.dtype(
+        [
+            ("active", "?"),
+            ("action", "<i8"),
+            ("accepted", "?"),
+            ("route", "u1"),
+            ("branch_usable", "?"),
+            ("rejection_reason", "u1"),
+            ("env", "<i2"),
+            ("reset", "?"),
+            ("done", "?"),
+        ]
+    )
+    rows = np.zeros(8, dtype=dtype)
+    rows["active"] = True
+    rows["env"] = [0, 1, 0, 1, 0, 1, 0, 1]
+    rows["action"] = [1, 1, 1, 1, 0, 1, 1, 1]
+    rows["route"] = [FitRoute.SPECIES_INVALID] * 8
+    rows["route"][4] = FitRoute.WAIT_RETURN
+    rows["rejection_reason"] = [2, 2, 2, 2, 0, 2, 3, 2]
+    rows["reset"][[0, 1]] = True
+    rows["done"][2] = True
+    selected, _, _ = compact_invalid_rows(rows)
+    # Each environment gets its own run; valid rows and reason changes remain.
+    np.testing.assert_array_equal(selected, [0, 1, 4, 6])
+
+
+def test_fitting_spool_compacts_invalid_rows_but_returns_keep_raw_counts(tmp_path):
+    cfg = load_config()
+    buffer = CompleteGameBuffer(tmp_path / "buffer", 1, block_rows=128, cfg=cfg)
+    rows = np.zeros(101, dtype=buffer.dtype)
+    rows["active"] = True
+    rows["action"] = 1
+    rows["accepted"] = False
+    rows["branch_usable"] = False
+    rows["rejection_reason"] = 2
+    rows["reset"][0] = True
+    rows["route"] = route_outcomes(rows["action"], rows["accepted"], rows["branch_usable"])
+    buffer.append(rows, [{"entities": [], "globals": [0] * 18}] * len(rows))
+    try:
+        buffer.finalize()
+        assert buffer.group_counts.tolist() == [0, 101, 0]
+        spool = FittingSpool(buffer)
+        try:
+            assert len(spool) == 2
+            assert spool.outcome_counts.tolist() == [[0, 0], [2, 0], [0, 0]]
+            assert spool.compaction["invalid_windows"] == 2
+        finally:
+            spool.close()
+    finally:
+        buffer.close()
 
 
 def boards(count):

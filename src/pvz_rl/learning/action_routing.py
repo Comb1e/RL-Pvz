@@ -116,6 +116,124 @@ def route_indices(rows):
     }
 
 
+def _outcome_counts(rows):
+    """Count the rows that will actually contribute to a fitting pass."""
+    counts = np.zeros((3, 2), dtype=np.int64)
+    if len(rows):
+        groups = np.where(
+            rows["action"] == 0,
+            0,
+            np.where(rows["action"] < A.dig_start, 1, 2),
+        )
+        np.add.at(counts, (groups, rows["accepted"].astype(np.int64)), 1)
+    return counts
+
+
+def compact_invalid_rows(rows, *, group_size=100):
+    """Select fitting representatives for repeated invalid proposals.
+
+    Complete-return accounting keeps every source row.  This helper only plans
+    the rows sent through the fitting encoders.  Invalid proposals are grouped
+    per environment and episode in their original chronological order.  A
+    contiguous run is keyed by action, route and rejection reason and is split
+    into windows of ``group_size``; the first row of every window is retained.
+    All waits and accepted actions remain selected.
+    """
+    if type(group_size) is not int or isinstance(group_size, bool) or group_size < 1:
+        raise ValueError("invalid fitting group size must be a positive integer")
+    rows = np.asarray(rows)
+    if rows.ndim != 1:
+        raise ValueError("fitting rows must be one-dimensional")
+    required = {"action", "accepted", "route", "rejection_reason"}
+    missing = required - set(rows.dtype.names or ())
+    if missing:
+        raise ValueError(f"fitting rows are missing routing fields: {sorted(missing)}")
+    active = (
+        np.asarray(rows["active"], bool)
+        if "active" in rows.dtype.names
+        else np.ones(len(rows), dtype=bool)
+    )
+    route = np.asarray(rows["route"], np.int64)
+    invalid = active & np.isin(route, (FitRoute.SPECIES_INVALID, FitRoute.TILE_INVALID))
+    selected = np.flatnonzero(active).tolist()
+    selected_invalid = set()
+    invalid_positions = set(np.flatnonzero(invalid).tolist())
+    run_count = 0
+
+    # Collection stores vector-environment rows interleaved by slot.  Grouping
+    # each slot independently restores its chronological episode order without
+    # changing the source row order used for all other fitting work.
+    env_values = (
+        np.asarray(rows["env"], np.int64)
+        if "env" in rows.dtype.names
+        else np.zeros(len(rows), dtype=np.int64)
+    )
+    reset = (
+        np.asarray(rows["reset"], bool)
+        if "reset" in rows.dtype.names
+        else np.zeros(len(rows), dtype=bool)
+    )
+    done = (
+        np.asarray(rows["done"], bool)
+        if "done" in rows.dtype.names
+        else np.zeros(len(rows), dtype=bool)
+    )
+    for env in np.unique(env_values[active]):
+        positions = np.flatnonzero(env_values == env)
+        run_key = None
+        run_length = 0
+        previous_done = True
+        for position in positions:
+            if not active[position]:
+                run_key = None
+                run_length = 0
+                previous_done = True
+                continue
+            if reset[position] or previous_done:
+                run_key = None
+                run_length = 0
+            previous_done = bool(done[position])
+            if not invalid[position]:
+                run_key = None
+                run_length = 0
+                continue
+            key = (
+                int(rows["action"][position]),
+                int(route[position]),
+                int(rows["rejection_reason"][position]),
+            )
+            if key != run_key:
+                run_key = key
+                run_length = 0
+                run_count += 1
+            if run_length % group_size == 0:
+                selected_invalid.add(int(position))
+            run_length += 1
+
+    selected = np.asarray(
+        [
+            position
+            for position in selected
+            if position not in invalid_positions or position in selected_invalid
+        ],
+        dtype=np.int64,
+    )
+    raw_invalid = int(invalid.sum())
+    retained_invalid = len(selected_invalid)
+    stats = {
+        "raw_rows": int(active.sum()),
+        "selected_rows": int(len(selected)),
+        "raw_invalid_rows": raw_invalid,
+        "retained_invalid_rows": retained_invalid,
+        "invalid_runs": int(run_count),
+        "invalid_windows": retained_invalid,
+        "invalid_reduction": (
+            float((raw_invalid - retained_invalid) / raw_invalid) if raw_invalid else 0.0
+        ),
+    }
+    return selected, _outcome_counts(rows[selected]), stats
+
+
 def workload_counts(rows):
     plans = route_indices(rows)
     return {

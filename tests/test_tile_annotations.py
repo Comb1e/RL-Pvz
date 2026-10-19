@@ -487,6 +487,7 @@ def test_live_session_generates_resolves_and_resumes_pending(tmp_path):
     first = session.state()["record"]
     assert first["status"] == "pending"
     assert first["difficulty"] == "easy"
+    assert session.store.manifest["sampler_seed"] == 91
     session.choose_difficulty("hard")
     assert session.state()["record"]["difficulty"] == "easy"
     assert session.state()["difficulty"] == "hard"
@@ -507,6 +508,16 @@ def test_live_session_generates_resolves_and_resumes_pending(tmp_path):
     assert resumed.state()["record"]["difficulty"] == "hard"
     counts = LiveAnnotationStore(output, plant_types=tuple(cfg["environment"]["plants"])).counts
     assert counts["labeled"] == 1 and counts["discarded"] == 1 and counts["pending"] == 1
+
+
+def test_annotation_sampler_uses_entropy_by_default_and_explicit_seed_is_reproducible(monkeypatch):
+    monkeypatch.setattr(sampler_module.secrets, "randbits", Mock(side_effect=[101, 202]))
+    first = ReachableSnapshotSampler(max_steps=1, max_attempts=1)
+    second = ReachableSnapshotSampler(max_steps=1, max_attempts=1)
+    assert first.seed == 101 and second.seed == 202
+    explicit_a = ReachableSnapshotSampler(seed=303, max_steps=1, max_attempts=1)
+    explicit_b = ReachableSnapshotSampler(seed=303, max_steps=1, max_attempts=1)
+    assert explicit_a.seed == explicit_b.seed == 303
 
 
 def test_record_validation_rejects_missing_full_observation():

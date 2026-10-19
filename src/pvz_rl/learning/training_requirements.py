@@ -23,8 +23,8 @@ def current_model_config(cfg):
             (
                 "two_stage_transformer_q_v1",
                 "entity_v1",
-                "complete_return_selective_invalid_v2",
-                "complete_return_selective_invalid_v2",
+                "complete_return_selective_invalid_v3",
+                "complete_return_selective_invalid_v3",
             ),
         }
         and cfg.get("policy", {}).get("action_distribution") == ACTION_DISTRIBUTION
@@ -41,7 +41,11 @@ def weight_model_config(cfg):
         and cfg.get("encoding", {}).get("version") == "entity_v1"
         and policy.get("action_distribution") == ACTION_DISTRIBUTION
         and train.get("method")
-        in ("complete_return_sequential_no_probe_v1", "complete_return_selective_invalid_v2")
+        in (
+            "complete_return_sequential_no_probe_v1",
+            "complete_return_selective_invalid_v2",
+            "complete_return_selective_invalid_v3",
+        )
         and train.get("objective", {}).get("protocol") == train.get("method")
         and cfg.get("reward", {}).get("version") == "net_value_v1"
     )
@@ -59,9 +63,10 @@ def inference_config(cfg):
     result = copy.deepcopy(cfg)
     if current_model_config(cfg):
         return result
-    result["training"]["method"] = "complete_return_selective_invalid_v2"
-    result["training"]["objective"]["protocol"] = "complete_return_selective_invalid_v2"
+    result["training"]["method"] = "complete_return_selective_invalid_v3"
+    result["training"]["objective"]["protocol"] = "complete_return_selective_invalid_v3"
     result["training"]["objective"].setdefault("invalid_action_target", -1.0)
+    result["training"]["objective"].setdefault("invalid_fit_group_size", 100)
     result["reward"].pop("invalid_plant_penalty", None)
     result["reward"].pop("empty_dig_penalty", None)
     return result
@@ -100,7 +105,7 @@ def require_cuda_training(cfg, condition="masked", *, runtime=True):
     validate_config(cfg)
     if (
         cfg["training"].get("objective", {}).get("protocol")
-        != "complete_return_selective_invalid_v2"
+        != "complete_return_selective_invalid_v3"
     ):
         raise ValueError(
             "Old-objective training cannot resume; use compatible BF16-master weights "

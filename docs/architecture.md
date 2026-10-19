@@ -201,6 +201,14 @@ best legal negative. Empty labels and contradictory identical model inputs fail
 before fitting. All-positive legal sets have zero loss. Source metadata, seeds
 and discard reasons never enter model inputs.
 
+The on-demand annotator uses a system-entropy session seed when `--seed` is
+omitted, while each record stores its actual simulator seed for audit and replay.
+An explicit seed restores deterministic sampling. Formal fitting compacts only
+consecutive invalid proposals within each environment episode: identical
+action/route/reason runs are split into 100-row windows and their first rows are
+retained. Complete-return finalization still uses the full trajectory; fitting
+denominators and encoder workload use the retained representatives.
+
 ```mermaid
 stateDiagram-v2
     [*] --> Validate: records and grouped splits

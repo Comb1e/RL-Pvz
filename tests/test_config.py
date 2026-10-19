@@ -76,6 +76,30 @@ def test_flat_batch_groups_refresh_without_changing_learning():
         validate_config(saved)
 
 
+@pytest.mark.parametrize("value", [0, -1, True, 1.0, None])
+def test_invalid_fit_group_size_requires_positive_integer(value):
+    cfg = load_config()
+    cfg["training"]["objective"]["invalid_fit_group_size"] = value
+    with pytest.raises(ValueError, match="invalid_fit_group_size"):
+        validate_config(cfg)
+
+
+@pytest.mark.parametrize("value", [True, -1, 1.5, None, "entropy"])
+def test_annotation_sampling_seed_rejects_invalid_values(value):
+    cfg = load_config()
+    cfg["training"]["annotation"]["sampling_seed"] = value
+    with pytest.raises(ValueError, match="sampling_seed"):
+        validate_config(cfg)
+
+
+def test_annotation_sampling_seed_accepts_random_or_integer():
+    cfg = load_config()
+    assert cfg["training"]["annotation"]["sampling_seed"] == "random"
+    validate_config(cfg)
+    cfg["training"]["annotation"]["sampling_seed"] = 101
+    validate_config(cfg)
+
+
 @pytest.mark.parametrize("value", [-1, True, float("nan"), float("inf"), None])
 def test_consistency_weight_requires_finite_nonnegative_number(value):
     cfg = load_config()
@@ -97,8 +121,9 @@ def test_double_estimator_defaults_and_storage_contracts():
     for cfg in (load_config(), load_demo_config()):
         objective = cfg["training"]["objective"]
         assert cfg["policy"]["kind"] == "two_stage_transformer_q_v1"
-        assert cfg["training"]["method"] == "complete_return_selective_invalid_v2"
-        assert objective["protocol"] == "complete_return_selective_invalid_v2"
+        assert cfg["training"]["method"] == "complete_return_selective_invalid_v3"
+        assert objective["protocol"] == "complete_return_selective_invalid_v3"
+        assert objective["invalid_fit_group_size"] == 100
         assert objective["species_consistency_huber_delta"] == 1.0
         assert objective["species_consistency_weight"] == 1.0
         assert current_model_config(cfg)
