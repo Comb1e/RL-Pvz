@@ -61,7 +61,9 @@ Open the standalone annotator with one command. It serves a local web page,
 stores records in `data/tile-annotations.jsonl`, and lets you choose `easy`,
 `standard`, or `hard` in the browser. Each generated map contains a reachable
 state with a plant card that is present, affordable, cooled down, and legally
-placeable.
+placeable in tile mode. Action mode accepts any running reachable state and
+lets you label plant cards, Wait, and Dig directly; it does not display a
+sampler-selected current action.
 
 Generation draws a simulation limit uniformly from 0–20,000 steps and retries
 finished games. Planting attempts occur every random 500–1,500 steps, choosing
@@ -91,9 +93,10 @@ weights, so annotation pretraining may precede human/demo initialization:
 
 Open the printed `./proxy/6006/` path in JupyterLab, hold the left mouse button
 while dragging to paint feasible plots, then choose **Save and next**. In action
-mode, click plant cards directly to mark feasible or absolute-infeasible actions;
-the board toolbar no longer duplicates each card as a separate button. The next
-map is generated at the same difficulty. Use **Discard state** for a meaningless
+mode, click plant cards directly or use the Wait/Dig controls to mark feasible or
+absolute-infeasible actions; the board toolbar does not duplicate each card as a
+separate button. The next map is generated at the same difficulty. Use
+**Discard state** for a meaningless
 map; discarded states stay in the audit file and are excluded from fitting.
 Use **Previous** and **Next** to revisit maps, edit labels, and **Save changes**
 in place. Discarded maps can be labeled again. **Return to current** resumes the

@@ -260,7 +260,10 @@ def validate_record(record, *, annotation=False, plant_types=None):
         raise ValueError("record.id must be a non-empty string")
     if not isinstance(record["group_id"], str) or not record["group_id"]:
         raise ValueError("record.group_id must be a non-empty string")
-    kind = annotation_kind(record) if annotation else "tile"
+    # Snapshot records normally predate the annotation-kind field and are
+    # tile records.  Action snapshots carry the field before validation so
+    # they can omit the tile-only selected plant target.
+    kind = annotation_kind(record) if annotation or record.get("annotation_kind") == "action" else "tile"
     if kind == "tile":
         if not isinstance(record.get("plant_type"), str) or not record["plant_type"]:
             raise ValueError("tile records require a non-empty plant_type")

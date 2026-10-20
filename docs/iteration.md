@@ -1,3 +1,24 @@
+## Action annotation states no longer carry a sampler-selected action — 2026-10-20
+
+- Problem/root cause: action annotation reused tile sampling’s requirement for a
+  currently usable plant and retained one randomly selected plant as the apparent
+  current action. This biased action records toward plant-available states and
+  made the displayed target look like supervision.
+- Improvement: action sampling now accepts any running endpoint, stores a null
+  selected plant with generic availability, and keeps complete branch metadata
+  for wait, all plants, and dig. The browser hides tile-only plant metadata,
+  keeps plant cards directly selectable, and adds synchronized Wait/Dig controls
+  for feasible, absolute-infeasible, and erase modes. Tile sampling remains
+  conditioned on one usable plant and is unchanged.
+- Verification: the focused annotation suite passes 67 cases, including action
+  sampling without usable cards, empty-board automatic dig infeasibility, branch
+  control mode synchronization, locked labels, and unchanged tile painting.
+  Inline browser JavaScript is exercised by the suite; static checks remain to
+  be run after documentation review.
+- Remaining limits: the sampler still chooses autonomous rollout actions only
+  to create reachable state diversity; it does not provide interactive simulator
+  stepping. A live Jupyter proxy check is still a manual acceptance task.
+
 ## Canvas action-card annotation controls — 2026-10-20
 
 - Problem/root cause: action annotation rendered plant cards as graphics but

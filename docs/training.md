@@ -125,13 +125,15 @@ start from random weights. `initialize-demo --init-from` accepts either
 annotation artifact and creates a fresh demo optimizer and EMA state, enabling
 annotation before human/demo initialization.
 
-The optional annotation workflow trains the existing conditional tile Transformer
-before complete-return learning. `annotate` is the single on-demand
-workflow: it starts a CPU web server, prints the relative JupyterLab entry point,
-and lets the browser choose `easy`, `standard`, or `hard`. It advances the
-pinned simulator until a complete reachable observation contains a present,
-affordable, cooled-down plant card with at least one legal placement. Seeds,
-levels, and generation metadata are audit fields and never enter policy tensors.
+The optional annotation workflow trains the existing Transformer heads before
+complete-return learning. `annotate` is the single on-demand workflow: it starts
+a CPU web server, prints the relative JupyterLab entry point, and lets the
+browser choose `easy`, `standard`, or `hard`. Tile mode advances until a
+reachable observation contains a present, affordable, cooled-down plant card
+with at least one legal placement. Action mode accepts any running reachable
+observation and exposes all plant cards plus Wait and Dig for user labeling;
+it does not display a sampler-selected current action. Seeds, levels, and
+generation metadata are audit fields and never enter policy tensors.
 
 ```bash
 python -m pvz_rl annotate --port 6006
@@ -145,6 +147,12 @@ The next map is generated automatically at the selected difficulty. Use
 audit but are never fitted. A difficulty change is applied to the next map only
 after the current map is handled. The server accepts `--data-dir`, `--seed`,
 `--family`, `--max-steps`, and `--max-attempts` overrides.
+
+Action mode writes `data/action-annotations.jsonl`. Plant cards are clicked
+directly, while Wait and Dig use the compact toolbar controls; the active
+feasible, absolute-infeasible, or erase mode applies to all three kinds of
+action labels. The browser never displays a random rollout action as the
+current action to annotate.
 
 Use **Previous** and **Next** to browse earlier maps and edit their feasible
 plots with the same Paint/Erase/Clear controls. **Save changes** updates the
@@ -170,9 +178,10 @@ the queue is empty. **Save and exit** persists only the displayed map or group a
 stops the annotator without generating another map.
 
 Annotation generation draws an inclusive uniform limit of 0–20,000 actions per
-attempt. It simulates exactly that many actions, then accepts only a running
-game with a usable plant card. Lost, won, truncated, or unusable endpoints are
-discarded and retried within the attempt limit. Each planting attempt is spaced
+attempt. It simulates exactly that many actions. Tile mode accepts only a
+running game with a usable plant card; action mode accepts any running game.
+Lost, won, truncated, or unusable endpoints are discarded and retried within
+the attempt limit. Each planting attempt is spaced
 500–1,500 steps after the previous attempt. Each interval chooses equally from
 wait and all eight configured plant types (1/9 each), before checking availability.
 A plant on cooldown, with insufficient sun, without a card or legal plot, or
@@ -186,8 +195,9 @@ and simulator ticks can differ.
 
 Later endpoints preserve actual zombie health/armor, mower use, sunlight, and
 card cooldown progress from the simulator. Early endpoints, including zero,
-can have no zombies or plants. Accepted maps are conditioned on survival and
-card availability; they are not a uniform sample of all possible board states.
+can have no zombies or plants. Tile maps are conditioned on card availability;
+action maps are conditioned only on survival, so they can include states where
+all plant branches are absolutely infeasible.
 
 Fit the unordered feasible-tile sets with a fresh or compatible weight
 initialization:

@@ -174,9 +174,11 @@ all eight configured species before checking availability. Cooldown, insufficien
 sun, absent cards, no legal plots or the configured eight-plant cap turn the
 selected plant into wait without a redraw. Usable choices select a random legal
 plot; the shared availability check also validates snapshot annotation cards.
-Only a running endpoint with a usable plant card and legal plots is retained;
-finished or unusable games are discarded and retried within bounded attempts.
-Both batch generation and the live session use this same sampler. Each record keeps the rich
+Tile mode retains only running endpoints with a usable plant card and legal
+plots. Action mode retains any running endpoint because it labels the complete
+wait/plant/dig decision and has no sampler-selected current action. Finished
+games are discarded and retried within bounded attempts. Both batch generation
+and the live session use this same sampler. Each record keeps the rich
 public board and canonical `entity_v1` encoding, plus card availability, cost,
 sun, cooldown, and engine-legal tiles. Pending records are persisted in
 `data/tile-annotations.jsonl`; a restart resumes the same map. Saving or
@@ -188,10 +190,12 @@ and are excluded from fitting.
 
 In action mode, the same Canvas board exposes each rendered plant card as a hit
 target. The active feasible, absolute-infeasible, or erase mode determines what
-a card click does; locked automatic absolute labels cannot be changed. The
-toolbar no longer duplicates every plant action as HTML buttons. Card hit
-testing uses the board's design coordinates, so
-browser resizing and high-DPI displays do not change the selected plant.
+a card click does; locked automatic absolute labels cannot be changed. Wait and
+dig have compact synchronized toolbar controls because they have no plant card.
+The toolbar does not duplicate plant actions as HTML buttons, and no random
+sampler action is shown as the current target. Card hit testing uses the board's
+design coordinates, so browser resizing and high-DPI displays do not change the
+selected action.
 
 At startup, completed labeled rows are grouped by plant type and their canonical
 encoded entities/globals. A group with no common feasible tile is a duplicate

@@ -77,6 +77,8 @@ class ReachableSnapshotSampler:
         """Return one validated record for ``level`` or raise a bounded error."""
         if level not in self.levels:
             raise ValueError(f"unknown annotation difficulty: {level}")
+        if annotation_kind not in ("tile", "action"):
+            raise ValueError("annotation_kind must be tile or action")
         for _attempt in range(self.max_attempts):
             self.episodes += 1
             scenario_seed = self.rng.randrange(1, 2**31 - 1)
@@ -100,13 +102,20 @@ class ReachableSnapshotSampler:
                 # continue beyond the randomly selected simulation limit.
                 if self.env.state != "running" or self.env.public.status != Status.RUNNING:
                     continue
-                available = _available(self.env)
-                if not available:
-                    continue
-                candidate = self.rng.choice(available)
+                # Tile records deliberately condition on one usable card so
+                # their plot labels have a concrete branch.  Action records
+                # label the complete species branch, so a sampler-selected
+                # plant is neither required nor supervision; any running
+                # endpoint is useful, including boards with no usable card.
+                candidate = None
+                if annotation_kind == "tile":
+                    available = _available(self.env)
+                    if not available:
+                        continue
+                    candidate = self.rng.choice(available)["plant_type"]
                 record = snapshot_record(
                     self.env,
-                    plant_type=candidate["plant_type"],
+                    plant_type=candidate,
                     group_id=group_id,
                     record_id=f"annotation-{uuid.uuid4().hex}",
                     annotation_kind=annotation_kind,
@@ -196,11 +205,13 @@ def _action_availability(env):
     return result
 
 
-def snapshot_record(env, *, plant_type, group_id, record_id, annotation_kind="tile"):
+def snapshot_record(env, *, plant_type=None, group_id, record_id, annotation_kind="tile"):
     if env.state != "running" or env.public.status != Status.RUNNING:
-        raise ValueError("tile annotation snapshots must come from a running game")
+        raise ValueError("annotation snapshots must come from a running game")
+    if annotation_kind not in ("tile", "action"):
+        raise ValueError("annotation_kind must be tile or action")
     available = {row["plant_type"]: row for row in _available(env)}
-    if plant_type not in available:
+    if annotation_kind == "tile" and plant_type not in available:
         raise ValueError(f"plant is not currently available: {plant_type}")
     observation = env.public
     encoder = env.encoder
@@ -214,7 +225,10 @@ def snapshot_record(env, *, plant_type, group_id, record_id, annotation_kind="ti
         "encoded_observation": _jsonable(encoded),
         "observation_schema": encoder.schema(),
         "rules_hash": env.rules.digest,
-        "availability": available[plant_type],
+        # Action records do not carry a sampler-selected branch.  Keep the
+        # generic field for protocol compatibility, but action fitting uses
+        # action_availability below instead.
+        "availability": available[plant_type] if annotation_kind == "tile" else {},
         "source": {
             "level": env.episode_level,
             "family": env.episode_family,
@@ -224,7 +238,6 @@ def snapshot_record(env, *, plant_type, group_id, record_id, annotation_kind="ti
     }
     if annotation_kind == "action":
         record["annotation_kind"] = "action"
-        record["plant_type"] = plant_type
         metadata = _action_availability(env)
         record["action_availability"] = metadata
         record["branch_availability"] = metadata

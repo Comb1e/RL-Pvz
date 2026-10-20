@@ -137,8 +137,10 @@
   snapshots effective settings without reloading TOML/device values.
 - `annotation/dataset.py` owns versioned rich snapshots, canonical entity rows,
   atomic annotation storage and durable pending/labeled/discarded records.
-  `annotation/sampler.py` samples reachable simulator states and selects only
-  currently usable plant cards. Live and batch generation share uniform
+  `annotation/sampler.py` samples reachable simulator states. Tile records
+  select only currently usable plant cards; action records accept any running
+  endpoint and expose complete branch availability without a sampler-selected
+  action. Live and batch generation share uniform
   0–20,000-step endpoints, bounded terminal/unusable retries, 500–1,500-step
   planting intervals and an eight-plant cap from `training.annotation`. Omitted
   annotation seeds use system entropy; explicit seeds remain reproducible.
@@ -147,8 +149,8 @@
   legal plots; only engine actions change sun, health, cooldowns or mowers.
   `presentation/web_assets.py` owns the shared
   Canvas renderer; `presentation/annotation_viewer.py` serves the one-map-at-a-time
-  CPU annotator with difficulty selection, pointer-drag painting, restart recovery,
-  and relative APIs. `dataset.py` also groups contradictory labeled records by
+  CPU annotator with difficulty selection, pointer-drag painting, synchronized
+  Wait/Dig controls, restart recovery, and relative APIs. `dataset.py` also groups contradictory labeled records by
   canonical plant/entity/global inputs; the annotator shows that conflict queue
   before generation, applies one revision atomically to every group member, and
   supports Save and exit. Browser-local history navigation revisits completed

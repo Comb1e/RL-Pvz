@@ -134,6 +134,10 @@ def test_browser_annotation_has_drag_discard_and_relative_protocol():
         "actionCardAt",
         "drawActionCardOverlay",
         "toggleAction",
+        "id=branch-controls",
+        "id=wait-action",
+        "id=dig-action",
+        "id=plant-label",
         "absolute_infeasible_tiles",
         "availability",
         "select id=plant",
@@ -487,6 +491,7 @@ vm.runInContext(`
  app.state.record={id:'two',revision:1,status:'discarded',feasible_tiles:[]};
  applyState({request:12,record:{id:'two',revision:1,status:'discarded',feasible_tiles:[]}},12,false);
  if(app.draft.size!==0)throw Error('discarded map did not start empty');
+ let fullRender=render;
  app.state={annotation_kind:'action',record:{id:'action',annotation_kind:'action',action_availability:{sunflower:{},wait:{},dig:{}},automatic_absolute_infeasible_actions:['wait']}};
  app.draft=new Set();app.absolute=new Set();app.dirty=false;render=()=>{};
  let cardCanvas={getBoundingClientRect(){return {left:0,top:0,width:1280,height:820}}};
@@ -504,6 +509,18 @@ vm.runInContext(`
  app.draft=new Set(['wait']);app.absolute=new Set();app.dirty=false;
  paint({buttons:1,clientX:500,clientY:400});
  if(!app.draft.has('wait')||app.draft.size!==1)throw Error('action canvas triggered tile painting');
+ app.state={annotation_kind:'action',mode:'pending',difficulty:'easy',difficulties:['easy'],navigation:{},record:{id:'action-controls',revision:0,annotation_kind:'action',action_availability:{wait:{feasible:true},sunflower:{feasible:true},dig:{feasible:true}},automatic_absolute_infeasible_actions:['dig'],observation:{rows:5,cols:9,sun:100,wave:0,total_waves:1,plants:[],zombies:[]}}};
+ app.draft=new Set();app.absolute=new Set();app.mode='add';render=fullRender;render();
+ if(!$('plant-label').hidden||$('branch-controls').hidden)throw Error('action mode did not switch to branch controls');
+ render=()=>{};
+ $('wait-action').onclick();
+ if(!app.draft.has('wait'))throw Error('wait action was not selectable');
+ app.mode='absolute';$('wait-action').onclick();
+ if(app.draft.has('wait')||!app.absolute.has('wait'))throw Error('wait absolute mode failed');
+ app.mode='erase';$('wait-action').onclick();
+ if(app.draft.has('wait')||app.absolute.has('wait'))throw Error('wait erase mode failed');
+ app.mode='add';$('dig-action').onclick();
+ if(app.draft.has('dig')||app.absolute.has('dig'))throw Error('locked dig action was editable');
  app.state={annotation_kind:'tile',record:{id:'tile',revision:1,annotation_kind:'tile',plant_type:'peashooter',observation:{rows:5,cols:9},availability:{available:true,cost:0,sun:0,cooldown_ticks:0,legal_tiles:[0]},automatic_absolute_infeasible_tiles:[1,2]}};
  app.draft=new Set();app.absolute=new Set([1,2]);app.mode='absolute';app.busy=false;
  $('board').getBoundingClientRect=()=>({left:0,top:0,width:1280,height:820});
@@ -627,6 +644,21 @@ def test_sampler_writes_only_usable_plants_and_full_observations(tmp_path):
         card = next(c for c in row["observation"]["cards"] if c["plant_type"] == row["plant_type"])
         assert availability["available"] and availability["sun"] >= card["cost"]
         assert availability["cooldown_ticks"] == 0 and availability["legal_tiles"]
+
+
+def test_action_sampler_uses_any_running_endpoint_without_selected_branch(monkeypatch):
+    sampler = ReachableSnapshotSampler(load_config(), seed=77, max_attempts=1, max_steps=1)
+    monkeypatch.setattr(sampler_module, "_warmup_steps", lambda *_: 0)
+    monkeypatch.setattr(sampler_module, "_available", lambda _env: [])
+    row = sampler.sample("easy", annotation_kind="action")
+    assert row["plant_type"] is None
+    assert row["availability"] == {}
+    assert set(row["action_availability"]) == {"wait", *load_config()["environment"]["plants"], "dig"}
+    assert row["action_availability"]["wait"]["feasible"] is True
+    assert row["action_availability"]["wait"]["absolute_infeasible"] is False
+    assert row["action_availability"]["dig"]["absolute_infeasible"] is True
+    with pytest.raises(RuntimeError, match="could not generate"):
+        sampler.sample("easy", annotation_kind="tile")
 
 
 def test_sampler_diversifies_easy_states_with_delayed_sparse_planting():
