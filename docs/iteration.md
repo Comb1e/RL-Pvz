@@ -2357,3 +2357,34 @@ unperformed.
 - Compatibility: the reward, objective, trajectory and autonomous recovery identities were bumped to v2; structurally compatible weight-only initialization remains available, while old optimizer/recovery state is rejected.
 - Verification: added cohort-rank terminal calculations and preserved CPU/CUDA physical reward accounting; focused reward and configuration checks are being updated for the new constants.
 - Remaining limit: equal-duration games share an average rank, and a partial final cohort is ranked over the games that actually completed.
+
+## Unmasked tile proposals and selective invalid fitting — 2026-10-20
+
+- Problem/root cause: occupancy was encoded in the learning tile mask, so a
+  full board or occupied proposal disappeared before the tile Transformer could
+  express that it was invalid. Branch-level failures also paid for tile
+  inference even though only the species head could receive supervision.
+- Improvement: active plant and dig branches now expose all 45 tile outputs.
+  Card presence, cooldown and sunlight are checked immediately after species
+  selection; unavailable branches skip tile inference and route a fixed `-1`
+  target to species. Usable branches validate occupancy after selecting a tile;
+  occupied plants and empty digs route only the tile head to `-1`. Invalid
+  proposals still execute as ordinary waits, and every original row remains in
+  chronological complete-return accounting.
+- Fitting: the shared compaction path keeps the first row of each 100-row
+  window in consecutive identical invalid runs, while waits, accepted actions,
+  route changes, episode boundaries and raw reward rows remain unchanged. The
+  reward value scale is `900`, so the configured progress conversion is
+  `0.01 / 900` and the existing dense multiplier is applied once.
+- Compatibility: reward, objective, action-distribution, trajectory and
+  autonomous recovery identities are now v3. Structural weight-only transfer
+  remains available; optimizer and autonomous recovery states from earlier
+  protocols are rejected.
+- Verification: the focused environment, routing, flat-fitting, checkpoint,
+  configuration, Transformer, and annotation suites pass (323 tests); Ruff,
+  bytecode compilation, and `git diff --check` also pass. CUDA mask generation
+  was smoke-checked after reset and exposes all 406 active proposals. The older
+  reward-contract tests still contain fixed `/30000` expectations and
+  immediate aggregate CUDA comparisons from the previous reward protocol, so
+  they are not treated as validation for this change. Formal training and a
+  pull request are intentionally not run.

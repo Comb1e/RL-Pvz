@@ -19,6 +19,30 @@ class FitRoute(IntEnum):
     TILE_INVALID = 3
 
 
+def branch_availability(sun, cooldowns, costs, *, active=None, card_present=None):
+    """Build branch availability without using occupancy or tile geometry."""
+    sun = np.asarray(sun, dtype=np.float64).reshape(-1)
+    cooldowns = np.asarray(cooldowns, dtype=np.int64)
+    costs = np.asarray(costs, dtype=np.float64).reshape(-1)
+    if cooldowns.shape != (len(sun), A.plant_types) or len(costs) != A.plant_types:
+        raise ValueError("Branch availability fields have incompatible shapes")
+    available = np.zeros((len(sun), A.plant_types + 2), dtype=bool)
+    available[:, 0] = True
+    available[:, -1] = True
+    available[:, 1:-1] = (cooldowns == 0) & (sun[:, None] >= costs[None, :])
+    if card_present is not None:
+        present = np.asarray(card_present, dtype=bool)
+        if present.shape != (len(sun), A.plant_types):
+            raise ValueError("card_present must have shape [rows, plant_types]")
+        available[:, 1:-1] &= present
+    if active is not None:
+        active = np.asarray(active, dtype=bool).reshape(-1)
+        if active.shape != (len(sun),):
+            raise ValueError("active must match the branch availability rows")
+        available &= active[:, None]
+    return available
+
+
 def route_outcomes(actions, accepted, branch_usable):
     """Branch impossibility takes precedence over a bad placement."""
     actions, accepted, usable = np.broadcast_arrays(
@@ -37,7 +61,7 @@ def route_outcomes(actions, accepted, branch_usable):
     ).astype(np.uint8)
 
 
-def classify_actions(actions, accepted, legal_masks, reasons=None):
+def classify_actions(actions, accepted, legal_masks, reasons=None, *, branch_available=None):
     """Return routes and availability evidence from full pre-action legal masks.
 
     Unlike policy proposal geometry, these masks include public card availability,
@@ -54,7 +78,12 @@ def classify_actions(actions, accepted, legal_masks, reasons=None):
     branches = np.where(actions == 0, 0, 1 + (actions - 1) // A.tiles)
     if np.any(accepted & (actions != 0) & ~masks[np.arange(len(actions)), actions]):
         raise ValueError("Accepted proposal disagrees with pre-action public legality")
-    available = np.c_[masks[:, 0], masks[:, 1:].reshape(-1, 9, A.tiles).any(-1)]
+    if branch_available is None:
+        available = np.c_[masks[:, 0], masks[:, 1:].reshape(-1, 9, A.tiles).any(-1)]
+    else:
+        available = np.asarray(branch_available, dtype=bool)
+        if available.shape != (len(actions), A.plant_types + 2):
+            raise ValueError("branch_available must have shape [rows, 10]")
     usable = available[np.arange(len(actions)), branches]
     if reasons is not None:
         reasons = np.asarray(reasons)

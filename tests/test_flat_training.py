@@ -374,7 +374,7 @@ def test_selected_and_consistency_losses_match_independent_global_control(partit
     )
 
 
-def test_candidate_geometry_full_board_and_missing_outcome_strata():
+def test_all_tile_candidates_and_missing_outcome_strata():
     cfg = load_config()
     cfg["training"]["objective"]["species_consistency_weight"] = 2
     model = IndependentValues(cfg)
@@ -410,10 +410,12 @@ def test_candidate_geometry_full_board_and_missing_outcome_strata():
         teacher=teacher,
         consistency_counts=[[1, 1], [1, 0]],
     )
-    assert float(model._last_species_consistency_loss) == pytest.approx(5)
-    assert loss.item() == pytest.approx(10.75)
+    # Consistency now evaluates all 45 tile outputs, including occupied plots.
+    # The online argmax is tile zero, so the detached EMA target is 99.
+    assert float(model._last_species_consistency_loss) == pytest.approx(197)
+    assert loss.item() == pytest.approx(394.75)
     torch.testing.assert_close(
-        model._last_species_consistency_metrics, torch.tensor([3, 1, 6, 1], dtype=torch.float64)
+        model._last_species_consistency_metrics, torch.tensor([99, 1, 0, 1], dtype=torch.float64)
     )
     loss.backward()
     assert model.species.grad[2, 9] == 0
@@ -495,22 +497,23 @@ def test_demo_ranking_uses_independent_branch_and_actual_tile_anchors():
     loss, accuracy = demonstration_rank_loss(
         model, boards(3), actions, accepted, masks, counts, 0.05
     )
-    branch = (
-        (
-            torch.nn.functional.softplus(torch.tensor(0.05 - 4))
-            + torch.nn.functional.softplus(torch.tensor(0.05 - 4 + 1))
-        )
-        / 2
-        + torch.nn.functional.softplus(torch.tensor(0.05 - 2))
-    ) / 2
-    tile = torch.nn.functional.softplus(torch.tensor(0.05 + 2 + 5))
+    branch_row0 = (
+        8 * torch.nn.functional.softplus(torch.tensor(0.05 - 4))
+        + torch.nn.functional.softplus(torch.tensor(0.05 - 4 + 1))
+    ) / 9
+    branch_row2 = torch.nn.functional.softplus(torch.tensor(0.05 - 2))
+    branch = (branch_row0 + branch_row2) / 2
+    tile = (
+        torch.nn.functional.softplus(torch.tensor(0.05 + 2 + 5))
+        + 43 * torch.nn.functional.softplus(torch.tensor(0.05 + 2))
+    ) / 44
     torch.testing.assert_close(loss, branch + tile)
     loss.backward()
     assert model.species.grad[0, 1] < 0
     assert model.tiles.grad[0, 0, 1] < 0
     assert model.tiles.grad[0, 0, 0] > 0
     assert model.species.grad[1].count_nonzero() == model.tiles.grad[1].count_nonzero() == 0
-    assert accuracy.tolist() == [4, 4, 0, 1]
+    assert accuracy.tolist() == [18, 18, 0, 44]
 
 
 @pytest.mark.parametrize("ram_bytes", [1, 1000000])

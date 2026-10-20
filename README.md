@@ -6,7 +6,7 @@ The species Transformer selects a plant, wait or dig; the independent tile
 Transformer scores 45 tiles for the selected branch. Both read only the current
 public board. Planting creates no counterfactual rollout.
 
-Training uses `complete_return_action_global_v2` with a causal action/global
+Training uses `complete_return_action_global_v3` with a causal action/global
 reward ledger. Previous compatible
 BF16-master two-stage weights remain usable for inference and fresh `--init-from`;
 previous-objective runs cannot resume. Parameters live in
@@ -137,6 +137,11 @@ held-out accuracy and game performance.
 Illegal proposals execute ordinary wait with zero rejection reward penalty.
 Fitting targets only their responsible output at `-1`, skipping EMA inference.
 See [the routing table and convergence workflow](docs/training.md).
+
+Every active plant or dig branch scores all 45 tiles. Unavailable plant branches
+skip tile inference and train only species; occupied plant tiles and empty digs
+train only tiles. Physical shaping uses `0.01 / 900`, giving an effective fitted
+physical scale of `/9000`. See the [decision flow](docs/architecture.md#decision-flow).
 
 Repeated illegal proposals are compacted only for fitting: consecutive identical
 `(action, route, rejection_reason)` runs are split into windows of 100 and the

@@ -8,6 +8,12 @@ from pvz_rl.learning.curriculum import selected_stage
 from pvz_rl.policy.sequential_q import ACTION_DISTRIBUTION
 
 TRAINING_CONDITIONS = ("masked",)
+CURRENT_OBJECTIVE = "complete_return_action_global_v3"
+CURRENT_REWARD = "action_global_value_v3"
+WEIGHT_ACTION_DISTRIBUTIONS = {
+    "sequential_q_unmasked_penalty_v1",
+    ACTION_DISTRIBUTION,
+}
 
 
 def current_model_config(cfg):
@@ -23,12 +29,12 @@ def current_model_config(cfg):
             (
                 "two_stage_transformer_q_v1",
                 "entity_v1",
-                "complete_return_action_global_v2",
-                "complete_return_action_global_v2",
+                CURRENT_OBJECTIVE,
+                CURRENT_OBJECTIVE,
             ),
         }
         and cfg.get("policy", {}).get("action_distribution") == ACTION_DISTRIBUTION
-        and cfg.get("reward", {}).get("version") == "action_global_value_v2"
+        and cfg.get("reward", {}).get("version") == CURRENT_REWARD
         and cfg.get("training", {}).get("discount_clock") == "simulation_ticks"
     )
 
@@ -39,7 +45,7 @@ def weight_model_config(cfg):
     return (
         policy.get("kind") == "two_stage_transformer_q_v1"
         and cfg.get("encoding", {}).get("version") == "entity_v1"
-        and policy.get("action_distribution") == ACTION_DISTRIBUTION
+        and policy.get("action_distribution") in WEIGHT_ACTION_DISTRIBUTIONS
         and train.get("method")
         in (
             "complete_return_sequential_no_probe_v1",
@@ -47,6 +53,7 @@ def weight_model_config(cfg):
             "complete_return_selective_invalid_v3",
             "complete_return_action_global_v1",
             "complete_return_action_global_v2",
+            CURRENT_OBJECTIVE,
         )
         and train.get("objective", {}).get("protocol") == train.get("method")
         and cfg.get("reward", {}).get("version")
@@ -54,6 +61,7 @@ def weight_model_config(cfg):
             "net_value_v1",
             "action_global_value_v1",
             "action_global_value_v2",
+            CURRENT_REWARD,
         )
     )
 
@@ -65,39 +73,24 @@ def inference_config(cfg):
     """
     import copy
 
+    from pvz_rl.config import load_config
+
     if not weight_model_config(cfg):
         raise ValueError("Incompatible model/encoding or objective protocol weight contract")
     result = copy.deepcopy(cfg)
     if current_model_config(cfg):
         return result
-    result["training"]["method"] = "complete_return_action_global_v2"
-    result["training"]["objective"]["protocol"] = "complete_return_action_global_v2"
-    result["training"]["objective"].setdefault("invalid_action_target", -1.0)
-    result["training"]["objective"].setdefault("invalid_fit_group_size", 100)
-    result["training"]["objective"].setdefault("dense_multiplier", 10.0)
+    result["training"]["method"] = CURRENT_OBJECTIVE
+    result["training"]["objective"]["protocol"] = CURRENT_OBJECTIVE
+    result["policy"]["action_distribution"] = ACTION_DISTRIBUTION
+    defaults = load_config()
+    for key, value in defaults["training"]["objective"].items():
+        result["training"]["objective"].setdefault(key, copy.deepcopy(value))
     # Weight-only transfer keeps architecture and observation compatibility but
     # always executes under the current reward protocol.  Old net-value
     # checkpoints remain valid as fresh initializations; they cannot resume
     # their optimizer/recovery state.
-    result["reward"]["version"] = "action_global_value_v2"
-    result["reward"]["basic_zombie_value"] = 30.0
-    result["reward"]["mower_value"] = 500.0
-    result["reward"]["win_time_weight"] = 0.5
-    result["reward"]["action"] = {
-        "sun_credit_multiplier": 1.0,
-        "block_value_by_plant": {
-            "sunflower": 0.0333333333,
-            "peashooter": 0.0333333333,
-            "wall_nut": 0.025,
-            "cherry_bomb": 0.0333333333,
-            "potato_mine": 0.0333333333,
-            "snow_pea": 0.0333333333,
-            "chomper": 0.0333333333,
-            "repeater": 0.0333333333,
-        },
-    }
-    result["reward"].pop("invalid_plant_penalty", None)
-    result["reward"].pop("empty_dig_penalty", None)
+    result["reward"] = copy.deepcopy(defaults["reward"])
     return result
 
 
@@ -111,7 +104,7 @@ def require_supported_policy(cfg, condition="masked"):
     ):
         raise ValueError(
             "Retired policy or scheduler. Use the stateless two-stage Transformer, entity_v1, "
-            "action_global_value_v2 and complete-game collection. "
+            "action_global_value_v3 and complete-game collection. "
             "Start fresh with the bundled train profile."
         )
 
@@ -132,7 +125,7 @@ def _cuda_probe():
 def require_cuda_training(cfg, condition="masked", *, runtime=True):
     """Reject unsupported runs before creating output or allocating collectors."""
     validate_config(cfg)
-    if cfg["training"].get("objective", {}).get("protocol") != "complete_return_action_global_v2":
+    if cfg["training"].get("objective", {}).get("protocol") != CURRENT_OBJECTIVE:
         raise ValueError(
             "Old-objective training cannot resume; use compatible BF16-master weights "
             "only through fresh --init-from."
@@ -242,7 +235,7 @@ def weight_transfer_protocol(cfg):
     or execution batch settings.
     """
     result = transfer_protocol(cfg)
-    for name in ("timing", "method", "return"):
+    for name in ("timing", "method", "return", "action_distribution"):
         result.pop(name)
     return result
 

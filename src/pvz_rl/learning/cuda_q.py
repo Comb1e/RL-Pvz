@@ -38,6 +38,9 @@ def checkpoint_metadata(path, *, weights_only=False):
     expected = protocol_for(metadata.get("policy"))
     if weights_only and metadata.get("optimizer") not in (
         OBJECTIVE_PROTOCOL,
+        "complete_return_action_global_v2",
+        "complete_return_action_global_v1",
+        "complete_return_selective_invalid_v3",
         "complete_return_selective_invalid_v2",
         "complete_return_sequential_no_probe_v1",
     ):

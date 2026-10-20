@@ -38,7 +38,9 @@ def test_multiple_actions_at_tick_zero_update_legality_and_preserve_time(per_tic
         assert info["ticks_advanced"] == 0 and env.public.tick == 0
         assert env.action_masks()[env.codec.encode(Place(kind, 1, 0))]
         assert not env.game.validate_action(Place(kind, 1, 0)).accepted
-        assert not env.action_masks()[env.codec.encode(Place("potato_mine", 0, i))]
+        # Learning masks expose every tile; the simulator legality mask still
+        # rejects a plant card on an occupied plot.
+        assert not env.engine_action_masks()[env.codec.encode(Place("potato_mine", 0, i))]
     assert env.public.sun == 200 and len(env.public.plants) == 3
     assert all(
         c.cooldown_ticks == c.recharge_ticks + 1

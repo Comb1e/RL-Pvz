@@ -238,7 +238,10 @@ def test_full_board_all_digs_and_no_plant_tile(per_tick_cfg):
         },
     )
     mask = env.action_masks()
-    assert mask[0] and not mask[1:361].any() and mask[361:].all()
+    # Learning proposals expose every tile. Occupancy is validated only after
+    # selection; the authoritative engine mask still rejects occupied plots.
+    assert mask.all()
+    assert not env.engine_action_masks()[1]
     _, reward, _, _, info = env.step(1)
     assert (
         reward == pytest.approx(-per_tick_cfg["reward"].get("invalid_plant_penalty", 0))

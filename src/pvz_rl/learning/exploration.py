@@ -97,13 +97,35 @@ class CommittedPlantExploration:
         self.plant_epsilon, self.tile_epsilon = float(plant_epsilon), float(tile_epsilon)
 
     @torch.no_grad()
-    def apply(self, policy, actions, details, masks, sun, cooldowns, costs, active, *, plan=None):
+    def apply(
+        self,
+        policy,
+        actions,
+        details,
+        masks,
+        sun,
+        cooldowns,
+        costs,
+        active,
+        *,
+        branch_usable=None,
+        plan=None,
+    ):
         pending = self.pending.clone()
         committed = pending.ne(0) & active
         rows = torch.arange(len(actions), device=actions.device)
         species = (pending - 1).clamp_min(0)
-        empty = A.tile_masks(masks)[rows, species].any(-1)
-        ready = committed & empty & (sun >= costs[species]) & (cooldowns[rows, species] == 0)
+        # Tile occupancy is validated after the all-45 tile choice. A committed
+        # branch therefore becomes ready based only on card availability; an
+        # occupied selection is retained as a tile-invalid proposal.
+        ready = committed & (sun >= costs[species]) & (cooldowns[rows, species] == 0)
+        if branch_usable is not None:
+            branch_usable = torch.as_tensor(
+                branch_usable, device=actions.device, dtype=torch.bool
+            )
+            if branch_usable.shape != (len(actions), A.plant_types + 2):
+                raise ValueError("branch_usable must have shape [batch, 10]")
+            ready &= branch_usable.gather(1, pending.clamp_min(1)[:, None]).flatten()
         policy_branches, _ = action_parts(actions)
         reuse = ready & (policy_branches == pending)
         requests = torch.where(ready & ~reuse, pending, 0)

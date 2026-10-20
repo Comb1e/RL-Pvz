@@ -78,10 +78,14 @@ flowchart LR
 The species stage has width 128, four layers and eight heads. The tile stage has
 width 192, six layers and twelve heads. Their parameters are independent. The
 tile stage receives the selected branch, the same current board and 45 spatial
-queries. Plants use empty tiles, dig uses all tiles, and a full-board plant
-keeps the tile-zero rejection fallback. Sunlight and cooldown do not hide
-branches. A rejected action records its proposal and advances one tick; an
-accepted plant or dig advances zero ticks.
+queries. Every active plant and dig branch exposes all 45 tiles, including
+occupied tiles. After species selection, card presence, cooldown, sunlight and
+task availability determine whether tile inference is needed. Unavailable plants
+skip the tile encoder and receive species-only invalid fitting. Usable branches
+score every tile; occupied plant tiles and empty digs receive tile-only invalid
+fitting. `engine_action_masks()` remains authoritative for baselines and replay
+checks. A rejected proposal advances one wait tick; accepted plant/dig advances
+zero ticks.
 
 Both stages run with BF16 parameters and activations during collection,
 evaluation, demonstrations and fitting. The online policy keeps unregistered
@@ -96,7 +100,8 @@ Tile exploration decays from 50% to 1%, and accepted normal planting can start
 a uniformly selected alternative-species commitment from 10% to 1%. Both
 schedules decay over 10,000 stage games, remain fixed within a cohort and reset
 on stage changes. Commitments issue ordinary waits until the species is
-affordable, cooled down and placeable. Successful committed placements clear the
+affordable and cooled down, then score every tile. Occupied selections remain
+tile-invalid. Successful committed placements clear the
 commitment; they do not recursively trigger another commitment.
 
 ```mermaid

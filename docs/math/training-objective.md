@@ -21,7 +21,7 @@ ranked by completion time. With `reward.win_time_weight=0.5`, the earliest
 winner receives +1.5 and the latest winner +0.5. Losses before the median stay
 at -1; losses after the median become progressively more negative, reaching
 -1.5 for the latest rank. This adjustment is applied only to the terminal row.
-Here `s=progress_weight/value_scale` and the multiplier is
+Here `s=progress_weight/value_scale=0.01/900` in the current profile and the multiplier is
 `training.objective.dense_multiplier=10`; scaling is applied once to the
 combined physical terms. The same interface builds demonstration and
 autonomous targets. [Sequential Q learning](sequential-training.md) specifies

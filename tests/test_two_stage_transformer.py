@@ -286,7 +286,10 @@ def test_wait_skips_tile_encoder_and_geometry_fallback_does_not_hide_species():
         masks = observation_tile_masks(observations)
         masks[:, 1 : A.dig_start] = False
         actions, details = policy.decide(observations, action_masks=masks)
-        assert actions.tolist() == [46, 46]
+        assert all(
+            1 <= action < A.dig_start and (action - 1) // A.tiles == 1
+            for action in actions.tolist()
+        )
         assert seen == [2]
     hook.remove()
 

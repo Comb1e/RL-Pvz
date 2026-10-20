@@ -1,10 +1,10 @@
 # Recording and training
 
-The objective is `complete_return_action_global_v2`. Old-objective optimizer
+The objective is `complete_return_action_global_v3`. Old-objective optimizer
 resume is rejected. Structurally compatible previous BF16-master two-stage
 checkpoints remain valid for inference and fresh weight-only initialization.
-Current recovery uses `action-global-state-v2` and
-`action-global-trajectory-v2`; the model weight protocol remains v2.
+Current recovery uses `action-global-state-v3` and
+`action-global-trajectory-v3`; the model weight protocol remains v2.
 Verified recordings remain reusable and are repriced without rewriting files.
 
 The learning reward has two channels. Global reward contains only the terminal
@@ -65,13 +65,19 @@ board, proposal, acceptance, duration, reward and exploration provenance.
 Ordinary tile exploration decays from 50% to 1%. Accepted normal plantings can
 start a persistent uniformly selected alternative-species commitment, decaying
 from 10% to 1%. Both schedules span 10,000 stage games, freeze within a cohort
-and restart on a stage change. A commitment waits ordinarily until affordable,
-cooled down and placeable, then clears after successful planting. Evaluation,
+and restart on a stage change. A commitment waits ordinarily until affordable
+and cooled down, then scores all 45 tiles and clears after successful planting.
+Evaluation,
 demonstrations do not use exploration commitments.
 
-Plant and dig candidates are geometry-only: empty tiles for plants and all tiles
-for dig. Full-board plants use tile zero for the ordinary rejection fallback;
-sunlight and cooldown do not hide branches. Rejected proposals execute ordinary
+Plant and dig branches expose all 45 tiles. After species selection, card
+presence, cooldown, affordability and task availability are checked. Unavailable
+plants skip tile inference and train only species. Usable branches score every
+tile; occupied plant tiles and empty digs train only tiles. Sunlight and cooldown
+do not hide species outputs, and the learning tile selector scores all 45 tiles.
+`engine_action_masks()` remains the authoritative legality source for baselines
+and replay checks; collection routes occupancy failures only after selection.
+Rejected proposals execute ordinary
 wait with zero rejection reward penalties and advance one tick,
 accepted plants/digs advance zero ticks. Planting immediately returns to normal
 collection. No simulator state is copied, no 30-second rollout is scheduled and
@@ -123,8 +129,8 @@ and locked. New action records also start Dig as an editable absolute-infeasible
 label, even when the raw board contains a plant, so the annotator can move it
 to feasible or remove it. The raw availability fact is
 preserved for audit, and human labels may add more absolute entries. Runtime
-gameplay masks are unchanged, while annotation fitting deliberately scores
-every output.
+engine legality remains authoritative for execution, while annotation fitting
+deliberately scores every output.
 
 Tile fitting freezes the species stage and action fitting freezes the tile
 stage. Both use the top-1/bottom-k margin objective, require exact feasible
@@ -229,7 +235,7 @@ discarded records remain excluded. Grouped 80/10/10 splits prevent source leakag
 
 `training.annotation.passes=0` means unlimited. Every completed pass prints its
 update count, full-training hits/total, remaining failures, loss and validation
-metrics. Training completion requires exact 100% legal top-1 membership using
+metrics. Training completion requires exact 100% feasible top-1 membership using
 BF16 runtime and lowest-index ties. Validation is diagnostic; test is evaluated
 only after convergence. `--passes N` adds a total pass cap; reaching it short of
 100% is incomplete. This training-set requirement does not establish held-out

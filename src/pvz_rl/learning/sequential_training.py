@@ -188,6 +188,7 @@ class CudaSequentialQ(CudaCohortLifecycle):
             rows["reset"] = self._scheduler.resets
             rows["env"] = np.arange(self.n_envs)
             masks = env.action_masks().clone()
+            branch_available = env.branch_availability()
             if new.any():
                 with env.profiler.track("online_inference"):
                     result = self._runner.decide(
@@ -197,6 +198,7 @@ class CudaSequentialQ(CudaCohortLifecycle):
                         deterministic=False,
                         defer_check=True,
                         plan=plan,
+                        branch_usable=branch_available,
                     )
                 actions, values, tile_values, details = result
                 actions, values, tile_values, details = self._plant_exploration.apply(
@@ -208,6 +210,7 @@ class CudaSequentialQ(CudaCohortLifecycle):
                     torch.from_dlpack(env.batch.cooldowns),
                     self._plant_costs,
                     enabled,
+                    branch_usable=branch_available,
                     plan=plan,
                 )
                 self._runner.valid &= details["valid"]
@@ -267,8 +270,7 @@ class CudaSequentialQ(CudaCohortLifecycle):
                         offsets=offsets,
                         globals=self._last_obs.globals.index_select(0, live_slots),
                         action_masks=masks & executing[:, None],
-                        plant_available=(env.header_tensor[:, 2, None] >= self._plant_costs)
-                        & (torch.from_dlpack(env.batch.cooldowns) == 0),
+                        branch_available=branch_available & executing[:, None],
                         columns=columns,
                         valid=self._runner.valid,
                     ),
@@ -327,15 +329,13 @@ class CudaSequentialQ(CudaCohortLifecycle):
             rows["done"] = env.last_transition_host[:, 0].astype(bool)
             rows["accepted"] = env.last_action_result_host[:, 0].astype(bool)
             rows["rejection_reason"] = env.last_action_result_host[:, 1]
-            # Policy masks remain geometry-only. Attribution uses immutable
-            # pre-action card facts captured through the existing stream fence.
-            legal = host["action_masks"].numpy().copy()
-            plant_geometry = legal[:, 1:361].reshape(self.n_envs, 8, 45)
-            occupied = ~plant_geometry[:, 0].copy()
-            plant_geometry &= host["plant_available"].numpy()[:, :, None]
-            legal[:, 361:] = occupied & active[:, None]
+            branch_available_host = host["branch_available"].numpy().copy()
             rows["route"], rows["branch_usable"] = classify_actions(
-                rows["action"], rows["accepted"], legal, rows["rejection_reason"]
+                rows["action"],
+                rows["accepted"],
+                host["action_masks"].numpy(),
+                rows["rejection_reason"],
+                branch_available=branch_available_host,
             )
             rows["components"] = env.last_reward_parts_host[
                 :, [REWARD_FIELDS.index(k) for k in COMPONENTS]

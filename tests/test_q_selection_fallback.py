@@ -10,10 +10,10 @@ from pvz_rl.envs.env import PvZEnv
 from pvz_rl.policy.sequential_q import select_q_actions
 
 
-def _select(values, mask):
+def _select(values, mask, tile_values=None):
     masks = torch.as_tensor(mask, dtype=torch.bool)[None]
     values = torch.tensor([values], dtype=torch.float32)
-    tiles = torch.zeros(1, A.tiles)
+    tiles = torch.zeros(1, A.tiles) if tile_values is None else torch.tensor([tile_values], dtype=torch.float32)
     return int(select_q_actions(values, tiles, masks, deterministic=True)[0][0])
 
 
@@ -70,7 +70,8 @@ def test_high_q_cooling_plant_stays_selected_and_is_rejected(per_tick_cfg):
     mask = env.action_masks()
     cooling = env.codec.encode(Place("sunflower", 0, 1))
     assert mask[cooling] and not env.engine_action_masks()[cooling]
-    action = _select([0, 5, 1, 0, 0, 0, 0, 0, 0, 0], mask)
+    tile_values = [0.0, 1.0] + [0.0] * (A.tiles - 2)
+    action = _select([0, 5, 1, 0, 0, 0, 0, 0, 0, 0], mask, tile_values)
     assert action == cooling
     before = env.public
     _, reward, terminated, truncated, info = env.step(action)

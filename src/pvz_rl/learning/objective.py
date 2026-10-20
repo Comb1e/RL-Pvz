@@ -13,7 +13,7 @@ from pvz_rl.policy.sequential_q import (
     tile_candidates,
 )
 
-OBJECTIVE_PROTOCOL = "complete_return_action_global_v2"
+OBJECTIVE_PROTOCOL = "complete_return_action_global_v3"
 # These are the only reward components that train the policy.  The simulator
 # still publishes the older diagnostic fields (combat_value, home_proximity,
 # victory_time, and so on) for reports and replay verification. Cohort-ranked
@@ -180,17 +180,16 @@ def species_consistency_loss(
 
 def ranking_counts(actions, accepted, masks):
     branch, tile = action_parts(actions)
-    branch_legal = torch.cat((masks[:, :1], masks[:, 1:].reshape(-1, 9, 45).any(-1)), -1)
+    active = masks.any(-1)
+    branch_legal = torch.ones(
+        (len(actions), 10), dtype=torch.bool, device=actions.device
+    )
+    branch_legal = branch_legal & active[:, None]
     alternatives = branch_legal.clone()
     alternatives.scatter_(1, branch[:, None], False)
     first = accepted & alternatives.any(-1)
-    geometry = (
-        masks[:, 1:]
-        .reshape(-1, 9, 45)[
-            torch.arange(len(actions), device=actions.device), (branch - 1).clamp_min(0)
-        ]
-        .clone()
-    )
+    geometry = torch.ones((len(actions), 45), dtype=torch.bool, device=actions.device)
+    geometry &= active[:, None]
     geometry.scatter_(1, tile[:, None], False)
     second = accepted & (branch != 0) & geometry.any(-1)
     return (

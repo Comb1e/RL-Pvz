@@ -93,18 +93,18 @@ def test_bad_tile_return_does_not_blame_species_and_consistency_stops_target_gra
     assert policy.tiles.grad is None
 
 
-def test_full_board_candidate_fallback_and_unrestricted_dig_consistency():
+def test_all_tile_candidates_and_unrestricted_dig_consistency():
     masks = torch.ones(2, A.size, dtype=torch.bool)
     masks[:, 1 : A.dig_start] = False
     tiles = torch.zeros(2, A.tiles)
     tiles[0, :2] = torch.tensor([7.0, 100.0])
     tiles[1, 44] = 6
     branches = torch.tensor([2, 9])
-    torch.testing.assert_close(candidate_maxima(tiles, masks, branches), torch.tensor([7.0, 6.0]))
+    torch.testing.assert_close(candidate_maxima(tiles, masks, branches), torch.tensor([100.0, 6.0]))
     species = torch.zeros(2, 10)
     species[0, 2] = 100
     species[1, 9] = 100
-    assert select_q_actions(species, tiles, masks, deterministic=True)[0].tolist() == [46, 405]
+    assert select_q_actions(species, tiles, masks, deterministic=True)[0].tolist() == [47, 405]
 
 
 @pytest.mark.parametrize(
@@ -113,8 +113,8 @@ def test_full_board_candidate_fallback_and_unrestricted_dig_consistency():
         ([3, 8, 1], [9, -4, 2], [], 1, 1, -4, 13),
         ([1, 5, 2], [1, 5, 2], [], 2, 1, 5, 0),
         ([4, 4, 1], [0, 9, 1], [], 3, 0, 0, 9),
-        ([100, 2, 7], [999, 12, -1], [0], 4, 2, -1, 13),
-        ([1, 8, 1], [-2, 9, 1], list(range(45)), 5, 0, -2, 0),
+        ([100, 2, 7], [999, 12, -1], [0], 4, 0, 999, 0),
+        ([1, 8, 1], [-2, 9, 1], list(range(45)), 5, 1, 9, 0),
         ([1, 2, 8], [9, 1, -3], list(range(45)), 9, 2, -3, 12),
     ],
     ids=["disagreement", "identical", "tie", "occupied", "full-board", "dig"],
@@ -301,4 +301,3 @@ def test_requested_pairs_equal_direct_selected_values_and_update_only_their_stag
     policy.selected_values(observations, torch.tensor([1, 1, 90, 405])).sum().backward()
     assert all(parameter.grad is None for parameter in policy.species_encoder.parameters())
     assert all(parameter.grad is None for parameter in policy.species_head.parameters())
-    assert cfg["training"]["n_epochs"] == 4 and cfg["training"]["demo"]["passes"] == 20

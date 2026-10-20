@@ -159,6 +159,11 @@ class CudaVecEnv(VecEnv):
             self.header_tensor = torch.from_dlpack(self.batch.header)
         self.render_mode = None
         super().__init__(self.batch.n, self.features.encoder.space, spaces.Discrete(A.size))
+        self._branch_costs = torch.tensor(
+            [self.batch.rules.plants[kind]["cost"] for kind in cfg["environment"]["plants"]],
+            device=torch.device("cuda"),
+            dtype=torch.float32,
+        )
         self._closed = False
         self.transition_ticks = torch.zeros(self.num_envs, dtype=torch.int64, device="cuda")
         # Keep proposal and execution channels separate.  Trajectories and
@@ -250,6 +255,36 @@ class CudaVecEnv(VecEnv):
 
     def action_masks(self):
         return self.features.mask_tensor
+
+    def branch_availability(self, active=None):
+        """Return pre-action branch availability without tile geometry.
+
+        Policy masks intentionally expose all tile outputs.  This separate
+        tensor lets the runner skip the conditional tile encoder when a plant
+        card cannot execute because it is absent, cooling down, unaffordable,
+        or task-restricted.  Dig remains branch-usable on a running board;
+        empty-tile legality is classified after its tile proposal.
+        """
+        header = self.header_tensor
+        running = (
+            (header[:, HEADER.index("status")] == 0)
+            & header[:, HEADER.index("enabled")].bool()
+        )
+        sun = header[:, HEADER.index("sun")]
+        cooldowns = torch.from_dlpack(self.batch.cooldowns)
+        device = self.header_tensor.device
+        costs = self._branch_costs.to(device=device, dtype=sun.dtype)
+        allowed = header[:, HEADER.index("allowed")][:, None].bitwise_and(
+            (1 << torch.arange(len(costs), device=device, dtype=torch.int64))[None, :]
+        ) != 0
+        plants = (cooldowns == 0) & (sun[:, None] >= costs[None, :]) & allowed
+        result = torch.cat((running[:, None], plants & running[:, None], running[:, None]), dim=1)
+        if active is not None:
+            active = torch.as_tensor(active, device=device, dtype=torch.bool).reshape(-1)
+            if active.shape != (self.num_envs,):
+                raise ValueError("active must match the CUDA environment size")
+            result &= active[:, None]
+        return result
 
     def _refresh_growth_bounds(self, indices):
         header = self.batch.header.get()

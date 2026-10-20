@@ -23,7 +23,7 @@ from pvz_rl.learning.objective import (
     training_rewards,
 )
 
-TRAJECTORY_PROTOCOL = "pvz-rl/action-global-trajectory-v2"
+TRAJECTORY_PROTOCOL = "pvz-rl/action-global-trajectory-v3"
 
 
 def trajectory_dtype(cfg=None):

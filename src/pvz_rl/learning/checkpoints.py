@@ -23,12 +23,12 @@ LEGACY_DEMO_PROTOCOL = "pvz-rl/demo-initialization-checkpoint-v9"
 ANNOTATION_CHECKPOINT_PROTOCOL = "pvz-rl/annotation-initialization-v2"
 LEGACY_ANNOTATION_CHECKPOINT_PROTOCOL = "pvz-rl/tile-annotation-initialization-v1"
 MODEL_STATE_PROTOCOL = "pvz-rl/stateless-two-stage-bf16-master-state-v2"
-AUTONOMOUS_STATE_PROTOCOL = "pvz-rl/action-global-state-v2"
+AUTONOMOUS_STATE_PROTOCOL = "pvz-rl/action-global-state-v3"
 
 
 def protocol_for(kind):
     methods = {
-        "two_stage_transformer_q_v1": "complete_return_action_global_v2",
+        "two_stage_transformer_q_v1": "complete_return_action_global_v3",
     }
     if kind not in methods:
         raise ValueError(
@@ -202,6 +202,8 @@ def inspect_checkpoint(path, *, weights_only=False):
                     runtime.get("protocol")
                     not in (
                         AUTONOMOUS_STATE_PROTOCOL,
+                        "pvz-rl/action-global-state-v2",
+                        "pvz-rl/action-global-state-v1",
                         "pvz-rl/stateless-no-probe-state-v1",
                         "pvz-rl/selective-invalid-state-v2",
                     )

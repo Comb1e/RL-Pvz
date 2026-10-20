@@ -23,11 +23,9 @@ from pvz_rl.annotation.dataset import (
     write_manifest,
 )
 from pvz_rl.config import digest, load_config, validate_config
-from pvz_rl.envs.encoding import collate_observations
 from pvz_rl.learning.batch_transport import collate_fitting_observations
 from pvz_rl.learning.checkpoints import MODEL_STATE_PROTOCOL
 from pvz_rl.learning.cohort import atomic_transition
-from pvz_rl.policy.sequential_q import observation_tile_masks
 from pvz_rl.policy.two_stage_transformer import TwoStageTransformerPolicy
 from pvz_rl.provenance import write_json
 
@@ -198,15 +196,6 @@ def _batch(model, rows, cfg, device, *, kind="tile", include_absolute=False):
         feasible = [row["feasible_tiles"] for row in rows]
         absolute = [row.get("absolute_infeasible_tiles", []) for row in rows]
     return (values, feasible, absolute) if include_absolute else (values, feasible)
-
-
-def _legal_masks(rows, device):
-    observations = collate_observations([row["encoded_observation"] for row in rows], device)
-    geometry = observation_tile_masks(observations)[:, 1:46]
-    public = torch.zeros(len(rows), 45, dtype=torch.bool, device=device)
-    for index, row in enumerate(rows):
-        public[index, row["availability"]["legal_tiles"]] = True
-    return geometry & public
 
 
 def _run_split(model, records, cfg, device, *, batch_size, margin, train=False, optimizer=None, kind="tile"):

@@ -65,6 +65,7 @@ def benchmark_rows(cfg, widths, rows_per_width, action_mix, dtype):
         action = 1 + branch * 45 + empty
         accepted, reason = True, None
         kind = action_mix
+        branch_available = np.ones(10, dtype=bool)
         if kind == "mixed":
             kind = "tile" if index % 14 == 0 else "wait"
         elif kind == "rejected_heavy":
@@ -77,6 +78,7 @@ def benchmark_rows(cfg, widths, rows_per_width, action_mix, dtype):
             # Public sun/cooldown failure: impossible species, even if occupied.
             board["globals"][0] = 0
             board["globals"][6 + branch] = 0.5
+            branch_available[1 + branch] = False
             legal[1:361] = False
             accepted, reason = False, "card_recharging"
         elif kind == "tile_invalid":
@@ -88,7 +90,13 @@ def benchmark_rows(cfg, widths, rows_per_width, action_mix, dtype):
             accepted = False
         elif occupied.any() and index % 3 == 0:
             action = 361 + int(np.flatnonzero(occupied)[0])
-        route, usable = classify_actions([action], [accepted], legal[None], [reason])
+        route, usable = classify_actions(
+            [action],
+            [accepted],
+            legal[None],
+            [reason],
+            branch_available=branch_available[None],
+        )
         rows[index]["action"], rows[index]["accepted"] = action, accepted
         rows[index]["route"], rows[index]["branch_usable"] = route[0], usable[0]
         rows[index]["rejection_reason"] = REASONS.index(reason)

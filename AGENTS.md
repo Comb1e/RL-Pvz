@@ -64,10 +64,10 @@
   are evaluated, with duplicate requests reused. `selected_values` supervises wait
   through species and non-wait through tiles. `two_stage_policy.py` owns `TwoStageQPolicy`.
 - `policy/runner.py` is the shared stateless runner for collection/evaluation.
-  `policy/sequential_q.py` owns candidate geometry, greedy ten-way selection and
-  balanced selected-action loss. Empty plant tiles/all dig tiles are candidates;
-  full-board plants use tile-zero rejection fallback. Sun/cooldown do not mask
-  ordinary branches. `active_batch.py` packs active canonical slots into public-width
+  `policy/sequential_q.py` owns all-45 tile proposals, greedy ten-way selection
+  and balanced selected-action loss. Occupancy is checked after a tile is
+  selected, so full boards and occupied plots remain representable as invalid
+  proposals; sun/cooldown do not mask ordinary branches. `active_batch.py` packs active canonical slots into public-width
   and power-of-two buckets with stage-specific token overheads 1/47. Padding has
   no actions, RNG or supervision. Behavior draws retain original-slot shape/order.
 - `policy/cudagraph_backend.py` owns separate collection/fitting captures and owned
@@ -91,8 +91,9 @@
   Sunflower eligibility, physical conservation, proximity penalties and cohort-median
   victory finalization. Recording fact checks remain configuration-independent.
 - `learning/exploration.py` owns persistent accepted-plant species commitments.
-  Choose another species uniformly; wait ordinarily for sun/cooldown/geometry, with
-  no timeout. Success clears commitment without recursively drawing a new one.
+  Choose another species uniformly; wait ordinarily for sun/cooldown, with no
+  timeout. All 45 tiles remain proposal candidates, so occupancy is classified
+  after selection. Success clears commitment without recursively drawing a new one.
   Provenance and original policy proposals remain diagnostics. Exploration is
   disabled for evaluation, demonstrations and auxiliary games.
 - `learning/collection_scheduler.py` retains actual decision tickets, original-slot
@@ -104,8 +105,9 @@
   double-estimator species consistency and demo ranking.
   `learning/objective.py` owns the shared detached online argmax/EMA evaluation
   target, selected tile IDs, estimator gap and MSE-matched Huber. Reuse existing
-  online tile tables and EMA forward; add no Transformer forwards. Geometry-only
-  candidates, tile-zero full-board fallback and lowest-index ties remain. Targets
+  online tile tables and EMA forward; add no Transformer forwards. All 45 tile
+  candidates and lowest-index ties remain; occupancy and branch availability are
+  routed after selection. Targets
   follow actual proposals, including rejection/commitment, never diagnostic
   proposals. Selected counts are 3x2 wait/plant/dig by acceptance; consistency
   counts are 2x2 plant/dig with rejected columns zero. Denominators cover the whole cohort. No non-wait sampled
@@ -158,7 +160,8 @@
   maps; revision-checked edits persist in place without consuming the pending map
   or invoking the sampler. Pending resolution alone generates the next map.
   `learning/annotation_fit.py` freezes the species stage and produces a compatible
-  tile-only initialization only after exact full-training legal top-1 convergence.
+  tile-only initialization only after exact full-training feasible top-1 convergence
+  over all 45 outputs.
   Its top-1 hinge ignores other positive ordering, defaults to unlimited passes,
   streams metrics, and saves separate atomic annotation weights/Adam/RNG/pass
   progress. Matching dataset/split/settings gate resume; partial gradients are

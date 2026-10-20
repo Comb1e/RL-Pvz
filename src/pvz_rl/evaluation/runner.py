@@ -46,6 +46,7 @@ def select_action(env: PvZEnv, obs, *, policy=None, baseline=None, rng=None, mas
         actions = runner.decide(
             collate_observations(obs, network.device),
             torch.as_tensor(env.action_masks(), device=network.device).reshape(1, -1),
+            branch_usable=torch.as_tensor(env.branch_availability(), device=network.device).reshape(1, -1),
         )[0]
         return int(actions[0])
     kwargs = {"action_masks": env.action_masks()} if masked else {}

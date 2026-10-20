@@ -29,7 +29,7 @@ METRIC_SIZE = (
 
 
 class CudaFeatures:
-    """Canonical observations, geometry masks and rewards for one simulator batch.
+    """Canonical observations, policy masks and rewards for one simulator batch.
 
     Records are written into a persistent ``[rows, max_entities]`` store; ``rows``
     may exceed the batch so successive active passes keep their observations

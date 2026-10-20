@@ -49,13 +49,13 @@ count_scale = 75
 wave_scale = 15
 
 [reward]
-version = "action_global_value_v2"
+version = "action_global_value_v3"
 win_reward = 1.0
 loss_penalty = 1.0
 basic_zombie_value = 30.0 # 270 basic-zombie damage is worth 30 sunlight.
 mower_value = 500.0 # One lawn mower is worth 500 sunlight.
 progress_weight = 0.01
-value_scale = 300.0 # Unit conversion, never a sun cap.
+value_scale = 900.0 # Raw physical shaping is progress_weight / value_scale.
 home_entry_penalties = [0.005, 0.015] # First entry into the second, then first column.
 win_time_weight = 0.5 # Cohort-ranked endgame adjustment: first +0.5, last -0.5.
 early_sun_extra_multiplier = 2.0
@@ -71,7 +71,7 @@ block_value_by_plant = { sunflower = 0.0333333333, peashooter = 0.0333333333, wa
 [training]
 gamma = 1.0
 discount_clock = "simulation_ticks"
-method = "complete_return_action_global_v2"
+method = "complete_return_action_global_v3"
 budget_unit = "games"
 until_stage_complete = false # With --stage: stop only when its mastery gate passes.
 total_games = 10000
@@ -97,7 +97,7 @@ ram_gib = 6
 block_rows = 32768
 
 [training.objective]
-protocol = "complete_return_action_global_v2"
+protocol = "complete_return_action_global_v3"
 accepted_outcome_share = 0.5
 species_consistency_weight = 1.0
 species_consistency_huber_delta = 1.0
@@ -161,7 +161,7 @@ hybrid = false
 
 [policy]
 kind = "two_stage_transformer_q_v1"
-action_distribution = "sequential_q_unmasked_penalty_v1"
+action_distribution = "sequential_q_unmasked_tiles_v2"
 species_width = 128
 species_layers = 4
 species_heads = 8

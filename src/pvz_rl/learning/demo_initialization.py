@@ -30,7 +30,11 @@ from pvz_rl.envs.rewards import (
     HomeProximityLedger,
     reward_parts,
 )
-from pvz_rl.learning.action_routing import classify_actions, compact_invalid_rows
+from pvz_rl.learning.action_routing import (
+    branch_availability,
+    classify_actions,
+    compact_invalid_rows,
+)
 from pvz_rl.learning.batch_transport import collate_fitting_observations, fitting_metadata
 from pvz_rl.learning.checkpoints import DEMO_PROTOCOL as CHECKPOINT_PROTOCOL
 from pvz_rl.learning.checkpoints import MODEL_STATE_PROTOCOL
@@ -205,6 +209,7 @@ def _verify_action_order(archive_rows: list[dict], replay_path: Path, cfg: dict)
     causal.seed_observation(game.observe())
     source_credits = {}
     native_masks = []
+    native_branch_availability = []
     observations = []
     native_truncation = []
     native_actions = []
@@ -216,6 +221,15 @@ def _verify_action_order(archive_rows: list[dict], replay_path: Path, cfg: dict)
         before = game.observe()
         before_tick = before.tick
         native_masks.append(codec.mask(game))
+        cards = {card.plant_type: card for card in before.cards}
+        native_branch_availability.append(
+            branch_availability(
+                [before.sun],
+                [[cards[kind].cooldown_ticks if kind in cards else -1 for kind in codec.plants]],
+                [game.rules.plants[kind]["cost"] for kind in codec.plants],
+                card_present=[ [kind in cards for kind in codec.plants] ],
+            )[0]
+        )
         observations.append(observation_json(encoder.encode(before)))
         native_truncation.append(dict(encoder.last_truncation))
         native_actions.append(codec.encode(decode_action(entry["action"])))
@@ -275,7 +289,7 @@ def _verify_action_order(archive_rows: list[dict], replay_path: Path, cfg: dict)
         raise ValueError("archive and replay decision counts differ")
     reward_changes = 0
     recorded_total = recomputed_total = 0.0
-    for row, action, obs, outcome, immediate, reward, terminal, omitted, legal in zip(
+    for row, action, obs, outcome, immediate, reward, terminal, omitted, legal, available in zip(
         transitions,
         native_actions,
         observations,
@@ -285,6 +299,7 @@ def _verify_action_order(archive_rows: list[dict], replay_path: Path, cfg: dict)
         native_terminals,
         native_truncation,
         native_masks,
+        native_branch_availability,
         strict=True,
     ):
         if row["action"] != action:
@@ -332,7 +347,13 @@ def _verify_action_order(archive_rows: list[dict], replay_path: Path, cfg: dict)
         row["reward_parts"] = reward
         row["training_reward"] = float(training_rewards(components(reward), cfg))
         row["legal_mask"] = legal
-        routes, usable = classify_actions([action], [outcome[1]], legal[None], [outcome[2]])
+        routes, usable = classify_actions(
+            [action],
+            [outcome[1]],
+            legal[None],
+            [outcome[2]],
+            branch_available=np.asarray(available, dtype=bool)[None],
+        )
         row["route"], row["branch_usable"] = int(routes[0]), bool(usable[0])
     final_rows = [row for row in archive_rows if row.get("record_type") == "final_observation"]
     if final_rows:

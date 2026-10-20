@@ -285,6 +285,7 @@ class TwoStageTransformerPolicy(nn.Module):
         deterministic=True,
         active=None,
         active_plan=None,
+        branch_usable=None,
     ):
         observations = collate_observations(observations, self.device)
         species = self.species_values(observations, plan=active_plan)
@@ -297,7 +298,20 @@ class TwoStageTransformerPolicy(nn.Module):
             active = torch.as_tensor(active_plan.compact_indices >= 0, device=self.device)
         if active is not None:
             branches = torch.where(active, branches, 0)
-        tiles = self.conditional_tiles(observations, branches, plan=active_plan)
+        if branch_usable is None:
+            branch_usable = torch.ones(
+                (len(observations), 10), dtype=torch.bool, device=observations.device
+            )
+        else:
+            branch_usable = torch.as_tensor(
+                branch_usable, device=observations.device, dtype=torch.bool
+            )
+            if branch_usable.shape != (len(observations), 10):
+                raise ValueError("Branch availability must have shape [batch, 10]")
+        selected_usable = branch_usable.gather(1, branches[:, None]).flatten()
+        tile_rows = (branches > 0) & selected_usable
+        requests = torch.where(tile_rows, branches, torch.zeros_like(branches))
+        tiles = self.conditional_tiles(observations, requests, plan=active_plan)
         actions, _, _, details = select_q_actions(
             species,
             tiles,
@@ -306,5 +320,7 @@ class TwoStageTransformerPolicy(nn.Module):
             tile_exploration_epsilon=getattr(self, "tile_exploration_epsilon", 0.0),
             active=active,
         )
+        details["branch_usable"] = branch_usable
+        details["tile_inference_skipped"] = (branches > 0) & ~tile_rows
         details["observations"] = observations
         return actions, details
