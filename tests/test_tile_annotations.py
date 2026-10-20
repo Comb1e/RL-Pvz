@@ -509,8 +509,8 @@ vm.runInContext(`
  app.draft=new Set(['wait']);app.absolute=new Set();app.dirty=false;
  paint({buttons:1,clientX:500,clientY:400});
  if(!app.draft.has('wait')||app.draft.size!==1)throw Error('action canvas triggered tile painting');
- app.state={annotation_kind:'action',mode:'pending',difficulty:'easy',difficulties:['easy'],navigation:{},record:{id:'action-controls',revision:0,annotation_kind:'action',action_availability:{wait:{feasible:true},sunflower:{feasible:true},dig:{feasible:true}},automatic_absolute_infeasible_actions:['dig'],observation:{rows:5,cols:9,sun:100,wave:0,total_waves:1,plants:[],zombies:[]}}};
- app.draft=new Set();app.absolute=new Set();app.mode='add';render=fullRender;render();
+app.state={annotation_kind:'action',mode:'pending',difficulty:'easy',difficulties:['easy'],navigation:{},record:{id:'action-controls',revision:0,annotation_kind:'action',action_availability:{wait:{feasible:true},sunflower:{feasible:true},dig:{feasible:true}},automatic_absolute_infeasible_actions:[],absolute_infeasible_actions:['dig'],observation:{rows:5,cols:9,sun:100,wave:0,total_waves:1,plants:[],zombies:[]}}};
+app.draft=new Set();app.absolute=new Set(['dig']);app.mode='add';render=fullRender;render();
  if(!$('plant-label').hidden||$('branch-controls').hidden)throw Error('action mode did not switch to branch controls');
  render=()=>{};
  $('wait-action').onclick();
@@ -520,7 +520,11 @@ vm.runInContext(`
  app.mode='erase';$('wait-action').onclick();
  if(app.draft.has('wait')||app.absolute.has('wait'))throw Error('wait erase mode failed');
  app.mode='add';$('dig-action').onclick();
- if(app.draft.has('dig')||app.absolute.has('dig'))throw Error('locked dig action was editable');
+if(!app.draft.has('dig')||app.absolute.has('dig'))throw Error('default absolute dig was not editable');
+app.mode='absolute';$('dig-action').onclick();
+if(app.draft.has('dig')||!app.absolute.has('dig'))throw Error('dig absolute mode failed');
+app.mode='erase';$('dig-action').onclick();
+if(app.draft.has('dig')||app.absolute.has('dig'))throw Error('dig erase mode failed');
  app.state={annotation_kind:'tile',record:{id:'tile',revision:1,annotation_kind:'tile',plant_type:'peashooter',observation:{rows:5,cols:9},availability:{available:true,cost:0,sun:0,cooldown_ticks:0,legal_tiles:[0]},automatic_absolute_infeasible_tiles:[1,2]}};
  app.draft=new Set();app.absolute=new Set([1,2]);app.mode='absolute';app.busy=false;
  $('board').getBoundingClientRect=()=>({left:0,top:0,width:1280,height:820});
@@ -667,7 +671,7 @@ def test_action_sampler_defaults_dig_to_absolute_infeasible(monkeypatch):
     populated = next(row for row in rows if row["observation"]["plants"])
     assert populated["action_availability"]["dig"]["feasible"] is True
     assert populated["action_availability"]["dig"]["absolute_infeasible"] is False
-    assert "dig" in populated["automatic_absolute_infeasible_actions"]
+    assert "dig" not in populated["automatic_absolute_infeasible_actions"]
     assert "dig" in populated["absolute_infeasible_actions"]
     validate_record(populated, annotation=False, plant_types=load_config()["environment"]["plants"])
 

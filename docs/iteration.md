@@ -1,15 +1,16 @@
-## Dig starts absolute-infeasible in action annotation — 2026-10-20
+## Dig defaults to editable absolute-infeasible in action annotation — 2026-10-20
 
 - Problem/root cause: action annotation could inherit the sampler's raw dig
   availability and leave Dig unlabeled on boards that happened to contain a
   plant, even though action labels are intended to be chosen deliberately by
   the annotator.
 - Improvement: every newly generated or imported pending action record starts
-  Dig in the locked automatic absolute-infeasible set. The complete simulator
-  `action_availability.dig` fact remains unchanged for audit and display, and
-  legacy records using the old availability-derived automatic set remain
-  readable.
-- Verification: the focused annotation suite passes, direct sampled-board
+  Dig in the editable absolute-infeasible set. Dig is no longer added to the
+  automatic locked labels, so the annotator can move it to feasible or erase
+  the default. The complete simulator `action_availability.dig` fact remains
+  unchanged for audit and display, and legacy records using the old
+  availability-derived or locked-Dig automatic set remain readable.
+- Verification: the focused annotation suite passes 68 tests, direct sampled-board
   checks cover populated and empty boards, and Ruff plus `git diff --check`
   pass.
 - Remaining limits: existing completed records are not rewritten on disk; they

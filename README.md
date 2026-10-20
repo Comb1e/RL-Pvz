@@ -82,8 +82,8 @@ sequence is needed.
 Use `--kind action` to label the species/action head; those records are kept in
 `data/action-annotations.jsonl`. Tile mode supports feasible plots plus
 manual and locked automatic absolute-infeasible plots. Action mode supports feasible action types plus
-locked automatic absolute-infeasible branches; Dig starts locked by default,
-even when the sampled board currently contains a plant. Both fitters can start from random
+locked automatic absolute-infeasible branches; Dig starts in the editable
+absolute-infeasible set by default, even when the sampled board currently contains a plant. Both fitters can start from random
 weights, so annotation pretraining may precede human/demo initialization:
 
 ```powershell
