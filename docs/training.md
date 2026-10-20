@@ -115,8 +115,11 @@ writes `data/tile-annotations.jsonl`; `--kind action` writes
 and an unordered absolute-bottom set over all 45 outputs. Action labels use
 `wait`, the eight configured plant names, and `dig`. A feasible set must be
 non-empty. Simulator-impossible branches and tiles are automatically absolute
-and locked; human labels may add more absolute entries. Runtime gameplay masks
-are unchanged, while annotation fitting deliberately scores every output.
+and locked; new action records also start Dig as a locked absolute-infeasible
+label, even when the raw board contains a plant. The raw availability fact is
+preserved for audit, and human labels may add more absolute entries. Runtime
+gameplay masks are unchanged, while annotation fitting deliberately scores
+every output.
 
 Tile fitting freezes the species stage and action fitting freezes the tile
 stage. Both use the top-1/bottom-k margin objective, require exact feasible

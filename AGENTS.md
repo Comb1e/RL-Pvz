@@ -17,6 +17,7 @@
 - User's current scope: complete the code and training README; availability and short
   integration tests are allowed. Do not launch formal training unless requested.
 - In this project, always keep only one training and model framework.
+- Python: .venv\Scripts\python.exe
 
 ## Code structure
 

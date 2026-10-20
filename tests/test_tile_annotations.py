@@ -661,6 +661,17 @@ def test_action_sampler_uses_any_running_endpoint_without_selected_branch(monkey
         sampler.sample("easy", annotation_kind="tile")
 
 
+def test_action_sampler_defaults_dig_to_absolute_infeasible(monkeypatch):
+    sampler = ReachableSnapshotSampler(load_config(), seed=101, max_steps=20000)
+    rows = [sampler.sample("easy", annotation_kind="action") for _ in range(8)]
+    populated = next(row for row in rows if row["observation"]["plants"])
+    assert populated["action_availability"]["dig"]["feasible"] is True
+    assert populated["action_availability"]["dig"]["absolute_infeasible"] is False
+    assert "dig" in populated["automatic_absolute_infeasible_actions"]
+    assert "dig" in populated["absolute_infeasible_actions"]
+    validate_record(populated, annotation=False, plant_types=load_config()["environment"]["plants"])
+
+
 def test_sampler_diversifies_easy_states_with_delayed_sparse_planting():
     sampler = ReachableSnapshotSampler(load_config(), seed=101)
     assert sampler.max_steps == 20000

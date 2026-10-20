@@ -241,6 +241,27 @@ def _action_metadata(record, plant_types):
     return metadata
 
 
+def _automatic_action_labels(record, plant_types):
+    """Return automatic action labels for annotation records.
+
+    Simulator availability remains the source of truth for the audit metadata.
+    The annotation protocol additionally starts every new action record with
+    ``dig`` in the absolute-infeasible set.  This default keeps the action
+    annotator from silently inheriting the sampler's rollout choice; legacy
+    records that predate the default are still accepted by ``validate_record``.
+    """
+    metadata = _action_metadata(record, plant_types)
+    inferred = tuple(
+        name for name in metadata if name not in ("wait", "dig")
+    ) if plant_types is None else plant_types
+    names = action_names(inferred)
+    labels = {
+        name for name, item in metadata.items() if item["absolute_infeasible"]
+    }
+    labels.add("dig")
+    return sorted(labels, key=names.index)
+
+
 def validate_record(record, *, annotation=False, plant_types=None):
     if not isinstance(record, dict):
         raise ValueError("annotation record must be an object")
@@ -362,8 +383,20 @@ def validate_record(record, *, annotation=False, plant_types=None):
             for value, label in ((feasible, "feasible_actions"), (absolute, "absolute_infeasible_actions"), (automatic, "automatic_absolute_infeasible_actions")):
                 if not isinstance(value, list) or any(item not in names for item in value) or len(set(value)) != len(value) or value != sorted(value, key=names.index):
                     raise ValueError(f"{label} must contain unique known action names in canonical order")
-            derived_automatic = [name for name in names if _action_metadata(record, plant_types)[name]["absolute_infeasible"]]
-            if set(automatic) != set(derived_automatic):
+            metadata = _action_metadata(record, plant_types)
+            derived_automatic = [
+                name for name in names if metadata[name]["absolute_infeasible"]
+            ]
+            # New action snapshots default Dig to absolute-infeasible even on
+            # boards where the simulator could currently execute a dig.  Keep
+            # pre-default records readable by accepting their availability-
+            # derived set as well; newly generated records carry the expanded
+            # set and remain locked in the browser.
+            derived_default = _automatic_action_labels(record, plant_types)
+            if (
+                set(automatic) != set(derived_automatic)
+                and set(automatic) != set(derived_default)
+            ):
                 raise ValueError("automatic absolute action labels do not match availability")
             if not set(automatic).issubset(set(absolute)):
                 raise ValueError("automatic absolute action labels cannot be removed")
@@ -786,7 +819,15 @@ class LiveAnnotationStore:
         if self.kind == "tile":
             row.update(feasible_tiles=[])
         else:
-            row.update(feasible_actions=[], absolute_infeasible_actions=list(row.get("automatic_absolute_infeasible_actions", [])))
+            automatic = set(row.get("automatic_absolute_infeasible_actions", []))
+            # New action records always start with Dig locked as an
+            # absolute-infeasible annotation.  The sampler already persists
+            # this label; enforcing it here also covers imported snapshots.
+            automatic.add("dig")
+            row["automatic_absolute_infeasible_actions"] = sorted(
+                automatic, key=action_names(self.plant_types).index
+            )
+            row.update(feasible_actions=[], absolute_infeasible_actions=list(row["automatic_absolute_infeasible_actions"]))
         validate_record(row, annotation=True, plant_types=self.plant_types or None)
         if row["id"] in self.by_id:
             raise ValueError(f"duplicate annotation record id: {row['id']}")

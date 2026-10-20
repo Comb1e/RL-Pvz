@@ -1,3 +1,20 @@
+## Dig starts absolute-infeasible in action annotation — 2026-10-20
+
+- Problem/root cause: action annotation could inherit the sampler's raw dig
+  availability and leave Dig unlabeled on boards that happened to contain a
+  plant, even though action labels are intended to be chosen deliberately by
+  the annotator.
+- Improvement: every newly generated or imported pending action record starts
+  Dig in the locked automatic absolute-infeasible set. The complete simulator
+  `action_availability.dig` fact remains unchanged for audit and display, and
+  legacy records using the old availability-derived automatic set remain
+  readable.
+- Verification: the focused annotation suite passes, direct sampled-board
+  checks cover populated and empty boards, and Ruff plus `git diff --check`
+  pass.
+- Remaining limits: existing completed records are not rewritten on disk; they
+  retain their historical automatic labels until re-annotated.
+
 ## Action annotation states no longer carry a sampler-selected action — 2026-10-20
 
 - Problem/root cause: action annotation reused tile sampling’s requirement for a

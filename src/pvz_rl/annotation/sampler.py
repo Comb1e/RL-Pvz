@@ -241,9 +241,18 @@ def snapshot_record(env, *, plant_type=None, group_id, record_id, annotation_kin
         metadata = _action_availability(env)
         record["action_availability"] = metadata
         record["branch_availability"] = metadata
+        # Dig is intentionally an annotation default rather than a sampler
+        # choice.  Even when a board currently contains a plant, the action
+        # annotator starts with Dig in the absolute-infeasible set so users
+        # must explicitly opt into another action set instead of inheriting a
+        # rollout artifact.  Keep the simulator's actual dig feasibility in
+        # ``action_availability`` for display and audit purposes.
+        automatic = {
+            name for name, item in metadata.items() if item["absolute_infeasible"]
+        }
+        automatic.add("dig")
         record["automatic_absolute_infeasible_actions"] = sorted(
-            [name for name, item in metadata.items() if item["absolute_infeasible"]],
-            key=action_names(env.codec.plants).index,
+            automatic, key=action_names(env.codec.plants).index
         )
         record["absolute_infeasible_actions"] = list(record["automatic_absolute_infeasible_actions"])
         record["feasible_actions"] = []
