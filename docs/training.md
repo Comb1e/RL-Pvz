@@ -115,8 +115,9 @@ writes `data/tile-annotations.jsonl`; `--kind action` writes
 and an unordered absolute-bottom set over all 45 outputs. Action labels use
 `wait`, the eight configured plant names, and `dig`. A feasible set must be
 non-empty. Simulator-impossible branches and tiles are automatically absolute
-and locked; new action records also start Dig as a locked absolute-infeasible
-label, even when the raw board contains a plant. The raw availability fact is
+and locked. New action records also start Dig as an editable absolute-infeasible
+label, even when the raw board contains a plant, so the annotator can move it
+to feasible or remove it. The raw availability fact is
 preserved for audit, and human labels may add more absolute entries. Runtime
 gameplay masks are unchanged, while annotation fitting deliberately scores
 every output.

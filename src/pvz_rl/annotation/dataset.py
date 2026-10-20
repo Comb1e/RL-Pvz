@@ -245,10 +245,11 @@ def _automatic_action_labels(record, plant_types):
     """Return automatic action labels for annotation records.
 
     Simulator availability remains the source of truth for the audit metadata.
-    The annotation protocol additionally starts every new action record with
-    ``dig`` in the absolute-infeasible set.  This default keeps the action
-    annotator from silently inheriting the sampler's rollout choice; legacy
-    records that predate the default are still accepted by ``validate_record``.
+    The annotation protocol starts every new action record with ``dig`` in the
+    editable absolute-infeasible set, but Dig is deliberately absent here so
+    the browser cannot mistake that default for a locked simulator-impossible
+    label. Legacy records that predate the default and locked Dig remain
+    readable by ``validate_record``.
     """
     metadata = _action_metadata(record, plant_types)
     inferred = tuple(
@@ -258,7 +259,6 @@ def _automatic_action_labels(record, plant_types):
     labels = {
         name for name, item in metadata.items() if item["absolute_infeasible"]
     }
-    labels.add("dig")
     return sorted(labels, key=names.index)
 
 
@@ -387,15 +387,17 @@ def validate_record(record, *, annotation=False, plant_types=None):
             derived_automatic = [
                 name for name in names if metadata[name]["absolute_infeasible"]
             ]
-            # New action snapshots default Dig to absolute-infeasible even on
-            # boards where the simulator could currently execute a dig.  Keep
-            # pre-default records readable by accepting their availability-
-            # derived set as well; newly generated records carry the expanded
-            # set and remain locked in the browser.
+            # New action snapshots default Dig to editable absolute-infeasible
+            # even on boards where the simulator could currently execute a
+            # dig. Keep pre-default records readable by accepting their old
+            # availability-derived or locked-Dig automatic set.
             derived_default = _automatic_action_labels(record, plant_types)
+            legacy_locked_default = sorted(
+                set(derived_default) | {"dig"}, key=names.index
+            )
             if (
                 set(automatic) != set(derived_automatic)
-                and set(automatic) != set(derived_default)
+                and set(automatic) != set(legacy_locked_default)
             ):
                 raise ValueError("automatic absolute action labels do not match availability")
             if not set(automatic).issubset(set(absolute)):
@@ -404,7 +406,12 @@ def validate_record(record, *, annotation=False, plant_types=None):
                 raise ValueError("feasible_actions and absolute_infeasible_actions overlap")
             if not feasible and status == "labeled":
                 raise ValueError("labeled action records require at least one feasible action")
-            if status in ("pending", "discarded") and (feasible or set(absolute) - set(automatic)):
+            # Dig is the editable default for new pending/discarded records;
+            # it is allowed in the absolute set without becoming automatic.
+            editable_defaults = {"dig"} if "dig" in names else set()
+            if status in ("pending", "discarded") and (
+                feasible or set(absolute) - set(automatic) - editable_defaults
+            ):
                 raise ValueError(f"{status} records cannot contain human action labels")
             record["feasible_actions"] = list(feasible)
             record["absolute_infeasible_actions"] = list(absolute)
@@ -696,6 +703,25 @@ class LiveAnnotationStore:
         )
         if any(annotation_kind(row) != self.kind for row in self.records):
             raise ValueError("annotation dataset kind does not match the annotator mode")
+        migrated_editable_dig = False
+        if self.kind == "action":
+            # Older v2 records treated the sampler's default Dig label as an
+            # automatic (locked) label.  Keep their absolute label, but make
+            # the status editable when the store is reopened so every action
+            # annotation follows the current contract.
+            for row in self.records:
+                inferred_plants = self.plant_types or tuple(
+                    name
+                    for name in row.get("action_availability", {})
+                    if name not in ("wait", "dig")
+                )
+                names = action_names(inferred_plants)
+                automatic = set(row.get("automatic_absolute_infeasible_actions", []))
+                if "dig" in automatic:
+                    row["automatic_absolute_infeasible_actions"] = sorted(
+                        automatic - {"dig"}, key=names.index
+                    )
+                    migrated_editable_dig = True
         self.by_id = {row["id"]: row for row in self.records}
         pending = [row for row in self.records if row.get("status") == "pending"]
         if len(pending) > 1:
@@ -706,6 +732,14 @@ class LiveAnnotationStore:
             if self.manifest_path.is_file()
             else {}
         )
+        if migrated_editable_dig:
+            for row in self.records:
+                validate_record(
+                    row,
+                    annotation=True,
+                    plant_types=self.plant_types or None,
+                )
+            self._persist()
 
     @property
     def pending(self):
@@ -820,14 +854,20 @@ class LiveAnnotationStore:
             row.update(feasible_tiles=[])
         else:
             automatic = set(row.get("automatic_absolute_infeasible_actions", []))
-            # New action records always start with Dig locked as an
-            # absolute-infeasible annotation.  The sampler already persists
-            # this label; enforcing it here also covers imported snapshots.
-            automatic.add("dig")
+            # New action records start with Dig in the editable
+            # absolute-infeasible set. It is intentionally not added to
+            # ``automatic`` because the browser must allow changing it.
+            automatic.discard("dig")
             row["automatic_absolute_infeasible_actions"] = sorted(
                 automatic, key=action_names(self.plant_types).index
             )
-            row.update(feasible_actions=[], absolute_infeasible_actions=list(row["automatic_absolute_infeasible_actions"]))
+            row.update(
+                feasible_actions=[],
+                absolute_infeasible_actions=sorted(
+                    automatic | {"dig"},
+                    key=action_names(self.plant_types).index,
+                ),
+            )
         validate_record(row, annotation=True, plant_types=self.plant_types or None)
         if row["id"] in self.by_id:
             raise ValueError(f"duplicate annotation record id: {row['id']}")
@@ -926,7 +966,10 @@ class LiveAnnotationStore:
             if not isinstance(feasible, list) or not isinstance(absolute, list):
                 raise ValueError("action labels must be lists")
             if status == "discarded":
-                feasible, absolute = [], list(row.get("automatic_absolute_infeasible_actions", []))
+                feasible = []
+                absolute = list(row.get("automatic_absolute_infeasible_actions", []))
+                if "dig" in action_names(self.plant_types):
+                    absolute.append("dig")
             absolute = sorted(set(absolute) | set(row.get("automatic_absolute_infeasible_actions", [])), key=action_names(self.plant_types).index)
             updated = dict(row)
             updated.update(status=status, feasible_actions=sorted(set(feasible), key=action_names(self.plant_types).index), absolute_infeasible_actions=sorted(set(absolute), key=action_names(self.plant_types).index), discard_reason=reason if status == "discarded" else None, revision=revision + 1)

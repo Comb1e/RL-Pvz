@@ -244,7 +244,7 @@ and optional unordered absolute-bottom set. The top-1/bottom-k margin objective
 requires one feasible label to win and all absolute labels to occupy the lowest
 slots, without ordering labels within either set. Automatic simulator-impossible
 labels are persisted and locked in the browser; new action records also start
-Dig as a locked absolute-infeasible label while retaining raw dig availability
+Dig as an editable absolute-infeasible label while retaining raw dig availability
 for audit. Tile fitting freezes species; action fitting freezes tiles. Both can
 start from random weights. The optional
 `initialize-demo --init-from` loads either artifact and creates fresh
