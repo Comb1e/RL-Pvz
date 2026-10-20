@@ -11,9 +11,11 @@ from pathlib import Path
 import numpy as np
 import torch
 from pvz_game import Rules
+from pvz_game.cuda.schema import REASONS
 from pvz_game.replay import decode_action, read_recording
 
 from pvz_rl.config import digest, load_demo_config
+from pvz_rl.envs.action_credit import CausalCreditLedger
 from pvz_rl.envs.action_timing import ActionPhaseGame
 from pvz_rl.envs.actions import ActionCodec, ActionSchema
 from pvz_rl.envs.encoding import (
@@ -28,18 +30,23 @@ from pvz_rl.envs.rewards import (
     HomeProximityLedger,
     reward_parts,
 )
+from pvz_rl.learning.action_routing import classify_actions, compact_invalid_rows
+from pvz_rl.learning.batch_transport import collate_fitting_observations, fitting_metadata
 from pvz_rl.learning.checkpoints import DEMO_PROTOCOL as CHECKPOINT_PROTOCOL
 from pvz_rl.learning.checkpoints import MODEL_STATE_PROTOCOL
+from pvz_rl.learning.cuda_buffer import trajectory_dtype
 from pvz_rl.learning.flat_q import batch_loss
 from pvz_rl.learning.objective import (
+    COMPONENTS,
     components,
     consistency_diagnostics,
     demonstration_rank_loss,
     ranking_counts,
+    raw_rewards,
     training_rewards,
 )
 from pvz_rl.learning.performance import without_performance
-from pvz_rl.policy.sequential_q import action_groups, action_parts
+from pvz_rl.policy.sequential_q import action_parts
 from pvz_rl.policy.two_stage_transformer import TwoStageTransformerPolicy
 from pvz_rl.presentation.recordings import open_playback, verify_replay
 from pvz_rl.provenance import file_hash, write_json
@@ -51,7 +58,7 @@ class VerifiedDemo:
     transitions: list[dict]
 
 
-def _verify_reward_facts(row: dict, reconstructed: dict) -> None:
+def _verify_reward_facts(row: dict, reconstructed: dict, cfg=None) -> None:
     """Validate historical facts/accounting, never historical reward coefficients."""
     saved = row.get("reward_parts")
     error = f"reward ledger mismatch at decision {row['decision_index']}"
@@ -71,6 +78,27 @@ def _verify_reward_facts(row: dict, reconstructed: dict) -> None:
                     "early_sun",
                     "early_sun_bonus",
                 },
+                {
+                    "global_terminal",
+                    "global_asset_value",
+                    "action_damage",
+                    "action_blocking",
+                    "action_sun",
+                    "action_mower",
+                },
+                {
+                    *HOME_FACT_FIELDS,
+                    "home_proximity",
+                    "victory_time",
+                    "early_sun",
+                    "early_sun_bonus",
+                    "global_terminal",
+                    "global_asset_value",
+                    "action_damage",
+                    "action_blocking",
+                    "action_sun",
+                    "action_mower",
+                },
             )
         )
         or any(
@@ -78,27 +106,66 @@ def _verify_reward_facts(row: dict, reconstructed: dict) -> None:
         )
         or any(saved[key] != reconstructed[key] for key in REWARD_FACT_FIELDS)
         or any(saved[key] != reconstructed[key] for key in HOME_FACT_FIELDS if key in saved)
+            or (
+                "global_asset_value" in saved
+                and not math.isclose(
+                    float(saved["global_asset_value"]),
+                    float(reconstructed.get("global_asset_value", 0.0)),
+                    rel_tol=1e-12,
+                    abs_tol=1e-12,
+                )
+            )
     ):
         raise ValueError(error)
     # Even old v2 archives without their reward configuration can verify these
     # identities. Historical prices are diagnostics; only replay rewards train.
-    total = (
-        saved["terminal"]
-        + saved["development"]
-        + saved["invalid_plant_penalty"]
-        + saved["empty_dig_penalty"]
-        + saved.get("home_proximity", 0)
-        + saved.get("victory_time", 0)
-    )
+    has_current_components = all(key in saved for key in COMPONENTS)
+    if not has_current_components:
+        total = (
+            saved["terminal"]
+            + saved["development"]
+            + saved["invalid_plant_penalty"]
+            + saved["empty_dig_penalty"]
+            + saved.get("home_proximity", 0)
+            + saved.get("victory_time", 0)
+        )
     net = (
         saved["produced_sun"]
         - saved["plant_value_loss"]
         + saved["combat_value"]
         - saved["mower_expenditure"]
     )
-    if not math.isclose(saved["total"], total, rel_tol=1e-12, abs_tol=1e-12) or not math.isclose(
-        saved["net_value"], net, rel_tol=1e-12, abs_tol=1e-12
-    ):
+    # New archives may have been recorded with a different reward coefficient
+    # profile. Their fact fields remain verifiable, but their historical total
+    # is deliberately not compared with the current profile; replay below
+    # recomputes the current six-component reward before fitting.
+    total_matches = has_current_components or math.isclose(
+        saved["total"], total, rel_tol=1e-12, abs_tol=1e-12
+    )
+    if has_current_components:
+        # Current archives retain enough scalar facts to recover the scale
+        # used when their immediate reward was written.  This catches a
+        # tampered ``total`` even when the caller deliberately changes the
+        # current reward coefficients to reprice a verified demonstration.
+        net_value = float(saved.get("net_value", 0.0))
+        development = float(saved.get("development", 0.0))
+        early_bonus = float(saved.get("early_sun_bonus", 0.0))
+        if abs(net_value) > 1e-15:
+            scale = (development - early_bonus) / net_value
+            physical = sum(float(saved.get(key, 0.0)) for key in COMPONENTS[1:])
+            expected = float(saved["terminal"]) + scale * physical
+            total_matches = total_matches and math.isclose(
+                float(saved["total"]), expected, rel_tol=1e-9, abs_tol=1e-9
+            )
+        elif abs(development) <= 1e-15 and abs(early_bonus) <= 1e-15:
+            # A completely idle transition has no scale-dependent term; its
+            # total must therefore be exactly the terminal component.
+            physical = sum(float(saved.get(key, 0.0)) for key in COMPONENTS[1:])
+            if abs(physical) <= 1e-15:
+                total_matches = total_matches and math.isclose(
+                    float(saved["total"]), float(saved["terminal"]), rel_tol=1e-12, abs_tol=1e-12
+                )
+    if not total_matches or not math.isclose(saved["net_value"], net, rel_tol=1e-12, abs_tol=1e-12):
         raise ValueError(error)
     invalid_plant = not row["accepted"] and 0 < row["action"] < ActionSchema.dig_start
     empty_dig = (
@@ -130,11 +197,19 @@ def _verify_action_order(archive_rows: list[dict], replay_path: Path, cfg: dict)
     encoder = ObservationEncoder(cfg, game.rules)
     codec = ActionCodec(cfg)
     proximity = HomeProximityLedger(game.observe(), game.rules)
+    # Reconstruct the same causal source ledger used by the live CPU adapter.
+    # Replay facts are authoritative, but provenance is deliberately kept out
+    # of the observation and archive schema.  Delayed effects are applied to
+    # their source transition only after the complete replay has been checked.
+    causal = CausalCreditLedger(cfg, game.rules)
+    causal.seed_observation(game.observe())
+    source_credits = {}
     native_masks = []
     observations = []
     native_truncation = []
     native_actions = []
     native_outcomes = []
+    native_immediate_rewards = []
     native_rewards = []
     native_terminals = []
     for entry in data["entries"]:
@@ -144,8 +219,34 @@ def _verify_action_order(archive_rows: list[dict], replay_path: Path, cfg: dict)
         observations.append(observation_json(encoder.encode(before)))
         native_truncation.append(dict(encoder.last_truncation))
         native_actions.append(codec.encode(decode_action(entry["action"])))
+        action_id = len(native_actions) - 1
         action = decode_action(entry["action"])
         result = game.step(action, ticks=entry["ticks"])
+        credits = causal.attribute(result.events, action_id=action_id)
+        causal.register_plant_kinds(result.observation)
+        for source, values in credits.items():
+            # The current transition is already supplied to reward_parts via
+            # ``causal_credits`` below.  Only retain credits that must be
+            # moved back to an earlier source row.
+            if source is None or int(source) == action_id:
+                continue
+            bucket = source_credits.setdefault(
+                int(source), {"damage": 0.0, "blocking": 0.0, "sun": 0.0, "mower": 0.0}
+            )
+            for field in bucket:
+                bucket[field] += float(values.get(field, 0.0))
+        native_immediate_rewards.append(
+            reward_parts(
+                before,
+                result.observation,
+                cfg,
+                events=result.events,
+                rules=game.rules,
+                action=action,
+                action_result=result.action_result,
+                proximity=proximity,
+            )
+        )
         native_rewards.append(
             reward_parts(
                 before,
@@ -156,6 +257,7 @@ def _verify_action_order(archive_rows: list[dict], replay_path: Path, cfg: dict)
                 action=action,
                 action_result=result.action_result,
                 proximity=proximity,
+                causal_credits=credits.get(action_id),
             )
         )
         native_terminals.append(result.status.value)
@@ -173,11 +275,12 @@ def _verify_action_order(archive_rows: list[dict], replay_path: Path, cfg: dict)
         raise ValueError("archive and replay decision counts differ")
     reward_changes = 0
     recorded_total = recomputed_total = 0.0
-    for row, action, obs, outcome, reward, terminal, omitted, legal in zip(
+    for row, action, obs, outcome, immediate, reward, terminal, omitted, legal in zip(
         transitions,
         native_actions,
         observations,
         native_outcomes,
+        native_immediate_rewards,
         native_rewards,
         native_terminals,
         native_truncation,
@@ -203,14 +306,34 @@ def _verify_action_order(archive_rows: list[dict], replay_path: Path, cfg: dict)
             raise ValueError(f"action outcome mismatch at decision {row['decision_index']}")
         if row["terminal"] != terminal:
             raise ValueError(f"terminal mismatch at decision {row['decision_index']}")
-        _verify_reward_facts(row, reward)
-        reward_changes += row["reward_parts"] != reward
+        # Validate the archived, immediate event facts before applying
+        # retroactive source credits.  Older archives may have used a
+        # different coefficient profile, but their public event accounting
+        # must still agree with the replay.
+        _verify_reward_facts(row, immediate, cfg)
         recorded_total += row["reward_parts"]["total"]
+        # Replace only the in-memory fitting data, never the user's recording.
+        # A source row can receive several delayed effects over later replay
+        # entries; update all six learning components atomically and derive the
+        # scalar reward from that final component vector.
+        source = source_credits.get(int(row["decision_index"]))
+        if source:
+            for field, component in (
+                ("damage", "action_damage"),
+                ("blocking", "action_blocking"),
+                ("sun", "action_sun"),
+                ("mower", "action_mower"),
+            ):
+                reward[component] = float(reward.get(component, 0.0)) + float(source[field])
+            reward["total"] = float(raw_rewards(components(reward), cfg))
+        reward_changes += row["reward_parts"] != reward
         recomputed_total += reward["total"]
         # Replace only the in-memory fitting data, never the user's recording.
         row["reward_parts"] = reward
         row["training_reward"] = float(training_rewards(components(reward), cfg))
         row["legal_mask"] = legal
+        routes, usable = classify_actions([action], [outcome[1]], legal[None], [outcome[2]])
+        row["route"], row["branch_usable"] = int(routes[0]), bool(usable[0])
     final_rows = [row for row in archive_rows if row.get("record_type") == "final_observation"]
     if final_rows:
         final = observation_json(encoder.encode(game.observe()))
@@ -227,6 +350,9 @@ def _verify_action_order(archive_rows: list[dict], replay_path: Path, cfg: dict)
         "recorded_reward_total": recorded_total,
         "recomputed_reward_total": recomputed_total,
         "reward_settings": dict(cfg["reward"]),
+        "causal_source_credited_rows": len(source_credits),
+        "causal_source_credits": source_credits,
+        "causal_unattributable_events": int(causal.last_diagnostics.get("unattributable_events", 0)),
     }
 
 
@@ -328,6 +454,7 @@ def initialize_demo(
     seed: int | None = None,
     time_budget_minutes: float | None = None,
     device: str = "cpu",
+    init_from: str | Path | None = None,
 ) -> dict:
     """Fit one complete game and publish a checkpoint only after whole passes."""
     cfg = cfg or load_demo_config()
@@ -355,6 +482,11 @@ def initialize_demo(
     torch.set_num_threads(cfg["training"]["torch_threads"])
     torch.manual_seed(seed)
     model = TwoStageTransformerPolicy(cfg).to(device)
+    if init_from is not None:
+        from pvz_rl.learning.training import initial_weights
+
+        weights, _ = initial_weights(init_from, cfg)
+        model.load_state_dict(weights, strict=True)
     with torch.random.fork_rng(
         devices=[torch.device(device)] if str(device).startswith("cuda") else []
     ):
@@ -380,19 +512,66 @@ def initialize_demo(
         np.asarray([r["legal_mask"] for r in demonstration.transitions], dtype=np.bool_),
         device=device,
     )
-    group_counts = torch.bincount(
-        action_groups(actions) * 2 + accepted.long(), minlength=6
-    ).reshape(3, 2)
-    rank_counts = ranking_counts(actions, accepted, legal)[0]
     objective = cfg["training"]["objective"]
+    raw_decisions = len(actions)
     rows = np.zeros(
         len(actions),
-        dtype=[("active", "?"), ("action", "<i8"), ("accepted", "?"), ("target", "<f4")],
+        dtype=trajectory_dtype(cfg),
     )
     rows["active"] = True
     rows["action"] = actions.cpu().numpy()
     rows["accepted"] = accepted.cpu().numpy()
     rows["target"] = returns.cpu().numpy()
+    rows["route"] = [r["route"] for r in demonstration.transitions]
+    rows["branch_usable"] = [r["branch_usable"] for r in demonstration.transitions]
+    rows["env"] = 0
+    if len(rows):
+        rows["reset"][0] = True
+    rows["tick"] = [int(r.get("tick", index)) for index, r in enumerate(demonstration.transitions)]
+    rows["done"] = [r.get("terminal") not in (None, "running") for r in demonstration.transitions]
+    for index, transition in enumerate(demonstration.transitions):
+        reason = transition.get("rejection_reason")
+        if reason is None:
+            reason = 0
+        elif isinstance(reason, str):
+            try:
+                reason = REASONS.index(reason)
+            except ValueError as exc:
+                raise ValueError(f"unknown demonstration rejection reason: {reason}") from exc
+        rows["rejection_reason"][index] = int(reason)
+    compact_positions, compact_counts, compaction = compact_invalid_rows(
+        rows,
+        group_size=objective.get("invalid_fit_group_size", 100),
+    )
+    rows = rows[compact_positions]
+    observations = [observations[index] for index in compact_positions]
+    selection = torch.as_tensor(compact_positions, device=device)
+    actions, accepted, legal = actions[selection], accepted[selection], legal[selection]
+    group_counts = torch.as_tensor(compact_counts, device=device)
+    rank_counts = ranking_counts(actions, accepted, legal)[0]
+    # Returns were computed in episode order. Reorder only fitting work, with
+    # all real rows and complete-cohort returns retained unchanged.
+    widths = np.asarray([len(obs["entities"]) for obs in observations])
+    order = np.lexsort(
+        (
+            rows["route"],
+            np.searchsorted(cfg["training"]["performance"]["fit_entity_buckets"], widths),
+        )
+    )
+    rows = rows[order]
+    observations = [observations[i] for i in order]
+    selection = torch.as_tensor(order, device=device)
+    actions, accepted, legal = actions[selection], accepted[selection], legal[selection]
+    keys = (
+        np.searchsorted(cfg["training"]["performance"]["fit_entity_buckets"], widths[order]) * 4
+        + rows["route"]
+    )
+    boundaries = np.r_[0, np.flatnonzero(keys[1:] != keys[:-1]) + 1, len(rows)]
+    chunks = [
+        (start, min(start + batch_size, int(upper)))
+        for lower, upper in zip(boundaries[:-1], boundaries[1:], strict=True)
+        for start in range(int(lower), int(upper), batch_size)
+    ]
     started = time.monotonic()
     completed = 0
     for pass_index in range(passes):
@@ -401,26 +580,30 @@ def initialize_demo(
         model.zero_grad(set_to_none=True)
         rank_accuracy = torch.zeros(4, device=device)
         pass_metrics = torch.zeros(10, device=device, dtype=torch.float64)
-        for start in range(0, len(observations), batch_size):
-            stop = min(start + batch_size, len(observations))
-            current = collate_observations(observations[start:stop], device)
+        for start, stop in chunks:
+            current = collate_fitting_observations(observations[start:stop], cfg, device)
             loss, _, gap = batch_loss(
                 model,
                 rows[start:stop],
                 group_counts,
                 current,
+                fitting_metadata(rows[start:stop], device),
                 teacher=teacher,
-                consistency_counts=group_counts[1:],
+                consistency_counts=group_counts[1:] * torch.tensor([0, 1], device=device),
             )
-            rank, accuracy = demonstration_rank_loss(
-                model,
-                current,
-                actions[start:stop],
-                accepted[start:stop],
-                legal[start:stop],
-                rank_counts,
-                objective["demo_rank_margin"],
-            )
+            selected = torch.as_tensor(np.flatnonzero(rows["accepted"][start:stop]), device=device)
+            if len(selected):
+                rank, accuracy = demonstration_rank_loss(
+                    model,
+                    current[selected],
+                    actions[start:stop][selected],
+                    accepted[start:stop][selected],
+                    legal[start:stop][selected],
+                    rank_counts,
+                    objective["demo_rank_margin"],
+                )
+            else:
+                rank, accuracy = loss.detach() * 0, loss.new_zeros(4)
             loss = loss + objective["demo_rank_loss_weight"] * rank
             rank_accuracy += accuracy.detach()
             loss.backward()
@@ -464,6 +647,7 @@ def initialize_demo(
                 "branch_ranking_accuracy": scores[0] / scores[1] if scores[1] else None,
                 "tile_ranking_accuracy": scores[2] / scores[3] if scores[3] else None,
                 "decisions": len(actions),
+                "raw_decisions": raw_decisions,
             }
         )
         _save_checkpoint(
@@ -486,6 +670,7 @@ def initialize_demo(
         output / "learning-curves.json",
         {"fit_scope": "one completed demonstration", "curves": curves},
     )
+    write_json(output / "fitting-compaction.json", compaction)
     write_json(output / "action-coverage.json", {"branches": coverage.tolist()})
     write_json(output / "replay-verification.json", verification)
     write_json(
@@ -500,6 +685,7 @@ def initialize_demo(
         "passes_completed": completed,
         "checkpoint": str((output / "initialization.pt").resolve()) if completed else None,
         "verification": verification,
+        "fitting_compaction": compaction,
     }
 
 

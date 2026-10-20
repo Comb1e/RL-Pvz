@@ -154,3 +154,23 @@ idle gaps between enqueued operations contribute too. It cannot establish
 GPU busy time. NVIDIA utilization measures whether any kernel ran during a
 device sample window, not SM occupancy, achieved FLOPs or training throughput.
 A one-second poll can miss shorter bursts and is device-wide.
+
+
+## Selective fitting workloads
+
+The fitting spool groups by entity bucket and persisted route. CPU selections
+are transferred with the existing pinned batches: species-invalid performs no
+tile/EMA forward, tile-invalid performs no species/EMA forward, and accepted
+non-wait reuses online tile tables for detached EMA consistency. No CUDA boolean
+compaction or deduplication is needed for this validated path. Rejection-heavy
+cohorts can therefore have much less EMA work without altering the simulator or
+ordinary controller selection.
+
+The existing `tools/tune_gpu.py` calls the shared complete-fit benchmark. Every
+sparse/medium/dense/bucket-boundary workload now includes wait-only, mixed,
+accepted tile-heavy, species-invalid-only, tile-invalid-only and rejection-heavy
+cases with coherent public availability and outcomes. JSON reports routed rows,
+online species/tile rows, EMA tile rows and skipped EMA rows alongside transport,
+cold four-pass setup, warmed repetitions, graph caches and peak memory. These
+are execution measurements, not game-quality evidence. Compare warmed complete
+work and cold setup separately; GPU utilization alone cannot establish speedup.

@@ -104,7 +104,7 @@ def test_exact_cost_cooldown_and_many_operations_without_an_artificial_cap(per_t
     assert env.public.tick == 1
 
 
-@pytest.mark.parametrize("terminal,expected", [(Status.WON, 1), (Status.LOST, -2)])
+@pytest.mark.parametrize("terminal,expected", [(Status.WON, 1), (Status.LOST, -1)])
 def test_configured_terminal_rewards_preserve_physical_assets(per_tick_cfg, terminal, expected):
     from dataclasses import replace
 
@@ -122,7 +122,7 @@ def test_wait_cutoff_terminal_precedence_and_restricted_request(per_tick_cfg):
         assert env.step(0)[2:4] == (False, False)
     _, _, terminated, truncated, info = env.step(0)
     assert not terminated and truncated and info["ticks_advanced"] == 1
-    assert info["reward_parts"]["terminal"] == -2 and asset_value(env.public) > 0
+    assert info["reward_parts"]["terminal"] == -1 and asset_value(env.public) > 0
     env.reset(options={"scenario": LevelSpec("empty")})
     assert env.step(0)[2:4] == (True, False)
     env.reset(options={"scenario": LevelSpec("last-tick-win", (Spawn(100, "basic", 0, x=0),))})
@@ -135,7 +135,7 @@ def test_wait_cutoff_terminal_precedence_and_restricted_request(per_tick_cfg):
     env.reset(options={"scenario": LevelSpec("loss", (Spawn(1, "basic", 0, x=0),), mowers=False)})
     while env.state == "running":
         _, _, _, _, info = env.step(0)
-    assert info["reward_parts"]["terminal"] == -2
+    assert info["reward_parts"]["terminal"] == -1
     lesson = PvZEnv(per_tick_cfg, family="diagnostic")
     lesson.reset(seed=42)
     info = lesson.step(lesson.codec.encode(Place("cherry_bomb", 0, 0)))[4]

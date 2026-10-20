@@ -6,10 +6,10 @@ The species Transformer selects a plant, wait or dig; the independent tile
 Transformer scores 45 tiles for the selected branch. Both read only the current
 public board. Planting creates no counterfactual rollout.
 
-Fresh weights are required for `complete_return_sequential_no_probe_v1`.
-Existing verified recordings can produce a new initialization in an unused directory;
-previous checkpoints, including earlier two-stage `human-init\initialization.pt`,
-cannot initialize or resume this objective. Preserve their files. Parameters live in
+Training uses `complete_return_action_global_v1` with a causal action/global
+reward ledger. Previous compatible
+BF16-master two-stage weights remain usable for inference and fresh `--init-from`;
+previous-objective runs cannot resume. Parameters live in
 [src/pvz_rl/data/train.toml](src/pvz_rl/data/train.toml).
 
 ## Requirements
@@ -56,6 +56,90 @@ Select a physical CUDA GPU independently from execution and learning presets. Na
 ```
 
 For JupyterLab, install `pip install -e .[web]` (or `jupyter-server-proxy`) and use `--viewer web`; training prints a relative `./proxy/<port>/` URL. Add `--viewer-port 6006` when the cloud port-forwarding service needs a fixed port. Checkpoint weights remain portable; destination GPU execution caches rebuild.
+
+Open the standalone annotator with one command. It serves a local web page,
+stores records in `data/tile-annotations.jsonl`, and lets you choose `easy`,
+`standard`, or `hard` in the browser. Each generated map contains a reachable
+state with a plant card that is present, affordable, cooled down, and legally
+placeable in tile mode. Action mode accepts any running reachable state and
+lets you label plant cards, Wait, and Dig directly; it does not display a
+sampler-selected current action.
+
+Generation draws a simulation limit uniformly from 0–20,000 steps and retries
+finished games. Planting attempts occur every random 500–1,500 steps, choosing
+equally from wait and the eight plant types (1/9 each). Unavailable plant choices
+become wait without redrawing; usable choices select a random legal plot, with
+at most eight plants on the board:
+
+The annotator uses a fresh entropy-derived session seed by default, so restarting
+it does not replay the same map sequence. Pass `--seed N` when a reproducible
+sequence is needed.
+
+```powershell
+.\.venv\Scripts\python.exe -m pvz_rl annotate --port 6006
+```
+
+Use `--kind action` to label the species/action head; those records are kept in
+`data/action-annotations.jsonl`. Tile mode supports feasible plots plus
+manual and locked automatic absolute-infeasible plots. Action mode supports feasible action types plus
+locked automatic absolute-infeasible branches; Dig starts locked by default,
+even when the sampled board currently contains a plant. Both fitters can start from random
+weights, so annotation pretraining may precede human/demo initialization:
+
+```powershell
+.\.venv\Scripts\python.exe -m pvz_rl fit-tile-annotations --annotations data\tile-annotations.jsonl --output runs\tile.pt
+.\.venv\Scripts\python.exe -m pvz_rl fit-action-annotations --annotations data\action-annotations.jsonl --output runs\action.pt --init-from runs\tile.pt
+.\.venv\Scripts\python.exe -m pvz_rl initialize-demo --init-from runs\action.pt --archive runs\human-1000.jsonl --replay runs\human-1000.pvzdemo --output runs\human-init
+```
+
+Open the printed `./proxy/6006/` path in JupyterLab, hold the left mouse button
+while dragging to paint feasible plots, then choose **Save and next**. In action
+mode, click plant cards directly or use the Wait/Dig controls to mark feasible or
+absolute-infeasible actions; the board toolbar does not duplicate each card as a
+separate button. The next map is generated at the same difficulty. Use
+**Discard state** for a meaningless
+map; discarded states stay in the audit file and are excluded from fitting.
+Use **Previous** and **Next** to revisit maps, edit labels, and **Save changes**
+in place. Discarded maps can be labeled again. **Return to current** resumes the
+pending map; reviewing earlier maps does not generate another one.
+Pending maps are resumed after a restart. Fit only completed labels, then use the
+resulting weight-only file with a fresh training run:
+
+If saved labels contain contradictory duplicates, the annotator opens the first
+duplicate conflict before generating a new map. It shows every member's old label
+set and lets one corrected set be applied to the whole identical-input group;
+groups are handled in order. Resolve these conflicts before fitting. **Save and
+exit** saves only the displayed map or conflict group and stops the annotator
+without generating another map.
+
+```powershell
+.\.venv\Scripts\python.exe -m pvz_rl fit-tile-annotations `
+  --annotations data\tile-annotations.jsonl `
+  --output artifacts\tile-initialization.pt --init-from runs\initialization.pt
+.\.venv\Scripts\python.exe -m pvz_rl train --output runs\annotated `
+  --init-from artifacts\tile-initialization.pt --gpu 0 --viewer off
+```
+
+Annotation fitting defaults to unlimited passes until every training record's
+highest-scoring feasible label and exact absolute-bottom set are correct.
+`--passes N` adds an explicit cap;
+incomplete runs save `tile-initialization.progress.pt` without publishing an
+initialization. Resume with `--resume-from artifacts\tile-initialization.progress.pt`
+using the same dataset and fitting settings. Training accuracy is separate from
+held-out accuracy and game performance.
+
+Illegal proposals execute ordinary wait with zero rejection reward penalty.
+Fitting targets only their responsible output at `-1`, skipping EMA inference.
+See [the routing table and convergence workflow](docs/training.md).
+
+Repeated illegal proposals are compacted only for fitting: consecutive identical
+`(action, route, rejection_reason)` runs are split into windows of 100 and the
+first row of each window is fitted once. Complete returns and reward accounting
+still retain every collected row.
+
+Annotation fitting preserves the existing two-stage architecture and checkpoint
+contract. It initializes placement values only; complete-return training still
+learns timing, resource management, and long-term action ranking.
 
 The browser viewer receives the same JSON snapshots used by the live protocol and
 renders the boards locally with Canvas 2D. It needs no simulator package or GPU;

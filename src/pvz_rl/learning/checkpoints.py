@@ -12,18 +12,23 @@ from pvz_rl.config import digest, load_config, validate_config
 from pvz_rl.learning.performance import ENCODER_SETTINGS, refresh_performance
 from pvz_rl.learning.training_requirements import (
     current_model_config,
+    inference_config,
     transfer_protocol,
+    weight_model_config,
     weight_transfer_protocol,
 )
 
-DEMO_PROTOCOL = "pvz-rl/demo-initialization-checkpoint-v9"
+DEMO_PROTOCOL = "pvz-rl/demo-initialization-checkpoint-v10"
+LEGACY_DEMO_PROTOCOL = "pvz-rl/demo-initialization-checkpoint-v9"
+ANNOTATION_CHECKPOINT_PROTOCOL = "pvz-rl/annotation-initialization-v2"
+LEGACY_ANNOTATION_CHECKPOINT_PROTOCOL = "pvz-rl/tile-annotation-initialization-v1"
 MODEL_STATE_PROTOCOL = "pvz-rl/stateless-two-stage-bf16-master-state-v2"
-AUTONOMOUS_STATE_PROTOCOL = "pvz-rl/stateless-no-probe-state-v1"
+AUTONOMOUS_STATE_PROTOCOL = "pvz-rl/action-global-state-v1"
 
 
 def protocol_for(kind):
     methods = {
-        "two_stage_transformer_q_v1": "complete_return_sequential_no_probe_v1",
+        "two_stage_transformer_q_v1": "complete_return_action_global_v1",
     }
     if kind not in methods:
         raise ValueError(
@@ -35,10 +40,12 @@ def protocol_for(kind):
 
 
 def compatible_config(source, target, *, weights_only=False):
-    if not current_model_config(source) or not current_model_config(target):
+    check = weight_model_config if weights_only else current_model_config
+    if not check(source) or not check(target):
         raise ValueError(
-            "Old-objective checkpoints cannot resume or initialize weights. "
-            "Refit a verified demonstration in a new directory."
+            "Checkpoint model or objective is incompatible with this transfer mode. "
+            "Previous compatible BF16-master weights allow fresh initialization only; "
+            "old-objective runs cannot resume."
         )
     protocol = weight_transfer_protocol if weights_only else transfer_protocol
     if protocol(source) != protocol(target):
@@ -88,9 +95,15 @@ def inspect_checkpoint(path, *, weights_only=False):
         path = path.with_suffix(".zip")
     if path.suffix == ".pt":
         saved = torch.load(path, map_location="cpu", weights_only=True)
-        if saved.get("protocol") != DEMO_PROTOCOL:
+        initialization_type = {
+            DEMO_PROTOCOL: "demonstration",
+            LEGACY_DEMO_PROTOCOL: "demonstration",
+            ANNOTATION_CHECKPOINT_PROTOCOL: "annotation",
+            LEGACY_ANNOTATION_CHECKPOINT_PROTOCOL: "annotation",
+        }.get(saved.get("protocol"))
+        if initialization_type is None:
             raise ValueError(
-                "Unsupported demonstration checkpoint protocol; refit a verified recording in a new directory"
+                "Unsupported weight-only checkpoint protocol; create a current demonstration or tile annotation initialization"
             )
         if (
             saved.get("model_storage_protocol") != MODEL_STATE_PROTOCOL
@@ -103,15 +116,25 @@ def inspect_checkpoint(path, *, weights_only=False):
             saved["config"]
         ):
             raise ValueError("Checkpoint configuration digest does not match its contents")
-        if saved.get("passes_completed", 0) < 1 or not isinstance(saved.get("model"), dict):
-            raise ValueError("Demonstration checkpoint has no completed fitting pass or weights")
+        convergence = saved.get("convergence", {})
+        zero_pass_verified = (
+            initialization_type == "annotation"
+            and convergence.get("verified") is True
+            and type(convergence.get("records")) is int
+            and convergence["records"] > 0
+            and convergence.get("hits") == convergence["records"]
+        )
+        if (saved.get("passes_completed", -1) < (0 if zero_pass_verified else 1)) or not isinstance(
+            saved.get("model"), dict
+        ):
+            raise ValueError("Weight-only checkpoint has no completed fitting pass or weights")
         if any(
             not isinstance(value, torch.Tensor) or not torch.isfinite(value).all()
             for value in saved["model"].values()
         ):
-            raise ValueError("Demonstration checkpoint contains invalid or non-finite weights")
+            raise ValueError("Weight-only checkpoint contains invalid or non-finite weights")
         cfg = saved["config"]
-        validate_config(execution_config(cfg))
+        validate_config(execution_config(inference_config(cfg) if weights_only else cfg))
         from pvz_game import Rules
 
         from pvz_rl.envs.encoding import ObservationEncoder
@@ -124,7 +147,7 @@ def inspect_checkpoint(path, *, weights_only=False):
             family="preset",
             learner_seed=saved["learner_seed"],
             validation_limit=None,
-            initialization_type="demonstration",
+            initialization_type=initialization_type,
             payload=saved,
         )
     else:
@@ -144,7 +167,7 @@ def inspect_checkpoint(path, *, weights_only=False):
                 else json.loads((path.parent / "metadata.json").read_text("utf-8"))
             )
         cfg = metadata["config"]
-        validate_config(execution_config(cfg))
+        validate_config(execution_config(inference_config(cfg) if weights_only else cfg))
         from pvz_game import Rules
 
         from pvz_rl.envs.encoding import ObservationEncoder
@@ -174,7 +197,20 @@ def inspect_checkpoint(path, *, weights_only=False):
                 map_location="cpu",
                 weights_only=False,
             )
-            validate_runtime_identity(runtime)
+            if weights_only:
+                if (
+                    runtime.get("protocol")
+                    not in (
+                        AUTONOMOUS_STATE_PROTOCOL,
+                        "pvz-rl/stateless-no-probe-state-v1",
+                        "pvz-rl/selective-invalid-state-v2",
+                    )
+                    or runtime.get("model_storage_protocol") != MODEL_STATE_PROTOCOL
+                    or runtime.get("precision_contract") != "bf16_master"
+                ):
+                    raise ValueError("Unsupported autonomous recovery protocol weight contract")
+            else:
+                validate_runtime_identity(runtime)
             if not weights_only:
                 if runtime.get("buffer") is not None:
                     from pvz_rl.learning.collection_scheduler import CollectionScheduler

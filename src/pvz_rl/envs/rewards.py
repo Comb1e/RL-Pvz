@@ -2,7 +2,7 @@
 
 from functools import lru_cache
 
-from pvz_game import Dig, Observation, Place, Rules, Status
+from pvz_game import Observation, Rules, Status
 
 # Public facts in the reward ledger are independent of configurable reward prices.
 REWARD_FACT_FIELDS = (
@@ -78,6 +78,14 @@ REWARD_METRICS = (
     "victory_time",
     "early_sun",
     "early_sun_bonus",
+    # Learning components.  The legacy fields above remain public diagnostics
+    # for viewers and replay archives.
+    "global_terminal",
+    "global_asset_value",
+    "action_damage",
+    "action_blocking",
+    "action_sun",
+    "action_mower",
 )
 
 LEDGER_METRICS = (
@@ -237,6 +245,51 @@ def early_sun_income(before, events, fraction):
     return income
 
 
+def _block_values(cfg, rules):
+    """Return signed raw sun-equivalent blocker values per health point."""
+    configured = cfg.get("reward", {}).get("action", {}).get("block_value_by_plant")
+    if configured is not None:
+        return {kind: float(configured[kind]) for kind in rules.plants}
+    # Keep a usable fallback for old programmatic configurations.  The
+    # explicit TOML profile carries the same values and is validated centrally.
+    return {
+        kind: (2.0 if kind == "wall_nut" else -1.0)
+        * rules.plants[kind]["cost"]
+        / rules.plants[kind]["health"]
+        for kind in rules.plants
+    }
+
+
+def _blocking_value(before, events, rules, cfg):
+    """Credit authoritative zombie bites to the plant's source action.
+
+    There is deliberately no inferred reward for merely occupying a tile.  A
+    ``PlantDamaged`` event is the engine's proof that a zombie was actually
+    eating the plant.  The source-action ledger consumes the target id from
+    the returned event stream when it is available.
+    """
+    plants = {p.id: p.plant_type for p in before.plants}
+    values = _block_values(cfg, rules)
+    total = 0.0
+    by_plant = {kind: 0.0 for kind in rules.plants}
+    for event in events:
+        if event.kind == "PlantPlaced":
+            plants[event.entity_id] = event.get("plant_type")
+        elif event.kind == "PlantRemoved":
+            # Removal is applied after all events from the same tick have been
+            # emitted, so this does not erase a same-transition bite target.
+            continue
+        elif event.kind == "PlantDamaged":
+            kind = plants.get(event.entity_id)
+            if kind not in values:
+                continue
+            amount = float(event.get("damage", 0))
+            credit = values[kind] * amount
+            by_plant[kind] += credit
+            total += credit
+    return total, by_plant
+
+
 def reward_parts(
     before: Observation,
     after: Observation,
@@ -247,6 +300,7 @@ def reward_parts(
     action=None,
     action_result=None,
     proximity=None,
+    causal_credits=None,
 ) -> dict:
     """Count actual gains/losses once, independent of action names and difficulty."""
     rules = rules if rules is not None else _default_rules()
@@ -280,13 +334,30 @@ def reward_parts(
     early_sun = early_sun_income(before, events, settings["early_sun_spawn_fraction"])
     early_bonus = scale * settings["early_sun_extra_multiplier"] * early_sun
     development = scale * net + early_bonus
-    invalid_plant = 0.0
-    empty_dig = 0.0
-    if action_result is not None and not action_result.accepted:
-        if isinstance(action, Place):
-            invalid_plant = -float(settings.get("invalid_plant_penalty", 0))
-        elif isinstance(action, Dig) and action_result.reason == "empty_tile":
-            empty_dig = -float(settings.get("empty_dig_penalty", 0))
+    blocking, _ = _blocking_value(before, events, rules, cfg)
+    action_settings = settings.get("action", {})
+    sun_multiplier = float(action_settings.get("sun_credit_multiplier", 1.0))
+    # Values in the new components are raw sun-equivalent units.  The existing
+    # progress/value conversion and dense training multiplier are applied by
+    # learning.objective.training_rewards exactly once.
+    global_terminal = terminal
+    global_asset_value = resource_delta
+    action_damage = combat_value
+    action_blocking = blocking
+    action_sun = sun_multiplier * produced + settings["early_sun_extra_multiplier"] * early_sun
+    action_mower = -mower_cost
+    if causal_credits is not None:
+        # Collection adapters may pass only the credits whose source action is
+        # the current row.  Delayed credits for older rows are applied through
+        # CompleteGameBuffer.apply_causal_credits and must not be counted a
+        # second time in this transition.
+        action_damage = float(causal_credits.get("damage", 0.0))
+        action_blocking = float(causal_credits.get("blocking", 0.0))
+        action_sun = float(causal_credits.get("sun", 0.0))
+        action_mower = float(causal_credits.get("mower", 0.0))
+    physical = global_asset_value + action_damage + action_blocking + action_sun + action_mower
+    # Rejection is an ordinary simulated wait; fitting attribution is separate.
+    invalid_plant = empty_dig = 0.0
     proximity = proximity if proximity is not None else HomeProximityLedger(before, rules)
     home = proximity.advance(after, settings.get("home_entry_penalties", (0, 0)))
     return {
@@ -308,5 +379,14 @@ def reward_parts(
         "mower_activation_penalty": -scale * mower_cost,
         "invalid_plant_penalty": invalid_plant,
         "empty_dig_penalty": empty_dig,
-        "total": terminal + development + invalid_plant + empty_dig + home["home_proximity"],
+        # ``total`` is the immediate raw simulator reward.  Home proximity and
+        # cohort victory-time remain diagnostics only under the action/global
+        # objective; learning applies its dense physical scale separately.
+        "total": terminal + scale * physical + invalid_plant + empty_dig,
+        "global_terminal": global_terminal,
+        "global_asset_value": global_asset_value,
+        "action_damage": action_damage,
+        "action_blocking": action_blocking,
+        "action_sun": action_sun,
+        "action_mower": action_mower,
     }

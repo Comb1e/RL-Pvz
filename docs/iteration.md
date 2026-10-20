@@ -1,3 +1,205 @@
+## Dig starts absolute-infeasible in action annotation — 2026-10-20
+
+- Problem/root cause: action annotation could inherit the sampler's raw dig
+  availability and leave Dig unlabeled on boards that happened to contain a
+  plant, even though action labels are intended to be chosen deliberately by
+  the annotator.
+- Improvement: every newly generated or imported pending action record starts
+  Dig in the locked automatic absolute-infeasible set. The complete simulator
+  `action_availability.dig` fact remains unchanged for audit and display, and
+  legacy records using the old availability-derived automatic set remain
+  readable.
+- Verification: the focused annotation suite passes, direct sampled-board
+  checks cover populated and empty boards, and Ruff plus `git diff --check`
+  pass.
+- Remaining limits: existing completed records are not rewritten on disk; they
+  retain their historical automatic labels until re-annotated.
+
+## Action annotation states no longer carry a sampler-selected action — 2026-10-20
+
+- Problem/root cause: action annotation reused tile sampling’s requirement for a
+  currently usable plant and retained one randomly selected plant as the apparent
+  current action. This biased action records toward plant-available states and
+  made the displayed target look like supervision.
+- Improvement: action sampling now accepts any running endpoint, stores a null
+  selected plant with generic availability, and keeps complete branch metadata
+  for wait, all plants, and dig. The browser hides tile-only plant metadata,
+  keeps plant cards directly selectable, and adds synchronized Wait/Dig controls
+  for feasible, absolute-infeasible, and erase modes. Tile sampling remains
+  conditioned on one usable plant and is unchanged.
+- Verification: the focused annotation suite passes 67 cases, including action
+  sampling without usable cards, empty-board automatic dig infeasibility, branch
+  control mode synchronization, locked labels, and unchanged tile painting.
+  Inline browser JavaScript is exercised by the suite; static checks remain to
+  be run after documentation review.
+- Remaining limits: the sampler still chooses autonomous rollout actions only
+  to create reachable state diversity; it does not provide interactive simulator
+  stepping. A live Jupyter proxy check is still a manual acceptance task.
+
+## Canvas action-card annotation controls — 2026-10-20
+
+- Problem/root cause: action annotation rendered plant cards as graphics but
+  required separate HTML buttons for every action label, so the board and the
+  annotation interaction did not match tile mode. The command name also
+  described only the tile branch even though the workflow supports action
+  annotations.
+- Improvement: shared Canvas card hit testing now maps responsive and high-DPI
+  pointer coordinates to plant actions. Feasible, absolute-infeasible, and
+  erase modes update the action sets directly; the duplicate per-action HTML
+  button strip is removed, automatic absolute labels remain locked, and action
+  clicks cannot enter the tile painter. Tile absolute labels are rendered,
+  editable when manual, and included in save payloads. The CLI is now
+  `annotate --kind tile|action`.
+- Verification: focused annotation tests cover card bounds, mode transitions,
+  locked labels, no accidental tile writes, synchronized controls, and the
+  removed command name. Browser JavaScript syntax and static checks are run with
+  the owning annotation suite.
+- Remaining limits: wait and dig have no plant cards and therefore require a
+  follow-up non-card control if those labels must be selected in action mode;
+  visual acceptance through a live Jupyter proxy still requires a manual browser
+  check.
+
+## Annotation convergence and selective invalid fitting — 2026-10-18
+
+- Problem/root cause: all-positive-versus-negative ranking overconstrained loose
+  tile labels, while a fixed pass count could publish incorrect training choices.
+  Rejected proposals also incurred reward penalties and paid for irrelevant
+  online/EMA tile inference during fitting.
+- Improvement: annotation fitting uses the best-positive/best-legal-negative
+  margin hinge, equal record weights and complete BF16 legal top-1 evaluation.
+  Unlimited passes stop only at exact training-set success; explicit caps and
+  interruptions retain separate atomic weights/Adam/RNG/pass progress. Resume
+  requires matching data, splits and settings. Freshly reloaded verification gates
+  initialization publication, including honestly reported zero-pass success.
+- Formal fitting: rejected proposals execute ordinary wait with zero rejection
+  audit penalties. Shared pre-action availability/outcome routing sends fixed
+  `-1` supervision only to the responsible species or tile output and skips EMA.
+  Accepted actions retain detached consistency and chronological complete returns.
+  CPU-prepared indices, bucket/route grouping and pinned transport share this path
+  with verified demonstrations. Four formal passes, one commit per pass, clipping
+  and EMA decay remain unchanged. The objective and recovery/trajectory identities
+  are versioned; old-objective resume fails, while compatible BF16-master weights
+  still support inference and fresh initialization.
+- Verification: focused mathematical, annotation, storage, fitting/recovery,
+  reward-equivalence, demonstration, checkpoint, configuration, viewer and tuner
+  controls passed. The final owning runs included 136 fitting/annotation cases,
+  60 checkpoint/configuration/tuner/interruption cases and eight precision/compiler/
+  graph-ownership controls. No repeated full-suite run or formal game training was
+  launched. The local 4070 rehearsal completed 24 action/width cases with three
+  warmed repetitions; rejected-only work performed zero EMA inference. A generated
+  reachable annotation converged in seven passes, survived resume and reloaded
+  through the CPU weight-initialization path. See
+  [the bounded evidence](evidence/selective-invalid-4070.md).
+- Remaining limits: the existing user dataset has three identical-input wall-nut
+  pairs with disjoint labels (JSONL lines 29/51, 34/56 and 36/58). All affected IDs
+  are reported before fitting; the original records were not modified. These
+  labels need reconciliation or explicit discard before 100% deterministic
+  fitting is possible. Training convergence does not establish held-out accuracy,
+  game quality, production speedup or cloud-GPU performance; those were not tested.
+
+## Equal annotation rollout proposals — 2026-10-18
+
+- Problem/root cause: rollout selection filtered to currently legal species before
+  drawing, favoring available plants and omitting an explicit wait choice.
+- Improvement: every 500–1,500-step interval draws wait or one of the eight
+  configured plant types with probability 1/9 each. Cooldown, insufficient sun,
+  missing cards, no legal plots or the existing sparse cap convert the selected
+  plant to wait without resampling. Usable plants select a uniform legal plot.
+  Live and batch generation share this path; snapshot-card filtering is unchanged.
+- Verification: 20 focused sampler and random-choice cases passed, covering all nine draw
+  options, availability boundaries, no-redraw failures, interval timing, sparse
+  caps, terminal/unusable retries and exact independent simulator replay. Ruff
+  lint and formatting checks passed; no training was launched.
+- Limits: executed wait frequency exceeds 1/9 when choices are unavailable; final
+  maps remain conditioned on survival and at least one usable annotation card.
+
+## Editable annotation history — 2026-10-18
+
+- Problem/root cause: the live session exposed only the pending record and its
+  resolution API refused completed records, so earlier labels could not be
+  corrected from the browser.
+- Improvement: Previous/Next browse persisted maps; Save changes revises labels
+  in place, Discard can exclude a labeled map, and saving a discarded map restores
+  it. Return to current resumes the pending map. Historical edits preserve the
+  snapshot, pending record, generation count and selected next-map difficulty.
+  Revision checks reject conflicting edits; request checks prevent stale browser
+  responses from replacing the board, and difficulty changes preserve drafts.
+- Verification: 47 focused annotation cases passed, including persistence/restart,
+  history boundaries, invalid/conflicting saves, HTTP protocol, legacy records,
+  generation failure, and Node.js browser-state controls. Existing generation
+  and CPU weight-initialization controls also pass. Ruff and formatting passed.
+- Limitations: unsaved drafts are browser-local; navigation/reload warns before
+  discarding them. Saved revisions replace the previous labels rather than
+  preserving a separate version archive. Existing fitted artifacts are unchanged.
+
+## Annotation rollout diversity — 2026-10-18
+
+- Problem/root cause: the short 2,000-step horizon sampled easy preparation
+  before zombies appeared. Frequent planting spent new sun immediately and
+  favored cheap plants; frozenset action order also defeated cross-process seeds.
+- Improvement: both annotation entry paths share one sampler. Each fresh game
+  draws an inclusive uniform 0–20,000-action endpoint. Terminal or unusable
+  endpoints are abandoned within bounded retries. Random planting attempts occur
+  every 500–1,500 steps, choose uniformly among usable species and then legal
+  plots, and retain at most eight plants. Defaults belong to `training.annotation`.
+  Source metadata records action steps separately from simulator ticks.
+- Longer rollouts exposed valid negative zombie X coordinates near the house.
+  Snapshot validation now accepts signed integer coordinates while continuing
+  to reject booleans, fractional values, strings and nonfinite values. Combat
+  health, sun, cooldowns and mower states are still taken from the simulator.
+- Verification: 32 focused annotation and 45 configuration cases passed,
+  including inclusive endpoints, final-step termination, retry exhaustion,
+  endpoint availability, interval timing, plant caps, species coverage, hash-order
+  independence and exact replay through a separate simulator. Ruff and formatting
+  checks passed. Eight easy samples at seed 4070 had 1–8 plants, zombie health
+  values 150/190/270, sun values 75/100/125/175/250, and ready/spent mowers.
+- Limits: zero/early endpoints can legitimately lack zombies or plants. Accepted
+  maps are conditioned on survival and usable cards. Individual random samples
+  do not guarantee every species, health value or mower state. No formal training
+  was launched, and no model, learning or browser-rendering behavior changed.
+
+## Reachable tile annotation warm-start — 2026-10-18
+
+- Problem: random board snapshots can be semantically meaningless, and manually
+  judging placement plots needs the complete public state and a fast way to mark
+  many cells. Unavailable cards must not become training examples.
+- Improvement: added reachable simulator snapshot sampling and validation for
+  full sun/card/cooldown/entity/projectile/mower/wave observations. The standalone
+  CPU web annotator paints feasible tile sets with left-button drag, supports
+  add/erase/clear, and durably records a discard reason so unusable states remain
+  audit-only. Relative proxy APIs and the shared Canvas renderer work without a
+  simulator or GPU in the browser.
+- Learning: added grouped 80/10/10 annotation splits and a permutation-invariant
+  tile-only margin fit. The species stage is frozen, BF16 runtime/FP32 master
+  storage remains unchanged, and the output is accepted only through fresh
+  weight-only `--init-from`; autonomous complete-return fitting is unchanged.
+- Verification: sampler generation, annotation persistence/discard, full-state
+  validation, browser drag/discard protocol, relative API checks, focused web
+  tests, Python compilation, Ruff checks, and Node syntax checks pass. A one-row
+  CPU smoke fit produced a compatible annotation initialization artifact and was
+  accepted by the existing weight-transfer validator.
+- Remaining limits: human label quality and the value of the pretraining stage
+  require a held-out annotation set and equal-budget game comparison. Empty or
+  all-positive sets provide coverage metrics but no pairwise ranking gradient.
+
+## Provisional RTX 5090 execution preset — 2026-10-15
+
+- Finding: the complete local 4070 calibration favored the stable 64/64,
+  16,384-token, four-group family; the larger 192/192 cases were not used
+  because their extended run was incomplete and the synthetic tuner does not
+  represent a full training cohort.
+- Improvement: set the RTX 5090 profile to compiled 128/128 fitting,
+  32,768 tokens, four grouped batches, one CPU thread and a 6,554 MiB
+  collection reserve. This is one bounded doubling of the validated 4070
+  family for the 5090's 32 GiB device, while preserving the provisional
+  status until native 5090 measurements complete.
+- Verification: GPU-profile configuration tests cover automatic RTX 5090
+  selection and every execution value. No learning, model architecture or
+  checkpoint contract changed.
+- Remaining limits: this is a scaled recommendation from the 4070, not a
+  measured 5090 preset. Confirm it with an actual-cohort fit run after the
+  cloud compiler and data-flow behavior are available.
+
 ## Extended fitting underfeeding calibration — 2026-10-15
 
 - Finding: 4080 SUPER telemetry shows low sustained busy intervals, low temperature/power and a training process near one CPU core, so the observed utilization is a pipeline/workload signal rather than a GPU thermal or power limit.
@@ -2060,3 +2262,89 @@ unperformed.
 - Problem: cloud port forwarding needed the browser viewer to bind a known loopback port instead of an ephemeral port.
 - Improvement: added `train --viewer-port PORT`; the web viewer binds `127.0.0.1:PORT` and retains ephemeral allocation when the option is omitted. Port values are validated from 0 through 65,535.
 - Verification: CLI forwarding and invalid-port controls cover the new setting; existing viewer process and browser protocol controls remain unchanged.
+## On-demand tile annotation session — 2026-10-18
+
+- Problem: annotation required a pre-generated snapshot JSONL and a separate
+  server invocation, which made difficulty selection and continuous labeling
+  cumbersome.
+- Improvement: `annotate-tiles` now starts a CPU session that generates one
+  reachable `easy`, `standard`, or `hard` state at a time. The browser selects
+  difficulty, paints legal plots by drag, persists pending/labeled/discarded
+  records under `data/`, resumes pending maps after restart, and generates the
+  next map automatically after Save or Discard.
+- Verification: focused annotation tests cover live generation, durable pending
+  recovery, automatic progression, rich observation validation, relative APIs,
+  drag controls, and tile-only fitting with pending/discarded rows excluded.
+- Remaining issue: map generation is bounded by the configured step and retry
+  limits; a rare difficulty/session exhaustion reports a retryable browser error.
+
+## Conflict-first annotation review — 2026-10-19
+
+- Problem/root cause: repeated annotation of an identical board/plant input could
+  leave disjoint feasible-tile labels in the JSONL file. Fitting correctly rejected
+  those records, but the browser did not help identify or repair them.
+- Improvement: shared canonical-input conflict grouping now opens the first
+  contradictory group at annotator startup, displays all existing member labels,
+  applies one corrected label set atomically to every member, and advances through
+  the queue. Pending maps remain durable. **Save and exit** commits the current
+  map/group and asynchronously stops the CPU server without generating another map.
+- Verification: focused tile-annotation tests cover grouped conflicts, compatible
+  duplicates, pending/discarded exclusion, atomic revisions, stale protection,
+  conflict-first startup, automatic queue progression, relative APIs, and browser
+  controls. The current data set exposes three conflict groups for correction.
+- Remaining issue: conflicts must be corrected before tile fitting; this workflow
+  does not infer the intended labels automatically.
+
+## Invalid fitting compaction and entropy-seeded annotation — 2026-10-19
+
+- Problem/root cause: repeated invalid proposals can dominate fitting work even
+  though every such row has the same fixed responsible-head target; the default
+  annotation session seed also replayed the same map sequence after restart.
+- Improvement: fitting now keeps all waits and accepted actions, but partitions
+  consecutive invalid action/route/reason runs per environment episode into
+  100-row windows and fits the first row of each window. Complete-return
+  accounting remains unchanged. On-demand annotation uses a system-entropy
+  session seed unless `--seed` is supplied, and records the session seed in the
+  manifest.
+- Verification: added boundary, interleaving, storage, representative-count,
+  protocol/configuration, and explicit-versus-entropy seed controls; focused
+  routing, storage, annotation, checkpoint, configuration, and demo suites were
+  run. No formal training or PR was started.
+- Remaining issue: compaction intentionally samples the first state in each
+  repeated 100-row run; it is an execution reduction, not a claim that all
+  intermediate invalid states are equivalent.
+## Causal action/global rewards — 2026-10-19
+
+- Problem/root cause: the former development reward mixed terminal, resource,
+  combat, proximity and victory-time shaping in one channel. Delayed damage and
+  sunlight were paid on the transition where the event arrived, so a placement
+  could not receive causal credit; Wall-nut and ordinary plant bites also had no
+  signed local distinction.
+- Improvement: the new `action_global_value_v1` ledger keeps global terminal and
+  `sun + living-plant value` (minus sky income) separate from action damage,
+  blocking, produced sun and mower cost. CPU events retain private plant,
+  projectile and source-action identities, while CUDA emits the same aggregate
+  physical fields. Source credits can be applied retroactively to trajectory
+  rows before complete returns. Home proximity and victory-time remain reports.
+  Peashooter bites are negative; Wall-nut blocking can be positive while its
+  global health value falls. Invalid execution and 100-row fitting compaction are
+  unchanged. Demonstration recording and replay verification now use the same
+  ledger, replacing only in-memory fitting rows so source credits reach the
+  original placement before returns are accumulated.
+- Verification: reward contract, CUDA/CPU parity, source-ledger controls,
+  demonstration reconstruction, retroactive buffer updates, nonfinite checks,
+  and compile checks were run once. Focused configuration, checkpoint, demo,
+  flat-fitting and causal-ledger suites pass under the new protocol.
+  Weight-only compatibility remains available, while autonomous and optimizer
+  recovery identities reject the old reward protocol.
+- Remaining limits: CUDA collection currently publishes aggregate action fields;
+  detailed device-side source-row provenance is available through the shared
+  host mutation API when an event adapter supplies it. Initial simulator plants
+  and environmental events remain explicitly unattributable to a learner action.
+
+## Dual annotation heads — 2026-10-19
+
+- Problem: tile-only annotation could express neither action-branch feasibility nor the distinction between a preferred label and a simulator-impossible output. It also required a human/demo artifact before supervised fitting.
+- Improvement: annotation protocol v2 stores separate tile/action datasets, feasible and absolute-bottom sets, locked automatic impossibility labels, and a shared conflict detector. `fit-tile-annotations` trains only the tile stage; `fit-action-annotations` trains only the species stage; both support fresh weights. `initialize-demo --init-from` starts a new demo optimizer/EMA from either artifact.
+- Verification: existing tile annotation controls remain green; action sampler records validate and a CPU action-head fit publishes a compatible weight-only artifact. Runtime action masks and the model/checkpoint layout remain unchanged.
+- Remaining issue: visual action controls are intentionally compact; held-out and game-quality effects still require an equal-budget training comparison.

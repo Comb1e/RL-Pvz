@@ -80,7 +80,7 @@ def test_demo_passes_are_independent_of_autonomous_epochs(
     completed_demo, tmp_path, configured_passes, override, expected
 ):
     cfg, archive, replay = completed_demo
-    assert cfg["training"]["demo"]["passes"] == 20
+    assert cfg["training"]["demo"]["passes"] == load_config()["training"]["demo"]["passes"]
     assert cfg["training"]["n_epochs"] == load_config()["training"]["n_epochs"] == 4
     cfg["training"]["n_epochs"] = 1
     cfg["training"]["demo"]["passes"] = configured_passes
@@ -305,8 +305,6 @@ def test_reused_demo_fits_current_rewards_without_rewriting_recording(
         value_scale=200.0,
         basic_zombie_value=100.0,
         mower_value=500.0,
-        invalid_plant_penalty=0.09,
-        empty_dig_penalty=0.07,
     )
     current["training"]["max_grad_norm"] = 2.0
     verified = demo._load_verified_demo(archive, replay, current)
@@ -343,7 +341,13 @@ def test_reused_demo_fits_current_rewards_without_rewriting_recording(
 
     monkeypatch.setattr(flat_q, "balanced_q_loss", observe)
     result = demo.initialize_demo(archive, replay, tmp_path / "fit", cfg=current, passes=1)
-    torch.testing.assert_close(torch.tensor(fitted_targets), expected_returns)
+    expected_fitting = expected_returns.clone()
+    for index, row in enumerate(verified.transitions):
+        if not row["accepted"] and row["action"] != 0:
+            expected_fitting[index] = -1
+    torch.testing.assert_close(
+        torch.tensor(fitted_targets).sort().values, expected_fitting.sort().values
+    )
     assert result["state"] == "complete"
     assert all(path.read_bytes() == contents for path, contents in before.items())
 

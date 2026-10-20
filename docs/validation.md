@@ -7,11 +7,12 @@ Focused suites are run once per change; full-suite repetition is avoided.
 | Transformer dimensions, statelessness, BF16 runtime and master lifecycle | `test_two_stage_transformer.py` |
 | Action attribution, detached consistency, Huber and weighting math | `test_two_stage_q.py`, `test_q_math.py` |
 | Flat fitting, spool/padding parity and recovery | `test_flat_training.py`, `test_entity_storage.py` |
-| Observation schema, reward accounting and exploration | Their existing owning suites |
+| Observation schema, reward accounting and exploration | Their existing owning suites; `test_reward_contract.py`, `test_net_value.py`, `test_cuda_learning.py` |
 | Demonstration reconstruction and checkpoint contracts | `test_demo_initialization.py`, checkpoint suites |
 | Active-only collection and throughput telemetry | Collection benchmark controls |
 | Pinned game staging and Bash installation/cleanup | `test_cuda_only.py` |
 | Optional fit collector transparency, bounded traces and host resource deltas | `test_fit_diagnostics.py`, hardware cases in `test_reporting_config.py` |
+| Reachable snapshots, annotation persistence, tile dragging, action-card selection and head-specific warm-start | `test_tile_annotations.py`, annotation fitting controls |
 
 ## Required controls
 
@@ -39,6 +40,11 @@ Focused suites are run once per change; full-suite repetition is avoided.
 These controls establish contract and numerical correctness. They do not promise
 training speed, win-rate improvement or mastery.
 
+Annotation controls additionally cover action-mode records, automatic locked
+absolute labels, all-output tile fitting without runtime masks, bottom-k ties and
+permutation invariance, action-only gradient routing, conflict recovery, and
+loading an annotation artifact before fresh demo initialization.
+
 
 ## Optimization and portability controls
 
@@ -46,4 +52,31 @@ training speed, win-rate improvement or mastery.
 - `test_two_stage_transformer.py` verifies collection cache limits separately from fitting graph ownership and masked partial-batch padding.
 - `test_gpu_configuration.py` verifies profile overlays, resume learning retention and device-independent execution settings.
 - `test_live_view.py` remains the shared mailbox/reconnect/history owner; `web_viewer.py` is CPU-only and uses the same command protocol.
+- `test_tile_annotations.py` covers complete rich observations, plant-availability filtering, legal tile bounds, grouped annotation storage, durable pending/labeled/discarded records, automatic one-map progression, relative browser APIs, Canvas tile dragging, direct action-card hit testing, feasible/absolute/erase modes, locked automatic labels, synchronized action controls, and the short `annotate` CLI. History controls cover navigation boundaries, persistent in-place edits, discard restoration, unchanged pending maps and sampler counts, invalid/stale revisions, independent HTTP clients, and browser draft/stale-response behavior through Node.js when available. Sampling controls verify inclusive random horizons, 500–1,500-step planting intervals, sparse caps, equal wait/eight-species proposals without tile-count bias, unavailable choices waiting without redraw, terminal/unusable retries, signed zombie coordinates, hash-order independence and independent simulator replay. The annotation fit additionally checks order-invariant set loss, frozen species parameters and weight-only checkpoint transfer.
 - `tools/tune_gpu.py` records three repetitions, cold setup, transfer/preparation/graph metrics and memory headroom across the original and larger grouped microbatch/thread cases. Learning recommendations require paired seeds and completed cohorts before promotion.
+
+
+## Annotation convergence and selective attribution
+
+- `test_tile_annotations.py`: independent hinge values/gradients, duplicate/order
+  invariance, partial-batch record weighting, legal masks, deterministic ties,
+  all-positive states, empty/conflicting inputs, unlimited default, incomplete
+  caps, exact weights/Adam recovery after interruption, changed dataset/settings
+  rejection, species freezing, zero-pass verification and artifact reload.
+- `test_flat_training.py`, `test_two_stage_q.py`, `test_q_math.py`: every routed
+  head and exact forward counts, detached accepted consistency, branch precedence,
+  legal boundaries, fixed-target isolation, global balancing, storage/prefetch,
+  graph/allocation recovery and interrupted pass restart.
+- `test_reward_contract.py`, existing environment/net-value/rejection controls:
+  rejected-vs-wait CPU/CUDA resulting state, one tick, terminal/development rewards,
+  zero audit charges, retained proposals/reasons. Demo suite verifies historical
+  facts and current repricing without rewriting recordings.
+- Reward controls also verify the six-component global/action split, sky-sun
+  exclusion, source-action damage/sun/blocking credit, Chomper and mower event
+  handling, Wall-nut-positive and ordinary-plant-negative bite signals, no
+  duplicate kill credit, finite CPU/CUDA parity, and complete-return accounting.
+- Checkpoint/config suites verify changed-objective resume rejection while
+  compatible BF16-master weights remain loadable for inference/fresh starts.
+  `test_tune_gpu.py` verifies coherent routed cases at all existing widths;
+  the shared benchmark supplies local CUDA execution evidence separately from
+  annotation train/held-out accuracy or game performance.

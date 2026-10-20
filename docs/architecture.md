@@ -19,6 +19,38 @@ frame stack or counterfactual simulator is part of the policy or collector.
 Seeds, schedules and simulator snapshots stay in execution state and never enter
 policy inputs. `src/pvz_rl/data/train.toml` is the sole parameter source.
 
+## Reward and causal credit flow
+
+```mermaid
+flowchart LR
+    Before[Public state before action] --> Step[Simulator transition]
+    Step --> Global[Global: terminal + asset delta - sky sun]
+    Step --> Events[Ordered public events]
+    Events --> Ledger[Private causal ledger]
+    Ledger --> Source[Placement/source action row]
+    Source --> Action[Damage, blocking, produced sun, mower cost]
+    Global --> Return[Chronological complete return]
+    Action --> Return
+```
+
+The global channel contains only the terminal outcome and the change in
+`sun + living-plant value`, with sky-generated sunlight excluded. The ordered
+event stream retains plant IDs, projectile source IDs and environment/episode
+identity privately. Plant/projectile damage, lethal damage, Sunflower income,
+Chomper swallowing and authoritative bites are credited to the originating
+placement action; mower activation has no placement origin and is charged to its
+transition. `PlantRemoved` is processed after earlier events in the same stream.
+Initial plants and events without an origin are reported as unattributable and
+cannot leak IDs into observations. The trajectory buffer can apply host source
+credits retroactively before returns are finalized. CUDA emits the same six
+learning components and private aggregate accounting; detailed device source
+rows are optional adapter data.
+
+Wall-nut uses a positive signed blocking coefficient while ordinary plant bites
+are negative. A Wall-nut can therefore earn local blocking value while losing
+asset health, but terminal defeat remains globally negative. Proximity and
+victory-time values remain diagnostics and are not learning targets.
+
 PowerShell and Bash bootstrap tools install the same pinned CUDA environment.
 They share archive/hash verification, install the game non-editably and never
 change its checkout. A missing commit or mismatched manifest fails installation;
@@ -83,7 +115,7 @@ source bank, auxiliary lane or post-plant drain.
 Every actual decision is appended with its public observation, proposed action,
 acceptance, duration, reward, exploration provenance and stable original slot.
 Complete returns are computed chronologically per episode, while inactive slots
-and capacity gaps contribute nothing. Width-bucketed flat batches are prefetched
+and capacity gaps contribute nothing. Entity-bucketed and route-separated flat batches are prefetched
 through the existing double buffer and reused across all fitting passes; padding
 is excluded from losses and denominators.
 
@@ -92,14 +124,164 @@ phase-local code objects and bounded static shapes; collection uses its separate
 LRU. Quiescent phase changes release fitting captures and renew only the owner's
 compiler cache, without changing global limits or policy inputs.
 
-Wait values regress against the complete remaining return through the species
-stage. Plant and dig values regress only the actual proposed tile through the
-conditional stage. Species consistency selects a geometry candidate with
-detached online tile values and evaluates that selected tile with the frozen
-BF16 EMA tile stage. Its MSE-matched Huber loss updates only the species stage.
-Accepted/rejected and wait/plant/dig weighting uses whole-cohort denominators.
-Four autonomous passes and twenty demonstration passes commit one optimizer
-step per pass, then update the EMA with decay 0.95.
+Ordinary wait regresses the complete remaining return through species. Accepted
+plant/dig regresses the proposed tile through the conditional stage; detached
+online tile selection and BF16 EMA evaluation supply species consistency. A
+shared classifier consumes full pre-action public legality and the actual
+outcome. Impossible branches train species to -1; bad tiles within usable
+branches train only the proposed tile to -1. The trajectory retains the route,
+branch usability and rejection reason separately from proposal/execution.
+Rejected proposals execute ordinary wait, and penalty audit fields stay zero.
+Fitting-only -1 targets never enter rewards or chronological returns.
+
+```mermaid
+flowchart TD
+    Facts[Pre-action public legality and actual outcome] --> Route{Recorded route}
+    Route -->|Ordinary wait| Species[Online species: return]
+    Route -->|Branch impossible| InvalidSpecies[Online species: -1]
+    Route -->|Invalid tile in usable branch| InvalidTile[Online tile: -1]
+    Route -->|Accepted plant or dig| Accepted[Online species and tile, EMA tile]
+    Accepted --> Loss[Tile return and detached species consistency]
+```
+
+CPU row plans accompany batches through the existing pinned double buffer.
+Species-only routes skip both tile networks; tile-only routes skip species and
+EMA. Accepted/rejected wait/plant/dig regression uses whole-cohort denominators;
+EMA consistency uses accepted plant/dig counts only. Four autonomous passes and
+twenty demonstration passes commit one optimizer step per pass, then update
+EMA with decay 0.95. Graph ownership, fencing and allocation recovery are shared.
+
+## Reachable-state annotation warm-start
+
+The annotation path is independent of a running training process:
+
+```mermaid
+flowchart LR
+    Select[Browser difficulty selection] --> Session[CPU annotation session]
+    Session -->|legal simulator actions| Game[Reachable simulator state]
+    Game -->|one pending map| Session
+    Session -->|save or discard| Labels[Annotation JSONL in data/]
+    Labels --> WarmStart[Tile or action supervised fit]
+    WarmStart --> Init[Weight-only initialization]
+    Init --> Train[Existing complete-return learner]
+```
+
+`annotate` owns one pending map at a time. Selecting `easy`, `standard`,
+or `hard` starts a fresh simulator episode and advances it through legal actions
+for a seeded uniform limit of 0–20,000 actions. Planting attempts are separated
+by random 500–1,500-step intervals. Every interval draws equally from wait and
+all eight configured species before checking availability. Cooldown, insufficient
+sun, absent cards, no legal plots or the configured eight-plant cap turn the
+selected plant into wait without a redraw. Usable choices select a random legal
+plot; the shared availability check also validates snapshot annotation cards.
+Tile mode retains only running endpoints with a usable plant card and legal
+plots. Action mode retains any running endpoint because it labels the complete
+wait/plant/dig decision and has no sampler-selected current action. Finished
+games are discarded and retried within bounded attempts. Both batch generation
+and the live session use this same sampler. Each record keeps the rich
+public board and canonical `entity_v1` encoding, plus card availability, cost,
+sun, cooldown, and engine-legal tiles. Pending records are persisted in
+`data/tile-annotations.jsonl`; a restart resumes the same map. Saving or
+discarding resolves the record atomically and immediately generates the next map.
+A staged difficulty change applies only to that next map. The browser shows the
+complete sun/card/entity/mower/wave state and paints a set by holding the left
+mouse button and dragging across tiles. Discarded states remain audit records
+and are excluded from fitting.
+
+In action mode, the same Canvas board exposes each rendered plant card as a hit
+target. The active feasible, absolute-infeasible, or erase mode determines what
+a card click does; locked automatic absolute labels cannot be changed. Wait and
+dig have compact synchronized toolbar controls because they have no plant card.
+The toolbar does not duplicate plant actions as HTML buttons, and no random
+sampler action is shown as the current target. Card hit testing uses the board's
+design coordinates, so browser resizing and high-DPI displays do not change the
+selected action.
+
+At startup, completed labeled rows are grouped by plant type and their canonical
+encoded entities/globals. A group with no common feasible tile is a duplicate
+conflict. Conflict review takes priority over map generation and shows the first
+group directly in the browser. One corrected label set is committed atomically to
+all group members, then the next group is shown. Any pending map remains durable
+and is resumed after the final conflict. **Save and exit** commits only the
+currently displayed map or conflict group and requests an asynchronous server
+shutdown.
+
+History navigation is local to each browser request, rather than a shared server
+cursor. Previous/Next can select any persisted map while the single pending map
+remains unchanged. Saving a completed record updates only its labels/status and
+increments its annotation revision; it never calls the sampler. Existing records
+without a revision start at zero. Every edit supplies the revision it loaded so
+an obsolete tab cannot overwrite newer labels. Reads and mutations share the
+session lock, and browser request IDs reject stale responses. Difficulty changes
+preserve the displayed record and its draft. JSONL records remain the source of
+truth; manifest counts and digest refresh after each saved edit.
+
+```mermaid
+stateDiagram-v2
+    [*] --> Pending: Generate or resume
+    Pending --> Pending: Save/discard and generate next
+    Pending --> Review: Previous
+    Review --> Review: Previous/Next or save/discard in place
+    Review --> Pending: Return to current or Next
+    [*] --> Conflict: Contradictory duplicate labels
+    Conflict --> Conflict: Save corrected group; show next
+    Conflict --> Pending: Queue empty; resume pending map
+    Conflict --> [*]: Save and exit
+```
+
+Reviewing can restore a discarded record to labeled status. Closing the browser
+discards only unsaved edits after a warning; restart resumes the pending map.
+Generation failures do not prevent reviewing and correcting completed maps.
+
+The sampler does not edit engine health, sun, cooldowns, or mower state. These
+facts evolve through simulator actions, and later endpoints include combat and
+spent mowers. Zero and other early limits remain valid preparation states. The
+source records the sampled action-step count separately from simulator ticks.
+
+Tile mode labels all 45 query outputs; action mode labels the ten species/action
+outputs (`wait`, eight plants, `dig`). Each record has an unordered feasible set
+and optional unordered absolute-bottom set. The top-1/bottom-k margin objective
+requires one feasible label to win and all absolute labels to occupy the lowest
+slots, without ordering labels within either set. Automatic simulator-impossible
+labels are persisted and locked in the browser; new action records also start
+Dig as a locked absolute-infeasible label while retaining raw dig availability
+for audit. Tile fitting freezes species; action fitting freezes tiles. Both can
+start from random weights. The optional
+`initialize-demo --init-from` loads either artifact and creates fresh
+optimizer/EMA state. Runtime gameplay masks remain unchanged. Empty labels,
+overlaps, missing automatic labels and contradictory identical model inputs fail
+before fitting. Source metadata, seeds and discard reasons never enter model
+inputs.
+
+The on-demand annotator uses a system-entropy session seed when `--seed` is
+omitted, while each record stores its actual simulator seed for audit and replay.
+An explicit seed restores deterministic sampling. Formal fitting compacts only
+consecutive invalid proposals within each environment episode: identical
+action/route/reason runs are split into 100-row windows and their first rows are
+retained. Complete-return finalization still uses the full trajectory; fitting
+denominators and encoder workload use the retained representatives.
+
+```mermaid
+stateDiagram-v2
+    [*] --> Validate: records and grouped splits
+    Validate --> Evaluate: initial BF16 runtime
+    Evaluate --> Fit: training failures remain
+    Fit --> Commit: full-record normalized gradients, clip and Adam
+    Commit --> SaveProgress: BF16 refresh, full train and validation evaluation
+    SaveProgress --> Evaluate: atomic weights, optimizer, RNG, counters
+    Evaluate --> VerifySaved: exact training hits equal total
+    VerifySaved --> Publish: reload and verify every training record
+    Publish --> [*]: test diagnostics and initialization
+    Fit --> Incomplete: interrupt discards uncommitted gradients
+    Evaluate --> Incomplete: explicit pass cap
+    Incomplete --> Fit: resume matching dataset, split and settings
+```
+
+Passes default to unlimited; validation never determines completion. Progress is
+separate from the portable weight-only artifact and metrics stream to JSONL.
+Only freshly verified convergence publishes an initialization; initially correct
+weights can qualify at zero passes. Exact training accuracy says nothing by
+itself about unseen boards or equal-game learning performance.
 
 ## Optional fitting diagnostics
 
@@ -150,7 +332,9 @@ prefetch workers, fitting spools and graph captures rebuild after recovery.
 BF16 support is checked before simulator allocation. Nonfinite BF16 loss or
 gradients fail explicitly; only bounded memory reductions may retry. Old
 probe-enabled, FP32-runtime, partial-BF16 and incompatible contracts are
-rejected before allocation. There is no migration path.
+rejected before allocation for resume. Structurally compatible previous
+BF16-master weights remain available for inference and fresh initialization;
+execution caches rebuild and annotation optimizer state is never transferred.
 
 Demonstration replay verification checks historical facts and reprices rewards
 under current settings without rewriting recordings. Evaluation disables both

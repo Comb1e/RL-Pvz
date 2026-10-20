@@ -15,7 +15,10 @@ def test_single_config_train_and_demo_profiles():
     assert demo == load_demo_config("src/pvz_rl/data/train.toml")
     assert demo["policy"] == training["policy"]
     assert demo["training"]["method"] == training["training"]["method"]
-    assert demo["reward"]["invalid_plant_penalty"] == training["reward"]["invalid_plant_penalty"]
+    assert (
+        "invalid_plant_penalty" not in demo["reward"]
+        and "invalid_plant_penalty" not in training["reward"]
+    )
     assert demo["training"]["max_grad_norm"] == training["training"]["max_grad_norm"] == 5
     assert "gradient_clip" not in demo["training"]["demo"]
     assert training["policy"]["kind"] == "two_stage_transformer_q_v1"

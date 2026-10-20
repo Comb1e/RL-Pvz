@@ -130,6 +130,8 @@ def validate_config(cfg: dict) -> None:
             "accepted_outcome_share",
             "species_consistency_weight",
             "species_consistency_huber_delta",
+            "invalid_action_target",
+            "invalid_fit_group_size",
             "dense_multiplier",
             "ema_decay",
             "demo_rank_loss_weight",
@@ -140,12 +142,22 @@ def validate_config(cfg: dict) -> None:
                 "training.objective contains retired or missing settings, including "
                 "species_consistency_huber_delta"
             )
-        if objective.get("protocol") != "complete_return_sequential_no_probe_v1":
+        if objective.get("protocol") != "complete_return_action_global_v1":
             raise ValueError(
                 "Unsupported training objective protocol; fresh initialization is required"
             )
         if objective.get("accepted_outcome_share") != 0.5:
             raise ValueError("objective.accepted_outcome_share must be 0.5")
+        if (
+            type(objective.get("invalid_action_target")) not in (int, float)
+            or objective["invalid_action_target"] != -1.0
+        ):
+            raise ValueError("objective.invalid_action_target must be -1.0")
+        if (
+            type(objective.get("invalid_fit_group_size")) is not int
+            or objective["invalid_fit_group_size"] < 1
+        ):
+            raise ValueError("objective.invalid_fit_group_size must be a positive integer")
         consistency_weight = objective.get("species_consistency_weight")
         if (
             type(consistency_weight) not in (int, float)
@@ -201,9 +213,9 @@ def validate_config(cfg: dict) -> None:
         raise ValueError(
             "Retired observation/policy format; entity_v1 requires fresh initialization"
         )
-    if cfg["reward"].get("version") != "net_value_v1":
+    if cfg["reward"].get("version") != "action_global_value_v1":
         raise ValueError(
-            "Retired reward format; 0.11.0 requires fresh training with the bundled train profile"
+            "Retired reward format; causal action/global rewards require fresh training with the bundled train profile"
         )
     reward_keys = {
         "version",
@@ -213,18 +225,39 @@ def validate_config(cfg: dict) -> None:
         "basic_zombie_value",
         "progress_weight",
         "value_scale",
-        "invalid_plant_penalty",
-        "empty_dig_penalty",
         "early_sun_extra_multiplier",
         "early_sun_spawn_fraction",
     }
-    if set(cfg["reward"]) not in (
+    reward_keys_with_optional = (
         reward_keys,
         reward_keys | {"home_entry_penalties", "win_time_weight"},
+        reward_keys | {"action"},
+        reward_keys | {"action", "home_entry_penalties"},
+        reward_keys | {"action", "win_time_weight"},
+        reward_keys | {"action", "home_entry_penalties", "win_time_weight"},
+    )
+    if set(cfg["reward"]) not in reward_keys_with_optional:
+        raise ValueError("reward must contain the outcome, asset-value, and action settings")
+    action_reward = cfg["reward"].get("action", {})
+    if not isinstance(action_reward, dict):
+        raise ValueError("reward.action must be a table")
+    if set(action_reward) != {"sun_credit_multiplier", "block_value_by_plant"}:
+        raise ValueError("reward.action must contain sun_credit_multiplier and block_value_by_plant")
+    sun_credit_multiplier = action_reward["sun_credit_multiplier"]
+    if (
+        type(sun_credit_multiplier) not in (int, float)
+        or not math.isfinite(sun_credit_multiplier)
+        or sun_credit_multiplier < 0
     ):
-        raise ValueError(
-            "reward must contain the outcome, net-value and rejection-penalty settings"
-        )
+        raise ValueError("reward.action.sun_credit_multiplier must be finite and nonnegative")
+    block_values = action_reward["block_value_by_plant"]
+    if not isinstance(block_values, dict) or set(block_values) != set(PLANT_TYPES):
+        raise ValueError("reward.action.block_value_by_plant must cover every configured plant")
+    if any(
+        type(value) not in (int, float) or not math.isfinite(value)
+        for value in block_values.values()
+    ):
+        raise ValueError("reward.action.block_value_by_plant values must be finite numbers")
     if "actor_objective" in cfg["training"] or "ent_coef" in cfg["training"]:
         raise ValueError("Retired PPO objective; use sequential Q fitting")
     if cfg["training"]["exploration"].get("objective") != "committed_plant_tile_epsilon_v1":
@@ -235,8 +268,6 @@ def validate_config(cfg: dict) -> None:
         "mower_value",
         "basic_zombie_value",
         "progress_weight",
-        "invalid_plant_penalty",
-        "empty_dig_penalty",
         "early_sun_extra_multiplier",
     ):
         value = cfg["reward"][key]
@@ -415,7 +446,7 @@ def validate_config(cfg: dict) -> None:
     if not math.isfinite(visual["final_hold_seconds"]) or visual["final_hold_seconds"] < 0:
         raise ValueError("Visualization final_hold_seconds must be finite and nonnegative")
     env, train = cfg["environment"], cfg["training"]
-    expected_method = "complete_return_sequential_no_probe_v1"
+    expected_method = "complete_return_action_global_v1"
     if train.get("method") != expected_method:
         raise ValueError("Training requires a supported complete-return method and fresh models")
     if any(
@@ -477,7 +508,14 @@ def validate_config(cfg: dict) -> None:
     for key in ("fit_species_microbatch", "fit_tile_microbatch"):
         if key in performance and (type(performance[key]) is not int or performance[key] < 1):
             raise ValueError(f"training.performance.{key} must be a positive integer")
-    if performance.get("fit_entity_buckets", [8, 16, 32, 64, 128, 256]) != [8, 16, 32, 64, 128, 256]:
+    if performance.get("fit_entity_buckets", [8, 16, 32, 64, 128, 256]) != [
+        8,
+        16,
+        32,
+        64,
+        128,
+        256,
+    ]:
         raise ValueError("Fitting buckets must cover 8,16,32,64,128,256 without truncation")
     if visual.get("viewer", "auto") not in ("auto", "desktop", "web", "off"):
         raise ValueError("visualization.viewer must be auto, desktop, web or off")
@@ -534,6 +572,72 @@ def validate_config(cfg: dict) -> None:
             or demo.get(key, 1.0) <= 0
         ):
             raise ValueError(f"training.demo.{key} must be finite and positive")
+    annotation = train.get("annotation", {})
+    if not isinstance(annotation, dict):
+        raise ValueError("training.annotation must be a table")
+    if set(annotation) - {
+        "passes",
+        "learning_rate",
+        "batch_size",
+        "margin",
+        "learner_seed",
+        "sampling_seed",
+        "sampling_family",
+        "sampling_max_steps",
+        "sampling_max_attempts",
+        "sampling_plant_interval_steps",
+        "sampling_max_plants",
+    }:
+        raise ValueError("training.annotation contains unsupported settings")
+    if type(annotation.get("passes", 0)) is not int or annotation.get("passes", 0) < 0:
+        raise ValueError(
+            "training.annotation.passes must be a nonnegative integer (0 means unlimited)"
+        )
+    if type(annotation.get("batch_size", 256)) is not int or annotation.get("batch_size", 256) < 1:
+        raise ValueError("training.annotation.batch_size must be a positive integer")
+    if (
+        type(annotation.get("learner_seed", 101)) is not int
+        or annotation.get("learner_seed", 101) < 0
+    ):
+        raise ValueError("training.annotation.learner_seed must be a nonnegative integer")
+    sampling_seed = annotation.get("sampling_seed", "random")
+    if sampling_seed != "random" and (type(sampling_seed) is not int or sampling_seed < 0):
+        raise ValueError(
+            "training.annotation.sampling_seed must be 'random' or a nonnegative integer"
+        )
+    if annotation.get("sampling_family", "preset") not in (
+        "preset",
+        "diagnostic",
+        "redistributed",
+        "faster",
+        "concentrated",
+    ):
+        raise ValueError("training.annotation.sampling_family is unsupported")
+    for key in ("sampling_max_steps", "sampling_max_attempts"):
+        if (
+            type(annotation.get(key, 20000 if key.endswith("steps") else 100)) is not int
+            or annotation.get(key, 20000 if key.endswith("steps") else 100) < 1
+        ):
+            raise ValueError(f"training.annotation.{key} must be a positive integer")
+    interval = annotation.get("sampling_plant_interval_steps", [500, 1500])
+    if (
+        not isinstance(interval, list)
+        or len(interval) != 2
+        or any(type(value) is not int or value < 1 for value in interval)
+        or interval[0] > interval[1]
+    ):
+        raise ValueError(
+            "training.annotation.sampling_plant_interval_steps must be ordered positive integers"
+        )
+    max_plants = annotation.get("sampling_max_plants", 8)
+    if type(max_plants) is not int or not 1 <= max_plants < env["rows"] * env["cols"]:
+        raise ValueError(
+            "training.annotation.sampling_max_plants must leave at least one empty tile"
+        )
+    for key in ("learning_rate", "margin"):
+        value = annotation.get(key, 3e-4 if key == "learning_rate" else 1.0)
+        if type(value) not in (int, float) or not math.isfinite(value) or value <= 0:
+            raise ValueError(f"training.annotation.{key} must be finite and positive")
     if train["device"] not in ("cpu", "cuda"):
         raise ValueError("Training device must be cpu or cuda")
     seeds = train["learner_seeds"]

@@ -1058,10 +1058,10 @@ def initial_weights(checkpoint, cfg):
     compatible_config(
         source_cfg,
         cfg,
-        weights_only=saved["initialization_type"] == "demonstration",
+        weights_only=True,
     )
     verify_engine(source_cfg)
-    if saved["initialization_type"] == "demonstration":
+    if saved["initialization_type"] in ("demonstration", "annotation"):
         weights = saved["payload"]["model"]
     else:
         import io
@@ -1102,12 +1102,17 @@ def load_policy(checkpoint, device="cpu", *, for_resume=False):
     from pvz_rl.learning.checkpoints import inspect_checkpoint, model_class
     from pvz_rl.policy.two_stage_policy import TwoStageQPolicy
 
-    data = inspect_checkpoint(checkpoint)
-    cfg = data["config"]
+    data = inspect_checkpoint(checkpoint, weights_only=not for_resume)
+    from pvz_rl.learning.checkpoints import execution_config
+    from pvz_rl.learning.training_requirements import current_model_config, inference_config
+
+    cfg = data["config"] if for_resume else execution_config(inference_config(data["config"]))
     verify_engine(cfg)
     require_supported_policy(cfg, data["condition"])
     torch.set_num_threads(cfg["training"]["torch_threads"])
-    if data["initialization_type"] == "demonstration":
+    if data["initialization_type"] in ("demonstration", "annotation") or not current_model_config(
+        data["config"]
+    ):
         model = model_class(cfg)(
             TwoStageQPolicy,
             device=device,
@@ -1118,7 +1123,11 @@ def load_policy(checkpoint, device="cpu", *, for_resume=False):
         model.action_space = spaces.Discrete(ActionSchema.size)
         model.n_envs = cfg["training"]["n_envs"]
         model._setup_model()
-        model.policy.load_state_dict(data.pop("payload")["model"], strict=True)
+        if data["initialization_type"] in ("demonstration", "annotation"):
+            weights = data.pop("payload")["model"]
+        else:
+            weights, _ = initial_weights(checkpoint, cfg)
+        model.policy.load_state_dict(weights, strict=True)
     else:
         model = model_class(cfg).load(checkpoint, device=device)
         if (

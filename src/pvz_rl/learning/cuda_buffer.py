@@ -15,9 +15,10 @@ from pvz_rl.envs.encoding import (
     collate_observations,
     validate_entity_records,
 )
-from pvz_rl.learning.objective import COMPONENTS, training_rewards, victory_time
+from pvz_rl.learning.action_routing import FitRoute, validate_routes
+from pvz_rl.learning.objective import COMPONENTS, raw_rewards, training_rewards, victory_time
 
-TRAJECTORY_PROTOCOL = "pvz-rl/stateless-no-probe-trajectory-v1"
+TRAJECTORY_PROTOCOL = "pvz-rl/action-global-trajectory-v1"
 
 
 def trajectory_dtype(cfg=None):
@@ -51,6 +52,9 @@ def trajectory_dtype(cfg=None):
             ("tile_coin", "?"),
             ("target", "<f4"),
             ("accepted", "?"),
+            ("route", "u1"),
+            ("branch_usable", "?"),
+            ("rejection_reason", "u1"),
             ("done", "?"),
             ("executed_action", "<u2"),
         ]
@@ -81,6 +85,11 @@ class CompleteGameBuffer:
         self.transport_metrics = dict(
             preparation_seconds=0.0, transfer_wait_seconds=0.0, transfer_stream_seconds=0.0
         )
+        # Host-side causal source metadata is deliberately kept separate from
+        # model observations and the fixed trajectory dtype.  A CUDA backend
+        # may fill this table when it has detailed event provenance; CPU and
+        # replay paths use the same mutation API.
+        self.causal_sources = {}
 
     def _allocate(self, entity=False):
         blocks = self.entity_blocks if entity else self.blocks
@@ -144,6 +153,9 @@ class CompleteGameBuffer:
             observations = PackedEntityBatch(
                 entities[mask], np.cumsum(counts) - counts, counts, globals_
             )
+        validate_routes(records[records["active"]])
+        if np.any(records["rejection_reason"] > 7):
+            raise ValueError("Unknown trajectory rejection reason")
         observations.validate()
         if observations.counts.shape != (len(records),):
             raise ValueError("Each transition needs one public observation")
@@ -204,20 +216,27 @@ class CompleteGameBuffer:
         return result.reshape(*rows.shape).to(device) if device else result.reshape(*rows.shape)
 
     @staticmethod
-    def observations_from_packed(packed, *, destination=None, device=None, validated=False, width=None):
+    def observations_from_packed(
+        packed, *, destination=None, device=None, validated=False, width=None
+    ):
         """Pad a fitting-spool packed batch into the transport shape."""
         if not validated:
             packed.validate()
         counts = np.asarray(packed.counts, dtype=np.int64)
         offsets = np.asarray(packed.offsets, dtype=np.int64)
-        if (np.any(counts < 0) or np.any(offsets < 0)
-                or np.any(offsets + counts > len(packed.entities))):
+        if (
+            np.any(counts < 0)
+            or np.any(offsets < 0)
+            or np.any(offsets + counts > len(packed.entities))
+        ):
             raise ValueError("Corrupt packed entity offset/count")
         required = int(counts.max(initial=0))
         width = required if width is None else int(width)
         if width < required:
             raise ValueError("Fitting width cannot truncate entities")
-        if destination is not None and (len(counts) > len(destination) or width > destination.entities.shape[-2]):
+        if destination is not None and (
+            len(counts) > len(destination) or width > destination.entities.shape[-2]
+        ):
             raise ValueError("Fitting batch exceeds pinned capacity")
         if destination is None:
             result = EntityBatch(
@@ -249,6 +268,83 @@ class CompleteGameBuffer:
             parts.append(np.flatnonzero(rows["active"]) + b * self.block_rows)
         return np.concatenate(parts) if parts else np.empty(0, np.int64)
 
+    def _row_view(self, index):
+        index = int(index)
+        if index < 0 or index >= self.size:
+            raise IndexError("Causal source row outside collected history")
+        block, offset = divmod(index, self.block_rows)
+        return self.blocks[block][offset]
+
+    def apply_causal_credits(self, credits):
+        """Apply delayed action credit to already-collected origin rows.
+
+        ``credits`` accepts either ``{row_index: {field: value}}`` or an
+        iterable of mappings containing ``row_index`` and ``credits``.  The
+        source mapping may also include ``env`` and ``episode``; when present
+        the row's environment is checked before mutation.  This small host API
+        is shared by CPU replay and CUDA event adapters, and keeps provenance
+        out of the public observation tensor.
+
+        Credit fields are the ledger names (``damage``, ``blocking``, ``sun``,
+        ``mower``) or their trajectory component names.  All updates are
+        atomic with respect to validation: a malformed or stale batch raises
+        before any row is changed.
+        """
+        if self.finalized or self.rewards_finalized:
+            raise RuntimeError("Causal credits must be applied before return finalization")
+        if isinstance(credits, dict):
+            entries = [
+                {"row_index": index, "credits": values}
+                for index, values in credits.items()
+            ]
+        else:
+            entries = list(credits)
+        normalized = []
+        field_map = {
+            "damage": "action_damage",
+            "blocking": "action_blocking",
+            "sun": "action_sun",
+            "mower": "action_mower",
+        }
+        for entry in entries:
+            if not isinstance(entry, dict):
+                raise TypeError("Causal credit entries must be mappings")
+            index = entry.get("row_index", entry.get("index"))
+            if type(index) is not int:
+                raise ValueError("Causal credit entry needs an integer row_index")
+            row = self._row_view(index)
+            if "env" in entry and int(row["env"]) != int(entry["env"]):
+                raise ValueError("Causal credit environment does not match trajectory row")
+            values = entry.get("credits", entry.get("values", entry))
+            if not isinstance(values, dict):
+                raise TypeError("Causal credit values must be a mapping")
+            updates = {}
+            for key, value in values.items():
+                target = field_map.get(key, key)
+                if target not in ("action_damage", "action_blocking", "action_sun", "action_mower"):
+                    continue
+                if type(value) not in (int, float) or not np.isfinite(value):
+                    raise ValueError(f"Non-finite causal credit for {target}")
+                updates[target] = updates.get(target, 0.0) + float(value)
+            normalized.append((index, updates, entry.get("source")))
+        # Validate every target before changing any row, then apply in one
+        # deterministic pass.  Duplicate entries intentionally add together.
+        for index, updates, source in normalized:
+            row = self._row_view(index)
+            for key, value in updates.items():
+                row["components"][COMPONENTS.index(key)] += value
+            if updates:
+                config = self.cfg
+                if config is None:
+                    from pvz_rl.config import load_config
+
+                    config = load_config()
+                row["reward"] = raw_rewards(row["components"], config)
+                self.causal_sources.setdefault(index, []).append(
+                    {"source": source, "credits": dict(updates)}
+                )
+        return {"rows_updated": len({index for index, updates, _ in normalized if updates})}
+
     def finalize_rewards(self):
         if self.rewards_finalized:
             return self.reward_summary
@@ -261,15 +357,12 @@ class CompleteGameBuffer:
         weight = self.cfg["reward"].get("win_time_weight", 0) if self.cfg else 0
         for b, block in enumerate(self.blocks):
             rows = block[: min(self.block_rows, self.size - b * self.block_rows)]
-            eligible = rows["active"] & rows["done"] & rows["components_valid"]
-            rows["components"][:, 5] = victory_time(
-                rows["tick"].astype(np.float64) + rows["duration"],
-                median,
-                eligible & rows["won"],
-                weight,
-            )
             real = rows["components_valid"]
-            rows["reward"][real] = rows["components"][real].sum(-1)
+            # Victory-time shaping remains a report-only diagnostic.  The new
+            # trajectory components are the global/action reward ledger, so
+            # recompute the immediate raw reward without mutating them.
+            if self.cfg and np.any(real):
+                rows["reward"][real] = raw_rewards(rows["components"][real], self.cfg)
         # The pinned simulator clock is the only clock used for the median.
         from pvz_game import Rules
 
@@ -304,6 +397,7 @@ class CompleteGameBuffer:
         contribution = np.zeros((self.n_envs, len(COMPONENTS)), np.float64)
         component_sum = np.zeros(len(COMPONENTS), np.float64)
         component_square = np.zeros(len(COMPONENTS), np.float64)
+        immediate_component_sum = np.zeros(len(COMPONENTS), np.float64)
         target_sum = target_square = 0.0
         episode_sum = np.zeros(self.n_envs, np.float64)
         episode_square = np.zeros(self.n_envs, np.float64)
@@ -311,10 +405,17 @@ class CompleteGameBuffer:
         quantile_sample = []
         self.outcome_counts[:] = 0
         counts = np.zeros(3, np.int64)
+        routed_counts = np.zeros(4, np.int64)
+        from pvz_rl.config import load_config
+
+        invalid_target = (self.cfg or load_config())["training"]["objective"][
+            "invalid_action_target"
+        ]
         species_counts = np.zeros(A.plant_types, np.int64)
         sums = np.zeros((3, 3), np.float64)
         for b in reversed(range(len(self.blocks))):
             rows = self.blocks[b][: min(self.block_rows, self.size - b * self.block_rows)]
+            routed_counts += np.bincount(rows["route"][rows["active"]], minlength=4)
             for env in range(self.n_envs):
                 ix = np.flatnonzero(rows["active"] & (rows["env"] == env))
                 rewards = rows["reward"][ix]
@@ -329,8 +430,9 @@ class CompleteGameBuffer:
                     running[env] = values[0]
                 rows["target"][ix] = values
                 parts = rows["components"][ix].copy()
+                immediate_component_sum += parts.sum(0)
                 if self.cfg:
-                    parts[:, 1] *= (
+                    parts[:, 1:] *= (
                         self.cfg["training"].get("objective", {}).get("dense_multiplier", 1)
                     )
                 returns = np.cumsum(parts[::-1], axis=0)[::-1] + contribution[env]
@@ -348,8 +450,16 @@ class CompleteGameBuffer:
             kinds = np.where(rows["action"] == 0, 0, np.where(rows["action"] < A.dig_start, 1, 2))
             for group in range(3):
                 ix = rows["active"] & (kinds == group)
-                selected = rows["branch_value"][ix] if group == 0 else rows["tile_value"][ix]
-                first = selected.astype(np.float64) - rows["target"][ix]
+                species_only = (rows["route"][ix] == FitRoute.WAIT_RETURN) | (
+                    rows["route"][ix] == FitRoute.SPECIES_INVALID
+                )
+                selected = np.where(species_only, rows["branch_value"][ix], rows["tile_value"][ix])
+                target = np.where(
+                    rows["route"][ix] >= FitRoute.SPECIES_INVALID,
+                    invalid_target,
+                    rows["target"][ix],
+                )
+                first = selected.astype(np.float64) - target
                 second = rows["placement_gap"][ix].astype(np.float64)
                 counts[group] += len(first)
                 self.outcome_counts[group] += np.bincount(
@@ -368,6 +478,7 @@ class CompleteGameBuffer:
             raise FloatingPointError("Non-finite complete returns or collection Q values")
         self.finalized, self.group_counts, self.species_counts = True, counts, species_counts
         self.consistency_counts[:] = self.outcome_counts[1:]
+        self.consistency_counts[:, 0] = 0
         n = max(1, counts.sum())
         variance = max(0, target_square / n - (target_sum / n) ** 2)
         self.reward_summary.update(
@@ -384,6 +495,17 @@ class CompleteGameBuffer:
             ),
             outcome_counts=self.outcome_counts.tolist(),
             consistency_counts=self.consistency_counts.tolist(),
+            routed_workload=dict(
+                routes={route.name.lower(): int(routed_counts[route]) for route in FitRoute},
+                online_species_rows=int(routed_counts.sum() - routed_counts[FitRoute.TILE_INVALID]),
+                online_tile_rows=int(
+                    routed_counts[FitRoute.ACCEPTED] + routed_counts[FitRoute.TILE_INVALID]
+                ),
+                ema_tile_rows=int(routed_counts[FitRoute.ACCEPTED]),
+                skipped_ema_rows=int(
+                    routed_counts[FitRoute.SPECIES_INVALID] + routed_counts[FitRoute.TILE_INVALID]
+                ),
+            ),
         )
         live = episode_count > 0
         self.reward_summary["within_episode_target_variance"] = (
@@ -407,13 +529,30 @@ class CompleteGameBuffer:
         )
         raw = contribution[live].copy()
         if self.cfg:
-            raw[:, 1] /= self.cfg["training"].get("objective", {}).get("dense_multiplier", 1)
+            raw[:, 1:] /= self.cfg["training"].get("objective", {}).get("dense_multiplier", 1)
         self.reward_summary["raw_component_episode_mean"] = (
             dict(zip(COMPONENTS, raw.mean(0).tolist())) if live.any() else {}
         )
+        self.reward_summary["global_reward_totals"] = {
+            key: float(immediate_component_sum[index])
+            for index, key in enumerate(("global_terminal", "global_asset_value"))
+        }
+        self.reward_summary["action_reward_totals"] = {
+            key: float(immediate_component_sum[index])
+            for index, key in enumerate(COMPONENTS[2:], start=2)
+        }
+        self.reward_summary["source_action_credited_rows"] = len(self.causal_sources)
+        self.reward_summary["causal_source_credits"] = self.causal_sources
         import warnings
 
-        dense_std = self.reward_summary["component_return_std"]["development"]
+        dense_std = float(
+            np.sqrt(
+                sum(
+                    self.reward_summary["component_return_std"].get(key, 0.0) ** 2
+                    for key in COMPONENTS[1:]
+                )
+            )
+        )
         if variance > 1e-20 and dense_std < 0.05 * np.sqrt(variance):
             warnings.warn(
                 "Dense return variation remains below 5% of target variation",
@@ -421,11 +560,11 @@ class CompleteGameBuffer:
                 stacklevel=2,
             )
         if live.any():
-            penalty = np.abs(contribution[live, 2:4].sum(-1)).mean()
+            penalty = np.abs(contribution[live, 2:].sum(-1)).mean()
             terminal = np.abs(contribution[live, 0]).mean()
             if penalty > 0.25 * terminal:
                 warnings.warn(
-                    "Rejection penalties exceed 25% of mean absolute terminal reward",
+                    "Action shaping exceeds 25% of mean absolute terminal reward",
                     RuntimeWarning,
                     stacklevel=2,
                 )
@@ -466,6 +605,7 @@ class CompleteGameBuffer:
             cfg=self.cfg,
             rewards_finalized=self.rewards_finalized,
             reward_summary=self.reward_summary,
+            causal_sources=self.causal_sources,
             outcome_counts=self.outcome_counts,
             consistency_counts=self.consistency_counts,
             exploration=dict(self.exploration),
@@ -580,6 +720,9 @@ class CompleteGameBuffer:
                 ):
                     raise ValueError("Non-finite trajectory Q values or placement gap")
                 actual = rows[rows["active"]]
+                validate_routes(actual)
+                if np.any(actual["rejection_reason"] > 7):
+                    raise ValueError("Unknown trajectory rejection reason")
                 if (
                     np.any(rows["policy_action"] >= A.size)
                     or np.any(rows["exploration_mode"] > 2)
@@ -624,7 +767,9 @@ class CompleteGameBuffer:
                 raise ValueError("Orphan entity records in trajectory")
             if state["finalized"] and (
                 not np.array_equal(actual_counts, state["outcome_counts"])
-                or not np.array_equal(actual_counts[1:], state["consistency_counts"])
+                or not np.array_equal(
+                    actual_counts[1:] * np.array([0, 1]), state["consistency_counts"]
+                )
                 or not np.array_equal(actual_counts.sum(-1), state["group_counts"])
             ):
                 raise ValueError("Corrupt trajectory acceptance counts disagree with records")
@@ -639,6 +784,10 @@ class CompleteGameBuffer:
                 "consistency_counts",
             ):
                 setattr(obj, key, state[key])
+            obj.causal_sources = {
+                int(index): list(values)
+                for index, values in state.get("causal_sources", {}).items()
+            }
             return obj
         except Exception:
             obj.close()

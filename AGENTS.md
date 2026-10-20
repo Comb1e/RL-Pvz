@@ -17,6 +17,7 @@
 - User's current scope: complete the code and training README; availability and short
   integration tests are allowed. Do not launch formal training unless requested.
 - In this project, always keep only one training and model framework.
+- Python: .venv\Scripts\python.exe
 
 ## Code structure
 
@@ -36,8 +37,8 @@
   transparency and trace bounds; hardware sampling remains in its reporting suite.
 - `src/pvz_rl/data/train.toml` is the single parameter source for train/demo overlays.
   Both use `entity_v1`, `two_stage_transformer_q_v1` and
-  `complete_return_sequential_no_probe_v1`. Old weights/resumes require fresh
-  initialization; verified recordings are reconstructed without changes. Preserve
+  `complete_return_action_global_v1`. Old-objective resumes are rejected; structurally compatible
+  BF16-master weights support inference/fresh initialization; verified recordings are reconstructed without changes. Preserve
   user reward adjustments. `training.demo.passes` is 20, independently of autonomous
   `training.n_epochs` (4). Tile (50% to 1%) and accepted-plant species (10% to 1%)
   probabilities decay over 10,000 stage games and freeze per cohort.
@@ -47,7 +48,7 @@
   detached EMA-evaluated tile targets. `species_consistency_huber_delta=1.0` under
   the same objective table is finite, positive and non-boolean; consistency uses
   twice unreduced Huber to preserve small-error MSE scale. No gates or sample
-  exclusion apply. `training.performance.fit_batch_groups=4` groups flat batches.
+  exclusion apply to accepted non-wait consistency. `training.performance.fit_batch_groups=4` groups flat batches.
 - `envs/encoding.py` defines the shared 11-field entity schema, 18 globals,
   normalization, truncation diagnostics and `EntityBatch`. Order is mowers, plants,
   zombies, projectiles; nearest zombies come first. Cap 256 drops from the end;
@@ -78,9 +79,15 @@
   Quiescent phase changes release outgoing captures and renew only the owner's
   fitting compiler cache; never raise global Dynamo limits or reset unrelated caches.
 - `envs/` owns simulator adapters, action outcomes and reward ledgers;
-  `cuda_accounting.py` supplies read-only reward counters. Rejection retains its
-  proposal/reason/penalty, executes wait and advances one tick; accepted plant/dig
-  advances zero ticks. Accounting is not a model input. `rewards.py` owns early
+  `action_credit.py` maps ordered plant/projectile events back to source actions
+  without entering observations, while `cuda_accounting.py` supplies read-only
+  aggregate reward counters. Rejection retains its
+  proposal/reason and zero penalty audit fields, executes wait and advances one tick; accepted plant/dig
+  advances zero ticks. Accounting is not a model input. `rewards.py` owns the
+  six-component global terminal/asset and action damage/blocking/sun/mower
+  objective plus diagnostic proximity/time fields. `CompleteGameBuffer` can
+  apply validated source credits before chronological return finalization.
+  `rewards.py` owns early
   Sunflower eligibility, physical conservation, proximity penalties and cohort-median
   victory finalization. Recording fact checks remain configuration-independent.
 - `learning/exploration.py` owns persistent accepted-plant species commitments.
@@ -101,19 +108,22 @@
   candidates, tile-zero full-board fallback and lowest-index ties remain. Targets
   follow actual proposals, including rejection/commitment, never diagnostic
   proposals. Selected counts are 3x2 wait/plant/dig by acceptance; consistency
-  counts are 2x2 plant/dig. Denominators cover the whole cohort. No non-wait sampled
+  counts are 2x2 plant/dig with rejected columns zero. Denominators cover the whole cohort. No non-wait sampled
   return directly trains species. One clipped Adam update commits per pass, then
   both EMA networks update with decay 0.95. No detach boundaries or recurrent fitting.
 - `learning/cuda_buffer.py` stores canonical slot-shaped metadata and ragged entity
   slabs under one RAM/disk budget. Active flat batches exclude capacity gaps/padding;
   complete returns remain chronological per episode. `batch_transport.py` owns
-  ordered double-buffer `BatchPrefetch`. `host_transfer.py` owns reusable pinned
+  ordered double-buffer `BatchPrefetch` and compacts consecutive invalid
+  action/route/reason runs into first-row representatives per 100-row window
+  for fitting only. `host_transfer.py` owns reusable pinned
   `HostHandoff`; views are consumed before reuse.
-- `learning/checkpoints.py` validates model/objective/schema and demo v9,
-  no-probe recovery v1 and trajectory v1 contracts before simulator allocation.
+- `learning/checkpoints.py` validates model/objective/schema and demo v10,
+  action-global recovery/trajectory contracts before simulator allocation;
+  the objective protocol is v3 because fitting representative weighting changed.
   Model-state `stateless-two-stage-bf16-master-state-v2` stores FP32 online
   masters, FP32 Adam state and BF16 EMA runtime weights. No migration or
-  partial transfer exists. Fresh current-contract `--init-from` transfers full weights
+  partial transfer exists. Fresh compatible `--init-from` transfers full weights
   only; resume retains saved learning settings. `cuda_q.py` owns cohort lifecycle and
   atomic recovery. Saving stops selection and finishes issued tickets before
   serializing simulator, accounting, controller,
@@ -126,6 +136,45 @@
   stages. Journals/viewers are read-only actual Q/proposal/execution diagnostics,
   not learned history. `live_layout.py` owns paging/follow-latest; `live_view.py`
   snapshots effective settings without reloading TOML/device values.
+- `annotation/dataset.py` owns versioned rich snapshots, canonical entity rows,
+  atomic annotation storage and durable pending/labeled/discarded records.
+  `annotation/sampler.py` samples reachable simulator states. Tile records
+  select only currently usable plant cards; action records accept any running
+  endpoint and expose complete branch availability without a sampler-selected
+  action. Live and batch generation share uniform
+  0–20,000-step endpoints, bounded terminal/unusable retries, 500–1,500-step
+  planting intervals and an eight-plant cap from `training.annotation`. Omitted
+  annotation seeds use system entropy; explicit seeds remain reproducible.
+  Each interval draws equally from wait and the eight configured plant types;
+  unavailable choices become wait without redrawing. Usable choices select random
+  legal plots; only engine actions change sun, health, cooldowns or mowers.
+  `presentation/web_assets.py` owns the shared
+  Canvas renderer; `presentation/annotation_viewer.py` serves the one-map-at-a-time
+  CPU annotator with difficulty selection, pointer-drag painting, synchronized
+  Wait/Dig controls, restart recovery, and relative APIs. `dataset.py` also groups contradictory labeled records by
+  canonical plant/entity/global inputs; the annotator shows that conflict queue
+  before generation, applies one revision atomically to every group member, and
+  supports Save and exit. Browser-local history navigation revisits completed
+  maps; revision-checked edits persist in place without consuming the pending map
+  or invoking the sampler. Pending resolution alone generates the next map.
+  `learning/annotation_fit.py` freezes the species stage and produces a compatible
+  tile-only initialization only after exact full-training legal top-1 convergence.
+  Its top-1 hinge ignores other positive ordering, defaults to unlimited passes,
+  streams metrics, and saves separate atomic annotation weights/Adam/RNG/pass
+  progress. Matching dataset/split/settings gate resume; partial gradients are
+  discarded. Fresh reloaded BF16 verification permits zero-pass publication.
+  It never creates an autonomous resume state.
+- `learning/action_routing.py` classifies pre-action public legality and actual
+  outcomes, with branch impossibility preceding bad tile attribution. Trajectories
+  persist route/branch usability/reason. `flat_q.py` skips irrelevant stages via
+  CPU-planned indices: wait/species-invalid use species only, tile-invalid uses
+  tiles only, accepted non-wait adds both online stages and EMA tile inference.
+  Invalid regression uses `training.objective.invalid_action_target=-1.0`, never
+  episode rewards; rejection penalty settings are removed and audit fields are zero.
+  Consecutive invalid runs are compacted by this shared module, while complete
+  returns retain every row. Consistency balances accepted plant/dig counts only.
+  Verified demos reprice historical rewards and share these routes without
+  rewriting recordings.
 - `evaluation/` uses the stateless runner and CPU-verifies CUDA action traces.
   `monitoring/` owns availability, both-stage entity/throughput benchmarks, bounded
   collection/four-pass-fit/collection controls and objective diagnostics. Progress
@@ -144,6 +193,9 @@
   and partition invariance; `test_flat_training.py` covers fitting/recovery.
   `test_entity_storage.py` owns flat active rows and spill/prefetch. Observation, reward,
   exploration, demonstration, evaluation and presentation suites retain their owners.
+  `test_tile_annotations.py` owns snapshot validation, live annotation persistence,
+  conflict grouping/revision, difficulty progression, discard behavior and browser
+  annotation controls.
 - `docs/architecture.md` traces current ownership/workflows/failures.
   `docs/training.md` owns commands and recovery; `docs/math/entity-inputs.md` owns
   encoding/attention, `sequential-training.md` learning/attribution,
@@ -155,3 +207,5 @@
   `tools/tune_gpu.py` runs isolated bounded calibration trials. `presentation/web_viewer.py`
   serves the existing bounded live-view mailboxes from a CPU process for JupyterLab
   Server Proxy; it does not own model or simulator state.
+
+- Annotation protocol v2 supports `annotate --kind tile|action`, separate JSONL stores, feasible and locked absolute-infeasible labels, shared conflict detection, and head-specific fitters. The action annotator exposes plant cards as Canvas hit targets; the duplicated per-action HTML button strip is removed. `initialize-demo --init-from` creates fresh demo optimizer/EMA state from either annotation artifact.

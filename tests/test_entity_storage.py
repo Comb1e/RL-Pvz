@@ -29,6 +29,7 @@ def _buffer(tmp_path, rows=5):
         np.zeros(rows, np.int64),
         np.zeros((rows, GLOBAL_WIDTH), np.float32),
     )
+    records["route"] = (records["action"] != 0).astype(np.uint8)
     buffer.append(records, observations)
     return buffer
 

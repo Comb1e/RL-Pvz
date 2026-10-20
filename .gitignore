@@ -8,6 +8,7 @@ build/
 dist/
 runs/
 artifacts/
+data/tile-annotations.jsonl*
 *.pyc
 .source-evidence/
 .test-cache/

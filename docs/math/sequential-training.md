@@ -1,6 +1,6 @@
 # Sequential complete-return training
 
-The official objective is `complete_return_sequential_no_probe_v1`. It uses
+The official objective is `complete_return_action_global_v1`. It uses
 complete remaining returns with gamma one and no counterfactual rollouts.
 
 For each actual decision (t),
@@ -9,13 +9,20 @@ For each actual decision (t),
 G_t=\sum_{u=t}^{T-1}r_u^{\mathrm{train}}.
 \]
 
-Wait proposals regress the species-stage wait value. Plant and dig proposals
-regress only the tile-stage value at the actual proposed tile. A poor sampled
-tile therefore does not directly train the species estimate.
+Ordinary wait proposals regress the species-stage wait value. Accepted plant
+and dig proposals regress the tile value at the actual proposed tile. Invalid
+proposals use the [shared attribution table](invalid-action-penalties.md): an
+impossible branch trains species to -1; a bad tile in a usable branch trains
+only that tile to -1. This target never enters episode rewards or returns.
+
+Repeated invalid proposals are compacted only in the fitting input. Within each
+environment episode, consecutive rows with the same action, route, and rejection
+reason are partitioned into 100-row windows and the first row of each window is
+used once. Complete returns remain chronological over every actual row.
 
 ## Species consistency
 
-For a non-wait branch (b), let (C_b(s)) be empty plant tiles or all dig
+For an accepted non-wait branch (b), let (C_b(s)) be empty plant tiles or all dig
 tiles, with tile zero as the full-board fallback. The online tile table selects
 
 \[
@@ -38,7 +45,7 @@ The target helper reuses the online tile table and the existing EMA forward.
 Selected losses use equal nonempty wait/plant/dig groups and a 50/50 accepted /
 rejected split when both strata exist. If one stratum is absent, the represented
 stratum receives its group share. Species consistency balances plant/dig and the
-same outcome strata using complete-cohort counts, never batch-local counts.
+accepted-only strata using complete-cohort counts, never batch-local counts.
 Demonstration ranking remains coefficient `0.10`, margin `0.05`.
 
 Autonomous training commits four optimizer steps per cohort; demonstration
@@ -63,5 +70,28 @@ Canonical rows retain public entities, masks, globals, action, acceptance,
 duration, reward, return and exploration provenance. Active packing, width
 buckets, fitting spools, prefetch workers and graph captures are transient.
 Checkpoints contain FP32 online masters, FP32 Adam state, BF16 EMA state and the
-no-probe trajectory/recovery contracts. Old probe-enabled or FP32-runtime
-contracts are rejected before simulator construction.
+selective-invalid trajectory/recovery v2 contracts. Old-objective resume is
+rejected before simulator construction; structurally compatible BF16-master
+weights remain valid for inference and fresh weight-only initialization.
+
+## Annotation convergence
+
+For annotated legal tiles P and legal unannotated tiles N, each record uses
+`max(0, margin + max(Q[N]) - max(Q[P]))`, with margin 1. Only one acceptable tile
+needs to win; other annotated tiles have no imposed ordering. Empty sets and
+identical model inputs with collectively disjoint feasible sets fail before
+fitting. All-legal-positive records are correct and have zero loss.
+
+Gradients accumulate with record weight `1 / training_records`, including
+partial batches and zero-loss records. The frozen species stage is untouched.
+After each FP32 Adam commit, the BF16 runtime evaluates the entire training
+partition with legal masking and lowest-index tie breaking. Exact training hits
+must equal training count; held-out metrics cannot terminate fitting. Grouped
+80/10/10 splits remain isolated. Test metrics run only after convergence.
+
+Default passes 0 means unlimited. A cap or interrupt yields separate incomplete
+progress; weights, Adam, RNG and counters resume only under the same dataset,
+split and fitting settings. Progress commits atomically per pass. A fresh
+full-training evaluation of reloaded saved weights gates initialization
+publication, including honestly recorded zero-pass success. No claim about
+held-out accuracy or game improvement follows from training convergence.

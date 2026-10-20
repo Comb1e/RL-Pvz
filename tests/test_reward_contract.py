@@ -54,8 +54,10 @@ def test_early_sun_independent_event_order_cap_and_training_scale(
         assert parts["net_value"] == income - sky
         assert parts["early_sun_bonus"] == pytest.approx(2 * expected / 30000)
         assert parts["development"] == pytest.approx((income - sky + 2 * expected) / 30000)
+        # The current objective keeps the resource delta and the
+        # source-action sun credit as separate physical channels.
         assert training_rewards(components(parts), cfg) == pytest.approx(
-            (income - sky + 2 * expected) / 3000
+            (2 * (income - sky) + 2 * expected) / 3000
         )
     finally:
         env.close()
@@ -149,7 +151,7 @@ def test_independent_damage_death_terminal_and_timeout_formula():
     after = replace(damaged, plants=())
     assert reward_parts(damaged, after, cfg)["total"] == pytest.approx(-50 / 30000)
     assert asset_value(after) == 600
-    for status, terminal in ((Status.WON, 1), (Status.LOST, -2)):
+    for status, terminal in ((Status.WON, 1), (Status.LOST, -1)):
         end = replace(after, status=status)
         assert asset_value(end) == 600
         assert reward_parts(damaged, end, cfg)["total"] == pytest.approx(terminal - 50 / 30000)
@@ -174,7 +176,7 @@ def test_mower_cost_once_independent_of_sun_and_kills(sun, kills):
     assert reward_parts(before, before, cfg)["mower_activation_penalty"] == 0
 
 
-def test_empty_explosion_and_nut_bite_are_only_diagnostics():
+def test_empty_explosion_and_nut_bite_have_signed_blocking_credit():
     cfg = load_config()
     env = PvZEnv(cfg)
     env.reset(
@@ -192,7 +194,8 @@ def test_empty_explosion_and_nut_bite_are_only_diagnostics():
     )
     part = reward_parts(before, before, cfg, events=events)
     assert part["wall_nut_damage"] == 25 and part["empty_explosions"] == 1
-    assert part["total"] == 0
+    assert part["action_blocking"] == pytest.approx(25 * 0.025)
+    assert part["total"] == pytest.approx(25 * 0.025 / 30000)
 
 
 def test_house_entries_are_staged_once_and_victory_time_is_win_only():
@@ -246,25 +249,23 @@ def test_house_entries_are_staged_once_and_victory_time_is_win_only():
     assert victory_time([0, 10, 300], 160, False, 0.1).tolist() == [0, 0, 0]
 
 
-def test_six_component_targets_only_scale_development():
+def test_six_component_targets_scale_all_physical_channels_once():
     from pvz_rl.learning.objective import components, training_rewards
 
     cfg = load_config()
-    # One effective HP, full basic HP, mower, invalid planting and empty digging.
-    raw = [1.0, -2.0, 50 / 270 / 30000, 50 / 30000, -200 / 30000, -0.00001, -0.000003, -0.02, 0.03]
-    keys = (
-        ["terminal"] * 2
-        + ["development"] * 3
-        + ["invalid_plant_penalty", "empty_dig_penalty", "home_proximity", "victory_time"]
-    )
-    got = [float(training_rewards(components({k: v}), cfg)) for k, v in zip(keys, raw)]
-    assert got == pytest.approx(
-        [1, -2, 50 / 270 / 3000, 50 / 3000, -200 / 3000, -0.00001, -0.000003, -0.02, 0.03]
-    )
-    assert training_rewards(components({"terminal": 1, "development": 0.01}), cfg) == pytest.approx(
-        1.1
-    )
-    assert training_rewards(components({"terminal": 1}), cfg) == 1
+    values = {
+        "global_terminal": 1.0,
+        "global_asset_value": -2.0,
+        "action_damage": 50 / 270,
+        "action_blocking": 50.0,
+        "action_sun": -200.0,
+        "action_mower": -3.0,
+    }
+    expected = 1 + 10 * (-2 + 50 / 270 + 50 - 200 - 3) / 30000
+    assert training_rewards(components(values), cfg) == pytest.approx(expected)
+    # Diagnostic-only aliases never enter the learning vector.
+    assert training_rewards(components({"terminal": 1, "development": 100}), cfg) == 0
+    assert training_rewards(components({"global_terminal": 1}), cfg) == 1
 
 
 @pytest.mark.parametrize("setting", ["shaped", "curriculum", "masked", "fixed"])
@@ -309,3 +310,68 @@ def test_retired_report_is_rejected_without_loading_model(tmp_path, monkeypatch,
     result = visualize_run(tmp_path, videos=False)
     assert result["state"] == "failed"
     assert "current engine and model protocol" in result["error"]
+
+
+@pytest.mark.parametrize(
+    "case", ["sun", "cooldown", "occupied", "empty_dig", "full", "terminal_tick"]
+)
+def test_invalid_wait_equivalence_cpu_and_cuda(case):
+    from pvz_rl.envs.cuda_accounting import AccountingCudaBatch
+    from pvz_rl.envs.cuda_features import REWARD_FIELDS, CudaFeatures
+
+    cfg = load_config()
+    if case == "terminal_tick":
+        cfg["environment"]["cutoff_seconds"] = 1
+    plants = ()
+    if case == "occupied":
+        plants = (InitialPlant("sunflower", 0, 0),)
+    elif case == "full":
+        plants = tuple(InitialPlant("sunflower", row, col) for row in range(5) for col in range(9))
+    level = LevelSpec(
+        "invalid-wait",
+        (Spawn(9999, "basic", 0),),
+        initial_sun=0 if case in ("sun", "terminal_tick") else 1000,
+        plants=plants,
+    )
+    proposed, waiting = PvZEnv(cfg), PvZEnv(cfg)
+    try:
+        for env in (proposed, waiting):
+            env.reset(seed=101, options={"scenario": level})
+            if case == "terminal_tick":
+                for _ in range(99):
+                    env.step(0)
+        snapshot = proposed.game.snapshot()
+        command = (
+            Dig(4, 8)
+            if case == "empty_dig"
+            else Place("wall_nut" if case == "cooldown" else "sunflower", 0, 0)
+        )
+        action = proposed.codec.encode(command)
+        result = proposed.step(action)
+        control = waiting.step(0)
+        assert proposed.public == waiting.public
+        assert result[1:4] == control[1:4]
+        info, reference = result[-1], control[-1]
+        assert not info["accepted"] and info["executed_action"] == 0
+        assert info["proposal_action"] == action and info["ticks_advanced"] == 1
+        assert info["reward_parts"] == reference["reward_parts"]
+        assert (
+            info["reward_parts"]["invalid_plant_penalty"]
+            == info["reward_parts"]["empty_dig_penalty"]
+            == 0
+        )
+        if torch.cuda.is_available():
+            batch = AccountingCudaBatch(2, zombie_capacity=1, max_step_ticks=1)
+            batch.restore([snapshot, snapshot])
+            with batch.cp.cuda.ExternalStream(torch.cuda.current_stream().cuda_stream):
+                features = CudaFeatures(batch, cfg, "masked")
+                features.encode()
+                features.step(batch.cp.asarray([action, 0], dtype=batch.cp.int64))
+                parts = features.parts.get()
+                assert parts[0].tolist() == parts[1].tolist()
+                for key, value in zip(REWARD_FIELDS, parts[0], strict=True):
+                    assert value == pytest.approx(info["reward_parts"][key], abs=1e-10), key
+                assert batch.state_hash(0) == batch.state_hash(1) == proposed.game.state_hash()
+    finally:
+        proposed.close()
+        waiting.close()

@@ -23,14 +23,73 @@ def current_model_config(cfg):
             (
                 "two_stage_transformer_q_v1",
                 "entity_v1",
-                "complete_return_sequential_no_probe_v1",
-                "complete_return_sequential_no_probe_v1",
+                "complete_return_action_global_v1",
+                "complete_return_action_global_v1",
             ),
         }
         and cfg.get("policy", {}).get("action_distribution") == ACTION_DISTRIBUTION
-        and cfg.get("reward", {}).get("version") == "net_value_v1"
+        and cfg.get("reward", {}).get("version") == "action_global_value_v1"
         and cfg.get("training", {}).get("discount_clock") == "simulation_ticks"
     )
+
+
+def weight_model_config(cfg):
+    """The previous objective shares the exact architecture and weight contract."""
+    policy, train = cfg.get("policy", {}), cfg.get("training", {})
+    return (
+        policy.get("kind") == "two_stage_transformer_q_v1"
+        and cfg.get("encoding", {}).get("version") == "entity_v1"
+        and policy.get("action_distribution") == ACTION_DISTRIBUTION
+        and train.get("method")
+        in (
+            "complete_return_sequential_no_probe_v1",
+            "complete_return_selective_invalid_v2",
+            "complete_return_selective_invalid_v3",
+            "complete_return_action_global_v1",
+        )
+        and train.get("objective", {}).get("protocol") == train.get("method")
+        and cfg.get("reward", {}).get("version") in ("net_value_v1", "action_global_value_v1")
+    )
+
+
+def inference_config(cfg):
+    """Refresh retired learning metadata only for inference/weight validation.
+
+    Resume never uses this adapter. It does not change network or encoding fields.
+    """
+    import copy
+
+    if not weight_model_config(cfg):
+        raise ValueError("Incompatible model/encoding or objective protocol weight contract")
+    result = copy.deepcopy(cfg)
+    if current_model_config(cfg):
+        return result
+    result["training"]["method"] = "complete_return_action_global_v1"
+    result["training"]["objective"]["protocol"] = "complete_return_action_global_v1"
+    result["training"]["objective"].setdefault("invalid_action_target", -1.0)
+    result["training"]["objective"].setdefault("invalid_fit_group_size", 100)
+    result["training"]["objective"].setdefault("dense_multiplier", 10.0)
+    # Weight-only transfer keeps architecture and observation compatibility but
+    # always executes under the current reward protocol.  Old net-value
+    # checkpoints remain valid as fresh initializations; they cannot resume
+    # their optimizer/recovery state.
+    result["reward"]["version"] = "action_global_value_v1"
+    result["reward"]["action"] = {
+        "sun_credit_multiplier": 1.0,
+        "block_value_by_plant": {
+            "sunflower": -0.1666666667,
+            "peashooter": -0.3333333333,
+            "wall_nut": 0.025,
+            "cherry_bomb": -0.5,
+            "potato_mine": -0.0833333333,
+            "snow_pea": -0.5833333333,
+            "chomper": -0.5,
+            "repeater": -0.6666666667,
+        },
+    }
+    result["reward"].pop("invalid_plant_penalty", None)
+    result["reward"].pop("empty_dig_penalty", None)
+    return result
 
 
 def require_supported_policy(cfg, condition="masked"):
@@ -43,7 +102,7 @@ def require_supported_policy(cfg, condition="masked"):
     ):
         raise ValueError(
             "Retired policy or scheduler. Use the stateless two-stage Transformer, entity_v1, "
-            "net_value_v1, sequential_q_unmasked_penalty_v1 and complete-game collection. "
+            "action_global_value_v1, sequential_q_unmasked_penalty_v1 and complete-game collection. "
             "Start fresh with the bundled train profile."
         )
 
@@ -66,10 +125,11 @@ def require_cuda_training(cfg, condition="masked", *, runtime=True):
     validate_config(cfg)
     if (
         cfg["training"].get("objective", {}).get("protocol")
-        != "complete_return_sequential_no_probe_v1"
+        != "complete_return_action_global_v1"
     ):
         raise ValueError(
-            "Old-objective checkpoints cannot resume or initialize weights. Refit a verified demonstration in a new directory."
+            "Old-objective training cannot resume; use compatible BF16-master weights "
+            "only through fresh --init-from."
         )
     if condition == "hybrid" or cfg["conditions"].get(condition, {}).get("hybrid"):
         raise ValueError("CPU/hybrid training was removed in 0.8.0; use a direct CUDA condition.")
@@ -122,6 +182,7 @@ def resume_protocol(cfg, condition):
     result["conditions"] = {condition: cfg["conditions"][condition]}
     for key in ("total_games", "total_steps", "max_minutes", "finalization_minutes"):
         result["training"].pop(key, None)
+    result["training"].pop("annotation", None)
     return result
 
 

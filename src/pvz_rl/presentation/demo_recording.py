@@ -11,6 +11,7 @@ from pvz_game.ui import App, Screen
 
 from pvz_rl.config import digest, load_demo_config
 from pvz_rl.envs.action_timing import ActionPhaseGame
+from pvz_rl.envs.action_credit import CausalCreditLedger
 from pvz_rl.envs.actions import ActionCodec
 from pvz_rl.envs.actions import ActionSchema as A
 from pvz_rl.envs.encoding import (
@@ -264,6 +265,8 @@ class DemoRecordingApp(App):
         # needs the action-phase adapter for zero-tick plant/dig operations.
         self.game = ActionPhaseGame(self.rules)
         self.game.reset(level, self.seed)
+        self.causal_credit = CausalCreditLedger(self.research_cfg, self.rules)
+        self.causal_credit.seed_observation(self.game.observe())
         self.proximity = HomeProximityLedger(self.game.observe(), self.rules)
         metadata = {
             "protocol": ARCHIVE_PROTOCOL,
@@ -326,6 +329,9 @@ class DemoRecordingApp(App):
         proposed = self.game.validate_action(action)
         ticks = 0 if isinstance(action, (Place, Dig)) and proposed.accepted else 1
         result = self.recorder.step(action, ticks=ticks)
+        action_id = len(self.transition_archive.records)
+        credits = self.causal_credit.attribute(result.events, action_id=action_id)
+        self.causal_credit.register_plant_kinds(result.observation)
         parts = reward_parts(
             before,
             result.observation,
@@ -335,6 +341,7 @@ class DemoRecordingApp(App):
             action=action,
             action_result=result.action_result,
             proximity=self.proximity,
+            causal_credits=credits.get(action_id, {}),
         )
         self.transition_archive.append(
             before,

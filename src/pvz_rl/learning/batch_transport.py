@@ -9,7 +9,14 @@ from time import perf_counter
 import numpy as np
 import torch
 
-from pvz_rl.envs.encoding import ENTITY_WIDTH, GLOBAL_WIDTH, EntityBatch, PackedEntityBatch
+from pvz_rl.envs.encoding import (
+    ENTITY_WIDTH,
+    GLOBAL_WIDTH,
+    EntityBatch,
+    PackedEntityBatch,
+    collate_observations,
+)
+from pvz_rl.learning.action_routing import compact_invalid_rows, route_indices
 
 
 @dataclass(frozen=True)
@@ -21,6 +28,8 @@ class BatchMetadata:
     branch_value: torch.Tensor
     tile_value: torch.Tensor
     placement_gap: torch.Tensor
+    route: torch.Tensor | None = None
+    plan: dict | None = None
     nonwait_indices: torch.Tensor | None = None
     trusted: bool = False
 
@@ -32,13 +41,63 @@ def fitting_metadata(rows, device):
     """CPU-owned selections for validated active fitting rows."""
     if not np.all(rows["active"]) or np.any(rows["action"] > 405):
         raise ValueError("Fitting plans require genuine active rows and valid proposals")
-    dtypes = (torch.bool, torch.long, torch.bool, torch.float32, torch.float32,
-              torch.float32, torch.float32)
-    names = ("active", "action", "accepted", "target", "branch_value", "tile_value", "placement_gap")
-    values = [torch.as_tensor(np.array(rows[name]), dtype=dtype, device=device)
-              for name, dtype in zip(names, dtypes, strict=True)]
+    dtypes = (
+        torch.bool,
+        torch.long,
+        torch.bool,
+        torch.float32,
+        torch.float32,
+        torch.float32,
+        torch.float32,
+    )
+    names = (
+        "active",
+        "action",
+        "accepted",
+        "target",
+        "branch_value",
+        "tile_value",
+        "placement_gap",
+    )
+    values = [
+        torch.as_tensor(np.array(rows[name]), dtype=dtype, device=device)
+        for name, dtype in zip(names, dtypes, strict=True)
+    ]
     indices = torch.as_tensor(np.flatnonzero(rows["action"] != 0), dtype=torch.long, device=device)
-    return BatchMetadata(*values, nonwait_indices=indices)
+    plan = fitting_plan(rows)
+    plan = {k: torch.as_tensor(v, dtype=torch.long, device=device) for k, v in plan.items()}
+    return BatchMetadata(
+        *values,
+        route=torch.as_tensor(np.array(rows["route"]), device=device),
+        plan=plan,
+        nonwait_indices=indices,
+        trusted=True,
+    )
+
+
+def collate_fitting_observations(observations, cfg, device):
+    """Shared masked width buckets for list-backed annotation/demo records."""
+    batch = collate_observations(observations, "cpu")
+    width = batch.entities.shape[1]
+    buckets = cfg["training"]["performance"]["fit_entity_buckets"]
+    at = int(np.searchsorted(buckets, width))
+    if at >= len(buckets):
+        raise ValueError("Fitting entities exceed the unchanged encoding cap")
+    target = buckets[at]
+    if width != target:
+        entities = batch.entities.new_zeros(len(batch), target, ENTITY_WIDTH)
+        mask = batch.entity_mask.new_zeros(len(batch), target)
+        entities[:, :width] = batch.entities
+        mask[:, :width] = batch.entity_mask
+        batch = EntityBatch(entities, mask, batch.globals, validated=True)
+    return batch.to(device)
+
+
+def fitting_plan(rows):
+    plan = route_indices(rows)
+    plan["ema_species"] = np.searchsorted(plan["species"], plan["ema"])
+    plan["ema_tiles"] = np.searchsorted(plan["tiles"], plan["ema"])
+    return plan
 
 
 class FittingSpool:
@@ -52,12 +111,33 @@ class FittingSpool:
         self.buckets = (buffer.cfg or load_config())["training"]["performance"].get(
             "fit_entity_buckets", [8, 16, 32, 64, 128, 256]
         )
+        self.compaction = {
+            "raw_rows": int(len(indices)),
+            "selected_rows": int(len(indices)),
+            "raw_invalid_rows": 0,
+            "retained_invalid_rows": 0,
+            "invalid_runs": 0,
+            "invalid_windows": 0,
+            "invalid_reduction": 0.0,
+        }
         if len(indices):
-            rows = buffer.take(indices)
+            source_rows = buffer.take(indices)
+            compact_positions, self.outcome_counts, self.compaction = compact_invalid_rows(
+                source_rows,
+                group_size=(buffer.cfg or load_config())["training"]["objective"].get(
+                    "invalid_fit_group_size", 100
+                ),
+            )
+            indices = indices[compact_positions]
+            rows = source_rows[compact_positions]
             if np.any(rows["entity_count"] > self.buckets[-1]):
                 raise ValueError("Fitting entities exceed the unchanged encoding cap")
             bucket = np.searchsorted(self.buckets, rows["entity_count"])
-            indices = indices[np.lexsort((rows["action"] != 0, bucket))]
+            order = np.lexsort((rows["route"], bucket))
+            indices = indices[order]
+            rows = rows[order]
+        else:
+            self.outcome_counts = np.zeros((3, 2), dtype=np.int64)
         self.indices = np.asarray(indices, dtype=np.int64)
         self._ram_arrays = []
         self._temp_paths = []
@@ -83,12 +163,20 @@ class FittingSpool:
             target_start = int(destination_offsets[start])
             for block in np.unique(blocks):
                 selected = np.flatnonzero(blocks == block)
-                self.entities[target_start + selected] = buffer.entity_blocks[block][offsets[selected]]
+                self.entities[target_start + selected] = buffer.entity_blocks[block][
+                    offsets[selected]
+                ]
         self.rows["entity_offset"] = destination_offsets
         self.widths = counts
-        keys = np.searchsorted(self.buckets, counts) * 2 + (self.rows["action"] != 0)
+        keys = np.searchsorted(self.buckets, counts) * 4 + self.rows["route"]
         self.boundaries = np.r_[0, np.flatnonzero(keys[1:] != keys[:-1]) + 1, len(self.rows)]
         self._closed = False
+
+    @property
+    def consistency_counts(self):
+        result = self.outcome_counts[1:].copy()
+        result[:, 0] = 0
+        return result
 
     def __len__(self):
         return len(self.rows)
@@ -130,7 +218,6 @@ class FittingSpool:
                         np.asarray(rows["globals"]),
                     ),
                 )
-
 
     def close(self):
         if self._closed:
@@ -208,8 +295,9 @@ class BatchPrefetch:
             * batch_size
             * (
                 max_entities * (ENTITY_WIDTH * 4 + 1)
-                + (GLOBAL_WIDTH + 7) * 4
-                + buffer.dtype.itemsize + 8
+                + (GLOBAL_WIDTH + 8) * 4
+                + buffer.dtype.itemsize
+                + 5 * 8
             )
         )
         if not buffer.reserve_staging(self.base_staging + amount):
@@ -242,8 +330,8 @@ class BatchPrefetch:
                             torch.empty(batch_size, GLOBAL_WIDTH, pin_memory=True),
                             validated=True,
                         ),
-                        torch.empty(batch_size, 7, pin_memory=True),
-                        torch.empty(batch_size, dtype=torch.long, pin_memory=True),
+                        torch.empty(batch_size, 8, pin_memory=True),
+                        torch.empty(5, batch_size, dtype=torch.long, pin_memory=True),
                     )
                 )
             self.worker = ThreadPoolExecutor(max_workers=1, thread_name_prefix="pvz-batches")
@@ -268,8 +356,12 @@ class BatchPrefetch:
             observations = self.buffer.observations(rows, destination=host)
         else:
             observations = self.buffer.observations_from_packed(
-                packed, destination=host, validated=True,
-                width=self.spool.buckets[np.searchsorted(self.spool.buckets, int(packed.counts.max(initial=0)))],
+                packed,
+                destination=host,
+                validated=True,
+                width=self.spool.buckets[
+                    np.searchsorted(self.spool.buckets, int(packed.counts.max(initial=0)))
+                ],
             )
         fields = metadata[: len(rows)]
         array = fields.numpy()
@@ -282,14 +374,17 @@ class BatchPrefetch:
                 "branch_value",
                 "tile_value",
                 "placement_gap",
+                "route",
             )
         ):
             array[:, column] = rows[name]
         self.buffer.transport_metrics["preparation_seconds"] += perf_counter() - started
-        indices = np.flatnonzero(rows["action"] != 0)
-        nonwait = plan[:len(indices)]
-        nonwait.numpy()[:] = indices
-        return rows, observations, fields, nonwait
+        selections = fitting_plan(rows)
+        pinned = {}
+        for index, (name, indices) in enumerate(selections.items()):
+            pinned[name] = plan[index, : len(indices)]
+            pinned[name].numpy()[:] = indices
+        return rows, observations, fields, pinned
 
     def __iter__(self):
         return self
@@ -304,19 +399,19 @@ class BatchPrefetch:
         if item is None:
             self.close()
             raise StopIteration
-        rows, observations, host_fields, host_nonwait = item
+        rows, observations, host_fields, host_plan = item
         with torch.cuda.stream(self.stream):
             start, end = torch.cuda.Event(enable_timing=True), torch.cuda.Event(enable_timing=True)
             start.record()
             observations = observations.to(self.device, non_blocking=True)
             fields = host_fields.to(self.device, non_blocking=True)
-            nonwait = host_nonwait.to(self.device, non_blocking=True)
+            plan = {k: v.to(self.device, non_blocking=True) for k, v in host_plan.items()}
             end.record()
         self.events[slot] = end
         self.timings.append((start, end))
         current = torch.cuda.current_stream(self.device)
         current.wait_event(end)
-        for tensor in (*observations.tensors(), fields, nonwait):
+        for tensor in (*observations.tensors(), fields, *plan.values()):
             tensor.record_stream(current)
         self.turn += 1
         self.futures[slot] = self.worker.submit(self._prepare, slot)
@@ -331,8 +426,10 @@ class BatchPrefetch:
                 branch_value=fields[:, 4],
                 tile_value=fields[:, 5],
                 placement_gap=fields[:, 6],
-                nonwait_indices=nonwait if self.spool is not None else None,
-                trusted=self.spool is not None,
+                route=fields[:, 7].long(),
+                plan=plan,
+                nonwait_indices=plan["tiles"],
+                trusted=True,
             ),
         )
 

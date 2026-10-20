@@ -21,8 +21,12 @@ from pvz_rl.provenance import file_hash, metadata, write_json
 def common(parser):
     parser.add_argument("--config", type=Path)
     parser.add_argument("--gpu", help="visible CUDA index or complete GPU UUID")
-    parser.add_argument("--gpu-profile", default="auto", help="auto or extensible execution profile name")
-    parser.add_argument("--learning-profile", default="current", help="fresh-run learning profile name")
+    parser.add_argument(
+        "--gpu-profile", default="auto", help="auto or extensible execution profile name"
+    )
+    parser.add_argument(
+        "--learning-profile", default="current", help="fresh-run learning profile name"
+    )
     parser.add_argument(
         "--profile",
         choices=("train",),
@@ -75,11 +79,15 @@ def configured(args):
     gpu_profile = getattr(args, "gpu_profile", None)
     learning_profile = getattr(args, "learning_profile", "current")
     if getattr(args, "resume", None) and learning_profile != "current":
-        raise ValueError("Resume retains saved learning settings; learning profiles apply to fresh runs")
+        raise ValueError(
+            "Resume retains saved learning settings; learning profiles apply to fresh runs"
+        )
     if learning_profile != "current":
         cfg = apply_learning_profile(cfg, learning_profile, path=args.config)
     if gpu_profile is not None:
-        cfg, _ = apply_gpu_profile(cfg, gpu_profile, device=getattr(args, "gpu_info", None), path=args.config)
+        cfg, _ = apply_gpu_profile(
+            cfg, gpu_profile, device=getattr(args, "gpu_info", None), path=args.config
+        )
     # Weight initialization starts a new run under the current configuration.
     # Only recovery/evaluation inherit the source checkpoint's run settings.
     checkpoint = getattr(args, "resume", None)
@@ -91,8 +99,16 @@ def configured(args):
         else:
             from pvz_rl.learning.checkpoints import inspect_checkpoint
 
-            saved = inspect_checkpoint(checkpoint)
+            saved = (
+                inspect_checkpoint(checkpoint, weights_only=True)
+                if args.command == "evaluate"
+                else inspect_checkpoint(checkpoint)
+            )
         cfg = copy.deepcopy(saved["config"])
+        if args.command == "evaluate":
+            from pvz_rl.learning.training_requirements import inference_config
+
+            cfg = inference_config(cfg)
         if args.command == "train":
             for name, field in (
                 ("seed", "learner_seed"),
@@ -104,15 +120,21 @@ def configured(args):
     if args.command == "evaluate" and gpu_profile is not None:
         from pvz_rl.learning.performance import refresh_performance
 
-        current, _ = apply_gpu_profile(load_config(args.config), gpu_profile,
-                                      device=getattr(args, "gpu_info", None), path=args.config)
+        current, _ = apply_gpu_profile(
+            load_config(args.config),
+            gpu_profile,
+            device=getattr(args, "gpu_info", None),
+            path=args.config,
+        )
         cfg = refresh_performance(cfg, current)
     if args.command == "train":
         from pvz_rl.learning.performance import refresh_performance
 
         current = load_config(args.config)
         if gpu_profile is not None:
-            current, _ = apply_gpu_profile(current, gpu_profile, device=getattr(args, "gpu_info", None), path=args.config)
+            current, _ = apply_gpu_profile(
+                current, gpu_profile, device=getattr(args, "gpu_info", None), path=args.config
+            )
         cfg = refresh_performance(cfg, current)
         cfg["logging"] = copy.deepcopy(current["logging"])
         args.seed = 101 if getattr(args, "seed", None) is None else args.seed
@@ -218,6 +240,68 @@ def main(argv=None):
     continuation.add_argument(
         "--init-from", type=Path, help="load compatible weights into a fresh experiment or stage"
     )
+    annotate = subs.add_parser(
+        "annotate", help="open the on-demand reachable-state annotation studio"
+    )
+    common(annotate)
+    annotate.add_argument(
+        "--data-dir",
+        type=Path,
+        default=Path("data"),
+        help="directory for annotation JSONL and manifest",
+    )
+    annotate.add_argument("--kind", choices=("tile", "action"), default="tile", help="annotation head to label")
+    annotate.add_argument(
+        "--port", type=int, default=0, help="loopback port; 0 selects an ephemeral port"
+    )
+    annotate.add_argument(
+        "--seed", type=int, help="sampler seed; omitted means fresh system entropy"
+    )
+    annotate.add_argument(
+        "--family",
+        choices=("preset", "diagnostic", "redistributed", "faster", "concentrated"),
+        help="scenario family; defaults to the annotation profile",
+    )
+    annotate.add_argument(
+        "--max-steps", type=int, help="inclusive upper bound of random simulation action steps"
+    )
+    annotate.add_argument("--max-attempts", type=int, help="maximum map-generation attempts")
+    fit_annotations = subs.add_parser(
+        "fit-tile-annotations", help="pretrain the conditional tile Transformer from annotations"
+    )
+    common(fit_annotations)
+    fit_annotations.add_argument("--annotations", required=True, type=Path)
+    fit_annotations.add_argument("--output", required=True, type=Path)
+    annotation_source = fit_annotations.add_mutually_exclusive_group()
+    annotation_source.add_argument("--init-from", type=Path)
+    annotation_source.add_argument(
+        "--resume-from",
+        type=Path,
+        help="resume matching annotation progress, including Adam and RNG",
+    )
+    fit_annotations.add_argument("--device", choices=("cpu", "cuda"), default="cuda")
+    fit_annotations.add_argument(
+        "--passes", type=int, help="total pass cap; 0 means unlimited (TOML default)"
+    )
+    fit_annotations.add_argument("--learning-rate", type=float)
+    fit_annotations.add_argument("--batch-size", type=int)
+    fit_annotations.add_argument("--margin", type=float)
+    fit_annotations.add_argument("--seed", type=int)
+    fit_action = subs.add_parser(
+        "fit-action-annotations", help="pretrain the species/action Transformer from annotations"
+    )
+    common(fit_action)
+    fit_action.add_argument("--annotations", required=True, type=Path)
+    fit_action.add_argument("--output", required=True, type=Path)
+    action_source = fit_action.add_mutually_exclusive_group()
+    action_source.add_argument("--init-from", type=Path)
+    action_source.add_argument("--resume-from", type=Path)
+    fit_action.add_argument("--device", choices=("cpu", "cuda"), default="cuda")
+    fit_action.add_argument("--passes", type=int)
+    fit_action.add_argument("--learning-rate", type=float)
+    fit_action.add_argument("--batch-size", type=int)
+    fit_action.add_argument("--margin", type=float)
+    fit_action.add_argument("--seed", type=int)
     demo = subs.add_parser(
         "record-demo",
         help="open one easy seed-1000 game and record a verified human transition archive",
@@ -242,6 +326,7 @@ def main(argv=None):
     initialize.add_argument("--learning-rate", type=float)
     initialize.add_argument("--seed", type=int)
     initialize.add_argument("--device", choices=("cpu", "cuda"), default="cpu")
+    initialize.add_argument("--init-from", type=Path, help="annotation or compatible weight-only checkpoint")
     evaluation = subs.add_parser("evaluate", help="evaluate a checkpoint or non-learning baseline")
     common(evaluation)
     source = evaluation.add_mutually_exclusive_group(required=True)
@@ -342,7 +427,14 @@ def main(argv=None):
             export_replay(args.path, args.video, load_config(args.config))
         return
 
-    if args.command in ("train", "suite", "evaluate", "benchmark-gpu", "initialize-demo", "doctor"):
+    if args.command in (
+        "train",
+        "suite",
+        "evaluate",
+        "benchmark-gpu",
+        "initialize-demo",
+        "doctor",
+    ) or (args.command in ("fit-tile-annotations", "fit-action-annotations") and args.device == "cuda"):
         import torch
 
         if args.gpu is not None or torch.cuda.is_available():
@@ -365,6 +457,58 @@ def main(argv=None):
                 indent=2,
             )
         )
+    elif args.command == "annotate":
+        from pvz_rl.presentation.annotation_viewer import serve_annotations
+
+        settings = cfg["training"].get("annotation", {})
+        profile_seed = settings.get("sampling_seed", "random")
+        serve_annotations(
+            args.data_dir / ("action-annotations.jsonl" if args.kind == "action" else "tile-annotations.jsonl"),
+            cfg=cfg,
+            port=args.port,
+            seed=args.seed
+            if args.seed is not None
+            else (None if profile_seed == "random" else profile_seed),
+            family=settings.get("sampling_family", "preset")
+            if args.family is None
+            else args.family,
+            max_steps=args.max_steps,
+            max_attempts=settings.get("sampling_max_attempts", 100)
+            if args.max_attempts is None
+            else args.max_attempts,
+            kind=args.kind,
+        )
+    elif args.command == "fit-tile-annotations":
+        from pvz_rl.learning.annotation_fit import fit_annotations
+
+        print(
+            json.dumps(
+                fit_annotations(
+                    args.annotations,
+                    args.output,
+                    cfg=cfg,
+                    init_from=args.init_from,
+                    resume_from=args.resume_from,
+                    device=args.device,
+                    passes=args.passes,
+                    learning_rate=args.learning_rate,
+                    batch_size=args.batch_size,
+                    margin=args.margin,
+                    seed=args.seed,
+                    kind="tile",
+                ),
+                indent=2,
+            )
+        )
+    elif args.command == "fit-action-annotations":
+        from pvz_rl.learning.annotation_fit import fit_action_annotations
+
+        print(json.dumps(fit_action_annotations(
+            args.annotations, args.output, cfg=cfg, init_from=args.init_from,
+            resume_from=args.resume_from, device=args.device, passes=args.passes,
+            learning_rate=args.learning_rate, batch_size=args.batch_size,
+            margin=args.margin, seed=args.seed,
+        ), indent=2))
     elif args.command == "initialize-demo":
         from pvz_rl.learning.demo_initialization import initialize_demo
 
@@ -377,6 +521,7 @@ def main(argv=None):
             learning_rate=args.learning_rate,
             seed=args.seed,
             device=args.device,
+            init_from=args.init_from,
         )
         print(json.dumps(result, indent=2))
     elif args.command == "visualize":

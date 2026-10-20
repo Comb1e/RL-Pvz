@@ -214,6 +214,7 @@ def test_cohort_interruption_restores_actual_scores_and_optimizer(tmp_path):
                 model.policy.tile_head[-1].weight.zero_()
                 model.policy.tile_head[-1].bias.zero_()
                 model.policy.species_head[-1].bias[1] = 0.1
+                model.policy._sync_masters_from_runtime()
             if interrupted:
                 with pytest.raises(KeyboardInterrupt):
                     model.learn(1, callback=Interrupt())
@@ -221,7 +222,7 @@ def test_cohort_interruption_restores_actual_scores_and_optimizer(tmp_path):
                 assert all(1 <= r["action"] <= 45 for r in page["rows"])
                 assert [r["sequence"] for r in page["rows"]] == [1, 2]
                 assert [r["tick"] for r in page["rows"]] == [0, 0]
-                assert page["rows"][0]["q"][1] == pytest.approx(0.1)
+                assert page["rows"][0]["q"][1] == float(torch.tensor(0.1, dtype=torch.bfloat16))
                 assert page["rows"][1]["q"] == page["rows"][0]["q"]
                 model.save(tmp_path / "interrupted.zip")
                 model = CudaSequentialQ.load(tmp_path / "interrupted.zip", env=env)
@@ -293,14 +294,12 @@ def test_journal_penalties_and_exact_q_survive_archive(tmp_path):
         rows["action"] = [1, 2, 361, 362, 0]
         results[:] = [[0, 3], [0, 2], [0, 4], [1, 0], [1, 0]]
         a.record_batch(rows, scores, results, [7] * 5)
-        assert a.latest[0]["penalty"] == -settings["invalid_plant_penalty"]
-        assert a.latest[2]["penalty"] == -settings["empty_dig_penalty"]
+        assert a.latest[0]["penalty"] == -settings.get("invalid_plant_penalty", 0)
+        assert a.latest[2]["penalty"] == -settings.get("empty_dig_penalty", 0)
         assert a.latest[3]["penalty"] == 0
         assert "automatic wait: insufficient_sun" in result_label(a.page(0, 7)["latest"])
         assert a.page(0, 7)["latest"]["executed_action"] == 0
-        assert f"penalty {-settings['empty_dig_penalty']:.9g}" in result_label(
-            a.page(2, 7)["latest"]
-        )
+        assert "penalty +0" in result_label(a.page(2, 7)["latest"])
         with ZipFile(tmp_path / "history.zip", "w") as archive:
             a.write_archive(archive)
         with ZipFile(tmp_path / "history.zip") as archive:

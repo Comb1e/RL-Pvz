@@ -25,7 +25,7 @@ def test_shipped_objective_bounds_independent_of_reward_implementation():
     assert cfg["reward"]["progress_weight"] / cfg["reward"]["value_scale"] == 1 / 30000
     assert cfg["reward"]["mower_value"] == 200
     assert cfg["reward"]["basic_zombie_value"] == 50
-    assert cfg["reward"]["win_reward"] == 1 and cfg["reward"]["loss_penalty"] == 2
+    assert cfg["reward"]["win_reward"] == 1 and cfg["reward"]["loss_penalty"] == 1
     assets = rules.game["sun_cap"] + 45 * max(p["cost"] for p in rules.plants.values())
     tick, drops = 425, 0
     while tick <= 120000:
@@ -285,7 +285,7 @@ def test_rejection_penalties_are_separate_from_economy_and_terminal(reason):
 
     cfg = load_config()
     before = Game().reset("easy", 101)
-    for outcome, terminal in ((Status.RUNNING, 0), (Status.WON, 1), (Status.LOST, -2)):
+    for outcome, terminal in ((Status.RUNNING, 0), (Status.WON, 1), (Status.LOST, -1)):
         after = replace(before, status=outcome)
         parts = reward_parts(
             before,
@@ -296,7 +296,9 @@ def test_rejection_penalties_are_separate_from_economy_and_terminal(reason):
         )
         assert parts["net_value"] == parts["development"] == 0
         assert parts["terminal"] == terminal
-        assert parts["total"] == pytest.approx(terminal - cfg["reward"]["invalid_plant_penalty"])
+        assert parts["total"] == pytest.approx(
+            terminal - cfg["reward"].get("invalid_plant_penalty", 0)
+        )
         dig = reward_parts(
             before, after, cfg, action=Dig(0, 0), action_result=ActionResult(False, reason)
         )
@@ -343,9 +345,11 @@ def test_penalties_cpu_cuda_accounting_and_cutoff_targets():
     assert truncated and cpu.public.tick == 100
     metrics = cpu.episode_metrics()
     assert metrics["invalid_plant_penalty"] == pytest.approx(
-        -3 * cfg["reward"]["invalid_plant_penalty"]
+        -3 * cfg["reward"].get("invalid_plant_penalty", 0)
     )
-    assert metrics["empty_dig_penalty"] == pytest.approx(-2 * cfg["reward"]["empty_dig_penalty"])
+    assert metrics["empty_dig_penalty"] == pytest.approx(
+        -2 * cfg["reward"].get("empty_dig_penalty", 0)
+    )
     assert metrics["return"] == metrics["discounted_return"] == accumulated
     assert metrics["return"] == pytest.approx(
         metrics["terminal"]

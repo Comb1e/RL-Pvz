@@ -83,11 +83,20 @@ class CudaFeatures:
             "mower_value",
             "progress_weight",
             "value_scale",
-            "invalid_plant_penalty",
-            "empty_dig_penalty",
             "early_sun_extra_multiplier",
         )
         params.update({f"R_{k}": float(cfg["reward"].get(k, 0)) for k in reward_keys})
+        action_reward = cfg["reward"].get("action", {})
+        params["R_action_sun_credit_multiplier"] = float(
+            action_reward.get("sun_credit_multiplier", 1.0)
+        )
+        params["R_action_wall_nut_block_value"] = float(
+            action_reward.get("block_value_by_plant", {}).get("wall_nut", 0.025)
+        )
+        for index, kind in enumerate(encoder.plants):
+            params[f"R_action_block_{index}"] = float(
+                action_reward.get("block_value_by_plant", {}).get(kind, 0.0)
+            )
         for index, value in enumerate(cfg["reward"].get("home_entry_penalties", (0, 0))):
             params[f"HOME_PENALTY_{index}"] = float(value)
         params.update({f"F_{k}": i for i, k in enumerate(REWARD_FIELDS)})
