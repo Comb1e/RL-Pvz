@@ -207,8 +207,8 @@ def test_current_cohort_means_finalize_reset_and_ignore_rolling_rows(tmp_path):
         assert summary["training_return"] == pytest.approx(-0.545)
         finalize_episode_metrics(rows, callback.cfg)
         summary = callback.cohort_summary()
-        assert summary["raw_return"] == pytest.approx(-0.49)
-        assert summary["training_return"] == pytest.approx(-0.535)
+        assert summary["raw_return"] == pytest.approx(-0.5)
+        assert summary["training_return"] == pytest.approx(-0.545)
         assert not summary["provisional"] and not callback.cohort_text().endswith("~")
         callback.model._pending_episodes = {}
         callback.model.cohort_games = 128

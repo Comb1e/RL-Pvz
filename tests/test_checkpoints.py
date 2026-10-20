@@ -112,7 +112,7 @@ def test_previous_objective_weights_load_for_inference_but_not_resume(tmp_path, 
     weights, _ = initial_weights(path, load_config())
     assert all(torch.equal(value, payload["model"][key]) for key, value in weights.items())
     model, _ = load_policy(path, device="cpu")
-    assert model.cfg["training"]["method"] == "complete_return_action_global_v1"
+    assert model.cfg["training"]["method"] == "complete_return_action_global_v2"
     with pytest.raises(ValueError, match="objective"):
         inspect_checkpoint(path)
 

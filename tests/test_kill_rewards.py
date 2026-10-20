@@ -45,7 +45,7 @@ def test_kills_are_diagnostics_not_extra_event_rewards(cfg):
     for source, key in ((1, "plant_kills"), (-1, "mower_kills")):
         parts = reward_parts(before, after, cfg, events=[damage(2, source), death(2)])
         assert parts[key] == 1
-        assert parts["total"] == pytest.approx((20 * 50 / 270) / 30000 if source > 0 else 0)
+        assert parts["total"] == pytest.approx((20 * 30 / 270) / 30000 if source > 0 else 0)
     empty = replace(before, counts=replace(before.counts, initial_total=0), status=Status.WON)
     assert reward_parts(before, empty, cfg)["total"] == 1
 
@@ -80,7 +80,7 @@ def test_real_engine_credits_all_plant_damage_types(cfg, plant):
     # Ten peas neutralize at 70 remaining HP. Instant attacks consume all 270 HP.
     expected = 200 if plant in ("peashooter", "snow_pea", "repeater") else 270
     assert env.episode_metrics()["effective_damage"] == expected
-    assert env.episode_metrics()["combat_value"] == pytest.approx(expected * 50 / 270)
+    assert env.episode_metrics()["combat_value"] == pytest.approx(expected * 30 / 270)
 
 
 def test_real_batched_mower_kills_count_each_zombie_once_and_terminal(cfg):
@@ -96,12 +96,12 @@ def test_real_batched_mower_kills_count_each_zombie_once_and_terminal(cfg):
     _, total, terminated, truncated, info = env.step(0)
     assert terminated and not truncated and env.state == "won"
     assert info["reward_parts"]["terminal"] == 1
-    assert info["reward_parts"]["mower_activation_penalty"] == pytest.approx(-200 / 30000)
+    assert info["reward_parts"]["mower_activation_penalty"] == pytest.approx(-500 / 30000)
     assert info["episode_metrics"]["mower_kills"] == 3
     assert info["episode_metrics"]["mowers_used"] == 1
     assert info["episode_metrics"]["effective_damage"] == 0
-    assert info["episode_metrics"]["mower_expenditure"] == 200
-    assert total == pytest.approx(1 - 200 / 30000)
+    assert info["episode_metrics"]["mower_expenditure"] == 500
+    assert total == pytest.approx(1 - 500 / 30000)
     env.reset(seed=8)
     assert env.episode_metrics()["mower_kills"] == 0
 
@@ -124,7 +124,7 @@ def test_real_simultaneous_batch_keeps_both_sources(cfg):
     assert terminated
     parts = info["reward_parts"]
     assert parts["plant_kills"] == parts["mower_kills"] == 1
-    assert parts["mower_activation_penalty"] == pytest.approx(-200 / 30000)
+    assert parts["mower_activation_penalty"] == pytest.approx(-500 / 30000)
     assert info["episode_metrics"]["defeated"] == 2
 
 

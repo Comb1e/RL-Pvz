@@ -146,12 +146,37 @@ def test_causal_source_credit_updates_origin_row_before_returns(tmp_path):
     rows["components"][1, 0] = 1.0
     buffer.append(rows, [{"entities": [], "globals": [0] * 18}] * 2)
     try:
-        buffer.apply_causal_credits({0: {"damage": 270 * 50 / 270}})
+        buffer.apply_causal_credits({0: {"damage": 270 * 30 / 270}})
         buffer.finalize()
         actual = buffer.take([0, 1])
-        assert actual[0]["components"][2] == pytest.approx(50)
+        assert actual[0]["components"][2] == pytest.approx(30)
         assert actual[0]["target"] > actual[1]["target"]
         assert buffer.reward_summary["source_action_credited_rows"] == 1
+    finally:
+        buffer.close()
+
+
+def test_cohort_ranked_endgame_rewards_update_terminal_rows(tmp_path):
+    cfg = load_config()
+    buffer = CompleteGameBuffer(tmp_path / "ranked-endgame", 3, block_rows=8, cfg=cfg)
+    rows = np.zeros(3, dtype=buffer.dtype)
+    rows["active"] = True
+    rows["done"] = True
+    rows["components_valid"] = True
+    rows["won"] = [True, False, True]
+    rows["env"] = [0, 1, 2]
+    rows["tick"] = [80, 160, 240]
+    rows["route"] = FitRoute.WAIT_RETURN
+    rows["components"][:, 0] = [1.0, -1.0, 1.0]
+    rows["reset"] = True
+    buffer.append(rows, [{"entities": [], "globals": [0] * 18}] * len(rows))
+    try:
+        buffer.finalize()
+        actual = buffer.take([0, 1, 2])
+        np.testing.assert_allclose(actual["components"][:, 0], [1.5, -1.0, 0.5])
+        np.testing.assert_allclose(
+            buffer.reward_summary["endgame_time_adjustments"], [0.5, 0.0, -0.5]
+        )
     finally:
         buffer.close()
 

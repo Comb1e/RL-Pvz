@@ -19,9 +19,7 @@ def ledger(cfg, plants=()):
 
 def test_projectile_damage_is_credited_to_placement_origin(cfg):
     credit = ledger(cfg)
-    credit.attribute(
-        [Event("PlantPlaced", 1, 10, (("plant_type", "peashooter"),))], action_id=7
-    )
+    credit.attribute([Event("PlantPlaced", 1, 10, (("plant_type", "peashooter"),))], action_id=7)
     values = credit.attribute(
         [
             Event("ProjectileFired", 2, 20, (("source", 10),)),
@@ -35,24 +33,20 @@ def test_projectile_damage_is_credited_to_placement_origin(cfg):
         ],
         action_id=8,
     )
-    assert values[7]["damage"] == pytest.approx(20 * 50 / 270)
+    assert values[7]["damage"] == pytest.approx(20 * 30 / 270)
     assert values.get(8, {}).get("damage", 0.0) == 0
 
 
 def test_sun_and_swallow_use_the_plant_origin_without_duplicate_kill_credit(cfg):
     credit = ledger(cfg)
-    credit.attribute(
-        [Event("PlantPlaced", 1, 10, (("plant_type", "sunflower"),))], action_id=2
-    )
+    credit.attribute([Event("PlantPlaced", 1, 10, (("plant_type", "sunflower"),))], action_id=2)
     values = credit.attribute(
         [Event("SunProduced", 2, 99, (("source", "sunflower"), ("amount", 25)))],
         action_id=3,
     )
     assert values[2]["sun"] == pytest.approx(25)
 
-    credit.attribute(
-        [Event("PlantPlaced", 3, 11, (("plant_type", "chomper"),))], action_id=4
-    )
+    credit.attribute([Event("PlantPlaced", 3, 11, (("plant_type", "chomper"),))], action_id=4)
     values = credit.attribute(
         [
             Event(
@@ -65,12 +59,10 @@ def test_sun_and_swallow_use_the_plant_origin_without_duplicate_kill_credit(cfg)
         ],
         action_id=5,
     )
-    assert values[4]["damage"] == pytest.approx(270 * 50 / 270)
+    assert values[4]["damage"] == pytest.approx(270 * 30 / 270)
 
 
-@pytest.mark.parametrize(
-    ("kind", "expected_sign"), [("peashooter", -1), ("wall_nut", 1)]
-)
+@pytest.mark.parametrize(("kind", "expected_sign"), [("peashooter", 1), ("wall_nut", 1)])
 def test_authoritative_bites_use_signed_per_plant_values(cfg, kind, expected_sign):
     credit = ledger(cfg)
     credit.attribute([Event("PlantPlaced", 1, 10, (("plant_type", kind),))], action_id=1)

@@ -73,7 +73,7 @@ loading an annotation artifact before fresh demo initialization.
   facts and current repricing without rewriting recordings.
 - Reward controls also verify the six-component global/action split, sky-sun
   exclusion, source-action damage/sun/blocking credit, Chomper and mower event
-  handling, Wall-nut-positive and ordinary-plant-negative bite signals, no
+  handling, Wall-nut-positive and ordinary-plant-10-sun blocking signals, no
   duplicate kill credit, finite CPU/CUDA parity, and complete-return accounting.
 - Checkpoint/config suites verify changed-objective resume rejection while
   compatible BF16-master weights remain loadable for inference/fresh starts.

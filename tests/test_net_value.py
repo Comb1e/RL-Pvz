@@ -23,8 +23,8 @@ def test_shipped_objective_bounds_independent_of_reward_implementation():
     cfg = load_config()
     assert cfg["training"]["gamma"] == 1
     assert cfg["reward"]["progress_weight"] / cfg["reward"]["value_scale"] == 1 / 30000
-    assert cfg["reward"]["mower_value"] == 200
-    assert cfg["reward"]["basic_zombie_value"] == 50
+    assert cfg["reward"]["mower_value"] == 500
+    assert cfg["reward"]["basic_zombie_value"] == 30
     assert cfg["reward"]["win_reward"] == 1 and cfg["reward"]["loss_penalty"] == 1
     assets = rules.game["sun_cap"] + 45 * max(p["cost"] for p in rules.plants.values())
     tick, drops = 425, 0
@@ -43,10 +43,10 @@ def test_shipped_objective_bounds_independent_of_reward_implementation():
         )
     assert assets == 18990 and sky == 3525
     assert damage == [4050, 17240, 38130]
-    lower, upper = -50 - sky - 5 * 200, assets - 50 + max(damage) * 50 / 270
-    assert (lower, upper) == pytest.approx((-4575, 26001.111111111))
-    assert 1 + lower / 30000 == pytest.approx(0.8475)
-    assert -2 + upper / 30000 == pytest.approx(-1.1332962963)
+    lower, upper = -50 - sky - 5 * 500, assets - 50 + max(damage) * 30 / 270
+    assert (lower, upper) == pytest.approx((-6075, 23176.666666667))
+    assert 1 + lower / 30000 == pytest.approx(0.7975)
+    assert -2 + upper / 30000 == pytest.approx(-1.2274444444)
     assert 1 + lower / 30000 > -2 + upper / 30000
 
 
@@ -86,11 +86,11 @@ def test_independent_accounting_orders_and_late_projectile_credit():
         + reward_parts(full, gone, cfg)["net_value"]
     )
     assert (
-        late == early == pytest.approx(600 * 50 / 270 - 100)
+        late == early == pytest.approx(600 * 30 / 270 - 100)
     )  # Effective damage value minus the 100-sun lost asset.
     parts = reward_parts(full, gone, cfg, events=events)
     assert parts["effective_damage"] == 600 and parts["plant_value_loss"] == 100
-    assert parts["total"] == pytest.approx((600 * 50 / 270 - 100) / 30000)
+    assert parts["total"] == pytest.approx((600 * 30 / 270 - 100) / 30000)
 
 
 @pytest.mark.parametrize("health_fraction", [1, 0.5, 0.01])
@@ -137,10 +137,10 @@ def test_actual_capped_income_not_requested_income(sky, flower):
 @pytest.mark.parametrize(
     "kind,count,expected",
     [
-        ("basic", 1, -100),
-        ("basic", 3, 0),
-        ("conehead", 1, 640 * 50 / 270 - 150),
-        ("buckethead", 1, 1370 * 50 / 270 - 150),
+        ("basic", 1, -120),
+        ("basic", 3, -60),
+        ("conehead", 1, 640 * 30 / 270 - 150),
+        ("buckethead", 1, 1370 * 30 / 270 - 150),
         ("basic", 0, -150),
     ],
 )
@@ -209,7 +209,7 @@ def test_projectiles_keep_credit_after_voluntary_dig():
         assert dug
         assert batch.state_hash(0) == env.game.state_hash()
     assert env.episode_metrics()["effective_damage"] == 20
-    assert env.episode_metrics()["net_value"] == pytest.approx(-100 + 20 * 50 / 270)
+    assert env.episode_metrics()["net_value"] == pytest.approx(-100 + 20 * 30 / 270)
 
 
 def test_mixed_cuda_resets_preserve_duration_and_episode_ledgers():
@@ -266,10 +266,10 @@ def test_partial_plant_damage_then_mower_credit_once():
         Event("ZombieDefeated", 1, 99),
     ]
     parts = reward_parts(env.public, env.public, cfg, events=events)
-    assert parts["effective_damage"] == 20 and parts["combat_value"] == pytest.approx(20 * 50 / 270)
-    assert parts["mower_expenditure"] == 200 and parts["mower_kills"] == 1
-    assert parts["net_value"] == pytest.approx(20 * 50 / 270 - 200)
-    assert parts["total"] == pytest.approx((20 * 50 / 270 - 200) / 30000)
+    assert parts["effective_damage"] == 20 and parts["combat_value"] == pytest.approx(20 * 30 / 270)
+    assert parts["mower_expenditure"] == 500 and parts["mower_kills"] == 1
+    assert parts["net_value"] == pytest.approx(20 * 30 / 270 - 500)
+    assert parts["total"] == pytest.approx((20 * 30 / 270 - 500) / 30000)
 
 
 @pytest.mark.parametrize(

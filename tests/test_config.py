@@ -121,17 +121,17 @@ def test_double_estimator_defaults_and_storage_contracts():
     for cfg in (load_config(), load_demo_config()):
         objective = cfg["training"]["objective"]
         assert cfg["policy"]["kind"] == "two_stage_transformer_q_v1"
-        assert cfg["training"]["method"] == "complete_return_action_global_v1"
-        assert objective["protocol"] == "complete_return_action_global_v1"
+        assert cfg["training"]["method"] == "complete_return_action_global_v2"
+        assert objective["protocol"] == "complete_return_action_global_v2"
         assert objective["invalid_fit_group_size"] == 100
         assert objective["species_consistency_huber_delta"] == 1.0
         assert objective["species_consistency_weight"] == 1.0
         assert current_model_config(cfg)
         assert protocol_for(cfg["policy"]["kind"])["optimizer"] == objective["protocol"]
     assert DEMO_PROTOCOL == "pvz-rl/demo-initialization-checkpoint-v10"
-    assert AUTONOMOUS_STATE_PROTOCOL == "pvz-rl/action-global-state-v1"
+    assert AUTONOMOUS_STATE_PROTOCOL == "pvz-rl/action-global-state-v2"
     assert MODEL_STATE_PROTOCOL == "pvz-rl/stateless-two-stage-bf16-master-state-v2"
-    assert TRAJECTORY_PROTOCOL == "pvz-rl/action-global-trajectory-v1"
+    assert TRAJECTORY_PROTOCOL == "pvz-rl/action-global-trajectory-v2"
 
 
 @pytest.mark.parametrize(

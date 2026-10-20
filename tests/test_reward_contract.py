@@ -12,7 +12,12 @@ from pvz_game.types import Event
 from pvz_rl.config import load_config
 from pvz_rl.envs.env import PvZEnv
 from pvz_rl.envs.rewards import HomeProximityLedger, asset_value, reward_parts
-from pvz_rl.learning.objective import components, training_rewards, victory_time
+from pvz_rl.learning.objective import (
+    components,
+    endgame_terminal_rewards,
+    training_rewards,
+    victory_time,
+)
 
 
 @pytest.mark.parametrize(
@@ -170,9 +175,9 @@ def test_mower_cost_once_independent_of_sun_and_kills(sun, kills):
             (Event("DamageApplied", 1, i, (("source", -1),)), Event("ZombieDefeated", 1, i))
         )
     parts = reward_parts(before, before, cfg, events=events)
-    assert parts["mower_activation_penalty"] == pytest.approx(-200 / 30000)
+    assert parts["mower_activation_penalty"] == pytest.approx(-500 / 30000)
     assert parts["mower_kills"] == kills
-    assert parts["total"] == pytest.approx(-200 / 30000)
+    assert parts["total"] == pytest.approx(-500 / 30000)
     assert reward_parts(before, before, cfg)["mower_activation_penalty"] == 0
 
 
@@ -249,6 +254,21 @@ def test_house_entries_are_staged_once_and_victory_time_is_win_only():
     assert victory_time([0, 10, 300], 160, False, 0.1).tolist() == [0, 0, 0]
 
 
+def test_endgame_time_ranking_changes_only_terminal_outcomes():
+    terminal, adjustment = endgame_terminal_rewards([80, 160, 240], [True, False, True], weight=0.5)
+    assert terminal.tolist() == pytest.approx([1.5, -1.0, 0.5])
+    assert adjustment.tolist() == pytest.approx([0.5, 0.0, -0.5])
+
+    terminal, _ = endgame_terminal_rewards([1, 2, 3], [False, False, False], weight=0.5)
+    assert terminal.tolist() == pytest.approx([-1.0, -1.0, -1.5])
+
+    # Equal completion times share a rank and therefore receive no arbitrary
+    # ordering bonus.
+    terminal, adjustment = endgame_terminal_rewards([10, 10, 10], [True, False, True])
+    assert terminal.tolist() == pytest.approx([1.0, -1.0, 1.0])
+    assert adjustment.tolist() == pytest.approx([0.0, 0.0, 0.0])
+
+
 def test_six_component_targets_scale_all_physical_channels_once():
     from pvz_rl.learning.objective import components, training_rewards
 
@@ -266,6 +286,23 @@ def test_six_component_targets_scale_all_physical_channels_once():
     # Diagnostic-only aliases never enter the learning vector.
     assert training_rewards(components({"terminal": 1, "development": 100}), cfg) == 0
     assert training_rewards(components({"global_terminal": 1}), cfg) == 1
+
+
+def test_shipped_action_reward_equivalents():
+    cfg = load_config()
+    assert cfg["reward"]["basic_zombie_value"] == 30
+    assert cfg["reward"]["mower_value"] == 500
+    assert cfg["reward"]["action"]["block_value_by_plant"]["wall_nut"] == pytest.approx(100 / 4000)
+    for kind, health in (
+        ("sunflower", 300),
+        ("peashooter", 300),
+        ("cherry_bomb", 300),
+        ("potato_mine", 300),
+        ("snow_pea", 300),
+        ("chomper", 300),
+        ("repeater", 300),
+    ):
+        assert cfg["reward"]["action"]["block_value_by_plant"][kind] == pytest.approx(10 / health)
 
 
 @pytest.mark.parametrize("setting", ["shaped", "curriculum", "masked", "fixed"])

@@ -142,7 +142,7 @@ def validate_config(cfg: dict) -> None:
                 "training.objective contains retired or missing settings, including "
                 "species_consistency_huber_delta"
             )
-        if objective.get("protocol") != "complete_return_action_global_v1":
+        if objective.get("protocol") != "complete_return_action_global_v2":
             raise ValueError(
                 "Unsupported training objective protocol; fresh initialization is required"
             )
@@ -213,9 +213,9 @@ def validate_config(cfg: dict) -> None:
         raise ValueError(
             "Retired observation/policy format; entity_v1 requires fresh initialization"
         )
-    if cfg["reward"].get("version") != "action_global_value_v1":
+    if cfg["reward"].get("version") != "action_global_value_v2":
         raise ValueError(
-            "Retired reward format; causal action/global rewards require fresh training with the bundled train profile"
+            "Retired reward format; ranked endgame action/global rewards require fresh training with the bundled train profile"
         )
     reward_keys = {
         "version",
@@ -242,7 +242,9 @@ def validate_config(cfg: dict) -> None:
     if not isinstance(action_reward, dict):
         raise ValueError("reward.action must be a table")
     if set(action_reward) != {"sun_credit_multiplier", "block_value_by_plant"}:
-        raise ValueError("reward.action must contain sun_credit_multiplier and block_value_by_plant")
+        raise ValueError(
+            "reward.action must contain sun_credit_multiplier and block_value_by_plant"
+        )
     sun_credit_multiplier = action_reward["sun_credit_multiplier"]
     if (
         type(sun_credit_multiplier) not in (int, float)
@@ -446,7 +448,7 @@ def validate_config(cfg: dict) -> None:
     if not math.isfinite(visual["final_hold_seconds"]) or visual["final_hold_seconds"] < 0:
         raise ValueError("Visualization final_hold_seconds must be finite and nonnegative")
     env, train = cfg["environment"], cfg["training"]
-    expected_method = "complete_return_action_global_v1"
+    expected_method = "complete_return_action_global_v2"
     if train.get("method") != expected_method:
         raise ValueError("Training requires a supported complete-return method and fresh models")
     if any(

@@ -2349,3 +2349,11 @@ unperformed.
 - Improvement: annotation protocol v2 stores separate tile/action datasets, feasible and absolute-bottom sets, locked automatic impossibility labels, and a shared conflict detector. `fit-tile-annotations` trains only the tile stage; `fit-action-annotations` trains only the species stage; both support fresh weights. `initialize-demo --init-from` starts a new demo optimizer/EMA from either artifact.
 - Verification: existing tile annotation controls remain green; action sampler records validate and a CPU action-head fit publishes a compatible weight-only artifact. Runtime action masks and the model/checkpoint layout remain unchanged.
 - Remaining issue: visual action controls are intentionally compact; held-out and game-quality effects still require an equal-budget training comparison.
+
+## Ranked endgame reward economics — 2026-10-20
+
+- Problem: combat, blocker and mower values did not match the requested sunlight-equivalent economics, and completion time was only a report diagnostic.
+- Improvement: the reward profile now values 270 effective basic-zombie damage at 30 sunlight, a full Wall-nut block at 100, a full ordinary-plant block at 10 without a separate bite penalty, and one mower at 500. Terminal rows are ranked by completion time once each 128-game cohort completes: winners range from +1.5 to +0.5, losses stay at -1 through the median and become more negative afterward, reaching -1.5 for the last rank.
+- Compatibility: the reward, objective, trajectory and autonomous recovery identities were bumped to v2; structurally compatible weight-only initialization remains available, while old optimizer/recovery state is rejected.
+- Verification: added cohort-rank terminal calculations and preserved CPU/CUDA physical reward accounting; focused reward and configuration checks are being updated for the new constants.
+- Remaining limit: equal-duration games share an average rank, and a partial final cohort is ranked over the games that actually completed.

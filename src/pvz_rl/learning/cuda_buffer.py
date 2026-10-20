@@ -16,9 +16,14 @@ from pvz_rl.envs.encoding import (
     validate_entity_records,
 )
 from pvz_rl.learning.action_routing import FitRoute, validate_routes
-from pvz_rl.learning.objective import COMPONENTS, raw_rewards, training_rewards, victory_time
+from pvz_rl.learning.objective import (
+    COMPONENTS,
+    endgame_terminal_rewards,
+    raw_rewards,
+    training_rewards,
+)
 
-TRAJECTORY_PROTOCOL = "pvz-rl/action-global-trajectory-v1"
+TRAJECTORY_PROTOCOL = "pvz-rl/action-global-trajectory-v2"
 
 
 def trajectory_dtype(cfg=None):
@@ -293,10 +298,7 @@ class CompleteGameBuffer:
         if self.finalized or self.rewards_finalized:
             raise RuntimeError("Causal credits must be applied before return finalization")
         if isinstance(credits, dict):
-            entries = [
-                {"row_index": index, "credits": values}
-                for index, values in credits.items()
-            ]
+            entries = [{"row_index": index, "credits": values} for index, values in credits.items()]
         else:
             entries = list(credits)
         normalized = []
@@ -351,30 +353,47 @@ class CompleteGameBuffer:
         terminal = []
         for b, block in enumerate(self.blocks):
             rows = block[: min(self.block_rows, self.size - b * self.block_rows)]
-            terminal.extend(rows[rows["active"] & rows["done"]])
-        durations = np.asarray([int(r["tick"]) + int(r["duration"]) for r in terminal], np.float64)
+            for index in np.flatnonzero(rows["active"] & rows["done"] & rows["components_valid"]):
+                row = rows[index]
+                terminal.append(
+                    (
+                        block,
+                        int(index),
+                        float(int(row["tick"]) + int(row["duration"])),
+                        bool(row["won"]),
+                    )
+                )
+        durations = np.asarray([item[2] for item in terminal], np.float64)
+        wins = np.asarray([item[3] for item in terminal], dtype=bool)
+        if self.cfg and len(terminal):
+            terminal_rewards, adjustments = endgame_terminal_rewards(
+                durations,
+                wins,
+                win_reward=self.cfg["reward"]["win_reward"],
+                loss_penalty=self.cfg["reward"]["loss_penalty"],
+                weight=self.cfg["reward"].get("win_time_weight", 0.5),
+            )
+            for (block, index, _, _won), value in zip(terminal, terminal_rewards, strict=True):
+                row = block[index]
+                row["components"][0] = value
+                row["reward"] = raw_rewards(row["components"], self.cfg)
+        else:
+            terminal_rewards = np.asarray([], dtype=np.float64)
+            adjustments = np.asarray([], dtype=np.float64)
         median = float(np.median(durations)) if len(durations) else 0.0
-        weight = self.cfg["reward"].get("win_time_weight", 0) if self.cfg else 0
-        for b, block in enumerate(self.blocks):
-            rows = block[: min(self.block_rows, self.size - b * self.block_rows)]
-            real = rows["components_valid"]
-            # Victory-time shaping remains a report-only diagnostic.  The new
-            # trajectory components are the global/action reward ledger, so
-            # recompute the immediate raw reward without mutating them.
-            if self.cfg and np.any(real):
-                rows["reward"][real] = raw_rewards(rows["components"][real], self.cfg)
         # The pinned simulator clock is the only clock used for the median.
         from pvz_game import Rules
 
         self.reward_summary = dict(
             duration_median_seconds=median / Rules().game["tick_rate"],
             duration_reference_count=len(durations),
-            victory_time_adjustments=victory_time(
-                durations[np.asarray([bool(r["won"]) for r in terminal], dtype=bool)],
-                median,
-                True,
-                weight,
-            ).tolist(),
+            endgame_terminal_rewards=terminal_rewards.tolist(),
+            endgame_time_adjustments=adjustments.tolist(),
+            endgame_time_weight=(
+                self.cfg["reward"].get("win_time_weight", 0.5) if self.cfg else 0.0
+            ),
+            # Compatibility alias for existing viewers and reports.
+            victory_time_adjustments=adjustments.tolist(),
             home_entries=np.sum(
                 [
                     block[: min(self.block_rows, self.size - b * self.block_rows)][

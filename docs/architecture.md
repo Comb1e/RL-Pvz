@@ -46,10 +46,14 @@ credits retroactively before returns are finalized. CUDA emits the same six
 learning components and private aggregate accounting; detailed device source
 rows are optional adapter data.
 
-Wall-nut uses a positive signed blocking coefficient while ordinary plant bites
-are negative. A Wall-nut can therefore earn local blocking value while losing
-asset health, but terminal defeat remains globally negative. Proximity and
-victory-time values remain diagnostics and are not learning targets.
+Wall-nut uses a positive blocking coefficient worth 100 sunlight over its full
+health, while each ordinary plant receives 10 sunlight over its full health.
+Blocking has no negative action term; global asset value still records health
+loss, so a Wall-nut can earn positive local value while losing health. Damage
+is worth 30 sunlight per 270 basic-zombie HP and a mower costs 500. After each
+128-game cohort, completion ranks adjust only the terminal row: winners range
+from +1.5 to +0.5, while losses after the median become more negative and can
+reach -1.5. Proximity remains diagnostic and does not enter learning targets.
 
 PowerShell and Bash bootstrap tools install the same pinned CUDA environment.
 They share archive/hash verification, install the game non-editably and never

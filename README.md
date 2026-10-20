@@ -6,11 +6,17 @@ The species Transformer selects a plant, wait or dig; the independent tile
 Transformer scores 45 tiles for the selected branch. Both read only the current
 public board. Planting creates no counterfactual rollout.
 
-Training uses `complete_return_action_global_v1` with a causal action/global
+Training uses `complete_return_action_global_v2` with a causal action/global
 reward ledger. Previous compatible
 BF16-master two-stage weights remain usable for inference and fresh `--init-from`;
 previous-objective runs cannot resume. Parameters live in
 [src/pvz_rl/data/train.toml](src/pvz_rl/data/train.toml).
+
+The reward profile values 270 effective zombie damage at 30 sunlight, a full
+Wall-nut block at 100, a full ordinary-plant block at 10, and a lawn mower at
+500. After each 128-game cohort, only the terminal row receives completion-time
+ranking: winning rewards range from +1.5 to +0.5, while late losses can reach
+-1.5. Detailed accounting is documented in [training](docs/training.md).
 
 ## Requirements
 

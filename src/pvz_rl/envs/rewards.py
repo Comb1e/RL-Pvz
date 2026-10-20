@@ -379,9 +379,9 @@ def reward_parts(
         "mower_activation_penalty": -scale * mower_cost,
         "invalid_plant_penalty": invalid_plant,
         "empty_dig_penalty": empty_dig,
-        # ``total`` is the immediate raw simulator reward.  Home proximity and
-        # cohort victory-time remain diagnostics only under the action/global
-        # objective; learning applies its dense physical scale separately.
+        # ``total`` is the immediate raw simulator reward. Home proximity stays
+        # diagnostic; cohort completion-time adjustment is applied to terminal
+        # rows by CompleteGameBuffer after all games in the cohort finish.
         "total": terminal + scale * physical + invalid_plant + empty_dig,
         "global_terminal": global_terminal,
         "global_asset_value": global_asset_value,
