@@ -37,6 +37,7 @@ def test_early_sun_independent_event_order_cap_and_training_scale(
     total, spawned, ordered, expected
 ):
     cfg = load_config()
+    scale = cfg["reward"]["progress_weight"] / cfg["reward"]["value_scale"]
     env = PvZEnv(cfg)
     try:
         env.reset(seed=3)
@@ -57,12 +58,14 @@ def test_early_sun_independent_event_order_cap_and_training_scale(
         parts = reward_parts(before, after, cfg, events=events)
         assert parts["early_sun"] == expected
         assert parts["net_value"] == income - sky
-        assert parts["early_sun_bonus"] == pytest.approx(2 * expected / 30000)
-        assert parts["development"] == pytest.approx((income - sky + 2 * expected) / 30000)
+        assert parts["early_sun_bonus"] == pytest.approx(2 * expected * scale)
+        assert parts["development"] == pytest.approx((income - sky + 2 * expected) * scale)
         # The current objective keeps the resource delta and the
         # source-action sun credit as separate physical channels.
         assert training_rewards(components(parts), cfg) == pytest.approx(
-            (2 * (income - sky) + 2 * expected) / 3000
+            (2 * (income - sky) + 2 * expected)
+            * scale
+            * cfg["training"]["objective"]["dense_multiplier"]
         )
     finally:
         env.close()
@@ -115,6 +118,7 @@ def test_early_sun_cuda_controls_at_production(sun, total, spawn_tick, expected)
 @pytest.mark.parametrize("kind", PLANT_TYPES)
 def test_purchase_conserves_assets_and_dig_removes_remaining_value(kind):
     cfg = load_config()
+    scale = cfg["reward"]["progress_weight"] / cfg["reward"]["value_scale"]
     env = PvZEnv(cfg)
     env.reset(
         seed=4,
@@ -129,11 +133,12 @@ def test_purchase_conserves_assets_and_dig_removes_remaining_value(kind):
     _, dig, _, _, _ = env.step(env.codec.encode(Dig(2, 3)))
     cost = env.rules.plants[kind]["cost"]
     assert asset_value(env.public) == before_assets - cost
-    assert dig == pytest.approx(-cost / 30000)
+    assert dig == pytest.approx(-cost * scale)
 
 
 def test_independent_damage_death_terminal_and_timeout_formula():
     cfg = load_config()
+    scale = cfg["reward"]["progress_weight"] / cfg["reward"]["value_scale"]
     env = PvZEnv(cfg)
     env.reset(
         seed=3,
@@ -152,20 +157,21 @@ def test_independent_damage_death_terminal_and_timeout_formula():
         before, plants=(replace(before.plants[0], health=before.plants[0].max_health // 2),)
     )
     assert asset_value(damaged) == 650
-    assert reward_parts(before, damaged, cfg)["total"] == pytest.approx(-50 / 30000)
+    assert reward_parts(before, damaged, cfg)["total"] == pytest.approx(-50 * scale)
     after = replace(damaged, plants=())
-    assert reward_parts(damaged, after, cfg)["total"] == pytest.approx(-50 / 30000)
+    assert reward_parts(damaged, after, cfg)["total"] == pytest.approx(-50 * scale)
     assert asset_value(after) == 600
     for status, terminal in ((Status.WON, 1), (Status.LOST, -1)):
         end = replace(after, status=status)
         assert asset_value(end) == 600
-        assert reward_parts(damaged, end, cfg)["total"] == pytest.approx(terminal - 50 / 30000)
+        assert reward_parts(damaged, end, cfg)["total"] == pytest.approx(terminal - 50 * scale)
 
 
 @pytest.mark.parametrize("sun", [0, 50, 300, 600, 9990])
 @pytest.mark.parametrize("kills", [0, 1, 4])
 def test_mower_cost_once_independent_of_sun_and_kills(sun, kills):
     cfg = load_config()
+    scale = cfg["reward"]["progress_weight"] / cfg["reward"]["value_scale"]
     env = PvZEnv(cfg)
     env.reset(seed=1)
     before = replace(env.public, sun=sun)
@@ -175,14 +181,15 @@ def test_mower_cost_once_independent_of_sun_and_kills(sun, kills):
             (Event("DamageApplied", 1, i, (("source", -1),)), Event("ZombieDefeated", 1, i))
         )
     parts = reward_parts(before, before, cfg, events=events)
-    assert parts["mower_activation_penalty"] == pytest.approx(-500 / 30000)
+    assert parts["mower_activation_penalty"] == pytest.approx(-500 * scale)
     assert parts["mower_kills"] == kills
-    assert parts["total"] == pytest.approx(-500 / 30000)
+    assert parts["total"] == pytest.approx(-500 * scale)
     assert reward_parts(before, before, cfg)["mower_activation_penalty"] == 0
 
 
 def test_empty_explosion_and_nut_bite_have_signed_blocking_credit():
     cfg = load_config()
+    scale = cfg["reward"]["progress_weight"] / cfg["reward"]["value_scale"]
     env = PvZEnv(cfg)
     env.reset(
         seed=3,
@@ -200,7 +207,7 @@ def test_empty_explosion_and_nut_bite_have_signed_blocking_credit():
     part = reward_parts(before, before, cfg, events=events)
     assert part["wall_nut_damage"] == 25 and part["empty_explosions"] == 1
     assert part["action_blocking"] == pytest.approx(25 * 0.025)
-    assert part["total"] == pytest.approx(25 * 0.025 / 30000)
+    assert part["total"] == pytest.approx(25 * 0.025 * scale)
 
 
 def test_house_entries_are_staged_once_and_victory_time_is_win_only():
@@ -281,7 +288,11 @@ def test_six_component_targets_scale_all_physical_channels_once():
         "action_sun": -200.0,
         "action_mower": -3.0,
     }
-    expected = 1 + 10 * (-2 + 50 / 270 + 50 - 200 - 3) / 30000
+    scale = cfg["reward"]["progress_weight"] / cfg["reward"]["value_scale"]
+    expected = (
+        1
+        + cfg["training"]["objective"]["dense_multiplier"] * (-2 + 50 / 270 + 50 - 200 - 3) * scale
+    )
     assert training_rewards(components(values), cfg) == pytest.approx(expected)
     # Diagnostic-only aliases never enter the learning vector.
     assert training_rewards(components({"terminal": 1, "development": 100}), cfg) == 0

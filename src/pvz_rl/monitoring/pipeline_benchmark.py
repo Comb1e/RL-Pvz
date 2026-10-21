@@ -139,6 +139,7 @@ def measure(cfg, output, *, initial=None, seed=101, seconds=1800, trajectory=Non
                             last_flush = perf_counter()
 
                 phase("collect", collect)
+                result["active_games"] = int(env.enabled_envs.sum())
                 result.update(
                     decisions=model.num_timesteps,
                     stored_rows=model._buffer.size,
@@ -166,13 +167,21 @@ def measure(cfg, output, *, initial=None, seed=101, seconds=1800, trajectory=Non
                 result["transport"] = dict(model._buffer.transport_metrics)
                 result["compaction"] = copy.deepcopy(model._fitting_spool.compaction)
                 result["representatives"] = len(model._fitting_spool)
+                result["spool_seconds"] = model._fitting_spool.preparation_seconds
                 result["workloads"] = copy.deepcopy(model._fitting_spool.workloads)
                 result["collection_execution"] = copy.deepcopy(model.collection_execution)
                 model._phase(CohortPhase.SYNCHRONIZE, callback)
                 phase("synchronize", lambda: model._synchronize(callback))
                 result["cohort"] = copy.deepcopy(model.cohort_metrics)
                 phase("next_begin", lambda: model._begin(callback))
-                phase("next_collect", lambda: model._collect_step(callback))
+
+                def next_decision():
+                    before = model.num_timesteps
+                    while model.num_timesteps == before:
+                        check()
+                        model._collect_step(callback)
+
+                phase("next_collect", next_decision)
                 model._drain()
                 result["cycle_seconds"] = perf_counter() - cycle_started
                 result["optimizer_commits"] = result["cohort"]["q_optimizer_steps"]
@@ -186,10 +195,17 @@ def measure(cfg, output, *, initial=None, seed=101, seconds=1800, trajectory=Non
                 result["elapsed_seconds"] = perf_counter() - startup
                 result["host_rss_mib"] = psutil.Process().memory_info().rss / 2**20
                 result["torch_peak_mib"] = torch.cuda.max_memory_allocated() / 2**20
+                result["torch_peak_reserved_mib"] = torch.cuda.max_memory_reserved() / 2**20
                 free, total = torch.cuda.mem_get_info()
                 result.update(free_mib=free / 2**20, total_mib=total / 2**20)
+                result["allocator_min_free_mib"] = max(
+                    0,
+                    result["free_mib"]
+                    - (torch.cuda.max_memory_reserved() - torch.cuda.memory_reserved()) / 2**20,
+                )
                 if model is not None:
                     result["execution"] = copy.deepcopy(model.execution_state)
+                    result["collection_execution"] = copy.deepcopy(model.collection_execution)
                     release_benchmark_model(model)
                 if env is not None:
                     env.close()
@@ -197,7 +213,7 @@ def measure(cfg, output, *, initial=None, seed=101, seconds=1800, trajectory=Non
         result.update(hardware_summary(output.with_suffix(".hardware.jsonl"), result["total_mib"]))
         sampled = result["sampled_min_free_mib"]
         result["minimum_free_mib"] = (
-            min(result["free_mib"], sampled) if sampled is not None else None
+            min(result["allocator_min_free_mib"], sampled) if sampled is not None else None
         )
         io_after = psutil.Process().io_counters()
         result["process_io_bytes"] = {

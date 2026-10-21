@@ -144,7 +144,7 @@ def batch_loss(
                     residual.new_tensor(len(ema_rows), dtype=torch.float64),
                 )
             )
-        denominators = None
+        denominators = consistency_counts
         if coefficients is None:
             denominators = (
                 torch.as_tensor(counts)[1:].clone()

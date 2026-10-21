@@ -130,8 +130,10 @@ class FittingSpool(PreparedPlans):
         self._ram_arrays, self._temp_paths = [], []
         self._mapped_arrays = []
         self._closed = False
+        started = perf_counter()
         try:
             self._build(buffer)
+            self.preparation_seconds = perf_counter() - started
         except BaseException:
             self.close()
             raise

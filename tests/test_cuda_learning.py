@@ -4,7 +4,7 @@ import copy
 
 import pytest
 import torch
-from pvz_game import LevelSpec, Spawn
+from pvz_game import Game, LevelSpec, Spawn, Wait
 from pvz_game.config import PLANT_TYPES, ZOMBIE_TYPES, InitialPlant
 
 from pvz_rl.config import load_config
@@ -32,6 +32,7 @@ def gpu_cfg():
 def test_observations_rewards_and_metrics_against_cpu(gpu_cfg, condition):
     from pvz_rl.envs.cuda_accounting import AccountingCudaBatch as CudaBatch
     from pvz_rl.envs.cuda_features import REWARD_FIELDS, CudaFeatures
+    from pvz_rl.envs.rewards import HomeProximityLedger, reward_parts
 
     cfg = copy.deepcopy(gpu_cfg)
     scenario = LevelSpec(
@@ -42,6 +43,9 @@ def test_observations_rewards_and_metrics_against_cpu(gpu_cfg, condition):
     )
     env = PvZEnv(cfg, condition=condition)
     env.reset(seed=15, options={"scenario": scenario})
+    oracle = Game()
+    oracle.reset(scenario, 15)
+    proximity = HomeProximityLedger(oracle.observe(), env.rules)
     batch = CudaBatch(1, zombie_capacity=15, max_step_ticks=1)
     batch.reset([scenario], [15])
     cp = batch.cp
@@ -54,10 +58,23 @@ def test_observations_rewards_and_metrics_against_cpu(gpu_cfg, condition):
             )
             action = 0
             obs, reward, done, truncated, info = env.step(action)
+            before = oracle.observe()
+            result = oracle.step(Wait(), ticks=1)
+            # CUDA publishes aggregate event economics. CPU source-row rewards
+            # intentionally omit effects from unowned initial plants; compare
+            # against the independent aggregate adapter, not that causal row.
+            aggregate = reward_parts(
+                before,
+                result.observation,
+                cfg,
+                events=result.events,
+                rules=env.rules,
+                proximity=proximity,
+            )
             feature.step(cp.asarray([action], dtype=cp.int64))
-            assert float(feature.rewards.get()[0]) == pytest.approx(reward, abs=2e-6)
+            assert float(feature.rewards.get()[0]) == pytest.approx(aggregate["total"], abs=2e-6)
             for key, value in zip(REWARD_FIELDS, feature.parts.get()[0]):
-                assert value == pytest.approx(info["reward_parts"][key], abs=1e-10), key
+                assert value == pytest.approx(aggregate[key], abs=1e-10), key
             if done or truncated:
                 break
 

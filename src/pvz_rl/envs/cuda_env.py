@@ -153,6 +153,7 @@ class CudaVecEnv(VecEnv):
         self.profiler = DeviceProfiler(
             self.cp,
             training and cfg["training"].get("performance", {}).get("telemetry", False),
+            span_limit=cfg["training"]["performance"].get("telemetry_span_limit"),
         )
         with self.device_context():
             self.features = CudaFeatures(self.batch, cfg, condition)
@@ -326,6 +327,7 @@ class CudaVecEnv(VecEnv):
             publish=False,
             observation_active=self.cp.asarray(self.enabled_envs),
         )
+        self._device_active = torch.from_dlpack(self.features.enabled)
         h = self.header_tensor
         self.proposed_actions.copy_(actions)
         self.transition_ticks.copy_(h[:, 14])
@@ -367,8 +369,10 @@ class CudaVecEnv(VecEnv):
     def step_host(self, *, autoreset=True, active=None, packed=False):
         """Interpret the completed step record after the handoff wait."""
         host = self._record.numpy()
-        if active is not None:
-            self._step_active = np.asarray(active, dtype=bool).copy()
+        executed = self._step_state_host["executing"].numpy()
+        self._step_active = executed.copy()
+        if active is not None and not np.array_equal(np.asarray(active, dtype=bool), executed):
+            raise ValueError("Host execution flags disagree with the completed simulator step")
         if self.training:
             self.task_transitions.update(self._tasks[i] for i in np.flatnonzero(self._step_active))
         self._pending_spawns[:] = self._step_state_host["pending_spawns"].numpy()

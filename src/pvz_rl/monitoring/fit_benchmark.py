@@ -192,10 +192,11 @@ def measure(cfg, *, repeats=3, rows_per_width=16, trajectory=None, initial=None)
                         optimizer.step()
                         model.sync_runtime_from_masters()
                         with torch.no_grad():
-                            for ema, online in zip(
-                                teacher.parameters(), model.parameters(), strict=True
-                            ):
-                                ema.lerp_(online, 1 - cfg["training"]["objective"]["ema_decay"])
+                            torch._foreach_lerp_(
+                                list(teacher.parameters()),
+                                list(model.parameters()),
+                                1 - cfg["training"]["objective"]["ema_decay"],
+                            )
 
                 torch.cuda.synchronize()
                 cold_start = perf_counter()

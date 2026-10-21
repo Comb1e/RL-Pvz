@@ -273,7 +273,6 @@ class CudaSequentialQ(CudaCohortLifecycle):
                         counts=counts,
                         offsets=offsets,
                         globals=self._last_obs.globals.index_select(0, live_slots),
-                        executing=executing,
                         branch_available=branch_available & executing[:, None],
                         columns=columns,
                         valid=self._runner.valid,
@@ -284,7 +283,7 @@ class CudaSequentialQ(CudaCohortLifecycle):
                 actions,
                 env.header_tensor[:, 12].bool(),
                 columns[:, 21].long(),
-                executing,
+                env._device_active,
                 env._step_device_result[1],
                 draws=(self._scheduler.species_coins, self._scheduler.species_choices),
             )
@@ -299,7 +298,7 @@ class CudaSequentialQ(CudaCohortLifecycle):
             for encoder in self._teacher.encoders:
                 encoder.release_retired()
             env.profiler.host("host_synchronization", env.handoff.wait_seconds - previous_wait)
-            active = host["executing"].numpy().copy()
+            active = env._step_state_host["executing"].numpy().copy()
             if np.any(active & ~issued_host):
                 raise ValueError("Executed slots differ from issued decision tickets")
             next_obs, _, dones, _, _, step = env.step_host(
@@ -761,6 +760,9 @@ class CudaSequentialQ(CudaCohortLifecycle):
         spool = getattr(self, "_fitting_spool", None)
         self._stats["fitting_compaction"] = dict(spool.compaction) if spool is not None else {}
         self._stats["fitting_workloads"] = dict(spool.workloads) if spool is not None else {}
+        self._stats["spool_preparation_seconds"] = (
+            spool.preparation_seconds if spool is not None else 0
+        )
         self._stats["compilation_status"] = getattr(self.policy, "compilation_status", "disabled")
         self._stats["compilation_backend"] = getattr(self.policy, "compilation_backend", None)
         self._stats["collection_graphs"] = {

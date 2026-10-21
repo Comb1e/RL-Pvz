@@ -485,6 +485,7 @@ def validate_config(cfg: dict) -> None:
         "compile_collection",
         "compile_fitting",
         "telemetry",
+        "telemetry_span_limit",
         "fit_precision",
         "prefetch",
         "fit_batch_groups",
@@ -510,6 +511,11 @@ def validate_config(cfg: dict) -> None:
     for key in ("fit_encoder_microbatch", "fit_token_budget"):
         if type(performance.get(key)) is not int or performance[key] < 1:
             raise ValueError(f"training.performance.{key} must be a positive integer")
+    if (
+        type(performance.get("telemetry_span_limit", 1024)) is not int
+        or performance.get("telemetry_span_limit", 1024) < 1
+    ):
+        raise ValueError("training.performance.telemetry_span_limit must be a positive integer")
     for key in ("fit_species_microbatch", "fit_tile_microbatch"):
         if key in performance and (type(performance[key]) is not int or performance[key] < 1):
             raise ValueError(f"training.performance.{key} must be a positive integer")

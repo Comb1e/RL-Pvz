@@ -311,6 +311,30 @@ def test_device_profiler_defers_unfinished_spans_and_snapshot_is_host_only():
     assert disabled.snapshot()["completed_phase_seconds"] == {}
 
 
+def test_device_profiler_bounds_events_without_waiting_for_unfinished_work():
+    from pvz_rl.monitoring.cuda_diagnostics import DeviceProfiler
+
+    class Event:
+        done = False
+
+        def record(self):
+            pass
+
+        def synchronize(self):
+            raise AssertionError("Bounded telemetry cannot synchronize")
+
+    cp = SimpleNamespace(cuda=SimpleNamespace(Event=Event, get_elapsed_time=lambda start, end: 25))
+    profiler = DeviceProfiler(cp, True, span_limit=2)
+    for _ in range(3):
+        with profiler.track("encoding"):
+            pass
+    assert len(profiler.pending) == 2 and profiler.snapshot()["dropped_device_spans"] == 1
+    for _, start, end in profiler.pending:
+        start.done = end.done = True
+    assert profiler.flush() == {"encoding": 0.05}
+    assert not profiler.pending and len(profiler._pool) == 4
+
+
 def test_benchmark_collection_counts_live_work_not_capacity(monkeypatch):
     from pvz_rl.monitoring import collection_benchmark
     from pvz_rl.monitoring.progress import CollectionProgress

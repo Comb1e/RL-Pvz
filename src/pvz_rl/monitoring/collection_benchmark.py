@@ -178,7 +178,8 @@ def measure(model, callback, hardware, process, decisions, **context):
         dict(
             env=int(row["env"]),
             terminal=float(row["components"][0]),
-            timed_out=bool(env.last_transition_host[int(row["env"]), 1]),
+            timed_out=model._pending_episodes[int(row["env"])]["metrics"]["failure_category"]
+            == "time_cutoff",
         )
         for row in terminal_rows
     ]

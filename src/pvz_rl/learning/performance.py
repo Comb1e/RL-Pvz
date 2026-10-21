@@ -9,6 +9,7 @@ PERFORMANCE_SETTINGS = (
     "compile_collection",
     "compile_fitting",
     "telemetry",
+    "telemetry_span_limit",
     "fit_batch_groups",
     "collection_graph_cache_entries",
     "collection_vram_headroom_mib",

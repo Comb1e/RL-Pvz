@@ -13,8 +13,13 @@ class DeviceProfiler:
     cached host totals and never queries the device.
     """
 
-    def __init__(self, cp, enabled=False):
+    def __init__(self, cp, enabled=False, *, span_limit=None):
+        if span_limit is None:
+            from pvz_rl.config import load_config
+
+            span_limit = load_config()["training"]["performance"]["telemetry_span_limit"]
         self.cp, self.enabled = cp, enabled
+        self.span_limit, self.dropped_spans = span_limit, 0
         self.pending, self.seconds, self._pool = [], {}, []
 
     def _event(self):
@@ -25,6 +30,12 @@ class DeviceProfiler:
         if not self.enabled:
             yield
             return
+        if len(self.pending) >= self.span_limit:
+            self.flush()
+            if len(self.pending) >= self.span_limit:
+                self.dropped_spans += 1
+                yield
+                return
         start, end = self._event(), self._event()
         start.record()
         try:
@@ -59,6 +70,7 @@ class DeviceProfiler:
             scope="current_cohort",
             completed_phase_seconds=dict(self.seconds),
             pending_device_spans=len(self.pending),
+            dropped_device_spans=self.dropped_spans,
         )
 
 

@@ -11,9 +11,6 @@ from pvz_rl.presentation.action_journal import ActionJournal
 def batch(n=5):
     rows = np.zeros(n, dtype=trajectory_dtype())
     rows["active"] = True
-    masks = np.zeros((n, 406), dtype=bool)
-    masks[:, [0, 1, 361]] = True
-    rows["mask"] = np.packbits(masks, axis=1, bitorder="little")
     rows["action"] = 1
     return rows, np.arange(n * 10, dtype=np.float32).reshape(n, 10), np.tile([1, 0], (n, 1))
 

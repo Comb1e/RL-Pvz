@@ -112,6 +112,7 @@ demo_rank_margin = 0.05
 compile_collection = true
 compile_fitting = true
 telemetry = true
+telemetry_span_limit = 1024
 fit_precision = "bf16_master"
 prefetch = true
 fit_batch_groups = 4
