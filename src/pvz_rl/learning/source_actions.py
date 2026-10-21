@@ -12,8 +12,9 @@ class SourceActionRef:
     decision: int
 
     def __post_init__(self):
-        if any(type(value) is not int or value < 0
-               for value in (self.env, self.episode, self.decision)):
+        if any(
+            type(value) is not int or value < 0 for value in (self.env, self.episode, self.decision)
+        ):
             raise ValueError("Action identity fields must be nonnegative integers")
 
 
@@ -26,5 +27,6 @@ class AppendReceipt:
     environments: np.ndarray
 
     def reference(self, index):
-        return SourceActionRef(int(self.environments[index]), int(self.episodes[index]),
-                               int(self.decisions[index]))
+        return SourceActionRef(
+            int(self.environments[index]), int(self.episodes[index]), int(self.decisions[index])
+        )

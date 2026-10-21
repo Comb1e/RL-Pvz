@@ -128,7 +128,9 @@ def test_demo_teacher_is_frozen_per_pass_and_updates_once_after_adam(
         assert not targets.requires_grad and not gaps.requires_grad
         online_values = online_tiles.detach().cpu().tolist()
         ema_values = ema_tiles.detach().cpu().tolist()
-        public_masks = masks.cpu().tolist() if masks is not None else [[True] * 406 for _ in branches]
+        public_masks = (
+            masks.cpu().tolist() if masks is not None else [[True] * 406 for _ in branches]
+        )
         expected_selected, expected_targets, expected_gaps = [], [], []
         for index, branch in enumerate(branches.cpu().tolist()):
             candidate_mask = public_masks[index][1 + (branch - 1) * 45 : 1 + branch * 45]
@@ -486,7 +488,14 @@ def test_early_sun_reconstructed_from_previous_ledger_without_rewriting(tmp_path
     assert early > 0
     old_targets = demo._training_tensors(baseline)[-1]
     new_targets = demo._training_tensors(verified)[-1]
-    assert float(new_targets[0] - old_targets[0]) == pytest.approx(2 * early * current["reward"]["progress_weight"] / current["reward"]["value_scale"] * current["training"]["objective"]["dense_multiplier"], abs=2e-7)
+    assert float(new_targets[0] - old_targets[0]) == pytest.approx(
+        2
+        * early
+        * current["reward"]["progress_weight"]
+        / current["reward"]["value_scale"]
+        * current["training"]["objective"]["dense_multiplier"],
+        abs=2e-7,
+    )
     assert all(path.read_bytes() == contents for path, contents in source.items())
 
 

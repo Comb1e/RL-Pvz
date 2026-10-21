@@ -165,7 +165,9 @@ class CudaVecEnv(VecEnv):
             device=torch.device("cuda"),
             dtype=self.header_tensor.dtype,
         )
-        self._card_bits = 1 << torch.arange(len(self._branch_costs), device="cuda", dtype=torch.int64)
+        self._card_bits = 1 << torch.arange(
+            len(self._branch_costs), device="cuda", dtype=torch.int64
+        )
         self._closed = False
         self.transition_ticks = torch.zeros(self.num_envs, dtype=torch.int64, device="cuda")
         # Keep proposal and execution channels separate.  Trajectories and
@@ -268,17 +270,16 @@ class CudaVecEnv(VecEnv):
         empty-tile legality is classified after its tile proposal.
         """
         header = self.header_tensor
-        running = (
-            (header[:, HEADER.index("status")] == 0)
-            & header[:, HEADER.index("enabled")].bool()
-        )
+        running = (header[:, HEADER.index("status")] == 0) & header[
+            :, HEADER.index("enabled")
+        ].bool()
         sun = header[:, HEADER.index("sun")]
         cooldowns = torch.from_dlpack(self.batch.cooldowns)
         device = self.header_tensor.device
         costs = self._branch_costs
-        allowed = header[:, HEADER.index("allowed")][:, None].bitwise_and(
-            self._card_bits[None, :]
-        ) != 0
+        allowed = (
+            header[:, HEADER.index("allowed")][:, None].bitwise_and(self._card_bits[None, :]) != 0
+        )
         plants = (cooldowns == 0) & (sun[:, None] >= costs[None, :]) & allowed
         result = torch.cat((running[:, None], plants & running[:, None], running[:, None]), dim=1)
         if active is not None:
@@ -353,10 +354,14 @@ class CudaVecEnv(VecEnv):
                 dim=1,
             )
             self._record = self.handoff.enqueue("transition", record)
-            self._step_state_host = self.handoff.enqueue_fields("step_state", dict(
-                executing=self._device_active,
-                pending_spawns=h[:, HEADER.index("total_spawns")] - h[:, HEADER.index("spawn_index")],
-            ))
+            self._step_state_host = self.handoff.enqueue_fields(
+                "step_state",
+                dict(
+                    executing=self._device_active,
+                    pending_spawns=h[:, HEADER.index("total_spawns")]
+                    - h[:, HEADER.index("spawn_index")],
+                ),
+            )
         self._step_device_result = reward, done, timed_out
 
     def step_host(self, *, autoreset=True, active=None, packed=False):
@@ -387,8 +392,9 @@ class CudaVecEnv(VecEnv):
         obs = self.features.publish(summary, self._step_active | self.enabled_envs)
         truncation = summary[:, 1:]
         completed = {}
-        step = PackedStepResult(compact, actions, self.last_action_result_host, truncation,
-                                self._step_active, completed)
+        step = PackedStepResult(
+            compact, actions, self.last_action_result_host, truncation, self._step_active, completed
+        )
         reward, done, timed_out = self._step_device_result
         reward = reward.clone()
         indices = np.flatnonzero(compact[:, 0]).tolist()
@@ -396,9 +402,13 @@ class CudaVecEnv(VecEnv):
         if indices:
             terminal_observations = None if packed else obs.clone()
             selected = torch.as_tensor(indices, device=self.header_tensor.device)
-            self._episode_host = self.handoff.enqueue_fields("completed_episode", dict(
-                header=self.header_tensor.index_select(0, selected),
-                totals=torch.from_dlpack(self.features.totals).index_select(0, selected)))
+            self._episode_host = self.handoff.enqueue_fields(
+                "completed_episode",
+                dict(
+                    header=self.header_tensor.index_select(0, selected),
+                    totals=torch.from_dlpack(self.features.totals).index_select(0, selected),
+                ),
+            )
             self.handoff.wait()
             headers = self._episode_host["header"].numpy()
             totals = self._episode_host["totals"].numpy()
@@ -415,7 +425,14 @@ class CudaVecEnv(VecEnv):
             else:
                 self.batch.header[self.cp.asarray(indices), 17] = 0
                 self.enabled_envs[indices] = False
-        return obs, reward, done, timed_out, terminal_observations, (step if packed else list(step.infos()))
+        return (
+            obs,
+            reward,
+            done,
+            timed_out,
+            terminal_observations,
+            (step if packed else list(step.infos())),
+        )
 
     def step_tensors(self, actions, *, autoreset=True):
         with self.device_context():

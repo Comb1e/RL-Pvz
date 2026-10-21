@@ -74,21 +74,25 @@ def outcome_weights(counts, *, device, dtype, accepted_share=0.5):
     return shares / counts.clamp_min(1) / represented
 
 
-def balanced_q_loss(selected, targets, actions, counts, *, accepted, accepted_share=0.5, weights=None):
+def balanced_q_loss(
+    selected, targets, actions, counts, *, accepted, accepted_share=0.5, weights=None
+):
     """Equal nonempty wait/plant/dig groups, then equal accepted/rejected outcomes."""
     errors = (selected - targets).square()
-    weights = outcome_weights(
-        counts, device=selected.device, dtype=selected.dtype, accepted_share=accepted_share
-    ) if weights is None else weights
+    weights = (
+        outcome_weights(
+            counts, device=selected.device, dtype=selected.dtype, accepted_share=accepted_share
+        )
+        if weights is None
+        else weights
+    )
     loss = (errors * weights[action_groups(actions), accepted.long()]).sum()
     return loss, errors
 
 
 def tile_candidates(action_masks, branches):
     active = action_masks.any(-1)
-    tile_legal = torch.ones(
-        (len(branches), A.tiles), dtype=torch.bool, device=branches.device
-    )
+    tile_legal = torch.ones((len(branches), A.tiles), dtype=torch.bool, device=branches.device)
     first_tile = torch.zeros_like(tile_legal)
     first_tile[:, 0] = True
     return torch.where(active[:, None], tile_legal, first_tile)

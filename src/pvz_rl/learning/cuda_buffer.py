@@ -91,7 +91,11 @@ class CompleteGameBuffer:
         self._position_cache = {}
         self._entity_gather_workspace = None
         self.transport_metrics = dict(
-            preparation_seconds=0.0, transfer_wait_seconds=0.0, transfer_stream_seconds=0.0
+            preparation_seconds=0.0,
+            transfer_wait_seconds=0.0,
+            transfer_stream_seconds=0.0,
+            producer_wait_seconds=0.0,
+            transferred_bytes=0,
         )
         # Host-side causal source metadata is deliberately kept separate from
         # model observations and the fixed trajectory dtype.  A CUDA backend
@@ -100,42 +104,82 @@ class CompleteGameBuffer:
         self.causal_sources = {}
         self._source_index = {}
         self._index_arrays = []
+        self._source_episodes = np.zeros(n_envs, np.uint64)
+        self._source_lengths = np.zeros(n_envs, np.int64)
         self._next_run_break = np.ones(n_envs, bool)
 
     def _index_records(self, records, base, *, validate_only=False):
         """Small per-episode directories; each decision maps through an integer slab."""
+        # Collection supplies at most one row per original slot. Validate the
+        # common case as arrays, avoiding per-slot NumPy searches every step.
+        environments = records["env"]
+        if len(records) and np.all(environments[1:] > environments[:-1]):
+            episodes = records["episode"]
+            prior = self._source_episodes[environments]
+            lengths = np.where(episodes == prior, self._source_lengths[environments], 0)
+            if np.any(episodes < prior) or not np.array_equal(records["decision"], lengths):
+                raise ValueError("Duplicate, missing or out-of-order source action identity")
+            if validate_only:
+                return
+            for index, (env, episode, length) in enumerate(
+                zip(environments, episodes, lengths, strict=True)
+            ):
+                key = int(env), int(episode)
+                blocks = self._source_index.get(key, ([], 0))[0]
+                block, offset = divmod(int(length), self.block_rows)
+                if block == len(blocks):
+                    blocks.append(self._allocate_source_index())
+                blocks[block][offset] = base + index
+                self._source_index[key] = blocks, int(length) + 1
+            self._source_episodes[environments] = episodes
+            self._source_lengths[environments] = lengths + 1
+            return
         for env in np.unique(records["env"]):
             positions = np.flatnonzero(records["env"] == env)
+            episodes = records["episode"][positions]
+            latest = max(
+                (episode for slot, episode in self._source_index if slot == int(env)), default=0
+            )
+            if np.any(episodes[1:] < episodes[:-1]) or (len(episodes) and episodes[0] < latest):
+                raise ValueError("Out-of-order source action episode identity")
             for episode in np.unique(records["episode"][positions]):
                 selected = positions[records["episode"][positions] == episode]
                 key = (int(env), int(episode))
                 blocks, length = self._source_index.get(key, ([], 0))
-                if not np.array_equal(records["decision"][selected],
-                                      np.arange(length, length + len(selected))):
+                if not np.array_equal(
+                    records["decision"][selected], np.arange(length, length + len(selected))
+                ):
                     raise ValueError("Duplicate, missing or out-of-order source action identity")
                 if validate_only:
                     continue
                 for start in range(0, len(selected), self.block_rows):
-                    part = selected[start:start + self.block_rows]
+                    part = selected[start : start + self.block_rows]
                     offset = 0
                     while offset < len(part):
                         block, at = divmod(length, self.block_rows)
                         if block == len(blocks):
-                            amount = self.block_rows * 8
-                            if self.ram_used + self.staging_bytes + amount <= self.ram_bytes:
-                                value = np.empty(self.block_rows, dtype=np.uint64)
-                                self.ram_used += amount
-                            else:
-                                value = np.lib.format.open_memmap(
-                                    self.path / f"source-index-{len(self._index_arrays):06d}.npy",
-                                    mode="w+", dtype=np.uint64, shape=(self.block_rows,))
-                            blocks.append(value)
-                            self._index_arrays.append(value)
+                            blocks.append(self._allocate_source_index())
                         take = min(len(part) - offset, self.block_rows - at)
-                        blocks[block][at:at + take] = base + part[offset:offset + take]
+                        blocks[block][at : at + take] = base + part[offset : offset + take]
                         length += take
                         offset += take
                 self._source_index[key] = blocks, length
+                self._source_episodes[env], self._source_lengths[env] = episode, length
+
+    def _allocate_source_index(self):
+        amount = self.block_rows * 8
+        if self.ram_used + self.staging_bytes + amount <= self.ram_bytes:
+            value = np.empty(self.block_rows, dtype=np.uint64)
+            self.ram_used += amount
+        else:
+            value = np.lib.format.open_memmap(
+                self.path / f"source-index-{len(self._index_arrays):06d}.npy",
+                mode="w+",
+                dtype=np.uint64,
+                shape=(self.block_rows,),
+            )
+        self._index_arrays.append(value)
+        return value
 
     def source_row(self, reference):
         if not isinstance(reference, SourceActionRef):
@@ -165,8 +209,11 @@ class CompleteGameBuffer:
         """Charge reusable pinned buffers to the same budget, spilling RAM if needed."""
         if amount > self.ram_bytes:
             return False
-        for prefix, blocks in (("entities", self.entity_blocks), ("block", self.blocks),
-                               ("source-index", self._index_arrays)):
+        for prefix, blocks in (
+            ("entities", self.entity_blocks),
+            ("block", self.blocks),
+            ("source-index", self._index_arrays),
+        ):
             for i, block in enumerate(blocks):
                 if self.ram_used + amount <= self.ram_bytes:
                     self.staging_bytes = amount
@@ -227,25 +274,37 @@ class CompleteGameBuffer:
         slots = np.flatnonzero(records["active"])
         next_run_break = self._next_run_break.copy()
         # Capture padding boundaries before removing inactive metadata slots.
-        for env in np.unique(records["env"]):
-            positions = np.flatnonzero(records["env"] == env)
-            enabled = records["active"][positions]
-            previous = np.r_[not next_run_break[env], enabled[:-1]]
-            records["run_break"][positions] |= ~previous | records["reset"][positions]
-            next_run_break[env] = not bool(enabled[-1])
+        if np.all(records["env"][1:] > records["env"][:-1]):
+            records["run_break"] |= next_run_break[records["env"]] | records["reset"]
+            next_run_break[records["env"]] = ~records["active"]
+        else:
+            for env in np.unique(records["env"]):
+                positions = np.flatnonzero(records["env"] == env)
+                enabled = records["active"][positions]
+                previous = np.r_[not next_run_break[env], enabled[:-1]]
+                records["run_break"][positions] |= ~previous | records["reset"][positions]
+                next_run_break[env] = not bool(enabled[-1])
         records = records[slots]
         counts = np.asarray(observations.counts)[slots].astype(np.int64)
         offsets = np.asarray(observations.offsets)[slots].astype(np.int64)
         starts = np.cumsum(counts) - counts
-        positions = np.repeat(offsets, counts) + np.arange(int(counts.sum())) - np.repeat(starts, counts)
-        observations = PackedEntityBatch(observations.entities[positions], starts, counts,
-                                         np.asarray(observations.globals)[slots])
+        positions = (
+            np.repeat(offsets, counts) + np.arange(int(counts.sum())) - np.repeat(starts, counts)
+        )
+        observations = PackedEntityBatch(
+            observations.entities[positions],
+            starts,
+            counts,
+            np.asarray(observations.globals)[slots],
+        )
         if identities is None:
             for env in np.unique(records["env"]):
-                selected = np.flatnonzero(records["env"] == env)
-                episode = int(records["episode"][selected[0]])
-                length = self._source_index.get((int(env), episode), ([], 0))[1]
-                records["decision"][selected] = np.arange(length, length + len(selected))
+                for episode in np.unique(records["episode"][records["env"] == env]):
+                    selected = np.flatnonzero(
+                        (records["env"] == env) & (records["episode"] == episode)
+                    )
+                    length = self._source_index.get((int(env), int(episode)), ([], 0))[1]
+                    records["decision"][selected] = np.arange(length, length + len(selected))
         else:
             episodes, decisions = identities
             records["episode"] = np.asarray(episodes)[slots]
@@ -258,8 +317,13 @@ class CompleteGameBuffer:
         self._append(records)
         self._index_records(records, base)
         self._next_run_break = next_run_break
-        return AppendReceipt(slots, np.arange(base, self.size), records["episode"].copy(),
-                             records["decision"].copy(), records["env"].copy())
+        return AppendReceipt(
+            slots,
+            np.arange(base, self.size),
+            records["episode"].copy(),
+            records["decision"].copy(),
+            records["env"].copy(),
+        )
 
     def take(self, indices):
         indices = np.asarray(indices, dtype=np.int64)
@@ -390,8 +454,13 @@ class CompleteGameBuffer:
         if self.finalized or self.rewards_finalized:
             raise RuntimeError("Causal credits must be applied before return finalization")
         if isinstance(credits, dict):
-            entries = [{("action_ref" if isinstance(index, SourceActionRef) else "row_index"): index,
-                        "credits": values} for index, values in credits.items()]
+            entries = [
+                {
+                    ("action_ref" if isinstance(index, SourceActionRef) else "row_index"): index,
+                    "credits": values,
+                }
+                for index, values in credits.items()
+            ]
         else:
             entries = list(credits)
         normalized = []
@@ -512,6 +581,7 @@ class CompleteGameBuffer:
         """Actual per-game returns and errors measured before fitting either head."""
         self.finalize_rewards()
         running = np.zeros(self.n_envs, np.float64)
+        running_episode = [None] * self.n_envs
         contribution = np.zeros((self.n_envs, len(COMPONENTS)), np.float64)
         component_sum = np.zeros(len(COMPONENTS), np.float64)
         component_square = np.zeros(len(COMPONENTS), np.float64)
@@ -543,19 +613,33 @@ class CompleteGameBuffer:
                         training_rewards(rows["components"][ix], self.cfg),
                         rewards,
                     )
-                values = np.cumsum(rewards[::-1], dtype=np.float64)[::-1] + running[env]
-                if len(ix):
-                    running[env] = values[0]
-                rows["target"][ix] = values
                 parts = rows["components"][ix].copy()
                 immediate_component_sum += parts.sum(0)
                 if self.cfg:
                     parts[:, 1:] *= (
                         self.cfg["training"].get("objective", {}).get("dense_multiplier", 1)
                     )
-                returns = np.cumsum(parts[::-1], axis=0)[::-1] + contribution[env]
-                if len(ix):
-                    contribution[env] = returns[0]
+                values = np.empty(len(ix), np.float64)
+                returns = np.empty_like(parts)
+                episodes, terminals = rows["episode"][ix], rows["done"][ix]
+                boundaries = np.r_[
+                    0, np.flatnonzero((episodes[1:] != episodes[:-1]) | terminals[:-1]) + 1, len(ix)
+                ]
+                for low, high in reversed(list(zip(boundaries[:-1], boundaries[1:], strict=True))):
+                    if high == low:
+                        continue
+                    if running_episode[env] != int(episodes[high - 1]) or terminals[high - 1]:
+                        running[env] = 0
+                        contribution[env] = 0
+                    values[low:high] = (
+                        np.cumsum(rewards[low:high][::-1], dtype=np.float64)[::-1] + running[env]
+                    )
+                    returns[low:high] = (
+                        np.cumsum(parts[low:high][::-1], axis=0)[::-1] + contribution[env]
+                    )
+                    running[env], contribution[env] = values[low], returns[low]
+                    running_episode[env] = int(episodes[low])
+                rows["target"][ix] = values
                 component_sum += returns.sum(0)
                 component_square += np.square(returns).sum(0)
                 target_sum += values.sum()

@@ -357,7 +357,11 @@ class SpatialTransformer(nn.Module):
             args = (*part.tensors(), branches[start : start + size])
             logical = len(part)
             compile_args = args
-            if self._compiled_encode is not None and (torch.is_grad_enabled() or self.fitting) and logical < size:
+            if (
+                self._compiled_encode is not None
+                and (torch.is_grad_enabled() or self.fitting)
+                and logical < size
+            ):
                 padding = size - logical
                 compile_args = tuple(
                     torch.cat((value, value.new_zeros((padding, *value.shape[1:]))), dim=0)

@@ -145,7 +145,7 @@ def test_browser_annotation_has_drag_discard_and_relative_protocol():
     ):
         assert token in ANNOTATION_HTML
     assert "id=action-controls" not in ANNOTATION_HTML
-    assert "class=\"action-label\"" not in ANNOTATION_HTML
+    assert 'class="action-label"' not in ANNOTATION_HTML
     assert "fetch('/api/" not in ANNOTATION_HTML
 
 
@@ -657,7 +657,11 @@ def test_action_sampler_uses_any_running_endpoint_without_selected_branch(monkey
     row = sampler.sample("easy", annotation_kind="action")
     assert row["plant_type"] is None
     assert row["availability"] == {}
-    assert set(row["action_availability"]) == {"wait", *load_config()["environment"]["plants"], "dig"}
+    assert set(row["action_availability"]) == {
+        "wait",
+        *load_config()["environment"]["plants"],
+        "dig",
+    }
     assert row["action_availability"]["wait"]["feasible"] is True
     assert row["action_availability"]["wait"]["absolute_infeasible"] is False
     assert row["action_availability"]["dig"]["absolute_infeasible"] is True
@@ -1102,3 +1106,42 @@ def test_annotation_interrupt_before_initial_evaluation_retains_zero_pass(
     saved = torch.load(result["progress"], weights_only=True)
     assert saved["status"] == "incomplete" and saved["passes_completed"] == 0
     assert saved["optimizer"]["state"] == {} and saved["train"] is None
+
+
+def test_vector_ranking_matches_scalar_indexed_tie_gradients_and_bottom_metrics():
+    from pvz_rl.learning.annotation_fit import _metrics
+
+    values = torch.tensor(
+        [[1.0, 1.0, 2.0, -1.0, -1.0], [0.0, 0.0, 0.0, 0.0, 0.0], [2.0, 1.0, 0.0, -1.0, -2.0]],
+        dtype=torch.float64,
+        requires_grad=True,
+    )
+    feasible = [[1, 0, 1], [4, 0, 2, 3, 1], [0, 1]]
+    absolute = [[4, 3, 4], [], [3, 4]]
+    actual = set_ranking_loss(values, feasible, absolute)
+    (gradient,) = torch.autograd.grad(actual, values)
+    reference = values.detach().clone().requires_grad_()
+    losses = []
+    for row, yes, no in zip(reference, feasible, absolute, strict=True):
+        positive, negative = sorted(set(yes)), sorted(set(no))
+        other = sorted(set(range(5)) - set(positive))
+        non_absolute = sorted(set(range(5)) - set(negative))
+        top = (
+            torch.relu(1 + row[other].max(0).values - row[positive].max(0).values)
+            if other
+            else row.sum() * 0
+        )
+        bottom = (
+            torch.relu(1 + row[negative].max(0).values - row[non_absolute].min(0).values)
+            if negative
+            else row.sum() * 0
+        )
+        losses.append(top + bottom)
+    control = torch.stack(losses).mean()
+    (expected,) = torch.autograd.grad(control, reference)
+    torch.testing.assert_close(actual, control, rtol=0, atol=0)
+    torch.testing.assert_close(gradient, expected, rtol=0, atol=0)
+    assert torch.isfinite(gradient).all()
+    report = _metrics(values, feasible, absolute)
+    assert report["hits"] == 2 and report["absolute_bottom_hits"] == 3
+    assert report["all_positive_records"] == report["no_absolute_records"] == 1

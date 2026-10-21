@@ -423,7 +423,9 @@ def benchmark(
     cfg["visualization"].update(enabled=False, live_enabled=False, demos=False, videos=False)
     cfg["training"].update(until_stage_complete=False, total_games=10000, n_epochs=FIT_PASSES)
     cfg["training"]["n_envs"] = ORIGINAL_ENVIRONMENTS
-    cfg["training"]["performance"].update(compile_collection=not eager, compile_fitting=not eager, telemetry=telemetry)
+    cfg["training"]["performance"].update(
+        compile_collection=not eager, compile_fitting=not eager, telemetry=telemetry
+    )
     torch.set_num_threads(cfg["training"]["torch_threads"])
     result = dict(
         protocol=PROTOCOL,

@@ -184,8 +184,10 @@ class InvalidRowCompactor:
             live, bad = active[ix], invalid[ix]
             n = len(ix)
             boundary = np.ones(n, bool)
-            keys = np.stack([current[k].astype(np.int64) for k in
-                             ("action", "route", "rejection_reason")], axis=1)
+            keys = np.stack(
+                [current[k].astype(np.int64) for k in ("action", "route", "rejection_reason")],
+                axis=1,
+            )
             if n > 1:
                 boundary[1:] = np.any(keys[1:] != keys[:-1], axis=1) | ~bad[:-1] | ~live[:-1]
             for field in ("reset", "run_break"):
@@ -202,7 +204,9 @@ class InvalidRowCompactor:
             if prior is not None:
                 key, previous_bad, done, episode, decision, length = prior
                 continuation = previous_bad and not done and tuple(keys[0]) == key
-                continuation &= not any(bool(current[k][0]) for k in ("reset", "run_break") if k in names)
+                continuation &= not any(
+                    bool(current[k][0]) for k in ("reset", "run_break") if k in names
+                )
                 if "episode" in names:
                     continuation &= int(current["episode"][0]) == episode
                 if "decision" in names:
@@ -212,11 +216,14 @@ class InvalidRowCompactor:
             ordinals = np.arange(n) - starts
             keep[ix] |= bad & (ordinals % self.group_size == 0)
             self.runs += int(np.count_nonzero(bad & boundary))
-            self.state[int(env)] = (tuple(keys[-1]), bool(bad[-1]),
+            self.state[int(env)] = (
+                tuple(keys[-1]),
+                bool(bad[-1]),
                 bool(current["done"][-1]) if "done" in names else False,
                 int(current["episode"][-1]) if "episode" in names else 0,
                 int(current["decision"][-1]) if "decision" in names else 0,
-                int(ordinals[-1] + 1) if bad[-1] else 0)
+                int(ordinals[-1] + 1) if bad[-1] else 0,
+            )
         selected = np.flatnonzero(keep)
         self.counts += _outcome_counts(rows[selected])
         self.raw += int(active.sum())
@@ -227,10 +234,15 @@ class InvalidRowCompactor:
 
     @property
     def diagnostics(self):
-        return dict(raw_rows=self.raw, selected_rows=self.selected,
-                    raw_invalid_rows=self.raw_invalid, retained_invalid_rows=self.retained,
-                    invalid_runs=self.runs, invalid_windows=self.retained,
-                    invalid_reduction=(1 - self.retained / self.raw_invalid) if self.raw_invalid else 0.0)
+        return dict(
+            raw_rows=self.raw,
+            selected_rows=self.selected,
+            raw_invalid_rows=self.raw_invalid,
+            retained_invalid_rows=self.retained,
+            invalid_runs=self.runs,
+            invalid_windows=self.retained,
+            invalid_reduction=(1 - self.retained / self.raw_invalid) if self.raw_invalid else 0.0,
+        )
 
 
 def compact_invalid_rows(rows, *, group_size=100):

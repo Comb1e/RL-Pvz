@@ -114,6 +114,7 @@ def measure(cfg, *, repeats=3, rows_per_width=16, trajectory=None, initial=None)
     model = TwoStageTransformerPolicy(cfg).cuda().train()
     if initial is not None:
         from pvz_rl.learning.training import initial_weights
+
         weights, _ = initial_weights(initial, cfg)
         model.load_state_dict(weights)
     teacher = TwoStageTransformerPolicy(cfg).cuda().eval().requires_grad_(False)
@@ -133,11 +134,13 @@ def measure(cfg, *, repeats=3, rows_per_width=16, trajectory=None, initial=None)
     measurements = []
     workloads = {"trajectory": ()} if trajectory is not None else WORKLOAD_WIDTHS
     for name, widths in workloads.items():
-        for action_mix in (("actual",) if trajectory is not None else ACTION_MIXES):
+        for action_mix in ("actual",) if trajectory is not None else ACTION_MIXES:
             with TemporaryDirectory(prefix="pvz-fit-benchmark-") as temporary:
                 if trajectory is None:
                     buffer = CompleteGameBuffer(temporary, 1, cfg=cfg)
-                    rows, boards = benchmark_rows(cfg, widths, rows_per_width, action_mix, buffer.dtype)
+                    rows, boards = benchmark_rows(
+                        cfg, widths, rows_per_width, action_mix, buffer.dtype
+                    )
                     buffer.append(rows, boards)
                 else:
                     state = json.loads((Path(trajectory) / "metadata.json").read_text())
@@ -147,7 +150,12 @@ def measure(cfg, *, repeats=3, rows_per_width=16, trajectory=None, initial=None)
                 spool = FittingSpool(buffer)
                 spool_seconds = perf_counter() - prepared
                 counts = spool.outcome_counts
-                coefficients = CohortCoefficients.prepare(counts, spool.consistency_counts, "cuda", cfg["training"]["objective"]["accepted_outcome_share"])
+                coefficients = CohortCoefficients.prepare(
+                    counts,
+                    spool.consistency_counts,
+                    "cuda",
+                    cfg["training"]["objective"]["accepted_outcome_share"],
+                )
 
                 def passes():
                     for _ in range(cfg["training"]["n_epochs"]):
@@ -289,7 +297,16 @@ def main():
         cfg["training"]["torch_threads"] = args.threads
     if args.no_compile:
         performance["compile_fitting"] = False
-    write_json(args.output, measure(cfg, repeats=args.repeats, rows_per_width=args.rows_per_width, trajectory=args.trajectory, initial=args.init_from))
+    write_json(
+        args.output,
+        measure(
+            cfg,
+            repeats=args.repeats,
+            rows_per_width=args.rows_per_width,
+            trajectory=args.trajectory,
+            initial=args.init_from,
+        ),
+    )
 
 
 if __name__ == "__main__":

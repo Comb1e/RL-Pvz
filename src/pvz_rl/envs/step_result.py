@@ -45,12 +45,20 @@ class PackedStepResult:
         accepted = bool(self.outcomes[index, 0])
         reason = int(self.outcomes[index, 1])
         omitted = self.truncation[index]
-        result = dict(entity_truncation=dict(total=int(omitted.sum()),
-                      **dict(zip(("plants", "zombies", "projectiles"), map(int, omitted)))),
-                      proposal_action=int(self.actions[index, 0]),
-                      executed_action=int(self.actions[index, 1]), accepted=accepted,
-                      rejection_reason=None if accepted or not 0 <= reason < len(REASONS) else REASONS[reason],
-                      ticks_advanced=int(self.compact[index, 2]), causal_credits={},
-                      causal_diagnostics=dict(source_action_credited_rows=0, unattributable_events=0))
+        result = dict(
+            entity_truncation=dict(
+                total=int(omitted.sum()),
+                **dict(zip(("plants", "zombies", "projectiles"), map(int, omitted))),
+            ),
+            proposal_action=int(self.actions[index, 0]),
+            executed_action=int(self.actions[index, 1]),
+            accepted=accepted,
+            rejection_reason=None
+            if accepted or not 0 <= reason < len(REASONS)
+            else REASONS[reason],
+            ticks_advanced=int(self.compact[index, 2]),
+            causal_credits={},
+            causal_diagnostics=dict(source_action_credited_rows=0, unattributable_events=0),
+        )
         result.update(self.completed.get(index, {}))
         return result

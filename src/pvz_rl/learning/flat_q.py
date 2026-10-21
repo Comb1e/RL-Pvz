@@ -25,8 +25,10 @@ class CohortCoefficients:
     @classmethod
     def prepare(cls, counts, consistency_counts, device, accepted_share):
         def weights(value):
-            return outcome_weights(value, device="cpu", dtype=torch.float32,
-                                   accepted_share=accepted_share).to(device)
+            return outcome_weights(
+                value, device="cpu", dtype=torch.float32, accepted_share=accepted_share
+            ).to(device)
+
         return cls(weights(counts), weights(consistency_counts))
 
 
@@ -37,8 +39,16 @@ class FittingForwardResult:
 
 
 def batch_loss(
-    policy, rows, counts, observations, fields=None, *, teacher, consistency_counts=None,
-    coefficients=None, return_forward=False
+    policy,
+    rows,
+    counts,
+    observations,
+    fields=None,
+    *,
+    teacher,
+    consistency_counts=None,
+    coefficients=None,
+    return_forward=False,
 ):
     """CPU-planned routes skip all irrelevant encoders, including rejected EMA."""
     device = next(policy.parameters()).device
@@ -67,7 +77,12 @@ def batch_loss(
         zero = next(policy.parameters()).sum() * 0
         policy._last_selected_loss = policy._last_species_consistency_loss = zero.detach()
         policy._last_species_consistency_metrics = zero.new_zeros(4, dtype=torch.float64)
-        return zero, zero.new_empty(0), zero.new_empty(0)
+        result = zero, zero.new_empty(0), zero.new_empty(0)
+        return (
+            (*result, FittingForwardResult(zero.new_empty((0, 10)), zero.new_empty((0, 45))))
+            if return_forward
+            else result
+        )
     branch, positions = action_parts(actions)
     objective = policy.cfg["training"]["objective"]
     species_rows, tile_rows, ema_rows = plan["species"], plan["tiles"], plan["ema"]
@@ -129,12 +144,14 @@ def batch_loss(
                     residual.new_tensor(len(ema_rows), dtype=torch.float64),
                 )
             )
-        denominators = (
-            torch.as_tensor(counts)[1:].clone()
-            if consistency_counts is None
-            else torch.as_tensor(consistency_counts).clone()
-        )
-        denominators[:, 0] = 0
+        denominators = None
+        if coefficients is None:
+            denominators = (
+                torch.as_tensor(counts)[1:].clone()
+                if consistency_counts is None
+                else torch.as_tensor(consistency_counts).clone()
+            )
+            denominators[:, 0] = 0
         consistency = species_consistency_loss(
             current_species,
             expected,
@@ -149,9 +166,13 @@ def batch_loss(
     policy._last_species_consistency_loss = consistency.detach()
     gap = selected.new_empty(0)
     if len(tile_rows):
-        maxima = (tables.float().max(-1).values if trusted else
-                  candidate_maxima(tables.float(), observation_tile_masks(observations[tile_rows]),
-                                   branch[tile_rows]))
+        maxima = (
+            tables.float().max(-1).values
+            if trusted
+            else candidate_maxima(
+                tables.float(), observation_tile_masks(observations[tile_rows]), branch[tile_rows]
+            )
+        )
         gap = maxima - selected[tile_rows]
     result = loss, selected_errors, gap.detach()
     if return_forward:

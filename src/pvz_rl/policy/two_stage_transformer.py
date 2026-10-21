@@ -262,7 +262,9 @@ class TwoStageTransformerPolicy(nn.Module):
         if not len(requested):
             return result
         encoded = self._encode(
-            self.tile_encoder, observations[requested], branches[requested],
+            self.tile_encoder,
+            observations[requested],
+            branches[requested],
             self._request_plan(plan, requested),
         )[:, 2:]
         return result.index_copy(0, requested, self.tile_head(encoded).squeeze(-1))

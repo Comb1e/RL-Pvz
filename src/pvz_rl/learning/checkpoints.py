@@ -202,6 +202,7 @@ def inspect_checkpoint(path, *, weights_only=False):
                     runtime.get("protocol")
                     not in (
                         AUTONOMOUS_STATE_PROTOCOL,
+                        "pvz-rl/action-global-state-v3",
                         "pvz-rl/action-global-state-v2",
                         "pvz-rl/action-global-state-v1",
                         "pvz-rl/stateless-no-probe-state-v1",

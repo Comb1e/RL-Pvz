@@ -138,8 +138,15 @@ class FitDiagnostics:
     readbacks or synchronization are added by the lightweight collector.
     """
 
-    def __init__(self, output, *, sample_seconds=1.0, trace_batches=0, trace_skip_batches=20,
-                 trace_phase="fitting"):
+    def __init__(
+        self,
+        output,
+        *,
+        sample_seconds=1.0,
+        trace_batches=0,
+        trace_skip_batches=20,
+        trace_phase="fitting",
+    ):
         if not math.isfinite(sample_seconds) or sample_seconds < 0.1:
             raise ValueError("sample_seconds must be finite and at least 0.1")
         if any(type(n) is not int or n < 0 for n in (trace_batches, trace_skip_batches)):
@@ -149,8 +156,14 @@ class FitDiagnostics:
         if trace_phase not in ("collection", "fitting"):
             raise ValueError("trace_phase must be collection or fitting")
         self.trace_phase = trace_phase
-        self.collection = dict(steps=0, host_seconds=0.0, tail_steps=0, tail_seconds=0.0,
-                               logical_rows=0, entity_widths={})
+        self.collection = dict(
+            steps=0,
+            host_seconds=0.0,
+            tail_steps=0,
+            tail_seconds=0.0,
+            logical_rows=0,
+            entity_widths={},
+        )
         self.trace_batches, self.trace_skip_batches = trace_batches, trace_skip_batches
         self.resources = ResourceDetails()
         self.local = threading.local()
@@ -247,6 +260,7 @@ class FitDiagnostics:
                 stat["host_seconds"] += seconds
                 stat["max_host_seconds"] = max(stat["max_host_seconds"], seconds)
                 self.event("boundary", operation=name, host_seconds=seconds)
+
         return run
 
     def initialize(self, model):
@@ -436,7 +450,7 @@ class FitDiagnostics:
                 heapq.heappop(self.slowest)
             if "batch" in row:
                 self.batches += 1
-                if self.profiler:
+                if self.profiler and self.trace_phase == "fitting":
                     self.trace_steps += 1
                     try:
                         self.profiler.step()
@@ -529,13 +543,14 @@ class FitDiagnostics:
         row = getattr(self.local, "row", None)
         if row is not None:
             shape = tuple(inputs[0].shape[:2])
-            if encoder._compiled_encode is None:
+            enabled = encoder.compile_fitting if encoder.fitting else encoder.compile_collection
+            if encoder._compiled_encode is None or not enabled:
                 path = "disabled_eager"
             elif not torch.is_grad_enabled():
                 path = "collection_graph_attempt"
             elif shape in encoder._compiled_shapes:
                 path = "fitting_compiled"
-            elif len(encoder._compiled_shapes) >= 4:
+            elif len(encoder._compiled_shapes) >= (6 if encoder.fitting else 4):
                 path = "extra_shape_eager"
             else:
                 path = "new_shape_compile_attempt"
@@ -581,8 +596,9 @@ class FitDiagnostics:
             (sequential_training.CudaSequentialQ, "_finalize_rewards", "finalize_rewards"),
             (sequential_training.CudaSequentialQ, "save", "checkpoint_save"),
         ):
-            self.patches.enter_context(patch.object(
-                owner, method, self.boundary_wrapped(getattr(owner, method), name)))
+            self.patches.enter_context(
+                patch.object(owner, method, self.boundary_wrapped(getattr(owner, method), name))
+            )
         for owner, method, handler in (
             (sequential_training.CudaSequentialQ, "_fit_chunk", self.fit_chunk),
             (sequential_training.CudaSequentialQ, "_collect_step", self.collect_step),

@@ -77,8 +77,9 @@ def test_compact_identity_boundaries_credit_atomicity_and_restore(tmp_path, ram_
     np.testing.assert_array_equal(selected, [0, 1, 3])
     before = rows.copy()
     with pytest.raises(ValueError, match="identity"):
-        buffer.apply_causal_credits({receipts[0].reference(0): {"damage": 1},
-                                    SourceActionRef(0, 99, 0): {"damage": 1}})
+        buffer.apply_causal_credits(
+            {receipts[0].reference(0): {"damage": 1}, SourceActionRef(0, 99, 0): {"damage": 1}}
+        )
     np.testing.assert_array_equal(buffer.take(np.arange(buffer.size)), before)
     buffer.apply_causal_credits({receipts[0].reference(0): {"damage": 30}})
     assert buffer._row_view(0)["components"][2] == 30
@@ -105,8 +106,78 @@ def test_segmented_compaction_is_partition_invariant(tmp_path):
     np.testing.assert_array_equal(single, expected)
     for width in (1, 17, 100, 128, 201):
         compactor = InvalidRowCompactor()
-        selected = [compactor.select(rows[start:start + width]) + start
-                    for start in range(0, len(rows), width)]
+        selected = [
+            compactor.select(rows[start : start + width]) + start
+            for start in range(0, len(rows), width)
+        ]
         np.testing.assert_array_equal(np.concatenate(selected), expected)
         np.testing.assert_array_equal(compactor.counts, counts)
+    buffer.close()
+
+
+@pytest.mark.parametrize("spool_budget", [1, 10**8])
+def test_failed_spool_build_releases_partial_ram_and_disk_allocations(
+    tmp_path, monkeypatch, spool_budget
+):
+    buffer = _buffer(tmp_path)
+    buffer.ram_bytes = spool_budget
+    before = buffer.ram_used
+    original = FittingSpool._allocate
+
+    def fail(self, name, shape, dtype):
+        if name == "entities":
+            raise MemoryError("injected spool preparation failure")
+        return original(self, name, shape, dtype)
+
+    monkeypatch.setattr(FittingSpool, "_allocate", fail)
+    with pytest.raises(MemoryError, match="injected"):
+        FittingSpool(buffer)
+    assert buffer.ram_used == before
+    assert not list(tmp_path.glob("fitting-spool-*.npy"))
+    buffer.close()
+
+
+def test_prepared_source_preserves_reordered_episode_identities(tmp_path):
+    from pvz_rl.learning.batch_transport import PreparedDataSource
+
+    buffer = _buffer(tmp_path)
+    rows = buffer.take(np.arange(5))
+    rows["episode"] = [7, 1, 7, 3, 1]
+    rows["decision"] = [5, 2, 4, 0, 1]
+    observations = [dict(entities=[], globals=[index] + [0] * 17) for index in range(5)]
+    with PreparedDataSource(observations, load_config(), rows=rows) as source:
+        actual = list(source.batches(2, "cpu"))
+        gathered = np.concatenate([item[0] for item in actual])
+        np.testing.assert_array_equal(gathered["episode"], rows["episode"])
+        np.testing.assert_array_equal(gathered["decision"], rows["decision"])
+        assert [int(value) for _, boards, _ in actual for value in boards.globals[:, 0]] == list(
+            range(5)
+        )
+    buffer.close()
+
+
+def test_episode_returns_empty_execution_gap_and_corrupt_identity_recovery(tmp_path):
+    buffer = CompleteGameBuffer(tmp_path / "live", 2, block_rows=3)
+    observations = [dict(entities=[], globals=[0] * 18)] * 2
+    rows = np.zeros(2, buffer.dtype)
+    rows["env"], rows["active"], rows["accepted"] = [0, 1], True, True
+    rows["reward"], rows["done"] = [1, 5], [False, True]
+    first = buffer.append(rows, observations, identities=([10, 20], [0, 0]))
+    rows["active"] = False
+    assert len(buffer.append(rows, observations).rows) == 0
+    rows["active"], rows["reward"], rows["done"] = True, [2, 7], True
+    second = buffer.append(rows, observations, identities=([10, 21], [1, 0]))
+    assert second.reference(1) == SourceActionRef(1, 21, 0)
+    assert buffer.source_row(first.reference(1)) == 1
+    buffer.finalize()
+    stored = buffer.take(np.arange(4))
+    np.testing.assert_array_equal(stored["target"], [3, 5, 2, 7])
+    assert stored["run_break"].all()
+    saved = tmp_path / "saved"
+    state = buffer.save(saved)
+    block = np.load(saved / "block-000000.npy")
+    block["decision"][0] = 9
+    np.save(saved / "block-000000.npy", block)
+    with pytest.raises(ValueError, match="identity"):
+        CompleteGameBuffer.restore(saved, state, tmp_path / "restored")
     buffer.close()

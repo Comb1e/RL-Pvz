@@ -78,6 +78,9 @@ def inference_config(cfg):
     if not weight_model_config(cfg):
         raise ValueError("Incompatible model/encoding or objective protocol weight contract")
     result = copy.deepcopy(cfg)
+    # Execution options are disposable when loading weights. Keep the strict
+    # retired-option error for user configuration and optimizer recovery only.
+    result["training"].get("performance", {}).pop("compile_kernels", None)
     if current_model_config(cfg):
         return result
     result["training"]["method"] = CURRENT_OBJECTIVE

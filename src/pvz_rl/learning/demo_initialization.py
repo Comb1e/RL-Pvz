@@ -111,15 +111,15 @@ def _verify_reward_facts(row: dict, reconstructed: dict, cfg=None) -> None:
         )
         or any(saved[key] != reconstructed[key] for key in REWARD_FACT_FIELDS)
         or any(saved[key] != reconstructed[key] for key in HOME_FACT_FIELDS if key in saved)
-            or (
-                "global_asset_value" in saved
-                and not math.isclose(
-                    float(saved["global_asset_value"]),
-                    float(reconstructed.get("global_asset_value", 0.0)),
-                    rel_tol=1e-12,
-                    abs_tol=1e-12,
-                )
+        or (
+            "global_asset_value" in saved
+            and not math.isclose(
+                float(saved["global_asset_value"]),
+                float(reconstructed.get("global_asset_value", 0.0)),
+                rel_tol=1e-12,
+                abs_tol=1e-12,
             )
+        )
     ):
         raise ValueError(error)
     # Even old v2 archives without their reward configuration can verify these
@@ -228,7 +228,7 @@ def _verify_action_order(archive_rows: list[dict], replay_path: Path, cfg: dict)
                 [before.sun],
                 [[cards[kind].cooldown_ticks if kind in cards else -1 for kind in codec.plants]],
                 [game.rules.plants[kind]["cost"] for kind in codec.plants],
-                card_present=[ [kind in cards for kind in codec.plants] ],
+                card_present=[[kind in cards for kind in codec.plants]],
             )[0]
         )
         observations.append(observation_json(encoder.encode(before)))
@@ -374,7 +374,9 @@ def _verify_action_order(archive_rows: list[dict], replay_path: Path, cfg: dict)
         "reward_settings": dict(cfg["reward"]),
         "causal_source_credited_rows": len(source_credits),
         "causal_source_credits": source_credits,
-        "causal_unattributable_events": int(causal.last_diagnostics.get("unattributable_events", 0)),
+        "causal_unattributable_events": int(
+            causal.last_diagnostics.get("unattributable_events", 0)
+        ),
     }
 
 
@@ -596,7 +598,9 @@ def _initialize_demo(
     prepared.boundaries = boundaries
     _resources.callback(prepared.close)
     consistency_counts = group_counts[1:] * group_counts.new_tensor([0, 1])
-    coefficients = CohortCoefficients.prepare(compact_counts, consistency_counts.cpu(), device, objective["accepted_outcome_share"])
+    coefficients = CohortCoefficients.prepare(
+        compact_counts, consistency_counts.cpu(), device, objective["accepted_outcome_share"]
+    )
     started = time.monotonic()
     completed = 0
     for pass_index in range(passes):
@@ -661,8 +665,9 @@ def _initialize_demo(
         optimizer.step()
         model.sync_runtime_from_masters()
         with torch.no_grad():
-            torch._foreach_lerp_(list(teacher.parameters()), list(model.parameters()),
-                                 1 - objective["ema_decay"])
+            torch._foreach_lerp_(
+                list(teacher.parameters()), list(model.parameters()), 1 - objective["ema_decay"]
+            )
         completed += 1
         coverage += torch.bincount(action_parts(actions)[0].detach().cpu(), minlength=10)
         scores = rank_accuracy.cpu().tolist()

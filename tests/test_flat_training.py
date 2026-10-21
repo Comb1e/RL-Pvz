@@ -516,6 +516,72 @@ def test_demo_ranking_uses_independent_branch_and_actual_tile_anchors():
     assert accuracy.tolist() == [18, 18, 0, 44]
 
 
+def test_demo_reused_forwards_match_independent_losses_gradients_and_calls():
+    from pvz_rl.learning.action_routing import _outcome_counts
+    from pvz_rl.learning.flat_q import CohortCoefficients
+
+    cfg = load_config()
+    cached = IndependentValues(cfg)
+    with torch.no_grad():
+        cached.species.copy_(
+            torch.linspace(-0.4, 0.6, cached.species.numel()).reshape_as(cached.species)
+        )
+        cached.tiles.copy_(torch.linspace(0.7, -0.5, cached.tiles.numel()).reshape_as(cached.tiles))
+    reference = deepcopy(cached)
+    teacher = deepcopy(cached).requires_grad_(False)
+    rows = loss_rows([0, 2, 361, 46, 47], [True, True, True, False, False], [1, 2, 3, 4, 5])
+    rows["route"][3:] = [2, 3]
+    rows["branch_usable"][3] = False
+    counts = _outcome_counts(rows)
+    consistency_counts = counts[1:] * np.array([0, 1])
+    coefficients = CohortCoefficients.prepare(counts, consistency_counts, "cpu", 0.5)
+    observations = boards(len(rows))
+    actions, accepted = torch.tensor(rows["action"]), torch.tensor(rows["accepted"])
+    masks = torch.ones(len(rows), 406, dtype=torch.bool)
+    ranking, _, _ = ranking_counts(actions, accepted, masks)
+    loss, _, _, forward = batch_loss(
+        cached,
+        rows,
+        counts,
+        observations,
+        teacher=teacher,
+        consistency_counts=consistency_counts,
+        coefficients=coefficients,
+        return_forward=True,
+    )
+    extra, _ = demonstration_rank_loss(
+        cached,
+        observations,
+        actions,
+        accepted,
+        masks,
+        ranking,
+        0.05,
+        species=forward.species,
+        tiles=forward.tiles,
+    )
+    combined = loss + extra
+    combined.backward()
+    control, _, _ = batch_loss(
+        reference,
+        rows,
+        counts,
+        observations,
+        teacher=teacher,
+        consistency_counts=consistency_counts,
+    )
+    extra, _ = demonstration_rank_loss(
+        reference, observations, actions, accepted, masks, ranking, 0.05
+    )
+    (control + extra).backward()
+    torch.testing.assert_close(combined, control + extra)
+    for actual, expected in zip(cached.parameters(), reference.parameters(), strict=True):
+        torch.testing.assert_close(actual.grad, expected.grad)
+    assert cached.species_calls == 1 and len(cached.tile_calls) == 1
+    assert reference.species_calls == 2 and len(reference.tile_calls) == 2
+    assert all(parameter.grad is None for parameter in teacher.parameters())
+
+
 @pytest.mark.parametrize("ram_bytes", [1, 1000000])
 def test_flat_batches_exclude_capacity_gaps_preserve_returns_and_release_maps(tmp_path, ram_bytes):
     buffer = CompleteGameBuffer(tmp_path / "buffer", 2, ram_bytes=ram_bytes, block_rows=3)
@@ -840,7 +906,9 @@ def test_failed_flat_pass_restarts_without_skipping_updates(tmp_path, monkeypatc
     cfg = load_config()
     cfg["training"].update(n_envs=1, n_epochs=2)
     cfg["visualization"]["live_enabled"] = False
-    cfg["training"]["performance"].update(compile_collection=False, compile_fitting=False, prefetch=False)
+    cfg["training"]["performance"].update(
+        compile_collection=False, compile_fitting=False, prefetch=False
+    )
     env = vector_env(cfg, "masked", 101)
     model = build_model(cfg, "masked", env, 101)
     model.trajectory_root = tmp_path
@@ -922,7 +990,9 @@ def test_ema_tile_allocation_failure_reduces_both_network_microbatches(tmp_path,
     cfg = load_config()
     cfg["training"].update(n_envs=1, n_epochs=2)
     cfg["visualization"]["live_enabled"] = False
-    cfg["training"]["performance"].update(compile_collection=False, compile_fitting=False, prefetch=False)
+    cfg["training"]["performance"].update(
+        compile_collection=False, compile_fitting=False, prefetch=False
+    )
     env = vector_env(cfg, "masked", 101)
     model = build_model(cfg, "masked", env, 101)
     model.trajectory_root = tmp_path

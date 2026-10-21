@@ -128,9 +128,24 @@ def test_gpu_execution_settings_never_enter_annotation_weight_compatibility(tmp_
         fit_species_microbatch=16,
         fit_tile_microbatch=8,
         fit_token_budget=4096,
-        compile_collection=False, compile_fitting=False,
+        compile_collection=False,
+        compile_fitting=False,
     )
     target["training"]["torch_threads"] = 2
     compatible_config(demo_payload["config"], target, weights_only=True)
     weights, _ = initial_weights(path, target)
     assert weights.keys() == demo_payload["model"].keys()
+
+
+def test_retired_compilation_option_is_ignored_only_for_weight_loading(tmp_path, demo_payload):
+    payload = copy.deepcopy(demo_payload)
+    payload["config"]["training"].setdefault("performance", {})["compile_kernels"] = True
+    payload["config_digest"] = digest(payload["config"])
+    path = tmp_path / "historical-execution.pt"
+    torch.save(payload, path)
+    assert (
+        inspect_checkpoint(path, weights_only=True)["payload"]["model"].keys()
+        == payload["model"].keys()
+    )
+    with pytest.raises(ValueError, match="compile_collection and compile_fitting"):
+        inspect_checkpoint(path)

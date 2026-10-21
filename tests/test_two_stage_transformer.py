@@ -248,6 +248,30 @@ def test_stateless_conditioning_and_duplicate_pair_gradient_accumulation():
         torch.testing.assert_close(expected, parameter.grad, atol=2e-5, rtol=1e-4)
 
 
+@pytest.mark.parametrize("device", ["cpu", "cuda"])
+def test_collection_single_request_path_matches_general_values_gradients_and_wait_skips(device):
+    if device == "cuda" and not torch.cuda.is_available():
+        pytest.skip("CUDA unavailable")
+    cfg, observations = inputs(4, device)
+    trusted = TwoStageTransformerPolicy(cfg).to(device)
+    general = TwoStageTransformerPolicy(cfg).to(device)
+    general.load_state_dict(trusted.state_dict())
+    branches = torch.tensor([1, 0, 9, 1], device=device)
+    actual = trusted.collection_tiles(observations, branches)
+    expected = general.conditional_tiles(observations, branches)
+    torch.testing.assert_close(actual, expected, atol=2e-5, rtol=1e-4)
+    actual.float().sum().backward()
+    expected.float().sum().backward()
+    for left, right in zip(
+        trusted.tile_encoder.parameters(), general.tile_encoder.parameters(), strict=True
+    ):
+        torch.testing.assert_close(left.grad, right.grad, atol=2e-5, rtol=1e-4)
+    calls = []
+    with trusted.tile_encoder.register_forward_pre_hook(lambda module, args: calls.append(1)):
+        assert not trusted.collection_tiles(observations, torch.zeros_like(branches)).any()
+    assert calls == []
+
+
 @pytest.mark.parametrize("field", ["position", "health", "sun", "cooldown"])
 def test_current_public_board_responsiveness(field):
     cfg, observations = inputs(1)

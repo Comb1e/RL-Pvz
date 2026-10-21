@@ -4,6 +4,34 @@ from pvz_rl.config import _read_config
 from tools.tune_gpu import tuning_candidates
 
 
+def test_workload_elapsed_is_summed_before_taking_repetition_median():
+    from tools.tune_gpu import _median
+
+    result = {
+        "measurements": [
+            {"repetitions": [{"seconds": 1}, {"seconds": 3}]},
+            {"repetitions": [{"seconds": 100}, {"seconds": 200}]},
+        ]
+    }
+    assert _median(result) == 152
+
+
+def test_pipeline_promotion_requires_complete_paired_cycles_and_no_regression():
+    from tools.tune_gpu import pipeline_acceptance
+
+    settings = dict(pipeline_minimum_improvement=0.05, pipeline_maximum_regression=0.02)
+    trials = [
+        dict(candidate=c, median_seconds=t, complete=True)
+        for c, t in zip(("a", "b", "b", "a"), (100, 90, 89, 101), strict=True)
+    ]
+    assert pipeline_acceptance(trials, settings)["eligible"]
+    assert not pipeline_acceptance(trials[:2], settings)["eligible"]
+    trials[2]["median_seconds"] = 104
+    assert not pipeline_acceptance(trials, settings)["eligible"]
+    trials[2].update(median_seconds=89, complete=False)
+    assert not pipeline_acceptance(trials, settings)["eligible"]
+
+
 def test_tuning_cases_include_unique_larger_stress_cases():
     tuning = _read_config(None)["tuning"]
     base = tuning_candidates(tuning)

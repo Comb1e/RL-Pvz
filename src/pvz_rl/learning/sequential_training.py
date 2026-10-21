@@ -121,8 +121,11 @@ class CudaSequentialQ(CudaCohortLifecycle):
     def _update_teacher(self):
         self._ensure_teacher()
         decay = self.cfg["training"]["objective"]["ema_decay"]
-        torch._foreach_lerp_(list(self._teacher.runtime_parameters()),
-                             list(self.policy.runtime_parameters()), 1 - decay)
+        torch._foreach_lerp_(
+            list(self._teacher.runtime_parameters()),
+            list(self.policy.runtime_parameters()),
+            1 - decay,
+        )
         self._teacher_version += 1
 
     def _finalize_rewards(self, callback):
@@ -299,7 +302,9 @@ class CudaSequentialQ(CudaCohortLifecycle):
             active = host["executing"].numpy().copy()
             if np.any(active & ~issued_host):
                 raise ValueError("Executed slots differ from issued decision tickets")
-            next_obs, _, dones, _, _, step = env.step_host(autoreset=False, active=active, packed=True)
+            next_obs, _, dones, _, _, step = env.step_host(
+                autoreset=False, active=active, packed=True
+            )
             rows["active"] = active
             self._scheduler.commit(issued_host, active)
             if not bool(host["valid"]):
@@ -362,8 +367,9 @@ class CudaSequentialQ(CudaCohortLifecycle):
             rows[~active] = np.zeros((), dtype=rows.dtype)
             rows["env"] = np.arange(self.n_envs)
             storage_started = perf_counter()
-            if active.any():
-                self._buffer.append(rows, observations, identities=(env._episode_serial, source_decisions))
+            self._buffer.append(
+                rows, observations, identities=(env._episode_serial, source_decisions)
+            )
             env.profiler.host("storage", perf_counter() - storage_started)
             self._stats["collection_logical_rows"] = (
                 self._stats.get("collection_logical_rows", 0) + plan.logical_rows
@@ -420,12 +426,20 @@ class CudaSequentialQ(CudaCohortLifecycle):
             for index, info in step.completed.items():
                 info["episode_metrics"]["time_reward_pending"] = True
                 info["episode_slot"] = index
-                self._pending_episodes[index] = dict(metrics=info["episode_metrics"],
-                    record_id=f"cohort:{self._n_updates}:slot:{index}")
+                self._pending_episodes[index] = dict(
+                    metrics=info["episode_metrics"],
+                    record_id=f"cohort:{self._n_updates}:slot:{index}",
+                )
             if not hasattr(callback, "cfg"):
                 self.training_games += len(step.completed)
-            callback.update_locals({"infos": step.infos(active_only=True), "dones": dones,
-                                    "step_batch": step, "episode_infos": list(step.completed.values())})
+            callback.update_locals(
+                {
+                    "infos": step.infos(active_only=True),
+                    "dones": dones,
+                    "step_batch": step,
+                    "episode_infos": list(step.completed.values()),
+                }
+            )
             # Publish the phase before callbacks may request an interruption.
             if not env.enabled_envs.any() and not self._scheduler.pending.any():
                 self._phase(CohortPhase.FINALIZE_REWARDS, callback)
@@ -608,14 +622,18 @@ class CudaSequentialQ(CudaCohortLifecycle):
         self._fit_consistency_counts = self._fitting_spool.consistency_counts
         if not hasattr(self._fitting_spool, "coefficients"):
             self._fitting_spool.coefficients = CohortCoefficients.prepare(
-                self._fit_outcome_counts, self._fit_consistency_counts, self.device,
-                self.cfg["training"]["objective"]["accepted_outcome_share"])
+                self._fit_outcome_counts,
+                self._fit_consistency_counts,
+                self.device,
+                self.cfg["training"]["objective"]["accepted_outcome_share"],
+            )
         self._fit_coefficients = self._fitting_spool.coefficients
         args = self._buffer, self.batch_size * groups, self._fitting_spool
         self._fit_pass_start = torch.cuda.Event(enable_timing=True)
         self._fit_pass_start.record()
-        if (self.cfg["training"].get("performance", {}).get("prefetch", False)
-                and not self.execution_state.get("prefetch_disabled")):
+        if self.cfg["training"].get("performance", {}).get(
+            "prefetch", False
+        ) and not self.execution_state.get("prefetch_disabled"):
             try:
                 self._batch_iterator = BatchPrefetch(
                     args[0],
@@ -742,6 +760,7 @@ class CudaSequentialQ(CudaCohortLifecycle):
         self._stats["fitting_spool_rows"] = len(getattr(self, "_fitting_spool", None) or ())
         spool = getattr(self, "_fitting_spool", None)
         self._stats["fitting_compaction"] = dict(spool.compaction) if spool is not None else {}
+        self._stats["fitting_workloads"] = dict(spool.workloads) if spool is not None else {}
         self._stats["compilation_status"] = getattr(self.policy, "compilation_status", "disabled")
         self._stats["compilation_backend"] = getattr(self.policy, "compilation_backend", None)
         self._stats["collection_graphs"] = {
