@@ -1,3 +1,50 @@
+## Compact CPU/GPU training pipeline — 2026-10-21
+
+- Problem/root cause: inactive slot metadata, repeated collation/routing and demo
+  forwards, fixed maximum-width pinned staging, tiny per-batch coefficient work,
+  and cohort-long telemetry event retention added CPU work and memory pressure.
+  The fitter benchmark also hid production batch size behind a 64-row clamp and
+  aggregated unrelated workloads with an inappropriate median.
+- Improvements: production lifecycle measurements and synthetic/trajectory/full
+  cycle tuner modes; active-only v4 storage with stable source identities and
+  atomic validated credits; chunk-carried segmented compaction and bounded spool
+  preparation; shared prepared transport, bucket-sized fenced pinned slots,
+  shared demo forwards, vectorized annotation losses/metrics, cached cohort
+  coefficients and foreach master/runtime/EMA operations. Collection caches
+  immutable constants, avoids duplicate-request machinery on its trusted path,
+  passes array-backed results to callbacks, and fetches detailed terminal data
+  only for completed slots. Actual execution flags use the existing handoff.
+  Bounded nonblocking telemetry replaces cohort-long event accumulation.
+- Configuration/recovery: independent collection/fitting compilation settings;
+  the old switch gives a replacement error. Only trajectory/autonomous recovery
+  advance to v4; older runs cannot resume, while compatible historical weights
+  still initialize fresh models. Model, observations, rewards and objective
+  semantics remain unchanged. The 4070 profile retains its current defaults.
+- Verification: focused storage, routing/math, annotation/demo, configuration,
+  checkpoints, diagnostics, CUDA policy/graph ownership, reward accounting and
+  fitting interruption/allocation controls pass. A short serialization/replay
+  integration control passes. Added independent shared-forward gradients,
+  indexed tie gradients, exact compaction/recovery identities, spool failure
+  cleanup and paired-promotion rejection controls. Existing reward tests now use
+  the configured physical conversion and compare aggregate accounting at the
+  same level; the old parity assumption also failed on the baseline. No
+  training-parameter-constant tests were added.
+- Measurements: within a 57.75-minute performance window, the baseline stops in
+  pass four at its 1,400 s limit. One intermediate candidate completes the cycle
+  in 1,022.94 s, with four passes totaling 457.32 s, but collection regresses
+  486.01 → 561.34 s and sampled VRAM headroom fails. Metadata rows fall from
+  4,058,368 to 2,290,461 without losing active decisions/entities. Short crowded,
+  accepted-action, four-active and 32 MiB forced-spill controls pass; later
+  identity/telemetry refinements lack repeated full-cycle measurements.
+- Remaining limits: no two completed paired comparisons, no profile promotion,
+  and no claim of total training speedup. Thread/group/compiler calibration and
+  final full-cycle evidence remain incomplete. Windows allocator pressure and
+  periodic whole-device samples require care. See the
+  [retained evidence and limitations](evidence/training-pipeline-optimization-20261021.md).
+  No PR, push or formal training; user data, scripts and run artifacts remain
+  untouched. Scratch cohorts and the baseline worktree are removed. Automatic
+  approval review blocked deletion of external scratch JSON/JSONL logs.
+
 ## RTX 4070 CPU/GPU pipeline audit — 2026-10-21
 
 - Problem: isolated throughput measurements do not reproduce the jointly

@@ -53,7 +53,34 @@ loading an annotation artifact before fresh demo initialization.
 - `test_gpu_configuration.py` verifies profile overlays, resume learning retention and device-independent execution settings.
 - `test_live_view.py` remains the shared mailbox/reconnect/history owner; `web_viewer.py` is CPU-only and uses the same command protocol.
 - `test_tile_annotations.py` covers complete rich observations, plant-availability filtering, legal tile bounds, grouped annotation storage, durable pending/labeled/discarded records, automatic one-map progression, relative browser APIs, Canvas tile dragging, direct action-card hit testing, feasible/absolute/erase modes, locked automatic labels, synchronized action controls, and the short `annotate` CLI. History controls cover navigation boundaries, persistent in-place edits, discard restoration, unchanged pending maps and sampler counts, invalid/stale revisions, independent HTTP clients, and browser draft/stale-response behavior through Node.js when available. Sampling controls verify inclusive random horizons, 500–1,500-step planting intervals, sparse caps, equal wait/eight-species proposals without tile-count bias, unavailable choices waiting without redraw, terminal/unusable retries, signed zombie coordinates, hash-order independence and independent simulator replay. The annotation fit additionally checks order-invariant set loss, frozen species parameters and weight-only checkpoint transfer.
-- `tools/tune_gpu.py` records three repetitions, cold setup, transfer/preparation/graph metrics and memory headroom across the original and larger grouped microbatch/thread cases. Learning recommendations require paired seeds and completed cohorts before promotion.
+- `tools/tune_gpu.py` uses production transport sizes for synthetic/trajectory
+  controls and production lifecycle phases for full cycles. Component elapsed
+  time is summed by repetition before taking a median. Only two completed paired
+  full-cycle comparisons with the configured improvement/regression and VRAM
+  gates can recommend profile promotion. Profiled trials are diagnostic only.
+
+The pipeline optimization extends existing owners:
+
+- `test_entity_storage.py`: active-only receipts and stable source identity,
+  episode/inactive/decision boundaries, chunk-invariant representatives, atomic
+  stale-credit failure, prepared row alignment, corrupt identity recovery, and
+  RAM/disk allocation cleanup after a failed spool build.
+- `test_flat_training.py`: independently recomputed versus shared demo losses,
+  gradients and forward counts; representative weighting, detached EMA targets,
+  spill, pinned reuse, interrupted pass and allocation restart controls.
+- `test_tile_annotations.py`: vectorized top/bottom losses against scalar indexed
+  extrema, tied gradients, all-positive and empty-absolute cases, exact BF16
+  convergence, head freezing and atomic progress recovery.
+- `test_checkpoints.py`, `test_config.py`, `test_gpu_configuration.py`: v4 recovery
+  boundary, independent compiler settings and historical weight-only portability.
+- `test_tune_gpu.py`, `test_fit_diagnostics.py`: workload-weighted elapsed time,
+  paired promotion rejection and wrappers that preserve forwards/gradients.
+- Existing CUDA environment, policy, reward and viewer suites retain ownership
+  of proposal/execution identity, RNG order, terminal records and graph fallbacks.
+
+Measured results and incomplete controls belong in
+[pipeline evidence](evidence/training-pipeline-optimization-20261021.md), separately
+from correctness results, annotation accuracy and game performance.
 
 
 ## Annotation convergence and selective attribution

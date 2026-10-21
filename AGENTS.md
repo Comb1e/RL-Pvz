@@ -35,9 +35,14 @@
   The lightweight collector adds no CUDA waits/readbacks or learning changes;
   detailed profiler overhead is explicit. `test_fit_diagnostics.py` owns wrapper
   transparency and trace bounds; hardware sampling remains in its reporting suite.
+  Collection counters include the small-active tail; return finalization, spool
+  preparation and checkpoint serialization have separate spans. `pipeline_benchmark.py`
+  calls production lifecycle phases on fresh scratch cohorts and stops after
+  four commits and the first decision of the next cohort. `tools/tune_gpu.py`
+  owns synthetic/trajectory/full-cycle selection and the paired promotion gate.
 - `src/pvz_rl/data/train.toml` is the single parameter source for train/demo overlays.
   Both use `entity_v1`, `two_stage_transformer_q_v1` and
-  `complete_return_action_global_v1`. Old-objective resumes are rejected; structurally compatible
+  `complete_return_action_global_v3`. Old-objective resumes are rejected; structurally compatible
   BF16-master weights support inference/fresh initialization; verified recordings are reconstructed without changes. Preserve
   user reward adjustments. `training.demo.passes` is 20, independently of autonomous
   `training.n_epochs` (4). Tile (50% to 1%) and accepted-plant species (10% to 1%)
@@ -75,9 +80,11 @@
   LRU: 8 entries and 512 MiB VRAM headroom by default. Eviction fences copies and
   releases retirees through existing handoffs; pressure/failure uses exact eager
   execution. Fitting compilation owns a separate code object per encoder/phase,
-  admits up to four shapes and pads partial microbatches before trimming readouts.
+  admits up to six fitting shapes and pads partial microbatches before trimming readouts.
   Quiescent phase changes release outgoing captures and renew only the owner's
   fitting compiler cache; never raise global Dynamo limits or reset unrelated caches.
+  `compile_collection` and `compile_fitting` are independent central settings;
+  `compile_kernels` is rejected except as ignored historical weight metadata.
 - `envs/` owns simulator adapters, action outcomes and reward ledgers;
   `action_credit.py` maps ordered plant/projectile events back to source actions
   without entering observations, while `cuda_accounting.py` supplies read-only
@@ -113,15 +120,21 @@
   counts are 2x2 plant/dig with rejected columns zero. Denominators cover the whole cohort. No non-wait sampled
   return directly trains species. One clipped Adam update commits per pass, then
   both EMA networks update with decay 0.95. No detach boundaries or recurrent fitting.
-- `learning/cuda_buffer.py` stores canonical slot-shaped metadata and ragged entity
-  slabs under one RAM/disk budget. Active flat batches exclude capacity gaps/padding;
+- `learning/cuda_buffer.py` stores executed active metadata and ragged entity
+  slabs under one RAM/disk budget. `source_actions.py` defines private
+  `(environment, episode, ordinal)` references and append receipts. Per-episode
+  integer lookup slabs rebuild and validate at recovery. Inactive-gap carry is
+  persisted before padding is dropped. Active flat batches exclude capacity gaps/padding;
   complete returns remain chronological per episode. `batch_transport.py` owns
-  ordered double-buffer `BatchPrefetch` and compacts consecutive invalid
-  action/route/reason runs into first-row representatives per 100-row window
-  for fitting only. `host_transfer.py` owns reusable pinned
+  shared prepared sources, cached CPU plans, bounded slim scans and counting
+  partitions, plus ordered double-buffer `BatchPrefetch`. Pinned entity staging
+  grows to the current bucket only after its copy fence. `action_routing.py`
+  owns segmented invalid compaction and chunk carry state; first-row
+  representatives per 100-row window affect fitting only. `step_result.py`
+  supplies array-backed step results and lazy compatibility infos. `host_transfer.py` owns reusable pinned
   `HostHandoff`; views are consumed before reuse.
 - `learning/checkpoints.py` validates model/objective/schema and demo v10,
-  action-global recovery/trajectory contracts before simulator allocation;
+  action-global v4 recovery/trajectory contracts before simulator allocation;
   the objective protocol is v3 because fitting representative weighting changed.
   Model-state `stateless-two-stage-bf16-master-state-v2` stores FP32 online
   masters, FP32 Adam state and BF16 EMA runtime weights. No migration or
@@ -136,7 +149,10 @@
   `learning/demo_initialization.py` verifies replay facts/outcomes/timing and reprices
   rewards without rewriting recordings, then fits 20 passes using both online/EMA
   stages. Journals/viewers are read-only actual Q/proposal/execution diagnostics,
-  not learned history. `live_layout.py` owns paging/follow-latest; `live_view.py`
+  not learned history.
+  Demo ranking reuses batch-scoped online forwards from `flat_q.py`; annotation
+  fitting prepares label masks once and preserves indexed extrema tie gradients.
+  `live_layout.py` owns paging/follow-latest; `live_view.py`
   snapshots effective settings without reloading TOML/device values.
 - `annotation/dataset.py` owns versioned rich snapshots, canonical entity rows,
   atomic annotation storage and durable pending/labeled/discarded records.
@@ -180,7 +196,9 @@
   rewriting recordings.
 - `evaluation/` uses the stateless runner and CPU-verifies CUDA action traces.
   `monitoring/` owns availability, both-stage entity/throughput benchmarks, bounded
-  collection/four-pass-fit/collection controls and objective diagnostics. Progress
+  collection/four-pass-fit/collection controls and objective diagnostics.
+  `DeviceProfiler` bounds pending events with central `telemetry_span_limit`,
+  reuses completed events and reports drops without synchronization. Progress
   uses host records for cohort wins/returns and interval active rates, distinct from
   lifetime totals. CUDA timings cross existing handoffs; telemetry adds no hot-loop
   device synchronization. Pass-boundary aggregates report `species_consistency_loss`

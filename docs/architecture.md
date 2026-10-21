@@ -12,7 +12,7 @@ frame stack or counterfactual simulator is part of the policy or collector.
 | Two-stage policy | Species/wait/dig Q values and conditional tile Q values |
 | Exploration controller | Tile randomness and persistent alternative-species commitments |
 | Cohort learner | Collection, complete returns, balanced losses and EMA updates |
-| Storage/transport | Canonical rows, ragged entities, RAM/disk spill and prefetch |
+| Storage/transport | Executed active rows, stable source references, ragged entities, RAM/disk spill and prefetch |
 | Checkpoints | Contract validation, FP32 masters, BF16 EMA and atomic recovery |
 | Monitoring/presentation | Host-side progress, diagnostics and read-only journals |
 
@@ -123,6 +123,11 @@ source bank, auxiliary lane or post-plant drain.
 
 Every actual decision is appended with its public observation, proposed action,
 acceptance, duration, reward, exploration provenance and stable original slot.
+Its private source reference is `(environment, episode serial, decision ordinal)`.
+The ordinal is retained while a capacity-blocked ticket waits for execution.
+Only executed rows and their entities enter storage; append receipts map slots
+and source references to physical rows. Per-episode integer slabs resolve delayed
+credits, and every credit is validated before any target row changes.
 Complete returns are computed chronologically per episode, while inactive slots
 and capacity gaps contribute nothing. Entity-bucketed and route-separated flat batches are prefetched
 through the existing double buffer and reused across all fitting passes; padding
@@ -132,6 +137,48 @@ Compiler caches and CUDA captures belong to individual encoders. Fitting uses
 phase-local code objects and bounded static shapes; collection uses its separate
 LRU. Quiescent phase changes release fitting captures and renew only the owner's
 compiler cache, without changing global limits or policy inputs.
+
+```mermaid
+flowchart LR
+    Tickets[Original-slot tickets and RNG draws] --> Execute[Species, eligible tiles, simulator]
+    Execute --> Handoff[Borrowed array-backed host result]
+    Handoff --> Counters[Aggregate callbacks and terminal records]
+    Handoff --> Append[Active rows and append receipt]
+    Append --> Returns[All chronological returns]
+    Returns --> Scan[Slim segmented invalid-run scan]
+    Scan --> Spool[Width and route partitions]
+    Spool --> Producer[One CPU producer, two pinned slots]
+    Producer --> Copy[Copy-stream event and ownership fence]
+    Copy --> Fit[Selective online and detached EMA forwards]
+    Fit --> Commit[FP32 Adam, BF16 runtime sync and EMA]
+```
+
+Collection has a trusted one-request-per-board tile path; general callers retain
+duplicate-request reuse. Wait and impossible branches skip tile inference.
+Execution flags travel in the ordinary host handoff and are checked against
+issued tickets. Ordinary progression transfers compact fields; completed slots
+alone fetch detailed terminal accounting before reset. Internal callbacks read
+aggregate counters and terminal records; compatibility dictionaries are lazy.
+Borrowed host views must be consumed before their handoff slot is reused.
+Optional device telemetry has a configured event-span bound. It resolves ready
+events through nonblocking queries and reports skipped spans while the bound is
+full; diagnostic events cannot accumulate for an entire long cohort.
+
+Storage carries explicit invalid-run boundaries across inactive steps and
+recovery. Episode, decision, route, reason and proposal changes also break runs.
+The fitting spool scans slim metadata, selects the first invalid row per
+100-row window, counts partitions, then gathers rows/entities in bounded chunks.
+Selection arrays, prepared plans, spool arrays and pinned staging share the
+RAM/disk budget. Pinned entity buffers fit the current bucket and may resize only
+after their prior copy finishes. A budget failure restarts an uncommitted pass
+without prefetch. Finished games remain paused until their cohort ends.
+
+Autonomous, demo and annotation fitting share prepared storage and transport.
+Demo regression and ranking share batch-local online tensors and one backward;
+no graph survives the batch. Annotation fitting prepares dense label masks once,
+uses indexed extrema for tie gradients, and reads aggregate fitting diagnostics
+at pass boundaries. Fresh BF16 full-training evaluation still gates publication.
+Collection and fitting compilation are independent execution settings.
 
 Ordinary wait regresses the complete remaining return through species. Accepted
 plant/dig regresses the proposed tile through the conditional stage; detached
@@ -338,6 +385,10 @@ stateDiagram-v2
 Saving and interruption preserve only coherent actual-game state. An unfinished
 fit pass discards gradients; a committed pass is never repeated. Runtime maps,
 prefetch workers, fitting spools and graph captures rebuild after recovery.
+Trajectory and autonomous recovery use v4. Recovery rebuilds integer lookup
+slabs from persisted source identities, rejecting gaps, duplicates or reordering.
+Old storage/recovery formats cannot resume; there is no migration path. Model,
+observation, reward, objective and weight-storage identities are unchanged.
 BF16 support is checked before simulator allocation. Nonfinite BF16 loss or
 gradients fail explicitly; only bounded memory reductions may retry. Old
 probe-enabled, FP32-runtime, partial-BF16 and incompatible contracts are

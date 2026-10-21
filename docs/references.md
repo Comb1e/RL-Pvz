@@ -396,3 +396,23 @@ throughput measurements.
 
 - [PyTorch `MarginRankingLoss`](https://pytorch.org/docs/stable/generated/torch.nn.MarginRankingLoss.html): used as the finite margin reference for the local two-set top-1/bottom-k hinge. The implementation takes a maximum over each unordered label set, so it does not impose an order inside feasible or absolute-infeasible labels.
 - [Hester et al., Deep Q-learning from Demonstrations](https://arxiv.org/abs/1704.03732): used as the supervision/initialization reference for fitting a head from human labels before fresh reinforcement-learning optimization. No demonstration loss or architecture is copied.
+
+## CPU/GPU pipeline optimization — 2026-10-21
+
+- [PyTorch 2.8 CUDA semantics and CUDA Graph notes](https://raw.githubusercontent.com/pytorch/pytorch/v2.8.0/docs/source/notes/cuda.rst):
+  consulted stream dependencies, `record_stream`, asynchronous copies and static
+  graph pointer ownership. The existing copy-stream event and owned graph caches
+  remain authoritative; host staging is reused or resized only after its fence.
+- [PyTorch pinned/nonblocking transfer tutorial](https://raw.githubusercontent.com/pytorch/tutorials/main/intermediate_source/pinmem_nonblock.py):
+  consulted the separate-stream/pinned-source requirements for overlap and source
+  mutation hazards. The local adaptation uses one producer and two bucket-sized
+  pinned slots under the shared budget, rather than pinning per batch or retaining
+  the entire cohort on the GPU.
+- [PyTorch 2.8 Adam implementation](https://raw.githubusercontent.com/pytorch/pytorch/v2.8.0/torch/optim/adam.py):
+  inspected grouped/foreach execution and its memory tradeoff. This implementation
+  batches master-gradient additions, runtime copies and EMA lerps; it preserves
+  Adam, FP32 masters, clipping and one optimizer commit per pass.
+- [PyTorch 2.8 profiler implementation](https://raw.githubusercontent.com/pytorch/pytorch/v2.8.0/torch/profiler/profiler.py):
+  consulted finite warmup/active schedules and step boundaries. Collection and
+  fitting traces are optional bounded diagnostics and are excluded from timing
+  comparisons. The production lifecycle remains the only learner.

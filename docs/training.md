@@ -3,8 +3,10 @@
 The objective is `complete_return_action_global_v3`. Old-objective optimizer
 resume is rejected. Structurally compatible previous BF16-master two-stage
 checkpoints remain valid for inference and fresh weight-only initialization.
-Current recovery uses `action-global-state-v3` and
-`action-global-trajectory-v3`; the model weight protocol remains v2.
+Current recovery uses `action-global-state-v4` and
+`action-global-trajectory-v4`; the model weight protocol remains v2.
+Earlier autonomous runs cannot resume. Compatible weights still load through
+fresh `--init-from`, without restoring an old optimizer or simulator.
 Verified recordings remain reusable and are repriced without rewriting files.
 
 The learning reward has two channels. Global reward contains only the terminal
@@ -90,6 +92,14 @@ rows are prefetched through the double buffer and width-bucketed into padded
 batches. A fitting spool can be materialized once and reused across all passes;
 it is RAM/disk-budgeted and never serialized as simulator state. Padding and
 inactive rows are excluded from denominators and diagnostics.
+
+The trajectory stores only executed active decisions, with private environment,
+episode and ordinal identities. Explicit gap boundaries preserve first-of-100
+invalid compaction through spill and recovery. Every executed row still enters
+complete returns. Prepared data and CPU routing plans are reused across passes;
+demo regression/ranking share their online forwards, and annotation labels are
+prepared once. Pinned staging grows to the current entity bucket under the
+shared storage budget and falls back to eager transport if it cannot fit.
 
 Ordinary wait regresses the complete return through species. Accepted plant/dig
 regresses the complete return at the proposed tile, and detached online selection /
@@ -284,6 +294,29 @@ Fitting uses masked entity buckets `[8, 16, 32, 64, 128, 256]`, CPU-owned row se
 ```bash
 python tools/tune_gpu.py --gpu 0 --output artifacts/tune --minutes 60 --stage easy
 ```
+
+The default `synthetic` workload is a component control. Use `--workload trajectory
+--trajectory <export>` for a current-format trajectory, or measure the production
+collection/return/four-pass-fit/collection cycle with fresh weights:
+
+```powershell
+.\.venv\Scripts\python.exe tools\tune_gpu.py --gpu 0 --workload full-cycle `
+  --initial-weights runs\human-init\initialization.pt --stage easy `
+  --output artifacts\pipeline --minutes 60 --no-compile
+```
+
+Full-cycle tuning alternates baseline/candidate/candidate/baseline. Promotion
+requires two completed pairs, median improvement of at least 5%, no paired
+regression over 2%, and free VRAM of at least the larger of 1 GiB or 20%.
+Incomplete or component-only trials cannot promote a profile. The 4070 retains
+64/64 microbatches and a 16,384-token budget; 128/128 and 32,768 remain explicit
+overrides until complete-cycle evidence qualifies. Transport grouping is held
+constant in this comparison. No GPU-resident whole-cohort cache is used.
+
+`training.performance.compile_collection` and `compile_fitting` independently
+control graphs/compilation. Both start disabled in the 4070 profile. The retired
+`compile_kernels` configuration key raises a replacement error; historical
+weight-only loading ignores that disposable execution setting.
 
 When telemetry shows spare VRAM, short GPU busy intervals and a saturated
 training CPU thread, run the full candidate set with larger grouped cases:
