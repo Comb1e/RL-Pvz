@@ -176,6 +176,7 @@ Static checks do not start the simulator or training:
 - [Sequential Q objective](docs/math/sequential-training.md)
 - [Reward accounting](docs/math/training-objective.md)
 - [Execution, compiler troubleshooting and throughput](docs/math/training-throughput.md)
+- [RTX 4070 pipeline audit using saved training data](docs/evidence/training-performance-audit-20261021.md)
 - [Collect cloud fitting diagnostics](docs/math/training-throughput.md#diagnose-cloud-fitting-stalls)
 - [Sources used](docs/references.md)
 - [Iteration history and measurements](docs/iteration.md)

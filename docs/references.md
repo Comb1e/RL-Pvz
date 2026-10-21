@@ -1,5 +1,20 @@
 # Sources actually used
 
+## CPU/GPU pipeline audit — 2026-10-21
+
+- [PyTorch 2.8 CUDA semantics](https://raw.githubusercontent.com/pytorch/pytorch/v2.8.0/docs/source/notes/cuda.rst):
+  rechecked asynchronous execution, explicit stream dependencies and synchronized
+  timing. The audit treats producer, copy and device spans as overlapping work,
+  not additive stages, and keeps buffer reuse fences.
+- [PyTorch pinned/nonblocking tutorial](https://raw.githubusercontent.com/pytorch/tutorials/main/intermediate_source/pinmem_nonblock.py):
+  rechecked the separate-stream and pinned-source requirements for overlapping
+  transfer with compute. Reusing the existing producer/pinned-slot path is
+  preferred to pinning batches on the main thread on every pass.
+- [PyTorch 2.8 Adam source](https://raw.githubusercontent.com/pytorch/pytorch/v2.8.0/torch/optim/adam.py):
+  inspected foreach/fused execution options as a secondary kernel-launch
+  opportunity; no optimizer setting or arithmetic was changed. Four commits per
+  cohort make this lower priority than repeated forward/backward launch work.
+
 ## Causal reward attribution — 2026-10-19
 
 - Sutton, Richard S., [Learning to Predict by the Methods of Temporal

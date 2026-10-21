@@ -1,3 +1,26 @@
+## RTX 4070 CPU/GPU pipeline audit — 2026-10-21
+
+- Problem: isolated throughput measurements do not reproduce the jointly
+  scheduled training pipeline. Inspect the user's `runs/compact-stages-101`
+  telemetry and saved public trajectory before recommending performance settings.
+- Findings: collection took 552.8 s for 2,320,769 active rows, with median
+  process CPU 92.4% and GPU utilization 39%. The run predates current v3
+  semantics and stopped in fitting pass 1 with zero optimizer commits, so it
+  cannot establish completed-cycle fitting time. Shared compaction retains
+  776,429 representatives; accepted EMA rows are only 3,352.
+- Verification: a 12,139-record stratified replay from those representatives
+  uses the shared CPU producer, pinned transport, routed loss, backward,
+  clipping, Adam and EMA over four passes. Microbatch/token budget 128/32,768
+  gives 4.57 s warmed versus 8.12 s for 64/16,384, with peak PyTorch memory
+  1,396.8 versus 1,387.6 MiB. Synthetic dense controls instead slow down, and
+  the existing compiled fitting backend also slows the measured medium case.
+- Outcome: documented prioritized opportunities and measurement limits in
+  [the audit](evidence/training-performance-audit-20261021.md), with raw evidence
+  alongside it. Model, settings, source code and user artifacts are unchanged;
+  no formal training or PR. CPU preparation/transfer are small in this in-RAM
+  replay. Full current-contract cycle, production memory headroom, disk spill
+  and sustained/alternating A/B measurements remain necessary before promotion.
+
 ## Dig defaults to editable absolute-infeasible in action annotation — 2026-10-20
 
 - Problem/root cause: action annotation could inherit the sampler's raw dig

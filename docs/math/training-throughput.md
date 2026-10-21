@@ -1,5 +1,10 @@
 # Precision and execution controls
 
+For the RTX 4070 investigation using `runs/compact-stages-101`, see the
+[training pipeline audit](../evidence/training-performance-audit-20261021.md).
+It distinguishes real run telemetry, a CPU/GPU fitting replay of saved rows,
+and synthetic component controls. Candidate settings are not promoted defaults.
+
 The collector and fitter share the stateless two-stage policy. Active original
 slots are packed by public entity width and results scatter back to canonical
 slots. Finished slots are inactive, never refilled and never inferred. Padding

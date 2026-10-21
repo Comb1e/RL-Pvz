@@ -1,0 +1,5606 @@
+{
+  "commit": "50751008a70245fc7456f0cdc5bf03d1ac624b65",
+  "device": {
+    "index": 0,
+    "uuid": "662ddbbe-d19c-dc9e-27d3-95baa1c22103",
+    "name": "NVIDIA GeForce RTX 4070 Laptop GPU",
+    "memory_mib": 8187.5,
+    "capability": [
+      8,
+      9
+    ]
+  },
+  "profile": "rtx4070-laptop",
+  "torch": "2.8.0+cu128",
+  "python": "3.12.3",
+  "platform": "Windows-11-10.0.26200-SP0",
+  "formal_training": false,
+  "complete": true,
+  "note": "Synthetic public boards; temporary model weights only. Medians are not end-to-end training speedups.",
+  "fitting_baseline": {
+    "device": "NVIDIA GeForce RTX 4070 Laptop GPU",
+    "torch": "2.8.0+cu128",
+    "config": {
+      "profile": "complete-game",
+      "schema_version": 1,
+      "engine_commit": "1424b4d802e783a36772091c49d96aa7c6036d7a",
+      "engine_version": "1.4.0",
+      "engine_package_version": "1.7.0",
+      "runtime": {
+        "cache_legal_actions": true,
+        "refill_evaluation": true
+      },
+      "logging": {
+        "progress_seconds": 15,
+        "terminal_progress_seconds": 60,
+        "terminal_mode": "compact",
+        "hardware_sample_seconds": 1.0,
+        "rolling_window": 100
+      },
+      "visualization": {
+        "live_enabled": true,
+        "viewer": "auto",
+        "live_fps": 5,
+        "live_history_ram_mib": 16,
+        "live_window_size": [
+          1600,
+          1050
+        ],
+        "enabled": true,
+        "demos": true,
+        "videos": false,
+        "video_fps": 25,
+        "video_size": [
+          1280,
+          820
+        ],
+        "ffmpeg": "",
+        "crf": 23,
+        "final_hold_seconds": 2
+      },
+      "environment": {
+        "action_timing": "per_tick",
+        "decision_ticks": 1,
+        "cutoff_seconds": 1200,
+        "rows": 5,
+        "cols": 9,
+        "plants": [
+          "sunflower",
+          "peashooter",
+          "wall_nut",
+          "cherry_bomb",
+          "potato_mine",
+          "snow_pea",
+          "chomper",
+          "repeater"
+        ],
+        "zombies": [
+          "basic",
+          "flag",
+          "conehead",
+          "buckethead",
+          "pole_vaulting"
+        ],
+        "plant_states": [
+          "ready",
+          "arming",
+          "armed",
+          "fusing",
+          "digesting",
+          "exploding",
+          "detonating",
+          "rising",
+          "biting",
+          "biting_got_one",
+          "recovering"
+        ],
+        "zombie_states": [
+          "walking",
+          "carrying_pole",
+          "vaulting",
+          "biting",
+          "dead"
+        ],
+        "mower_states": [
+          "ready",
+          "moving",
+          "spent"
+        ]
+      },
+      "encoding": {
+        "version": "entity_v1",
+        "max_entities": 256,
+        "count_scale": 75,
+        "wave_scale": 15
+      },
+      "reward": {
+        "version": "action_global_value_v3",
+        "win_reward": 1.0,
+        "loss_penalty": 1.0,
+        "basic_zombie_value": 30.0,
+        "mower_value": 500.0,
+        "progress_weight": 0.01,
+        "value_scale": 900.0,
+        "home_entry_penalties": [
+          0.005,
+          0.015
+        ],
+        "win_time_weight": 0.5,
+        "early_sun_extra_multiplier": 2.0,
+        "early_sun_spawn_fraction": [
+          1,
+          3
+        ],
+        "action": {
+          "sun_credit_multiplier": 1.0,
+          "block_value_by_plant": {
+            "sunflower": 0.0333333333,
+            "peashooter": 0.0333333333,
+            "wall_nut": 0.025,
+            "cherry_bomb": 0.0333333333,
+            "potato_mine": 0.0333333333,
+            "snow_pea": 0.0333333333,
+            "chomper": 0.0333333333,
+            "repeater": 0.0333333333
+          }
+        }
+      },
+      "training": {
+        "gamma": 1.0,
+        "discount_clock": "simulation_ticks",
+        "method": "complete_return_action_global_v3",
+        "budget_unit": "games",
+        "until_stage_complete": false,
+        "total_games": 10000,
+        "validation_schedule": "stage_success",
+        "eval_interval_games": 2000,
+        "total_steps": 3000000,
+        "learner_seeds": [
+          101,
+          102
+        ],
+        "n_envs": 128,
+        "device": "cuda",
+        "max_minutes": 120,
+        "finalization_minutes": 15,
+        "exploration": {
+          "objective": "committed_plant_tile_epsilon_v1",
+          "epsilon_start": 0.5,
+          "epsilon_floor": 0.01,
+          "decay_games": 10000,
+          "plant_epsilon_start": 0.1,
+          "plant_epsilon_floor": 0.01,
+          "plant_decay_games": 10000
+        },
+        "batch_size": 1024,
+        "n_epochs": 4,
+        "learning_rate": 0.0003,
+        "max_grad_norm": 5,
+        "eval_interval": 250000,
+        "torch_threads": 2,
+        "storage": {
+          "ram_gib": 6,
+          "block_rows": 32768
+        },
+        "objective": {
+          "protocol": "complete_return_action_global_v3",
+          "accepted_outcome_share": 0.5,
+          "species_consistency_weight": 1.0,
+          "species_consistency_huber_delta": 1.0,
+          "invalid_action_target": -1.0,
+          "invalid_fit_group_size": 100,
+          "dense_multiplier": 10.0,
+          "ema_decay": 0.95,
+          "demo_rank_loss_weight": 0.1,
+          "demo_rank_margin": 0.05
+        },
+        "performance": {
+          "compile_kernels": false,
+          "telemetry": true,
+          "fit_precision": "bf16_master",
+          "prefetch": true,
+          "fit_batch_groups": 2,
+          "fit_encoder_microbatch": 192,
+          "fit_species_microbatch": 64,
+          "fit_tile_microbatch": 64,
+          "fit_entity_buckets": [
+            8,
+            16,
+            32,
+            64,
+            128,
+            256
+          ],
+          "fit_token_budget": 16384,
+          "collection_graph_cache_entries": 8,
+          "collection_vram_headroom_mib": 1638
+        },
+        "demo": {
+          "passes": 40,
+          "learning_rate": 0.0003,
+          "learner_seed": 101,
+          "time_budget_minutes": 30
+        },
+        "annotation": {
+          "passes": 0,
+          "learning_rate": 0.0003,
+          "batch_size": 256,
+          "margin": 1.0,
+          "learner_seed": 101,
+          "sampling_seed": "random",
+          "sampling_family": "preset",
+          "sampling_max_steps": 20000,
+          "sampling_max_attempts": 100,
+          "sampling_plant_interval_steps": [
+            500,
+            1500
+          ],
+          "sampling_max_plants": 8
+        }
+      },
+      "curriculum": {
+        "mode": "teaching",
+        "residency": "episode_start_stage",
+        "probe_interval_games": 2000,
+        "minimum_stage_games": 100,
+        "probe_interval": 16384,
+        "probe_cases": 100,
+        "consecutive_passes": 1,
+        "minimum_stage_steps": 16384,
+        "boundaries": [
+          0.1,
+          0.4
+        ],
+        "easy_weights": [
+          1.0,
+          0.0,
+          0.0
+        ],
+        "intermediate_weights": [
+          0.5,
+          0.5,
+          0.0
+        ],
+        "final_weights": [
+          0.2,
+          0.4,
+          0.4
+        ],
+        "stages": {
+          "easy": {
+            "tasks": [
+              "easy"
+            ],
+            "weights": [
+              1.0
+            ],
+            "requirements": {
+              "easy": 100
+            }
+          },
+          "standard": {
+            "tasks": [
+              "easy",
+              "standard"
+            ],
+            "weights": [
+              0.5,
+              0.5
+            ],
+            "requirements": {
+              "easy": 100,
+              "standard": 100
+            }
+          },
+          "shared": {
+            "tasks": [
+              "easy",
+              "standard",
+              "hard"
+            ],
+            "weights": [
+              0.2,
+              0.4,
+              0.4
+            ],
+            "requirements": {
+              "easy": 100,
+              "standard": 100,
+              "hard": 100
+            }
+          }
+        }
+      },
+      "splits": {
+        "train": [
+          1000,
+          99999
+        ],
+        "validation": [
+          100000,
+          100049
+        ],
+        "curriculum": [
+          100050,
+          100149
+        ],
+        "test": [
+          200000,
+          200299
+        ],
+        "ood": [
+          300000,
+          300099
+        ]
+      },
+      "evaluation": {
+        "levels": [
+          "easy",
+          "standard",
+          "hard"
+        ],
+        "ood_families": [
+          "redistributed",
+          "faster",
+          "concentrated"
+        ],
+        "ood_levels": [
+          "standard",
+          "hard"
+        ],
+        "replays_per_outcome": 10,
+        "bootstrap_replicates": 2000,
+        "bootstrap_seed": 1739,
+        "targets": [
+          0.95,
+          0.9,
+          0.75
+        ]
+      },
+      "conditions": {
+        "masked": {
+          "masked": true,
+          "shaped": true,
+          "curriculum": true,
+          "hybrid": false
+        }
+      },
+      "policy": {
+        "kind": "two_stage_transformer_q_v1",
+        "action_distribution": "sequential_q_unmasked_tiles_v2",
+        "species_width": 128,
+        "species_layers": 4,
+        "species_heads": 8,
+        "species_feedforward": 512,
+        "tile_width": 192,
+        "tile_layers": 6,
+        "tile_heads": 12,
+        "tile_feedforward": 768,
+        "encoder_microbatch": 128,
+        "attention_query_chunk": 64,
+        "encoder_token_budget": 65536
+      },
+      "simulation": {
+        "backend": "cuda"
+      },
+      "diagnostics": {
+        "early_dig_seconds": 5
+      }
+    },
+    "complete": true,
+    "measurements": [
+      {
+        "workload": "sparse",
+        "actions": "species_invalid",
+        "widths": [
+          8
+        ],
+        "rows": 128,
+        "passes": 4,
+        "spool_seconds": 0.008525200000008226,
+        "cold_seconds": 0.6898994999999104,
+        "routed_workload": {
+          "routes": {
+            "wait_return": 0,
+            "accepted": 0,
+            "species_invalid": 128,
+            "tile_invalid": 0
+          },
+          "online_species_rows": 128,
+          "online_tile_rows": 0,
+          "ema_tile_rows": 0,
+          "skipped_ema_rows": 128
+        },
+        "repetitions": [
+          {
+            "seconds": 0.10335450000002311,
+            "peak_allocated_mib": 92.0166015625,
+            "peak_reserved_mib": 128.0,
+            "free_mib": 6882.0,
+            "total_mib": 8187.5
+          },
+          {
+            "seconds": 0.10640349999994214,
+            "peak_allocated_mib": 92.0166015625,
+            "peak_reserved_mib": 136.0,
+            "free_mib": 6874.0,
+            "total_mib": 8187.5
+          },
+          {
+            "seconds": 0.10310339999989537,
+            "peak_allocated_mib": 92.0166015625,
+            "peak_reserved_mib": 144.0,
+            "free_mib": 6866.0,
+            "total_mib": 8187.5
+          }
+        ],
+        "transport": {
+          "preparation_seconds": 0.004626800000096409,
+          "transfer_wait_seconds": 0.00011549999999260763,
+          "transfer_stream_seconds": 0.007044640004634856
+        },
+        "encoders": [
+          {
+            "stage": "species",
+            "network": "online",
+            "compiled_shapes": [],
+            "collection": {
+              "hits": 0,
+              "misses": 0,
+              "captures": 0,
+              "evictions": 0,
+              "retired_releases": 0,
+              "capacity_fallbacks": 0,
+              "headroom_fallbacks": 0,
+              "oom_fallbacks": 0,
+              "capture_failures": 0,
+              "capture_setup_seconds": 0.0,
+              "releases": 0,
+              "entries": 0,
+              "retired_entries": 0,
+              "resident_entries": 0,
+              "cache_entries": 8,
+              "vram_headroom_mib": 1638,
+              "last_free_mib": null
+            },
+            "fitting": {
+              "hits": 0,
+              "misses": 0,
+              "captures": 0,
+              "evictions": 0,
+              "retired_releases": 0,
+              "capacity_fallbacks": 0,
+              "headroom_fallbacks": 0,
+              "oom_fallbacks": 0,
+              "capture_failures": 0,
+              "capture_setup_seconds": 0.0,
+              "releases": 0,
+              "entries": 0,
+              "retired_entries": 0,
+              "resident_entries": 0,
+              "cache_entries": 6,
+              "vram_headroom_mib": 1024,
+              "last_free_mib": null
+            },
+            "status": "disabled",
+            "compilation_backend": null,
+            "compilation_error": null
+          },
+          {
+            "stage": "tile",
+            "network": "online",
+            "compiled_shapes": [],
+            "collection": {
+              "hits": 0,
+              "misses": 0,
+              "captures": 0,
+              "evictions": 0,
+              "retired_releases": 0,
+              "capacity_fallbacks": 0,
+              "headroom_fallbacks": 0,
+              "oom_fallbacks": 0,
+              "capture_failures": 0,
+              "capture_setup_seconds": 0.0,
+              "releases": 0,
+              "entries": 0,
+              "retired_entries": 0,
+              "resident_entries": 0,
+              "cache_entries": 8,
+              "vram_headroom_mib": 1638,
+              "last_free_mib": null
+            },
+            "fitting": {
+              "hits": 0,
+              "misses": 0,
+              "captures": 0,
+              "evictions": 0,
+              "retired_releases": 0,
+              "capacity_fallbacks": 0,
+              "headroom_fallbacks": 0,
+              "oom_fallbacks": 0,
+              "capture_failures": 0,
+              "capture_setup_seconds": 0.0,
+              "releases": 0,
+              "entries": 0,
+              "retired_entries": 0,
+              "resident_entries": 0,
+              "cache_entries": 6,
+              "vram_headroom_mib": 1024,
+              "last_free_mib": null
+            },
+            "status": "disabled",
+            "compilation_backend": null,
+            "compilation_error": null
+          },
+          {
+            "stage": "species",
+            "network": "ema",
+            "compiled_shapes": [],
+            "collection": {
+              "hits": 0,
+              "misses": 0,
+              "captures": 0,
+              "evictions": 0,
+              "retired_releases": 0,
+              "capacity_fallbacks": 0,
+              "headroom_fallbacks": 0,
+              "oom_fallbacks": 0,
+              "capture_failures": 0,
+              "capture_setup_seconds": 0.0,
+              "releases": 0,
+              "entries": 0,
+              "retired_entries": 0,
+              "resident_entries": 0,
+              "cache_entries": 8,
+              "vram_headroom_mib": 1638,
+              "last_free_mib": null
+            },
+            "fitting": {
+              "hits": 0,
+              "misses": 0,
+              "captures": 0,
+              "evictions": 0,
+              "retired_releases": 0,
+              "capacity_fallbacks": 0,
+              "headroom_fallbacks": 0,
+              "oom_fallbacks": 0,
+              "capture_failures": 0,
+              "capture_setup_seconds": 0.0,
+              "releases": 0,
+              "entries": 0,
+              "retired_entries": 0,
+              "resident_entries": 0,
+              "cache_entries": 6,
+              "vram_headroom_mib": 1024,
+              "last_free_mib": null
+            },
+            "status": "disabled",
+            "compilation_backend": null,
+            "compilation_error": null
+          },
+          {
+            "stage": "tile",
+            "network": "ema",
+            "compiled_shapes": [],
+            "collection": {
+              "hits": 0,
+              "misses": 0,
+              "captures": 0,
+              "evictions": 0,
+              "retired_releases": 0,
+              "capacity_fallbacks": 0,
+              "headroom_fallbacks": 0,
+              "oom_fallbacks": 0,
+              "capture_failures": 0,
+              "capture_setup_seconds": 0.0,
+              "releases": 0,
+              "entries": 0,
+              "retired_entries": 0,
+              "resident_entries": 0,
+              "cache_entries": 8,
+              "vram_headroom_mib": 1638,
+              "last_free_mib": null
+            },
+            "fitting": {
+              "hits": 0,
+              "misses": 0,
+              "captures": 0,
+              "evictions": 0,
+              "retired_releases": 0,
+              "capacity_fallbacks": 0,
+              "headroom_fallbacks": 0,
+              "oom_fallbacks": 0,
+              "capture_failures": 0,
+              "capture_setup_seconds": 0.0,
+              "releases": 0,
+              "entries": 0,
+              "retired_entries": 0,
+              "resident_entries": 0,
+              "cache_entries": 6,
+              "vram_headroom_mib": 1024,
+              "last_free_mib": null
+            },
+            "status": "disabled",
+            "compilation_backend": null,
+            "compilation_error": null
+          }
+        ]
+      },
+      {
+        "workload": "sparse",
+        "actions": "tile_invalid",
+        "widths": [
+          8
+        ],
+        "rows": 128,
+        "passes": 4,
+        "spool_seconds": 0.00035500000001320586,
+        "cold_seconds": 0.18038660000001983,
+        "routed_workload": {
+          "routes": {
+            "wait_return": 0,
+            "accepted": 0,
+            "species_invalid": 0,
+            "tile_invalid": 128
+          },
+          "online_species_rows": 0,
+          "online_tile_rows": 128,
+          "ema_tile_rows": 0,
+          "skipped_ema_rows": 128
+        },
+        "repetitions": [
+          {
+            "seconds": 0.13406699999995908,
+            "peak_allocated_mib": 397.18603515625,
+            "peak_reserved_mib": 502.0,
+            "free_mib": 6508.0,
+            "total_mib": 8187.5
+          },
+          {
+            "seconds": 0.13214900000002672,
+            "peak_allocated_mib": 397.18603515625,
+            "peak_reserved_mib": 510.0,
+            "free_mib": 6500.0,
+            "total_mib": 8187.5
+          },
+          {
+            "seconds": 0.1313231999999971,
+            "peak_allocated_mib": 397.18603515625,
+            "peak_reserved_mib": 518.0,
+            "free_mib": 6492.0,
+            "total_mib": 8187.5
+          }
+        ],
+        "transport": {
+          "preparation_seconds": 0.004420400000185509,
+          "transfer_wait_seconds": 0.00010350000013659155,
+          "transfer_stream_seconds": 0.006424927979707718
+        },
+        "encoders": [
+          {
+            "stage": "species",
+            "network": "online",
+            "compiled_shapes": [],
+            "collection": {
+              "hits": 0,
+              "misses": 0,
+              "captures": 0,
+              "evictions": 0,
+              "retired_releases": 0,
+              "capacity_fallbacks": 0,
+              "headroom_fallbacks": 0,
+              "oom_fallbacks": 0,
+              "capture_failures": 0,
+              "capture_setup_seconds": 0.0,
+              "releases": 0,
+              "entries": 0,
+              "retired_entries": 0,
+              "resident_entries": 0,
+              "cache_entries": 8,
+              "vram_headroom_mib": 1638,
+              "last_free_mib": null
+            },
+            "fitting": {
+              "hits": 0,
+              "misses": 0,
+              "captures": 0,
+              "evictions": 0,
+              "retired_releases": 0,
+              "capacity_fallbacks": 0,
+              "headroom_fallbacks": 0,
+              "oom_fallbacks": 0,
+              "capture_failures": 0,
+              "capture_setup_seconds": 0.0,
+              "releases": 0,
+              "entries": 0,
+              "retired_entries": 0,
+              "resident_entries": 0,
+              "cache_entries": 6,
+              "vram_headroom_mib": 1024,
+              "last_free_mib": null
+            },
+            "status": "disabled",
+            "compilation_backend": null,
+            "compilation_error": null
+          },
+          {
+            "stage": "tile",
+            "network": "online",
+            "compiled_shapes": [],
+            "collection": {
+              "hits": 0,
+              "misses": 0,
+              "captures": 0,
+              "evictions": 0,
+              "retired_releases": 0,
+              "capacity_fallbacks": 0,
+              "headroom_fallbacks": 0,
+              "oom_fallbacks": 0,
+              "capture_failures": 0,
+              "capture_setup_seconds": 0.0,
+              "releases": 0,
+              "entries": 0,
+              "retired_entries": 0,
+              "resident_entries": 0,
+              "cache_entries": 8,
+              "vram_headroom_mib": 1638,
+              "last_free_mib": null
+            },
+            "fitting": {
+              "hits": 0,
+              "misses": 0,
+              "captures": 0,
+              "evictions": 0,
+              "retired_releases": 0,
+              "capacity_fallbacks": 0,
+              "headroom_fallbacks": 0,
+              "oom_fallbacks": 0,
+              "capture_failures": 0,
+              "capture_setup_seconds": 0.0,
+              "releases": 0,
+              "entries": 0,
+              "retired_entries": 0,
+              "resident_entries": 0,
+              "cache_entries": 6,
+              "vram_headroom_mib": 1024,
+              "last_free_mib": null
+            },
+            "status": "disabled",
+            "compilation_backend": null,
+            "compilation_error": null
+          },
+          {
+            "stage": "species",
+            "network": "ema",
+            "compiled_shapes": [],
+            "collection": {
+              "hits": 0,
+              "misses": 0,
+              "captures": 0,
+              "evictions": 0,
+              "retired_releases": 0,
+              "capacity_fallbacks": 0,
+              "headroom_fallbacks": 0,
+              "oom_fallbacks": 0,
+              "capture_failures": 0,
+              "capture_setup_seconds": 0.0,
+              "releases": 0,
+              "entries": 0,
+              "retired_entries": 0,
+              "resident_entries": 0,
+              "cache_entries": 8,
+              "vram_headroom_mib": 1638,
+              "last_free_mib": null
+            },
+            "fitting": {
+              "hits": 0,
+              "misses": 0,
+              "captures": 0,
+              "evictions": 0,
+              "retired_releases": 0,
+              "capacity_fallbacks": 0,
+              "headroom_fallbacks": 0,
+              "oom_fallbacks": 0,
+              "capture_failures": 0,
+              "capture_setup_seconds": 0.0,
+              "releases": 0,
+              "entries": 0,
+              "retired_entries": 0,
+              "resident_entries": 0,
+              "cache_entries": 6,
+              "vram_headroom_mib": 1024,
+              "last_free_mib": null
+            },
+            "status": "disabled",
+            "compilation_backend": null,
+            "compilation_error": null
+          },
+          {
+            "stage": "tile",
+            "network": "ema",
+            "compiled_shapes": [],
+            "collection": {
+              "hits": 0,
+              "misses": 0,
+              "captures": 0,
+              "evictions": 0,
+              "retired_releases": 0,
+              "capacity_fallbacks": 0,
+              "headroom_fallbacks": 0,
+              "oom_fallbacks": 0,
+              "capture_failures": 0,
+              "capture_setup_seconds": 0.0,
+              "releases": 0,
+              "entries": 0,
+              "retired_entries": 0,
+              "resident_entries": 0,
+              "cache_entries": 8,
+              "vram_headroom_mib": 1638,
+              "last_free_mib": null
+            },
+            "fitting": {
+              "hits": 0,
+              "misses": 0,
+              "captures": 0,
+              "evictions": 0,
+              "retired_releases": 0,
+              "capacity_fallbacks": 0,
+              "headroom_fallbacks": 0,
+              "oom_fallbacks": 0,
+              "capture_failures": 0,
+              "capture_setup_seconds": 0.0,
+              "releases": 0,
+              "entries": 0,
+              "retired_entries": 0,
+              "resident_entries": 0,
+              "cache_entries": 6,
+              "vram_headroom_mib": 1024,
+              "last_free_mib": null
+            },
+            "status": "disabled",
+            "compilation_backend": null,
+            "compilation_error": null
+          }
+        ]
+      },
+      {
+        "workload": "sparse",
+        "actions": "tile",
+        "widths": [
+          8
+        ],
+        "rows": 128,
+        "passes": 4,
+        "spool_seconds": 0.00040169999999761785,
+        "cold_seconds": 0.2758841999999504,
+        "routed_workload": {
+          "routes": {
+            "wait_return": 0,
+            "accepted": 128,
+            "species_invalid": 0,
+            "tile_invalid": 0
+          },
+          "online_species_rows": 128,
+          "online_tile_rows": 128,
+          "ema_tile_rows": 128,
+          "skipped_ema_rows": 0
+        },
+        "repetitions": [
+          {
+            "seconds": 0.24093390000007275,
+            "peak_allocated_mib": 425.9384765625,
+            "peak_reserved_mib": 526.0,
+            "free_mib": 6484.0,
+            "total_mib": 8187.5
+          },
+          {
+            "seconds": 0.23751909999998588,
+            "peak_allocated_mib": 425.9384765625,
+            "peak_reserved_mib": 526.0,
+            "free_mib": 6484.0,
+            "total_mib": 8187.5
+          },
+          {
+            "seconds": 0.23732040000004417,
+            "peak_allocated_mib": 425.9384765625,
+            "peak_reserved_mib": 526.0,
+            "free_mib": 6484.0,
+            "total_mib": 8187.5
+          }
+        ],
+        "transport": {
+          "preparation_seconds": 0.004562199999895711,
+          "transfer_wait_seconds": 0.00011659999972835067,
+          "transfer_stream_seconds": 0.002711487993597984
+        },
+        "encoders": [
+          {
+            "stage": "species",
+            "network": "online",
+            "compiled_shapes": [],
+            "collection": {
+              "hits": 0,
+              "misses": 0,
+              "captures": 0,
+              "evictions": 0,
+              "retired_releases": 0,
+              "capacity_fallbacks": 0,
+              "headroom_fallbacks": 0,
+              "oom_fallbacks": 0,
+              "capture_failures": 0,
+              "capture_setup_seconds": 0.0,
+              "releases": 0,
+              "entries": 0,
+              "retired_entries": 0,
+              "resident_entries": 0,
+              "cache_entries": 8,
+              "vram_headroom_mib": 1638,
+              "last_free_mib": null
+            },
+            "fitting": {
+              "hits": 0,
+              "misses": 0,
+              "captures": 0,
+              "evictions": 0,
+              "retired_releases": 0,
+              "capacity_fallbacks": 0,
+              "headroom_fallbacks": 0,
+              "oom_fallbacks": 0,
+              "capture_failures": 0,
+              "capture_setup_seconds": 0.0,
+              "releases": 0,
+              "entries": 0,
+              "retired_entries": 0,
+              "resident_entries": 0,
+              "cache_entries": 6,
+              "vram_headroom_mib": 1024,
+              "last_free_mib": null
+            },
+            "status": "disabled",
+            "compilation_backend": null,
+            "compilation_error": null
+          },
+          {
+            "stage": "tile",
+            "network": "online",
+            "compiled_shapes": [],
+            "collection": {
+              "hits": 0,
+              "misses": 0,
+              "captures": 0,
+              "evictions": 0,
+              "retired_releases": 0,
+              "capacity_fallbacks": 0,
+              "headroom_fallbacks": 0,
+              "oom_fallbacks": 0,
+              "capture_failures": 0,
+              "capture_setup_seconds": 0.0,
+              "releases": 0,
+              "entries": 0,
+              "retired_entries": 0,
+              "resident_entries": 0,
+              "cache_entries": 8,
+              "vram_headroom_mib": 1638,
+              "last_free_mib": null
+            },
+            "fitting": {
+              "hits": 0,
+              "misses": 0,
+              "captures": 0,
+              "evictions": 0,
+              "retired_releases": 0,
+              "capacity_fallbacks": 0,
+              "headroom_fallbacks": 0,
+              "oom_fallbacks": 0,
+              "capture_failures": 0,
+              "capture_setup_seconds": 0.0,
+              "releases": 0,
+              "entries": 0,
+              "retired_entries": 0,
+              "resident_entries": 0,
+              "cache_entries": 6,
+              "vram_headroom_mib": 1024,
+              "last_free_mib": null
+            },
+            "status": "disabled",
+            "compilation_backend": null,
+            "compilation_error": null
+          },
+          {
+            "stage": "species",
+            "network": "ema",
+            "compiled_shapes": [],
+            "collection": {
+              "hits": 0,
+              "misses": 0,
+              "captures": 0,
+              "evictions": 0,
+              "retired_releases": 0,
+              "capacity_fallbacks": 0,
+              "headroom_fallbacks": 0,
+              "oom_fallbacks": 0,
+              "capture_failures": 0,
+              "capture_setup_seconds": 0.0,
+              "releases": 0,
+              "entries": 0,
+              "retired_entries": 0,
+              "resident_entries": 0,
+              "cache_entries": 8,
+              "vram_headroom_mib": 1638,
+              "last_free_mib": null
+            },
+            "fitting": {
+              "hits": 0,
+              "misses": 0,
+              "captures": 0,
+              "evictions": 0,
+              "retired_releases": 0,
+              "capacity_fallbacks": 0,
+              "headroom_fallbacks": 0,
+              "oom_fallbacks": 0,
+              "capture_failures": 0,
+              "capture_setup_seconds": 0.0,
+              "releases": 0,
+              "entries": 0,
+              "retired_entries": 0,
+              "resident_entries": 0,
+              "cache_entries": 6,
+              "vram_headroom_mib": 1024,
+              "last_free_mib": null
+            },
+            "status": "disabled",
+            "compilation_backend": null,
+            "compilation_error": null
+          },
+          {
+            "stage": "tile",
+            "network": "ema",
+            "compiled_shapes": [],
+            "collection": {
+              "hits": 0,
+              "misses": 0,
+              "captures": 0,
+              "evictions": 0,
+              "retired_releases": 0,
+              "capacity_fallbacks": 0,
+              "headroom_fallbacks": 0,
+              "oom_fallbacks": 0,
+              "capture_failures": 0,
+              "capture_setup_seconds": 0.0,
+              "releases": 0,
+              "entries": 0,
+              "retired_entries": 0,
+              "resident_entries": 0,
+              "cache_entries": 8,
+              "vram_headroom_mib": 1638,
+              "last_free_mib": null
+            },
+            "fitting": {
+              "hits": 0,
+              "misses": 0,
+              "captures": 0,
+              "evictions": 0,
+              "retired_releases": 0,
+              "capacity_fallbacks": 0,
+              "headroom_fallbacks": 0,
+              "oom_fallbacks": 0,
+              "capture_failures": 0,
+              "capture_setup_seconds": 0.0,
+              "releases": 0,
+              "entries": 0,
+              "retired_entries": 0,
+              "resident_entries": 0,
+              "cache_entries": 6,
+              "vram_headroom_mib": 1024,
+              "last_free_mib": null
+            },
+            "status": "disabled",
+            "compilation_backend": null,
+            "compilation_error": null
+          }
+        ]
+      },
+      {
+        "workload": "sparse",
+        "actions": "rejected_heavy",
+        "widths": [
+          8
+        ],
+        "rows": 128,
+        "passes": 4,
+        "spool_seconds": 0.00030770000000757136,
+        "cold_seconds": 0.2644367999999986,
+        "routed_workload": {
+          "routes": {
+            "wait_return": 0,
+            "accepted": 25,
+            "species_invalid": 52,
+            "tile_invalid": 51
+          },
+          "online_species_rows": 77,
+          "online_tile_rows": 76,
+          "ema_tile_rows": 25,
+          "skipped_ema_rows": 103
+        },
+        "repetitions": [
+          {
+            "seconds": 0.2596636999999191,
+            "peak_allocated_mib": 227.81591796875,
+            "peak_reserved_mib": 526.0,
+            "free_mib": 6484.0,
+            "total_mib": 8187.5
+          },
+          {
+            "seconds": 0.2562129000000368,
+            "peak_allocated_mib": 227.81591796875,
+            "peak_reserved_mib": 526.0,
+            "free_mib": 6484.0,
+            "total_mib": 8187.5
+          },
+          {
+            "seconds": 0.26222900000004756,
+            "peak_allocated_mib": 227.81591796875,
+            "peak_reserved_mib": 526.0,
+            "free_mib": 6484.0,
+            "total_mib": 8187.5
+          }
+        ],
+        "transport": {
+          "preparation_seconds": 0.009665600000289487,
+          "transfer_wait_seconds": 0.0002490999999054111,
+          "transfer_stream_seconds": 0.008709791980683803
+        },
+        "encoders": [
+          {
+            "stage": "species",
+            "network": "online",
+            "compiled_shapes": [],
+            "collection": {
+              "hits": 0,
+              "misses": 0,
+              "captures": 0,
+              "evictions": 0,
+              "retired_releases": 0,
+              "capacity_fallbacks": 0,
+              "headroom_fallbacks": 0,
+              "oom_fallbacks": 0,
+              "capture_failures": 0,
+              "capture_setup_seconds": 0.0,
+              "releases": 0,
+              "entries": 0,
+              "retired_entries": 0,
+              "resident_entries": 0,
+              "cache_entries": 8,
+              "vram_headroom_mib": 1638,
+              "last_free_mib": null
+            },
+            "fitting": {
+              "hits": 0,
+              "misses": 0,
+              "captures": 0,
+              "evictions": 0,
+              "retired_releases": 0,
+              "capacity_fallbacks": 0,
+              "headroom_fallbacks": 0,
+              "oom_fallbacks": 0,
+              "capture_failures": 0,
+              "capture_setup_seconds": 0.0,
+              "releases": 0,
+              "entries": 0,
+              "retired_entries": 0,
+              "resident_entries": 0,
+              "cache_entries": 6,
+              "vram_headroom_mib": 1024,
+              "last_free_mib": null
+            },
+            "status": "disabled",
+            "compilation_backend": null,
+            "compilation_error": null
+          },
+          {
+            "stage": "tile",
+            "network": "online",
+            "compiled_shapes": [],
+            "collection": {
+              "hits": 0,
+              "misses": 0,
+              "captures": 0,
+              "evictions": 0,
+              "retired_releases": 0,
+              "capacity_fallbacks": 0,
+              "headroom_fallbacks": 0,
+              "oom_fallbacks": 0,
+              "capture_failures": 0,
+              "capture_setup_seconds": 0.0,
+              "releases": 0,
+              "entries": 0,
+              "retired_entries": 0,
+              "resident_entries": 0,
+              "cache_entries": 8,
+              "vram_headroom_mib": 1638,
+              "last_free_mib": null
+            },
+            "fitting": {
+              "hits": 0,
+              "misses": 0,
+              "captures": 0,
+              "evictions": 0,
+              "retired_releases": 0,
+              "capacity_fallbacks": 0,
+              "headroom_fallbacks": 0,
+              "oom_fallbacks": 0,
+              "capture_failures": 0,
+              "capture_setup_seconds": 0.0,
+              "releases": 0,
+              "entries": 0,
+              "retired_entries": 0,
+              "resident_entries": 0,
+              "cache_entries": 6,
+              "vram_headroom_mib": 1024,
+              "last_free_mib": null
+            },
+            "status": "disabled",
+            "compilation_backend": null,
+            "compilation_error": null
+          },
+          {
+            "stage": "species",
+            "network": "ema",
+            "compiled_shapes": [],
+            "collection": {
+              "hits": 0,
+              "misses": 0,
+              "captures": 0,
+              "evictions": 0,
+              "retired_releases": 0,
+              "capacity_fallbacks": 0,
+              "headroom_fallbacks": 0,
+              "oom_fallbacks": 0,
+              "capture_failures": 0,
+              "capture_setup_seconds": 0.0,
+              "releases": 0,
+              "entries": 0,
+              "retired_entries": 0,
+              "resident_entries": 0,
+              "cache_entries": 8,
+              "vram_headroom_mib": 1638,
+              "last_free_mib": null
+            },
+            "fitting": {
+              "hits": 0,
+              "misses": 0,
+              "captures": 0,
+              "evictions": 0,
+              "retired_releases": 0,
+              "capacity_fallbacks": 0,
+              "headroom_fallbacks": 0,
+              "oom_fallbacks": 0,
+              "capture_failures": 0,
+              "capture_setup_seconds": 0.0,
+              "releases": 0,
+              "entries": 0,
+              "retired_entries": 0,
+              "resident_entries": 0,
+              "cache_entries": 6,
+              "vram_headroom_mib": 1024,
+              "last_free_mib": null
+            },
+            "status": "disabled",
+            "compilation_backend": null,
+            "compilation_error": null
+          },
+          {
+            "stage": "tile",
+            "network": "ema",
+            "compiled_shapes": [],
+            "collection": {
+              "hits": 0,
+              "misses": 0,
+              "captures": 0,
+              "evictions": 0,
+              "retired_releases": 0,
+              "capacity_fallbacks": 0,
+              "headroom_fallbacks": 0,
+              "oom_fallbacks": 0,
+              "capture_failures": 0,
+              "capture_setup_seconds": 0.0,
+              "releases": 0,
+              "entries": 0,
+              "retired_entries": 0,
+              "resident_entries": 0,
+              "cache_entries": 8,
+              "vram_headroom_mib": 1638,
+              "last_free_mib": null
+            },
+            "fitting": {
+              "hits": 0,
+              "misses": 0,
+              "captures": 0,
+              "evictions": 0,
+              "retired_releases": 0,
+              "capacity_fallbacks": 0,
+              "headroom_fallbacks": 0,
+              "oom_fallbacks": 0,
+              "capture_failures": 0,
+              "capture_setup_seconds": 0.0,
+              "releases": 0,
+              "entries": 0,
+              "retired_entries": 0,
+              "resident_entries": 0,
+              "cache_entries": 6,
+              "vram_headroom_mib": 1024,
+              "last_free_mib": null
+            },
+            "status": "disabled",
+            "compilation_backend": null,
+            "compilation_error": null
+          }
+        ]
+      },
+      {
+        "workload": "medium",
+        "actions": "species_invalid",
+        "widths": [
+          64
+        ],
+        "rows": 128,
+        "passes": 4,
+        "spool_seconds": 0.0006257999999661479,
+        "cold_seconds": 0.3300815000000057,
+        "routed_workload": {
+          "routes": {
+            "wait_return": 0,
+            "accepted": 0,
+            "species_invalid": 128,
+            "tile_invalid": 0
+          },
+          "online_species_rows": 128,
+          "online_tile_rows": 0,
+          "ema_tile_rows": 0,
+          "skipped_ema_rows": 128
+        },
+        "repetitions": [
+          {
+            "seconds": 0.1037876000000324,
+            "peak_allocated_mib": 257.03076171875,
+            "peak_reserved_mib": 526.0,
+            "free_mib": 6484.0,
+            "total_mib": 8187.5
+          },
+          {
+            "seconds": 0.10538239999993948,
+            "peak_allocated_mib": 257.03076171875,
+            "peak_reserved_mib": 526.0,
+            "free_mib": 6484.0,
+            "total_mib": 8187.5
+          },
+          {
+            "seconds": 0.1027528000000757,
+            "peak_allocated_mib": 257.03076171875,
+            "peak_reserved_mib": 526.0,
+            "free_mib": 6484.0,
+            "total_mib": 8187.5
+          }
+        ],
+        "transport": {
+          "preparation_seconds": 0.006867400000032831,
+          "transfer_wait_seconds": 8.76000000289423e-05,
+          "transfer_stream_seconds": 0.004749120041728019
+        },
+        "encoders": [
+          {
+            "stage": "species",
+            "network": "online",
+            "compiled_shapes": [],
+            "collection": {
+              "hits": 0,
+              "misses": 0,
+              "captures": 0,
+              "evictions": 0,
+              "retired_releases": 0,
+              "capacity_fallbacks": 0,
+              "headroom_fallbacks": 0,
+              "oom_fallbacks": 0,
+              "capture_failures": 0,
+              "capture_setup_seconds": 0.0,
+              "releases": 0,
+              "entries": 0,
+              "retired_entries": 0,
+              "resident_entries": 0,
+              "cache_entries": 8,
+              "vram_headroom_mib": 1638,
+              "last_free_mib": null
+            },
+            "fitting": {
+              "hits": 0,
+              "misses": 0,
+              "captures": 0,
+              "evictions": 0,
+              "retired_releases": 0,
+              "capacity_fallbacks": 0,
+              "headroom_fallbacks": 0,
+              "oom_fallbacks": 0,
+              "capture_failures": 0,
+              "capture_setup_seconds": 0.0,
+              "releases": 0,
+              "entries": 0,
+              "retired_entries": 0,
+              "resident_entries": 0,
+              "cache_entries": 6,
+              "vram_headroom_mib": 1024,
+              "last_free_mib": null
+            },
+            "status": "disabled",
+            "compilation_backend": null,
+            "compilation_error": null
+          },
+          {
+            "stage": "tile",
+            "network": "online",
+            "compiled_shapes": [],
+            "collection": {
+              "hits": 0,
+              "misses": 0,
+              "captures": 0,
+              "evictions": 0,
+              "retired_releases": 0,
+              "capacity_fallbacks": 0,
+              "headroom_fallbacks": 0,
+              "oom_fallbacks": 0,
+              "capture_failures": 0,
+              "capture_setup_seconds": 0.0,
+              "releases": 0,
+              "entries": 0,
+              "retired_entries": 0,
+              "resident_entries": 0,
+              "cache_entries": 8,
+              "vram_headroom_mib": 1638,
+              "last_free_mib": null
+            },
+            "fitting": {
+              "hits": 0,
+              "misses": 0,
+              "captures": 0,
+              "evictions": 0,
+              "retired_releases": 0,
+              "capacity_fallbacks": 0,
+              "headroom_fallbacks": 0,
+              "oom_fallbacks": 0,
+              "capture_failures": 0,
+              "capture_setup_seconds": 0.0,
+              "releases": 0,
+              "entries": 0,
+              "retired_entries": 0,
+              "resident_entries": 0,
+              "cache_entries": 6,
+              "vram_headroom_mib": 1024,
+              "last_free_mib": null
+            },
+            "status": "disabled",
+            "compilation_backend": null,
+            "compilation_error": null
+          },
+          {
+            "stage": "species",
+            "network": "ema",
+            "compiled_shapes": [],
+            "collection": {
+              "hits": 0,
+              "misses": 0,
+              "captures": 0,
+              "evictions": 0,
+              "retired_releases": 0,
+              "capacity_fallbacks": 0,
+              "headroom_fallbacks": 0,
+              "oom_fallbacks": 0,
+              "capture_failures": 0,
+              "capture_setup_seconds": 0.0,
+              "releases": 0,
+              "entries": 0,
+              "retired_entries": 0,
+              "resident_entries": 0,
+              "cache_entries": 8,
+              "vram_headroom_mib": 1638,
+              "last_free_mib": null
+            },
+            "fitting": {
+              "hits": 0,
+              "misses": 0,
+              "captures": 0,
+              "evictions": 0,
+              "retired_releases": 0,
+              "capacity_fallbacks": 0,
+              "headroom_fallbacks": 0,
+              "oom_fallbacks": 0,
+              "capture_failures": 0,
+              "capture_setup_seconds": 0.0,
+              "releases": 0,
+              "entries": 0,
+              "retired_entries": 0,
+              "resident_entries": 0,
+              "cache_entries": 6,
+              "vram_headroom_mib": 1024,
+              "last_free_mib": null
+            },
+            "status": "disabled",
+            "compilation_backend": null,
+            "compilation_error": null
+          },
+          {
+            "stage": "tile",
+            "network": "ema",
+            "compiled_shapes": [],
+            "collection": {
+              "hits": 0,
+              "misses": 0,
+              "captures": 0,
+              "evictions": 0,
+              "retired_releases": 0,
+              "capacity_fallbacks": 0,
+              "headroom_fallbacks": 0,
+              "oom_fallbacks": 0,
+              "capture_failures": 0,
+              "capture_setup_seconds": 0.0,
+              "releases": 0,
+              "entries": 0,
+              "retired_entries": 0,
+              "resident_entries": 0,
+              "cache_entries": 8,
+              "vram_headroom_mib": 1638,
+              "last_free_mib": null
+            },
+            "fitting": {
+              "hits": 0,
+              "misses": 0,
+              "captures": 0,
+              "evictions": 0,
+              "retired_releases": 0,
+              "capacity_fallbacks": 0,
+              "headroom_fallbacks": 0,
+              "oom_fallbacks": 0,
+              "capture_failures": 0,
+              "capture_setup_seconds": 0.0,
+              "releases": 0,
+              "entries": 0,
+              "retired_entries": 0,
+              "resident_entries": 0,
+              "cache_entries": 6,
+              "vram_headroom_mib": 1024,
+              "last_free_mib": null
+            },
+            "status": "disabled",
+            "compilation_backend": null,
+            "compilation_error": null
+          }
+        ]
+      },
+      {
+        "workload": "medium",
+        "actions": "tile_invalid",
+        "widths": [
+          64
+        ],
+        "rows": 128,
+        "passes": 4,
+        "spool_seconds": 0.0005480000000943619,
+        "cold_seconds": 0.5429617999999437,
+        "routed_workload": {
+          "routes": {
+            "wait_return": 0,
+            "accepted": 0,
+            "species_invalid": 0,
+            "tile_invalid": 128
+          },
+          "online_species_rows": 0,
+          "online_tile_rows": 128,
+          "ema_tile_rows": 0,
+          "skipped_ema_rows": 128
+        },
+        "repetitions": [
+          {
+            "seconds": 0.15289510000002338,
+            "peak_allocated_mib": 687.00732421875,
+            "peak_reserved_mib": 878.0,
+            "free_mib": 6132.0,
+            "total_mib": 8187.5
+          },
+          {
+            "seconds": 0.15305390000003172,
+            "peak_allocated_mib": 687.00732421875,
+            "peak_reserved_mib": 878.0,
+            "free_mib": 6132.0,
+            "total_mib": 8187.5
+          },
+          {
+            "seconds": 0.15357030000006944,
+            "peak_allocated_mib": 687.00732421875,
+            "peak_reserved_mib": 878.0,
+            "free_mib": 6132.0,
+            "total_mib": 8187.5
+          }
+        ],
+        "transport": {
+          "preparation_seconds": 0.007267899999988003,
+          "transfer_wait_seconds": 0.00010300000019469735,
+          "transfer_stream_seconds": 0.00423999996483326
+        },
+        "encoders": [
+          {
+            "stage": "species",
+            "network": "online",
+            "compiled_shapes": [],
+            "collection": {
+              "hits": 0,
+              "misses": 0,
+              "captures": 0,
+              "evictions": 0,
+              "retired_releases": 0,
+              "capacity_fallbacks": 0,
+              "headroom_fallbacks": 0,
+              "oom_fallbacks": 0,
+              "capture_failures": 0,
+              "capture_setup_seconds": 0.0,
+              "releases": 0,
+              "entries": 0,
+              "retired_entries": 0,
+              "resident_entries": 0,
+              "cache_entries": 8,
+              "vram_headroom_mib": 1638,
+              "last_free_mib": null
+            },
+            "fitting": {
+              "hits": 0,
+              "misses": 0,
+              "captures": 0,
+              "evictions": 0,
+              "retired_releases": 0,
+              "capacity_fallbacks": 0,
+              "headroom_fallbacks": 0,
+              "oom_fallbacks": 0,
+              "capture_failures": 0,
+              "capture_setup_seconds": 0.0,
+              "releases": 0,
+              "entries": 0,
+              "retired_entries": 0,
+              "resident_entries": 0,
+              "cache_entries": 6,
+              "vram_headroom_mib": 1024,
+              "last_free_mib": null
+            },
+            "status": "disabled",
+            "compilation_backend": null,
+            "compilation_error": null
+          },
+          {
+            "stage": "tile",
+            "network": "online",
+            "compiled_shapes": [],
+            "collection": {
+              "hits": 0,
+              "misses": 0,
+              "captures": 0,
+              "evictions": 0,
+              "retired_releases": 0,
+              "capacity_fallbacks": 0,
+              "headroom_fallbacks": 0,
+              "oom_fallbacks": 0,
+              "capture_failures": 0,
+              "capture_setup_seconds": 0.0,
+              "releases": 0,
+              "entries": 0,
+              "retired_entries": 0,
+              "resident_entries": 0,
+              "cache_entries": 8,
+              "vram_headroom_mib": 1638,
+              "last_free_mib": null
+            },
+            "fitting": {
+              "hits": 0,
+              "misses": 0,
+              "captures": 0,
+              "evictions": 0,
+              "retired_releases": 0,
+              "capacity_fallbacks": 0,
+              "headroom_fallbacks": 0,
+              "oom_fallbacks": 0,
+              "capture_failures": 0,
+              "capture_setup_seconds": 0.0,
+              "releases": 0,
+              "entries": 0,
+              "retired_entries": 0,
+              "resident_entries": 0,
+              "cache_entries": 6,
+              "vram_headroom_mib": 1024,
+              "last_free_mib": null
+            },
+            "status": "disabled",
+            "compilation_backend": null,
+            "compilation_error": null
+          },
+          {
+            "stage": "species",
+            "network": "ema",
+            "compiled_shapes": [],
+            "collection": {
+              "hits": 0,
+              "misses": 0,
+              "captures": 0,
+              "evictions": 0,
+              "retired_releases": 0,
+              "capacity_fallbacks": 0,
+              "headroom_fallbacks": 0,
+              "oom_fallbacks": 0,
+              "capture_failures": 0,
+              "capture_setup_seconds": 0.0,
+              "releases": 0,
+              "entries": 0,
+              "retired_entries": 0,
+              "resident_entries": 0,
+              "cache_entries": 8,
+              "vram_headroom_mib": 1638,
+              "last_free_mib": null
+            },
+            "fitting": {
+              "hits": 0,
+              "misses": 0,
+              "captures": 0,
+              "evictions": 0,
+              "retired_releases": 0,
+              "capacity_fallbacks": 0,
+              "headroom_fallbacks": 0,
+              "oom_fallbacks": 0,
+              "capture_failures": 0,
+              "capture_setup_seconds": 0.0,
+              "releases": 0,
+              "entries": 0,
+              "retired_entries": 0,
+              "resident_entries": 0,
+              "cache_entries": 6,
+              "vram_headroom_mib": 1024,
+              "last_free_mib": null
+            },
+            "status": "disabled",
+            "compilation_backend": null,
+            "compilation_error": null
+          },
+          {
+            "stage": "tile",
+            "network": "ema",
+            "compiled_shapes": [],
+            "collection": {
+              "hits": 0,
+              "misses": 0,
+              "captures": 0,
+              "evictions": 0,
+              "retired_releases": 0,
+              "capacity_fallbacks": 0,
+              "headroom_fallbacks": 0,
+              "oom_fallbacks": 0,
+              "capture_failures": 0,
+              "capture_setup_seconds": 0.0,
+              "releases": 0,
+              "entries": 0,
+              "retired_entries": 0,
+              "resident_entries": 0,
+              "cache_entries": 8,
+              "vram_headroom_mib": 1638,
+              "last_free_mib": null
+            },
+            "fitting": {
+              "hits": 0,
+              "misses": 0,
+              "captures": 0,
+              "evictions": 0,
+              "retired_releases": 0,
+              "capacity_fallbacks": 0,
+              "headroom_fallbacks": 0,
+              "oom_fallbacks": 0,
+              "capture_failures": 0,
+              "capture_setup_seconds": 0.0,
+              "releases": 0,
+              "entries": 0,
+              "retired_entries": 0,
+              "resident_entries": 0,
+              "cache_entries": 6,
+              "vram_headroom_mib": 1024,
+              "last_free_mib": null
+            },
+            "status": "disabled",
+            "compilation_backend": null,
+            "compilation_error": null
+          }
+        ]
+      },
+      {
+        "workload": "medium",
+        "actions": "tile",
+        "widths": [
+          64
+        ],
+        "rows": 128,
+        "passes": 4,
+        "spool_seconds": 0.000507900000002337,
+        "cold_seconds": 0.5574986999999965,
+        "routed_workload": {
+          "routes": {
+            "wait_return": 0,
+            "accepted": 128,
+            "species_invalid": 0,
+            "tile_invalid": 0
+          },
+          "online_species_rows": 128,
+          "online_tile_rows": 128,
+          "ema_tile_rows": 128,
+          "skipped_ema_rows": 0
+        },
+        "repetitions": [
+          {
+            "seconds": 0.2584835000000112,
+            "peak_allocated_mib": 876.20166015625,
+            "peak_reserved_mib": 1062.0,
+            "free_mib": 5948.0,
+            "total_mib": 8187.5
+          },
+          {
+            "seconds": 0.2580942000000732,
+            "peak_allocated_mib": 876.20166015625,
+            "peak_reserved_mib": 1062.0,
+            "free_mib": 5948.0,
+            "total_mib": 8187.5
+          },
+          {
+            "seconds": 0.25614740000003167,
+            "peak_allocated_mib": 876.20166015625,
+            "peak_reserved_mib": 1062.0,
+            "free_mib": 5948.0,
+            "total_mib": 8187.5
+          }
+        ],
+        "transport": {
+          "preparation_seconds": 0.0072015999999166525,
+          "transfer_wait_seconds": 0.00011740000002191664,
+          "transfer_stream_seconds": 0.005063967898488044
+        },
+        "encoders": [
+          {
+            "stage": "species",
+            "network": "online",
+            "compiled_shapes": [],
+            "collection": {
+              "hits": 0,
+              "misses": 0,
+              "captures": 0,
+              "evictions": 0,
+              "retired_releases": 0,
+              "capacity_fallbacks": 0,
+              "headroom_fallbacks": 0,
+              "oom_fallbacks": 0,
+              "capture_failures": 0,
+              "capture_setup_seconds": 0.0,
+              "releases": 0,
+              "entries": 0,
+              "retired_entries": 0,
+              "resident_entries": 0,
+              "cache_entries": 8,
+              "vram_headroom_mib": 1638,
+              "last_free_mib": null
+            },
+            "fitting": {
+              "hits": 0,
+              "misses": 0,
+              "captures": 0,
+              "evictions": 0,
+              "retired_releases": 0,
+              "capacity_fallbacks": 0,
+              "headroom_fallbacks": 0,
+              "oom_fallbacks": 0,
+              "capture_failures": 0,
+              "capture_setup_seconds": 0.0,
+              "releases": 0,
+              "entries": 0,
+              "retired_entries": 0,
+              "resident_entries": 0,
+              "cache_entries": 6,
+              "vram_headroom_mib": 1024,
+              "last_free_mib": null
+            },
+            "status": "disabled",
+            "compilation_backend": null,
+            "compilation_error": null
+          },
+          {
+            "stage": "tile",
+            "network": "online",
+            "compiled_shapes": [],
+            "collection": {
+              "hits": 0,
+              "misses": 0,
+              "captures": 0,
+              "evictions": 0,
+              "retired_releases": 0,
+              "capacity_fallbacks": 0,
+              "headroom_fallbacks": 0,
+              "oom_fallbacks": 0,
+              "capture_failures": 0,
+              "capture_setup_seconds": 0.0,
+              "releases": 0,
+              "entries": 0,
+              "retired_entries": 0,
+              "resident_entries": 0,
+              "cache_entries": 8,
+              "vram_headroom_mib": 1638,
+              "last_free_mib": null
+            },
+            "fitting": {
+              "hits": 0,
+              "misses": 0,
+              "captures": 0,
+              "evictions": 0,
+              "retired_releases": 0,
+              "capacity_fallbacks": 0,
+              "headroom_fallbacks": 0,
+              "oom_fallbacks": 0,
+              "capture_failures": 0,
+              "capture_setup_seconds": 0.0,
+              "releases": 0,
+              "entries": 0,
+              "retired_entries": 0,
+              "resident_entries": 0,
+              "cache_entries": 6,
+              "vram_headroom_mib": 1024,
+              "last_free_mib": null
+            },
+            "status": "disabled",
+            "compilation_backend": null,
+            "compilation_error": null
+          },
+          {
+            "stage": "species",
+            "network": "ema",
+            "compiled_shapes": [],
+            "collection": {
+              "hits": 0,
+              "misses": 0,
+              "captures": 0,
+              "evictions": 0,
+              "retired_releases": 0,
+              "capacity_fallbacks": 0,
+              "headroom_fallbacks": 0,
+              "oom_fallbacks": 0,
+              "capture_failures": 0,
+              "capture_setup_seconds": 0.0,
+              "releases": 0,
+              "entries": 0,
+              "retired_entries": 0,
+              "resident_entries": 0,
+              "cache_entries": 8,
+              "vram_headroom_mib": 1638,
+              "last_free_mib": null
+            },
+            "fitting": {
+              "hits": 0,
+              "misses": 0,
+              "captures": 0,
+              "evictions": 0,
+              "retired_releases": 0,
+              "capacity_fallbacks": 0,
+              "headroom_fallbacks": 0,
+              "oom_fallbacks": 0,
+              "capture_failures": 0,
+              "capture_setup_seconds": 0.0,
+              "releases": 0,
+              "entries": 0,
+              "retired_entries": 0,
+              "resident_entries": 0,
+              "cache_entries": 6,
+              "vram_headroom_mib": 1024,
+              "last_free_mib": null
+            },
+            "status": "disabled",
+            "compilation_backend": null,
+            "compilation_error": null
+          },
+          {
+            "stage": "tile",
+            "network": "ema",
+            "compiled_shapes": [],
+            "collection": {
+              "hits": 0,
+              "misses": 0,
+              "captures": 0,
+              "evictions": 0,
+              "retired_releases": 0,
+              "capacity_fallbacks": 0,
+              "headroom_fallbacks": 0,
+              "oom_fallbacks": 0,
+              "capture_failures": 0,
+              "capture_setup_seconds": 0.0,
+              "releases": 0,
+              "entries": 0,
+              "retired_entries": 0,
+              "resident_entries": 0,
+              "cache_entries": 8,
+              "vram_headroom_mib": 1638,
+              "last_free_mib": null
+            },
+            "fitting": {
+              "hits": 0,
+              "misses": 0,
+              "captures": 0,
+              "evictions": 0,
+              "retired_releases": 0,
+              "capacity_fallbacks": 0,
+              "headroom_fallbacks": 0,
+              "oom_fallbacks": 0,
+              "capture_failures": 0,
+              "capture_setup_seconds": 0.0,
+              "releases": 0,
+              "entries": 0,
+              "retired_entries": 0,
+              "resident_entries": 0,
+              "cache_entries": 6,
+              "vram_headroom_mib": 1024,
+              "last_free_mib": null
+            },
+            "status": "disabled",
+            "compilation_backend": null,
+            "compilation_error": null
+          }
+        ]
+      },
+      {
+        "workload": "medium",
+        "actions": "rejected_heavy",
+        "widths": [
+          64
+        ],
+        "rows": 128,
+        "passes": 4,
+        "spool_seconds": 0.0005098999999972875,
+        "cold_seconds": 0.5241500000000769,
+        "routed_workload": {
+          "routes": {
+            "wait_return": 0,
+            "accepted": 25,
+            "species_invalid": 52,
+            "tile_invalid": 51
+          },
+          "online_species_rows": 77,
+          "online_tile_rows": 76,
+          "ema_tile_rows": 25,
+          "skipped_ema_rows": 103
+        },
+        "repetitions": [
+          {
+            "seconds": 0.2712387999999919,
+            "peak_allocated_mib": 350.7705078125,
+            "peak_reserved_mib": 1068.0,
+            "free_mib": 5942.0,
+            "total_mib": 8187.5
+          },
+          {
+            "seconds": 0.2683428999999933,
+            "peak_allocated_mib": 350.7705078125,
+            "peak_reserved_mib": 1068.0,
+            "free_mib": 5942.0,
+            "total_mib": 8187.5
+          },
+          {
+            "seconds": 0.27266980000001695,
+            "peak_allocated_mib": 350.7705078125,
+            "peak_reserved_mib": 1068.0,
+            "free_mib": 5942.0,
+            "total_mib": 8187.5
+          }
+        ],
+        "transport": {
+          "preparation_seconds": 0.013139800000317337,
+          "transfer_wait_seconds": 0.0002406999992672354,
+          "transfer_stream_seconds": 0.013225727990269663
+        },
+        "encoders": [
+          {
+            "stage": "species",
+            "network": "online",
+            "compiled_shapes": [],
+            "collection": {
+              "hits": 0,
+              "misses": 0,
+              "captures": 0,
+              "evictions": 0,
+              "retired_releases": 0,
+              "capacity_fallbacks": 0,
+              "headroom_fallbacks": 0,
+              "oom_fallbacks": 0,
+              "capture_failures": 0,
+              "capture_setup_seconds": 0.0,
+              "releases": 0,
+              "entries": 0,
+              "retired_entries": 0,
+              "resident_entries": 0,
+              "cache_entries": 8,
+              "vram_headroom_mib": 1638,
+              "last_free_mib": null
+            },
+            "fitting": {
+              "hits": 0,
+              "misses": 0,
+              "captures": 0,
+              "evictions": 0,
+              "retired_releases": 0,
+              "capacity_fallbacks": 0,
+              "headroom_fallbacks": 0,
+              "oom_fallbacks": 0,
+              "capture_failures": 0,
+              "capture_setup_seconds": 0.0,
+              "releases": 0,
+              "entries": 0,
+              "retired_entries": 0,
+              "resident_entries": 0,
+              "cache_entries": 6,
+              "vram_headroom_mib": 1024,
+              "last_free_mib": null
+            },
+            "status": "disabled",
+            "compilation_backend": null,
+            "compilation_error": null
+          },
+          {
+            "stage": "tile",
+            "network": "online",
+            "compiled_shapes": [],
+            "collection": {
+              "hits": 0,
+              "misses": 0,
+              "captures": 0,
+              "evictions": 0,
+              "retired_releases": 0,
+              "capacity_fallbacks": 0,
+              "headroom_fallbacks": 0,
+              "oom_fallbacks": 0,
+              "capture_failures": 0,
+              "capture_setup_seconds": 0.0,
+              "releases": 0,
+              "entries": 0,
+              "retired_entries": 0,
+              "resident_entries": 0,
+              "cache_entries": 8,
+              "vram_headroom_mib": 1638,
+              "last_free_mib": null
+            },
+            "fitting": {
+              "hits": 0,
+              "misses": 0,
+              "captures": 0,
+              "evictions": 0,
+              "retired_releases": 0,
+              "capacity_fallbacks": 0,
+              "headroom_fallbacks": 0,
+              "oom_fallbacks": 0,
+              "capture_failures": 0,
+              "capture_setup_seconds": 0.0,
+              "releases": 0,
+              "entries": 0,
+              "retired_entries": 0,
+              "resident_entries": 0,
+              "cache_entries": 6,
+              "vram_headroom_mib": 1024,
+              "last_free_mib": null
+            },
+            "status": "disabled",
+            "compilation_backend": null,
+            "compilation_error": null
+          },
+          {
+            "stage": "species",
+            "network": "ema",
+            "compiled_shapes": [],
+            "collection": {
+              "hits": 0,
+              "misses": 0,
+              "captures": 0,
+              "evictions": 0,
+              "retired_releases": 0,
+              "capacity_fallbacks": 0,
+              "headroom_fallbacks": 0,
+              "oom_fallbacks": 0,
+              "capture_failures": 0,
+              "capture_setup_seconds": 0.0,
+              "releases": 0,
+              "entries": 0,
+              "retired_entries": 0,
+              "resident_entries": 0,
+              "cache_entries": 8,
+              "vram_headroom_mib": 1638,
+              "last_free_mib": null
+            },
+            "fitting": {
+              "hits": 0,
+              "misses": 0,
+              "captures": 0,
+              "evictions": 0,
+              "retired_releases": 0,
+              "capacity_fallbacks": 0,
+              "headroom_fallbacks": 0,
+              "oom_fallbacks": 0,
+              "capture_failures": 0,
+              "capture_setup_seconds": 0.0,
+              "releases": 0,
+              "entries": 0,
+              "retired_entries": 0,
+              "resident_entries": 0,
+              "cache_entries": 6,
+              "vram_headroom_mib": 1024,
+              "last_free_mib": null
+            },
+            "status": "disabled",
+            "compilation_backend": null,
+            "compilation_error": null
+          },
+          {
+            "stage": "tile",
+            "network": "ema",
+            "compiled_shapes": [],
+            "collection": {
+              "hits": 0,
+              "misses": 0,
+              "captures": 0,
+              "evictions": 0,
+              "retired_releases": 0,
+              "capacity_fallbacks": 0,
+              "headroom_fallbacks": 0,
+              "oom_fallbacks": 0,
+              "capture_failures": 0,
+              "capture_setup_seconds": 0.0,
+              "releases": 0,
+              "entries": 0,
+              "retired_entries": 0,
+              "resident_entries": 0,
+              "cache_entries": 8,
+              "vram_headroom_mib": 1638,
+              "last_free_mib": null
+            },
+            "fitting": {
+              "hits": 0,
+              "misses": 0,
+              "captures": 0,
+              "evictions": 0,
+              "retired_releases": 0,
+              "capacity_fallbacks": 0,
+              "headroom_fallbacks": 0,
+              "oom_fallbacks": 0,
+              "capture_failures": 0,
+              "capture_setup_seconds": 0.0,
+              "releases": 0,
+              "entries": 0,
+              "retired_entries": 0,
+              "resident_entries": 0,
+              "cache_entries": 6,
+              "vram_headroom_mib": 1024,
+              "last_free_mib": null
+            },
+            "status": "disabled",
+            "compilation_backend": null,
+            "compilation_error": null
+          }
+        ]
+      },
+      {
+        "workload": "dense",
+        "actions": "species_invalid",
+        "widths": [
+          256
+        ],
+        "rows": 128,
+        "passes": 4,
+        "spool_seconds": 0.0015253999999913503,
+        "cold_seconds": 0.46125180000001365,
+        "routed_workload": {
+          "routes": {
+            "wait_return": 0,
+            "accepted": 0,
+            "species_invalid": 128,
+            "tile_invalid": 0
+          },
+          "online_species_rows": 128,
+          "online_tile_rows": 0,
+          "ema_tile_rows": 0,
+          "skipped_ema_rows": 128
+        },
+        "repetitions": [
+          {
+            "seconds": 0.2130551000000196,
+            "peak_allocated_mib": 721.78076171875,
+            "peak_reserved_mib": 1268.0,
+            "free_mib": 5742.0,
+            "total_mib": 8187.5
+          },
+          {
+            "seconds": 0.21317049999993287,
+            "peak_allocated_mib": 721.78076171875,
+            "peak_reserved_mib": 1348.0,
+            "free_mib": 5662.0,
+            "total_mib": 8187.5
+          },
+          {
+            "seconds": 0.2139551999999867,
+            "peak_allocated_mib": 721.78076171875,
+            "peak_reserved_mib": 1428.0,
+            "free_mib": 5582.0,
+            "total_mib": 8187.5
+          }
+        ],
+        "transport": {
+          "preparation_seconds": 0.019541000000117492,
+          "transfer_wait_seconds": 9.579999948527984e-05,
+          "transfer_stream_seconds": 0.018259040117263793
+        },
+        "encoders": [
+          {
+            "stage": "species",
+            "network": "online",
+            "compiled_shapes": [],
+            "collection": {
+              "hits": 0,
+              "misses": 0,
+              "captures": 0,
+              "evictions": 0,
+              "retired_releases": 0,
+              "capacity_fallbacks": 0,
+              "headroom_fallbacks": 0,
+              "oom_fallbacks": 0,
+              "capture_failures": 0,
+              "capture_setup_seconds": 0.0,
+              "releases": 0,
+              "entries": 0,
+              "retired_entries": 0,
+              "resident_entries": 0,
+              "cache_entries": 8,
+              "vram_headroom_mib": 1638,
+              "last_free_mib": null
+            },
+            "fitting": {
+              "hits": 0,
+              "misses": 0,
+              "captures": 0,
+              "evictions": 0,
+              "retired_releases": 0,
+              "capacity_fallbacks": 0,
+              "headroom_fallbacks": 0,
+              "oom_fallbacks": 0,
+              "capture_failures": 0,
+              "capture_setup_seconds": 0.0,
+              "releases": 0,
+              "entries": 0,
+              "retired_entries": 0,
+              "resident_entries": 0,
+              "cache_entries": 6,
+              "vram_headroom_mib": 1024,
+              "last_free_mib": null
+            },
+            "status": "disabled",
+            "compilation_backend": null,
+            "compilation_error": null
+          },
+          {
+            "stage": "tile",
+            "network": "online",
+            "compiled_shapes": [],
+            "collection": {
+              "hits": 0,
+              "misses": 0,
+              "captures": 0,
+              "evictions": 0,
+              "retired_releases": 0,
+              "capacity_fallbacks": 0,
+              "headroom_fallbacks": 0,
+              "oom_fallbacks": 0,
+              "capture_failures": 0,
+              "capture_setup_seconds": 0.0,
+              "releases": 0,
+              "entries": 0,
+              "retired_entries": 0,
+              "resident_entries": 0,
+              "cache_entries": 8,
+              "vram_headroom_mib": 1638,
+              "last_free_mib": null
+            },
+            "fitting": {
+              "hits": 0,
+              "misses": 0,
+              "captures": 0,
+              "evictions": 0,
+              "retired_releases": 0,
+              "capacity_fallbacks": 0,
+              "headroom_fallbacks": 0,
+              "oom_fallbacks": 0,
+              "capture_failures": 0,
+              "capture_setup_seconds": 0.0,
+              "releases": 0,
+              "entries": 0,
+              "retired_entries": 0,
+              "resident_entries": 0,
+              "cache_entries": 6,
+              "vram_headroom_mib": 1024,
+              "last_free_mib": null
+            },
+            "status": "disabled",
+            "compilation_backend": null,
+            "compilation_error": null
+          },
+          {
+            "stage": "species",
+            "network": "ema",
+            "compiled_shapes": [],
+            "collection": {
+              "hits": 0,
+              "misses": 0,
+              "captures": 0,
+              "evictions": 0,
+              "retired_releases": 0,
+              "capacity_fallbacks": 0,
+              "headroom_fallbacks": 0,
+              "oom_fallbacks": 0,
+              "capture_failures": 0,
+              "capture_setup_seconds": 0.0,
+              "releases": 0,
+              "entries": 0,
+              "retired_entries": 0,
+              "resident_entries": 0,
+              "cache_entries": 8,
+              "vram_headroom_mib": 1638,
+              "last_free_mib": null
+            },
+            "fitting": {
+              "hits": 0,
+              "misses": 0,
+              "captures": 0,
+              "evictions": 0,
+              "retired_releases": 0,
+              "capacity_fallbacks": 0,
+              "headroom_fallbacks": 0,
+              "oom_fallbacks": 0,
+              "capture_failures": 0,
+              "capture_setup_seconds": 0.0,
+              "releases": 0,
+              "entries": 0,
+              "retired_entries": 0,
+              "resident_entries": 0,
+              "cache_entries": 6,
+              "vram_headroom_mib": 1024,
+              "last_free_mib": null
+            },
+            "status": "disabled",
+            "compilation_backend": null,
+            "compilation_error": null
+          },
+          {
+            "stage": "tile",
+            "network": "ema",
+            "compiled_shapes": [],
+            "collection": {
+              "hits": 0,
+              "misses": 0,
+              "captures": 0,
+              "evictions": 0,
+              "retired_releases": 0,
+              "capacity_fallbacks": 0,
+              "headroom_fallbacks": 0,
+              "oom_fallbacks": 0,
+              "capture_failures": 0,
+              "capture_setup_seconds": 0.0,
+              "releases": 0,
+              "entries": 0,
+              "retired_entries": 0,
+              "resident_entries": 0,
+              "cache_entries": 8,
+              "vram_headroom_mib": 1638,
+              "last_free_mib": null
+            },
+            "fitting": {
+              "hits": 0,
+              "misses": 0,
+              "captures": 0,
+              "evictions": 0,
+              "retired_releases": 0,
+              "capacity_fallbacks": 0,
+              "headroom_fallbacks": 0,
+              "oom_fallbacks": 0,
+              "capture_failures": 0,
+              "capture_setup_seconds": 0.0,
+              "releases": 0,
+              "entries": 0,
+              "retired_entries": 0,
+              "resident_entries": 0,
+              "cache_entries": 6,
+              "vram_headroom_mib": 1024,
+              "last_free_mib": null
+            },
+            "status": "disabled",
+            "compilation_backend": null,
+            "compilation_error": null
+          }
+        ]
+      },
+      {
+        "workload": "dense",
+        "actions": "tile_invalid",
+        "widths": [
+          256
+        ],
+        "rows": 128,
+        "passes": 4,
+        "spool_seconds": 0.0015214999999670908,
+        "cold_seconds": 0.7672663999999259,
+        "routed_workload": {
+          "routes": {
+            "wait_return": 0,
+            "accepted": 0,
+            "species_invalid": 0,
+            "tile_invalid": 128
+          },
+          "online_species_rows": 0,
+          "online_tile_rows": 128,
+          "ema_tile_rows": 0,
+          "skipped_ema_rows": 128
+        },
+        "repetitions": [
+          {
+            "seconds": 0.47523339999997916,
+            "peak_allocated_mib": 1691.52099609375,
+            "peak_reserved_mib": 2438.0,
+            "free_mib": 4572.0,
+            "total_mib": 8187.5
+          },
+          {
+            "seconds": 0.47341980000010153,
+            "peak_allocated_mib": 1691.52099609375,
+            "peak_reserved_mib": 2518.0,
+            "free_mib": 4492.0,
+            "total_mib": 8187.5
+          },
+          {
+            "seconds": 0.47385399999996025,
+            "peak_allocated_mib": 1691.52099609375,
+            "peak_reserved_mib": 2598.0,
+            "free_mib": 4412.0,
+            "total_mib": 8187.5
+          }
+        ],
+        "transport": {
+          "preparation_seconds": 0.02011880000020483,
+          "transfer_wait_seconds": 0.00011419999975714745,
+          "transfer_stream_seconds": 0.0182061762213707
+        },
+        "encoders": [
+          {
+            "stage": "species",
+            "network": "online",
+            "compiled_shapes": [],
+            "collection": {
+              "hits": 0,
+              "misses": 0,
+              "captures": 0,
+              "evictions": 0,
+              "retired_releases": 0,
+              "capacity_fallbacks": 0,
+              "headroom_fallbacks": 0,
+              "oom_fallbacks": 0,
+              "capture_failures": 0,
+              "capture_setup_seconds": 0.0,
+              "releases": 0,
+              "entries": 0,
+              "retired_entries": 0,
+              "resident_entries": 0,
+              "cache_entries": 8,
+              "vram_headroom_mib": 1638,
+              "last_free_mib": null
+            },
+            "fitting": {
+              "hits": 0,
+              "misses": 0,
+              "captures": 0,
+              "evictions": 0,
+              "retired_releases": 0,
+              "capacity_fallbacks": 0,
+              "headroom_fallbacks": 0,
+              "oom_fallbacks": 0,
+              "capture_failures": 0,
+              "capture_setup_seconds": 0.0,
+              "releases": 0,
+              "entries": 0,
+              "retired_entries": 0,
+              "resident_entries": 0,
+              "cache_entries": 6,
+              "vram_headroom_mib": 1024,
+              "last_free_mib": null
+            },
+            "status": "disabled",
+            "compilation_backend": null,
+            "compilation_error": null
+          },
+          {
+            "stage": "tile",
+            "network": "online",
+            "compiled_shapes": [],
+            "collection": {
+              "hits": 0,
+              "misses": 0,
+              "captures": 0,
+              "evictions": 0,
+              "retired_releases": 0,
+              "capacity_fallbacks": 0,
+              "headroom_fallbacks": 0,
+              "oom_fallbacks": 0,
+              "capture_failures": 0,
+              "capture_setup_seconds": 0.0,
+              "releases": 0,
+              "entries": 0,
+              "retired_entries": 0,
+              "resident_entries": 0,
+              "cache_entries": 8,
+              "vram_headroom_mib": 1638,
+              "last_free_mib": null
+            },
+            "fitting": {
+              "hits": 0,
+              "misses": 0,
+              "captures": 0,
+              "evictions": 0,
+              "retired_releases": 0,
+              "capacity_fallbacks": 0,
+              "headroom_fallbacks": 0,
+              "oom_fallbacks": 0,
+              "capture_failures": 0,
+              "capture_setup_seconds": 0.0,
+              "releases": 0,
+              "entries": 0,
+              "retired_entries": 0,
+              "resident_entries": 0,
+              "cache_entries": 6,
+              "vram_headroom_mib": 1024,
+              "last_free_mib": null
+            },
+            "status": "disabled",
+            "compilation_backend": null,
+            "compilation_error": null
+          },
+          {
+            "stage": "species",
+            "network": "ema",
+            "compiled_shapes": [],
+            "collection": {
+              "hits": 0,
+              "misses": 0,
+              "captures": 0,
+              "evictions": 0,
+              "retired_releases": 0,
+              "capacity_fallbacks": 0,
+              "headroom_fallbacks": 0,
+              "oom_fallbacks": 0,
+              "capture_failures": 0,
+              "capture_setup_seconds": 0.0,
+              "releases": 0,
+              "entries": 0,
+              "retired_entries": 0,
+              "resident_entries": 0,
+              "cache_entries": 8,
+              "vram_headroom_mib": 1638,
+              "last_free_mib": null
+            },
+            "fitting": {
+              "hits": 0,
+              "misses": 0,
+              "captures": 0,
+              "evictions": 0,
+              "retired_releases": 0,
+              "capacity_fallbacks": 0,
+              "headroom_fallbacks": 0,
+              "oom_fallbacks": 0,
+              "capture_failures": 0,
+              "capture_setup_seconds": 0.0,
+              "releases": 0,
+              "entries": 0,
+              "retired_entries": 0,
+              "resident_entries": 0,
+              "cache_entries": 6,
+              "vram_headroom_mib": 1024,
+              "last_free_mib": null
+            },
+            "status": "disabled",
+            "compilation_backend": null,
+            "compilation_error": null
+          },
+          {
+            "stage": "tile",
+            "network": "ema",
+            "compiled_shapes": [],
+            "collection": {
+              "hits": 0,
+              "misses": 0,
+              "captures": 0,
+              "evictions": 0,
+              "retired_releases": 0,
+              "capacity_fallbacks": 0,
+              "headroom_fallbacks": 0,
+              "oom_fallbacks": 0,
+              "capture_failures": 0,
+              "capture_setup_seconds": 0.0,
+              "releases": 0,
+              "entries": 0,
+              "retired_entries": 0,
+              "resident_entries": 0,
+              "cache_entries": 8,
+              "vram_headroom_mib": 1638,
+              "last_free_mib": null
+            },
+            "fitting": {
+              "hits": 0,
+              "misses": 0,
+              "captures": 0,
+              "evictions": 0,
+              "retired_releases": 0,
+              "capacity_fallbacks": 0,
+              "headroom_fallbacks": 0,
+              "oom_fallbacks": 0,
+              "capture_failures": 0,
+              "capture_setup_seconds": 0.0,
+              "releases": 0,
+              "entries": 0,
+              "retired_entries": 0,
+              "resident_entries": 0,
+              "cache_entries": 6,
+              "vram_headroom_mib": 1024,
+              "last_free_mib": null
+            },
+            "status": "disabled",
+            "compilation_backend": null,
+            "compilation_error": null
+          }
+        ]
+      },
+      {
+        "workload": "dense",
+        "actions": "tile",
+        "widths": [
+          256
+        ],
+        "rows": 128,
+        "passes": 4,
+        "spool_seconds": 0.0014983000000938773,
+        "cold_seconds": 1.0286013000001049,
+        "routed_workload": {
+          "routes": {
+            "wait_return": 0,
+            "accepted": 128,
+            "species_invalid": 0,
+            "tile_invalid": 0
+          },
+          "online_species_rows": 128,
+          "online_tile_rows": 128,
+          "ema_tile_rows": 128,
+          "skipped_ema_rows": 0
+        },
+        "repetitions": [
+          {
+            "seconds": 0.7450941999999259,
+            "peak_allocated_mib": 2376.728515625,
+            "peak_reserved_mib": 3264.0,
+            "free_mib": 3746.0,
+            "total_mib": 8187.5
+          },
+          {
+            "seconds": 0.7427174999999124,
+            "peak_allocated_mib": 2376.728515625,
+            "peak_reserved_mib": 3264.0,
+            "free_mib": 3746.0,
+            "total_mib": 8187.5
+          },
+          {
+            "seconds": 0.7425422999999682,
+            "peak_allocated_mib": 2376.728515625,
+            "peak_reserved_mib": 3264.0,
+            "free_mib": 3746.0,
+            "total_mib": 8187.5
+          }
+        ],
+        "transport": {
+          "preparation_seconds": 0.020457200000009834,
+          "transfer_wait_seconds": 0.00011639999968338088,
+          "transfer_stream_seconds": 0.0033629439920187
+        },
+        "encoders": [
+          {
+            "stage": "species",
+            "network": "online",
+            "compiled_shapes": [],
+            "collection": {
+              "hits": 0,
+              "misses": 0,
+              "captures": 0,
+              "evictions": 0,
+              "retired_releases": 0,
+              "capacity_fallbacks": 0,
+              "headroom_fallbacks": 0,
+              "oom_fallbacks": 0,
+              "capture_failures": 0,
+              "capture_setup_seconds": 0.0,
+              "releases": 0,
+              "entries": 0,
+              "retired_entries": 0,
+              "resident_entries": 0,
+              "cache_entries": 8,
+              "vram_headroom_mib": 1638,
+              "last_free_mib": null
+            },
+            "fitting": {
+              "hits": 0,
+              "misses": 0,
+              "captures": 0,
+              "evictions": 0,
+              "retired_releases": 0,
+              "capacity_fallbacks": 0,
+              "headroom_fallbacks": 0,
+              "oom_fallbacks": 0,
+              "capture_failures": 0,
+              "capture_setup_seconds": 0.0,
+              "releases": 0,
+              "entries": 0,
+              "retired_entries": 0,
+              "resident_entries": 0,
+              "cache_entries": 6,
+              "vram_headroom_mib": 1024,
+              "last_free_mib": null
+            },
+            "status": "disabled",
+            "compilation_backend": null,
+            "compilation_error": null
+          },
+          {
+            "stage": "tile",
+            "network": "online",
+            "compiled_shapes": [],
+            "collection": {
+              "hits": 0,
+              "misses": 0,
+              "captures": 0,
+              "evictions": 0,
+              "retired_releases": 0,
+              "capacity_fallbacks": 0,
+              "headroom_fallbacks": 0,
+              "oom_fallbacks": 0,
+              "capture_failures": 0,
+              "capture_setup_seconds": 0.0,
+              "releases": 0,
+              "entries": 0,
+              "retired_entries": 0,
+              "resident_entries": 0,
+              "cache_entries": 8,
+              "vram_headroom_mib": 1638,
+              "last_free_mib": null
+            },
+            "fitting": {
+              "hits": 0,
+              "misses": 0,
+              "captures": 0,
+              "evictions": 0,
+              "retired_releases": 0,
+              "capacity_fallbacks": 0,
+              "headroom_fallbacks": 0,
+              "oom_fallbacks": 0,
+              "capture_failures": 0,
+              "capture_setup_seconds": 0.0,
+              "releases": 0,
+              "entries": 0,
+              "retired_entries": 0,
+              "resident_entries": 0,
+              "cache_entries": 6,
+              "vram_headroom_mib": 1024,
+              "last_free_mib": null
+            },
+            "status": "disabled",
+            "compilation_backend": null,
+            "compilation_error": null
+          },
+          {
+            "stage": "species",
+            "network": "ema",
+            "compiled_shapes": [],
+            "collection": {
+              "hits": 0,
+              "misses": 0,
+              "captures": 0,
+              "evictions": 0,
+              "retired_releases": 0,
+              "capacity_fallbacks": 0,
+              "headroom_fallbacks": 0,
+              "oom_fallbacks": 0,
+              "capture_failures": 0,
+              "capture_setup_seconds": 0.0,
+              "releases": 0,
+              "entries": 0,
+              "retired_entries": 0,
+              "resident_entries": 0,
+              "cache_entries": 8,
+              "vram_headroom_mib": 1638,
+              "last_free_mib": null
+            },
+            "fitting": {
+              "hits": 0,
+              "misses": 0,
+              "captures": 0,
+              "evictions": 0,
+              "retired_releases": 0,
+              "capacity_fallbacks": 0,
+              "headroom_fallbacks": 0,
+              "oom_fallbacks": 0,
+              "capture_failures": 0,
+              "capture_setup_seconds": 0.0,
+              "releases": 0,
+              "entries": 0,
+              "retired_entries": 0,
+              "resident_entries": 0,
+              "cache_entries": 6,
+              "vram_headroom_mib": 1024,
+              "last_free_mib": null
+            },
+            "status": "disabled",
+            "compilation_backend": null,
+            "compilation_error": null
+          },
+          {
+            "stage": "tile",
+            "network": "ema",
+            "compiled_shapes": [],
+            "collection": {
+              "hits": 0,
+              "misses": 0,
+              "captures": 0,
+              "evictions": 0,
+              "retired_releases": 0,
+              "capacity_fallbacks": 0,
+              "headroom_fallbacks": 0,
+              "oom_fallbacks": 0,
+              "capture_failures": 0,
+              "capture_setup_seconds": 0.0,
+              "releases": 0,
+              "entries": 0,
+              "retired_entries": 0,
+              "resident_entries": 0,
+              "cache_entries": 8,
+              "vram_headroom_mib": 1638,
+              "last_free_mib": null
+            },
+            "fitting": {
+              "hits": 0,
+              "misses": 0,
+              "captures": 0,
+              "evictions": 0,
+              "retired_releases": 0,
+              "capacity_fallbacks": 0,
+              "headroom_fallbacks": 0,
+              "oom_fallbacks": 0,
+              "capture_failures": 0,
+              "capture_setup_seconds": 0.0,
+              "releases": 0,
+              "entries": 0,
+              "retired_entries": 0,
+              "resident_entries": 0,
+              "cache_entries": 6,
+              "vram_headroom_mib": 1024,
+              "last_free_mib": null
+            },
+            "status": "disabled",
+            "compilation_backend": null,
+            "compilation_error": null
+          }
+        ]
+      },
+      {
+        "workload": "dense",
+        "actions": "rejected_heavy",
+        "widths": [
+          256
+        ],
+        "rows": 128,
+        "passes": 4,
+        "spool_seconds": 0.0016475999999556734,
+        "cold_seconds": 0.65720680000004,
+        "routed_workload": {
+          "routes": {
+            "wait_return": 0,
+            "accepted": 25,
+            "species_invalid": 52,
+            "tile_invalid": 51
+          },
+          "online_species_rows": 77,
+          "online_tile_rows": 76,
+          "ema_tile_rows": 25,
+          "skipped_ema_rows": 103
+        },
+        "repetitions": [
+          {
+            "seconds": 0.4414242999999942,
+            "peak_allocated_mib": 788.38427734375,
+            "peak_reserved_mib": 3264.0,
+            "free_mib": 3746.0,
+            "total_mib": 8187.5
+          },
+          {
+            "seconds": 0.4437169000000267,
+            "peak_allocated_mib": 788.38427734375,
+            "peak_reserved_mib": 3264.0,
+            "free_mib": 3746.0,
+            "total_mib": 8187.5
+          },
+          {
+            "seconds": 0.4410036999998965,
+            "peak_allocated_mib": 788.38427734375,
+            "peak_reserved_mib": 3264.0,
+            "free_mib": 3746.0,
+            "total_mib": 8187.5
+          }
+        ],
+        "transport": {
+          "preparation_seconds": 0.023896199999626333,
+          "transfer_wait_seconds": 0.0002734999997073828,
+          "transfer_stream_seconds": 0.0059792959541082385
+        },
+        "encoders": [
+          {
+            "stage": "species",
+            "network": "online",
+            "compiled_shapes": [],
+            "collection": {
+              "hits": 0,
+              "misses": 0,
+              "captures": 0,
+              "evictions": 0,
+              "retired_releases": 0,
+              "capacity_fallbacks": 0,
+              "headroom_fallbacks": 0,
+              "oom_fallbacks": 0,
+              "capture_failures": 0,
+              "capture_setup_seconds": 0.0,
+              "releases": 0,
+              "entries": 0,
+              "retired_entries": 0,
+              "resident_entries": 0,
+              "cache_entries": 8,
+              "vram_headroom_mib": 1638,
+              "last_free_mib": null
+            },
+            "fitting": {
+              "hits": 0,
+              "misses": 0,
+              "captures": 0,
+              "evictions": 0,
+              "retired_releases": 0,
+              "capacity_fallbacks": 0,
+              "headroom_fallbacks": 0,
+              "oom_fallbacks": 0,
+              "capture_failures": 0,
+              "capture_setup_seconds": 0.0,
+              "releases": 0,
+              "entries": 0,
+              "retired_entries": 0,
+              "resident_entries": 0,
+              "cache_entries": 6,
+              "vram_headroom_mib": 1024,
+              "last_free_mib": null
+            },
+            "status": "disabled",
+            "compilation_backend": null,
+            "compilation_error": null
+          },
+          {
+            "stage": "tile",
+            "network": "online",
+            "compiled_shapes": [],
+            "collection": {
+              "hits": 0,
+              "misses": 0,
+              "captures": 0,
+              "evictions": 0,
+              "retired_releases": 0,
+              "capacity_fallbacks": 0,
+              "headroom_fallbacks": 0,
+              "oom_fallbacks": 0,
+              "capture_failures": 0,
+              "capture_setup_seconds": 0.0,
+              "releases": 0,
+              "entries": 0,
+              "retired_entries": 0,
+              "resident_entries": 0,
+              "cache_entries": 8,
+              "vram_headroom_mib": 1638,
+              "last_free_mib": null
+            },
+            "fitting": {
+              "hits": 0,
+              "misses": 0,
+              "captures": 0,
+              "evictions": 0,
+              "retired_releases": 0,
+              "capacity_fallbacks": 0,
+              "headroom_fallbacks": 0,
+              "oom_fallbacks": 0,
+              "capture_failures": 0,
+              "capture_setup_seconds": 0.0,
+              "releases": 0,
+              "entries": 0,
+              "retired_entries": 0,
+              "resident_entries": 0,
+              "cache_entries": 6,
+              "vram_headroom_mib": 1024,
+              "last_free_mib": null
+            },
+            "status": "disabled",
+            "compilation_backend": null,
+            "compilation_error": null
+          },
+          {
+            "stage": "species",
+            "network": "ema",
+            "compiled_shapes": [],
+            "collection": {
+              "hits": 0,
+              "misses": 0,
+              "captures": 0,
+              "evictions": 0,
+              "retired_releases": 0,
+              "capacity_fallbacks": 0,
+              "headroom_fallbacks": 0,
+              "oom_fallbacks": 0,
+              "capture_failures": 0,
+              "capture_setup_seconds": 0.0,
+              "releases": 0,
+              "entries": 0,
+              "retired_entries": 0,
+              "resident_entries": 0,
+              "cache_entries": 8,
+              "vram_headroom_mib": 1638,
+              "last_free_mib": null
+            },
+            "fitting": {
+              "hits": 0,
+              "misses": 0,
+              "captures": 0,
+              "evictions": 0,
+              "retired_releases": 0,
+              "capacity_fallbacks": 0,
+              "headroom_fallbacks": 0,
+              "oom_fallbacks": 0,
+              "capture_failures": 0,
+              "capture_setup_seconds": 0.0,
+              "releases": 0,
+              "entries": 0,
+              "retired_entries": 0,
+              "resident_entries": 0,
+              "cache_entries": 6,
+              "vram_headroom_mib": 1024,
+              "last_free_mib": null
+            },
+            "status": "disabled",
+            "compilation_backend": null,
+            "compilation_error": null
+          },
+          {
+            "stage": "tile",
+            "network": "ema",
+            "compiled_shapes": [],
+            "collection": {
+              "hits": 0,
+              "misses": 0,
+              "captures": 0,
+              "evictions": 0,
+              "retired_releases": 0,
+              "capacity_fallbacks": 0,
+              "headroom_fallbacks": 0,
+              "oom_fallbacks": 0,
+              "capture_failures": 0,
+              "capture_setup_seconds": 0.0,
+              "releases": 0,
+              "entries": 0,
+              "retired_entries": 0,
+              "resident_entries": 0,
+              "cache_entries": 8,
+              "vram_headroom_mib": 1638,
+              "last_free_mib": null
+            },
+            "fitting": {
+              "hits": 0,
+              "misses": 0,
+              "captures": 0,
+              "evictions": 0,
+              "retired_releases": 0,
+              "capacity_fallbacks": 0,
+              "headroom_fallbacks": 0,
+              "oom_fallbacks": 0,
+              "capture_failures": 0,
+              "capture_setup_seconds": 0.0,
+              "releases": 0,
+              "entries": 0,
+              "retired_entries": 0,
+              "resident_entries": 0,
+              "cache_entries": 6,
+              "vram_headroom_mib": 1024,
+              "last_free_mib": null
+            },
+            "status": "disabled",
+            "compilation_backend": null,
+            "compilation_error": null
+          }
+        ]
+      }
+    ]
+  },
+  "execution_candidates": [
+    {
+      "device": "NVIDIA GeForce RTX 4070 Laptop GPU",
+      "torch": "2.8.0+cu128",
+      "complete": true,
+      "measurements": [
+        {
+          "workload": "medium",
+          "actions": "tile",
+          "widths": [
+            64
+          ],
+          "rows": 128,
+          "passes": 4,
+          "spool_seconds": 0.0005075999999917258,
+          "cold_seconds": 0.6474580000000287,
+          "routed_workload": {
+            "routes": {
+              "wait_return": 0,
+              "accepted": 128,
+              "species_invalid": 0,
+              "tile_invalid": 0
+            },
+            "online_species_rows": 128,
+            "online_tile_rows": 128,
+            "ema_tile_rows": 128,
+            "skipped_ema_rows": 0
+          },
+          "repetitions": [
+            {
+              "seconds": 0.4132417999999234,
+              "peak_allocated_mib": 859.5126953125,
+              "peak_reserved_mib": 914.0,
+              "free_mib": 6096.0,
+              "total_mib": 8187.5
+            },
+            {
+              "seconds": 0.42002370000000155,
+              "peak_allocated_mib": 859.5126953125,
+              "peak_reserved_mib": 922.0,
+              "free_mib": 6088.0,
+              "total_mib": 8187.5
+            },
+            {
+              "seconds": 0.41647980000004736,
+              "peak_allocated_mib": 859.5126953125,
+              "peak_reserved_mib": 930.0,
+              "free_mib": 6080.0,
+              "total_mib": 8187.5
+            }
+          ],
+          "transport": {
+            "preparation_seconds": 0.007030500000155371,
+            "transfer_wait_seconds": 0.00010660000020834559,
+            "transfer_stream_seconds": 0.01209574407339096
+          },
+          "encoders": [
+            {
+              "stage": "species",
+              "network": "online",
+              "compiled_shapes": [],
+              "collection": {
+                "hits": 0,
+                "misses": 0,
+                "captures": 0,
+                "evictions": 0,
+                "retired_releases": 0,
+                "capacity_fallbacks": 0,
+                "headroom_fallbacks": 0,
+                "oom_fallbacks": 0,
+                "capture_failures": 0,
+                "capture_setup_seconds": 0.0,
+                "releases": 0,
+                "entries": 0,
+                "retired_entries": 0,
+                "resident_entries": 0,
+                "cache_entries": 8,
+                "vram_headroom_mib": 1638,
+                "last_free_mib": null
+              },
+              "fitting": {
+                "hits": 0,
+                "misses": 0,
+                "captures": 0,
+                "evictions": 0,
+                "retired_releases": 0,
+                "capacity_fallbacks": 0,
+                "headroom_fallbacks": 0,
+                "oom_fallbacks": 0,
+                "capture_failures": 0,
+                "capture_setup_seconds": 0.0,
+                "releases": 0,
+                "entries": 0,
+                "retired_entries": 0,
+                "resident_entries": 0,
+                "cache_entries": 6,
+                "vram_headroom_mib": 1024,
+                "last_free_mib": null
+              },
+              "status": "disabled",
+              "compilation_backend": null,
+              "compilation_error": null
+            },
+            {
+              "stage": "tile",
+              "network": "online",
+              "compiled_shapes": [],
+              "collection": {
+                "hits": 0,
+                "misses": 0,
+                "captures": 0,
+                "evictions": 0,
+                "retired_releases": 0,
+                "capacity_fallbacks": 0,
+                "headroom_fallbacks": 0,
+                "oom_fallbacks": 0,
+                "capture_failures": 0,
+                "capture_setup_seconds": 0.0,
+                "releases": 0,
+                "entries": 0,
+                "retired_entries": 0,
+                "resident_entries": 0,
+                "cache_entries": 8,
+                "vram_headroom_mib": 1638,
+                "last_free_mib": null
+              },
+              "fitting": {
+                "hits": 0,
+                "misses": 0,
+                "captures": 0,
+                "evictions": 0,
+                "retired_releases": 0,
+                "capacity_fallbacks": 0,
+                "headroom_fallbacks": 0,
+                "oom_fallbacks": 0,
+                "capture_failures": 0,
+                "capture_setup_seconds": 0.0,
+                "releases": 0,
+                "entries": 0,
+                "retired_entries": 0,
+                "resident_entries": 0,
+                "cache_entries": 6,
+                "vram_headroom_mib": 1024,
+                "last_free_mib": null
+              },
+              "status": "disabled",
+              "compilation_backend": null,
+              "compilation_error": null
+            },
+            {
+              "stage": "species",
+              "network": "ema",
+              "compiled_shapes": [],
+              "collection": {
+                "hits": 0,
+                "misses": 0,
+                "captures": 0,
+                "evictions": 0,
+                "retired_releases": 0,
+                "capacity_fallbacks": 0,
+                "headroom_fallbacks": 0,
+                "oom_fallbacks": 0,
+                "capture_failures": 0,
+                "capture_setup_seconds": 0.0,
+                "releases": 0,
+                "entries": 0,
+                "retired_entries": 0,
+                "resident_entries": 0,
+                "cache_entries": 8,
+                "vram_headroom_mib": 1638,
+                "last_free_mib": null
+              },
+              "fitting": {
+                "hits": 0,
+                "misses": 0,
+                "captures": 0,
+                "evictions": 0,
+                "retired_releases": 0,
+                "capacity_fallbacks": 0,
+                "headroom_fallbacks": 0,
+                "oom_fallbacks": 0,
+                "capture_failures": 0,
+                "capture_setup_seconds": 0.0,
+                "releases": 0,
+                "entries": 0,
+                "retired_entries": 0,
+                "resident_entries": 0,
+                "cache_entries": 6,
+                "vram_headroom_mib": 1024,
+                "last_free_mib": null
+              },
+              "status": "disabled",
+              "compilation_backend": null,
+              "compilation_error": null
+            },
+            {
+              "stage": "tile",
+              "network": "ema",
+              "compiled_shapes": [],
+              "collection": {
+                "hits": 0,
+                "misses": 0,
+                "captures": 0,
+                "evictions": 0,
+                "retired_releases": 0,
+                "capacity_fallbacks": 0,
+                "headroom_fallbacks": 0,
+                "oom_fallbacks": 0,
+                "capture_failures": 0,
+                "capture_setup_seconds": 0.0,
+                "releases": 0,
+                "entries": 0,
+                "retired_entries": 0,
+                "resident_entries": 0,
+                "cache_entries": 8,
+                "vram_headroom_mib": 1638,
+                "last_free_mib": null
+              },
+              "fitting": {
+                "hits": 0,
+                "misses": 0,
+                "captures": 0,
+                "evictions": 0,
+                "retired_releases": 0,
+                "capacity_fallbacks": 0,
+                "headroom_fallbacks": 0,
+                "oom_fallbacks": 0,
+                "capture_failures": 0,
+                "capture_setup_seconds": 0.0,
+                "releases": 0,
+                "entries": 0,
+                "retired_entries": 0,
+                "resident_entries": 0,
+                "cache_entries": 6,
+                "vram_headroom_mib": 1024,
+                "last_free_mib": null
+              },
+              "status": "disabled",
+              "compilation_backend": null,
+              "compilation_error": null
+            }
+          ]
+        },
+        {
+          "workload": "dense",
+          "actions": "tile",
+          "widths": [
+            256
+          ],
+          "rows": 128,
+          "passes": 4,
+          "spool_seconds": 0.0014160999999148771,
+          "cold_seconds": 1.1580964999999424,
+          "routed_workload": {
+            "routes": {
+              "wait_return": 0,
+              "accepted": 128,
+              "species_invalid": 0,
+              "tile_invalid": 0
+            },
+            "online_species_rows": 128,
+            "online_tile_rows": 128,
+            "ema_tile_rows": 128,
+            "skipped_ema_rows": 0
+          },
+          "repetitions": [
+            {
+              "seconds": 0.7491786000000502,
+              "peak_allocated_mib": 2348.138671875,
+              "peak_reserved_mib": 2710.0,
+              "free_mib": 4300.0,
+              "total_mib": 8187.5
+            },
+            {
+              "seconds": 0.7385485999999446,
+              "peak_allocated_mib": 2348.138671875,
+              "peak_reserved_mib": 2798.0,
+              "free_mib": 4212.0,
+              "total_mib": 8187.5
+            },
+            {
+              "seconds": 0.7426421999999775,
+              "peak_allocated_mib": 2348.138671875,
+              "peak_reserved_mib": 2886.0,
+              "free_mib": 4124.0,
+              "total_mib": 8187.5
+            }
+          ],
+          "transport": {
+            "preparation_seconds": 0.020522500000197397,
+            "transfer_wait_seconds": 0.00011999999981071596,
+            "transfer_stream_seconds": 0.020465952038764952
+          },
+          "encoders": [
+            {
+              "stage": "species",
+              "network": "online",
+              "compiled_shapes": [],
+              "collection": {
+                "hits": 0,
+                "misses": 0,
+                "captures": 0,
+                "evictions": 0,
+                "retired_releases": 0,
+                "capacity_fallbacks": 0,
+                "headroom_fallbacks": 0,
+                "oom_fallbacks": 0,
+                "capture_failures": 0,
+                "capture_setup_seconds": 0.0,
+                "releases": 0,
+                "entries": 0,
+                "retired_entries": 0,
+                "resident_entries": 0,
+                "cache_entries": 8,
+                "vram_headroom_mib": 1638,
+                "last_free_mib": null
+              },
+              "fitting": {
+                "hits": 0,
+                "misses": 0,
+                "captures": 0,
+                "evictions": 0,
+                "retired_releases": 0,
+                "capacity_fallbacks": 0,
+                "headroom_fallbacks": 0,
+                "oom_fallbacks": 0,
+                "capture_failures": 0,
+                "capture_setup_seconds": 0.0,
+                "releases": 0,
+                "entries": 0,
+                "retired_entries": 0,
+                "resident_entries": 0,
+                "cache_entries": 6,
+                "vram_headroom_mib": 1024,
+                "last_free_mib": null
+              },
+              "status": "disabled",
+              "compilation_backend": null,
+              "compilation_error": null
+            },
+            {
+              "stage": "tile",
+              "network": "online",
+              "compiled_shapes": [],
+              "collection": {
+                "hits": 0,
+                "misses": 0,
+                "captures": 0,
+                "evictions": 0,
+                "retired_releases": 0,
+                "capacity_fallbacks": 0,
+                "headroom_fallbacks": 0,
+                "oom_fallbacks": 0,
+                "capture_failures": 0,
+                "capture_setup_seconds": 0.0,
+                "releases": 0,
+                "entries": 0,
+                "retired_entries": 0,
+                "resident_entries": 0,
+                "cache_entries": 8,
+                "vram_headroom_mib": 1638,
+                "last_free_mib": null
+              },
+              "fitting": {
+                "hits": 0,
+                "misses": 0,
+                "captures": 0,
+                "evictions": 0,
+                "retired_releases": 0,
+                "capacity_fallbacks": 0,
+                "headroom_fallbacks": 0,
+                "oom_fallbacks": 0,
+                "capture_failures": 0,
+                "capture_setup_seconds": 0.0,
+                "releases": 0,
+                "entries": 0,
+                "retired_entries": 0,
+                "resident_entries": 0,
+                "cache_entries": 6,
+                "vram_headroom_mib": 1024,
+                "last_free_mib": null
+              },
+              "status": "disabled",
+              "compilation_backend": null,
+              "compilation_error": null
+            },
+            {
+              "stage": "species",
+              "network": "ema",
+              "compiled_shapes": [],
+              "collection": {
+                "hits": 0,
+                "misses": 0,
+                "captures": 0,
+                "evictions": 0,
+                "retired_releases": 0,
+                "capacity_fallbacks": 0,
+                "headroom_fallbacks": 0,
+                "oom_fallbacks": 0,
+                "capture_failures": 0,
+                "capture_setup_seconds": 0.0,
+                "releases": 0,
+                "entries": 0,
+                "retired_entries": 0,
+                "resident_entries": 0,
+                "cache_entries": 8,
+                "vram_headroom_mib": 1638,
+                "last_free_mib": null
+              },
+              "fitting": {
+                "hits": 0,
+                "misses": 0,
+                "captures": 0,
+                "evictions": 0,
+                "retired_releases": 0,
+                "capacity_fallbacks": 0,
+                "headroom_fallbacks": 0,
+                "oom_fallbacks": 0,
+                "capture_failures": 0,
+                "capture_setup_seconds": 0.0,
+                "releases": 0,
+                "entries": 0,
+                "retired_entries": 0,
+                "resident_entries": 0,
+                "cache_entries": 6,
+                "vram_headroom_mib": 1024,
+                "last_free_mib": null
+              },
+              "status": "disabled",
+              "compilation_backend": null,
+              "compilation_error": null
+            },
+            {
+              "stage": "tile",
+              "network": "ema",
+              "compiled_shapes": [],
+              "collection": {
+                "hits": 0,
+                "misses": 0,
+                "captures": 0,
+                "evictions": 0,
+                "retired_releases": 0,
+                "capacity_fallbacks": 0,
+                "headroom_fallbacks": 0,
+                "oom_fallbacks": 0,
+                "capture_failures": 0,
+                "capture_setup_seconds": 0.0,
+                "releases": 0,
+                "entries": 0,
+                "retired_entries": 0,
+                "resident_entries": 0,
+                "cache_entries": 8,
+                "vram_headroom_mib": 1638,
+                "last_free_mib": null
+              },
+              "fitting": {
+                "hits": 0,
+                "misses": 0,
+                "captures": 0,
+                "evictions": 0,
+                "retired_releases": 0,
+                "capacity_fallbacks": 0,
+                "headroom_fallbacks": 0,
+                "oom_fallbacks": 0,
+                "capture_failures": 0,
+                "capture_setup_seconds": 0.0,
+                "releases": 0,
+                "entries": 0,
+                "retired_entries": 0,
+                "resident_entries": 0,
+                "cache_entries": 6,
+                "vram_headroom_mib": 1024,
+                "last_free_mib": null
+              },
+              "status": "disabled",
+              "compilation_backend": null,
+              "compilation_error": null
+            }
+          ]
+        }
+      ],
+      "execution_settings": {
+        "torch_threads": 2,
+        "compile_kernels": false,
+        "telemetry": true,
+        "fit_precision": "bf16_master",
+        "prefetch": true,
+        "fit_batch_groups": 2,
+        "fit_encoder_microbatch": 192,
+        "fit_species_microbatch": 32,
+        "fit_tile_microbatch": 32,
+        "fit_entity_buckets": [
+          8,
+          16,
+          32,
+          64,
+          128,
+          256
+        ],
+        "fit_token_budget": 8192,
+        "collection_graph_cache_entries": 8,
+        "collection_vram_headroom_mib": 1638
+      }
+    },
+    {
+      "device": "NVIDIA GeForce RTX 4070 Laptop GPU",
+      "torch": "2.8.0+cu128",
+      "complete": true,
+      "measurements": [
+        {
+          "workload": "medium",
+          "actions": "tile",
+          "widths": [
+            64
+          ],
+          "rows": 128,
+          "passes": 4,
+          "spool_seconds": 0.0005102999999735403,
+          "cold_seconds": 0.5863825000000134,
+          "routed_workload": {
+            "routes": {
+              "wait_return": 0,
+              "accepted": 128,
+              "species_invalid": 0,
+              "tile_invalid": 0
+            },
+            "online_species_rows": 128,
+            "online_tile_rows": 128,
+            "ema_tile_rows": 128,
+            "skipped_ema_rows": 0
+          },
+          "repetitions": [
+            {
+              "seconds": 0.24229590000004464,
+              "peak_allocated_mib": 907.46630859375,
+              "peak_reserved_mib": 1138.0,
+              "free_mib": 5872.0,
+              "total_mib": 8187.5
+            },
+            {
+              "seconds": 0.2396748999999545,
+              "peak_allocated_mib": 907.46630859375,
+              "peak_reserved_mib": 1148.0,
+              "free_mib": 5862.0,
+              "total_mib": 8187.5
+            },
+            {
+              "seconds": 0.2397783999999774,
+              "peak_allocated_mib": 907.46630859375,
+              "peak_reserved_mib": 1156.0,
+              "free_mib": 5854.0,
+              "total_mib": 8187.5
+            }
+          ],
+          "transport": {
+            "preparation_seconds": 0.007707100000061473,
+            "transfer_wait_seconds": 0.00011429999960910209,
+            "transfer_stream_seconds": 0.011242911964654921
+          },
+          "encoders": [
+            {
+              "stage": "species",
+              "network": "online",
+              "compiled_shapes": [],
+              "collection": {
+                "hits": 0,
+                "misses": 0,
+                "captures": 0,
+                "evictions": 0,
+                "retired_releases": 0,
+                "capacity_fallbacks": 0,
+                "headroom_fallbacks": 0,
+                "oom_fallbacks": 0,
+                "capture_failures": 0,
+                "capture_setup_seconds": 0.0,
+                "releases": 0,
+                "entries": 0,
+                "retired_entries": 0,
+                "resident_entries": 0,
+                "cache_entries": 8,
+                "vram_headroom_mib": 1638,
+                "last_free_mib": null
+              },
+              "fitting": {
+                "hits": 0,
+                "misses": 0,
+                "captures": 0,
+                "evictions": 0,
+                "retired_releases": 0,
+                "capacity_fallbacks": 0,
+                "headroom_fallbacks": 0,
+                "oom_fallbacks": 0,
+                "capture_failures": 0,
+                "capture_setup_seconds": 0.0,
+                "releases": 0,
+                "entries": 0,
+                "retired_entries": 0,
+                "resident_entries": 0,
+                "cache_entries": 6,
+                "vram_headroom_mib": 1024,
+                "last_free_mib": null
+              },
+              "status": "disabled",
+              "compilation_backend": null,
+              "compilation_error": null
+            },
+            {
+              "stage": "tile",
+              "network": "online",
+              "compiled_shapes": [],
+              "collection": {
+                "hits": 0,
+                "misses": 0,
+                "captures": 0,
+                "evictions": 0,
+                "retired_releases": 0,
+                "capacity_fallbacks": 0,
+                "headroom_fallbacks": 0,
+                "oom_fallbacks": 0,
+                "capture_failures": 0,
+                "capture_setup_seconds": 0.0,
+                "releases": 0,
+                "entries": 0,
+                "retired_entries": 0,
+                "resident_entries": 0,
+                "cache_entries": 8,
+                "vram_headroom_mib": 1638,
+                "last_free_mib": null
+              },
+              "fitting": {
+                "hits": 0,
+                "misses": 0,
+                "captures": 0,
+                "evictions": 0,
+                "retired_releases": 0,
+                "capacity_fallbacks": 0,
+                "headroom_fallbacks": 0,
+                "oom_fallbacks": 0,
+                "capture_failures": 0,
+                "capture_setup_seconds": 0.0,
+                "releases": 0,
+                "entries": 0,
+                "retired_entries": 0,
+                "resident_entries": 0,
+                "cache_entries": 6,
+                "vram_headroom_mib": 1024,
+                "last_free_mib": null
+              },
+              "status": "disabled",
+              "compilation_backend": null,
+              "compilation_error": null
+            },
+            {
+              "stage": "species",
+              "network": "ema",
+              "compiled_shapes": [],
+              "collection": {
+                "hits": 0,
+                "misses": 0,
+                "captures": 0,
+                "evictions": 0,
+                "retired_releases": 0,
+                "capacity_fallbacks": 0,
+                "headroom_fallbacks": 0,
+                "oom_fallbacks": 0,
+                "capture_failures": 0,
+                "capture_setup_seconds": 0.0,
+                "releases": 0,
+                "entries": 0,
+                "retired_entries": 0,
+                "resident_entries": 0,
+                "cache_entries": 8,
+                "vram_headroom_mib": 1638,
+                "last_free_mib": null
+              },
+              "fitting": {
+                "hits": 0,
+                "misses": 0,
+                "captures": 0,
+                "evictions": 0,
+                "retired_releases": 0,
+                "capacity_fallbacks": 0,
+                "headroom_fallbacks": 0,
+                "oom_fallbacks": 0,
+                "capture_failures": 0,
+                "capture_setup_seconds": 0.0,
+                "releases": 0,
+                "entries": 0,
+                "retired_entries": 0,
+                "resident_entries": 0,
+                "cache_entries": 6,
+                "vram_headroom_mib": 1024,
+                "last_free_mib": null
+              },
+              "status": "disabled",
+              "compilation_backend": null,
+              "compilation_error": null
+            },
+            {
+              "stage": "tile",
+              "network": "ema",
+              "compiled_shapes": [],
+              "collection": {
+                "hits": 0,
+                "misses": 0,
+                "captures": 0,
+                "evictions": 0,
+                "retired_releases": 0,
+                "capacity_fallbacks": 0,
+                "headroom_fallbacks": 0,
+                "oom_fallbacks": 0,
+                "capture_failures": 0,
+                "capture_setup_seconds": 0.0,
+                "releases": 0,
+                "entries": 0,
+                "retired_entries": 0,
+                "resident_entries": 0,
+                "cache_entries": 8,
+                "vram_headroom_mib": 1638,
+                "last_free_mib": null
+              },
+              "fitting": {
+                "hits": 0,
+                "misses": 0,
+                "captures": 0,
+                "evictions": 0,
+                "retired_releases": 0,
+                "capacity_fallbacks": 0,
+                "headroom_fallbacks": 0,
+                "oom_fallbacks": 0,
+                "capture_failures": 0,
+                "capture_setup_seconds": 0.0,
+                "releases": 0,
+                "entries": 0,
+                "retired_entries": 0,
+                "resident_entries": 0,
+                "cache_entries": 6,
+                "vram_headroom_mib": 1024,
+                "last_free_mib": null
+              },
+              "status": "disabled",
+              "compilation_backend": null,
+              "compilation_error": null
+            }
+          ]
+        },
+        {
+          "workload": "dense",
+          "actions": "tile",
+          "widths": [
+            256
+          ],
+          "rows": 128,
+          "passes": 4,
+          "spool_seconds": 0.0014016000000083295,
+          "cold_seconds": 1.185397299999977,
+          "routed_workload": {
+            "routes": {
+              "wait_return": 0,
+              "accepted": 128,
+              "species_invalid": 0,
+              "tile_invalid": 0
+            },
+            "online_species_rows": 128,
+            "online_tile_rows": 128,
+            "ema_tile_rows": 128,
+            "skipped_ema_rows": 0
+          },
+          "repetitions": [
+            {
+              "seconds": 0.8460428999999294,
+              "peak_allocated_mib": 2471.44873046875,
+              "peak_reserved_mib": 2990.0,
+              "free_mib": 4020.0,
+              "total_mib": 8187.5
+            },
+            {
+              "seconds": 0.8494955999999547,
+              "peak_allocated_mib": 2471.44873046875,
+              "peak_reserved_mib": 3078.0,
+              "free_mib": 3932.0,
+              "total_mib": 8187.5
+            },
+            {
+              "seconds": 0.8460383999999976,
+              "peak_allocated_mib": 2471.44873046875,
+              "peak_reserved_mib": 3166.0,
+              "free_mib": 3844.0,
+              "total_mib": 8187.5
+            }
+          ],
+          "transport": {
+            "preparation_seconds": 0.02076440000007551,
+            "transfer_wait_seconds": 0.00011249999988649506,
+            "transfer_stream_seconds": 0.020074368178844455
+          },
+          "encoders": [
+            {
+              "stage": "species",
+              "network": "online",
+              "compiled_shapes": [],
+              "collection": {
+                "hits": 0,
+                "misses": 0,
+                "captures": 0,
+                "evictions": 0,
+                "retired_releases": 0,
+                "capacity_fallbacks": 0,
+                "headroom_fallbacks": 0,
+                "oom_fallbacks": 0,
+                "capture_failures": 0,
+                "capture_setup_seconds": 0.0,
+                "releases": 0,
+                "entries": 0,
+                "retired_entries": 0,
+                "resident_entries": 0,
+                "cache_entries": 8,
+                "vram_headroom_mib": 1638,
+                "last_free_mib": null
+              },
+              "fitting": {
+                "hits": 0,
+                "misses": 0,
+                "captures": 0,
+                "evictions": 0,
+                "retired_releases": 0,
+                "capacity_fallbacks": 0,
+                "headroom_fallbacks": 0,
+                "oom_fallbacks": 0,
+                "capture_failures": 0,
+                "capture_setup_seconds": 0.0,
+                "releases": 0,
+                "entries": 0,
+                "retired_entries": 0,
+                "resident_entries": 0,
+                "cache_entries": 6,
+                "vram_headroom_mib": 1024,
+                "last_free_mib": null
+              },
+              "status": "disabled",
+              "compilation_backend": null,
+              "compilation_error": null
+            },
+            {
+              "stage": "tile",
+              "network": "online",
+              "compiled_shapes": [],
+              "collection": {
+                "hits": 0,
+                "misses": 0,
+                "captures": 0,
+                "evictions": 0,
+                "retired_releases": 0,
+                "capacity_fallbacks": 0,
+                "headroom_fallbacks": 0,
+                "oom_fallbacks": 0,
+                "capture_failures": 0,
+                "capture_setup_seconds": 0.0,
+                "releases": 0,
+                "entries": 0,
+                "retired_entries": 0,
+                "resident_entries": 0,
+                "cache_entries": 8,
+                "vram_headroom_mib": 1638,
+                "last_free_mib": null
+              },
+              "fitting": {
+                "hits": 0,
+                "misses": 0,
+                "captures": 0,
+                "evictions": 0,
+                "retired_releases": 0,
+                "capacity_fallbacks": 0,
+                "headroom_fallbacks": 0,
+                "oom_fallbacks": 0,
+                "capture_failures": 0,
+                "capture_setup_seconds": 0.0,
+                "releases": 0,
+                "entries": 0,
+                "retired_entries": 0,
+                "resident_entries": 0,
+                "cache_entries": 6,
+                "vram_headroom_mib": 1024,
+                "last_free_mib": null
+              },
+              "status": "disabled",
+              "compilation_backend": null,
+              "compilation_error": null
+            },
+            {
+              "stage": "species",
+              "network": "ema",
+              "compiled_shapes": [],
+              "collection": {
+                "hits": 0,
+                "misses": 0,
+                "captures": 0,
+                "evictions": 0,
+                "retired_releases": 0,
+                "capacity_fallbacks": 0,
+                "headroom_fallbacks": 0,
+                "oom_fallbacks": 0,
+                "capture_failures": 0,
+                "capture_setup_seconds": 0.0,
+                "releases": 0,
+                "entries": 0,
+                "retired_entries": 0,
+                "resident_entries": 0,
+                "cache_entries": 8,
+                "vram_headroom_mib": 1638,
+                "last_free_mib": null
+              },
+              "fitting": {
+                "hits": 0,
+                "misses": 0,
+                "captures": 0,
+                "evictions": 0,
+                "retired_releases": 0,
+                "capacity_fallbacks": 0,
+                "headroom_fallbacks": 0,
+                "oom_fallbacks": 0,
+                "capture_failures": 0,
+                "capture_setup_seconds": 0.0,
+                "releases": 0,
+                "entries": 0,
+                "retired_entries": 0,
+                "resident_entries": 0,
+                "cache_entries": 6,
+                "vram_headroom_mib": 1024,
+                "last_free_mib": null
+              },
+              "status": "disabled",
+              "compilation_backend": null,
+              "compilation_error": null
+            },
+            {
+              "stage": "tile",
+              "network": "ema",
+              "compiled_shapes": [],
+              "collection": {
+                "hits": 0,
+                "misses": 0,
+                "captures": 0,
+                "evictions": 0,
+                "retired_releases": 0,
+                "capacity_fallbacks": 0,
+                "headroom_fallbacks": 0,
+                "oom_fallbacks": 0,
+                "capture_failures": 0,
+                "capture_setup_seconds": 0.0,
+                "releases": 0,
+                "entries": 0,
+                "retired_entries": 0,
+                "resident_entries": 0,
+                "cache_entries": 8,
+                "vram_headroom_mib": 1638,
+                "last_free_mib": null
+              },
+              "fitting": {
+                "hits": 0,
+                "misses": 0,
+                "captures": 0,
+                "evictions": 0,
+                "retired_releases": 0,
+                "capacity_fallbacks": 0,
+                "headroom_fallbacks": 0,
+                "oom_fallbacks": 0,
+                "capture_failures": 0,
+                "capture_setup_seconds": 0.0,
+                "releases": 0,
+                "entries": 0,
+                "retired_entries": 0,
+                "resident_entries": 0,
+                "cache_entries": 6,
+                "vram_headroom_mib": 1024,
+                "last_free_mib": null
+              },
+              "status": "disabled",
+              "compilation_backend": null,
+              "compilation_error": null
+            }
+          ]
+        }
+      ],
+      "execution_settings": {
+        "torch_threads": 2,
+        "compile_kernels": false,
+        "telemetry": true,
+        "fit_precision": "bf16_master",
+        "prefetch": true,
+        "fit_batch_groups": 2,
+        "fit_encoder_microbatch": 192,
+        "fit_species_microbatch": 128,
+        "fit_tile_microbatch": 128,
+        "fit_entity_buckets": [
+          8,
+          16,
+          32,
+          64,
+          128,
+          256
+        ],
+        "fit_token_budget": 32768,
+        "collection_graph_cache_entries": 8,
+        "collection_vram_headroom_mib": 1638
+      }
+    }
+  ],
+  "fit_profile": [
+    {
+      "name": "cudaLaunchKernel",
+      "calls": 2572,
+      "self_cpu_ms": 18.734700000000196,
+      "device_ms": 0.0
+    },
+    {
+      "name": "aten::copy_",
+      "calls": 1066,
+      "self_cpu_ms": 3.852299999999699,
+      "device_ms": 3.37545100000008
+    },
+    {
+      "name": "aten::addmm",
+      "calls": 148,
+      "self_cpu_ms": 3.0669999999999917,
+      "device_ms": 3.5122909999999803
+    },
+    {
+      "name": "aten::mm",
+      "calls": 179,
+      "self_cpu_ms": 2.908400000000067,
+      "device_ms": 3.3604510000000265
+    },
+    {
+      "name": "aten::empty",
+      "calls": 1109,
+      "self_cpu_ms": 2.4787000000001624,
+      "device_ms": 0.0
+    },
+    {
+      "name": "aten::empty_strided",
+      "calls": 883,
+      "self_cpu_ms": 2.251000000000182,
+      "device_ms": 0.0
+    },
+    {
+      "name": "aten::_to_copy",
+      "calls": 726,
+      "self_cpu_ms": 2.2105000000000206,
+      "device_ms": 2.2055150000000867
+    },
+    {
+      "name": "cudaMemcpyAsync",
+      "calls": 198,
+      "self_cpu_ms": 1.7847999999999429,
+      "device_ms": 0.0
+    },
+    {
+      "name": "aten::fill_",
+      "calls": 525,
+      "self_cpu_ms": 1.5028999999998778,
+      "device_ms": 1.2227579999997915
+    },
+    {
+      "name": "Activity Buffer Request",
+      "calls": 1,
+      "self_cpu_ms": 1.3493000000000002,
+      "device_ms": 0.0021760000000003855
+    },
+    {
+      "name": "aten::where",
+      "calls": 122,
+      "self_cpu_ms": 1.1311000000000258,
+      "device_ms": 0.2904479999999885
+    },
+    {
+      "name": "aten::add",
+      "calls": 172,
+      "self_cpu_ms": 1.1297999999998973,
+      "device_ms": 0.4294370000000372
+    },
+    {
+      "name": "aten::add_",
+      "calls": 290,
+      "self_cpu_ms": 1.127900000000136,
+      "device_ms": 0.7576880000000128
+    },
+    {
+      "name": "aten::view",
+      "calls": 884,
+      "self_cpu_ms": 1.1253999999999866,
+      "device_ms": 0.0
+    },
+    {
+      "name": "aten::transpose",
+      "calls": 1012,
+      "self_cpu_ms": 1.0433999999998622,
+      "device_ms": 0.0
+    },
+    {
+      "name": "aten::sum",
+      "calls": 105,
+      "self_cpu_ms": 1.030799999999992,
+      "device_ms": 0.8430550000000913
+    },
+    {
+      "name": "cuLaunchKernel",
+      "calls": 120,
+      "self_cpu_ms": 1.0202999999998783,
+      "device_ms": 0.0
+    },
+    {
+      "name": "aten::slice",
+      "calls": 553,
+      "self_cpu_ms": 0.9802000000001599,
+      "device_ms": 0.0
+    },
+    {
+      "name": "autograd::engine::evaluate_function: AddmmBackward0",
+      "calls": 93,
+      "self_cpu_ms": 0.8836999999999171,
+      "device_ms": 4.155671000000147
+    },
+    {
+      "name": "aten::as_strided",
+      "calls": 2274,
+      "self_cpu_ms": 0.8820999999998121,
+      "device_ms": 0.0
+    },
+    {
+      "name": "aten::t",
+      "calls": 516,
+      "self_cpu_ms": 0.8576000000001559,
+      "device_ms": 0.0
+    },
+    {
+      "name": "autograd::engine::evaluate_function: ToCopyBackward0",
+      "calls": 203,
+      "self_cpu_ms": 0.8530000000001164,
+      "device_ms": 0.823919000000038
+    },
+    {
+      "name": "aten::native_layer_norm",
+      "calls": 76,
+      "self_cpu_ms": 0.8237999999999638,
+      "device_ms": 1.327300999999984
+    },
+    {
+      "name": "aten::to",
+      "calls": 837,
+      "self_cpu_ms": 0.6930999999999103,
+      "device_ms": 2.2055150000000867
+    },
+    {
+      "name": "autograd::engine::evaluate_function: SliceBackward0",
+      "calls": 137,
+      "self_cpu_ms": 0.6159999999998108,
+      "device_ms": 1.3744669999998804
+    },
+    {
+      "name": "aten::linear",
+      "calls": 150,
+      "self_cpu_ms": 0.5889999999999272,
+      "device_ms": 3.5950419999999803
+    },
+    {
+      "name": "autograd::engine::evaluate_function: ViewBackward0",
+      "calls": 209,
+      "self_cpu_ms": 0.5441999999998952,
+      "device_ms": 0.0
+    },
+    {
+      "name": "aten::slice_backward",
+      "calls": 137,
+      "self_cpu_ms": 0.5230000000000727,
+      "device_ms": 1.142309999999845
+    },
+    {
+      "name": "aten::reshape",
+      "calls": 468,
+      "self_cpu_ms": 0.518900000000305,
+      "device_ms": 0.010592000000000552
+    },
+    {
+      "name": "aten::zero_",
+      "calls": 385,
+      "self_cpu_ms": 0.5138000000000166,
+      "device_ms": 1.0288159999998197
+    }
+  ],
+  "attention_operators": [
+    {
+      "name": "aten::scaled_dot_product_attention",
+      "calls": 32
+    },
+    {
+      "name": "aten::_scaled_dot_product_efficient_attention",
+      "calls": 32
+    },
+    {
+      "name": "aten::_efficient_attention_forward",
+      "calls": 32
+    },
+    {
+      "name": "aten::_scaled_dot_product_efficient_attention_backward",
+      "calls": 20
+    },
+    {
+      "name": "aten::_efficient_attention_backward",
+      "calls": 20
+    }
+  ],
+  "fit_sync_operators": [
+    {
+      "name": "cudaStreamSynchronize",
+      "calls": 6,
+      "self_cpu_ms": 0.020499999999985447
+    },
+    {
+      "name": "aten::_local_scalar_dense",
+      "calls": 3,
+      "self_cpu_ms": 0.0010999999999985449
+    },
+    {
+      "name": "cudaDeviceSynchronize",
+      "calls": 2,
+      "self_cpu_ms": 0.0195
+    }
+  ],
+  "compaction": [
+    {
+      "seconds": 0.008818300000029922,
+      "raw_rows": 12800,
+      "selected_rows": 128,
+      "raw_invalid_rows": 12800,
+      "retained_invalid_rows": 128,
+      "invalid_runs": 128,
+      "invalid_windows": 128,
+      "invalid_reduction": 0.99
+    },
+    {
+      "seconds": 0.0931421999999884,
+      "raw_rows": 128000,
+      "selected_rows": 1280,
+      "raw_invalid_rows": 128000,
+      "retained_invalid_rows": 1280,
+      "invalid_runs": 128,
+      "invalid_windows": 1280,
+      "invalid_reduction": 0.99
+    },
+    {
+      "seconds": 0.3858315999999604,
+      "raw_rows": 512000,
+      "selected_rows": 5120,
+      "raw_invalid_rows": 512000,
+      "retained_invalid_rows": 5120,
+      "invalid_runs": 128,
+      "invalid_windows": 5120,
+      "invalid_reduction": 0.99
+    }
+  ],
+  "collection_probe": {
+    "steps": 64,
+    "rows": 8192,
+    "seconds": 0.6984178000000156,
+    "rows_per_second": 11729.368867746236,
+    "handoff_wait_seconds": 0.00029229999927338213,
+    "handoff_buffer_bytes": {
+      "behavior_entities": 28160,
+      "behavior_counts": 1024,
+      "behavior_offsets": 1024,
+      "behavior_globals": 9216,
+      "behavior_action_masks": 51968,
+      "behavior_branch_available": 1280,
+      "behavior_columns": 12288,
+      "behavior_valid": 1,
+      "transition": 46080,
+      "episode_header": 21504,
+      "episode_totals": 112640,
+      "exploration_coins": 128,
+      "exploration_pending": 1024
+    },
+    "cpu_profile_top": [
+      {
+        "file": "~",
+        "line": 0,
+        "function": "<built-in method torch.where>",
+        "primitive_calls": 736,
+        "calls": 736,
+        "self_seconds": 0.013730000000000001,
+        "cumulative_seconds": 0.013730000000000001
+      },
+      {
+        "file": "~",
+        "line": 0,
+        "function": "<built-in method torch._C._nn.linear>",
+        "primitive_calls": 320,
+        "calls": 320,
+        "self_seconds": 0.009403,
+        "cumulative_seconds": 0.009403
+      },
+      {
+        "file": "~",
+        "line": 0,
+        "function": "<method 'to' of 'torch._C.TensorBase' objects>",
+        "primitive_calls": 992,
+        "calls": 992,
+        "self_seconds": 0.0082836,
+        "cumulative_seconds": 0.0082836
+      },
+      {
+        "file": "pvz_rl/learning/sequential_training.py",
+        "line": 169,
+        "function": "_collect_step",
+        "primitive_calls": 16,
+        "calls": 16,
+        "self_seconds": 0.0065123,
+        "cumulative_seconds": 0.2097147
+      },
+      {
+        "file": "~",
+        "line": 0,
+        "function": "<built-in method torch._C._nn.scaled_dot_product_attention>",
+        "primitive_calls": 64,
+        "calls": 64,
+        "self_seconds": 0.0063281000000000006,
+        "cumulative_seconds": 0.0063281000000000006
+      },
+      {
+        "file": "pvz_rl/learning/exploration.py",
+        "line": 99,
+        "function": "apply",
+        "primitive_calls": 16,
+        "calls": 16,
+        "self_seconds": 0.0056232,
+        "cumulative_seconds": 0.0278994
+      },
+      {
+        "file": "pvz_rl/envs/cuda_env.py",
+        "line": 363,
+        "function": "step_host",
+        "primitive_calls": 16,
+        "calls": 16,
+        "self_seconds": 0.0048699,
+        "cumulative_seconds": 0.0089089
+      },
+      {
+        "file": "~",
+        "line": 0,
+        "function": "<method 'masked_fill' of 'torch._C.TensorBase' objects>",
+        "primitive_calls": 160,
+        "calls": 160,
+        "self_seconds": 0.0045285,
+        "cumulative_seconds": 0.0045285
+      },
+      {
+        "file": "~",
+        "line": 0,
+        "function": "<built-in method torch.multinomial>",
+        "primitive_calls": 32,
+        "calls": 32,
+        "self_seconds": 0.0043575,
+        "cumulative_seconds": 0.0043575
+      },
+      {
+        "file": "~",
+        "line": 0,
+        "function": "<method 'copy' of 'numpy.generic' objects>",
+        "primitive_calls": 2048,
+        "calls": 2048,
+        "self_seconds": 0.0038741,
+        "cumulative_seconds": 0.0038741
+      },
+      {
+        "file": "pvz_rl/policy/entity_attention.py",
+        "line": 72,
+        "function": "forward",
+        "primitive_calls": 64,
+        "calls": 64,
+        "self_seconds": 0.0038222000000000004,
+        "cumulative_seconds": 0.0356329
+      },
+      {
+        "file": "~",
+        "line": 0,
+        "function": "<method 'copy_' of 'torch._C.TensorBase' objects>",
+        "primitive_calls": 336,
+        "calls": 336,
+        "self_seconds": 0.0037157,
+        "cumulative_seconds": 0.0037157
+      },
+      {
+        "file": "pvz_rl/policy/sequential_q.py",
+        "line": 52,
+        "function": "action_parts",
+        "primitive_calls": 48,
+        "calls": 48,
+        "self_seconds": 0.0035059,
+        "cumulative_seconds": 0.0065361
+      },
+      {
+        "file": "pvz_rl/envs/cuda_env.py",
+        "line": 299,
+        "function": "step_device",
+        "primitive_calls": 16,
+        "calls": 16,
+        "self_seconds": 0.0034436000000000002,
+        "cumulative_seconds": 0.0164276
+      },
+      {
+        "file": "pvz_rl/envs/cuda_env.py",
+        "line": 259,
+        "function": "branch_availability",
+        "primitive_calls": 16,
+        "calls": 16,
+        "self_seconds": 0.0031439000000000003,
+        "cumulative_seconds": 0.0055078
+      },
+      {
+        "file": "~",
+        "line": 0,
+        "function": "<built-in method torch.as_tensor>",
+        "primitive_calls": 176,
+        "calls": 176,
+        "self_seconds": 0.0031103000000000003,
+        "cumulative_seconds": 0.0031103000000000003
+      },
+      {
+        "file": "pvz_rl/policy/entity_attention.py",
+        "line": 279,
+        "function": "_normalize_tensors",
+        "primitive_calls": 16,
+        "calls": 16,
+        "self_seconds": 0.0030361000000000003,
+        "cumulative_seconds": 0.0049927
+      },
+      {
+        "file": "~",
+        "line": 0,
+        "function": "<built-in method torch.cat>",
+        "primitive_calls": 96,
+        "calls": 96,
+        "self_seconds": 0.0029543,
+        "cumulative_seconds": 0.0029543
+      },
+      {
+        "file": "pvz_rl/learning/exploration.py",
+        "line": 167,
+        "function": "observe",
+        "primitive_calls": 16,
+        "calls": 16,
+        "self_seconds": 0.0028781,
+        "cumulative_seconds": 0.0059661
+      },
+      {
+        "file": "~",
+        "line": 0,
+        "function": "<built-in method torch.layer_norm>",
+        "primitive_calls": 160,
+        "calls": 160,
+        "self_seconds": 0.0027733000000000002,
+        "cumulative_seconds": 0.0027733000000000002
+      },
+      {
+        "file": "pvz_rl/policy/sequential_q.py",
+        "line": 58,
+        "function": "assemble",
+        "primitive_calls": 48,
+        "calls": 48,
+        "self_seconds": 0.0026049000000000003,
+        "cumulative_seconds": 0.0035733
+      },
+      {
+        "file": "pvz_rl/policy/sequential_q.py",
+        "line": 108,
+        "function": "select_q_actions",
+        "primitive_calls": 16,
+        "calls": 16,
+        "self_seconds": 0.0025617,
+        "cumulative_seconds": 0.0194767
+      },
+      {
+        "file": "pvz_rl/presentation/action_journal.py",
+        "line": 111,
+        "function": "record_batch",
+        "primitive_calls": 16,
+        "calls": 16,
+        "self_seconds": 0.0025158000000000003,
+        "cumulative_seconds": 0.006587900000000001
+      },
+      {
+        "file": "E:/Projects/Tower-Defence-AI/PVZ-plant/.venv/Lib/site-packages/torch/nn/modules/module.py",
+        "line": 1966,
+        "function": "__setattr__",
+        "primitive_calls": 1856,
+        "calls": 1856,
+        "self_seconds": 0.0021696000000000003,
+        "cumulative_seconds": 0.005967500000000001
+      },
+      {
+        "file": "~",
+        "line": 0,
+        "function": "<method 'float' of 'torch._C.TensorBase' objects>",
+        "primitive_calls": 176,
+        "calls": 176,
+        "self_seconds": 0.0021608,
+        "cumulative_seconds": 0.0021608
+      }
+    ],
+    "sync_operators": [
+      {
+        "name": "cudaStreamSynchronize",
+        "calls": 22,
+        "self_cpu_ms": 2.1692999999999993
+      },
+      {
+        "name": "aten::nonzero",
+        "calls": 4,
+        "self_cpu_ms": 0.09039999999999963
+      },
+      {
+        "name": "aten::_local_scalar_dense",
+        "calls": 14,
+        "self_cpu_ms": 0.007199999999995271
+      },
+      {
+        "name": "aten::is_nonzero",
+        "calls": 2,
+        "self_cpu_ms": 0.003499999999996362
+      },
+      {
+        "name": "cudaDeviceSynchronize",
+        "calls": 2,
+        "self_cpu_ms": 0.00610000000000582
+      }
+    ],
+    "cuda_launches": 978
+  },
+  "compiled_probe": {
+    "device": "NVIDIA GeForce RTX 4070 Laptop GPU",
+    "torch": "2.8.0+cu128",
+    "complete": true,
+    "measurements": [
+      {
+        "workload": "medium",
+        "actions": "tile",
+        "widths": [
+          64
+        ],
+        "rows": 128,
+        "passes": 4,
+        "spool_seconds": 0.00740670000004684,
+        "cold_seconds": 4.358919699999888,
+        "routed_workload": {
+          "routes": {
+            "wait_return": 0,
+            "accepted": 128,
+            "species_invalid": 0,
+            "tile_invalid": 0
+          },
+          "online_species_rows": 128,
+          "online_tile_rows": 128,
+          "ema_tile_rows": 128,
+          "skipped_ema_rows": 0
+        },
+        "repetitions": [
+          {
+            "seconds": 0.31068009999989954,
+            "peak_allocated_mib": 2087.07275390625,
+            "peak_reserved_mib": 2524.0,
+            "free_mib": 4474.0,
+            "total_mib": 8187.5
+          },
+          {
+            "seconds": 0.30756689999998343,
+            "peak_allocated_mib": 2087.07275390625,
+            "peak_reserved_mib": 2532.0,
+            "free_mib": 4466.0,
+            "total_mib": 8187.5
+          },
+          {
+            "seconds": 0.29428550000011455,
+            "peak_allocated_mib": 2087.07275390625,
+            "peak_reserved_mib": 2540.0,
+            "free_mib": 4458.0,
+            "total_mib": 8187.5
+          }
+        ],
+        "transport": {
+          "preparation_seconds": 0.008196199999929377,
+          "transfer_wait_seconds": 0.0001257999999779713,
+          "transfer_stream_seconds": 0.016958975881338118
+        },
+        "encoders": [
+          {
+            "stage": "species",
+            "network": "online",
+            "compiled_shapes": [
+              [
+                64,
+                64
+              ]
+            ],
+            "collection": {
+              "hits": 0,
+              "misses": 0,
+              "captures": 0,
+              "evictions": 0,
+              "retired_releases": 0,
+              "capacity_fallbacks": 0,
+              "headroom_fallbacks": 0,
+              "oom_fallbacks": 0,
+              "capture_failures": 0,
+              "capture_setup_seconds": 0.0,
+              "releases": 0,
+              "entries": 0,
+              "retired_entries": 0,
+              "resident_entries": 0,
+              "cache_entries": 8,
+              "vram_headroom_mib": 1638,
+              "last_free_mib": null
+            },
+            "fitting": {
+              "hits": 0,
+              "misses": 0,
+              "captures": 0,
+              "evictions": 0,
+              "retired_releases": 0,
+              "capacity_fallbacks": 0,
+              "headroom_fallbacks": 0,
+              "oom_fallbacks": 0,
+              "capture_failures": 0,
+              "capture_setup_seconds": 0.0,
+              "releases": 0,
+              "entries": 0,
+              "retired_entries": 0,
+              "resident_entries": 0,
+              "cache_entries": 6,
+              "vram_headroom_mib": 1024,
+              "last_free_mib": null
+            },
+            "status": "compiled",
+            "compilation_backend": "cudagraphs_owned",
+            "compilation_error": null
+          },
+          {
+            "stage": "tile",
+            "network": "online",
+            "compiled_shapes": [
+              [
+                64,
+                64
+              ]
+            ],
+            "collection": {
+              "hits": 0,
+              "misses": 0,
+              "captures": 0,
+              "evictions": 0,
+              "retired_releases": 0,
+              "capacity_fallbacks": 0,
+              "headroom_fallbacks": 0,
+              "oom_fallbacks": 0,
+              "capture_failures": 0,
+              "capture_setup_seconds": 0.0,
+              "releases": 0,
+              "entries": 0,
+              "retired_entries": 0,
+              "resident_entries": 0,
+              "cache_entries": 8,
+              "vram_headroom_mib": 1638,
+              "last_free_mib": null
+            },
+            "fitting": {
+              "hits": 0,
+              "misses": 0,
+              "captures": 0,
+              "evictions": 0,
+              "retired_releases": 0,
+              "capacity_fallbacks": 0,
+              "headroom_fallbacks": 0,
+              "oom_fallbacks": 0,
+              "capture_failures": 0,
+              "capture_setup_seconds": 0.0,
+              "releases": 0,
+              "entries": 0,
+              "retired_entries": 0,
+              "resident_entries": 0,
+              "cache_entries": 6,
+              "vram_headroom_mib": 1024,
+              "last_free_mib": null
+            },
+            "status": "compiled",
+            "compilation_backend": "cudagraphs_owned",
+            "compilation_error": null
+          },
+          {
+            "stage": "species",
+            "network": "ema",
+            "compiled_shapes": [],
+            "collection": {
+              "hits": 0,
+              "misses": 0,
+              "captures": 0,
+              "evictions": 0,
+              "retired_releases": 0,
+              "capacity_fallbacks": 0,
+              "headroom_fallbacks": 0,
+              "oom_fallbacks": 0,
+              "capture_failures": 0,
+              "capture_setup_seconds": 0.0,
+              "releases": 0,
+              "entries": 0,
+              "retired_entries": 0,
+              "resident_entries": 0,
+              "cache_entries": 8,
+              "vram_headroom_mib": 1638,
+              "last_free_mib": null
+            },
+            "fitting": {
+              "hits": 0,
+              "misses": 0,
+              "captures": 0,
+              "evictions": 0,
+              "retired_releases": 0,
+              "capacity_fallbacks": 0,
+              "headroom_fallbacks": 0,
+              "oom_fallbacks": 0,
+              "capture_failures": 0,
+              "capture_setup_seconds": 0.0,
+              "releases": 0,
+              "entries": 0,
+              "retired_entries": 0,
+              "resident_entries": 0,
+              "cache_entries": 6,
+              "vram_headroom_mib": 1024,
+              "last_free_mib": null
+            },
+            "status": "requested",
+            "compilation_backend": "cudagraphs_owned",
+            "compilation_error": null
+          },
+          {
+            "stage": "tile",
+            "network": "ema",
+            "compiled_shapes": [],
+            "collection": {
+              "hits": 0,
+              "misses": 0,
+              "captures": 0,
+              "evictions": 0,
+              "retired_releases": 0,
+              "capacity_fallbacks": 0,
+              "headroom_fallbacks": 0,
+              "oom_fallbacks": 0,
+              "capture_failures": 0,
+              "capture_setup_seconds": 0.0,
+              "releases": 0,
+              "entries": 0,
+              "retired_entries": 0,
+              "resident_entries": 0,
+              "cache_entries": 8,
+              "vram_headroom_mib": 1638,
+              "last_free_mib": null
+            },
+            "fitting": {
+              "hits": 31,
+              "misses": 1,
+              "captures": 1,
+              "evictions": 0,
+              "retired_releases": 0,
+              "capacity_fallbacks": 0,
+              "headroom_fallbacks": 0,
+              "oom_fallbacks": 0,
+              "capture_failures": 0,
+              "capture_setup_seconds": 0.09025159999987409,
+              "releases": 0,
+              "entries": 1,
+              "retired_entries": 0,
+              "resident_entries": 1,
+              "cache_entries": 6,
+              "vram_headroom_mib": 1024,
+              "last_free_mib": 5252.0
+            },
+            "status": "compiled",
+            "compilation_backend": "cudagraphs_owned",
+            "compilation_error": null
+          }
+        ]
+      },
+      {
+        "workload": "medium",
+        "actions": "rejected_heavy",
+        "widths": [
+          64
+        ],
+        "rows": 128,
+        "passes": 4,
+        "spool_seconds": 0.0005770999998730986,
+        "cold_seconds": 0.715393800000129,
+        "routed_workload": {
+          "routes": {
+            "wait_return": 0,
+            "accepted": 25,
+            "species_invalid": 52,
+            "tile_invalid": 51
+          },
+          "online_species_rows": 77,
+          "online_tile_rows": 76,
+          "ema_tile_rows": 25,
+          "skipped_ema_rows": 103
+        },
+        "repetitions": [
+          {
+            "seconds": 0.3261992000000191,
+            "peak_allocated_mib": 1569.07177734375,
+            "peak_reserved_mib": 2556.0,
+            "free_mib": 4442.0,
+            "total_mib": 8187.5
+          },
+          {
+            "seconds": 0.33182010000018636,
+            "peak_allocated_mib": 1569.07177734375,
+            "peak_reserved_mib": 2560.0,
+            "free_mib": 4438.0,
+            "total_mib": 8187.5
+          },
+          {
+            "seconds": 0.34237740000003214,
+            "peak_allocated_mib": 1569.07177734375,
+            "peak_reserved_mib": 2568.0,
+            "free_mib": 4430.0,
+            "total_mib": 8187.5
+          }
+        ],
+        "transport": {
+          "preparation_seconds": 0.014996400000200083,
+          "transfer_wait_seconds": 0.00026730000081442995,
+          "transfer_stream_seconds": 0.025404479831457133
+        },
+        "encoders": [
+          {
+            "stage": "species",
+            "network": "online",
+            "compiled_shapes": [
+              [
+                64,
+                64
+              ]
+            ],
+            "collection": {
+              "hits": 0,
+              "misses": 0,
+              "captures": 0,
+              "evictions": 0,
+              "retired_releases": 0,
+              "capacity_fallbacks": 0,
+              "headroom_fallbacks": 0,
+              "oom_fallbacks": 0,
+              "capture_failures": 0,
+              "capture_setup_seconds": 0.0,
+              "releases": 0,
+              "entries": 0,
+              "retired_entries": 0,
+              "resident_entries": 0,
+              "cache_entries": 8,
+              "vram_headroom_mib": 1638,
+              "last_free_mib": null
+            },
+            "fitting": {
+              "hits": 0,
+              "misses": 0,
+              "captures": 0,
+              "evictions": 0,
+              "retired_releases": 0,
+              "capacity_fallbacks": 0,
+              "headroom_fallbacks": 0,
+              "oom_fallbacks": 0,
+              "capture_failures": 0,
+              "capture_setup_seconds": 0.0,
+              "releases": 0,
+              "entries": 0,
+              "retired_entries": 0,
+              "resident_entries": 0,
+              "cache_entries": 6,
+              "vram_headroom_mib": 1024,
+              "last_free_mib": null
+            },
+            "status": "compiled",
+            "compilation_backend": "cudagraphs_owned",
+            "compilation_error": null
+          },
+          {
+            "stage": "tile",
+            "network": "online",
+            "compiled_shapes": [
+              [
+                64,
+                64
+              ]
+            ],
+            "collection": {
+              "hits": 0,
+              "misses": 0,
+              "captures": 0,
+              "evictions": 0,
+              "retired_releases": 0,
+              "capacity_fallbacks": 0,
+              "headroom_fallbacks": 0,
+              "oom_fallbacks": 0,
+              "capture_failures": 0,
+              "capture_setup_seconds": 0.0,
+              "releases": 0,
+              "entries": 0,
+              "retired_entries": 0,
+              "resident_entries": 0,
+              "cache_entries": 8,
+              "vram_headroom_mib": 1638,
+              "last_free_mib": null
+            },
+            "fitting": {
+              "hits": 0,
+              "misses": 0,
+              "captures": 0,
+              "evictions": 0,
+              "retired_releases": 0,
+              "capacity_fallbacks": 0,
+              "headroom_fallbacks": 0,
+              "oom_fallbacks": 0,
+              "capture_failures": 0,
+              "capture_setup_seconds": 0.0,
+              "releases": 0,
+              "entries": 0,
+              "retired_entries": 0,
+              "resident_entries": 0,
+              "cache_entries": 6,
+              "vram_headroom_mib": 1024,
+              "last_free_mib": null
+            },
+            "status": "compiled",
+            "compilation_backend": "cudagraphs_owned",
+            "compilation_error": null
+          },
+          {
+            "stage": "species",
+            "network": "ema",
+            "compiled_shapes": [],
+            "collection": {
+              "hits": 0,
+              "misses": 0,
+              "captures": 0,
+              "evictions": 0,
+              "retired_releases": 0,
+              "capacity_fallbacks": 0,
+              "headroom_fallbacks": 0,
+              "oom_fallbacks": 0,
+              "capture_failures": 0,
+              "capture_setup_seconds": 0.0,
+              "releases": 0,
+              "entries": 0,
+              "retired_entries": 0,
+              "resident_entries": 0,
+              "cache_entries": 8,
+              "vram_headroom_mib": 1638,
+              "last_free_mib": null
+            },
+            "fitting": {
+              "hits": 0,
+              "misses": 0,
+              "captures": 0,
+              "evictions": 0,
+              "retired_releases": 0,
+              "capacity_fallbacks": 0,
+              "headroom_fallbacks": 0,
+              "oom_fallbacks": 0,
+              "capture_failures": 0,
+              "capture_setup_seconds": 0.0,
+              "releases": 0,
+              "entries": 0,
+              "retired_entries": 0,
+              "resident_entries": 0,
+              "cache_entries": 6,
+              "vram_headroom_mib": 1024,
+              "last_free_mib": null
+            },
+            "status": "requested",
+            "compilation_backend": "cudagraphs_owned",
+            "compilation_error": null
+          },
+          {
+            "stage": "tile",
+            "network": "ema",
+            "compiled_shapes": [],
+            "collection": {
+              "hits": 0,
+              "misses": 0,
+              "captures": 0,
+              "evictions": 0,
+              "retired_releases": 0,
+              "capacity_fallbacks": 0,
+              "headroom_fallbacks": 0,
+              "oom_fallbacks": 0,
+              "capture_failures": 0,
+              "capture_setup_seconds": 0.0,
+              "releases": 0,
+              "entries": 0,
+              "retired_entries": 0,
+              "resident_entries": 0,
+              "cache_entries": 8,
+              "vram_headroom_mib": 1638,
+              "last_free_mib": null
+            },
+            "fitting": {
+              "hits": 47,
+              "misses": 1,
+              "captures": 1,
+              "evictions": 0,
+              "retired_releases": 0,
+              "capacity_fallbacks": 0,
+              "headroom_fallbacks": 0,
+              "oom_fallbacks": 0,
+              "capture_failures": 0,
+              "capture_setup_seconds": 0.09025159999987409,
+              "releases": 0,
+              "entries": 1,
+              "retired_entries": 0,
+              "resident_entries": 1,
+              "cache_entries": 6,
+              "vram_headroom_mib": 1024,
+              "last_free_mib": 5252.0
+            },
+            "status": "compiled",
+            "compilation_backend": "cudagraphs_owned",
+            "compilation_error": null
+          }
+        ]
+      }
+    ],
+    "execution_settings": {
+      "torch_threads": 2,
+      "compile_kernels": true,
+      "telemetry": true,
+      "fit_precision": "bf16_master",
+      "prefetch": true,
+      "fit_batch_groups": 2,
+      "fit_encoder_microbatch": 192,
+      "fit_species_microbatch": 64,
+      "fit_tile_microbatch": 64,
+      "fit_entity_buckets": [
+        8,
+        16,
+        32,
+        64,
+        128,
+        256
+      ],
+      "fit_token_budget": 16384,
+      "collection_graph_cache_entries": 8,
+      "collection_vram_headroom_mib": 1638
+    }
+  },
+  "actual_run": {
+    "path": "runs/compact-stages-101/easy",
+    "checkpoint_mutated": false,
+    "checkpoint_resumed": false,
+    "formal_training": false,
+    "hardware_by_phase": {
+      "collect": {
+        "samples": 548,
+        "first_second": 1.0155463000010059,
+        "last_second": 552.5392534999992,
+        "medians": {
+          "process_cpu_percent": 92.4,
+          "busiest_cpu_percent": 77.9,
+          "gpu_percent": 39.0,
+          "gpu_watts": 57.325,
+          "process_ram_mib": 3479.1015625,
+          "gpu_memory_mib": 609.0
+        }
+      },
+      "finalize_rewards": {
+        "samples": 1,
+        "first_second": 553.5488738999993,
+        "last_second": 553.5488738999993,
+        "medians": {
+          "process_cpu_percent": 97.0,
+          "busiest_cpu_percent": 76.8,
+          "gpu_percent": 37.0,
+          "gpu_watts": 13.27,
+          "process_ram_mib": 4695.93359375,
+          "gpu_memory_mib": 609.0
+        }
+      },
+      "fit": {
+        "samples": 17,
+        "first_second": 556.5779997999998,
+        "last_second": 572.8106227999997,
+        "medians": {
+          "process_cpu_percent": 100.0,
+          "busiest_cpu_percent": 78.5,
+          "gpu_percent": 0.0,
+          "gpu_watts": 15.98,
+          "process_ram_mib": 5567.74609375,
+          "gpu_memory_mib": 881.0
+        }
+      },
+      "returns": {
+        "samples": 2,
+        "first_second": 554.5547680999989,
+        "last_second": 555.5664878999996,
+        "medians": {
+          "process_cpu_percent": 100.0,
+          "busiest_cpu_percent": 55.8,
+          "gpu_percent": 0.0,
+          "gpu_watts": 12.2,
+          "process_ram_mib": 4698.095703125,
+          "gpu_memory_mib": 609.0
+        }
+      }
+    },
+    "checkpoint_protocol": "pvz-rl/action-global-state-v2",
+    "buffer": {
+      "size": 3398784,
+      "entity_size": 42677927,
+      "finalized": true,
+      "n_envs": 128,
+      "block_rows": 32768,
+      "transport_metrics": {
+        "preparation_seconds": 0.03813309999532066,
+        "transfer_wait_seconds": 0.00013019999460084364,
+        "transfer_stream_seconds": 0.033199263989925384
+      },
+      "raw_outcome_counts": [
+        [
+          0,
+          358235
+        ],
+        [
+          1959182,
+          3352
+        ],
+        [
+          0,
+          0
+        ]
+      ],
+      "reward_summary": {
+        "routed_workload": {
+          "routes": {
+            "wait_return": 358235,
+            "accepted": 3352,
+            "species_invalid": 1959182,
+            "tile_invalid": 0
+          },
+          "online_species_rows": 2320769,
+          "online_tile_rows": 3352,
+          "ema_tile_rows": 3352,
+          "skipped_ema_rows": 1959182
+        }
+      }
+    },
+    "read_seconds": 0.7117109999999229,
+    "entity_width_counts": {
+      "5": 128,
+      "6": 132017,
+      "7": 108775,
+      "8": 92611,
+      "9": 73501,
+      "10": 53543,
+      "11": 58697,
+      "12": 101431,
+      "13": 87649,
+      "14": 77553,
+      "15": 76963,
+      "16": 77287,
+      "17": 91932,
+      "18": 120799,
+      "19": 138415,
+      "20": 121987,
+      "21": 100867,
+      "22": 94183,
+      "23": 84716,
+      "24": 87955,
+      "25": 88919,
+      "26": 73628,
+      "27": 64211,
+      "28": 60601,
+      "29": 51945,
+      "30": 44915,
+      "31": 39357,
+      "32": 31805,
+      "33": 22801,
+      "34": 16350,
+      "35": 12497,
+      "36": 8856,
+      "37": 8497,
+      "38": 5663,
+      "39": 2968,
+      "40": 1178,
+      "41": 1712,
+      "42": 2146,
+      "43": 1711
+    },
+    "route_counts": [
+      358235,
+      3352,
+      1959182,
+      0
+    ],
+    "compaction_seconds": 2.264772300000004,
+    "compaction": {
+      "raw_rows": 2320769,
+      "selected_rows": 776429,
+      "raw_invalid_rows": 1959182,
+      "retained_invalid_rows": 414842,
+      "invalid_runs": 414841,
+      "invalid_windows": 414842,
+      "invalid_reduction": 0.7882575483033225
+    },
+    "representative_outcome_counts": [
+      [
+        0,
+        358235
+      ],
+      [
+        414842,
+        3352
+      ],
+      [
+        0,
+        0
+      ]
+    ],
+    "completed_episode_rows": 128,
+    "simulated_seconds_quantiles": [
+      143.41,
+      151.064,
+      175.235,
+      213.954,
+      265.04
+    ],
+    "terminal_training_log": [
+      "2026-10-20T04:44:30+00:00 [updating] Cohort 1 collected: 128 games, 2,320,769 transitions in 552.8s (4,199/s); done 128/128 wins 50/128 Rraw=-0.161 Rtrain=-0.0586~",
+      "2026-10-20T04:44:30+00:00 [updating] cohort 1 done 128/128 wins 50/128 Rraw=-0.224 Rtrain=-0.122 | active 0/128 | n/a decisions/game/s | n/a active transitions/s | returns | games total 128 | transitions total 2,320,769 | collect n/a fit n/a | optimizer step 0 | GPU 37% CPU 13%",
+      "2026-10-20T04:44:32+00:00 [updating] Warning: RuntimeWarning: Action shaping exceeds 25% of mean absolute terminal reward",
+      "2026-10-20T04:44:32+00:00 [updating] cohort 1 done 128/128 wins 50/128 Rraw=-0.224 Rtrain=-0.122 | active 0/128 | n/a decisions/game/s | n/a active transitions/s | pass 1/4 | games total 128 | transitions total 2,320,769 | collect n/a fit n/a | optimizer step 0 | GPU 0% CPU 10% | warning: RuntimeWarning: Action shaping exceeds 25% of mean absolute terminal reward",
+      "2026-10-20T04:44:46+00:00 [updating] Checkpoint saved: interrupted.zip; transitions 2,320,769; optimizer step 0; done 128/128 wins 50/128 Rraw=-0.224 Rtrain=-0.122",
+      "2026-10-20T04:44:46+00:00 [interrupted] Training stopped: ; recovery checkpoint saved when available",
+      "2026-10-20T04:44:49+00:00 [interrupted] Report refreshed: E:\\Projects\\Tower-Defence-AI\\PVZ-plant\\runs\\compact-stages-101\\easy\\visualizations\\index.html"
+    ],
+    "source_files": {
+      "train.log": {
+        "bytes": 6941,
+        "sha256": "36752b98f8127878ca6b32b37f6d01d514df69242f388a22b25cdb23e567ef37"
+      },
+      "config.json": {
+        "bytes": 7911,
+        "sha256": "467805ed1535912097b1e2b0141372264427ba5a780a8660603eac6902345c63"
+      },
+      "hardware-metrics.jsonl": {
+        "bytes": 427335,
+        "sha256": "c56853e04fdc1baeab5f7cbe540ee6092935e4e4f501ba99db26db00b316ca5c"
+      }
+    },
+    "checkpoint_bytes": 2979792546
+  },
+  "real_row_pipeline_replay": {
+    "note": "Every 64th fitting representative within each real entity bucket/route; original public observations, actions and old targets. This is a bounded fitting replay, not a complete-cycle measurement. Historical optimizer/simulator state was not resumed.",
+    "rows": 12139,
+    "settings": [
+      {
+        "microbatch": 64,
+        "token_budget": 16384,
+        "transport_batch": 2048,
+        "spool_seconds": 0.03271859999995286,
+        "outcome_counts": [
+          [
+            0,
+            5601
+          ],
+          [
+            6484,
+            54
+          ],
+          [
+            0,
+            0
+          ]
+        ],
+        "repetitions": [
+          {
+            "seconds": 8.443024700000024,
+            "peak_allocated_mib": 1387.62255859375
+          },
+          {
+            "seconds": 8.120399599999928,
+            "peak_allocated_mib": 1387.62255859375
+          }
+        ],
+        "transport": {
+          "preparation_seconds": 0.14266489999909027,
+          "transfer_wait_seconds": 0.0006002999998599989,
+          "transfer_stream_seconds": 0.055038783743977554
+        }
+      },
+      {
+        "microbatch": 128,
+        "token_budget": 32768,
+        "transport_batch": 2048,
+        "spool_seconds": 0.040144799999779934,
+        "outcome_counts": [
+          [
+            0,
+            5601
+          ],
+          [
+            6484,
+            54
+          ],
+          [
+            0,
+            0
+          ]
+        ],
+        "repetitions": [
+          {
+            "seconds": 4.573586699999851,
+            "peak_allocated_mib": 1396.84716796875
+          },
+          {
+            "seconds": 4.569786500000191,
+            "peak_allocated_mib": 1396.84716796875
+          }
+        ],
+        "transport": {
+          "preparation_seconds": 0.13173049999977593,
+          "transfer_wait_seconds": 0.0005488000010700489,
+          "transfer_stream_seconds": 0.05650649606436491
+        }
+      }
+    ],
+    "sample_row_id_sha256": "a148d3eadffec8157c89757962729bb3d7c7b6d6fdc2d788d47c7366e197e991",
+    "sample_first_row_id": 0,
+    "sample_last_row_id": 3374221
+  },
+  "methodology": {
+    "date": "2026-10-21",
+    "primary_evidence": "Read-only logs, hardware samples and public trajectory arrays from runs/compact-stages-101/easy/interrupted.zip; old v2 protocol, no autonomous/optimizer resume.",
+    "pipeline_replay": "Shared CompleteGameBuffer, FittingSpool, BatchPrefetch and batch_loss. Sample every 64th already-compacted representative separately within each real width bucket/route, retaining original actions, observations and targets. Fresh temporary Adam/EMA, four commits per repetition, transport 2048, two repetitions per setting; first is cold, second is warm. No trained weights saved.",
+    "compaction": "Shared compact_invalid_rows on slim copies of all original metadata including inactive slots, reset/done boundaries and original file order. Slim-metadata timing excludes archive reads and full spool construction.",
+    "synthetic_controls": "Shared fit_benchmark.measure, WORKLOAD_WIDTHS sparse=(8,), medium=(64,), dense=(256,), 128 rows per width; baseline four action mixes, candidate accepted-only widths64/256, three warm repetitions after one cold four-pass cycle. Current auto 4070 profile; no CLI batch_size clamp.",
+    "profiling": "One warmed 128-row,64-entity accepted batch loss/backward/master accumulation, plus two actual collector calls following a 64-step current-code initial-state collection probe. Profiler overhead excluded from throughput measurements.",
+    "limits": "Historical training was interrupted in pass1. Replay is sampled and has no simulator allocation or live viewer. No complete current-contract 128-game cycle, independent process A/B randomization, sustained thermal run, or speedup in game performance was measured."
+  },
+  "transport_capacity_probe": {
+    "note": "Nine prefetch constructions of the same 64-entity spool; capacity is independent of actual width. Two entity arrays of 2048x256x11 int32 reserve 44MiB alone. Original buffers freed before total capacity sampling, so total pinned bytes were not measured.",
+    "entity_array_mib_per_slot": 22.0,
+    "entity_array_shape_per_slot": [
+      2048,
+      256,
+      11
+    ],
+    "allocation_and_first_prepare_ms": [
+      1.282800000012685,
+      0.7403000000749671,
+      0.7843999999295193
+    ]
+  }
+}
