@@ -11,7 +11,7 @@ from gymnasium import spaces
 from pvz_game import Game, Rules
 from pvz_game.config import PLANT_TYPES
 from pvz_game.cuda.backend import projectile_bound
-from pvz_game.cuda.schema import HEADER, REASONS
+from pvz_game.cuda.schema import HEADER
 from stable_baselines3.common.vec_env import VecEnv
 
 from pvz_rl.envs.actions import ActionSchema as A
@@ -19,6 +19,7 @@ from pvz_rl.envs.cuda_accounting import AccountingCudaBatch
 from pvz_rl.envs.cuda_features import LEDGER_INDICES, METRIC_INDICES, CudaFeatures
 from pvz_rl.envs.rewards import REWARD_METRICS
 from pvz_rl.envs.scenarios import difficulty_weights, scenario
+from pvz_rl.envs.step_result import PackedStepResult
 from pvz_rl.learning.budget import budget_target
 from pvz_rl.learning.curriculum import stage_distribution, teaching_enabled
 from pvz_rl.learning.host_transfer import HostHandoff
@@ -162,8 +163,9 @@ class CudaVecEnv(VecEnv):
         self._branch_costs = torch.tensor(
             [self.batch.rules.plants[kind]["cost"] for kind in cfg["environment"]["plants"]],
             device=torch.device("cuda"),
-            dtype=torch.float32,
+            dtype=self.header_tensor.dtype,
         )
+        self._card_bits = 1 << torch.arange(len(self._branch_costs), device="cuda", dtype=torch.int64)
         self._closed = False
         self.transition_ticks = torch.zeros(self.num_envs, dtype=torch.int64, device="cuda")
         # Keep proposal and execution channels separate.  Trajectories and
@@ -273,9 +275,9 @@ class CudaVecEnv(VecEnv):
         sun = header[:, HEADER.index("sun")]
         cooldowns = torch.from_dlpack(self.batch.cooldowns)
         device = self.header_tensor.device
-        costs = self._branch_costs.to(device=device, dtype=sun.dtype)
+        costs = self._branch_costs
         allowed = header[:, HEADER.index("allowed")][:, None].bitwise_and(
-            (1 << torch.arange(len(costs), device=device, dtype=torch.int64))[None, :]
+            self._card_bits[None, :]
         ) != 0
         plants = (cooldowns == 0) & (sun[:, None] >= costs[None, :]) & allowed
         result = torch.cat((running[:, None], plants & running[:, None], running[:, None]), dim=1)
@@ -351,23 +353,20 @@ class CudaVecEnv(VecEnv):
                 dim=1,
             )
             self._record = self.handoff.enqueue("transition", record)
-            self._episode_host = self.handoff.enqueue_fields(
-                "episode",
-                dict(
-                    header=h,
-                    totals=torch.from_dlpack(self.features.totals),
-                ),
-            )
+            self._step_state_host = self.handoff.enqueue_fields("step_state", dict(
+                executing=self._device_active,
+                pending_spawns=h[:, HEADER.index("total_spawns")] - h[:, HEADER.index("spawn_index")],
+            ))
         self._step_device_result = reward, done, timed_out
 
-    def step_host(self, *, autoreset=True, active=None):
+    def step_host(self, *, autoreset=True, active=None, packed=False):
         """Interpret the completed step record after the handoff wait."""
         host = self._record.numpy()
         if active is not None:
             self._step_active = np.asarray(active, dtype=bool).copy()
         if self.training:
             self.task_transitions.update(self._tasks[i] for i in np.flatnonzero(self._step_active))
-        self._update_public_counts(self._episode_host["header"].numpy(), slice(None))
+        self._pending_spawns[:] = self._step_state_host["pending_spawns"].numpy()
         compact = host[:, RECORD_OUTCOME]
         self.last_transition_host = compact
         self.last_action_result_host = host[:, RECORD_RESULT]
@@ -387,59 +386,36 @@ class CudaVecEnv(VecEnv):
         # Every game active during this step keeps its complete terminal record.
         obs = self.features.publish(summary, self._step_active | self.enabled_envs)
         truncation = summary[:, 1:]
-        infos = []
-        for index, row in enumerate(compact):
-            accepted = bool(self.last_action_result_host[index, 0])
-            reason_code = int(self.last_action_result_host[index, 1])
-            reason = (
-                None if accepted or not 0 <= reason_code < len(REASONS) else REASONS[reason_code]
-            )
-            infos.append(
-                {
-                    "entity_truncation": {
-                        "total": int(truncation[index].sum()),
-                        **dict(
-                            zip(("plants", "zombies", "projectiles"), map(int, truncation[index]))
-                        ),
-                    },
-                    "proposal_action": int(actions[index, 0]),
-                    "executed_action": int(actions[index, 1]),
-                    "accepted": accepted,
-                    "rejection_reason": reason,
-                    "ticks_advanced": int(row[2]),
-                    # The device backend exposes aggregate causal components
-                    # in ``last_reward_parts_host``.  Detailed source rows are
-                    # optional event-adapter data and remain empty here until
-                    # a backend publishes entity provenance.
-                    "causal_credits": {},
-                    "causal_diagnostics": {
-                        "source_action_credited_rows": 0,
-                        "unattributable_events": 0,
-                    },
-                }
-            )
+        completed = {}
+        step = PackedStepResult(compact, actions, self.last_action_result_host, truncation,
+                                self._step_active, completed)
         reward, done, timed_out = self._step_device_result
         reward = reward.clone()
         indices = np.flatnonzero(compact[:, 0]).tolist()
         terminal_observations = None
         if indices:
-            terminal_observations = obs.clone()
-            headers = self._episode_host["header"].numpy()[indices]
-            totals = self._episode_host["totals"].numpy()[indices]
+            terminal_observations = None if packed else obs.clone()
+            selected = torch.as_tensor(indices, device=self.header_tensor.device)
+            self._episode_host = self.handoff.enqueue_fields("completed_episode", dict(
+                header=self.header_tensor.index_select(0, selected),
+                totals=torch.from_dlpack(self.features.totals).index_select(0, selected)))
+            self.handoff.wait()
+            headers = self._episode_host["header"].numpy()
+            totals = self._episode_host["totals"].numpy()
             for index, header, total in zip(indices, headers, totals):
                 self.task_completed[self._tasks[index]] += 1
-                infos[index].update(
+                completed[index] = dict(
                     episode_metrics=self.episode_metrics(index, header, total),
                     **{"TimeLimit.truncated": bool(compact[index, 1])},
                 )
-                self.finished_outcomes[index] = infos[index]["episode_metrics"]["status"]
+                self.finished_outcomes[index] = completed[index]["episode_metrics"]["status"]
             if autoreset:
                 self.reset_indices(indices)
                 obs = self.features.obs_tensor
             else:
                 self.batch.header[self.cp.asarray(indices), 17] = 0
                 self.enabled_envs[indices] = False
-        return obs, reward, done, timed_out, terminal_observations, infos
+        return obs, reward, done, timed_out, terminal_observations, (step if packed else list(step.infos()))
 
     def step_tensors(self, actions, *, autoreset=True):
         with self.device_context():

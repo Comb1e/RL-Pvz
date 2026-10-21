@@ -29,6 +29,7 @@ import torch
 from pvz_rl.learning import sequential_training
 from pvz_rl.learning.action_routing import workload_counts
 from pvz_rl.learning.batch_transport import BatchPrefetch, FittingSpool
+from pvz_rl.learning.cuda_buffer import CompleteGameBuffer
 from pvz_rl.monitoring.hardware import HardwareMonitor
 from pvz_rl.policy.cudagraph_backend import FittingGraphBackend, GraphCapture
 from pvz_rl.policy.entity_attention import SpatialTransformer
@@ -137,13 +138,19 @@ class FitDiagnostics:
     readbacks or synchronization are added by the lightweight collector.
     """
 
-    def __init__(self, output, *, sample_seconds=1.0, trace_batches=0, trace_skip_batches=20):
+    def __init__(self, output, *, sample_seconds=1.0, trace_batches=0, trace_skip_batches=20,
+                 trace_phase="fitting"):
         if not math.isfinite(sample_seconds) or sample_seconds < 0.1:
             raise ValueError("sample_seconds must be finite and at least 0.1")
         if any(type(n) is not int or n < 0 for n in (trace_batches, trace_skip_batches)):
             raise ValueError("Trace batch counts must be nonnegative integers")
         self.output = Path(output)
         self.sample_seconds = sample_seconds
+        if trace_phase not in ("collection", "fitting"):
+            raise ValueError("trace_phase must be collection or fitting")
+        self.trace_phase = trace_phase
+        self.collection = dict(steps=0, host_seconds=0.0, tail_steps=0, tail_seconds=0.0,
+                               logical_rows=0, entity_widths={})
         self.trace_batches, self.trace_skip_batches = trace_batches, trace_skip_batches
         self.resources = ResourceDetails()
         self.local = threading.local()
@@ -178,6 +185,7 @@ class FitDiagnostics:
                 fit_chunks=self.chunks,
                 fit_batches=self.batches,
                 fit_host_wall_seconds=self.fit_wall_seconds,
+                collection=self.collection,
                 inclusive_host_spans=dict(self.spans),
                 slowest_chunks=[entry[2] for entry in sorted(self.slowest, reverse=True)],
                 trace_requested_batches=self.trace_batches,
@@ -224,6 +232,21 @@ class FitDiagnostics:
             with self.span(name):
                 return function(*args, **kwargs)
 
+        return run
+
+    def boundary_wrapped(self, function, name):
+        @wraps(function)
+        def run(*args, **kwargs):
+            started = perf_counter()
+            try:
+                return function(*args, **kwargs)
+            finally:
+                seconds = perf_counter() - started
+                stat = self.spans[name]
+                stat["calls"] += 1
+                stat["host_seconds"] += seconds
+                stat["max_host_seconds"] = max(stat["max_host_seconds"], seconds)
+                self.event("boundary", operation=name, host_seconds=seconds)
         return run
 
     def initialize(self, model):
@@ -295,7 +318,8 @@ class FitDiagnostics:
         if self.hardware:
             self.hardware.update(operation="trace_export")
         try:
-            profiler.export_chrome_trace(str(self.output / "fit-trace.json.gz"))
+            name = "collection" if self.trace_phase == "collection" else "fit"
+            profiler.export_chrome_trace(str(self.output / f"{name}-trace.json.gz"))
             averages = profiler.key_averages()
             for device in ("cpu", "device"):
                 (self.output / f"operators-{device}.txt").write_text(
@@ -307,7 +331,8 @@ class FitDiagnostics:
             self.errors.append("trace export: " + repr(exc))
 
     def start_trace(self):
-        if not self.trace_batches or self.trace_started or self.batches < self.trace_skip_batches:
+        steps = self.collection["steps"] if self.trace_phase == "collection" else self.batches
+        if not self.trace_batches or self.trace_started or steps < self.trace_skip_batches:
             return
         self.trace_started = True
         try:
@@ -342,7 +367,8 @@ class FitDiagnostics:
     def fit_chunk(self, original, model, *args, **kwargs):
         if self.hardware is None:
             self.initialize(model)
-        self.start_trace()
+        if self.trace_phase == "fitting":
+            self.start_trace()
         row = dict(
             chunk=self.chunks + 1,
             cohort=getattr(model, "cohort_number", None),
@@ -435,6 +461,35 @@ class FitDiagnostics:
             )
         return result
 
+    def collect_step(self, original, model, *args, **kwargs):
+        if self.hardware is None:
+            self.initialize(model)
+        if self.trace_phase == "collection":
+            self.start_trace()
+        active = int(model.env.enabled_envs.sum())
+        started = perf_counter()
+        try:
+            return original(model, *args, **kwargs)
+        finally:
+            seconds = perf_counter() - started
+            self.collection["steps"] += 1
+            self.collection["host_seconds"] += seconds
+            if active <= 8:
+                self.collection["tail_steps"] += 1
+                self.collection["tail_seconds"] += seconds
+            execution = getattr(model, "collection_execution", {})
+            self.collection["logical_rows"] = execution.get("logical_rows", 0)
+            self.collection["entity_widths"] = execution.get("entity_widths", {})
+            if self.trace_phase == "collection" and self.profiler:
+                self.trace_steps += 1
+                self.profiler.step()
+                if self.trace_steps >= self.trace_batches + 1:
+                    self.trace_finished = True
+                    self.stop_trace()
+            if perf_counter() - self.last_summary >= 15:
+                self.event("collection", **self.collection)
+                self.summary()
+
     def batch_loss(self, original, policy, rows, counts, observations, *args, **kwargs):
         row = getattr(self.local, "row", None)
         if row is not None:
@@ -510,7 +565,6 @@ class FitDiagnostics:
             (sequential_training.CudaSequentialQ, "_publish_fit_metrics", "pass_metrics"),
             (sequential_training.CudaSequentialQ, "_close_batches", "close_batches"),
             (sequential_training.CudaSequentialQ, "_update_teacher", "ema_update"),
-            (FittingSpool, "__init__", "spool_build"),
             (BatchPrefetch, "__init__", "prefetch_start"),
             (BatchPrefetch, "__next__", "next_batch"),
             (FittingGraphBackend, "__call__", "compile_backend"),
@@ -521,8 +575,17 @@ class FitDiagnostics:
             self.patches.enter_context(
                 patch.object(owner, method, self.wrapped(getattr(owner, method), name))
             )
+        for owner, method, name in (
+            (FittingSpool, "__init__", "spool_build"),
+            (CompleteGameBuffer, "finalize", "complete_returns"),
+            (sequential_training.CudaSequentialQ, "_finalize_rewards", "finalize_rewards"),
+            (sequential_training.CudaSequentialQ, "save", "checkpoint_save"),
+        ):
+            self.patches.enter_context(patch.object(
+                owner, method, self.boundary_wrapped(getattr(owner, method), name)))
         for owner, method, handler in (
             (sequential_training.CudaSequentialQ, "_fit_chunk", self.fit_chunk),
+            (sequential_training.CudaSequentialQ, "_collect_step", self.collect_step),
             (sequential_training.CudaSequentialQ, "_phase", self.phase_change),
             (sequential_training, "batch_loss", self.batch_loss),
             (SpatialTransformer, "forward", self.encoder_forward),
@@ -556,6 +619,7 @@ def main(argv=None):
     parser.add_argument("--sample-seconds", type=float, default=1.0)
     parser.add_argument("--trace-batches", type=int, default=0, help="0 disables the bounded trace")
     parser.add_argument("--trace-skip-batches", type=int, default=20)
+    parser.add_argument("--trace-phase", choices=("collection", "fitting"), default="fitting")
     if "--" not in arguments:
         parser.parse_args(arguments)  # Preserve --help without starting training.
         parser.error("append -- followed by your ordinary pvz-rl train arguments")

@@ -6,7 +6,8 @@ ENCODER_SETTINGS = ("encoder_microbatch", "encoder_token_budget", "attention_que
 PERFORMANCE_SETTINGS = (
     "fit_precision",
     "prefetch",
-    "compile_kernels",
+    "compile_collection",
+    "compile_fitting",
     "telemetry",
     "fit_batch_groups",
     "collection_graph_cache_entries",
@@ -59,3 +60,7 @@ def phase_memory(device, *, empty_cache=False):
             free_mib=free / 1024**2,
             total_mib=total / 1024**2,
         )
+
+
+def compilation_requested(performance):
+    return performance.get("compile_collection", False) or performance.get("compile_fitting", False)

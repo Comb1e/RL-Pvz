@@ -6,6 +6,7 @@ from time import perf_counter
 import numpy as np
 import torch
 
+from pvz_rl.envs.actions import ActionSchema as A
 from pvz_rl.envs.cuda_features import REWARD_FIELDS
 from pvz_rl.envs.encoding import ENTITY_WIDTH, PackedEntityBatch
 from pvz_rl.learning.action_routing import classify_actions
@@ -19,13 +20,14 @@ from pvz_rl.learning.cohort import CohortPhase, atomic_transition, check_transit
 from pvz_rl.learning.collection_scheduler import CollectionScheduler
 from pvz_rl.learning.cuda_q import CudaCohortLifecycle
 from pvz_rl.learning.exploration import CommittedPlantExploration
-from pvz_rl.learning.flat_q import batch_loss
+from pvz_rl.learning.flat_q import CohortCoefficients, batch_loss
 from pvz_rl.learning.objective import (
     COMPONENTS,
     OBJECTIVE_PROTOCOL,
     consistency_diagnostics,
     finalize_episode_metrics,
 )
+from pvz_rl.learning.performance import compilation_requested
 from pvz_rl.policy.active_batch import ActiveBatchPlan
 from pvz_rl.policy.cudagraph_backend import EncoderCompilationError
 from pvz_rl.policy.runner import PolicyRunner
@@ -98,7 +100,7 @@ class CudaSequentialQ(CudaCohortLifecycle):
         )
         self._ensure_teacher()
         self._scheduler = CollectionScheduler(self.n_envs, self.device)
-        if self.cfg["training"]["performance"]["compile_kernels"]:
+        if compilation_requested(self.cfg["training"]["performance"]):
             for encoder in self._teacher.encoders:
                 if encoder.compilation_status == "disabled":
                     encoder.enable_compilation()
@@ -119,10 +121,8 @@ class CudaSequentialQ(CudaCohortLifecycle):
     def _update_teacher(self):
         self._ensure_teacher()
         decay = self.cfg["training"]["objective"]["ema_decay"]
-        for target, source in zip(
-            self._teacher.runtime_parameters(), self.policy.runtime_parameters(), strict=True
-        ):
-            target.lerp_(source, 1 - decay)
+        torch._foreach_lerp_(list(self._teacher.runtime_parameters()),
+                             list(self.policy.runtime_parameters()), 1 - decay)
         self._teacher_version += 1
 
     def _finalize_rewards(self, callback):
@@ -187,6 +187,7 @@ class CudaSequentialQ(CudaCohortLifecycle):
             rows = np.zeros(self.n_envs, dtype=self._buffer.dtype)
             rows["reset"] = self._scheduler.resets
             rows["env"] = np.arange(self.n_envs)
+            source_decisions = self._scheduler.decisions.copy()
             masks = env.action_masks().clone()
             branch_available = env.branch_availability()
             if new.any():
@@ -269,7 +270,7 @@ class CudaSequentialQ(CudaCohortLifecycle):
                         counts=counts,
                         offsets=offsets,
                         globals=self._last_obs.globals.index_select(0, live_slots),
-                        action_masks=masks & executing[:, None],
+                        executing=executing,
                         branch_available=branch_available & executing[:, None],
                         columns=columns,
                         valid=self._runner.valid,
@@ -295,8 +296,10 @@ class CudaSequentialQ(CudaCohortLifecycle):
             for encoder in self._teacher.encoders:
                 encoder.release_retired()
             env.profiler.host("host_synchronization", env.handoff.wait_seconds - previous_wait)
-            active = executing.cpu().numpy().copy()
-            next_obs, _, dones, _, _, infos = env.step_host(autoreset=False, active=active)
+            active = host["executing"].numpy().copy()
+            if np.any(active & ~issued_host):
+                raise ValueError("Executed slots differ from issued decision tickets")
+            next_obs, _, dones, _, _, step = env.step_host(autoreset=False, active=active, packed=True)
             rows["active"] = active
             self._scheduler.commit(issued_host, active)
             if not bool(host["valid"]):
@@ -323,7 +326,6 @@ class CudaSequentialQ(CudaCohortLifecycle):
             rows["pending_species"] = packed[:, 22]
             rows["next_species"] = exploration_host["pending"].numpy()
             rows["entity_omitted"] = packed[:, 17:20]
-            rows["mask"] = np.packbits(host["action_masks"].numpy(), axis=-1, bitorder="little")
             rows["reward"] = env.last_transition_host[:, 3]
             rows["duration"] = env.last_transition_host[:, 2]
             rows["done"] = env.last_transition_host[:, 0].astype(bool)
@@ -333,7 +335,7 @@ class CudaSequentialQ(CudaCohortLifecycle):
             rows["route"], rows["branch_usable"] = classify_actions(
                 rows["action"],
                 rows["accepted"],
-                host["action_masks"].numpy(),
+                np.broadcast_to(active[:, None], (self.n_envs, A.size)),
                 rows["rejection_reason"],
                 branch_available=branch_available_host,
             )
@@ -361,7 +363,7 @@ class CudaSequentialQ(CudaCohortLifecycle):
             rows["env"] = np.arange(self.n_envs)
             storage_started = perf_counter()
             if active.any():
-                self._buffer.append(rows, observations)
+                self._buffer.append(rows, observations, identities=(env._episode_serial, source_decisions))
             env.profiler.host("storage", perf_counter() - storage_started)
             self._stats["collection_logical_rows"] = (
                 self._stats.get("collection_logical_rows", 0) + plan.logical_rows
@@ -415,18 +417,15 @@ class CudaSequentialQ(CudaCohortLifecycle):
             self._simulation_ticks += int(rows["duration"][active].sum())
             self._first, self._last_obs = False, next_obs
             self.num_timesteps += int(active.sum())
-            active_infos = [info for info, on in zip(infos, active) if on]
-            for index, info in enumerate(infos):
-                if "episode_metrics" in info:
-                    info["episode_metrics"]["time_reward_pending"] = True
-                    info["episode_slot"] = index
-                    self._pending_episodes[index] = dict(
-                        metrics=info["episode_metrics"],
-                        record_id=f"cohort:{self._n_updates}:slot:{index}",
-                    )
+            for index, info in step.completed.items():
+                info["episode_metrics"]["time_reward_pending"] = True
+                info["episode_slot"] = index
+                self._pending_episodes[index] = dict(metrics=info["episode_metrics"],
+                    record_id=f"cohort:{self._n_updates}:slot:{index}")
             if not hasattr(callback, "cfg"):
-                self.training_games += sum("episode_metrics" in info for info in active_infos)
-            callback.update_locals({"infos": active_infos, "dones": dones})
+                self.training_games += len(step.completed)
+            callback.update_locals({"infos": step.infos(active_only=True), "dones": dones,
+                                    "step_batch": step, "episode_infos": list(step.completed.values())})
             # Publish the phase before callbacks may request an interruption.
             if not env.enabled_envs.any() and not self._scheduler.pending.any():
                 self._phase(CohortPhase.FINALIZE_REWARDS, callback)
@@ -539,6 +538,11 @@ class CudaSequentialQ(CudaCohortLifecycle):
             if self._optimizer_committing:
                 raise
             retry = "memory"
+        except MemoryError:
+            if self._optimizer_committing or self.execution_state.get("prefetch_disabled"):
+                raise
+            self.execution_state["prefetch_disabled"] = True
+            retry = "pinned_budget"
         except FloatingPointError:
             self._restart_pass("nonfinite_bf16")
             raise
@@ -553,7 +557,7 @@ class CudaSequentialQ(CudaCohortLifecycle):
             retry = "encoder_compilation"
         # Retry outside the exception frame, after failed activation graphs are released.
         if retry:
-            if retry == "encoder_compilation":
+            if retry in ("encoder_compilation", "pinned_budget"):
                 pass  # Replay the uncommitted pass eagerly with the same precision.
             elif self.execution_state["microbatch"] > 16:
                 self.execution_state["microbatch"] = max(
@@ -602,10 +606,16 @@ class CudaSequentialQ(CudaCohortLifecycle):
             self._fitting_spool = FittingSpool(self._buffer)
         self._fit_outcome_counts = self._fitting_spool.outcome_counts
         self._fit_consistency_counts = self._fitting_spool.consistency_counts
+        if not hasattr(self._fitting_spool, "coefficients"):
+            self._fitting_spool.coefficients = CohortCoefficients.prepare(
+                self._fit_outcome_counts, self._fit_consistency_counts, self.device,
+                self.cfg["training"]["objective"]["accepted_outcome_share"])
+        self._fit_coefficients = self._fitting_spool.coefficients
         args = self._buffer, self.batch_size * groups, self._fitting_spool
         self._fit_pass_start = torch.cuda.Event(enable_timing=True)
         self._fit_pass_start.record()
-        if self.cfg["training"].get("performance", {}).get("prefetch", False):
+        if (self.cfg["training"].get("performance", {}).get("prefetch", False)
+                and not self.execution_state.get("prefetch_disabled")):
             try:
                 self._batch_iterator = BatchPrefetch(
                     args[0],
@@ -690,6 +700,7 @@ class CudaSequentialQ(CudaCohortLifecycle):
                 metadata[0] if metadata else None,
                 teacher=self._teacher,
                 consistency_counts=self._fit_consistency_counts,
+                coefficients=self._fit_coefficients,
             )
             loss.backward()
             self.policy.accumulate_master_gradients()
@@ -823,7 +834,7 @@ class CudaSequentialQ(CudaCohortLifecycle):
                         raise ValueError("Invalid encoder execution recovery state")
                     if compilation["status"] == "fallback":
                         encoder.disable_compilation(compilation["error"])
-                    elif self.cfg["training"]["performance"]["compile_kernels"]:
+                    elif compilation_requested(self.cfg["training"]["performance"]):
                         encoder.enable_compilation()
         self._scheduler = CollectionScheduler(self.n_envs, self.device)
         if extra and extra.get("collection_scheduler") is not None:

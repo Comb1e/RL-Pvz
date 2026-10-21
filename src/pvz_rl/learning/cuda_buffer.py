@@ -22,8 +22,9 @@ from pvz_rl.learning.objective import (
     raw_rewards,
     training_rewards,
 )
+from pvz_rl.learning.source_actions import AppendReceipt, SourceActionRef
 
-TRAJECTORY_PROTOCOL = "pvz-rl/action-global-trajectory-v3"
+TRAJECTORY_PROTOCOL = "pvz-rl/action-global-trajectory-v4"
 
 
 def trajectory_dtype(cfg=None):
@@ -33,12 +34,14 @@ def trajectory_dtype(cfg=None):
             ("entity_count", "<u4"),
             ("entity_omitted", "<u4", 3),
             ("globals", "<f4", GLOBAL_WIDTH),
-            ("mask", "u1", (A.size + 7) // 8),
             ("action", "<u2"),
             ("tick", "<u4"),
             ("reset", "?"),
             ("active", "?"),
             ("env", "<u2"),
+            ("episode", "<u8"),
+            ("decision", "<u8"),
+            ("run_break", "?"),
             ("duration", "<u2"),
             ("reward", "<f8"),
             ("components", "<f8", len(COMPONENTS)),
@@ -95,6 +98,53 @@ class CompleteGameBuffer:
         # may fill this table when it has detailed event provenance; CPU and
         # replay paths use the same mutation API.
         self.causal_sources = {}
+        self._source_index = {}
+        self._index_arrays = []
+        self._next_run_break = np.ones(n_envs, bool)
+
+    def _index_records(self, records, base, *, validate_only=False):
+        """Small per-episode directories; each decision maps through an integer slab."""
+        for env in np.unique(records["env"]):
+            positions = np.flatnonzero(records["env"] == env)
+            for episode in np.unique(records["episode"][positions]):
+                selected = positions[records["episode"][positions] == episode]
+                key = (int(env), int(episode))
+                blocks, length = self._source_index.get(key, ([], 0))
+                if not np.array_equal(records["decision"][selected],
+                                      np.arange(length, length + len(selected))):
+                    raise ValueError("Duplicate, missing or out-of-order source action identity")
+                if validate_only:
+                    continue
+                for start in range(0, len(selected), self.block_rows):
+                    part = selected[start:start + self.block_rows]
+                    offset = 0
+                    while offset < len(part):
+                        block, at = divmod(length, self.block_rows)
+                        if block == len(blocks):
+                            amount = self.block_rows * 8
+                            if self.ram_used + self.staging_bytes + amount <= self.ram_bytes:
+                                value = np.empty(self.block_rows, dtype=np.uint64)
+                                self.ram_used += amount
+                            else:
+                                value = np.lib.format.open_memmap(
+                                    self.path / f"source-index-{len(self._index_arrays):06d}.npy",
+                                    mode="w+", dtype=np.uint64, shape=(self.block_rows,))
+                            blocks.append(value)
+                            self._index_arrays.append(value)
+                        take = min(len(part) - offset, self.block_rows - at)
+                        blocks[block][at:at + take] = base + part[offset:offset + take]
+                        length += take
+                        offset += take
+                self._source_index[key] = blocks, length
+
+    def source_row(self, reference):
+        if not isinstance(reference, SourceActionRef):
+            raise TypeError("Causal credit requires a SourceActionRef")
+        blocks, length = self._source_index.get((reference.env, reference.episode), ([], 0))
+        if reference.decision >= length:
+            raise ValueError("Stale or unknown source action identity")
+        block, offset = divmod(reference.decision, self.block_rows)
+        return int(blocks[block][offset])
 
     def _allocate(self, entity=False):
         blocks = self.entity_blocks if entity else self.blocks
@@ -115,7 +165,8 @@ class CompleteGameBuffer:
         """Charge reusable pinned buffers to the same budget, spilling RAM if needed."""
         if amount > self.ram_bytes:
             return False
-        for prefix, blocks in (("entities", self.entity_blocks), ("block", self.blocks)):
+        for prefix, blocks in (("entities", self.entity_blocks), ("block", self.blocks),
+                               ("source-index", self._index_arrays)):
             for i, block in enumerate(blocks):
                 if self.ram_used + amount <= self.ram_bytes:
                     self.staging_bytes = amount
@@ -130,7 +181,14 @@ class CompleteGameBuffer:
                 )
                 mapped[:] = block
                 blocks[i] = mapped
+                if prefix == "source-index":
+                    for index_blocks, _ in self._source_index.values():
+                        for j, existing in enumerate(index_blocks):
+                            if existing is block:
+                                index_blocks[j] = mapped
                 self.ram_used -= block.nbytes
+        if self.ram_used + amount > self.ram_bytes:
+            return False
         self.staging_bytes = amount
         return True
 
@@ -147,7 +205,7 @@ class CompleteGameBuffer:
             setattr(self, key, getattr(self, key) + take)
             at += take
 
-    def append(self, records, observations):
+    def append(self, records, observations, *, identities=None):
         if self.finalized or self.rewards_finalized:
             raise RuntimeError("Cannot append after complete-return finalization")
         records = np.array(records, dtype=self.dtype, copy=True)
@@ -164,10 +222,44 @@ class CompleteGameBuffer:
         observations.validate()
         if observations.counts.shape != (len(records),):
             raise ValueError("Each transition needs one public observation")
+        if np.any(records["env"] >= self.n_envs):
+            raise ValueError("Trajectory environment outside canonical slots")
+        slots = np.flatnonzero(records["active"])
+        next_run_break = self._next_run_break.copy()
+        # Capture padding boundaries before removing inactive metadata slots.
+        for env in np.unique(records["env"]):
+            positions = np.flatnonzero(records["env"] == env)
+            enabled = records["active"][positions]
+            previous = np.r_[not next_run_break[env], enabled[:-1]]
+            records["run_break"][positions] |= ~previous | records["reset"][positions]
+            next_run_break[env] = not bool(enabled[-1])
+        records = records[slots]
+        counts = np.asarray(observations.counts)[slots].astype(np.int64)
+        offsets = np.asarray(observations.offsets)[slots].astype(np.int64)
+        starts = np.cumsum(counts) - counts
+        positions = np.repeat(offsets, counts) + np.arange(int(counts.sum())) - np.repeat(starts, counts)
+        observations = PackedEntityBatch(observations.entities[positions], starts, counts,
+                                         np.asarray(observations.globals)[slots])
+        if identities is None:
+            for env in np.unique(records["env"]):
+                selected = np.flatnonzero(records["env"] == env)
+                episode = int(records["episode"][selected[0]])
+                length = self._source_index.get((int(env), episode), ([], 0))[1]
+                records["decision"][selected] = np.arange(length, length + len(selected))
+        else:
+            episodes, decisions = identities
+            records["episode"] = np.asarray(episodes)[slots]
+            records["decision"] = np.asarray(decisions)[slots]
+        self._index_records(records, self.size, validate_only=True)
         records["entity_offset"] = self.entity_size + observations.offsets
         records["entity_count"], records["globals"] = observations.counts, observations.globals
+        base = self.size
         self._append(observations.entities, entity=True)
         self._append(records)
+        self._index_records(records, base)
+        self._next_run_break = next_run_break
+        return AppendReceipt(slots, np.arange(base, self.size), records["episode"].copy(),
+                             records["decision"].copy(), records["env"].copy())
 
     def take(self, indices):
         indices = np.asarray(indices, dtype=np.int64)
@@ -298,7 +390,8 @@ class CompleteGameBuffer:
         if self.finalized or self.rewards_finalized:
             raise RuntimeError("Causal credits must be applied before return finalization")
         if isinstance(credits, dict):
-            entries = [{"row_index": index, "credits": values} for index, values in credits.items()]
+            entries = [{("action_ref" if isinstance(index, SourceActionRef) else "row_index"): index,
+                        "credits": values} for index, values in credits.items()]
         else:
             entries = list(credits)
         normalized = []
@@ -311,12 +404,18 @@ class CompleteGameBuffer:
         for entry in entries:
             if not isinstance(entry, dict):
                 raise TypeError("Causal credit entries must be mappings")
-            index = entry.get("row_index", entry.get("index"))
+            reference = entry.get("action_ref")
+            if reference is not None:
+                index = self.source_row(reference)
+            else:
+                index = entry.get("row_index", entry.get("index"))
             if type(index) is not int:
                 raise ValueError("Causal credit entry needs an integer row_index")
             row = self._row_view(index)
             if "env" in entry and int(row["env"]) != int(entry["env"]):
                 raise ValueError("Causal credit environment does not match trajectory row")
+            if "episode" in entry and int(row["episode"]) != int(entry["episode"]):
+                raise ValueError("Causal credit episode does not match trajectory row")
             values = entry.get("credits", entry.get("values", entry))
             if not isinstance(values, dict):
                 raise TypeError("Causal credit values must be a mapping")
@@ -628,6 +727,7 @@ class CompleteGameBuffer:
             outcome_counts=self.outcome_counts,
             consistency_counts=self.consistency_counts,
             exploration=dict(self.exploration),
+            next_run_break=self._next_run_break.tolist(),
         )
 
     def save(self, destination):
@@ -738,7 +838,10 @@ class CompleteGameBuffer:
                     for name in ("branch_value", "tile_value", "placement_gap")
                 ):
                     raise ValueError("Non-finite trajectory Q values or placement gap")
-                actual = rows[rows["active"]]
+                if not np.all(rows["active"]) or np.any(rows["env"] >= obj.n_envs):
+                    raise ValueError("Compact trajectories contain only active canonical rows")
+                obj._index_records(rows, at)
+                actual = rows
                 validate_routes(actual)
                 if np.any(actual["rejection_reason"] > 7):
                     raise ValueError("Unknown trajectory rejection reason")
@@ -807,20 +910,25 @@ class CompleteGameBuffer:
                 int(index): list(values)
                 for index, values in state.get("causal_sources", {}).items()
             }
+            boundary = np.asarray(state.get("next_run_break"))
+            if boundary.shape != (obj.n_envs,) or boundary.dtype != np.bool_:
+                raise ValueError("Corrupt compaction boundary recovery")
+            obj._next_run_break = boundary.copy()
             return obj
         except Exception:
             obj.close()
             raise
 
     def close(self):
-        for blocks in (self.blocks, self.entity_blocks):
+        self._source_index.clear()
+        for blocks in (self.blocks, self.entity_blocks, self._index_arrays):
             for block in blocks:
                 if isinstance(block, np.memmap):
                     block.flush()
                     block._mmap.close()
             blocks.clear()
         if self.path.is_dir():
-            for prefix in ("block", "entities"):
+            for prefix in ("block", "entities", "source-index"):
                 for path in self.path.glob(prefix + "-*.npy"):
                     path.unlink()
             try:

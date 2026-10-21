@@ -16,7 +16,7 @@ from pvz_rl.envs.encoding import (
     PackedEntityBatch,
     collate_observations,
 )
-from pvz_rl.learning.action_routing import compact_invalid_rows, route_indices
+from pvz_rl.learning.action_routing import InvalidRowCompactor, route_indices
 
 
 @dataclass(frozen=True)
@@ -37,7 +37,7 @@ class BatchMetadata:
         return getattr(self, name)
 
 
-def fitting_metadata(rows, device):
+def fitting_metadata(rows, device, *, plan=None):
     """CPU-owned selections for validated active fitting rows."""
     if not np.all(rows["active"]) or np.any(rows["action"] > 405):
         raise ValueError("Fitting plans require genuine active rows and valid proposals")
@@ -64,7 +64,7 @@ def fitting_metadata(rows, device):
         for name, dtype in zip(names, dtypes, strict=True)
     ]
     indices = torch.as_tensor(np.flatnonzero(rows["action"] != 0), dtype=torch.long, device=device)
-    plan = fitting_plan(rows)
+    plan = fitting_plan(rows) if plan is None else plan
     plan = {k: torch.as_tensor(v, dtype=torch.long, device=device) for k, v in plan.items()}
     return BatchMetadata(
         *values,
@@ -100,77 +100,110 @@ def fitting_plan(rows):
     return plan
 
 
-class FittingSpool:
+class PreparedPlans:
+    def plan_for(self, rows):
+        if not hasattr(self, "_plans"):
+            self._plans = {}
+            self._plan_bytes = 0
+        key = (int(rows["env"][0]), int(rows["episode"][0]), int(rows["decision"][0]), len(rows))
+        if key in self._plans:
+            return self._plans[key]
+        plan = fitting_plan(rows)
+        amount = sum(value.nbytes for value in plan.values())
+        if self.buffer.ram_used + self.buffer.staging_bytes + amount <= self.buffer.ram_bytes:
+            self.buffer.ram_used += amount
+            self._plan_bytes += amount
+            self._plans[key] = plan
+        return plan
+
+    def clear_plans(self):
+        self.buffer.ram_used -= getattr(self, "_plan_bytes", 0)
+        self._plan_bytes = 0
+        getattr(self, "_plans", {}).clear()
+
+
+class FittingSpool(PreparedPlans):
     """Reusable active rows and ragged public inputs for every fitting pass."""
 
     def __init__(self, buffer):
-        self.buffer = buffer
-        indices = buffer.valid_indices()
         from pvz_rl.config import load_config
 
-        self.buckets = (buffer.cfg or load_config())["training"]["performance"].get(
-            "fit_entity_buckets", [8, 16, 32, 64, 128, 256]
-        )
-        self.compaction = {
-            "raw_rows": int(len(indices)),
-            "selected_rows": int(len(indices)),
-            "raw_invalid_rows": 0,
-            "retained_invalid_rows": 0,
-            "invalid_runs": 0,
-            "invalid_windows": 0,
-            "invalid_reduction": 0.0,
-        }
-        if len(indices):
-            source_rows = buffer.take(indices)
-            compact_positions, self.outcome_counts, self.compaction = compact_invalid_rows(
-                source_rows,
-                group_size=(buffer.cfg or load_config())["training"]["objective"].get(
-                    "invalid_fit_group_size", 100
-                ),
-            )
-            indices = indices[compact_positions]
-            rows = source_rows[compact_positions]
-            if np.any(rows["entity_count"] > self.buckets[-1]):
+        self.buffer = buffer
+        self._ram_arrays, self._temp_paths = [], []
+        self._closed = False
+        cfg = buffer.cfg or load_config()
+        self.buckets = cfg["training"]["performance"]["fit_entity_buckets"]
+        compactor = InvalidRowCompactor(cfg["training"]["objective"]["invalid_fit_group_size"])
+        candidates = self._allocate("selection", (buffer.size,), np.dtype("<i8"))
+        keys = self._allocate("partition", (buffer.size,), np.dtype("u1"))
+        used, entities = 0, 0
+        populations = np.zeros(len(self.buckets) * 4, np.int64)
+        fields = ("active", "action", "accepted", "route", "rejection_reason", "env",
+                  "episode", "decision", "reset", "done", "run_break")
+        slim_dtype = np.dtype([(name, buffer.dtype.fields[name][0]) for name in fields])
+        for block_index, block in enumerate(buffer.blocks):
+            rows = block[:min(buffer.block_rows, buffer.size - block_index * buffer.block_rows)]
+            slim = np.empty(len(rows), dtype=slim_dtype)
+            for field in fields:
+                slim[field] = rows[field]
+            selected = compactor.select(slim)
+            counts = rows["entity_count"][selected]
+            if np.any(counts > self.buckets[-1]):
                 raise ValueError("Fitting entities exceed the unchanged encoding cap")
-            bucket = np.searchsorted(self.buckets, rows["entity_count"])
-            order = np.lexsort((rows["route"], bucket))
-            indices = indices[order]
-            rows = rows[order]
-        else:
-            self.outcome_counts = np.zeros((3, 2), dtype=np.int64)
-        self.indices = np.asarray(indices, dtype=np.int64)
-        self._ram_arrays = []
-        self._temp_paths = []
-        self.rows = self._allocate("rows", (len(self.indices),), buffer.dtype)
-        if len(self.indices):
-            self.rows[:] = buffer.take(self.indices)
-        entity_count = int(self.rows["entity_count"].sum())
-        self.entities = self._allocate("entities", (entity_count, ENTITY_WIDTH), np.dtype("<i4"))
-        counts = self.rows["entity_count"].astype(np.int64)
-        source_offsets = self.rows["entity_offset"].astype(np.int64)
-        if np.any(source_offsets < 0) or np.any(source_offsets + counts > buffer.entity_size):
-            raise ValueError("Corrupt fitting entity offset/count")
-        destination_offsets = np.cumsum(counts) - counts
-        # Bounded vectorized gathers, including slabs spanning storage blocks.
+            part = np.searchsorted(self.buckets, counts) * 4 + rows["route"][selected]
+            candidates[used:used + len(selected)] = block_index * buffer.block_rows + selected
+            keys[used:used + len(selected)] = part
+            populations += np.bincount(part, minlength=len(populations))
+            entities += int(counts.sum())
+            used += len(selected)
+        self.compaction, self.outcome_counts = compactor.diagnostics, compactor.counts
+        self.indices = self._allocate("indices", (used,), np.dtype("<i8"))
+        starts = np.r_[0, np.cumsum(populations)]
+        cursor = starts[:-1].copy()
+        # Stable counting partition; scratch is bounded by a storage block.
+        for at in range(0, used, buffer.block_rows):
+            source = candidates[at:min(used, at + buffer.block_rows)]
+            partition = keys[at:min(used, at + buffer.block_rows)]
+            for key in np.unique(partition):
+                selected = source[partition == key]
+                begin = int(cursor[key])
+                self.indices[begin:begin + len(selected)] = selected
+                cursor[key] += len(selected)
+        self._release(candidates)
+        self._release(keys)
+        self.rows = self._allocate("rows", (used,), buffer.dtype)
+        for at in range(0, used, buffer.block_rows):
+            self.rows[at:at + buffer.block_rows] = buffer.take(self.indices[at:at + buffer.block_rows])
+        self.entities = self._allocate("entities", (entities, ENTITY_WIDTH), np.dtype("<i4"))
         chunk = max(1, buffer.block_rows // self.buckets[-1])
-        for start in range(0, len(self.rows), chunk):
-            stop = min(len(self.rows), start + chunk)
-            local_counts = counts[start:stop]
-            local_offsets = np.cumsum(local_counts) - local_counts
-            positions = np.repeat(source_offsets[start:stop], local_counts)
-            positions += np.arange(len(positions)) - np.repeat(local_offsets, local_counts)
-            blocks, offsets = np.divmod(positions, buffer.block_rows)
-            target_start = int(destination_offsets[start])
+        destination = 0
+        for at in range(0, used, chunk):
+            rows = self.rows[at:min(at + chunk, used)]
+            counts = rows["entity_count"].astype(np.int64)
+            offsets = rows["entity_offset"].astype(np.int64)
+            if np.any(offsets + counts > buffer.entity_size):
+                raise ValueError("Corrupt fitting entity offset/count")
+            local = np.cumsum(counts) - counts
+            positions = np.repeat(offsets, counts)
+            positions += np.arange(len(positions)) - np.repeat(local, counts)
+            blocks, indices = np.divmod(positions, buffer.block_rows)
             for block in np.unique(blocks):
                 selected = np.flatnonzero(blocks == block)
-                self.entities[target_start + selected] = buffer.entity_blocks[block][
-                    offsets[selected]
-                ]
-        self.rows["entity_offset"] = destination_offsets
-        self.widths = counts
-        keys = np.searchsorted(self.buckets, counts) * 4 + self.rows["route"]
-        self.boundaries = np.r_[0, np.flatnonzero(keys[1:] != keys[:-1]) + 1, len(self.rows)]
-        self._closed = False
+                self.entities[destination + selected] = buffer.entity_blocks[block][indices[selected]]
+            rows["entity_offset"] = destination + local
+            destination += len(positions)
+        self.widths = self.rows["entity_count"]
+        self.boundaries = np.unique(starts)
+
+    def _release(self, value):
+        if isinstance(value, np.memmap):
+            path = Path(value.filename)
+            value._mmap.close()
+            path.unlink(missing_ok=True)
+            self._temp_paths.remove(path)
+        else:
+            self.buffer.ram_used -= value.nbytes
+            self._ram_arrays = [array for array in self._ram_arrays if array is not value]
 
     @property
     def consistency_counts(self):
@@ -183,7 +216,7 @@ class FittingSpool:
 
     def _allocate(self, name, shape, dtype):
         amount = int(np.prod(shape, dtype=np.int64)) * np.dtype(dtype).itemsize
-        if self.buffer.ram_used + self.buffer.staging_bytes + amount <= self.buffer.ram_bytes:
+        if not amount or self.buffer.ram_used + self.buffer.staging_bytes + amount <= self.buffer.ram_bytes:
             value = np.empty(shape, dtype=dtype)
             self.buffer.ram_used += amount
             self._ram_arrays.append(value)
@@ -223,10 +256,11 @@ class FittingSpool:
         if self._closed:
             return
         self._closed = True
+        self.clear_plans()
         for value in self._ram_arrays:
             self.buffer.ram_used -= value.nbytes
         self._ram_arrays.clear()
-        for value in (self.rows, self.entities):
+        for value in (self.rows, self.entities, self.indices):
             if isinstance(value, np.memmap):
                 value.flush()
                 value._mmap.close()
@@ -237,6 +271,86 @@ class FittingSpool:
         self.entities = np.empty((0, ENTITY_WIDTH), dtype=np.int32)
         self.indices = np.empty(0, np.int64)
         self.widths = np.empty(0, np.uint32)
+
+
+class PreparedDataSource(PreparedPlans):
+    """One-time canonical preparation for list-backed demo/annotation inputs.
+
+    The same ragged storage budget, padding and fenced transport serve all
+    fitters. Order is caller-owned; preparation never shuffles or compacts.
+    """
+
+    def __init__(self, observations, cfg, *, rows=None):
+        from pvz_rl.learning.cuda_buffer import CompleteGameBuffer
+
+        self._workspace = TemporaryDirectory(prefix="pvz-prepared-")
+        spec = cfg["training"]["storage"]
+        self.buffer = CompleteGameBuffer(self._workspace.name, 1,
+                                        ram_bytes=spec["ram_gib"] * 1024**3,
+                                        block_rows=spec["block_rows"], cfg=cfg)
+        self.buckets = cfg["training"]["performance"]["fit_entity_buckets"]
+        self.original_rows = rows
+        try:
+            for start in range(0, len(observations), cfg["training"]["batch_size"]):
+                current = observations[start:start + cfg["training"]["batch_size"]]
+                metadata = np.zeros(len(current), dtype=self.buffer.dtype)
+                if rows is not None:
+                    metadata[:] = rows[start:start + len(current)]
+                else:
+                    metadata["accepted"] = True
+                metadata["active"] = True
+                self.buffer.append(metadata, current)
+        except BaseException:
+            self.close()
+            raise
+
+    def __len__(self):
+        return self.buffer.size
+
+    def iter_batches(self, batch_size):
+        boundaries = getattr(self, "boundaries", [0, len(self)])
+        starts = (start for low, high in zip(boundaries[:-1], boundaries[1:], strict=True)
+                  for start in range(int(low), int(high), batch_size))
+        limits = (min(start + batch_size, int(high))
+                  for low, high in zip(boundaries[:-1], boundaries[1:], strict=True)
+                  for start in range(int(low), int(high), batch_size))
+        for start, stop in zip(starts, limits, strict=True):
+            rows = self.buffer.take(np.arange(start, stop))
+            if self.original_rows is not None:
+                for field in ("episode", "decision", "run_break"):
+                    rows[field] = self.original_rows[field][start:stop]
+            counts = rows["entity_count"].astype(np.int64)
+            source_offsets = rows["entity_offset"].astype(np.int64)
+            offsets = np.cumsum(counts) - counts
+            positions = np.repeat(source_offsets, counts)
+            positions += np.arange(len(positions)) - np.repeat(offsets, counts)
+            entities = np.empty((len(positions), ENTITY_WIDTH), np.int32)
+            blocks, indices = np.divmod(positions, self.buffer.block_rows)
+            for block in np.unique(blocks):
+                selected = np.flatnonzero(blocks == block)
+                entities[selected] = self.buffer.entity_blocks[block][indices[selected]]
+            yield rows, PackedEntityBatch(entities, offsets, counts, rows["globals"])
+
+    def batches(self, batch_size, device):
+        if torch.device(device).type == "cuda" and self.buffer.cfg["training"]["performance"]["prefetch"]:
+            return BatchPrefetch(self.buffer, batch_size, device, self.buckets[-1], spool=self)
+
+        def eager():
+            for rows, packed in self.iter_batches(batch_size):
+                width = self.buckets[np.searchsorted(self.buckets, int(packed.counts.max(initial=0)))]
+                yield rows, self.buffer.observations_from_packed(packed, width=width, device=device), fitting_metadata(rows, device, plan=self.plan_for(rows))
+        return eager()
+
+    def close(self):
+        self.clear_plans()
+        self.buffer.close()
+        self._workspace.cleanup()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        self.close()
 
 
 def batch_rows(buffer, batch_size, *, spool=None):
@@ -287,15 +401,19 @@ class BatchPrefetch:
     """One ordered producer and two pinned slots with explicit reuse fences."""
 
     def __init__(self, buffer, batch_size, device, max_entities, *, spool=None):
+        from pvz_rl.config import load_config
+
         self.buffer, self.device = buffer, torch.device(device)
+        self.buckets = (buffer.cfg or load_config())["training"]["performance"]["fit_entity_buckets"]
         self.spool = spool
         self.base_staging = buffer.staging_bytes
+        self.batch_size = batch_size
+        self.max_entities = max_entities
         amount = (
             2
             * batch_size
             * (
-                max_entities * (ENTITY_WIDTH * 4 + 1)
-                + (GLOBAL_WIDTH + 8) * 4
+                (GLOBAL_WIDTH + 8) * 4
                 + buffer.dtype.itemsize
                 + 5 * 8
             )
@@ -319,13 +437,13 @@ class BatchPrefetch:
                         EntityBatch(
                             torch.empty(
                                 batch_size,
-                                max_entities,
+                                0,
                                 ENTITY_WIDTH,
                                 dtype=torch.int32,
                                 pin_memory=True,
                             ),
                             torch.empty(
-                                batch_size, max_entities, dtype=torch.bool, pin_memory=True
+                                batch_size, 0, dtype=torch.bool, pin_memory=True
                             ),
                             torch.empty(batch_size, GLOBAL_WIDTH, pin_memory=True),
                             validated=True,
@@ -352,6 +470,23 @@ class BatchPrefetch:
             return None
         rows, packed = item if self.spool is not None else (item, None)
         host, metadata, plan = self.slots[slot]
+        required = int((rows["entity_count"] if packed is None else packed.counts).max(initial=0))
+        buckets = self.buckets
+        width = int(buckets[np.searchsorted(buckets, required)])
+        if host.entities.shape[1] != width:
+            # The prior copy event was fenced above; no borrowed pinned view survives reuse.
+            widths = [entry[0].entities.shape[1] for entry in self.slots]
+            widths[slot] = width
+            amount = sum(self.batch_size * (w * (ENTITY_WIDTH * 8 + 1 + 3 * 8)
+                         + (GLOBAL_WIDTH + 8) * 4 + self.buffer.dtype.itemsize + 5 * 8)
+                         for w in widths)
+            if not self.buffer.reserve_staging(self.base_staging + amount):
+                raise MemoryError("Pinned bucket exceeds the shared storage budget")
+            host = EntityBatch(
+                torch.empty(self.batch_size, width, ENTITY_WIDTH, dtype=torch.int32, pin_memory=True),
+                torch.empty(self.batch_size, width, dtype=torch.bool, pin_memory=True),
+                host.globals, validated=True)
+            self.slots[slot] = host, metadata, plan
         if packed is None:
             observations = self.buffer.observations(rows, destination=host)
         else:
@@ -379,7 +514,7 @@ class BatchPrefetch:
         ):
             array[:, column] = rows[name]
         self.buffer.transport_metrics["preparation_seconds"] += perf_counter() - started
-        selections = fitting_plan(rows)
+        selections = self.spool.plan_for(rows) if self.spool is not None else fitting_plan(rows)
         pinned = {}
         for index, (name, indices) in enumerate(selections.items()):
             pinned[name] = plan[index, : len(indices)]

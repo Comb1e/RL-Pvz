@@ -40,19 +40,28 @@ def tuning_candidates(tuning):
 
 
 def _median(result):
-    values = [r["seconds"] for m in result["measurements"] for r in m["repetitions"]]
-    return sorted(values)[len(values) // 2] if values else float("inf")
+    measurements = result["measurements"]
+    repeats = min((len(m["repetitions"]) for m in measurements), default=0)
+    totals = [sum(m["repetitions"][i]["seconds"] for m in measurements) for i in range(repeats)]
+    return sorted(totals)[len(totals) // 2] if totals else float("inf")
 
 
 def run_trial(args, candidate, output, timeout):
     output.unlink(missing_ok=True)
-    command = [sys.executable, "-m", "pvz_rl.monitoring.fit_benchmark", "--output", str(output),
-               "--gpu", args.gpu, "--rows-per-width", str(args.rows_per_width),
-               "--repeats", str(args.repeats),
-               "--species-microbatch", str(candidate["species"]),
-               "--tile-microbatch", str(candidate["tile"]),
-               "--token-budget", str(candidate["tokens"]),
+    workload = getattr(args, "workload", "synthetic")
+    module = "pipeline_benchmark" if workload == "full-cycle" else "fit_benchmark"
+    command = [sys.executable, "-m", "pvz_rl.monitoring." + module, "--output", str(output),
+               "--gpu", args.gpu, "--species-microbatch", str(candidate["species"]),
+               "--tile-microbatch", str(candidate["tile"]), "--token-budget", str(candidate["tokens"]),
                "--groups", str(candidate["groups"]), "--threads", str(candidate["threads"])]
+    if workload == "full-cycle":
+        command.extend(("--seconds", str(timeout), "--stage", args.stage))
+    else:
+        command.extend(("--rows-per-width", str(args.rows_per_width), "--repeats", str(args.repeats)))
+    if workload == "trajectory":
+        command.extend(("--trajectory", str(args.trajectory)))
+    if getattr(args, "initial_weights", None):
+        command.extend(("--init-from", str(args.initial_weights)))
     if args.no_compile:
         command.append("--no-compile")
     if args.config is not None:
@@ -67,6 +76,11 @@ def run_trial(args, candidate, output, timeout):
         return {"candidate": candidate, "complete": False, "reason": "subprocess",
                 "stderr": completed.stderr[-2000:]}
     result = json.loads(output.read_text("utf-8"))
+    if workload == "full-cycle":
+        result["measurements"] = [dict(workload="full-cycle", repetitions=[dict(
+            seconds=result.get("cycle_seconds", float("inf")),
+            peak_allocated_mib=result["torch_peak_mib"], free_mib=result["free_mib"],
+            total_mib=result["total_mib"])])]
     if result.get("candidate") not in (None, candidate):
         return {"candidate": candidate, "complete": False, "reason": "candidate mismatch"}
     repetitions = [r for m in result["measurements"] for r in m["repetitions"]]
@@ -75,6 +89,18 @@ def run_trial(args, candidate, output, timeout):
     return {"candidate": candidate, "complete": bool(result.get("complete") and headroom),
             "headroom": headroom, "median_seconds": _median(result),
             "elapsed_seconds": monotonic() - started, "raw": result}
+
+
+def pipeline_acceptance(trials, settings):
+    if len(trials) != 4 or not all(t.get("complete") for t in trials):
+        return dict(eligible=False, reason="two completed paired comparisons required")
+    baseline = [trials[0]["median_seconds"], trials[3]["median_seconds"]]
+    candidate = [trials[1]["median_seconds"], trials[2]["median_seconds"]]
+    changes = [c / a - 1 for a, c in zip(baseline, candidate, strict=True)]
+    median_change = sum(changes) / 2
+    eligible = (median_change <= -settings["pipeline_minimum_improvement"] and
+                max(changes) <= settings["pipeline_maximum_regression"])
+    return dict(eligible=eligible, paired_relative_changes=changes, median_relative_change=median_change)
 
 
 def choose(trials, tolerance):
@@ -145,6 +171,8 @@ def main():
     parser.add_argument("--config", type=Path)
     parser.add_argument("--initial-weights", type=Path)
     parser.add_argument("--stage", default="easy")
+    parser.add_argument("--workload", choices=("synthetic", "trajectory", "full-cycle"), default="synthetic")
+    parser.add_argument("--trajectory", type=Path)
     parser.add_argument("--minutes", type=float, default=60)
     parser.add_argument("--repeats", type=int,
                         help="measured repetitions (defaults to tuning.repetitions)")
@@ -161,6 +189,10 @@ def main():
     parser.add_argument("--study-games", type=int, default=256,
                         help="completed games per paired pilot (two default 128-game cohorts)")
     args = parser.parse_args()
+    if args.workload == "trajectory" and args.trajectory is None:
+        parser.error("trajectory workload requires --trajectory")
+    if args.workload == "full-cycle" and args.initial_weights is None:
+        parser.error("full-cycle workload requires --initial-weights")
     args.output.mkdir(parents=True, exist_ok=True)
     raw = _read_config(args.config)
     tuning = raw.get("tuning", {})
@@ -172,6 +204,9 @@ def main():
                          else float(tuning.get("minimum_headroom_mib", 1024)))
     args.tuning = tuning
     candidates = tuning_candidates(tuning)
+    if args.workload == "full-cycle":
+        pair = tuning_candidates({"candidates": tuning["pipeline_candidates"]})
+        candidates = [pair[0], pair[1], pair[1], pair[0]]
     started = monotonic()
     trials = []
     for index, candidate in enumerate(candidates):
@@ -185,6 +220,14 @@ def main():
               "initial_weights": str(args.initial_weights) if args.initial_weights else None,
               "trials": trials,
               "recommendation": choose(trials, float(tuning.get("within_fastest_fraction", 0.05)))}
+    result["workload"] = args.workload
+    result["eligible_for_profile_promotion"] = False
+    if args.workload == "full-cycle":
+        gate = pipeline_acceptance(trials, tuning)
+        result["profile_acceptance"] = gate
+        result["eligible_for_profile_promotion"] = gate["eligible"]
+        if not gate["eligible"]:
+            result["recommendation"] = None
     if args.learning_study:
         result["learning_study"] = run_learning_study(
             args, args.output / "learning", max(30, args.minutes * 60 - (monotonic() - started))

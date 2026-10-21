@@ -472,7 +472,9 @@ def validate_config(cfg: dict) -> None:
         if type(storage.get(key)) is not int or storage[key] < 1:
             raise ValueError(f"training.storage.{key} must be a positive integer")
     performance = train.get("performance", {})
-    for key in ("compile_kernels", "telemetry"):
+    if "compile_kernels" in performance:
+        raise ValueError("compile_kernels was replaced by compile_collection and compile_fitting")
+    for key in ("compile_collection", "compile_fitting", "telemetry"):
         if type(performance.get(key, False)) is not bool:
             raise ValueError(f"training.performance.{key} must be a boolean")
     if performance.get("fit_precision", "fp32") != "bf16_master":
@@ -480,7 +482,8 @@ def validate_config(cfg: dict) -> None:
     if type(performance.get("prefetch", False)) is not bool:
         raise ValueError("training.performance.prefetch must be a boolean")
     if set(performance) - {
-        "compile_kernels",
+        "compile_collection",
+        "compile_fitting",
         "telemetry",
         "fit_precision",
         "prefetch",

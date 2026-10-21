@@ -23,7 +23,7 @@ LEGACY_DEMO_PROTOCOL = "pvz-rl/demo-initialization-checkpoint-v9"
 ANNOTATION_CHECKPOINT_PROTOCOL = "pvz-rl/annotation-initialization-v2"
 LEGACY_ANNOTATION_CHECKPOINT_PROTOCOL = "pvz-rl/tile-annotation-initialization-v1"
 MODEL_STATE_PROTOCOL = "pvz-rl/stateless-two-stage-bf16-master-state-v2"
-AUTONOMOUS_STATE_PROTOCOL = "pvz-rl/action-global-state-v3"
+AUTONOMOUS_STATE_PROTOCOL = "pvz-rl/action-global-state-v4"
 
 
 def protocol_for(kind):

@@ -11,7 +11,6 @@ import tempfile
 from pathlib import Path
 from time import perf_counter
 
-import numpy as np
 import psutil
 import torch
 from stable_baselines3.common.callbacks import BaseCallback
@@ -70,6 +69,8 @@ def measure(cfg, output, *, initial=None, seed=101, seconds=1800, trajectory=Non
                 if initial:
                     weights, result["initialization"] = initial_weights(initial, cfg)
                 env = vector_env(cfg, "masked", seed)
+                from pvz_rl.learning.curriculum import initial_state
+                env.set_curriculum_stage(initial_state(cfg).stage)
                 model = build_model(cfg, "masked", env, seed)
                 if weights is not None:
                     model.policy.load_state_dict(weights)
@@ -110,7 +111,7 @@ def measure(cfg, output, *, initial=None, seed=101, seconds=1800, trajectory=Non
                 model._phase_times["returns"] = result["phases"]["returns"]
                 if trajectory is not None:
                     result["trajectory"] = str(Path(trajectory).resolve())
-                    model._buffer.save(trajectory)
+                    write_json(Path(trajectory) / "metadata.json", model._buffer.save(trajectory))
                 model._phase(CohortPhase.FIT, callback)
                 for index in range(model.n_epochs):
                     def fit_pass():
@@ -160,6 +161,7 @@ def main():
     parser.add_argument("--gpu", default="0")
     parser.add_argument("--init-from", type=Path)
     parser.add_argument("--seed", type=int, default=101)
+    parser.add_argument("--stage", choices=("easy", "standard", "shared"), default="easy")
     parser.add_argument("--seconds", type=float, default=1800)
     parser.add_argument("--species-microbatch", type=int)
     parser.add_argument("--tile-microbatch", type=int)
@@ -167,15 +169,19 @@ def main():
     parser.add_argument("--groups", type=int)
     parser.add_argument("--threads", type=int)
     parser.add_argument("--trajectory", type=Path)
+    parser.add_argument("--no-compile", action="store_true")
     args = parser.parse_args()
     device = select_gpu(args.gpu)
     cfg, profile = apply_gpu_profile(load_config(args.config), device=device, path=args.config)
-    cfg["training"]["device"] = f"cuda:{device['index']}"
+    cfg["training"]["device"] = "cuda"
+    cfg["curriculum"]["run_stage"] = args.stage
     for argument, key in ((args.species_microbatch, "fit_species_microbatch"),
                           (args.tile_microbatch, "fit_tile_microbatch"),
                           (args.token_budget, "fit_token_budget"), (args.groups, "fit_batch_groups")):
         if argument is not None:
             cfg["training"]["performance"][key] = argument
+    if args.no_compile:
+        cfg["training"]["performance"].update(compile_collection=False, compile_fitting=False)
     if args.threads is not None:
         cfg["training"]["torch_threads"] = args.threads
     result = measure(cfg, args.output, initial=args.init_from, seed=args.seed,

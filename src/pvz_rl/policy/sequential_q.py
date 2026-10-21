@@ -74,12 +74,12 @@ def outcome_weights(counts, *, device, dtype, accepted_share=0.5):
     return shares / counts.clamp_min(1) / represented
 
 
-def balanced_q_loss(selected, targets, actions, counts, *, accepted, accepted_share=0.5):
+def balanced_q_loss(selected, targets, actions, counts, *, accepted, accepted_share=0.5, weights=None):
     """Equal nonempty wait/plant/dig groups, then equal accepted/rejected outcomes."""
     errors = (selected - targets).square()
     weights = outcome_weights(
         counts, device=selected.device, dtype=selected.dtype, accepted_share=accepted_share
-    )
+    ) if weights is None else weights
     loss = (errors * weights[action_groups(actions), accepted.long()]).sum()
     return loss, errors
 

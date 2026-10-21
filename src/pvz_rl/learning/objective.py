@@ -148,9 +148,12 @@ def finalize_episode_metrics(rows, cfg, *, median=None):
 @torch.no_grad()
 def species_consistency_targets(online_tiles, ema_tiles, masks, branches):
     """Select with online geometry values and evaluate with the frozen EMA."""
-    selected = greedy_choice(online_tiles.detach(), tile_candidates(masks, branches))
+    selected = (online_tiles.detach().argmax(-1) if masks is None else
+                greedy_choice(online_tiles.detach(), tile_candidates(masks, branches)))
     targets = ema_tiles.detach().gather(1, selected[:, None]).flatten()
-    gaps = candidate_maxima(ema_tiles.detach(), masks, branches) - targets
+    maxima = (ema_tiles.detach().max(-1).values if masks is None else
+              candidate_maxima(ema_tiles.detach(), masks, branches))
+    gaps = maxima - targets
     return targets, selected, gaps
 
 
@@ -166,7 +169,7 @@ def consistency_diagnostics(loss, totals):
 
 
 def species_consistency_loss(
-    species, targets, actions, accepted, counts, *, delta=1.0, accepted_share=0.5
+    species, targets, actions, accepted, counts, *, delta=1.0, accepted_share=0.5, weights=None
 ):
     """Balanced MSE-matched Huber toward detached double-estimator targets."""
     branches, _ = action_parts(actions)
@@ -174,7 +177,7 @@ def species_consistency_loss(
     errors = 2 * F.huber_loss(predictions, targets.detach(), reduction="none", delta=delta)
     weights = outcome_weights(
         counts, device=species.device, dtype=species.dtype, accepted_share=accepted_share
-    )
+    ) if weights is None else weights
     return (errors * weights[action_groups(actions) - 1, accepted.long()]).sum()
 
 

@@ -267,7 +267,7 @@ def test_complete_training_cohorts_identical_with_viewer(smoke_cfg, tmp_path):
 
     cfg = copy.deepcopy(smoke_cfg)
     cfg["training"].update(n_envs=2, batch_size=16)
-    cfg["training"]["performance"]["compile_kernels"] = False
+    cfg["training"]["performance"]["compile_fitting"] = False
     results = []
     for enabled in (False, True):
         env = vector_env(cfg, "masked", 101, "diagnostic")

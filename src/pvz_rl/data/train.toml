@@ -109,7 +109,8 @@ demo_rank_loss_weight = 0.10
 demo_rank_margin = 0.05
 
 [training.performance]
-compile_kernels = true
+compile_collection = true
+compile_fitting = true
 telemetry = true
 fit_precision = "bf16_master"
 prefetch = true
@@ -238,14 +239,14 @@ performance = {fit_species_microbatch = 32, fit_tile_microbatch = 32, fit_token_
 device_names = ["NVIDIA GeForce RTX 4070 Laptop GPU"]
 status = "measured-eager-2026-10-15"
 torch_threads = 2
-performance = {compile_kernels = false, fit_species_microbatch = 64, fit_tile_microbatch = 64, fit_token_budget = 16384, fit_batch_groups = 2, collection_vram_headroom_mib = 1638}
+performance = {compile_collection = false, compile_fitting = false, fit_species_microbatch = 64, fit_tile_microbatch = 64, fit_token_budget = 16384, fit_batch_groups = 2, collection_vram_headroom_mib = 1638}
 
 [gpu_profiles.rtx4080-super]
 device_names = ["NVIDIA GeForce RTX 4080 SUPER"]
 status = "measured-32gib-2026-10-15"
 torch_threads = 1
 # The measured cloud device reports 32 GiB; retain the 20% collection reserve.
-performance = {compile_kernels = true, fit_species_microbatch = 64, fit_tile_microbatch = 64, fit_token_budget = 16384, fit_batch_groups = 2, collection_vram_headroom_mib = 6554}
+performance = {compile_collection = true, compile_fitting = true, fit_species_microbatch = 64, fit_tile_microbatch = 64, fit_token_budget = 16384, fit_batch_groups = 2, collection_vram_headroom_mib = 6554}
 
 [gpu_profiles.rtx5090]
 device_names = ["NVIDIA GeForce RTX 5090"]
@@ -255,7 +256,7 @@ device_names = ["NVIDIA GeForce RTX 5090"]
 # retaining a 20% collection reserve until a native 5090 run completes.
 status = "provisional-scaled-from-rtx4070-2026-10-15"
 torch_threads = 1
-performance = {compile_kernels = true, fit_species_microbatch = 128, fit_tile_microbatch = 128, fit_token_budget = 32768, fit_batch_groups = 4, collection_vram_headroom_mib = 6554}
+performance = {compile_collection = true, compile_fitting = true, fit_species_microbatch = 128, fit_tile_microbatch = 128, fit_token_budget = 32768, fit_batch_groups = 4, collection_vram_headroom_mib = 6554}
 
 [gpu_profiles.rtx4090]
 device_names = ["NVIDIA GeForce RTX 4090"]
@@ -282,6 +283,12 @@ learning_rate = 0.00015
 learning_rate = 0.0006
 
 [tuning]
+pipeline_minimum_improvement = 0.05
+pipeline_maximum_regression = 0.02
+pipeline_candidates = [
+  {species = 64, tile = 64, tokens = 16384, groups = 2, threads = 2},
+  {species = 128, tile = 128, tokens = 32768, groups = 2, threads = 2},
+]
 repetitions = 3
 within_fastest_fraction = 0.05
 minimum_headroom_fraction = 0.20

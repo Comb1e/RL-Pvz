@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import math
 import time
+from contextlib import ExitStack, closing
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -35,11 +36,11 @@ from pvz_rl.learning.action_routing import (
     classify_actions,
     compact_invalid_rows,
 )
-from pvz_rl.learning.batch_transport import collate_fitting_observations, fitting_metadata
+from pvz_rl.learning.batch_transport import PreparedDataSource
 from pvz_rl.learning.checkpoints import DEMO_PROTOCOL as CHECKPOINT_PROTOCOL
 from pvz_rl.learning.checkpoints import MODEL_STATE_PROTOCOL
 from pvz_rl.learning.cuda_buffer import trajectory_dtype
-from pvz_rl.learning.flat_q import batch_loss
+from pvz_rl.learning.flat_q import CohortCoefficients, batch_loss
 from pvz_rl.learning.objective import (
     COMPONENTS,
     components,
@@ -464,7 +465,7 @@ def _training_tensors(demonstration: VerifiedDemo):
     return observations, actions, returns
 
 
-def initialize_demo(
+def _initialize_demo(
     archive: str | Path,
     replay: str | Path,
     output: str | Path,
@@ -476,6 +477,7 @@ def initialize_demo(
     time_budget_minutes: float | None = None,
     device: str = "cpu",
     init_from: str | Path | None = None,
+    _resources=None,
 ) -> dict:
     """Fit one complete game and publish a checkpoint only after whole passes."""
     cfg = cfg or load_demo_config()
@@ -546,6 +548,8 @@ def initialize_demo(
     rows["route"] = [r["route"] for r in demonstration.transitions]
     rows["branch_usable"] = [r["branch_usable"] for r in demonstration.transitions]
     rows["env"] = 0
+    rows["episode"] = [r.get("episode_index", 0) for r in demonstration.transitions]
+    rows["decision"] = [r.get("decision_index", i) for i, r in enumerate(demonstration.transitions)]
     if len(rows):
         rows["reset"][0] = True
     rows["tick"] = [int(r.get("tick", index)) for index, r in enumerate(demonstration.transitions)]
@@ -588,11 +592,11 @@ def initialize_demo(
         + rows["route"]
     )
     boundaries = np.r_[0, np.flatnonzero(keys[1:] != keys[:-1]) + 1, len(rows)]
-    chunks = [
-        (start, min(start + batch_size, int(upper)))
-        for lower, upper in zip(boundaries[:-1], boundaries[1:], strict=True)
-        for start in range(int(lower), int(upper), batch_size)
-    ]
+    prepared = PreparedDataSource(observations, cfg, rows=rows)
+    prepared.boundaries = boundaries
+    _resources.callback(prepared.close)
+    consistency_counts = group_counts[1:] * group_counts.new_tensor([0, 1])
+    coefficients = CohortCoefficients.prepare(compact_counts, consistency_counts.cpu(), device, objective["accepted_outcome_share"])
     started = time.monotonic()
     completed = 0
     for pass_index in range(passes):
@@ -601,16 +605,20 @@ def initialize_demo(
         model.zero_grad(set_to_none=True)
         rank_accuracy = torch.zeros(4, device=device)
         pass_metrics = torch.zeros(10, device=device, dtype=torch.float64)
-        for start, stop in chunks:
-            current = collate_fitting_observations(observations[start:stop], cfg, device)
-            loss, _, gap = batch_loss(
+        batches = _resources.enter_context(closing(prepared.batches(batch_size, device)))
+        start = 0
+        for batch_rows, current, fields in batches:
+            stop = start + len(batch_rows)
+            loss, _, gap, forward = batch_loss(
                 model,
                 rows[start:stop],
                 group_counts,
                 current,
-                fitting_metadata(rows[start:stop], device),
+                fields,
                 teacher=teacher,
-                consistency_counts=group_counts[1:] * torch.tensor([0, 1], device=device),
+                consistency_counts=consistency_counts,
+                coefficients=coefficients,
+                return_forward=True,
             )
             selected = torch.as_tensor(np.flatnonzero(rows["accepted"][start:stop]), device=device)
             if len(selected):
@@ -622,6 +630,8 @@ def initialize_demo(
                     legal[start:stop][selected],
                     rank_counts,
                     objective["demo_rank_margin"],
+                    species=forward.species[selected],
+                    tiles=forward.tiles[selected],
                 )
             else:
                 rank, accuracy = loss.detach() * 0, loss.new_zeros(4)
@@ -630,6 +640,7 @@ def initialize_demo(
             loss.backward()
             model.accumulate_master_gradients()
             model.clear_runtime_grad(set_to_none=True)
+            del forward
             pass_metrics += torch.cat(
                 (
                     torch.stack(
@@ -645,12 +656,13 @@ def initialize_demo(
                     model._last_species_consistency_metrics,
                 )
             )
+            start = stop
         torch.nn.utils.clip_grad_norm_(model.master_parameters(), max_grad_norm)
         optimizer.step()
         model.sync_runtime_from_masters()
         with torch.no_grad():
-            for target, source in zip(teacher.parameters(), model.parameters(), strict=True):
-                target.lerp_(source, 1 - objective["ema_decay"])
+            torch._foreach_lerp_(list(teacher.parameters()), list(model.parameters()),
+                                 1 - objective["ema_decay"])
         completed += 1
         coverage += torch.bincount(action_parts(actions)[0].detach().cpu(), minlength=10)
         scores = rank_accuracy.cpu().tolist()
@@ -731,3 +743,8 @@ def load_demo_checkpoint(path: str | Path, cfg: dict | None = None, *, device="c
     model = TwoStageTransformerPolicy(cfg or info["config"]).to(device)
     model.load_state_dict(saved["model"], strict=True)
     return model, saved
+
+
+def initialize_demo(archive, replay, output, **kwargs):
+    with ExitStack() as resources:
+        return _initialize_demo(archive, replay, output, _resources=resources, **kwargs)

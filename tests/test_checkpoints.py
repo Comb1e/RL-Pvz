@@ -128,7 +128,7 @@ def test_gpu_execution_settings_never_enter_annotation_weight_compatibility(tmp_
         fit_species_microbatch=16,
         fit_tile_microbatch=8,
         fit_token_budget=4096,
-        compile_kernels=False,
+        compile_collection=False, compile_fitting=False,
     )
     target["training"]["torch_threads"] = 2
     compatible_config(demo_payload["config"], target, weights_only=True)

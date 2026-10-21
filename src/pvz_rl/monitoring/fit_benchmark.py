@@ -1,6 +1,7 @@
 """Bounded real-loss fitting calibration; synthetic public boards, no quality claim."""
 
 import argparse
+import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from time import perf_counter
@@ -12,7 +13,7 @@ from pvz_rl.config import load_config
 from pvz_rl.learning.action_routing import classify_actions, workload_counts
 from pvz_rl.learning.batch_transport import BatchPrefetch, FittingSpool
 from pvz_rl.learning.cuda_buffer import CompleteGameBuffer
-from pvz_rl.learning.flat_q import batch_loss
+from pvz_rl.learning.flat_q import CohortCoefficients, batch_loss
 from pvz_rl.monitoring.entity_benchmark import observation
 from pvz_rl.policy.two_stage_transformer import TwoStageTransformerPolicy
 from pvz_rl.provenance import write_json
@@ -106,11 +107,15 @@ def benchmark_rows(cfg, widths, rows_per_width, action_mix, dtype):
     return rows, boards
 
 
-def measure(cfg, *, repeats=3, rows_per_width=16):
+def measure(cfg, *, repeats=3, rows_per_width=16, trajectory=None, initial=None):
     """Each repetition commits four complete passes with fixed cohort denominators."""
     torch.set_num_threads(cfg["training"]["torch_threads"])
     torch.manual_seed(101)
     model = TwoStageTransformerPolicy(cfg).cuda().train()
+    if initial is not None:
+        from pvz_rl.learning.training import initial_weights
+        weights, _ = initial_weights(initial, cfg)
+        model.load_state_dict(weights)
     teacher = TwoStageTransformerPolicy(cfg).cuda().eval().requires_grad_(False)
     teacher.load_state_dict(model.runtime_state_dict())
     performance = cfg["training"]["performance"]
@@ -122,22 +127,27 @@ def measure(cfg, *, repeats=3, rows_per_width=16):
             encoder.token_budget = performance["fit_token_budget"]
             if hasattr(encoder, "fitting"):
                 encoder.fitting = True
-        if performance["compile_kernels"]:
+        if performance["compile_fitting"]:
             network.enable_compilation()
     optimizer = torch.optim.Adam(model.master_parameters(), lr=cfg["training"]["learning_rate"])
     measurements = []
-    for name, widths in WORKLOAD_WIDTHS.items():
-        for action_mix in ACTION_MIXES:
+    workloads = {"trajectory": ()} if trajectory is not None else WORKLOAD_WIDTHS
+    for name, widths in workloads.items():
+        for action_mix in (("actual",) if trajectory is not None else ACTION_MIXES):
             with TemporaryDirectory(prefix="pvz-fit-benchmark-") as temporary:
-                buffer = CompleteGameBuffer(temporary, 1, cfg=cfg)
-                rows, boards = benchmark_rows(cfg, widths, rows_per_width, action_mix, buffer.dtype)
-                buffer.append(rows, boards)
-                branches = np.where(rows["action"] == 0, 0, np.where(rows["action"] <= 360, 1, 2))
-                counts = np.zeros((3, 2), dtype=np.int64)
-                np.add.at(counts, (branches, rows["accepted"].astype(int)), 1)
+                if trajectory is None:
+                    buffer = CompleteGameBuffer(temporary, 1, cfg=cfg)
+                    rows, boards = benchmark_rows(cfg, widths, rows_per_width, action_mix, buffer.dtype)
+                    buffer.append(rows, boards)
+                else:
+                    state = json.loads((Path(trajectory) / "metadata.json").read_text())
+                    buffer = CompleteGameBuffer.restore(trajectory, state, temporary)
+                    rows = None
                 prepared = perf_counter()
                 spool = FittingSpool(buffer)
                 spool_seconds = perf_counter() - prepared
+                counts = spool.outcome_counts
+                coefficients = CohortCoefficients.prepare(counts, spool.consistency_counts, "cuda", cfg["training"]["objective"]["accepted_outcome_share"])
 
                 def passes():
                     for _ in range(cfg["training"]["n_epochs"]):
@@ -158,7 +168,8 @@ def measure(cfg, *, repeats=3, rows_per_width=16):
                                     obs,
                                     fields,
                                     teacher=teacher,
-                                    consistency_counts=counts[1:] * np.array([0, 1]),
+                                    consistency_counts=spool.consistency_counts,
+                                    coefficients=coefficients,
                                 )
                                 loss.backward()
                                 model.accumulate_master_gradients()
@@ -204,11 +215,13 @@ def measure(cfg, *, repeats=3, rows_per_width=16):
                         workload=name,
                         actions=action_mix,
                         widths=widths,
-                        rows=len(rows),
+                        rows=buffer.size,
+                        representatives=len(spool),
+                        compaction=spool.compaction,
                         passes=cfg["training"]["n_epochs"],
                         spool_seconds=spool_seconds,
                         cold_seconds=cold_seconds,
-                        routed_workload=workload_counts(rows),
+                        routed_workload=workload_counts(spool.rows),
                         repetitions=repetitions,
                         transport=dict(buffer.transport_metrics),
                         encoders=[
@@ -244,6 +257,8 @@ def main():
     parser.add_argument("--config", type=Path)
     parser.add_argument("--rows-per-width", type=int, default=16)
     parser.add_argument("--gpu", default="0")
+    parser.add_argument("--trajectory", type=Path)
+    parser.add_argument("--init-from", type=Path)
     parser.add_argument("--species-microbatch", type=int)
     parser.add_argument("--tile-microbatch", type=int)
     parser.add_argument("--token-budget", type=int)
@@ -257,10 +272,10 @@ def main():
     )
     args = parser.parse_args()
     cfg = load_config(args.config)
-    from pvz_rl.gpu import select_gpu
+    from pvz_rl.gpu import apply_gpu_profile, select_gpu
 
-    select_gpu(args.gpu)
-    cfg["training"]["batch_size"] = min(64, cfg["training"]["batch_size"])
+    device = select_gpu(args.gpu)
+    cfg, _ = apply_gpu_profile(cfg, device=device, path=args.config)
     performance = cfg["training"]["performance"]
     if args.species_microbatch:
         performance["fit_species_microbatch"] = args.species_microbatch
@@ -273,8 +288,8 @@ def main():
     if args.threads:
         cfg["training"]["torch_threads"] = args.threads
     if args.no_compile:
-        performance["compile_kernels"] = False
-    write_json(args.output, measure(cfg, repeats=args.repeats, rows_per_width=args.rows_per_width))
+        performance["compile_fitting"] = False
+    write_json(args.output, measure(cfg, repeats=args.repeats, rows_per_width=args.rows_per_width, trajectory=args.trajectory, initial=args.init_from))
 
 
 if __name__ == "__main__":

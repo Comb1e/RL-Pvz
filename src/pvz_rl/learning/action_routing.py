@@ -158,109 +158,86 @@ def _outcome_counts(rows):
     return counts
 
 
+class InvalidRowCompactor:
+    """Bounded segmented selection with carry state per environment, not per row."""
+
+    def __init__(self, group_size=100):
+        if type(group_size) is not int or group_size < 1:
+            raise ValueError("invalid fitting group size must be a positive integer")
+        self.group_size, self.state = group_size, {}
+        self.counts = np.zeros((3, 2), np.int64)
+        self.raw = self.raw_invalid = self.retained = self.runs = self.selected = 0
+
+    def select(self, rows):
+        rows = np.asarray(rows)
+        required = {"action", "accepted", "route", "rejection_reason"}
+        if rows.ndim != 1 or required - set(rows.dtype.names or ()):
+            raise ValueError("fitting rows require one-dimensional routing fields")
+        names = rows.dtype.names
+        active = rows["active"] if "active" in names else np.ones(len(rows), bool)
+        environments = rows["env"] if "env" in names else np.zeros(len(rows), np.int64)
+        invalid = active & np.isin(rows["route"], (FitRoute.SPECIES_INVALID, FitRoute.TILE_INVALID))
+        keep = active & ~invalid
+        for env in np.unique(environments):
+            ix = np.flatnonzero(environments == env)
+            current = rows[ix]
+            live, bad = active[ix], invalid[ix]
+            n = len(ix)
+            boundary = np.ones(n, bool)
+            keys = np.stack([current[k].astype(np.int64) for k in
+                             ("action", "route", "rejection_reason")], axis=1)
+            if n > 1:
+                boundary[1:] = np.any(keys[1:] != keys[:-1], axis=1) | ~bad[:-1] | ~live[:-1]
+            for field in ("reset", "run_break"):
+                if field in names:
+                    boundary |= current[field]
+            if "done" in names:
+                boundary[1:] |= current["done"][:-1]
+            if "episode" in names:
+                boundary[1:] |= current["episode"][1:] != current["episode"][:-1]
+            if "decision" in names:
+                boundary[1:] |= current["decision"][1:] != current["decision"][:-1] + 1
+            prior = self.state.get(int(env))
+            length = 0
+            if prior is not None:
+                key, previous_bad, done, episode, decision, length = prior
+                continuation = previous_bad and not done and tuple(keys[0]) == key
+                continuation &= not any(bool(current[k][0]) for k in ("reset", "run_break") if k in names)
+                if "episode" in names:
+                    continuation &= int(current["episode"][0]) == episode
+                if "decision" in names:
+                    continuation &= int(current["decision"][0]) == decision + 1
+                boundary[0] = not continuation
+            starts = np.maximum.accumulate(np.where(boundary, np.arange(n), -length))
+            ordinals = np.arange(n) - starts
+            keep[ix] |= bad & (ordinals % self.group_size == 0)
+            self.runs += int(np.count_nonzero(bad & boundary))
+            self.state[int(env)] = (tuple(keys[-1]), bool(bad[-1]),
+                bool(current["done"][-1]) if "done" in names else False,
+                int(current["episode"][-1]) if "episode" in names else 0,
+                int(current["decision"][-1]) if "decision" in names else 0,
+                int(ordinals[-1] + 1) if bad[-1] else 0)
+        selected = np.flatnonzero(keep)
+        self.counts += _outcome_counts(rows[selected])
+        self.raw += int(active.sum())
+        self.raw_invalid += int(invalid.sum())
+        self.retained += int(np.count_nonzero(keep & invalid))
+        self.selected += len(selected)
+        return selected
+
+    @property
+    def diagnostics(self):
+        return dict(raw_rows=self.raw, selected_rows=self.selected,
+                    raw_invalid_rows=self.raw_invalid, retained_invalid_rows=self.retained,
+                    invalid_runs=self.runs, invalid_windows=self.retained,
+                    invalid_reduction=(1 - self.retained / self.raw_invalid) if self.raw_invalid else 0.0)
+
+
 def compact_invalid_rows(rows, *, group_size=100):
-    """Select fitting representatives for repeated invalid proposals.
-
-    Complete-return accounting keeps every source row.  This helper only plans
-    the rows sent through the fitting encoders.  Invalid proposals are grouped
-    per environment and episode in their original chronological order.  A
-    contiguous run is keyed by action, route and rejection reason and is split
-    into windows of ``group_size``; the first row of every window is retained.
-    All waits and accepted actions remain selected.
-    """
-    if type(group_size) is not int or isinstance(group_size, bool) or group_size < 1:
-        raise ValueError("invalid fitting group size must be a positive integer")
-    rows = np.asarray(rows)
-    if rows.ndim != 1:
-        raise ValueError("fitting rows must be one-dimensional")
-    required = {"action", "accepted", "route", "rejection_reason"}
-    missing = required - set(rows.dtype.names or ())
-    if missing:
-        raise ValueError(f"fitting rows are missing routing fields: {sorted(missing)}")
-    active = (
-        np.asarray(rows["active"], bool)
-        if "active" in rows.dtype.names
-        else np.ones(len(rows), dtype=bool)
-    )
-    route = np.asarray(rows["route"], np.int64)
-    invalid = active & np.isin(route, (FitRoute.SPECIES_INVALID, FitRoute.TILE_INVALID))
-    selected = np.flatnonzero(active).tolist()
-    selected_invalid = set()
-    invalid_positions = set(np.flatnonzero(invalid).tolist())
-    run_count = 0
-
-    # Collection stores vector-environment rows interleaved by slot.  Grouping
-    # each slot independently restores its chronological episode order without
-    # changing the source row order used for all other fitting work.
-    env_values = (
-        np.asarray(rows["env"], np.int64)
-        if "env" in rows.dtype.names
-        else np.zeros(len(rows), dtype=np.int64)
-    )
-    reset = (
-        np.asarray(rows["reset"], bool)
-        if "reset" in rows.dtype.names
-        else np.zeros(len(rows), dtype=bool)
-    )
-    done = (
-        np.asarray(rows["done"], bool)
-        if "done" in rows.dtype.names
-        else np.zeros(len(rows), dtype=bool)
-    )
-    for env in np.unique(env_values[active]):
-        positions = np.flatnonzero(env_values == env)
-        run_key = None
-        run_length = 0
-        previous_done = True
-        for position in positions:
-            if not active[position]:
-                run_key = None
-                run_length = 0
-                previous_done = True
-                continue
-            if reset[position] or previous_done:
-                run_key = None
-                run_length = 0
-            previous_done = bool(done[position])
-            if not invalid[position]:
-                run_key = None
-                run_length = 0
-                continue
-            key = (
-                int(rows["action"][position]),
-                int(route[position]),
-                int(rows["rejection_reason"][position]),
-            )
-            if key != run_key:
-                run_key = key
-                run_length = 0
-                run_count += 1
-            if run_length % group_size == 0:
-                selected_invalid.add(int(position))
-            run_length += 1
-
-    selected = np.asarray(
-        [
-            position
-            for position in selected
-            if position not in invalid_positions or position in selected_invalid
-        ],
-        dtype=np.int64,
-    )
-    raw_invalid = int(invalid.sum())
-    retained_invalid = len(selected_invalid)
-    stats = {
-        "raw_rows": int(active.sum()),
-        "selected_rows": int(len(selected)),
-        "raw_invalid_rows": raw_invalid,
-        "retained_invalid_rows": retained_invalid,
-        "invalid_runs": int(run_count),
-        "invalid_windows": retained_invalid,
-        "invalid_reduction": (
-            float((raw_invalid - retained_invalid) / raw_invalid) if raw_invalid else 0.0
-        ),
-    }
-    return selected, _outcome_counts(rows[selected]), stats
+    """Shared first-of-window compaction, preserving every non-invalid row."""
+    compactor = InvalidRowCompactor(group_size)
+    selected = compactor.select(rows)
+    return selected, compactor.counts, compactor.diagnostics
 
 
 def workload_counts(rows):

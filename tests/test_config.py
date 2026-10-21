@@ -129,9 +129,9 @@ def test_double_estimator_defaults_and_storage_contracts():
         assert current_model_config(cfg)
         assert protocol_for(cfg["policy"]["kind"])["optimizer"] == objective["protocol"]
     assert DEMO_PROTOCOL == "pvz-rl/demo-initialization-checkpoint-v10"
-    assert AUTONOMOUS_STATE_PROTOCOL == "pvz-rl/action-global-state-v3"
+    assert AUTONOMOUS_STATE_PROTOCOL == "pvz-rl/action-global-state-v4"
     assert MODEL_STATE_PROTOCOL == "pvz-rl/stateless-two-stage-bf16-master-state-v2"
-    assert TRAJECTORY_PROTOCOL == "pvz-rl/action-global-trajectory-v3"
+    assert TRAJECTORY_PROTOCOL == "pvz-rl/action-global-trajectory-v4"
 
 
 @pytest.mark.parametrize(

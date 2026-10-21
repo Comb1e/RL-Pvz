@@ -47,6 +47,7 @@ from pvz_rl.learning.exploration import (
     configure_exploration,
     exploration_state,
 )
+from pvz_rl.learning.performance import compilation_requested
 from pvz_rl.learning.training_requirements import (
     parameter_changes,
     require_cuda_training,
@@ -93,7 +94,7 @@ def build_model(cfg, condition, env, seed, log_dir=None):
         tensorboard_log=str(log_dir) if log_dir else None,
     )
     model.training_games = 0
-    if t.get("performance", {}).get("compile_kernels", False):
+    if compilation_requested(t.get("performance", {})):
         model.policy.enable_compilation()
     configure_exploration(model, cfg)
     return model
@@ -638,9 +639,14 @@ class ResearchCallback(BaseCallback):
     def _on_step(self):
         self.observe_collection_progress()
         completed = 0
-        for info in self.locals["infos"]:
-            self.simulation_ticks += info["ticks_advanced"]
-            self.instant_actions += int(info["ticks_advanced"] == 0)
+        step = self.locals.get("step_batch")
+        if step is not None:
+            self.simulation_ticks += step.ticks
+            self.instant_actions += step.instant_actions
+        for info in self.locals.get("episode_infos", self.locals["infos"]):
+            if step is None:
+                self.simulation_ticks += info["ticks_advanced"]
+                self.instant_actions += int(info["ticks_advanced"] == 0)
             if "episode_metrics" in info:
                 self.model.training_games = getattr(self.model, "training_games", 0) + 1
                 completed += 1
@@ -1323,7 +1329,7 @@ def train(
                 getattr(model, "wall_budget_state", {}).get("elapsed_seconds", 0.0),
             )
             model.set_env(env)
-            if cfg["training"].get("performance", {}).get("compile_kernels", False):
+            if compilation_requested(cfg["training"].get("performance", {})):
                 model.policy.enable_compilation()
             model.tensorboard_log = str(output / "tensorboard")
             details["resume_steps"] = model.num_timesteps

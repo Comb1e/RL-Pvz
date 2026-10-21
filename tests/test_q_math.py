@@ -17,7 +17,7 @@ def tiny_config():
     c["training"].update(n_envs=2, n_epochs=1, batch_size=128)
     c["environment"]["cutoff_seconds"] = 1
     c["visualization"].update(live_enabled=False, enabled=False, demos=False)
-    c["training"]["performance"].update(compile_kernels=False, telemetry=False)
+    c["training"]["performance"].update(compile_collection=False, compile_fitting=False, telemetry=False)
     return c
 
 

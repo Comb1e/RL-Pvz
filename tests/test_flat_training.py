@@ -840,7 +840,7 @@ def test_failed_flat_pass_restarts_without_skipping_updates(tmp_path, monkeypatc
     cfg = load_config()
     cfg["training"].update(n_envs=1, n_epochs=2)
     cfg["visualization"]["live_enabled"] = False
-    cfg["training"]["performance"].update(compile_kernels=False, prefetch=False)
+    cfg["training"]["performance"].update(compile_collection=False, compile_fitting=False, prefetch=False)
     env = vector_env(cfg, "masked", 101)
     model = build_model(cfg, "masked", env, 101)
     model.trajectory_root = tmp_path
@@ -922,7 +922,7 @@ def test_ema_tile_allocation_failure_reduces_both_network_microbatches(tmp_path,
     cfg = load_config()
     cfg["training"].update(n_envs=1, n_epochs=2)
     cfg["visualization"]["live_enabled"] = False
-    cfg["training"]["performance"].update(compile_kernels=False, prefetch=False)
+    cfg["training"]["performance"].update(compile_collection=False, compile_fitting=False, prefetch=False)
     env = vector_env(cfg, "masked", 101)
     model = build_model(cfg, "masked", env, 101)
     model.trajectory_root = tmp_path
