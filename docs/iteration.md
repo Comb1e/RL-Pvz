@@ -1,3 +1,21 @@
+## Architecture framework review - 2026-10-22
+
+- Problem/root cause: architecture prose mixed the project framework with code
+  inventories, parameter values and implementation mechanics, obscuring the
+  system boundaries for a new developer.
+- Improvement: rewrote the page under the revised collaborator skill as a
+  conceptual map of simulation, policy, complete-game learning, human supervision,
+  evaluation, persistence and presentation. Diagrams explain information flow
+  and cohort transitions; code navigation and detailed contracts are linked.
+  Preserved verified boundaries for private inputs, aggregate CUDA versus causal
+  CPU/demo attribution, annotation publication, validation and recovery.
+- Verification: checked the framework against implementation and configuration,
+  reviewed diagram transitions and local links, and ran `git diff --check`.
+  No runtime code or parameters changed; no training or regression suite ran.
+- Remaining limits: documentation verification supplies no new learning-quality
+  or performance evidence. Detailed math and historical pages remain separate
+  sources and were not comprehensively revised in this task.
+
 ## Documentation removal - 2026-10-22
 
 - Removed the training guide, live-view guide, and validation page as requested.

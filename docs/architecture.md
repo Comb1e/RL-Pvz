@@ -1,426 +1,263 @@
 # System architecture
 
-The project trains a stateless two-stage Q policy against a pinned CUDA
-simulator. Every decision reads the current public board; no LSTM, event memory,
-frame stack or counterfactual simulator is part of the policy or collector.
+This project learns plant placement in a pinned Plants vs. Zombies simulator.
+It has one stateless two-stage Transformer Q policy and one autonomous learning
+framework. Human annotations and verified demonstrations provide optional
+starting weights for that same policy.
 
-## Responsibilities
+The project owns learning, reward interpretation and experimental evidence.
+The separately installed game owns combat, legal actions and game rules.
+Autonomous learning requires an NVIDIA GPU with native BF16 support; CPU
+simulation supports annotation, recording, baselines and reference checks.
 
-| Area | Responsibility |
+## Project framework
+
+| Component | Responsibility |
 |---|---|
-| Environment adapters | Public entities, timing, action outcomes and reward ledgers |
-| Two-stage policy | Species/wait/dig Q values and conditional tile Q values |
-| Exploration controller | Tile randomness and persistent alternative-species commitments |
-| Cohort learner | Collection, complete returns, balanced losses and EMA updates |
-| Storage/transport | Executed active rows, stable source references, ragged entities, RAM/disk spill and prefetch |
-| Checkpoints | Contract validation, FP32 masters, BF16 EMA and atomic recovery |
-| Monitoring/presentation | Host-side progress, diagnostics and read-only journals |
-
-Seeds, schedules and simulator snapshots stay in execution state and never enter
-policy inputs. `src/pvz_rl/data/train.toml` is the sole parameter source.
-
-## Reward and causal credit flow
+| Simulation and public-state boundary | Execute proposals, expose the current board and report actual outcomes |
+| Policy and exploration | Choose an action category and location, with controlled exploration during collection |
+| Complete-game learner | Turn finished trajectories into targets and update the shared policy |
+| Human supervision | Collect reachable-state labels and verified games, then produce compatible starting weights |
+| Experiment control | Resolve settings, manage curriculum and budgets, validate progress and recover interrupted runs |
+| Evidence and presentation | Preserve provenance, evaluate frozen policies, report results and display actual gameplay |
 
 ```mermaid
 flowchart LR
-    Before[Public state before action] --> Step[Simulator transition]
-    Step --> Global[Global: terminal + asset delta - sky sun]
-    Step --> Events[Ordered public events]
-    Events --> Ledger[Private causal ledger]
-    Ledger --> Source[Placement/source action row]
-    Source --> Action[Damage, blocking, produced sun, mower cost]
-    Global --> Return[Chronological complete return]
-    Action --> Return
+    Game[Pinned game] --> World[Simulation adapter]
+    World -->|public board| Policy[Two-stage policy]
+    Policy -->|proposal| World
+    World -->|execute| Game
+    World --> Trajectory[Actual game trajectories]
+    Trajectory --> Learn[Complete-game learning]
+    Learn -->|updated weights| Policy
+    Human[Annotations and demonstrations] --> Init[Verified initialization]
+    Init -->|starting weights| Policy
+    Policy -->|frozen weights| Evaluate[Evaluation]
+    Evaluate --> Evidence[Results and reports]
 ```
 
-The global channel contains only the terminal outcome and the change in
-`sun + living-plant value`, with sky-generated sunlight excluded. The ordered
-event stream retains plant IDs, projectile source IDs and environment/episode
-identity privately. Plant/projectile damage, lethal damage, Sunflower income,
-Chomper swallowing and authoritative bites are credited to the originating
-placement action; mower activation has no placement origin and is charged to its
-transition. `PlantRemoved` is processed after earlier events in the same stream.
-Initial plants and events without an origin are reported as unattributable and
-cannot leak IDs into observations. The trajectory buffer can apply host source
-credits retroactively before returns are finalized. CUDA emits the same six
-learning components and private aggregate accounting; detailed device source
-rows are optional adapter data.
+The interaction loop produces actual experience; the learning loop consumes
+completed games. Human supervision feeds the same model through initialization.
+Evaluation uses frozen weights and supplies evidence rather than training data.
+Experiment control coordinates these workflows, while viewers observe them.
 
-Wall-nut uses a positive blocking coefficient worth 100 sunlight over its full
-health, while each ordinary plant receives 10 sunlight over its full health.
-Blocking has no negative action term; global asset value still records health
-loss, so a Wall-nut can earn positive local value while losing health. Damage
-is worth 30 sunlight per 270 basic-zombie HP and a mower costs 500. After each
-128-game cohort, completion ranks adjust only the terminal row: winners range
-from +1.5 to +0.5, while losses after the median become more negative and can
-reach -1.5. Proximity remains diagnostic and does not enter learning targets.
+A single [training configuration](../src/pvz_rl/data/train.toml) defines the
+bundled model, learning and task settings. A run resolves its configuration
+before execution and records the effective settings with provenance. Hardware
+profiles adjust execution without defining a different policy or objective.
+The game dependency is installed from a verified source pin, and its installed
+sources and rules are checked before experiments.
 
-PowerShell and Bash bootstrap tools install the same pinned CUDA environment.
-They share archive/hash verification, install the game non-editably and never
-change its checkout. A missing commit or mismatched manifest fails installation;
-the Bash entry point removes its temporary source archive even on failure.
-See [installation](../README.md#installation).
+## What the policy knows and decides
 
-## Decision flow
+The policy sees only the current public board: plants, zombies, projectiles,
+mowers, resources, card cooldowns and public progress counters. A shared encoding
+presents individual entities and global facts to both stages. Entity storage is
+bounded; truncation is reported, and transport padding carries no information.
 
-```mermaid
-flowchart LR
-    Board[Current public board] --> Species[Species Transformer]
-    Species --> Branch[10 Q values]
-    Branch -->|plant/dig| Tiles[Conditional tile Transformer]
-    Board --> Tiles
-    Tiles --> Placement[45 tile values]
-    Branch -->|wait| Action[Actual proposal]
-    Placement --> Action
-    Action --> Game[One simulator transition]
-```
+Seeds, future spawn schedules, simulator snapshots, source identities and reward
+ledgers remain private execution data. Annotation provenance and viewer history
+also stay outside model inputs. The policy has no learned memory between
+decisions.
 
-The species stage has width 128, four layers and eight heads. The tile stage has
-width 192, six layers and twelve heads. Their parameters are independent. The
-tile stage receives the selected branch, the same current board and 45 spatial
-queries. Every active plant and dig branch exposes all 45 tiles, including
-occupied tiles. After species selection, card presence, cooldown, sunlight and
-task availability determine whether tile inference is needed. Unavailable plants
-skip the tile encoder and receive species-only invalid fitting. Usable branches
-score every tile; occupied plant tiles and empty digs receive tile-only invalid
-fitting. `engine_action_masks()` remains authoritative for baselines and replay
-checks. A rejected proposal advances one wait tick; accepted plant/dig advances
-zero ticks.
+The first stage predicts values for wait, each plant species and dig. The
+independent second stage receives the chosen non-wait category and the same
+board, then scores the 45 plots. Both stages share the public representation
+but have separate learned parameters. The first stage predicts category values
+directly; it does not run every possible placement to choose a category.
 
-Both stages run with BF16 parameters and activations during collection,
-evaluation, demonstrations and fitting. The online policy keeps unregistered
-FP32 master parameters, and Adam owns only those masters and FP32 moments.
-After each committed fit pass, masters are copied to the BF16 runtime model and
-the BF16 EMA teacher is updated. Checkpoints serialize FP32 online masters,
-FP32 optimizer state and BF16 EMA state.
+The simulator remains the authority on whether a proposal succeeds. Resource
+and cooldown restrictions do not remove categories from ordinary policy
+selection, and placement considers occupied plots as well as empty ones.
+An impossible category can skip placement inference while preserving its
+rejected proposal. This lets learning distinguish a poor category choice from
+a poor location within an available category.
 
-## Exploration and collection
+Accepted planting and digging change the board without advancing combat time.
+Wait or rejection advances one tick; rejection executes wait while retaining
+the proposed action and reason. Collection may explore locations or maintain a
+commitment to another plant species until it can be placed. Evaluation disables
+these exploration mechanisms.
 
-Tile exploration decays from 50% to 1%, and accepted normal planting can start
-a uniformly selected alternative-species commitment from 10% to 1%. Both
-schedules decay over 10,000 stage games, remain fixed within a cohort and reset
-on stage changes. Commitments issue ordinary waits until the species is
-affordable and cooled down, then score every tile. Occupied selections remain
-tile-invalid. Successful committed placements clear the
-commitment; they do not recursively trigger another commitment.
+## Learning from complete games
 
-```mermaid
-stateDiagram-v2
-    [*] --> Ready
-    Ready --> Committed: exploration coin after accepted normal plant
-    Committed --> Committed: wait while unavailable
-    Committed --> Ready: accepted exploratory placement
-    Committed --> [*]: episode ends
-```
-
-An active-batch plan packs unfinished original slots into public-width buckets,
-then restores results to canonical slots. Finished slots are inactive and never
-refilled. Padding carries no state, RNG, supervision or storage evidence. Real
-environments continue immediately after planting: there is no probe queue,
-source bank, auxiliary lane or post-plant drain.
-
-## Learning and storage
-
-Every actual decision is appended with its public observation, proposed action,
-acceptance, duration, reward, exploration provenance and stable original slot.
-Its private source reference is `(environment, episode serial, decision ordinal)`.
-The ordinal is retained while a capacity-blocked ticket waits for execution.
-Only executed rows and their entities enter storage; append receipts map slots
-and source references to physical rows. Per-episode integer slabs resolve delayed
-credits, and every credit is validated before any target row changes.
-Complete returns are computed chronologically per episode, while inactive slots
-and capacity gaps contribute nothing. Entity-bucketed and route-separated flat batches are prefetched
-through the existing double buffer and reused across all fitting passes; padding
-is excluded from losses and denominators.
-
-Compiler caches and CUDA captures belong to individual encoders. Fitting uses
-phase-local code objects and bounded static shapes; collection uses its separate
-LRU. Quiescent phase changes release fitting captures and renew only the owner's
-compiler cache, without changing global limits or policy inputs.
-
-```mermaid
-flowchart LR
-    Tickets[Original-slot tickets and RNG draws] --> Execute[Species, eligible tiles, simulator]
-    Execute --> Handoff[Borrowed array-backed host result]
-    Handoff --> Counters[Aggregate callbacks and terminal records]
-    Handoff --> Append[Active rows and append receipt]
-    Append --> Returns[All chronological returns]
-    Returns --> Scan[Slim segmented invalid-run scan]
-    Scan --> Spool[Width and route partitions]
-    Spool --> Producer[One CPU producer, two pinned slots]
-    Producer --> Copy[Copy-stream event and ownership fence]
-    Copy --> Fit[Selective online and detached EMA forwards]
-    Fit --> Commit[FP32 Adam, BF16 runtime sync and EMA]
-```
-
-Collection has a trusted one-request-per-board tile path; general callers retain
-duplicate-request reuse. Wait and impossible branches skip tile inference.
-Execution flags travel in the ordinary host handoff and are checked against
-issued tickets. Ordinary progression transfers compact fields; completed slots
-alone fetch detailed terminal accounting before reset. Internal callbacks read
-aggregate counters and terminal records; compatibility dictionaries are lazy.
-Borrowed host views must be consumed before their handoff slot is reused.
-Optional device telemetry has a configured event-span bound. It resolves ready
-events through nonblocking queries and reports skipped spans while the bound is
-full; diagnostic events cannot accumulate for an entire long cohort.
-
-Storage carries explicit invalid-run boundaries across inactive steps and
-recovery. Episode, decision, route, reason and proposal changes also break runs.
-The fitting spool scans slim metadata, selects the first invalid row per
-100-row window, counts partitions, then gathers rows/entities in bounded chunks.
-Selection arrays, prepared plans, spool arrays and pinned staging share the
-RAM/disk budget. Pinned entity buffers fit the current bucket and may resize only
-after their prior copy finishes. A budget failure restarts an uncommitted pass
-without prefetch. Finished games remain paused until their cohort ends.
-
-Autonomous, demo and annotation fitting share prepared storage and transport.
-Demo regression and ranking share batch-local online tensors and one backward;
-no graph survives the batch. Annotation fitting prepares dense label masks once,
-uses indexed extrema for tie gradients, and reads aggregate fitting diagnostics
-at pass boundaries. Fresh BF16 full-training evaluation still gates publication.
-Collection and fitting compilation are independent execution settings.
-
-Ordinary wait regresses the complete remaining return through species. Accepted
-plant/dig regresses the proposed tile through the conditional stage; detached
-online tile selection and BF16 EMA evaluation supply species consistency. A
-shared classifier consumes full pre-action public legality and the actual
-outcome. Impossible branches train species to -1; bad tiles within usable
-branches train only the proposed tile to -1. The trajectory retains the route,
-branch usability and rejection reason separately from proposal/execution.
-Rejected proposals execute ordinary wait, and penalty audit fields stay zero.
-Fitting-only -1 targets never enter rewards or chronological returns.
-
-```mermaid
-flowchart TD
-    Facts[Pre-action public legality and actual outcome] --> Route{Recorded route}
-    Route -->|Ordinary wait| Species[Online species: return]
-    Route -->|Branch impossible| InvalidSpecies[Online species: -1]
-    Route -->|Invalid tile in usable branch| InvalidTile[Online tile: -1]
-    Route -->|Accepted plant or dig| Accepted[Online species and tile, EMA tile]
-    Accepted --> Loss[Tile return and detached species consistency]
-```
-
-CPU row plans accompany batches through the existing pinned double buffer.
-Species-only routes skip both tile networks; tile-only routes skip species and
-EMA. Accepted/rejected wait/plant/dig regression uses whole-cohort denominators;
-EMA consistency uses accepted plant/dig counts only. Four autonomous passes and
-twenty demonstration passes commit one optimizer step per pass, then update
-EMA with decay 0.95. Graph ownership, fencing and allocation recovery are shared.
-
-## Reachable-state annotation warm-start
-
-The annotation path is independent of a running training process:
-
-```mermaid
-flowchart LR
-    Select[Browser difficulty selection] --> Session[CPU annotation session]
-    Session -->|legal simulator actions| Game[Reachable simulator state]
-    Game -->|one pending map| Session
-    Session -->|save or discard| Labels[Annotation JSONL in data/]
-    Labels --> WarmStart[Tile or action supervised fit]
-    WarmStart --> Init[Weight-only initialization]
-    Init --> Train[Existing complete-return learner]
-```
-
-`annotate` owns one pending map at a time. Selecting `easy`, `standard`,
-or `hard` starts a fresh simulator episode and advances it through legal actions
-for a seeded uniform limit of 0–20,000 actions. Planting attempts are separated
-by random 500–1,500-step intervals. Every interval draws equally from wait and
-all eight configured species before checking availability. Cooldown, insufficient
-sun, absent cards, no legal plots or the configured eight-plant cap turn the
-selected plant into wait without a redraw. Usable choices select a random legal
-plot; the shared availability check also validates snapshot annotation cards.
-Tile mode retains only running endpoints with a usable plant card and legal
-plots. Action mode retains any running endpoint because it labels the complete
-wait/plant/dig decision and has no sampler-selected current action. Finished
-games are discarded and retried within bounded attempts. Both batch generation
-and the live session use this same sampler. Each record keeps the rich
-public board and canonical `entity_v1` encoding, plus card availability, cost,
-sun, cooldown, and engine-legal tiles. Pending records are persisted in
-`data/tile-annotations.jsonl`; a restart resumes the same map. Saving or
-discarding resolves the record atomically and immediately generates the next map.
-A staged difficulty change applies only to that next map. The browser shows the
-complete sun/card/entity/mower/wave state and paints a set by holding the left
-mouse button and dragging across tiles. Discarded states remain audit records
-and are excluded from fitting.
-
-In action mode, the same Canvas board exposes each rendered plant card as a hit
-target. The active feasible, absolute-infeasible, or erase mode determines what
-a card click does; locked automatic absolute labels cannot be changed. Wait and
-dig have compact synchronized toolbar controls because they have no plant card.
-The toolbar does not duplicate plant actions as HTML buttons, and no random
-sampler action is shown as the current target. Card hit testing uses the board's
-design coordinates, so browser resizing and high-DPI displays do not change the
-selected action.
-
-At startup, completed labeled rows are grouped by plant type and their canonical
-encoded entities/globals. A group with no common feasible tile is a duplicate
-conflict. Conflict review takes priority over map generation and shows the first
-group directly in the browser. One corrected label set is committed atomically to
-all group members, then the next group is shown. Any pending map remains durable
-and is resumed after the final conflict. **Save and exit** commits only the
-currently displayed map or conflict group and requests an asynchronous server
-shutdown.
-
-History navigation is local to each browser request, rather than a shared server
-cursor. Previous/Next can select any persisted map while the single pending map
-remains unchanged. Saving a completed record updates only its labels/status and
-increments its annotation revision; it never calls the sampler. Existing records
-without a revision start at zero. Every edit supplies the revision it loaded so
-an obsolete tab cannot overwrite newer labels. Reads and mutations share the
-session lock, and browser request IDs reject stale responses. Difficulty changes
-preserve the displayed record and its draft. JSONL records remain the source of
-truth; manifest counts and digest refresh after each saved edit.
-
-```mermaid
-stateDiagram-v2
-    [*] --> Pending: Generate or resume
-    Pending --> Pending: Save/discard and generate next
-    Pending --> Review: Previous
-    Review --> Review: Previous/Next or save/discard in place
-    Review --> Pending: Return to current or Next
-    [*] --> Conflict: Contradictory duplicate labels
-    Conflict --> Conflict: Save corrected group; show next
-    Conflict --> Pending: Queue empty; resume pending map
-    Conflict --> [*]: Save and exit
-```
-
-Reviewing can restore a discarded record to labeled status. Closing the browser
-discards only unsaved edits after a warning; restart resumes the pending map.
-Generation failures do not prevent reviewing and correcting completed maps.
-
-The sampler does not edit engine health, sun, cooldowns, or mower state. These
-facts evolve through simulator actions, and later endpoints include combat and
-spent mowers. Zero and other early limits remain valid preparation states. The
-source records the sampled action-step count separately from simulator ticks.
-
-Tile mode labels all 45 query outputs; action mode labels the ten species/action
-outputs (`wait`, eight plants, `dig`). Each record has an unordered feasible set
-and optional unordered absolute-bottom set. The top-1/bottom-k margin objective
-requires one feasible label to win and all absolute labels to occupy the lowest
-slots, without ordering labels within either set. Automatic simulator-impossible
-labels are persisted and locked in the browser; new action records also start
-Dig as an editable absolute-infeasible label while retaining raw dig availability
-for audit. Tile fitting freezes species; action fitting freezes tiles. Both can
-start from random weights. The optional
-`initialize-demo --init-from` loads either artifact and creates fresh
-optimizer/EMA state. Runtime gameplay masks remain unchanged. Empty labels,
-overlaps, missing automatic labels and contradictory identical model inputs fail
-before fitting. Source metadata, seeds and discard reasons never enter model
-inputs.
-
-The on-demand annotator uses a system-entropy session seed when `--seed` is
-omitted, while each record stores its actual simulator seed for audit and replay.
-An explicit seed restores deterministic sampling. Formal fitting compacts only
-consecutive invalid proposals within each environment episode: identical
-action/route/reason runs are split into 100-row windows and their first rows are
-retained. Complete-return finalization still uses the full trajectory; fitting
-denominators and encoder workload use the retained representatives.
-
-```mermaid
-stateDiagram-v2
-    [*] --> Validate: records and grouped splits
-    Validate --> Evaluate: initial BF16 runtime
-    Evaluate --> Fit: training failures remain
-    Fit --> Commit: full-record normalized gradients, clip and Adam
-    Commit --> SaveProgress: BF16 refresh, full train and validation evaluation
-    SaveProgress --> Evaluate: atomic weights, optimizer, RNG, counters
-    Evaluate --> VerifySaved: exact training hits equal total
-    VerifySaved --> Publish: reload and verify every training record
-    Publish --> [*]: test diagnostics and initialization
-    Fit --> Incomplete: interrupt discards uncommitted gradients
-    Evaluate --> Incomplete: explicit pass cap
-    Incomplete --> Fit: resume matching dataset, split and settings
-```
-
-Passes default to unlimited; validation never determines completion. Progress is
-separate from the portable weight-only artifact and metrics stream to JSONL.
-Only freshly verified convergence publishes an initialization; initially correct
-weights can qualify at zero passes. Exact training accuracy says nothing by
-itself about unseen boards or equal-game learning performance.
-
-## Optional fitting diagnostics
-
-```mermaid
-flowchart LR
-    Train[Existing train command] --> Wrappers[Temporary host timing wrappers]
-    Wrappers --> Learner[Same cohort learner and optimizer]
-    Wrappers --> Events[Streaming fit and worker events]
-    Sampler[Independent hardware sampler] --> Hardware[GPU and host resource samples]
-    Learner --> Trace[Optional bounded CPU and CUDA trace]
-    Events --> Summary[Diagnostic summary and effective settings]
-```
-
-The diagnostic script in `tools/` forwards the normal training arguments and
-records fitting startup, CPU preparation, compilation/capture, loss/backward
-and weight updates without replacing any training operation. Chunk metadata
-uses host records and tensor shapes; the lightweight path issues no new CUDA
-events or waits. The existing independent hardware sampler accepts optional
-host detail collection for thread CPU, process I/O and container quotas.
-Raw samples/events stream to a separate unused directory, with a bounded set
-of slow chunks in the summary. Temporary wrappers are restored on exit.
-
-The optional profiler captures one finite window counted by fitting data batches.
-It can perturb execution and add synchronization, so its trace explains the
-timeline while lightweight samples describe ordinary utilization. Unsupported
-resource facts and trace failures are reported without dropping samples or
-changing fitting. Host spans overlap and CUDA-event pass duration includes idle
-gaps; neither is an estimate of GPU busy time. See the
-[diagnostic workflow](math/training-throughput.md#diagnose-cloud-fitting-stalls).
-
-## Recovery and failures
+Training collects a fixed cohort of games. Finished games remain paused until
+all cohort games finish, so fitting uses complete trajectories from one
+collection period. Only executed decisions enter those trajectories; inactive
+slots and padding create no experience. Stable episode/action identities keep
+observations, outcomes and reward evidence associated during storage and recovery.
 
 ```mermaid
 stateDiagram-v2
     [*] --> Collect
-    Collect --> Finalize: cohort complete or save boundary
-    Finalize --> Fit: complete returns ready
-    Fit --> Fit: next uncommitted pass
-    Fit --> Collect: all passes committed
-    Collect --> Save: interruption
-    Fit --> Save: discard uncommitted gradients
-    Save --> [*]
+    Collect --> Finalize: all games and issued decisions finish
+    Finalize --> Fit: rewards and complete returns ready
+    Fit --> Fit: next complete fitting pass
+    Fit --> Boundary: all passes committed
+    Boundary --> Collect: continue training
+    Boundary --> Evaluate: mastery check or validation due
+    Evaluate --> Boundary: required evaluation completes
+    Boundary --> [*]: budget or mastery stop
 ```
 
-Saving and interruption preserve only coherent actual-game state. An unfinished
-fit pass discards gradients; a committed pass is never repeated. Runtime maps,
-prefetch workers, fitting spools and graph captures rebuild after recovery.
-Trajectory and autonomous recovery use v4. Recovery rebuilds integer lookup
-slabs from persisted source identities, rejecting gaps, duplicates or reordering.
-Old storage/recovery formats cannot resume; there is no migration path. Model,
-observation, reward, objective and weight-storage identities are unchanged.
-BF16 support is checked before simulator allocation. Nonfinite BF16 loss or
-gradients fail explicitly; only bounded memory reductions may retry. Old
-probe-enabled, FP32-runtime, partial-BF16 and incompatible contracts are
-rejected before allocation for resume. Structurally compatible previous
-BF16-master weights remain available for inference and fresh initialization;
-execution caches rebuild and annotation optimizer state is never transferred.
+Reward finalization precedes fitting. At the boundary, experiment control can
+continue, evaluate or stop. An incomplete required validation remains pending
+and prevents further updates until it is completed or the run is saved.
 
-Demonstration replay verification checks historical facts and reprices rewards
-under current settings without rewriting recordings. Evaluation disables both
-exploration mechanisms and performs no fitting. Curriculum mastery probes are
-evaluation controls only; they are unrelated to counterfactual gameplay.
+Rewards combine the terminal result, changes in resources and living plant
+value, and credited damage, blocking, produced sun and mower expenditure.
+Completion-time ranking adjusts terminal rewards after the cohort finishes.
+The learning target is the complete undiscounted remaining return; it does not
+bootstrap a prediction beyond the recorded game. Diagnostic quantities are
+kept separate from reward components used for learning.
 
-## Device portability and browser viewing
+Credit attribution has an important backend boundary. CPU/reference games and
+reconstructed demonstrations can assign delayed owned effects to the originating
+placement. The current CUDA collector consumes aggregate effects on the
+transition where they occur. Equal aggregate accounting therefore does not imply
+identical placement-time targets across those paths.
+
+Fitting assigns responsibility according to the actual proposal and outcome.
+Wait learns through the category stage; accepted plant/dig returns train the
+selected placement. Impossible categories and bad locations train their
+respective stage toward an invalid-action target, which is not an episode
+penalty. A slowly updated reference policy supplies consistency targets that
+connect accepted category choices to their placement values.
+
+Every fitting pass covers the prepared cohort before committing an optimizer
+update. Balancing uses cohort-wide populations so splitting work into batches
+does not redefine the objective. Repeated invalid decisions can be represented
+more compactly for fitting, while complete returns retain every actual decision.
+
+## Human supervision and initialization
+
+Human supervision is independent of a running autonomous learner. Both routes
+produce full-model weights that can start a fresh run.
 
 ```mermaid
-flowchart LR
-  CLI[GPU index or UUID] --> Select[Capability selection]
-  Select --> Torch[PyTorch device]
-  Select --> CuPy[CuPy and simulator]
-  Select --> Telemetry[UUID telemetry]
-  Fit[CPU bucketed fitting rows] --> Graph[Fitting-owned bounded graphs]
-  EMA[EMA fitting inference] --> Graph
-  Frames[Latest frame queue] --> Web[CPU web process]
-  Web --> Proxy[Jupyter Server Proxy]
-  Proxy --> Browser[Browser JSON client]
-  Browser --> Canvas[Canvas board renderer]
+flowchart TD
+    Reachable[Reachable simulator states] --> Labels[Human action or tile labels]
+    Labels --> Review[Validate labels and resolve conflicts]
+    Review --> Supervised[Fit the selected policy stage]
+    Supervised --> Verify[Verify saved training-set requirements]
+    Verify --> Weights[Compatible model weights]
+    Human[Completed human game] --> Recording[Replay and transition evidence]
+    Recording --> Reconstruct[Verify reconstruction and reprice rewards]
+    Reconstruct --> DemoFit[Fit both policy stages]
+    DemoFit --> Weights
+    Weights --> Fresh[Fresh autonomous run]
 ```
 
-GPU names are matching hints, not a model whitelist. Any installed native-BF16 NVIDIA device can use `generic-bf16` or a user-defined TOML profile. Graphs, device identity and execution settings are rebuilt for the destination GPU; model weights retain the existing architecture and compatibility contract. The browser process consumes bounded latest-frame packets and sends the existing selection/history commands, so a slow browser cannot block collection or fitting. Web training uses an ephemeral loopback port by default; `--viewer-port` can reserve a fixed loopback port for cloud forwarding.
+Annotations supervise either the action category or placement stage. Recorded
+human games supervise both stages through the shared return-fitting framework.
+The two paths can be composed by initializing demonstration fitting from
+annotation weights.
 
-The browser-side renderer consumes only the JSON public observation contract.
-It normalizes empty or partial frames before drawing and keeps the raw frame and
-learning settings behind expandable diagnostics. Canvas rendering is procedural
-and portable; it intentionally does not import the simulator or create a GPU
-context in the browser.
+Annotation states are reached through simulator actions rather than edits to
+resources or combat state. Records retain the public snapshot, model input,
+availability evidence and human label sets. Pending, labeled and discarded
+records persist across restarts. Contradictory labels for identical model inputs
+are reviewed together; revision checks prevent stale edits. Failure to generate
+the next board preserves the saved labels and allows retry.
+
+Annotation fitting freezes the other stage. It publishes an initialization only
+when freshly reloaded weights satisfy every training record's feasible-winner
+and absolute-bottom requirements. Its resumable fitting progress is separate
+from portable weights. Held-out annotation results remain diagnostics and do not
+establish gameplay quality.
+
+A demonstration must contain a complete natural win or loss. Reconstruction
+checks observations, proposals, outcomes, timing and replay identity before
+fitting. Verified events can be valued under current reward settings without
+rewriting the recording. Demonstration fitting has its own pass/time allowance
+and publishes weights only at completed-pass boundaries.
+
+## Curriculum and evaluation
+
+The teaching curriculum progresses from easy games to mixed easy/standard games
+and then a shared mix including hard games. Mastery checks use separate,
+deterministic cases and require the configured residency and success criteria.
+Stage changes affect future game resets and preserve learning state within a
+continuous run. A separately initialized stage transfers weights into fresh
+learning state.
+
+Under the default schedule, a mastered stage triggers ordinary validation.
+Complete validation chooses one shared best policy across difficulties.
+Partial results cannot select a best checkpoint, and a run that never reaches
+qualifying validation may have no selected best policy. Ending a run or reaching
+its game budget does not imply mastery.
+
+Training, mastery, validation, final test and changed-scenario evaluation use
+separate case pools. Evaluation freezes the policy and performs no fitting.
+It can refill finished simulation slots because it does not need training's
+cohort boundary. CUDA traces selected for recording are replayed on CPU and
+checked before publication; this check does not cover every unrecorded case.
+
+Reports compare learned policies with fixed baselines on paired scenarios.
+They reject incompatible protocols, duplicate cases and incomplete comparison
+sets. Formal research orchestration explicitly runs learner attempts, frozen
+checkpoint evaluations and reports, preserving a journal for restart.
+Availability checks and performance benchmarks are separate evidence: neither
+certifies learning quality.
+
+## Storage, recovery and compatibility
+
+The system distinguishes three kinds of durable information:
+
+| Information | Purpose |
+|---|---|
+| Supervision | Annotation records and verified recordings support review, reconstruction and reusable initialization |
+| Learning state | Autonomous checkpoints preserve unfinished trajectories with the rest of the run; supervision-specific progress preserves its own resumable work |
+| Provenance and results | Resolved settings, source identities, evaluation cases and reports explain what ran and what the results mean |
+
+Trajectory storage spans bounded RAM and disk and is released after its cohort
+is fitted. Checkpoints include unfinished experience needed for recovery.
+Temporary batching, transfer and execution caches are derived working state and
+are rebuilt; scratch files are not the recovery contract.
+
+Initialization transfers compatible complete model weights into a fresh
+optimizer, curriculum, budget and random state. Resume continues an autonomous
+run, including simulator state, unfinished experience, optimizer, reference
+policy, exploration, schedules and random state. Annotation fitting has its own
+resume mechanism. These operations are deliberately distinct.
+
+Checkpoint compatibility checks engine identity, public representation, model
+structure and the relevant learning/state contracts before collectors allocate.
+Some incompatible run states may still provide structurally compatible starting
+weights; they cannot be resumed as though their learning settings matched.
+
+Saving stops new selection and finishes issued work before publishing one
+coherent checkpoint. Replacement is atomic, preserving the previous checkpoint
+if saving fails. A partial fitting pass restarts from its beginning; a committed
+update is not repeated. This boundary prevents recovery from combining model
+weights with mismatched optimizer or game state.
+
+## Execution and presentation boundaries
+
+GPU batching, compilation and memory management are execution concerns. They may
+change how work is scheduled, but must preserve public inputs, targets and
+learning semantics. Memory pressure can spill host storage or trigger bounded
+execution fallbacks. Exhausted recovery and nonfinite learning values fail
+explicitly rather than silently dropping evidence or changing the objective.
+
+Progress, hardware sampling, journals and viewers observe actual execution.
+Bounded queues prevent a slow viewer from holding up training; presentation
+failure can disable the viewer while learning continues. Desktop and browser
+frontends consume public frames and diagnostic decisions, not ownership of the
+model or simulator. Viewer history never becomes policy memory.
+
+Offline reports, replay videos and plots are derived artifacts. Their export
+status is tracked separately, so an export failure does not invalidate completed
+learning. Performance diagnostics also distinguish completed production cycles
+from partial measurements; utilization or an isolated benchmark is not evidence
+of total training speedup.
+
+## Further reading
+
+- [Quick start](../README.md) for requirements and installation.
+- [Entity inputs](math/entity-inputs.md), [reward economics](math/training-objective.md)
+  and [invalid-action attribution](math/invalid-action-penalties.md) for detailed contracts.
+- [Execution controls and diagnostics](math/training-throughput.md) for performance work.
+- [Code and test ownership](../AGENTS.md#code-structure) for implementation navigation.
+- [References](references.md), [iteration history](iteration.md) and
+  [retained measurements](evidence/) for research attribution and evidence.
