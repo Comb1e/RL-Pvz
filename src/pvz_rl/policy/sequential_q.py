@@ -1,37 +1,28 @@
 """Shared legality, exploration and regression algebra for sequential Q control."""
 
 import torch
-from pvz_game import Rules
 
 from pvz_rl.envs.actions import ActionSchema as A
 
-UNITS_PER_TILE = Rules().game["units_per_tile"]
-
 POLICY_SIGNATURE = "two_stage_transformer_q_v1"
-ACTION_DISTRIBUTION = "sequential_q_unmasked_penalty_v1"
+ACTION_DISTRIBUTION = "sequential_q_unmasked_tiles_v2"
 
 
 def observation_tile_masks(obs):
-    """Default proposal geometry from public plant fields, without private state."""
+    """Return unmasked proposal slots; the simulator validates tile occupancy."""
     from pvz_rl.envs.encoding import collate_observations
 
     obs = collate_observations(obs)
-    entities = obs.entities
-    plants = obs.entity_mask & (entities[..., 0] >= 1) & (entities[..., 0] <= A.plant_types)
-    tiles = entities[..., 2].long() * A.cols + entities[..., 3].long() // UNITS_PER_TILE
-    occupied = torch.zeros(len(obs), A.tiles, dtype=torch.long, device=obs.device)
-    occupied.scatter_add_(1, tiles.clamp(0, A.tiles - 1), plants.long())
-    empty = occupied == 0
-    available = torch.ones(len(obs), 1, dtype=torch.bool, device=obs.device)
-    return torch.cat((available, empty.repeat(1, A.plant_types), available.expand(-1, A.tiles)), -1)
+    active = torch.ones(len(obs), 1, dtype=torch.bool, device=obs.device)
+    return torch.cat((active, active.expand(-1, A.plant_types * A.tiles + A.tiles)), -1)
 
 
 def selection_masks(masks):
     """Return the ten-way comparison mask used by the controller.
 
-    Every active environment compares wait, all eight plants, and dig.  Tile
-    masks still constrain the second-level selector; a full board therefore
-    produces a rejected plant proposal instead of silently hiding its branch.
+    Every active environment compares wait, all eight plants, and dig. Tile
+    outputs are unmasked; branch availability and occupancy are classified
+    after the proposal so invalid actions can train their responsible head.
     """
     if masks.ndim != 2 or masks.shape[-1] != A.size or masks.dtype != torch.bool:
         raise ValueError("Action masks must be boolean [batch, action] tensors")
@@ -83,22 +74,28 @@ def outcome_weights(counts, *, device, dtype, accepted_share=0.5):
     return shares / counts.clamp_min(1) / represented
 
 
-def balanced_q_loss(selected, targets, actions, counts, *, accepted, accepted_share=0.5):
+def balanced_q_loss(
+    selected, targets, actions, counts, *, accepted, accepted_share=0.5, weights=None
+):
     """Equal nonempty wait/plant/dig groups, then equal accepted/rejected outcomes."""
     errors = (selected - targets).square()
-    weights = outcome_weights(
-        counts, device=selected.device, dtype=selected.dtype, accepted_share=accepted_share
+    weights = (
+        outcome_weights(
+            counts, device=selected.device, dtype=selected.dtype, accepted_share=accepted_share
+        )
+        if weights is None
+        else weights
     )
     loss = (errors * weights[action_groups(actions), accepted.long()]).sum()
     return loss, errors
 
 
 def tile_candidates(action_masks, branches):
-    rows = torch.arange(len(branches), device=branches.device)
-    tile_legal = A.tile_masks(action_masks)[rows, (branches - 1).clamp_min(0)]
+    active = action_masks.any(-1)
+    tile_legal = torch.ones((len(branches), A.tiles), dtype=torch.bool, device=branches.device)
     first_tile = torch.zeros_like(tile_legal)
     first_tile[:, 0] = True
-    return torch.where(tile_legal.any(-1, keepdim=True), tile_legal, first_tile)
+    return torch.where(active[:, None], tile_legal, first_tile)
 
 
 def candidate_maxima(tile_q, action_masks, branches):

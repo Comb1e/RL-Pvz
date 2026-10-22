@@ -16,9 +16,15 @@ from pvz_rl.envs.encoding import (
     validate_entity_records,
 )
 from pvz_rl.learning.action_routing import FitRoute, validate_routes
-from pvz_rl.learning.objective import COMPONENTS, raw_rewards, training_rewards, victory_time
+from pvz_rl.learning.objective import (
+    COMPONENTS,
+    endgame_terminal_rewards,
+    raw_rewards,
+    training_rewards,
+)
+from pvz_rl.learning.source_actions import AppendReceipt, SourceActionRef
 
-TRAJECTORY_PROTOCOL = "pvz-rl/action-global-trajectory-v1"
+TRAJECTORY_PROTOCOL = "pvz-rl/action-global-trajectory-v4"
 
 
 def trajectory_dtype(cfg=None):
@@ -28,12 +34,14 @@ def trajectory_dtype(cfg=None):
             ("entity_count", "<u4"),
             ("entity_omitted", "<u4", 3),
             ("globals", "<f4", GLOBAL_WIDTH),
-            ("mask", "u1", (A.size + 7) // 8),
             ("action", "<u2"),
             ("tick", "<u4"),
             ("reset", "?"),
             ("active", "?"),
             ("env", "<u2"),
+            ("episode", "<u8"),
+            ("decision", "<u8"),
+            ("run_break", "?"),
             ("duration", "<u2"),
             ("reward", "<f8"),
             ("components", "<f8", len(COMPONENTS)),
@@ -83,13 +91,104 @@ class CompleteGameBuffer:
         self._position_cache = {}
         self._entity_gather_workspace = None
         self.transport_metrics = dict(
-            preparation_seconds=0.0, transfer_wait_seconds=0.0, transfer_stream_seconds=0.0
+            preparation_seconds=0.0,
+            transfer_wait_seconds=0.0,
+            transfer_stream_seconds=0.0,
+            producer_wait_seconds=0.0,
+            transferred_bytes=0,
         )
         # Host-side causal source metadata is deliberately kept separate from
         # model observations and the fixed trajectory dtype.  A CUDA backend
         # may fill this table when it has detailed event provenance; CPU and
         # replay paths use the same mutation API.
         self.causal_sources = {}
+        self._source_index = {}
+        self._index_arrays = []
+        self._source_episodes = np.zeros(n_envs, np.uint64)
+        self._source_lengths = np.zeros(n_envs, np.int64)
+        self._next_run_break = np.ones(n_envs, bool)
+
+    def _index_records(self, records, base, *, validate_only=False):
+        """Small per-episode directories; each decision maps through an integer slab."""
+        # Collection supplies at most one row per original slot. Validate the
+        # common case as arrays, avoiding per-slot NumPy searches every step.
+        environments = records["env"]
+        if len(records) and np.all(environments[1:] > environments[:-1]):
+            episodes = records["episode"]
+            prior = self._source_episodes[environments]
+            lengths = np.where(episodes == prior, self._source_lengths[environments], 0)
+            if np.any(episodes < prior) or not np.array_equal(records["decision"], lengths):
+                raise ValueError("Duplicate, missing or out-of-order source action identity")
+            if validate_only:
+                return
+            for index, (env, episode, length) in enumerate(
+                zip(environments, episodes, lengths, strict=True)
+            ):
+                key = int(env), int(episode)
+                blocks = self._source_index.get(key, ([], 0))[0]
+                block, offset = divmod(int(length), self.block_rows)
+                if block == len(blocks):
+                    blocks.append(self._allocate_source_index())
+                blocks[block][offset] = base + index
+                self._source_index[key] = blocks, int(length) + 1
+            self._source_episodes[environments] = episodes
+            self._source_lengths[environments] = lengths + 1
+            return
+        for env in np.unique(records["env"]):
+            positions = np.flatnonzero(records["env"] == env)
+            episodes = records["episode"][positions]
+            latest = max(
+                (episode for slot, episode in self._source_index if slot == int(env)), default=0
+            )
+            if np.any(episodes[1:] < episodes[:-1]) or (len(episodes) and episodes[0] < latest):
+                raise ValueError("Out-of-order source action episode identity")
+            for episode in np.unique(records["episode"][positions]):
+                selected = positions[records["episode"][positions] == episode]
+                key = (int(env), int(episode))
+                blocks, length = self._source_index.get(key, ([], 0))
+                if not np.array_equal(
+                    records["decision"][selected], np.arange(length, length + len(selected))
+                ):
+                    raise ValueError("Duplicate, missing or out-of-order source action identity")
+                if validate_only:
+                    continue
+                for start in range(0, len(selected), self.block_rows):
+                    part = selected[start : start + self.block_rows]
+                    offset = 0
+                    while offset < len(part):
+                        block, at = divmod(length, self.block_rows)
+                        if block == len(blocks):
+                            blocks.append(self._allocate_source_index())
+                        take = min(len(part) - offset, self.block_rows - at)
+                        blocks[block][at : at + take] = base + part[offset : offset + take]
+                        length += take
+                        offset += take
+                self._source_index[key] = blocks, length
+                self._source_episodes[env], self._source_lengths[env] = episode, length
+
+    def _allocate_source_index(self):
+        amount = self.block_rows * 8
+        if self.ram_used + self.staging_bytes + amount <= self.ram_bytes:
+            value = np.empty(self.block_rows, dtype=np.uint64)
+            self.ram_used += amount
+        else:
+            value = np.lib.format.open_memmap(
+                self.path / f"source-index-{len(self._index_arrays):06d}.npy",
+                mode="w+",
+                dtype=np.uint64,
+                shape=(self.block_rows,),
+            )
+        self._index_arrays.append(value)
+        return value
+
+    def source_row(self, reference):
+        if not isinstance(reference, SourceActionRef):
+            raise TypeError("Causal credit requires a SourceActionRef")
+        blocks, length = self._source_index.get((reference.env, reference.episode), ([], 0))
+        if reference.decision >= length:
+            raise ValueError("Stale or unknown source action identity")
+        block, offset = divmod(reference.decision, self.block_rows)
+        return int(blocks[block][offset])
 
     def _allocate(self, entity=False):
         blocks = self.entity_blocks if entity else self.blocks
@@ -110,7 +209,11 @@ class CompleteGameBuffer:
         """Charge reusable pinned buffers to the same budget, spilling RAM if needed."""
         if amount > self.ram_bytes:
             return False
-        for prefix, blocks in (("entities", self.entity_blocks), ("block", self.blocks)):
+        for prefix, blocks in (
+            ("entities", self.entity_blocks),
+            ("block", self.blocks),
+            ("source-index", self._index_arrays),
+        ):
             for i, block in enumerate(blocks):
                 if self.ram_used + amount <= self.ram_bytes:
                     self.staging_bytes = amount
@@ -125,7 +228,14 @@ class CompleteGameBuffer:
                 )
                 mapped[:] = block
                 blocks[i] = mapped
+                if prefix == "source-index":
+                    for index_blocks, _ in self._source_index.values():
+                        for j, existing in enumerate(index_blocks):
+                            if existing is block:
+                                index_blocks[j] = mapped
                 self.ram_used -= block.nbytes
+        if self.ram_used + amount > self.ram_bytes:
+            return False
         self.staging_bytes = amount
         return True
 
@@ -142,7 +252,7 @@ class CompleteGameBuffer:
             setattr(self, key, getattr(self, key) + take)
             at += take
 
-    def append(self, records, observations):
+    def append(self, records, observations, *, identities=None):
         if self.finalized or self.rewards_finalized:
             raise RuntimeError("Cannot append after complete-return finalization")
         records = np.array(records, dtype=self.dtype, copy=True)
@@ -159,10 +269,61 @@ class CompleteGameBuffer:
         observations.validate()
         if observations.counts.shape != (len(records),):
             raise ValueError("Each transition needs one public observation")
+        if np.any(records["env"] >= self.n_envs):
+            raise ValueError("Trajectory environment outside canonical slots")
+        slots = np.flatnonzero(records["active"])
+        next_run_break = self._next_run_break.copy()
+        # Capture padding boundaries before removing inactive metadata slots.
+        if np.all(records["env"][1:] > records["env"][:-1]):
+            records["run_break"] |= next_run_break[records["env"]] | records["reset"]
+            next_run_break[records["env"]] = ~records["active"]
+        else:
+            for env in np.unique(records["env"]):
+                positions = np.flatnonzero(records["env"] == env)
+                enabled = records["active"][positions]
+                previous = np.r_[not next_run_break[env], enabled[:-1]]
+                records["run_break"][positions] |= ~previous | records["reset"][positions]
+                next_run_break[env] = not bool(enabled[-1])
+        records = records[slots]
+        counts = np.asarray(observations.counts)[slots].astype(np.int64)
+        offsets = np.asarray(observations.offsets)[slots].astype(np.int64)
+        starts = np.cumsum(counts) - counts
+        positions = (
+            np.repeat(offsets, counts) + np.arange(int(counts.sum())) - np.repeat(starts, counts)
+        )
+        observations = PackedEntityBatch(
+            observations.entities[positions],
+            starts,
+            counts,
+            np.asarray(observations.globals)[slots],
+        )
+        if identities is None:
+            for env in np.unique(records["env"]):
+                for episode in np.unique(records["episode"][records["env"] == env]):
+                    selected = np.flatnonzero(
+                        (records["env"] == env) & (records["episode"] == episode)
+                    )
+                    length = self._source_index.get((int(env), int(episode)), ([], 0))[1]
+                    records["decision"][selected] = np.arange(length, length + len(selected))
+        else:
+            episodes, decisions = identities
+            records["episode"] = np.asarray(episodes)[slots]
+            records["decision"] = np.asarray(decisions)[slots]
+        self._index_records(records, self.size, validate_only=True)
         records["entity_offset"] = self.entity_size + observations.offsets
         records["entity_count"], records["globals"] = observations.counts, observations.globals
+        base = self.size
         self._append(observations.entities, entity=True)
         self._append(records)
+        self._index_records(records, base)
+        self._next_run_break = next_run_break
+        return AppendReceipt(
+            slots,
+            np.arange(base, self.size),
+            records["episode"].copy(),
+            records["decision"].copy(),
+            records["env"].copy(),
+        )
 
     def take(self, indices):
         indices = np.asarray(indices, dtype=np.int64)
@@ -294,7 +455,10 @@ class CompleteGameBuffer:
             raise RuntimeError("Causal credits must be applied before return finalization")
         if isinstance(credits, dict):
             entries = [
-                {"row_index": index, "credits": values}
+                {
+                    ("action_ref" if isinstance(index, SourceActionRef) else "row_index"): index,
+                    "credits": values,
+                }
                 for index, values in credits.items()
             ]
         else:
@@ -309,12 +473,18 @@ class CompleteGameBuffer:
         for entry in entries:
             if not isinstance(entry, dict):
                 raise TypeError("Causal credit entries must be mappings")
-            index = entry.get("row_index", entry.get("index"))
+            reference = entry.get("action_ref")
+            if reference is not None:
+                index = self.source_row(reference)
+            else:
+                index = entry.get("row_index", entry.get("index"))
             if type(index) is not int:
                 raise ValueError("Causal credit entry needs an integer row_index")
             row = self._row_view(index)
             if "env" in entry and int(row["env"]) != int(entry["env"]):
                 raise ValueError("Causal credit environment does not match trajectory row")
+            if "episode" in entry and int(row["episode"]) != int(entry["episode"]):
+                raise ValueError("Causal credit episode does not match trajectory row")
             values = entry.get("credits", entry.get("values", entry))
             if not isinstance(values, dict):
                 raise TypeError("Causal credit values must be a mapping")
@@ -351,30 +521,47 @@ class CompleteGameBuffer:
         terminal = []
         for b, block in enumerate(self.blocks):
             rows = block[: min(self.block_rows, self.size - b * self.block_rows)]
-            terminal.extend(rows[rows["active"] & rows["done"]])
-        durations = np.asarray([int(r["tick"]) + int(r["duration"]) for r in terminal], np.float64)
+            for index in np.flatnonzero(rows["active"] & rows["done"] & rows["components_valid"]):
+                row = rows[index]
+                terminal.append(
+                    (
+                        block,
+                        int(index),
+                        float(int(row["tick"]) + int(row["duration"])),
+                        bool(row["won"]),
+                    )
+                )
+        durations = np.asarray([item[2] for item in terminal], np.float64)
+        wins = np.asarray([item[3] for item in terminal], dtype=bool)
+        if self.cfg and len(terminal):
+            terminal_rewards, adjustments = endgame_terminal_rewards(
+                durations,
+                wins,
+                win_reward=self.cfg["reward"]["win_reward"],
+                loss_penalty=self.cfg["reward"]["loss_penalty"],
+                weight=self.cfg["reward"].get("win_time_weight", 0.5),
+            )
+            for (block, index, _, _won), value in zip(terminal, terminal_rewards, strict=True):
+                row = block[index]
+                row["components"][0] = value
+                row["reward"] = raw_rewards(row["components"], self.cfg)
+        else:
+            terminal_rewards = np.asarray([], dtype=np.float64)
+            adjustments = np.asarray([], dtype=np.float64)
         median = float(np.median(durations)) if len(durations) else 0.0
-        weight = self.cfg["reward"].get("win_time_weight", 0) if self.cfg else 0
-        for b, block in enumerate(self.blocks):
-            rows = block[: min(self.block_rows, self.size - b * self.block_rows)]
-            real = rows["components_valid"]
-            # Victory-time shaping remains a report-only diagnostic.  The new
-            # trajectory components are the global/action reward ledger, so
-            # recompute the immediate raw reward without mutating them.
-            if self.cfg and np.any(real):
-                rows["reward"][real] = raw_rewards(rows["components"][real], self.cfg)
         # The pinned simulator clock is the only clock used for the median.
         from pvz_game import Rules
 
         self.reward_summary = dict(
             duration_median_seconds=median / Rules().game["tick_rate"],
             duration_reference_count=len(durations),
-            victory_time_adjustments=victory_time(
-                durations[np.asarray([bool(r["won"]) for r in terminal], dtype=bool)],
-                median,
-                True,
-                weight,
-            ).tolist(),
+            endgame_terminal_rewards=terminal_rewards.tolist(),
+            endgame_time_adjustments=adjustments.tolist(),
+            endgame_time_weight=(
+                self.cfg["reward"].get("win_time_weight", 0.5) if self.cfg else 0.0
+            ),
+            # Compatibility alias for existing viewers and reports.
+            victory_time_adjustments=adjustments.tolist(),
             home_entries=np.sum(
                 [
                     block[: min(self.block_rows, self.size - b * self.block_rows)][
@@ -394,6 +581,7 @@ class CompleteGameBuffer:
         """Actual per-game returns and errors measured before fitting either head."""
         self.finalize_rewards()
         running = np.zeros(self.n_envs, np.float64)
+        running_episode = [None] * self.n_envs
         contribution = np.zeros((self.n_envs, len(COMPONENTS)), np.float64)
         component_sum = np.zeros(len(COMPONENTS), np.float64)
         component_square = np.zeros(len(COMPONENTS), np.float64)
@@ -425,19 +613,33 @@ class CompleteGameBuffer:
                         training_rewards(rows["components"][ix], self.cfg),
                         rewards,
                     )
-                values = np.cumsum(rewards[::-1], dtype=np.float64)[::-1] + running[env]
-                if len(ix):
-                    running[env] = values[0]
-                rows["target"][ix] = values
                 parts = rows["components"][ix].copy()
                 immediate_component_sum += parts.sum(0)
                 if self.cfg:
                     parts[:, 1:] *= (
                         self.cfg["training"].get("objective", {}).get("dense_multiplier", 1)
                     )
-                returns = np.cumsum(parts[::-1], axis=0)[::-1] + contribution[env]
-                if len(ix):
-                    contribution[env] = returns[0]
+                values = np.empty(len(ix), np.float64)
+                returns = np.empty_like(parts)
+                episodes, terminals = rows["episode"][ix], rows["done"][ix]
+                boundaries = np.r_[
+                    0, np.flatnonzero((episodes[1:] != episodes[:-1]) | terminals[:-1]) + 1, len(ix)
+                ]
+                for low, high in reversed(list(zip(boundaries[:-1], boundaries[1:], strict=True))):
+                    if high == low:
+                        continue
+                    if running_episode[env] != int(episodes[high - 1]) or terminals[high - 1]:
+                        running[env] = 0
+                        contribution[env] = 0
+                    values[low:high] = (
+                        np.cumsum(rewards[low:high][::-1], dtype=np.float64)[::-1] + running[env]
+                    )
+                    returns[low:high] = (
+                        np.cumsum(parts[low:high][::-1], axis=0)[::-1] + contribution[env]
+                    )
+                    running[env], contribution[env] = values[low], returns[low]
+                    running_episode[env] = int(episodes[low])
+                rows["target"][ix] = values
                 component_sum += returns.sum(0)
                 component_square += np.square(returns).sum(0)
                 target_sum += values.sum()
@@ -609,6 +811,7 @@ class CompleteGameBuffer:
             outcome_counts=self.outcome_counts,
             consistency_counts=self.consistency_counts,
             exploration=dict(self.exploration),
+            next_run_break=self._next_run_break.tolist(),
         )
 
     def save(self, destination):
@@ -719,7 +922,10 @@ class CompleteGameBuffer:
                     for name in ("branch_value", "tile_value", "placement_gap")
                 ):
                     raise ValueError("Non-finite trajectory Q values or placement gap")
-                actual = rows[rows["active"]]
+                if not np.all(rows["active"]) or np.any(rows["env"] >= obj.n_envs):
+                    raise ValueError("Compact trajectories contain only active canonical rows")
+                obj._index_records(rows, at)
+                actual = rows
                 validate_routes(actual)
                 if np.any(actual["rejection_reason"] > 7):
                     raise ValueError("Unknown trajectory rejection reason")
@@ -788,20 +994,25 @@ class CompleteGameBuffer:
                 int(index): list(values)
                 for index, values in state.get("causal_sources", {}).items()
             }
+            boundary = np.asarray(state.get("next_run_break"))
+            if boundary.shape != (obj.n_envs,) or boundary.dtype != np.bool_:
+                raise ValueError("Corrupt compaction boundary recovery")
+            obj._next_run_break = boundary.copy()
             return obj
         except Exception:
             obj.close()
             raise
 
     def close(self):
-        for blocks in (self.blocks, self.entity_blocks):
+        self._source_index.clear()
+        for blocks in (self.blocks, self.entity_blocks, self._index_arrays):
             for block in blocks:
                 if isinstance(block, np.memmap):
                     block.flush()
                     block._mmap.close()
             blocks.clear()
         if self.path.is_dir():
-            for prefix in ("block", "entities"):
+            for prefix in ("block", "entities", "source-index"):
                 for path in self.path.glob(prefix + "-*.npy"):
                     path.unlink()
             try:

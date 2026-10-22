@@ -98,16 +98,13 @@ entity slabs. Each raw entity costs 44 bytes. Slabs/staging share RAM allowance
 and spill to disk. Recovery checks protocol, dtype, shapes, offsets, counts,
 cap and final slab extent before exposing data to training.
 
-## Independent controls
+## Verification scope
 
-Owning model controls compare both stages' values/gradients with independent
-serial/dense attention, including fallback, permutation, padding and batched
-requests. They verify required dimensions, branch conditioning, duplicate-request
-reuse, statelessness, current-state sensitivity and empty/crowded finiteness.
-FP64 mathematical controls avoid precision artifacts; FP32 comparisons account
-for reduction/TF32 differences rather than weakening schema/attribution checks.
-Observation/storage suites own raw CPU/CUDA facts, all public phases, multiplicity,
-cap/private-state boundaries, ragged spill and corruption.
+The current [smoke suite](../../AGENTS.md#test-ownership) runs both policy stages
+on a real public board and checks finite Q values, output dimensions and action
+submission. Its CUDA check covers a tiny learning/checkpoint workflow. Independent
+attention/gradient, permutation, padding, private-state, CPU/CUDA parity and storage
+regressions are no longer maintained; historical results remain in iteration history.
 
 Historical cap measurements remain in [iteration history](../iteration.md);
 they do not measure this two-network architecture. See

@@ -146,9 +146,9 @@ extern "C" __global__ void encode_canonical(const I *headers, const I *plants,
   }
 }
 
-// Policy masks expose only board geometry.  The sequential Q controller keeps
-// all ten branch values visible; the simulator remains authoritative for
-// affordability, cooldown, and rejection reasons.
+// Policy masks expose every tile for every active plant/dig branch. The
+// simulator remains authoritative for affordability, cooldown, occupancy and
+// rejection reasons; the collector classifies those outcomes after stepping.
 extern "C" __global__ void policy_masks(const I *headers, const I *plants,
                                          bool *masks, I n) {
   I index = blockIdx.x * blockDim.x + threadIdx.x;
@@ -161,16 +161,9 @@ extern "C" __global__ void policy_masks(const I *headers, const I *plants,
     masks[index] = false;
     return;
   }
-  bool available = action == 0 || action >= ACTION_DIG_START;
-  if (action > 0 && action < ACTION_DIG_START) {
-    I tile = (action - 1) % ACTION_TILES;
-    I row = tile / 9, col = tile % 9;
-    available = true;
-    Plant *p = (Plant *)(plants + game * 45 * GAME_PLANT_WIDTH);
-    for (I j = 0; j < h.np; j++)
-      if (p[j].row == row && p[j].col == col) available = false;
-  }
-  masks[index] = available;
+  // Policy masks expose all 45 tiles. The simulator validates occupancy after
+  // selection so invalid tiles remain tile-only fitting examples.
+  masks[index] = true;
 }
 
 // Copy each selected row's kept canonical records to its exclusive-scan offset.

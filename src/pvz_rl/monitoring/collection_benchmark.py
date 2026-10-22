@@ -178,7 +178,8 @@ def measure(model, callback, hardware, process, decisions, **context):
         dict(
             env=int(row["env"]),
             terminal=float(row["components"][0]),
-            timed_out=bool(env._episode_host["header"][int(row["env"]), 1] == 0),
+            timed_out=model._pending_episodes[int(row["env"])]["metrics"]["failure_category"]
+            == "time_cutoff",
         )
         for row in terminal_rows
     ]
@@ -423,7 +424,9 @@ def benchmark(
     cfg["visualization"].update(enabled=False, live_enabled=False, demos=False, videos=False)
     cfg["training"].update(until_stage_complete=False, total_games=10000, n_epochs=FIT_PASSES)
     cfg["training"]["n_envs"] = ORIGINAL_ENVIRONMENTS
-    cfg["training"]["performance"].update(compile_kernels=not eager, telemetry=telemetry)
+    cfg["training"]["performance"].update(
+        compile_collection=not eager, compile_fitting=not eager, telemetry=telemetry
+    )
     torch.set_num_threads(cfg["training"]["torch_threads"])
     result = dict(
         protocol=PROTOCOL,

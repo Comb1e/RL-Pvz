@@ -1,5 +1,12 @@
 # Precision and execution controls
 
+For the RTX 4070 investigation using `runs/compact-stages-101`, see the
+[training pipeline audit](../evidence/training-performance-audit-20261021.md).
+It distinguishes real run telemetry, a CPU/GPU fitting replay of saved rows,
+and synthetic component controls. Candidate settings are not promoted defaults.
+The [pipeline implementation evidence](../evidence/training-pipeline-optimization-20261021.md)
+records current complete-cycle trials, including incomplete comparisons.
+
 The collector and fitter share the stateless two-stage policy. Active original
 slots are packed by public entity width and results scatter back to canonical
 slots. Finished slots are inactive, never refilled and never inferred. Padding
@@ -23,17 +30,38 @@ INT8 and INT4 execution are not implemented.
 
 ## Flat fitting
 
-Complete returns remain chronological per original episode. Genuine active rows
-are materialized in a reusable fitting spool, optionally spilled through the
-trajectory RAM/disk budget, and bucketed by capped public entity width. Fixed
-padded batches are prefetched through the ordered double buffer. Padding and
-reordering do not affect whole-cohort denominators or gradients. The spool is
-discarded after fitting and is never simulator recovery state.
+Complete returns remain chronological per original episode. Storage contains
+executed active decisions only; private `(slot, episode, ordinal)` references
+resolve source credits through RAM/disk integer slabs. Explicit inactive-gap
+boundaries survive compaction and recovery. The spool scans slim metadata with
+segmented NumPy operations, counts width/route partitions, and gathers selected
+rows/entities in bounded chunks. It never copies the complete trajectory dtype
+just to compute representatives. Return counts stay raw; fitting denominators
+use representatives without frequency weights.
+
+Prepared sources share ordered double-buffer transport across autonomous, demo
+and annotation fitting. Each pinned slot grows to its required entity bucket
+only after its previous copy event completes. Source indices, spool arrays,
+cached CPU routing plans and staging share the storage budget. Preparation and
+copy overlap GPU fitting through one producer and a separate copy stream;
+consumer stream ownership is recorded before pinned slots are reused. A staging
+budget failure restarts the uncommitted pass with eager transport. The disposable
+spool is never serialized as simulator recovery state.
 
 Base batches contain 1,024 rows and `fit_batch_groups=4` groups transport work;
 there is one optimizer commit per autonomous pass (four) or demonstration pass
 (twenty). Collection geometry remains `encoder_microbatch=128`; fitting defaults
-use `fit_encoder_microbatch=192` and `fit_token_budget=65536`.
+use `fit_encoder_microbatch=192` and `fit_token_budget=65536` before GPU-profile
+overlays. The 4070 keeps 64/64 and 16,384; 128/128 and 32,768 are candidate overrides.
+Transport grouping does not change encoder microbatch limits.
+
+Whole-cohort balancing coefficients are transferred once. Accepted consistency
+uses direct all-45 reductions without rebuilding proposal masks. Demo ranking
+shares online species/tile tensors with regression until the batch backward.
+Annotation inputs and dense label masks are prepared once; indexed max/min
+preserve tie gradients and pass-boundary totals avoid redundant train metrics.
+FP32 gradient additions, BF16 runtime copies and EMA updates use grouped foreach
+operations; clipping and the one-commit-per-pass boundary remain unchanged.
 
 ## Collection
 
@@ -48,18 +76,26 @@ headroom. Collection and fitting captures have separate ownership; quiescent
 phase changes release outgoing captures. Capture failure uses eager BF16
 execution. Recovery rebuilds captures, prefetch workers, maps and fitting spools.
 
+`compile_collection` and `compile_fitting` are independent central execution
+settings. The old `compile_kernels` key is rejected in user configuration.
+`telemetry_span_limit` bounds pending diagnostic events and their reusable pool.
+Ready events are resolved without waits; if the bound remains full, skipped spans
+are counted. Hardware samples and host counters remain separate from device spans.
+Both compilation settings are disabled in the initial 4070 profile. Eager,
+collection-graph and fitting-compiler controls must be measured independently.
+
 Fitting compiler caches are private to each encoder and fitting phase: separate
 Python code objects prevent species/tile stages or different model instances from
-sharing Dynamo's recompilation allowance. Up to four observed fitting shapes are
+sharing Dynamo's recompilation allowance. Up to six observed fitting shapes are
 compiled per phase; additional shapes use eager BF16. Partial compiled microbatches
 are padded and trimmed before supervision. Quiescent fitting release renews that
 encoder's compiler cache as well as releasing captures, so changed microbatch
 limits do not accumulate stale specializations across cohorts. Global compiler
 limits are not increased and unrelated compiler caches are not reset.
 
-After updating compiler code, restart the training process from its coherent
-current-contract recovery checkpoint. Existing weights and recordings remain
-compatible; fresh demonstration initialization is not needed for this execution fix.
+Trajectory/recovery v4 stores active identities and boundary carry state.
+Earlier recovery files cannot resume; compatible weights and recordings remain
+valid for fresh initialization. Prepared caches rebuild and are never model data.
 
 ## Rates and evidence
 
@@ -70,10 +106,11 @@ Diagnostics include both-stage inference/fit time, fitting rows/s, memory,
 optimizer completion, selected-action error, species-consistency diagnostics and
 conditional best-tile minus sampled-tile placement gap.
 
-Independent controls cover 128/64/32/16/4/1 live slots, sparse/mixed/crowded
-boards, zero/one planting and recovery. Bounded collect → four-pass-fit → collect
-checks establish implementation correctness only, not a speed or win-rate
-guarantee.
+The current [smoke suite](../../AGENTS.md#test-ownership) checks one tiny CUDA
+learning/checkpoint workflow with compilation disabled. It does not verify
+execution equivalence, compiler behavior, recovery or throughput. Historical
+controls and measurements remain in iteration history and retained evidence;
+manual benchmarks supply new performance evidence.
 
 ## Diagnose cloud fitting stalls
 
@@ -103,6 +140,10 @@ but no CUDA waits, device tensor readbacks or new CUDA events. Shapes, stacks an
 allocation tracing are disabled to bound profiler overhead. CUDA trace support
 depends on the cloud build/driver; unavailable CUDA profiling is reported and
 the CPU trace remains useful. CUDA Graph kernel visibility is build dependent.
+Use `--trace-phase collection` for a bounded collection window instead of the
+default fitting window. Lightweight collection counters include the tail with
+eight or fewer active games. Finalization, complete returns, spool build and
+checkpoint serialization have distinct host spans.
 
 The collector reuses the hardware sampler and temporarily wraps the existing
 learner; it does not introduce another training framework. Host labels distinguish
@@ -134,7 +175,7 @@ Interpret measurements using these controls:
 | Long `next_batch` and busy `pvz-batches` thread | Row-by-row validation/padding in CPU preparation; compare worker preparation events |
 | Long `spool_build`, major faults or increasing read bytes | First-pass materialization or RAM-budget spill; inspect RAM and process I/O together |
 | Long compile/backend or graph-setup spans at new widths | Lazy compilation/capture; compare subsequent chunks of the same shape |
-| Frequent `extra_shape_eager` microbatches | Exact transport maxima exceed the four fitting shapes admitted per encoder; inspect kernel-launch gaps |
+| Frequent `extra_shape_eager` microbatches | Shapes exceed the six fitting specializations admitted per encoder; inspect kernel-launch gaps |
 | CUDA runtime waits around `aten::nonzero` / indexing | Device-dependent output sizes synchronize the host; locate waits in the trace |
 | Many short kernels and gaps with small effective microbatches | Host launch/control overhead; inspect forward/backward/master-gradient spans |
 | Increasing cgroup `throttled_usec`, CPU pressure or steal time | Cloud CPU quota or contention; total CPU percentage can hide a saturated thread |
@@ -142,9 +183,8 @@ Interpret measurements using these controls:
 
 These are hypotheses, not automatic tuning recommendations. In particular,
 4,096 transported rows still execute in microbatches capped at 192 by default.
-The spool is sorted by entity count, while each transport batch uses its exact
-maximum entity count; sorting does not by itself guarantee four fixed widths.
-Teacher tile inference takes the no-grad collection-graph path even during fit.
+The spool partitions by configured public-width bucket and route. Teacher tile
+inference uses its own no-grad fitting graph owner when fitting compilation is enabled.
 Increasing transport groups alone does not enlarge encoder microbatches.
 
 Host spans are inclusive and nested; producer work overlaps the main thread.

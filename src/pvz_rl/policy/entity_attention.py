@@ -99,6 +99,8 @@ class SpatialTransformer(nn.Module):
         self._compiled_shapes = {}
         self._fitting_backend = None
         performance = layout.cfg["training"].get("performance", {})
+        self.compile_collection = performance.get("compile_collection", False)
+        self.compile_fitting = performance.get("compile_fitting", False)
         self._collection_cache = CollectionGraphCache(
             performance.get("collection_graph_cache_entries", 8),
             performance.get("collection_vram_headroom_mib", 512),
@@ -196,6 +198,8 @@ class SpatialTransformer(nn.Module):
 
     def configure_collection(self, performance):
         """Refresh execution settings at a quiescent boundary, including after resume."""
+        self.compile_collection = performance.get("compile_collection", False)
+        self.compile_fitting = performance.get("compile_fitting", False)
         entries = performance.get("collection_graph_cache_entries", 8)
         headroom = performance.get("collection_vram_headroom_mib", 512)
         if any(type(value) is not int or value < 0 for value in (entries, headroom)):
@@ -242,7 +246,8 @@ class SpatialTransformer(nn.Module):
         )
 
     def _encode_with_optional_compile(self, args):
-        if self._compiled_encode is None:
+        enabled = self.compile_fitting if self.fitting else self.compile_collection
+        if self._compiled_encode is None or not enabled:
             return self._encode(*args)
         if not torch.is_grad_enabled():
             if not args[0].is_cuda:
@@ -352,7 +357,11 @@ class SpatialTransformer(nn.Module):
             args = (*part.tensors(), branches[start : start + size])
             logical = len(part)
             compile_args = args
-            if self._compiled_encode is not None and (torch.is_grad_enabled() or self.fitting) and logical < size:
+            if (
+                self._compiled_encode is not None
+                and (torch.is_grad_enabled() or self.fitting)
+                and logical < size
+            ):
                 padding = size - logical
                 compile_args = tuple(
                     torch.cat((value, value.new_zeros((padding, *value.shape[1:]))), dim=0)

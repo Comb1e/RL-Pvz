@@ -3,8 +3,9 @@
 The six signed learning components are global terminal, global asset value,
 action damage, action blocking, action sun and action mower. All component
 accounting and return accumulation use FP64; trajectory targets are stored in
-FP32 and cast to BF16 for model fitting. Legacy combat, rejection, proximity and
-victory-time fields remain diagnostics only:
+FP32 and cast to BF16 for model fitting. Legacy combat, rejection and proximity
+fields remain diagnostics; completion time changes the terminal component only
+after a cohort is ranked:
 
 \[
 r^{physical}=r^{global\ asset}+r^{action\ damage}+r^{action\ blocking}
@@ -14,40 +15,49 @@ r^{physical}=r^{global\ asset}+r^{action\ damage}+r^{action\ blocking}
 \]
 
 Gamma is one; selected-action targets sum the complete episode without bootstrap.
-The shipped terminal rewards are +1 for victory and -1 for defeat or cutoff
-(`reward.loss_penalty=1.0`). Here `s=progress_weight/value_scale` and the
-multiplier is `training.objective.dense_multiplier=10`; scaling is applied once
-to the combined physical terms. The same interface builds demonstration
-and autonomous targets. [Sequential Q learning](sequential-training.md) specifies the
-selected-action, consistency and demonstration losses. Maximum net value and
-drawdown remain diagnostics.
+The base terminal rewards are +1 for victory and -1 for defeat or cutoff
+(`reward.loss_penalty=1.0`). After each 128-game cohort, terminal rows are
+ranked by completion time. With `reward.win_time_weight=0.5`, the earliest
+winner receives +1.5 and the latest winner +0.5. Losses before the median stay
+at -1; losses after the median become progressively more negative, reaching
+-1.5 for the latest rank. This adjustment is applied only to the terminal row.
+Here `s=progress_weight/value_scale=0.01/900` in the current profile and the multiplier is
+`training.objective.dense_multiplier=10`; scaling is applied once to the
+combined physical terms. The same interface builds demonstration and
+autonomous targets. [Sequential Q learning](sequential-training.md) specifies
+the selected-action, consistency and demonstration losses. Maximum net value
+and drawdown remain diagnostics.
 
 Assets are available sun plus each living plant's purchase cost times its
 remaining-health fraction. Purchase is neutral. Effective damage includes
 actual body and armor damage from plants/projectiles, capped at remaining HP;
 autonomous headless decay and mower damage do not earn plant-damage value.
-With basic body HP 270, damage valuation is 50/270 per effective HP.
+With basic body HP 270, damage valuation is 30/270 per effective HP.
 
 For asset value A, actual sky income S, effective damage D, mower activations M,
 and eligible actual Sunflower income E, the physical ledger is
 
 \[
-R_{physical}=(A_{after}-A_{before}-S)+(50/270)D+B+C-200M,
+R_{physical}=(A_{after}-A_{before}-S)+(30/270)D+B+C-500M,
 \]
 
 where `B` is the signed per-plant blocking credit and `C` is produced sunlight
-credit (including the configured early-sun source bonus). Subtracting actual sky
-income prevents free ambient sun from earning global asset reward. Plant-produced
-sun remains valuable only when it fits below the sun cap. Asset losses and mower
-expenditure are each charged once; diagnostic kill counts are not another reward
-term. Damage and delayed source events are assigned to their placement action by
-the causal ledger; no separate kill bonus is added.
+credit (including the configured early-sun source bonus). The current profile
+values 270 effective basic-zombie damage at 30 sunlight, a full Wall-nut block
+at 100 sunlight, a full ordinary-plant block at 10 sunlight, and one mower at
+500 sunlight. Subtracting actual sky income prevents free ambient sun from
+earning global asset reward. Plant-produced sun remains valuable only when it
+fits below the sun cap. Asset losses and mower expenditure are each charged
+once; diagnostic kill counts are not another reward term. Damage and delayed
+source events are assigned to their placement action by the causal ledger; no
+separate kill bonus is added.
 
 The default blocker coefficients are raw sun-equivalent value per health point:
-ordinary plants are `-cost/max_health`, while Wall-nut is `+2*cost/max_health`.
-Thus a Peashooter bite has a negative combined local signal, whereas a Wall-nut
-can receive positive blocking credit despite losing health. A terminal defeat
-still contributes the global loss penalty.
+ordinary plants are `10/max_health`, while Wall-nut is `100/max_health`.
+Blocking itself has no negative action term. The global asset value still records
+the plant's health loss, so ordinary plants remain economically costly while a
+Wall-nut can receive a positive combined local signal. A terminal defeat still
+contributes the global loss penalty.
 
 Eligibility is evaluated at each production event: total roster must be positive
 and `3 * cumulative_spawned < total`. Defeat/removal never reopens eligibility;
@@ -64,8 +74,8 @@ are intentionally both retained.
 | Lose a healthy 100-sun shooter | global asset `-100` plus its signed bite credit |
 | Produce 25 uncapped early Sunflower sun | global asset `+25` plus source action sun |
 | Produce 25 uncapped late Sunflower sun | global asset `+25` plus source action sun |
-| Remove 20 effective HP | action damage `(20*50/270)` |
-| Activate one mower | action mower `-200` |
+| Remove 20 effective HP | action damage `(20*30/270)` |
+| Activate one mower | action mower `-500` |
 | Empty cherry | no combat credit |
 | Cherry against three full basics | action damage from actual body/armor damage |
 | Cherry against one full conehead | action damage from actual body/armor damage |
@@ -103,22 +113,19 @@ transition are considered. Death never refunds a charge; headless zombies cannot
 breach and incur none. Maximum cost is -0.020 per zombie, or -0.30 for fifteen.
 IDs remain private accounting metadata. Recovery restores the ledger.
 
-## Cohort victory time
+## Ranked endgame time
 
-After all actual games finish, compute the median simulation duration \(m\),
-including victories, losses and timeouts. For 128 games it is the average of the
-64th and 65th sorted durations. Partial cohorts report their actual reference count.
-Probes never contribute durations. With `reward.win_time_weight=0.1`:
+After all actual games finish, sort the 128 completion durations from fastest to
+slowest. Equal durations share their average rank. For rank q in a cohort of n
+games, the adjustment is
 
-\[
-r^{time}(T)=\begin{cases}0.1(m-T)/(m+T)&\text{victory and }m+T>0,\\
-0&\text{otherwise}.\end{cases}
-\]
+a_q = w(1 - 2q/(n-1)), with w=reward.win_time_weight=0.5.
 
-At a 160-second median, victories lasting 80, 160, 240 and 320 seconds receive
-+0.03333, 0, -0.02000 and -0.03333. A faster defeat receives no bonus. A single-game
-demonstration has \(m=T\) and zero adjustment. Median is cohort context, never
-a policy input.
+A winning terminal row receives 1+a_q. A losing row receives -1+min(a_q,0).
+Thus winners before the median improve while early-loss penalties stay at -1;
+late winners decline and late-loss penalties increase, ending at +0.5 and -1.5
+for the last rank. A single-game or equal-duration cohort has zero adjustment.
+The rank is cohort context and never a policy input.
 
 Collection marks completed rewards provisional. `FINALIZE_REWARDS` writes terminal
 adjustments before `RETURNS` and `FIT`. Saved finalization

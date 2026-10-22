@@ -142,7 +142,7 @@ def validate_config(cfg: dict) -> None:
                 "training.objective contains retired or missing settings, including "
                 "species_consistency_huber_delta"
             )
-        if objective.get("protocol") != "complete_return_action_global_v1":
+        if objective.get("protocol") != "complete_return_action_global_v3":
             raise ValueError(
                 "Unsupported training objective protocol; fresh initialization is required"
             )
@@ -213,9 +213,9 @@ def validate_config(cfg: dict) -> None:
         raise ValueError(
             "Retired observation/policy format; entity_v1 requires fresh initialization"
         )
-    if cfg["reward"].get("version") != "action_global_value_v1":
+    if cfg["reward"].get("version") != "action_global_value_v3":
         raise ValueError(
-            "Retired reward format; causal action/global rewards require fresh training with the bundled train profile"
+            "Retired reward format; ranked endgame action/global rewards require fresh training with the bundled train profile"
         )
     reward_keys = {
         "version",
@@ -242,7 +242,9 @@ def validate_config(cfg: dict) -> None:
     if not isinstance(action_reward, dict):
         raise ValueError("reward.action must be a table")
     if set(action_reward) != {"sun_credit_multiplier", "block_value_by_plant"}:
-        raise ValueError("reward.action must contain sun_credit_multiplier and block_value_by_plant")
+        raise ValueError(
+            "reward.action must contain sun_credit_multiplier and block_value_by_plant"
+        )
     sun_credit_multiplier = action_reward["sun_credit_multiplier"]
     if (
         type(sun_credit_multiplier) not in (int, float)
@@ -316,7 +318,7 @@ def validate_config(cfg: dict) -> None:
         raise ValueError(
             "policy must contain only the stateless two-stage model and execution settings"
         )
-    if policy["action_distribution"] != "sequential_q_unmasked_penalty_v1":
+    if policy["action_distribution"] != "sequential_q_unmasked_tiles_v2":
         raise ValueError("Unsupported sequential action-value distribution")
     for key in (
         *model_settings,
@@ -446,7 +448,7 @@ def validate_config(cfg: dict) -> None:
     if not math.isfinite(visual["final_hold_seconds"]) or visual["final_hold_seconds"] < 0:
         raise ValueError("Visualization final_hold_seconds must be finite and nonnegative")
     env, train = cfg["environment"], cfg["training"]
-    expected_method = "complete_return_action_global_v1"
+    expected_method = "complete_return_action_global_v3"
     if train.get("method") != expected_method:
         raise ValueError("Training requires a supported complete-return method and fresh models")
     if any(
@@ -470,7 +472,9 @@ def validate_config(cfg: dict) -> None:
         if type(storage.get(key)) is not int or storage[key] < 1:
             raise ValueError(f"training.storage.{key} must be a positive integer")
     performance = train.get("performance", {})
-    for key in ("compile_kernels", "telemetry"):
+    if "compile_kernels" in performance:
+        raise ValueError("compile_kernels was replaced by compile_collection and compile_fitting")
+    for key in ("compile_collection", "compile_fitting", "telemetry"):
         if type(performance.get(key, False)) is not bool:
             raise ValueError(f"training.performance.{key} must be a boolean")
     if performance.get("fit_precision", "fp32") != "bf16_master":
@@ -478,8 +482,10 @@ def validate_config(cfg: dict) -> None:
     if type(performance.get("prefetch", False)) is not bool:
         raise ValueError("training.performance.prefetch must be a boolean")
     if set(performance) - {
-        "compile_kernels",
+        "compile_collection",
+        "compile_fitting",
         "telemetry",
+        "telemetry_span_limit",
         "fit_precision",
         "prefetch",
         "fit_batch_groups",
@@ -505,6 +511,11 @@ def validate_config(cfg: dict) -> None:
     for key in ("fit_encoder_microbatch", "fit_token_budget"):
         if type(performance.get(key)) is not int or performance[key] < 1:
             raise ValueError(f"training.performance.{key} must be a positive integer")
+    if (
+        type(performance.get("telemetry_span_limit", 1024)) is not int
+        or performance.get("telemetry_span_limit", 1024) < 1
+    ):
+        raise ValueError("training.performance.telemetry_span_limit must be a positive integer")
     for key in ("fit_species_microbatch", "fit_tile_microbatch"):
         if key in performance and (type(performance[key]) is not int or performance[key] < 1):
             raise ValueError(f"training.performance.{key} must be a positive integer")

@@ -113,6 +113,7 @@ def refilled_games(
                             obs,
                             env.action_masks(),
                             active=active,
+                            branch_usable=env.branch_availability(active=active),
                             defer_check=True,
                         )[0]
                 if record:
@@ -200,6 +201,7 @@ def fixed_batches(
                                     obs,
                                     env.action_masks(),
                                     active=active,
+                                    branch_usable=env.branch_availability(active=active),
                                     defer_check=True,
                                 )[0]
                         if record:

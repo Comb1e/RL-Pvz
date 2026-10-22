@@ -1,5 +1,27 @@
 # Sources actually used
 
+## Smoke-test selection — 2026-10-22
+
+- [pytest custom-marker examples](https://github.com/pytest-dev/pytest/blob/main/doc/en/example/markers.rst):
+  consulted marker-based selection for the default CPU checks and explicit
+  `-m learning` CUDA smoke command. This uses pytest's existing marker support
+  without another test dependency.
+
+## CPU/GPU pipeline audit — 2026-10-21
+
+- [PyTorch 2.8 CUDA semantics](https://raw.githubusercontent.com/pytorch/pytorch/v2.8.0/docs/source/notes/cuda.rst):
+  rechecked asynchronous execution, explicit stream dependencies and synchronized
+  timing. The audit treats producer, copy and device spans as overlapping work,
+  not additive stages, and keeps buffer reuse fences.
+- [PyTorch pinned/nonblocking tutorial](https://raw.githubusercontent.com/pytorch/tutorials/main/intermediate_source/pinmem_nonblock.py):
+  rechecked the separate-stream and pinned-source requirements for overlapping
+  transfer with compute. Reusing the existing producer/pinned-slot path is
+  preferred to pinning batches on the main thread on every pass.
+- [PyTorch 2.8 Adam source](https://raw.githubusercontent.com/pytorch/pytorch/v2.8.0/torch/optim/adam.py):
+  inspected foreach/fused execution options as a secondary kernel-launch
+  opportunity; no optimizer setting or arithmetic was changed. Four commits per
+  cohort make this lower priority than repeated forward/backward launch work.
+
 ## Causal reward attribution — 2026-10-19
 
 - Sutton, Richard S., [Learning to Predict by the Methods of Temporal
@@ -358,6 +380,11 @@ throughput measurements.
 
 ## Reachable tile annotation — 2026-10-18
 
+- [MDN Using the Fetch API](https://developer.mozilla.org/en-US/docs/Web/API/Fetch_API/Using_Fetch):
+  consulted HTTP method selection and `Response.ok` error handling for annotation
+  retry recovery. Retry uses POST; successful save responses retain their session
+  state even when next-map generation reports an error. HTTP failures still
+  preserve the unsaved browser draft.
 - [Python random sequence sampling](https://docs.python.org/3/library/random.html#random.choice): reviewed the single-element sequence draw for equal wait/eight-species proposals. Availability is checked after this draw, with failed choices becoming wait rather than resampling; sorted legal tile IDs preserve seeded replay across public-board iteration orders.
 - [MDN conditional requests: optimistic locking](https://developer.mozilla.org/en-US/docs/Web/HTTP/Guides/Conditional_requests#avoiding_the_lost_update_problem_with_optimistic_locking): reviewed the lost-update failure between concurrent editors. Annotation edits carry the loaded record revision in the JSON protocol and reject mismatches under the session lock; the application does not introduce ETag headers or change model inputs.
 - [Procgen project](https://github.com/openai/procgen): reviewed its procedural
@@ -381,3 +408,23 @@ throughput measurements.
 
 - [PyTorch `MarginRankingLoss`](https://pytorch.org/docs/stable/generated/torch.nn.MarginRankingLoss.html): used as the finite margin reference for the local two-set top-1/bottom-k hinge. The implementation takes a maximum over each unordered label set, so it does not impose an order inside feasible or absolute-infeasible labels.
 - [Hester et al., Deep Q-learning from Demonstrations](https://arxiv.org/abs/1704.03732): used as the supervision/initialization reference for fitting a head from human labels before fresh reinforcement-learning optimization. No demonstration loss or architecture is copied.
+
+## CPU/GPU pipeline optimization — 2026-10-21
+
+- [PyTorch 2.8 CUDA semantics and CUDA Graph notes](https://raw.githubusercontent.com/pytorch/pytorch/v2.8.0/docs/source/notes/cuda.rst):
+  consulted stream dependencies, `record_stream`, asynchronous copies and static
+  graph pointer ownership. The existing copy-stream event and owned graph caches
+  remain authoritative; host staging is reused or resized only after its fence.
+- [PyTorch pinned/nonblocking transfer tutorial](https://raw.githubusercontent.com/pytorch/tutorials/main/intermediate_source/pinmem_nonblock.py):
+  consulted the separate-stream/pinned-source requirements for overlap and source
+  mutation hazards. The local adaptation uses one producer and two bucket-sized
+  pinned slots under the shared budget, rather than pinning per batch or retaining
+  the entire cohort on the GPU.
+- [PyTorch 2.8 Adam implementation](https://raw.githubusercontent.com/pytorch/pytorch/v2.8.0/torch/optim/adam.py):
+  inspected grouped/foreach execution and its memory tradeoff. This implementation
+  batches master-gradient additions, runtime copies and EMA lerps; it preserves
+  Adam, FP32 masters, clipping and one optimizer commit per pass.
+- [PyTorch 2.8 profiler implementation](https://raw.githubusercontent.com/pytorch/pytorch/v2.8.0/torch/profiler/profiler.py):
+  consulted finite warmup/active schedules and step boundaries. Collection and
+  fitting traces are optional bounded diagnostics and are excluded from timing
+  comparisons. The production lifecycle remains the only learner.

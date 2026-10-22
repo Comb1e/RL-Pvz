@@ -13,6 +13,7 @@ from pvz_game import Place, Status, Wait
 from pvz_rl.annotation.dataset import (
     SNAPSHOT_PROTOCOL,
     _atomic_jsonl,
+    _automatic_action_labels,
     _jsonable,
     action_names,
     dataset_digest,
@@ -249,9 +250,7 @@ def snapshot_record(env, *, plant_type=None, group_id, record_id, annotation_kin
         # part of the automatic (locked) labels.  Keep the simulator's actual
         # dig feasibility in ``action_availability`` for display and audit
         # purposes.
-        automatic = {
-            name for name, item in metadata.items() if item["absolute_infeasible"]
-        }
+        automatic = set(_automatic_action_labels(record, env.codec.plants))
         record["automatic_absolute_infeasible_actions"] = sorted(
             automatic, key=action_names(env.codec.plants).index
         )

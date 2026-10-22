@@ -257,7 +257,8 @@ def _automatic_action_labels(record, plant_types):
     ) if plant_types is None else plant_types
     names = action_names(inferred)
     labels = {
-        name for name, item in metadata.items() if item["absolute_infeasible"]
+        name for name, item in metadata.items()
+        if name != "dig" and item["absolute_infeasible"]
     }
     return sorted(labels, key=names.index)
 
@@ -383,22 +384,10 @@ def validate_record(record, *, annotation=False, plant_types=None):
             for value, label in ((feasible, "feasible_actions"), (absolute, "absolute_infeasible_actions"), (automatic, "automatic_absolute_infeasible_actions")):
                 if not isinstance(value, list) or any(item not in names for item in value) or len(set(value)) != len(value) or value != sorted(value, key=names.index):
                     raise ValueError(f"{label} must contain unique known action names in canonical order")
-            metadata = _action_metadata(record, plant_types)
-            derived_automatic = [
-                name for name in names if metadata[name]["absolute_infeasible"]
-            ]
-            # New action snapshots default Dig to editable absolute-infeasible
-            # even on boards where the simulator could currently execute a
-            # dig. Keep pre-default records readable by accepting their old
-            # availability-derived or locked-Dig automatic set.
-            derived_default = _automatic_action_labels(record, plant_types)
-            legacy_locked_default = sorted(
-                set(derived_default) | {"dig"}, key=names.index
-            )
-            if (
-                set(automatic) != set(derived_automatic)
-                and set(automatic) != set(legacy_locked_default)
-            ):
+            derived_automatic = set(_automatic_action_labels(record, plant_types))
+            # Legacy records may lock Dig even on a populated board. Only
+            # Dig is optional here; every impossible plant remains mandatory.
+            if set(automatic) not in (derived_automatic, derived_automatic | {"dig"}):
                 raise ValueError("automatic absolute action labels do not match availability")
             if not set(automatic).issubset(set(absolute)):
                 raise ValueError("automatic absolute action labels cannot be removed")

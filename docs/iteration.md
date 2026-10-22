@@ -1,3 +1,158 @@
+## Core smoke-test suite — 2026-10-22
+
+- Problem/root cause: 44 test modules and shared fixtures contained 431 test
+  functions across 13,388 lines, including archived protocols and detailed
+  subsystem regressions beyond the user's requested smoke-only coverage.
+- Improvement: replaced the entire suite with three core workflow smoke checks
+  in one 95-line file (99.29% less test code), capped at 200 lines. Default pytest
+  selects CLI/CPU inference;
+  explicit `-m learning` selects bounded CUDA learning and checkpoint reload.
+  Removed Hypothesis and its otherwise unused sortedcontainers lock entry,
+  updated current test guidance, and retained previous regressions in Git only.
+- Verification: collection finds exactly three tests. Default CPU selection passes
+  two tests in 3.81 seconds; explicit CUDA selection passes one in 8.69 seconds,
+  including game-budget completion, an optimizer update, checkpoint reload and
+  prediction. Each group ran once. Ruff lint/format, the test-size limit, removed
+  suite-reference checks and `git diff --check` pass.
+- Remaining limits: this suite establishes startup/inference/tiny-learning
+  availability only. Mathematical, boundary, backend-parity, interruption/recovery
+  and peripheral workflow regressions are intentionally removed. Production code,
+  bundled parameters and architecture documentation are unchanged.
+- Cleanup: automatic approval review rejected cache and temporary-directory
+  removal with "blocked by policy"; ignored test artifacts remain.
+
+## Agent model architecture documentation - 2026-10-22
+
+- Problem/root cause: the framework overview described the policy's two stages
+  without exposing their inputs, token construction, intermediate layers or
+  output shapes, leaving the requested model topology implicit.
+- Improvement: added the configured input schemas, embedding paths, both
+  Transformer stacks and Q heads, and every operation inside a repeated block.
+  A diagram connects the stages to action selection; tables give dimensions,
+  activations, residuals, masks and conditional placement outputs.
+- Verification: inspected the configured model and checked the documented
+  topology against source, including state/type vocabularies, coordinate queries
+  and output ordering. CPU inference on empty/single-plant boards verified all
+  ten blocks' projection/activation shapes, both Q heads, plant/dig requests and
+  wait's tile-stage skip. Local links and `git diff --check` pass.
+- Remaining limits: documentation adds no learning-quality or performance
+  evidence. Runtime code and parameters are unchanged; no formal training ran.
+
+## Architecture framework review - 2026-10-22
+
+- Problem/root cause: architecture prose mixed the project framework with code
+  inventories, parameter values and implementation mechanics, obscuring the
+  system boundaries for a new developer.
+- Improvement: rewrote the page under the revised collaborator skill as a
+  conceptual map of simulation, policy, complete-game learning, human supervision,
+  evaluation, persistence and presentation. Diagrams explain information flow
+  and cohort transitions; code navigation and detailed contracts are linked.
+  Preserved verified boundaries for private inputs, aggregate CUDA versus causal
+  CPU/demo attribution, annotation publication, validation and recovery.
+- Verification: checked the framework against implementation and configuration,
+  reviewed diagram transitions and local links, and ran `git diff --check`.
+  No runtime code or parameters changed; no training or regression suite ran.
+- Remaining limits: documentation verification supplies no new learning-quality
+  or performance evidence. Detailed math and historical pages remain separate
+  sources and were not comprehensively revised in this task.
+
+## Documentation removal - 2026-10-22
+
+- Removed the training guide, live-view guide, and validation page as requested.
+  Updated README links and code-ownership references. Architecture is unchanged;
+  archived external evidence links remain available.
+- Verification: confirmed all three files are absent, removed local links to
+  them, and ran `git diff --check`. No tests were rerun for documentation deletion.
+
+## Action annotation save and retry recovery - 2026-10-22
+
+- Problem/root cause: on empty boards, validation required Dig in the automatic
+  locked set even though the live store deliberately removed it. Saving could
+  persist the current labels and then fail while preparing the next map. The
+  browser also sent GET to the POST-only retry endpoint and discarded successful
+  save responses containing a next-map generation error.
+- Improvement: sampler and validation share automatic label derivation, with
+  impossible plant labels mandatory and Dig editable. Legacy locked-Dig records
+  remain readable. Generation failures return the saved record and a retryable
+  session error; Retry generation uses POST on the existing server.
+- Verification: the owning annotation suite passes 76 tests, including empty and
+  populated boards, legacy records, mandatory plant-label rejection, save/next,
+  retry on the same port, stale replies, and Save and exit. Ruff, inline JavaScript
+  syntax validation, and `git diff --check` pass.
+- Remaining limits: bounded sampler failures still require a retry; this fix
+  preserves the saved labels rather than guaranteeing every generation succeeds.
+  No formal training, PR, or push; user datasets and scripts are untouched.
+
+## Compact CPU/GPU training pipeline — 2026-10-21
+
+- Problem/root cause: inactive slot metadata, repeated collation/routing and demo
+  forwards, fixed maximum-width pinned staging, tiny per-batch coefficient work,
+  and cohort-long telemetry event retention added CPU work and memory pressure.
+  The fitter benchmark also hid production batch size behind a 64-row clamp and
+  aggregated unrelated workloads with an inappropriate median.
+- Improvements: production lifecycle measurements and synthetic/trajectory/full
+  cycle tuner modes; active-only v4 storage with stable source identities and
+  atomic validated credits; chunk-carried segmented compaction and bounded spool
+  preparation; shared prepared transport, bucket-sized fenced pinned slots,
+  shared demo forwards, vectorized annotation losses/metrics, cached cohort
+  coefficients and foreach master/runtime/EMA operations. Collection caches
+  immutable constants, avoids duplicate-request machinery on its trusted path,
+  passes array-backed results to callbacks, and fetches detailed terminal data
+  only for completed slots. Actual execution flags use the existing handoff.
+  Bounded nonblocking telemetry replaces cohort-long event accumulation.
+- Configuration/recovery: independent collection/fitting compilation settings;
+  the old switch gives a replacement error. Only trajectory/autonomous recovery
+  advance to v4; older runs cannot resume, while compatible historical weights
+  still initialize fresh models. Model, observations, rewards and objective
+  semantics remain unchanged. The 4070 profile retains its current defaults.
+- Verification: focused storage, routing/math, annotation/demo, configuration,
+  checkpoints, diagnostics, CUDA policy/graph ownership, reward accounting and
+  fitting interruption/allocation controls pass. A short serialization/replay
+  integration control passes. Added independent shared-forward gradients,
+  indexed tie gradients, exact compaction/recovery identities, spool failure
+  cleanup and paired-promotion rejection controls. Existing reward tests now use
+  the configured physical conversion and compare aggregate accounting at the
+  same level; the old parity assumption also failed on the baseline. No
+  training-parameter-constant tests were added.
+- Measurements: within a 57.75-minute performance window, the baseline stops in
+  pass four at its 1,400 s limit. One intermediate candidate completes the cycle
+  in 1,022.94 s, with four passes totaling 457.32 s, but collection regresses
+  486.01 → 561.34 s and sampled VRAM headroom fails. Metadata rows fall from
+  4,058,368 to 2,290,461 without losing active decisions/entities. Short crowded,
+  accepted-action, four-active and 32 MiB forced-spill controls pass; later
+  identity/telemetry refinements lack repeated full-cycle measurements.
+- Remaining limits: no two completed paired comparisons, no profile promotion,
+  and no claim of total training speedup. Thread/group/compiler calibration and
+  final full-cycle evidence remain incomplete. Windows allocator pressure and
+  periodic whole-device samples require care. See the
+  [retained evidence and limitations](evidence/training-pipeline-optimization-20261021.md).
+  No PR, push or formal training; user data, scripts and run artifacts remain
+  untouched. Scratch cohorts and the baseline worktree are removed. Automatic
+  approval review blocked deletion of external scratch JSON/JSONL logs.
+
+## RTX 4070 CPU/GPU pipeline audit — 2026-10-21
+
+- Problem: isolated throughput measurements do not reproduce the jointly
+  scheduled training pipeline. Inspect the user's `runs/compact-stages-101`
+  telemetry and saved public trajectory before recommending performance settings.
+- Findings: collection took 552.8 s for 2,320,769 active rows, with median
+  process CPU 92.4% and GPU utilization 39%. The run predates current v3
+  semantics and stopped in fitting pass 1 with zero optimizer commits, so it
+  cannot establish completed-cycle fitting time. Shared compaction retains
+  776,429 representatives; accepted EMA rows are only 3,352.
+- Verification: a 12,139-record stratified replay from those representatives
+  uses the shared CPU producer, pinned transport, routed loss, backward,
+  clipping, Adam and EMA over four passes. Microbatch/token budget 128/32,768
+  gives 4.57 s warmed versus 8.12 s for 64/16,384, with peak PyTorch memory
+  1,396.8 versus 1,387.6 MiB. Synthetic dense controls instead slow down, and
+  the existing compiled fitting backend also slows the measured medium case.
+- Outcome: documented prioritized opportunities and measurement limits in
+  [the audit](evidence/training-performance-audit-20261021.md), with raw evidence
+  alongside it. Model, settings, source code and user artifacts are unchanged;
+  no formal training or PR. CPU preparation/transfer are small in this in-RAM
+  replay. Full current-contract cycle, production memory headroom, disk spill
+  and sustained/alternating A/B measurements remain necessary before promotion.
+
 ## Dig defaults to editable absolute-infeasible in action annotation — 2026-10-20
 
 - Problem/root cause: action annotation could inherit the sampler's raw dig
@@ -1512,7 +1667,7 @@ Warmed median decisions/game/s, with fixed 128 original slots:
   No formal training was launched.
 
 Dates and results belong to their recorded version. Current behavior lives in
-[architecture](architecture.md) and [training](training.md). Archived test counts,
+[architecture](architecture.md). Archived test counts,
 artifact locations and learning outcomes remain in the historical validation snapshot.
 The longer pre-consolidation notes remain in `git show b642c9c:docs/iteration.md`.
 
@@ -2349,3 +2504,42 @@ unperformed.
 - Improvement: annotation protocol v2 stores separate tile/action datasets, feasible and absolute-bottom sets, locked automatic impossibility labels, and a shared conflict detector. `fit-tile-annotations` trains only the tile stage; `fit-action-annotations` trains only the species stage; both support fresh weights. `initialize-demo --init-from` starts a new demo optimizer/EMA from either artifact.
 - Verification: existing tile annotation controls remain green; action sampler records validate and a CPU action-head fit publishes a compatible weight-only artifact. Runtime action masks and the model/checkpoint layout remain unchanged.
 - Remaining issue: visual action controls are intentionally compact; held-out and game-quality effects still require an equal-budget training comparison.
+
+## Ranked endgame reward economics — 2026-10-20
+
+- Problem: combat, blocker and mower values did not match the requested sunlight-equivalent economics, and completion time was only a report diagnostic.
+- Improvement: the reward profile now values 270 effective basic-zombie damage at 30 sunlight, a full Wall-nut block at 100, a full ordinary-plant block at 10 without a separate bite penalty, and one mower at 500. Terminal rows are ranked by completion time once each 128-game cohort completes: winners range from +1.5 to +0.5, losses stay at -1 through the median and become more negative afterward, reaching -1.5 for the last rank.
+- Compatibility: the reward, objective, trajectory and autonomous recovery identities were bumped to v2; structurally compatible weight-only initialization remains available, while old optimizer/recovery state is rejected.
+- Verification: added cohort-rank terminal calculations and preserved CPU/CUDA physical reward accounting; focused reward and configuration checks are being updated for the new constants.
+- Remaining limit: equal-duration games share an average rank, and a partial final cohort is ranked over the games that actually completed.
+
+## Unmasked tile proposals and selective invalid fitting — 2026-10-20
+
+- Problem/root cause: occupancy was encoded in the learning tile mask, so a
+  full board or occupied proposal disappeared before the tile Transformer could
+  express that it was invalid. Branch-level failures also paid for tile
+  inference even though only the species head could receive supervision.
+- Improvement: active plant and dig branches now expose all 45 tile outputs.
+  Card presence, cooldown and sunlight are checked immediately after species
+  selection; unavailable branches skip tile inference and route a fixed `-1`
+  target to species. Usable branches validate occupancy after selecting a tile;
+  occupied plants and empty digs route only the tile head to `-1`. Invalid
+  proposals still execute as ordinary waits, and every original row remains in
+  chronological complete-return accounting.
+- Fitting: the shared compaction path keeps the first row of each 100-row
+  window in consecutive identical invalid runs, while waits, accepted actions,
+  route changes, episode boundaries and raw reward rows remain unchanged. The
+  reward value scale is `900`, so the configured progress conversion is
+  `0.01 / 900` and the existing dense multiplier is applied once.
+- Compatibility: reward, objective, action-distribution, trajectory and
+  autonomous recovery identities are now v3. Structural weight-only transfer
+  remains available; optimizer and autonomous recovery states from earlier
+  protocols are rejected.
+- Verification: the focused environment, routing, flat-fitting, checkpoint,
+  configuration, Transformer, and annotation suites pass (323 tests); Ruff,
+  bytecode compilation, and `git diff --check` also pass. CUDA mask generation
+  was smoke-checked after reset and exposes all 406 active proposals. The older
+  reward-contract tests still contain fixed `/30000` expectations and
+  immediate aggregate CUDA comparisons from the previous reward protocol, so
+  they are not treated as validation for this change. Formal training and a
+  pull request are intentionally not run.

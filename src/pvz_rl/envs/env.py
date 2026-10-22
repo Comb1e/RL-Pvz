@@ -16,13 +16,14 @@ from pvz_rl.config import (
     runtime_settings,
     validate_config,
 )
+from pvz_rl.envs.action_credit import CausalCreditLedger
 from pvz_rl.envs.action_timing import ActionPhaseGame, per_tick_actions
 from pvz_rl.envs.actions import ActionCodec
-from pvz_rl.envs.action_credit import CausalCreditLedger
 from pvz_rl.envs.encoding import ObservationEncoder
 from pvz_rl.envs.rewards import LEDGER_METRICS, REWARD_METRICS, HomeProximityLedger, reward_parts
 from pvz_rl.envs.scenarios import difficulty_weights, scenario
 from pvz_rl.evaluation.controllers import PublicBoard, strategy_candidates
+from pvz_rl.learning.action_routing import branch_availability
 from pvz_rl.learning.budget import budget_target, uses_games
 from pvz_rl.learning.curriculum import stage_distribution, teaching_enabled
 from pvz_rl.presentation.recordings import ActionPhaseRecorder
@@ -216,21 +217,29 @@ class PvZEnv(gym.Env):
         if self.options["hybrid"]:
             return np.array([a is not None for a in self.candidates()], dtype=np.bool_)
         if self._direct_mask is None or not self.cache_legal_actions:
-            # Policy masks describe tile occupancy only. The ten-way Q head
-            # still compares every species when sun is low or cards are cooling
-            # down; the simulator reports those proposals as rejected waits.
+            # The policy deliberately scores every tile. Card availability,
+            # cooldown, sunlight and occupancy are simulator outcomes; the
+            # resulting rejection executes as one ordinary wait tick.
             mask = np.zeros(self.codec.size, dtype=np.bool_)
             mask[0] = True
-            occupied = {(plant.row, plant.col) for plant in self.public.plants}
             for plant_index in range(len(self.codec.plants)):
                 offset = 1 + plant_index * (self.codec.rows * self.codec.cols)
-                for row in range(self.codec.rows):
-                    for col in range(self.codec.cols):
-                        mask[offset + row * self.codec.cols + col] = (row, col) not in occupied
+                mask[offset : offset + self.codec.rows * self.codec.cols] = True
             dig_start = 1 + len(self.codec.plants) * self.codec.rows * self.codec.cols
             mask[dig_start:] = True
             self._direct_mask = mask
         return self._direct_mask.copy()
+
+    def branch_availability(self):
+        """Return pre-action branch availability without tile geometry."""
+        cards = {card.plant_type: card for card in self.public.cards}
+        return branch_availability(
+            [self.public.sun if self.state == EpisodeState.RUNNING else 0],
+            [[cards[kind].cooldown_ticks if kind in cards else -1 for kind in self.codec.plants]],
+            [self.rules.plants[kind]["cost"] for kind in self.codec.plants],
+            active=[self.state == EpisodeState.RUNNING],
+            card_present=[[kind in cards for kind in self.codec.plants]],
+        )[0]
 
     def engine_action_masks(self):
         """Return authoritative engine legality for non-learning baselines."""
@@ -293,9 +302,9 @@ class PvZEnv(gym.Env):
         ):
             self.causal_summary[target].update(diagnostics.get(name, {}))
         self.maximum_sun = max(self.maximum_sun, before.sun, self.public.sun)
-        # The policy mask depends only on occupancy, so invalidate its cached
-        # tile geometry after every simulator transition.  (The engine legal
-        # cache may still be retained for hybrid diagnostics.)
+        # Policy masks are all-45 and only depend on running status. Keep the
+        # cache invalidation for active/inactive transitions and preserve the
+        # engine legal cache for baselines and diagnostics.
         self._direct_mask = None
         if not self.cache_legal_actions:
             self._legal = None

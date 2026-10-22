@@ -1,21 +1,13 @@
 # PVZ plant research
 
-Record a human Plants vs. Zombies game, initialize a stateless two-stage
-Transformer Q policy, then train and evaluate it with the pinned simulator.
-The species Transformer selects a plant, wait or dig; the independent tile
-Transformer scores 45 tiles for the selected branch. Both read only the current
-public board. Planting creates no counterfactual rollout.
-
-Training uses `complete_return_action_global_v1` with a causal action/global
-reward ledger. Previous compatible
-BF16-master two-stage weights remain usable for inference and fresh `--init-from`;
-previous-objective runs cannot resume. Parameters live in
-[src/pvz_rl/data/train.toml](src/pvz_rl/data/train.toml).
+Train a stateless two-stage Transformer Q policy against a pinned Plants vs.
+Zombies simulator. The species stage chooses wait, a plant, or dig; the tile
+stage scores all 45 plots. Both read only the current public board.
 
 ## Requirements
 
-Python 3.12, Git and the pinned game package. Recording needs pygame.
-Autonomous training requires NVIDIA CUDA with BF16 support.
+Python 3.12, Git, and the pinned game checkout. Autonomous training and fitting
+require an NVIDIA GPU with native BF16 support. Recording also needs pygame.
 
 ## Installation
 
@@ -24,147 +16,66 @@ Autonomous training requires NVIDIA CUDA with BF16 support.
 .\.venv\Scripts\python.exe -m pvz_rl doctor --output artifacts\availability.json
 ```
 
-For Linux/WSL or Git Bash, use an existing `pvz-cuda-work` checkout:
+For Linux/WSL or Git Bash:
 
 ```bash
 bash tools/bootstrap.sh --game-repo ../pvz-cuda-work --python python3.12
 ```
 
-Use `--python /path/to/python` if Python 3.12 has a different executable name.
-Both installers verify and install the pinned game without changing its checkout,
-install PyTorch `2.8.0+cu128` / CUDA `12.8`, and run the availability check.
-The Bash installer removes its temporary game archive on success or failure.
-
-The [engine lock](src/pvz_rl/data/engine-lock.json) fixes source and package hashes.
+Both installers verify the [engine lock](src/pvz_rl/data/engine-lock.json),
+install PyTorch 2.8.0/CUDA 12.8, and leave the game checkout unchanged.
 
 ## First useful command
 
-Record one easy game using unused output paths; finish with a natural win or loss:
+Record a human game into unused paths and finish with a natural win or loss:
 
 ```powershell
 .\.venv\Scripts\python.exe -m pvz_rl record-demo `
-  --output runs\human-1000.pvzdemo --archive runs\human-1000.jsonl
+  --output runs\human.pvzdemo --archive runs\human.jsonl
 ```
 
-Use [recording and training](docs/training.md) to initialize, train, resume or
-evaluate. Demonstration fitting uses 20 passes; autonomous cohorts use four.
-Select a physical CUDA GPU independently from execution and learning presets. Native BF16 devices are detected by capability; the catalogue includes measured/provisional presets for the 4070 Laptop, 4080 SUPER, 4090, 5090, RTX PRO 6000 and RTX 6000D, while arbitrary user profiles remain supported:
+Or open the browser annotator and label plant cards, Wait/Dig, or board tiles:
 
 ```powershell
-.\.venv\Scripts\python.exe -m pvz_rl train --output runs\fit --gpu 0 --gpu-profile auto --learning-profile current --viewer off
-.\.venv\Scripts\python.exe tools\tune_gpu.py --gpu 0 --output artifacts\tune-4070 --minutes 60
+.\.venv\Scripts\python.exe -m pvz_rl annotate --kind action --port 6006
+.\.venv\Scripts\python.exe -m pvz_rl annotate --kind tile --port 6006
 ```
 
-For JupyterLab, install `pip install -e .[web]` (or `jupyter-server-proxy`) and use `--viewer web`; training prints a relative `./proxy/<port>/` URL. Add `--viewer-port 6006` when the cloud port-forwarding service needs a fixed port. Checkpoint weights remain portable; destination GPU execution caches rebuild.
+Dig starts as an editable absolute-infeasible action label. If next-map
+generation fails, use **Retry generation** on the same server; saved labels remain persisted.
 
-Open the standalone annotator with one command. It serves a local web page,
-stores records in `data/tile-annotations.jsonl`, and lets you choose `easy`,
-`standard`, or `hard` in the browser. Each generated map contains a reachable
-state with a plant card that is present, affordable, cooled down, and legally
-placeable in tile mode. Action mode accepts any running reachable state and
-lets you label plant cards, Wait, and Dig directly; it does not display a
-sampler-selected current action.
-
-Generation draws a simulation limit uniformly from 0–20,000 steps and retries
-finished games. Planting attempts occur every random 500–1,500 steps, choosing
-equally from wait and the eight plant types (1/9 each). Unavailable plant choices
-become wait without redrawing; usable choices select a random legal plot, with
-at most eight plants on the board:
-
-The annotator uses a fresh entropy-derived session seed by default, so restarting
-it does not replay the same map sequence. Pass `--seed N` when a reproducible
-sequence is needed.
-
-```powershell
-.\.venv\Scripts\python.exe -m pvz_rl annotate --port 6006
-```
-
-Use `--kind action` to label the species/action head; those records are kept in
-`data/action-annotations.jsonl`. Tile mode supports feasible plots plus
-manual and locked automatic absolute-infeasible plots. Action mode supports feasible action types plus
-locked automatic absolute-infeasible branches; Dig starts in the editable
-absolute-infeasible set by default, even when the sampled board currently contains a plant. Both fitters can start from random
-weights, so annotation pretraining may precede human/demo initialization:
-
-```powershell
-.\.venv\Scripts\python.exe -m pvz_rl fit-tile-annotations --annotations data\tile-annotations.jsonl --output runs\tile.pt
-.\.venv\Scripts\python.exe -m pvz_rl fit-action-annotations --annotations data\action-annotations.jsonl --output runs\action.pt --init-from runs\tile.pt
-.\.venv\Scripts\python.exe -m pvz_rl initialize-demo --init-from runs\action.pt --archive runs\human-1000.jsonl --replay runs\human-1000.pvzdemo --output runs\human-init
-```
-
-Open the printed `./proxy/6006/` path in JupyterLab, hold the left mouse button
-while dragging to paint feasible plots, then choose **Save and next**. In action
-mode, click plant cards directly or use the Wait/Dig controls to mark feasible or
-absolute-infeasible actions; the board toolbar does not duplicate each card as a
-separate button. The next map is generated at the same difficulty. Use
-**Discard state** for a meaningless
-map; discarded states stay in the audit file and are excluded from fitting.
-Use **Previous** and **Next** to revisit maps, edit labels, and **Save changes**
-in place. Discarded maps can be labeled again. **Return to current** resumes the
-pending map; reviewing earlier maps does not generate another one.
-Pending maps are resumed after a restart. Fit only completed labels, then use the
-resulting weight-only file with a fresh training run:
-
-If saved labels contain contradictory duplicates, the annotator opens the first
-duplicate conflict before generating a new map. It shows every member's old label
-set and lets one corrected set be applied to the whole identical-input group;
-groups are handled in order. Resolve these conflicts before fitting. **Save and
-exit** saves only the displayed map or conflict group and stops the annotator
-without generating another map.
-
-```powershell
-.\.venv\Scripts\python.exe -m pvz_rl fit-tile-annotations `
-  --annotations data\tile-annotations.jsonl `
-  --output artifacts\tile-initialization.pt --init-from runs\initialization.pt
-.\.venv\Scripts\python.exe -m pvz_rl train --output runs\annotated `
-  --init-from artifacts\tile-initialization.pt --gpu 0 --viewer off
-```
-
-Annotation fitting defaults to unlimited passes until every training record's
-highest-scoring feasible label and exact absolute-bottom set are correct.
-`--passes N` adds an explicit cap;
-incomplete runs save `tile-initialization.progress.pt` without publishing an
-initialization. Resume with `--resume-from artifacts\tile-initialization.progress.pt`
-using the same dataset and fitting settings. Training accuracy is separate from
-held-out accuracy and game performance.
-
-Illegal proposals execute ordinary wait with zero rejection reward penalty.
-Fitting targets only their responsible output at `-1`, skipping EMA inference.
-See [the routing table and convergence workflow](docs/training.md).
-
-Repeated illegal proposals are compacted only for fitting: consecutive identical
-`(action, route, rejection_reason)` runs are split into windows of 100 and the
-first row of each window is fitted once. Complete returns and reward accounting
-still retain every collected row.
-
-Annotation fitting preserves the existing two-stage architecture and checkpoint
-contract. It initializes placement values only; complete-return training still
-learns timing, resource management, and long-term action ranking.
-
-The browser viewer receives the same JSON snapshots used by the live protocol and
-renders the boards locally with Canvas 2D. It needs no simulator package or GPU;
-expand the raw diagnostics sections when inspecting the original JSON.
-
-Runtime inference and fitting use BF16 model parameters; optimization uses
-separate FP32 master weights and FP32 Adam state. INT8/INT4 paths are not
-implemented.
+The active-only trajectory/recovery format is v4; older runs support compatible
+weight-only initialization, but cannot resume. Model weights and the learning
+objective are unchanged by the pipeline optimization.
 
 ## Common checks
 
-Static checks do not start the simulator or training:
-
 ```powershell
+.\.venv\Scripts\python.exe -m pytest -q
+.\.venv\Scripts\python.exe -m pytest -q -m learning
 .\.venv\Scripts\python.exe -m ruff check --no-cache .
 .\.venv\Scripts\python.exe -m ruff format --check --no-cache .
 ```
 
-- [Validation and test ownership](docs/validation.md)
-- [Architecture and workflows](docs/architecture.md)
-- [Viewer controls](docs/live-view.md)
-- [Entity schema and attention](docs/math/entity-inputs.md)
-- [Sequential Q objective](docs/math/sequential-training.md)
-- [Reward accounting](docs/math/training-objective.md)
-- [Execution, compiler troubleshooting and throughput](docs/math/training-throughput.md)
-- [Collect cloud fitting diagnostics](docs/math/training-throughput.md#diagnose-cloud-fitting-stalls)
-- [Sources used](docs/references.md)
-- [Iteration history and measurements](docs/iteration.md)
+Default pytest runs two CPU smoke checks: CLI startup and public-board inference.
+The explicit `-m learning` command runs the two-game CUDA learning/checkpoint smoke
+check and fails if CUDA requirements are missing. These checks cover core workflow
+availability. See [test ownership](AGENTS.md#test-ownership) for their limits.
+
+For bounded production-cycle calibration with fresh optimizer and simulator state:
+
+```powershell
+.\.venv\Scripts\python.exe tools\tune_gpu.py --gpu 0 `
+  --workload full-cycle --initial-weights runs\human-init\initialization.pt `
+  --output artifacts\pipeline --minutes 60 --no-compile
+```
+
+This is a scratch performance rehearsal, not a formal training run. Incomplete
+comparisons never promote a profile; existing 4070 microbatch defaults remain.
+
+- [Architecture and state flows](docs/architecture.md)
+- [Execution controls and diagnostics](docs/math/training-throughput.md)
+- [4070 pipeline measurements and limitations](docs/evidence/training-pipeline-optimization-20261021.md)
+- [Learning objective](docs/math/training-objective.md)
+- [References](docs/references.md)
+- [Iteration history](docs/iteration.md)

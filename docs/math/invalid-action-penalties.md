@@ -1,8 +1,10 @@
 # Invalid-action execution and selective fitting
 
-The controller still compares all ten species outputs. Plant proposals consider
-empty tiles; digging considers all 45 tiles. Sun and cooldown do not hide a
-branch. A full-board plant uses tile zero so rejection remains observable.
+The controller compares all ten species outputs. Every active plant and dig
+branch exposes all 45 tiles. After species selection, unavailable plants skip
+tile inference. Usable plants and dig score every tile, then the simulator
+validates occupancy. A full board never makes an affordable ready plant branch
+unavailable, and an empty board never makes dig branch-invalid.
 
 Every rejected proposal executes exactly one ordinary wait tick. The original
 proposal, actual reason and executed action `0` are retained separately.
@@ -18,10 +20,9 @@ Branch impossibility takes precedence, including cooldown plus occupancy.
 |---|---|---|---|
 | Ordinary wait | Complete return | None | None |
 | Accepted plant/dig | Detached consistency | Complete return at proposed tile | Yes |
-| Unavailable/cooldown/unaffordable/restricted/full-board plant | Proposed branch to -1 | None | None |
+| Unavailable/cooldown/unaffordable/restricted plant | Proposed branch to -1 | None | None |
 | Occupied plant tile with usable branch | None | Proposed tile to -1 | None |
-| Empty dig with plants elsewhere | None | Proposed tile to -1 | None |
-| Dig with no plants | Dig branch to -1 | None | None |
+| Empty dig, including an empty board | None | Proposed tile to -1 | None |
 
 `training.objective.invalid_action_target=-1.0` supplies the squared-error target.
 It is fitting-only: chronological complete returns still include actual tick

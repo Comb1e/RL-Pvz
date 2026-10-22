@@ -154,8 +154,7 @@ class TwoStageTransformerPolicy(nn.Module):
 
     @torch.no_grad()
     def sync_runtime_from_masters(self):
-        for master, parameter in zip(self._master_parameters, super().parameters(), strict=True):
-            parameter.copy_(master.to(dtype=torch.bfloat16))
+        torch._foreach_copy_(list(super().parameters()), self._master_parameters)
 
     def zero_grad(self, set_to_none=True):
         super().zero_grad(set_to_none=set_to_none)
@@ -172,12 +171,17 @@ class TwoStageTransformerPolicy(nn.Module):
 
     @torch.no_grad()
     def accumulate_master_gradients(self):
+        destinations, sources = [], []
         for master, parameter in zip(self._master_parameters, super().parameters(), strict=True):
             if parameter.grad is None:
                 continue
             if master.grad is None:
-                master.grad = torch.zeros_like(master)
-            master.grad.add_(parameter.grad.float())
+                master.grad = parameter.grad.float()
+            else:
+                destinations.append(master.grad)
+                sources.append(parameter.grad.float())
+        if destinations:
+            torch._foreach_add_(destinations, sources)
 
     @property
     def runtime_dtype(self):
@@ -251,6 +255,20 @@ class TwoStageTransformerPolicy(nn.Module):
         encoded = self.tile_encoder(observations[rows], branches)[:, 2:]
         return self.tile_head(encoded).squeeze(-1)
 
+    def collection_tiles(self, observations, branches, *, plan=None):
+        """One branch per board: compact eligible rows once, without deduplication."""
+        requested = torch.nonzero(branches > 0, as_tuple=False).flatten()
+        result = next(self.parameters()).new_zeros(len(branches), A.tiles)
+        if not len(requested):
+            return result
+        encoded = self._encode(
+            self.tile_encoder,
+            observations[requested],
+            branches[requested],
+            self._request_plan(plan, requested),
+        )[:, 2:]
+        return result.index_copy(0, requested, self.tile_head(encoded).squeeze(-1))
+
     def selected_values(self, observations, actions, *, species=None, tiles=None):
         observations = collate_observations(observations, self.device)
         actions = torch.as_tensor(actions, device=self.device, dtype=torch.long)
@@ -285,6 +303,7 @@ class TwoStageTransformerPolicy(nn.Module):
         deterministic=True,
         active=None,
         active_plan=None,
+        branch_usable=None,
     ):
         observations = collate_observations(observations, self.device)
         species = self.species_values(observations, plan=active_plan)
@@ -297,7 +316,20 @@ class TwoStageTransformerPolicy(nn.Module):
             active = torch.as_tensor(active_plan.compact_indices >= 0, device=self.device)
         if active is not None:
             branches = torch.where(active, branches, 0)
-        tiles = self.conditional_tiles(observations, branches, plan=active_plan)
+        if branch_usable is None:
+            branch_usable = torch.ones(
+                (len(observations), 10), dtype=torch.bool, device=observations.device
+            )
+        else:
+            branch_usable = torch.as_tensor(
+                branch_usable, device=observations.device, dtype=torch.bool
+            )
+            if branch_usable.shape != (len(observations), 10):
+                raise ValueError("Branch availability must have shape [batch, 10]")
+        selected_usable = branch_usable.gather(1, branches[:, None]).flatten()
+        tile_rows = (branches > 0) & selected_usable
+        requests = torch.where(tile_rows, branches, torch.zeros_like(branches))
+        tiles = self.collection_tiles(observations, requests, plan=active_plan)
         actions, _, _, details = select_q_actions(
             species,
             tiles,
@@ -306,5 +338,7 @@ class TwoStageTransformerPolicy(nn.Module):
             tile_exploration_epsilon=getattr(self, "tile_exploration_epsilon", 0.0),
             active=active,
         )
+        details["branch_usable"] = branch_usable
+        details["tile_inference_skipped"] = (branches > 0) & ~tile_rows
         details["observations"] = observations
         return actions, details

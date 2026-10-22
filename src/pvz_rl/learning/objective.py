@@ -13,11 +13,11 @@ from pvz_rl.policy.sequential_q import (
     tile_candidates,
 )
 
-OBJECTIVE_PROTOCOL = "complete_return_action_global_v1"
+OBJECTIVE_PROTOCOL = "complete_return_action_global_v3"
 # These are the only reward components that train the policy.  The simulator
 # still publishes the older diagnostic fields (combat_value, home_proximity,
-# victory_time, and so on) for reports and replay verification, but they are no
-# longer part of the learning target.
+# victory_time, and so on) for reports and replay verification. Cohort-ranked
+# completion time is applied to the terminal component during finalization.
 COMPONENTS = (
     "global_terminal",
     "global_asset_value",
@@ -54,6 +54,11 @@ def raw_rewards(values, cfg):
 
 
 def victory_time(duration, median, won, weight):
+    """Legacy report-only smooth time diagnostic.
+
+    Training uses :func:`endgame_terminal_rewards`; this helper remains for
+    archived report readers and independent diagnostics.
+    """
     duration = np.asarray(duration, dtype=np.float64)
     denominator = duration + median
     ratio = np.divide(
@@ -62,43 +67,99 @@ def victory_time(duration, median, won, weight):
     return np.where(won, weight * ratio, 0.0)
 
 
+def endgame_terminal_rewards(durations, won, *, win_reward=1.0, loss_penalty=1.0, weight=0.5):
+    """Return cohort-ranked terminal rewards and their time adjustments.
+
+    Completion time is used only once, on the terminal transition.  The first
+    game in a cohort receives ``+weight`` when it wins and the last receives
+    ``-weight``.  A loss keeps the base ``-loss_penalty`` until the median and
+    becomes more negative after it, reaching ``-loss_penalty-weight`` for the
+    last-ranked game.  Equal-duration games share their average rank.
+    """
+    durations = np.asarray(durations, dtype=np.float64)
+    won = np.asarray(won, dtype=bool)
+    if durations.ndim != 1 or won.shape != durations.shape:
+        raise ValueError("durations and won must be one-dimensional arrays of equal length")
+    if not len(durations):
+        return np.empty(0, dtype=np.float64), np.empty(0, dtype=np.float64)
+    if not np.isfinite(durations).all():
+        raise ValueError("durations must be finite")
+    if not np.isfinite(weight) or weight < 0:
+        raise ValueError("endgame time weight must be finite and nonnegative")
+    if len(durations) == 1:
+        adjustment = np.zeros(1, dtype=np.float64)
+    else:
+        order = np.argsort(durations, kind="stable")
+        sorted_durations = durations[order]
+        positions = np.arange(len(durations), dtype=np.float64)
+        ranks = np.empty(len(durations), dtype=np.float64)
+        start = 0
+        while start < len(durations):
+            stop = start + 1
+            while stop < len(durations) and sorted_durations[stop] == sorted_durations[start]:
+                stop += 1
+            ranks[order[start:stop]] = positions[start:stop].mean()
+            start = stop
+        adjustment = float(weight) * (1.0 - 2.0 * ranks / (len(durations) - 1))
+    terminal = np.where(
+        won,
+        float(win_reward) + adjustment,
+        -float(loss_penalty) + np.minimum(adjustment, 0.0),
+    )
+    return terminal, adjustment
+
+
 def finalize_episode_metrics(rows, cfg, *, median=None):
     """Finalize one cohort idempotently, including standalone evaluation batches."""
     if not rows:
         return 0.0
-    median = (
-        float(np.median([r["simulated_seconds"] for r in rows]))
-        if median is None
-        else float(median)
+    durations = np.asarray([r["simulated_seconds"] for r in rows], dtype=np.float64)
+    won = np.asarray([bool(r["win"]) for r in rows], dtype=bool)
+    terminal, adjustment = endgame_terminal_rewards(
+        durations,
+        won,
+        win_reward=cfg["reward"]["win_reward"],
+        loss_penalty=cfg["reward"]["loss_penalty"],
+        weight=cfg["reward"].get("win_time_weight", 0.5),
     )
-    for row in rows:
-        old = row.get("victory_time", 0.0)
-        value = float(
-            victory_time(
-                row["simulated_seconds"],
-                median,
-                bool(row["win"]),
-                cfg["reward"].get("win_time_weight", 0),
-            )
-        )
-        for key in ("return", "discounted_return"):
+    for row, value, delta in zip(rows, terminal, adjustment, strict=True):
+        baseline = cfg["reward"]["win_reward"] if row["win"] else -cfg["reward"]["loss_penalty"]
+        change = float(value - baseline)
+        for key in ("terminal", "global_terminal"):
             if key in row:
-                row[key] += value - old
+                row[key] += change
+        for key in ("return", "discounted_return", "discounted_outcome_return"):
+            if key in row:
+                row[key] += change
         row.update(
-            victory_time=value,
+            terminal_reward=float(value),
+            endgame_time_adjustment=float(delta),
+            # Retain the field for report readers that understand the old
+            # provisional protocol; the actual terminal adjustment is now in
+            # terminal_reward and is part of the learning target.
+            victory_time=0.0,
             time_reward_pending=False,
-            duration_median_seconds=median,
+            duration_median_seconds=float(np.median(durations) if median is None else median),
             duration_reference_count=len(rows),
         )
-    return median
+    return float(np.median(durations) if median is None else median)
 
 
 @torch.no_grad()
 def species_consistency_targets(online_tiles, ema_tiles, masks, branches):
     """Select with online geometry values and evaluate with the frozen EMA."""
-    selected = greedy_choice(online_tiles.detach(), tile_candidates(masks, branches))
+    selected = (
+        online_tiles.detach().argmax(-1)
+        if masks is None
+        else greedy_choice(online_tiles.detach(), tile_candidates(masks, branches))
+    )
     targets = ema_tiles.detach().gather(1, selected[:, None]).flatten()
-    gaps = candidate_maxima(ema_tiles.detach(), masks, branches) - targets
+    maxima = (
+        ema_tiles.detach().max(-1).values
+        if masks is None
+        else candidate_maxima(ema_tiles.detach(), masks, branches)
+    )
+    gaps = maxima - targets
     return targets, selected, gaps
 
 
@@ -114,31 +175,32 @@ def consistency_diagnostics(loss, totals):
 
 
 def species_consistency_loss(
-    species, targets, actions, accepted, counts, *, delta=1.0, accepted_share=0.5
+    species, targets, actions, accepted, counts, *, delta=1.0, accepted_share=0.5, weights=None
 ):
     """Balanced MSE-matched Huber toward detached double-estimator targets."""
     branches, _ = action_parts(actions)
     predictions = species.gather(1, branches[:, None]).flatten()
     errors = 2 * F.huber_loss(predictions, targets.detach(), reduction="none", delta=delta)
-    weights = outcome_weights(
-        counts, device=species.device, dtype=species.dtype, accepted_share=accepted_share
+    weights = (
+        outcome_weights(
+            counts, device=species.device, dtype=species.dtype, accepted_share=accepted_share
+        )
+        if weights is None
+        else weights
     )
     return (errors * weights[action_groups(actions) - 1, accepted.long()]).sum()
 
 
 def ranking_counts(actions, accepted, masks):
     branch, tile = action_parts(actions)
-    branch_legal = torch.cat((masks[:, :1], masks[:, 1:].reshape(-1, 9, 45).any(-1)), -1)
+    active = masks.any(-1)
+    branch_legal = torch.ones((len(actions), 10), dtype=torch.bool, device=actions.device)
+    branch_legal = branch_legal & active[:, None]
     alternatives = branch_legal.clone()
     alternatives.scatter_(1, branch[:, None], False)
     first = accepted & alternatives.any(-1)
-    geometry = (
-        masks[:, 1:]
-        .reshape(-1, 9, 45)[
-            torch.arange(len(actions), device=actions.device), (branch - 1).clamp_min(0)
-        ]
-        .clone()
-    )
+    geometry = torch.ones((len(actions), 45), dtype=torch.bool, device=actions.device)
+    geometry &= active[:, None]
     geometry.scatter_(1, tile[:, None], False)
     second = accepted & (branch != 0) & geometry.any(-1)
     return (

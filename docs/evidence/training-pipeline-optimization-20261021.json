@@ -1,0 +1,4575 @@
+{
+  "date": "2026-10-21",
+  "performance_wall_minutes": 57.75488333333333,
+  "formal_training": false,
+  "profile_promoted": false,
+  "reason": "No two completed pairs; sampled VRAM headroom fails",
+  "hardware": {
+    "gpu": "NVIDIA GeForce RTX 4070 Laptop GPU",
+    "vram_mib": 8187.5,
+    "driver": "616.56",
+    "uuid": "GPU-662ddbbe-d19c-dc9e-27d3-95baa1c22103",
+    "os": "Windows-11-10.0.26200-SP0",
+    "cpu": "Intel64 Family 6 Model 183 Stepping 1, GenuineIntel",
+    "logical_cpus": 32,
+    "ram_mib": 32386.48046875
+  },
+  "starting_weights": {
+    "path": "runs/compact-stages-101/easy/interrupted.zip",
+    "sha256": "c964fa8e7f4773a98c780b0e4b398140c3bbe28304bafb915d67b487da74a8ac",
+    "mode": "fresh weight-only initialization; no optimizer/simulator resume"
+  },
+  "baseline": {
+    "active_games": 1,
+    "collection_steps": 31706,
+    "complete": false,
+    "config": {
+      "conditions": {
+        "masked": {
+          "curriculum": true,
+          "hybrid": false,
+          "masked": true,
+          "shaped": true
+        }
+      },
+      "curriculum": {
+        "boundaries": [
+          0.1,
+          0.4
+        ],
+        "consecutive_passes": 1,
+        "easy_weights": [
+          1.0,
+          0.0,
+          0.0
+        ],
+        "final_weights": [
+          0.2,
+          0.4,
+          0.4
+        ],
+        "intermediate_weights": [
+          0.5,
+          0.5,
+          0.0
+        ],
+        "minimum_stage_games": 100,
+        "minimum_stage_steps": 16384,
+        "mode": "teaching",
+        "probe_cases": 100,
+        "probe_interval": 16384,
+        "probe_interval_games": 2000,
+        "residency": "episode_start_stage",
+        "stages": {
+          "easy": {
+            "requirements": {
+              "easy": 100
+            },
+            "tasks": [
+              "easy"
+            ],
+            "weights": [
+              1.0
+            ]
+          },
+          "shared": {
+            "requirements": {
+              "easy": 100,
+              "hard": 100,
+              "standard": 100
+            },
+            "tasks": [
+              "easy",
+              "standard",
+              "hard"
+            ],
+            "weights": [
+              0.2,
+              0.4,
+              0.4
+            ]
+          },
+          "standard": {
+            "requirements": {
+              "easy": 100,
+              "standard": 100
+            },
+            "tasks": [
+              "easy",
+              "standard"
+            ],
+            "weights": [
+              0.5,
+              0.5
+            ]
+          }
+        }
+      },
+      "diagnostics": {
+        "early_dig_seconds": 5
+      },
+      "encoding": {
+        "count_scale": 75,
+        "max_entities": 256,
+        "version": "entity_v1",
+        "wave_scale": 15
+      },
+      "engine_commit": "1424b4d802e783a36772091c49d96aa7c6036d7a",
+      "engine_package_version": "1.7.0",
+      "engine_version": "1.4.0",
+      "environment": {
+        "action_timing": "per_tick",
+        "cols": 9,
+        "cutoff_seconds": 1200,
+        "decision_ticks": 1,
+        "mower_states": [
+          "ready",
+          "moving",
+          "spent"
+        ],
+        "plant_states": [
+          "ready",
+          "arming",
+          "armed",
+          "fusing",
+          "digesting",
+          "exploding",
+          "detonating",
+          "rising",
+          "biting",
+          "biting_got_one",
+          "recovering"
+        ],
+        "plants": [
+          "sunflower",
+          "peashooter",
+          "wall_nut",
+          "cherry_bomb",
+          "potato_mine",
+          "snow_pea",
+          "chomper",
+          "repeater"
+        ],
+        "rows": 5,
+        "zombie_states": [
+          "walking",
+          "carrying_pole",
+          "vaulting",
+          "biting",
+          "dead"
+        ],
+        "zombies": [
+          "basic",
+          "flag",
+          "conehead",
+          "buckethead",
+          "pole_vaulting"
+        ]
+      },
+      "evaluation": {
+        "bootstrap_replicates": 2000,
+        "bootstrap_seed": 1739,
+        "levels": [
+          "easy",
+          "standard",
+          "hard"
+        ],
+        "ood_families": [
+          "redistributed",
+          "faster",
+          "concentrated"
+        ],
+        "ood_levels": [
+          "standard",
+          "hard"
+        ],
+        "replays_per_outcome": 10,
+        "targets": [
+          0.95,
+          0.9,
+          0.75
+        ]
+      },
+      "logging": {
+        "hardware_sample_seconds": 1.0,
+        "progress_seconds": 15,
+        "rolling_window": 100,
+        "terminal_mode": "compact",
+        "terminal_progress_seconds": 60
+      },
+      "policy": {
+        "action_distribution": "sequential_q_unmasked_tiles_v2",
+        "attention_query_chunk": 64,
+        "encoder_microbatch": 128,
+        "encoder_token_budget": 65536,
+        "kind": "two_stage_transformer_q_v1",
+        "species_feedforward": 512,
+        "species_heads": 8,
+        "species_layers": 4,
+        "species_width": 128,
+        "tile_feedforward": 768,
+        "tile_heads": 12,
+        "tile_layers": 6,
+        "tile_width": 192
+      },
+      "profile": "complete-game",
+      "reward": {
+        "action": {
+          "block_value_by_plant": {
+            "cherry_bomb": 0.0333333333,
+            "chomper": 0.0333333333,
+            "peashooter": 0.0333333333,
+            "potato_mine": 0.0333333333,
+            "repeater": 0.0333333333,
+            "snow_pea": 0.0333333333,
+            "sunflower": 0.0333333333,
+            "wall_nut": 0.025
+          },
+          "sun_credit_multiplier": 1.0
+        },
+        "basic_zombie_value": 30.0,
+        "early_sun_extra_multiplier": 2.0,
+        "early_sun_spawn_fraction": [
+          1,
+          3
+        ],
+        "home_entry_penalties": [
+          0.005,
+          0.015
+        ],
+        "loss_penalty": 1.0,
+        "mower_value": 500.0,
+        "progress_weight": 0.01,
+        "value_scale": 900.0,
+        "version": "action_global_value_v3",
+        "win_reward": 1.0,
+        "win_time_weight": 0.5
+      },
+      "runtime": {
+        "cache_legal_actions": true,
+        "refill_evaluation": true
+      },
+      "schema_version": 1,
+      "simulation": {
+        "backend": "cuda"
+      },
+      "splits": {
+        "curriculum": [
+          100050,
+          100149
+        ],
+        "ood": [
+          300000,
+          300099
+        ],
+        "test": [
+          200000,
+          200299
+        ],
+        "train": [
+          1000,
+          99999
+        ],
+        "validation": [
+          100000,
+          100049
+        ]
+      },
+      "training": {
+        "annotation": {
+          "batch_size": 256,
+          "learner_seed": 101,
+          "learning_rate": 0.0003,
+          "margin": 1.0,
+          "passes": 0,
+          "sampling_family": "preset",
+          "sampling_max_attempts": 100,
+          "sampling_max_plants": 8,
+          "sampling_max_steps": 20000,
+          "sampling_plant_interval_steps": [
+            500,
+            1500
+          ],
+          "sampling_seed": "random"
+        },
+        "batch_size": 1024,
+        "budget_unit": "games",
+        "demo": {
+          "learner_seed": 101,
+          "learning_rate": 0.0003,
+          "passes": 40,
+          "time_budget_minutes": 30
+        },
+        "device": "cuda",
+        "discount_clock": "simulation_ticks",
+        "eval_interval": 250000,
+        "eval_interval_games": 2000,
+        "exploration": {
+          "decay_games": 10000,
+          "epsilon_floor": 0.01,
+          "epsilon_start": 0.5,
+          "objective": "committed_plant_tile_epsilon_v1",
+          "plant_decay_games": 10000,
+          "plant_epsilon_floor": 0.01,
+          "plant_epsilon_start": 0.1
+        },
+        "finalization_minutes": 15,
+        "gamma": 1.0,
+        "learner_seeds": [
+          101,
+          102
+        ],
+        "learning_rate": 0.0003,
+        "max_grad_norm": 5,
+        "max_minutes": 120,
+        "method": "complete_return_action_global_v3",
+        "n_envs": 128,
+        "n_epochs": 4,
+        "objective": {
+          "accepted_outcome_share": 0.5,
+          "demo_rank_loss_weight": 0.1,
+          "demo_rank_margin": 0.05,
+          "dense_multiplier": 10.0,
+          "ema_decay": 0.95,
+          "invalid_action_target": -1.0,
+          "invalid_fit_group_size": 100,
+          "protocol": "complete_return_action_global_v3",
+          "species_consistency_huber_delta": 1.0,
+          "species_consistency_weight": 1.0
+        },
+        "performance": {
+          "collection_graph_cache_entries": 8,
+          "collection_vram_headroom_mib": 1638,
+          "compile_kernels": false,
+          "fit_batch_groups": 2,
+          "fit_encoder_microbatch": 192,
+          "fit_entity_buckets": [
+            8,
+            16,
+            32,
+            64,
+            128,
+            256
+          ],
+          "fit_precision": "bf16_master",
+          "fit_species_microbatch": 64,
+          "fit_tile_microbatch": 64,
+          "fit_token_budget": 16384,
+          "prefetch": true,
+          "telemetry": true
+        },
+        "storage": {
+          "block_rows": 32768,
+          "ram_gib": 6
+        },
+        "torch_threads": 2,
+        "total_games": 256,
+        "total_steps": 3000000,
+        "until_stage_complete": false,
+        "validation_schedule": "stage_success"
+      },
+      "visualization": {
+        "crf": 23,
+        "demos": false,
+        "enabled": false,
+        "ffmpeg": "",
+        "final_hold_seconds": 2,
+        "live_enabled": false,
+        "live_fps": 5,
+        "live_history_ram_mib": 16,
+        "live_window_size": [
+          1600,
+          1050
+        ],
+        "video_fps": 25,
+        "video_size": [
+          1280,
+          820
+        ],
+        "videos": false,
+        "viewer": "auto"
+      }
+    },
+    "config_digest": "8c3263a4c14e9c214a8bc59c7286cb6ce05d9e27612f3f1dd96b724b13ef191f",
+    "decisions": 2290461,
+    "device": "NVIDIA GeForce RTX 4070 Laptop GPU",
+    "elapsed_seconds": 1400.2570538,
+    "entity_rows": 39500521,
+    "error": "TimeoutError('Complete-cycle measurement exhausted its wall budget')",
+    "execution": {
+      "checkpointing": false,
+      "fallbacks": [],
+      "fit_batch_groups": 2,
+      "microbatch": 64,
+      "precision": "bf16_master",
+      "requested_precision": "bf16_master",
+      "species_microbatch": 64,
+      "tile_microbatch": 64,
+      "token_budget": 16384
+    },
+    "formal_training": false,
+    "free_mib": 0.0,
+    "host_rss_mib": 7164.23046875,
+    "initialization": {
+      "checkpoint": "E:\\Projects\\Tower-Defence-AI\\PVZ-plant\\runs\\compact-stages-101\\easy\\interrupted.zip",
+      "checkpoint_sha256": "c964fa8e7f4773a98c780b0e4b398140c3bbe28304bafb915d67b487da74a8ac",
+      "conversion": "none",
+      "games": 128,
+      "mode": "weights_only",
+      "parameter_changes": {
+        "curriculum.run_stage": {
+          "after": null,
+          "before": "easy"
+        },
+        "policy.action_distribution": {
+          "after": "sequential_q_unmasked_tiles_v2",
+          "before": "sequential_q_unmasked_penalty_v1"
+        },
+        "reward.value_scale": {
+          "after": 900.0,
+          "before": 300.0
+        },
+        "reward.version": {
+          "after": "action_global_value_v3",
+          "before": "action_global_value_v2"
+        },
+        "training.exploration.epsilon_start": {
+          "after": 0.5,
+          "before": 0.1
+        },
+        "training.method": {
+          "after": "complete_return_action_global_v3",
+          "before": "complete_return_action_global_v2"
+        },
+        "training.objective.protocol": {
+          "after": "complete_return_action_global_v3",
+          "before": "complete_return_action_global_v2"
+        },
+        "training.total_games": {
+          "after": 256,
+          "before": 10000
+        },
+        "training.until_stage_complete": {
+          "after": false,
+          "before": true
+        },
+        "visualization.demos": {
+          "after": false,
+          "before": true
+        },
+        "visualization.enabled": {
+          "after": false,
+          "before": true
+        },
+        "visualization.live_enabled": {
+          "after": false,
+          "before": true
+        }
+      },
+      "source_learner_seed": 101,
+      "source_structural_signature": {
+        "action_distribution": "sequential_q_unmasked_penalty_v1",
+        "actions": "kind_plant_tile_v1",
+        "board": {
+          "cols": 9,
+          "mower_states": [
+            "ready",
+            "moving",
+            "spent"
+          ],
+          "plant_states": [
+            "ready",
+            "arming",
+            "armed",
+            "fusing",
+            "digesting",
+            "exploding",
+            "detonating",
+            "rising",
+            "biting",
+            "biting_got_one",
+            "recovering"
+          ],
+          "plants": [
+            "sunflower",
+            "peashooter",
+            "wall_nut",
+            "cherry_bomb",
+            "potato_mine",
+            "snow_pea",
+            "chomper",
+            "repeater"
+          ],
+          "rows": 5,
+          "zombie_states": [
+            "walking",
+            "carrying_pole",
+            "vaulting",
+            "biting",
+            "dead"
+          ],
+          "zombies": [
+            "basic",
+            "flag",
+            "conehead",
+            "buckethead",
+            "pole_vaulting"
+          ]
+        },
+        "encoding": {
+          "count_scale": 75,
+          "max_entities": 256,
+          "version": "entity_v1",
+          "wave_scale": 15
+        },
+        "engine": [
+          "1424b4d802e783a36772091c49d96aa7c6036d7a",
+          "1.4.0",
+          "1.7.0"
+        ],
+        "method": "complete_return_action_global_v2",
+        "policy": {
+          "kind": "two_stage_transformer_q_v1",
+          "species_feedforward": 512,
+          "species_heads": 8,
+          "species_layers": 4,
+          "species_width": 128,
+          "tile_feedforward": 768,
+          "tile_heads": 12,
+          "tile_layers": 6,
+          "tile_width": 192
+        },
+        "return": [
+          1.0,
+          "simulation_ticks"
+        ],
+        "timing": {
+          "action_timing": "per_tick",
+          "cutoff_seconds": 1200,
+          "decision_ticks": 1
+        }
+      },
+      "steps": 2320769,
+      "type": "autonomous",
+      "updates": 0
+    },
+    "phases": {
+      "begin": 0.7110037999991619,
+      "collect": 486.0087617999998,
+      "finalize_rewards": 0.09255050000047049,
+      "fit_pass_1": 222.7678105999994,
+      "fit_pass_2": 214.52835890000006,
+      "fit_pass_3": 255.43234499999926,
+      "returns": 2.666661899999781
+    },
+    "protocol": "pvz-rl/pipeline-benchmark-v1",
+    "revision": "c21fe01342a235f2d747dbc0a9ce5f312b90931e",
+    "seed": 101,
+    "startup_seconds": 3.3651578999997582,
+    "stored_rows": 4058368,
+    "tail": {
+      "seconds": 107.52577670002847,
+      "steps": 9288
+    },
+    "timed_out": true,
+    "torch": "2.8.0+cu128",
+    "torch_peak_mib": 6786.25634765625,
+    "total_mib": 8187.5,
+    "hardware_summary": {
+      "starting": {
+        "samples": 3,
+        "gpu_percent": {
+          "median": 0.0,
+          "maximum": 0.0
+        },
+        "gpu_memory_mib": {
+          "median": 113.0,
+          "maximum": 389.0
+        },
+        "process_cpu_percent": {
+          "median": 98.4,
+          "maximum": 100.0
+        },
+        "process_ram_mib": {
+          "median": 696.66015625,
+          "maximum": 746.09375
+        }
+      },
+      "begin": {
+        "samples": 1,
+        "gpu_percent": {
+          "median": 0.0,
+          "maximum": 0.0
+        },
+        "gpu_memory_mib": {
+          "median": 431.0,
+          "maximum": 431.0
+        },
+        "process_cpu_percent": {
+          "median": 94.0,
+          "maximum": 94.0
+        },
+        "process_ram_mib": {
+          "median": 779.91015625,
+          "maximum": 779.91015625
+        }
+      },
+      "collect": {
+        "samples": 481,
+        "gpu_percent": {
+          "median": 39.0,
+          "maximum": 53.0
+        },
+        "gpu_memory_mib": {
+          "median": 551.0,
+          "maximum": 551.0
+        },
+        "process_cpu_percent": {
+          "median": 98.4,
+          "maximum": 103.1
+        },
+        "process_ram_mib": {
+          "median": 3576.515625,
+          "maximum": 4766.53125
+        }
+      },
+      "returns": {
+        "samples": 3,
+        "gpu_percent": {
+          "median": 0.0,
+          "maximum": 6.0
+        },
+        "gpu_memory_mib": {
+          "median": 551.0,
+          "maximum": 551.0
+        },
+        "process_cpu_percent": {
+          "median": 100.0,
+          "maximum": 100.0
+        },
+        "process_ram_mib": {
+          "median": 4770.72265625,
+          "maximum": 4771.23046875
+        }
+      },
+      "fit_pass_1": {
+        "samples": 221,
+        "gpu_percent": {
+          "median": 36.0,
+          "maximum": 94.0
+        },
+        "gpu_memory_mib": {
+          "median": 3453.0,
+          "maximum": 7713.0
+        },
+        "process_cpu_percent": {
+          "median": 100.0,
+          "maximum": 104.7
+        },
+        "process_ram_mib": {
+          "median": 6786.9921875,
+          "maximum": 7453.46875
+        }
+      },
+      "fit_pass_2": {
+        "samples": 213,
+        "gpu_percent": {
+          "median": 38.0,
+          "maximum": 81.0
+        },
+        "gpu_memory_mib": {
+          "median": 7763.0,
+          "maximum": 7783.0
+        },
+        "process_cpu_percent": {
+          "median": 100.0,
+          "maximum": 106.2
+        },
+        "process_ram_mib": {
+          "median": 6951.8125,
+          "maximum": 6964.05078125
+        }
+      },
+      "fit_pass_3": {
+        "samples": 253,
+        "gpu_percent": {
+          "median": 48.0,
+          "maximum": 100.0
+        },
+        "gpu_memory_mib": {
+          "median": 7625.0,
+          "maximum": 7938.0
+        },
+        "process_cpu_percent": {
+          "median": 98.4,
+          "maximum": 104.7
+        },
+        "process_ram_mib": {
+          "median": 7160.79296875,
+          "maximum": 7164.140625
+        }
+      },
+      "fit_pass_4": {
+        "samples": 214,
+        "gpu_percent": {
+          "median": 61.0,
+          "maximum": 97.0
+        },
+        "gpu_memory_mib": {
+          "median": 7647.0,
+          "maximum": 7647.0
+        },
+        "process_cpu_percent": {
+          "median": 98.4,
+          "maximum": 104.7
+        },
+        "process_ram_mib": {
+          "median": 7163.36328125,
+          "maximum": 7165.44921875
+        }
+      }
+    },
+    "sampled_gpu_peak_mib": 7938.0,
+    "sampled_rss_peak_mib": 7453.46875
+  },
+  "candidate": {
+    "active_games": 1,
+    "cohort": {
+      "collection_entity_widths": {
+        "32": 2259815,
+        "64": 30646
+      },
+      "collection_graphs": {
+        "ema": {
+          "species": {
+            "cache_entries": 8,
+            "capacity_fallbacks": 0,
+            "capture_failures": 0,
+            "capture_setup_seconds": 0.0,
+            "captures": 0,
+            "entries": 0,
+            "evictions": 0,
+            "headroom_fallbacks": 0,
+            "hits": 0,
+            "last_free_mib": null,
+            "misses": 0,
+            "oom_fallbacks": 0,
+            "releases": 1,
+            "resident_entries": 0,
+            "retired_entries": 0,
+            "retired_releases": 0,
+            "vram_headroom_mib": 1638
+          },
+          "tile": {
+            "cache_entries": 8,
+            "capacity_fallbacks": 0,
+            "capture_failures": 0,
+            "capture_setup_seconds": 0.0,
+            "captures": 0,
+            "entries": 0,
+            "evictions": 0,
+            "headroom_fallbacks": 0,
+            "hits": 0,
+            "last_free_mib": null,
+            "misses": 0,
+            "oom_fallbacks": 0,
+            "releases": 1,
+            "resident_entries": 0,
+            "retired_entries": 0,
+            "retired_releases": 0,
+            "vram_headroom_mib": 1638
+          }
+        },
+        "online": {
+          "species": {
+            "cache_entries": 8,
+            "capacity_fallbacks": 0,
+            "capture_failures": 0,
+            "capture_setup_seconds": 0.0,
+            "captures": 0,
+            "entries": 0,
+            "evictions": 0,
+            "headroom_fallbacks": 0,
+            "hits": 0,
+            "last_free_mib": null,
+            "misses": 0,
+            "oom_fallbacks": 0,
+            "releases": 1,
+            "resident_entries": 0,
+            "retired_entries": 0,
+            "retired_releases": 0,
+            "vram_headroom_mib": 1638
+          },
+          "tile": {
+            "cache_entries": 8,
+            "capacity_fallbacks": 0,
+            "capture_failures": 0,
+            "capture_setup_seconds": 0.0,
+            "captures": 0,
+            "entries": 0,
+            "evictions": 0,
+            "headroom_fallbacks": 0,
+            "hits": 0,
+            "last_free_mib": null,
+            "misses": 0,
+            "oom_fallbacks": 0,
+            "releases": 1,
+            "resident_entries": 0,
+            "retired_entries": 0,
+            "retired_releases": 0,
+            "vram_headroom_mib": 1638
+          }
+        }
+      },
+      "collection_logical_rows": 2290461,
+      "collection_padded_rows": 2443570,
+      "collection_seconds": 561.3353849000005,
+      "committed_plant_attempts": 555,
+      "committed_plant_successes": 288,
+      "committed_wait_decisions": 384608,
+      "compilation_backend": null,
+      "compilation_status": "disabled",
+      "device_compute_seconds": 455.207171875,
+      "ema_compilation_status": "disabled",
+      "ema_version": 4,
+      "encoder_microbatch": 128,
+      "encoder_token_budget": 32768,
+      "execution_fallbacks": [],
+      "exploratory_changes": 1314919,
+      "fit_batch_groups": 2,
+      "fit_precision": "bf16_master",
+      "fit_seconds": 457.3162336000005,
+      "fitting_compaction": {
+        "invalid_reduction": 0.26645371912685556,
+        "invalid_runs": 1395574,
+        "invalid_windows": 1395574,
+        "raw_invalid_rows": 1902503,
+        "raw_rows": 2290461,
+        "retained_invalid_rows": 1395574,
+        "selected_rows": 1783532
+      },
+      "fitting_spool_rows": 1783532,
+      "objective": {
+        "action_reward_totals": {
+          "action_blocking": 24881.39998783926,
+          "action_damage": 24312.33333333455,
+          "action_mower": -175000.0,
+          "action_sun": 236775.0
+        },
+        "causal_source_credits": {},
+        "component_episode_mean": {
+          "action_blocking": 1943.8593740499043,
+          "action_damage": 1899.401041666667,
+          "action_mower": -13671.875,
+          "action_sun": 18498.046875,
+          "global_asset_value": 3970.3567708333335,
+          "global_terminal": -0.319451279527559
+        },
+        "component_return_mean": {
+          "action_blocking": 1376.6669678638589,
+          "action_damage": 1255.9495296167677,
+          "action_mower": -9685.698643198903,
+          "action_sun": 8725.695285796179,
+          "global_asset_value": 1968.9127391094314,
+          "global_terminal": -0.34638755818736505
+        },
+        "component_return_std": {
+          "action_blocking": 1118.954271100115,
+          "action_damage": 867.1921055376711,
+          "action_mower": 6200.189780863055,
+          "action_sun": 7679.6693493101075,
+          "global_asset_value": 4602.755756821253,
+          "global_terminal": 1.0365427337943127
+        },
+        "consistency_counts": [
+          [
+            0,
+            3128
+          ],
+          [
+            0,
+            0
+          ]
+        ],
+        "constant_predictor_mse": 1.0473201505725303,
+        "duration_median_seconds": 172.09,
+        "duration_reference_count": 128,
+        "endgame_terminal_rewards": [
+          -1.0,
+          -1.0,
+          -1.0,
+          -1.0,
+          1.468503937007874,
+          -1.0,
+          -1.0,
+          -1.0,
+          -1.0,
+          -1.0,
+          -1.0,
+          -1.0,
+          -1.0,
+          1.3976377952755905,
+          -1.0,
+          1.3818897637795275,
+          1.374015748031496,
+          1.3661417322834646,
+          -1.0,
+          1.358267716535433,
+          -1.0,
+          -1.0,
+          1.326771653543307,
+          1.3188976377952755,
+          -1.0,
+          1.3031496062992125,
+          -1.0,
+          -1.0,
+          -1.0,
+          1.2716535433070866,
+          1.263779527559055,
+          -1.0,
+          -1.0,
+          1.2401574803149606,
+          -1.0,
+          1.2244094488188977,
+          1.2165354330708662,
+          1.2086614173228347,
+          -1.0,
+          -1.0,
+          1.1929133858267718,
+          1.1771653543307088,
+          -1.0,
+          -1.0,
+          -1.0,
+          -1.0,
+          -1.0,
+          -1.0,
+          -1.0,
+          -1.0,
+          -1.0,
+          -1.0,
+          -1.0,
+          -1.0,
+          1.0669291338582676,
+          1.074803149606299,
+          -1.0,
+          -1.0,
+          -1.0,
+          -1.0,
+          -1.0,
+          -1.0,
+          -1.0,
+          1.0039370078740157,
+          -1.0039370078740157,
+          -1.0196850393700787,
+          -1.0118110236220472,
+          0.9724409448818898,
+          -1.0354330708661417,
+          0.9566929133858267,
+          -1.0511811023622046,
+          0.9409448818897638,
+          0.9330708661417323,
+          0.9251968503937008,
+          0.9173228346456693,
+          -1.090551181102362,
+          -1.0984251968503937,
+          -1.1062992125984252,
+          0.8858267716535433,
+          -1.1220472440944882,
+          -1.1299212598425197,
+          -1.1377952755905512,
+          0.8543307086614174,
+          0.8464566929133859,
+          0.8385826771653543,
+          0.8307086614173228,
+          0.8228346456692913,
+          -1.1850393700787403,
+          0.8070866141732284,
+          0.7992125984251969,
+          0.7913385826771654,
+          -1.2244094488188977,
+          0.7834645669291339,
+          -1.2322834645669292,
+          0.7598425196850394,
+          0.7519685039370079,
+          0.7440944881889764,
+          -1.263779527559055,
+          -1.2716535433070866,
+          -1.279527559055118,
+          0.7125984251968503,
+          -1.295275590551181,
+          -1.311023622047244,
+          -1.3031496062992125,
+          -1.3188976377952755,
+          -1.326771653543307,
+          -1.3346456692913384,
+          0.65748031496063,
+          0.6496062992125984,
+          0.6417322834645669,
+          -1.3661417322834646,
+          -1.374015748031496,
+          0.6181102362204725,
+          -1.389763779527559,
+          0.6023622047244095,
+          0.594488188976378,
+          -1.4133858267716537,
+          -1.4212598425196852,
+          -1.4291338582677167,
+          0.562992125984252,
+          -1.4448818897637796,
+          0.547244094488189,
+          -1.4606299212598426,
+          -1.468503937007874,
+          -1.4763779527559056,
+          0.515748031496063,
+          -1.4921259842519685,
+          -1.5
+        ],
+        "endgame_time_adjustments": [
+          0.5,
+          0.4921259842519685,
+          0.48425196850393704,
+          0.4763779527559055,
+          0.468503937007874,
+          0.46062992125984253,
+          0.452755905511811,
+          0.4448818897637795,
+          0.43700787401574803,
+          0.42913385826771655,
+          0.42125984251968507,
+          0.41338582677165353,
+          0.40551181102362205,
+          0.39763779527559057,
+          0.38976377952755903,
+          0.38188976377952755,
+          0.37401574803149606,
+          0.3661417322834646,
+          0.35039370078740156,
+          0.3582677165354331,
+          0.3425196850393701,
+          0.33464566929133854,
+          0.32677165354330706,
+          0.3188976377952756,
+          0.3110236220472441,
+          0.3031496062992126,
+          0.29527559055118113,
+          0.2874015748031496,
+          0.2795275590551181,
+          0.2716535433070866,
+          0.2637795275590551,
+          0.25196850393700787,
+          0.25196850393700787,
+          0.24015748031496065,
+          0.2322834645669291,
+          0.22440944881889763,
+          0.21653543307086615,
+          0.20866141732283466,
+          0.20078740157480313,
+          0.18503937007874016,
+          0.19291338582677164,
+          0.17716535433070868,
+          0.16929133858267714,
+          0.16141732283464566,
+          0.15354330708661418,
+          0.14173228346456695,
+          0.14173228346456695,
+          0.12992125984251968,
+          0.1220472440944882,
+          0.11417322834645671,
+          0.10629921259842517,
+          0.09842519685039369,
+          0.09055118110236221,
+          0.08267716535433073,
+          0.06692913385826771,
+          0.07480314960629919,
+          0.051181102362204745,
+          0.05905511811023623,
+          0.04330708661417321,
+          0.035433070866141725,
+          0.01968503937007876,
+          0.027559055118110243,
+          0.011811023622047223,
+          0.003937007874015741,
+          -0.003937007874015741,
+          -0.019685039370078705,
+          -0.011811023622047223,
+          -0.027559055118110187,
+          -0.03543307086614178,
+          -0.04330708661417326,
+          -0.051181102362204745,
+          -0.05905511811023623,
+          -0.06692913385826771,
+          -0.07480314960629919,
+          -0.08267716535433067,
+          -0.09055118110236215,
+          -0.09842519685039375,
+          -0.10629921259842523,
+          -0.11417322834645671,
+          -0.1220472440944882,
+          -0.12992125984251968,
+          -0.13779527559055116,
+          -0.14566929133858264,
+          -0.15354330708661412,
+          -0.16141732283464572,
+          -0.1692913385826772,
+          -0.17716535433070868,
+          -0.18503937007874016,
+          -0.19291338582677164,
+          -0.20078740157480313,
+          -0.2086614173228346,
+          -0.22440944881889768,
+          -0.2165354330708661,
+          -0.23228346456692917,
+          -0.24015748031496065,
+          -0.24803149606299213,
+          -0.2559055118110236,
+          -0.2637795275590551,
+          -0.2716535433070866,
+          -0.27952755905511806,
+          -0.28740157480314965,
+          -0.29527559055118113,
+          -0.3110236220472441,
+          -0.3031496062992126,
+          -0.3188976377952756,
+          -0.32677165354330706,
+          -0.33464566929133854,
+          -0.34251968503937,
+          -0.3503937007874016,
+          -0.3582677165354331,
+          -0.3661417322834646,
+          -0.37401574803149606,
+          -0.38188976377952755,
+          -0.38976377952755903,
+          -0.3976377952755905,
+          -0.405511811023622,
+          -0.4133858267716536,
+          -0.42125984251968507,
+          -0.42913385826771655,
+          -0.43700787401574803,
+          -0.4448818897637795,
+          -0.452755905511811,
+          -0.4606299212598425,
+          -0.46850393700787396,
+          -0.47637795275590555,
+          -0.48425196850393704,
+          -0.4921259842519685,
+          -0.5
+        ],
+        "endgame_time_weight": 0.5,
+        "global_reward_totals": {
+          "global_asset_value": 50820.56666666639,
+          "global_terminal": -40.88976377952756
+        },
+        "home_entries": [
+          649,
+          571
+        ],
+        "outcome_counts": [
+          [
+            0,
+            384830
+          ],
+          [
+            1902503,
+            3128
+          ],
+          [
+            0,
+            0
+          ]
+        ],
+        "raw_component_episode_mean": {
+          "action_blocking": 194.38593740499053,
+          "action_damage": 189.9401041666666,
+          "action_mower": -1367.1875,
+          "action_sun": 1849.8046875,
+          "global_asset_value": 397.03567708333327,
+          "global_terminal": -0.319451279527559
+        },
+        "routed_workload": {
+          "ema_tile_rows": 3128,
+          "online_species_rows": 2287773,
+          "online_tile_rows": 5816,
+          "routes": {
+            "accepted": 3128,
+            "species_invalid": 1899815,
+            "tile_invalid": 2688,
+            "wait_return": 384830
+          },
+          "skipped_ema_rows": 1902503
+        },
+        "sampled_target_quantiles": [
+          -1.5215174492144048,
+          -1.283874307381571,
+          -0.9636666666788886,
+          1.1826802478806648,
+          1.55015627975986
+        ],
+        "source_action_credited_rows": 0,
+        "target_std": 1.0233866085563805,
+        "victory_time_adjustments": [
+          0.5,
+          0.4921259842519685,
+          0.48425196850393704,
+          0.4763779527559055,
+          0.468503937007874,
+          0.46062992125984253,
+          0.452755905511811,
+          0.4448818897637795,
+          0.43700787401574803,
+          0.42913385826771655,
+          0.42125984251968507,
+          0.41338582677165353,
+          0.40551181102362205,
+          0.39763779527559057,
+          0.38976377952755903,
+          0.38188976377952755,
+          0.37401574803149606,
+          0.3661417322834646,
+          0.35039370078740156,
+          0.3582677165354331,
+          0.3425196850393701,
+          0.33464566929133854,
+          0.32677165354330706,
+          0.3188976377952756,
+          0.3110236220472441,
+          0.3031496062992126,
+          0.29527559055118113,
+          0.2874015748031496,
+          0.2795275590551181,
+          0.2716535433070866,
+          0.2637795275590551,
+          0.25196850393700787,
+          0.25196850393700787,
+          0.24015748031496065,
+          0.2322834645669291,
+          0.22440944881889763,
+          0.21653543307086615,
+          0.20866141732283466,
+          0.20078740157480313,
+          0.18503937007874016,
+          0.19291338582677164,
+          0.17716535433070868,
+          0.16929133858267714,
+          0.16141732283464566,
+          0.15354330708661418,
+          0.14173228346456695,
+          0.14173228346456695,
+          0.12992125984251968,
+          0.1220472440944882,
+          0.11417322834645671,
+          0.10629921259842517,
+          0.09842519685039369,
+          0.09055118110236221,
+          0.08267716535433073,
+          0.06692913385826771,
+          0.07480314960629919,
+          0.051181102362204745,
+          0.05905511811023623,
+          0.04330708661417321,
+          0.035433070866141725,
+          0.01968503937007876,
+          0.027559055118110243,
+          0.011811023622047223,
+          0.003937007874015741,
+          -0.003937007874015741,
+          -0.019685039370078705,
+          -0.011811023622047223,
+          -0.027559055118110187,
+          -0.03543307086614178,
+          -0.04330708661417326,
+          -0.051181102362204745,
+          -0.05905511811023623,
+          -0.06692913385826771,
+          -0.07480314960629919,
+          -0.08267716535433067,
+          -0.09055118110236215,
+          -0.09842519685039375,
+          -0.10629921259842523,
+          -0.11417322834645671,
+          -0.1220472440944882,
+          -0.12992125984251968,
+          -0.13779527559055116,
+          -0.14566929133858264,
+          -0.15354330708661412,
+          -0.16141732283464572,
+          -0.1692913385826772,
+          -0.17716535433070868,
+          -0.18503937007874016,
+          -0.19291338582677164,
+          -0.20078740157480313,
+          -0.2086614173228346,
+          -0.22440944881889768,
+          -0.2165354330708661,
+          -0.23228346456692917,
+          -0.24015748031496065,
+          -0.24803149606299213,
+          -0.2559055118110236,
+          -0.2637795275590551,
+          -0.2716535433070866,
+          -0.27952755905511806,
+          -0.28740157480314965,
+          -0.29527559055118113,
+          -0.3110236220472441,
+          -0.3031496062992126,
+          -0.3188976377952756,
+          -0.32677165354330706,
+          -0.33464566929133854,
+          -0.34251968503937,
+          -0.3503937007874016,
+          -0.3582677165354331,
+          -0.3661417322834646,
+          -0.37401574803149606,
+          -0.38188976377952755,
+          -0.38976377952755903,
+          -0.3976377952755905,
+          -0.405511811023622,
+          -0.4133858267716536,
+          -0.42125984251968507,
+          -0.42913385826771655,
+          -0.43700787401574803,
+          -0.4448818897637795,
+          -0.452755905511811,
+          -0.4606299212598425,
+          -0.46850393700787396,
+          -0.47637795275590555,
+          -0.48425196850393704,
+          -0.4921259842519685,
+          -0.5
+        ],
+        "within_episode_target_variance": 0.005447895566907059
+      },
+      "optimization_seconds": 457.3162336000005,
+      "optimizer_seconds": 0.03460464024543762,
+      "peak_cuda_memory_bytes": 7167812608,
+      "phase_memory": [
+        {
+          "boundary": "before_collection_release",
+          "cupy_reserved_mib": 252.93212890625,
+          "free_mib": 6772.0,
+          "torch_allocated_mib": 20.240234375,
+          "torch_reserved_mib": 22.0,
+          "total_mib": 8187.5
+        },
+        {
+          "boundary": "after_collection_release",
+          "cupy_reserved_mib": 252.927734375,
+          "free_mib": 6772.0,
+          "torch_allocated_mib": 20.240234375,
+          "torch_reserved_mib": 22.0,
+          "total_mib": 8187.5
+        },
+        {
+          "boundary": "fit_entry",
+          "cupy_reserved_mib": 252.927734375,
+          "free_mib": 6716.0,
+          "torch_allocated_mib": 48.619140625,
+          "torch_reserved_mib": 62.0,
+          "total_mib": 8187.5
+        }
+      ],
+      "planting_samples": 1905631,
+      "prefit_errors": {
+        "dig": {
+          "count": 0,
+          "mse": null,
+          "placement_gap": null,
+          "signed_error": null
+        },
+        "plant": {
+          "count": 1905631,
+          "mse": 34.717451944900745,
+          "placement_gap": 0.003473806297625301,
+          "signed_error": 5.802863647232591
+        },
+        "wait": {
+          "count": 384830,
+          "mse": 7.337220916030731,
+          "placement_gap": null,
+          "signed_error": 2.483222032376502
+        }
+      },
+      "preparation_seconds": 6.7138430999702905,
+      "q_optimizer_steps": 4,
+      "returns_seconds": 1.560097499999756,
+      "simulation_speed": 40.748063662644014,
+      "species_counts": [
+        724582,
+        830978,
+        345862,
+        88,
+        3860,
+        50,
+        118,
+        93
+      ],
+      "species_exploration_coins": 312,
+      "tile_exploration_coins": 951401,
+      "trajectory_bytes": 2248795727,
+      "trajectory_ram_bytes": 4058926868,
+      "transfer_stream_seconds": 0.7988779201507568,
+      "transfer_wait_seconds": 0.02644930001861212,
+      "transitions": 2290461,
+      "transitions_per_second": 2245.0839997998987,
+      "window_seconds": 1020.2117160000007
+    },
+    "collection_execution": {
+      "active_games": 0,
+      "actual_ema_rows": {
+        "logical": 0,
+        "padded": 0
+      },
+      "capacity_blocked_slots": 0,
+      "current_logical_rows": 1,
+      "current_padded_rows": 1,
+      "entity_widths": {
+        "32": 2259815,
+        "64": 30646
+      },
+      "graph_cache": {
+        "ema": {
+          "species": {
+            "cache_entries": 8,
+            "capacity_fallbacks": 0,
+            "capture_failures": 0,
+            "capture_setup_seconds": 0.0,
+            "captures": 0,
+            "entries": 0,
+            "evictions": 0,
+            "headroom_fallbacks": 0,
+            "hits": 0,
+            "last_free_mib": null,
+            "misses": 0,
+            "oom_fallbacks": 0,
+            "releases": 0,
+            "resident_entries": 0,
+            "retired_entries": 0,
+            "retired_releases": 0,
+            "vram_headroom_mib": 1638
+          },
+          "tile": {
+            "cache_entries": 8,
+            "capacity_fallbacks": 0,
+            "capture_failures": 0,
+            "capture_setup_seconds": 0.0,
+            "captures": 0,
+            "entries": 0,
+            "evictions": 0,
+            "headroom_fallbacks": 0,
+            "hits": 0,
+            "last_free_mib": null,
+            "misses": 0,
+            "oom_fallbacks": 0,
+            "releases": 0,
+            "resident_entries": 0,
+            "retired_entries": 0,
+            "retired_releases": 0,
+            "vram_headroom_mib": 1638
+          }
+        },
+        "online": {
+          "species": {
+            "cache_entries": 8,
+            "capacity_fallbacks": 0,
+            "capture_failures": 0,
+            "capture_setup_seconds": 0.0,
+            "captures": 0,
+            "entries": 0,
+            "evictions": 0,
+            "headroom_fallbacks": 0,
+            "hits": 0,
+            "last_free_mib": null,
+            "misses": 0,
+            "oom_fallbacks": 0,
+            "releases": 0,
+            "resident_entries": 0,
+            "retired_entries": 0,
+            "retired_releases": 0,
+            "vram_headroom_mib": 1638
+          },
+          "tile": {
+            "cache_entries": 8,
+            "capacity_fallbacks": 0,
+            "capture_failures": 0,
+            "capture_setup_seconds": 0.0,
+            "captures": 0,
+            "entries": 0,
+            "evictions": 0,
+            "headroom_fallbacks": 0,
+            "hits": 0,
+            "last_free_mib": null,
+            "misses": 0,
+            "oom_fallbacks": 0,
+            "releases": 0,
+            "resident_entries": 0,
+            "retired_entries": 0,
+            "retired_releases": 0,
+            "vram_headroom_mib": 1638
+          }
+        }
+      },
+      "logical_rows": 2290461,
+      "online_rows": {
+        "logical": 1,
+        "padded": 1
+      },
+      "padded_rows": 2443570,
+      "phase_memory": [
+        {
+          "boundary": "before_collection_release",
+          "cupy_reserved_mib": 252.93212890625,
+          "free_mib": 6772.0,
+          "torch_allocated_mib": 20.240234375,
+          "torch_reserved_mib": 22.0,
+          "total_mib": 8187.5
+        },
+        {
+          "boundary": "after_collection_release",
+          "cupy_reserved_mib": 252.927734375,
+          "free_mib": 6772.0,
+          "torch_allocated_mib": 20.240234375,
+          "torch_reserved_mib": 22.0,
+          "total_mib": 8187.5
+        }
+      ],
+      "scope": "current_cohort",
+      "timings": {
+        "completed_phase_seconds": {
+          "host_synchronization": 0.18539780012906704,
+          "presentation": 22.264134899936835,
+          "scenario_preparation": 0.7228729000007661,
+          "storage": 63.24330450010075
+        },
+        "pending_device_spans": 253648,
+        "scope": "current_cohort"
+      }
+    },
+    "collection_steps": 31706,
+    "compaction": {
+      "invalid_reduction": 0.26645371912685556,
+      "invalid_runs": 1395574,
+      "invalid_windows": 1395574,
+      "raw_invalid_rows": 1902503,
+      "raw_rows": 2290461,
+      "retained_invalid_rows": 1395574,
+      "selected_rows": 1783532
+    },
+    "complete": true,
+    "config": {
+      "conditions": {
+        "masked": {
+          "curriculum": true,
+          "hybrid": false,
+          "masked": true,
+          "shaped": true
+        }
+      },
+      "curriculum": {
+        "boundaries": [
+          0.1,
+          0.4
+        ],
+        "consecutive_passes": 1,
+        "easy_weights": [
+          1.0,
+          0.0,
+          0.0
+        ],
+        "final_weights": [
+          0.2,
+          0.4,
+          0.4
+        ],
+        "intermediate_weights": [
+          0.5,
+          0.5,
+          0.0
+        ],
+        "minimum_stage_games": 100,
+        "minimum_stage_steps": 16384,
+        "mode": "teaching",
+        "probe_cases": 100,
+        "probe_interval": 16384,
+        "probe_interval_games": 2000,
+        "residency": "episode_start_stage",
+        "run_stage": "easy",
+        "stages": {
+          "easy": {
+            "requirements": {
+              "easy": 100
+            },
+            "tasks": [
+              "easy"
+            ],
+            "weights": [
+              1.0
+            ]
+          },
+          "shared": {
+            "requirements": {
+              "easy": 100,
+              "hard": 100,
+              "standard": 100
+            },
+            "tasks": [
+              "easy",
+              "standard",
+              "hard"
+            ],
+            "weights": [
+              0.2,
+              0.4,
+              0.4
+            ]
+          },
+          "standard": {
+            "requirements": {
+              "easy": 100,
+              "standard": 100
+            },
+            "tasks": [
+              "easy",
+              "standard"
+            ],
+            "weights": [
+              0.5,
+              0.5
+            ]
+          }
+        }
+      },
+      "diagnostics": {
+        "early_dig_seconds": 5
+      },
+      "encoding": {
+        "count_scale": 75,
+        "max_entities": 256,
+        "version": "entity_v1",
+        "wave_scale": 15
+      },
+      "engine_commit": "1424b4d802e783a36772091c49d96aa7c6036d7a",
+      "engine_package_version": "1.7.0",
+      "engine_version": "1.4.0",
+      "environment": {
+        "action_timing": "per_tick",
+        "cols": 9,
+        "cutoff_seconds": 1200,
+        "decision_ticks": 1,
+        "mower_states": [
+          "ready",
+          "moving",
+          "spent"
+        ],
+        "plant_states": [
+          "ready",
+          "arming",
+          "armed",
+          "fusing",
+          "digesting",
+          "exploding",
+          "detonating",
+          "rising",
+          "biting",
+          "biting_got_one",
+          "recovering"
+        ],
+        "plants": [
+          "sunflower",
+          "peashooter",
+          "wall_nut",
+          "cherry_bomb",
+          "potato_mine",
+          "snow_pea",
+          "chomper",
+          "repeater"
+        ],
+        "rows": 5,
+        "zombie_states": [
+          "walking",
+          "carrying_pole",
+          "vaulting",
+          "biting",
+          "dead"
+        ],
+        "zombies": [
+          "basic",
+          "flag",
+          "conehead",
+          "buckethead",
+          "pole_vaulting"
+        ]
+      },
+      "evaluation": {
+        "bootstrap_replicates": 2000,
+        "bootstrap_seed": 1739,
+        "levels": [
+          "easy",
+          "standard",
+          "hard"
+        ],
+        "ood_families": [
+          "redistributed",
+          "faster",
+          "concentrated"
+        ],
+        "ood_levels": [
+          "standard",
+          "hard"
+        ],
+        "replays_per_outcome": 10,
+        "targets": [
+          0.95,
+          0.9,
+          0.75
+        ]
+      },
+      "logging": {
+        "hardware_sample_seconds": 1.0,
+        "progress_seconds": 15,
+        "rolling_window": 100,
+        "terminal_mode": "compact",
+        "terminal_progress_seconds": 60
+      },
+      "policy": {
+        "action_distribution": "sequential_q_unmasked_tiles_v2",
+        "attention_query_chunk": 64,
+        "encoder_microbatch": 128,
+        "encoder_token_budget": 65536,
+        "kind": "two_stage_transformer_q_v1",
+        "species_feedforward": 512,
+        "species_heads": 8,
+        "species_layers": 4,
+        "species_width": 128,
+        "tile_feedforward": 768,
+        "tile_heads": 12,
+        "tile_layers": 6,
+        "tile_width": 192
+      },
+      "profile": "complete-game",
+      "reward": {
+        "action": {
+          "block_value_by_plant": {
+            "cherry_bomb": 0.0333333333,
+            "chomper": 0.0333333333,
+            "peashooter": 0.0333333333,
+            "potato_mine": 0.0333333333,
+            "repeater": 0.0333333333,
+            "snow_pea": 0.0333333333,
+            "sunflower": 0.0333333333,
+            "wall_nut": 0.025
+          },
+          "sun_credit_multiplier": 1.0
+        },
+        "basic_zombie_value": 30.0,
+        "early_sun_extra_multiplier": 2.0,
+        "early_sun_spawn_fraction": [
+          1,
+          3
+        ],
+        "home_entry_penalties": [
+          0.005,
+          0.015
+        ],
+        "loss_penalty": 1.0,
+        "mower_value": 500.0,
+        "progress_weight": 0.01,
+        "value_scale": 900.0,
+        "version": "action_global_value_v3",
+        "win_reward": 1.0,
+        "win_time_weight": 0.5
+      },
+      "runtime": {
+        "cache_legal_actions": true,
+        "refill_evaluation": true
+      },
+      "schema_version": 1,
+      "simulation": {
+        "backend": "cuda"
+      },
+      "splits": {
+        "curriculum": [
+          100050,
+          100149
+        ],
+        "ood": [
+          300000,
+          300099
+        ],
+        "test": [
+          200000,
+          200299
+        ],
+        "train": [
+          1000,
+          99999
+        ],
+        "validation": [
+          100000,
+          100049
+        ]
+      },
+      "training": {
+        "annotation": {
+          "batch_size": 256,
+          "learner_seed": 101,
+          "learning_rate": 0.0003,
+          "margin": 1.0,
+          "passes": 0,
+          "sampling_family": "preset",
+          "sampling_max_attempts": 100,
+          "sampling_max_plants": 8,
+          "sampling_max_steps": 20000,
+          "sampling_plant_interval_steps": [
+            500,
+            1500
+          ],
+          "sampling_seed": "random"
+        },
+        "batch_size": 1024,
+        "budget_unit": "games",
+        "demo": {
+          "learner_seed": 101,
+          "learning_rate": 0.0003,
+          "passes": 40,
+          "time_budget_minutes": 30
+        },
+        "device": "cuda",
+        "discount_clock": "simulation_ticks",
+        "eval_interval": 250000,
+        "eval_interval_games": 2000,
+        "exploration": {
+          "decay_games": 10000,
+          "epsilon_floor": 0.01,
+          "epsilon_start": 0.5,
+          "objective": "committed_plant_tile_epsilon_v1",
+          "plant_decay_games": 10000,
+          "plant_epsilon_floor": 0.01,
+          "plant_epsilon_start": 0.1
+        },
+        "finalization_minutes": 15,
+        "gamma": 1.0,
+        "learner_seeds": [
+          101,
+          102
+        ],
+        "learning_rate": 0.0003,
+        "max_grad_norm": 5,
+        "max_minutes": 120,
+        "method": "complete_return_action_global_v3",
+        "n_envs": 128,
+        "n_epochs": 4,
+        "objective": {
+          "accepted_outcome_share": 0.5,
+          "demo_rank_loss_weight": 0.1,
+          "demo_rank_margin": 0.05,
+          "dense_multiplier": 10.0,
+          "ema_decay": 0.95,
+          "invalid_action_target": -1.0,
+          "invalid_fit_group_size": 100,
+          "protocol": "complete_return_action_global_v3",
+          "species_consistency_huber_delta": 1.0,
+          "species_consistency_weight": 1.0
+        },
+        "performance": {
+          "collection_graph_cache_entries": 8,
+          "collection_vram_headroom_mib": 1638,
+          "compile_collection": false,
+          "compile_fitting": false,
+          "fit_batch_groups": 2,
+          "fit_encoder_microbatch": 192,
+          "fit_entity_buckets": [
+            8,
+            16,
+            32,
+            64,
+            128,
+            256
+          ],
+          "fit_precision": "bf16_master",
+          "fit_species_microbatch": 128,
+          "fit_tile_microbatch": 128,
+          "fit_token_budget": 32768,
+          "prefetch": true,
+          "telemetry": true
+        },
+        "storage": {
+          "block_rows": 32768,
+          "ram_gib": 6
+        },
+        "torch_threads": 2,
+        "total_games": 256,
+        "total_steps": 3000000,
+        "until_stage_complete": false,
+        "validation_schedule": "stage_success"
+      },
+      "visualization": {
+        "crf": 23,
+        "demos": false,
+        "enabled": false,
+        "ffmpeg": "",
+        "final_hold_seconds": 2,
+        "live_enabled": false,
+        "live_fps": 5,
+        "live_history_ram_mib": 16,
+        "live_window_size": [
+          1600,
+          1050
+        ],
+        "video_fps": 25,
+        "video_size": [
+          1280,
+          820
+        ],
+        "videos": false,
+        "viewer": "auto"
+      }
+    },
+    "config_digest": "651c2be7c3e4c57949b18f43afa422458bc00b62b926021339aa008b4415680f",
+    "cycle_seconds": 1022.9397222999996,
+    "decisions": 2290461,
+    "device": "NVIDIA GeForce RTX 4070 Laptop GPU",
+    "elapsed_seconds": 1026.1655239000002,
+    "entity_rows": 39500521,
+    "execution": {
+      "checkpointing": false,
+      "fallbacks": [],
+      "fit_batch_groups": 2,
+      "microbatch": 128,
+      "precision": "bf16_master",
+      "requested_precision": "bf16_master",
+      "species_microbatch": 128,
+      "tile_microbatch": 128,
+      "token_budget": 32768
+    },
+    "formal_training": false,
+    "free_mib": 6574.0,
+    "host_rss_mib": 2388.1015625,
+    "initialization": {
+      "checkpoint": "E:\\Projects\\Tower-Defence-AI\\PVZ-plant\\runs\\compact-stages-101\\easy\\interrupted.zip",
+      "checkpoint_sha256": "c964fa8e7f4773a98c780b0e4b398140c3bbe28304bafb915d67b487da74a8ac",
+      "conversion": "none",
+      "games": 128,
+      "mode": "weights_only",
+      "parameter_changes": {
+        "policy.action_distribution": {
+          "after": "sequential_q_unmasked_tiles_v2",
+          "before": "sequential_q_unmasked_penalty_v1"
+        },
+        "reward.value_scale": {
+          "after": 900.0,
+          "before": 300.0
+        },
+        "reward.version": {
+          "after": "action_global_value_v3",
+          "before": "action_global_value_v2"
+        },
+        "training.exploration.epsilon_start": {
+          "after": 0.5,
+          "before": 0.1
+        },
+        "training.method": {
+          "after": "complete_return_action_global_v3",
+          "before": "complete_return_action_global_v2"
+        },
+        "training.objective.protocol": {
+          "after": "complete_return_action_global_v3",
+          "before": "complete_return_action_global_v2"
+        },
+        "training.performance.compile_collection": {
+          "after": false,
+          "before": null
+        },
+        "training.performance.compile_fitting": {
+          "after": false,
+          "before": null
+        },
+        "training.performance.compile_kernels": {
+          "after": null,
+          "before": false
+        },
+        "training.performance.fit_species_microbatch": {
+          "after": 128,
+          "before": 64
+        },
+        "training.performance.fit_tile_microbatch": {
+          "after": 128,
+          "before": 64
+        },
+        "training.performance.fit_token_budget": {
+          "after": 32768,
+          "before": 16384
+        },
+        "training.total_games": {
+          "after": 256,
+          "before": 10000
+        },
+        "training.until_stage_complete": {
+          "after": false,
+          "before": true
+        },
+        "visualization.demos": {
+          "after": false,
+          "before": true
+        },
+        "visualization.enabled": {
+          "after": false,
+          "before": true
+        },
+        "visualization.live_enabled": {
+          "after": false,
+          "before": true
+        }
+      },
+      "source_learner_seed": 101,
+      "source_structural_signature": {
+        "action_distribution": "sequential_q_unmasked_penalty_v1",
+        "actions": "kind_plant_tile_v1",
+        "board": {
+          "cols": 9,
+          "mower_states": [
+            "ready",
+            "moving",
+            "spent"
+          ],
+          "plant_states": [
+            "ready",
+            "arming",
+            "armed",
+            "fusing",
+            "digesting",
+            "exploding",
+            "detonating",
+            "rising",
+            "biting",
+            "biting_got_one",
+            "recovering"
+          ],
+          "plants": [
+            "sunflower",
+            "peashooter",
+            "wall_nut",
+            "cherry_bomb",
+            "potato_mine",
+            "snow_pea",
+            "chomper",
+            "repeater"
+          ],
+          "rows": 5,
+          "zombie_states": [
+            "walking",
+            "carrying_pole",
+            "vaulting",
+            "biting",
+            "dead"
+          ],
+          "zombies": [
+            "basic",
+            "flag",
+            "conehead",
+            "buckethead",
+            "pole_vaulting"
+          ]
+        },
+        "encoding": {
+          "count_scale": 75,
+          "max_entities": 256,
+          "version": "entity_v1",
+          "wave_scale": 15
+        },
+        "engine": [
+          "1424b4d802e783a36772091c49d96aa7c6036d7a",
+          "1.4.0",
+          "1.7.0"
+        ],
+        "method": "complete_return_action_global_v2",
+        "policy": {
+          "kind": "two_stage_transformer_q_v1",
+          "species_feedforward": 512,
+          "species_heads": 8,
+          "species_layers": 4,
+          "species_width": 128,
+          "tile_feedforward": 768,
+          "tile_heads": 12,
+          "tile_layers": 6,
+          "tile_width": 192
+        },
+        "return": [
+          1.0,
+          "simulation_ticks"
+        ],
+        "timing": {
+          "action_timing": "per_tick",
+          "cutoff_seconds": 1200,
+          "decision_ticks": 1
+        }
+      },
+      "steps": 2320769,
+      "type": "autonomous",
+      "updates": 0
+    },
+    "optimizer_commits": 4,
+    "phases": {
+      "begin": 0.7695106000001033,
+      "collect": 561.3353849000005,
+      "finalize_rewards": 0.049719999999979336,
+      "fit_pass_1": 115.44579440000052,
+      "fit_pass_2": 110.72506350000003,
+      "fit_pass_3": 121.12964949999969,
+      "fit_pass_4": 110.01572620000024,
+      "next_begin": 1.747329699999682,
+      "next_collect": 0.031014000000141095,
+      "returns": 1.560097499999756,
+      "synchronize": 0.11324160000003758
+    },
+    "protocol": "pvz-rl/pipeline-benchmark-v1",
+    "representatives": 1783532,
+    "revision": "8235da03afe928d04b45b043471a779a5800e871",
+    "seed": 101,
+    "startup_seconds": 3.2257988000001205,
+    "stored_rows": 2290461,
+    "tail": {
+      "seconds": 130.4935517999911,
+      "steps": 9288
+    },
+    "torch": "2.8.0+cu128",
+    "torch_peak_mib": 6835.7587890625,
+    "total_mib": 8187.5,
+    "transport": {
+      "preparation_seconds": 6.7138430999702905,
+      "transfer_stream_seconds": 0.7988779201507568,
+      "transfer_wait_seconds": 0.02644930001861212
+    },
+    "hardware_summary": {
+      "starting": {
+        "samples": 3,
+        "gpu_percent": {
+          "median": 0.0,
+          "maximum": 0.0
+        },
+        "gpu_memory_mib": {
+          "median": 113.0,
+          "maximum": 389.0
+        },
+        "process_cpu_percent": {
+          "median": 100.0,
+          "maximum": 104.7
+        },
+        "process_ram_mib": {
+          "median": 697.5078125,
+          "maximum": 765.01171875
+        }
+      },
+      "collect": {
+        "samples": 556,
+        "gpu_percent": {
+          "median": 38.0,
+          "maximum": 47.0
+        },
+        "gpu_memory_mib": {
+          "median": 551.0,
+          "maximum": 551.0
+        },
+        "process_cpu_percent": {
+          "median": 98.4,
+          "maximum": 103.1
+        },
+        "process_ram_mib": {
+          "median": 3472.85546875,
+          "maximum": 4284.95703125
+        }
+      },
+      "returns": {
+        "samples": 2,
+        "gpu_percent": {
+          "median": 0.0,
+          "maximum": 0.0
+        },
+        "gpu_memory_mib": {
+          "median": 551.0,
+          "maximum": 551.0
+        },
+        "process_cpu_percent": {
+          "median": 100.0,
+          "maximum": 100.0
+        },
+        "process_ram_mib": {
+          "median": 4287.83203125,
+          "maximum": 4287.9296875
+        }
+      },
+      "fit_pass_1": {
+        "samples": 114,
+        "gpu_percent": {
+          "median": 45.0,
+          "maximum": 85.0
+        },
+        "gpu_memory_mib": {
+          "median": 3535.0,
+          "maximum": 7849.0
+        },
+        "process_cpu_percent": {
+          "median": 100.0,
+          "maximum": 109.3
+        },
+        "process_ram_mib": {
+          "median": 6192.322265625,
+          "maximum": 6221.16015625
+        }
+      },
+      "fit_pass_2": {
+        "samples": 110,
+        "gpu_percent": {
+          "median": 45.0,
+          "maximum": 86.0
+        },
+        "gpu_memory_mib": {
+          "median": 7899.0,
+          "maximum": 7899.0
+        },
+        "process_cpu_percent": {
+          "median": 100.1,
+          "maximum": 106.2
+        },
+        "process_ram_mib": {
+          "median": 6371.09765625,
+          "maximum": 6377.015625
+        }
+      },
+      "fit_pass_3": {
+        "samples": 120,
+        "gpu_percent": {
+          "median": 41.0,
+          "maximum": 69.0
+        },
+        "gpu_memory_mib": {
+          "median": 7921.0,
+          "maximum": 7921.0
+        },
+        "process_cpu_percent": {
+          "median": 96.9,
+          "maximum": 106.1
+        },
+        "process_ram_mib": {
+          "median": 6377.375,
+          "maximum": 6380.171875
+        }
+      },
+      "fit_pass_4": {
+        "samples": 109,
+        "gpu_percent": {
+          "median": 46.0,
+          "maximum": 86.0
+        },
+        "gpu_memory_mib": {
+          "median": 7923.0,
+          "maximum": 7923.0
+        },
+        "process_cpu_percent": {
+          "median": 100.1,
+          "maximum": 107.8
+        },
+        "process_ram_mib": {
+          "median": 6398.875,
+          "maximum": 6401.92578125
+        }
+      },
+      "next_begin": {
+        "samples": 2,
+        "gpu_percent": {
+          "median": 0.0,
+          "maximum": 0.0
+        },
+        "gpu_memory_mib": {
+          "median": 549.0,
+          "maximum": 549.0
+        },
+        "process_cpu_percent": {
+          "median": 96.94999999999999,
+          "maximum": 100.1
+        },
+        "process_ram_mib": {
+          "median": 2437.16015625,
+          "maximum": 2488.07421875
+        }
+      }
+    },
+    "sampled_gpu_peak_mib": 7923.0,
+    "sampled_rss_peak_mib": 6401.92578125
+  },
+  "controls": [
+    {
+      "name": "pipeline-controls",
+      "config": {
+        "conditions": {
+          "masked": {
+            "curriculum": true,
+            "hybrid": false,
+            "masked": true,
+            "shaped": true
+          }
+        },
+        "curriculum": {
+          "boundaries": [
+            0.1,
+            0.4
+          ],
+          "consecutive_passes": 1,
+          "easy_weights": [
+            1.0,
+            0.0,
+            0.0
+          ],
+          "final_weights": [
+            0.2,
+            0.4,
+            0.4
+          ],
+          "intermediate_weights": [
+            0.5,
+            0.5,
+            0.0
+          ],
+          "minimum_stage_games": 100,
+          "minimum_stage_steps": 16384,
+          "mode": "teaching",
+          "probe_cases": 100,
+          "probe_interval": 16384,
+          "probe_interval_games": 2000,
+          "residency": "episode_start_stage",
+          "stages": {
+            "easy": {
+              "requirements": {
+                "easy": 100
+              },
+              "tasks": [
+                "easy"
+              ],
+              "weights": [
+                1.0
+              ]
+            },
+            "shared": {
+              "requirements": {
+                "easy": 100,
+                "hard": 100,
+                "standard": 100
+              },
+              "tasks": [
+                "easy",
+                "standard",
+                "hard"
+              ],
+              "weights": [
+                0.2,
+                0.4,
+                0.4
+              ]
+            },
+            "standard": {
+              "requirements": {
+                "easy": 100,
+                "standard": 100
+              },
+              "tasks": [
+                "easy",
+                "standard"
+              ],
+              "weights": [
+                0.5,
+                0.5
+              ]
+            }
+          }
+        },
+        "diagnostics": {
+          "early_dig_seconds": 5
+        },
+        "encoding": {
+          "count_scale": 75,
+          "max_entities": 256,
+          "version": "entity_v1",
+          "wave_scale": 15
+        },
+        "engine_commit": "1424b4d802e783a36772091c49d96aa7c6036d7a",
+        "engine_package_version": "1.7.0",
+        "engine_version": "1.4.0",
+        "environment": {
+          "action_timing": "per_tick",
+          "cols": 9,
+          "cutoff_seconds": 1200,
+          "decision_ticks": 1,
+          "mower_states": [
+            "ready",
+            "moving",
+            "spent"
+          ],
+          "plant_states": [
+            "ready",
+            "arming",
+            "armed",
+            "fusing",
+            "digesting",
+            "exploding",
+            "detonating",
+            "rising",
+            "biting",
+            "biting_got_one",
+            "recovering"
+          ],
+          "plants": [
+            "sunflower",
+            "peashooter",
+            "wall_nut",
+            "cherry_bomb",
+            "potato_mine",
+            "snow_pea",
+            "chomper",
+            "repeater"
+          ],
+          "rows": 5,
+          "zombie_states": [
+            "walking",
+            "carrying_pole",
+            "vaulting",
+            "biting",
+            "dead"
+          ],
+          "zombies": [
+            "basic",
+            "flag",
+            "conehead",
+            "buckethead",
+            "pole_vaulting"
+          ]
+        },
+        "evaluation": {
+          "bootstrap_replicates": 2000,
+          "bootstrap_seed": 1739,
+          "levels": [
+            "easy",
+            "standard",
+            "hard"
+          ],
+          "ood_families": [
+            "redistributed",
+            "faster",
+            "concentrated"
+          ],
+          "ood_levels": [
+            "standard",
+            "hard"
+          ],
+          "replays_per_outcome": 10,
+          "targets": [
+            0.95,
+            0.9,
+            0.75
+          ]
+        },
+        "logging": {
+          "hardware_sample_seconds": 1.0,
+          "progress_seconds": 15,
+          "rolling_window": 100,
+          "terminal_mode": "compact",
+          "terminal_progress_seconds": 60
+        },
+        "policy": {
+          "action_distribution": "sequential_q_unmasked_tiles_v2",
+          "attention_query_chunk": 64,
+          "encoder_microbatch": 128,
+          "encoder_token_budget": 65536,
+          "kind": "two_stage_transformer_q_v1",
+          "species_feedforward": 512,
+          "species_heads": 8,
+          "species_layers": 4,
+          "species_width": 128,
+          "tile_feedforward": 768,
+          "tile_heads": 12,
+          "tile_layers": 6,
+          "tile_width": 192
+        },
+        "profile": "complete-game",
+        "reward": {
+          "action": {
+            "block_value_by_plant": {
+              "cherry_bomb": 0.0333333333,
+              "chomper": 0.0333333333,
+              "peashooter": 0.0333333333,
+              "potato_mine": 0.0333333333,
+              "repeater": 0.0333333333,
+              "snow_pea": 0.0333333333,
+              "sunflower": 0.0333333333,
+              "wall_nut": 0.025
+            },
+            "sun_credit_multiplier": 1.0
+          },
+          "basic_zombie_value": 30.0,
+          "early_sun_extra_multiplier": 2.0,
+          "early_sun_spawn_fraction": [
+            1,
+            3
+          ],
+          "home_entry_penalties": [
+            0.005,
+            0.015
+          ],
+          "loss_penalty": 1.0,
+          "mower_value": 500.0,
+          "progress_weight": 0.01,
+          "value_scale": 900.0,
+          "version": "action_global_value_v3",
+          "win_reward": 1.0,
+          "win_time_weight": 0.5
+        },
+        "runtime": {
+          "cache_legal_actions": true,
+          "refill_evaluation": true
+        },
+        "schema_version": 1,
+        "simulation": {
+          "backend": "cuda"
+        },
+        "splits": {
+          "curriculum": [
+            100050,
+            100149
+          ],
+          "ood": [
+            300000,
+            300099
+          ],
+          "test": [
+            200000,
+            200299
+          ],
+          "train": [
+            1000,
+            99999
+          ],
+          "validation": [
+            100000,
+            100049
+          ]
+        },
+        "training": {
+          "annotation": {
+            "batch_size": 256,
+            "learner_seed": 101,
+            "learning_rate": 0.0003,
+            "margin": 1.0,
+            "passes": 0,
+            "sampling_family": "preset",
+            "sampling_max_attempts": 100,
+            "sampling_max_plants": 8,
+            "sampling_max_steps": 20000,
+            "sampling_plant_interval_steps": [
+              500,
+              1500
+            ],
+            "sampling_seed": "random"
+          },
+          "batch_size": 1024,
+          "budget_unit": "games",
+          "demo": {
+            "learner_seed": 101,
+            "learning_rate": 0.0003,
+            "passes": 40,
+            "time_budget_minutes": 30
+          },
+          "device": "cuda",
+          "discount_clock": "simulation_ticks",
+          "eval_interval": 250000,
+          "eval_interval_games": 2000,
+          "exploration": {
+            "decay_games": 10000,
+            "epsilon_floor": 0.01,
+            "epsilon_start": 0.5,
+            "objective": "committed_plant_tile_epsilon_v1",
+            "plant_decay_games": 10000,
+            "plant_epsilon_floor": 0.01,
+            "plant_epsilon_start": 0.1
+          },
+          "finalization_minutes": 15,
+          "gamma": 1.0,
+          "learner_seeds": [
+            101,
+            102
+          ],
+          "learning_rate": 0.0003,
+          "max_grad_norm": 5,
+          "max_minutes": 120,
+          "method": "complete_return_action_global_v3",
+          "n_envs": 128,
+          "n_epochs": 4,
+          "objective": {
+            "accepted_outcome_share": 0.5,
+            "demo_rank_loss_weight": 0.1,
+            "demo_rank_margin": 0.05,
+            "dense_multiplier": 10.0,
+            "ema_decay": 0.95,
+            "invalid_action_target": -1.0,
+            "invalid_fit_group_size": 100,
+            "protocol": "complete_return_action_global_v3",
+            "species_consistency_huber_delta": 1.0,
+            "species_consistency_weight": 1.0
+          },
+          "performance": {
+            "collection_graph_cache_entries": 8,
+            "collection_vram_headroom_mib": 512,
+            "compile_collection": false,
+            "compile_fitting": false,
+            "fit_batch_groups": 2,
+            "fit_encoder_microbatch": 192,
+            "fit_entity_buckets": [
+              8,
+              16,
+              32,
+              64,
+              128,
+              256
+            ],
+            "fit_precision": "bf16_master",
+            "fit_species_microbatch": 64,
+            "fit_tile_microbatch": 64,
+            "fit_token_budget": 16384,
+            "prefetch": true,
+            "telemetry": true
+          },
+          "storage": {
+            "block_rows": 32768,
+            "ram_gib": 6
+          },
+          "torch_threads": 2,
+          "total_games": 10000,
+          "total_steps": 3000000,
+          "until_stage_complete": false,
+          "validation_schedule": "stage_success"
+        },
+        "visualization": {
+          "crf": 23,
+          "demos": false,
+          "enabled": false,
+          "ffmpeg": "",
+          "final_hold_seconds": 2,
+          "live_enabled": false,
+          "live_fps": 5,
+          "live_history_ram_mib": 16,
+          "live_window_size": [
+            1600,
+            1050
+          ],
+          "video_fps": 25,
+          "video_size": [
+            1280,
+            820
+          ],
+          "videos": false,
+          "viewer": "auto"
+        }
+      },
+      "records": [
+        {
+          "activity": "collect",
+          "case": "crowded",
+          "cupy_reserved_mib": 254.8642578125,
+          "host_rss_mib": 1536.12109375,
+          "live_games": 128,
+          "repeat": null,
+          "seconds": 0.6408142999998745,
+          "torch_peak_allocated_mib": 180.02685546875,
+          "trajectory_bytes": 23525376,
+          "transitions": 2048,
+          "transitions_per_second": 3195.9336737653966
+        },
+        {
+          "activity": "collect",
+          "case": "crowded",
+          "cupy_reserved_mib": 254.8642578125,
+          "host_rss_mib": 1551.5625,
+          "live_games": 128,
+          "repeat": 0,
+          "seconds": 0.3690843999993376,
+          "torch_peak_allocated_mib": 180.02685546875,
+          "trajectory_bytes": 23525376,
+          "transitions": 2048,
+          "transitions_per_second": 5548.866329770848
+        },
+        {
+          "activity": "collect",
+          "case": "crowded",
+          "cupy_reserved_mib": 254.8642578125,
+          "host_rss_mib": 1554.546875,
+          "live_games": 128,
+          "repeat": 1,
+          "seconds": 0.32308760000069014,
+          "torch_peak_allocated_mib": 180.02685546875,
+          "trajectory_bytes": 23525376,
+          "transitions": 2048,
+          "transitions_per_second": 6338.838135526171
+        },
+        {
+          "activity": "collect",
+          "case": "crowded",
+          "cupy_reserved_mib": 254.8642578125,
+          "host_rss_mib": 1557.21875,
+          "live_games": 128,
+          "repeat": 2,
+          "seconds": 0.3180525999996462,
+          "torch_peak_allocated_mib": 180.02685546875,
+          "trajectory_bytes": 23525376,
+          "transitions": 2048,
+          "transitions_per_second": 6439.186474194137
+        },
+        {
+          "case": "crowded",
+          "cycle_peak_cuda_allocated_mib": 9872.71630859375,
+          "fit_seconds": 31.042451500000425,
+          "last_pass_placement_gap": null,
+          "last_pass_selected_action_error": 0.07251644134521484,
+          "live_games": 128,
+          "optimizer_steps": 4,
+          "preparation_seconds": 0.0077172999999675085,
+          "repeat": null,
+          "completed_games": 128,
+          "all_timeout_losses": true
+        },
+        {
+          "activity": "collect",
+          "case": "accepted-action",
+          "cupy_reserved_mib": 507.962890625,
+          "host_rss_mib": 1946.21484375,
+          "live_games": 128,
+          "repeat": null,
+          "seconds": 0.3559711000007155,
+          "torch_peak_allocated_mib": 193.6337890625,
+          "trajectory_bytes": 4150900,
+          "transitions": 2048,
+          "transitions_per_second": 5753.276038408409
+        },
+        {
+          "activity": "collect",
+          "case": "accepted-action",
+          "cupy_reserved_mib": 507.962890625,
+          "host_rss_mib": 1951.1796875,
+          "live_games": 128,
+          "repeat": 0,
+          "seconds": 0.43676849999974365,
+          "torch_peak_allocated_mib": 193.6337890625,
+          "trajectory_bytes": 4150900,
+          "transitions": 2048,
+          "transitions_per_second": 4688.9828364481455
+        },
+        {
+          "activity": "collect",
+          "case": "accepted-action",
+          "cupy_reserved_mib": 507.962890625,
+          "host_rss_mib": 1951.4296875,
+          "live_games": 128,
+          "repeat": 1,
+          "seconds": 0.36699880000014673,
+          "torch_peak_allocated_mib": 193.6337890625,
+          "trajectory_bytes": 4150900,
+          "transitions": 2048,
+          "transitions_per_second": 5580.399717926002
+        },
+        {
+          "activity": "collect",
+          "case": "accepted-action",
+          "cupy_reserved_mib": 506.0263671875,
+          "host_rss_mib": 1952.31640625,
+          "live_games": 128,
+          "repeat": 2,
+          "seconds": 0.37718580000000657,
+          "torch_peak_allocated_mib": 145.505859375,
+          "trajectory_bytes": 4150900,
+          "transitions": 2048,
+          "transitions_per_second": 5429.68478664882
+        }
+      ],
+      "forced_storage_budget_mib": null,
+      "hardware_summary": {
+        "starting": {
+          "samples": 3,
+          "gpu_percent": {
+            "median": 0.0,
+            "maximum": 0.0
+          },
+          "gpu_memory_mib": {
+            "median": 409.0,
+            "maximum": 431.0
+          },
+          "process_cpu_percent": {
+            "median": 80.0,
+            "maximum": 101.6
+          },
+          "process_ram_mib": {
+            "median": 755.5546875,
+            "maximum": 829.39453125
+          }
+        },
+        "crowded": {
+          "samples": 51,
+          "gpu_percent": {
+            "median": 99.0,
+            "maximum": 100.0
+          },
+          "gpu_memory_mib": {
+            "median": 7937.0,
+            "maximum": 7941.0
+          },
+          "process_cpu_percent": {
+            "median": 92.2,
+            "maximum": 101.6
+          },
+          "process_ram_mib": {
+            "median": 4219.71875,
+            "maximum": 4474.796875
+          }
+        },
+        "accepted-action": {
+          "samples": 9,
+          "gpu_percent": {
+            "median": 21.0,
+            "maximum": 53.0
+          },
+          "gpu_memory_mib": {
+            "median": 809.0,
+            "maximum": 915.0
+          },
+          "process_cpu_percent": {
+            "median": 95.4,
+            "maximum": 100.0
+          },
+          "process_ram_mib": {
+            "median": 1947.5,
+            "maximum": 2131.69140625
+          }
+        }
+      },
+      "incomplete": true
+    },
+    {
+      "name": "pipeline-controls-terminal",
+      "config": {
+        "conditions": {
+          "masked": {
+            "curriculum": true,
+            "hybrid": false,
+            "masked": true,
+            "shaped": true
+          }
+        },
+        "curriculum": {
+          "boundaries": [
+            0.1,
+            0.4
+          ],
+          "consecutive_passes": 1,
+          "easy_weights": [
+            1.0,
+            0.0,
+            0.0
+          ],
+          "final_weights": [
+            0.2,
+            0.4,
+            0.4
+          ],
+          "intermediate_weights": [
+            0.5,
+            0.5,
+            0.0
+          ],
+          "minimum_stage_games": 100,
+          "minimum_stage_steps": 16384,
+          "mode": "teaching",
+          "probe_cases": 100,
+          "probe_interval": 16384,
+          "probe_interval_games": 2000,
+          "residency": "episode_start_stage",
+          "stages": {
+            "easy": {
+              "requirements": {
+                "easy": 100
+              },
+              "tasks": [
+                "easy"
+              ],
+              "weights": [
+                1.0
+              ]
+            },
+            "shared": {
+              "requirements": {
+                "easy": 100,
+                "hard": 100,
+                "standard": 100
+              },
+              "tasks": [
+                "easy",
+                "standard",
+                "hard"
+              ],
+              "weights": [
+                0.2,
+                0.4,
+                0.4
+              ]
+            },
+            "standard": {
+              "requirements": {
+                "easy": 100,
+                "standard": 100
+              },
+              "tasks": [
+                "easy",
+                "standard"
+              ],
+              "weights": [
+                0.5,
+                0.5
+              ]
+            }
+          }
+        },
+        "diagnostics": {
+          "early_dig_seconds": 5
+        },
+        "encoding": {
+          "count_scale": 75,
+          "max_entities": 256,
+          "version": "entity_v1",
+          "wave_scale": 15
+        },
+        "engine_commit": "1424b4d802e783a36772091c49d96aa7c6036d7a",
+        "engine_package_version": "1.7.0",
+        "engine_version": "1.4.0",
+        "environment": {
+          "action_timing": "per_tick",
+          "cols": 9,
+          "cutoff_seconds": 1200,
+          "decision_ticks": 1,
+          "mower_states": [
+            "ready",
+            "moving",
+            "spent"
+          ],
+          "plant_states": [
+            "ready",
+            "arming",
+            "armed",
+            "fusing",
+            "digesting",
+            "exploding",
+            "detonating",
+            "rising",
+            "biting",
+            "biting_got_one",
+            "recovering"
+          ],
+          "plants": [
+            "sunflower",
+            "peashooter",
+            "wall_nut",
+            "cherry_bomb",
+            "potato_mine",
+            "snow_pea",
+            "chomper",
+            "repeater"
+          ],
+          "rows": 5,
+          "zombie_states": [
+            "walking",
+            "carrying_pole",
+            "vaulting",
+            "biting",
+            "dead"
+          ],
+          "zombies": [
+            "basic",
+            "flag",
+            "conehead",
+            "buckethead",
+            "pole_vaulting"
+          ]
+        },
+        "evaluation": {
+          "bootstrap_replicates": 2000,
+          "bootstrap_seed": 1739,
+          "levels": [
+            "easy",
+            "standard",
+            "hard"
+          ],
+          "ood_families": [
+            "redistributed",
+            "faster",
+            "concentrated"
+          ],
+          "ood_levels": [
+            "standard",
+            "hard"
+          ],
+          "replays_per_outcome": 10,
+          "targets": [
+            0.95,
+            0.9,
+            0.75
+          ]
+        },
+        "logging": {
+          "hardware_sample_seconds": 1.0,
+          "progress_seconds": 15,
+          "rolling_window": 100,
+          "terminal_mode": "compact",
+          "terminal_progress_seconds": 60
+        },
+        "policy": {
+          "action_distribution": "sequential_q_unmasked_tiles_v2",
+          "attention_query_chunk": 64,
+          "encoder_microbatch": 128,
+          "encoder_token_budget": 65536,
+          "kind": "two_stage_transformer_q_v1",
+          "species_feedforward": 512,
+          "species_heads": 8,
+          "species_layers": 4,
+          "species_width": 128,
+          "tile_feedforward": 768,
+          "tile_heads": 12,
+          "tile_layers": 6,
+          "tile_width": 192
+        },
+        "profile": "complete-game",
+        "reward": {
+          "action": {
+            "block_value_by_plant": {
+              "cherry_bomb": 0.0333333333,
+              "chomper": 0.0333333333,
+              "peashooter": 0.0333333333,
+              "potato_mine": 0.0333333333,
+              "repeater": 0.0333333333,
+              "snow_pea": 0.0333333333,
+              "sunflower": 0.0333333333,
+              "wall_nut": 0.025
+            },
+            "sun_credit_multiplier": 1.0
+          },
+          "basic_zombie_value": 30.0,
+          "early_sun_extra_multiplier": 2.0,
+          "early_sun_spawn_fraction": [
+            1,
+            3
+          ],
+          "home_entry_penalties": [
+            0.005,
+            0.015
+          ],
+          "loss_penalty": 1.0,
+          "mower_value": 500.0,
+          "progress_weight": 0.01,
+          "value_scale": 900.0,
+          "version": "action_global_value_v3",
+          "win_reward": 1.0,
+          "win_time_weight": 0.5
+        },
+        "runtime": {
+          "cache_legal_actions": true,
+          "refill_evaluation": true
+        },
+        "schema_version": 1,
+        "simulation": {
+          "backend": "cuda"
+        },
+        "splits": {
+          "curriculum": [
+            100050,
+            100149
+          ],
+          "ood": [
+            300000,
+            300099
+          ],
+          "test": [
+            200000,
+            200299
+          ],
+          "train": [
+            1000,
+            99999
+          ],
+          "validation": [
+            100000,
+            100049
+          ]
+        },
+        "training": {
+          "annotation": {
+            "batch_size": 256,
+            "learner_seed": 101,
+            "learning_rate": 0.0003,
+            "margin": 1.0,
+            "passes": 0,
+            "sampling_family": "preset",
+            "sampling_max_attempts": 100,
+            "sampling_max_plants": 8,
+            "sampling_max_steps": 20000,
+            "sampling_plant_interval_steps": [
+              500,
+              1500
+            ],
+            "sampling_seed": "random"
+          },
+          "batch_size": 1024,
+          "budget_unit": "games",
+          "demo": {
+            "learner_seed": 101,
+            "learning_rate": 0.0003,
+            "passes": 40,
+            "time_budget_minutes": 30
+          },
+          "device": "cuda",
+          "discount_clock": "simulation_ticks",
+          "eval_interval": 250000,
+          "eval_interval_games": 2000,
+          "exploration": {
+            "decay_games": 10000,
+            "epsilon_floor": 0.01,
+            "epsilon_start": 0.5,
+            "objective": "committed_plant_tile_epsilon_v1",
+            "plant_decay_games": 10000,
+            "plant_epsilon_floor": 0.01,
+            "plant_epsilon_start": 0.1
+          },
+          "finalization_minutes": 15,
+          "gamma": 1.0,
+          "learner_seeds": [
+            101,
+            102
+          ],
+          "learning_rate": 0.0003,
+          "max_grad_norm": 5,
+          "max_minutes": 120,
+          "method": "complete_return_action_global_v3",
+          "n_envs": 128,
+          "n_epochs": 4,
+          "objective": {
+            "accepted_outcome_share": 0.5,
+            "demo_rank_loss_weight": 0.1,
+            "demo_rank_margin": 0.05,
+            "dense_multiplier": 10.0,
+            "ema_decay": 0.95,
+            "invalid_action_target": -1.0,
+            "invalid_fit_group_size": 100,
+            "protocol": "complete_return_action_global_v3",
+            "species_consistency_huber_delta": 1.0,
+            "species_consistency_weight": 1.0
+          },
+          "performance": {
+            "collection_graph_cache_entries": 8,
+            "collection_vram_headroom_mib": 512,
+            "compile_collection": false,
+            "compile_fitting": false,
+            "fit_batch_groups": 2,
+            "fit_encoder_microbatch": 192,
+            "fit_entity_buckets": [
+              8,
+              16,
+              32,
+              64,
+              128,
+              256
+            ],
+            "fit_precision": "bf16_master",
+            "fit_species_microbatch": 64,
+            "fit_tile_microbatch": 64,
+            "fit_token_budget": 16384,
+            "prefetch": true,
+            "telemetry": true
+          },
+          "storage": {
+            "block_rows": 32768,
+            "ram_gib": 6
+          },
+          "torch_threads": 2,
+          "total_games": 10000,
+          "total_steps": 3000000,
+          "until_stage_complete": false,
+          "validation_schedule": "stage_success"
+        },
+        "visualization": {
+          "crf": 23,
+          "demos": false,
+          "enabled": false,
+          "ffmpeg": "",
+          "final_hold_seconds": 2,
+          "live_enabled": false,
+          "live_fps": 5,
+          "live_history_ram_mib": 16,
+          "live_window_size": [
+            1600,
+            1050
+          ],
+          "video_fps": 25,
+          "video_size": [
+            1280,
+            820
+          ],
+          "videos": false,
+          "viewer": "auto"
+        }
+      },
+      "records": [
+        {
+          "activity": "collect",
+          "case": "accepted-action",
+          "cupy_reserved_mib": 254.8642578125,
+          "host_rss_mib": 1498.7265625,
+          "live_games": 128,
+          "repeat": null,
+          "seconds": 0.5733645000000251,
+          "torch_peak_allocated_mib": 137.865234375,
+          "trajectory_bytes": 4150900,
+          "transitions": 2048,
+          "transitions_per_second": 3571.8988531726504
+        },
+        {
+          "activity": "collect",
+          "case": "accepted-action",
+          "cupy_reserved_mib": 254.8642578125,
+          "host_rss_mib": 1511.0,
+          "live_games": 128,
+          "repeat": 0,
+          "seconds": 0.298749499999758,
+          "torch_peak_allocated_mib": 138.255859375,
+          "trajectory_bytes": 4150900,
+          "transitions": 2048,
+          "transitions_per_second": 6855.241598736263
+        },
+        {
+          "activity": "collect",
+          "case": "accepted-action",
+          "cupy_reserved_mib": 254.8642578125,
+          "host_rss_mib": 1510.79296875,
+          "live_games": 128,
+          "repeat": 1,
+          "seconds": 0.2854582999998456,
+          "torch_peak_allocated_mib": 138.255859375,
+          "trajectory_bytes": 4150900,
+          "transitions": 2048,
+          "transitions_per_second": 7174.427928706601
+        },
+        {
+          "activity": "collect",
+          "case": "accepted-action",
+          "cupy_reserved_mib": 254.8642578125,
+          "host_rss_mib": 1512.109375,
+          "live_games": 128,
+          "repeat": 2,
+          "seconds": 0.2931332999996812,
+          "torch_peak_allocated_mib": 138.255859375,
+          "trajectory_bytes": 4150900,
+          "transitions": 2048,
+          "transitions_per_second": 6986.582554770227
+        },
+        {
+          "case": "accepted-action",
+          "cycle_peak_cuda_allocated_mib": 8242.5703125,
+          "fit_seconds": 20.855377700000645,
+          "last_pass_placement_gap": 0.04647421423410405,
+          "last_pass_selected_action_error": 0.06304482265395406,
+          "live_games": 128,
+          "optimizer_steps": 4,
+          "preparation_seconds": 0.008220700000492798,
+          "repeat": null,
+          "completed_games": 128,
+          "all_timeout_losses": true
+        },
+        {
+          "activity": "collect",
+          "case": "rejection-heavy",
+          "cupy_reserved_mib": 507.962890625,
+          "host_rss_mib": 2039.609375,
+          "live_games": 128,
+          "repeat": null,
+          "seconds": 0.17138729999987845,
+          "torch_peak_allocated_mib": 146.15771484375,
+          "trajectory_bytes": 907264,
+          "transitions": 2048,
+          "transitions_per_second": 11949.543519277406
+        },
+        {
+          "activity": "collect",
+          "case": "rejection-heavy",
+          "cupy_reserved_mib": 507.962890625,
+          "host_rss_mib": 1972.2109375,
+          "live_games": 128,
+          "repeat": 0,
+          "seconds": 0.18012499999986176,
+          "torch_peak_allocated_mib": 146.15771484375,
+          "trajectory_bytes": 907264,
+          "transitions": 2048,
+          "transitions_per_second": 11369.882026379302
+        },
+        {
+          "activity": "collect",
+          "case": "rejection-heavy",
+          "cupy_reserved_mib": 507.962890625,
+          "host_rss_mib": 2036.38671875,
+          "live_games": 128,
+          "repeat": 1,
+          "seconds": 0.18022349999955622,
+          "torch_peak_allocated_mib": 146.15771484375,
+          "trajectory_bytes": 907264,
+          "transitions": 2048,
+          "transitions_per_second": 11363.667890175493
+        },
+        {
+          "activity": "collect",
+          "case": "rejection-heavy",
+          "cupy_reserved_mib": 507.962890625,
+          "host_rss_mib": 2024.44140625,
+          "live_games": 128,
+          "repeat": 2,
+          "seconds": 0.17150929999934306,
+          "torch_peak_allocated_mib": 146.15771484375,
+          "trajectory_bytes": 907264,
+          "transitions": 2048,
+          "transitions_per_second": 11941.043430343687
+        },
+        {
+          "activity": "collect",
+          "case": "accepted-action",
+          "cupy_reserved_mib": 760.8837890625,
+          "host_rss_mib": 2030.9453125,
+          "live_games": 4,
+          "repeat": null,
+          "seconds": 0.2421918000000005,
+          "torch_peak_allocated_mib": 173.0615234375,
+          "trajectory_bytes": 130828,
+          "transitions": 64,
+          "transitions_per_second": 264.25337274011696
+        },
+        {
+          "activity": "collect",
+          "case": "accepted-action",
+          "cupy_reserved_mib": 760.8837890625,
+          "host_rss_mib": 2044.69921875,
+          "live_games": 4,
+          "repeat": 0,
+          "seconds": 0.22754779999922903,
+          "torch_peak_allocated_mib": 173.0615234375,
+          "trajectory_bytes": 130828,
+          "transitions": 64,
+          "transitions_per_second": 281.2595858989489
+        },
+        {
+          "activity": "collect",
+          "case": "accepted-action",
+          "cupy_reserved_mib": 760.8837890625,
+          "host_rss_mib": 2044.6953125,
+          "live_games": 4,
+          "repeat": 1,
+          "seconds": 0.23417950000020937,
+          "torch_peak_allocated_mib": 173.0615234375,
+          "trajectory_bytes": 130828,
+          "transitions": 64,
+          "transitions_per_second": 273.29463082781706
+        },
+        {
+          "activity": "collect",
+          "case": "accepted-action",
+          "cupy_reserved_mib": 760.8837890625,
+          "host_rss_mib": 2046.65625,
+          "live_games": 4,
+          "repeat": 2,
+          "seconds": 0.23029159999987314,
+          "torch_peak_allocated_mib": 173.0615234375,
+          "trajectory_bytes": 130828,
+          "transitions": 64,
+          "transitions_per_second": 277.9085298813993
+        },
+        {
+          "activity": "collect",
+          "case": "rejection-heavy",
+          "cupy_reserved_mib": 1011.8681640625,
+          "host_rss_mib": 2046.5546875,
+          "live_games": 4,
+          "repeat": null,
+          "seconds": 0.15933599999971193,
+          "torch_peak_allocated_mib": 59.62939453125,
+          "trajectory_bytes": 28352,
+          "transitions": 64,
+          "transitions_per_second": 401.6669177092164
+        },
+        {
+          "activity": "collect",
+          "case": "rejection-heavy",
+          "cupy_reserved_mib": 258.73046875,
+          "host_rss_mib": 2035.1875,
+          "live_games": 4,
+          "repeat": 0,
+          "seconds": 0.15697870000076364,
+          "torch_peak_allocated_mib": 59.62939453125,
+          "trajectory_bytes": 28352,
+          "transitions": 64,
+          "transitions_per_second": 407.69862407886336
+        },
+        {
+          "activity": "collect",
+          "case": "rejection-heavy",
+          "cupy_reserved_mib": 258.73046875,
+          "host_rss_mib": 2035.19140625,
+          "live_games": 4,
+          "repeat": 1,
+          "seconds": 0.16801269999996293,
+          "torch_peak_allocated_mib": 59.62939453125,
+          "trajectory_bytes": 28352,
+          "transitions": 64,
+          "transitions_per_second": 380.9235849433651
+        },
+        {
+          "activity": "collect",
+          "case": "rejection-heavy",
+          "cupy_reserved_mib": 258.73046875,
+          "host_rss_mib": 2035.19140625,
+          "live_games": 4,
+          "repeat": 2,
+          "seconds": 0.16767979999985982,
+          "torch_peak_allocated_mib": 59.62939453125,
+          "trajectory_bytes": 28352,
+          "transitions": 64,
+          "transitions_per_second": 381.6798445612024
+        }
+      ],
+      "forced_storage_budget_mib": null,
+      "hardware_summary": {
+        "starting": {
+          "samples": 3,
+          "gpu_percent": {
+            "median": 0.0,
+            "maximum": 0.0
+          },
+          "gpu_memory_mib": {
+            "median": 409.0,
+            "maximum": 431.0
+          },
+          "process_cpu_percent": {
+            "median": 78.1,
+            "maximum": 98.4
+          },
+          "process_ram_mib": {
+            "median": 754.5078125,
+            "maximum": 823.84765625
+          }
+        },
+        "accepted-action": {
+          "samples": 44,
+          "gpu_percent": {
+            "median": 58.0,
+            "maximum": 100.0
+          },
+          "gpu_memory_mib": {
+            "median": 1129.0,
+            "maximum": 7939.0
+          },
+          "process_cpu_percent": {
+            "median": 96.95,
+            "maximum": 147.6
+          },
+          "process_ram_mib": {
+            "median": 2099.697265625,
+            "maximum": 3331.5234375
+          }
+        },
+        "rejection-heavy": {
+          "samples": 12,
+          "gpu_percent": {
+            "median": 1.0,
+            "maximum": 32.0
+          },
+          "gpu_memory_mib": {
+            "median": 676.0,
+            "maximum": 1105.0
+          },
+          "process_cpu_percent": {
+            "median": 100.0,
+            "maximum": 101.6
+          },
+          "process_ram_mib": {
+            "median": 2035.21875,
+            "maximum": 2086.93359375
+          }
+        }
+      },
+      "incomplete": false
+    },
+    {
+      "name": "pipeline-forced-spill",
+      "config": {
+        "conditions": {
+          "masked": {
+            "curriculum": true,
+            "hybrid": false,
+            "masked": true,
+            "shaped": true
+          }
+        },
+        "curriculum": {
+          "boundaries": [
+            0.1,
+            0.4
+          ],
+          "consecutive_passes": 1,
+          "easy_weights": [
+            1.0,
+            0.0,
+            0.0
+          ],
+          "final_weights": [
+            0.2,
+            0.4,
+            0.4
+          ],
+          "intermediate_weights": [
+            0.5,
+            0.5,
+            0.0
+          ],
+          "minimum_stage_games": 100,
+          "minimum_stage_steps": 16384,
+          "mode": "teaching",
+          "probe_cases": 100,
+          "probe_interval": 16384,
+          "probe_interval_games": 2000,
+          "residency": "episode_start_stage",
+          "stages": {
+            "easy": {
+              "requirements": {
+                "easy": 100
+              },
+              "tasks": [
+                "easy"
+              ],
+              "weights": [
+                1.0
+              ]
+            },
+            "shared": {
+              "requirements": {
+                "easy": 100,
+                "hard": 100,
+                "standard": 100
+              },
+              "tasks": [
+                "easy",
+                "standard",
+                "hard"
+              ],
+              "weights": [
+                0.2,
+                0.4,
+                0.4
+              ]
+            },
+            "standard": {
+              "requirements": {
+                "easy": 100,
+                "standard": 100
+              },
+              "tasks": [
+                "easy",
+                "standard"
+              ],
+              "weights": [
+                0.5,
+                0.5
+              ]
+            }
+          }
+        },
+        "diagnostics": {
+          "early_dig_seconds": 5
+        },
+        "encoding": {
+          "count_scale": 75,
+          "max_entities": 256,
+          "version": "entity_v1",
+          "wave_scale": 15
+        },
+        "engine_commit": "1424b4d802e783a36772091c49d96aa7c6036d7a",
+        "engine_package_version": "1.7.0",
+        "engine_version": "1.4.0",
+        "environment": {
+          "action_timing": "per_tick",
+          "cols": 9,
+          "cutoff_seconds": 1200,
+          "decision_ticks": 1,
+          "mower_states": [
+            "ready",
+            "moving",
+            "spent"
+          ],
+          "plant_states": [
+            "ready",
+            "arming",
+            "armed",
+            "fusing",
+            "digesting",
+            "exploding",
+            "detonating",
+            "rising",
+            "biting",
+            "biting_got_one",
+            "recovering"
+          ],
+          "plants": [
+            "sunflower",
+            "peashooter",
+            "wall_nut",
+            "cherry_bomb",
+            "potato_mine",
+            "snow_pea",
+            "chomper",
+            "repeater"
+          ],
+          "rows": 5,
+          "zombie_states": [
+            "walking",
+            "carrying_pole",
+            "vaulting",
+            "biting",
+            "dead"
+          ],
+          "zombies": [
+            "basic",
+            "flag",
+            "conehead",
+            "buckethead",
+            "pole_vaulting"
+          ]
+        },
+        "evaluation": {
+          "bootstrap_replicates": 2000,
+          "bootstrap_seed": 1739,
+          "levels": [
+            "easy",
+            "standard",
+            "hard"
+          ],
+          "ood_families": [
+            "redistributed",
+            "faster",
+            "concentrated"
+          ],
+          "ood_levels": [
+            "standard",
+            "hard"
+          ],
+          "replays_per_outcome": 10,
+          "targets": [
+            0.95,
+            0.9,
+            0.75
+          ]
+        },
+        "logging": {
+          "hardware_sample_seconds": 1.0,
+          "progress_seconds": 15,
+          "rolling_window": 100,
+          "terminal_mode": "compact",
+          "terminal_progress_seconds": 60
+        },
+        "policy": {
+          "action_distribution": "sequential_q_unmasked_tiles_v2",
+          "attention_query_chunk": 64,
+          "encoder_microbatch": 128,
+          "encoder_token_budget": 65536,
+          "kind": "two_stage_transformer_q_v1",
+          "species_feedforward": 512,
+          "species_heads": 8,
+          "species_layers": 4,
+          "species_width": 128,
+          "tile_feedforward": 768,
+          "tile_heads": 12,
+          "tile_layers": 6,
+          "tile_width": 192
+        },
+        "profile": "complete-game",
+        "reward": {
+          "action": {
+            "block_value_by_plant": {
+              "cherry_bomb": 0.0333333333,
+              "chomper": 0.0333333333,
+              "peashooter": 0.0333333333,
+              "potato_mine": 0.0333333333,
+              "repeater": 0.0333333333,
+              "snow_pea": 0.0333333333,
+              "sunflower": 0.0333333333,
+              "wall_nut": 0.025
+            },
+            "sun_credit_multiplier": 1.0
+          },
+          "basic_zombie_value": 30.0,
+          "early_sun_extra_multiplier": 2.0,
+          "early_sun_spawn_fraction": [
+            1,
+            3
+          ],
+          "home_entry_penalties": [
+            0.005,
+            0.015
+          ],
+          "loss_penalty": 1.0,
+          "mower_value": 500.0,
+          "progress_weight": 0.01,
+          "value_scale": 900.0,
+          "version": "action_global_value_v3",
+          "win_reward": 1.0,
+          "win_time_weight": 0.5
+        },
+        "runtime": {
+          "cache_legal_actions": true,
+          "refill_evaluation": true
+        },
+        "schema_version": 1,
+        "simulation": {
+          "backend": "cuda"
+        },
+        "splits": {
+          "curriculum": [
+            100050,
+            100149
+          ],
+          "ood": [
+            300000,
+            300099
+          ],
+          "test": [
+            200000,
+            200299
+          ],
+          "train": [
+            1000,
+            99999
+          ],
+          "validation": [
+            100000,
+            100049
+          ]
+        },
+        "training": {
+          "annotation": {
+            "batch_size": 256,
+            "learner_seed": 101,
+            "learning_rate": 0.0003,
+            "margin": 1.0,
+            "passes": 0,
+            "sampling_family": "preset",
+            "sampling_max_attempts": 100,
+            "sampling_max_plants": 8,
+            "sampling_max_steps": 20000,
+            "sampling_plant_interval_steps": [
+              500,
+              1500
+            ],
+            "sampling_seed": "random"
+          },
+          "batch_size": 1024,
+          "budget_unit": "games",
+          "demo": {
+            "learner_seed": 101,
+            "learning_rate": 0.0003,
+            "passes": 40,
+            "time_budget_minutes": 30
+          },
+          "device": "cuda",
+          "discount_clock": "simulation_ticks",
+          "eval_interval": 250000,
+          "eval_interval_games": 2000,
+          "exploration": {
+            "decay_games": 10000,
+            "epsilon_floor": 0.01,
+            "epsilon_start": 0.5,
+            "objective": "committed_plant_tile_epsilon_v1",
+            "plant_decay_games": 10000,
+            "plant_epsilon_floor": 0.01,
+            "plant_epsilon_start": 0.1
+          },
+          "finalization_minutes": 15,
+          "gamma": 1.0,
+          "learner_seeds": [
+            101,
+            102
+          ],
+          "learning_rate": 0.0003,
+          "max_grad_norm": 5,
+          "max_minutes": 120,
+          "method": "complete_return_action_global_v3",
+          "n_envs": 128,
+          "n_epochs": 4,
+          "objective": {
+            "accepted_outcome_share": 0.5,
+            "demo_rank_loss_weight": 0.1,
+            "demo_rank_margin": 0.05,
+            "dense_multiplier": 10.0,
+            "ema_decay": 0.95,
+            "invalid_action_target": -1.0,
+            "invalid_fit_group_size": 100,
+            "protocol": "complete_return_action_global_v3",
+            "species_consistency_huber_delta": 1.0,
+            "species_consistency_weight": 1.0
+          },
+          "performance": {
+            "collection_graph_cache_entries": 8,
+            "collection_vram_headroom_mib": 512,
+            "compile_collection": false,
+            "compile_fitting": false,
+            "fit_batch_groups": 2,
+            "fit_encoder_microbatch": 192,
+            "fit_entity_buckets": [
+              8,
+              16,
+              32,
+              64,
+              128,
+              256
+            ],
+            "fit_precision": "bf16_master",
+            "fit_species_microbatch": 64,
+            "fit_tile_microbatch": 64,
+            "fit_token_budget": 16384,
+            "prefetch": true,
+            "telemetry": true
+          },
+          "storage": {
+            "block_rows": 32768,
+            "ram_gib": 6
+          },
+          "torch_threads": 2,
+          "total_games": 10000,
+          "total_steps": 3000000,
+          "until_stage_complete": false,
+          "validation_schedule": "stage_success"
+        },
+        "visualization": {
+          "crf": 23,
+          "demos": false,
+          "enabled": false,
+          "ffmpeg": "",
+          "final_hold_seconds": 2,
+          "live_enabled": false,
+          "live_fps": 5,
+          "live_history_ram_mib": 16,
+          "live_window_size": [
+            1600,
+            1050
+          ],
+          "video_fps": 25,
+          "video_size": [
+            1280,
+            820
+          ],
+          "videos": false,
+          "viewer": "auto"
+        }
+      },
+      "records": [
+        {
+          "activity": "collect",
+          "case": "crowded",
+          "cupy_reserved_mib": 254.8642578125,
+          "host_rss_mib": 1526.78515625,
+          "live_games": 128,
+          "repeat": null,
+          "seconds": 0.5578513999998904,
+          "torch_peak_allocated_mib": 180.0263671875,
+          "trajectory_bytes": 11762688,
+          "transitions": 1024,
+          "transitions_per_second": 1835.614287246032
+        },
+        {
+          "activity": "collect",
+          "case": "crowded",
+          "cupy_reserved_mib": 254.8642578125,
+          "host_rss_mib": 1542.19140625,
+          "live_games": 128,
+          "repeat": 0,
+          "seconds": 0.2723838000001706,
+          "torch_peak_allocated_mib": 180.0263671875,
+          "trajectory_bytes": 11762688,
+          "transitions": 1024,
+          "transitions_per_second": 3759.401256606886
+        },
+        {
+          "activity": "collect",
+          "case": "crowded",
+          "cupy_reserved_mib": 254.8642578125,
+          "host_rss_mib": 1544.15625,
+          "live_games": 128,
+          "repeat": 1,
+          "seconds": 0.2635193000005529,
+          "torch_peak_allocated_mib": 180.0263671875,
+          "trajectory_bytes": 11762688,
+          "transitions": 1024,
+          "transitions_per_second": 3885.863388366057
+        },
+        {
+          "activity": "collect",
+          "case": "crowded",
+          "cupy_reserved_mib": 254.8642578125,
+          "host_rss_mib": 1545.4765625,
+          "live_games": 128,
+          "repeat": 2,
+          "seconds": 0.23915469999974448,
+          "torch_peak_allocated_mib": 180.0263671875,
+          "trajectory_bytes": 11762688,
+          "transitions": 1024,
+          "transitions_per_second": 4281.747337606554
+        },
+        {
+          "case": "crowded",
+          "cycle_peak_cuda_allocated_mib": 4974.40380859375,
+          "fit_seconds": 1.5229947000007087,
+          "last_pass_placement_gap": null,
+          "last_pass_selected_action_error": 0.07451057434082031,
+          "live_games": 128,
+          "optimizer_steps": 4,
+          "preparation_seconds": 0.0073623000007501105,
+          "repeat": null,
+          "completed_games": 128,
+          "all_timeout_losses": true
+        }
+      ],
+      "forced_storage_budget_mib": 32,
+      "hardware_summary": {
+        "starting": {
+          "samples": 3,
+          "gpu_percent": {
+            "median": 0.0,
+            "maximum": 0.0
+          },
+          "gpu_memory_mib": {
+            "median": 409.0,
+            "maximum": 431.0
+          },
+          "process_cpu_percent": {
+            "median": 78.4,
+            "maximum": 100.0
+          },
+          "process_ram_mib": {
+            "median": 755.7734375,
+            "maximum": 830.953125
+          }
+        },
+        "crowded": {
+          "samples": 20,
+          "gpu_percent": {
+            "median": 0.0,
+            "maximum": 79.0
+          },
+          "gpu_memory_mib": {
+            "median": 515.0,
+            "maximum": 5487.0
+          },
+          "process_cpu_percent": {
+            "median": 96.9,
+            "maximum": 101.6
+          },
+          "process_ram_mib": {
+            "median": 1760.20703125,
+            "maximum": 1846.63671875
+          }
+        }
+      },
+      "incomplete": false
+    }
+  ],
+  "telemetry_rehearsal": {
+    "active_games": 128,
+    "allocator_min_free_mib": 6630.0,
+    "collection_steps": 2563,
+    "complete": false,
+    "config": {
+      "conditions": {
+        "masked": {
+          "curriculum": true,
+          "hybrid": false,
+          "masked": true,
+          "shaped": true
+        }
+      },
+      "curriculum": {
+        "boundaries": [
+          0.1,
+          0.4
+        ],
+        "consecutive_passes": 1,
+        "easy_weights": [
+          1.0,
+          0.0,
+          0.0
+        ],
+        "final_weights": [
+          0.2,
+          0.4,
+          0.4
+        ],
+        "intermediate_weights": [
+          0.5,
+          0.5,
+          0.0
+        ],
+        "minimum_stage_games": 100,
+        "minimum_stage_steps": 16384,
+        "mode": "teaching",
+        "probe_cases": 100,
+        "probe_interval": 16384,
+        "probe_interval_games": 2000,
+        "residency": "episode_start_stage",
+        "run_stage": "easy",
+        "stages": {
+          "easy": {
+            "requirements": {
+              "easy": 100
+            },
+            "tasks": [
+              "easy"
+            ],
+            "weights": [
+              1.0
+            ]
+          },
+          "shared": {
+            "requirements": {
+              "easy": 100,
+              "hard": 100,
+              "standard": 100
+            },
+            "tasks": [
+              "easy",
+              "standard",
+              "hard"
+            ],
+            "weights": [
+              0.2,
+              0.4,
+              0.4
+            ]
+          },
+          "standard": {
+            "requirements": {
+              "easy": 100,
+              "standard": 100
+            },
+            "tasks": [
+              "easy",
+              "standard"
+            ],
+            "weights": [
+              0.5,
+              0.5
+            ]
+          }
+        }
+      },
+      "diagnostics": {
+        "early_dig_seconds": 5
+      },
+      "encoding": {
+        "count_scale": 75,
+        "max_entities": 256,
+        "version": "entity_v1",
+        "wave_scale": 15
+      },
+      "engine_commit": "1424b4d802e783a36772091c49d96aa7c6036d7a",
+      "engine_package_version": "1.7.0",
+      "engine_version": "1.4.0",
+      "environment": {
+        "action_timing": "per_tick",
+        "cols": 9,
+        "cutoff_seconds": 1200,
+        "decision_ticks": 1,
+        "mower_states": [
+          "ready",
+          "moving",
+          "spent"
+        ],
+        "plant_states": [
+          "ready",
+          "arming",
+          "armed",
+          "fusing",
+          "digesting",
+          "exploding",
+          "detonating",
+          "rising",
+          "biting",
+          "biting_got_one",
+          "recovering"
+        ],
+        "plants": [
+          "sunflower",
+          "peashooter",
+          "wall_nut",
+          "cherry_bomb",
+          "potato_mine",
+          "snow_pea",
+          "chomper",
+          "repeater"
+        ],
+        "rows": 5,
+        "zombie_states": [
+          "walking",
+          "carrying_pole",
+          "vaulting",
+          "biting",
+          "dead"
+        ],
+        "zombies": [
+          "basic",
+          "flag",
+          "conehead",
+          "buckethead",
+          "pole_vaulting"
+        ]
+      },
+      "evaluation": {
+        "bootstrap_replicates": 2000,
+        "bootstrap_seed": 1739,
+        "levels": [
+          "easy",
+          "standard",
+          "hard"
+        ],
+        "ood_families": [
+          "redistributed",
+          "faster",
+          "concentrated"
+        ],
+        "ood_levels": [
+          "standard",
+          "hard"
+        ],
+        "replays_per_outcome": 10,
+        "targets": [
+          0.95,
+          0.9,
+          0.75
+        ]
+      },
+      "logging": {
+        "hardware_sample_seconds": 1.0,
+        "progress_seconds": 15,
+        "rolling_window": 100,
+        "terminal_mode": "compact",
+        "terminal_progress_seconds": 60
+      },
+      "policy": {
+        "action_distribution": "sequential_q_unmasked_tiles_v2",
+        "attention_query_chunk": 64,
+        "encoder_microbatch": 128,
+        "encoder_token_budget": 65536,
+        "kind": "two_stage_transformer_q_v1",
+        "species_feedforward": 512,
+        "species_heads": 8,
+        "species_layers": 4,
+        "species_width": 128,
+        "tile_feedforward": 768,
+        "tile_heads": 12,
+        "tile_layers": 6,
+        "tile_width": 192
+      },
+      "profile": "complete-game",
+      "reward": {
+        "action": {
+          "block_value_by_plant": {
+            "cherry_bomb": 0.0333333333,
+            "chomper": 0.0333333333,
+            "peashooter": 0.0333333333,
+            "potato_mine": 0.0333333333,
+            "repeater": 0.0333333333,
+            "snow_pea": 0.0333333333,
+            "sunflower": 0.0333333333,
+            "wall_nut": 0.025
+          },
+          "sun_credit_multiplier": 1.0
+        },
+        "basic_zombie_value": 30.0,
+        "early_sun_extra_multiplier": 2.0,
+        "early_sun_spawn_fraction": [
+          1,
+          3
+        ],
+        "home_entry_penalties": [
+          0.005,
+          0.015
+        ],
+        "loss_penalty": 1.0,
+        "mower_value": 500.0,
+        "progress_weight": 0.01,
+        "value_scale": 900.0,
+        "version": "action_global_value_v3",
+        "win_reward": 1.0,
+        "win_time_weight": 0.5
+      },
+      "runtime": {
+        "cache_legal_actions": true,
+        "refill_evaluation": true
+      },
+      "schema_version": 1,
+      "simulation": {
+        "backend": "cuda"
+      },
+      "splits": {
+        "curriculum": [
+          100050,
+          100149
+        ],
+        "ood": [
+          300000,
+          300099
+        ],
+        "test": [
+          200000,
+          200299
+        ],
+        "train": [
+          1000,
+          99999
+        ],
+        "validation": [
+          100000,
+          100049
+        ]
+      },
+      "training": {
+        "annotation": {
+          "batch_size": 256,
+          "learner_seed": 101,
+          "learning_rate": 0.0003,
+          "margin": 1.0,
+          "passes": 0,
+          "sampling_family": "preset",
+          "sampling_max_attempts": 100,
+          "sampling_max_plants": 8,
+          "sampling_max_steps": 20000,
+          "sampling_plant_interval_steps": [
+            500,
+            1500
+          ],
+          "sampling_seed": "random"
+        },
+        "batch_size": 1024,
+        "budget_unit": "games",
+        "demo": {
+          "learner_seed": 101,
+          "learning_rate": 0.0003,
+          "passes": 40,
+          "time_budget_minutes": 30
+        },
+        "device": "cuda",
+        "discount_clock": "simulation_ticks",
+        "eval_interval": 250000,
+        "eval_interval_games": 2000,
+        "exploration": {
+          "decay_games": 10000,
+          "epsilon_floor": 0.01,
+          "epsilon_start": 0.5,
+          "objective": "committed_plant_tile_epsilon_v1",
+          "plant_decay_games": 10000,
+          "plant_epsilon_floor": 0.01,
+          "plant_epsilon_start": 0.1
+        },
+        "finalization_minutes": 15,
+        "gamma": 1.0,
+        "learner_seeds": [
+          101,
+          102
+        ],
+        "learning_rate": 0.0003,
+        "max_grad_norm": 5,
+        "max_minutes": 120,
+        "method": "complete_return_action_global_v3",
+        "n_envs": 128,
+        "n_epochs": 4,
+        "objective": {
+          "accepted_outcome_share": 0.5,
+          "demo_rank_loss_weight": 0.1,
+          "demo_rank_margin": 0.05,
+          "dense_multiplier": 10.0,
+          "ema_decay": 0.95,
+          "invalid_action_target": -1.0,
+          "invalid_fit_group_size": 100,
+          "protocol": "complete_return_action_global_v3",
+          "species_consistency_huber_delta": 1.0,
+          "species_consistency_weight": 1.0
+        },
+        "performance": {
+          "collection_graph_cache_entries": 8,
+          "collection_vram_headroom_mib": 1638,
+          "compile_collection": false,
+          "compile_fitting": false,
+          "fit_batch_groups": 2,
+          "fit_encoder_microbatch": 192,
+          "fit_entity_buckets": [
+            8,
+            16,
+            32,
+            64,
+            128,
+            256
+          ],
+          "fit_precision": "bf16_master",
+          "fit_species_microbatch": 64,
+          "fit_tile_microbatch": 64,
+          "fit_token_budget": 16384,
+          "prefetch": true,
+          "telemetry": true,
+          "telemetry_span_limit": 1024
+        },
+        "storage": {
+          "block_rows": 32768,
+          "ram_gib": 6
+        },
+        "torch_threads": 2,
+        "total_games": 256,
+        "total_steps": 3000000,
+        "until_stage_complete": false,
+        "validation_schedule": "stage_success"
+      },
+      "visualization": {
+        "crf": 23,
+        "demos": false,
+        "enabled": false,
+        "ffmpeg": "",
+        "final_hold_seconds": 2,
+        "live_enabled": false,
+        "live_fps": 5,
+        "live_history_ram_mib": 16,
+        "live_window_size": [
+          1600,
+          1050
+        ],
+        "video_fps": 25,
+        "video_size": [
+          1280,
+          820
+        ],
+        "videos": false,
+        "viewer": "auto"
+      }
+    },
+    "config_digest": "24e962b23f1bca46901560319031b11616e1ba2e41438d90394115e69e13076f",
+    "decisions": 280576,
+    "device": "NVIDIA GeForce RTX 4070 Laptop GPU",
+    "elapsed_seconds": 40.006765399999495,
+    "error": "TimeoutError('Complete-cycle measurement exhausted its wall budget')",
+    "execution": {
+      "checkpointing": false,
+      "fallbacks": [],
+      "fit_batch_groups": 2,
+      "microbatch": 64,
+      "precision": "bf16_master",
+      "requested_precision": "bf16_master",
+      "species_microbatch": 64,
+      "tile_microbatch": 64,
+      "token_budget": 16384
+    },
+    "formal_training": false,
+    "free_mib": 6630.0,
+    "hardware_samples": 39,
+    "host_rss_mib": 1745.80078125,
+    "initialization": {
+      "checkpoint": "E:\\Projects\\Tower-Defence-AI\\PVZ-plant\\runs\\compact-stages-101\\easy\\interrupted.zip",
+      "checkpoint_sha256": "c964fa8e7f4773a98c780b0e4b398140c3bbe28304bafb915d67b487da74a8ac",
+      "conversion": "none",
+      "games": 128,
+      "mode": "weights_only",
+      "parameter_changes": {
+        "policy.action_distribution": {
+          "after": "sequential_q_unmasked_tiles_v2",
+          "before": "sequential_q_unmasked_penalty_v1"
+        },
+        "reward.value_scale": {
+          "after": 900.0,
+          "before": 300.0
+        },
+        "reward.version": {
+          "after": "action_global_value_v3",
+          "before": "action_global_value_v2"
+        },
+        "training.exploration.epsilon_start": {
+          "after": 0.5,
+          "before": 0.1
+        },
+        "training.method": {
+          "after": "complete_return_action_global_v3",
+          "before": "complete_return_action_global_v2"
+        },
+        "training.objective.protocol": {
+          "after": "complete_return_action_global_v3",
+          "before": "complete_return_action_global_v2"
+        },
+        "training.performance.compile_collection": {
+          "after": false,
+          "before": null
+        },
+        "training.performance.compile_fitting": {
+          "after": false,
+          "before": null
+        },
+        "training.performance.compile_kernels": {
+          "after": null,
+          "before": false
+        },
+        "training.performance.telemetry_span_limit": {
+          "after": 1024,
+          "before": null
+        },
+        "training.total_games": {
+          "after": 256,
+          "before": 10000
+        },
+        "training.until_stage_complete": {
+          "after": false,
+          "before": true
+        },
+        "visualization.demos": {
+          "after": false,
+          "before": true
+        },
+        "visualization.enabled": {
+          "after": false,
+          "before": true
+        },
+        "visualization.live_enabled": {
+          "after": false,
+          "before": true
+        }
+      },
+      "source_learner_seed": 101,
+      "source_structural_signature": {
+        "action_distribution": "sequential_q_unmasked_penalty_v1",
+        "actions": "kind_plant_tile_v1",
+        "board": {
+          "cols": 9,
+          "mower_states": [
+            "ready",
+            "moving",
+            "spent"
+          ],
+          "plant_states": [
+            "ready",
+            "arming",
+            "armed",
+            "fusing",
+            "digesting",
+            "exploding",
+            "detonating",
+            "rising",
+            "biting",
+            "biting_got_one",
+            "recovering"
+          ],
+          "plants": [
+            "sunflower",
+            "peashooter",
+            "wall_nut",
+            "cherry_bomb",
+            "potato_mine",
+            "snow_pea",
+            "chomper",
+            "repeater"
+          ],
+          "rows": 5,
+          "zombie_states": [
+            "walking",
+            "carrying_pole",
+            "vaulting",
+            "biting",
+            "dead"
+          ],
+          "zombies": [
+            "basic",
+            "flag",
+            "conehead",
+            "buckethead",
+            "pole_vaulting"
+          ]
+        },
+        "encoding": {
+          "count_scale": 75,
+          "max_entities": 256,
+          "version": "entity_v1",
+          "wave_scale": 15
+        },
+        "engine": [
+          "1424b4d802e783a36772091c49d96aa7c6036d7a",
+          "1.4.0",
+          "1.7.0"
+        ],
+        "method": "complete_return_action_global_v2",
+        "policy": {
+          "kind": "two_stage_transformer_q_v1",
+          "species_feedforward": 512,
+          "species_heads": 8,
+          "species_layers": 4,
+          "species_width": 128,
+          "tile_feedforward": 768,
+          "tile_heads": 12,
+          "tile_layers": 6,
+          "tile_width": 192
+        },
+        "return": [
+          1.0,
+          "simulation_ticks"
+        ],
+        "timing": {
+          "action_timing": "per_tick",
+          "cutoff_seconds": 1200,
+          "decision_ticks": 1
+        }
+      },
+      "steps": 2320769,
+      "type": "autonomous",
+      "updates": 0
+    },
+    "minimum_free_mib": 6630.0,
+    "phases": {
+      "begin": 0.7038824000010209
+    },
+    "process_io_bytes": {
+      "read_bytes": 3033058063,
+      "write_bytes": 407381
+    },
+    "protocol": "pvz-rl/pipeline-benchmark-v1",
+    "revision": "fd30c4498c20c135b2af529d430bc1abc06566c8",
+    "sampled_min_free_mib": 7636.5,
+    "sampled_peak_gpu_mib": 551.0,
+    "sampled_peak_rss_mib": 1742.73828125,
+    "seed": 101,
+    "startup_seconds": 3.1803108000003704,
+    "tail": {
+      "seconds": 0.0,
+      "steps": 0
+    },
+    "timed_out": true,
+    "torch": "2.8.0+cu128",
+    "torch_peak_mib": 111.32470703125,
+    "torch_peak_reserved_mib": 146.0,
+    "total_mib": 8187.5
+  },
+  "source_notes": {
+    "baseline": "c21fe01 plus device literal cuda correction",
+    "candidate": "8235da0 plus historical compilation weight adapter, v3 weight allowlist, and env_method stage selection; before later identity and telemetry refinements",
+    "controls": "fd30c44 plus terminal-record correction; forced-spill includes actual execution handoff",
+    "telemetry": "fd30c44 plus bounded telemetry and current handoff/measurement refinements"
+  },
+  "limitations": [
+    "Baseline timed out during pass four; candidate is one completed cold cycle, not a paired speedup.",
+    "Brief owning checks overlapped parts of trials; exclude rigorous promotion claims.",
+    "Only short controls cover final identity/telemetry refinements, not a repeated complete cycle.",
+    "First control stopped at stale terminal diagnostic before remaining cases; corrected subset rerun passed.",
+    "Device samples are periodic and whole-device; allocator peaks can exceed physical VRAM under Windows paging.",
+    "No separate thread/group/compiler calibration or ABBA repetition fit the budget."
+  ]
+}
