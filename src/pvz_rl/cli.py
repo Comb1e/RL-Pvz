@@ -286,6 +286,9 @@ def main(argv=None):
     fit_annotations.add_argument("--learning-rate", type=float)
     fit_annotations.add_argument("--batch-size", type=int)
     fit_annotations.add_argument("--margin", type=float)
+    fit_annotations.add_argument(
+        "--l2-strength", type=float, help="post-training validation-phase L2 strength"
+    )
     fit_annotations.add_argument("--seed", type=int)
     fit_action = subs.add_parser(
         "fit-action-annotations", help="pretrain the species/action Transformer from annotations"
@@ -301,6 +304,7 @@ def main(argv=None):
     fit_action.add_argument("--learning-rate", type=float)
     fit_action.add_argument("--batch-size", type=int)
     fit_action.add_argument("--margin", type=float)
+    fit_action.add_argument("--l2-strength", type=float)
     fit_action.add_argument("--seed", type=int)
     demo = subs.add_parser(
         "record-demo",
@@ -494,6 +498,7 @@ def main(argv=None):
                     learning_rate=args.learning_rate,
                     batch_size=args.batch_size,
                     margin=args.margin,
+                    l2_strength=args.l2_strength,
                     seed=args.seed,
                     kind="tile",
                 ),
@@ -507,7 +512,7 @@ def main(argv=None):
             args.annotations, args.output, cfg=cfg, init_from=args.init_from,
             resume_from=args.resume_from, device=args.device, passes=args.passes,
             learning_rate=args.learning_rate, batch_size=args.batch_size,
-            margin=args.margin, seed=args.seed,
+            margin=args.margin, l2_strength=args.l2_strength, seed=args.seed,
         ), indent=2))
     elif args.command == "initialize-demo":
         from pvz_rl.learning.demo_initialization import initialize_demo

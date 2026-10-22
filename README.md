@@ -44,6 +44,20 @@ Or open the browser annotator and label plant cards, Wait/Dig, or board tiles:
 Dig starts as an editable absolute-infeasible action label. If next-map
 generation fails, use **Retry generation** on the same server; saved labels remain persisted.
 
+Annotation fitting first reaches exact training-set convergence. If validation is
+still below 100%, it continues on the unchanged training split with L2 pressure
+until both splits are exact. To inspect long histories without collapsing detail
+into an unreadable static plot, generate the interactive min/max-envelope viewer:
+
+```powershell
+.\.venv\Scripts\python.exe tools\plot_annotation_loss.py `
+  runs\tile-initialization.history.jsonl --output runs\tile-loss.html
+```
+
+The HTML keeps every committed pass, supports zoom and drag, and reports the
+nearest raw pass on hover. Adjust the regularization strength with
+`--l2-strength` on either annotation-fitting command when needed.
+
 The active-only trajectory/recovery format is v4; older runs support compatible
 weight-only initialization, but cannot resume. Model weights and the learning
 objective are unchanged by the pipeline optimization.

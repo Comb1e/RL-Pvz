@@ -30,8 +30,9 @@ from pvz_rl.learning.cohort import atomic_transition
 from pvz_rl.policy.two_stage_transformer import TwoStageTransformerPolicy
 from pvz_rl.provenance import write_json
 
-ANNOTATION_CHECKPOINT_PROTOCOL = "pvz-rl/annotation-initialization-v2"
-ANNOTATION_PROGRESS_PROTOCOL = "pvz-rl/annotation-progress-v2"
+ANNOTATION_CHECKPOINT_PROTOCOL = "pvz-rl/annotation-initialization-v3"
+ANNOTATION_PROGRESS_PROTOCOL = "pvz-rl/annotation-progress-v3"
+ANNOTATION_OBJECTIVE = "top1-bottomk-hinge-v3-l2-validation-grokking"
 
 
 def _label_masks(feasible, absolute, width):
@@ -130,6 +131,22 @@ def _metric_report(totals, n):
         empty_records=0,
         numerically_stable=True,
     )
+
+
+def _split_converged(metrics, rows):
+    """Return whether both exact annotation metrics pass for one split."""
+    return (
+        metrics is not None
+        and metrics["hits"] == rows
+        and metrics.get("absolute_bottom_hits", rows) == rows
+    )
+
+
+def _l2_penalty(trainable, strength):
+    """Return the explicit 0.5 * strength * ||theta||^2 master-weight penalty."""
+    if not trainable:
+        raise ValueError("annotation fitting has no trainable parameters")
+    return 0.5 * strength * torch.stack([parameter.square().sum() for parameter in trainable]).sum()
 
 
 def _metrics(values, feasible_tiles, absolute_labels=None, legal_masks=None):
@@ -356,6 +373,7 @@ def _fit_annotations(
     learning_rate=None,
     batch_size=None,
     margin=None,
+    l2_strength=None,
     seed=None,
     kind="tile",
     _resources=None,
@@ -370,6 +388,7 @@ def _fit_annotations(
     learning_rate = settings["learning_rate"] if learning_rate is None else learning_rate
     batch_size = settings["batch_size"] if batch_size is None else batch_size
     margin = settings["margin"] if margin is None else margin
+    l2_strength = settings.get("l2_strength", 1e-4) if l2_strength is None else l2_strength
     seed = settings["learner_seed"] if seed is None else seed
     if type(passes) is not int or passes < 0 or type(batch_size) is not int or batch_size < 1:
         raise ValueError("passes must be nonnegative (0 unlimited); batch size must be positive")
@@ -377,6 +396,8 @@ def _fit_annotations(
         raise ValueError("invalid annotation learning rate/seed")
     if not math.isfinite(margin) or margin <= 0:
         raise ValueError("annotation margin must be finite and positive")
+    if not math.isfinite(l2_strength) or l2_strength <= 0:
+        raise ValueError("annotation L2 strength must be finite and positive")
     if kind not in ("tile", "action"):
         raise ValueError("annotation kind must be tile or action")
     fit_settings = dict(
@@ -386,9 +407,11 @@ def _fit_annotations(
         margin=margin,
         max_grad_norm=cfg["training"]["max_grad_norm"],
         learner_seed=seed,
-        objective="top1-bottomk-hinge-v2",
+        objective=ANNOTATION_OBJECTIVE,
         annotation_kind=kind,
         head_scope="tile" if kind == "tile" else "species",
+        l2_strength=l2_strength,
+        convergence="train-and-validation-exact-v1",
         reward_protocol=cfg["reward"]["version"],
         objective_protocol=cfg["training"]["objective"]["protocol"],
     )
@@ -477,7 +500,7 @@ def _fit_annotations(
             prepared=prepared[name],
         )
 
-    def save_progress(training, validation):
+    def save_progress(training, validation, regularization_active=False, regularization_loss=0.0):
         _atomic_save(
             dict(
                 protocol=ANNOTATION_PROGRESS_PROTOCOL,
@@ -494,30 +517,45 @@ def _fit_annotations(
                 status="incomplete",
                 train=training,
                 validation=validation,
+                regularization_active=regularization_active,
+                regularization_loss=regularization_loss,
+                l2_strength=l2_strength,
             ),
             progress_path,
         )
 
+    regularization_active = bool(
+        resume_from is not None and saved.get("regularization_active", False)
+    )
+    regularization_loss = float(
+        saved.get("regularization_loss", 0.0) if resume_from is not None else 0.0
+    )
     training = saved.get("train") if resume_from is not None else None
     validation = saved.get("validation") if resume_from is not None else None
-    save_progress(training, validation)
+    save_progress(training, validation, regularization_active, regularization_loss)
     if resume_from is None:
         history_path.write_text("", encoding="utf-8")
     interrupted = False
+
+    def exact(name, metrics):
+        return _split_converged(metrics, len(partitions[name]))
+
     try:
         training, validation = evaluate("train"), evaluate("validation")
-        save_progress(training, validation)
+        if exact("train", training) and exact("validation", validation):
+            regularization_active = False
+        elif exact("train", training):
+            regularization_active = True
+        save_progress(training, validation, regularization_active, regularization_loss)
         print(
             f"pass={completed} updates={completed} train={training['hits']}/{training['rows']} "
             f"remaining={training['failures']} bottom={training.get('absolute_bottom_hits', 0)}/{training['rows']} loss={training['loss']:.6g} "
             f"validation={validation['hits']}/{validation['rows']} validation_loss={validation['loss']}",
             flush=True,
         )
-        while (
-            training["hits"] != len(partitions["train"])
-            or training.get("absolute_bottom_hits", len(partitions["train"]))
-            != len(partitions["train"])
-        ) and (passes == 0 or completed < passes):
+        while not (exact("train", training) and exact("validation", validation)) and (
+            passes == 0 or completed < passes
+        ):
             model.train()
             _run_split(
                 model,
@@ -531,6 +569,13 @@ def _fit_annotations(
                 kind=kind,
                 prepared=prepared["train"],
             )
+            regularization_loss = 0.0
+            if regularization_active:
+                penalty = _l2_penalty(trainable, l2_strength)
+                if not bool(torch.isfinite(penalty)):
+                    raise FloatingPointError("non-finite annotation L2 penalty")
+                regularization_loss = float(penalty.detach().cpu())
+                penalty.backward()
             torch.nn.utils.clip_grad_norm_(
                 trainable, fit_settings["max_grad_norm"], error_if_nonfinite=True
             )
@@ -542,7 +587,11 @@ def _fit_annotations(
                 model.eval()
                 completed += 1
                 training, validation = evaluate("train"), evaluate("validation")
-                save_progress(training, validation)
+                if exact("train", training) and exact("validation", validation):
+                    regularization_active = False
+                elif exact("train", training):
+                    regularization_active = True
+                save_progress(training, validation, regularization_active, regularization_loss)
                 with history_path.open("a", encoding="utf-8") as stream:
                     stream.write(
                         json.dumps(
@@ -551,6 +600,8 @@ def _fit_annotations(
                                 optimizer_updates=completed,
                                 train=training,
                                 validation=validation,
+                                regularization_active=regularization_active,
+                                regularization_loss=regularization_loss,
                             )
                         )
                         + "\n"
@@ -572,13 +623,13 @@ def _fit_annotations(
         optimizer.load_state_dict(saved["optimizer"])
         completed = saved["passes_completed"]
         training, validation = saved["train"], saved["validation"]
+        regularization_active = bool(saved.get("regularization_active", False))
+        regularization_loss = float(saved.get("regularization_loss", 0.0))
         _restore_rng(saved["rng"], device)
 
     converged = (
-        training is not None
-        and training["hits"] == len(partitions["train"])
-        and training.get("absolute_bottom_hits", len(partitions["train"]))
-        == len(partitions["train"])
+        exact("train", training)
+        and exact("validation", validation)
         and not interrupted
     )
     test = None
@@ -588,10 +639,9 @@ def _fit_annotations(
         model.load_state_dict(saved["model"])
         model.eval()
         training = evaluate("train")
-        if training["hits"] != len(partitions["train"]) or training["absolute_bottom_hits"] != len(
-            partitions["train"]
-        ):
-            raise RuntimeError("saved annotation weights failed fresh training-set verification")
+        validation = evaluate("validation")
+        if not exact("train", training) or not exact("validation", validation):
+            raise RuntimeError("saved annotation weights failed fresh convergence verification")
         test = evaluate("test")
         checkpoint_cfg = copy.deepcopy(cfg)
         checkpoint_cfg["training"].pop("annotation", None)
@@ -606,13 +656,24 @@ def _fit_annotations(
             model=model.state_dict(),
             passes_completed=completed,
             learner_seed=seed,
-            convergence=dict(verified=True, hits=training["hits"], records=training["rows"]),
+            convergence=dict(
+                verified=True,
+                hits=training["hits"],
+                records=training["rows"],
+                absolute_bottom_hits=training["absolute_bottom_hits"],
+                validation_hits=validation["hits"],
+                validation_records=validation["rows"],
+                validation_absolute_bottom_hits=validation["absolute_bottom_hits"],
+            ),
             annotation=dict(
                 protocol=ANNOTATION_PROTOCOL,
                 annotation_kind=kind,
                 head_scope=kind,
                 reward_protocol=cfg["reward"]["version"],
                 objective_protocol=cfg["training"]["objective"]["protocol"],
+                objective=ANNOTATION_OBJECTIVE,
+                l2_strength=l2_strength,
+                validation_converged=True,
                 **identity,
                 split={r["id"]: split[r["group_id"]] for r in records},
                 source_digest=manifest.get("source_digest"),
@@ -653,6 +714,9 @@ def _fit_annotations(
         train=training,
         validation=validation,
         test=test,
+        regularization_active=regularization_active,
+        regularization_loss=regularization_loss,
+        l2_strength=l2_strength,
         tile_parameters_only=kind == "tile",
         species_parameters_only=kind == "action",
         annotation_kind=kind,

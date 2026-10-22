@@ -428,3 +428,11 @@ throughput measurements.
   consulted finite warmup/active schedules and step boundaries. Collection and
   fitting traces are optional bounded diagnostics and are excluded from timing
   comparisons. The production lifecycle remains the only learner.
+
+## Annotation validation-phase regularization — 2026-10-22
+
+- [PyTorch Adam documentation](https://pytorch.org/docs/stable/generated/torch.optim.Adam.html):
+  checked the optimizer's L2/weight-decay distinction. Annotation fitting uses
+  an explicit differentiable \(\lambda\lVert\theta\rVert^2/2\) term on FP32
+  master parameters so its activation and contribution are recorded separately
+  from the existing Adam update.

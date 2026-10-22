@@ -592,6 +592,7 @@ def validate_config(cfg: dict) -> None:
         "batch_size",
         "margin",
         "learner_seed",
+        "l2_strength",
         "sampling_seed",
         "sampling_family",
         "sampling_max_steps",
@@ -645,8 +646,9 @@ def validate_config(cfg: dict) -> None:
         raise ValueError(
             "training.annotation.sampling_max_plants must leave at least one empty tile"
         )
-    for key in ("learning_rate", "margin"):
-        value = annotation.get(key, 3e-4 if key == "learning_rate" else 1.0)
+    annotation_defaults = {"learning_rate": 3e-4, "margin": 1.0, "l2_strength": 1e-4}
+    for key in ("learning_rate", "margin", "l2_strength"):
+        value = annotation.get(key, annotation_defaults[key])
         if type(value) not in (int, float) or not math.isfinite(value) or value <= 0:
             raise ValueError(f"training.annotation.{key} must be finite and positive")
     if train["device"] not in ("cpu", "cuda"):

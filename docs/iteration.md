@@ -1,3 +1,18 @@
+## Annotation validation-phase L2 regularization — 2026-10-22
+
+- Problem: annotation fitting stopped once the training split reached exact
+  accuracy, even when the held-out validation split remained incorrect. Long
+  histories were also difficult to inspect with dense static plots.
+- Improvement: tile and action fitting now keeps the original grouped split,
+  activates explicit FP32-master L2 pressure only after training convergence,
+  and publishes only after both train and validation feasible/bottom metrics are
+  exact. Phase state, penalty values, and metrics are recoverable. Added a
+  standalone HTML canvas viewer that retains every history point and draws
+  per-pixel min/max envelopes with zoom, drag, and raw-point hover.
+- Verification: a temporary CPU fitter control completed the normal history and
+  progress path; standalone L2-gradient, split-convergence, CLI, viewer-JavaScript,
+  smoke, Ruff, and diff checks passed. No formal training ran.
+
 ## Core smoke-test suite — 2026-10-22
 
 - Problem/root cause: 44 test modules and shared fixtures contained 431 test

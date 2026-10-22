@@ -178,12 +178,15 @@
   maps; revision-checked edits persist in place without consuming the pending map
   or invoking the sampler. Pending resolution alone generates the next map.
   `learning/annotation_fit.py` freezes the species stage and produces a compatible
-  tile-only initialization only after exact full-training feasible top-1 convergence
-  over all 45 outputs.
-  Its top-1 hinge ignores other positive ordering, defaults to unlimited passes,
-  streams metrics, and saves separate atomic annotation weights/Adam/RNG/pass
-  progress. Matching dataset/split/settings gate resume; partial gradients are
-  discarded. Fresh reloaded BF16 verification permits zero-pass publication.
+  tile-only initialization only after exact train-and-validation feasible top-1
+  and absolute-bottom convergence over all outputs.
+  Its top-1/bottom-k hinge ignores ordering inside label sets, defaults to unlimited
+  passes, and enters an explicit L2 phase only after training first converges.
+  It streams metrics, records the regularization phase, and saves separate atomic
+  annotation weights/Adam/RNG/pass progress. Matching dataset/split/settings and
+  L2 identity gate resume; partial gradients are discarded. Fresh reloaded BF16
+  verification permits zero-pass publication. Long histories use the standalone
+  `tools/plot_annotation_loss.py` min/max-envelope canvas viewer.
   It never creates an autonomous resume state.
 - `learning/action_routing.py` classifies pre-action public legality and actual
   outcomes, with branch impossibility preceding bad tile attribution. Trajectories

@@ -183,12 +183,14 @@ learner_seed = 101
 time_budget_minutes = 30
 
 [training.annotation]
-# Tile-only convergence: 0 means unlimited passes until every training record is correct.
+# Annotation convergence: 0 means unlimited passes until train and validation are exact.
+# L2 activates only after the training split first reaches exact convergence.
 passes = 0
 learning_rate = 0.0003
 batch_size = 256
 margin = 1.0
 learner_seed = 101
+l2_strength = 0.0001
 sampling_seed = "random"
 sampling_family = "preset"
 # Uniform endpoint in [0, sampling_max_steps]; finished games are retried.

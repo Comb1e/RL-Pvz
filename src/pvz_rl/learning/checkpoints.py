@@ -20,7 +20,8 @@ from pvz_rl.learning.training_requirements import (
 
 DEMO_PROTOCOL = "pvz-rl/demo-initialization-checkpoint-v10"
 LEGACY_DEMO_PROTOCOL = "pvz-rl/demo-initialization-checkpoint-v9"
-ANNOTATION_CHECKPOINT_PROTOCOL = "pvz-rl/annotation-initialization-v2"
+ANNOTATION_CHECKPOINT_PROTOCOL = "pvz-rl/annotation-initialization-v3"
+LEGACY_ANNOTATION_CHECKPOINT_PROTOCOL_V2 = "pvz-rl/annotation-initialization-v2"
 LEGACY_ANNOTATION_CHECKPOINT_PROTOCOL = "pvz-rl/tile-annotation-initialization-v1"
 MODEL_STATE_PROTOCOL = "pvz-rl/stateless-two-stage-bf16-master-state-v2"
 AUTONOMOUS_STATE_PROTOCOL = "pvz-rl/action-global-state-v4"
@@ -99,6 +100,7 @@ def inspect_checkpoint(path, *, weights_only=False):
             DEMO_PROTOCOL: "demonstration",
             LEGACY_DEMO_PROTOCOL: "demonstration",
             ANNOTATION_CHECKPOINT_PROTOCOL: "annotation",
+            LEGACY_ANNOTATION_CHECKPOINT_PROTOCOL_V2: "annotation",
             LEGACY_ANNOTATION_CHECKPOINT_PROTOCOL: "annotation",
         }.get(saved.get("protocol"))
         if initialization_type is None:
@@ -117,12 +119,24 @@ def inspect_checkpoint(path, *, weights_only=False):
         ):
             raise ValueError("Checkpoint configuration digest does not match its contents")
         convergence = saved.get("convergence", {})
+        current_annotation_convergence = saved.get("protocol") == ANNOTATION_CHECKPOINT_PROTOCOL
         zero_pass_verified = (
             initialization_type == "annotation"
             and convergence.get("verified") is True
             and type(convergence.get("records")) is int
             and convergence["records"] > 0
             and convergence.get("hits") == convergence["records"]
+            and (
+                not current_annotation_convergence
+                or (
+                    convergence.get("absolute_bottom_hits") == convergence["records"]
+                    and type(convergence.get("validation_records")) is int
+                    and convergence["validation_records"] >= 0
+                    and convergence.get("validation_hits") == convergence["validation_records"]
+                    and convergence.get("validation_absolute_bottom_hits")
+                    == convergence["validation_records"]
+                )
+            )
         )
         if (saved.get("passes_completed", -1) < (0 if zero_pass_verified else 1)) or not isinstance(
             saved.get("model"), dict

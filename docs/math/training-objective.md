@@ -28,6 +28,30 @@ autonomous targets. [Sequential Q learning](sequential-training.md) specifies
 the selected-action, consistency and demonstration losses. Maximum net value
 and drawdown remain diagnostics.
 
+## Annotation convergence and L2 phase
+
+Tile and action annotation fitting keeps the grouped train/validation/test split
+fixed. The top-1 feasible and bottom-k absolute-infeasible objectives use only
+the training partition for gradients. Fitting first runs until both exact
+training metrics reach 100%. If either validation metric is still below 100%,
+the fitter enters a second phase without changing the split or adding validation
+records to the training source.
+
+In that phase it adds an explicit penalty to the selected head's FP32 master
+parameters:
+
+\[
+L_{L2}=\frac{\lambda}{2}\sum_{\theta\in H}\theta^2,
+\]
+
+where `H` is the trainable tile or species/action head and `lambda` is
+`training.annotation.l2_strength` (overrideable with `--l2-strength`). The
+penalty is absent during initial training convergence. Publication requires
+exact 100% feasible and absolute-bottom accuracy on both train and validation;
+the held-out test split is evaluated only after that gate passes. Every phase,
+metric, and regularizer value is recorded in the annotation progress, history,
+and report artifacts.
+
 Assets are available sun plus each living plant's purchase cost times its
 remaining-health fraction. Purchase is neutral. Effective damage includes
 actual body and armor damage from plants/projectiles, capped at remaining HP;
