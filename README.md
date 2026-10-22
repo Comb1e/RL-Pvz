@@ -41,6 +41,9 @@ Or open the browser annotator and label plant cards, Wait/Dig, or board tiles:
 .\.venv\Scripts\python.exe -m pvz_rl annotate --kind tile --port 6006
 ```
 
+Dig starts as an editable absolute-infeasible action label. If next-map
+generation fails, use **Retry generation** on the same server; saved labels remain persisted.
+
 [Training guidance](docs/training.md) covers annotation fitting before demo
 initialization, autonomous training, GPU selection, Jupyter proxies, and recovery.
 The active-only trajectory/recovery format is v4; older runs support compatible

@@ -418,6 +418,61 @@ def test_history_http_protocol_and_stale_save(history_session):
         server.server_close()
 
 
+@pytest.mark.parametrize("kind,failure_type", [("tile", RuntimeError), ("action", ValueError)])
+def test_annotation_http_generation_failure_can_retry_on_same_port(
+    tmp_path, monkeypatch, kind, failure_type
+):
+    monkeypatch.setattr(sampler_module, "_warmup_steps", lambda *_: 0)
+    output = tmp_path / "annotations.jsonl"
+    session = AnnotationSession(load_config(), output, seed=77, max_steps=1, kind=kind)
+    session.choose_difficulty("easy")
+    first = session.store.pending
+    following = session.sampler.sample("easy", annotation_kind=kind)
+    session.sampler.sample = Mock(side_effect=[failure_type("generation failed"), following])
+    server = _AnnotationServer(("127.0.0.1", 0), session)
+    thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01})
+    thread.start()
+    base = f"http://127.0.0.1:{server.server_port}/"
+
+    def post(path, **body):
+        with urlopen(
+            Request(base + path, json.dumps(body).encode(), {"Content-Type": "application/json"}),
+            timeout=5,
+        ) as response:
+            assert response.status == 200
+            return json.load(response)
+
+    def labels(row):
+        if kind == "action":
+            return {
+                "feasible_actions": ["wait"],
+                "absolute_infeasible_actions": row["absolute_infeasible_actions"],
+            }
+        return {"tiles": row["availability"]["legal_tiles"][:1]}
+
+    try:
+        saved = post("api/resolve", id=first["id"], status="labeled", request=1, **labels(first))
+        assert saved["request"] == 1 and saved["error"] == "generation failed"
+        assert saved["record"]["id"] == first["id"] and saved["record"]["revision"] == 1
+        assert saved["counts"]["labeled"] == 1 and session.store.pending is None
+        persisted = LiveAnnotationStore(
+            output, plant_types=load_config()["environment"]["plants"], kind=kind
+        )
+        assert persisted.record(first["id"])["status"] == "labeled"
+        retried = post("api/retry", request=2)
+        assert retried["error"] is None and retried["mode"] == "pending"
+        assert retried["record"]["id"] == following["id"]
+        post("api/resolve", id=following["id"], status="labeled", exit=True, **labels(following))
+        thread.join(timeout=5)
+        assert not thread.is_alive()
+        assert session.sampler.sample.call_count == 2
+        assert session.store.counts["labeled"] == 2 and session.store.pending is None
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
+
+
 def test_conflict_http_resolution_and_save_exit_shuts_down_server(tmp_path):
     output = tmp_path / "annotations.jsonl"
     rows = [_live_annotation_row("a", "labeled", [0]), _live_annotation_row("b", "labeled", [1])]
@@ -467,7 +522,7 @@ def test_annotation_browser_preserves_drafts_and_ignores_stale_replies():
     harness = r"""
 const vm=require('node:vm'),assert=require('node:assert/strict');
 let source=JSON.parse(require('node:fs').readFileSync(0,'utf8'));
-let elements=new Map(),context={console,Set,URLSearchParams,encodeURIComponent};
+let elements=new Map(),context={console,assert,Set,URLSearchParams,encodeURIComponent};
 function element(){return {value:'',textContent:'',innerHTML:'',hidden:false,disabled:false,appendChild(){},
  classList:{toggle(){}},addEventListener(){},getContext(){return null},hasPointerCapture(){return false}}}
 context.document={getElementById(id){if(!elements.has(id))elements.set(id,element());return elements.get(id)},createElement:element};
@@ -534,6 +589,30 @@ if(app.draft.has('dig')||app.absolute.has('dig'))throw Error('dig erase mode fai
  paint({buttons:1,clientX:211,clientY:281});
  if(!app.absolute.has(1))throw Error('automatic tile absolute label was removed');
  `,context);
+vm.runInContext(`(async()=>{
+ app.busy=false;app.request=30;app.dirty=true;render=fullRender;
+ let saved={...app.state,request:31,error:'generation paused',mode:'review',
+  record:{...currentRecord(),status:'labeled',revision:2,feasible_tiles:[0]},
+  navigation:{reviewing:true}};
+ fetch=async()=>({ok:true,json:async()=>saved});
+ await request('./api/resolve',{id:'tile',revision:1,tiles:[0]});
+ assert.equal(currentRecord().revision,2);assert.equal(app.dirty,false);
+ assert.equal(app.error,null);assert.equal($('retry').hidden,false);assert.equal(app.busy,false);
+ let next={...saved,request:32,error:null,mode:'pending',
+  record:{...saved.record,id:'next',status:'pending',revision:0,feasible_tiles:[]},navigation:{}};
+ fetch=async(path,options)=>{
+  assert.equal(path,'./api/retry');assert.equal(options.method,'POST');
+  assert.equal(JSON.parse(options.body).request,32);
+  return {ok:true,json:async()=>next};
+ };
+ await $('retry').onclick();
+ assert.equal(currentRecord().id,'next');assert.equal($('retry').hidden,true);
+ app.draft=new Set([0]);app.dirty=true;
+ fetch=async()=>({ok:false,status:400,json:async()=>({error:'stale annotation revision'})});
+ await request('./api/resolve',{id:'next',tiles:[0]});
+ assert.equal(currentRecord().id,'next');assert.equal(app.dirty,true);
+ assert.ok(app.error.includes('stale annotation revision'));assert.equal(app.busy,false);
+})()`,context).catch(error=>{console.error(error);process.exitCode=1});
 """
     result = subprocess.run(
         [node, "-e", harness], input=json.dumps(script), text=True, capture_output=True, timeout=15
@@ -678,6 +757,70 @@ def test_action_sampler_defaults_dig_to_absolute_infeasible(monkeypatch):
     assert "dig" not in populated["automatic_absolute_infeasible_actions"]
     assert "dig" in populated["absolute_infeasible_actions"]
     validate_record(populated, annotation=False, plant_types=load_config()["environment"]["plants"])
+
+
+def test_action_annotation_advances_after_empty_board_without_restart(monkeypatch, tmp_path):
+    monkeypatch.setattr(sampler_module, "_warmup_steps", lambda *_: 0)
+    monkeypatch.setattr(sampler_module, "_available", lambda _env: [])
+    output = tmp_path / "action-annotations.jsonl"
+    session = AnnotationSession(
+        load_config(), output, seed=77, family="diagnostic", max_steps=1, kind="action"
+    )
+    session.choose_difficulty("easy")
+    first = session.state()["record"]
+    assert first["status"] == "pending"
+    assert "dig" in first["absolute_infeasible_actions"]
+    assert "dig" not in first["automatic_absolute_infeasible_actions"]
+
+    session.resolve(
+        {
+            "id": first["id"],
+            "status": "labeled",
+            "feasible_actions": ["wait"],
+            "absolute_infeasible_actions": ["dig"],
+        }
+    )
+    state = session.state()
+    assert state["error"] is None
+    assert state["mode"] == "pending"
+    assert state["record"]["id"] != first["id"]
+
+
+@pytest.mark.parametrize("populated", [False, True], ids=["empty", "populated"])
+@pytest.mark.parametrize("legacy_locked_dig", [False, True], ids=["editable", "legacy-locked"])
+def test_action_dig_default_validates_and_remains_editable_after_reload(
+    tmp_path, monkeypatch, populated, legacy_locked_dig
+):
+    cfg = load_config()
+    monkeypatch.setattr(sampler_module, "_warmup_steps", lambda *_: 0)
+    sampler = ReachableSnapshotSampler(cfg, seed=77, max_steps=1)
+    sampler.sample("easy", annotation_kind="action")
+    if populated:
+        sampler.env.step(sampler.env.codec.encode(Place("sunflower", 0, 0)))
+    row = sampler_module.snapshot_record(
+        sampler.env, group_id="episode", record_id="action", annotation_kind="action"
+    )
+    assert bool(row["observation"]["plants"]) == populated
+    assert row["action_availability"]["dig"]["feasible"] == populated
+    assert "dig" not in row["automatic_absolute_infeasible_actions"]
+    assert "dig" in row["absolute_infeasible_actions"]
+    row.update(protocol=ANNOTATION_PROTOCOL, status="pending", difficulty="easy")
+    if legacy_locked_dig:
+        row["automatic_absolute_infeasible_actions"].append("dig")
+    validate_record(row, annotation=True, plant_types=cfg["environment"]["plants"])
+    path = tmp_path / "action.jsonl"
+    path.write_text(json.dumps(row) + "\n", "utf-8")
+    store = LiveAnnotationStore(path, plant_types=cfg["environment"]["plants"], kind="action")
+    automatic = store.pending["automatic_absolute_infeasible_actions"]
+    assert "dig" not in automatic
+    for invalid in (automatic[1:], ["wait", *automatic]):
+        broken = {**store.pending, "automatic_absolute_infeasible_actions": invalid}
+        with pytest.raises(ValueError, match="automatic absolute action labels do not match"):
+            validate_record(broken, annotation=True, plant_types=cfg["environment"]["plants"])
+    store.resolve("action", status="labeled", feasible=["dig"], absolute=automatic)
+    restored = LiveAnnotationStore(path, plant_types=cfg["environment"]["plants"], kind="action")
+    assert restored.record("action")["feasible_actions"] == ["dig"]
+    assert "dig" not in restored.record("action")["absolute_infeasible_actions"]
 
 
 def test_sampler_diversifies_easy_states_with_delayed_sparse_planting():

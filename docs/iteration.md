@@ -1,3 +1,22 @@
+## Action annotation save and retry recovery - 2026-10-22
+
+- Problem/root cause: on empty boards, validation required Dig in the automatic
+  locked set even though the live store deliberately removed it. Saving could
+  persist the current labels and then fail while preparing the next map. The
+  browser also sent GET to the POST-only retry endpoint and discarded successful
+  save responses containing a next-map generation error.
+- Improvement: sampler and validation share automatic label derivation, with
+  impossible plant labels mandatory and Dig editable. Legacy locked-Dig records
+  remain readable. Generation failures return the saved record and a retryable
+  session error; Retry generation uses POST on the existing server.
+- Verification: the owning annotation suite passes 76 tests, including empty and
+  populated boards, legacy records, mandatory plant-label rejection, save/next,
+  retry on the same port, stale replies, and Save and exit. Ruff, inline JavaScript
+  syntax validation, and `git diff --check` pass.
+- Remaining limits: bounded sampler failures still require a retry; this fix
+  preserves the saved labels rather than guaranteeing every generation succeeds.
+  No formal training, PR, or push; user datasets and scripts are untouched.
+
 ## Compact CPU/GPU training pipeline — 2026-10-21
 
 - Problem/root cause: inactive slot metadata, repeated collation/routing and demo

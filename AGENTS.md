@@ -169,7 +169,11 @@
   `presentation/web_assets.py` owns the shared
   Canvas renderer; `presentation/annotation_viewer.py` serves the one-map-at-a-time
   CPU annotator with difficulty selection, pointer-drag painting, synchronized
-  Wait/Dig controls, restart recovery, and relative APIs. `dataset.py` also groups contradictory labeled records by
+  Wait/Dig controls, restart recovery, and relative APIs. Sampler and validation
+  share automatic action-label derivation: impossible plants stay locked; Dig is
+  an editable default, including on empty boards. Generation failures retain the
+  saved state and retry through relative POST without restarting the server.
+  `dataset.py` also groups contradictory labeled records by
   canonical plant/entity/global inputs; the annotator shows that conflict queue
   before generation, applies one revision atomically to every group member, and
   supports Save and exit. Browser-local history navigation revisits completed

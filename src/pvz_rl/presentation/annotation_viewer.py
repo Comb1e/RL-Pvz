@@ -83,7 +83,7 @@ async function request(path,body=null,preserveDraft=false){
   let options=body===null?{cache:'no-store'}:{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({...body,request})};
   let url=body===null?path+(path.includes('?')?'&':'?')+'request='+request:path;
   let response=await fetch(url,options),data=await response.json();
-  if(request!==app.request)return;if(!response.ok||data.error)throw Error(data.error||'HTTP '+response.status);
+  if(request!==app.request)return;if(!response.ok)throw Error(data.error||'HTTP '+response.status);
   applyState(data,request,preserveDraft);
  }catch(error){if(request===app.request)app.error='Request failed: '+error+' · Reload map to fetch saved labels.'}
  finally{if(request===app.request){app.busy=false;render()}}
@@ -101,7 +101,7 @@ $('wait-action').onclick=()=>{if(isActionMode())toggleAction('wait',app.mode)};$
 $('difficulty').onchange=()=>{let level=$('difficulty').value,r=currentRecord();if(level)request('./api/difficulty',{difficulty:level,...(r?{id:r.id}:{})},true)};$('clear').onclick=()=>{app.draft.clear();app.dirty=true;render()};
  function saveCurrent(exit){if(!availabilityValid()){setActivity('Cannot save: choose at least one feasible label');return}let r=currentRecord(),isAction=app.state.annotation_kind==='action';app.exiting=exit;if(app.state.mode==='conflict'){let c=app.state.conflict;request('./api/conflict/resolve',{key:c.key,members:list(c.members).map(member=>({id:member.id,revision:n(member.revision)})),...(isAction?{feasible_actions:selected(),absolute_infeasible_actions:selectedAbsolute()}:{tiles:selected(),absolute_infeasible_tiles:selectedAbsolute()}),exit})}else request('./api/resolve',{id:r.id,revision:n(r.revision),status:'labeled',...(isAction?{feasible_actions:selected(),absolute_infeasible_actions:selectedAbsolute()}:{tiles:selected(),absolute_infeasible_tiles:selectedAbsolute()}),exit})}
  $('save').onclick=()=>saveCurrent(false);$('save-exit').onclick=()=>saveCurrent(true);
-$('discard').onclick=()=>{let r=currentRecord(),reason=window.prompt('Optional discard reason:','');if(reason!==null)request('./api/resolve',{id:r.id,revision:n(r.revision),status:'discarded',reason:reason||null})};$('retry').onclick=()=>{if(canLeave())request('./api/retry')};
+$('discard').onclick=()=>{let r=currentRecord(),reason=window.prompt('Optional discard reason:','');if(reason!==null)request('./api/resolve',{id:r.id,revision:n(r.revision),status:'discarded',reason:reason||null})};$('retry').onclick=()=>{if(canLeave())return request('./api/retry',{})};
 for(let direction of ['previous','next','current'])$(direction).onclick=()=>navigate(direction);
 $('reload').onclick=()=>{if(canLeave())refresh()};
 let canvas=$('board');canvas.addEventListener('pointerdown',event=>{if(event.button!==0)return;if(isActionMode()){let name=actionCardAt(canvas,currentRecord()&&currentRecord().observation,event);if(name){event.preventDefault();toggleAction(name,app.mode)}return}canvas.setPointerCapture(event.pointerId);app.lastTile=null;paint(event)});canvas.addEventListener('pointermove',paint);canvas.addEventListener('pointerup',event=>{app.lastTile=null;if(canvas.hasPointerCapture(event.pointerId))canvas.releasePointerCapture(event.pointerId)});canvas.addEventListener('pointercancel',event=>{app.lastTile=null;if(canvas.hasPointerCapture(event.pointerId))canvas.releasePointerCapture(event.pointerId)});window.addEventListener('resize',()=>{if(app.state)render()});window.addEventListener('beforeunload',event=>{if(app.dirty&&!app.exiting){event.preventDefault();event.returnValue=''}});refresh();
@@ -154,7 +154,7 @@ class AnnotationSession:
                 sampler_seed=self.sampler.seed,
             )
             self.error = None
-        except RuntimeError as exc:
+        except (RuntimeError, ValueError) as exc:
             self.error = str(exc)
 
     def state(self, request=0, *, record_id=None):

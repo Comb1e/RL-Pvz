@@ -373,6 +373,11 @@ throughput measurements.
 
 ## Reachable tile annotation — 2026-10-18
 
+- [MDN Using the Fetch API](https://developer.mozilla.org/en-US/docs/Web/API/Fetch_API/Using_Fetch):
+  consulted HTTP method selection and `Response.ok` error handling for annotation
+  retry recovery. Retry uses POST; successful save responses retain their session
+  state even when next-map generation reports an error. HTTP failures still
+  preserve the unsaved browser draft.
 - [Python random sequence sampling](https://docs.python.org/3/library/random.html#random.choice): reviewed the single-element sequence draw for equal wait/eight-species proposals. Availability is checked after this draw, with failed choices becoming wait rather than resampling; sorted legal tile IDs preserve seeded replay across public-board iteration orders.
 - [MDN conditional requests: optimistic locking](https://developer.mozilla.org/en-US/docs/Web/HTTP/Guides/Conditional_requests#avoiding_the_lost_update_problem_with_optimistic_locking): reviewed the lost-update failure between concurrent editors. Annotation edits carry the loaded record revision in the JSON protocol and reject mismatches under the session lock; the application does not introduce ETag headers or change model inputs.
 - [Procgen project](https://github.com/openai/procgen): reviewed its procedural
