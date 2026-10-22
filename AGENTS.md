@@ -222,10 +222,11 @@
   conflict grouping/revision, difficulty progression, discard behavior and browser
   annotation controls.
 - `docs/architecture.md` traces current ownership/workflows/failures.
-  `docs/training.md` owns commands and recovery; `docs/math/entity-inputs.md` owns
-  encoding/attention, `sequential-training.md` learning/attribution,
+  `README.md` owns quick-start commands; this file maps test ownership.
+  `docs/math/entity-inputs.md` owns encoding/attention,
+  `sequential-training.md` learning/attribution,
   `training-objective.md` reward economics, `invalid-action-penalties.md` rejection,
-  and `training-throughput.md` execution. `docs/validation.md` maps verification;
+  and `training-throughput.md` execution;
   results/history belong in `docs/iteration.md`, raw measurements in `docs/evidence/`.
 - `gpu.py` resolves a visible index or CUDA UUID and applies execution-only native-BF16
   profiles; `monitoring/fit_benchmark.py` measures the complete fitting path and

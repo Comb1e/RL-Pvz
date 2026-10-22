@@ -44,8 +44,6 @@ Or open the browser annotator and label plant cards, Wait/Dig, or board tiles:
 Dig starts as an editable absolute-infeasible action label. If next-map
 generation fails, use **Retry generation** on the same server; saved labels remain persisted.
 
-[Training guidance](docs/training.md) covers annotation fitting before demo
-initialization, autonomous training, GPU selection, Jupyter proxies, and recovery.
 The active-only trajectory/recovery format is v4; older runs support compatible
 weight-only initialization, but cannot resume. Model weights and the learning
 objective are unchanged by the pipeline optimization.
@@ -57,7 +55,7 @@ objective are unchanged by the pipeline optimization.
 .\.venv\Scripts\python.exe -m ruff format --check --no-cache .
 ```
 
-Use [test ownership](docs/validation.md) to select focused suites. For bounded
+Use [test ownership](AGENTS.md#code-structure) to select focused suites. For bounded
 production-cycle calibration with fresh optimizer and simulator state:
 
 ```powershell
@@ -70,10 +68,8 @@ This is a scratch performance rehearsal, not a formal training run. Incomplete
 comparisons never promote a profile; existing 4070 microbatch defaults remain.
 
 - [Architecture and state flows](docs/architecture.md)
-- [Training, reward settings, and recovery](docs/training.md)
 - [Execution controls and diagnostics](docs/math/training-throughput.md)
 - [4070 pipeline measurements and limitations](docs/evidence/training-pipeline-optimization-20261021.md)
 - [Learning objective](docs/math/training-objective.md)
-- [Viewer controls](docs/live-view.md)
 - [References](docs/references.md)
 - [Iteration history](docs/iteration.md)

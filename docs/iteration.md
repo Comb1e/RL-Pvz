@@ -1,3 +1,11 @@
+## Documentation removal - 2026-10-22
+
+- Removed the training guide, live-view guide, and validation page as requested.
+  Updated README links and code-ownership references. Architecture is unchanged;
+  archived external evidence links remain available.
+- Verification: confirmed all three files are absent, removed local links to
+  them, and ran `git diff --check`. No tests were rerun for documentation deletion.
+
 ## Action annotation save and retry recovery - 2026-10-22
 
 - Problem/root cause: on empty boards, validation required Dig in the automatic
@@ -1601,7 +1609,7 @@ Warmed median decisions/game/s, with fixed 128 original slots:
   No formal training was launched.
 
 Dates and results belong to their recorded version. Current behavior lives in
-[architecture](architecture.md) and [training](training.md). Archived test counts,
+[architecture](architecture.md). Archived test counts,
 artifact locations and learning outcomes remain in the historical validation snapshot.
 The longer pre-consolidation notes remain in `git show b642c9c:docs/iteration.md`.
 
