@@ -9,9 +9,8 @@
 - Keep current architecture and workflow diagrams in `docs/architecture.md`.
 - Record date, previous problems, root causes, improvements, verification, and
   remaining issues for each version in `docs/iteration.md`.
-- Verify successful, failing, boundary, and independent mathematical controls together.
-- Reduce duplicate tests: keep each behavior in its owning suite and preserve distinct
-  mathematical, boundary, backend and recovery controls.
+- Keep only the three core smoke tests described below, per the user's selected scope.
+  Do not restore mathematical, boundary, backend or recovery regression suites.
 - Keep the game dependency separate and pinned. Never expose seeds, future schedules,
   or snapshots to policy inputs.
 - User's current scope: complete the code and training README; availability and short
@@ -25,16 +24,15 @@
   an existing game checkout. Both reuse `tools/stage_game.py` for verified,
   non-editable installation of the engine lock, without changing the game checkout.
   Bash accepts `--game-repo` / `--python`, handles POSIX and Windows virtual
-  environments, and cleans its temporary archive on exit. Installation controls
-  belong to `test_cuda_only.py`; do not download dependencies in regression tests.
+  environments, and cleans its temporary archive on exit. Do not download
+  dependencies in smoke tests.
 - `tools/collect_fit_diagnostics.py` wraps the existing autonomous train command
   with temporary host-timing wrappers and an optional bounded CPU/CUDA profiler.
   It reuses `monitoring/hardware.py` with an optional independent detail sampler
   for thread CPU, process I/O and Linux cgroup throttling. Streaming chunk/worker
   events retain exact batch shapes, compiler paths, graph state and fallbacks.
   The lightweight collector adds no CUDA waits/readbacks or learning changes;
-  detailed profiler overhead is explicit. `test_fit_diagnostics.py` owns wrapper
-  transparency and trace bounds; hardware sampling remains in its reporting suite.
+  detailed profiler overhead is explicit.
   Collection counters include the small-active tail; return finalization, spool
   preparation and checkpoint serialization have separate spans. `pipeline_benchmark.py`
   calls production lifecycle phases on fresh scratch cohorts and stops after
@@ -211,16 +209,6 @@
   absent non-wait rows are nullable/`n/a`. Gap is EMA candidate max minus EMA at the
   online-selected tile: disagreement, not proven overestimation. Selected error and
   conditional best-tile minus sampled-tile placement gap stay separate.
-- Owning suites: `test_two_stage_transformer.py` covers attention/dimensions,
-  statelessness, active packing, precision and graph ownership; `test_two_stage_q.py`
-  and `test_q_math.py` cover attribution, detached double-estimator targets,
-  piecewise Huber values/gradients and ranking weights
-  and partition invariance; `test_flat_training.py` covers fitting/recovery.
-  `test_entity_storage.py` owns flat active rows and spill/prefetch. Observation, reward,
-  exploration, demonstration, evaluation and presentation suites retain their owners.
-  `test_tile_annotations.py` owns snapshot validation, live annotation persistence,
-  conflict grouping/revision, difficulty progression, discard behavior and browser
-  annotation controls.
 - `docs/architecture.md` traces current ownership/workflows/failures.
   `README.md` owns quick-start commands; this file maps test ownership.
   `docs/math/entity-inputs.md` owns encoding/attention,
@@ -235,3 +223,26 @@
   Server Proxy; it does not own model or simulator state.
 
 - Annotation protocol v2 supports `annotate --kind tile|action`, separate JSONL stores, feasible and locked absolute-infeasible labels, shared conflict detection, and head-specific fitters. The action annotator exposes plant cards as Canvas hit targets; the duplicated per-action HTML button strip is removed. `initialize-demo --init-from` creates fresh demo optimizer/EMA state from either annotation artifact.
+
+## Test ownership
+
+`tests/test_smoke.py` is the entire test suite, capped at 200 lines with three tests:
+
+- CLI help starts successfully within a 15-second subprocess timeout.
+- CPU inference consumes a real public board, runs both policy stages, returns finite
+  Q values with valid dimensions, and submits an action to the simulator.
+- The explicitly selected `learning` test collects two one-second CUDA games with two
+  environments and one fitting pass, then reloads a checkpoint and predicts an action.
+  Compilation and presentation are disabled; batch size is 32, training allowance is
+  two minutes, and the subprocess timeout is 180 seconds. Missing CUDA requirements fail.
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest -q
+.\.venv\Scripts\python.exe -m pytest -q -m learning
+```
+
+The default command runs only the two CPU checks. All outputs use temporary
+directories. These smoke checks establish core workflow availability; they do not
+establish mathematical correctness, backend parity, detailed recovery behavior or
+annotation/demo/viewer/reporting correctness. Previous regressions remain in Git
+history; there is no archived test suite in the working tree.

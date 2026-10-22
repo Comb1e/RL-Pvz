@@ -1,5 +1,12 @@
 # Sources actually used
 
+## Smoke-test selection — 2026-10-22
+
+- [pytest custom-marker examples](https://github.com/pytest-dev/pytest/blob/main/doc/en/example/markers.rst):
+  consulted marker-based selection for the default CPU checks and explicit
+  `-m learning` CUDA smoke command. This uses pytest's existing marker support
+  without another test dependency.
+
 ## CPU/GPU pipeline audit — 2026-10-21
 
 - [PyTorch 2.8 CUDA semantics](https://raw.githubusercontent.com/pytorch/pytorch/v2.8.0/docs/source/notes/cuda.rst):

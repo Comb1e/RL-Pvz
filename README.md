@@ -51,12 +51,18 @@ objective are unchanged by the pipeline optimization.
 ## Common checks
 
 ```powershell
+.\.venv\Scripts\python.exe -m pytest -q
+.\.venv\Scripts\python.exe -m pytest -q -m learning
 .\.venv\Scripts\python.exe -m ruff check --no-cache .
 .\.venv\Scripts\python.exe -m ruff format --check --no-cache .
 ```
 
-Use [test ownership](AGENTS.md#code-structure) to select focused suites. For bounded
-production-cycle calibration with fresh optimizer and simulator state:
+Default pytest runs two CPU smoke checks: CLI startup and public-board inference.
+The explicit `-m learning` command runs the two-game CUDA learning/checkpoint smoke
+check and fails if CUDA requirements are missing. These checks cover core workflow
+availability. See [test ownership](AGENTS.md#test-ownership) for their limits.
+
+For bounded production-cycle calibration with fresh optimizer and simulator state:
 
 ```powershell
 .\.venv\Scripts\python.exe tools\tune_gpu.py --gpu 0 `

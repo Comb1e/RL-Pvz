@@ -1,3 +1,26 @@
+## Core smoke-test suite — 2026-10-22
+
+- Problem/root cause: 44 test modules and shared fixtures contained 431 test
+  functions across 13,388 lines, including archived protocols and detailed
+  subsystem regressions beyond the user's requested smoke-only coverage.
+- Improvement: replaced the entire suite with three core workflow smoke checks
+  in one 95-line file (99.29% less test code), capped at 200 lines. Default pytest
+  selects CLI/CPU inference;
+  explicit `-m learning` selects bounded CUDA learning and checkpoint reload.
+  Removed Hypothesis and its otherwise unused sortedcontainers lock entry,
+  updated current test guidance, and retained previous regressions in Git only.
+- Verification: collection finds exactly three tests. Default CPU selection passes
+  two tests in 3.81 seconds; explicit CUDA selection passes one in 8.69 seconds,
+  including game-budget completion, an optimizer update, checkpoint reload and
+  prediction. Each group ran once. Ruff lint/format, the test-size limit, removed
+  suite-reference checks and `git diff --check` pass.
+- Remaining limits: this suite establishes startup/inference/tiny-learning
+  availability only. Mathematical, boundary, backend-parity, interruption/recovery
+  and peripheral workflow regressions are intentionally removed. Production code,
+  bundled parameters and architecture documentation are unchanged.
+- Cleanup: automatic approval review rejected cache and temporary-directory
+  removal with "blocked by policy"; ignored test artifacts remain.
+
 ## Agent model architecture documentation - 2026-10-22
 
 - Problem/root cause: the framework overview described the policy's two stages

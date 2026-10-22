@@ -106,10 +106,11 @@ Diagnostics include both-stage inference/fit time, fitting rows/s, memory,
 optimizer completion, selected-action error, species-consistency diagnostics and
 conditional best-tile minus sampled-tile placement gap.
 
-Independent controls cover 128/64/32/16/4/1 live slots, sparse/mixed/crowded
-boards, zero/one planting and recovery. Bounded collect → four-pass-fit → collect
-checks establish implementation correctness only, not a speed or win-rate
-guarantee.
+The current [smoke suite](../../AGENTS.md#test-ownership) checks one tiny CUDA
+learning/checkpoint workflow with compilation disabled. It does not verify
+execution equivalence, compiler behavior, recovery or throughput. Historical
+controls and measurements remain in iteration history and retained evidence;
+manual benchmarks supply new performance evidence.
 
 ## Diagnose cloud fitting stalls
 
