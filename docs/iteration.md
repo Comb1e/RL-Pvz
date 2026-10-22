@@ -1,3 +1,20 @@
+## Agent model architecture documentation - 2026-10-22
+
+- Problem/root cause: the framework overview described the policy's two stages
+  without exposing their inputs, token construction, intermediate layers or
+  output shapes, leaving the requested model topology implicit.
+- Improvement: added the configured input schemas, embedding paths, both
+  Transformer stacks and Q heads, and every operation inside a repeated block.
+  A diagram connects the stages to action selection; tables give dimensions,
+  activations, residuals, masks and conditional placement outputs.
+- Verification: inspected the configured model and checked the documented
+  topology against source, including state/type vocabularies, coordinate queries
+  and output ordering. CPU inference on empty/single-plant boards verified all
+  ten blocks' projection/activation shapes, both Q heads, plant/dig requests and
+  wait's tile-stage skip. Local links and `git diff --check` pass.
+- Remaining limits: documentation adds no learning-quality or performance
+  evidence. Runtime code and parameters are unchanged; no formal training ran.
+
 ## Architecture framework review - 2026-10-22
 
 - Problem/root cause: architecture prose mixed the project framework with code

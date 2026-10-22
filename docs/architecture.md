@@ -79,6 +79,150 @@ the proposed action and reason. Collection may explore locations or maintain a
 commitment to another plant species until it can be placed. Evaluation disables
 these exploration mechanisms.
 
+## Agent model architecture
+
+The configured `two_stage_transformer_q_v1` agent has an action-category
+(species) network followed by a conditional tile network. Each stage learns
+its own embeddings, Transformer blocks and Q head. The tile stage receives
+the selected category ID and the public board; species hidden features stay
+inside the species stage.
+
+### Inputs and token construction
+
+In the shapes below, `B` is the batch entering a stage and `N` is its padded
+entity width, capped at 256. Each board has its own retained entity count
+`n <= N`. The tile batch contains only requested board/category pairs.
+
+| Input | Shape and type | Contents |
+|---|---|---|
+| Entity records | `[B, N, 11]`, int32 | `type`, `state`, `row`, `x`, `health`, `armor`, `phase_ticks`, `slow_ticks`, `has_pole`, `headless`, `damage` |
+| Entity validity | `[B, N]`, boolean | Identifies retained entities and excludes transport padding |
+| Global facts | `[B, 18]`, float32 | Sun, elapsed time, current wave, total waves, initial zombies, defeated zombies, eight card cooldowns, and plant/zombie/projectile/mower counts |
+| Selected category, tile stage only | `[B]`, int64 | One plant category (1–8) or dig (9) per requested board |
+
+The first two entity fields are categorical. The other nine are numerical:
+row and position use board coordinates; health and armor use pinned maximum
+values; countdowns use the tick rate; flags stay binary; projectile damage
+uses normal-pea damage. Global facts arrive normalized. See the
+[input contract](math/entity-inputs.md) for the exact scales and retention order.
+
+Each stage constructs tokens as follows, with `d = 128` for species and
+`d = 192` for tiles. `Linear(a, b)` includes a learned bias.
+
+| Token path | Intermediate layers | Result |
+|---|---|---|
+| Entity type | `Embedding(17, d)`: 16 public entity types plus index 0 | `[B, N, d]` |
+| Entity state | `Embedding(20, d)`: 19 namespaced public states plus index 0 | `[B, N, d]` |
+| Entity numerical fields | Normalize nine fields → `Linear(9, d)` | `[B, N, d]` |
+| Combined entity | Sum type, state and numerical vectors → `LayerNorm(d)` → zero padding | `[B, N, d]` |
+| Global token | `Linear(18, d)` → insert token axis | `[B, 1, d]` |
+| Category token, tile stage only | `Embedding(10, 192)` → insert token axis | `[B, 1, 192]` |
+| Spatial queries, tile stage only | 45 fixed nine-field vectors → the tile encoder's `Linear(9, 192)` → add learned tile marker → repeat across batch | `[B, 45, 192]` |
+
+Type/state embedding index 0 has a fixed zero vector; projectiles also use
+state 0. The validity mask distinguishes present entities from padding.
+Each spatial query has only normalized row and tile-center x populated in
+its nine-field vector. It shares the numerical projection with tile-stage
+entities and receives the learned marker directly. The input LayerNorm
+above applies to combined entity tokens.
+
+### Stage-by-stage layers
+
+The species sequence is `[global, entities]`. The tile sequence is
+`[global, category, 45 spatial queries, entities]`. Both use bidirectional
+self-attention over their complete sequence, with padding masked out.
+
+```mermaid
+flowchart TD
+    Input["Public entities, validity mask and 18 globals"]
+    Input --> SpeciesTokens["Species token construction<br/>[B, N+1, 128]"]
+    SpeciesTokens --> SpeciesBlocks["Transformer blocks 1–4<br/>8 heads; FF width 512"]
+    SpeciesBlocks --> SpeciesNorm["Final LayerNorm(128)<br/>global readout [B, 128]"]
+    SpeciesNorm --> SpeciesHidden["Linear(128, 128) → ReLU"]
+    SpeciesHidden --> SpeciesOutput["Linear(128, 10)<br/>category Q values [B, 10]"]
+    SpeciesOutput --> Category["Argmax category"]
+    Category -->|wait| Wait["Wait action"]
+    Category -->|usable plant or dig ID| TileTokens
+    Input --> TileTokens["Tile token construction<br/>[B, N+47, 192]"]
+    TileTokens --> TileBlocks["Transformer blocks 1–6<br/>12 heads; FF width 768"]
+    TileBlocks --> TileNorm["Final LayerNorm(192) on 47 readout tokens<br/>keep 45 query outputs [B, 45, 192]"]
+    TileNorm --> TileHidden["Shared Linear(192, 128) → ReLU<br/>[B, 45, 128]"]
+    TileHidden --> TileOutput["Shared Linear(128, 1) → squeeze<br/>tile Q values [B, 45]"]
+    TileOutput --> Plot["Argmax plot, or collection exploration"]
+    Plot --> Action["Selected category + plot → action proposal"]
+```
+
+This diagram follows an ordinary usable non-wait proposal through both
+networks. Wait ends at the species stage. An impossible selected category
+skips tile inference and retains a rejected proposal, as described above.
+Spatial queries participate in every tile self-attention block alongside
+the global, category and entity tokens.
+
+| Stage | Sequence through every block | Stack | Final readout and head |
+|---|---|---|---|
+| Species | `[B, N+1, 128]` | 4 independent blocks; 8 heads × 16 features; feed-forward width 512 | Global token → `LayerNorm(128)` → `Linear(128, 128)` → ReLU → `Linear(128, 10)` → `[B, 10]` |
+| Conditional tile | `[B, N+47, 192]` | 6 independent blocks; 12 heads × 16 features; feed-forward width 768 | First 47 tokens → `LayerNorm(192)` → retain 45 spatial queries → shared `Linear(192, 128)` → ReLU → shared `Linear(128, 1)` → squeeze → `[B, 45]` |
+
+Every block has its own parameters. The tile head applies the same two
+linear layers independently to each spatial query. All dropout is zero.
+There is no entity-list positional embedding; spatial information comes
+from public coordinates and the fixed query coordinates.
+
+### Inside every Transformer block
+
+Let `L = N+1` for species and `L = N+47` for tiles. Each block preserves
+`[B, L, d]`. The following operations run in this order in every block:
+
+| Step | Operation | Species intermediate shape | Tile intermediate shape |
+|---|---|---|---|
+| 1 | Save input residual `x`; pre-attention `LayerNorm(d)` | `[B, L, 128]` | `[B, L, 192]` |
+| 2 | Joint query/key/value projection `Linear(d, 3d)` | `[B, L, 384]` | `[B, L, 576]` |
+| 3 | Split Q/K/V and reshape into heads | Each `[B, 8, L, 16]` | Each `[B, 12, L, 16]` |
+| 4 | Attention scores `QKᵀ / sqrt(16)` | Logical `[B, 8, L, L]` | Logical `[B, 12, L, L]` |
+| 5 | Exclude padded keys; softmax over key positions | Logical `[B, 8, L, L]` | Logical `[B, 12, L, L]` |
+| 6 | Attention-weighted sum of V | `[B, 8, L, 16]` | `[B, 12, L, 16]` |
+| 7 | Concatenate heads | `[B, L, 128]` | `[B, L, 192]` |
+| 8 | Attention output projection `Linear(d, d)` | `[B, L, 128]` | `[B, L, 192]` |
+| 9 | Add saved input: `y = x + attention_output` | `[B, L, 128]` | `[B, L, 192]` |
+| 10 | Pre-feed-forward `LayerNorm(d)` on `y` | `[B, L, 128]` | `[B, L, 192]` |
+| 11 | Feed-forward expansion `Linear(d, ff)` | `[B, L, 512]` | `[B, L, 768]` |
+| 12 | GELU | `[B, L, 512]` | `[B, L, 768]` |
+| 13 | Feed-forward contraction `Linear(ff, d)` | `[B, L, 128]` | `[B, L, 192]` |
+| 14 | Add second residual: `z = y + feedforward_output` | `[B, L, 128]` | `[B, L, 192]` |
+| 15 | Zero padded entity positions | `[B, L, 128]` | `[B, L, 192]` |
+
+Attention computes `softmax(QKᵀ / sqrt(16) + mask) V`; the mask excludes
+padding and permits attention in both directions. Global/category/query
+tokens remain valid even on an empty board. The score/softmax shapes are
+logical: efficient attention can avoid materializing the full matrices,
+and the exact fallback chunks queries. Both implement the same operation.
+Runtime weights and features
+use BF16, with FP32 embedding accumulation and stable LayerNorm reductions;
+training maintains FP32 master weights.
+
+### Outputs and action selection
+
+The species outputs are ten unconstrained Q values in this order:
+wait, Sunflower, Peashooter, Wall-nut, Cherry Bomb, Potato Mine, Snow Pea,
+Chomper, Repeater, dig. The tile outputs are 45 unconstrained Q values for
+the requested category, in row-major order (`tile = row * 9 + column`).
+The Q heads have no output softmax. The softmax inside attention only mixes
+token information.
+
+Greedy selection chooses the highest category Q, then the highest tile Q
+for a usable non-wait category; ties choose the lowest index. Collection
+can alter this proposal through the exploration workflow. Only requested
+board/category pairs enter the tile network. The final proposal uses one
+of 406 simulator action IDs: wait `0`, plant `1 + plant_index * 45 + tile`
+(zero-based plant index), or dig `361 + tile`. The selected value is the
+wait category Q for wait and the chosen conditional tile Q for non-wait.
+
+The EMA reference used during training has this same architecture.
+The layer definitions are verified against the
+[encoder implementation](../src/pvz_rl/policy/entity_attention.py),
+[policy heads](../src/pvz_rl/policy/two_stage_transformer.py) and
+[model configuration](../src/pvz_rl/data/train.toml#L164).
+
 ## Learning from complete games
 
 Training collects a fixed cohort of games. Finished games remain paused until
