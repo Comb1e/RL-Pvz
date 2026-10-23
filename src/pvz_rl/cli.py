@@ -238,7 +238,9 @@ def main(argv=None):
     continuation = training.add_mutually_exclusive_group()
     continuation.add_argument("--resume", type=Path, help="continue with saved budget and progress")
     continuation.add_argument(
-        "--init-from", type=Path, help="load compatible weights into a fresh experiment or stage"
+        "--init-from",
+        type=Path,
+        help="load compatible weights (including unfinished annotation .progress.pt) into a fresh experiment or stage",
     )
     annotate = subs.add_parser(
         "annotate", help="open the on-demand reachable-state annotation studio"
@@ -250,7 +252,9 @@ def main(argv=None):
         default=Path("data"),
         help="directory for annotation JSONL and manifest",
     )
-    annotate.add_argument("--kind", choices=("tile", "action"), default="tile", help="annotation head to label")
+    annotate.add_argument(
+        "--kind", choices=("tile", "action"), default="tile", help="annotation head to label"
+    )
     annotate.add_argument(
         "--port", type=int, default=0, help="loopback port; 0 selects an ephemeral port"
     )
@@ -273,15 +277,19 @@ def main(argv=None):
     fit_annotations.add_argument("--annotations", required=True, type=Path)
     fit_annotations.add_argument("--output", required=True, type=Path)
     annotation_source = fit_annotations.add_mutually_exclusive_group()
-    annotation_source.add_argument("--init-from", type=Path)
+    annotation_source.add_argument(
+        "--init-from",
+        type=Path,
+        help="fresh fit from compatible weights or unfinished .progress.pt",
+    )
     annotation_source.add_argument(
         "--resume-from",
         type=Path,
-        help="resume matching annotation progress, including Adam and RNG",
+        help="restore matching progress, Adam, RNG and L2 phase; inherit saved fitting settings",
     )
     fit_annotations.add_argument("--device", choices=("cpu", "cuda"), default="cuda")
     fit_annotations.add_argument(
-        "--passes", type=int, help="total pass cap; 0 means unlimited (TOML default)"
+        "--passes", type=int, help="additional passes this invocation, also on resume; 0 unlimited"
     )
     fit_annotations.add_argument("--learning-rate", type=float)
     fit_annotations.add_argument("--batch-size", type=int)
@@ -297,10 +305,20 @@ def main(argv=None):
     fit_action.add_argument("--annotations", required=True, type=Path)
     fit_action.add_argument("--output", required=True, type=Path)
     action_source = fit_action.add_mutually_exclusive_group()
-    action_source.add_argument("--init-from", type=Path)
-    action_source.add_argument("--resume-from", type=Path)
+    action_source.add_argument(
+        "--init-from",
+        type=Path,
+        help="fresh fit from compatible weights or unfinished .progress.pt",
+    )
+    action_source.add_argument(
+        "--resume-from",
+        type=Path,
+        help="restore matching progress, Adam, RNG and L2 phase; inherit saved fitting settings",
+    )
     fit_action.add_argument("--device", choices=("cpu", "cuda"), default="cuda")
-    fit_action.add_argument("--passes", type=int)
+    fit_action.add_argument(
+        "--passes", type=int, help="additional passes this invocation, also on resume; 0 unlimited"
+    )
     fit_action.add_argument("--learning-rate", type=float)
     fit_action.add_argument("--batch-size", type=int)
     fit_action.add_argument("--margin", type=float)
@@ -330,7 +348,11 @@ def main(argv=None):
     initialize.add_argument("--learning-rate", type=float)
     initialize.add_argument("--seed", type=int)
     initialize.add_argument("--device", choices=("cpu", "cuda"), default="cpu")
-    initialize.add_argument("--init-from", type=Path, help="annotation or compatible weight-only checkpoint")
+    initialize.add_argument(
+        "--init-from",
+        type=Path,
+        help="annotation weights, unfinished .progress.pt, or compatible weight-only checkpoint",
+    )
     evaluation = subs.add_parser("evaluate", help="evaluate a checkpoint or non-learning baseline")
     common(evaluation)
     source = evaluation.add_mutually_exclusive_group(required=True)
@@ -438,7 +460,9 @@ def main(argv=None):
         "benchmark-gpu",
         "initialize-demo",
         "doctor",
-    ) or (args.command in ("fit-tile-annotations", "fit-action-annotations") and args.device == "cuda"):
+    ) or (
+        args.command in ("fit-tile-annotations", "fit-action-annotations") and args.device == "cuda"
+    ):
         import torch
 
         if args.gpu is not None or torch.cuda.is_available():
@@ -467,7 +491,8 @@ def main(argv=None):
         settings = cfg["training"].get("annotation", {})
         profile_seed = settings.get("sampling_seed", "random")
         serve_annotations(
-            args.data_dir / ("action-annotations.jsonl" if args.kind == "action" else "tile-annotations.jsonl"),
+            args.data_dir
+            / ("action-annotations.jsonl" if args.kind == "action" else "tile-annotations.jsonl"),
             cfg=cfg,
             port=args.port,
             seed=args.seed
@@ -508,12 +533,25 @@ def main(argv=None):
     elif args.command == "fit-action-annotations":
         from pvz_rl.learning.annotation_fit import fit_action_annotations
 
-        print(json.dumps(fit_action_annotations(
-            args.annotations, args.output, cfg=cfg, init_from=args.init_from,
-            resume_from=args.resume_from, device=args.device, passes=args.passes,
-            learning_rate=args.learning_rate, batch_size=args.batch_size,
-            margin=args.margin, l2_strength=args.l2_strength, seed=args.seed,
-        ), indent=2))
+        print(
+            json.dumps(
+                fit_action_annotations(
+                    args.annotations,
+                    args.output,
+                    cfg=cfg,
+                    init_from=args.init_from,
+                    resume_from=args.resume_from,
+                    device=args.device,
+                    passes=args.passes,
+                    learning_rate=args.learning_rate,
+                    batch_size=args.batch_size,
+                    margin=args.margin,
+                    l2_strength=args.l2_strength,
+                    seed=args.seed,
+                ),
+                indent=2,
+            )
+        )
     elif args.command == "initialize-demo":
         from pvz_rl.learning.demo_initialization import initialize_demo
 

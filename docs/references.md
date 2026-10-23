@@ -378,6 +378,14 @@ throughput measurements.
 - [Jupyter Server Proxy](https://github.com/jupyterhub/jupyter-server-proxy): authenticated loopback proxying and prefix-safe relative URLs guide the optional browser viewer.
 - Agarwal et al., [Deep Reinforcement Learning at the Edge of the Statistical Precipice](https://arxiv.org/abs/2108.13264), with the [rliable project](https://github.com/google-research/rliable): paired seeds, uncertainty and equal-game comparisons guide the bounded learning study; no new evaluation dependency is added.
 
+## Annotation resume and unfinished-weight handoff — 2026-10-23
+
+- [PyTorch saving/loading models](https://docs.pytorch.org/tutorials/beginner/saving_loading_models.html):
+  consulted the general-checkpoint and warmstarting sections. Continuing optimization
+  requires saved optimizer state in addition to model weights; fresh initialization
+  loads weights alone. Annotation progress follows these separate paths, adding
+  fixed-split/objective identity, RNG, phase, and immutable-snapshot provenance.
+
 ## Reachable tile annotation — 2026-10-18
 
 - [MDN Using the Fetch API](https://developer.mozilla.org/en-US/docs/Web/API/Fetch_API/Using_Fetch):

@@ -507,10 +507,11 @@ def _initialize_demo(
     torch.set_num_threads(cfg["training"]["torch_threads"])
     torch.manual_seed(seed)
     model = TwoStageTransformerPolicy(cfg).to(device)
+    initialization = None
     if init_from is not None:
         from pvz_rl.learning.training import initial_weights
 
-        weights, _ = initial_weights(init_from, cfg)
+        weights, initialization = initial_weights(init_from, cfg)
         model.load_state_dict(weights, strict=True)
     with torch.random.fork_rng(
         devices=[torch.device(device)] if str(device).startswith("cuda") else []
@@ -700,6 +701,7 @@ def _initialize_demo(
                 "objective": dict(objective),
                 "passes_completed": completed,
                 "learner_seed": seed,
+                "initialization": initialization,
                 "source_replay_sha256": verification["reconstruction"]["replay_sha256"],
             },
             output / "initialization.pt",
@@ -716,11 +718,13 @@ def _initialize_demo(
         {
             "state": "complete" if completed == passes else "incomplete",
             "passes_completed": completed,
+            "initialization": initialization,
         },
     )
     return {
         "state": "complete" if completed == passes else "incomplete",
         "passes_completed": completed,
+        "initialization": initialization,
         "checkpoint": str((output / "initialization.pt").resolve()) if completed else None,
         "verification": verification,
         "fitting_compaction": compaction,

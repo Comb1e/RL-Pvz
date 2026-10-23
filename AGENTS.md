@@ -143,6 +143,11 @@
   scheduler, RNG, trajectory, optimizer and both networks. Pools/maps/caches rebuild.
   Fitting/finalization/EMA changes require complete actual rows. Uncommitted passes
   restart; committed steps are not repeated. `performance.py` owns execution refresh.
+  Annotation progress v4 is self-contained and accepted for weight-only fresh
+  initialization, including zero-pass/incomplete snapshots. Shared immutable-byte
+  loading hashes the loaded version and retries Windows sharing conflicts;
+  destination provenance records source pass/kind/convergence. Annotation progress
+  is never autonomous recovery. Progress v3 first needs annotation resume to v4.
 - `presentation/demo_recording.py` records reusable v2 archives/native replays.
   `learning/demo_initialization.py` verifies replay facts/outcomes/timing and reprices
   rewards without rewriting recordings, then fits 20 passes using both online/EMA
@@ -177,15 +182,18 @@
   supports Save and exit. Browser-local history navigation revisits completed
   maps; revision-checked edits persist in place without consuming the pending map
   or invoking the sampler. Pending resolution alone generates the next map.
-  `learning/annotation_fit.py` freezes the species stage and produces a compatible
-  tile-only initialization only after exact train-and-validation feasible top-1
-  and absolute-bottom convergence over all outputs.
+  `learning/annotation_fit.py` freezes the opposite stage for tile/action fitting
+  and publishes a compatible final initialization only after exact train-and-validation
+  feasible top-1 and absolute-bottom convergence over all outputs.
   Its top-1/bottom-k hinge ignores ordering inside label sets, defaults to unlimited
   passes, and enters an explicit L2 phase only after training first converges.
   It streams metrics, records the regularization phase, and saves separate atomic
   annotation weights/Adam/RNG/pass progress. Matching dataset/split/settings and
-  L2 identity gate resume; partial gradients are discarded. Fresh reloaded BF16
-  verification permits zero-pass publication. Long histories use the standalone
+  L2 identity gate resume; omitted options inherit saved settings and pass limits
+  count additional commits per invocation. Progress v3 resumes into v4 with its
+  obsolete cap ignored. History tails reconcile against durable pass metrics;
+  partial gradients are discarded and commits defer Ctrl+C until durable.
+  Fresh reloaded BF16 verification permits zero-pass publication. Long histories use the standalone
   `tools/plot_annotation_loss.py` min/max-envelope canvas viewer.
   It never creates an autonomous resume state.
 - `learning/action_routing.py` classifies pre-action public legality and actual

@@ -1,3 +1,37 @@
+## Annotation resume and unfinished-weight initialization — 2026-10-23
+
+- Problem/root cause: annotation pass limits were part of resume compatibility,
+  omitted CLI options reverted to current defaults, and progress lacked the
+  configuration needed by the shared weight loader. An unfinished fit could not
+  initialize another stage without satisfying the final publication gate.
+- Improvement: `--passes N` now permits N additional passes per invocation, outside
+  fitting identity. Resume inherits saved fitting settings and restores model,
+  Adam, RNG, phase, and metrics. Atomic commits defer Ctrl+C; history tail repair
+  uses the durable pass rather than repeating updates. Self-contained v4 progress
+  initializes tile/action/demo/autonomous stages with weights alone, including
+  zero-pass states. Compatible v3 resume writes v4 while ignoring its old cap.
+  Loaded bytes and provenance hashes share one snapshot; Windows sharing errors
+  use bounded retries. Exact final train/validation and held-out test gates remain.
+- Verification: temporary CPU controls for both heads used real BF16 forwards,
+  FP32 gradients and Adam commits, with controlled evaluation gates to exercise
+  phase transitions. Interrupted/resumed three-pass runs matched uninterrupted
+  model, optimizer, RNG, frozen parameters and L2 state exactly. Controls covered
+  additional/unlimited limits, dataset/split and explicit-option rejection without
+  replacing progress, torn/duplicate history repair, v3 resume, unfinished/zero-pass
+  weight handoff, corrupt/nonfinite/shape-invalid rejection and SIGINT during
+  commit. Independent real-metric zero-pass controls verified both convergence
+  gates and test evaluation. Concurrent Windows replacement/load matched each
+  snapshot hash; errno-only sharing failures found during the control were fixed.
+  Default CPU smoke checks passed (2 passed, 1 deselected); focused Ruff lint/format,
+  CLI help, and `git diff --check` passed.
+- Remaining limits: these short CPU controls establish state and loader behavior,
+  not CUDA recovery parity or annotation learning/generalization quality. No formal
+  training, remote push, or PR; datasets and existing run artifacts are untouched.
+- Cleanup: automatic approval review rejected both recursive and individual-file
+  cleanup as "blocked by policy". Temporary controls/checkpoints remain under
+  the system temp directory's `pvz-annotation-progress-controls` folder; they are
+  outside the repository and excluded from the commit.
+
 ## Annotation validation-phase L2 regularization — 2026-10-22
 
 - Problem: annotation fitting stopped once the training split reached exact

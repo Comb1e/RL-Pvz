@@ -58,6 +58,30 @@ The HTML keeps every committed pass, supports zoom and drag, and reports the
 nearest raw pass on hover. Adjust the regularization strength with
 `--l2-strength` on either annotation-fitting command when needed.
 
+Resume a stopped fit with its saved optimizer, RNG, split, and L2 phase:
+
+```powershell
+.\.venv\Scripts\python.exe -m pvz_rl fit-tile-annotations `
+  --annotations data\tile-annotations.jsonl --output runs\tile-init\tile.pt `
+  --resume-from runs\tile-init\tile.progress.pt --passes 1000
+```
+
+This allows 1,000 additional passes; `--passes 0` is unlimited. Omitted fitting
+options inherit their saved values. Use `--init-from` for changed hyperparameters.
+Any saved progress, including an unfinished or zero-pass snapshot, can supply
+weights to another annotation fit, `initialize-demo`, or `train`:
+
+```powershell
+.\.venv\Scripts\python.exe -m pvz_rl fit-action-annotations `
+  --annotations data\action-annotations.jsonl --output runs\action-init\action.pt `
+  --init-from runs\tile-init\tile.progress.pt
+```
+
+The handoff reads the latest committed snapshot, even while its source fit runs,
+and starts a fresh destination optimizer. The final `tile.pt`/`action.pt` still
+requires convergence. Annotation progress v3 needs one annotation resume to write
+v4 before downstream initialization; `train --resume` requires autonomous recovery.
+
 The active-only trajectory/recovery format is v4; older runs support compatible
 weight-only initialization, but cannot resume. Model weights and the learning
 objective are unchanged by the pipeline optimization.

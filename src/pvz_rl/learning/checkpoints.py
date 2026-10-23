@@ -1,8 +1,12 @@
 """Inspect checkpoint identity and dispatch models before starting environments."""
 
 import copy
+import errno
+import hashlib
 import io
 import json
+import os
+import time
 from pathlib import Path
 from zipfile import ZipFile
 
@@ -21,10 +25,37 @@ from pvz_rl.learning.training_requirements import (
 DEMO_PROTOCOL = "pvz-rl/demo-initialization-checkpoint-v10"
 LEGACY_DEMO_PROTOCOL = "pvz-rl/demo-initialization-checkpoint-v9"
 ANNOTATION_CHECKPOINT_PROTOCOL = "pvz-rl/annotation-initialization-v3"
+ANNOTATION_PROGRESS_PROTOCOL = "pvz-rl/annotation-progress-v4"
+LEGACY_ANNOTATION_PROGRESS_PROTOCOL = "pvz-rl/annotation-progress-v3"
 LEGACY_ANNOTATION_CHECKPOINT_PROTOCOL_V2 = "pvz-rl/annotation-initialization-v2"
 LEGACY_ANNOTATION_CHECKPOINT_PROTOCOL = "pvz-rl/tile-annotation-initialization-v1"
 MODEL_STATE_PROTOCOL = "pvz-rl/stateless-two-stage-bf16-master-state-v2"
 AUTONOMOUS_STATE_PROTOCOL = "pvz-rl/action-global-state-v4"
+
+
+def retry_file_sharing(operation):
+    """Bound retries for Windows readers briefly preventing atomic replacement."""
+    delays = iter((0.02, 0.05, 0.1, 0.2, 0.4, 0.8))
+    while True:
+        try:
+            return operation()
+        except PermissionError as error:
+            delay = next(delays, None)
+            sharing_conflict = getattr(error, "winerror", None) in (5, 32, 33) or (
+                getattr(error, "winerror", None) is None and error.errno == errno.EACCES
+            )
+            if os.name != "nt" or not sharing_conflict or delay is None:
+                raise
+            time.sleep(delay)
+
+
+def load_torch_snapshot(path):
+    """Deserialize and hash the same immutable bytes, closing the live file promptly."""
+    contents = retry_file_sharing(lambda: Path(path).read_bytes())
+    saved = torch.load(io.BytesIO(contents), map_location="cpu", weights_only=True)
+    if not isinstance(saved, dict):
+        raise ValueError("Checkpoint must contain a state dictionary")
+    return saved, hashlib.sha256(contents).hexdigest()
 
 
 def protocol_for(kind):
@@ -95,11 +126,24 @@ def inspect_checkpoint(path, *, weights_only=False):
     if not path.suffix:
         path = path.with_suffix(".zip")
     if path.suffix == ".pt":
-        saved = torch.load(path, map_location="cpu", weights_only=True)
+        saved, snapshot_sha256 = load_torch_snapshot(path)
+        progress = saved.get("protocol") == ANNOTATION_PROGRESS_PROTOCOL
+        if saved.get("protocol") == LEGACY_ANNOTATION_PROGRESS_PROTOCOL:
+            raise ValueError(
+                "Annotation progress v3 must first be loaded with the annotation fitter's "
+                "--resume-from to write v4 progress; then use that file with --init-from"
+            )
+        if progress and not weights_only:
+            raise ValueError(
+                "Annotation progress supports --init-from only here; train --resume "
+                "requires an autonomous checkpoint. Use an annotation fitter's "
+                "--resume-from to continue annotation optimization."
+            )
         initialization_type = {
             DEMO_PROTOCOL: "demonstration",
             LEGACY_DEMO_PROTOCOL: "demonstration",
             ANNOTATION_CHECKPOINT_PROTOCOL: "annotation",
+            ANNOTATION_PROGRESS_PROTOCOL: "annotation",
             LEGACY_ANNOTATION_CHECKPOINT_PROTOCOL_V2: "annotation",
             LEGACY_ANNOTATION_CHECKPOINT_PROTOCOL: "annotation",
         }.get(saved.get("protocol"))
@@ -119,6 +163,8 @@ def inspect_checkpoint(path, *, weights_only=False):
         ):
             raise ValueError("Checkpoint configuration digest does not match its contents")
         convergence = saved.get("convergence", {})
+        if not isinstance(convergence, dict):
+            raise ValueError("Checkpoint convergence metadata must be a dictionary")
         current_annotation_convergence = saved.get("protocol") == ANNOTATION_CHECKPOINT_PROTOCOL
         zero_pass_verified = (
             initialization_type == "annotation"
@@ -138,10 +184,23 @@ def inspect_checkpoint(path, *, weights_only=False):
                 )
             )
         )
-        if (saved.get("passes_completed", -1) < (0 if zero_pass_verified else 1)) or not isinstance(
-            saved.get("model"), dict
+        completed = saved.get("passes_completed")
+        if (
+            type(completed) is not int
+            or completed < (0 if progress or zero_pass_verified else 1)
+            or not isinstance(saved.get("model"), dict)
+            or not saved["model"]
         ):
             raise ValueError("Weight-only checkpoint has no completed fitting pass or weights")
+        if progress:
+            identity = saved.get("identity")
+            settings = identity.get("settings") if isinstance(identity, dict) else None
+            if (
+                saved.get("annotation_kind") not in ("tile", "action")
+                or not isinstance(settings, dict)
+                or settings.get("annotation_kind") != saved["annotation_kind"]
+            ):
+                raise ValueError("Annotation progress has invalid annotation kind metadata")
         if any(
             not isinstance(value, torch.Tensor) or not torch.isfinite(value).all()
             for value in saved["model"].values()
@@ -163,7 +222,17 @@ def inspect_checkpoint(path, *, weights_only=False):
             validation_limit=None,
             initialization_type=initialization_type,
             payload=saved,
+            snapshot_sha256=snapshot_sha256,
         )
+        if initialization_type == "annotation":
+            metadata["source_annotation"] = dict(
+                source_passes_completed=completed,
+                source_annotation_kind=saved.get("annotation_kind")
+                or saved.get("annotation", {}).get("annotation_kind", "tile"),
+                source_converged=convergence.get("verified") is True,
+                source_checkpoint_protocol=saved["protocol"],
+            )
+            metadata["source_counters"] = dict(steps=0, games=0, updates=completed)
     else:
         from pvz_rl.learning.cuda_q import checkpoint_metadata
 

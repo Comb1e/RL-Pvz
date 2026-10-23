@@ -52,6 +52,33 @@ the held-out test split is evaluated only after that gate passes. Every phase,
 metric, and regularizer value is recorded in the annotation progress, history,
 and report artifacts.
 
+Annotation `--resume-from` restores the last durable model, Adam, Python/NumPy/
+PyTorch/device RNG state, cumulative pass count, metrics, and L2 phase. A partial
+gradient pass is discarded; an optimizer commit finishes evaluation and atomic
+progress saving before Ctrl+C takes effect. The dataset, grouped split, kind,
+objective, schema, and model structure must match. Omitted fitting options inherit
+saved values; conflicting explicit options require a fresh `--init-from` run.
+The pass budget is an execution limit outside that compatibility identity:
+`--passes N` permits N additional commits from the restored count, and zero is
+unlimited. Reports record the starting count, cumulative count, invocation count,
+and effective limit. Resume repairs missing, duplicate, or torn history tails from
+the durable progress metrics without repeating committed passes.
+
+Self-contained annotation progress v4 stores configuration/digest, model storage
+and precision identities, source provenance, and convergence status. All four
+initialization paths (tile, action, demo, autonomous) accept it through `--init-from`,
+including unfinished and zero-pass snapshots. They transfer the complete model's
+weights and create fresh optimizer/counters/RNG and, where applicable, EMA state.
+The source pass, kind, convergence status, and SHA-256 of the exact loaded file
+version are recorded. Concurrent replacement is safe: deserialization and hashing
+use the same immutable bytes, with bounded retries for Windows sharing conflicts.
+This weight handoff does not certify convergence or run held-out test evaluation.
+The final annotation initialization artifact remains gated by exact train and
+validation verification. Progress v3 can resume with its obsolete total-pass cap
+ignored, then writes v4; direct downstream loading of v3 is rejected with upgrade
+guidance. Converged annotation artifacts remain supported. Annotation progress is
+separate from autonomous `train --resume` recovery.
+
 Assets are available sun plus each living plant's purchase cost times its
 remaining-health fraction. Purchase is neutral. Effective damage includes
 actual body and armor damage from plants/projectiles, capped at remaining HP;

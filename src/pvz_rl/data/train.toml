@@ -184,6 +184,7 @@ time_budget_minutes = 30
 
 [training.annotation]
 # Annotation convergence: 0 means unlimited passes until train and validation are exact.
+# A positive pass budget counts additional passes per invocation, including resume.
 # L2 activates only after the training split first reaches exact convergence.
 passes = 0
 learning_rate = 0.0003
