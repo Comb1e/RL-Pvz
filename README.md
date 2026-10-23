@@ -58,6 +58,11 @@ The HTML keeps every committed pass, supports zoom and drag, and reports the
 nearest raw pass on hover. Adjust the regularization strength with
 `--l2-strength` on either annotation-fitting command when needed.
 
+Both fitters automatically cache prepared inputs when GPU memory permits and
+pack checkpoint transfers while saving every pass. Existing commands work
+unchanged. See [annotation execution settings and measurements](docs/math/training-throughput.md#annotation-fitting)
+for cache limits, the streaming fallback, and opt-in microbatch tuning.
+
 Resume a stopped fit with its saved optimizer, RNG, split, and L2 phase:
 
 ```powershell

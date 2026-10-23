@@ -438,8 +438,10 @@ class PreparedDeviceBatches:
 
     @staticmethod
     def required_bytes(source, batch_size, auxiliary):
-        return source.observation_bytes(batch_size) + len(source) * 8 + sum(
-            value.numel() * value.element_size() for value in auxiliary.values()
+        return (
+            source.observation_bytes(batch_size)
+            + len(source) * 8
+            + sum(value.numel() * value.element_size() for value in auxiliary.values())
         )
 
     def __init__(self, source, batch_size, device, auxiliary):

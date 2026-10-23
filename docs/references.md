@@ -1,5 +1,20 @@
 # Sources actually used
 
+## Annotation fitting execution — 2026-10-23
+
+- [PyTorch performance tuning guide source](https://raw.githubusercontent.com/pytorch/tutorials/main/recipes_source/recipes/tuning_guide.py):
+  consulted synchronization, repeated setup, memory allocation and small-operation
+  overhead. Prepared raw inputs are reused; learned activations recompute. Encoder
+  limits are opt-in because batching changed BF16 arithmetic in the controls.
+- [PyTorch pinned/nonblocking transfer tutorial source](https://raw.githubusercontent.com/pytorch/tutorials/main/intermediate_source/pinmem_nonblock.py):
+  consulted D2H completion and buffer mutation hazards. Packed CPU snapshots use
+  blocking transfer before serialization; streaming retains the existing pinned
+  transport rather than pinning each tensor on every pass.
+- [PyTorch asynchronous checkpoint recipe source](https://raw.githubusercontent.com/pytorch/tutorials/main/recipes_source/distributed_async_checkpoint_recipe.rst):
+  consulted immutable CPU staging, staging memory cost and limiting in-flight
+  snapshots. The local adaptation is synchronous and retains per-pass `fsync`
+  and atomic replacement; it adds no distributed checkpoint dependency.
+
 ## Smoke-test selection — 2026-10-22
 
 - [pytest custom-marker examples](https://github.com/pytest-dev/pytest/blob/main/doc/en/example/markers.rst):

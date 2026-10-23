@@ -294,7 +294,9 @@ class PreparedAnnotations:
         with closing(self.source.batches(batch_size, device)) as batches:
             for rows, observations, _ in batches:
                 stop = start + len(rows)
-                fields = {key: value[start:stop].to(device) for key, value in self.auxiliary().items()}
+                fields = {
+                    key: value[start:stop].to(device) for key, value in self.auxiliary().items()
+                }
                 fields["rows"] = torch.arange(len(rows), device=device)
                 yield start, stop, observations, fields
                 start = stop
@@ -315,7 +317,10 @@ def _cache_inputs(prepared, batch_size, cfg, device):
     cap = performance.get("annotation_cache_mib", 256) * 1024**2
     report = dict(
         requested=performance.get("annotation_input_cache", "auto"),
-        actual="streaming", bytes=0, cap_bytes=cap, splits=list(prepared),
+        actual="streaming",
+        bytes=0,
+        cap_bytes=cap,
+        splits=list(prepared),
     )
     if report["requested"] == "off" or device.type != "cuda":
         report["reason"] = "disabled" if report["requested"] == "off" else "cpu"
@@ -414,8 +419,14 @@ def _evaluate_splits(model, partitions, prepared, cfg, device, *, batch_size, ma
     names = ("train", "validation")
     totals = [
         _split_totals(
-            model, partitions[name], cfg, device, batch_size=batch_size, margin=margin,
-            kind=kind, prepared=prepared[name],
+            model,
+            partitions[name],
+            cfg,
+            device,
+            batch_size=batch_size,
+            margin=margin,
+            kind=kind,
+            prepared=prepared[name],
         )
         for name in names
     ]
@@ -737,14 +748,20 @@ def _fit_annotations(
 
     def evaluate_training():
         return _evaluate_splits(
-            model, partitions, prepared, cfg, device,
-            batch_size=batch_size, margin=margin, kind=kind,
+            model,
+            partitions,
+            prepared,
+            cfg,
+            device,
+            batch_size=batch_size,
+            margin=margin,
+            kind=kind,
         )
 
     def save_progress(training, validation, regularization_active=False, regularization_loss=0.0):
         convergence = _convergence(training, validation)
-        _atomic_save(
-            snapshot_stager.stage(dict(
+        payload = snapshot_stager.stage(
+            dict(
                 protocol=ANNOTATION_PROGRESS_PROTOCOL,
                 identity=identity,
                 model_storage_protocol=MODEL_STATE_PROTOCOL,
@@ -775,10 +792,11 @@ def _fit_annotations(
                 regularization_loss=regularization_loss,
                 l2_strength=l2_strength,
                 execution=execution,
-            )),
-            progress_path,
+            )
         )
         execution["snapshot_staging"] = snapshot_stager.mode
+        payload["execution"]["snapshot_staging"] = snapshot_stager.mode
+        _atomic_save(payload, progress_path)
 
     regularization_active = bool(
         resume_from is not None and saved.get("regularization_active", False)

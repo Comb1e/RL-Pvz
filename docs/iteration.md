@@ -1,3 +1,36 @@
+## Faster annotation fitting — 2026-10-23
+
+- Problem/root cause: every annotation pass repeated raw-input transport and
+  many small model/Adam D2H transfers before its durable save. Train/validation
+  evaluation also performed separate host metric readbacks.
+- Improvement: shared checkpoint staging packs immutable CPU snapshots by CUDA
+  device/dtype with bounded direct-copy fallback. Prepared annotation inputs
+  retain exact batches/padding on the GPU when both train/validation fit the
+  central cap and headroom. Streaming remains available; caches release on exit
+  and rebuild on resume. Evaluation retains separate split totals and uses one
+  final readback. Reports include admission, bytes, staging mode and limits.
+  Stage fitting limits are opt-in, compilation remains inactive, and existing
+  L2/Adam/clipping arithmetic is preserved. Checkpoint protocols are unchanged.
+- Verification: both-head temporary controls matched baseline losses, metrics,
+  gradients, all weights, Adam/RNG and counters exactly. Checks covered partial
+  batches, empty validation, snapshot ownership, memory rejection/fallback,
+  resource release, interruption/resume, v3 upgrade, fixed train membership,
+  zero-pass/incomplete initialization, publication/test gating and concurrent
+  Windows save/load. CPU smoke checks passed (2 passed, 1 deselected), focused
+  Ruff lint/format and `git diff --check` passed. No permanent tests were added.
+- Measurement: production-fitter ABBA controls on the 4070 Laptop included
+  backward, fresh evaluation and per-pass durable saving. Warm tile passes fell
+  129.75→111.66 ms (initial) and 147.15→128.04 ms (L2); action fell
+  93.69→72.84 and 99.55→84.65 ms. All paired trials improved; final numerical
+  states matched exactly. [Evidence and limitations](evidence/annotation-fitting-performance-20261023.md)
+  includes configuration/digests, cold behavior, memory and optional controls.
+- Remaining limits: these are execution timings, not convergence or grokking
+  evidence. Tile 192/256 limits were faster but changed BF16 values/updates, so
+  they remain opt-in. Grouped L2 matched arithmetic but failed timing acceptance
+  and was rejected. No formal training, push or PR; datasets, existing runs,
+  architecture and the user's pre-training script remain unchanged. Scratch
+  controls were deleted after retaining concise measurements.
+
 ## Annotation resume and unfinished-weight initialization — 2026-10-23
 
 - Problem/root cause: annotation pass limits were part of resume compatibility,

@@ -131,6 +131,9 @@
   representatives per 100-row window affect fitting only. `step_result.py`
   supplies array-backed step results and lazy compatibility infos. `host_transfer.py` owns reusable pinned
   `HostHandoff`; views are consumed before reuse.
+  `PreparedDeviceBatches` in `batch_transport.py` owns immutable resident raw
+  inputs/labels with the original source batch ranges and padding; annotation
+  admission covers train/validation together and retains streaming fallback.
 - `learning/checkpoints.py` validates model/objective/schema and demo v10,
   action-global v4 recovery/trajectory contracts before simulator allocation;
   the objective protocol is v3 because fitting representative weighting changed.
@@ -148,6 +151,10 @@
   loading hashes the loaded version and retries Windows sharing conflicts;
   destination provenance records source pass/kind/convergence. Annotation progress
   is never autonomous recovery. Progress v3 first needs annotation resume to v4.
+  `SnapshotStager` groups borrowed authoritative master/Adam tensors by CUDA
+  device/dtype into owned CPU snapshot storage. Cached layouts rebuild on Adam
+  state changes; bounded allocation failure uses direct copies. Serialization
+  waits for D2H, and each annotation pass remains durably atomic before advancing.
 - `presentation/demo_recording.py` records reusable v2 archives/native replays.
   `learning/demo_initialization.py` verifies replay facts/outcomes/timing and reprices
   rewards without rewriting recordings, then fits 20 passes using both online/EMA
@@ -193,6 +200,13 @@
   count additional commits per invocation. Progress v3 resumes into v4 with its
   obsolete cap ignored. History tails reconcile against durable pass metrics;
   partial gradients are discarded and commits defer Ctrl+C until durable.
+  Annotation training reuses resident raw batches when admitted under the central
+  cache cap and GPU headroom; learned activations always recompute. Train/validation
+  evaluation preserves separate shapes, order and totals with one combined metric
+  readback. Test-cache admission follows convergence and fresh BF16 verification.
+  All sources/caches close on exit and rebuild after resume. `performance.py`
+  resolves optional stage fitting limits; annotation compilation stays disabled.
+  Cache/execution settings are reported but remain outside fitting identity.
   Fresh reloaded BF16 verification permits zero-pass publication. Long histories use the standalone
   `tools/plot_annotation_loss.py` min/max-envelope canvas viewer.
   It never creates an autonomous resume state.

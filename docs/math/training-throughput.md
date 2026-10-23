@@ -63,6 +63,75 @@ preserve tie gradients and pass-boundary totals avoid redundant train metrics.
 FP32 gradient additions, BF16 runtime copies and EMA updates use grouped foreach
 operations; clipping and the one-commit-per-pass boundary remain unchanged.
 
+## Annotation fitting
+
+Both annotation commands use packed checkpoint staging and automatically admit
+prepared train/validation inputs to GPU memory. On the measured 4070 Laptop
+datasets, complete warm passes improved by 13–22%, including fresh evaluation
+and durable saving. See the [paired measurements and limits](../evidence/annotation-fitting-performance-20261023.md).
+This measures execution throughput; convergence time and grokking were not tested.
+
+The central `training.performance` settings are:
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `annotation_input_cache` | `"auto"` | Cache both training and validation if admitted; `"off"` streams inputs. |
+| `annotation_cache_mib` | `256` | Combined resident input cap; zero disables admission for nonempty inputs. |
+| `annotation_use_fit_limits` | `false` | Opt into the existing species/tile fitting microbatch and token limits. |
+
+For example, place these values under the existing table in a custom TOML
+configuration and pass it with the usual `--config` option:
+
+```toml
+[training.performance]
+annotation_input_cache = "auto"
+annotation_cache_mib = 256
+annotation_use_fit_limits = false
+```
+
+Admission includes padded entities, globals, padding masks, label masks, branch
+IDs and row indices. It preserves the exact existing batch boundaries, widths,
+record order and normalization. Training and validation are admitted together
+only if their combined estimate fits the cap and leaves at least the larger of
+1 GiB or 20% of total VRAM free. CPU execution, oversized inputs, insufficient
+headroom or allocation failure use the existing streaming/prefetch transport.
+Partially allocated caches are released before fallback. Admission checks input
+memory at setup; later learned activations still need their usual memory budget.
+
+Only immutable raw inputs reside in the cache. All learned forwards and
+backwards run again with current weights. Fresh post-update BF16 train/validation
+evaluation retains separate accumulation order and metrics, with a combined
+final host readback. Validation stays gradient-free and outside the training
+source. The test cache is prepared only after exact train/validation convergence
+and fresh saved-weight verification, after releasing train/validation caches.
+Sources and transports close on completion, interruption or failure.
+
+Checkpoint staging groups authoritative model and Adam tensors by CUDA device
+and dtype, copies packed buffers to owned CPU storage, and preserves the existing
+checkpoint dictionary's names, shapes, dtypes and values. Layouts are reused
+until tensor structure changes, including Adam moment creation. Scratch is
+bounded by the configured storage RAM allowance; allocation pressure uses direct
+per-tensor transfers. D2H completes before serialization. Saving remains serial,
+with a temporary file, flush, `fsync`, Windows-sharing retries and atomic replace
+after every committed pass. No next pass starts before that durable save.
+
+Reports and progress record cache request/admission, bytes/reason, staging mode
+and effective encoder limits. These execution settings can change on resume;
+they do not change objective compatibility. Caches rebuild after resume and are
+never serialized. Progress v3/v4 and unfinished-weight initialization retain
+their existing rules; no checkpoint protocol or model layout changed.
+
+Default annotation forwards retain policy encoder limits (128 rows, 65,536
+tokens under the measured configuration). To experiment with stage fitting
+limits, set `annotation_use_fit_limits=true`, then use `fit_species_microbatch`,
+`fit_tile_microbatch` and `fit_token_budget` in the same performance table.
+The 4070 profile's existing 64-row/16,384-token limits are a control, not the
+annotation default. Tile 192/256 controls improved pass timing but changed BF16
+values and updates, so larger limits remain opt-in. Compilation stays inactive
+for annotation fitting. A grouped explicit FP32 L2 candidate matched arithmetic
+but failed repeated complete-pass timing acceptance; the existing L2 reduction,
+activation timing, Adam and clipping remain in use.
+
 ## Collection
 
 `ActiveBatchPlan` uses published live flags and public entity counts only. It

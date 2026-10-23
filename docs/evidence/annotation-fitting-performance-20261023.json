@@ -1,0 +1,1413 @@
+{
+  "date": "2026-10-23",
+  "baseline_revision": "5c801d0",
+  "candidate_revision": "144b69e",
+  "candidate_followup": "report snapshot staging mode from current snapshot; formatting only otherwise",
+  "hardware": {
+    "gpu": "NVIDIA GeForce RTX 4070 Laptop GPU",
+    "gpu_total_bytes": 8585216000,
+    "driver": "616.56",
+    "cpu": "Intel64 Family 6 Model 183 Stepping 1, GenuineIntel",
+    "system": "Windows-11-10.0.26200-SP0",
+    "ram_bytes": 33959686144
+  },
+  "software": {
+    "python": "3.12.3",
+    "torch": "2.8.0+cu128",
+    "cuda": "12.8"
+  },
+  "effective_config": {
+    "profile": "complete-game",
+    "schema_version": 1,
+    "engine_commit": "1424b4d802e783a36772091c49d96aa7c6036d7a",
+    "engine_version": "1.4.0",
+    "engine_package_version": "1.7.0",
+    "runtime": {
+      "cache_legal_actions": true,
+      "refill_evaluation": true
+    },
+    "logging": {
+      "progress_seconds": 15,
+      "terminal_progress_seconds": 60,
+      "terminal_mode": "compact",
+      "hardware_sample_seconds": 1.0,
+      "rolling_window": 100
+    },
+    "visualization": {
+      "live_enabled": true,
+      "viewer": "auto",
+      "live_fps": 5,
+      "live_history_ram_mib": 16,
+      "live_window_size": [
+        1600,
+        1050
+      ],
+      "enabled": true,
+      "demos": true,
+      "videos": false,
+      "video_fps": 25,
+      "video_size": [
+        1280,
+        820
+      ],
+      "ffmpeg": "",
+      "crf": 23,
+      "final_hold_seconds": 2
+    },
+    "environment": {
+      "action_timing": "per_tick",
+      "decision_ticks": 1,
+      "cutoff_seconds": 1200,
+      "rows": 5,
+      "cols": 9,
+      "plants": [
+        "sunflower",
+        "peashooter",
+        "wall_nut",
+        "cherry_bomb",
+        "potato_mine",
+        "snow_pea",
+        "chomper",
+        "repeater"
+      ],
+      "zombies": [
+        "basic",
+        "flag",
+        "conehead",
+        "buckethead",
+        "pole_vaulting"
+      ],
+      "plant_states": [
+        "ready",
+        "arming",
+        "armed",
+        "fusing",
+        "digesting",
+        "exploding",
+        "detonating",
+        "rising",
+        "biting",
+        "biting_got_one",
+        "recovering"
+      ],
+      "zombie_states": [
+        "walking",
+        "carrying_pole",
+        "vaulting",
+        "biting",
+        "dead"
+      ],
+      "mower_states": [
+        "ready",
+        "moving",
+        "spent"
+      ]
+    },
+    "encoding": {
+      "version": "entity_v1",
+      "max_entities": 256,
+      "count_scale": 75,
+      "wave_scale": 15
+    },
+    "reward": {
+      "version": "action_global_value_v3",
+      "win_reward": 1.0,
+      "loss_penalty": 1.0,
+      "basic_zombie_value": 30.0,
+      "mower_value": 500.0,
+      "progress_weight": 0.01,
+      "value_scale": 900.0,
+      "home_entry_penalties": [
+        0.005,
+        0.015
+      ],
+      "win_time_weight": 0.5,
+      "early_sun_extra_multiplier": 2.0,
+      "early_sun_spawn_fraction": [
+        1,
+        3
+      ],
+      "action": {
+        "sun_credit_multiplier": 1.0,
+        "block_value_by_plant": {
+          "sunflower": 0.0333333333,
+          "peashooter": 0.0333333333,
+          "wall_nut": 0.025,
+          "cherry_bomb": 0.0333333333,
+          "potato_mine": 0.0333333333,
+          "snow_pea": 0.0333333333,
+          "chomper": 0.0333333333,
+          "repeater": 0.0333333333
+        }
+      }
+    },
+    "training": {
+      "gamma": 1.0,
+      "discount_clock": "simulation_ticks",
+      "method": "complete_return_action_global_v3",
+      "budget_unit": "games",
+      "until_stage_complete": false,
+      "total_games": 10000,
+      "validation_schedule": "stage_success",
+      "eval_interval_games": 2000,
+      "total_steps": 3000000,
+      "learner_seeds": [
+        101,
+        102
+      ],
+      "n_envs": 128,
+      "device": "cuda",
+      "max_minutes": 120,
+      "finalization_minutes": 15,
+      "exploration": {
+        "objective": "committed_plant_tile_epsilon_v1",
+        "epsilon_start": 0.5,
+        "epsilon_floor": 0.01,
+        "decay_games": 10000,
+        "plant_epsilon_start": 0.1,
+        "plant_epsilon_floor": 0.01,
+        "plant_decay_games": 10000
+      },
+      "batch_size": 1024,
+      "n_epochs": 4,
+      "learning_rate": 0.0003,
+      "max_grad_norm": 5,
+      "eval_interval": 250000,
+      "torch_threads": 2,
+      "storage": {
+        "ram_gib": 6,
+        "block_rows": 32768
+      },
+      "objective": {
+        "protocol": "complete_return_action_global_v3",
+        "accepted_outcome_share": 0.5,
+        "species_consistency_weight": 1.0,
+        "species_consistency_huber_delta": 1.0,
+        "invalid_action_target": -1.0,
+        "invalid_fit_group_size": 100,
+        "dense_multiplier": 10.0,
+        "ema_decay": 0.95,
+        "demo_rank_loss_weight": 0.1,
+        "demo_rank_margin": 0.05
+      },
+      "performance": {
+        "compile_collection": false,
+        "compile_fitting": false,
+        "telemetry": true,
+        "telemetry_span_limit": 1024,
+        "fit_precision": "bf16_master",
+        "prefetch": true,
+        "annotation_input_cache": "auto",
+        "annotation_cache_mib": 256,
+        "annotation_use_fit_limits": false,
+        "fit_batch_groups": 2,
+        "fit_encoder_microbatch": 192,
+        "fit_species_microbatch": 64,
+        "fit_tile_microbatch": 64,
+        "fit_entity_buckets": [
+          8,
+          16,
+          32,
+          64,
+          128,
+          256
+        ],
+        "fit_token_budget": 16384,
+        "collection_graph_cache_entries": 8,
+        "collection_vram_headroom_mib": 1638
+      },
+      "demo": {
+        "passes": 40,
+        "learning_rate": 0.0003,
+        "learner_seed": 101,
+        "time_budget_minutes": 30
+      },
+      "annotation": {
+        "passes": 0,
+        "learning_rate": 0.0003,
+        "batch_size": 256,
+        "margin": 1.0,
+        "learner_seed": 101,
+        "l2_strength": 0.0001,
+        "sampling_seed": "random",
+        "sampling_family": "preset",
+        "sampling_max_steps": 20000,
+        "sampling_max_attempts": 100,
+        "sampling_plant_interval_steps": [
+          500,
+          1500
+        ],
+        "sampling_max_plants": 8
+      }
+    },
+    "curriculum": {
+      "mode": "teaching",
+      "residency": "episode_start_stage",
+      "probe_interval_games": 2000,
+      "minimum_stage_games": 100,
+      "probe_interval": 16384,
+      "probe_cases": 100,
+      "consecutive_passes": 1,
+      "minimum_stage_steps": 16384,
+      "boundaries": [
+        0.1,
+        0.4
+      ],
+      "easy_weights": [
+        1.0,
+        0.0,
+        0.0
+      ],
+      "intermediate_weights": [
+        0.5,
+        0.5,
+        0.0
+      ],
+      "final_weights": [
+        0.2,
+        0.4,
+        0.4
+      ],
+      "stages": {
+        "easy": {
+          "tasks": [
+            "easy"
+          ],
+          "weights": [
+            1.0
+          ],
+          "requirements": {
+            "easy": 100
+          }
+        },
+        "standard": {
+          "tasks": [
+            "easy",
+            "standard"
+          ],
+          "weights": [
+            0.5,
+            0.5
+          ],
+          "requirements": {
+            "easy": 100,
+            "standard": 100
+          }
+        },
+        "shared": {
+          "tasks": [
+            "easy",
+            "standard",
+            "hard"
+          ],
+          "weights": [
+            0.2,
+            0.4,
+            0.4
+          ],
+          "requirements": {
+            "easy": 100,
+            "standard": 100,
+            "hard": 100
+          }
+        }
+      }
+    },
+    "splits": {
+      "train": [
+        1000,
+        99999
+      ],
+      "validation": [
+        100000,
+        100049
+      ],
+      "curriculum": [
+        100050,
+        100149
+      ],
+      "test": [
+        200000,
+        200299
+      ],
+      "ood": [
+        300000,
+        300099
+      ]
+    },
+    "evaluation": {
+      "levels": [
+        "easy",
+        "standard",
+        "hard"
+      ],
+      "ood_families": [
+        "redistributed",
+        "faster",
+        "concentrated"
+      ],
+      "ood_levels": [
+        "standard",
+        "hard"
+      ],
+      "replays_per_outcome": 10,
+      "bootstrap_replicates": 2000,
+      "bootstrap_seed": 1739,
+      "targets": [
+        0.95,
+        0.9,
+        0.75
+      ]
+    },
+    "conditions": {
+      "masked": {
+        "masked": true,
+        "shaped": true,
+        "curriculum": true,
+        "hybrid": false
+      }
+    },
+    "policy": {
+      "kind": "two_stage_transformer_q_v1",
+      "action_distribution": "sequential_q_unmasked_tiles_v2",
+      "species_width": 128,
+      "species_layers": 4,
+      "species_heads": 8,
+      "species_feedforward": 512,
+      "tile_width": 192,
+      "tile_layers": 6,
+      "tile_heads": 12,
+      "tile_feedforward": 768,
+      "encoder_microbatch": 128,
+      "attention_query_chunk": 64,
+      "encoder_token_budget": 65536
+    },
+    "simulation": {
+      "backend": "cuda"
+    },
+    "diagnostics": {
+      "early_dig_seconds": 5
+    }
+  },
+  "config_digest": "30aa5468be6f5ff4873401644cfbd38f6961abb77614d439a260a83373376a46",
+  "initial_weights_sha256": "bbe69939e38896e57d255d382f8977052c6178a5d2286a0d6fe28bccb15bb627",
+  "initial_weights_hash_algorithm": "SHA256 of ordered name UTF8, str((dtype, shape)) UTF8 and contiguous tensor bytes",
+  "observation_schema": {
+    "version": "entity_v1",
+    "fields": [
+      "type",
+      "state",
+      "row",
+      "x",
+      "health",
+      "armor",
+      "phase_ticks",
+      "slow_ticks",
+      "has_pole",
+      "headless",
+      "damage"
+    ],
+    "globals": [
+      "sun",
+      "elapsed",
+      "wave",
+      "total_waves",
+      "initial",
+      "defeated",
+      "cooldown_0",
+      "cooldown_1",
+      "cooldown_2",
+      "cooldown_3",
+      "cooldown_4",
+      "cooldown_5",
+      "cooldown_6",
+      "cooldown_7",
+      "plant_count",
+      "zombie_count",
+      "projectile_count",
+      "mower_count"
+    ],
+    "types": {
+      "plant:sunflower": 1,
+      "plant:peashooter": 2,
+      "plant:wall_nut": 3,
+      "plant:cherry_bomb": 4,
+      "plant:potato_mine": 5,
+      "plant:snow_pea": 6,
+      "plant:chomper": 7,
+      "plant:repeater": 8,
+      "zombie:basic": 9,
+      "zombie:flag": 10,
+      "zombie:conehead": 11,
+      "zombie:buckethead": 12,
+      "zombie:pole_vaulting": 13,
+      "projectile:pea": 14,
+      "projectile:icy": 15,
+      "mower": 16
+    },
+    "states": {
+      "plant:ready": 1,
+      "plant:arming": 2,
+      "plant:armed": 3,
+      "plant:fusing": 4,
+      "plant:digesting": 5,
+      "plant:exploding": 6,
+      "plant:detonating": 7,
+      "plant:rising": 8,
+      "plant:biting": 9,
+      "plant:biting_got_one": 10,
+      "plant:recovering": 11,
+      "zombie:walking": 12,
+      "zombie:carrying_pole": 13,
+      "zombie:vaulting": 14,
+      "zombie:biting": 15,
+      "zombie:dead": 16,
+      "mower:ready": 17,
+      "mower:moving": 18,
+      "mower:spent": 19
+    },
+    "normalization": "pinned_rules_v1",
+    "rules_hash": "456201ededc185eaf9104fe9b095a873ea46be46c0be9855e68136bd8c936478",
+    "max_entities": 256,
+    "selection": "mowers_plants_zombies_projectiles_v1"
+  },
+  "datasets": {
+    "tile": {
+      "file_sha256": "596988c75add60075ed767070769828ce07fc29c802b671557164a9fdc5c6b77",
+      "dataset_digest": "fe3650c08788fde2ec11376778b8e90132fb3110afe8cc7358d0d5734ba4e106",
+      "split_digest": "56e37b911c511ca4d1e691913b619b73f752184f06727a2ed3605d4dd0d1513f",
+      "records": 199,
+      "partitions": {
+        "train": 160,
+        "validation": 22,
+        "test": 17
+      }
+    },
+    "action": {
+      "file_sha256": "d6bfd71aeb260ea1780247190e5aa3da74dda64e572788b2f36d8426aba58bc5",
+      "dataset_digest": "609d6aa2b2bab1e56ae1b3727c6a433415f0a97ece99afa81f7211ae07396779",
+      "split_digest": "918dc1a01c51bf2232d970f6145e61837eba74ad7935fc2a9e74d0dfb9b856a3",
+      "records": 50,
+      "partitions": {
+        "train": 40,
+        "validation": 5,
+        "test": 5
+      }
+    }
+  },
+  "controls": {
+    "order": "ABBA per head/phase",
+    "passes": 48,
+    "warmup_passes": 5,
+    "seed": 101,
+    "console": "flushed scratch file; identical for baseline and candidate",
+    "timing": "host elapsed backward start through committed-pass console flush; no profiler",
+    "l2": "controlled convergence predicate to exercise L2 from pass 1; not actual convergence",
+    "outside_repeated_pass_seconds": "invocation elapsed minus passes 2..48: setup + first pass + teardown, not isolated cold preparation",
+    "spans": "inclusive asynchronous host timings; evaluation is per split on baseline, combined on candidate; L2 schedule excludes backward; do not sum spans",
+    "preparation": "input_admission is cache admission only; setup/teardown also included in outside_repeated_pass_seconds",
+    "numerical_equality": "exact tensor/state/metrics comparisons; execution/provenance metadata intentionally differ"
+  },
+  "execution": {
+    "tile": {
+      "use_fit_limits": false,
+      "compilation": "disabled",
+      "encoders": {
+        "species": {
+          "microbatch": 128,
+          "token_budget": 65536
+        },
+        "tile": {
+          "microbatch": 128,
+          "token_budget": 65536
+        }
+      },
+      "input_cache": {
+        "requested": "auto",
+        "actual": "resident",
+        "bytes": 294476,
+        "cap_bytes": 268435456,
+        "splits": [
+          "train",
+          "validation"
+        ],
+        "estimated_bytes": 294476,
+        "headroom_bytes": 1717043200,
+        "reason": "admitted"
+      },
+      "snapshot_staging": "packed"
+    },
+    "action": {
+      "use_fit_limits": false,
+      "compilation": "disabled",
+      "encoders": {
+        "species": {
+          "microbatch": 128,
+          "token_budget": 65536
+        },
+        "tile": {
+          "microbatch": 128,
+          "token_budget": 65536
+        }
+      },
+      "input_cache": {
+        "requested": "auto",
+        "actual": "resident",
+        "bytes": 65700,
+        "cap_bytes": 268435456,
+        "splits": [
+          "train",
+          "validation"
+        ],
+        "estimated_bytes": 65700,
+        "headroom_bytes": 1717043200,
+        "reason": "admitted"
+      },
+      "snapshot_staging": "packed"
+    }
+  },
+  "summary": [
+    {
+      "kind": "tile",
+      "phase": "initial",
+      "baseline_ms": 129.75170000026992,
+      "candidate_ms": 111.65755000001809,
+      "reduction_percent": 13.945212278693987,
+      "paired_reduction_percent": [
+        10.783795308057787,
+        16.883407521726735
+      ]
+    },
+    {
+      "kind": "tile",
+      "phase": "l2",
+      "baseline_ms": 147.14524999999412,
+      "candidate_ms": 128.03649999978006,
+      "reduction_percent": 12.986317941092096,
+      "paired_reduction_percent": [
+        16.624860529763563,
+        8.939547489213018
+      ]
+    },
+    {
+      "kind": "action",
+      "phase": "initial",
+      "baseline_ms": 93.69014999992942,
+      "candidate_ms": 72.83534999987751,
+      "reduction_percent": 22.25933035657176,
+      "paired_reduction_percent": [
+        12.193666247124701,
+        30.194582089723486
+      ]
+    },
+    {
+      "kind": "action",
+      "phase": "l2",
+      "baseline_ms": 99.54754999989746,
+      "candidate_ms": 84.65465000062977,
+      "reduction_percent": 14.960589185050788,
+      "paired_reduction_percent": [
+        14.979927935656379,
+        14.940219526109866
+      ]
+    }
+  ],
+  "trials": [
+    {
+      "kind": "tile",
+      "phase": "initial",
+      "candidate": false,
+      "trial": 0,
+      "passes": 48,
+      "elapsed_seconds": 7.540250500000184,
+      "first_pass_ms": 288.54229999979,
+      "warm_pass_ms": 125.00330000057147,
+      "spans_ms": {
+        "serialize": 57.30770000081975,
+        "evaluation": 11.561899999833258,
+        "backward": 38.42400000030466,
+        "optimizer_schedule": 0.8010000001377193,
+        "runtime_schedule": 0.21209999977145344
+      },
+      "peak_allocated_mib": 780.32958984375,
+      "peak_reserved_mib": 988.0,
+      "rss_mib": 1621.63671875,
+      "progress_mib": 34.2881441116333,
+      "exact": true,
+      "outside_repeated_pass_seconds": 1.5640526000015598
+    },
+    {
+      "kind": "tile",
+      "phase": "initial",
+      "candidate": true,
+      "trial": 1,
+      "passes": 48,
+      "elapsed_seconds": 5.745927799999663,
+      "first_pass_ms": 145.9872000004907,
+      "warm_pass_ms": 111.52320000019245,
+      "spans_ms": {
+        "input_admission": 1.489199999923585,
+        "stage": 7.2258999998666695,
+        "serialize": 45.57659999954922,
+        "evaluation": 15.874550000262388,
+        "backward": 35.94879999945988,
+        "optimizer_schedule": 0.8053999999901862,
+        "runtime_schedule": 0.21419999939098489
+      },
+      "peak_allocated_mib": 590.658203125,
+      "peak_reserved_mib": 728.0,
+      "rss_mib": 2145.6171875,
+      "progress_mib": 34.225847244262695,
+      "exact": true,
+      "outside_repeated_pass_seconds": 0.3363964999989548
+    },
+    {
+      "kind": "tile",
+      "phase": "initial",
+      "candidate": true,
+      "trial": 2,
+      "passes": 48,
+      "elapsed_seconds": 5.714336600000024,
+      "first_pass_ms": 129.58570000046166,
+      "warm_pass_ms": 111.79189999984374,
+      "spans_ms": {
+        "input_admission": 2.2488000004159403,
+        "stage": 6.8688999999722,
+        "serialize": 47.80839999966702,
+        "evaluation": 16.427699999894685,
+        "backward": 36.91340000023047,
+        "optimizer_schedule": 0.7976999995662482,
+        "runtime_schedule": 0.2217999999629683
+      },
+      "peak_allocated_mib": 590.658203125,
+      "peak_reserved_mib": 728.0,
+      "rss_mib": 2162.88671875,
+      "progress_mib": 34.225847244262695,
+      "exact": true,
+      "outside_repeated_pass_seconds": 0.3305882000022393
+    },
+    {
+      "kind": "tile",
+      "phase": "initial",
+      "candidate": false,
+      "trial": 3,
+      "passes": 48,
+      "elapsed_seconds": 6.824402399999599,
+      "first_pass_ms": 161.04059999997844,
+      "warm_pass_ms": 134.50009999996837,
+      "spans_ms": {
+        "serialize": 67.63520000004064,
+        "evaluation": 11.81670000005397,
+        "backward": 40.70700000011129,
+        "optimizer_schedule": 0.8167000005414593,
+        "runtime_schedule": 0.21879999985685572
+      },
+      "peak_allocated_mib": 793.806640625,
+      "peak_reserved_mib": 994.0,
+      "rss_mib": 1709.0234375,
+      "progress_mib": 34.2881441116333,
+      "exact": true,
+      "outside_repeated_pass_seconds": 0.3804727999995521
+    },
+    {
+      "kind": "tile",
+      "phase": "l2",
+      "candidate": false,
+      "trial": 0,
+      "passes": 48,
+      "elapsed_seconds": 7.52407680000033,
+      "first_pass_ms": 167.85770000024058,
+      "warm_pass_ms": 154.96129999974073,
+      "spans_ms": {
+        "serialize": 66.93619999987277,
+        "evaluation": 12.564800000291143,
+        "backward": 43.33299999962037,
+        "l2_schedule": 2.3469999996450497,
+        "optimizer_schedule": 0.8101000003080117,
+        "runtime_schedule": 0.24169999960577115
+      },
+      "peak_allocated_mib": 793.80712890625,
+      "peak_reserved_mib": 994.0,
+      "rss_mib": 1750.66015625,
+      "progress_mib": 34.2881441116333,
+      "exact": true,
+      "outside_repeated_pass_seconds": 0.42390530000011495
+    },
+    {
+      "kind": "tile",
+      "phase": "l2",
+      "candidate": true,
+      "trial": 1,
+      "passes": 48,
+      "elapsed_seconds": 6.545935300000565,
+      "first_pass_ms": 147.51979999982723,
+      "warm_pass_ms": 129.19919999967533,
+      "spans_ms": {
+        "input_admission": 1.3257999999041203,
+        "stage": 7.378000000244356,
+        "serialize": 52.453199999945355,
+        "evaluation": 15.798249999988911,
+        "backward": 37.338500000259955,
+        "l2_schedule": 1.9447999993644771,
+        "optimizer_schedule": 0.7942000002003624,
+        "runtime_schedule": 0.2226999995400547
+      },
+      "peak_allocated_mib": 590.65869140625,
+      "peak_reserved_mib": 728.0,
+      "rss_mib": 2187.44140625,
+      "progress_mib": 34.225847244262695,
+      "exact": true,
+      "outside_repeated_pass_seconds": 0.37540000000626605
+    },
+    {
+      "kind": "tile",
+      "phase": "l2",
+      "candidate": true,
+      "trial": 2,
+      "passes": 48,
+      "elapsed_seconds": 6.460495700000138,
+      "first_pass_ms": 159.36239999973623,
+      "warm_pass_ms": 126.8737999998848,
+      "spans_ms": {
+        "input_admission": 1.0888000006161747,
+        "stage": 7.086100000378792,
+        "serialize": 50.25320000004285,
+        "evaluation": 16.806200000246463,
+        "backward": 37.01850000015838,
+        "l2_schedule": 2.0005999995191814,
+        "optimizer_schedule": 0.8108000001811888,
+        "runtime_schedule": 0.23529999998572748
+      },
+      "peak_allocated_mib": 590.65869140625,
+      "peak_reserved_mib": 728.0,
+      "rss_mib": 2222.53515625,
+      "progress_mib": 34.225847244262695,
+      "exact": true,
+      "outside_repeated_pass_seconds": 0.3610306999999011
+    },
+    {
+      "kind": "tile",
+      "phase": "l2",
+      "candidate": false,
+      "trial": 3,
+      "passes": 48,
+      "elapsed_seconds": 6.950102599999809,
+      "first_pass_ms": 149.20560000064143,
+      "warm_pass_ms": 139.3292000002475,
+      "spans_ms": {
+        "serialize": 64.84540000019479,
+        "evaluation": 11.469600000054925,
+        "backward": 38.55139999996027,
+        "l2_schedule": 1.9376000000193017,
+        "optimizer_schedule": 0.8022000001801644,
+        "runtime_schedule": 0.22460000036517158
+      },
+      "peak_allocated_mib": 793.80712890625,
+      "peak_reserved_mib": 994.0,
+      "rss_mib": 1784.22265625,
+      "progress_mib": 34.2881441116333,
+      "exact": true,
+      "outside_repeated_pass_seconds": 0.3642244999982722
+    },
+    {
+      "kind": "action",
+      "phase": "initial",
+      "candidate": false,
+      "trial": 0,
+      "passes": 48,
+      "elapsed_seconds": 4.259705700000268,
+      "first_pass_ms": 100.05439999986265,
+      "warm_pass_ms": 82.60189999964496,
+      "spans_ms": {
+        "serialize": 48.11969999991561,
+        "evaluation": 6.120199999713805,
+        "backward": 16.193399999792746,
+        "optimizer_schedule": 0.6057000000510016,
+        "runtime_schedule": 0.21109999943291768
+      },
+      "peak_allocated_mib": 274.25146484375,
+      "peak_reserved_mib": 354.0,
+      "rss_mib": 1751.23828125,
+      "progress_mib": 19.84902286529541,
+      "exact": true,
+      "outside_repeated_pass_seconds": 0.2921985000002678
+    },
+    {
+      "kind": "action",
+      "phase": "initial",
+      "candidate": true,
+      "trial": 1,
+      "passes": 48,
+      "elapsed_seconds": 3.7706806999995024,
+      "first_pass_ms": 80.66719999987981,
+      "warm_pass_ms": 72.52969999990455,
+      "spans_ms": {
+        "input_admission": 1.8529999997554114,
+        "stage": 12.023699999190285,
+        "serialize": 32.390899999882095,
+        "evaluation": 10.334099999909085,
+        "backward": 13.568999999733933,
+        "optimizer_schedule": 0.5854000000908854,
+        "runtime_schedule": 0.19499999962135917
+      },
+      "peak_allocated_mib": 72.09814453125,
+      "peak_reserved_mib": 120.0,
+      "rss_mib": 1845.27734375,
+      "progress_mib": 19.796966552734375,
+      "exact": true,
+      "outside_repeated_pass_seconds": 0.2756587000003492
+    },
+    {
+      "kind": "action",
+      "phase": "initial",
+      "candidate": true,
+      "trial": 2,
+      "passes": 48,
+      "elapsed_seconds": 3.7451106999997137,
+      "first_pass_ms": 79.60749999983818,
+      "warm_pass_ms": 73.14099999985046,
+      "spans_ms": {
+        "input_admission": 0.9839999993346282,
+        "stage": 12.017899999591464,
+        "serialize": 32.03529999973398,
+        "evaluation": 9.354199999961565,
+        "backward": 13.85149999987334,
+        "optimizer_schedule": 0.5931000005148235,
+        "runtime_schedule": 0.20450000010896474
+      },
+      "peak_allocated_mib": 72.09814453125,
+      "peak_reserved_mib": 120.0,
+      "rss_mib": 1866.890625,
+      "progress_mib": 19.796966552734375,
+      "exact": true,
+      "outside_repeated_pass_seconds": 0.2637824000012188
+    },
+    {
+      "kind": "action",
+      "phase": "initial",
+      "candidate": false,
+      "trial": 3,
+      "passes": 48,
+      "elapsed_seconds": 5.225610400000733,
+      "first_pass_ms": 101.38989999995829,
+      "warm_pass_ms": 104.77840000021388,
+      "spans_ms": {
+        "serialize": 64.34979999994539,
+        "evaluation": 7.924099999399914,
+        "backward": 18.329200000152923,
+        "optimizer_schedule": 0.6061000003683148,
+        "runtime_schedule": 0.2142000003004796
+      },
+      "peak_allocated_mib": 274.25146484375,
+      "peak_reserved_mib": 354.0,
+      "rss_mib": 1849.921875,
+      "progress_mib": 19.84902286529541,
+      "exact": true,
+      "outside_repeated_pass_seconds": 0.3101840999988781
+    },
+    {
+      "kind": "action",
+      "phase": "l2",
+      "candidate": false,
+      "trial": 0,
+      "passes": 48,
+      "elapsed_seconds": 5.261952599999859,
+      "first_pass_ms": 97.27839999959542,
+      "warm_pass_ms": 102.13199999998324,
+      "spans_ms": {
+        "serialize": 55.25910000051226,
+        "evaluation": 6.844499999715481,
+        "backward": 18.293000000085158,
+        "l2_schedule": 1.6414000001532258,
+        "optimizer_schedule": 0.6003000007694936,
+        "runtime_schedule": 0.21699999979318818
+      },
+      "peak_allocated_mib": 274.251953125,
+      "peak_reserved_mib": 352.0,
+      "rss_mib": 1857.1796875,
+      "progress_mib": 19.84902286529541,
+      "exact": true,
+      "outside_repeated_pass_seconds": 0.3173834000026545
+    },
+    {
+      "kind": "action",
+      "phase": "l2",
+      "candidate": true,
+      "trial": 1,
+      "passes": 48,
+      "elapsed_seconds": 4.411238800000319,
+      "first_pass_ms": 87.049400000069,
+      "warm_pass_ms": 86.83270000074117,
+      "spans_ms": {
+        "input_admission": 1.6294999995807302,
+        "stage": 12.040800000249874,
+        "serialize": 34.24870000071678,
+        "evaluation": 9.379650000482798,
+        "backward": 15.769199999340344,
+        "l2_schedule": 1.520199999504257,
+        "optimizer_schedule": 0.5878000001757755,
+        "runtime_schedule": 0.20429999949556077
+      },
+      "peak_allocated_mib": 72.0986328125,
+      "peak_reserved_mib": 120.0,
+      "rss_mib": 1876.6484375,
+      "progress_mib": 19.796966552734375,
+      "exact": true,
+      "outside_repeated_pass_seconds": 0.2800124000013966
+    },
+    {
+      "kind": "action",
+      "phase": "l2",
+      "candidate": true,
+      "trial": 2,
+      "passes": 48,
+      "elapsed_seconds": 4.3284505000001445,
+      "first_pass_ms": 105.41329999978188,
+      "warm_pass_ms": 82.47660000051837,
+      "spans_ms": {
+        "input_admission": 1.4271000000007916,
+        "stage": 12.087099999916973,
+        "serialize": 33.47759999996924,
+        "evaluation": 9.67804999982036,
+        "backward": 14.68750000003638,
+        "l2_schedule": 1.4937999994799611,
+        "optimizer_schedule": 0.5879000000277301,
+        "runtime_schedule": 0.2096999996865634
+      },
+      "peak_allocated_mib": 72.0986328125,
+      "peak_reserved_mib": 120.0,
+      "rss_mib": 1877.31640625,
+      "progress_mib": 19.796966552734375,
+      "exact": true,
+      "outside_repeated_pass_seconds": 0.3296191999997973
+    },
+    {
+      "kind": "action",
+      "phase": "l2",
+      "candidate": false,
+      "trial": 3,
+      "passes": 48,
+      "elapsed_seconds": 5.040370800000346,
+      "first_pass_ms": 98.73549999974784,
+      "warm_pass_ms": 96.96309999981167,
+      "spans_ms": {
+        "serialize": 54.10149999988789,
+        "evaluation": 6.566000000020722,
+        "backward": 16.589200000453275,
+        "l2_schedule": 1.3290999995660968,
+        "optimizer_schedule": 0.5865000002813758,
+        "runtime_schedule": 0.21379999998316634
+      },
+      "peak_allocated_mib": 274.251953125,
+      "peak_reserved_mib": 352.0,
+      "rss_mib": 1865.09375,
+      "progress_mib": 19.84902286529541,
+      "exact": true,
+      "outside_repeated_pass_seconds": 0.31011319999652187
+    }
+  ],
+  "tuning": {
+    "microbatch": [
+      {
+        "kind": "tile",
+        "microbatch": 128,
+        "limits": {
+          "use_fit_limits": true,
+          "compilation": "disabled",
+          "encoders": {
+            "species": {
+              "microbatch": 128,
+              "token_budget": 65536
+            },
+            "tile": {
+              "microbatch": 128,
+              "token_budget": 65536
+            }
+          }
+        },
+        "backward_ms": 33.84160000041447,
+        "value_max_abs": 0.0,
+        "loss_abs": 0.0,
+        "gradient_max_abs": 0.0,
+        "update_max_abs": 0.0
+      },
+      {
+        "kind": "tile",
+        "microbatch": 64,
+        "limits": {
+          "use_fit_limits": true,
+          "compilation": "disabled",
+          "encoders": {
+            "species": {
+              "microbatch": 64,
+              "token_budget": 16384
+            },
+            "tile": {
+              "microbatch": 64,
+              "token_budget": 16384
+            }
+          }
+        },
+        "backward_ms": 39.34389999994892,
+        "value_max_abs": 0.0,
+        "loss_abs": 0.0,
+        "gradient_max_abs": 0.000732421875,
+        "update_max_abs": 0.0005996525287628174
+      },
+      {
+        "kind": "tile",
+        "microbatch": 192,
+        "limits": {
+          "use_fit_limits": true,
+          "compilation": "disabled",
+          "encoders": {
+            "species": {
+              "microbatch": 192,
+              "token_budget": 65536
+            },
+            "tile": {
+              "microbatch": 192,
+              "token_budget": 65536
+            }
+          }
+        },
+        "backward_ms": 28.647400000409107,
+        "value_max_abs": 0.00390625,
+        "loss_abs": 9.751319885253906e-05,
+        "gradient_max_abs": 0.00390625,
+        "update_max_abs": 0.0005999840795993805
+      },
+      {
+        "kind": "tile",
+        "microbatch": 256,
+        "limits": {
+          "use_fit_limits": true,
+          "compilation": "disabled",
+          "encoders": {
+            "species": {
+              "microbatch": 256,
+              "token_budget": 65536
+            },
+            "tile": {
+              "microbatch": 256,
+              "token_budget": 65536
+            }
+          }
+        },
+        "backward_ms": 28.88879999954952,
+        "value_max_abs": 0.00390625,
+        "loss_abs": 9.751319885253906e-05,
+        "gradient_max_abs": 0.00390625,
+        "update_max_abs": 0.0005999840795993805
+      },
+      {
+        "kind": "action",
+        "microbatch": 128,
+        "limits": {
+          "use_fit_limits": true,
+          "compilation": "disabled",
+          "encoders": {
+            "species": {
+              "microbatch": 128,
+              "token_budget": 65536
+            },
+            "tile": {
+              "microbatch": 128,
+              "token_budget": 65536
+            }
+          }
+        },
+        "backward_ms": 12.357700000393379,
+        "value_max_abs": 0.0,
+        "loss_abs": 0.0,
+        "gradient_max_abs": 0.0,
+        "update_max_abs": 0.0
+      },
+      {
+        "kind": "action",
+        "microbatch": 64,
+        "limits": {
+          "use_fit_limits": true,
+          "compilation": "disabled",
+          "encoders": {
+            "species": {
+              "microbatch": 64,
+              "token_budget": 16384
+            },
+            "tile": {
+              "microbatch": 64,
+              "token_budget": 16384
+            }
+          }
+        },
+        "backward_ms": 10.456699999849661,
+        "value_max_abs": 0.0,
+        "loss_abs": 0.0,
+        "gradient_max_abs": 0.0,
+        "update_max_abs": 0.0
+      }
+    ],
+    "l2": [
+      {
+        "kind": "tile",
+        "candidate": false,
+        "warm_pass_ms": 138.1467999999586,
+        "exact": true
+      },
+      {
+        "kind": "tile",
+        "candidate": true,
+        "warm_pass_ms": 127.30169999940699,
+        "exact": true
+      },
+      {
+        "kind": "tile",
+        "candidate": true,
+        "warm_pass_ms": 135.0538000006054,
+        "exact": true
+      },
+      {
+        "kind": "tile",
+        "candidate": false,
+        "warm_pass_ms": 128.95600000047125,
+        "exact": true
+      },
+      {
+        "kind": "action",
+        "candidate": false,
+        "warm_pass_ms": 69.36339999992924,
+        "exact": true
+      },
+      {
+        "kind": "action",
+        "candidate": true,
+        "warm_pass_ms": 77.54019999993034,
+        "exact": true
+      },
+      {
+        "kind": "action",
+        "candidate": true,
+        "warm_pass_ms": 81.36590000049182,
+        "exact": true
+      },
+      {
+        "kind": "action",
+        "candidate": false,
+        "warm_pass_ms": 79.3376999999964,
+        "exact": true
+      }
+    ]
+  },
+  "microbatch_complete_passes": [
+    {
+      "limit": 128,
+      "candidate": false,
+      "trial": 0,
+      "passes": 24,
+      "total_seconds": 4.149292300000525,
+      "first_pass_ms": 244.7900999995909,
+      "warm_pass_ms": 109.07629999928758,
+      "peak_allocated_mib": 592.013671875,
+      "min_free_mib": 6286.0,
+      "token_budget": 65536
+    },
+    {
+      "limit": 64,
+      "candidate": true,
+      "trial": 1,
+      "passes": 24,
+      "total_seconds": 2.8485420999995767,
+      "first_pass_ms": 120.63140000009298,
+      "warm_pass_ms": 110.47450000023673,
+      "peak_allocated_mib": 590.82861328125,
+      "min_free_mib": 6312.0,
+      "token_budget": 16384
+    },
+    {
+      "limit": 64,
+      "candidate": true,
+      "trial": 2,
+      "passes": 24,
+      "total_seconds": 2.8835164000001896,
+      "first_pass_ms": 121.36050000026444,
+      "warm_pass_ms": 111.48580000008224,
+      "peak_allocated_mib": 590.82861328125,
+      "min_free_mib": 6312.0,
+      "token_budget": 16384
+    },
+    {
+      "limit": 128,
+      "candidate": false,
+      "trial": 3,
+      "passes": 24,
+      "total_seconds": 2.6992300000001705,
+      "first_pass_ms": 113.81110000002082,
+      "warm_pass_ms": 103.92200000023877,
+      "peak_allocated_mib": 591.888671875,
+      "min_free_mib": 6294.0,
+      "token_budget": 65536
+    },
+    {
+      "limit": 128,
+      "candidate": false,
+      "trial": 0,
+      "passes": 24,
+      "total_seconds": 2.7428099999997357,
+      "first_pass_ms": 113.59859999993205,
+      "warm_pass_ms": 106.15929999949003,
+      "peak_allocated_mib": 591.888671875,
+      "min_free_mib": 6294.0,
+      "token_budget": 65536
+    },
+    {
+      "limit": 192,
+      "candidate": true,
+      "trial": 1,
+      "passes": 24,
+      "total_seconds": 2.5634545000002618,
+      "first_pass_ms": 113.46940000021277,
+      "warm_pass_ms": 97.48239999953512,
+      "peak_allocated_mib": 609.70556640625,
+      "min_free_mib": 6244.0,
+      "token_budget": 65536
+    },
+    {
+      "limit": 192,
+      "candidate": true,
+      "trial": 2,
+      "passes": 24,
+      "total_seconds": 2.534838800000216,
+      "first_pass_ms": 104.9713000002157,
+      "warm_pass_ms": 97.68589999930555,
+      "peak_allocated_mib": 609.70556640625,
+      "min_free_mib": 6244.0,
+      "token_budget": 65536
+    },
+    {
+      "limit": 128,
+      "candidate": false,
+      "trial": 3,
+      "passes": 24,
+      "total_seconds": 2.738952299999255,
+      "first_pass_ms": 118.83359999956156,
+      "warm_pass_ms": 104.96270000021468,
+      "peak_allocated_mib": 591.888671875,
+      "min_free_mib": 6294.0,
+      "token_budget": 65536
+    },
+    {
+      "limit": 128,
+      "candidate": false,
+      "trial": 0,
+      "passes": 24,
+      "total_seconds": 2.7026937999999063,
+      "first_pass_ms": 119.69760000010865,
+      "warm_pass_ms": 104.62040000038542,
+      "peak_allocated_mib": 591.888671875,
+      "min_free_mib": 6294.0,
+      "token_budget": 65536
+    },
+    {
+      "limit": 256,
+      "candidate": true,
+      "trial": 1,
+      "passes": 24,
+      "total_seconds": 2.570323400000234,
+      "first_pass_ms": 109.98810000000958,
+      "warm_pass_ms": 97.17090000049211,
+      "peak_allocated_mib": 609.70556640625,
+      "min_free_mib": 6244.0,
+      "token_budget": 65536
+    },
+    {
+      "limit": 256,
+      "candidate": true,
+      "trial": 2,
+      "passes": 24,
+      "total_seconds": 2.5306371999995463,
+      "first_pass_ms": 107.44689999955881,
+      "warm_pass_ms": 97.5389000004725,
+      "peak_allocated_mib": 609.70556640625,
+      "min_free_mib": 6244.0,
+      "token_budget": 65536
+    },
+    {
+      "limit": 128,
+      "candidate": false,
+      "trial": 3,
+      "passes": 24,
+      "total_seconds": 2.740795800000342,
+      "first_pass_ms": 115.31070000000909,
+      "warm_pass_ms": 105.18820000015694,
+      "peak_allocated_mib": 591.888671875,
+      "min_free_mib": 6294.0,
+      "token_budget": 65536
+    }
+  ],
+  "synchronized_diagnostics": [
+    {
+      "kind": "tile",
+      "regularized": false,
+      "diagnostic_only": "explicit CUDA synchronization at phase boundaries; excluded from headline timings",
+      "median_ms": {
+        "cpu_prepare": 1.3219999996181286,
+        "input_cache": 17.257399999834888,
+        "snapshot_stage": 10.644300000421936,
+        "serialization": 45.558900000287395,
+        "evaluation": 14.461449999998877,
+        "ranking_backward": 27.265199999419565,
+        "optimizer": 0.8133999999699881,
+        "runtime": 0.24310000026162015
+      }
+    },
+    {
+      "kind": "tile",
+      "regularized": true,
+      "diagnostic_only": "explicit CUDA synchronization at phase boundaries; excluded from headline timings",
+      "median_ms": {
+        "cpu_prepare": 1.2864000004810805,
+        "input_cache": 1.0764999997263658,
+        "snapshot_stage": 7.031199999801174,
+        "serialization": 46.30340000039723,
+        "evaluation": 14.998499999819614,
+        "ranking_backward": 23.896499999864318,
+        "l2_forward": 1.8688999998630607,
+        "l2_backward": 8.195600000362901,
+        "optimizer": 0.8084000000962988,
+        "runtime": 0.23839999994379468
+      }
+    },
+    {
+      "kind": "action",
+      "regularized": false,
+      "diagnostic_only": "explicit CUDA synchronization at phase boundaries; excluded from headline timings",
+      "median_ms": {
+        "cpu_prepare": 0.9561499996380007,
+        "input_cache": 0.8164000000761007,
+        "snapshot_stage": 4.963300000781601,
+        "serialization": 28.247999999621243,
+        "evaluation": 8.728249999876425,
+        "ranking_backward": 4.751500000566011,
+        "optimizer": 0.5715999996027676,
+        "runtime": 0.24500000017724233
+      }
+    },
+    {
+      "kind": "action",
+      "regularized": true,
+      "diagnostic_only": "explicit CUDA synchronization at phase boundaries; excluded from headline timings",
+      "median_ms": {
+        "cpu_prepare": 0.9364999996250845,
+        "input_cache": 0.8104999997158302,
+        "snapshot_stage": 5.330699999831268,
+        "serialization": 28.60540000074252,
+        "evaluation": 9.454500000174448,
+        "ranking_backward": 9.931700000379351,
+        "l2_forward": 1.1902999995072605,
+        "l2_backward": 4.102900000361842,
+        "optimizer": 0.6978000001254259,
+        "runtime": 0.28759999986505136
+      }
+    }
+  ]
+}
