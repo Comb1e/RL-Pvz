@@ -33,6 +33,85 @@ MODEL_STATE_PROTOCOL = "pvz-rl/stateless-two-stage-bf16-master-state-v2"
 AUTONOMOUS_STATE_PROTOCOL = "pvz-rl/action-global-state-v4"
 
 
+class SnapshotStager:
+    """Stage one immutable CPU snapshot, packing CUDA transfers by dtype/device.
+
+    Only layout descriptions are reused. Returned CPU storage belongs to that
+    snapshot and cannot be overwritten by a later save or optimizer commit.
+    ``max_bytes`` bounds simultaneous packed device and host scratch storage;
+    direct per-tensor copies remain available under allocation pressure.
+    """
+
+    def __init__(self, max_bytes):
+        self.max_bytes = max_bytes
+        self._signature = None
+        self._groups = ()
+        self.mode = "direct"
+
+    @staticmethod
+    def _map(value, transform):
+        if isinstance(value, torch.Tensor):
+            return transform(value)
+        if isinstance(value, dict):
+            result = copy.copy(value)
+            for key, item in value.items():
+                result[key] = SnapshotStager._map(item, transform)
+            return result
+        if isinstance(value, (list, tuple)):
+            items = [SnapshotStager._map(item, transform) for item in value]
+            return tuple(items) if isinstance(value, tuple) else items
+        return copy.deepcopy(value)
+
+    def _layout(self, tensors):
+        signature = tuple((t.device, t.dtype, t.shape, t.layout) for t in tensors)
+        if signature != self._signature:
+            groups = {}
+            for index, tensor in enumerate(tensors):
+                if tensor.device.type == "cuda":
+                    groups.setdefault((tensor.device, tensor.dtype), []).append(index)
+            self._groups = tuple(tuple(indices) for indices in groups.values())
+            self._signature = signature
+
+    @torch.no_grad()
+    def _packed(self, tensors):
+        result = [None] * len(tensors)
+        for indices in self._groups:
+            packed = torch.cat([tensors[i].detach().reshape(-1) for i in indices])
+            # Blocking D2H completes before serialization and device scratch reuse.
+            host = packed.cpu()
+            offset = 0
+            for index in indices:
+                tensor = tensors[index]
+                result[index] = host[offset : offset + tensor.numel()].view(tensor.shape)
+                offset += tensor.numel()
+            del packed
+        for index, tensor in enumerate(tensors):
+            if result[index] is None:
+                result[index] = tensor.detach().to("cpu", copy=True)
+        return result
+
+    def stage(self, payload):
+        tensors = []
+        self._map(payload, lambda tensor: tensors.append(tensor))
+        self._layout(tensors)
+        packed_bytes = 2 * sum(
+            t.numel() * t.element_size() for t in tensors if t.device.type == "cuda"
+        )
+        self.mode = "direct"
+        staged = None
+        if packed_bytes <= self.max_bytes and all(t.layout == torch.strided for t in tensors):
+            try:
+                staged = self._packed(tensors)
+                self.mode = "packed"
+            except (torch.cuda.OutOfMemoryError, MemoryError):
+                # _packed's partial storage is released before the direct retry.
+                pass
+        if staged is None:
+            staged = [tensor.detach().to("cpu", copy=True) for tensor in tensors]
+        copies = iter(staged)
+        return self._map(payload, lambda _: next(copies))
+
+
 def retry_file_sharing(operation):
     """Bound retries for Windows readers briefly preventing atomic replacement."""
     delays = iter((0.02, 0.05, 0.1, 0.2, 0.4, 0.8))

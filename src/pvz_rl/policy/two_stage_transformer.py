@@ -123,6 +123,14 @@ class TwoStageTransformerPolicy(nn.Module):
     def runtime_state_dict(self):
         return super().state_dict()
 
+    def checkpoint_state_dict(self):
+        """Borrow authoritative tensors for immediate immutable CPU staging only."""
+        state = super().state_dict()
+        for name, master in zip(self._master_names, self._master_parameters, strict=True):
+            if name in state:
+                state[name] = master.detach()
+        return state
+
     def state_dict(self, *args, **kwargs):
         state = super().state_dict(*args, **kwargs)
         for name, master in zip(self._master_names, self._master_parameters, strict=True):

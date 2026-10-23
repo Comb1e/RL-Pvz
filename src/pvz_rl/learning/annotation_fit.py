@@ -30,6 +30,7 @@ from pvz_rl.learning.checkpoints import (
     ANNOTATION_PROGRESS_PROTOCOL,
     LEGACY_ANNOTATION_PROGRESS_PROTOCOL,
     MODEL_STATE_PROTOCOL,
+    SnapshotStager,
     compatible_config,
     load_torch_snapshot,
     retry_file_sharing,
@@ -588,6 +589,7 @@ def _fit_annotations(
     progress_path = output.with_suffix(".progress.pt")
     history_path = output.with_suffix(".history.jsonl")
     report_path = output.with_suffix(".report.json")
+    snapshot_stager = SnapshotStager(cfg["training"]["storage"]["ram_gib"] * 1024**3)
     completed = 0
     if saved is not None:
         if (
@@ -643,7 +645,7 @@ def _fit_annotations(
     def save_progress(training, validation, regularization_active=False, regularization_loss=0.0):
         convergence = _convergence(training, validation)
         _atomic_save(
-            dict(
+            snapshot_stager.stage(dict(
                 protocol=ANNOTATION_PROGRESS_PROTOCOL,
                 identity=identity,
                 model_storage_protocol=MODEL_STATE_PROTOCOL,
@@ -657,7 +659,7 @@ def _fit_annotations(
                 reward_protocol=cfg["reward"]["version"],
                 objective_protocol=cfg["training"]["objective"]["protocol"],
                 observation_schema=schema,
-                model=model.state_dict(),
+                model=model.checkpoint_state_dict(),
                 optimizer=optimizer.state_dict(),
                 rng=_rng_state(device),
                 passes_completed=completed,
@@ -673,7 +675,7 @@ def _fit_annotations(
                 regularization_active=regularization_active,
                 regularization_loss=regularization_loss,
                 l2_strength=l2_strength,
-            ),
+            )),
             progress_path,
         )
 
@@ -809,7 +811,7 @@ def _fit_annotations(
             rules_hash=schema["rules_hash"],
             config=checkpoint_cfg,
             config_digest=digest(checkpoint_cfg),
-            model=model.state_dict(),
+            model=model.checkpoint_state_dict(),
             passes_completed=completed,
             learner_seed=seed,
             initialization=initialization,
@@ -836,7 +838,7 @@ def _fit_annotations(
                 source_digest=manifest.get("source_digest"),
             ),
         )
-        _atomic_save(payload, output)
+        _atomic_save(snapshot_stager.stage(payload), output)
     manifest.update(
         protocol=manifest.get("protocol", ANNOTATION_PROTOCOL),
         config_digest=manifest.get("config_digest") or digest(cfg),
