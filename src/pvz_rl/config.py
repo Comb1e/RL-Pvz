@@ -481,6 +481,13 @@ def validate_config(cfg: dict) -> None:
         raise ValueError("training.performance.fit_precision must be bf16_master")
     if type(performance.get("prefetch", False)) is not bool:
         raise ValueError("training.performance.prefetch must be a boolean")
+    if performance.get("annotation_input_cache", "auto") not in ("auto", "off"):
+        raise ValueError("training.performance.annotation_input_cache must be auto or off")
+    cache_mib = performance.get("annotation_cache_mib", 256)
+    if type(cache_mib) is not int or cache_mib < 0:
+        raise ValueError("training.performance.annotation_cache_mib must be a nonnegative integer")
+    if type(performance.get("annotation_use_fit_limits", False)) is not bool:
+        raise ValueError("training.performance.annotation_use_fit_limits must be a boolean")
     if set(performance) - {
         "compile_collection",
         "compile_fitting",
@@ -488,6 +495,9 @@ def validate_config(cfg: dict) -> None:
         "telemetry_span_limit",
         "fit_precision",
         "prefetch",
+        "annotation_input_cache",
+        "annotation_cache_mib",
+        "annotation_use_fit_limits",
         "fit_batch_groups",
         "fit_encoder_microbatch",
         "fit_species_microbatch",

@@ -24,7 +24,11 @@ from pvz_rl.annotation.dataset import (
     write_manifest,
 )
 from pvz_rl.config import digest, load_config, validate_config
-from pvz_rl.learning.batch_transport import PreparedDataSource, collate_fitting_observations
+from pvz_rl.learning.batch_transport import (
+    PreparedDataSource,
+    PreparedDeviceBatches,
+    collate_fitting_observations,
+)
 from pvz_rl.learning.checkpoints import (
     ANNOTATION_CHECKPOINT_PROTOCOL,
     ANNOTATION_PROGRESS_PROTOCOL,
@@ -36,6 +40,7 @@ from pvz_rl.learning.checkpoints import (
     retry_file_sharing,
 )
 from pvz_rl.learning.cohort import atomic_transition
+from pvz_rl.learning.performance import annotation_execution_limits
 from pvz_rl.policy.two_stage_transformer import TwoStageTransformerPolicy
 from pvz_rl.provenance import write_json
 
@@ -271,12 +276,74 @@ class PreparedAnnotations:
             feasible, absolute, 10 if kind == "action" else 45
         )
         self.source = PreparedDataSource([r["encoded_observation"] for r in records], cfg)
+        self.resident = None
+
+    def auxiliary(self):
+        fields = dict(positive=self.positive, absolute=self.absolute)
+        if self.branches is not None:
+            fields["branches"] = self.branches
+        return fields
+
+    def batches(self, batch_size, device):
+        if self.resident is not None:
+            if batch_size != self.resident.batch_size:
+                raise ValueError("Resident annotation batch size changed")
+            yield from self.resident.items
+            return
+        start = 0
+        with closing(self.source.batches(batch_size, device)) as batches:
+            for rows, observations, _ in batches:
+                stop = start + len(rows)
+                fields = {key: value[start:stop].to(device) for key, value in self.auxiliary().items()}
+                fields["rows"] = torch.arange(len(rows), device=device)
+                yield start, stop, observations, fields
+                start = stop
 
     def close(self):
+        self.release_cache()
         self.source.close()
 
+    def release_cache(self):
+        if self.resident is not None:
+            self.resident.close()
+            self.resident = None
 
-def _run_split(
+
+def _cache_inputs(prepared, batch_size, cfg, device):
+    """Admit related splits atomically; failed admission retains streaming."""
+    performance = cfg["training"]["performance"]
+    cap = performance.get("annotation_cache_mib", 256) * 1024**2
+    report = dict(
+        requested=performance.get("annotation_input_cache", "auto"),
+        actual="streaming", bytes=0, cap_bytes=cap, splits=list(prepared),
+    )
+    if report["requested"] == "off" or device.type != "cuda":
+        report["reason"] = "disabled" if report["requested"] == "off" else "cpu"
+        return report
+    required = sum(
+        PreparedDeviceBatches.required_bytes(p.source, batch_size, p.auxiliary())
+        for p in prepared.values()
+    )
+    report["estimated_bytes"] = required
+    free, total = torch.cuda.mem_get_info(device)
+    headroom = max(1024**3, total // 5)
+    report["headroom_bytes"] = headroom
+    if required > cap or free - required < headroom:
+        report["reason"] = "cap" if required > cap else "headroom"
+        return report
+    try:
+        for p in prepared.values():
+            p.resident = PreparedDeviceBatches(p.source, batch_size, device, p.auxiliary())
+    except (torch.cuda.OutOfMemoryError, MemoryError):
+        for p in prepared.values():
+            p.release_cache()
+        report["reason"] = "allocation_failed"
+        return report
+    report.update(actual="resident", bytes=required, reason="admitted")
+    return report
+
+
+def _split_totals(
     model,
     records,
     cfg,
@@ -299,41 +366,63 @@ def _run_split(
                 raise ValueError("training split requires an optimizer")
             model.zero_grad(set_to_none=True)
             optimizer.zero_grad(set_to_none=True)
-        batches = stack.enter_context(closing(prepared.source.batches(batch_size, device)))
-        start = 0
+        batches = stack.enter_context(closing(prepared.batches(batch_size, device)))
         with torch.set_grad_enabled(train):
-            for rows, observations, _ in batches:
-                stop = start + len(rows)
+            for start, stop, observations, fields in batches:
+                count = stop - start
                 if kind == "action":
                     values = model.species_values(observations)
                 else:
-                    branches = prepared.branches[start:stop].to(device)
                     values = model.fitting_tiles(
-                        observations, branches, rows=torch.arange(len(rows), device=device)
+                        observations, fields["branches"], rows=fields["rows"]
                     )
-                positive = prepared.positive[start:stop].to(device)
-                absolute = prepared.absolute[start:stop].to(device)
+                positive, absolute = fields["positive"], fields["absolute"]
                 top, bottom = _ranking_terms(values.float(), positive, absolute, margin)
                 loss = (top + bottom).mean()
                 if train:
-                    (loss * (len(rows) / len(records))).backward()
+                    (loss * (count / len(records))).backward()
                     model.accumulate_master_gradients()
                     model.clear_runtime_grad(set_to_none=True)
                 else:
                     totals[:8] += _metric_totals(values, positive, absolute)
-                totals[8] += loss.detach().double() * len(rows)
+                totals[8] += loss.detach().double() * count
                 totals[9] += (~torch.isfinite(values)).sum() + (~torch.isfinite(loss)).sum()
                 totals[10] += top.detach().double().sum()
                 totals[11] += bottom.detach().double().sum()
-                start = stop
-        summary = totals.cpu().tolist()
-        if summary[9]:
-            raise FloatingPointError("non-finite annotation values/loss")
-        result = _metric_report(summary[:8], len(records))
-        result["loss"] = summary[8] / len(records) if records else None
-        result["top_loss"] = summary[10] / len(records) if records else None
-        result["bottom_loss"] = summary[11] / len(records) if records else None
-        return result
+        return totals
+
+
+def _split_report(summary, count):
+    if summary[9]:
+        raise FloatingPointError("non-finite annotation values/loss")
+    result = _metric_report(summary[:8], count)
+    result.update(
+        loss=summary[8] / count if count else None,
+        top_loss=summary[10] / count if count else None,
+        bottom_loss=summary[11] / count if count else None,
+    )
+    return result
+
+
+def _run_split(model, records, cfg, device, **kwargs):
+    totals = _split_totals(model, records, cfg, device, **kwargs)
+    return _split_report(totals.cpu().tolist(), len(records))
+
+
+def _evaluate_splits(model, partitions, prepared, cfg, device, *, batch_size, margin, kind):
+    """Keep split shapes/accumulation separate, sharing one final host readback."""
+    names = ("train", "validation")
+    totals = [
+        _split_totals(
+            model, partitions[name], cfg, device, batch_size=batch_size, margin=margin,
+            kind=kind, prepared=prepared[name],
+        )
+        for name in names
+    ]
+    return tuple(
+        _split_report(summary, len(partitions[name]))
+        for name, summary in zip(names, torch.stack(totals).cpu().tolist(), strict=True)
+    )
 
 
 def _atomic_save(payload, path):
@@ -564,6 +653,7 @@ def _fit_annotations(
     random.seed(seed)
     np.random.seed(seed)
     model, initialization = _load_initial_model(cfg, device, init_from)
+    execution = annotation_execution_limits(model, cfg)
     schema = model.layout.schema()
     manifest_path = Path(str(annotations) + ".manifest.json")
     manifest = json.loads(manifest_path.read_text("utf-8")) if manifest_path.exists() else {}
@@ -629,6 +719,9 @@ def _fit_annotations(
     for name, rows in partitions.items():
         prepared[name] = PreparedAnnotations(rows, cfg, kind)
         _resources.callback(prepared[name].close)
+    execution["input_cache"] = _cache_inputs(
+        {name: prepared[name] for name in ("train", "validation")}, batch_size, cfg, device
+    )
 
     def evaluate(name):
         return _run_split(
@@ -640,6 +733,12 @@ def _fit_annotations(
             margin=margin,
             kind=kind,
             prepared=prepared[name],
+        )
+
+    def evaluate_training():
+        return _evaluate_splits(
+            model, partitions, prepared, cfg, device,
+            batch_size=batch_size, margin=margin, kind=kind,
         )
 
     def save_progress(training, validation, regularization_active=False, regularization_loss=0.0):
@@ -675,9 +774,11 @@ def _fit_annotations(
                 regularization_active=regularization_active,
                 regularization_loss=regularization_loss,
                 l2_strength=l2_strength,
+                execution=execution,
             )),
             progress_path,
         )
+        execution["snapshot_staging"] = snapshot_stager.mode
 
     regularization_active = bool(
         resume_from is not None and saved.get("regularization_active", False)
@@ -704,7 +805,7 @@ def _fit_annotations(
                     ),
                 )
             save_progress(training, validation, regularization_active, regularization_loss)
-        training, validation = evaluate("train"), evaluate("validation")
+        training, validation = evaluate_training()
         if exact("train", training) and exact("validation", validation):
             regularization_active = False
         elif exact("train", training):
@@ -749,7 +850,7 @@ def _fit_annotations(
                 model.sync_runtime_from_masters()
                 model.eval()
                 completed += 1
-                training, validation = evaluate("train"), evaluate("validation")
+                training, validation = evaluate_training()
                 if exact("train", training) and exact("validation", validation):
                     regularization_active = False
                 elif exact("train", training):
@@ -796,10 +897,14 @@ def _fit_annotations(
         saved = torch.load(progress_path, map_location="cpu", weights_only=True)
         model.load_state_dict(saved["model"])
         model.eval()
-        training = evaluate("train")
-        validation = evaluate("validation")
+        training, validation = evaluate_training()
         if not exact("train", training) or not exact("validation", validation):
             raise RuntimeError("saved annotation weights failed fresh convergence verification")
+        for name in ("train", "validation"):
+            prepared[name].release_cache()
+        execution["test_input_cache"] = _cache_inputs(
+            {"test": prepared["test"]}, batch_size, cfg, device
+        )
         test = evaluate("test")
         checkpoint_cfg = copy.deepcopy(cfg)
         checkpoint_cfg["training"].pop("annotation", None)
@@ -884,6 +989,7 @@ def _fit_annotations(
         tile_parameters_only=kind == "tile",
         species_parameters_only=kind == "action",
         annotation_kind=kind,
+        execution=execution,
     )
     write_json(report_path, report)
     return report

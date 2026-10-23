@@ -361,19 +361,25 @@ class PreparedDataSource(PreparedPlans):
     def __len__(self):
         return self.buffer.size
 
-    def iter_batches(self, batch_size):
+    def batch_ranges(self, batch_size):
         boundaries = getattr(self, "boundaries", [0, len(self)])
-        starts = (
-            start
-            for low, high in zip(boundaries[:-1], boundaries[1:], strict=True)
-            for start in range(int(low), int(high), batch_size)
-        )
-        limits = (
-            min(start + batch_size, int(high))
-            for low, high in zip(boundaries[:-1], boundaries[1:], strict=True)
-            for start in range(int(low), int(high), batch_size)
-        )
-        for start, stop in zip(starts, limits, strict=True):
+        for low, high in zip(boundaries[:-1], boundaries[1:], strict=True):
+            for start in range(int(low), int(high), batch_size):
+                yield start, min(start + batch_size, int(high))
+
+    def observation_bytes(self, batch_size):
+        """Exact padded input footprint, scanned without gathering entity slabs."""
+        amount = 0
+        for start, stop in self.batch_ranges(batch_size):
+            rows = self.buffer.take(np.arange(start, stop))
+            width = self.buckets[
+                np.searchsorted(self.buckets, int(rows["entity_count"].max(initial=0)))
+            ]
+            amount += (stop - start) * (int(width) * (ENTITY_WIDTH * 4 + 1) + GLOBAL_WIDTH * 4)
+        return amount
+
+    def iter_batches(self, batch_size):
+        for start, stop in self.batch_ranges(batch_size):
             rows = self.buffer.take(np.arange(start, stop))
             if self.original_rows is not None:
                 for field in ("env", "episode", "decision", "run_break"):
@@ -420,6 +426,44 @@ class PreparedDataSource(PreparedPlans):
 
     def __exit__(self, *args):
         self.close()
+
+
+class PreparedDeviceBatches:
+    """Owned immutable raw inputs with the source's exact batching and padding.
+
+    Admission is caller-owned across all related sources. No learned features,
+    fitting metadata or autograd graphs are retained. Construction is exception
+    safe: a failed caller can drop the object and keep using streaming transport.
+    """
+
+    @staticmethod
+    def required_bytes(source, batch_size, auxiliary):
+        return source.observation_bytes(batch_size) + len(source) * 8 + sum(
+            value.numel() * value.element_size() for value in auxiliary.values()
+        )
+
+    def __init__(self, source, batch_size, device, auxiliary):
+        self.items = []
+        self.bytes = self.required_bytes(source, batch_size, auxiliary)
+        self.batch_size = batch_size
+        with torch.no_grad():
+            labels = {key: value.to(device, copy=True) for key, value in auxiliary.items()}
+            start = 0
+            for rows, packed in source.iter_batches(batch_size):
+                stop = start + len(rows)
+                width = source.buckets[
+                    np.searchsorted(source.buckets, int(packed.counts.max(initial=0)))
+                ]
+                observations = source.buffer.observations_from_packed(
+                    packed, width=width, device=device
+                )
+                fields = {key: value[start:stop] for key, value in labels.items()}
+                fields["rows"] = torch.arange(len(rows), device=device)
+                self.items.append((start, stop, observations, fields))
+                start = stop
+
+    def close(self):
+        self.items.clear()
 
 
 def batch_rows(buffer, batch_size, *, spool=None):
