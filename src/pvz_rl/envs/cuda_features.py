@@ -80,7 +80,7 @@ class CudaFeatures:
             "win_reward",
             "loss_penalty",
             "basic_zombie_value",
-            "mower_value",
+            "mower_penalty",
             "progress_weight",
             "value_scale",
             "early_sun_extra_multiplier",

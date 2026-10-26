@@ -40,7 +40,7 @@
   owns synthetic/trajectory/full-cycle selection and the paired promotion gate.
 - `src/pvz_rl/data/train.toml` is the single parameter source for train/demo overlays.
   Both use `entity_v1`, `two_stage_transformer_q_v1` and
-  `complete_return_action_global_v3`. Old-objective resumes are rejected; structurally compatible
+  `complete_return_action_global_v4`. Old-objective resumes are rejected; structurally compatible
   BF16-master weights support inference/fresh initialization; verified recordings are reconstructed without changes. Preserve
   user reward adjustments. `training.demo.passes` is 20, independently of autonomous
   `training.n_epochs` (4). Tile (50% to 1%) and accepted-plant species (10% to 1%)
@@ -49,7 +49,8 @@
   early actual Sunflower income value. `value_scale=2000` converts physical
   values to fitted rewards at /20,000. Damage and blocking coefficients and
   `reward.asset_loss_multiplier` compensate by 2000/900; both produced-sun
-  contributions remain unscaled, and `mower_value=2000` gives -0.1 per activation.
+  contributions remain unscaled. `mower_penalty=0.1` charges each activation
+  directly in final reward units, outside physical and dense conversion.
   Shared clipping uses `training.max_grad_norm=5`.
   `training.objective.species_consistency_weight=1.0` controls online-selected,
   detached EMA-evaluated tile targets. `species_consistency_huber_delta=1.0` under
@@ -94,7 +95,9 @@
   proposal/reason and zero penalty audit fields, executes wait and advances one tick; accepted plant/dig
   advances zero ticks. Accounting is not a model input. `rewards.py` owns the
   six-component global terminal/asset and action damage/blocking/sun/mower
-  objective plus diagnostic proximity/time fields. `CompleteGameBuffer` can
+  objective plus diagnostic proximity/time fields. Reward protocol v4 separates
+  final-unit mower penalties from the four physical terms; previous weights
+  remain usable for fresh initialization, while old optimizer resumes fail. `CompleteGameBuffer` can
   apply validated source credits before chronological return finalization.
   CPU and CUDA asset rewards subtract the configured extra plant-loss value
   from the physical asset delta, leaving actual production income untouched.
@@ -171,6 +174,10 @@
   fitting prepares label masks once and preserves indexed extrema tie gradients.
   `live_layout.py` owns paging/follow-latest; `live_view.py`
   snapshots effective settings without reloading TOML/device values.
+  `live_capture.py` stages selected boards' FP64 reward totals behind the same
+  copy fence as their public state. Native/web HUDs show accumulated training
+  reward through shared conversion; it never enters policy observations.
+  `rendering.py` supplies the same reward label to Gym RGB rendering.
 - `annotation/dataset.py` owns versioned rich snapshots, canonical entity rows,
   atomic annotation storage and durable pending/labeled/discarded records.
   `annotation/sampler.py` samples reachable simulator states. Tile records

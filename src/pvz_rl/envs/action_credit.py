@@ -129,9 +129,7 @@ class CausalCreditLedger:
                 self.projectile_kinds[event.entity_id] = self.plant_kinds.get(source)
             elif kind == "DamageApplied":
                 origin = self._origin(event.get("source"))
-                amount = float(event.get("health_damage", 0)) + float(
-                    event.get("armor_damage", 0)
-                )
+                amount = float(event.get("health_damage", 0)) + float(event.get("armor_damage", 0))
                 if amount > 0 and origin is not None:
                     self._credit(
                         values,
@@ -185,7 +183,7 @@ class CausalCreditLedger:
                     values,
                     action_id,
                     "mower",
-                    -float(self.cfg["reward"]["mower_value"]),
+                    -float(self.cfg["reward"]["mower_penalty"]),
                 )
             elif kind == "PlantRemoved":
                 # The engine emits PlantRemoved after the effect that caused
@@ -207,4 +205,3 @@ class CausalCreditLedger:
     def register_plant_kinds(self, observation):
         """Cache public plant kinds for PlantDamaged attribution."""
         self.plant_kinds = {plant.id: plant.plant_type for plant in observation.plants}
-

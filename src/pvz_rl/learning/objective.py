@@ -13,7 +13,7 @@ from pvz_rl.policy.sequential_q import (
     tile_candidates,
 )
 
-OBJECTIVE_PROTOCOL = "complete_return_action_global_v3"
+OBJECTIVE_PROTOCOL = "complete_return_action_global_v4"
 # These are the only reward components that train the policy.  The simulator
 # still publishes the older diagnostic fields (combat_value, home_proximity,
 # victory_time, and so on) for reports and replay verification. Cohort-ranked
@@ -37,20 +37,20 @@ def training_rewards(values, cfg):
 
     The reward ledger stores physical terms in sun-equivalent units.  The
     existing progress/value conversion and dense multiplier are applied once
-    here, while the terminal outcome remains unscaled.
+    here. Terminal outcomes and mower penalties are already in final units.
     """
     value = np.asarray(values, dtype=np.float64)
     multiplier = cfg["training"].get("objective", {}).get("dense_multiplier", 1.0)
     scale = cfg["reward"]["progress_weight"] / cfg["reward"]["value_scale"]
-    physical = value[..., 1:].sum(axis=-1)
-    return value[..., 0] + multiplier * scale * physical
+    physical = value[..., 1:-1].sum(axis=-1)
+    return value[..., 0] + value[..., -1] + multiplier * scale * physical
 
 
 def raw_rewards(values, cfg):
     """Compute the immediate un-densified reward stored by the simulator."""
     value = np.asarray(values, dtype=np.float64)
     scale = cfg["reward"]["progress_weight"] / cfg["reward"]["value_scale"]
-    return value[..., 0] + scale * value[..., 1:].sum(axis=-1)
+    return value[..., 0] + value[..., -1] + scale * value[..., 1:-1].sum(axis=-1)
 
 
 def victory_time(duration, median, won, weight):

@@ -139,7 +139,7 @@ def load_torch_snapshot(path):
 
 def protocol_for(kind):
     methods = {
-        "two_stage_transformer_q_v1": "complete_return_action_global_v3",
+        "two_stage_transformer_q_v1": "complete_return_action_global_v4",
     }
     if kind not in methods:
         raise ValueError(

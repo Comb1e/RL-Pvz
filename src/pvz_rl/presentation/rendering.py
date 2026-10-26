@@ -16,12 +16,20 @@ def render_context(values=None):
     from pvz_game.rendering import RenderContext
 
     values = values or {}
+    message = values.get("message", values.get("action", ""))
+    if values.get("reward") is not None:
+        message = " | ".join(filter(None, (reward_label(values["reward"]), message)))
     return RenderContext(
         policy_id=values.get("policy_id"),
         outcome=values.get("outcome"),
         termination_reason=values.get("termination_reason"),
-        message=values.get("message", values.get("action", "")),
+        message=message,
     )
+
+
+def reward_label(value):
+    """Accumulated training reward; absent on annotation-only public snapshots."""
+    return f"Reward {value:+.6f}" if value is not None else "Reward —"
 
 
 def render_observation(obs, *, context=None):

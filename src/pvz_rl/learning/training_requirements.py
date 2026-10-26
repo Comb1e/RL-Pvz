@@ -8,8 +8,8 @@ from pvz_rl.learning.curriculum import selected_stage
 from pvz_rl.policy.sequential_q import ACTION_DISTRIBUTION
 
 TRAINING_CONDITIONS = ("masked",)
-CURRENT_OBJECTIVE = "complete_return_action_global_v3"
-CURRENT_REWARD = "action_global_value_v3"
+CURRENT_OBJECTIVE = "complete_return_action_global_v4"
+CURRENT_REWARD = "action_global_value_v4"
 WEIGHT_ACTION_DISTRIBUTIONS = {
     "sequential_q_unmasked_penalty_v1",
     ACTION_DISTRIBUTION,
@@ -53,6 +53,7 @@ def weight_model_config(cfg):
             "complete_return_selective_invalid_v3",
             "complete_return_action_global_v1",
             "complete_return_action_global_v2",
+            "complete_return_action_global_v3",
             CURRENT_OBJECTIVE,
         )
         and train.get("objective", {}).get("protocol") == train.get("method")
@@ -61,6 +62,7 @@ def weight_model_config(cfg):
             "net_value_v1",
             "action_global_value_v1",
             "action_global_value_v2",
+            "action_global_value_v3",
             CURRENT_REWARD,
         )
     )
@@ -107,7 +109,7 @@ def require_supported_policy(cfg, condition="masked"):
     ):
         raise ValueError(
             "Retired policy or scheduler. Use the stateless two-stage Transformer, entity_v1, "
-            "action_global_value_v3 and complete-game collection. "
+            "action_global_value_v4 and complete-game collection. "
             "Start fresh with the bundled train profile."
         )
 

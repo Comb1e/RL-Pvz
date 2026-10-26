@@ -155,20 +155,26 @@ def _verify_reward_facts(row: dict, reconstructed: dict, cfg=None) -> None:
         net_value = float(saved.get("net_value", 0.0))
         development = float(saved.get("development", 0.0))
         early_bonus = float(saved.get("early_sun_bonus", 0.0))
+        direct_mower = float(saved["action_mower"]) if saved["mower_expenditure"] == 0 else 0.0
+        physical = sum(float(saved.get(key, 0.0)) for key in COMPONENTS[1:]) - direct_mower
         if abs(net_value) > 1e-15:
             scale = (development - early_bonus) / net_value
-            physical = sum(float(saved.get(key, 0.0)) for key in COMPONENTS[1:])
-            expected = float(saved["terminal"]) + scale * physical
+            # Historical mowers used physical expenditure; current mowers are
+            # final-unit penalties with zero physical expenditure. Infer this
+            # from archived accounting, never from today's reward coefficients.
+            expected = float(saved["terminal"]) + direct_mower + scale * physical
             total_matches = total_matches and math.isclose(
                 float(saved["total"]), expected, rel_tol=1e-9, abs_tol=1e-9
             )
         elif abs(development) <= 1e-15 and abs(early_bonus) <= 1e-15:
             # A completely idle transition has no scale-dependent term; its
-            # total must therefore be exactly the terminal component.
-            physical = sum(float(saved.get(key, 0.0)) for key in COMPONENTS[1:])
+            # total contains only the terminal and any direct mower penalty.
             if abs(physical) <= 1e-15:
                 total_matches = total_matches and math.isclose(
-                    float(saved["total"]), float(saved["terminal"]), rel_tol=1e-12, abs_tol=1e-12
+                    float(saved["total"]),
+                    float(saved["terminal"]) + direct_mower,
+                    rel_tol=1e-12,
+                    abs_tol=1e-12,
                 )
     if not total_matches or not math.isclose(saved["net_value"], net, rel_tol=1e-12, abs_tol=1e-12):
         raise ValueError(error)

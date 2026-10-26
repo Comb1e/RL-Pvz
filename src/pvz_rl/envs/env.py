@@ -26,6 +26,7 @@ from pvz_rl.evaluation.controllers import PublicBoard, strategy_candidates
 from pvz_rl.learning.action_routing import branch_availability
 from pvz_rl.learning.budget import budget_target, uses_games
 from pvz_rl.learning.curriculum import stage_distribution, teaching_enabled
+from pvz_rl.learning.objective import components, training_rewards
 from pvz_rl.presentation.recordings import ActionPhaseRecorder
 
 
@@ -488,4 +489,7 @@ class PvZEnv(gym.Env):
             raise RuntimeError("Reset before rendering")
         from pvz_rl.presentation.rendering import render_observation
 
-        return render_observation(self.public)
+        return render_observation(
+            self.public,
+            context={"reward": float(training_rewards(components(self.metrics), self.cfg))},
+        )

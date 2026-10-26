@@ -459,3 +459,11 @@ throughput measurements.
   an explicit differentiable \(\lambda\lVert\theta\rVert^2/2\) term on FP32
   master parameters so its activation and contribution are recorded separately
   from the existing Adam update.
+
+
+## Environment reward display — 2026-10-26
+
+- [Gymnasium Env API](https://gymnasium.farama.org/api/env/): consulted the
+  distinction between the reward returned by `step` and auxiliary diagnostic
+  `info`. The viewer displays accumulated learning reward outside observations;
+  delayed causal credits and cohort-finalized outcomes remain explicit.

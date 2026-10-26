@@ -47,6 +47,7 @@ from pvz_rl.learning.exploration import (
     configure_exploration,
     exploration_state,
 )
+from pvz_rl.learning.objective import components, training_rewards
 from pvz_rl.learning.performance import compilation_requested
 from pvz_rl.learning.training_requirements import (
     parameter_changes,
@@ -421,15 +422,12 @@ class ResearchCallback(BaseCallback):
     def cohort_summary(self):
         rows = [item["metrics"] for item in getattr(self.model, "_pending_episodes", {}).values()]
         count = len(rows)
-        multiplier = self.cfg["training"]["objective"]["dense_multiplier"]
         return dict(
             games=getattr(self.model, "cohort_games", 0),
             completed=count,
             wins=sum(bool(row["win"]) for row in rows),
             raw_return=sum(row["return"] for row in rows) / count if count else None,
-            training_return=sum(
-                row["return"] + (multiplier - 1) * row["development"] for row in rows
-            )
+            training_return=sum(float(training_rewards(components(row), self.cfg)) for row in rows)
             / count
             if count
             else None,

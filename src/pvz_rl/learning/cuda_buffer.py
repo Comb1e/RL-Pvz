@@ -616,7 +616,7 @@ class CompleteGameBuffer:
                 parts = rows["components"][ix].copy()
                 immediate_component_sum += parts.sum(0)
                 if self.cfg:
-                    parts[:, 1:] *= (
+                    parts[:, 1:-1] *= (
                         self.cfg["training"].get("objective", {}).get("dense_multiplier", 1)
                     )
                 values = np.empty(len(ix), np.float64)
@@ -731,7 +731,7 @@ class CompleteGameBuffer:
         )
         raw = contribution[live].copy()
         if self.cfg:
-            raw[:, 1:] /= self.cfg["training"].get("objective", {}).get("dense_multiplier", 1)
+            raw[:, 1:-1] /= self.cfg["training"].get("objective", {}).get("dense_multiplier", 1)
         self.reward_summary["raw_component_episode_mean"] = (
             dict(zip(COMPONENTS, raw.mean(0).tolist())) if live.any() else {}
         )
@@ -751,7 +751,7 @@ class CompleteGameBuffer:
             np.sqrt(
                 sum(
                     self.reward_summary["component_return_std"].get(key, 0.0) ** 2
-                    for key in COMPONENTS[1:]
+                    for key in COMPONENTS[1:-1]
                 )
             )
         )

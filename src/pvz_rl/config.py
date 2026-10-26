@@ -142,7 +142,7 @@ def validate_config(cfg: dict) -> None:
                 "training.objective contains retired or missing settings, including "
                 "species_consistency_huber_delta"
             )
-        if objective.get("protocol") != "complete_return_action_global_v3":
+        if objective.get("protocol") != "complete_return_action_global_v4":
             raise ValueError(
                 "Unsupported training objective protocol; fresh initialization is required"
             )
@@ -213,7 +213,7 @@ def validate_config(cfg: dict) -> None:
         raise ValueError(
             "Retired observation/policy format; entity_v1 requires fresh initialization"
         )
-    if cfg["reward"].get("version") != "action_global_value_v3":
+    if cfg["reward"].get("version") != "action_global_value_v4":
         raise ValueError(
             "Retired reward format; ranked endgame action/global rewards require fresh training with the bundled train profile"
         )
@@ -221,7 +221,7 @@ def validate_config(cfg: dict) -> None:
         "version",
         "win_reward",
         "loss_penalty",
-        "mower_value",
+        "mower_penalty",
         "basic_zombie_value",
         "progress_weight",
         "value_scale",
@@ -274,7 +274,7 @@ def validate_config(cfg: dict) -> None:
     for key in (
         "win_reward",
         "loss_penalty",
-        "mower_value",
+        "mower_penalty",
         "basic_zombie_value",
         "progress_weight",
         "early_sun_extra_multiplier",
@@ -455,7 +455,7 @@ def validate_config(cfg: dict) -> None:
     if not math.isfinite(visual["final_hold_seconds"]) or visual["final_hold_seconds"] < 0:
         raise ValueError("Visualization final_hold_seconds must be finite and nonnegative")
     env, train = cfg["environment"], cfg["training"]
-    expected_method = "complete_return_action_global_v3"
+    expected_method = "complete_return_action_global_v4"
     if train.get("method") != expected_method:
         raise ValueError("Training requires a supported complete-return method and fresh models")
     if any(

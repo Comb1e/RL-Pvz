@@ -9,9 +9,9 @@ after a cohort is ranked:
 
 \[
 r^{physical}=r^{global\ asset}+r^{action\ damage}+r^{action\ blocking}
-             +r^{action\ sun}+r^{action\ mower},
-\qquad r^{raw}=r^{global\ terminal}+s r^{physical},
-\qquad r^{train}=r^{global\ terminal}+10s r^{physical}.
+             +r^{action\ sun},
+\qquad r^{raw}=r^{global\ terminal}+r^{action\ mower}+s r^{physical},
+\qquad r^{train}=r^{global\ terminal}+r^{action\ mower}+10s r^{physical}.
 \]
 
 Gamma is one; selected-action targets sum the complete episode without bootstrap.
@@ -25,6 +25,18 @@ Here `s=progress_weight/value_scale=0.01/2000` in the current profile and the
 multiplier is `training.objective.dense_multiplier=10`; scaling is applied once
 to the combined physical terms, giving /20,000 for fitted physical rewards.
 The same interface builds demonstration and autonomous targets.
+Reward `action_global_value_v4` and objective `complete_return_action_global_v4`
+identify this mixed-unit contract. Old optimizer/recovery states cannot resume;
+structurally compatible weights still initialize fresh runs. Verified historical
+demonstrations are repriced under the current contract.
+
+The native and browser live game windows display accumulated **training** reward
+for that environment and episode, including causal damage/blocking/sun credits
+and direct mower penalties. The display resets with the episode and is captured
+with the same board snapshot; it adds no policy inputs or per-step CUDA readbacks.
+The endgame time adjustment is not available until cohort finalization, so a
+finished board initially shows its base terminal outcome. Gym RGB rendering uses
+the same accumulated component conversion.
 [Sequential Q learning](sequential-training.md) specifies
 the selected-action, consistency and demonstration losses. Maximum net value
 and drawdown remain diagnostics.
@@ -91,7 +103,7 @@ damage D, mower activations M, and eligible early Sunflower income E, define
 plant asset loss `L=P-(A_after-A_before-S)` and `k=2000/900`. The physical ledger is
 
 \[
-R_{physical}=(P-kL)+k(30/270)D+B+(P+2E)-2000M.
+R_{physical}=(P-kL)+k(30/270)D+B+(P+2E),\qquad r^{action\ mower}=-0.1M.
 \]
 
 Here `B` is per-plant blocking credit, with its coefficients multiplied by `k`.
@@ -100,7 +112,10 @@ from production income. Its default of one for older saved configurations
 reproduces the original asset delta. The current damage, blocking, and plant
 loss prices compensate for the change from value scale 900 to 2000, preserving
 their fitted rewards. Both production-sun contributions use the new lower
-scale. One mower is priced at 2000, giving a fitted penalty of -0.1.
+scale. `reward.mower_penalty=0.1` is a final-unit penalty per activation. It
+bypasses `value_scale`, `progress_weight`, and `dense_multiplier` in both raw
+and fitted rewards. Mowers are excluded from physical net value/development;
+`mower_expenditure` remains zero as a legacy diagnostic.
 Subtracting actual sky income prevents free ambient sun from
 earning global asset reward. Plant-produced sun remains valuable only when it
 fits below the sun cap. Asset losses and mower expenditure are each charged
@@ -122,7 +137,7 @@ fraction is `reward.early_sun_spawn_fraction=[1,3]`, with
 `reward.early_sun_extra_multiplier=2`. Count only actual credited sunlight, not
 requested production, and never sky income. `early_sun_bonus` is a diagnostic
 subset of action sun, not a seventh component. The dense multiplier applies once
-to all five physical terms; source sunlight and the production part of global assets
+to the four physical terms; source sunlight and the production part of global assets
 are intentionally both retained.
 
 | Control | Physical ledger effect | Fitted reward contribution |
@@ -135,7 +150,7 @@ are intentionally both retained.
 | Produce 25 uncapped late Sunflower sun | global asset `+25`, action sun `+25` | +0.0025 |
 | Sky produces 25 sun | excluded from global assets | 0 |
 | Buy a healthy plant | sun converts into equal plant value | 0 |
-| Activate one mower | action mower `-2000` | -0.1 |
+| Activate one mower | final-unit action mower `-0.1`, no physical cost | -0.1 |
 | Empty cherry | no combat credit; remaining plant asset value is lost | negative asset contribution only |
 
 Head loss can stop a game before all body HP disappears. Damage credits use

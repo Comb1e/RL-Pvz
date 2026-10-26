@@ -1,3 +1,35 @@
+## Direct mower penalties and environment reward HUD — 2026-10-26
+
+- Problem/root cause: the mower cost was expressed in sunlight, so changing the
+  physical value scale or dense multiplier also changed the final penalty.
+  Live game windows showed sun and Q values but no accumulated environment reward.
+- Improvement: replace `mower_value` with `reward.mower_penalty=0.1`. Each
+  activation contributes -0.1 directly to raw and training rewards on CPU/CUDA,
+  outside physical development, sunlight conversion, and dense scaling. The
+  existing action-mower component retains source attribution; complete returns,
+  summaries, and replay repricing share the new conversion. Historical recording
+  verification still recognizes its original sun-priced mower accounting.
+  Reward/objective v4 rejects earlier optimizer resumes; compatible weight-only
+  initialization remains supported without changing model tensors or observations.
+- Display: native and browser live boards show each environment's accumulated
+  training reward, including causal credits. CUDA capture stages FP64 totals only
+  for subscribed boards under the public-state copy fence; no new hot-step
+  synchronization or policy input is introduced. Gym RGB rendering shares the
+  reward formatter. Episode resets clear the display; terminal time ranking is
+  pending until cohort completion.
+- Verification: temporary controls compared five actual CPU/CUDA simulator cases
+  with zero, one, two, and five simultaneous mower activations at different sun
+  amounts; all reward fields matched. Additional controls verified independent
+  physical/dense scales, historical replay integrity and altered-total rejection,
+  causal complete returns, prior weight compatibility/old-optimizer rejection,
+  immutable viewer captures, episode reset, and native rendering. Native/browser
+  HUDs were visually checked. All three smoke tests passed, including short CUDA
+  learning/checkpoint reload. Focused Ruff, current Node inline-JavaScript syntax,
+  and `git diff --check` passed; no permanent tests were added.
+- Remaining limits: displayed terminal reward uses the base outcome until the
+  cohort's time ranks exist. No formal training, push, or PR. User datasets,
+  previous runs, architecture documentation, and pre-training script are untouched.
+
 ## Reward conversion at value scale 2000 — 2026-10-26
 
 - Problem/root cause: changing `reward.value_scale` from 900 to 2000 reduced
