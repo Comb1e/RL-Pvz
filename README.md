@@ -91,6 +91,11 @@ The active-only trajectory/recovery format is v4; older runs support compatible
 weight-only initialization, but cannot resume. Model weights and the learning
 objective are unchanged by the pipeline optimization.
 
+Reward settings live in `src/pvz_rl/data/train.toml`. At `value_scale=2000`,
+25 Sunflower sun gives +0.0025 normally or +0.005 early, and one mower costs
+0.1 training reward. Damage, blocking, and plant asset-loss rewards retain their
+previous scale; see the [reward conversion table](docs/math/training-objective.md).
+
 ## Common checks
 
 ```powershell

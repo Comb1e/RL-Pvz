@@ -236,7 +236,7 @@ def validate_config(cfg: dict) -> None:
         reward_keys | {"action", "win_time_weight"},
         reward_keys | {"action", "home_entry_penalties", "win_time_weight"},
     )
-    if set(cfg["reward"]) not in reward_keys_with_optional:
+    if set(cfg["reward"]) - {"asset_loss_multiplier"} not in reward_keys_with_optional:
         raise ValueError("reward must contain the outcome, asset-value, and action settings")
     action_reward = cfg["reward"].get("action", {})
     if not isinstance(action_reward, dict):
@@ -260,6 +260,13 @@ def validate_config(cfg: dict) -> None:
         for value in block_values.values()
     ):
         raise ValueError("reward.action.block_value_by_plant values must be finite numbers")
+    asset_loss_multiplier = cfg["reward"].get("asset_loss_multiplier", 1.0)
+    if (
+        type(asset_loss_multiplier) not in (int, float)
+        or not math.isfinite(asset_loss_multiplier)
+        or asset_loss_multiplier < 0
+    ):
+        raise ValueError("reward.asset_loss_multiplier must be finite and nonnegative")
     if "actor_objective" in cfg["training"] or "ent_coef" in cfg["training"]:
         raise ValueError("Retired PPO objective; use sequential Q fitting")
     if cfg["training"]["exploration"].get("objective") != "committed_plant_tile_epsilon_v1":

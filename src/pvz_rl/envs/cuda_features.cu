@@ -246,7 +246,8 @@ reward_metrics(const I *headers, const I *old_headers, const I *old_cd,
   // exposes authoritative wall-nut bite facts; host-side CPU collection can
   // refine the per-plant provenance through the shared causal ledger.
   v[F_global_terminal] = v[F_terminal];
-  v[F_global_asset_value] = resources;
+  v[F_global_asset_value] = resources
+      - (R_asset_loss_multiplier - 1.) * v[F_plant_value_loss];
   v[F_action_damage] = v[F_combat_value];
   v[F_action_blocking] = R_action_block_0 * a[4]
       + R_action_block_1 * a[5]

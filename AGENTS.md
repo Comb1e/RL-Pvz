@@ -46,7 +46,11 @@
   `training.n_epochs` (4). Tile (50% to 1%) and accepted-plant species (10% to 1%)
   probabilities decay over 10,000 stage games and freeze per cohort.
   `reward.early_sun_spawn_fraction=[1,3]` and `early_sun_extra_multiplier=2` triple
-  early actual Sunflower income value. Shared clipping uses `training.max_grad_norm=5`.
+  early actual Sunflower income value. `value_scale=2000` converts physical
+  values to fitted rewards at /20,000. Damage and blocking coefficients and
+  `reward.asset_loss_multiplier` compensate by 2000/900; both produced-sun
+  contributions remain unscaled, and `mower_value=2000` gives -0.1 per activation.
+  Shared clipping uses `training.max_grad_norm=5`.
   `training.objective.species_consistency_weight=1.0` controls online-selected,
   detached EMA-evaluated tile targets. `species_consistency_huber_delta=1.0` under
   the same objective table is finite, positive and non-boolean; consistency uses
@@ -92,6 +96,9 @@
   six-component global terminal/asset and action damage/blocking/sun/mower
   objective plus diagnostic proximity/time fields. `CompleteGameBuffer` can
   apply validated source credits before chronological return finalization.
+  CPU and CUDA asset rewards subtract the configured extra plant-loss value
+  from the physical asset delta, leaving actual production income untouched.
+  A missing asset-loss multiplier in saved configurations retains legacy unit pricing.
   `rewards.py` owns early
   Sunflower eligibility, physical conservation, proximity penalties and cohort-median
   victory finalization. Recording fact checks remain configuration-independent.

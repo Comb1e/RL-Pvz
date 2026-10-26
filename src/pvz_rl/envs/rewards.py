@@ -341,7 +341,12 @@ def reward_parts(
     # progress/value conversion and dense training multiplier are applied by
     # learning.objective.training_rewards exactly once.
     global_terminal = terminal
-    global_asset_value = resource_delta
+    # Reprice lost plant assets independently so changing value_scale can leave
+    # damage/blocking/losses intact while reducing both production-sun terms.
+    # Legacy configurations retain the original unweighted asset delta.
+    global_asset_value = (
+        resource_delta - (settings.get("asset_loss_multiplier", 1.0) - 1) * lost_value
+    )
     action_damage = combat_value
     action_blocking = blocking
     action_sun = sun_multiplier * produced + settings["early_sun_extra_multiplier"] * early_sun

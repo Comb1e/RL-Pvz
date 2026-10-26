@@ -52,10 +52,11 @@ wave_scale = 15
 version = "action_global_value_v3"
 win_reward = 1.0
 loss_penalty = 1.0
-basic_zombie_value = 30.0 # 270 basic-zombie damage is worth 30 sunlight.
-mower_value = 500.0 # One lawn mower is worth 500 sunlight.
+basic_zombie_value = 66.66666666666667 # Preserve +1/300 fitted reward per 270 damage.
+mower_value = 2000.0 # One activation gives -0.1 fitted reward.
 progress_weight = 0.01
-value_scale = 900.0 # Raw physical shaping is progress_weight / value_scale.
+value_scale = 2000.0 # Raw physical shaping is progress_weight / value_scale.
+asset_loss_multiplier = 2.2222222222222223 # Preserve plant asset-loss rewards; produced sun is unscaled.
 home_entry_penalties = [0.005, 0.015] # First entry into the second, then first column.
 win_time_weight = 0.5 # Cohort-ranked endgame adjustment: first +0.5, last -0.5.
 early_sun_extra_multiplier = 2.0
@@ -63,10 +64,9 @@ early_sun_spawn_fraction = [1, 3]
 
 [reward.action]
 sun_credit_multiplier = 1.0
-# Raw sun-equivalent blocker credit per health point. Ordinary plants receive
-# 10 sunlight over full health; Wall-nut receives 100. Global asset loss still
-# records health damage separately.
-block_value_by_plant = { sunflower = 0.0333333333, peashooter = 0.0333333333, wall_nut = 0.025, cherry_bomb = 0.0333333333, potato_mine = 0.0333333333, snow_pea = 0.0333333333, chomper = 0.0333333333, repeater = 0.0333333333 }
+# Raw blocker credit per health point, compensated by 2000/900 to preserve
+# fitted rewards. Global asset loss records health damage separately.
+block_value_by_plant = { sunflower = 0.074074074, peashooter = 0.074074074, wall_nut = 0.05555555555555556, cherry_bomb = 0.074074074, potato_mine = 0.074074074, snow_pea = 0.074074074, chomper = 0.074074074, repeater = 0.074074074 }
 
 [training]
 gamma = 1.0

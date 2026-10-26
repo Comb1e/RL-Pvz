@@ -21,10 +21,11 @@ ranked by completion time. With `reward.win_time_weight=0.5`, the earliest
 winner receives +1.5 and the latest winner +0.5. Losses before the median stay
 at -1; losses after the median become progressively more negative, reaching
 -1.5 for the latest rank. This adjustment is applied only to the terminal row.
-Here `s=progress_weight/value_scale=0.01/900` in the current profile and the multiplier is
-`training.objective.dense_multiplier=10`; scaling is applied once to the
-combined physical terms. The same interface builds demonstration and
-autonomous targets. [Sequential Q learning](sequential-training.md) specifies
+Here `s=progress_weight/value_scale=0.01/2000` in the current profile and the
+multiplier is `training.objective.dense_multiplier=10`; scaling is applied once
+to the combined physical terms, giving /20,000 for fitted physical rewards.
+The same interface builds demonstration and autonomous targets.
+[Sequential Q learning](sequential-training.md) specifies
 the selected-action, consistency and demonstration losses. Maximum net value
 and drawdown remain diagnostics.
 
@@ -83,28 +84,32 @@ Assets are available sun plus each living plant's purchase cost times its
 remaining-health fraction. Purchase is neutral. Effective damage includes
 actual body and armor damage from plants/projectiles, capped at remaining HP;
 autonomous headless decay and mower damage do not earn plant-damage value.
-With basic body HP 270, damage valuation is 30/270 per effective HP.
+With basic body HP 270, damage valuation is `(2000/900)*30/270` per effective HP.
 
-For asset value A, actual sky income S, effective damage D, mower activations M,
-and eligible actual Sunflower income E, the physical ledger is
+For asset value A, actual sky income S, actual plant-produced income P, effective
+damage D, mower activations M, and eligible early Sunflower income E, define
+plant asset loss `L=P-(A_after-A_before-S)` and `k=2000/900`. The physical ledger is
 
 \[
-R_{physical}=(A_{after}-A_{before}-S)+(30/270)D+B+C-500M,
+R_{physical}=(P-kL)+k(30/270)D+B+(P+2E)-2000M.
 \]
 
-where `B` is the signed per-plant blocking credit and `C` is produced sunlight
-credit (including the configured early-sun source bonus). The current profile
-values 270 effective basic-zombie damage at 30 sunlight, a full Wall-nut block
-at 100 sunlight, a full ordinary-plant block at 10 sunlight, and one mower at
-500 sunlight. Subtracting actual sky income prevents free ambient sun from
+Here `B` is per-plant blocking credit, with its coefficients multiplied by `k`.
+`reward.asset_loss_multiplier=k` prices health loss and plant removal separately
+from production income. Its default of one for older saved configurations
+reproduces the original asset delta. The current damage, blocking, and plant
+loss prices compensate for the change from value scale 900 to 2000, preserving
+their fitted rewards. Both production-sun contributions use the new lower
+scale. One mower is priced at 2000, giving a fitted penalty of -0.1.
+Subtracting actual sky income prevents free ambient sun from
 earning global asset reward. Plant-produced sun remains valuable only when it
 fits below the sun cap. Asset losses and mower expenditure are each charged
 once; diagnostic kill counts are not another reward term. Damage and delayed
 source events are assigned to their placement action by the causal ledger; no
 separate kill bonus is added.
 
-The default blocker coefficients are raw sun-equivalent value per health point:
-ordinary plants are `10/max_health`, while Wall-nut is `100/max_health`.
+The blocker coefficients are priced value per health point: ordinary plants
+are approximately `k*10/max_health`, while Wall-nut is `k*100/max_health`.
 Blocking itself has no negative action term. The global asset value still records
 the plant's health loss, so ordinary plants remain economically costly while a
 Wall-nut can receive a positive combined local signal. A terminal defeat still
@@ -117,32 +122,29 @@ fraction is `reward.early_sun_spawn_fraction=[1,3]`, with
 `reward.early_sun_extra_multiplier=2`. Count only actual credited sunlight, not
 requested production, and never sky income. `early_sun_bonus` is a diagnostic
 subset of action sun, not a seventh component. The dense multiplier applies once
-to all five physical terms; source sunlight and the separate global asset delta
+to all five physical terms; source sunlight and the production part of global assets
 are intentionally both retained.
 
-| Control | Physical ledger effect |
-|---|---:|
-| Lose a healthy 100-sun shooter | global asset `-100` plus its signed bite credit |
-| Produce 25 uncapped early Sunflower sun | global asset `+25` plus source action sun |
-| Produce 25 uncapped late Sunflower sun | global asset `+25` plus source action sun |
-| Remove 20 effective HP | action damage `(20*30/270)` |
-| Activate one mower | action mower `-500` |
-| Empty cherry | no combat credit |
-| Cherry against three full basics | action damage from actual body/armor damage |
-| Cherry against one full conehead | action damage from actual body/armor damage |
+| Control | Physical ledger effect | Fitted reward contribution |
+|---|---:|---:|
+| Remove 270 effective HP | action damage `k*30` | +0.0033333333 |
+| Full Wall-nut bites | blocking `k*100` | +0.0111111111 |
+| Full ordinary-plant bites | blocking approximately `k*10` | +0.0011111111 |
+| Lose a healthy 100-sun shooter | global asset `-k*100` | -0.0111111111 before bite credit |
+| Produce 25 uncapped early Sunflower sun | global asset `+25`, action sun `+75` | +0.005 |
+| Produce 25 uncapped late Sunflower sun | global asset `+25`, action sun `+25` | +0.0025 |
+| Sky produces 25 sun | excluded from global assets | 0 |
+| Buy a healthy plant | sun converts into equal plant value | 0 |
+| Activate one mower | action mower `-2000` | -0.1 |
+| Empty cherry | no combat credit; remaining plant asset value is lost | negative asset contribution only |
 
-Head loss can stop a game before all body HP disappears. These explosion controls
-use actual damage, and never award the unremoved remainder. Bounds for normal
-levels are conservative; they are not claims of training success or optimal values.
-
-For the pinned normal levels, 50 initial sun and the 120,000-tick cutoff,
-independent controls bound final assets by 18,990 and actual sky income by 3,525.
-The largest roster has 38,130 body-plus-armor HP. Cumulative net value therefore
-lies between -4,575 and 26,001.111111 sun-equivalents. Outcome plus physical development
-is at least 0.8475 on a natural win and at most -0.1332962963 on a natural loss.
-These bounds cover only terminal plus **unscaled physical development**, excluding
-the early Sunflower bonus, proximity, time shaping, custom scenarios and incomplete games. They do not
-bound the full raw or fitting return.
+Head loss can stop a game before all body HP disappears. Damage credits use
+actual damage and never award the unremoved remainder. Combined signals
+include both blocking and lost assets: a fully eaten 50-sun Wall-nut contributes
+`k*(100-50)/20000 = +0.0055555556`; a fully eaten 100-sun shooter contributes
+approximately `k*(10-100)/20000 = -0.01`, before its damage credit. Historical
+net-value bounds from other reward profiles do not bound the current six-component
+fitting return. Terminal ranking and invalid-action targets are unchanged.
 
 ## One-time house entries
 

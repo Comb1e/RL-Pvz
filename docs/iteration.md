@@ -1,3 +1,30 @@
+## Reward conversion at value scale 2000 — 2026-10-26
+
+- Problem/root cause: changing `reward.value_scale` from 900 to 2000 reduced
+  every physical reward, although only Sunflower production was meant to shrink.
+  Production income and plant asset loss share the global asset component, so
+  scaling that entire component would also preserve unwanted sunlight value.
+- Improvement: retain the user's value scale 2000 and compensate damage,
+  blocking, and plant asset loss by 2000/900. A configurable asset-loss multiplier
+  prices losses separately on CPU and CUDA; missing multipliers preserve saved
+  configurations' original unit pricing. Both actual Sunflower-income components
+  retain the reduced scale: 25 sun gives +0.0025 normally or +0.005 early.
+  `mower_value=2000` makes one activation cost -0.1 in fitting. Terminal rewards,
+  sky exclusion, purchase neutrality, and source-action attribution are unchanged.
+- Verification: temporary independent controls covered 17 idle, purchase/removal,
+  partial/full damage, bite, early/late/capped sun, sky, mower, terminal, and
+  simultaneous-event cases. CPU and the actual CUDA reward kernel agreed under
+  both current and legacy pricing; unchanged contributions matched the prior
+  profile to FP64 rounding. Validation rejected nonfinite, boolean, and negative
+  loss multipliers; delayed source credits retained their original fitted value.
+  CPU smoke checks passed (2 passed, 1 deselected); focused Ruff lint/format and
+  `git diff --check` passed. No permanent tests were added.
+- Remaining limits: changed reward settings require fresh weight-only
+  initialization rather than optimizer resume. These accounting
+  checks establish reward conversion, not training effectiveness. No formal
+  training, push, or PR; architecture, datasets, runs, and pre-training script remain
+  unchanged.
+
 ## Faster annotation fitting — 2026-10-23
 
 - Problem/root cause: every annotation pass repeated raw-input transport and

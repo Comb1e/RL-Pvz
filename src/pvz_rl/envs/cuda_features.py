@@ -86,6 +86,7 @@ class CudaFeatures:
             "early_sun_extra_multiplier",
         )
         params.update({f"R_{k}": float(cfg["reward"].get(k, 0)) for k in reward_keys})
+        params["R_asset_loss_multiplier"] = float(cfg["reward"].get("asset_loss_multiplier", 1.0))
         action_reward = cfg["reward"].get("action", {})
         params["R_action_sun_credit_multiplier"] = float(
             action_reward.get("sun_credit_multiplier", 1.0)
