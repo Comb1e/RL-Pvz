@@ -16,17 +16,19 @@ r^{physical}=r^{global\ asset}+r^{action\ damage}+r^{action\ blocking}
 
 Gamma is one; selected-action targets sum the complete episode without bootstrap.
 The base terminal rewards are +1 for victory and -1 for defeat or cutoff
-(`reward.loss_penalty=1.0`). After each 128-game cohort, terminal rows are
-ranked by completion time. With `reward.win_time_weight=0.5`, the earliest
-winner receives +1.5 and the latest winner +0.5. Losses before the median stay
-at -1; losses after the median become progressively more negative, reaching
--1.5 for the latest rank. This adjustment is applied only to the terminal row.
+(`reward.loss_penalty=1.0`). After each completed cohort, normally 128 games,
+terminal rows are ranked together by completion time, including losses. A signed
+quadratic adjustment with maximum magnitude `reward.win_time_weight=0.3` gives
+terminal wins in [+0.7,+1.3] and losses in [-1.3,-1]. This adjustment is applied
+only to the terminal row; physical rewards and mowers additionally affect totals.
 Here `s=progress_weight/value_scale=0.01/2000` in the current profile and the
 multiplier is `training.objective.dense_multiplier=10`; scaling is applied once
 to the combined physical terms, giving /20,000 for fitted physical rewards.
 The same interface builds demonstration and autonomous targets.
-Reward `action_global_value_v4` and objective `complete_return_action_global_v4`
-identify this mixed-unit contract. Old optimizer/recovery states cannot resume;
+Reward `action_global_value_v5` and objective `complete_return_action_global_v5`
+identify the quadratic terminal and wait-representative contract. Trajectory and
+autonomous recovery are v5; demonstration initialization is v11. Old
+optimizer/recovery states cannot resume;
 structurally compatible weights still initialize fresh runs. Verified historical
 demonstrations are repriced under the current contract.
 
@@ -161,7 +163,8 @@ include both blocking and lost assets: a fully eaten 50-sun Wall-nut contributes
 `k*(100-50)/20000 = +0.0055555556`; a fully eaten 100-sun shooter contributes
 approximately `k*(10-100)/20000 = -0.01`, before its damage credit. Historical
 net-value bounds from other reward profiles do not bound the current six-component
-fitting return. Terminal ranking and invalid-action targets are unchanged.
+fitting return. These physical prices are independent of terminal ranking and
+the fitting-only invalid-action target.
 
 ## One-time house entries
 
@@ -185,21 +188,44 @@ IDs remain private accounting metadata. Recovery restores the ledger.
 
 ## Ranked endgame time
 
-After all actual games finish, sort the 128 completion durations from fastest to
-slowest. Equal durations share their average rank. For rank q in a cohort of n
-games, the adjustment is
+After all actual games finish, sort their completion durations from fastest to
+slowest, including losses. Equal durations share their average zero-based rank.
+For rank r in the actual cohort size n > 1, define
 
-a_q = w(1 - 2q/(n-1)), with w=reward.win_time_weight=0.5.
+```text
+u = 1 - 2r/(n-1)
+a = w * u * abs(u), where w = reward.win_time_weight = 0.3
+win terminal  =  1 + a
+loss terminal = -1 + min(a, 0)
+```
 
-A winning terminal row receives 1+a_q. A losing row receives -1+min(a_q,0).
-Thus winners before the median improve while early-loss penalties stay at -1;
-late winners decline and late-loss penalties increase, ending at +0.5 and -1.5
-for the last rank. A single-game or equal-duration cohort has zero adjustment.
-The rank is cohort context and never a policy input.
+`w` is the maximum absolute rank adjustment. The signed piecewise quadratic
+makes smaller changes near the median position.
+
+| Normalized rank u | Win terminal | Loss terminal |
+|---:|---:|---:|
+| +1, fastest | +1.300 | -1.000 |
+| +0.5 | +1.075 | -1.000 |
+| 0 | +1.000 | -1.000 |
+| -0.5 | +0.925 | -1.075 |
+| -1, slowest | +0.700 | -1.300 |
+
+A single-game or entirely tied cohort receives zero adjustment. With 128 distinct
+times, the central two games are on opposite sides of the median position. The
+shared helper serves trajectory finalization, episode reports, standalone
+evaluation and verified demonstrations. A single demonstration is a singleton
+cohort and therefore retains its base outcome. Rank never enters policy inputs.
+
+`endgame_time_adjustment` reports the applied terminal value minus the base
+outcome, so an early loss reports zero. `terminal_reward` and `global_terminal`
+are authoritative; legacy `victory_time` stays zero. Repeated finalization
+replaces the terminal value and applies only its difference to episode totals.
 
 Collection marks completed rewards provisional. `FINALIZE_REWARDS` writes terminal
 adjustments before `RETURNS` and `FIT`. Saved finalization
 state prevents applying adjustments or publishing episode records twice on resume.
+Finalized HUD overrides are cleared on episode reset, with episode-serial fences
+rejecting delayed captures and finalization messages from the previous game.
 Curriculum counts victories independently of shaped rewards.
 
 These shaping terms intentionally change the objective and do not claim to preserve

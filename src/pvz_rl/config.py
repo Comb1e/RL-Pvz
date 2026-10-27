@@ -142,7 +142,7 @@ def validate_config(cfg: dict) -> None:
                 "training.objective contains retired or missing settings, including "
                 "species_consistency_huber_delta"
             )
-        if objective.get("protocol") != "complete_return_action_global_v4":
+        if objective.get("protocol") != "complete_return_action_global_v5":
             raise ValueError(
                 "Unsupported training objective protocol; fresh initialization is required"
             )
@@ -196,7 +196,7 @@ def validate_config(cfg: dict) -> None:
     ):
         raise ValueError("home_entry_penalties require two increasing nonnegative magnitudes")
     weight = cfg["reward"].get("win_time_weight", 0)
-    if not math.isfinite(weight) or weight < 0:
+    if type(weight) not in (int, float) or not math.isfinite(weight) or weight < 0:
         raise ValueError("win_time_weight must be finite and nonnegative")
     current_policy = (
         cfg.get("encoding", {}).get("version") == "entity_v1"
@@ -213,7 +213,7 @@ def validate_config(cfg: dict) -> None:
         raise ValueError(
             "Retired observation/policy format; entity_v1 requires fresh initialization"
         )
-    if cfg["reward"].get("version") != "action_global_value_v4":
+    if cfg["reward"].get("version") != "action_global_value_v5":
         raise ValueError(
             "Retired reward format; ranked endgame action/global rewards require fresh training with the bundled train profile"
         )
@@ -455,7 +455,7 @@ def validate_config(cfg: dict) -> None:
     if not math.isfinite(visual["final_hold_seconds"]) or visual["final_hold_seconds"] < 0:
         raise ValueError("Visualization final_hold_seconds must be finite and nonnegative")
     env, train = cfg["environment"], cfg["training"]
-    expected_method = "complete_return_action_global_v4"
+    expected_method = "complete_return_action_global_v5"
     if train.get("method") != expected_method:
         raise ValueError("Training requires a supported complete-return method and fresh models")
     if any(

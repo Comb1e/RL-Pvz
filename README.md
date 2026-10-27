@@ -87,9 +87,9 @@ and starts a fresh destination optimizer. The final `tile.pt`/`action.pt` still
 requires convergence. Annotation progress v3 needs one annotation resume to write
 v4 before downstream initialization; `train --resume` requires autonomous recovery.
 
-The active-only trajectory/recovery format is v4; older runs support compatible
-weight-only initialization, but cannot resume. Model weights and the learning
-objective are unchanged by the pipeline optimization.
+The active-only trajectory/recovery format is v5; older runs support compatible
+weight-only initialization, but cannot resume. Model architecture, observation
+encoding and weight layout remain unchanged.
 
 Reward settings live in `src/pvz_rl/data/train.toml`. At `value_scale=2000`,
 25 Sunflower sun gives +0.0025 normally or +0.005 early. One mower activation
@@ -99,7 +99,10 @@ training reward. Terminal boards show a pending label until cohort time ranking
 finishes, then refresh with the finalized reward.
 Fitting retains the first of each 100 adjacent waits or identical invalid
 proposals; complete returns and reward accounting retain every decision.
-Reward/objective v4 requires fresh `--init-from` for previous weights rather than
+Completion-time ranking uses a signed quadratic adjustment capped at 0.3:
+terminal wins range from +0.7 to +1.3 and losses from -1 to -1.3. Physical
+rewards and mower penalties additionally affect total game reward.
+Reward/objective v5 requires fresh `--init-from` for previous weights rather than
 optimizer resume. See the [reward conversion table](docs/math/training-objective.md).
 
 ## Common checks

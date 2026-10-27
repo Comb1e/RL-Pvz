@@ -216,6 +216,8 @@ class CudaVecEnv(VecEnv):
             self.action_journal.reset(index, self._episode_serial[index])
             self._level_names[index] = spec if isinstance(spec, str) else spec.name
             self._episode_stages[index] = self.queue.stage
+        if self.live_view is not None:
+            self.live_view.reset_episodes(indices)
         self.batch.reset(
             [s[4] for s in staged],
             [s[3] for s in staged],

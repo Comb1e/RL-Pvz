@@ -25,7 +25,7 @@ from pvz_rl.learning.objective import (
 from pvz_rl.learning.source_actions import AppendReceipt, SourceActionRef
 from pvz_rl.monitoring.moments import RunningMoments
 
-TRAJECTORY_PROTOCOL = "pvz-rl/action-global-trajectory-v4"
+TRAJECTORY_PROTOCOL = "pvz-rl/action-global-trajectory-v5"
 
 
 def trajectory_dtype(cfg=None):
@@ -540,7 +540,7 @@ class CompleteGameBuffer:
                 wins,
                 win_reward=self.cfg["reward"]["win_reward"],
                 loss_penalty=self.cfg["reward"]["loss_penalty"],
-                weight=self.cfg["reward"].get("win_time_weight", 0.5),
+                weight=self.cfg["reward"].get("win_time_weight", 0.3),
             )
             for (block, index, _, _won), value in zip(terminal, terminal_rewards, strict=True):
                 row = block[index]
@@ -559,7 +559,7 @@ class CompleteGameBuffer:
             endgame_terminal_rewards=terminal_rewards.tolist(),
             endgame_time_adjustments=adjustments.tolist(),
             endgame_time_weight=(
-                self.cfg["reward"].get("win_time_weight", 0.5) if self.cfg else 0.0
+                self.cfg["reward"].get("win_time_weight", 0.3) if self.cfg else 0.0
             ),
             # Compatibility alias for existing viewers and reports.
             victory_time_adjustments=adjustments.tolist(),

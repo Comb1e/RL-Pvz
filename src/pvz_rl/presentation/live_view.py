@@ -64,6 +64,7 @@ class Selection:
         self.active = set(range(count))
         self.pending = set()
         self.finalized_rewards = {}
+        self.episode_floor = {}
 
     def refresh(self, active):
         self.active = set(active)
@@ -93,6 +94,8 @@ class Selection:
         p = self.panels[panel]
         if generation != p.generation or frame.get("env", p.env) != p.env:
             return False
+        if frame["episode"] < self.episode_floor.get(p.env, 0):
+            return False
         if p.frame is not None and frame["sequence"] <= p.frame["sequence"]:
             return False
         saved = self.finalized_rewards.get(p.env)
@@ -109,9 +112,17 @@ class Selection:
             p.state = PanelState.RESULT if frame["outcome"] != "running" else PanelState.WATCHING
         return True
 
+    def reset_episodes(self, episodes):
+        """Expire finalized overrides and fence captures from reset episodes."""
+        for env, episode in episodes:
+            self.episode_floor[env] = max(episode, self.episode_floor.get(env, 0))
+            self.finalized_rewards.pop(env, None)
+
     def finalize_rewards(self, episodes):
         """Replace rewards by stable episode identity, including delayed captures."""
         for env, episode, reward in episodes:
+            if episode < self.episode_floor.get(env, 0):
+                continue
             saved = self.finalized_rewards.get(env)
             if saved is not None and episode < saved[0]:
                 continue

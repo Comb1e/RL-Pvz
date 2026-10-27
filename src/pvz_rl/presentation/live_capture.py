@@ -291,6 +291,11 @@ class CudaLiveCapture:
             slot["pending"] = None
         self.session.publish()
 
+    def reset_episodes(self, indices):
+        self.session.selection.reset_episodes(
+            (int(env), int(self.env._episode_serial[env])) for env in indices
+        )
+
     def finalize_rewards(self, pending):
         """At the cohort boundary, publish authoritative host episode totals."""
         self.drain(wait=True)

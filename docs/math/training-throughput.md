@@ -164,7 +164,8 @@ encoder's compiler cache as well as releasing captures, so changed microbatch
 limits do not accumulate stale specializations across cohorts. Global compiler
 limits are not increased and unrelated compiler caches are not reset.
 
-Trajectory/recovery v4 stores active identities and boundary carry state.
+Trajectory/recovery v5 stores active identities and boundary carry state and
+identifies the changed wait-representative and quadratic reward semantics.
 Earlier recovery files cannot resume; compatible weights and recordings remain
 valid for fresh initialization. Prepared caches rebuild and are never model data.
 
@@ -182,6 +183,11 @@ learning/checkpoint workflow with compilation disabled. It does not verify
 execution equivalence, compiler behavior, recovery or throughput. Historical
 controls and measurements remain in iteration history and retained evidence;
 manual benchmarks supply new performance evidence.
+
+The [2026-10-27 wait-compaction control](../evidence/wait-compaction-20261027.md)
+records raw/retained rows, spool preparation and four-pass fitting on the 4070.
+It is a bounded synthetic fitting control, not a complete training-cycle or
+convergence measurement.
 
 ## Diagnose cloud fitting stalls
 

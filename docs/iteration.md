@@ -2721,3 +2721,34 @@ unperformed.
   immediate aggregate CUDA comparisons from the previous reward protocol, so
   they are not treated as validation for this change. Formal training and a
   pull request are intentionally not run.
+## Quadratic endgame rewards, wait compaction and finalized diagnostics — 2026-10-27
+
+- Problem/root cause: the dense-return warning compared different units and
+  ignored covariance, genuine waits were fitted at full trajectory volume, and
+  completion-time shaping remained linear. Standalone evaluation and live HUD
+  records also exposed base terminal values after a cohort had finished ranking.
+- Improvement: dense diagnostics now take FP64 moments of the summed physical
+  return after its fitted-unit conversion, with cohort-scoped warning events.
+  Genuine waits share the first-of-100 segmented compactor with identical
+  invalid proposals; raw rows and returns remain complete. Cohort terminal
+  shaping uses `a=0.3*u*abs(u)` with actual cohort size, average tie ranks and
+  idempotent applied adjustments. CPU/CUDA evaluation reports and live panels
+  refresh finalized terminal totals, while reset episode serials fence delayed
+  captures. Reward, objective, trajectory, recovery and demo identities advance
+  to v5/v11; old optimizer/recovery resumes remain rejected and compatible
+  weight-only initialization remains available.
+- Verification: temporary FP64 covariance/cancellation, zero-variance and
+  target-preservation controls passed. Wait/invalid representatives matched
+  independent references across boundaries, gaps, interleaving, spill and
+  restart. Quadratic endpoints, ties, singleton cohorts and repeated
+  finalization passed. Actual tile/action annotation resume controls passed for
+  v4 progress provenance under current v5 autonomous settings. Existing
+  autonomous weight-only loading and old-resume rejection passed. A 4070
+  production fitting control retained 21/2048 all-wait rows and 530/2048 mixed
+  rows; targets were unchanged. CPU and short CUDA evaluation published
+  finalized JSONL records. CPU/CUDA smoke checks and Ruff/syntax checks are
+  retained below; no formal training, push or PR was performed.
+- Remaining limits: the 4070 control is synthetic and excludes collection,
+  complete returns and checkpoint serialization, so it does not prove end-to-end
+  training speed or convergence. Existing run files and user datasets remain
+  untouched.

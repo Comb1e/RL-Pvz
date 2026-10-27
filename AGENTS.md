@@ -40,7 +40,7 @@
   owns synthetic/trajectory/full-cycle selection and the paired promotion gate.
 - `src/pvz_rl/data/train.toml` is the single parameter source for train/demo overlays.
   Both use `entity_v1`, `two_stage_transformer_q_v1` and
-  `complete_return_action_global_v4`. Old-objective resumes are rejected; structurally compatible
+  `complete_return_action_global_v5`. Old-objective resumes are rejected; structurally compatible
   BF16-master weights support inference/fresh initialization; verified recordings are reconstructed without changes. Preserve
   user reward adjustments. `training.demo.passes` is 20, independently of autonomous
   `training.n_epochs` (4). Tile (50% to 1%) and accepted-plant species (10% to 1%)
@@ -95,16 +95,19 @@
   proposal/reason and zero penalty audit fields, executes wait and advances one tick; accepted plant/dig
   advances zero ticks. Accounting is not a model input. `rewards.py` owns the
   six-component global terminal/asset and action damage/blocking/sun/mower
-  objective plus diagnostic proximity/time fields. Reward protocol v4 separates
-  final-unit mower penalties from the four physical terms; previous weights
+  objective plus diagnostic proximity/time fields. Reward protocol v5 keeps
+  final-unit mower penalties separate from the four physical terms and uses
+  signed-quadratic cohort time adjustments capped by `win_time_weight=0.3`; previous weights
   remain usable for fresh initialization, while old optimizer resumes fail. `CompleteGameBuffer` can
   apply validated source credits before chronological return finalization.
   CPU and CUDA asset rewards subtract the configured extra plant-loss value
   from the physical asset delta, leaving actual production income untouched.
   A missing asset-loss multiplier in saved configurations retains legacy unit pricing.
   `rewards.py` owns early
-  Sunflower eligibility, physical conservation, proximity penalties and cohort-median
-  victory finalization. Recording fact checks remain configuration-independent.
+  Sunflower eligibility, physical conservation and proximity penalties.
+  `learning/objective.py` owns shared average-rank terminal finalization for
+  trajectories, episode reports, demonstrations and evaluation. Recording fact
+  checks remain configuration-independent.
 - `learning/exploration.py` owns persistent accepted-plant species commitments.
   Choose another species uniformly; wait ordinarily for sun/cooldown, with no
   timeout. All 45 tiles remain proposal candidates, so occupancy is classified
@@ -145,9 +148,9 @@
   `PreparedDeviceBatches` in `batch_transport.py` owns immutable resident raw
   inputs/labels with the original source batch ranges and padding; annotation
   admission covers train/validation together and retains streaming fallback.
-- `learning/checkpoints.py` validates model/objective/schema and demo v10,
-  action-global v4 recovery/trajectory contracts before simulator allocation;
-  the objective protocol is v3 because fitting representative weighting changed.
+- `learning/checkpoints.py` validates model/objective/schema and demo v11,
+  action-global v5 recovery/trajectory contracts before simulator allocation;
+  the objective protocol is v5 for wait representatives and quadratic time rewards.
   Model-state `stateless-two-stage-bf16-master-state-v2` stores FP32 online
   masters, FP32 Adam state and BF16 EMA runtime weights. No migration or
   partial transfer exists. Fresh compatible `--init-from` transfers full weights
@@ -179,7 +182,8 @@
   copy fence as their public state. Native/web HUDs show accumulated training
   reward through shared conversion; it never enters policy observations. Cohort
   finalization drains captures and replaces rewards by environment/episode
-  identity. Bounded host overrides fence delayed frames and expire on new episodes;
+  identity. Bounded host overrides fence delayed frames and clear on reset;
+  episode floors reject stale captures and finalization updates after reset.
   native render caching includes reward and pending state.
   `rendering.py` supplies the same reward label to Gym RGB rendering.
 - `annotation/dataset.py` owns versioned rich snapshots, canonical entity rows,
@@ -214,7 +218,9 @@
   passes, and enters an explicit L2 phase only after training first converges.
   It streams metrics, records the regularization phase, and saves separate atomic
   annotation weights/Adam/RNG/pass progress. Matching dataset/split/settings and
-  L2 identity gate resume; omitted options inherit saved settings and pass limits
+  L2 identity gate resume; autonomous reward/objective provenance is retained
+  across annotation resume without changing its ranking objective or protocols.
+  Omitted options inherit saved settings and pass limits
   count additional commits per invocation. Progress v3 resumes into v4 with its
   obsolete cap ignored. History tails reconcile against durable pass metrics;
   partial gradients are discarded and commits defer Ctrl+C until durable.

@@ -22,15 +22,16 @@ from pvz_rl.learning.training_requirements import (
     weight_transfer_protocol,
 )
 
-DEMO_PROTOCOL = "pvz-rl/demo-initialization-checkpoint-v10"
-LEGACY_DEMO_PROTOCOL = "pvz-rl/demo-initialization-checkpoint-v9"
+DEMO_PROTOCOL = "pvz-rl/demo-initialization-checkpoint-v11"
+LEGACY_DEMO_PROTOCOL = "pvz-rl/demo-initialization-checkpoint-v10"
+LEGACY_DEMO_PROTOCOL_V9 = "pvz-rl/demo-initialization-checkpoint-v9"
 ANNOTATION_CHECKPOINT_PROTOCOL = "pvz-rl/annotation-initialization-v3"
 ANNOTATION_PROGRESS_PROTOCOL = "pvz-rl/annotation-progress-v4"
 LEGACY_ANNOTATION_PROGRESS_PROTOCOL = "pvz-rl/annotation-progress-v3"
 LEGACY_ANNOTATION_CHECKPOINT_PROTOCOL_V2 = "pvz-rl/annotation-initialization-v2"
 LEGACY_ANNOTATION_CHECKPOINT_PROTOCOL = "pvz-rl/tile-annotation-initialization-v1"
 MODEL_STATE_PROTOCOL = "pvz-rl/stateless-two-stage-bf16-master-state-v2"
-AUTONOMOUS_STATE_PROTOCOL = "pvz-rl/action-global-state-v4"
+AUTONOMOUS_STATE_PROTOCOL = "pvz-rl/action-global-state-v5"
 
 
 class SnapshotStager:
@@ -139,7 +140,7 @@ def load_torch_snapshot(path):
 
 def protocol_for(kind):
     methods = {
-        "two_stage_transformer_q_v1": "complete_return_action_global_v4",
+        "two_stage_transformer_q_v1": "complete_return_action_global_v5",
     }
     if kind not in methods:
         raise ValueError(
@@ -221,6 +222,7 @@ def inspect_checkpoint(path, *, weights_only=False):
         initialization_type = {
             DEMO_PROTOCOL: "demonstration",
             LEGACY_DEMO_PROTOCOL: "demonstration",
+            LEGACY_DEMO_PROTOCOL_V9: "demonstration",
             ANNOTATION_CHECKPOINT_PROTOCOL: "annotation",
             ANNOTATION_PROGRESS_PROTOCOL: "annotation",
             LEGACY_ANNOTATION_CHECKPOINT_PROTOCOL_V2: "annotation",
@@ -364,6 +366,7 @@ def inspect_checkpoint(path, *, weights_only=False):
                     runtime.get("protocol")
                     not in (
                         AUTONOMOUS_STATE_PROTOCOL,
+                        "pvz-rl/action-global-state-v4",
                         "pvz-rl/action-global-state-v3",
                         "pvz-rl/action-global-state-v2",
                         "pvz-rl/action-global-state-v1",

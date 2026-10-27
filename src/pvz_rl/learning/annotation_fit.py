@@ -624,6 +624,11 @@ def _fit_annotations(
         reward_protocol=cfg["reward"]["version"],
         objective_protocol=cfg["training"]["objective"]["protocol"],
     )
+    if saved_identity is not None:
+        # These historical provenance fields do not enter the annotation loss.
+        # Preserve them across autonomous-only reward/objective revisions.
+        for key in ("reward_protocol", "objective_protocol"):
+            fit_settings[key] = saved_identity["settings"][key]
     settings.update(
         passes=passes,
         learning_rate=learning_rate,
@@ -638,7 +643,9 @@ def _fit_annotations(
             saved["config"]
         ):
             raise ValueError("Annotation progress configuration digest does not match its contents")
-        compatible_config(saved["config"], cfg)
+        # Annotation identity below owns its ranking/optimizer compatibility;
+        # autonomous reward/objective revisions do not change annotation fitting.
+        compatible_config(saved["config"], cfg, weights_only=True)
     all_records = load_records(
         annotations, annotation=True, plant_types=cfg["environment"]["plants"]
     )

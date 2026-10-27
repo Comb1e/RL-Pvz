@@ -46,6 +46,7 @@ from pvz_rl.learning.objective import (
     components,
     consistency_diagnostics,
     demonstration_rank_loss,
+    endgame_terminal_rewards,
     ranking_counts,
     raw_rewards,
     training_rewards,
@@ -347,7 +348,18 @@ def _verify_action_order(archive_rows: list[dict], replay_path: Path, cfg: dict)
                 ("mower", "action_mower"),
             ):
                 reward[component] = float(reward.get(component, 0.0)) + float(source[field])
-            reward["total"] = float(raw_rewards(components(reward), cfg))
+        if terminal != "running":
+            # One verified demo is a singleton cohort: the shared time rule
+            # applies its base outcome with zero rank adjustment.
+            values, _ = endgame_terminal_rewards(
+                [outcome[0] + outcome[3]],
+                [terminal == "won"],
+                win_reward=cfg["reward"]["win_reward"],
+                loss_penalty=cfg["reward"]["loss_penalty"],
+                weight=cfg["reward"].get("win_time_weight", 0.3),
+            )
+            reward["terminal"] = reward["global_terminal"] = float(values[0])
+        reward["total"] = float(raw_rewards(components(reward), cfg))
         reward_changes += row["reward_parts"] != reward
         recomputed_total += reward["total"]
         # Replace only the in-memory fitting data, never the user's recording.
