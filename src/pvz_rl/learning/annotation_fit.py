@@ -24,14 +24,27 @@ from pvz_rl.annotation.dataset import (
     write_manifest,
 )
 from pvz_rl.config import digest, load_config, validate_config
-from pvz_rl.learning.batch_transport import PreparedDataSource, collate_fitting_observations
-from pvz_rl.learning.checkpoints import MODEL_STATE_PROTOCOL
+from pvz_rl.learning.batch_transport import (
+    PreparedDataSource,
+    PreparedDeviceBatches,
+    collate_fitting_observations,
+)
+from pvz_rl.learning.checkpoints import (
+    ANNOTATION_CHECKPOINT_PROTOCOL,
+    ANNOTATION_PROGRESS_PROTOCOL,
+    LEGACY_ANNOTATION_PROGRESS_PROTOCOL,
+    MODEL_STATE_PROTOCOL,
+    SnapshotStager,
+    compatible_config,
+    load_torch_snapshot,
+    retry_file_sharing,
+)
 from pvz_rl.learning.cohort import atomic_transition
+from pvz_rl.learning.performance import annotation_execution_limits
 from pvz_rl.policy.two_stage_transformer import TwoStageTransformerPolicy
 from pvz_rl.provenance import write_json
 
-ANNOTATION_CHECKPOINT_PROTOCOL = "pvz-rl/annotation-initialization-v2"
-ANNOTATION_PROGRESS_PROTOCOL = "pvz-rl/annotation-progress-v2"
+ANNOTATION_OBJECTIVE = "top1-bottomk-hinge-v3-l2-validation-grokking"
 
 
 def _label_masks(feasible, absolute, width):
@@ -132,6 +145,22 @@ def _metric_report(totals, n):
     )
 
 
+def _split_converged(metrics, rows):
+    """Return whether both exact annotation metrics pass for one split."""
+    return (
+        metrics is not None
+        and metrics["hits"] == rows
+        and metrics.get("absolute_bottom_hits", rows) == rows
+    )
+
+
+def _l2_penalty(trainable, strength):
+    """Return the explicit 0.5 * strength * ||theta||^2 master-weight penalty."""
+    if not trainable:
+        raise ValueError("annotation fitting has no trainable parameters")
+    return 0.5 * strength * torch.stack([parameter.square().sum() for parameter in trainable]).sum()
+
+
 def _metrics(values, feasible_tiles, absolute_labels=None, legal_masks=None):
     if torch.is_tensor(absolute_labels):
         legal_masks, absolute_labels = absolute_labels, None
@@ -194,12 +223,13 @@ def _groups(records):
 
 def _load_initial_model(cfg, device, init_from):
     model = TwoStageTransformerPolicy(cfg).to(device)
+    initialization = None
     if init_from is not None:
         from pvz_rl.learning.training import initial_weights
 
-        weights, _ = initial_weights(init_from, cfg)
+        weights, initialization = initial_weights(init_from, cfg)
         model.load_state_dict(weights, strict=True)
-    return model
+    return model, initialization
 
 
 def _batch(model, rows, cfg, device, *, kind="tile", include_absolute=False):
@@ -246,12 +276,79 @@ class PreparedAnnotations:
             feasible, absolute, 10 if kind == "action" else 45
         )
         self.source = PreparedDataSource([r["encoded_observation"] for r in records], cfg)
+        self.resident = None
+
+    def auxiliary(self):
+        fields = dict(positive=self.positive, absolute=self.absolute)
+        if self.branches is not None:
+            fields["branches"] = self.branches
+        return fields
+
+    def batches(self, batch_size, device):
+        if self.resident is not None:
+            if batch_size != self.resident.batch_size:
+                raise ValueError("Resident annotation batch size changed")
+            yield from self.resident.items
+            return
+        start = 0
+        with closing(self.source.batches(batch_size, device)) as batches:
+            for rows, observations, _ in batches:
+                stop = start + len(rows)
+                fields = {
+                    key: value[start:stop].to(device) for key, value in self.auxiliary().items()
+                }
+                fields["rows"] = torch.arange(len(rows), device=device)
+                yield start, stop, observations, fields
+                start = stop
 
     def close(self):
+        self.release_cache()
         self.source.close()
 
+    def release_cache(self):
+        if self.resident is not None:
+            self.resident.close()
+            self.resident = None
 
-def _run_split(
+
+def _cache_inputs(prepared, batch_size, cfg, device):
+    """Admit related splits atomically; failed admission retains streaming."""
+    performance = cfg["training"]["performance"]
+    cap = performance.get("annotation_cache_mib", 256) * 1024**2
+    report = dict(
+        requested=performance.get("annotation_input_cache", "auto"),
+        actual="streaming",
+        bytes=0,
+        cap_bytes=cap,
+        splits=list(prepared),
+    )
+    if report["requested"] == "off" or device.type != "cuda":
+        report["reason"] = "disabled" if report["requested"] == "off" else "cpu"
+        return report
+    required = sum(
+        PreparedDeviceBatches.required_bytes(p.source, batch_size, p.auxiliary())
+        for p in prepared.values()
+    )
+    report["estimated_bytes"] = required
+    free, total = torch.cuda.mem_get_info(device)
+    headroom = max(1024**3, total // 5)
+    report["headroom_bytes"] = headroom
+    if required > cap or free - required < headroom:
+        report["reason"] = "cap" if required > cap else "headroom"
+        return report
+    try:
+        for p in prepared.values():
+            p.resident = PreparedDeviceBatches(p.source, batch_size, device, p.auxiliary())
+    except (torch.cuda.OutOfMemoryError, MemoryError):
+        for p in prepared.values():
+            p.release_cache()
+        report["reason"] = "allocation_failed"
+        return report
+    report.update(actual="resident", bytes=required, reason="admitted")
+    return report
+
+
+def _split_totals(
     model,
     records,
     cfg,
@@ -274,41 +371,69 @@ def _run_split(
                 raise ValueError("training split requires an optimizer")
             model.zero_grad(set_to_none=True)
             optimizer.zero_grad(set_to_none=True)
-        batches = stack.enter_context(closing(prepared.source.batches(batch_size, device)))
-        start = 0
+        batches = stack.enter_context(closing(prepared.batches(batch_size, device)))
         with torch.set_grad_enabled(train):
-            for rows, observations, _ in batches:
-                stop = start + len(rows)
+            for start, stop, observations, fields in batches:
+                count = stop - start
                 if kind == "action":
                     values = model.species_values(observations)
                 else:
-                    branches = prepared.branches[start:stop].to(device)
                     values = model.fitting_tiles(
-                        observations, branches, rows=torch.arange(len(rows), device=device)
+                        observations, fields["branches"], rows=fields["rows"]
                     )
-                positive = prepared.positive[start:stop].to(device)
-                absolute = prepared.absolute[start:stop].to(device)
+                positive, absolute = fields["positive"], fields["absolute"]
                 top, bottom = _ranking_terms(values.float(), positive, absolute, margin)
                 loss = (top + bottom).mean()
                 if train:
-                    (loss * (len(rows) / len(records))).backward()
+                    (loss * (count / len(records))).backward()
                     model.accumulate_master_gradients()
                     model.clear_runtime_grad(set_to_none=True)
                 else:
                     totals[:8] += _metric_totals(values, positive, absolute)
-                totals[8] += loss.detach().double() * len(rows)
+                totals[8] += loss.detach().double() * count
                 totals[9] += (~torch.isfinite(values)).sum() + (~torch.isfinite(loss)).sum()
                 totals[10] += top.detach().double().sum()
                 totals[11] += bottom.detach().double().sum()
-                start = stop
-        summary = totals.cpu().tolist()
-        if summary[9]:
-            raise FloatingPointError("non-finite annotation values/loss")
-        result = _metric_report(summary[:8], len(records))
-        result["loss"] = summary[8] / len(records) if records else None
-        result["top_loss"] = summary[10] / len(records) if records else None
-        result["bottom_loss"] = summary[11] / len(records) if records else None
-        return result
+        return totals
+
+
+def _split_report(summary, count):
+    if summary[9]:
+        raise FloatingPointError("non-finite annotation values/loss")
+    result = _metric_report(summary[:8], count)
+    result.update(
+        loss=summary[8] / count if count else None,
+        top_loss=summary[10] / count if count else None,
+        bottom_loss=summary[11] / count if count else None,
+    )
+    return result
+
+
+def _run_split(model, records, cfg, device, **kwargs):
+    totals = _split_totals(model, records, cfg, device, **kwargs)
+    return _split_report(totals.cpu().tolist(), len(records))
+
+
+def _evaluate_splits(model, partitions, prepared, cfg, device, *, batch_size, margin, kind):
+    """Keep split shapes/accumulation separate, sharing one final host readback."""
+    names = ("train", "validation")
+    totals = [
+        _split_totals(
+            model,
+            partitions[name],
+            cfg,
+            device,
+            batch_size=batch_size,
+            margin=margin,
+            kind=kind,
+            prepared=prepared[name],
+        )
+        for name in names
+    ]
+    return tuple(
+        _split_report(summary, len(partitions[name]))
+        for name, summary in zip(names, torch.stack(totals).cpu().tolist(), strict=True)
+    )
 
 
 def _atomic_save(payload, path):
@@ -320,9 +445,75 @@ def _atomic_save(payload, path):
             torch.save(payload, stream)
             stream.flush()
             os.fsync(stream.fileno())
-        os.replace(temporary, path)
+        retry_file_sharing(lambda: os.replace(temporary, path))
     finally:
         Path(temporary).unlink(missing_ok=True)
+
+
+def _history_entry(completed, training, validation, active, penalty):
+    return dict(
+        pass_number=completed,
+        optimizer_updates=completed,
+        train=training,
+        validation=validation,
+        regularization_active=active,
+        regularization_loss=penalty,
+    )
+
+
+def _last_history_line(stream):
+    """Read one trailing JSONL line without scanning a long fitting history."""
+    end = stream.seek(0, os.SEEK_END)
+    position, tail = end, b""
+    while position and tail.count(b"\n") < 2:
+        start = max(0, position - 65536)
+        stream.seek(start)
+        tail = stream.read(position - start) + tail
+        position = start
+    separator = tail.rfind(b"\n", 0, len(tail) - int(tail.endswith(b"\n")))
+    return position + separator + 1, tail[separator + 1 :]
+
+
+def _reconcile_history(path, entry):
+    """Discard an uncommitted/torn tail and recover the durable pass's metrics."""
+    with path.open("a+b") as stream:
+        while stream.seek(0, os.SEEK_END):
+            offset, line = _last_history_line(stream)
+            try:
+                previous = json.loads(line)
+                number = previous["pass_number"]
+                valid = type(number) is int and 0 < number <= entry["pass_number"]
+            except (ValueError, KeyError, TypeError):
+                valid = False
+            if not valid:
+                stream.truncate(offset)
+                continue
+            if number == entry["pass_number"]:
+                # Replace this row from the checkpoint; also remove tail duplicates.
+                stream.truncate(offset)
+                continue
+            if not line.endswith(b"\n"):
+                stream.write(b"\n")
+            break
+        if entry["pass_number"] and entry["train"] is not None:
+            stream.write((json.dumps(entry) + "\n").encode("utf-8"))
+        stream.flush()
+        os.fsync(stream.fileno())
+
+
+def _convergence(training, validation):
+    train, valid = training or {}, validation or {}
+    return dict(
+        verified=bool(train.get("rows", 0))
+        and _split_converged(training, train["rows"])
+        and _split_converged(validation, valid.get("rows", 0)),
+        hits=train.get("hits"),
+        records=train.get("rows", 0),
+        absolute_bottom_hits=train.get("absolute_bottom_hits"),
+        validation_hits=valid.get("hits"),
+        validation_records=valid.get("rows", 0),
+        validation_absolute_bottom_hits=valid.get("absolute_bottom_hits"),
+    )
 
 
 def _rng_state(device):
@@ -356,20 +547,58 @@ def _fit_annotations(
     learning_rate=None,
     batch_size=None,
     margin=None,
+    l2_strength=None,
     seed=None,
     kind="tile",
     _resources=None,
 ):
-    """Publish only freshly verified convergence; incomplete progress is separate."""
+    """Resume whole passes and expose saved weights independently of convergence."""
     if init_from is not None and resume_from is not None:
         raise ValueError("--resume-from and --init-from are mutually exclusive")
     cfg = copy.deepcopy(cfg or load_config())
     validate_config(cfg)
     settings = cfg["training"]["annotation"]
+    saved = None
+    saved_identity = None
+    if resume_from is not None:
+        saved, _ = load_torch_snapshot(resume_from)
+        if saved.get("protocol") not in (
+            ANNOTATION_PROGRESS_PROTOCOL,
+            LEGACY_ANNOTATION_PROGRESS_PROTOCOL,
+        ):
+            raise ValueError(
+                "Unsupported annotation progress protocol; use --init-from for weights"
+            )
+        saved_identity = copy.deepcopy(saved.get("identity"))
+        if not isinstance(saved_identity, dict) or not isinstance(
+            saved_identity.get("settings"), dict
+        ):
+            raise ValueError("Annotation progress is missing fitting identity/settings")
+        saved_settings = saved_identity["settings"]
+        # v3 included the total pass cap in objective identity. It was never a loss setting.
+        saved_settings.pop("passes", None)
+        overrides = dict(
+            learning_rate=learning_rate,
+            batch_size=batch_size,
+            margin=margin,
+            l2_strength=l2_strength,
+            learner_seed=seed,
+        )
+        for key, value in overrides.items():
+            if key not in saved_settings:
+                raise ValueError(f"Annotation progress is missing fitting setting {key}")
+            if value is not None and value != saved_settings[key]:
+                raise ValueError(
+                    f"Resume {key} differs from saved fitting settings; "
+                    "use --init-from to start a fresh experiment with changed settings"
+                )
+            settings[key] = saved_settings[key]
+        cfg["training"]["max_grad_norm"] = saved_settings.get("max_grad_norm")
     passes = settings["passes"] if passes is None else passes
     learning_rate = settings["learning_rate"] if learning_rate is None else learning_rate
     batch_size = settings["batch_size"] if batch_size is None else batch_size
     margin = settings["margin"] if margin is None else margin
+    l2_strength = settings.get("l2_strength", 1e-4) if l2_strength is None else l2_strength
     seed = settings["learner_seed"] if seed is None else seed
     if type(passes) is not int or passes < 0 or type(batch_size) is not int or batch_size < 1:
         raise ValueError("passes must be nonnegative (0 unlimited); batch size must be positive")
@@ -377,21 +606,46 @@ def _fit_annotations(
         raise ValueError("invalid annotation learning rate/seed")
     if not math.isfinite(margin) or margin <= 0:
         raise ValueError("annotation margin must be finite and positive")
+    if not math.isfinite(l2_strength) or l2_strength <= 0:
+        raise ValueError("annotation L2 strength must be finite and positive")
     if kind not in ("tile", "action"):
         raise ValueError("annotation kind must be tile or action")
     fit_settings = dict(
-        passes=passes,
         learning_rate=learning_rate,
         batch_size=batch_size,
         margin=margin,
         max_grad_norm=cfg["training"]["max_grad_norm"],
         learner_seed=seed,
-        objective="top1-bottomk-hinge-v2",
+        objective=ANNOTATION_OBJECTIVE,
         annotation_kind=kind,
         head_scope="tile" if kind == "tile" else "species",
+        l2_strength=l2_strength,
+        convergence="train-and-validation-exact-v1",
         reward_protocol=cfg["reward"]["version"],
         objective_protocol=cfg["training"]["objective"]["protocol"],
     )
+    if saved_identity is not None:
+        # These historical provenance fields do not enter the annotation loss.
+        # Preserve them across autonomous-only reward/objective revisions.
+        for key in ("reward_protocol", "objective_protocol"):
+            fit_settings[key] = saved_identity["settings"][key]
+    settings.update(
+        passes=passes,
+        learning_rate=learning_rate,
+        batch_size=batch_size,
+        margin=margin,
+        l2_strength=l2_strength,
+        learner_seed=seed,
+    )
+    validate_config(cfg)
+    if saved is not None and saved["protocol"] == ANNOTATION_PROGRESS_PROTOCOL:
+        if not isinstance(saved.get("config"), dict) or saved.get("config_digest") != digest(
+            saved["config"]
+        ):
+            raise ValueError("Annotation progress configuration digest does not match its contents")
+        # Annotation identity below owns its ranking/optimizer compatibility;
+        # autonomous reward/objective revisions do not change annotation fitting.
+        compatible_config(saved["config"], cfg, weights_only=True)
     all_records = load_records(
         annotations, annotation=True, plant_types=cfg["environment"]["plants"]
     )
@@ -416,7 +670,8 @@ def _fit_annotations(
     torch.manual_seed(seed)
     random.seed(seed)
     np.random.seed(seed)
-    model = _load_initial_model(cfg, device, init_from)
+    model, initialization = _load_initial_model(cfg, device, init_from)
+    execution = annotation_execution_limits(model, cfg)
     schema = model.layout.schema()
     manifest_path = Path(str(annotations) + ".manifest.json")
     manifest = json.loads(manifest_path.read_text("utf-8")) if manifest_path.exists() else {}
@@ -442,28 +697,49 @@ def _fit_annotations(
     progress_path = output.with_suffix(".progress.pt")
     history_path = output.with_suffix(".history.jsonl")
     report_path = output.with_suffix(".report.json")
+    snapshot_stager = SnapshotStager(cfg["training"]["storage"]["ram_gib"] * 1024**3)
     completed = 0
-    if resume_from is not None:
-        saved = torch.load(resume_from, map_location="cpu", weights_only=True)
+    if saved is not None:
         if (
-            saved.get("protocol") != ANNOTATION_PROGRESS_PROTOCOL
-            or saved.get("identity") != identity
+            saved_identity != identity
             or saved.get("observation_schema") != schema
             or saved.get("model_storage_protocol") != MODEL_STATE_PROTOCOL
+            or (
+                saved["protocol"] == ANNOTATION_PROGRESS_PROTOCOL
+                and saved.get("precision_contract") != "bf16_master"
+            )
         ):
             raise ValueError(
                 "annotation progress dataset, split, fitting settings or schema mismatch"
             )
+        if (
+            type(saved.get("passes_completed")) is not int
+            or saved["passes_completed"] < 0
+            or saved.get("optimizer_updates") != saved["passes_completed"]
+            or not isinstance(saved.get("model"), dict)
+            or not saved["model"]
+            or any(
+                not torch.is_tensor(value) or not torch.isfinite(value).all()
+                for value in saved["model"].values()
+            )
+        ):
+            raise ValueError("Annotation progress has invalid pass counters or model weights")
         model.load_state_dict(saved["model"])
         optimizer.load_state_dict(saved["optimizer"])
         completed = saved["passes_completed"]
+        initialization = saved.get("initialization")
         _restore_rng(saved["rng"], device)
+    starting_pass = completed
+    pass_limit = starting_pass + passes if passes else None
     model.eval()
 
     prepared = {}
     for name, rows in partitions.items():
         prepared[name] = PreparedAnnotations(rows, cfg, kind)
         _resources.callback(prepared[name].close)
+    execution["input_cache"] = _cache_inputs(
+        {name: prepared[name] for name in ("train", "validation")}, batch_size, cfg, device
+    )
 
     def evaluate(name):
         return _run_split(
@@ -477,47 +753,98 @@ def _fit_annotations(
             prepared=prepared[name],
         )
 
-    def save_progress(training, validation):
-        _atomic_save(
+    def evaluate_training():
+        return _evaluate_splits(
+            model,
+            partitions,
+            prepared,
+            cfg,
+            device,
+            batch_size=batch_size,
+            margin=margin,
+            kind=kind,
+        )
+
+    def save_progress(training, validation, regularization_active=False, regularization_loss=0.0):
+        convergence = _convergence(training, validation)
+        payload = snapshot_stager.stage(
             dict(
                 protocol=ANNOTATION_PROGRESS_PROTOCOL,
                 identity=identity,
                 model_storage_protocol=MODEL_STATE_PROTOCOL,
+                precision_contract="bf16_master",
+                config=cfg,
+                config_digest=digest(cfg),
+                annotation_kind=kind,
+                learner_seed=seed,
+                rules_hash=schema["rules_hash"],
+                initialization=initialization,
                 reward_protocol=cfg["reward"]["version"],
                 objective_protocol=cfg["training"]["objective"]["protocol"],
                 observation_schema=schema,
-                model=model.state_dict(),
+                model=model.checkpoint_state_dict(),
                 optimizer=optimizer.state_dict(),
                 rng=_rng_state(device),
                 passes_completed=completed,
                 optimizer_updates=completed,
-                status="incomplete",
+                starting_pass=starting_pass,
+                passes_requested=passes,
+                passes_this_invocation=completed - starting_pass,
+                pass_limit=pass_limit,
+                status="complete" if convergence["verified"] else "incomplete",
+                convergence=convergence,
                 train=training,
                 validation=validation,
-            ),
-            progress_path,
+                regularization_active=regularization_active,
+                regularization_loss=regularization_loss,
+                l2_strength=l2_strength,
+                execution=execution,
+            )
         )
+        execution["snapshot_staging"] = snapshot_stager.mode
+        payload["execution"]["snapshot_staging"] = snapshot_stager.mode
+        _atomic_save(payload, progress_path)
 
+    regularization_active = bool(
+        resume_from is not None and saved.get("regularization_active", False)
+    )
+    regularization_loss = float(
+        saved.get("regularization_loss", 0.0) if resume_from is not None else 0.0
+    )
     training = saved.get("train") if resume_from is not None else None
     validation = saved.get("validation") if resume_from is not None else None
-    save_progress(training, validation)
-    if resume_from is None:
-        history_path.write_text("", encoding="utf-8")
     interrupted = False
+
+    def exact(name, metrics):
+        return _split_converged(metrics, len(partitions[name]))
+
     try:
-        training, validation = evaluate("train"), evaluate("validation")
-        save_progress(training, validation)
+        with atomic_transition():
+            if resume_from is None:
+                history_path.write_text("", encoding="utf-8")
+            else:
+                _reconcile_history(
+                    history_path,
+                    _history_entry(
+                        completed, training, validation, regularization_active, regularization_loss
+                    ),
+                )
+            save_progress(training, validation, regularization_active, regularization_loss)
+        training, validation = evaluate_training()
+        if exact("train", training) and exact("validation", validation):
+            regularization_active = False
+        elif exact("train", training):
+            regularization_active = True
+        save_progress(training, validation, regularization_active, regularization_loss)
         print(
             f"pass={completed} updates={completed} train={training['hits']}/{training['rows']} "
             f"remaining={training['failures']} bottom={training.get('absolute_bottom_hits', 0)}/{training['rows']} loss={training['loss']:.6g} "
             f"validation={validation['hits']}/{validation['rows']} validation_loss={validation['loss']}",
             flush=True,
         )
-        while (
-            training["hits"] != len(partitions["train"])
-            or training.get("absolute_bottom_hits", len(partitions["train"]))
-            != len(partitions["train"])
-        ) and (passes == 0 or completed < passes):
+        while not (exact("train", training) and exact("validation", validation)) and (
+            pass_limit is None or completed < pass_limit
+        ):
             model.train()
             _run_split(
                 model,
@@ -531,6 +858,13 @@ def _fit_annotations(
                 kind=kind,
                 prepared=prepared["train"],
             )
+            regularization_loss = 0.0
+            if regularization_active:
+                penalty = _l2_penalty(trainable, l2_strength)
+                if not bool(torch.isfinite(penalty)):
+                    raise FloatingPointError("non-finite annotation L2 penalty")
+                regularization_loss = float(penalty.detach().cpu())
+                penalty.backward()
             torch.nn.utils.clip_grad_norm_(
                 trainable, fit_settings["max_grad_norm"], error_if_nonfinite=True
             )
@@ -541,16 +875,21 @@ def _fit_annotations(
                 model.sync_runtime_from_masters()
                 model.eval()
                 completed += 1
-                training, validation = evaluate("train"), evaluate("validation")
-                save_progress(training, validation)
+                training, validation = evaluate_training()
+                if exact("train", training) and exact("validation", validation):
+                    regularization_active = False
+                elif exact("train", training):
+                    regularization_active = True
+                save_progress(training, validation, regularization_active, regularization_loss)
                 with history_path.open("a", encoding="utf-8") as stream:
                     stream.write(
                         json.dumps(
-                            dict(
-                                pass_number=completed,
-                                optimizer_updates=completed,
-                                train=training,
-                                validation=validation,
+                            _history_entry(
+                                completed,
+                                training,
+                                validation,
+                                regularization_active,
+                                regularization_loss,
                             )
                         )
                         + "\n"
@@ -572,26 +911,25 @@ def _fit_annotations(
         optimizer.load_state_dict(saved["optimizer"])
         completed = saved["passes_completed"]
         training, validation = saved["train"], saved["validation"]
+        regularization_active = bool(saved.get("regularization_active", False))
+        regularization_loss = float(saved.get("regularization_loss", 0.0))
         _restore_rng(saved["rng"], device)
 
-    converged = (
-        training is not None
-        and training["hits"] == len(partitions["train"])
-        and training.get("absolute_bottom_hits", len(partitions["train"]))
-        == len(partitions["train"])
-        and not interrupted
-    )
+    converged = exact("train", training) and exact("validation", validation) and not interrupted
     test = None
     if converged:
         # Reload the durable FP32 weights; their BF16 runtime must qualify again.
         saved = torch.load(progress_path, map_location="cpu", weights_only=True)
         model.load_state_dict(saved["model"])
         model.eval()
-        training = evaluate("train")
-        if training["hits"] != len(partitions["train"]) or training["absolute_bottom_hits"] != len(
-            partitions["train"]
-        ):
-            raise RuntimeError("saved annotation weights failed fresh training-set verification")
+        training, validation = evaluate_training()
+        if not exact("train", training) or not exact("validation", validation):
+            raise RuntimeError("saved annotation weights failed fresh convergence verification")
+        for name in ("train", "validation"):
+            prepared[name].release_cache()
+        execution["test_input_cache"] = _cache_inputs(
+            {"test": prepared["test"]}, batch_size, cfg, device
+        )
         test = evaluate("test")
         checkpoint_cfg = copy.deepcopy(cfg)
         checkpoint_cfg["training"].pop("annotation", None)
@@ -603,22 +941,34 @@ def _fit_annotations(
             rules_hash=schema["rules_hash"],
             config=checkpoint_cfg,
             config_digest=digest(checkpoint_cfg),
-            model=model.state_dict(),
+            model=model.checkpoint_state_dict(),
             passes_completed=completed,
             learner_seed=seed,
-            convergence=dict(verified=True, hits=training["hits"], records=training["rows"]),
+            initialization=initialization,
+            convergence=dict(
+                verified=True,
+                hits=training["hits"],
+                records=training["rows"],
+                absolute_bottom_hits=training["absolute_bottom_hits"],
+                validation_hits=validation["hits"],
+                validation_records=validation["rows"],
+                validation_absolute_bottom_hits=validation["absolute_bottom_hits"],
+            ),
             annotation=dict(
                 protocol=ANNOTATION_PROTOCOL,
                 annotation_kind=kind,
                 head_scope=kind,
                 reward_protocol=cfg["reward"]["version"],
                 objective_protocol=cfg["training"]["objective"]["protocol"],
+                objective=ANNOTATION_OBJECTIVE,
+                l2_strength=l2_strength,
+                validation_converged=True,
                 **identity,
                 split={r["id"]: split[r["group_id"]] for r in records},
                 source_digest=manifest.get("source_digest"),
             ),
         )
-        _atomic_save(payload, output)
+        _atomic_save(snapshot_stager.stage(payload), output)
     manifest.update(
         protocol=manifest.get("protocol", ANNOTATION_PROTOCOL),
         config_digest=manifest.get("config_digest") or digest(cfg),
@@ -649,13 +999,22 @@ def _fit_annotations(
         **identity,
         passes_completed=completed,
         optimizer_updates=completed,
+        starting_pass=starting_pass,
+        passes_requested=passes,
+        passes_this_invocation=completed - starting_pass,
+        pass_limit=pass_limit,
+        initialization=initialization,
         partitions={name: len(rows) for name, rows in partitions.items()},
         train=training,
         validation=validation,
         test=test,
+        regularization_active=regularization_active,
+        regularization_loss=regularization_loss,
+        l2_strength=l2_strength,
         tile_parameters_only=kind == "tile",
         species_parameters_only=kind == "action",
         annotation_kind=kind,
+        execution=execution,
     )
     write_json(report_path, report)
     return report

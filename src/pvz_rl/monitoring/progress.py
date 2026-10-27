@@ -137,7 +137,6 @@ class ProgressReporter:
         isatty = getattr(self.stream, "isatty", None)
         self.interactive = bool(isatty and isatty()) if interactive is None else interactive
         self.state = Phase.STARTING
-        self.warning = None
         self._showwarning = None
         self._status_last = self._terminal_last = -float("inf")
         self._last_line = None
@@ -166,9 +165,9 @@ class ProgressReporter:
             self.emit(message, force=True)
 
     def warn(self, message):
-        """Print a warning immediately and keep it in later routine summaries."""
-        self.warning = " ".join(str(message).split())
-        return self.emit(f"Warning: {self.warning}", force=True)
+        """Log a warning event without repeating it in routine summaries."""
+        message = " ".join(str(message).split())
+        return self.emit(f"Warning: {message}", force=True)
 
     def route_warnings(self):
         """Send Python warnings through this reporter until :meth:`close`."""

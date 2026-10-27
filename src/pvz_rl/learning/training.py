@@ -47,6 +47,7 @@ from pvz_rl.learning.exploration import (
     configure_exploration,
     exploration_state,
 )
+from pvz_rl.learning.objective import components, training_rewards
 from pvz_rl.learning.performance import compilation_requested
 from pvz_rl.learning.training_requirements import (
     parameter_changes,
@@ -421,15 +422,12 @@ class ResearchCallback(BaseCallback):
     def cohort_summary(self):
         rows = [item["metrics"] for item in getattr(self.model, "_pending_episodes", {}).values()]
         count = len(rows)
-        multiplier = self.cfg["training"]["objective"]["dense_multiplier"]
         return dict(
             games=getattr(self.model, "cohort_games", 0),
             completed=count,
             wins=sum(bool(row["win"]) for row in rows),
             raw_return=sum(row["return"] for row in rows) / count if count else None,
-            training_return=sum(
-                row["return"] + (multiplier - 1) * row["development"] for row in rows
-            )
+            training_return=sum(float(training_rewards(components(row), self.cfg)) for row in rows)
             / count
             if count
             else None,
@@ -512,8 +510,6 @@ class ResearchCallback(BaseCallback):
         ]
         if usage:
             parts.append(" ".join(usage))
-        if self.progress.warning:
-            parts.append(f"warning: {self.progress.warning[:96]}")
         change = (
             phase,
             cohort,
@@ -1091,8 +1087,9 @@ def initial_weights(checkpoint, cfg):
         "type": saved["initialization_type"],
         "conversion": "none",
         "checkpoint": str(Path(checkpoint).resolve()),
-        "checkpoint_sha256": file_hash(checkpoint),
+        "checkpoint_sha256": saved.get("snapshot_sha256") or file_hash(checkpoint),
         "source_learner_seed": saved["learner_seed"],
+        **saved.get("source_annotation", {}),
         **saved.get("source_counters", {"steps": 0, "games": 0, "updates": 0}),
         "source_structural_signature": transfer_protocol(source_cfg),
         "parameter_changes": parameter_changes(source_cfg, cfg),

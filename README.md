@@ -44,9 +44,66 @@ Or open the browser annotator and label plant cards, Wait/Dig, or board tiles:
 Dig starts as an editable absolute-infeasible action label. If next-map
 generation fails, use **Retry generation** on the same server; saved labels remain persisted.
 
-The active-only trajectory/recovery format is v4; older runs support compatible
-weight-only initialization, but cannot resume. Model weights and the learning
-objective are unchanged by the pipeline optimization.
+Annotation fitting first reaches exact training-set convergence. If validation is
+still below 100%, it continues on the unchanged training split with L2 pressure
+until both splits are exact. To inspect long histories without collapsing detail
+into an unreadable static plot, generate the interactive min/max-envelope viewer:
+
+```powershell
+.\.venv\Scripts\python.exe tools\plot_annotation_loss.py `
+  runs\tile-initialization.history.jsonl --output runs\tile-loss.html
+```
+
+The HTML keeps every committed pass, supports zoom and drag, and reports the
+nearest raw pass on hover. Adjust the regularization strength with
+`--l2-strength` on either annotation-fitting command when needed.
+
+Both fitters automatically cache prepared inputs when GPU memory permits and
+pack checkpoint transfers while saving every pass. Existing commands work
+unchanged. See [annotation execution settings and measurements](docs/math/training-throughput.md#annotation-fitting)
+for cache limits, the streaming fallback, and opt-in microbatch tuning.
+
+Resume a stopped fit with its saved optimizer, RNG, split, and L2 phase:
+
+```powershell
+.\.venv\Scripts\python.exe -m pvz_rl fit-tile-annotations `
+  --annotations data\tile-annotations.jsonl --output runs\tile-init\tile.pt `
+  --resume-from runs\tile-init\tile.progress.pt --passes 1000
+```
+
+This allows 1,000 additional passes; `--passes 0` is unlimited. Omitted fitting
+options inherit their saved values. Use `--init-from` for changed hyperparameters.
+Any saved progress, including an unfinished or zero-pass snapshot, can supply
+weights to another annotation fit, `initialize-demo`, or `train`:
+
+```powershell
+.\.venv\Scripts\python.exe -m pvz_rl fit-action-annotations `
+  --annotations data\action-annotations.jsonl --output runs\action-init\action.pt `
+  --init-from runs\tile-init\tile.progress.pt
+```
+
+The handoff reads the latest committed snapshot, even while its source fit runs,
+and starts a fresh destination optimizer. The final `tile.pt`/`action.pt` still
+requires convergence. Annotation progress v3 needs one annotation resume to write
+v4 before downstream initialization; `train --resume` requires autonomous recovery.
+
+The active-only trajectory/recovery format is v5; older runs support compatible
+weight-only initialization, but cannot resume. Model architecture, observation
+encoding and weight layout remain unchanged.
+
+Reward settings live in `src/pvz_rl/data/train.toml`. At `value_scale=2000`,
+25 Sunflower sun gives +0.0025 normally or +0.005 early. One mower activation
+is a direct -0.1 reward penalty, independent of sunlight scaling and the dense
+multiplier. Live native/browser boards show each environment's accumulated
+training reward. Terminal boards show a pending label until cohort time ranking
+finishes, then refresh with the finalized reward.
+Fitting retains the first of each 100 adjacent waits or identical invalid
+proposals; complete returns and reward accounting retain every decision.
+Completion-time ranking uses a signed quadratic adjustment capped at 0.3:
+terminal wins range from +0.7 to +1.3 and losses from -1 to -1.3. Physical
+rewards and mower penalties additionally affect total game reward.
+Reward/objective v5 requires fresh `--init-from` for previous weights rather than
+optimizer resume. See the [reward conversion table](docs/math/training-objective.md).
 
 ## Common checks
 

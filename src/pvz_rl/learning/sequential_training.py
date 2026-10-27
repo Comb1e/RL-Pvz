@@ -138,6 +138,12 @@ class CudaSequentialQ(CudaCohortLifecycle):
             self.cfg,
             median=summary["duration_median_seconds"],
         )
+        viewer = getattr(self.env, "live_view", None)
+        if viewer is not None and viewer.enabled:
+            try:
+                viewer.finalize_rewards(pending)
+            except Exception as exc:
+                viewer.fail(exc)
         if hasattr(callback, "finalize_cohort_rewards"):
             callback.finalize_cohort_rewards(pending)
         self._phase(CohortPhase.RETURNS, callback)
@@ -426,6 +432,7 @@ class CudaSequentialQ(CudaCohortLifecycle):
                 info["episode_metrics"]["time_reward_pending"] = True
                 info["episode_slot"] = index
                 self._pending_episodes[index] = dict(
+                    episode=int(env._episode_serial[index]),
                     metrics=info["episode_metrics"],
                     record_id=f"cohort:{self._n_updates}:slot:{index}",
                 )

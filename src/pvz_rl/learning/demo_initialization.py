@@ -34,7 +34,7 @@ from pvz_rl.envs.rewards import (
 from pvz_rl.learning.action_routing import (
     branch_availability,
     classify_actions,
-    compact_invalid_rows,
+    compact_repeated_rows,
 )
 from pvz_rl.learning.batch_transport import PreparedDataSource
 from pvz_rl.learning.checkpoints import DEMO_PROTOCOL as CHECKPOINT_PROTOCOL
@@ -46,6 +46,7 @@ from pvz_rl.learning.objective import (
     components,
     consistency_diagnostics,
     demonstration_rank_loss,
+    endgame_terminal_rewards,
     ranking_counts,
     raw_rewards,
     training_rewards,
@@ -155,20 +156,26 @@ def _verify_reward_facts(row: dict, reconstructed: dict, cfg=None) -> None:
         net_value = float(saved.get("net_value", 0.0))
         development = float(saved.get("development", 0.0))
         early_bonus = float(saved.get("early_sun_bonus", 0.0))
+        direct_mower = float(saved["action_mower"]) if saved["mower_expenditure"] == 0 else 0.0
+        physical = sum(float(saved.get(key, 0.0)) for key in COMPONENTS[1:]) - direct_mower
         if abs(net_value) > 1e-15:
             scale = (development - early_bonus) / net_value
-            physical = sum(float(saved.get(key, 0.0)) for key in COMPONENTS[1:])
-            expected = float(saved["terminal"]) + scale * physical
+            # Historical mowers used physical expenditure; current mowers are
+            # final-unit penalties with zero physical expenditure. Infer this
+            # from archived accounting, never from today's reward coefficients.
+            expected = float(saved["terminal"]) + direct_mower + scale * physical
             total_matches = total_matches and math.isclose(
                 float(saved["total"]), expected, rel_tol=1e-9, abs_tol=1e-9
             )
         elif abs(development) <= 1e-15 and abs(early_bonus) <= 1e-15:
             # A completely idle transition has no scale-dependent term; its
-            # total must therefore be exactly the terminal component.
-            physical = sum(float(saved.get(key, 0.0)) for key in COMPONENTS[1:])
+            # total contains only the terminal and any direct mower penalty.
             if abs(physical) <= 1e-15:
                 total_matches = total_matches and math.isclose(
-                    float(saved["total"]), float(saved["terminal"]), rel_tol=1e-12, abs_tol=1e-12
+                    float(saved["total"]),
+                    float(saved["terminal"]) + direct_mower,
+                    rel_tol=1e-12,
+                    abs_tol=1e-12,
                 )
     if not total_matches or not math.isclose(saved["net_value"], net, rel_tol=1e-12, abs_tol=1e-12):
         raise ValueError(error)
@@ -341,7 +348,18 @@ def _verify_action_order(archive_rows: list[dict], replay_path: Path, cfg: dict)
                 ("mower", "action_mower"),
             ):
                 reward[component] = float(reward.get(component, 0.0)) + float(source[field])
-            reward["total"] = float(raw_rewards(components(reward), cfg))
+        if terminal != "running":
+            # One verified demo is a singleton cohort: the shared time rule
+            # applies its base outcome with zero rank adjustment.
+            values, _ = endgame_terminal_rewards(
+                [outcome[0] + outcome[3]],
+                [terminal == "won"],
+                win_reward=cfg["reward"]["win_reward"],
+                loss_penalty=cfg["reward"]["loss_penalty"],
+                weight=cfg["reward"].get("win_time_weight", 0.3),
+            )
+            reward["terminal"] = reward["global_terminal"] = float(values[0])
+        reward["total"] = float(raw_rewards(components(reward), cfg))
         reward_changes += row["reward_parts"] != reward
         recomputed_total += reward["total"]
         # Replace only the in-memory fitting data, never the user's recording.
@@ -507,10 +525,11 @@ def _initialize_demo(
     torch.set_num_threads(cfg["training"]["torch_threads"])
     torch.manual_seed(seed)
     model = TwoStageTransformerPolicy(cfg).to(device)
+    initialization = None
     if init_from is not None:
         from pvz_rl.learning.training import initial_weights
 
-        weights, _ = initial_weights(init_from, cfg)
+        weights, initialization = initial_weights(init_from, cfg)
         model.load_state_dict(weights, strict=True)
     with torch.random.fork_rng(
         devices=[torch.device(device)] if str(device).startswith("cuda") else []
@@ -566,7 +585,7 @@ def _initialize_demo(
             except ValueError as exc:
                 raise ValueError(f"unknown demonstration rejection reason: {reason}") from exc
         rows["rejection_reason"][index] = int(reason)
-    compact_positions, compact_counts, compaction = compact_invalid_rows(
+    compact_positions, compact_counts, compaction = compact_repeated_rows(
         rows,
         group_size=objective.get("invalid_fit_group_size", 100),
     )
@@ -700,6 +719,7 @@ def _initialize_demo(
                 "objective": dict(objective),
                 "passes_completed": completed,
                 "learner_seed": seed,
+                "initialization": initialization,
                 "source_replay_sha256": verification["reconstruction"]["replay_sha256"],
             },
             output / "initialization.pt",
@@ -716,11 +736,13 @@ def _initialize_demo(
         {
             "state": "complete" if completed == passes else "incomplete",
             "passes_completed": completed,
+            "initialization": initialization,
         },
     )
     return {
         "state": "complete" if completed == passes else "incomplete",
         "passes_completed": completed,
+        "initialization": initialization,
         "checkpoint": str((output / "initialization.pt").resolve()) if completed else None,
         "verification": verification,
         "fitting_compaction": compaction,

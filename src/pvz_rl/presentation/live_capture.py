@@ -18,6 +18,9 @@ from pvz_game.types import (
     ZombieView,
 )
 
+from pvz_rl.envs.cuda_features import METRIC_INDICES
+from pvz_rl.envs.rewards import REWARD_METRICS
+from pvz_rl.learning.objective import COMPONENTS, components, training_rewards
 from pvz_rl.presentation.live_view import Activity, LiveSession, PanelState
 
 
@@ -110,6 +113,8 @@ class CudaLiveCapture:
         self.session = session or LiveSession(env.num_envs, settings, cfg=env.cfg, notify=notify)
         self.session.journal = env.action_journal
         self.source = {k: torch.from_dlpack(v) for k, v in env.batch.public_state_device().items()}
+        self.reward_totals = torch.from_dlpack(env.features.totals)
+        self.reward_columns = [METRIC_INDICES[REWARD_METRICS.index(k)] for k in COMPONENTS]
         self.shapes = {k: v.shape[1:] for k, v in self.source.items()}
         self.widths = {k: int(np.prod(shape)) for k, shape in self.shapes.items()}
         self.width = sum(self.widths.values())
@@ -120,6 +125,16 @@ class CudaLiveCapture:
                     (self.capacity, self.width), dtype=torch.int64, device=env.header_tensor.device
                 ),
                 host=torch.empty((self.capacity, self.width), dtype=torch.int64, pin_memory=True),
+                reward_device=torch.empty(
+                    (self.capacity, self.reward_totals.shape[1]),
+                    dtype=torch.float64,
+                    device=env.header_tensor.device,
+                ),
+                reward_host=torch.empty(
+                    (self.capacity, self.reward_totals.shape[1]),
+                    dtype=torch.float64,
+                    pin_memory=True,
+                ),
                 event=torch.cuda.Event(),
                 pending=None,
             )
@@ -213,6 +228,8 @@ class CudaLiveCapture:
             )
             offset += width
         slot["host"].copy_(slot["device"], non_blocking=True)
+        torch.index_select(self.reward_totals, 0, self.indices, out=slot["reward_device"])
+        slot["reward_host"].copy_(slot["reward_device"], non_blocking=True)
         slot["event"].record(self.env.stream)
         self.sequence += 1
         pending = []
@@ -224,6 +241,7 @@ class CudaLiveCapture:
                     i,
                     p.generation,
                     dict(
+                        env=p.env,
                         level=self.env._level_names[p.env],
                         task=self.env._tasks[p.env],
                         episode=self.env._episode_serial[p.env],
@@ -248,6 +266,7 @@ class CudaLiveCapture:
             if not slot["event"].query():
                 continue
             raw = slot["host"].numpy()
+            reward_totals = slot["reward_host"].numpy()
             for i, generation, frame in slot["pending"]:
                 arrays, offset = {}, 0
                 for key, width in self.widths.items():
@@ -255,7 +274,11 @@ class CudaLiveCapture:
                     offset += width
                 obs = public_observation(arrays, self.env.batch.rules, frame.pop("level"))
                 frame["observation"] = obs
+                frame["reward"] = float(
+                    training_rewards(reward_totals[i, self.reward_columns], self.env.cfg)
+                )
                 frame["outcome"] = frame["outcome"] or obs.status.value
+                frame["reward_pending"] = frame["outcome"] != "running"
                 panel = self.session.selection.panels[i]
                 history = self.env.action_journal.page(panel.env, frame["episode"])
                 frame["history"] = history
@@ -267,6 +290,24 @@ class CudaLiveCapture:
                     panel.state = PanelState.RESULT
             slot["pending"] = None
         self.session.publish()
+
+    def reset_episodes(self, indices):
+        self.session.selection.reset_episodes(
+            (int(env), int(self.env._episode_serial[env])) for env in indices
+        )
+
+    def finalize_rewards(self, pending):
+        """At the cohort boundary, publish authoritative host episode totals."""
+        self.drain(wait=True)
+        episodes = [
+            (
+                int(env),
+                int(item["episode"]),
+                float(training_rewards(components(item["metrics"]), self.env.cfg)),
+            )
+            for env, item in pending.items()
+        ]
+        self.session.finalize_rewards(episodes)
 
     def close(self):
         self.drain(wait=True)

@@ -38,6 +38,8 @@ def checkpoint_metadata(path, *, weights_only=False):
     expected = protocol_for(metadata.get("policy"))
     if weights_only and metadata.get("optimizer") not in (
         OBJECTIVE_PROTOCOL,
+        "complete_return_action_global_v4",
+        "complete_return_action_global_v3",
         "complete_return_action_global_v2",
         "complete_return_action_global_v1",
         "complete_return_selective_invalid_v3",
@@ -317,7 +319,7 @@ class CudaCohortLifecycle(BaseAlgorithm):
                     elif phase == CohortPhase.FINALIZE_REWARDS:
                         self._finalize_rewards(callback)
                     elif phase == CohortPhase.RETURNS:
-                        self.prefit_errors = self._buffer.finalize()
+                        self.prefit_errors = self._buffer.finalize(cohort=self.cohort_number)
                         for name, values in self.prefit_errors.items():
                             self.logger.record("train/action_count_" + name, values["count"])
                             self.logger.record("train/value_target_error_" + name, values["mse"])

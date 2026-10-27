@@ -13,7 +13,7 @@ from pvz_rl.policy.sequential_q import (
     tile_candidates,
 )
 
-OBJECTIVE_PROTOCOL = "complete_return_action_global_v3"
+OBJECTIVE_PROTOCOL = "complete_return_action_global_v5"
 # These are the only reward components that train the policy.  The simulator
 # still publishes the older diagnostic fields (combat_value, home_proximity,
 # victory_time, and so on) for reports and replay verification. Cohort-ranked
@@ -37,20 +37,20 @@ def training_rewards(values, cfg):
 
     The reward ledger stores physical terms in sun-equivalent units.  The
     existing progress/value conversion and dense multiplier are applied once
-    here, while the terminal outcome remains unscaled.
+    here. Terminal outcomes and mower penalties are already in final units.
     """
     value = np.asarray(values, dtype=np.float64)
     multiplier = cfg["training"].get("objective", {}).get("dense_multiplier", 1.0)
     scale = cfg["reward"]["progress_weight"] / cfg["reward"]["value_scale"]
-    physical = value[..., 1:].sum(axis=-1)
-    return value[..., 0] + multiplier * scale * physical
+    physical = value[..., 1:-1].sum(axis=-1)
+    return value[..., 0] + value[..., -1] + multiplier * scale * physical
 
 
 def raw_rewards(values, cfg):
     """Compute the immediate un-densified reward stored by the simulator."""
     value = np.asarray(values, dtype=np.float64)
     scale = cfg["reward"]["progress_weight"] / cfg["reward"]["value_scale"]
-    return value[..., 0] + scale * value[..., 1:].sum(axis=-1)
+    return value[..., 0] + value[..., -1] + scale * value[..., 1:-1].sum(axis=-1)
 
 
 def victory_time(duration, median, won, weight):
@@ -67,8 +67,8 @@ def victory_time(duration, median, won, weight):
     return np.where(won, weight * ratio, 0.0)
 
 
-def endgame_terminal_rewards(durations, won, *, win_reward=1.0, loss_penalty=1.0, weight=0.5):
-    """Return cohort-ranked terminal rewards and their time adjustments.
+def endgame_terminal_rewards(durations, won, *, win_reward=1.0, loss_penalty=1.0, weight=0.3):
+    """Return signed-quadratic ranked rewards and applied time adjustments.
 
     Completion time is used only once, on the terminal transition.  The first
     game in a cohort receives ``+weight`` when it wins and the last receives
@@ -100,12 +100,11 @@ def endgame_terminal_rewards(durations, won, *, win_reward=1.0, loss_penalty=1.0
                 stop += 1
             ranks[order[start:stop]] = positions[start:stop].mean()
             start = stop
-        adjustment = float(weight) * (1.0 - 2.0 * ranks / (len(durations) - 1))
-    terminal = np.where(
-        won,
-        float(win_reward) + adjustment,
-        -float(loss_penalty) + np.minimum(adjustment, 0.0),
-    )
+        normalized = 1.0 - 2.0 * ranks / (len(durations) - 1)
+        adjustment = float(weight) * normalized * np.abs(normalized)
+    # Early losses receive no adjustment; reports describe the applied value.
+    adjustment = np.where(won, adjustment, np.minimum(adjustment, 0.0))
+    terminal = np.where(won, float(win_reward), -float(loss_penalty)) + adjustment
     return terminal, adjustment
 
 
@@ -120,11 +119,11 @@ def finalize_episode_metrics(rows, cfg, *, median=None):
         won,
         win_reward=cfg["reward"]["win_reward"],
         loss_penalty=cfg["reward"]["loss_penalty"],
-        weight=cfg["reward"].get("win_time_weight", 0.5),
+        weight=cfg["reward"].get("win_time_weight", 0.3),
     )
     for row, value, delta in zip(rows, terminal, adjustment, strict=True):
         baseline = cfg["reward"]["win_reward"] if row["win"] else -cfg["reward"]["loss_penalty"]
-        change = float(value - baseline)
+        change = float(value - row.get("terminal_reward", baseline))
         for key in ("terminal", "global_terminal"):
             if key in row:
                 row[key] += change

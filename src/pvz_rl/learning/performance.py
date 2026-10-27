@@ -6,6 +6,9 @@ ENCODER_SETTINGS = ("encoder_microbatch", "encoder_token_budget", "attention_que
 PERFORMANCE_SETTINGS = (
     "fit_precision",
     "prefetch",
+    "annotation_input_cache",
+    "annotation_cache_mib",
+    "annotation_use_fit_limits",
     "compile_collection",
     "compile_fitting",
     "telemetry",
@@ -19,6 +22,24 @@ PERFORMANCE_SETTINGS = (
     "fit_tile_microbatch",
     "fit_entity_buckets",
 )
+
+
+def annotation_execution_limits(model, cfg):
+    """Resolve execution-only annotation limits without enabling compilation."""
+    performance = cfg["training"]["performance"]
+    use_fit = performance.get("annotation_use_fit_limits", False)
+    limits = {}
+    for encoder in model.encoders:
+        if use_fit:
+            encoder.microbatch = performance.get(
+                f"fit_{encoder.stage}_microbatch", performance["fit_encoder_microbatch"]
+            )
+            encoder.token_budget = performance["fit_token_budget"]
+        encoder.compile_collection = encoder.compile_fitting = False
+        limits[encoder.stage] = dict(
+            microbatch=encoder.microbatch, token_budget=encoder.token_budget
+        )
+    return dict(use_fit_limits=use_fit, compilation="disabled", encoders=limits)
 
 
 def refresh_performance(cfg, current):

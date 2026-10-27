@@ -15,9 +15,10 @@ from pvz_rl.envs.rewards import LEDGER_METRICS, REWARD_METRICS
 from pvz_rl.envs.scenarios import namespace_seed
 from pvz_rl.evaluation.frozen_baseline import choose_action
 from pvz_rl.learning.deadline import BudgetExpired, check_deadline
+from pvz_rl.learning.objective import finalize_episode_metrics
 from pvz_rl.monitoring.progress import Phase, ProgressReporter
 from pvz_rl.presentation.recordings import verify_replay
-from pvz_rl.provenance import append_jsonl, file_hash, verify_engine, write_json
+from pvz_rl.provenance import append_jsonl, file_hash, verify_engine, write_json, write_jsonl
 
 BASELINES = ("wait", "random_legal", "heuristic", "random_strategy")
 
@@ -46,7 +47,9 @@ def select_action(env: PvZEnv, obs, *, policy=None, baseline=None, rng=None, mas
         actions = runner.decide(
             collate_observations(obs, network.device),
             torch.as_tensor(env.action_masks(), device=network.device).reshape(1, -1),
-            branch_usable=torch.as_tensor(env.branch_availability(), device=network.device).reshape(1, -1),
+            branch_usable=torch.as_tensor(env.branch_availability(), device=network.device).reshape(
+                1, -1
+            ),
         )[0]
         return int(actions[0])
     kwargs = {"action_masks": env.action_masks()} if masked else {}
@@ -288,10 +291,14 @@ def evaluate(
                             row["replay_verified"] = True
                             row["replay_hash"] = file_hash(replay_path)
                             quotas[row["status"]] += 1
+                        row["time_reward_pending"] = True
                         append_jsonl(stream, row)
                         rows.append(row)
                 finally:
                     env.close()
+        # Evaluation cases form one completed cohort, independent of GPU batching.
+        finalize_episode_metrics(rows, cfg)
+        write_jsonl(output / "episodes.jsonl", rows)
         write_json(output / "summary.json", summarize(rows))
         write_json(output / "status.json", {"state": "complete", "episodes": len(rows)})
         progress.emit(f"Evaluation complete: {len(rows)}/{total} games", force=True)

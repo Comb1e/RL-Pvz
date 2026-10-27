@@ -1,5 +1,20 @@
 # Sources actually used
 
+## Annotation fitting execution — 2026-10-23
+
+- [PyTorch performance tuning guide source](https://raw.githubusercontent.com/pytorch/tutorials/main/recipes_source/recipes/tuning_guide.py):
+  consulted synchronization, repeated setup, memory allocation and small-operation
+  overhead. Prepared raw inputs are reused; learned activations recompute. Encoder
+  limits are opt-in because batching changed BF16 arithmetic in the controls.
+- [PyTorch pinned/nonblocking transfer tutorial source](https://raw.githubusercontent.com/pytorch/tutorials/main/intermediate_source/pinmem_nonblock.py):
+  consulted D2H completion and buffer mutation hazards. Packed CPU snapshots use
+  blocking transfer before serialization; streaming retains the existing pinned
+  transport rather than pinning each tensor on every pass.
+- [PyTorch asynchronous checkpoint recipe source](https://raw.githubusercontent.com/pytorch/tutorials/main/recipes_source/distributed_async_checkpoint_recipe.rst):
+  consulted immutable CPU staging, staging memory cost and limiting in-flight
+  snapshots. The local adaptation is synchronous and retains per-pass `fsync`
+  and atomic replacement; it adds no distributed checkpoint dependency.
+
 ## Smoke-test selection — 2026-10-22
 
 - [pytest custom-marker examples](https://github.com/pytest-dev/pytest/blob/main/doc/en/example/markers.rst):
@@ -378,6 +393,14 @@ throughput measurements.
 - [Jupyter Server Proxy](https://github.com/jupyterhub/jupyter-server-proxy): authenticated loopback proxying and prefix-safe relative URLs guide the optional browser viewer.
 - Agarwal et al., [Deep Reinforcement Learning at the Edge of the Statistical Precipice](https://arxiv.org/abs/2108.13264), with the [rliable project](https://github.com/google-research/rliable): paired seeds, uncertainty and equal-game comparisons guide the bounded learning study; no new evaluation dependency is added.
 
+## Annotation resume and unfinished-weight handoff — 2026-10-23
+
+- [PyTorch saving/loading models](https://docs.pytorch.org/tutorials/beginner/saving_loading_models.html):
+  consulted the general-checkpoint and warmstarting sections. Continuing optimization
+  requires saved optimizer state in addition to model weights; fresh initialization
+  loads weights alone. Annotation progress follows these separate paths, adding
+  fixed-split/objective identity, RNG, phase, and immutable-snapshot provenance.
+
 ## Reachable tile annotation — 2026-10-18
 
 - [MDN Using the Fetch API](https://developer.mozilla.org/en-US/docs/Web/API/Fetch_API/Using_Fetch):
@@ -428,3 +451,30 @@ throughput measurements.
   consulted finite warmup/active schedules and step boundaries. Collection and
   fitting traces are optional bounded diagnostics and are excluded from timing
   comparisons. The production lifecycle remains the only learner.
+
+## Annotation validation-phase regularization — 2026-10-22
+
+- [PyTorch Adam documentation](https://pytorch.org/docs/stable/generated/torch.optim.Adam.html):
+  checked the optimizer's L2/weight-decay distinction. Annotation fitting uses
+  an explicit differentiable \(\lambda\lVert\theta\rVert^2/2\) term on FP32
+  master parameters so its activation and contribution are recorded separately
+  from the existing Adam update.
+
+
+## Environment reward display — 2026-10-26
+
+- [Gymnasium Env API](https://gymnasium.farama.org/api/env/): consulted the
+  distinction between the reward returned by `step` and auxiliary diagnostic
+  `info`. The viewer displays accumulated learning reward outside observations;
+  delayed causal credits and cohort-finalized outcomes remain explicit.
+
+## Return diagnostics and completion-time ranks — 2026-10-27
+
+- [NumPy variance documentation](https://numpy.org/doc/stable/reference/generated/numpy.var.html):
+  consulted the installed NumPy docstring for population variance (`ddof=0`),
+  centered deviations and FP64 accumulation. Bounded centered chunks measure a
+  converted scalar sum, preserving covariance.
+- [SciPy rankdata implementation](https://raw.githubusercontent.com/scipy/scipy/main/scipy/stats/_stats_py.py):
+  consulted average ranks for equal values. Local ranking keeps this convention
+  with zero-based ranks; signed-square shaping and its cap are user-selected
+  economics, not a research guarantee. No dependency is added.

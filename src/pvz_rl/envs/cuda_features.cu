@@ -233,20 +233,21 @@ reward_metrics(const I *headers, const I *old_headers, const I *old_cd,
   double resources = after_assets[i] - before_assets[i] - a[1];
   v[F_plant_value_loss] = a[2] - resources;
   v[F_combat_value] = R_basic_zombie_value * a[0] / BASIC_HP;
-  v[F_mower_expenditure] = R_mower_value * f[5];
-  v[F_net_value] = resources + v[F_combat_value] - v[F_mower_expenditure];
+  v[F_mower_expenditure] = 0.; // Retired sun-equivalent cost diagnostic.
+  v[F_net_value] = resources + v[F_combat_value];
   double scale = R_progress_weight / R_value_scale;
   v[F_early_sun] = a[3];
   v[F_early_sun_bonus] = scale * R_early_sun_extra_multiplier * a[3];
   v[F_development] = scale * v[F_net_value] + v[F_early_sun_bonus];
-  v[F_mower_activation_penalty] = -scale * v[F_mower_expenditure];
+  v[F_mower_activation_penalty] = -R_mower_penalty * f[5];
   v[F_invalid_plant_penalty] = 0.;
   v[F_empty_dig_penalty] = 0.;
   // New action/global objective.  The CUDA accounting stream currently
   // exposes authoritative wall-nut bite facts; host-side CPU collection can
   // refine the per-plant provenance through the shared causal ledger.
   v[F_global_terminal] = v[F_terminal];
-  v[F_global_asset_value] = resources;
+  v[F_global_asset_value] = resources
+      - (R_asset_loss_multiplier - 1.) * v[F_plant_value_loss];
   v[F_action_damage] = v[F_combat_value];
   v[F_action_blocking] = R_action_block_0 * a[4]
       + R_action_block_1 * a[5]
@@ -258,7 +259,7 @@ reward_metrics(const I *headers, const I *old_headers, const I *old_cd,
       + R_action_block_7 * a[11];
   v[F_action_sun] = R_action_sun_credit_multiplier * v[F_produced_sun]
       + R_early_sun_extra_multiplier * v[F_early_sun];
-  v[F_action_mower] = -v[F_mower_expenditure];
+  v[F_action_mower] = v[F_mower_activation_penalty];
   v[F_home_outer_entries] = home_entries[i * 2];
   v[F_home_inner_entries] = home_entries[i * 2 + 1];
   v[F_home_proximity] = -HOME_PENALTY_0 * home_entries[i * 2]
@@ -267,8 +268,8 @@ reward_metrics(const I *headers, const I *old_headers, const I *old_cd,
   // never turn the negative overflow sentinel into a positive reward.
   if (home_entries[i * 2] < 0) v[F_home_proximity] = 0.0 / 0.0;
   double physical = v[F_global_asset_value] + v[F_action_damage]
-      + v[F_action_blocking] + v[F_action_sun] + v[F_action_mower];
-  double total = v[F_global_terminal] + scale * physical
+      + v[F_action_blocking] + v[F_action_sun];
+  double total = v[F_global_terminal] + v[F_action_mower] + scale * physical
       + v[F_invalid_plant_penalty] + v[F_empty_dig_penalty];
   v[F_total] = total;
   rewards[i] = (float)total;

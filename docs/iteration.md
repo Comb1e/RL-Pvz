@@ -1,3 +1,181 @@
+## Shared first-of-100 wait fitting — 2026-10-27
+
+- Problem/root cause: genuine waits bypassed invalid-row compaction, allowing
+  all-wait cohorts to fit millions of redundant decisions.
+- Improvement: one shared bounded segmented compactor handles genuine waits
+  and identical invalid proposals in autonomous/demo fitting. It preserves
+  accepted non-wait rows and all raw returns/credits. Representative counts
+  normalize fitting without frequency weights; wait/invalid diagnostics remain
+  separate. Existing episode/decision/inactive/terminal boundaries and chunk
+  carry are retained. The existing configured window size controls both.
+- Verification: temporary independent scalar controls matched exact selected
+  indices at 1/99/100/101/200/201 rows, interleaved environments, changing routes
+  and reasons, resets, decision gaps, inactive rows, terminals, seven chunk
+  sizes and restart. Forced-disk spool/restore retained [0,100,200,300] for 301
+  waits and left complete targets unchanged. No permanent tests added.
+- Remaining delivery work: v5 compatibility, quadratic rewards and smoke/static
+  checks. No formal training, push or PR.
+
+## Same-unit return diagnostics and finalized HUD — 2026-10-27
+
+- Problem/root cause: CUDA diagnostics compared physical units against fitted
+  returns and ignored covariance; progress repeated its last warning. Terminal
+  HUD frames never received the later cohort ranking.
+- Improvement: bounded FP64 centered moments compare summed physical returns in
+  fitted units, publish the ratio/flag and emit cohort-specific warning events.
+  Zero physical variation remains a valid warning. The adjacent action-shaping
+  magnitude diagnostic now uses fitted units too. Targets are unchanged.
+  Cohort finalization replaces episode-identified HUD totals, marks provisional
+  outcomes, fences delayed captures and refreshes native render caches. Episode
+  metric finalization is idempotent.
+- Verification: temporary FP64 reference controls covered correlated/cancelling
+  components, zero dense/target variation, unchanged complete targets, chunked
+  moments, warning events, delayed/duplicate HUD updates, episode reset and
+  repeated finalization. They passed; no permanent tests or formal training added.
+- Remaining delivery work: shared wait compaction and quadratic endgame rewards,
+  then the existing smoke/static checks.
+
+## Direct mower penalties and environment reward HUD — 2026-10-26
+
+- Problem/root cause: the mower cost was expressed in sunlight, so changing the
+  physical value scale or dense multiplier also changed the final penalty.
+  Live game windows showed sun and Q values but no accumulated environment reward.
+- Improvement: replace `mower_value` with `reward.mower_penalty=0.1`. Each
+  activation contributes -0.1 directly to raw and training rewards on CPU/CUDA,
+  outside physical development, sunlight conversion, and dense scaling. The
+  existing action-mower component retains source attribution; complete returns,
+  summaries, and replay repricing share the new conversion. Historical recording
+  verification still recognizes its original sun-priced mower accounting.
+  Reward/objective v4 rejects earlier optimizer resumes; compatible weight-only
+  initialization remains supported without changing model tensors or observations.
+- Display: native and browser live boards show each environment's accumulated
+  training reward, including causal credits. CUDA capture stages FP64 totals only
+  for subscribed boards under the public-state copy fence; no new hot-step
+  synchronization or policy input is introduced. Gym RGB rendering shares the
+  reward formatter. Episode resets clear the display; terminal time ranking is
+  pending until cohort completion.
+- Verification: temporary controls compared five actual CPU/CUDA simulator cases
+  with zero, one, two, and five simultaneous mower activations at different sun
+  amounts; all reward fields matched. Additional controls verified independent
+  physical/dense scales, historical replay integrity and altered-total rejection,
+  causal complete returns, prior weight compatibility/old-optimizer rejection,
+  immutable viewer captures, episode reset, and native rendering. Native/browser
+  HUDs were visually checked. All three smoke tests passed, including short CUDA
+  learning/checkpoint reload. Focused Ruff, current Node inline-JavaScript syntax,
+  and `git diff --check` passed; no permanent tests were added.
+- Remaining limits: displayed terminal reward uses the base outcome until the
+  cohort's time ranks exist. No formal training, push, or PR. User datasets,
+  previous runs, architecture documentation, and pre-training script are untouched.
+
+## Reward conversion at value scale 2000 — 2026-10-26
+
+- Problem/root cause: changing `reward.value_scale` from 900 to 2000 reduced
+  every physical reward, although only Sunflower production was meant to shrink.
+  Production income and plant asset loss share the global asset component, so
+  scaling that entire component would also preserve unwanted sunlight value.
+- Improvement: retain the user's value scale 2000 and compensate damage,
+  blocking, and plant asset loss by 2000/900. A configurable asset-loss multiplier
+  prices losses separately on CPU and CUDA; missing multipliers preserve saved
+  configurations' original unit pricing. Both actual Sunflower-income components
+  retain the reduced scale: 25 sun gives +0.0025 normally or +0.005 early.
+  `mower_value=2000` makes one activation cost -0.1 in fitting. Terminal rewards,
+  sky exclusion, purchase neutrality, and source-action attribution are unchanged.
+- Verification: temporary independent controls covered 17 idle, purchase/removal,
+  partial/full damage, bite, early/late/capped sun, sky, mower, terminal, and
+  simultaneous-event cases. CPU and the actual CUDA reward kernel agreed under
+  both current and legacy pricing; unchanged contributions matched the prior
+  profile to FP64 rounding. Validation rejected nonfinite, boolean, and negative
+  loss multipliers; delayed source credits retained their original fitted value.
+  CPU smoke checks passed (2 passed, 1 deselected); focused Ruff lint/format and
+  `git diff --check` passed. No permanent tests were added.
+- Remaining limits: changed reward settings require fresh weight-only
+  initialization rather than optimizer resume. These accounting
+  checks establish reward conversion, not training effectiveness. No formal
+  training, push, or PR; architecture, datasets, runs, and pre-training script remain
+  unchanged.
+
+## Faster annotation fitting — 2026-10-23
+
+- Problem/root cause: every annotation pass repeated raw-input transport and
+  many small model/Adam D2H transfers before its durable save. Train/validation
+  evaluation also performed separate host metric readbacks.
+- Improvement: shared checkpoint staging packs immutable CPU snapshots by CUDA
+  device/dtype with bounded direct-copy fallback. Prepared annotation inputs
+  retain exact batches/padding on the GPU when both train/validation fit the
+  central cap and headroom. Streaming remains available; caches release on exit
+  and rebuild on resume. Evaluation retains separate split totals and uses one
+  final readback. Reports include admission, bytes, staging mode and limits.
+  Stage fitting limits are opt-in, compilation remains inactive, and existing
+  L2/Adam/clipping arithmetic is preserved. Checkpoint protocols are unchanged.
+- Verification: both-head temporary controls matched baseline losses, metrics,
+  gradients, all weights, Adam/RNG and counters exactly. Checks covered partial
+  batches, empty validation, snapshot ownership, memory rejection/fallback,
+  resource release, interruption/resume, v3 upgrade, fixed train membership,
+  zero-pass/incomplete initialization, publication/test gating and concurrent
+  Windows save/load. CPU smoke checks passed (2 passed, 1 deselected), focused
+  Ruff lint/format and `git diff --check` passed. No permanent tests were added.
+- Measurement: production-fitter ABBA controls on the 4070 Laptop included
+  backward, fresh evaluation and per-pass durable saving. Warm tile passes fell
+  129.75→111.66 ms (initial) and 147.15→128.04 ms (L2); action fell
+  93.69→72.84 and 99.55→84.65 ms. All paired trials improved; final numerical
+  states matched exactly. [Evidence and limitations](evidence/annotation-fitting-performance-20261023.md)
+  includes configuration/digests, cold behavior, memory and optional controls.
+- Remaining limits: these are execution timings, not convergence or grokking
+  evidence. Tile 192/256 limits were faster but changed BF16 values/updates, so
+  they remain opt-in. Grouped L2 matched arithmetic but failed timing acceptance
+  and was rejected. No formal training, push or PR; datasets, existing runs,
+  architecture and the user's pre-training script remain unchanged. Scratch
+  controls were deleted after retaining concise measurements.
+
+## Annotation resume and unfinished-weight initialization — 2026-10-23
+
+- Problem/root cause: annotation pass limits were part of resume compatibility,
+  omitted CLI options reverted to current defaults, and progress lacked the
+  configuration needed by the shared weight loader. An unfinished fit could not
+  initialize another stage without satisfying the final publication gate.
+- Improvement: `--passes N` now permits N additional passes per invocation, outside
+  fitting identity. Resume inherits saved fitting settings and restores model,
+  Adam, RNG, phase, and metrics. Atomic commits defer Ctrl+C; history tail repair
+  uses the durable pass rather than repeating updates. Self-contained v4 progress
+  initializes tile/action/demo/autonomous stages with weights alone, including
+  zero-pass states. Compatible v3 resume writes v4 while ignoring its old cap.
+  Loaded bytes and provenance hashes share one snapshot; Windows sharing errors
+  use bounded retries. Exact final train/validation and held-out test gates remain.
+- Verification: temporary CPU controls for both heads used real BF16 forwards,
+  FP32 gradients and Adam commits, with controlled evaluation gates to exercise
+  phase transitions. Interrupted/resumed three-pass runs matched uninterrupted
+  model, optimizer, RNG, frozen parameters and L2 state exactly. Controls covered
+  additional/unlimited limits, dataset/split and explicit-option rejection without
+  replacing progress, torn/duplicate history repair, v3 resume, unfinished/zero-pass
+  weight handoff, corrupt/nonfinite/shape-invalid rejection and SIGINT during
+  commit. Independent real-metric zero-pass controls verified both convergence
+  gates and test evaluation. Concurrent Windows replacement/load matched each
+  snapshot hash; errno-only sharing failures found during the control were fixed.
+  Default CPU smoke checks passed (2 passed, 1 deselected); focused Ruff lint/format,
+  CLI help, and `git diff --check` passed.
+- Remaining limits: these short CPU controls establish state and loader behavior,
+  not CUDA recovery parity or annotation learning/generalization quality. No formal
+  training, remote push, or PR; datasets and existing run artifacts are untouched.
+- Cleanup: automatic approval review rejected both recursive and individual-file
+  cleanup as "blocked by policy". Temporary controls/checkpoints remain under
+  the system temp directory's `pvz-annotation-progress-controls` folder; they are
+  outside the repository and excluded from the commit.
+
+## Annotation validation-phase L2 regularization — 2026-10-22
+
+- Problem: annotation fitting stopped once the training split reached exact
+  accuracy, even when the held-out validation split remained incorrect. Long
+  histories were also difficult to inspect with dense static plots.
+- Improvement: tile and action fitting now keeps the original grouped split,
+  activates explicit FP32-master L2 pressure only after training convergence,
+  and publishes only after both train and validation feasible/bottom metrics are
+  exact. Phase state, penalty values, and metrics are recoverable. Added a
+  standalone HTML canvas viewer that retains every history point and draws
+  per-pixel min/max envelopes with zoom, drag, and raw-point hover.
+- Verification: a temporary CPU fitter control completed the normal history and
+  progress path; standalone L2-gradient, split-convergence, CLI, viewer-JavaScript,
+  smoke, Ruff, and diff checks passed. No formal training ran.
+
 ## Core smoke-test suite — 2026-10-22
 
 - Problem/root cause: 44 test modules and shared fixtures contained 431 test
@@ -2543,3 +2721,34 @@ unperformed.
   immediate aggregate CUDA comparisons from the previous reward protocol, so
   they are not treated as validation for this change. Formal training and a
   pull request are intentionally not run.
+## Quadratic endgame rewards, wait compaction and finalized diagnostics — 2026-10-27
+
+- Problem/root cause: the dense-return warning compared different units and
+  ignored covariance, genuine waits were fitted at full trajectory volume, and
+  completion-time shaping remained linear. Standalone evaluation and live HUD
+  records also exposed base terminal values after a cohort had finished ranking.
+- Improvement: dense diagnostics now take FP64 moments of the summed physical
+  return after its fitted-unit conversion, with cohort-scoped warning events.
+  Genuine waits share the first-of-100 segmented compactor with identical
+  invalid proposals; raw rows and returns remain complete. Cohort terminal
+  shaping uses `a=0.3*u*abs(u)` with actual cohort size, average tie ranks and
+  idempotent applied adjustments. CPU/CUDA evaluation reports and live panels
+  refresh finalized terminal totals, while reset episode serials fence delayed
+  captures. Reward, objective, trajectory, recovery and demo identities advance
+  to v5/v11; old optimizer/recovery resumes remain rejected and compatible
+  weight-only initialization remains available.
+- Verification: temporary FP64 covariance/cancellation, zero-variance and
+  target-preservation controls passed. Wait/invalid representatives matched
+  independent references across boundaries, gaps, interleaving, spill and
+  restart. Quadratic endpoints, ties, singleton cohorts and repeated
+  finalization passed. Actual tile/action annotation resume controls passed for
+  v4 progress provenance under current v5 autonomous settings. Existing
+  autonomous weight-only loading and old-resume rejection passed. A 4070
+  production fitting control retained 21/2048 all-wait rows and 530/2048 mixed
+  rows; targets were unchanged. CPU and short CUDA evaluation published
+  finalized JSONL records. CPU/CUDA smoke checks and Ruff/syntax checks are
+  retained below; no formal training, push or PR was performed.
+- Remaining limits: the 4070 control is synthetic and excludes collection,
+  complete returns and checkpoint serialization, so it does not prove end-to-end
+  training speed or convergence. Existing run files and user datasets remain
+  untouched.

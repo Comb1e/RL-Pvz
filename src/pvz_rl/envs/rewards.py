@@ -1,4 +1,4 @@
-"""Net realized value from public assets and events, in sun-equivalent units."""
+"""Public physical values and independent final-unit outcome/mower rewards."""
 
 from functools import lru_cache
 
@@ -328,8 +328,8 @@ def reward_parts(
     resource_delta = asset_value(after) - asset_value(before) - sky
     lost_value = produced - resource_delta
     combat_value = settings["basic_zombie_value"] * damage / rules.zombies["basic"]["health"]
-    mower_cost = settings["mower_value"] * combat["mower_activations"]
-    net = resource_delta + combat_value - mower_cost
+    mower_penalty = settings["mower_penalty"] * combat["mower_activations"]
+    net = resource_delta + combat_value
     scale = settings["progress_weight"] / settings["value_scale"]
     early_sun = early_sun_income(before, events, settings["early_sun_spawn_fraction"])
     early_bonus = scale * settings["early_sun_extra_multiplier"] * early_sun
@@ -337,15 +337,19 @@ def reward_parts(
     blocking, _ = _blocking_value(before, events, rules, cfg)
     action_settings = settings.get("action", {})
     sun_multiplier = float(action_settings.get("sun_credit_multiplier", 1.0))
-    # Values in the new components are raw sun-equivalent units.  The existing
-    # progress/value conversion and dense training multiplier are applied by
-    # learning.objective.training_rewards exactly once.
+    # Physical components use sun-equivalent units; terminal and mower terms
+    # use final reward units and bypass both physical conversion multipliers.
     global_terminal = terminal
-    global_asset_value = resource_delta
+    # Reprice lost plant assets independently so changing value_scale can leave
+    # damage/blocking/losses intact while reducing both production-sun terms.
+    # Legacy configurations retain the original unweighted asset delta.
+    global_asset_value = (
+        resource_delta - (settings.get("asset_loss_multiplier", 1.0) - 1) * lost_value
+    )
     action_damage = combat_value
     action_blocking = blocking
     action_sun = sun_multiplier * produced + settings["early_sun_extra_multiplier"] * early_sun
-    action_mower = -mower_cost
+    action_mower = -mower_penalty
     if causal_credits is not None:
         # Collection adapters may pass only the credits whose source action is
         # the current row.  Delayed credits for older rows are applied through
@@ -355,7 +359,7 @@ def reward_parts(
         action_blocking = float(causal_credits.get("blocking", 0.0))
         action_sun = float(causal_credits.get("sun", 0.0))
         action_mower = float(causal_credits.get("mower", 0.0))
-    physical = global_asset_value + action_damage + action_blocking + action_sun + action_mower
+    physical = global_asset_value + action_damage + action_blocking + action_sun
     # Rejection is an ordinary simulated wait; fitting attribution is separate.
     invalid_plant = empty_dig = 0.0
     proximity = proximity if proximity is not None else HomeProximityLedger(before, rules)
@@ -373,16 +377,15 @@ def reward_parts(
         "effective_damage": damage,
         "plant_value_loss": lost_value,
         "combat_value": combat_value,
-        "mower_expenditure": mower_cost,
+        "mower_expenditure": 0.0,  # Legacy physical-cost diagnostic; mowers cost no sunlight.
         "net_value": net,
-        # A reported component of development, never added a second time.
-        "mower_activation_penalty": -scale * mower_cost,
+        "mower_activation_penalty": -mower_penalty,
         "invalid_plant_penalty": invalid_plant,
         "empty_dig_penalty": empty_dig,
         # ``total`` is the immediate raw simulator reward. Home proximity stays
         # diagnostic; cohort completion-time adjustment is applied to terminal
         # rows by CompleteGameBuffer after all games in the cohort finish.
-        "total": terminal + scale * physical + invalid_plant + empty_dig,
+        "total": terminal + action_mower + scale * physical + invalid_plant + empty_dig,
         "global_terminal": global_terminal,
         "global_asset_value": global_asset_value,
         "action_damage": action_damage,

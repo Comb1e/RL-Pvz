@@ -40,13 +40,18 @@
   owns synthetic/trajectory/full-cycle selection and the paired promotion gate.
 - `src/pvz_rl/data/train.toml` is the single parameter source for train/demo overlays.
   Both use `entity_v1`, `two_stage_transformer_q_v1` and
-  `complete_return_action_global_v3`. Old-objective resumes are rejected; structurally compatible
+  `complete_return_action_global_v5`. Old-objective resumes are rejected; structurally compatible
   BF16-master weights support inference/fresh initialization; verified recordings are reconstructed without changes. Preserve
   user reward adjustments. `training.demo.passes` is 20, independently of autonomous
   `training.n_epochs` (4). Tile (50% to 1%) and accepted-plant species (10% to 1%)
   probabilities decay over 10,000 stage games and freeze per cohort.
   `reward.early_sun_spawn_fraction=[1,3]` and `early_sun_extra_multiplier=2` triple
-  early actual Sunflower income value. Shared clipping uses `training.max_grad_norm=5`.
+  early actual Sunflower income value. `value_scale=2000` converts physical
+  values to fitted rewards at /20,000. Damage and blocking coefficients and
+  `reward.asset_loss_multiplier` compensate by 2000/900; both produced-sun
+  contributions remain unscaled. `mower_penalty=0.1` charges each activation
+  directly in final reward units, outside physical and dense conversion.
+  Shared clipping uses `training.max_grad_norm=5`.
   `training.objective.species_consistency_weight=1.0` controls online-selected,
   detached EMA-evaluated tile targets. `species_consistency_huber_delta=1.0` under
   the same objective table is finite, positive and non-boolean; consistency uses
@@ -90,11 +95,19 @@
   proposal/reason and zero penalty audit fields, executes wait and advances one tick; accepted plant/dig
   advances zero ticks. Accounting is not a model input. `rewards.py` owns the
   six-component global terminal/asset and action damage/blocking/sun/mower
-  objective plus diagnostic proximity/time fields. `CompleteGameBuffer` can
+  objective plus diagnostic proximity/time fields. Reward protocol v5 keeps
+  final-unit mower penalties separate from the four physical terms and uses
+  signed-quadratic cohort time adjustments capped by `win_time_weight=0.3`; previous weights
+  remain usable for fresh initialization, while old optimizer resumes fail. `CompleteGameBuffer` can
   apply validated source credits before chronological return finalization.
+  CPU and CUDA asset rewards subtract the configured extra plant-loss value
+  from the physical asset delta, leaving actual production income untouched.
+  A missing asset-loss multiplier in saved configurations retains legacy unit pricing.
   `rewards.py` owns early
-  Sunflower eligibility, physical conservation, proximity penalties and cohort-median
-  victory finalization. Recording fact checks remain configuration-independent.
+  Sunflower eligibility, physical conservation and proximity penalties.
+  `learning/objective.py` owns shared average-rank terminal finalization for
+  trajectories, episode reports, demonstrations and evaluation. Recording fact
+  checks remain configuration-independent.
 - `learning/exploration.py` owns persistent accepted-plant species commitments.
   Choose another species uniformly; wait ordinarily for sun/cooldown, with no
   timeout. All 45 tiles remain proposal candidates, so occupancy is classified
@@ -127,13 +140,17 @@
   shared prepared sources, cached CPU plans, bounded slim scans and counting
   partitions, plus ordered double-buffer `BatchPrefetch`. Pinned entity staging
   grows to the current bucket only after its copy fence. `action_routing.py`
-  owns segmented invalid compaction and chunk carry state; first-row
-  representatives per 100-row window affect fitting only. `step_result.py`
+  owns shared `RepeatedRowCompactor` wait/invalid segmentation and chunk carry;
+  first-row representatives per 100-row window affect fitting only. Wait and
+  invalid run/window/reduction metrics remain separate. `step_result.py`
   supplies array-backed step results and lazy compatibility infos. `host_transfer.py` owns reusable pinned
   `HostHandoff`; views are consumed before reuse.
-- `learning/checkpoints.py` validates model/objective/schema and demo v10,
-  action-global v4 recovery/trajectory contracts before simulator allocation;
-  the objective protocol is v3 because fitting representative weighting changed.
+  `PreparedDeviceBatches` in `batch_transport.py` owns immutable resident raw
+  inputs/labels with the original source batch ranges and padding; annotation
+  admission covers train/validation together and retains streaming fallback.
+- `learning/checkpoints.py` validates model/objective/schema and demo v11,
+  action-global v5 recovery/trajectory contracts before simulator allocation;
+  the objective protocol is v5 for wait representatives and quadratic time rewards.
   Model-state `stateless-two-stage-bf16-master-state-v2` stores FP32 online
   masters, FP32 Adam state and BF16 EMA runtime weights. No migration or
   partial transfer exists. Fresh compatible `--init-from` transfers full weights
@@ -143,6 +160,15 @@
   scheduler, RNG, trajectory, optimizer and both networks. Pools/maps/caches rebuild.
   Fitting/finalization/EMA changes require complete actual rows. Uncommitted passes
   restart; committed steps are not repeated. `performance.py` owns execution refresh.
+  Annotation progress v4 is self-contained and accepted for weight-only fresh
+  initialization, including zero-pass/incomplete snapshots. Shared immutable-byte
+  loading hashes the loaded version and retries Windows sharing conflicts;
+  destination provenance records source pass/kind/convergence. Annotation progress
+  is never autonomous recovery. Progress v3 first needs annotation resume to v4.
+  `SnapshotStager` groups borrowed authoritative master/Adam tensors by CUDA
+  device/dtype into owned CPU snapshot storage. Cached layouts rebuild on Adam
+  state changes; bounded allocation failure uses direct copies. Serialization
+  waits for D2H, and each annotation pass remains durably atomic before advancing.
 - `presentation/demo_recording.py` records reusable v2 archives/native replays.
   `learning/demo_initialization.py` verifies replay facts/outcomes/timing and reprices
   rewards without rewriting recordings, then fits 20 passes using both online/EMA
@@ -152,6 +178,14 @@
   fitting prepares label masks once and preserves indexed extrema tie gradients.
   `live_layout.py` owns paging/follow-latest; `live_view.py`
   snapshots effective settings without reloading TOML/device values.
+  `live_capture.py` stages selected boards' FP64 reward totals behind the same
+  copy fence as their public state. Native/web HUDs show accumulated training
+  reward through shared conversion; it never enters policy observations. Cohort
+  finalization drains captures and replaces rewards by environment/episode
+  identity. Bounded host overrides fence delayed frames and clear on reset;
+  episode floors reject stale captures and finalization updates after reset.
+  native render caching includes reward and pending state.
+  `rendering.py` supplies the same reward label to Gym RGB rendering.
 - `annotation/dataset.py` owns versioned rich snapshots, canonical entity rows,
   atomic annotation storage and durable pending/labeled/discarded records.
   `annotation/sampler.py` samples reachable simulator states. Tile records
@@ -177,13 +211,28 @@
   supports Save and exit. Browser-local history navigation revisits completed
   maps; revision-checked edits persist in place without consuming the pending map
   or invoking the sampler. Pending resolution alone generates the next map.
-  `learning/annotation_fit.py` freezes the species stage and produces a compatible
-  tile-only initialization only after exact full-training feasible top-1 convergence
-  over all 45 outputs.
-  Its top-1 hinge ignores other positive ordering, defaults to unlimited passes,
-  streams metrics, and saves separate atomic annotation weights/Adam/RNG/pass
-  progress. Matching dataset/split/settings gate resume; partial gradients are
-  discarded. Fresh reloaded BF16 verification permits zero-pass publication.
+  `learning/annotation_fit.py` freezes the opposite stage for tile/action fitting
+  and publishes a compatible final initialization only after exact train-and-validation
+  feasible top-1 and absolute-bottom convergence over all outputs.
+  Its top-1/bottom-k hinge ignores ordering inside label sets, defaults to unlimited
+  passes, and enters an explicit L2 phase only after training first converges.
+  It streams metrics, records the regularization phase, and saves separate atomic
+  annotation weights/Adam/RNG/pass progress. Matching dataset/split/settings and
+  L2 identity gate resume; autonomous reward/objective provenance is retained
+  across annotation resume without changing its ranking objective or protocols.
+  Omitted options inherit saved settings and pass limits
+  count additional commits per invocation. Progress v3 resumes into v4 with its
+  obsolete cap ignored. History tails reconcile against durable pass metrics;
+  partial gradients are discarded and commits defer Ctrl+C until durable.
+  Annotation training reuses resident raw batches when admitted under the central
+  cache cap and GPU headroom; learned activations always recompute. Train/validation
+  evaluation preserves separate shapes, order and totals with one combined metric
+  readback. Test-cache admission follows convergence and fresh BF16 verification.
+  All sources/caches close on exit and rebuild after resume. `performance.py`
+  resolves optional stage fitting limits; annotation compilation stays disabled.
+  Cache/execution settings are reported but remain outside fitting identity.
+  Fresh reloaded BF16 verification permits zero-pass publication. Long histories use the standalone
+  `tools/plot_annotation_loss.py` min/max-envelope canvas viewer.
   It never creates an autonomous resume state.
 - `learning/action_routing.py` classifies pre-action public legality and actual
   outcomes, with branch impossibility preceding bad tile attribution. Trajectories
@@ -192,13 +241,17 @@
   tiles only, accepted non-wait adds both online stages and EMA tile inference.
   Invalid regression uses `training.objective.invalid_action_target=-1.0`, never
   episode rewards; rejection penalty settings are removed and audit fields are zero.
-  Consecutive invalid runs are compacted by this shared module, while complete
-  returns retain every row. Consistency balances accepted plant/dig counts only.
+  Consecutive waits and identical invalid runs use this module's shared compactor;
+  complete returns retain every row. Episode/decision/inactive gaps and terminal
+  boundaries survive chunking/recovery. Consistency balances accepted plant/dig counts only.
   Verified demos reprice historical rewards and share these routes without
   rewriting recordings.
 - `evaluation/` uses the stateless runner and CPU-verifies CUDA action traces.
   `monitoring/` owns availability, both-stage entity/throughput benchmarks, bounded
   collection/four-pass-fit/collection controls and objective diagnostics.
+  `monitoring/moments.py` supplies bounded FP64 centered population moments for
+  same-unit dense/total return diagnostics, including covariance. Warnings identify
+  their cohort and are not repeated in routine progress.
   `DeviceProfiler` bounds pending events with central `telemetry_span_limit`,
   reuses completed events and reports drops without synchronization. Progress
   uses host records for cohort wins/returns and interval active rates, distinct from

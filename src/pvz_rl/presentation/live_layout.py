@@ -10,6 +10,7 @@ from pvz_game.config import PLANT_TYPES
 from pvz_game.cuda.schema import REASONS
 
 from pvz_rl.envs.actions import ActionSchema as A
+from pvz_rl.presentation.rendering import render_context, reward_label
 
 NAMES = ("wait", *PLANT_TYPES, "dig")
 SHORT = (
@@ -175,7 +176,7 @@ def draw_learning_settings(surface, font, renderers):
 
 def draw_view(surface, packets, activity, *, renderers, boards, pending=(), count=128):
     import pygame
-    from pvz_game.rendering import BoardRenderer, RenderContext
+    from pvz_game.rendering import BoardRenderer
 
     from .live_view import ACTIVITY_TEXT, Activity, decision_reason
 
@@ -291,18 +292,17 @@ def draw_view(surface, packets, activity, *, renderers, boards, pending=(), coun
                 if isinstance(old, tuple) and old[0] == index:
                     del renderers[old]
             renderers[cache_key] = BoardRenderer(size=size)
-        identity = (gen, frame["sequence"], size)
+        identity = (gen, frame["sequence"], frame.get("reward"), frame.get("reward_pending"), size)
         if index not in boards or boards[index][0] != identity:
             boards[index] = (
                 identity,
-                renderers[cache_key].render(
-                    frame["observation"], context=RenderContext(outcome=frame["outcome"])
-                ),
+                renderers[cache_key].render(frame["observation"], context=render_context(frame)),
             )
         surface.blit(boards[index][1], (x + 10, y + 42))
         obs = frame["observation"]
         top = y + 45 + board_h
         caption = f"Board {obs.elapsed_seconds:.2f}s | sun {obs.sun} | {frame['outcome']}"
+        caption += " | " + reward_label(frame.get("reward"), frame.get("reward_pending"))
         if switching:
             caption += " | waiting for unfinished replacement"
         surface.blit(small.render(caption, True, (234, 219, 159)), (x + 12, top))
@@ -419,7 +419,16 @@ def draw_view(surface, packets, activity, *, renderers, boards, pending=(), coun
 
 
 def viewer_main(
-    frames, commands, history_responses, errors, closed, ready, activity, size, count, settings=(),
+    frames,
+    commands,
+    history_responses,
+    errors,
+    closed,
+    ready,
+    activity,
+    size,
+    count,
+    settings=(),
     port_value=None,
 ):
     import pygame

@@ -142,7 +142,7 @@ def validate_config(cfg: dict) -> None:
                 "training.objective contains retired or missing settings, including "
                 "species_consistency_huber_delta"
             )
-        if objective.get("protocol") != "complete_return_action_global_v3":
+        if objective.get("protocol") != "complete_return_action_global_v5":
             raise ValueError(
                 "Unsupported training objective protocol; fresh initialization is required"
             )
@@ -196,7 +196,7 @@ def validate_config(cfg: dict) -> None:
     ):
         raise ValueError("home_entry_penalties require two increasing nonnegative magnitudes")
     weight = cfg["reward"].get("win_time_weight", 0)
-    if not math.isfinite(weight) or weight < 0:
+    if type(weight) not in (int, float) or not math.isfinite(weight) or weight < 0:
         raise ValueError("win_time_weight must be finite and nonnegative")
     current_policy = (
         cfg.get("encoding", {}).get("version") == "entity_v1"
@@ -213,7 +213,7 @@ def validate_config(cfg: dict) -> None:
         raise ValueError(
             "Retired observation/policy format; entity_v1 requires fresh initialization"
         )
-    if cfg["reward"].get("version") != "action_global_value_v3":
+    if cfg["reward"].get("version") != "action_global_value_v5":
         raise ValueError(
             "Retired reward format; ranked endgame action/global rewards require fresh training with the bundled train profile"
         )
@@ -221,7 +221,7 @@ def validate_config(cfg: dict) -> None:
         "version",
         "win_reward",
         "loss_penalty",
-        "mower_value",
+        "mower_penalty",
         "basic_zombie_value",
         "progress_weight",
         "value_scale",
@@ -236,7 +236,7 @@ def validate_config(cfg: dict) -> None:
         reward_keys | {"action", "win_time_weight"},
         reward_keys | {"action", "home_entry_penalties", "win_time_weight"},
     )
-    if set(cfg["reward"]) not in reward_keys_with_optional:
+    if set(cfg["reward"]) - {"asset_loss_multiplier"} not in reward_keys_with_optional:
         raise ValueError("reward must contain the outcome, asset-value, and action settings")
     action_reward = cfg["reward"].get("action", {})
     if not isinstance(action_reward, dict):
@@ -260,6 +260,13 @@ def validate_config(cfg: dict) -> None:
         for value in block_values.values()
     ):
         raise ValueError("reward.action.block_value_by_plant values must be finite numbers")
+    asset_loss_multiplier = cfg["reward"].get("asset_loss_multiplier", 1.0)
+    if (
+        type(asset_loss_multiplier) not in (int, float)
+        or not math.isfinite(asset_loss_multiplier)
+        or asset_loss_multiplier < 0
+    ):
+        raise ValueError("reward.asset_loss_multiplier must be finite and nonnegative")
     if "actor_objective" in cfg["training"] or "ent_coef" in cfg["training"]:
         raise ValueError("Retired PPO objective; use sequential Q fitting")
     if cfg["training"]["exploration"].get("objective") != "committed_plant_tile_epsilon_v1":
@@ -267,7 +274,7 @@ def validate_config(cfg: dict) -> None:
     for key in (
         "win_reward",
         "loss_penalty",
-        "mower_value",
+        "mower_penalty",
         "basic_zombie_value",
         "progress_weight",
         "early_sun_extra_multiplier",
@@ -448,7 +455,7 @@ def validate_config(cfg: dict) -> None:
     if not math.isfinite(visual["final_hold_seconds"]) or visual["final_hold_seconds"] < 0:
         raise ValueError("Visualization final_hold_seconds must be finite and nonnegative")
     env, train = cfg["environment"], cfg["training"]
-    expected_method = "complete_return_action_global_v3"
+    expected_method = "complete_return_action_global_v5"
     if train.get("method") != expected_method:
         raise ValueError("Training requires a supported complete-return method and fresh models")
     if any(
@@ -481,6 +488,13 @@ def validate_config(cfg: dict) -> None:
         raise ValueError("training.performance.fit_precision must be bf16_master")
     if type(performance.get("prefetch", False)) is not bool:
         raise ValueError("training.performance.prefetch must be a boolean")
+    if performance.get("annotation_input_cache", "auto") not in ("auto", "off"):
+        raise ValueError("training.performance.annotation_input_cache must be auto or off")
+    cache_mib = performance.get("annotation_cache_mib", 256)
+    if type(cache_mib) is not int or cache_mib < 0:
+        raise ValueError("training.performance.annotation_cache_mib must be a nonnegative integer")
+    if type(performance.get("annotation_use_fit_limits", False)) is not bool:
+        raise ValueError("training.performance.annotation_use_fit_limits must be a boolean")
     if set(performance) - {
         "compile_collection",
         "compile_fitting",
@@ -488,6 +502,9 @@ def validate_config(cfg: dict) -> None:
         "telemetry_span_limit",
         "fit_precision",
         "prefetch",
+        "annotation_input_cache",
+        "annotation_cache_mib",
+        "annotation_use_fit_limits",
         "fit_batch_groups",
         "fit_encoder_microbatch",
         "fit_species_microbatch",
@@ -592,6 +609,7 @@ def validate_config(cfg: dict) -> None:
         "batch_size",
         "margin",
         "learner_seed",
+        "l2_strength",
         "sampling_seed",
         "sampling_family",
         "sampling_max_steps",
@@ -645,8 +663,9 @@ def validate_config(cfg: dict) -> None:
         raise ValueError(
             "training.annotation.sampling_max_plants must leave at least one empty tile"
         )
-    for key in ("learning_rate", "margin"):
-        value = annotation.get(key, 3e-4 if key == "learning_rate" else 1.0)
+    annotation_defaults = {"learning_rate": 3e-4, "margin": 1.0, "l2_strength": 1e-4}
+    for key in ("learning_rate", "margin", "l2_strength"):
+        value = annotation.get(key, annotation_defaults[key])
         if type(value) not in (int, float) or not math.isfinite(value) or value <= 0:
             raise ValueError(f"training.annotation.{key} must be finite and positive")
     if train["device"] not in ("cpu", "cuda"):

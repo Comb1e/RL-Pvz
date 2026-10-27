@@ -158,15 +158,16 @@ def _outcome_counts(rows):
     return counts
 
 
-class InvalidRowCompactor:
-    """Bounded segmented selection with carry state per environment, not per row."""
+class RepeatedRowCompactor:
+    """First-of-window wait/invalid selection, with bounded per-environment carry."""
 
     def __init__(self, group_size=100):
         if type(group_size) is not int or group_size < 1:
-            raise ValueError("invalid fitting group size must be a positive integer")
+            raise ValueError("repeated fitting group size must be a positive integer")
         self.group_size, self.state = group_size, {}
         self.counts = np.zeros((3, 2), np.int64)
-        self.raw = self.raw_invalid = self.retained = self.runs = self.selected = 0
+        self.raw = self.raw_invalid = self.retained_invalid = self.selected = 0
+        self.raw_wait = self.retained_wait = self.invalid_runs = self.wait_runs = 0
 
     def select(self, rows):
         rows = np.asarray(rows)
@@ -177,11 +178,13 @@ class InvalidRowCompactor:
         active = rows["active"] if "active" in names else np.ones(len(rows), bool)
         environments = rows["env"] if "env" in names else np.zeros(len(rows), np.int64)
         invalid = active & np.isin(rows["route"], (FitRoute.SPECIES_INVALID, FitRoute.TILE_INVALID))
-        keep = active & ~invalid
+        waits = active & (rows["route"] == FitRoute.WAIT_RETURN) & (rows["action"] == 0)
+        compactable = invalid | waits
+        keep = active & ~compactable
         for env in np.unique(environments):
             ix = np.flatnonzero(environments == env)
             current = rows[ix]
-            live, bad = active[ix], invalid[ix]
+            live, repeated = active[ix], compactable[ix]
             n = len(ix)
             boundary = np.ones(n, bool)
             keys = np.stack(
@@ -189,7 +192,7 @@ class InvalidRowCompactor:
                 axis=1,
             )
             if n > 1:
-                boundary[1:] = np.any(keys[1:] != keys[:-1], axis=1) | ~bad[:-1] | ~live[:-1]
+                boundary[1:] = np.any(keys[1:] != keys[:-1], axis=1) | ~repeated[:-1] | ~live[:-1]
             for field in ("reset", "run_break"):
                 if field in names:
                     boundary |= current[field]
@@ -202,8 +205,8 @@ class InvalidRowCompactor:
             prior = self.state.get(int(env))
             length = 0
             if prior is not None:
-                key, previous_bad, done, episode, decision, length = prior
-                continuation = previous_bad and not done and tuple(keys[0]) == key
+                key, previous_repeated, done, episode, decision, length = prior
+                continuation = previous_repeated and not done and tuple(keys[0]) == key
                 continuation &= not any(
                     bool(current[k][0]) for k in ("reset", "run_break") if k in names
                 )
@@ -214,21 +217,24 @@ class InvalidRowCompactor:
                 boundary[0] = not continuation
             starts = np.maximum.accumulate(np.where(boundary, np.arange(n), -length))
             ordinals = np.arange(n) - starts
-            keep[ix] |= bad & (ordinals % self.group_size == 0)
-            self.runs += int(np.count_nonzero(bad & boundary))
+            keep[ix] |= repeated & (ordinals % self.group_size == 0)
+            self.invalid_runs += int(np.count_nonzero(invalid[ix] & boundary))
+            self.wait_runs += int(np.count_nonzero(waits[ix] & boundary))
             self.state[int(env)] = (
                 tuple(keys[-1]),
-                bool(bad[-1]),
+                bool(repeated[-1]),
                 bool(current["done"][-1]) if "done" in names else False,
                 int(current["episode"][-1]) if "episode" in names else 0,
                 int(current["decision"][-1]) if "decision" in names else 0,
-                int(ordinals[-1] + 1) if bad[-1] else 0,
+                int(ordinals[-1] + 1) if repeated[-1] else 0,
             )
         selected = np.flatnonzero(keep)
         self.counts += _outcome_counts(rows[selected])
         self.raw += int(active.sum())
         self.raw_invalid += int(invalid.sum())
-        self.retained += int(np.count_nonzero(keep & invalid))
+        self.retained_invalid += int(np.count_nonzero(keep & invalid))
+        self.raw_wait += int(waits.sum())
+        self.retained_wait += int(np.count_nonzero(keep & waits))
         self.selected += len(selected)
         return selected
 
@@ -238,16 +244,24 @@ class InvalidRowCompactor:
             raw_rows=self.raw,
             selected_rows=self.selected,
             raw_invalid_rows=self.raw_invalid,
-            retained_invalid_rows=self.retained,
-            invalid_runs=self.runs,
-            invalid_windows=self.retained,
-            invalid_reduction=(1 - self.retained / self.raw_invalid) if self.raw_invalid else 0.0,
+            retained_invalid_rows=self.retained_invalid,
+            invalid_runs=self.invalid_runs,
+            invalid_windows=self.retained_invalid,
+            invalid_reduction=(1 - self.retained_invalid / self.raw_invalid)
+            if self.raw_invalid
+            else 0.0,
+            raw_wait_rows=self.raw_wait,
+            retained_wait_rows=self.retained_wait,
+            wait_runs=self.wait_runs,
+            wait_windows=self.retained_wait,
+            wait_reduction=(1 - self.retained_wait / self.raw_wait) if self.raw_wait else 0.0,
+            fitting_reduction=(1 - self.selected / self.raw) if self.raw else 0.0,
         )
 
 
-def compact_invalid_rows(rows, *, group_size=100):
-    """Shared first-of-window compaction, preserving every non-invalid row."""
-    compactor = InvalidRowCompactor(group_size)
+def compact_repeated_rows(rows, *, group_size=100):
+    """Shared first-of-window compaction; accepted non-wait rows stay intact."""
+    compactor = RepeatedRowCompactor(group_size)
     selected = compactor.select(rows)
     return selected, compactor.counts, compactor.diagnostics
 

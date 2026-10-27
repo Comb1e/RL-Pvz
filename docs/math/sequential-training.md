@@ -1,6 +1,6 @@
 # Sequential complete-return training
 
-The official objective is `complete_return_action_global_v2`. It uses
+The official objective is `complete_return_action_global_v5`. It uses
 complete remaining returns with gamma one and no counterfactual rollouts.
 
 For each actual decision (t),
@@ -15,15 +15,18 @@ proposals use the [shared attribution table](invalid-action-penalties.md): an
 impossible branch trains species to -1; a bad tile in a usable branch trains
 only that tile to -1. This target never enters episode rewards or returns.
 
-Repeated invalid proposals are compacted only in the fitting input. Within each
+Repeated waits and invalid proposals are compacted only in the fitting input. Within each
 environment episode, consecutive rows with the same action, route, and rejection
 reason are partitioned into 100-row windows and the first row of each window is
-used once. Complete returns remain chronological over every actual row.
+used once. Episode/decision/inactive gaps and terminal boundaries split runs;
+other environments' interleaved rows do not. Accepted non-wait rows are retained.
+Complete returns remain chronological over every actual row. Fitting uses
+representative counts without frequency weights.
 
 ## Species consistency
 
-For an accepted non-wait branch (b), let (C_b(s)) be empty plant tiles or all dig
-tiles, with tile zero as the full-board fallback. The online tile table selects
+For an accepted non-wait branch (b), let (C_b(s)) contain all 45 tiles. Occupancy
+is post-selection legality and never masks these candidates. The online table selects
 
 \[
 \ell^*=\arg\max_{\ell\in C_b(s)}Q_{\mathrm{tile}}(s,b,\ell),
@@ -70,28 +73,21 @@ Canonical rows retain public entities, masks, globals, action, acceptance,
 duration, reward, return and exploration provenance. Active packing, width
 buckets, fitting spools, prefetch workers and graph captures are transient.
 Checkpoints contain FP32 online masters, FP32 Adam state, BF16 EMA state and the
-selective-invalid trajectory/recovery v2 contracts. Old-objective resume is
+action-global trajectory/recovery v5 contracts. Old-objective resume is
 rejected before simulator construction; structurally compatible BF16-master
 weights remain valid for inference and fresh weight-only initialization.
 
 ## Annotation convergence
 
-For annotated legal tiles P and legal unannotated tiles N, each record uses
-`max(0, margin + max(Q[N]) - max(Q[P]))`, with margin 1. Only one acceptable tile
-needs to win; other annotated tiles have no imposed ordering. Empty sets and
-identical model inputs with collectively disjoint feasible sets fail before
-fitting. All-legal-positive records are correct and have zero loss.
+Tile and action annotation fitting use fixed grouped training/validation/test
+splits, feasible top-1 and absolute-bottom ranking across all outputs, and a
+frozen opposite head. Explicit FP32 L2 begins only after training first converges
+while validation remains incomplete. Both training and validation must be exact
+before publication or test evaluation. Validation never supplies gradients.
 
-Gradients accumulate with record weight `1 / training_records`, including
-partial batches and zero-loss records. The frozen species stage is untouched.
-After each FP32 Adam commit, the BF16 runtime evaluates the entire training
-partition with legal masking and lowest-index tie breaking. Exact training hits
-must equal training count; held-out metrics cannot terminate fitting. Grouped
-80/10/10 splits remain isolated. Test metrics run only after convergence.
-
-Default passes 0 means unlimited. A cap or interrupt yields separate incomplete
-progress; weights, Adam, RNG and counters resume only under the same dataset,
-split and fitting settings. Progress commits atomically per pass. A fresh
-full-training evaluation of reloaded saved weights gates initialization
-publication, including honestly recorded zero-pass success. No claim about
-held-out accuracy or game improvement follows from training convergence.
+Progress commits atomically per pass, retaining optimizer/RNG/phase for resume
+and complete weights for fresh initialization elsewhere, including incomplete
+or zero-pass snapshots. Pass caps count additional commits per invocation; zero
+is unlimited. Annotation protocols are unchanged by autonomous v5. The
+[annotation objective and recovery contract](training-objective.md#annotation-convergence-and-l2-phase)
+owns the detailed requirements.
