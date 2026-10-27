@@ -137,8 +137,9 @@
   shared prepared sources, cached CPU plans, bounded slim scans and counting
   partitions, plus ordered double-buffer `BatchPrefetch`. Pinned entity staging
   grows to the current bucket only after its copy fence. `action_routing.py`
-  owns segmented invalid compaction and chunk carry state; first-row
-  representatives per 100-row window affect fitting only. `step_result.py`
+  owns shared `RepeatedRowCompactor` wait/invalid segmentation and chunk carry;
+  first-row representatives per 100-row window affect fitting only. Wait and
+  invalid run/window/reduction metrics remain separate. `step_result.py`
   supplies array-backed step results and lazy compatibility infos. `host_transfer.py` owns reusable pinned
   `HostHandoff`; views are consumed before reuse.
   `PreparedDeviceBatches` in `batch_transport.py` owns immutable resident raw
@@ -234,8 +235,9 @@
   tiles only, accepted non-wait adds both online stages and EMA tile inference.
   Invalid regression uses `training.objective.invalid_action_target=-1.0`, never
   episode rewards; rejection penalty settings are removed and audit fields are zero.
-  Consecutive invalid runs are compacted by this shared module, while complete
-  returns retain every row. Consistency balances accepted plant/dig counts only.
+  Consecutive waits and identical invalid runs use this module's shared compactor;
+  complete returns retain every row. Episode/decision/inactive gaps and terminal
+  boundaries survive chunking/recovery. Consistency balances accepted plant/dig counts only.
   Verified demos reprice historical rewards and share these routes without
   rewriting recordings.
 - `evaluation/` uses the stateless runner and CPU-verifies CUDA action traces.

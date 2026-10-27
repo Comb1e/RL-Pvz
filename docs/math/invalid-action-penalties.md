@@ -36,5 +36,20 @@ Verified demonstrations use the same classifier after reconstructing pre-action
 legality; historical penalties are verified as recorded facts, then repriced to
 zero in memory without modifying recording files.
 
+Both autonomous and demonstration fitting use the shared first-of-window
+compactor. Genuine wait proposals and identical invalid proposals retain rows
+1, 101, 201, etc. under `training.objective.invalid_fit_group_size=100`; the
+historical setting name now controls both. Invalid proposals executed as wait
+retain their original route/action/reason and never merge with genuine waits.
+Accepted non-wait rows are preserved. Adjacency is per environment, independent
+of interleaving or observation changes; episodes, missing decisions, inactive
+gaps, resets and explicit run breaks split runs. A terminal row closes a run
+after itself. Chunk/restart carry preserves the same representatives.
+
+Returns, causal credits and raw metrics still use every decision. Fitting counts
+and whole-cohort coefficients use representatives without frequency weights,
+intentionally reducing long-wait weighting. Reports separate wait/invalid raw
+and retained rows, runs, windows and reduction ratios.
+
 The saved-weight contract and action dimensions are unchanged. The objective,
 trajectory and recovery versions prevent resuming old optimizer/reward semantics.

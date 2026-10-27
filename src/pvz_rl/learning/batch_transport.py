@@ -16,7 +16,7 @@ from pvz_rl.envs.encoding import (
     PackedEntityBatch,
     collate_observations,
 )
-from pvz_rl.learning.action_routing import InvalidRowCompactor, route_indices, workload_counts
+from pvz_rl.learning.action_routing import RepeatedRowCompactor, route_indices, workload_counts
 
 
 @dataclass(frozen=True)
@@ -143,7 +143,7 @@ class FittingSpool(PreparedPlans):
 
         cfg = buffer.cfg or load_config()
         self.buckets = cfg["training"]["performance"]["fit_entity_buckets"]
-        compactor = InvalidRowCompactor(cfg["training"]["objective"]["invalid_fit_group_size"])
+        compactor = RepeatedRowCompactor(cfg["training"]["objective"]["invalid_fit_group_size"])
         self.workloads = dict(
             routes={},
             online_species_rows=0,

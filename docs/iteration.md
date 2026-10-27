@@ -1,3 +1,21 @@
+## Shared first-of-100 wait fitting — 2026-10-27
+
+- Problem/root cause: genuine waits bypassed invalid-row compaction, allowing
+  all-wait cohorts to fit millions of redundant decisions.
+- Improvement: one shared bounded segmented compactor handles genuine waits
+  and identical invalid proposals in autonomous/demo fitting. It preserves
+  accepted non-wait rows and all raw returns/credits. Representative counts
+  normalize fitting without frequency weights; wait/invalid diagnostics remain
+  separate. Existing episode/decision/inactive/terminal boundaries and chunk
+  carry are retained. The existing configured window size controls both.
+- Verification: temporary independent scalar controls matched exact selected
+  indices at 1/99/100/101/200/201 rows, interleaved environments, changing routes
+  and reasons, resets, decision gaps, inactive rows, terminals, seven chunk
+  sizes and restart. Forced-disk spool/restore retained [0,100,200,300] for 301
+  waits and left complete targets unchanged. No permanent tests added.
+- Remaining delivery work: v5 compatibility, quadratic rewards and smoke/static
+  checks. No formal training, push or PR.
+
 ## Same-unit return diagnostics and finalized HUD — 2026-10-27
 
 - Problem/root cause: CUDA diagnostics compared physical units against fitted

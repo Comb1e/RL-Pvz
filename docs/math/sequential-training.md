@@ -15,10 +15,13 @@ proposals use the [shared attribution table](invalid-action-penalties.md): an
 impossible branch trains species to -1; a bad tile in a usable branch trains
 only that tile to -1. This target never enters episode rewards or returns.
 
-Repeated invalid proposals are compacted only in the fitting input. Within each
+Repeated waits and invalid proposals are compacted only in the fitting input. Within each
 environment episode, consecutive rows with the same action, route, and rejection
 reason are partitioned into 100-row windows and the first row of each window is
-used once. Complete returns remain chronological over every actual row.
+used once. Episode/decision/inactive gaps and terminal boundaries split runs;
+other environments' interleaved rows do not. Accepted non-wait rows are retained.
+Complete returns remain chronological over every actual row. Fitting uses
+representative counts without frequency weights.
 
 ## Species consistency
 

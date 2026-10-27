@@ -97,6 +97,8 @@ is a direct -0.1 reward penalty, independent of sunlight scaling and the dense
 multiplier. Live native/browser boards show each environment's accumulated
 training reward. Terminal boards show a pending label until cohort time ranking
 finishes, then refresh with the finalized reward.
+Fitting retains the first of each 100 adjacent waits or identical invalid
+proposals; complete returns and reward accounting retain every decision.
 Reward/objective v4 requires fresh `--init-from` for previous weights rather than
 optimizer resume. See the [reward conversion table](docs/math/training-objective.md).
 

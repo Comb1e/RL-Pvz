@@ -34,7 +34,7 @@ from pvz_rl.envs.rewards import (
 from pvz_rl.learning.action_routing import (
     branch_availability,
     classify_actions,
-    compact_invalid_rows,
+    compact_repeated_rows,
 )
 from pvz_rl.learning.batch_transport import PreparedDataSource
 from pvz_rl.learning.checkpoints import DEMO_PROTOCOL as CHECKPOINT_PROTOCOL
@@ -573,7 +573,7 @@ def _initialize_demo(
             except ValueError as exc:
                 raise ValueError(f"unknown demonstration rejection reason: {reason}") from exc
         rows["rejection_reason"][index] = int(reason)
-    compact_positions, compact_counts, compaction = compact_invalid_rows(
+    compact_positions, compact_counts, compaction = compact_repeated_rows(
         rows,
         group_size=objective.get("invalid_fit_group_size", 100),
     )

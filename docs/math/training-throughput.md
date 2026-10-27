@@ -37,7 +37,9 @@ boundaries survive compaction and recovery. The spool scans slim metadata with
 segmented NumPy operations, counts width/route partitions, and gathers selected
 rows/entities in bounded chunks. It never copies the complete trajectory dtype
 just to compute representatives. Return counts stay raw; fitting denominators
-use representatives without frequency weights.
+use representatives without frequency weights. Genuine waits and identical
+invalid actions retain the first of each configured 100-row window; accepted
+non-wait rows remain intact. Wait and invalid reductions are reported separately.
 
 Prepared sources share ordered double-buffer transport across autonomous, demo
 and annotation fitting. Each pinned slot grows to its required entity bucket
