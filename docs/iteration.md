@@ -1,3 +1,22 @@
+## Same-unit return diagnostics and finalized HUD — 2026-10-27
+
+- Problem/root cause: CUDA diagnostics compared physical units against fitted
+  returns and ignored covariance; progress repeated its last warning. Terminal
+  HUD frames never received the later cohort ranking.
+- Improvement: bounded FP64 centered moments compare summed physical returns in
+  fitted units, publish the ratio/flag and emit cohort-specific warning events.
+  Zero physical variation remains a valid warning. The adjacent action-shaping
+  magnitude diagnostic now uses fitted units too. Targets are unchanged.
+  Cohort finalization replaces episode-identified HUD totals, marks provisional
+  outcomes, fences delayed captures and refreshes native render caches. Episode
+  metric finalization is idempotent.
+- Verification: temporary FP64 reference controls covered correlated/cancelling
+  components, zero dense/target variation, unchanged complete targets, chunked
+  moments, warning events, delayed/duplicate HUD updates, episode reset and
+  repeated finalization. They passed; no permanent tests or formal training added.
+- Remaining delivery work: shared wait compaction and quadratic endgame rewards,
+  then the existing smoke/static checks.
+
 ## Direct mower penalties and environment reward HUD — 2026-10-26
 
 - Problem/root cause: the mower cost was expressed in sunlight, so changing the

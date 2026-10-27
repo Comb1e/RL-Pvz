@@ -292,7 +292,7 @@ def draw_view(surface, packets, activity, *, renderers, boards, pending=(), coun
                 if isinstance(old, tuple) and old[0] == index:
                     del renderers[old]
             renderers[cache_key] = BoardRenderer(size=size)
-        identity = (gen, frame["sequence"], size)
+        identity = (gen, frame["sequence"], frame.get("reward"), frame.get("reward_pending"), size)
         if index not in boards or boards[index][0] != identity:
             boards[index] = (
                 identity,
@@ -302,7 +302,7 @@ def draw_view(surface, packets, activity, *, renderers, boards, pending=(), coun
         obs = frame["observation"]
         top = y + 45 + board_h
         caption = f"Board {obs.elapsed_seconds:.2f}s | sun {obs.sun} | {frame['outcome']}"
-        caption += " | " + reward_label(frame.get("reward"))
+        caption += " | " + reward_label(frame.get("reward"), frame.get("reward_pending"))
         if switching:
             caption += " | waiting for unfinished replacement"
         surface.blit(small.render(caption, True, (234, 219, 159)), (x + 12, top))

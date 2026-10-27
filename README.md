@@ -95,7 +95,8 @@ Reward settings live in `src/pvz_rl/data/train.toml`. At `value_scale=2000`,
 25 Sunflower sun gives +0.0025 normally or +0.005 early. One mower activation
 is a direct -0.1 reward penalty, independent of sunlight scaling and the dense
 multiplier. Live native/browser boards show each environment's accumulated
-training reward; terminal time ranking remains pending until the cohort finishes.
+training reward. Terminal boards show a pending label until cohort time ranking
+finishes, then refresh with the finalized reward.
 Reward/objective v4 requires fresh `--init-from` for previous weights rather than
 optimizer resume. See the [reward conversion table](docs/math/training-objective.md).
 

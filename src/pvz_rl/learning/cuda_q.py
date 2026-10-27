@@ -317,7 +317,7 @@ class CudaCohortLifecycle(BaseAlgorithm):
                     elif phase == CohortPhase.FINALIZE_REWARDS:
                         self._finalize_rewards(callback)
                     elif phase == CohortPhase.RETURNS:
-                        self.prefit_errors = self._buffer.finalize()
+                        self.prefit_errors = self._buffer.finalize(cohort=self.cohort_number)
                         for name, values in self.prefit_errors.items():
                             self.logger.record("train/action_count_" + name, values["count"])
                             self.logger.record("train/value_target_error_" + name, values["mse"])

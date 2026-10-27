@@ -23,6 +23,7 @@ from pvz_rl.learning.objective import (
     training_rewards,
 )
 from pvz_rl.learning.source_actions import AppendReceipt, SourceActionRef
+from pvz_rl.monitoring.moments import RunningMoments
 
 TRAJECTORY_PROTOCOL = "pvz-rl/action-global-trajectory-v4"
 
@@ -577,7 +578,7 @@ class CompleteGameBuffer:
         self.rewards_finalized = True
         return self.reward_summary
 
-    def finalize(self):
+    def finalize(self, *, cohort=None):
         """Actual per-game returns and errors measured before fitting either head."""
         self.finalize_rewards()
         running = np.zeros(self.n_envs, np.float64)
@@ -586,7 +587,7 @@ class CompleteGameBuffer:
         component_sum = np.zeros(len(COMPONENTS), np.float64)
         component_square = np.zeros(len(COMPONENTS), np.float64)
         immediate_component_sum = np.zeros(len(COMPONENTS), np.float64)
-        target_sum = target_square = 0.0
+        target_moments, dense_moments = RunningMoments(), RunningMoments()
         episode_sum = np.zeros(self.n_envs, np.float64)
         episode_square = np.zeros(self.n_envs, np.float64)
         episode_count = np.zeros(self.n_envs, np.int64)
@@ -642,8 +643,15 @@ class CompleteGameBuffer:
                 rows["target"][ix] = values
                 component_sum += returns.sum(0)
                 component_square += np.square(returns).sum(0)
-                target_sum += values.sum()
-                target_square += np.square(values).sum()
+                target_moments.update(values)
+                # Component returns already include the dense multiplier. Sum
+                # before taking moments to retain covariance, then convert once.
+                scale = (
+                    self.cfg["reward"]["progress_weight"] / self.cfg["reward"]["value_scale"]
+                    if self.cfg
+                    else 1.0
+                )
+                dense_moments.update(scale * returns[:, 1:-1].sum(-1))
                 episode_sum[env] += values.sum()
                 episode_square[env] += np.square(values).sum()
                 episode_count[env] += len(values)
@@ -682,9 +690,17 @@ class CompleteGameBuffer:
         self.consistency_counts[:] = self.outcome_counts[1:]
         self.consistency_counts[:, 0] = 0
         n = max(1, counts.sum())
-        variance = max(0, target_square / n - (target_sum / n) ** 2)
+        variance = target_moments.variance
+        target_std = float(np.sqrt(variance))
+        dense_std = float(np.sqrt(dense_moments.variance))
+        ratio = dense_std / target_std if variance > 1e-20 else None
+        low_variation = ratio is not None and ratio < 0.05
         self.reward_summary.update(
-            target_std=float(np.sqrt(variance)),
+            cohort=cohort,
+            target_std=target_std,
+            dense_return_std=dense_std,
+            dense_to_target_std_ratio=ratio,
+            low_dense_return_variation=low_variation,
             constant_predictor_mse=float(variance),
             component_return_mean=dict(zip(COMPONENTS, (component_sum / n).tolist())),
             component_return_std=dict(
@@ -747,22 +763,24 @@ class CompleteGameBuffer:
         self.reward_summary["causal_source_credits"] = self.causal_sources
         import warnings
 
-        dense_std = float(
-            np.sqrt(
-                sum(
-                    self.reward_summary["component_return_std"].get(key, 0.0) ** 2
-                    for key in COMPONENTS[1:-1]
-                )
-            )
-        )
-        if variance > 1e-20 and dense_std < 0.05 * np.sqrt(variance):
+        if low_variation:
             warnings.warn(
-                "Dense return variation remains below 5% of target variation",
+                f"Cohort {cohort if cohort is not None else self.path.name}: dense return "
+                f"variation is below 5% of target variation "
+                f"(dense_std={dense_std:.8g}, target_std={target_std:.8g}, "
+                f"ratio={ratio:.4%}; fitted reward units)",
                 RuntimeWarning,
                 stacklevel=2,
             )
         if live.any():
-            penalty = np.abs(contribution[live, 2:].sum(-1)).mean()
+            scale = (
+                self.cfg["reward"]["progress_weight"] / self.cfg["reward"]["value_scale"]
+                if self.cfg
+                else 1.0
+            )
+            penalty = np.abs(
+                scale * contribution[live, 2:-1].sum(-1) + contribution[live, -1]
+            ).mean()
             terminal = np.abs(contribution[live, 0]).mean()
             if penalty > 0.25 * terminal:
                 warnings.warn(

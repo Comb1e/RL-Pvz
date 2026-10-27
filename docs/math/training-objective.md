@@ -35,8 +35,10 @@ for that environment and episode, including causal damage/blocking/sun credits
 and direct mower penalties. The display resets with the episode and is captured
 with the same board snapshot; it adds no policy inputs or per-step CUDA readbacks.
 The endgame time adjustment is not available until cohort finalization, so a
-finished board initially shows its base terminal outcome. Gym RGB rendering uses
-the same accumulated component conversion.
+finished board initially shows its base terminal outcome with a pending label.
+Finalization replaces the HUD total by environment/episode identity. Delayed
+captures cannot undo that replacement; native rendering refreshes its reward
+overlay and caption. Gym RGB rendering shares the component conversion.
 [Sequential Q learning](sequential-training.md) specifies
 the selected-action, consistency and demonstration losses. Maximum net value
 and drawdown remain diagnostics.
@@ -204,3 +206,19 @@ These shaping terms intentionally change the objective and do not claim to prese
 every ordering induced by terminal rewards. [Invalid proposals](invalid-action-penalties.md) execute ordinary wait with zero
 rejection charges. Their fixed -1 targets apply only to fitting and do not alter
 this reward ledger or earlier chronological returns.
+
+## Physical-return variation diagnostic
+
+Before fitting compaction, bounded FP64 centered moments measure population
+standard deviations over all actual decisions. Dense return sums asset, damage,
+blocking and produced-sun returns, converted once with
+`dense_multiplier * progress_weight / value_scale`. Taking moments of that sum
+retains covariance. Terminal outcomes, time ranking and direct mower penalties
+are excluded from dense variation but included in total-return variation. Reports
+contain `dense_return_std`, `target_std`, `dense_to_target_std_ratio` and
+`low_dense_return_variation`.
+
+A ratio below 5% emits one cohort-identified warning event; routine progress does
+not repeat historical warnings. Effectively zero total variance has a null ratio
+and no warning. An all-wait cohort with no physical rewards can legitimately warn
+when outcomes or mowers vary. This diagnostic never changes targets.

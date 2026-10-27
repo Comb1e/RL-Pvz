@@ -510,8 +510,6 @@ class ResearchCallback(BaseCallback):
         ]
         if usage:
             parts.append(" ".join(usage))
-        if self.progress.warning:
-            parts.append(f"warning: {self.progress.warning[:96]}")
         change = (
             phase,
             cohort,

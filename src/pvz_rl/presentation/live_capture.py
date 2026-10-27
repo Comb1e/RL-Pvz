@@ -20,7 +20,7 @@ from pvz_game.types import (
 
 from pvz_rl.envs.cuda_features import METRIC_INDICES
 from pvz_rl.envs.rewards import REWARD_METRICS
-from pvz_rl.learning.objective import COMPONENTS, training_rewards
+from pvz_rl.learning.objective import COMPONENTS, components, training_rewards
 from pvz_rl.presentation.live_view import Activity, LiveSession, PanelState
 
 
@@ -241,6 +241,7 @@ class CudaLiveCapture:
                     i,
                     p.generation,
                     dict(
+                        env=p.env,
                         level=self.env._level_names[p.env],
                         task=self.env._tasks[p.env],
                         episode=self.env._episode_serial[p.env],
@@ -277,6 +278,7 @@ class CudaLiveCapture:
                     training_rewards(reward_totals[i, self.reward_columns], self.env.cfg)
                 )
                 frame["outcome"] = frame["outcome"] or obs.status.value
+                frame["reward_pending"] = frame["outcome"] != "running"
                 panel = self.session.selection.panels[i]
                 history = self.env.action_journal.page(panel.env, frame["episode"])
                 frame["history"] = history
@@ -288,6 +290,19 @@ class CudaLiveCapture:
                     panel.state = PanelState.RESULT
             slot["pending"] = None
         self.session.publish()
+
+    def finalize_rewards(self, pending):
+        """At the cohort boundary, publish authoritative host episode totals."""
+        self.drain(wait=True)
+        episodes = [
+            (
+                int(env),
+                int(item["episode"]),
+                float(training_rewards(components(item["metrics"]), self.env.cfg)),
+            )
+            for env, item in pending.items()
+        ]
+        self.session.finalize_rewards(episodes)
 
     def close(self):
         self.drain(wait=True)

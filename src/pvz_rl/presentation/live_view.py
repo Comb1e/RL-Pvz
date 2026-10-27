@@ -63,6 +63,7 @@ class Selection:
         self.panels = [Panel(i) for i in self.rng.sample(range(count), min(PANELS, count))]
         self.active = set(range(count))
         self.pending = set()
+        self.finalized_rewards = {}
 
     def refresh(self, active):
         self.active = set(active)
@@ -90,14 +91,40 @@ class Selection:
 
     def accept(self, panel, generation, frame):
         p = self.panels[panel]
-        if generation != p.generation:
+        if generation != p.generation or frame.get("env", p.env) != p.env:
             return False
         if p.frame is not None and frame["sequence"] <= p.frame["sequence"]:
             return False
+        saved = self.finalized_rewards.get(p.env)
+        if saved is not None:
+            episode, reward = saved
+            if frame["episode"] < episode:
+                return False
+            if frame["episode"] == episode:
+                frame = dict(frame, reward=reward, reward_pending=False)
+            else:
+                del self.finalized_rewards[p.env]
         p.frame = frame
         if panel not in self.pending:
             p.state = PanelState.RESULT if frame["outcome"] != "running" else PanelState.WATCHING
         return True
+
+    def finalize_rewards(self, episodes):
+        """Replace rewards by stable episode identity, including delayed captures."""
+        for env, episode, reward in episodes:
+            saved = self.finalized_rewards.get(env)
+            if saved is not None and episode < saved[0]:
+                continue
+            self.finalized_rewards[env] = (episode, reward)
+            for panel in self.panels:
+                frame = panel.frame
+                if (
+                    panel.env == env
+                    and frame is not None
+                    and frame.get("env", env) == env
+                    and frame["episode"] == episode
+                ):
+                    panel.frame = dict(frame, reward=reward, reward_pending=False)
 
 
 def offer_latest(queue, item):
@@ -265,6 +292,10 @@ class LiveSession:
         key = "published" if offer_latest(self.frames, packet) else "dropped"
         self.stats[key] += 1
         self.last_publish = now
+
+    def finalize_rewards(self, episodes):
+        self.selection.finalize_rewards(episodes)
+        self.publish(force=True)
 
     def set_activity(self, activity):
         if self.enabled:

@@ -467,3 +467,14 @@ throughput measurements.
   distinction between the reward returned by `step` and auxiliary diagnostic
   `info`. The viewer displays accumulated learning reward outside observations;
   delayed causal credits and cohort-finalized outcomes remain explicit.
+
+## Return diagnostics and completion-time ranks — 2026-10-27
+
+- [NumPy variance documentation](https://numpy.org/doc/stable/reference/generated/numpy.var.html):
+  consulted the installed NumPy docstring for population variance (`ddof=0`),
+  centered deviations and FP64 accumulation. Bounded centered chunks measure a
+  converted scalar sum, preserving covariance.
+- [SciPy rankdata implementation](https://raw.githubusercontent.com/scipy/scipy/main/scipy/stats/_stats_py.py):
+  consulted average ranks for equal values. Local ranking keeps this convention
+  with zero-based ranks; signed-square shaping and its cap are user-selected
+  economics, not a research guarantee. No dependency is added.

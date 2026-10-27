@@ -176,7 +176,10 @@
   snapshots effective settings without reloading TOML/device values.
   `live_capture.py` stages selected boards' FP64 reward totals behind the same
   copy fence as their public state. Native/web HUDs show accumulated training
-  reward through shared conversion; it never enters policy observations.
+  reward through shared conversion; it never enters policy observations. Cohort
+  finalization drains captures and replaces rewards by environment/episode
+  identity. Bounded host overrides fence delayed frames and expire on new episodes;
+  native render caching includes reward and pending state.
   `rendering.py` supplies the same reward label to Gym RGB rendering.
 - `annotation/dataset.py` owns versioned rich snapshots, canonical entity rows,
   atomic annotation storage and durable pending/labeled/discarded records.
@@ -238,6 +241,9 @@
 - `evaluation/` uses the stateless runner and CPU-verifies CUDA action traces.
   `monitoring/` owns availability, both-stage entity/throughput benchmarks, bounded
   collection/four-pass-fit/collection controls and objective diagnostics.
+  `monitoring/moments.py` supplies bounded FP64 centered population moments for
+  same-unit dense/total return diagnostics, including covariance. Warnings identify
+  their cohort and are not repeated in routine progress.
   `DeviceProfiler` bounds pending events with central `telemetry_span_limit`,
   reuses completed events and reports drops without synchronization. Progress
   uses host records for cohort wins/returns and interval active rates, distinct from

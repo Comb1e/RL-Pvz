@@ -124,7 +124,7 @@ def finalize_episode_metrics(rows, cfg, *, median=None):
     )
     for row, value, delta in zip(rows, terminal, adjustment, strict=True):
         baseline = cfg["reward"]["win_reward"] if row["win"] else -cfg["reward"]["loss_penalty"]
-        change = float(value - baseline)
+        change = float(value - row.get("terminal_reward", baseline))
         for key in ("terminal", "global_terminal"):
             if key in row:
                 row[key] += change

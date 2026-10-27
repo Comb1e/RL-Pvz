@@ -18,7 +18,9 @@ def render_context(values=None):
     values = values or {}
     message = values.get("message", values.get("action", ""))
     if values.get("reward") is not None:
-        message = " | ".join(filter(None, (reward_label(values["reward"]), message)))
+        message = " | ".join(
+            filter(None, (reward_label(values["reward"], values.get("reward_pending")), message))
+        )
     return RenderContext(
         policy_id=values.get("policy_id"),
         outcome=values.get("outcome"),
@@ -27,9 +29,10 @@ def render_context(values=None):
     )
 
 
-def reward_label(value):
+def reward_label(value, pending=False):
     """Accumulated training reward; absent on annotation-only public snapshots."""
-    return f"Reward {value:+.6f}" if value is not None else "Reward —"
+    label = f"Reward {value:+.6f}" if value is not None else "Reward —"
+    return label + (" (time pending)" if pending else "")
 
 
 def render_observation(obs, *, context=None):
