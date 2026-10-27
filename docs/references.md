@@ -468,6 +468,16 @@ throughput measurements.
   `info`. The viewer displays accumulated learning reward outside observations;
   delayed causal credits and cohort-finalized outcomes remain explicit.
 
+## Branch-first simulator validation — 2026-10-27
+
+- [Pinned game project](https://github.com/Comb1e/pvz-cuda-work/tree/1424b4d802e783a36772091c49d96aa7c6036d7a):
+  inspected `Game.validate_action`, CUDA `Sim::legality`/`Sim::step`, and the
+  existing `tests/test_cuda.py::compare` differential control. Their action
+  results, events, legal masks, state hashes and clocks supply independent
+  CPU/CUDA checks. Branch-before-tile precedence is the requested research
+  contract, not a claim about the original game's order. The corrected source
+  is pinned at `ea84293d09618b6ef94910d66f835e33781387fc` (package 1.7.1).
+
 ## Return diagnostics and completion-time ranks — 2026-10-27
 
 - [NumPy variance documentation](https://numpy.org/doc/stable/reference/generated/numpy.var.html):

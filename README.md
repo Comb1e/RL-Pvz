@@ -25,6 +25,11 @@ bash tools/bootstrap.sh --game-repo ../pvz-cuda-work --python python3.12
 Both installers verify the [engine lock](src/pvz_rl/data/engine-lock.json),
 install PyTorch 2.8.0/CUDA 12.8, and leave the game checkout unchanged.
 
+Engine 1.7.1 checks branch availability before tile occupancy. Reinstall with the
+bootstrap command after updating. Older engine pins require fresh autonomous runs
+and newly recorded demonstration archives; compatible weights still work with
+`--init-from`, and matching annotation progress can still resume.
+
 ## First useful command
 
 Record a human game into unused paths and finish with a natural win or loss:

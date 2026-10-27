@@ -331,6 +331,10 @@ def inspect_checkpoint(path, *, weights_only=False):
                 else json.loads((path.parent / "metadata.json").read_text("utf-8"))
             )
         cfg = metadata["config"]
+        if not weights_only:
+            from pvz_rl.provenance import verify_engine
+
+            verify_engine(cfg)
         validate_config(execution_config(inference_config(cfg) if weights_only else cfg))
         from pvz_game import Rules
 

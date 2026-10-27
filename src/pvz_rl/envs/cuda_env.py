@@ -269,7 +269,7 @@ class CudaVecEnv(VecEnv):
         Policy masks intentionally expose all tile outputs.  This separate
         tensor lets the runner skip the conditional tile encoder when a plant
         card cannot execute because it is absent, cooling down, unaffordable,
-        or task-restricted.  Dig remains branch-usable on a running board;
+        or task-restricted. Dig requires its permission on a running board;
         empty-tile legality is classified after its tile proposal.
         """
         header = self.header_tensor
@@ -284,7 +284,8 @@ class CudaVecEnv(VecEnv):
             header[:, HEADER.index("allowed")][:, None].bitwise_and(self._card_bits[None, :]) != 0
         )
         plants = (cooldowns == 0) & (sun[:, None] >= costs[None, :]) & allowed
-        result = torch.cat((running[:, None], plants & running[:, None], running[:, None]), dim=1)
+        digging = running & header[:, HEADER.index("dig")].bool()
+        result = torch.cat((running[:, None], plants & running[:, None], digging[:, None]), dim=1)
         if active is not None:
             active = torch.as_tensor(active, device=device, dtype=torch.bool).reshape(-1)
             if active.shape != (self.num_envs,):

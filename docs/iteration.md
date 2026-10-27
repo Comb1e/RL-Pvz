@@ -1,3 +1,31 @@
+## Branch-first simulator rejection and fitting evidence — 2026-10-27
+
+- Problem/root cause: CPU/CUDA occupancy checks hid cooldown/sunlight failures;
+  restricted CUDA boards rewrote unrelated failures and omitted rejection events.
+  CUDA branch availability ignored disabled digging, and the classifier could
+  infer branch usability from placement geometry on full/empty boards.
+- Improvement: pin game package 1.7.1, checking permission, cooldown, sunlight,
+  then occupancy with matching rejection events. Require explicit availability;
+  reject contradictory outcomes, classify only executed rows, honor disabled
+  digging, and supply valid accepted-Wait metadata in prepared annotation inputs.
+  Selective targets, all-45 proposals, rewards, compaction and model/schema layouts
+  remain unchanged. Exact engine pins reject old recoveries and demo archives;
+  the explicitly allowlisted previous pin supports weights and annotation resume.
+- Verification: 464 temporary CPU/CUDA cases matched acceptance, reasons, events,
+  ticks, state/hashes, observations, RNG and legal masks. Engine/replay checks:
+  58 passed. CPU smoke: 2 passed; CUDA learning/checkpoint smoke: 1 passed.
+  Temporary controls covered unavailable-branch tile skipping, invalid-route
+  online/EMA skipping, full boards, contradictory evidence, disabled digging,
+  CPU/CUDA availability, journals, pin rejection before simulator allocation,
+  and fresh weight-only loading. Tile/action v3/v4 progress resumed with exact
+  model/Adam/RNG/phase/metrics across old/current pins; unfinished and zero-pass
+  weights remained usable. Ruff, Python/inline-JavaScript syntax, source-pin
+  verification, dependency checks and `git diff --check` passed. No permanent
+  tests were added.
+- Limits: old research archives require new recordings; old simulator recovery
+  has no migration. Native state/replay layouts retain simulation 1.4.0. No formal
+  training, push or PR; architecture documents and user artifacts were untouched.
+
 ## Shared first-of-100 wait fitting — 2026-10-27
 
 - Problem/root cause: genuine waits bypassed invalid-row compaction, allowing

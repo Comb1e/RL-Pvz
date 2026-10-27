@@ -1062,7 +1062,7 @@ def initial_weights(checkpoint, cfg):
         cfg,
         weights_only=True,
     )
-    verify_engine(source_cfg)
+    verify_engine(cfg)
     if saved["initialization_type"] in ("demonstration", "annotation"):
         weights = saved["payload"]["model"]
     else:
@@ -1108,13 +1108,16 @@ def load_policy(checkpoint, device="cpu", *, for_resume=False):
     data = inspect_checkpoint(checkpoint, weights_only=not for_resume)
     from pvz_rl.learning.checkpoints import execution_config
     from pvz_rl.learning.training_requirements import current_model_config, inference_config
+    from pvz_rl.provenance import current_engine_config
 
     cfg = data["config"] if for_resume else execution_config(inference_config(data["config"]))
     verify_engine(cfg)
     require_supported_policy(cfg, data["condition"])
     torch.set_num_threads(cfg["training"]["torch_threads"])
-    if data["initialization_type"] in ("demonstration", "annotation") or not current_model_config(
-        data["config"]
+    if (
+        data["initialization_type"] in ("demonstration", "annotation")
+        or not current_model_config(data["config"])
+        or not current_engine_config(data["config"])
     ):
         model = model_class(cfg)(
             TwoStageQPolicy,

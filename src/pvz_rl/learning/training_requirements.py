@@ -6,6 +6,7 @@ from pvz_rl.config import research_config, simulator, validate_config
 from pvz_rl.envs.actions import ActionSchema
 from pvz_rl.learning.curriculum import selected_stage
 from pvz_rl.policy.sequential_q import ACTION_DISTRIBUTION
+from pvz_rl.provenance import weight_engine_config
 
 TRAINING_CONDITIONS = ("masked",)
 CURRENT_OBJECTIVE = "complete_return_action_global_v5"
@@ -81,7 +82,7 @@ def inference_config(cfg):
 
     if not weight_model_config(cfg):
         raise ValueError("Incompatible model/encoding or objective protocol weight contract")
-    result = copy.deepcopy(cfg)
+    result = weight_engine_config(cfg)
     # Execution options are disposable when loading weights. Keep the strict
     # retired-option error for user configuration and optimizer recovery only.
     result["training"].get("performance", {}).pop("compile_kernels", None)
@@ -241,7 +242,7 @@ def weight_transfer_protocol(cfg):
     network dimensions, but do not require matching reward, return, optimizer,
     or execution batch settings.
     """
-    result = transfer_protocol(cfg)
+    result = transfer_protocol(weight_engine_config(cfg))
     for name in ("timing", "method", "return", "action_distribution"):
         result.pop(name)
     return result

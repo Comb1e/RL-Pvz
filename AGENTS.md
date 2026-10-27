@@ -23,6 +23,9 @@
 - `tools/bootstrap.ps1` and `tools/bootstrap.sh` install the CUDA environment from
   an existing game checkout. Both reuse `tools/stage_game.py` for verified,
   non-editable installation of the engine lock, without changing the game checkout.
+  The engine 1.7.1 pin validates permission/cooldown/sun before occupancy. Its
+  previous exact pin is allowlisted only for model weights and matching annotation
+  resume; autonomous recovery and demonstration verification retain exact pins.
   Bash accepts `--game-repo` / `--python`, handles POSIX and Windows virtual
   environments, and cleans its temporary archive on exit. Do not download
   dependencies in smoke tests.
@@ -138,7 +141,8 @@
   persisted before padding is dropped. Active flat batches exclude capacity gaps/padding;
   complete returns remain chronological per episode. `batch_transport.py` owns
   shared prepared sources, cached CPU plans, bounded slim scans and counting
-  partitions, plus ordered double-buffer `BatchPrefetch`. Pinned entity staging
+  partitions; list-only sources use consistent accepted-Wait placeholder metadata.
+  Ordered double-buffer `BatchPrefetch` owns transport. Pinned entity staging
   grows to the current bucket only after its copy fence. `action_routing.py`
   owns shared `RepeatedRowCompactor` wait/invalid segmentation and chunk carry;
   first-row representatives per 100-row window affect fitting only. Wait and
@@ -235,7 +239,10 @@
   `tools/plot_annotation_loss.py` min/max-envelope canvas viewer.
   It never creates an autonomous resume state.
 - `learning/action_routing.py` classifies pre-action public legality and actual
-  outcomes, with branch impossibility preceding bad tile attribution. Trajectories
+  outcomes with required branch availability, never inferred from tile geometry.
+  It validates acceptance/reason/availability agreement; collection excludes
+  inactive scheduler slots. CUDA availability includes the digging permission.
+  Branch impossibility precedes bad tile attribution. Trajectories
   persist route/branch usability/reason. `flat_q.py` skips irrelevant stages via
   CPU-planned indices: wait/species-invalid use species only, tile-invalid uses
   tiles only, accepted non-wait adds both online stages and EMA tile inference.

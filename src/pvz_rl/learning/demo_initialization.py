@@ -424,7 +424,11 @@ def _load_verified_demo(
         "version": cfg["engine_version"],
         "package_version": cfg["engine_package_version"],
     }:
-        raise ValueError("Archive engine does not match the configured pinned engine")
+        raise ValueError(
+            "Archive engine does not match the configured pinned engine; "
+            "record a fresh demonstration with the current engine. "
+            "Historical rejection reasons are not migrated."
+        )
     if manifest.get("observation_schema") != ObservationEncoder(cfg, Rules()).schema():
         raise ValueError("Archive entity schema does not match; record a fresh demonstration")
     if manifest.get("replay") != file_hash(replay):

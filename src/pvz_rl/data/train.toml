@@ -1,8 +1,8 @@
 profile = "complete-game"
 schema_version = 1
-engine_commit = "1424b4d802e783a36772091c49d96aa7c6036d7a"
+engine_commit = "ea84293d09618b6ef94910d66f835e33781387fc"
 engine_version = "1.4.0"
-engine_package_version = "1.7.0"
+engine_package_version = "1.7.1"
 
 [runtime]
 cache_legal_actions = true

@@ -342,12 +342,12 @@ class CudaSequentialQ(CudaCohortLifecycle):
             rows["accepted"] = env.last_action_result_host[:, 0].astype(bool)
             rows["rejection_reason"] = env.last_action_result_host[:, 1]
             branch_available_host = host["branch_available"].numpy().copy()
-            rows["route"], rows["branch_usable"] = classify_actions(
-                rows["action"],
-                rows["accepted"],
-                np.broadcast_to(active[:, None], (self.n_envs, A.size)),
-                rows["rejection_reason"],
-                branch_available=branch_available_host,
+            rows["route"][active], rows["branch_usable"][active] = classify_actions(
+                rows["action"][active],
+                rows["accepted"][active],
+                np.broadcast_to(True, (np.count_nonzero(active), A.size)),
+                rows["rejection_reason"][active],
+                branch_available=branch_available_host[active],
             )
             rows["components"] = env.last_reward_parts_host[
                 :, [REWARD_FIELDS.index(k) for k in COMPONENTS]
