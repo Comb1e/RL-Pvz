@@ -29,14 +29,17 @@ selected allowed branch's reason. Rejection events and action results agree.
 |---|---|---|---|
 | Ordinary wait | Complete return | None | None |
 | Accepted plant/dig | Detached consistency | Complete return at proposed tile | Yes |
-| Unavailable/cooldown/unaffordable/restricted plant | Proposed branch to -1 | None | None |
-| Disabled dig | Proposed dig branch to -1 | None | None |
-| Occupied plant tile with usable branch | None | Proposed tile to -1 | None |
-| Empty dig, including an empty board | None | Proposed tile to -1 | None |
+| Unavailable/cooldown/unaffordable/restricted plant | Proposed branch to configured target | None | None |
+| Disabled dig | Proposed dig branch to configured target | None | None |
+| Occupied plant tile with usable branch | None | Proposed tile to configured target | None |
+| Empty dig, including an empty board | None | Proposed tile to configured target | None |
 
-`training.objective.invalid_action_target=-1.0` supplies the squared-error target.
+`training.objective.invalid_action_target=-0.1` supplies the squared-error target by
+default. It is a configurable finite non-positive fitting target; it is not an
+episode reward or simulator penalty.
 It is fitting-only: chronological complete returns still include actual tick
-rewards, and earlier decisions never receive an artificial -1 reward. Invalid
+rewards, and earlier decisions never receive an artificial fitting target as a
+reward. Invalid
 proposals do not train the wait output just because their execution was wait.
 
 Wait/plant/dig groups and their accepted/rejected strata retain whole-cohort

@@ -180,11 +180,16 @@ def validate_config(cfg: dict) -> None:
             )
         if objective.get("accepted_outcome_share") != 0.5:
             raise ValueError("objective.accepted_outcome_share must be 0.5")
+        invalid_target = objective.get("invalid_action_target")
         if (
-            type(objective.get("invalid_action_target")) not in (int, float)
-            or objective["invalid_action_target"] != -1.0
+            type(invalid_target) not in (int, float)
+            or isinstance(invalid_target, bool)
+            or not math.isfinite(invalid_target)
+            or invalid_target > 0
         ):
-            raise ValueError("objective.invalid_action_target must be -1.0")
+            raise ValueError(
+                "objective.invalid_action_target must be a finite non-positive number"
+            )
         if (
             type(objective.get("invalid_fit_group_size")) is not int
             or objective["invalid_fit_group_size"] < 1

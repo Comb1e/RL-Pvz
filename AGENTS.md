@@ -251,7 +251,8 @@
   persist route/branch usability/reason. `flat_q.py` skips irrelevant stages via
   CPU-planned indices: wait/species-invalid use species only, tile-invalid uses
   tiles only, accepted non-wait adds both online stages and EMA tile inference.
-  Invalid regression uses `training.objective.invalid_action_target=-1.0`, never
+  Invalid regression uses the configured finite non-positive
+  `training.objective.invalid_action_target` (currently `-0.1`), never
   episode rewards; rejection penalty settings are removed and audit fields are zero.
   Consecutive waits and identical invalid runs use this module's shared compactor;
   complete returns retain every row. Episode/decision/inactive gaps and terminal

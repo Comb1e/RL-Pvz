@@ -2812,3 +2812,14 @@ unperformed.
   complete returns and checkpoint serialization, so it does not prove end-to-end
   training speed or convergence. Existing run files and user datasets remain
   untouched.
+
+## Configurable invalid-action fitting target — 2026-10-28
+
+- Problem/root cause: `train.toml` was changed to use
+  `training.objective.invalid_action_target=-0.1`, but configuration validation
+  still rejected every value except the retired `-1.0` literal.
+- Improvement: validate the target as a finite non-positive number, so the
+  bundled `-0.1` target reaches the existing selective species/tile fitting
+  path without changing simulator rewards or episode returns.
+- Verification: configuration loading, CPU smoke checks, Ruff, Python syntax,
+  and `git diff --check` pass. No formal training was launched.

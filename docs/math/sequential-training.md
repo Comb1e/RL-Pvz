@@ -12,8 +12,9 @@ G_t=\sum_{u=t}^{T-1}r_u^{\mathrm{train}}.
 Ordinary wait proposals regress the species-stage wait value. Accepted plant
 and dig proposals regress the tile value at the actual proposed tile. Invalid
 proposals use the [shared attribution table](invalid-action-penalties.md): an
-impossible branch trains species to -1; a bad tile in a usable branch trains
-only that tile to -1. This target never enters episode rewards or returns.
+impossible branch trains species to the configured invalid-action target; a bad
+tile in a usable branch trains only that tile to the same target. The bundled
+target is `-0.1`. This fitting target never enters episode rewards or returns.
 
 Repeated waits and invalid proposals are compacted only in the fitting input. Within each
 environment episode, consecutive rows with the same action, route, and rejection
