@@ -31,8 +31,9 @@ crf = 23
 final_hold_seconds = 2
 
 [environment]
-action_timing = "per_tick"
-decision_ticks = 1
+# The pinned engine advances at 100 Hz. The agent makes one decision every
+# 100 / action_frequency_hz simulator ticks; edit this value to change cadence.
+action_frequency_hz = 10
 cutoff_seconds = 1200
 rows = 5
 cols = 9

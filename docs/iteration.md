@@ -1,3 +1,21 @@
+## Configurable 10 Hz agent cadence — 2026-10-27
+
+- Problem/root cause: the autonomous agent was making one decision per pinned
+  100 Hz simulator tick, while the desired control cadence was 10 Hz and the
+  interval was split between a hard-coded `per_tick` mode and `decision_ticks`.
+- Improvement: add `environment.action_frequency_hz` to `train.toml`, defaulting
+  to 10 Hz. Configuration resolves it to an exact simulator-tick interval and
+  derives fixed/per-tick timing. CPU and CUDA collection now use the resolved
+  interval; accepted proposals, rejected proposals, waits, execution records,
+  and episode metrics agree in both backends. CUDA allocation accepts the
+  configured step bound rather than assuming one tick.
+- Verification: configuration resolution, CPU smoke, CUDA learning smoke, Python
+  syntax, Ruff and diff checks pass with the new fixed cadence. No formal
+  training or user artifacts were changed.
+- Remaining issue: old autonomous recovery configurations with the previous
+  timing contract are intentionally incompatible; use compatible weights for a
+  fresh run.
+
 ## Branch-first simulator rejection and fitting evidence — 2026-10-27
 
 - Problem/root cause: CPU/CUDA occupancy checks hid cooldown/sunlight failures;

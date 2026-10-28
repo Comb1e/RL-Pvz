@@ -103,8 +103,40 @@ def _resolve_profile(raw: dict, profile: str) -> dict:
     return raw
 
 
+def _resolve_action_timing(cfg: dict) -> None:
+    """Resolve the agent cadence into the engine's exact tick interval.
+
+    The pinned simulator runs at 100 Hz. Keeping the user-facing frequency in
+    the research TOML avoids making callers duplicate the corresponding tick
+    count. A frequency that does not divide the engine rate is rejected rather
+    than silently rounding the decision cadence.
+    """
+    environment = cfg.get("environment")
+    if not isinstance(environment, dict) or "action_frequency_hz" not in environment:
+        return
+    frequency = environment["action_frequency_hz"]
+    if (
+        type(frequency) not in (int, float)
+        or isinstance(frequency, bool)
+        or not math.isfinite(frequency)
+        or frequency <= 0
+    ):
+        raise ValueError("environment.action_frequency_hz must be finite and positive")
+    from pvz_game import Rules
+
+    tick_rate = Rules().game["tick_rate"]
+    ticks = tick_rate / frequency
+    if not ticks.is_integer() or ticks < 1:
+        raise ValueError(
+            "environment.action_frequency_hz must produce a positive whole simulator-tick interval"
+        )
+    environment["decision_ticks"] = int(ticks)
+    environment["action_timing"] = "per_tick" if ticks == 1 else "fixed"
+
+
 def load_config(path: str | Path | None = None, *, profile: str = "train") -> dict:
     cfg = _resolve_profile(_read_config(path), profile)
+    _resolve_action_timing(cfg)
     validate_config(cfg)
     return copy.deepcopy(cfg)
 
@@ -556,6 +588,27 @@ def validate_config(cfg: dict) -> None:
         raise ValueError("Unsupported environment.action_timing")
     if env.get("action_timing") == "per_tick" and env["decision_ticks"] != 1:
         raise ValueError("per_tick action timing requires decision_ticks = 1")
+    frequency = env.get("action_frequency_hz")
+    if frequency is not None:
+        if (
+            type(frequency) not in (int, float)
+            or isinstance(frequency, bool)
+            or not math.isfinite(frequency)
+            or frequency <= 0
+        ):
+            raise ValueError("environment.action_frequency_hz must be finite and positive")
+        from pvz_game import Rules
+
+        tick_rate = Rules().game["tick_rate"]
+        if abs(frequency * env["decision_ticks"] - tick_rate) > 1e-9:
+            raise ValueError(
+                "environment.action_frequency_hz and decision_ticks disagree with the simulator tick rate"
+            )
+        expected_timing = "per_tick" if env["decision_ticks"] == 1 else "fixed"
+        if env["action_timing"] != expected_timing:
+            raise ValueError(
+                "environment.action_timing must match action_frequency_hz and decision_ticks"
+            )
     if cfg["schema_version"] != 1 or (env["rows"], env["cols"]) != (5, 9):
         raise ValueError("Unsupported research schema/board")
     if tuple(env["plants"]) != PLANT_TYPES or tuple(env["zombies"]) != ZOMBIE_TYPES:

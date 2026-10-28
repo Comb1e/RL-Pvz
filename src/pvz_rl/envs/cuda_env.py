@@ -92,12 +92,10 @@ class CudaVecEnv(VecEnv):
             raise ValueError("Hybrid training is no longer supported; use direct CUDA training")
         if cfg["training"]["device"] != "cuda":
             raise ValueError("CUDA simulation requires --device cuda")
-        if cfg["environment"].get("action_timing") != "per_tick":
-            raise ValueError(
-                "CUDA training requires per_tick actions; legacy timing is inference-only"
-            )
         require_supported_policy(cfg, condition)
         self.cfg, self.condition, self.family, self.training = cfg, condition, family, training
+        self._per_tick = cfg["environment"].get("action_timing") == "per_tick"
+        self._decision_ticks = int(cfg["environment"]["decision_ticks"])
         self.queue = ScenarioQueue(cfg, condition, learner_seed, family, cfg["training"]["n_envs"])
         self.stream = torch.cuda.current_stream()
         self.handoff = HostHandoff(self.stream)
@@ -144,7 +142,7 @@ class CudaVecEnv(VecEnv):
             # future simulation.  Allocate both portions up front so resume does
             # not fail merely because the checkpoint was saved after firing.
             projectile_capacity=2 * projectile_bound(self.queue.rules),
-            max_step_ticks=1,
+            max_step_ticks=self._decision_ticks,
             diagnostic=False,
         )
         self.cp = self.batch.cp
@@ -327,6 +325,8 @@ class CudaVecEnv(VecEnv):
         self.header_tensor[:, 17].copy_(self._device_active.long())
         _, reward = self.features.step(
             self.cp.from_dlpack(actions.detach().contiguous()),
+            ticks=self._decision_ticks,
+            per_tick=self._per_tick,
             publish=False,
             observation_active=self.cp.asarray(self.enabled_envs),
         )
@@ -334,9 +334,11 @@ class CudaVecEnv(VecEnv):
         h = self.header_tensor
         self.proposed_actions.copy_(actions)
         self.transition_ticks.copy_(h[:, 14])
-        # Instantaneous accepted plant/dig proposals execute themselves;
-        # waits and every rejected proposal execute action zero.
-        self.executed_actions.copy_(torch.where(h[:, 14] == 0, actions, 0))
+        # Preserve the concrete proposal only when the simulator accepted it.
+        # In fixed-cadence mode accepted actions advance the decision interval;
+        # in action-phase mode they advance zero ticks. Both use the same
+        # acceptance bit, while rejected proposals execute as waits.
+        self.executed_actions.copy_(torch.where(self._device_active & h[:, 12].bool(), actions, 0))
         done = (
             (h[:, 1] != 0)
             | (
@@ -545,13 +547,14 @@ class CudaVecEnv(VecEnv):
             simulated_seconds=float(h[0] / self.batch.rules.game["tick_rate"]),
             **{"return": float(t[0])},
             decisions=int(t[1]),
-            # In the required per-tick mode, only accepted plant/dig actions
-            # advance zero ticks. Waits and rejected actions always advance one.
-            agent_actions=int(t[3]),
+            # Accepted actions advance zero ticks in action-phase mode and the
+            # configured decision interval in fixed-cadence mode. Waits and
+            # rejected actions advance the configured interval.
+            agent_actions=int(t[34]),
             simulation_ticks=int(t[2]),
             instant_actions=int(t[3]),
             max_actions_per_tick=int(t[5]),
-            action_timing="per_tick",
+            action_timing=self.cfg["environment"]["action_timing"],
             invalid_actions=int(t[6]),
             wait_actions=int(t[7]),
             maximum_sun=int(t[8]),

@@ -110,6 +110,18 @@ rewards and mower penalties additionally affect total game reward.
 Reward/objective v5 requires fresh `--init-from` for previous weights rather than
 optimizer resume. See the [reward conversion table](docs/math/training-objective.md).
 
+The agent cadence is also configured in `train.toml`:
+
+```toml
+[environment]
+action_frequency_hz = 10
+```
+
+The pinned simulator runs at 100 Hz, so this resolves to ten simulator ticks per
+agent decision. `decision_ticks` and `action_timing` are derived and validated;
+edit `action_frequency_hz` when changing the cadence. A frequency must divide the
+engine tick rate exactly.
+
 ## Common checks
 
 ```powershell

@@ -152,10 +152,6 @@ def require_cuda_training(cfg, condition="masked", *, runtime=True):
             "CPU training is not supported. "
             "Start a fresh complete-game CUDA run with the bundled train profile."
         )
-    if cfg["environment"].get("action_timing") != "per_tick":
-        raise ValueError(
-            "CUDA training requires per_tick actions; legacy timing is inference-only."
-        )
     if (
         cfg["conditions"][condition]
         != {"masked": True, "shaped": True, "curriculum": True, "hybrid": False}
@@ -199,7 +195,11 @@ def transfer_protocol(cfg, condition="masked"):
     return {
         "engine": [cfg[k] for k in ("engine_commit", "engine_version", "engine_package_version")],
         "encoding": cfg["encoding"],
-        "timing": {k: env[k] for k in ("action_timing", "decision_ticks", "cutoff_seconds")},
+        "timing": {
+            k: env[k]
+            for k in ("action_frequency_hz", "action_timing", "decision_ticks", "cutoff_seconds")
+            if k in env
+        },
         "actions": ActionSchema.version,
         "action_distribution": p.get("action_distribution"),
         "board": {

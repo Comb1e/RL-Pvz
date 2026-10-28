@@ -91,12 +91,17 @@
   fitting compiler cache; never raise global Dynamo limits or reset unrelated caches.
   `compile_collection` and `compile_fitting` are independent central settings;
   `compile_kernels` is rejected except as ignored historical weight metadata.
-- `envs/` owns simulator adapters, action outcomes and reward ledgers;
+- `envs/` owns simulator adapters, action outcomes and reward ledgers. The
+  configurable `environment.action_frequency_hz` in `train.toml` resolves against
+  the pinned 100 Hz engine into an exact `decision_ticks` interval; the default
+  10 Hz agent cadence advances ten simulator ticks per decision in both CPU and
+  CUDA collection. Fixed-cadence accepted actions and waits use the same interval.
   `action_credit.py` maps ordered plant/projectile events back to source actions
   without entering observations, while `cuda_accounting.py` supplies read-only
   aggregate reward counters. Rejection retains its
-  proposal/reason and zero penalty audit fields, executes wait and advances one tick; accepted plant/dig
-  advances zero ticks. Accounting is not a model input. `rewards.py` owns the
+  proposal/reason and zero penalty audit fields, executes wait and advances the
+  configured decision interval; accepted actions use that interval in fixed
+  cadence (or zero ticks in action-phase mode). Accounting is not a model input. `rewards.py` owns the
   six-component global terminal/asset and action damage/blocking/sun/mower
   objective plus diagnostic proximity/time fields. Reward protocol v5 keeps
   final-unit mower penalties separate from the four physical terms and uses

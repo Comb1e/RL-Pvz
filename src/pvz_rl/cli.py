@@ -620,7 +620,9 @@ def main(argv=None):
             details["compact_replay"] = {
                 "available": read_recording(replay_path)["metadata"]["policy_id"] == "doctor",
                 "seek_supported": hasattr(probe, "seek"),
+                "action_frequency_hz": cfg["environment"].get("action_frequency_hz"),
                 "action_timing": cfg["environment"].get("action_timing", "fixed"),
+                "decision_ticks": cfg["environment"].get("decision_ticks"),
                 "instant_placement": info["ticks_advanced"] == 0,
             }
         try:

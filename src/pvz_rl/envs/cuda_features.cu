@@ -279,6 +279,10 @@ reward_metrics(const I *headers, const I *old_headers, const I *old_cd,
   t[T_discounted_development_return] += pow(GAMMA, t[2]) * v[F_development];
   t[1]++;
   t[2] += h.advanced;
+  // Keep accepted non-wait actions separate from the legacy instant-action
+  // counter below so fixed-cadence collection reports the same metric as CPU.
+  if (action && h.accepted)
+    t[34]++;
   t[3] += h.advanced == 0;
   if (action && h.accepted) {
     t[4]++;
@@ -287,8 +291,8 @@ reward_metrics(const I *headers, const I *old_headers, const I *old_cd,
   if (h.advanced)
     t[4] = 0;
   t[6] += !h.accepted;
-  // Rejected proposals advance one tick as automatic waits, so metrics count
-  // their resolved execution action rather than only explicit Wait commands.
+  // Rejected proposals advance as automatic waits, so metrics count their
+  // resolved execution action rather than only explicit Wait commands.
   t[7] += action == 0 || !h.accepted;
   t[8] = fmax(t[8], (double)hi(b.sun, h.sun));
   bool opportunity = false;

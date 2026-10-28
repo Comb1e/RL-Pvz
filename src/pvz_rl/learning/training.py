@@ -1311,8 +1311,8 @@ def train(
             force=True,
         )
     progress.emit(
-        f"Action timing: {cfg['environment'].get('action_timing', 'fixed')}; "
-        f"{cfg['environment']['decision_ticks']} ticks per wait; "
+        f"Agent cadence: {cfg['environment'].get('action_frequency_hz', 'derived')} Hz; "
+        f"{cfg['environment']['decision_ticks']} simulator ticks per decision; "
         f"discount {cfg['training']['gamma']} per simulation tick",
         force=True,
     )
