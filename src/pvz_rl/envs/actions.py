@@ -6,6 +6,11 @@ from pvz_game import Dig, Game, Place, Wait
 from pvz_rl.config import load_config
 
 
+def dig_branch_available(plant_count, permitted=True):
+    """Check Dig before tile inference, without host/device conversion."""
+    return (plant_count > 0) & permitted
+
+
 class ActionSchema:
     """Pinned engine transport and conditional policy dimensions in one place."""
 

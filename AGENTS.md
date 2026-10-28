@@ -43,14 +43,14 @@
   owns synthetic/trajectory/full-cycle selection and the paired promotion gate.
 - `src/pvz_rl/data/train.toml` is the single parameter source for train/demo overlays.
   Both use `entity_v1`, `two_stage_transformer_q_v1` and
-  `complete_return_action_global_v6`. Old-objective resumes are rejected; structurally compatible
+  `complete_return_action_global_v7`. Old-objective resumes are rejected; structurally compatible
   BF16-master weights support inference/fresh initialization; verified recordings are reconstructed without changes. Preserve
   user reward adjustments. `training.demo.passes` is 20, independently of autonomous
   `training.n_epochs` (4). Tile (50% to 1%) and accepted-plant species (10% to 1%)
   probabilities decay over 10,000 stage games and freeze per cohort.
-  `reward.early_sun_spawn_fraction=[1,3]` and `early_sun_extra_multiplier=2` triple
-  early actual Sunflower income value. `value_scale=2000` converts physical
-  values to fitted rewards at /20,000. Damage and blocking coefficients and
+  `reward.early_sun_spawn_fraction=[1,3]` and `early_sun_extra_multiplier=4` price
+  eligible actual Sunflower action income at five times ordinary income. `value_scale=2000` converts physical
+  values to fitted rewards at /20,000. The current damage price is `basic_zombie_value=50`; blocking coefficients and
   `reward.asset_loss_multiplier` compensate by 2000/900; both produced-sun
   contributions remain unscaled. `mower_penalty=0.1` charges each activation
   directly in final reward units, outside physical and dense conversion.
@@ -164,8 +164,8 @@
   inputs/labels with the original source batch ranges and padding; annotation
   admission covers train/validation together and retains streaming fallback.
 - `learning/checkpoints.py` validates model/objective/schema and demo v11,
-  action-global v6 recovery/trajectory contracts before simulator allocation;
-  Objective v6 uses detached minimum-Q invalid supervision; reward stays v5.
+  action-global v7 recovery/trajectory contracts before simulator allocation;
+  Objective v7 uses detached minimum-Q invalid supervision and empty-board Dig rejection; reward stays v5.
   Old objectives/storage remain weight-only compatible; annotation
   ranking and matching annotation resumes retain their own identities.
   Model-state `stateless-two-stage-bf16-master-state-v2` stores FP32 online
@@ -255,6 +255,11 @@
   outcomes with required branch availability, never inferred from tile geometry.
   It validates acceptance/reason/availability agreement; collection excludes
   inactive scheduler slots. CUDA availability includes the digging permission.
+  `envs/actions.py::dig_branch_available` shares the plant-count/permission gate
+  across CPU/CUDA availability and direct policy inference. Empty-board Dig is
+  species-invalid and skips tile inference; on populated boards an empty Dig
+  tile remains tile-invalid. Engine `empty_tile` reasons and wait execution stay
+  unchanged. The count uses complete public state, independent of entity truncation.
   Branch impossibility precedes bad tile attribution. Trajectories
   persist route/branch usability/reason. `flat_q.py` skips irrelevant stages via
   CPU-planned indices: wait/species-invalid use species only, tile-invalid uses

@@ -92,13 +92,14 @@ and starts a fresh destination optimizer. The final `tile.pt`/`action.pt` still
 requires convergence. Annotation progress v3 needs one annotation resume to write
 v4 before downstream initialization; `train --resume` requires autonomous recovery.
 
-The active-only trajectory/recovery format is v6; older runs support compatible
+The active-only trajectory/recovery format is v7; older runs support compatible
 weight-only initialization, but cannot resume. Model architecture, observation
 encoding and weight layout remain unchanged.
 
 Reward settings live in `src/pvz_rl/data/train.toml`. At `value_scale=2000`,
-25 Sunflower sun gives +0.0025 normally or +0.005 early. One mower activation
-is a direct -0.1 reward penalty, independent of sunlight scaling and the dense
+25 Sunflower sun gives +0.0025 normally or +0.0075 early with the current
+`early_sun_extra_multiplier=4`. Removing 270 effective zombie HP gives +0.0025.
+One mower activation is a direct -0.1 reward penalty, independent of sunlight scaling and the dense
 multiplier. Live native/browser boards show each environment's accumulated
 training reward. Terminal boards show a pending label until cohort time ranking
 finishes, then refresh with the finalized reward.
@@ -111,10 +112,13 @@ use the minimum of all ten species outputs; illegal tiles use all 45 outputs
 for the selected branch. A minimum of -1.2 gives a -1.3 target regardless of
 which illegal output was selected. The target is detached and recomputed every
 pass. Only the responsible head is fitted; game rewards and returns are unchanged.
+Selecting Dig on an empty board is branch-invalid: only the species/action
+Transformer is fitted and tile inference is skipped. With at least one plant,
+Dig scores all 45 tiles; selecting an empty tile then fits only the tile stage.
 Completion-time ranking uses a signed quadratic adjustment capped at 0.3:
 terminal wins range from +0.7 to +1.3 and losses from -1 to -1.3. Physical
 rewards and mower penalties additionally affect total game reward.
-Objective v6 requires fresh `--init-from` for previous weights rather than
+Objective v7 requires fresh `--init-from` for previous weights rather than
 optimizer resume. The reward protocol stays v5; annotation resume is
 unchanged. See the [reward conversion table](docs/math/training-objective.md).
 

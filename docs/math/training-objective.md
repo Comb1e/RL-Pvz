@@ -26,8 +26,9 @@ multiplier is `training.objective.dense_multiplier=10`; scaling is applied once
 to the combined physical terms, giving /20,000 for fitted physical rewards.
 The same interface builds demonstration and autonomous targets.
 Reward `action_global_value_v5` retains quadratic terminal shaping; objective
-`complete_return_action_global_v6` adds minimum-Q invalid supervision.
-Trajectory and autonomous recovery formats are v6, and demonstration
+`complete_return_action_global_v7` retains minimum-Q invalid supervision and
+attributes Dig on an empty board to the species stage, skipping tile inference.
+Trajectory and autonomous recovery formats are v7, and demonstration
 initialization remains v11. Old-objective
 optimizer/recovery states cannot resume;
 structurally compatible weights still initialize fresh runs. Verified historical
@@ -101,22 +102,23 @@ Assets are available sun plus each living plant's purchase cost times its
 remaining-health fraction. Purchase is neutral. Effective damage includes
 actual body and armor damage from plants/projectiles, capped at remaining HP;
 autonomous headless decay and mower damage do not earn plant-damage value.
-With basic body HP 270, damage valuation is `(2000/900)*30/270` per effective HP.
+With basic body HP 270, the current damage valuation is `50/270` per effective HP,
+from `reward.basic_zombie_value=50`.
 
 For asset value A, actual sky income S, actual plant-produced income P, effective
 damage D, mower activations M, and eligible early Sunflower income E, define
 plant asset loss `L=P-(A_after-A_before-S)` and `k=2000/900`. The physical ledger is
 
 \[
-R_{physical}=(P-kL)+k(30/270)D+B+(P+2E),\qquad r^{action\ mower}=-0.1M.
+R_{physical}=(P-kL)+(50/270)D+B+(P+4E),\qquad r^{action\ mower}=-0.1M.
 \]
 
 Here `B` is per-plant blocking credit, with its coefficients multiplied by `k`.
 `reward.asset_loss_multiplier=k` prices health loss and plant removal separately
 from production income. Its default of one for older saved configurations
-reproduces the original asset delta. The current damage, blocking, and plant
-loss prices compensate for the change from value scale 900 to 2000, preserving
-their fitted rewards. Both production-sun contributions use the new lower
+reproduces the original asset delta. The current blocking and plant-loss prices
+compensate for the change from value scale 900 to 2000. The damage coefficient
+is independently configured at 50. Both production-sun contributions use the new lower
 scale. `reward.mower_penalty=0.1` is a final-unit penalty per activation. It
 bypasses `value_scale`, `progress_weight`, and `dense_multiplier` in both raw
 and fitted rewards. Mowers are excluded from physical net value/development;
@@ -139,7 +141,7 @@ Eligibility is evaluated at each production event: total roster must be positive
 and `3 * cumulative_spawned < total`. Defeat/removal never reopens eligibility;
 spawns earlier in the same tick count before production. The configurable exact
 fraction is `reward.early_sun_spawn_fraction=[1,3]`, with
-`reward.early_sun_extra_multiplier=2`. Count only actual credited sunlight, not
+`reward.early_sun_extra_multiplier=4`. Count only actual credited sunlight, not
 requested production, and never sky income. `early_sun_bonus` is a diagnostic
 subset of action sun, not a seventh component. The dense multiplier applies once
 to the four physical terms; source sunlight and the production part of global assets
@@ -147,11 +149,11 @@ are intentionally both retained.
 
 | Control | Physical ledger effect | Fitted reward contribution |
 |---|---:|---:|
-| Remove 270 effective HP | action damage `k*30` | +0.0033333333 |
+| Remove 270 effective HP | action damage `50` | +0.0025 |
 | Full Wall-nut bites | blocking `k*100` | +0.0111111111 |
 | Full ordinary-plant bites | blocking approximately `k*10` | +0.0011111111 |
 | Lose a healthy 100-sun shooter | global asset `-k*100` | -0.0111111111 before bite credit |
-| Produce 25 uncapped early Sunflower sun | global asset `+25`, action sun `+75` | +0.005 |
+| Produce 25 uncapped early Sunflower sun | global asset `+25`, action sun `+125` | +0.0075 |
 | Produce 25 uncapped late Sunflower sun | global asset `+25`, action sun `+25` | +0.0025 |
 | Sky produces 25 sun | excluded from global assets | 0 |
 | Buy a healthy plant | sun converts into equal plant value | 0 |

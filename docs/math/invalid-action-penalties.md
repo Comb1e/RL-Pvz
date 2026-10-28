@@ -1,10 +1,12 @@
 # Invalid-action execution and selective fitting
 
 The controller compares all ten species outputs. Every active plant and dig
-branch exposes all 45 tiles. After species selection, unavailable plants and
-disabled dig skip tile inference. Usable plants and enabled dig score every tile, then the simulator
+branch exposes all 45 tiles when available. After species selection, unavailable plants,
+disabled Dig and Dig on a board with no plants skip tile inference.
+Usable plants and enabled Dig on a populated board score every tile, then the simulator
 validates occupancy. A full board never makes an affordable ready plant branch
-unavailable, and an empty board never makes enabled dig branch-invalid.
+unavailable. An empty board makes Dig branch-invalid, determined from the
+pre-action public plant count before any conditional tile forward.
 
 Every rejected proposal executes an ordinary wait for the configured decision
 interval. The original
@@ -31,9 +33,17 @@ selected allowed branch's reason. Rejection events and action results agree.
 | Ordinary wait | Complete return | None | None |
 | Accepted plant/dig | Detached consistency | Complete return at proposed tile | Yes |
 | Unavailable/cooldown/unaffordable/restricted plant | Proposed branch to species minimum Q + offset | None | None |
-| Disabled dig | Proposed dig branch to species minimum Q + offset | None | None |
+| Disabled Dig or Dig on an empty board | Proposed dig branch to species minimum Q + offset | None | None |
 | Occupied plant tile with usable branch | None | Proposed tile to conditional tile minimum Q + offset | None |
-| Empty dig, including an empty board | None | Proposed tile to conditional tile minimum Q + offset | None |
+| Empty Dig tile on a populated board | None | Proposed tile to conditional tile minimum Q + offset | None |
+
+The simulator retains its `empty_tile` reason for an empty-board Dig and
+executes wait normally. Pre-action availability distinguishes this species-invalid
+case from a tile-invalid empty Dig on a populated board. It uses the complete
+public plant count, independent of encoded-entity truncation, and respects Dig
+permission and running/active state. Only the species stage is forwarded/fitted
+for empty-board Dig rows; there is no tile or EMA forward. The branch is still
+selectable, so it receives its existing minimum-Q-minus-offset supervision.
 
 `training.objective.invalid_action_q_offset=-0.1` supplies a finite non-positive
 fitting-only offset. At the current row's observation, let `m` be the minimum
@@ -56,7 +66,7 @@ reward. Invalid proposals do not train the wait output just because execution
 was wait. No species/tile/EMA forwards are added.
 
 The old `invalid_action_target` setting is rejected rather than reinterpreted.
-Objective/trajectory/recovery v6 prevents resuming fixed-target optimizer states;
+Objective/trajectory/recovery v7 prevents resuming older empty-board routing or fixed-target optimizer states;
 compatible model weights remain valid for fresh initialization. Reward/annotation
 identities and the demonstration archive format are unchanged. This is a moving
 target: if the selected output is already the minimum, its target is another

@@ -1,6 +1,6 @@
 # Sequential complete-return training
 
-The official objective is `complete_return_action_global_v6`. It uses
+The official objective is `complete_return_action_global_v7`. It uses
 complete remaining returns with gamma one and no counterfactual rollouts.
 
 For each actual decision (t),
@@ -15,6 +15,8 @@ proposals use the [shared attribution table](invalid-action-penalties.md): an
 impossible branch trains species to its detached current ten-output minimum
 plus `invalid_action_q_offset`; a bad tile in a usable branch trains only that
 tile to its detached current 45-output conditional minimum plus the same offset.
+Dig with no plants is an impossible branch and skips tile inference; Dig with
+plants remains a 45-tile proposal with post-selection tile validation.
 The configured offset is `-0.1`, independent of the selected invalid output.
 The baseline is recomputed from each pass's online forward, without an EMA
 forward or gradient through the minimum. Returns remain unchanged, and the
@@ -67,7 +69,7 @@ discarded.
 ## Reward and provenance
 
 Reward ledgers retain physical net-value diagnostics and dense development
-scaling. Credited early Sunflower income is tripled while
+scaling. Credited early Sunflower action income uses the configured extra multiplier while
 `3 * cumulative_spawned < total`; sky income, capped/discarded sunlight and
 zero-total episodes are excluded. Actual proposals, rejected actions,
 commitments and exploration provenance remain separate from diagnostic greedy
@@ -79,7 +81,7 @@ Canonical rows retain public entities, masks, globals, action, acceptance,
 duration, reward, return and exploration provenance. Active packing, width
 buckets, fitting spools, prefetch workers and graph captures are transient.
 Checkpoints contain FP32 online masters, FP32 Adam state, BF16 EMA state and the
-action-global trajectory/recovery v6 contracts. Old-objective resume is
+action-global trajectory/recovery v7 contracts. Old-objective resume is
 rejected before simulator construction; structurally compatible BF16-master
 weights remain valid for inference and fresh weight-only initialization.
 
@@ -94,6 +96,6 @@ before publication or test evaluation. Validation never supplies gradients.
 Progress commits atomically per pass, retaining optimizer/RNG/phase for resume
 and complete weights for fresh initialization elsewhere, including incomplete
 or zero-pass snapshots. Pass caps count additional commits per invocation; zero
-is unlimited. Annotation protocols are unchanged by autonomous v6. The
+is unlimited. Annotation protocols are unchanged by autonomous v7. The
 [annotation objective and recovery contract](training-objective.md#annotation-convergence-and-l2-phase)
 owns the detailed requirements.

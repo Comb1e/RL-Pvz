@@ -232,12 +232,13 @@ class PvZEnv(gym.Env):
         return self._direct_mask.copy()
 
     def branch_availability(self):
-        """Return pre-action branch availability without tile geometry."""
+        """Return card availability and reject Dig when there are no plants."""
         cards = {card.plant_type: card for card in self.public.cards}
         return branch_availability(
             [self.public.sun if self.state == EpisodeState.RUNNING else 0],
             [[cards[kind].cooldown_ticks if kind in cards else -1 for kind in self.codec.plants]],
             [self.rules.plants[kind]["cost"] for kind in self.codec.plants],
+            plant_count=[len(self.public.plants)],
             active=[self.state == EpisodeState.RUNNING],
             card_present=[[kind in cards for kind in self.codec.plants]],
         )[0]

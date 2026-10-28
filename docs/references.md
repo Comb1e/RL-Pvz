@@ -500,3 +500,15 @@ throughput measurements.
   consulted the installed API docstring: detached tensors do not require
   gradients and share storage. Minima are read without mutation; regression
   gradients reach the selected invalid output, never the minimum's source output.
+
+
+## Empty-board Dig attribution — 2026-10-28
+
+- [PyTorch 2.8 Adam implementation](https://raw.githubusercontent.com/pytorch/pytorch/v2.8.0/torch/optim/adam.py):
+  inspected `_init_group` and its `p.grad is not None` filter to interpret the
+  different species/tile Adam counters in the collapsed checkpoint. Parameters
+  skipped by selective fitting do not receive ordinary Adam updates.
+- The pinned game project's public `Observation.plants` and CUDA `Header.np`
+  provide the same complete pre-action plant count. The local Dig availability
+  exception uses those public facts without adding model inputs or changing the
+  engine's rejection reasons or execution mechanics.

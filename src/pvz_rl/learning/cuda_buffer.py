@@ -26,7 +26,7 @@ from pvz_rl.learning.objective import (
 from pvz_rl.learning.source_actions import AppendReceipt, SourceActionRef
 from pvz_rl.monitoring.moments import RunningMoments
 
-TRAJECTORY_PROTOCOL = "pvz-rl/action-global-trajectory-v6"
+TRAJECTORY_PROTOCOL = "pvz-rl/action-global-trajectory-v7"
 
 
 def trajectory_dtype(cfg=None):

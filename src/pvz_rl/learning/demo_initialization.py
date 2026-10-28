@@ -235,6 +235,7 @@ def _verify_action_order(archive_rows: list[dict], replay_path: Path, cfg: dict)
                 [before.sun],
                 [[cards[kind].cooldown_ticks if kind in cards else -1 for kind in codec.plants]],
                 [game.rules.plants[kind]["cost"] for kind in codec.plants],
+                plant_count=[len(before.plants)],
                 card_present=[[kind in cards for kind in codec.plants]],
             )[0]
         )

@@ -1,3 +1,38 @@
+## Empty-board Dig species attribution — 2026-10-28
+
+- Problem/root cause: the latest easy run collapses to rejected Dig proposals
+  from cohort 23. Empty-board Dig was marked available and therefore fitted only
+  through the tile stage. The independently selected Dig species value stopped
+  receiving gradients despite negative game rewards. The inspected cohort-32
+  checkpoint has species/tile Adam counters 88/116 and Dig species Q -0.765625
+  versus conditional tile values near -6.67 at the empty seed-1 board.
+- Improvement: share the complete public plant-count/permission gate across
+  CPU/CUDA availability and direct policy inference. Empty-board Dig now skips
+  tile inference and receives species-only minimum-Q-offset fitting; on a
+  populated board an empty selected tile remains tile-invalid. Preserve the
+  simulator's empty_tile reason, actual wait execution, original-slot draws,
+  rewards, compaction, observation encoding and model architecture. Demonstration
+  reconstruction uses the same pre-action plant count. Advance objective,
+  trajectory and autonomous recovery to v7; explicitly retain v6 weight-only
+  loading and the annotation ranking/resume identities. Reward settings remain
+  unchanged. Correct stale documentation of the actual damage price 50 and
+  early-sun extra multiplier 4.
+- Verification: temporary controls passed for real CPU/CUDA transitions and
+  availability, empty/populated Dig forward counts, species-only/tile-only
+  gradients on both devices, no invalid EMA, unchanged complete-return fields,
+  full-board plant availability, permission/inactive gates, contradictory
+  evidence, old recovery rejection and compatible autonomous/demo weights.
+  All three existing smoke tests passed once (12.08 s), including short CUDA
+  collection/fitting/checkpoint reload. Focused Ruff/format, AST syntax and
+  diff checks passed. Temporary controls were removed; no permanent tests,
+  formal training, push or PR. Datasets, runs, pre-training script and architecture
+  documentation remain untouched.
+- Evidence/limits: [run audit](evidence/empty-board-dig-collapse-20261028.md).
+  Mower penalties dominate individual physical credits, and time shaping still
+  favors earlier losses over later ones by up to 0.3. Those existing settings
+  are documented, not retuned. The requested moving minimum-Q target remains
+  unbounded; the routing fix has no claimed convergence or win-rate result.
+
 ## Detached minimum-Q illegal-action targets — 2026-10-28
 
 - Problem/root cause: fitting every illegal proposal toward the fixed -0.1

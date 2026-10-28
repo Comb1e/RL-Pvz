@@ -10,6 +10,7 @@ import numpy as np
 from pvz_game.cuda.schema import REASONS
 
 from pvz_rl.envs.actions import ActionSchema as A
+from pvz_rl.envs.actions import dig_branch_available
 
 
 class FitRoute(IntEnum):
@@ -19,21 +20,30 @@ class FitRoute(IntEnum):
     TILE_INVALID = 3
 
 
-def branch_availability(sun, cooldowns, costs, *, active=None, card_present=None, digging=None):
-    """Build branch availability without using occupancy or tile geometry."""
+def branch_availability(
+    sun, cooldowns, costs, *, plant_count, active=None, card_present=None, digging=None
+):
+    """Plant branches ignore geometry; Dig requires at least one plant."""
     sun = np.asarray(sun, dtype=np.float64).reshape(-1)
     cooldowns = np.asarray(cooldowns, dtype=np.int64)
     costs = np.asarray(costs, dtype=np.float64).reshape(-1)
     if cooldowns.shape != (len(sun), A.plant_types) or len(costs) != A.plant_types:
         raise ValueError("Branch availability fields have incompatible shapes")
+    plant_count = np.asarray(plant_count)
+    if (
+        plant_count.shape != (len(sun),)
+        or plant_count.dtype.kind not in "iu"
+        or np.any(plant_count < 0)
+    ):
+        raise ValueError("plant_count must contain nonnegative integer counts for each row")
     available = np.zeros((len(sun), A.plant_types + 2), dtype=bool)
     available[:, 0] = True
-    available[:, -1] = True
+    available[:, -1] = dig_branch_available(plant_count)
     if digging is not None:
         digging = np.asarray(digging, dtype=bool).reshape(-1)
         if digging.shape != (len(sun),):
             raise ValueError("digging must match the branch availability rows")
-        available[:, -1] = digging
+        available[:, -1] = dig_branch_available(plant_count, digging)
     available[:, 1:-1] = (cooldowns == 0) & (sun[:, None] >= costs[None, :])
     if card_present is not None:
         present = np.asarray(card_present, dtype=bool)
@@ -97,7 +107,10 @@ def _validate_outcomes(actions, accepted, usable, reasons=None):
             )
         ],
     )
-    tile_failure = np.isin(reasons, [REASONS.index("occupied_tile"), REASONS.index("empty_tile")])
+    # The engine reports empty_tile for both an impossible empty-board Dig
+    # and a bad tile on a populated board. Explicit pre-action availability
+    # distinguishes species-invalid from tile-invalid; the reason is retained.
+    tile_failure = reasons == REASONS.index("occupied_tile")
     if np.any((branch_failure & usable) | (tile_failure & ~usable)):
         raise ValueError("Routing branch availability contradicts rejection reason")
     if np.any(
@@ -115,8 +128,8 @@ def _validate_outcomes(actions, accepted, usable, reasons=None):
 def classify_actions(actions, accepted, legal_masks, reasons=None, *, branch_available):
     """Return routes from explicit pre-action branch availability and outcomes.
 
-    Legal masks check accepted placements only. Their geometry cannot establish
-    branch availability on full boards or boards with no diggable plants.
+    Legal masks check accepted placements only. Plant branch availability is
+    independent of geometry; Dig's explicit availability also requires a plant.
     """
     actions = np.asarray(actions, np.int64).reshape(-1)
     accepted = np.asarray(accepted, bool).reshape(-1)

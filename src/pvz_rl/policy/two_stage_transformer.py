@@ -8,6 +8,7 @@ from pvz_game import Rules
 from torch import nn
 
 from pvz_rl.envs.actions import ActionSchema as A
+from pvz_rl.envs.actions import dig_branch_available
 from pvz_rl.envs.encoding import collate_observations
 from pvz_rl.policy.active_batch import ActiveBatchPlan, encode_active
 from pvz_rl.policy.entity_attention import SpatialTransformer
@@ -334,6 +335,14 @@ class TwoStageTransformerPolicy(nn.Module):
             )
             if branch_usable.shape != (len(observations), 10):
                 raise ValueError("Branch availability must have shape [batch, 10]")
+        # Public plant count includes all plants, even when entity truncation
+        # drops a record. Also enforce the branch check for weight-only callers
+        # that have no simulator availability tensor. Never mutate a borrowed one.
+        branch_usable = branch_usable.clone()
+        branch_usable[:, -1] = dig_branch_available(
+            observations.globals[:, self.layout.global_fields["plant_count"]],
+            branch_usable[:, -1],
+        )
         selected_usable = branch_usable.gather(1, branches[:, None]).flatten()
         tile_rows = (branches > 0) & selected_usable
         requests = torch.where(tile_rows, branches, torch.zeros_like(branches))

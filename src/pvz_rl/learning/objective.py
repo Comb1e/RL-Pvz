@@ -14,7 +14,7 @@ from pvz_rl.policy.sequential_q import (
     tile_candidates,
 )
 
-OBJECTIVE_PROTOCOL = "complete_return_action_global_v6"
+OBJECTIVE_PROTOCOL = "complete_return_action_global_v7"
 # These are the only reward components that train the policy.  The simulator
 # still publishes the older diagnostic fields (combat_value, home_proximity,
 # victory_time, and so on) for reports and replay verification. Cohort-ranked

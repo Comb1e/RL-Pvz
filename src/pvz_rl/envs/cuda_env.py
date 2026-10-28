@@ -15,6 +15,7 @@ from pvz_game.cuda.schema import HEADER
 from stable_baselines3.common.vec_env import VecEnv
 
 from pvz_rl.envs.actions import ActionSchema as A
+from pvz_rl.envs.actions import dig_branch_available
 from pvz_rl.envs.cuda_accounting import AccountingCudaBatch
 from pvz_rl.envs.cuda_features import LEDGER_INDICES, METRIC_INDICES, CudaFeatures
 from pvz_rl.envs.rewards import REWARD_METRICS
@@ -262,13 +263,13 @@ class CudaVecEnv(VecEnv):
         return self.features.mask_tensor
 
     def branch_availability(self, active=None):
-        """Return pre-action branch availability without tile geometry.
+        """Return pre-action card availability and empty-board Dig rejection.
 
         Policy masks intentionally expose all tile outputs.  This separate
         tensor lets the runner skip the conditional tile encoder when a plant
         card cannot execute because it is absent, cooling down, unaffordable,
-        or task-restricted. Dig requires its permission on a running board;
-        empty-tile legality is classified after its tile proposal.
+        or task-restricted. Dig requires permission and at least one plant;
+        on populated boards its selected tile is checked after inference.
         """
         header = self.header_tensor
         running = (header[:, HEADER.index("status")] == 0) & header[
@@ -282,7 +283,9 @@ class CudaVecEnv(VecEnv):
             header[:, HEADER.index("allowed")][:, None].bitwise_and(self._card_bits[None, :]) != 0
         )
         plants = (cooldowns == 0) & (sun[:, None] >= costs[None, :]) & allowed
-        digging = running & header[:, HEADER.index("dig")].bool()
+        digging = running & dig_branch_available(
+            header[:, HEADER.index("np")], header[:, HEADER.index("dig")].bool()
+        )
         result = torch.cat((running[:, None], plants & running[:, None], digging[:, None]), dim=1)
         if active is not None:
             active = torch.as_tensor(active, device=device, dtype=torch.bool).reshape(-1)
