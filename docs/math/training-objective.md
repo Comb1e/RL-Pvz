@@ -25,9 +25,10 @@ Here `s=progress_weight/value_scale=0.01/2000` in the current profile and the
 multiplier is `training.objective.dense_multiplier=10`; scaling is applied once
 to the combined physical terms, giving /20,000 for fitted physical rewards.
 The same interface builds demonstration and autonomous targets.
-Reward `action_global_value_v5` and objective `complete_return_action_global_v5`
-identify the quadratic terminal and wait-representative contract. Trajectory and
-autonomous recovery are v5; demonstration initialization is v11. Old
+Reward `action_global_value_v5` retains quadratic terminal shaping; objective
+`complete_return_action_global_v6` adds minimum-Q invalid supervision.
+Trajectory and autonomous recovery formats are v6, and demonstration
+initialization remains v11. Old-objective
 optimizer/recovery states cannot resume;
 structurally compatible weights still initialize fresh runs. Verified historical
 demonstrations are repriced under the current contract.
@@ -230,8 +231,14 @@ Curriculum counts victories independently of shaped rewards.
 
 These shaping terms intentionally change the objective and do not claim to preserve
 every ordering induced by terminal rewards. [Invalid proposals](invalid-action-penalties.md) execute ordinary wait with zero
-rejection charges. Their fixed -1 targets apply only to fitting and do not alter
-this reward ledger or earlier chronological returns.
+rejection charges. Their fitting targets are the detached minimum current Q
+from the responsible head plus `training.objective.invalid_action_q_offset`
+(currently -0.1): all ten species outputs for an unavailable branch, or all 45
+conditional tiles for a usable branch's illegal tile. This target is recomputed
+on each pass from the existing online forward, independent of the selected
+invalid output, without EMA inference or gradients through the minimum. Prefit
+errors use collection-time minima. Stored returns, this reward ledger, and
+earlier chronological returns never acquire a rejection charge.
 
 ## Physical-return variation diagnostic
 

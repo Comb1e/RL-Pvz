@@ -6,8 +6,12 @@ import numpy as np
 import torch
 
 from pvz_rl.envs.encoding import collate_observations
-from pvz_rl.learning.action_routing import FitRoute, route_indices
-from pvz_rl.learning.objective import species_consistency_loss, species_consistency_targets
+from pvz_rl.learning.action_routing import route_indices
+from pvz_rl.learning.objective import (
+    selected_action_targets,
+    species_consistency_loss,
+    species_consistency_targets,
+)
 from pvz_rl.policy.sequential_q import (
     action_parts,
     balanced_q_loss,
@@ -87,11 +91,13 @@ def batch_loss(
     objective = policy.cfg["training"]["objective"]
     species_rows, tile_rows, ema_rows = plan["species"], plan["tiles"], plan["ema"]
     selected = torch.zeros(len(actions), device=device, dtype=torch.float32)
+    minimum_q = torch.zeros_like(selected)
     species = None
     if len(species_rows):
         species = policy.species_values(observations[species_rows])
         predictions = species.float().gather(1, branch[species_rows, None]).flatten()
         selected = selected.index_copy(0, species_rows, predictions)
+        minimum_q = minimum_q.index_copy(0, species_rows, species.detach().float().amin(-1))
     tile_forward = (
         policy.fitting_tiles
         if trusted and hasattr(policy, "fitting_tiles")
@@ -102,9 +108,9 @@ def batch_loss(
         tables = tile_forward(observations, branch[tile_rows], rows=tile_rows)
         predictions = tables.float().gather(1, positions[tile_rows, None]).flatten()
         selected = selected.index_copy(0, tile_rows, predictions)
-    invalid = (routes == FitRoute.SPECIES_INVALID) | (routes == FitRoute.TILE_INVALID)
-    fitting_targets = torch.where(
-        invalid, targets.new_tensor(objective["invalid_action_target"]), targets
+        minimum_q = minimum_q.index_copy(0, tile_rows, tables.detach().float().amin(-1))
+    fitting_targets = selected_action_targets(
+        targets, routes, minimum_q, objective["invalid_action_q_offset"]
     )
     loss, selected_errors = balanced_q_loss(
         selected,

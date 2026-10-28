@@ -373,7 +373,7 @@ def build_run_report(run, cfg=None):
             (f"{key}_{group}", f"{group.title()}: {label}")
             for group in ("wait", "plant", "dig")
             for key, label in (
-                ("value_target_error", "pre-fit error against actual returns"),
+                ("value_target_error", "pre-fit error against routed fitting targets"),
                 ("action_count", "completed-cohort decisions"),
             )
         ),

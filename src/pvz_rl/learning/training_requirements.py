@@ -9,7 +9,7 @@ from pvz_rl.policy.sequential_q import ACTION_DISTRIBUTION
 from pvz_rl.provenance import weight_engine_config
 
 TRAINING_CONDITIONS = ("masked",)
-CURRENT_OBJECTIVE = "complete_return_action_global_v5"
+CURRENT_OBJECTIVE = "complete_return_action_global_v6"
 CURRENT_REWARD = "action_global_value_v5"
 WEIGHT_ACTION_DISTRIBUTIONS = {
     "sequential_q_unmasked_penalty_v1",
@@ -56,6 +56,7 @@ def weight_model_config(cfg):
             "complete_return_action_global_v2",
             "complete_return_action_global_v3",
             "complete_return_action_global_v4",
+            "complete_return_action_global_v5",
             CURRENT_OBJECTIVE,
         )
         and train.get("objective", {}).get("protocol") == train.get("method")
@@ -90,6 +91,7 @@ def inference_config(cfg):
         return result
     result["training"]["method"] = CURRENT_OBJECTIVE
     result["training"]["objective"]["protocol"] = CURRENT_OBJECTIVE
+    result["training"]["objective"].pop("invalid_action_target", None)
     result["policy"]["action_distribution"] = ACTION_DISTRIBUTION
     defaults = load_config()
     for key, value in defaults["training"]["objective"].items():

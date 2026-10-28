@@ -31,6 +31,7 @@ from pvz_rl.learning.performance import compilation_requested
 from pvz_rl.policy.active_batch import ActiveBatchPlan
 from pvz_rl.policy.cudagraph_backend import EncoderCompilationError
 from pvz_rl.policy.runner import PolicyRunner
+from pvz_rl.policy.sequential_q import action_parts
 from pvz_rl.policy.two_stage_transformer import TwoStageTransformerPolicy
 
 
@@ -233,6 +234,13 @@ class CudaSequentialQ(CudaCohortLifecycle):
                 )
             # Queue immutable public inputs and decision evidence before simulation.
             if new.any():
+                branches, _ = action_parts(actions)
+                usable = branch_available.gather(1, branches[:, None]).flatten()
+                minimum_q = torch.where(
+                    (branches > 0) & usable,
+                    details["tile_q"].float().amin(-1),
+                    details["branch_q"].float().amin(-1),
+                )
                 columns = torch.cat(
                     (
                         env.header_tensor[:, :1].float(),
@@ -247,6 +255,7 @@ class CudaSequentialQ(CudaCohortLifecycle):
                         details["exploration_mode"][:, None].float(),
                         details["pending_species"][:, None].float(),
                         details["placement_gap"][:, None],
+                        minimum_q[:, None],
                     ),
                     dim=1,
                 )
@@ -261,7 +270,7 @@ class CudaSequentialQ(CudaCohortLifecycle):
                     ),
                 )
             else:
-                columns = torch.zeros(self.n_envs, 24, device=self.device)
+                columns = torch.zeros(self.n_envs, 25, device=self.device)
             columns, issued = self._scheduler.retain(columns, new)
             actions = columns[:, 1].long()
             executing = issued
@@ -328,6 +337,7 @@ class CudaSequentialQ(CudaCohortLifecycle):
             rows["tick"], rows["action"] = packed[:, 0], packed[:, 1]
             rows["branch_value"], rows["tile_value"] = packed[:, 2], packed[:, 3]
             rows["placement_gap"] = packed[:, 23]
+            rows["minimum_q"] = packed[:, 24]
             rows["greedy_action"] = packed[:, 4]
             rows["species_coin"] = exploration_host["coins"].numpy()
             rows["tile_coin"] = packed[:, 6]

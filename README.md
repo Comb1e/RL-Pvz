@@ -92,7 +92,7 @@ and starts a fresh destination optimizer. The final `tile.pt`/`action.pt` still
 requires convergence. Annotation progress v3 needs one annotation resume to write
 v4 before downstream initialization; `train --resume` requires autonomous recovery.
 
-The active-only trajectory/recovery format is v5; older runs support compatible
+The active-only trajectory/recovery format is v6; older runs support compatible
 weight-only initialization, but cannot resume. Model architecture, observation
 encoding and weight layout remain unchanged.
 
@@ -102,16 +102,21 @@ is a direct -0.1 reward penalty, independent of sunlight scaling and the dense
 multiplier. Live native/browser boards show each environment's accumulated
 training reward. Terminal boards show a pending label until cohort time ranking
 finishes, then refresh with the finalized reward.
-Fitting retains the first of each 10 adjacent waits or identical invalid
-proposals; complete returns and reward accounting retain every decision.
-Invalid branch and tile proposals use the configurable fitting target
-`training.objective.invalid_action_target` (bundled default `-0.1`); it does not
-alter simulator rewards or complete returns.
+Fitting retains the first row of each configured window of adjacent waits or
+identical invalid proposals (`training.objective.invalid_fit_group_size`);
+complete returns and reward accounting retain every decision. Invalid branch
+and tile proposals fit below the responsible head's lowest current Q-value,
+using `training.objective.invalid_action_q_offset = -0.1`. Unavailable branches
+use the minimum of all ten species outputs; illegal tiles use all 45 outputs
+for the selected branch. A minimum of -1.2 gives a -1.3 target regardless of
+which illegal output was selected. The target is detached and recomputed every
+pass. Only the responsible head is fitted; game rewards and returns are unchanged.
 Completion-time ranking uses a signed quadratic adjustment capped at 0.3:
 terminal wins range from +0.7 to +1.3 and losses from -1 to -1.3. Physical
 rewards and mower penalties additionally affect total game reward.
-Reward/objective v5 requires fresh `--init-from` for previous weights rather than
-optimizer resume. See the [reward conversion table](docs/math/training-objective.md).
+Objective v6 requires fresh `--init-from` for previous weights rather than
+optimizer resume. The reward protocol stays v5; annotation resume is
+unchanged. See the [reward conversion table](docs/math/training-objective.md).
 
 The agent cadence is also configured in `train.toml`:
 

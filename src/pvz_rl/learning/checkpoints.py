@@ -31,7 +31,7 @@ LEGACY_ANNOTATION_PROGRESS_PROTOCOL = "pvz-rl/annotation-progress-v3"
 LEGACY_ANNOTATION_CHECKPOINT_PROTOCOL_V2 = "pvz-rl/annotation-initialization-v2"
 LEGACY_ANNOTATION_CHECKPOINT_PROTOCOL = "pvz-rl/tile-annotation-initialization-v1"
 MODEL_STATE_PROTOCOL = "pvz-rl/stateless-two-stage-bf16-master-state-v2"
-AUTONOMOUS_STATE_PROTOCOL = "pvz-rl/action-global-state-v5"
+AUTONOMOUS_STATE_PROTOCOL = "pvz-rl/action-global-state-v6"
 
 
 class SnapshotStager:
@@ -140,7 +140,7 @@ def load_torch_snapshot(path):
 
 def protocol_for(kind):
     methods = {
-        "two_stage_transformer_q_v1": "complete_return_action_global_v5",
+        "two_stage_transformer_q_v1": "complete_return_action_global_v6",
     }
     if kind not in methods:
         raise ValueError(
@@ -370,6 +370,7 @@ def inspect_checkpoint(path, *, weights_only=False):
                     runtime.get("protocol")
                     not in (
                         AUTONOMOUS_STATE_PROTOCOL,
+                        "pvz-rl/action-global-state-v5",
                         "pvz-rl/action-global-state-v4",
                         "pvz-rl/action-global-state-v3",
                         "pvz-rl/action-global-state-v2",

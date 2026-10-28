@@ -43,7 +43,7 @@
   owns synthetic/trajectory/full-cycle selection and the paired promotion gate.
 - `src/pvz_rl/data/train.toml` is the single parameter source for train/demo overlays.
   Both use `entity_v1`, `two_stage_transformer_q_v1` and
-  `complete_return_action_global_v5`. Old-objective resumes are rejected; structurally compatible
+  `complete_return_action_global_v6`. Old-objective resumes are rejected; structurally compatible
   BF16-master weights support inference/fresh initialization; verified recordings are reconstructed without changes. Preserve
   user reward adjustments. `training.demo.passes` is 20, independently of autonomous
   `training.n_epochs` (4). Tile (50% to 1%) and accepted-plant species (10% to 1%)
@@ -129,7 +129,13 @@
   background drains, complete returns and four whole-cohort fitting passes.
   `learning/flat_q.py` owns shared autonomous/demo fitting: selected regression,
   double-estimator species consistency and demo ranking.
-  `learning/objective.py` owns the shared detached online argmax/EMA evaluation
+  `learning/objective.py` owns shared NumPy/PyTorch selected-action targets:
+  invalid rows use the detached current responsible head minimum plus
+  `invalid_action_q_offset`, while accepted rows and genuine waits keep complete
+  returns. Autonomous/demo fitting uses the current forward every pass; prefit
+  diagnostics use the head minimum retained in collection's existing handoff.
+  No additional forwards or readbacks are needed, and stored returns are unchanged.
+  It also owns the shared detached online argmax/EMA evaluation
   target, selected tile IDs, estimator gap and MSE-matched Huber. Reuse existing
   online tile tables and EMA forward; add no Transformer forwards. All 45 tile
   candidates and lowest-index ties remain; occupancy and branch availability are
@@ -150,7 +156,7 @@
   Ordered double-buffer `BatchPrefetch` owns transport. Pinned entity staging
   grows to the current bucket only after its copy fence. `action_routing.py`
   owns shared `RepeatedRowCompactor` wait/invalid segmentation and chunk carry;
-  first-row representatives per configured 10-row window affect fitting only. Wait and
+  first-row representatives per configured window affect fitting only. Wait and
   invalid run/window/reduction metrics remain separate. `step_result.py`
   supplies array-backed step results and lazy compatibility infos. `host_transfer.py` owns reusable pinned
   `HostHandoff`; views are consumed before reuse.
@@ -158,8 +164,10 @@
   inputs/labels with the original source batch ranges and padding; annotation
   admission covers train/validation together and retains streaming fallback.
 - `learning/checkpoints.py` validates model/objective/schema and demo v11,
-  action-global v5 recovery/trajectory contracts before simulator allocation;
-  the objective protocol is v5 for wait representatives and quadratic time rewards.
+  action-global v6 recovery/trajectory contracts before simulator allocation;
+  Objective v6 uses detached minimum-Q invalid supervision; reward stays v5.
+  Old objectives/storage remain weight-only compatible; annotation
+  ranking and matching annotation resumes retain their own identities.
   Model-state `stateless-two-stage-bf16-master-state-v2` stores FP32 online
   masters, FP32 Adam state and BF16 EMA runtime weights. No migration or
   partial transfer exists. Fresh compatible `--init-from` transfers full weights
@@ -251,9 +259,12 @@
   persist route/branch usability/reason. `flat_q.py` skips irrelevant stages via
   CPU-planned indices: wait/species-invalid use species only, tile-invalid uses
   tiles only, accepted non-wait adds both online stages and EMA tile inference.
-  Invalid regression uses the configured finite non-positive
-  `training.objective.invalid_action_target` (currently `-0.1`), never
-  episode rewards; rejection penalty settings are removed and audit fields are zero.
+  Invalid regression offsets the detached minimum across the current responsible
+  head (ten species or 45 conditional tile values) by the finite non-positive
+  `training.objective.invalid_action_q_offset` (currently `-0.1`). The target
+  does not depend on the selected invalid output. The retired fixed-target
+  setting is rejected with replacement guidance.
+  The offset never enters episode rewards; rejection audit fields remain zero.
   Consecutive waits and identical invalid runs use this module's shared compactor;
   complete returns retain every row. Episode/decision/inactive gaps and terminal
   boundaries survive chunking/recovery. Consistency balances accepted plant/dig counts only.

@@ -488,3 +488,15 @@ throughput measurements.
   consulted average ranks for equal values. Local ranking keeps this convention
   with zero-based ranks; signed-square shaping and its cap are user-selected
   economics, not a research guarantee. No dependency is added.
+
+## Minimum-Q invalid supervision — 2026-10-28
+
+- [PyTorch 2.8 MSELoss implementation](https://raw.githubusercontent.com/pytorch/pytorch/v2.8.0/torch/nn/modules/loss.py):
+  inspected unreduced squared-error semantics. Existing whole-cohort weights
+  remain unchanged; only invalid-row targets use the responsible head minimum
+  plus the configured offset. This moving target is the requested fitting rule,
+  not a convergence guarantee from PyTorch.
+- [PyTorch Tensor.detach](https://docs.pytorch.org/docs/stable/generated/torch.Tensor.detach.html):
+  consulted the installed API docstring: detached tensors do not require
+  gradients and share storage. Minima are read without mutation; regression
+  gradients reach the selected invalid output, never the minimum's source output.

@@ -1,3 +1,34 @@
+## Detached minimum-Q illegal-action targets — 2026-10-28
+
+- Problem/root cause: fitting every illegal proposal toward the fixed -0.1
+  prediction could make it outrank legal actions with lower game returns.
+- Improvement: objective v6 fits a branch-invalid proposal to the detached
+  minimum of the current ten species outputs minus 0.1, and a tile-invalid
+  proposal to the detached minimum of its current 45 conditional tile outputs
+  minus 0.1. The configured `invalid_action_q_offset` controls that offset.
+  Every pass reuses existing online forwards; only the selected responsible
+  output receives direct regression gradients. No EMA/other-head forward is
+  added for invalid rows. Accepted actions and genuine waits retain complete
+  returns. Collection retains the head minimum in its existing handoff for
+  matching prefit diagnostics, advancing private trajectory/recovery formats
+  to v6. Game rewards, model/observation/annotation identities are unchanged.
+  Old optimizer resumes fail; compatible v5 and earlier weights remain usable
+  for fresh initialization. The user's existing two-row compaction setting is
+  retained and included in this commit.
+- Verification: temporary independent CPU/CUDA controls passed for routed
+  losses and gradients, detached targets, different illegal selections, an
+  already-minimal selection, negative/zero/positive minima, partial batches,
+  trusted/ordinary transport, unchanged complete returns, prefit errors,
+  trajectory restore, old-resume rejection, and zero-pass v5 annotation weight
+  loading. The existing three smoke tests passed (14.43 seconds), including
+  short CUDA collection/fitting/checkpoint reload. Focused Ruff, Python syntax,
+  and `git diff --check` passed.
+  No permanent tests, formal training, push or PR; user artifacts and architecture
+  documentation remain untouched.
+- Limit: the minimum includes invalid outputs and moves with each update. An
+  already-lowest illegal output is pushed another offset lower; no floor is
+  imposed and no convergence or policy-quality improvement is claimed.
+
 ## Configurable 10 Hz agent cadence — 2026-10-27
 
 - Problem/root cause: the autonomous agent was making one decision per pinned

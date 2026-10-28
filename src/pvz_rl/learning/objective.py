@@ -4,6 +4,7 @@ import numpy as np
 import torch
 from torch.nn import functional as F
 
+from pvz_rl.learning.action_routing import FitRoute
 from pvz_rl.policy.sequential_q import (
     action_groups,
     action_parts,
@@ -13,7 +14,7 @@ from pvz_rl.policy.sequential_q import (
     tile_candidates,
 )
 
-OBJECTIVE_PROTOCOL = "complete_return_action_global_v5"
+OBJECTIVE_PROTOCOL = "complete_return_action_global_v6"
 # These are the only reward components that train the policy.  The simulator
 # still publishes the older diagnostic fields (combat_value, home_proximity,
 # victory_time, and so on) for reports and replay verification. Cohort-ranked
@@ -26,6 +27,18 @@ COMPONENTS = (
     "action_sun",
     "action_mower",
 )
+
+
+def selected_action_targets(returns, routes, minimum_q, invalid_offset):
+    """Fit invalid proposals below their responsible head's detached minimum.
+
+    Shared by autonomous/demo regression and NumPy prefit diagnostics. Ordinary
+    waits and accepted actions keep their original complete-return targets.
+    """
+    invalid = (routes == FitRoute.SPECIES_INVALID) | (routes == FitRoute.TILE_INVALID)
+    if isinstance(returns, torch.Tensor):
+        return torch.where(invalid, minimum_q.detach() + invalid_offset, returns)
+    return np.where(invalid, minimum_q + invalid_offset, returns)
 
 
 def components(parts):

@@ -157,12 +157,18 @@ def validate_config(cfg: dict) -> None:
     if not isinstance(objective, dict):
         raise ValueError("training.objective must describe the stateless two-stage objective")
     if objective is not None:
+        if "invalid_action_target" in objective:
+            raise ValueError(
+                "objective.invalid_action_target was replaced by invalid_action_q_offset; "
+                "use -0.1 to fit illegal proposals below the current head's minimum Q. "
+                "Old optimizer states require fresh --init-from."
+            )
         objective_keys = {
             "protocol",
             "accepted_outcome_share",
             "species_consistency_weight",
             "species_consistency_huber_delta",
-            "invalid_action_target",
+            "invalid_action_q_offset",
             "invalid_fit_group_size",
             "dense_multiplier",
             "ema_decay",
@@ -174,21 +180,21 @@ def validate_config(cfg: dict) -> None:
                 "training.objective contains retired or missing settings, including "
                 "species_consistency_huber_delta"
             )
-        if objective.get("protocol") != "complete_return_action_global_v5":
+        if objective.get("protocol") != "complete_return_action_global_v6":
             raise ValueError(
                 "Unsupported training objective protocol; fresh initialization is required"
             )
         if objective.get("accepted_outcome_share") != 0.5:
             raise ValueError("objective.accepted_outcome_share must be 0.5")
-        invalid_target = objective.get("invalid_action_target")
+        invalid_offset = objective.get("invalid_action_q_offset")
         if (
-            type(invalid_target) not in (int, float)
-            or isinstance(invalid_target, bool)
-            or not math.isfinite(invalid_target)
-            or invalid_target > 0
+            type(invalid_offset) not in (int, float)
+            or isinstance(invalid_offset, bool)
+            or not math.isfinite(invalid_offset)
+            or invalid_offset > 0
         ):
             raise ValueError(
-                "objective.invalid_action_target must be a finite non-positive number"
+                "objective.invalid_action_q_offset must be a finite non-positive number"
             )
         if (
             type(objective.get("invalid_fit_group_size")) is not int
@@ -492,7 +498,7 @@ def validate_config(cfg: dict) -> None:
     if not math.isfinite(visual["final_hold_seconds"]) or visual["final_hold_seconds"] < 0:
         raise ValueError("Visualization final_hold_seconds must be finite and nonnegative")
     env, train = cfg["environment"], cfg["training"]
-    expected_method = "complete_return_action_global_v5"
+    expected_method = "complete_return_action_global_v6"
     if train.get("method") != expected_method:
         raise ValueError("Training requires a supported complete-return method and fresh models")
     if any(

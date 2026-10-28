@@ -20,12 +20,13 @@ from pvz_rl.learning.objective import (
     COMPONENTS,
     endgame_terminal_rewards,
     raw_rewards,
+    selected_action_targets,
     training_rewards,
 )
 from pvz_rl.learning.source_actions import AppendReceipt, SourceActionRef
 from pvz_rl.monitoring.moments import RunningMoments
 
-TRAJECTORY_PROTOCOL = "pvz-rl/action-global-trajectory-v5"
+TRAJECTORY_PROTOCOL = "pvz-rl/action-global-trajectory-v6"
 
 
 def trajectory_dtype(cfg=None):
@@ -51,6 +52,7 @@ def trajectory_dtype(cfg=None):
             ("home_entries", "<u4", 2),
             ("branch_value", "<f4"),
             ("tile_value", "<f4"),
+            ("minimum_q", "<f4"),
             ("placement_gap", "<f4"),
             ("greedy_action", "<u2"),
             ("policy_action", "<u2"),
@@ -597,8 +599,8 @@ class CompleteGameBuffer:
         routed_counts = np.zeros(4, np.int64)
         from pvz_rl.config import load_config
 
-        invalid_target = (self.cfg or load_config())["training"]["objective"][
-            "invalid_action_target"
+        invalid_offset = (self.cfg or load_config())["training"]["objective"][
+            "invalid_action_q_offset"
         ]
         species_counts = np.zeros(A.plant_types, np.int64)
         sums = np.zeros((3, 3), np.float64)
@@ -664,10 +666,8 @@ class CompleteGameBuffer:
                     rows["route"][ix] == FitRoute.SPECIES_INVALID
                 )
                 selected = np.where(species_only, rows["branch_value"][ix], rows["tile_value"][ix])
-                target = np.where(
-                    rows["route"][ix] >= FitRoute.SPECIES_INVALID,
-                    invalid_target,
-                    rows["target"][ix],
+                target = selected_action_targets(
+                    rows["target"][ix], rows["route"][ix], rows["minimum_q"][ix], invalid_offset
                 )
                 first = selected.astype(np.float64) - target
                 second = rows["placement_gap"][ix].astype(np.float64)

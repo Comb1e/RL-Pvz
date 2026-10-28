@@ -72,7 +72,7 @@ block_value_by_plant = { sunflower = 0.074074074, peashooter = 0.074074074, wall
 [training]
 gamma = 1.0
 discount_clock = "simulation_ticks"
-method = "complete_return_action_global_v5"
+method = "complete_return_action_global_v6"
 budget_unit = "games"
 until_stage_complete = false # With --stage: stop only when its mastery gate passes.
 total_games = 10000
@@ -98,12 +98,12 @@ ram_gib = 6
 block_rows = 32768
 
 [training.objective]
-protocol = "complete_return_action_global_v5"
+protocol = "complete_return_action_global_v6"
 accepted_outcome_share = 0.5
 species_consistency_weight = 1.0
 species_consistency_huber_delta = 1.0
-invalid_action_target = -0.1
-invalid_fit_group_size = 10 # Shared first-of-window size for invalid proposals and waits.
+invalid_action_q_offset = -0.1 # Illegal target = detached current head minimum Q + this offset.
+invalid_fit_group_size = 2 # Shared first-of-window size for invalid proposals and waits.
 dense_multiplier = 10.0
 ema_decay = 0.95
 demo_rank_loss_weight = 0.10

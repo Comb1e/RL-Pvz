@@ -1,6 +1,6 @@
 # Sequential complete-return training
 
-The official objective is `complete_return_action_global_v5`. It uses
+The official objective is `complete_return_action_global_v6`. It uses
 complete remaining returns with gamma one and no counterfactual rollouts.
 
 For each actual decision (t),
@@ -12,13 +12,18 @@ G_t=\sum_{u=t}^{T-1}r_u^{\mathrm{train}}.
 Ordinary wait proposals regress the species-stage wait value. Accepted plant
 and dig proposals regress the tile value at the actual proposed tile. Invalid
 proposals use the [shared attribution table](invalid-action-penalties.md): an
-impossible branch trains species to the configured invalid-action target; a bad
-tile in a usable branch trains only that tile to the same target. The bundled
-target is `-0.1`. This fitting target never enters episode rewards or returns.
+impossible branch trains species to its detached current ten-output minimum
+plus `invalid_action_q_offset`; a bad tile in a usable branch trains only that
+tile to its detached current 45-output conditional minimum plus the same offset.
+The configured offset is `-0.1`, independent of the selected invalid output.
+The baseline is recomputed from each pass's online forward, without an EMA
+forward or gradient through the minimum. Returns remain unchanged, and the
+offset never enters episode rewards or earlier chronological returns. Prefit
+diagnostics use the same helper with collection-time minima.
 
 Repeated waits and invalid proposals are compacted only in the fitting input. Within each
 environment episode, consecutive rows with the same action, route, and rejection
-reason are partitioned into 10-row windows and the first row of each window is
+reason are partitioned into configured `invalid_fit_group_size` windows and the first row is
 used once. Episode/decision/inactive gaps and terminal boundaries split runs;
 other environments' interleaved rows do not. Accepted non-wait rows are retained.
 Complete returns remain chronological over every actual row. Fitting uses
@@ -74,7 +79,7 @@ Canonical rows retain public entities, masks, globals, action, acceptance,
 duration, reward, return and exploration provenance. Active packing, width
 buckets, fitting spools, prefetch workers and graph captures are transient.
 Checkpoints contain FP32 online masters, FP32 Adam state, BF16 EMA state and the
-action-global trajectory/recovery v5 contracts. Old-objective resume is
+action-global trajectory/recovery v6 contracts. Old-objective resume is
 rejected before simulator construction; structurally compatible BF16-master
 weights remain valid for inference and fresh weight-only initialization.
 
@@ -89,6 +94,6 @@ before publication or test evaluation. Validation never supplies gradients.
 Progress commits atomically per pass, retaining optimizer/RNG/phase for resume
 and complete weights for fresh initialization elsewhere, including incomplete
 or zero-pass snapshots. Pass caps count additional commits per invocation; zero
-is unlimited. Annotation protocols are unchanged by autonomous v5. The
+is unlimited. Annotation protocols are unchanged by autonomous v6. The
 [annotation objective and recovery contract](training-objective.md#annotation-convergence-and-l2-phase)
 owns the detailed requirements.
