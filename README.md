@@ -102,7 +102,7 @@ is a direct -0.1 reward penalty, independent of sunlight scaling and the dense
 multiplier. Live native/browser boards show each environment's accumulated
 training reward. Terminal boards show a pending label until cohort time ranking
 finishes, then refresh with the finalized reward.
-Fitting retains the first of each 100 adjacent waits or identical invalid
+Fitting retains the first of each 10 adjacent waits or identical invalid
 proposals; complete returns and reward accounting retain every decision.
 Completion-time ranking uses a signed quadratic adjustment capped at 0.3:
 terminal wins range from +0.7 to +1.3 and losses from -1 to -1.3. Physical

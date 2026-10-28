@@ -150,7 +150,7 @@
   Ordered double-buffer `BatchPrefetch` owns transport. Pinned entity staging
   grows to the current bucket only after its copy fence. `action_routing.py`
   owns shared `RepeatedRowCompactor` wait/invalid segmentation and chunk carry;
-  first-row representatives per 100-row window affect fitting only. Wait and
+  first-row representatives per configured 10-row window affect fitting only. Wait and
   invalid run/window/reduction metrics remain separate. `step_result.py`
   supplies array-backed step results and lazy compatibility infos. `host_transfer.py` owns reusable pinned
   `HostHandoff`; views are consumed before reuse.

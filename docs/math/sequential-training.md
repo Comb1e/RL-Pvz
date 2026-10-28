@@ -17,7 +17,7 @@ only that tile to -1. This target never enters episode rewards or returns.
 
 Repeated waits and invalid proposals are compacted only in the fitting input. Within each
 environment episode, consecutive rows with the same action, route, and rejection
-reason are partitioned into 100-row windows and the first row of each window is
+reason are partitioned into 10-row windows and the first row of each window is
 used once. Episode/decision/inactive gaps and terminal boundaries split runs;
 other environments' interleaved rows do not. Accepted non-wait rows are retained.
 Complete returns remain chronological over every actual row. Fitting uses

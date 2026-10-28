@@ -591,7 +591,7 @@ def _initialize_demo(
         rows["rejection_reason"][index] = int(reason)
     compact_positions, compact_counts, compaction = compact_repeated_rows(
         rows,
-        group_size=objective.get("invalid_fit_group_size", 100),
+        group_size=objective.get("invalid_fit_group_size", 10),
     )
     rows = rows[compact_positions]
     observations = [observations[index] for index in compact_positions]

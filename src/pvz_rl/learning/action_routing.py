@@ -179,7 +179,7 @@ def _outcome_counts(rows):
 class RepeatedRowCompactor:
     """First-of-window wait/invalid selection, with bounded per-environment carry."""
 
-    def __init__(self, group_size=100):
+    def __init__(self, group_size=10):
         if type(group_size) is not int or group_size < 1:
             raise ValueError("repeated fitting group size must be a positive integer")
         self.group_size, self.state = group_size, {}
@@ -277,7 +277,7 @@ class RepeatedRowCompactor:
         )
 
 
-def compact_repeated_rows(rows, *, group_size=100):
+def compact_repeated_rows(rows, *, group_size=10):
     """Shared first-of-window compaction; accepted non-wait rows stay intact."""
     compactor = RepeatedRowCompactor(group_size)
     selected = compactor.select(rows)

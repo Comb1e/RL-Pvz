@@ -48,7 +48,7 @@ zero in memory without modifying recording files.
 
 Both autonomous and demonstration fitting use the shared first-of-window
 compactor. Genuine wait proposals and identical invalid proposals retain rows
-1, 101, 201, etc. under `training.objective.invalid_fit_group_size=100`; the
+1, 11, 21, etc. under `training.objective.invalid_fit_group_size=10`; the
 historical setting name now controls both. Invalid proposals executed as wait
 retain their original route/action/reason and never merge with genuine waits.
 Accepted non-wait rows are preserved. Adjacency is per environment, independent

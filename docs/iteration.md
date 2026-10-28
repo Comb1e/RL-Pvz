@@ -44,6 +44,20 @@
   has no migration. Native state/replay layouts retain simulation 1.4.0. No formal
   training, push or PR; architecture documents and user artifacts were untouched.
 
+## Configurable ten-row invalid fitting compaction — 2026-10-27
+
+- Problem/root cause: the shared fitting compactor still retained only the first
+  row of each 100-row invalid-action run, which kept too much repeated invalid
+  supervision in the next fitting pass.
+- Improvement: `training.objective.invalid_fit_group_size` is now explicitly
+  configured in `train.toml` as `10`. The shared autonomous and demonstration
+  compactor uses that setting for identical invalid proposals and genuine wait
+  runs, retaining rows 1, 11, 21, and so on while complete returns continue to
+  include every executed decision.
+- Verification: configuration loading, source fallback defaults, and the CPU
+  smoke/static checks were run after the change. Existing historical evidence
+  retains the earlier 100-row measurements for reproducibility.
+
 ## Shared first-of-100 wait fitting — 2026-10-27
 
 - Problem/root cause: genuine waits bypassed invalid-row compaction, allowing
