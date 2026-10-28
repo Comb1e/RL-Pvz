@@ -41,18 +41,29 @@
   calls production lifecycle phases on fresh scratch cohorts and stops after
   four commits and the first decision of the next cohort. `tools/tune_gpu.py`
   owns synthetic/trajectory/full-cycle selection and the paired promotion gate.
+- `tools/report_rewards.py RUN_FOLDER COHORT` calls the read-only
+  `monitoring/reward_report.py` interface. It uses the run's saved configuration
+  and shared raw/fitted conversion, reconciles one-based log cohorts with
+  zero-based episode IDs, and streams bounded log snapshots. Per-episode
+  component/absolute-action statistics remain separate from recorded
+  per-decision dense-return variation. Reports include event examples,
+  accounting errors, routes, compaction, recent cohorts and warning events.
+  Incomplete tails/episodes are disclosed; no checkpoint or simulator is loaded.
 - `src/pvz_rl/data/train.toml` is the single parameter source for train/demo overlays.
   Both use `entity_v1`, `two_stage_transformer_q_v1` and
   `complete_return_action_global_v7`. Old-objective resumes are rejected; structurally compatible
   BF16-master weights support inference/fresh initialization; verified recordings are reconstructed without changes. Preserve
   user reward adjustments. `training.demo.passes` is 20, independently of autonomous
-  `training.n_epochs` (4). Tile (50% to 1%) and accepted-plant species (10% to 1%)
+  `training.n_epochs` (4). Tile (50% to 3%) and accepted-plant species (10% to 3%)
   probabilities decay over 10,000 stage games and freeze per cohort.
-  `reward.early_sun_spawn_fraction=[1,3]` and `early_sun_extra_multiplier=4` price
-  eligible actual Sunflower action income at five times ordinary income. `value_scale=2000` converts physical
-  values to fitted rewards at /20,000. The current damage price is `basic_zombie_value=50`; blocking coefficients and
-  `reward.asset_loss_multiplier` compensate by 2000/900; both produced-sun
-  contributions remain unscaled. `mower_penalty=0.1` charges each activation
+  `reward.early_sun_spawn_fraction=[1,3]` and `early_sun_extra_multiplier=6` price
+  eligible actual Sunflower action income at seven times ordinary income.
+  `value_scale=500` converts physical values to fitted rewards at /5,000. The
+  current damage price is `basic_zombie_value=50`; blocking coefficients and
+  `reward.asset_loss_multiplier` retain the earlier 2000/900 compensation, so
+  their fitted magnitudes also rise fourfold relative to value_scale=2000.
+  Both produced-sun contributions use the configured physical conversion.
+  `mower_penalty=0.1` charges each activation
   directly in final reward units, outside physical and dense conversion.
   Shared clipping uses `training.max_grad_norm=5`.
   `training.objective.species_consistency_weight=1.0` controls online-selected,

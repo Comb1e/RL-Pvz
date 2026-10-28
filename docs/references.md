@@ -512,3 +512,17 @@ throughput measurements.
   provide the same complete pre-action plant count. The local Dig availability
   exception uses those public facts without adding model inputs or changing the
   engine's rejection reasons or execution mechanics.
+
+## Saved-run reward reporting — 2026-10-28
+
+- [Python JSON documentation](https://docs.python.org/3/library/json.html):
+  consulted its unframed-protocol warning. The reporter decodes complete JSONL
+  records individually within bounded file snapshots and discloses unfinished
+  tails rather than parsing an active stream as one JSON document.
+- NumPy's installed `mean` and `std` docstrings: inspected FP64 accumulation and
+  population standard deviation (`ddof=0`). The reporter takes each episode's
+  absolute action sum before its mean, retaining cross-component cancellation;
+  recorded per-decision return variation remains a separate statistic.
+- Inspected this project's `CompleteGameBuffer.finalize` action-shaping
+  inequality and `learning/objective.py` reward conversion. Reporting reuses the
+  latter and reproduces the existing diagnostic without modifying training.

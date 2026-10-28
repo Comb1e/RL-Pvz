@@ -21,9 +21,9 @@ terminal rows are ranked together by completion time, including losses. A signed
 quadratic adjustment with maximum magnitude `reward.win_time_weight=0.3` gives
 terminal wins in [+0.7,+1.3] and losses in [-1.3,-1]. This adjustment is applied
 only to the terminal row; physical rewards and mowers additionally affect totals.
-Here `s=progress_weight/value_scale=0.01/2000` in the current profile and the
+Here `s=progress_weight/value_scale=0.01/500` in the current profile and the
 multiplier is `training.objective.dense_multiplier=10`; scaling is applied once
-to the combined physical terms, giving /20,000 for fitted physical rewards.
+to the combined physical terms, giving /5,000 for fitted physical rewards.
 The same interface builds demonstration and autonomous targets.
 Reward `action_global_value_v5` retains quadratic terminal shaping; objective
 `complete_return_action_global_v7` retains minimum-Q invalid supervision and
@@ -110,16 +110,17 @@ damage D, mower activations M, and eligible early Sunflower income E, define
 plant asset loss `L=P-(A_after-A_before-S)` and `k=2000/900`. The physical ledger is
 
 \[
-R_{physical}=(P-kL)+(50/270)D+B+(P+4E),\qquad r^{action\ mower}=-0.1M.
+R_{physical}=(P-kL)+(50/270)D+B+(P+6E),\qquad r^{action\ mower}=-0.1M.
 \]
 
 Here `B` is per-plant blocking credit, with its coefficients multiplied by `k`.
 `reward.asset_loss_multiplier=k` prices health loss and plant removal separately
 from production income. Its default of one for older saved configurations
-reproduces the original asset delta. The current blocking and plant-loss prices
-compensate for the change from value scale 900 to 2000. The damage coefficient
-is independently configured at 50. Both production-sun contributions use the new lower
-scale. `reward.mower_penalty=0.1` is a final-unit penalty per activation. It
+reproduces the original asset delta. Blocking and plant-loss prices retain the
+earlier compensation for the change from value scale 900 to 2000. Reducing the
+current value scale to 500 therefore increases their fitted magnitudes fourfold,
+along with damage and ordinary production sun. The damage coefficient is
+independently configured at 50. `reward.mower_penalty=0.1` is a final-unit penalty per activation. It
 bypasses `value_scale`, `progress_weight`, and `dense_multiplier` in both raw
 and fitted rewards. Mowers are excluded from physical net value/development;
 `mower_expenditure` remains zero as a legacy diagnostic.
@@ -141,7 +142,7 @@ Eligibility is evaluated at each production event: total roster must be positive
 and `3 * cumulative_spawned < total`. Defeat/removal never reopens eligibility;
 spawns earlier in the same tick count before production. The configurable exact
 fraction is `reward.early_sun_spawn_fraction=[1,3]`, with
-`reward.early_sun_extra_multiplier=4`. Count only actual credited sunlight, not
+`reward.early_sun_extra_multiplier=6`. Count only actual credited sunlight, not
 requested production, and never sky income. `early_sun_bonus` is a diagnostic
 subset of action sun, not a seventh component. The dense multiplier applies once
 to the four physical terms; source sunlight and the production part of global assets
@@ -149,12 +150,12 @@ are intentionally both retained.
 
 | Control | Physical ledger effect | Fitted reward contribution |
 |---|---:|---:|
-| Remove 270 effective HP | action damage `50` | +0.0025 |
-| Full Wall-nut bites | blocking `k*100` | +0.0111111111 |
-| Full ordinary-plant bites | blocking approximately `k*10` | +0.0011111111 |
-| Lose a healthy 100-sun shooter | global asset `-k*100` | -0.0111111111 before bite credit |
-| Produce 25 uncapped early Sunflower sun | global asset `+25`, action sun `+125` | +0.0075 |
-| Produce 25 uncapped late Sunflower sun | global asset `+25`, action sun `+25` | +0.0025 |
+| Remove 270 effective HP | action damage `50` | +0.01 |
+| Full Wall-nut bites | blocking `k*100` | +0.0444444444 |
+| Full ordinary-plant bites | blocking approximately `k*10` | +0.0044444444 |
+| Lose a healthy 100-sun shooter | global asset `-k*100` | -0.0444444444 before bite credit |
+| Produce 25 uncapped early Sunflower sun | global asset `+25`, action sun `+175` | +0.04 |
+| Produce 25 uncapped late Sunflower sun | global asset `+25`, action sun `+25` | +0.01 |
 | Sky produces 25 sun | excluded from global assets | 0 |
 | Buy a healthy plant | sun converts into equal plant value | 0 |
 | Activate one mower | final-unit action mower `-0.1`, no physical cost | -0.1 |
@@ -163,8 +164,8 @@ are intentionally both retained.
 Head loss can stop a game before all body HP disappears. Damage credits use
 actual damage and never award the unremoved remainder. Combined signals
 include both blocking and lost assets: a fully eaten 50-sun Wall-nut contributes
-`k*(100-50)/20000 = +0.0055555556`; a fully eaten 100-sun shooter contributes
-approximately `k*(10-100)/20000 = -0.01`, before its damage credit. Historical
+`k*(100-50)/5000 = +0.0222222222`; a fully eaten 100-sun shooter contributes
+approximately `k*(10-100)/5000 = -0.04`, before its damage credit. Historical
 net-value bounds from other reward profiles do not bound the current six-component
 fitting return. These physical prices are independent of terminal ranking and
 the fitting-only invalid-action target.
@@ -257,3 +258,23 @@ A ratio below 5% emits one cohort-identified warning event; routine progress doe
 not repeat historical warnings. Effectively zero total variance has a null ratio
 and no warning. An all-wait cohort with no physical rewards can legitimately warn
 when outcomes or mowers vary. This diagnostic never changes targets.
+
+The separate **action-shaping warning** uses complete episode sums in fitted
+units. For each episode, let `A = damage + blocking + sun + mower` and let `T`
+be its finalized terminal outcome, including completion-time shaping. It warns
+when `mean(abs(A)) > 0.25 * mean(abs(T))`. This excludes asset changes and
+includes direct mower penalties; the dense-return diagnostic does the reverse
+for these two terms. Take the absolute value per episode before averaging;
+`abs(mean(A))` is generally different. A zero terminal denominator makes the
+ratio undefined, but any positive mean absolute action sum still triggers the
+inequality. Neither diagnostic changes losses, rewards or fitting targets.
+
+Run `python tools/report_rewards.py RUN_FOLDER COHORT` to inspect the exact
+saved settings and a one-based cohort number from `train.log`. It reconstructs
+episode components, raw/fitted totals and the action-shaping warning; dense
+return moments are read from the recorded cohort summary, since episode totals
+cannot recover per-decision variation. The report also shows event values,
+outcomes, plant usage, proposal/route counts, fitting compaction, accounting
+differences and recent cohorts. It streams files only to their initial lengths
+and discloses unfinished tails, provisional episodes and missing summaries.
+Rerun to refresh an active run; no checkpoint, simulator or GPU work is required.

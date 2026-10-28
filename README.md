@@ -96,9 +96,10 @@ The active-only trajectory/recovery format is v7; older runs support compatible
 weight-only initialization, but cannot resume. Model architecture, observation
 encoding and weight layout remain unchanged.
 
-Reward settings live in `src/pvz_rl/data/train.toml`. At `value_scale=2000`,
-25 Sunflower sun gives +0.0025 normally or +0.0075 early with the current
-`early_sun_extra_multiplier=4`. Removing 270 effective zombie HP gives +0.0025.
+Reward settings live in `src/pvz_rl/data/train.toml`; each run saves its effective
+configuration. With `value_scale=500` and `early_sun_extra_multiplier=6`,
+25 Sunflower sun gives +0.01 normally or +0.04 early. Removing 270 effective
+zombie HP gives +0.01.
 One mower activation is a direct -0.1 reward penalty, independent of sunlight scaling and the dense
 multiplier. Live native/browser boards show each environment's accumulated
 training reward. Terminal boards show a pending label until cohort time ranking
@@ -135,6 +136,18 @@ edit `action_frequency_hz` when changing the cadence. A frequency must divide th
 engine tick rate exactly.
 
 ## Common checks
+
+Inspect one cohort's saved settings, event rewards, component breakdown,
+warnings, action mix and fitting compaction while training continues:
+
+```powershell
+.\.venv\Scripts\python.exe tools\report_rewards.py runs\compact-stages-101-new\easy 6
+```
+
+The two arguments are the run folder and the **cohort number shown in the log**
+(starting at 1). Redirect stdout to a text file to retain a report. The script
+reads saved configuration/logs; unfinished data is marked provisional. See
+[reward diagnostic definitions](docs/math/training-objective.md#physical-return-variation-diagnostic).
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest -q

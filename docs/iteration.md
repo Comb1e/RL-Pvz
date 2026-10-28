@@ -1,3 +1,41 @@
+## Saved-run cohort reward reports — 2026-10-28
+
+- Problem/root cause: the generic action-shaping warning omits its quantities
+  and cohort identity. It compares per-episode absolute action sums, including
+  mower penalties and excluding assets; the separate dense warning compares
+  per-decision return standard deviations, excluding mowers and including assets.
+  Confusing the two obscured the cause of warnings in the new easy run.
+- Improvement: add `tools/report_rewards.py RUN_FOLDER COHORT`, backed by the
+  shared monitoring report interface and production reward conversion. The
+  second argument is the one-based number displayed in the training log; saved
+  episode IDs are translated from their zero-based counter. Read saved config,
+  complete JSONL records, matching status summaries and contextual warning events
+  without touching checkpoints or starting simulator/GPU work. Report event
+  prices, component means/std/extrema, exact absolute-action warning quantities,
+  recorded dense-return diagnostics, outcomes, usage, accounting errors, routes,
+  compaction and recent cohorts. Mark incomplete data provisional and ignore
+  disclosed unfinished tails within bounded file reads.
+- Preserve and commit the user's existing parameter adjustments: value scale
+  500, early-sun extra multiplier 6, and both exploration floors 3%. No additional
+  reward or learning changes. Update current reward examples and ownership;
+  leave historical evidence, runs, datasets and architecture documentation intact.
+- Evidence: new-run cohort 6 has mean absolute action shaping 0.3029903935,
+  mean absolute terminal 1.0023994048, threshold 0.2505998512, ratio 30.2265%.
+  Mean mower contribution -0.34765625 outweighs +0.0446658565 in damage,
+  blocking and sun. Its separate dense ratio is 7.1099%, above the 5% threshold.
+  Reports for new cohorts 1/6 and previous cohort 156 reconstruct saved fitted
+  means within 1e-10; raw accounting errors are below 1e-10.
+- Verification: temporary independent FP64 controls cover cancellation across
+  episodes, the strict 25% boundary, zero terminal/physical values, cohort indexing,
+  duplicate revisions, pending episodes, missing/matching summaries, unfinished
+  and malformed lines, and appends during reads. No permanent tests are added.
+  The existing two CPU smoke tests passed once (4.43 s); focused Ruff, formatting,
+  AST syntax and diff checks passed. No formal training, push or PR.
+- Limits: separate files are not an atomic multi-file snapshot. Missing raw
+  per-decision statistics remain unavailable rather than inferred from episode
+  totals. Warnings remain diagnostics and do not change fitting or imply a
+  particular reward balance is optimal.
+
 ## Empty-board Dig species attribution — 2026-10-28
 
 - Problem/root cause: the latest easy run collapses to rejected Dig proposals
