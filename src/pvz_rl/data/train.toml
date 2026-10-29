@@ -68,7 +68,7 @@ early_sun_spawn_fraction = [1, 3]
 # a separate terminal reward; losses distribute a separate penalty over waits.
 win_max_reward = 0.2
 win_reserve = 0.0
-loss_max_penalty = 1.0
+loss_max_penalty = 0.1
 loss_reserve = 200.0
 sun_reference = 1000.0
 

@@ -124,10 +124,15 @@ terminal wins range from +0.7 to +1.3 and losses from -1 to -1.3. Physical
 rewards and mower penalties additionally affect total game reward. A losing
 episode also applies residual-sun passivity shaping. A win receives
 `+0.2 * clamp(remaining_sun / 1000, 0, 1)^2` as a terminal reward. A loss
-uses `-0.3 * clamp((remaining_sun - 200) / 800, 0, 1)^2`, distributed across
-accepted ordinary waits by their executed duration. Commitment waits, rejected
-actions, plants and digs are excluded; a loss with no ordinary waits receives
-no such penalty. The settings live under `[reward.passivity]` in `train.toml`.
+uses `-loss_max_penalty * clamp((remaining_sun - 200) / 800, 0, 1)^2` as the
+per-wait maximum. Every accepted ordinary wait in a consecutive run receives
+its own penalty: the longest run receives the maximum, the shortest receives
+one-fifth of it, and intermediate run lengths use a quadratic curve. Equal-
+length runs are treated as longest runs. Commitment waits, rejected actions,
+plants and digs break runs and receive no penalty; a loss with no ordinary
+waits receives no such penalty. Total loss shaping can therefore grow with the
+number of passive waits. The settings live under `[reward.passivity]` in
+`train.toml`.
 Objective v7 requires fresh `--init-from` for previous weights rather than
 optimizer resume. The reward protocol stays v5; annotation resume is
 unchanged. See the [reward conversion table](docs/math/training-objective.md).

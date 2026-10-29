@@ -14,6 +14,8 @@ from pvz_rl.policy.sequential_q import (
     tile_candidates,
 )
 
+PASSIVITY_WAIT_ATTRIBUTION = "per_wait_run_quadratic_v1"
+
 
 def residual_sun_adjustment(remaining_sun, won, cfg):
     """Return the bounded final-unit residual-sun outcome amount.
@@ -46,6 +48,110 @@ def residual_sun_adjustment(remaining_sun, won, cfg):
     magnitude = maximum * np.square(fraction)
     result = np.where(won_array, magnitude, -magnitude)
     return float(result) if result.ndim == 0 else result
+
+
+def residual_sun_wait_penalties(rows, amount):
+    """Return per-row loss penalties for uninterrupted ordinary-wait runs.
+
+    ``rows`` must contain the raw, un-compacted trajectory rows for one
+    episode.  The returned array is aligned with ``rows`` and contains
+    negative global-terminal adjustments.  A non-wait row breaks a run, even
+    when it is not itself eligible for passivity attribution.  Run lengths are
+    measured in decisions; row durations deliberately do not weight the
+    penalty.
+    """
+    rows = np.asarray(rows)
+    names = set(rows.dtype.names or ())
+    required = {
+        "active",
+        "accepted",
+        "action",
+        "route",
+        "exploration_mode",
+        "decision",
+    }
+    missing = required - names
+    if rows.ndim != 1 or missing:
+        raise ValueError(f"wait penalty rows are missing fields: {sorted(missing)}")
+    if not np.isfinite(amount) or amount < 0:
+        raise ValueError("wait penalty amount must be finite and nonnegative")
+    if len(rows) == 0:
+        return np.empty(0, dtype=np.float64), {
+            "wait_rows": 0,
+            "run_count": 0,
+            "shortest_run": 0,
+            "longest_run": 0,
+            "run_details": [],
+            "total_penalty": 0.0,
+            "minimum_penalty": 0.0,
+            "maximum_penalty": 0.0,
+        }
+
+    order = np.argsort(rows["decision"], kind="stable")
+    ordered = rows[order]
+    eligible = (
+        ordered["active"]
+        & ordered["accepted"]
+        & (ordered["action"] == 0)
+        & (ordered["route"] == int(FitRoute.WAIT_RETURN))
+        & (ordered["exploration_mode"] == 0)
+    )
+    starts, stops = [], []
+    start = None
+    for index, is_eligible in enumerate(eligible):
+        continues = bool(is_eligible and start is not None)
+        if continues:
+            previous = index - 1
+            continues = bool(
+                eligible[previous]
+                and int(ordered["decision"][index])
+                == int(ordered["decision"][previous]) + 1
+                and not (
+                    ("reset" in names and ordered["reset"][index])
+                    or ("run_break" in names and ordered["run_break"][index])
+                    or ("done" in names and ordered["done"][previous])
+                )
+            )
+        if not continues:
+            if start is not None:
+                stops.append(index)
+            start = index if is_eligible else None
+            if start is not None:
+                starts.append(start)
+    if start is not None:
+        stops.append(len(ordered))
+
+    lengths = [stop - begin for begin, stop in zip(starts, stops, strict=True)]
+    minimum = min(lengths, default=0)
+    maximum = max(lengths, default=0)
+    penalties = np.zeros(len(rows), dtype=np.float64)
+    details = []
+    for begin, stop, length in zip(starts, stops, lengths, strict=True):
+        if maximum == minimum:
+            fraction = 1.0
+        else:
+            fraction = (length - minimum) / (maximum - minimum)
+        factor = 0.2 + 0.8 * fraction * fraction
+        per_wait = float(amount) * factor
+        penalties[order[begin:stop]] = -per_wait
+        details.append(
+            {
+                "length": int(length),
+                "penalty_per_wait": per_wait,
+                "penalty_total": per_wait * length,
+            }
+        )
+    positive = -penalties[penalties < 0]
+    return penalties, {
+        "wait_rows": int(sum(lengths)),
+        "run_count": len(lengths),
+        "shortest_run": int(minimum),
+        "longest_run": int(maximum),
+        "run_details": details,
+        "total_penalty": float(positive.sum()),
+        "minimum_penalty": float(positive.min()) if len(positive) else 0.0,
+        "maximum_penalty": float(positive.max()) if len(positive) else 0.0,
+    }
 
 
 OBJECTIVE_PROTOCOL = "complete_return_action_global_v7"
@@ -182,23 +288,27 @@ def finalize_episode_metrics(rows, cfg, *, median=None, wait_penalties=None):
             if key in row:
                 row[key] += change
         passivity_done = bool(row.get("passivity_finalized", False))
-        penalty = (
-            0.0
-            if passivity_done
-            else float(
-                row.get(
-                    "wait_passivity_penalty",
-                    wait_penalties.get(row.get("record_id"), 0.0),
-                )
+        reported_penalty = float(
+            row.get(
+                "wait_passivity_penalty",
+                wait_penalties.get(row.get("record_id"), 0.0),
             )
         )
+        penalty = 0.0 if passivity_done else reported_penalty
+        # The loss shaping was attributed to individual wait rows in the
+        # trajectory.  Episode summaries have one aggregate field, so mirror
+        # that amount into the accumulated global-terminal metric used by the
+        # HUD and report conversion.  The legacy terminal event itself stays
+        # at the ranked outcome value.
+        if penalty and "global_terminal" in row:
+            row["global_terminal"] += penalty
         for key in ("return", "discounted_return", "discounted_outcome_return"):
             if key in row:
                 row[key] += change + penalty
         row.update(
             terminal_reward=float(value + outcome_adjustment),
             residual_sun_reward=outcome_adjustment,
-            wait_passivity_penalty=penalty,
+            wait_passivity_penalty=reported_penalty,
             passivity_finalized=True,
             endgame_time_adjustment=float(delta),
             # Retain the field for report readers that understand the old

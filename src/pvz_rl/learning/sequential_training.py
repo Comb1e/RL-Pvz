@@ -174,6 +174,27 @@ class CudaSequentialQ(CudaCohortLifecycle):
             item["metrics"]["wait_passivity_penalty"] = float(
                 -details.get("loss_wait_penalty", 0.0)
             )
+            item["metrics"].update(
+                {
+                    "wait_passivity_attribution": summary.get("passivity", {}).get(
+                        "loss_wait_attribution"
+                    ),
+                    "wait_passivity_wait_rows": int(details.get("wait_rows", 0)),
+                    "wait_passivity_run_count": int(details.get("run_count", 0)),
+                    "wait_passivity_shortest_run": int(details.get("shortest_run", 0)),
+                    "wait_passivity_longest_run": int(details.get("longest_run", 0)),
+                    "wait_passivity_run_details": details.get("run_details", []),
+                    "wait_passivity_penalty_minimum": float(
+                        details.get("minimum_penalty", 0.0)
+                    ),
+                    "wait_passivity_penalty_maximum": float(
+                        details.get("maximum_penalty", 0.0)
+                    ),
+                    "wait_passivity_skipped_no_wait": bool(
+                        details.get("skipped_no_wait", False)
+                    ),
+                }
+            )
         finalize_episode_metrics(
             [p["metrics"] for p in pending.values()],
             self.cfg,

@@ -18,9 +18,11 @@ from pvz_rl.envs.encoding import (
 from pvz_rl.learning.action_routing import FitRoute, validate_routes
 from pvz_rl.learning.objective import (
     COMPONENTS,
+    PASSIVITY_WAIT_ATTRIBUTION,
     endgame_terminal_rewards,
     raw_rewards,
     residual_sun_adjustment,
+    residual_sun_wait_penalties,
     selected_action_targets,
     training_rewards,
 )
@@ -553,16 +555,23 @@ class CompleteGameBuffer:
             "eligible_wait_rows": 0,
             "eligible_wait_duration": 0,
             "skipped_no_wait_losses": 0,
+            "loss_wait_attribution": PASSIVITY_WAIT_ATTRIBUTION,
         }
         if not by_episode or settings is None:
             return summary
 
         terminal_rows = {}
+        episode_rows = {}
         for block_index, block in enumerate(self.blocks):
             rows = block[: min(self.block_rows, self.size - block_index * self.block_rows)]
-            for index in np.flatnonzero(rows["active"] & rows["done"] & rows["components_valid"]):
+            for index in np.flatnonzero(rows["active"] & rows["components_valid"]):
                 row = rows[index]
-                terminal_rows[(int(row["env"]), int(row["episode"]))] = (block, int(index))
+                key = int(row["env"]), int(row["episode"])
+                if key not in by_episode:
+                    continue
+                episode_rows.setdefault(key, []).append((block, int(index)))
+                if row["done"]:
+                    terminal_rows[key] = (block, int(index))
 
         for key, metrics in by_episode.items():
             terminal = terminal_rows.get(key)
@@ -577,7 +586,14 @@ class CompleteGameBuffer:
                 "residual_sun_amount": magnitude,
                 "wait_rows": 0,
                 "wait_duration": 0,
+                "run_count": 0,
+                "shortest_run": 0,
+                "longest_run": 0,
+                "run_details": [],
+                "minimum_penalty": 0.0,
+                "maximum_penalty": 0.0,
                 "loss_wait_penalty": 0.0,
+                "skipped_no_wait": False,
             }
             block, index = terminal
             if won:
@@ -585,47 +601,43 @@ class CompleteGameBuffer:
                 block[index]["reward"] = raw_rewards(block[index]["components"], self.cfg)
                 summary["win_final_rewards"] += magnitude
             else:
-                candidates = []
-                for block_index, candidate_block in enumerate(self.blocks):
-                    rows = candidate_block[
-                        : min(self.block_rows, self.size - block_index * self.block_rows)
-                    ]
-                    selected = (
-                        rows["active"]
-                        & (rows["env"] == key[0])
-                        & (rows["episode"] == key[1])
-                        & (rows["action"] == 0)
-                        & rows["accepted"]
-                        & (rows["route"] == int(FitRoute.WAIT_RETURN))
-                        & (rows["exploration_mode"] == 0)
+                references = episode_rows.get(key, [])
+                references.sort(key=lambda item: int(item[0][item[1]]["decision"]))
+                raw = np.asarray([candidate_block[candidate_index] for candidate_block, candidate_index in references])
+                penalties, details = residual_sun_wait_penalties(raw, magnitude)
+                for (candidate_block, candidate_index), penalty in zip(
+                    references, penalties, strict=True
+                ):
+                    if penalty == 0:
+                        continue
+                    candidate_block[candidate_index]["components"][0] += penalty
+                    candidate_block[candidate_index]["reward"] = raw_rewards(
+                        candidate_block[candidate_index]["components"], self.cfg
                     )
-                    for candidate_index in np.flatnonzero(selected):
-                        candidates.append((candidate_block, int(candidate_index)))
-                if candidates:
-                    weights = np.asarray(
-                        [float(block[index]["duration"]) for block, index in candidates],
-                        dtype=np.float64,
-                    )
-                    if weights.sum() <= 0:
-                        weights.fill(1.0)
-                    weights /= weights.sum()
-                    for (candidate_block, candidate_index), weight in zip(
-                        candidates, weights, strict=True
-                    ):
-                        penalty = -magnitude * float(weight)
-                        candidate_block[candidate_index]["components"][0] += penalty
-                        candidate_block[candidate_index]["reward"] = raw_rewards(
-                            candidate_block[candidate_index]["components"], self.cfg
+                episode_summary.update(
+                    wait_rows=details["wait_rows"],
+                    wait_duration=int(
+                        sum(
+                            int(candidate_block[candidate_index]["duration"])
+                            for (candidate_block, candidate_index), penalty in zip(
+                                references, penalties, strict=True
+                            )
+                            if penalty < 0
                         )
-                    episode_summary["wait_rows"] = len(candidates)
-                    episode_summary["wait_duration"] = int(
-                        sum(int(block[index]["duration"]) for block, index in candidates)
-                    )
-                    episode_summary["loss_wait_penalty"] = magnitude
-                    summary["loss_wait_penalties"] += magnitude
-                    summary["eligible_wait_rows"] += len(candidates)
-                    summary["eligible_wait_duration"] += episode_summary["wait_duration"]
-                else:
+                    ),
+                    run_count=details["run_count"],
+                    shortest_run=details["shortest_run"],
+                    longest_run=details["longest_run"],
+                    run_details=details["run_details"],
+                    minimum_penalty=details["minimum_penalty"],
+                    maximum_penalty=details["maximum_penalty"],
+                    loss_wait_penalty=details["total_penalty"],
+                    skipped_no_wait=details["wait_rows"] == 0,
+                )
+                summary["loss_wait_penalties"] += details["total_penalty"]
+                summary["eligible_wait_rows"] += details["wait_rows"]
+                summary["eligible_wait_duration"] += episode_summary["wait_duration"]
+                if details["wait_rows"] == 0:
                     summary["skipped_no_wait_losses"] += 1
             summary["episodes"][f"{key[0]}:{key[1]}"] = episode_summary
         return summary
