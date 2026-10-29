@@ -11,6 +11,7 @@ from pvz_rl.provenance import weight_engine_config
 TRAINING_CONDITIONS = ("masked",)
 CURRENT_OBJECTIVE = "complete_return_action_global_v7"
 CURRENT_REWARD = "action_global_value_v5"
+FIT_SCHEDULE_PROTOCOL = "tile_warmup_then_joint_v1"
 WEIGHT_ACTION_DISTRIBUTIONS = {
     "sequential_q_unmasked_penalty_v1",
     ACTION_DISTRIBUTION,

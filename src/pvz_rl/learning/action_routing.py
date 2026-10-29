@@ -197,6 +197,7 @@ class RepeatedRowCompactor:
             raise ValueError("repeated fitting group size must be a positive integer")
         self.group_size, self.state = group_size, {}
         self.counts = np.zeros((3, 2), np.int64)
+        self.tile_counts = np.zeros((3, 2), np.int64)
         self.raw = self.raw_invalid = self.retained_invalid = self.selected = 0
         self.raw_wait = self.retained_wait = self.invalid_runs = self.wait_runs = 0
 
@@ -261,6 +262,10 @@ class RepeatedRowCompactor:
             )
         selected = np.flatnonzero(keep)
         self.counts += _outcome_counts(rows[selected])
+        tile_rows = selected[
+            np.isin(rows["route"][selected], (FitRoute.ACCEPTED, FitRoute.TILE_INVALID))
+        ]
+        self.tile_counts += _outcome_counts(rows[tile_rows])
         self.raw += int(active.sum())
         self.raw_invalid += int(invalid.sum())
         self.retained_invalid += int(np.count_nonzero(keep & invalid))

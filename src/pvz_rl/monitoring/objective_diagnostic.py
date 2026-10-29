@@ -126,7 +126,7 @@ def run(checkpoint, output):
     output = Path(output)
     output.mkdir(parents=True, exist_ok=False)
     cfg = load_config()
-    cfg["training"].update(n_envs=16, total_games=16, n_epochs=4)
+    cfg["training"].update(n_envs=16, total_games=16)
     cfg["environment"]["cutoff_seconds"] = 30
     cfg["visualization"].update(enabled=False, live_enabled=False)
     cfg["simulation"]["profile"] = True

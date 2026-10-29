@@ -15,6 +15,7 @@ import torch
 from pvz_rl.config import digest, load_config, validate_config
 from pvz_rl.learning.performance import ENCODER_SETTINGS, refresh_performance
 from pvz_rl.learning.training_requirements import (
+    FIT_SCHEDULE_PROTOCOL,
     current_model_config,
     inference_config,
     transfer_protocol,
@@ -139,16 +140,13 @@ def load_torch_snapshot(path):
 
 
 def protocol_for(kind):
-    methods = {
-        "two_stage_transformer_q_v1": "complete_return_action_global_v7",
-    }
-    if kind not in methods:
+    if kind != "two_stage_transformer_q_v1":
         raise ValueError(
             f"Incompatible checkpoint model family: {kind}; entity_v1 requires fresh initialization"
         )
     from pvz_rl.learning.exploration import EXPLORATION_PROTOCOL
 
-    return dict(policy=kind, optimizer=methods[kind], exploration=EXPLORATION_PROTOCOL)
+    return dict(policy=kind, optimizer=FIT_SCHEDULE_PROTOCOL, exploration=EXPLORATION_PROTOCOL)
 
 
 def compatible_config(source, target, *, weights_only=False):
@@ -175,7 +173,14 @@ def execution_config(cfg):
         cfg["policy"].setdefault(key, copy.deepcopy(defaults["policy"][key]))
     for key in ("logging", "visualization", "runtime", "simulation"):
         cfg.setdefault(key, copy.deepcopy(defaults[key]))
-    for key in ("storage", "performance", "batch_size", "n_epochs", "max_grad_norm"):
+    for key in (
+        "storage",
+        "performance",
+        "batch_size",
+        "n_epochs",
+        "tile_warmup_passes",
+        "max_grad_norm",
+    ):
         cfg["training"].setdefault(key, copy.deepcopy(defaults["training"][key]))
     for key, value in defaults["training"]["performance"].items():
         cfg["training"]["performance"].setdefault(key, copy.deepcopy(value))

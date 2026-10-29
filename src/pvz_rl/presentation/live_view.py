@@ -174,7 +174,14 @@ def learning_settings(cfg):
             "Learning",
             tuple(
                 f"{key}={training[key]}"
-                for key in ("learning_rate", "max_grad_norm", "batch_size", "n_epochs", "gamma")
+                for key in (
+                    "learning_rate",
+                    "max_grad_norm",
+                    "batch_size",
+                    "tile_warmup_passes",
+                    "n_epochs",
+                    "gamma",
+                )
             )
             + (f"fit_batch_groups={training['performance']['fit_batch_groups']}",),
         ),

@@ -30,11 +30,11 @@ from pvz_rl.learning.exploration import (
 from pvz_rl.learning.flat_q import CohortCoefficients, batch_loss
 from pvz_rl.learning.objective import (
     COMPONENTS,
-    OBJECTIVE_PROTOCOL,
     consistency_diagnostics,
     finalize_episode_metrics,
 )
 from pvz_rl.learning.performance import compilation_requested
+from pvz_rl.learning.training_requirements import FIT_SCHEDULE_PROTOCOL
 from pvz_rl.policy.active_batch import ActiveBatchPlan
 from pvz_rl.policy.cudagraph_backend import EncoderCompilationError
 from pvz_rl.policy.runner import PolicyRunner
@@ -59,7 +59,19 @@ def flat_batches(buffer, decision_budget, spool=None):
 
 class CudaSequentialQ(CudaCohortLifecycle):
     policy_protocol = "two_stage_transformer_q_v1"
-    optimizer_version = OBJECTIVE_PROTOCOL
+    optimizer_version = FIT_SCHEDULE_PROTOCOL
+
+    @property
+    def tile_warmup_passes(self):
+        return int(self.cfg["training"]["tile_warmup_passes"])
+
+    @property
+    def total_fit_passes(self):
+        return self.tile_warmup_passes + self.n_epochs
+
+    @property
+    def fit_stage(self):
+        return "tile_only" if self._fit_epoch < self.tile_warmup_passes else "joint"
 
     def _setup_model(self):
         super()._setup_model()
@@ -152,12 +164,14 @@ class CudaSequentialQ(CudaCohortLifecycle):
             self._teacher_version = getattr(self, "_teacher_version", 0)
 
     @torch.no_grad()
-    def _update_teacher(self):
+    def _update_teacher(self, stage=None):
         self._ensure_teacher()
         decay = self.cfg["training"]["objective"]["ema_decay"]
+        teacher_parameters = self._teacher.runtime_parameters(stage)
+        online_parameters = self.policy.runtime_parameters(stage)
         torch._foreach_lerp_(
-            list(self._teacher.runtime_parameters()),
-            list(self.policy.runtime_parameters()),
+            list(teacher_parameters),
+            list(online_parameters),
             1 - decay,
         )
         self._teacher_version += 1
@@ -718,16 +732,30 @@ class CudaSequentialQ(CudaCohortLifecycle):
         groups = self.execution_state["fit_batch_groups"]
         if getattr(self, "_fitting_spool", None) is None:
             self._fitting_spool = FittingSpool(self._buffer)
-        self._fit_outcome_counts = self._fitting_spool.outcome_counts
+        self._fit_kind = self.fit_stage
+        self._fit_outcome_counts = (
+            self._fitting_spool.tile_outcome_counts
+            if self._fit_kind == "tile_only"
+            else self._fitting_spool.outcome_counts
+        )
         self._fit_consistency_counts = self._fitting_spool.consistency_counts
         if not hasattr(self._fitting_spool, "coefficients"):
             self._fitting_spool.coefficients = CohortCoefficients.prepare(
-                self._fit_outcome_counts,
+                self._fitting_spool.outcome_counts,
                 self._fit_consistency_counts,
                 self.device,
                 self.cfg["training"]["objective"]["accepted_outcome_share"],
             )
+        if not hasattr(self._fitting_spool, "tile_coefficients"):
+            self._fitting_spool.tile_coefficients = CohortCoefficients.prepare(
+                self._fitting_spool.tile_outcome_counts,
+                np.zeros((2, 2), dtype=np.int64),
+                self.device,
+                self.cfg["training"]["objective"]["accepted_outcome_share"],
+            )
         self._fit_coefficients = self._fitting_spool.coefficients
+        if self._fit_kind == "tile_only":
+            self._fit_coefficients = self._fitting_spool.tile_coefficients
         args = self._buffer, self.batch_size * groups, self._fitting_spool
         self._fit_pass_start = torch.cuda.Event(enable_timing=True)
         self._fit_pass_start.record()
@@ -759,6 +787,7 @@ class CudaSequentialQ(CudaCohortLifecycle):
                 selected_sum / selected_n if selected_n else None,
                 gap_sum / gap_n if gap_n else None,
             )
+            self._cached_fit_examples = int(selected_n)
         loss, selected_error, placement_gap = self._cached_metrics
         self.logger.record("train/q_loss", loss)
         self.logger.record("train/selected_action_error", selected_error)
@@ -770,7 +799,7 @@ class CudaSequentialQ(CudaCohortLifecycle):
         if viewer is not None and viewer.session.enabled:
             viewer.session.poll()
             viewer.session.publish()
-        if self._fit_epoch >= self.n_epochs:
+        if self._fit_epoch >= self.total_fit_passes:
             self._phase(CohortPhase.SYNCHRONIZE, callback)
             return
         if getattr(self, "_batch_iterator", None) is None:
@@ -785,9 +814,12 @@ class CudaSequentialQ(CudaCohortLifecycle):
             self._publish_fit_metrics(final=True)
             if not torch.isfinite(self._pass_metrics).all():
                 raise FloatingPointError("Non-finite two-stage Q loss")
+            parameters = self.policy.master_parameters(
+                "tile" if self._fit_kind == "tile_only" else None
+            )
             try:
                 norm = torch.nn.utils.clip_grad_norm_(
-                    self.policy.master_parameters(), self.max_grad_norm, error_if_nonfinite=True
+                    parameters, self.max_grad_norm, error_if_nonfinite=True
                 )
             except RuntimeError as exc:
                 if "non-finite" not in str(exc):
@@ -798,12 +830,15 @@ class CudaSequentialQ(CudaCohortLifecycle):
             self._optimizer_committing = True
             self.policy.optimizer.step()
             self.policy.sync_runtime_from_masters()
-            self._update_teacher()
+            self._update_teacher("tile" if self._fit_kind == "tile_only" else None)
             self._optimizer_committing = False
             end.record()
             self._optimizer_events.append((start, end))
             self.policy.zero_grad(set_to_none=True)
             self._stats["q_optimizer_steps"] += 1
+            phase_key = "tile_warmup" if self._fit_kind == "tile_only" else "joint"
+            self._stats[f"{phase_key}_optimizer_steps"] += 1
+            self._stats[f"{phase_key}_fit_examples"] += self._cached_fit_examples
             self._fit_epoch += 1
             self._close_batches()
             self.logger.record("train/q_grad_norm", float(norm))
@@ -819,6 +854,7 @@ class CudaSequentialQ(CudaCohortLifecycle):
                 teacher=self._teacher,
                 consistency_counts=self._fit_consistency_counts,
                 coefficients=self._fit_coefficients,
+                fit_stage=self._fit_kind,
             )
             loss.backward()
             self.policy.accumulate_master_gradients()
@@ -857,6 +893,11 @@ class CudaSequentialQ(CudaCohortLifecycle):
         self._stats["encoder_microbatch"] = self.execution_state["microbatch"]
         self._stats["encoder_token_budget"] = self.execution_state["token_budget"]
         self._stats["execution_fallbacks"] = list(self.execution_state["fallbacks"])
+        self._stats["fit_schedule"] = dict(
+            tile_warmup_passes=self.tile_warmup_passes,
+            joint_passes=self.n_epochs,
+            total_passes=self.total_fit_passes,
+        )
         self._stats["fitting_spool_rows"] = len(getattr(self, "_fitting_spool", None) or ())
         spool = getattr(self, "_fitting_spool", None)
         self._stats["fitting_compaction"] = dict(spool.compaction) if spool is not None else {}

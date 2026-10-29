@@ -21,6 +21,7 @@ from pvz_rl.learning.cohort import (
 from pvz_rl.learning.cuda_buffer import CompleteGameBuffer
 from pvz_rl.learning.exploration import EXPLORATION_PROTOCOL, configure_exploration
 from pvz_rl.learning.objective import OBJECTIVE_PROTOCOL
+from pvz_rl.learning.training_requirements import FIT_SCHEDULE_PROTOCOL
 from pvz_rl.policy.sequential_q import ACTION_DISTRIBUTION, POLICY_SIGNATURE
 
 
@@ -36,7 +37,13 @@ def checkpoint_metadata(path, *, weights_only=False):
     from pvz_rl.learning.checkpoints import protocol_for
 
     expected = protocol_for(metadata.get("policy"))
+    if not weights_only and metadata.get("optimizer") == OBJECTIVE_PROTOCOL:
+        raise ValueError(
+            "Checkpoint uses the previous four-joint-pass schedule and cannot resume. "
+            "Use --init-from for a fresh run with compatible weights."
+        )
     if weights_only and metadata.get("optimizer") not in (
+        FIT_SCHEDULE_PROTOCOL,
         OBJECTIVE_PROTOCOL,
         "complete_return_action_global_v6",
         "complete_return_action_global_v5",
@@ -71,7 +78,7 @@ def checkpoint_optimizer_protocol(path):
 
 class CudaCohortLifecycle(BaseAlgorithm):
     policy_protocol = POLICY_SIGNATURE
-    optimizer_version = OBJECTIVE_PROTOCOL
+    optimizer_version = FIT_SCHEDULE_PROTOCOL
 
     def __init__(
         self,
@@ -80,7 +87,7 @@ class CudaCohortLifecycle(BaseAlgorithm):
         *,
         learning_rate=3e-4,
         batch_size=1024,
-        n_epochs=4,
+        n_epochs=1,
         max_grad_norm=5,
         policy_kwargs=None,
         seed=None,
@@ -229,6 +236,10 @@ class CudaCohortLifecycle(BaseAlgorithm):
             self.logger.record("train/" + key, None)
         self._stats = dict(
             q_optimizer_steps=0,
+            tile_warmup_optimizer_steps=0,
+            joint_optimizer_steps=0,
+            tile_warmup_fit_examples=0,
+            joint_fit_examples=0,
             species_exploration_coins=0,
             tile_exploration_coins=0,
             exploratory_changes=0,

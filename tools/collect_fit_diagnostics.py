@@ -289,6 +289,8 @@ class FitDiagnostics:
             storage=cfg["training"]["storage"],
             batch_size=model.batch_size,
             n_epochs=model.n_epochs,
+            tile_warmup_passes=model.tile_warmup_passes,
+            total_fit_passes=model.total_fit_passes,
             encoding=cfg["encoding"],
             diagnostics=dict(
                 sample_seconds=self.sample_seconds,

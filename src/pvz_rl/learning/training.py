@@ -50,6 +50,7 @@ from pvz_rl.learning.exploration import (
 from pvz_rl.learning.objective import components, training_rewards
 from pvz_rl.learning.performance import compilation_requested
 from pvz_rl.learning.training_requirements import (
+    FIT_SCHEDULE_PROTOCOL,
     parameter_changes,
     require_cuda_training,
     require_supported_policy,
@@ -491,9 +492,13 @@ class ResearchCallback(BaseCallback):
             finished = max(0, size - int(model.env.enabled_envs[:size].sum()))
             marker = f"{finished}/{size} games"
         elif phase == "fit":
-            marker = (
-                f"pass {getattr(model, '_fit_epoch', 0) + 1}/{self.cfg['training']['n_epochs']}"
-            )
+            if model._fit_epoch >= model.total_fit_passes:
+                marker = "fit complete"
+            elif model.fit_stage == "tile_only":
+                marker = f"tile-only pass {model._fit_epoch + 1}/{model.tile_warmup_passes}"
+            else:
+                joint_pass = model._fit_epoch - model.tile_warmup_passes + 1
+                marker = f"joint pass {joint_pass}/{model.n_epochs}"
         else:
             marker = phase
         games = f"games total {row['training_games']:,}"
@@ -939,6 +944,8 @@ class ResearchCallback(BaseCallback):
         cohort = self.model.cohort_metrics
         self.progress.emit(
             f"Cohort {self.model._n_updates} fitted: {cohort.get('q_optimizer_steps', 0)} passes "
+            f"({cohort.get('tile_warmup_optimizer_steps', 0)} tile-only + "
+            f"{cohort.get('joint_optimizer_steps', 0)} joint) "
             f"in {cohort['fit_seconds']:.1f}s after {cohort['collection_seconds']:.1f}s "
             f"collection; {cohort['transitions_per_second']:,.0f} transitions/s; "
             f"optimizer step {optimizer_step(self.model):,}; {self.cohort_text()}",
@@ -1271,6 +1278,7 @@ def train(
         exploration_protocol=EXPLORATION_PROTOCOL,
         structural_signature=transfer_protocol(cfg),
         optimizer_protocol=cfg["training"]["method"],
+        fit_schedule_protocol=FIT_SCHEDULE_PROTOCOL,
         model_family=cfg["policy"]["kind"],
         hardware_telemetry={
             "enabled": cfg["training"].get("performance", {}).get("telemetry", False),
@@ -1283,6 +1291,8 @@ def train(
             "learning_rate": cfg["training"]["learning_rate"],
             "adam_epsilon": 1e-8,
             "batch_size": cfg["training"]["batch_size"],
+            "tile_warmup_passes": cfg["training"]["tile_warmup_passes"],
+            "joint_passes": cfg["training"]["n_epochs"],
             "independent_encoders": True,
             "runtime_dtype": "bf16",
             "master_dtype": "fp32",
@@ -1311,8 +1321,10 @@ def train(
     )
     progress.emit(f"Data transport: {runtime_settings(cfg)}", force=True)
     progress.emit(
-        f"Policy: {cfg.get('policy', {'kind': 'flat'})}; "
-        f"actual returns, one sequential Q fitting phase; minibatch {cfg['training']['batch_size']}",
+        f"Policy: {cfg.get('policy', {'kind': 'flat'})}; actual returns; "
+        f"{cfg['training']['tile_warmup_passes']} tile-only passes then "
+        f"{cfg['training']['n_epochs']} joint action/tile pass(es); "
+        f"minibatch {cfg['training']['batch_size']}",
         force=True,
     )
     progress.emit(f"Reward settings: {cfg['reward']}", force=True)

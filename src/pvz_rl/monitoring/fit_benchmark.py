@@ -108,7 +108,7 @@ def benchmark_rows(cfg, widths, rows_per_width, action_mix, dtype):
 
 
 def measure(cfg, *, repeats=3, rows_per_width=16, trajectory=None, initial=None):
-    """Each repetition commits four complete passes with fixed cohort denominators."""
+    """Each repetition commits configured tile-only warmup and joint passes."""
     torch.set_num_threads(cfg["training"]["torch_threads"])
     torch.manual_seed(101)
     model = TwoStageTransformerPolicy(cfg).cuda().train()
@@ -156,9 +156,22 @@ def measure(cfg, *, repeats=3, rows_per_width=16, trajectory=None, initial=None)
                     "cuda",
                     cfg["training"]["objective"]["accepted_outcome_share"],
                 )
+                tile_coefficients = CohortCoefficients.prepare(
+                    spool.tile_outcome_counts,
+                    np.zeros((2, 2), dtype=np.int64),
+                    "cuda",
+                    cfg["training"]["objective"]["accepted_outcome_share"],
+                )
+                total_passes = (
+                    cfg["training"]["tile_warmup_passes"] + cfg["training"]["n_epochs"]
+                )
 
                 def passes():
-                    for _ in range(cfg["training"]["n_epochs"]):
+                    for pass_index in range(total_passes):
+                        tile_only = pass_index < cfg["training"]["tile_warmup_passes"]
+                        fit_stage = "tile_only" if tile_only else "joint"
+                        pass_counts = spool.tile_outcome_counts if tile_only else counts
+                        pass_coefficients = tile_coefficients if tile_only else coefficients
                         model.zero_grad(set_to_none=True)
                         with_transport = BatchPrefetch(
                             buffer,
@@ -172,12 +185,13 @@ def measure(cfg, *, repeats=3, rows_per_width=16, trajectory=None, initial=None)
                                 loss, *_ = batch_loss(
                                     model,
                                     chunk,
-                                    counts,
+                                    pass_counts,
                                     obs,
                                     fields,
                                     teacher=teacher,
                                     consistency_counts=spool.consistency_counts,
-                                    coefficients=coefficients,
+                                    coefficients=pass_coefficients,
+                                    fit_stage=fit_stage,
                                 )
                                 loss.backward()
                                 model.accumulate_master_gradients()
@@ -185,16 +199,22 @@ def measure(cfg, *, repeats=3, rows_per_width=16, trajectory=None, initial=None)
                         finally:
                             with_transport.close()
                         torch.nn.utils.clip_grad_norm_(
-                            model.master_parameters(),
+                            model.master_parameters("tile") if tile_only else model.master_parameters(),
                             cfg["training"]["max_grad_norm"],
                             error_if_nonfinite=True,
                         )
                         optimizer.step()
                         model.sync_runtime_from_masters()
                         with torch.no_grad():
+                            teacher_parameters = teacher.runtime_parameters(
+                                "tile" if tile_only else None
+                            )
+                            model_parameters = model.runtime_parameters(
+                                "tile" if tile_only else None
+                            )
                             torch._foreach_lerp_(
-                                list(teacher.parameters()),
-                                list(model.parameters()),
+                                list(teacher_parameters),
+                                list(model_parameters),
                                 1 - cfg["training"]["objective"]["ema_decay"],
                             )
 
@@ -227,7 +247,9 @@ def measure(cfg, *, repeats=3, rows_per_width=16, trajectory=None, initial=None)
                         rows=buffer.size,
                         representatives=len(spool),
                         compaction=spool.compaction,
-                        passes=cfg["training"]["n_epochs"],
+                        passes=total_passes,
+                        tile_warmup_passes=cfg["training"]["tile_warmup_passes"],
+                        joint_passes=cfg["training"]["n_epochs"],
                         spool_seconds=spool_seconds,
                         cold_seconds=cold_seconds,
                         routed_workload=workload_counts(spool.rows),

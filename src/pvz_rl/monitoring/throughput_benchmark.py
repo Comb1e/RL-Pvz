@@ -1,4 +1,4 @@
-"""Bounded four-pass fitting controls for the current model and execution settings."""
+"""Bounded synthetic four-pass joint-encoder throughput controls."""
 
 import argparse
 import gc
@@ -14,6 +14,8 @@ from pvz_rl.monitoring.entity_benchmark import observation
 from pvz_rl.policy.two_stage_transformer import TwoStageTransformerPolicy
 from pvz_rl.provenance import write_json
 
+SYNTHETIC_PASSES = 4
+
 
 def synthetic(cfg, counts):
     torch.manual_seed(101)
@@ -24,7 +26,7 @@ def synthetic(cfg, counts):
     branches = torch.arange(1024, device="cuda") % 9 + 1
 
     def passes():
-        for _ in range(cfg["training"]["n_epochs"]):
+        for _ in range(SYNTHETIC_PASSES):
             model.zero_grad(set_to_none=True)
             q = model.species_values(obs)
             tile_q = model.conditional_tiles(obs, branches)
@@ -52,7 +54,7 @@ def synthetic(cfg, counts):
                 repeat=repeat,
                 entities=counts,
                 seconds=seconds,
-                passes=4,
+                passes=SYNTHETIC_PASSES,
                 frames=4096,
                 frames_per_second=4096 / seconds,
                 torch_peak_allocated_mib=torch.cuda.max_memory_allocated() / 2**20,
@@ -73,7 +75,7 @@ def main():
         torch=torch.__version__,
         n_envs=128,
         batch_size=1024,
-        n_epochs=4,
+        synthetic_joint_passes=SYNTHETIC_PASSES,
         formal_training=False,
         measurements=[],
     )

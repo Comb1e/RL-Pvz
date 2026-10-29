@@ -148,7 +148,9 @@
   draws and per-slot counters. Accepted planting returns immediately to normal
   collection; there is no counterfactual source, probe lane or rollout state.
 - `learning/sequential_training.py` owns `CudaSequentialQ`: canonical collection,
-  background drains, complete returns and four whole-cohort fitting passes.
+  background drains, complete returns, five tile-only whole-cohort warmup passes,
+  then one joint action/tile pass. The committed pass index determines its
+  recovery stage.
   `learning/flat_q.py` owns shared autonomous/demo fitting: selected regression,
   double-estimator species consistency and demo ranking.
   `learning/objective.py` owns shared NumPy/PyTorch selected-action targets:
@@ -299,7 +301,7 @@
   rewriting recordings.
 - `evaluation/` uses the stateless runner and CPU-verifies CUDA action traces.
   `monitoring/` owns availability, both-stage entity/throughput benchmarks, bounded
-  collection/four-pass-fit/collection controls and objective diagnostics.
+  collection/tile-warmup+joint-fit/collection controls and objective diagnostics.
   `monitoring/moments.py` supplies bounded FP64 centered population moments for
   same-unit dense/total return diagnostics, including covariance. Warnings identify
   their cohort and are not repeated in routine progress.

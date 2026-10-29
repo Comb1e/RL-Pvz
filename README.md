@@ -156,12 +156,17 @@ check. Rejected actions break the streak, and commitment waits do not count.
 See [exploration and recovery](docs/math/sequential-training.md#plant-exploration)
 for species selection and cohort-boundary behavior.
 
-Resume an interrupted compatible run with its optimizer, RNG and fitting progress:
+Each complete-game cohort runs five tile-only fitting passes followed by one
+joint action/tile pass. The tile-only phase learns from accepted plant/dig rows
+and tile-invalid proposals; waits and species-invalid proposals do not enter its
+loss. The joint pass retains the normal route-aware objective.
+
+Resume an interrupted run created with this fitting schedule:
 
 ```powershell
 .\.venv\Scripts\python.exe -m pvz_rl train `
-  --resume runs\compact-stages-101-new\easy\interrupted.zip `
-  --output runs\compact-stages-101-new\easy `
+  --resume runs\my-run\latest.zip `
+  --output runs\my-run `
   --gpu 0 --gpu-profile rtx4070-laptop
 ```
 
@@ -169,6 +174,19 @@ Resume retains saved exploration rates, decay schedules and the active reward
 settings for an already collected cohort. The current wait interval and
 `[reward.passivity]` values take effect at the next collection cohort. A saved
 3% rate means a 3% chance per check, not guaranteed planting.
+
+Checkpoints created with the previous four-joint-pass schedule cannot resume
+their optimizer or simulator state. They remain usable with `--init-from` for a
+fresh run; that transfers weights only and starts new optimizer, RNG and game
+state. For example:
+
+```powershell
+.\.venv\Scripts\python.exe -m pvz_rl train `
+  --stage easy --seed 101 `
+  --output runs\new-schedule\easy `
+  --init-from runs\previous-run\interrupted.zip `
+  --gpu 0 --gpu-profile rtx4070-laptop
+```
 
 ## Common checks
 

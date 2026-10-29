@@ -103,8 +103,17 @@ class TwoStageTransformerPolicy(nn.Module):
                 master.grad = fn(master.grad).float()
         return result
 
-    def master_parameters(self):
-        return tuple(self._master_parameters)
+    def master_parameters(self, stage=None):
+        if stage is None:
+            return tuple(self._master_parameters)
+        if stage not in ("species", "tile"):
+            raise ValueError("Parameter stage must be species or tile")
+        prefix = f"{stage}_"
+        return tuple(
+            master
+            for name, master in zip(self._master_names, self._master_parameters, strict=True)
+            if name.startswith(prefix)
+        )
 
     def requires_grad_(self, requires_grad=True):
         super().requires_grad_(requires_grad)
@@ -112,8 +121,18 @@ class TwoStageTransformerPolicy(nn.Module):
             master.requires_grad_(requires_grad)
         return self
 
-    def runtime_parameters(self):
-        return tuple(super().parameters())
+    def runtime_parameters(self, stage=None):
+        parameters = tuple(super().parameters())
+        if stage is None:
+            return parameters
+        if stage not in ("species", "tile"):
+            raise ValueError("Parameter stage must be species or tile")
+        prefix = f"{stage}_"
+        return tuple(
+            parameter
+            for name, parameter in zip(self._master_names, parameters, strict=True)
+            if name.startswith(prefix)
+        )
 
     def master_state_dict(self):
         return {

@@ -716,6 +716,8 @@ def validate_config(cfg: dict) -> None:
     ):
         if type(train[key]) is not int or train[key] <= 0:
             raise ValueError(f"{key} must be a positive integer")
+    if type(train.get("tile_warmup_passes")) is not int or train["tile_warmup_passes"] < 0:
+        raise ValueError("training.tile_warmup_passes must be a nonnegative integer")
     if train.get("discount_clock") != "simulation_ticks" or train["gamma"] != 1:
         raise ValueError("Complete actual returns require gamma 1; start fresh")
     if train["batch_size"] > 1024:

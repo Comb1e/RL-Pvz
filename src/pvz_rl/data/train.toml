@@ -97,7 +97,8 @@ finalization_minutes = 15
 # Ordinary waits trigger the same plant probability check once per interval.
 exploration = {objective = "committed_plant_tile_epsilon_v1", epsilon_start = 0.5, epsilon_floor = 0.03, decay_games = 10000, plant_epsilon_start = 0.1, plant_epsilon_floor = 0.03, plant_decay_games = 10000, plant_wait_check_seconds = 15.0}
 batch_size = 1024
-n_epochs = 4
+tile_warmup_passes = 5
+n_epochs = 1 # Joint action/tile passes after tile-only warmup.
 learning_rate = 0.0003
 max_grad_norm = 5 # Shared by autonomous training and demonstration initialization.
 eval_interval = 250000 # Used only by bounded decision-window diagnostics.

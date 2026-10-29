@@ -195,6 +195,7 @@ class FittingSpool(PreparedPlans):
             entities += int(counts.sum())
             used += len(selected)
         self.compaction, self.outcome_counts = compactor.diagnostics, compactor.counts
+        self.tile_outcome_counts = compactor.tile_counts
         self.indices = self._allocate("indices", (used,), np.dtype("<i8"))
         starts = np.r_[0, np.cumsum(populations)]
         cursor = starts[:-1].copy()
