@@ -25,6 +25,34 @@ Here `s=progress_weight/value_scale=0.01/500` in the current profile and the
 multiplier is `training.objective.dense_multiplier=10`; scaling is applied once
 to the combined physical terms, giving /5,000 for fitted physical rewards.
 The same interface builds demonstration and autonomous targets.
+
+## Residual-sun passivity shaping
+
+The current profile adds separate bounded outcome signals for unused sunlight. With
+`[reward.passivity]` set to `win_max_reward=0.2`, `win_reserve=0`,
+`loss_max_penalty=0.3`, `loss_reserve=200`, and `sun_reference=1000`, define
+
+\[
+a_{win}(S)=0.2\,\operatorname{clamp}(S/1000,0,1)^2,
+\qquad a_{loss}(S)=0.3\,\operatorname{clamp}((S-200)/800,0,1)^2.
+\]
+
+For a win, `+a_win(S)` is added to the terminal row's final-unit outcome reward.
+For a loss, `-a_loss(S)` is distributed over that episode's accepted ordinary Wait
+rows in proportion to their executed transition durations. Both curves are
+quadratic in normalized residual sunlight. The allocation uses the actual stored
+`duration`; if all eligible durations are zero, rows share it equally. Commitment
+waits, rejected proposals, plant actions, dig actions and episodes with no eligible
+ordinary waits are excluded. The loss terminal outcome itself is unchanged apart
+from the existing completion-time ranking. All rows remain in the complete return;
+only their final-unit `global_terminal` components and resulting targets change.
+
+The shaping is finalized after the cohort's remaining sunlight is known and
+before returns and fitting compaction. Finalization is idempotent and records
+the residual sunlight, win reward, loss wait penalty, eligible row/duration
+counts, and skipped no-wait losses. Older checkpoints without this table remain
+readable with shaping disabled for their already collected cohort. On resume,
+the current passivity settings activate when the next cohort is created.
 Reward `action_global_value_v5` retains quadratic terminal shaping; objective
 `complete_return_action_global_v7` retains minimum-Q invalid supervision and
 attributes Dig on an empty board to the species stage, skipping tile inference.

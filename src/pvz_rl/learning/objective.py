@@ -14,6 +14,40 @@ from pvz_rl.policy.sequential_q import (
     tile_candidates,
 )
 
+
+def residual_sun_adjustment(remaining_sun, won, cfg):
+    """Return the bounded final-unit residual-sun outcome amount.
+
+    Wins start shaping at zero sunlight; losses start above their configured
+    reserve. Both reach their separate caps at ``sun_reference``. Legacy saved
+    profiles that predate this setting return zero shaping.
+    """
+    settings = cfg.get("reward", {}).get("passivity")
+    if settings is None:
+        if np.ndim(remaining_sun) == 0:
+            return 0.0
+        return np.zeros_like(np.asarray(remaining_sun, dtype=np.float64))
+    sun = np.asarray(remaining_sun, dtype=np.float64)
+    if not np.isfinite(sun).all():
+        raise ValueError("remaining sunlight must be finite")
+    reference = float(settings["sun_reference"])
+    won_array = np.asarray(won, dtype=bool)
+    if won_array.ndim == 0:
+        maximum = float(
+            settings["win_max_reward"] if bool(won_array) else settings["loss_max_penalty"]
+        )
+        reserve = float(settings["win_reserve"] if bool(won_array) else settings["loss_reserve"])
+    else:
+        maximum = np.where(won_array, settings["win_max_reward"], settings["loss_max_penalty"])
+        reserve = np.where(won_array, settings["win_reserve"], settings["loss_reserve"])
+    fraction = np.clip((sun - reserve) / (reference - reserve), 0.0, 1.0)
+    # Quadratic growth keeps the signal mild near the reserve and steepens as
+    # unused sunlight approaches the configured cap.
+    magnitude = maximum * np.square(fraction)
+    result = np.where(won_array, magnitude, -magnitude)
+    return float(result) if result.ndim == 0 else result
+
+
 OBJECTIVE_PROTOCOL = "complete_return_action_global_v7"
 # These are the only reward components that train the policy.  The simulator
 # still publishes the older diagnostic fields (combat_value, home_proximity,
@@ -121,7 +155,7 @@ def endgame_terminal_rewards(durations, won, *, win_reward=1.0, loss_penalty=1.0
     return terminal, adjustment
 
 
-def finalize_episode_metrics(rows, cfg, *, median=None):
+def finalize_episode_metrics(rows, cfg, *, median=None, wait_penalties=None):
     """Finalize one cohort idempotently, including standalone evaluation batches."""
     if not rows:
         return 0.0
@@ -134,17 +168,38 @@ def finalize_episode_metrics(rows, cfg, *, median=None):
         loss_penalty=cfg["reward"]["loss_penalty"],
         weight=cfg["reward"].get("win_time_weight", 0.3),
     )
+    wait_penalties = wait_penalties or {}
     for row, value, delta in zip(rows, terminal, adjustment, strict=True):
         baseline = cfg["reward"]["win_reward"] if row["win"] else -cfg["reward"]["loss_penalty"]
-        change = float(value - row.get("terminal_reward", baseline))
+        final_sun = row.get("remaining_sun")
+        outcome_adjustment = (
+            float(residual_sun_adjustment(final_sun, True, cfg))
+            if row["win"] and final_sun is not None
+            else 0.0
+        )
+        change = float(value + outcome_adjustment - row.get("terminal_reward", baseline))
         for key in ("terminal", "global_terminal"):
             if key in row:
                 row[key] += change
+        passivity_done = bool(row.get("passivity_finalized", False))
+        penalty = (
+            0.0
+            if passivity_done
+            else float(
+                row.get(
+                    "wait_passivity_penalty",
+                    wait_penalties.get(row.get("record_id"), 0.0),
+                )
+            )
+        )
         for key in ("return", "discounted_return", "discounted_outcome_return"):
             if key in row:
-                row[key] += change
+                row[key] += change + penalty
         row.update(
-            terminal_reward=float(value),
+            terminal_reward=float(value + outcome_adjustment),
+            residual_sun_reward=outcome_adjustment,
+            wait_passivity_penalty=penalty,
+            passivity_finalized=True,
             endgame_time_adjustment=float(delta),
             # Retain the field for report readers that understand the old
             # provisional protocol; the actual terminal adjustment is now in

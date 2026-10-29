@@ -125,8 +125,10 @@
   `rewards.py` owns early
   Sunflower eligibility, physical conservation and proximity penalties.
   `learning/objective.py` owns shared average-rank terminal finalization for
-  trajectories, episode reports, demonstrations and evaluation. Recording fact
-  checks remain configuration-independent.
+  trajectories, episode reports, demonstrations and evaluation. Residual-sun
+  passivity adds separate quadratic win-terminal and loss-wait signals during
+  `CompleteGameBuffer` finalization. Recording fact checks remain
+  configuration-independent.
 - `learning/exploration.py` owns persistent planting/wait-triggered species commitments.
   Choose another species uniformly; wait ordinarily for sun/cooldown, with no
   timeout. All 45 tiles remain proposal candidates, so occupancy is classified

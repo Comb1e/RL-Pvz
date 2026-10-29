@@ -75,6 +75,15 @@ zero-total episodes are excluded. Actual proposals, rejected actions,
 commitments and exploration provenance remain separate from diagnostic greedy
 proposals. No rollout row, probe target or auxiliary reward exists.
 
+Residual-sun passivity shaping is finalized at the cohort boundary. A win adds
+`0.2 * clamp(remaining_sun / 1000, 0, 1)^2` to the terminal outcome row. A loss
+distributes `-0.3 * clamp((remaining_sun - 200) / 800, 0, 1)^2` over accepted
+ordinary Wait rows by executed duration; commitment waits, rejected proposals,
+plants and digs are excluded. A loss with no eligible waits has no passivity
+penalty. The rows remain chronological and complete returns are calculated after
+this update. Older in-flight cohorts retain their saved settings, while resumed
+runs apply current passivity values to the next cohort.
+
 ## Plant exploration
 
 Normal accepted planting and prolonged ordinary waiting share the same

@@ -453,6 +453,7 @@ class PvZEnv(gym.Env):
             "status": self.state.value,
             "win": int(self.state == EpisodeState.WON),
             "tick": obs.tick,
+            "remaining_sun": float(obs.sun),
             "simulated_seconds": obs.elapsed_seconds,
             "return": self.episode_reward,
             "decisions": self.metrics["decisions"],

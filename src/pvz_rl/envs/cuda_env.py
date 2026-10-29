@@ -547,6 +547,7 @@ class CudaVecEnv(VecEnv):
             status=status,
             win=int(status == "won"),
             tick=int(h[0]),
+            remaining_sun=float(h[HEADER.index("sun")]),
             simulated_seconds=float(h[0] / self.batch.rules.game["tick_rate"]),
             **{"return": float(t[0])},
             decisions=int(t[1]),

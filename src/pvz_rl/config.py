@@ -152,6 +152,26 @@ def plant_wait_check_ticks(cfg: dict) -> int | None:
     return int(ticks)
 
 
+def passivity_settings(cfg: dict) -> dict:
+    """Return residual-sun shaping settings, with legacy runs disabled."""
+    settings = cfg.get("reward", {}).get("passivity")
+    if settings is None:
+        return {
+            "win_max_reward": 0.0,
+            "win_reserve": 0.0,
+            "loss_max_penalty": 0.0,
+            "loss_reserve": 0.0,
+            "sun_reference": 1000.0,
+        }
+    return {
+        "win_max_reward": float(settings["win_max_reward"]),
+        "win_reserve": float(settings["win_reserve"]),
+        "loss_max_penalty": float(settings["loss_max_penalty"]),
+        "loss_reserve": float(settings["loss_reserve"]),
+        "sun_reference": float(settings["sun_reference"]),
+    }
+
+
 def load_config(path: str | Path | None = None, *, profile: str = "train") -> dict:
     cfg = _resolve_profile(_read_config(path), profile)
     _resolve_action_timing(cfg)
@@ -296,9 +316,39 @@ def validate_config(cfg: dict) -> None:
         reward_keys | {"action", "home_entry_penalties"},
         reward_keys | {"action", "win_time_weight"},
         reward_keys | {"action", "home_entry_penalties", "win_time_weight"},
+        reward_keys | {"passivity"},
+        reward_keys | {"passivity", "home_entry_penalties"},
+        reward_keys | {"passivity", "win_time_weight"},
+        reward_keys | {"passivity", "home_entry_penalties", "win_time_weight"},
+        reward_keys | {"passivity", "action"},
+        reward_keys | {"passivity", "action", "home_entry_penalties"},
+        reward_keys | {"passivity", "action", "win_time_weight"},
+        reward_keys | {"passivity", "action", "home_entry_penalties", "win_time_weight"},
     )
     if set(cfg["reward"]) - {"asset_loss_multiplier"} not in reward_keys_with_optional:
         raise ValueError("reward must contain the outcome, asset-value, and action settings")
+    passivity = cfg["reward"].get("passivity")
+    if passivity is not None:
+        passivity_keys = {
+            "win_max_reward",
+            "win_reserve",
+            "loss_max_penalty",
+            "loss_reserve",
+            "sun_reference",
+        }
+        if not isinstance(passivity, dict) or set(passivity) != passivity_keys:
+            raise ValueError("reward.passivity contains an invalid setting")
+        for key in passivity_keys:
+            value = passivity[key]
+            if (
+                type(value) not in (int, float)
+                or isinstance(value, bool)
+                or not math.isfinite(value)
+                or value < 0
+            ):
+                raise ValueError(f"reward.passivity.{key} must be finite and nonnegative")
+        if passivity["sun_reference"] <= max(passivity["win_reserve"], passivity["loss_reserve"]):
+            raise ValueError("reward.passivity.sun_reference must exceed both reserves")
     action_reward = cfg["reward"].get("action", {})
     if not isinstance(action_reward, dict):
         raise ValueError("reward.action must be a table")

@@ -246,6 +246,8 @@ class ResearchCallback(BaseCallback):
                 for trigger in ("plant", "wait")
                 for suffix in ("checks", "commitments")
             },
+            passivity_requested=getattr(self.model, "_passivity_requested", None),
+            passivity_active=getattr(self.model, "_passivity_active", None),
         )
 
     def task_counts(self):
@@ -1223,6 +1225,11 @@ def train(
     resumed_model = (
         load_policy(resume, cfg["training"]["device"], for_resume=True)[0] if resume else None
     )
+    if resumed_model is not None and hasattr(resumed_model, "refresh_passivity"):
+        # Reward shaping is the only resume-scoped update. The restored buffer
+        # keeps its saved cohort settings; the requested values activate when
+        # the next cohort is created.
+        resumed_model.refresh_passivity(cfg)
     torch.set_num_threads(cfg["training"]["torch_threads"])
     # Complete Q rollouts are counted explicitly; no discarded partial optimization batch.
     game_budget = uses_games(cfg)

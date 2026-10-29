@@ -1,12 +1,13 @@
 """Stateless two-stage fitting on the shared CUDA cohort lifecycle."""
 
+import copy
 from contextlib import closing
 from time import perf_counter
 
 import numpy as np
 import torch
 
-from pvz_rl.config import plant_wait_check_ticks
+from pvz_rl.config import passivity_settings, plant_wait_check_ticks
 from pvz_rl.envs.actions import ActionSchema as A
 from pvz_rl.envs.cuda_features import REWARD_FIELDS
 from pvz_rl.envs.encoding import ENTITY_WIDTH, PackedEntityBatch
@@ -66,11 +67,24 @@ class CudaSequentialQ(CudaCohortLifecycle):
         # saved cohort's FP32/memory fallback instead of overwriting it here.
         if not getattr(self, "execution_state", None):
             self._reset_execution()
+        if not hasattr(self, "_passivity_requested"):
+            self._passivity_requested = passivity_settings(self.cfg)
+        if not hasattr(self, "_passivity_active"):
+            self._passivity_active = None
+
+    def refresh_passivity(self, cfg):
+        """Apply only the requested residual-sun settings at a cohort boundary."""
+        self._passivity_requested = passivity_settings(cfg)
+        return dict(self._passivity_requested)
 
     def _new_runner(self):
         return PolicyRunner(self.policy)
 
     def _begin(self, callback):
+        # A restored cohort keeps the buffer configuration it was collected
+        # with. New buffers receive the current requested reward settings.
+        self.cfg["reward"]["passivity"] = copy.deepcopy(self._passivity_requested)
+        self._passivity_active = copy.deepcopy(self._passivity_requested)
         self._drain()
         self._close_batches()
         boundary = self._phase_memory("before_collection_release")
@@ -104,6 +118,8 @@ class CudaSequentialQ(CudaCohortLifecycle):
             wait_exploration_checks=0,
             plant_exploration_commitments=0,
             wait_exploration_commitments=0,
+            passivity_requested=copy.deepcopy(self._passivity_requested),
+            passivity_active=copy.deepcopy(self._passivity_active),
             **exploration_status(self),
         )
         self._buffer.exploration = dict(
@@ -149,8 +165,15 @@ class CudaSequentialQ(CudaCohortLifecycle):
     def _finalize_rewards(self, callback):
         self.env.handoff.clear()
         self._buffer.reserve_staging(0)
-        summary = self._buffer.finalize_rewards()
         pending = getattr(self, "_pending_episodes", {})
+        summary = self._buffer.finalize_rewards(pending)
+        passivity = summary.get("passivity", {}).get("episodes", {})
+        for slot, item in pending.items():
+            episode = item.get("episode")
+            details = passivity.get(f"{int(slot)}:{int(episode)}", {})
+            item["metrics"]["wait_passivity_penalty"] = float(
+                -details.get("loss_wait_penalty", 0.0)
+            )
         finalize_episode_metrics(
             [p["metrics"] for p in pending.values()],
             self.cfg,
@@ -892,6 +915,12 @@ class CudaSequentialQ(CudaCohortLifecycle):
                 ],
                 device=self.device,
             )
+        self._passivity_requested = copy.deepcopy(
+            extra.get("passivity_requested", passivity_settings(self.cfg))
+            if extra
+            else passivity_settings(self.cfg)
+        )
+        self._passivity_active = copy.deepcopy(extra.get("passivity_active")) if extra else None
         if self._buffer is not None and self._buffer.cfg != self.cfg:
             from pvz_rl.learning.training_requirements import resume_protocol
 
@@ -952,6 +981,10 @@ class CudaSequentialQ(CudaCohortLifecycle):
             teacher={k: v.cpu() for k, v in self._teacher.runtime_state_dict().items()},
             teacher_version=self._teacher_version,
             pending_episodes=getattr(self, "_pending_episodes", {}),
+            passivity_requested=copy.deepcopy(
+                getattr(self, "_passivity_requested", passivity_settings(self.cfg))
+            ),
+            passivity_active=copy.deepcopy(getattr(self, "_passivity_active", None)),
             objective=dict(self.cfg["training"]["objective"]),
             compilation={
                 name: {

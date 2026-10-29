@@ -92,9 +92,12 @@ and starts a fresh destination optimizer. The final `tile.pt`/`action.pt` still
 requires convergence. Annotation progress v3 needs one annotation resume to write
 v4 before downstream initialization; `train --resume` requires autonomous recovery.
 
-The active-only trajectory/recovery format is v7; older runs support compatible
-weight-only initialization, but cannot resume. Model architecture, observation
-encoding and weight layout remain unchanged.
+The active-only trajectory/recovery format is v7. Existing v7 runs, including
+those created before residual-sun shaping, remain resumable; their already
+collected cohort keeps its saved reward settings and the new settings begin with
+the next cohort. Older recovery formats support compatible weight-only
+initialization. Model architecture, observation encoding and weight layout
+remain unchanged.
 
 Reward settings live in `src/pvz_rl/data/train.toml`; each run saves its effective
 configuration. With `value_scale=500` and `early_sun_extra_multiplier=6`,
@@ -118,7 +121,13 @@ Transformer is fitted and tile inference is skipped. With at least one plant,
 Dig scores all 45 tiles; selecting an empty tile then fits only the tile stage.
 Completion-time ranking uses a signed quadratic adjustment capped at 0.3:
 terminal wins range from +0.7 to +1.3 and losses from -1 to -1.3. Physical
-rewards and mower penalties additionally affect total game reward.
+rewards and mower penalties additionally affect total game reward. A losing
+episode also applies residual-sun passivity shaping. A win receives
+`+0.2 * clamp(remaining_sun / 1000, 0, 1)^2` as a terminal reward. A loss
+uses `-0.3 * clamp((remaining_sun - 200) / 800, 0, 1)^2`, distributed across
+accepted ordinary waits by their executed duration. Commitment waits, rejected
+actions, plants and digs are excluded; a loss with no ordinary waits receives
+no such penalty. The settings live under `[reward.passivity]` in `train.toml`.
 Objective v7 requires fresh `--init-from` for previous weights rather than
 optimizer resume. The reward protocol stays v5; annotation resume is
 unchanged. See the [reward conversion table](docs/math/training-objective.md).
@@ -151,9 +160,10 @@ Resume an interrupted compatible run with its optimizer, RNG and fitting progres
   --gpu 0 --gpu-profile rtx4070-laptop
 ```
 
-Resume retains saved exploration rates and decay schedules. Only the wait
-interval comes from current configuration, taking effect at the next collection
-cohort. A saved 3% rate means a 3% chance per check, not guaranteed planting.
+Resume retains saved exploration rates, decay schedules and the active reward
+settings for an already collected cohort. The current wait interval and
+`[reward.passivity]` values take effect at the next collection cohort. A saved
+3% rate means a 3% chance per check, not guaranteed planting.
 
 ## Common checks
 
