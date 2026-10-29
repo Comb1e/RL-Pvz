@@ -134,6 +134,24 @@ def _resolve_action_timing(cfg: dict) -> None:
     environment["action_timing"] = "per_tick" if ticks == 1 else "fixed"
 
 
+def plant_wait_check_ticks(cfg: dict) -> int | None:
+    """Resolve the optional legacy-compatible wait interval to exact engine ticks."""
+    settings = cfg["training"]["exploration"]
+    if "plant_wait_check_seconds" not in settings:
+        return None
+    seconds = settings["plant_wait_check_seconds"]
+    from pvz_game import Rules
+
+    if type(seconds) not in (int, float) or not math.isfinite(seconds) or seconds <= 0:
+        raise ValueError("exploration.plant_wait_check_seconds must be finite and positive")
+    ticks = float(seconds * Rules().game["tick_rate"])
+    if not math.isfinite(ticks) or not ticks.is_integer() or not 1 <= ticks < 2**63:
+        raise ValueError(
+            "exploration.plant_wait_check_seconds must represent positive whole simulator ticks"
+        )
+    return int(ticks)
+
+
 def load_config(path: str | Path | None = None, *, profile: str = "train") -> dict:
     cfg = _resolve_profile(_read_config(path), profile)
     _resolve_action_timing(cfg)
@@ -389,6 +407,7 @@ def validate_config(cfg: dict) -> None:
     ):
         raise ValueError("hardware_sample_seconds must be finite and at least 0.1")
     exploration = cfg["training"]["exploration"]
+    plant_wait_check_ticks(cfg)
     for key in ("epsilon_start", "epsilon_floor", "plant_epsilon_start", "plant_epsilon_floor"):
         value = exploration.get(key)
         if type(value) not in (int, float) or not math.isfinite(value) or not 0 < value <= 1:

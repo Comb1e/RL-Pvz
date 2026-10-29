@@ -6,6 +6,7 @@ from time import perf_counter
 import numpy as np
 import torch
 
+from pvz_rl.config import plant_wait_check_ticks
 from pvz_rl.envs.actions import ActionSchema as A
 from pvz_rl.envs.cuda_features import REWARD_FIELDS
 from pvz_rl.envs.encoding import ENTITY_WIDTH, PackedEntityBatch
@@ -19,7 +20,12 @@ from pvz_rl.learning.batch_transport import (
 from pvz_rl.learning.cohort import CohortPhase, atomic_transition, check_transition_interruption
 from pvz_rl.learning.collection_scheduler import CollectionScheduler
 from pvz_rl.learning.cuda_q import CudaCohortLifecycle
-from pvz_rl.learning.exploration import CommittedPlantExploration
+from pvz_rl.learning.exploration import (
+    CommittedPlantExploration,
+    configure_exploration,
+    exploration_status,
+    refresh_wait_exploration,
+)
 from pvz_rl.learning.flat_q import CohortCoefficients, batch_loss
 from pvz_rl.learning.objective import (
     COMPONENTS,
@@ -87,7 +93,18 @@ class CudaSequentialQ(CudaCohortLifecycle):
         self._stats["collection_padded_rows"] = 0
         self._stats["collection_entity_widths"] = {}
         self._plant_exploration = CommittedPlantExploration(
-            self.n_envs, self.device, self.plant_exploration_rate, self.exploration_rate
+            self.n_envs,
+            self.device,
+            self.plant_exploration_rate,
+            self.exploration_rate,
+            wait_check_ticks=plant_wait_check_ticks(self.cfg),
+        )
+        self._stats.update(
+            plant_exploration_checks=0,
+            wait_exploration_checks=0,
+            plant_exploration_commitments=0,
+            wait_exploration_commitments=0,
+            **exploration_status(self),
         )
         self._buffer.exploration = dict(
             plant_epsilon=self.plant_exploration_rate, tile_epsilon=self.exploration_rate
@@ -268,6 +285,9 @@ class CudaSequentialQ(CudaCohortLifecycle):
                         (self.n_envs,),
                         device=self.device,
                     ),
+                    torch.randint(1, A.plant_types + 1, (self.n_envs,), device=self.device)
+                    if self._plant_exploration.wait_check_ticks is not None
+                    else self._scheduler.wait_species_choices,
                 )
             else:
                 columns = torch.zeros(self.n_envs, 25, device=self.device)
@@ -294,17 +314,28 @@ class CudaSequentialQ(CudaCohortLifecycle):
                     ),
                 )
             env.step_device(actions, active=executing)
-            species_coin = self._plant_exploration.observe(
+            checks = self._plant_exploration.observe(
                 actions,
                 env.header_tensor[:, 12].bool(),
                 columns[:, 21].long(),
                 env._device_active,
                 env._step_device_result[1],
-                draws=(self._scheduler.species_coins, self._scheduler.species_choices),
+                env.transition_ticks,
+                draws=(
+                    self._scheduler.species_coins,
+                    self._scheduler.species_choices,
+                    self._scheduler.wait_species_choices,
+                ),
             )
             with env.profiler.track("transfer"):
                 exploration_host = env.handoff.enqueue_fields(
-                    "exploration", dict(coins=species_coin, pending=self._plant_exploration.pending)
+                    "exploration",
+                    dict(
+                        coins=checks.fired,
+                        pending=self._plant_exploration.pending,
+                        plant_checks=checks.plant_checks,
+                        wait_checks=checks.wait_checks,
+                    ),
                 )
             previous_wait = env.handoff.wait_seconds
             env.handoff.wait()
@@ -424,6 +455,14 @@ class CudaSequentialQ(CudaCohortLifecycle):
             )
             self._stats["species_exploration_coins"] += int(rows["species_coin"][active].sum())
             self._stats["tile_exploration_coins"] += int(rows["tile_coin"][active].sum())
+            for trigger in ("plant", "wait"):
+                selected = exploration_host[f"{trigger}_checks"].numpy() & active
+                for suffix, count in (
+                    ("checks", np.count_nonzero(selected)),
+                    ("commitments", np.count_nonzero(selected & rows["species_coin"])),
+                ):
+                    key = f"{trigger}_exploration_{suffix}"
+                    self._stats[key] = self._stats.get(key, 0) + int(count)
             for name, selected in (
                 ("committed_wait_decisions", rows["exploration_mode"] == 1),
                 ("committed_plant_attempts", rows["exploration_mode"] == 2),
@@ -500,10 +539,11 @@ class CudaSequentialQ(CudaCohortLifecycle):
         from pvz_rl.learning.performance import refresh_performance
 
         previous = self.cfg
-        self.policy.cfg = refresh_performance(previous, cfg)
+        self.policy.cfg = refresh_wait_exploration(refresh_performance(previous, cfg), cfg)
         self.policy.cfg["logging"] = dict(cfg["logging"])
         self.policy.features_extractor.cfg = self.policy.cfg
         self.policy_kwargs["features_extractor_kwargs"]["layout_cfg"] = self.policy.cfg
+        configure_exploration(self, self.cfg)
         if (
             getattr(self, "execution_state", {}).get("requested_precision")
             != cfg["training"]["performance"].get("fit_precision", "bf16_master")
@@ -837,6 +877,10 @@ class CudaSequentialQ(CudaCohortLifecycle):
                 self.n_envs, self.device, self.plant_exploration_rate, self.exploration_rate
             )
             self._plant_exploration.restore(extra["plant_exploration"])
+            for trigger in ("plant", "wait"):
+                for suffix in ("checks", "commitments"):
+                    self._stats.setdefault(f"{trigger}_exploration_{suffix}", 0)
+            self._stats.update(exploration_status(self))
             if self._buffer is not None and self._buffer.exploration != dict(
                 plant_epsilon=self.plant_exploration_rate, tile_epsilon=self.exploration_rate
             ):

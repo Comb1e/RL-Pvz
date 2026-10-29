@@ -13,6 +13,7 @@ class CollectionScheduler:
         self.columns = None
         self.species_coins = torch.zeros(count, device=device)
         self.species_choices = torch.ones(count, dtype=torch.long, device=device)
+        self.wait_species_choices = torch.ones(count, dtype=torch.long, device=device)
         self.round = 0
         self.draining = False
 
@@ -20,7 +21,13 @@ class CollectionScheduler:
     def retained_bytes(self):
         return sum(
             value.numel() * value.element_size()
-            for value in (self.columns, self.order, self.species_coins, self.species_choices)
+            for value in (
+                self.columns,
+                self.order,
+                self.species_coins,
+                self.species_choices,
+                self.wait_species_choices,
+            )
             if value is not None
         ) + sum(value.nbytes for value in (self.pending, self.resets, self.decisions))
 
@@ -41,10 +48,13 @@ class CollectionScheduler:
         self.round += 1
         return self.columns, torch.as_tensor(issued, device=columns.device) | pending
 
-    def retain_species_draws(self, new, coins, choices):
+    def retain_species_draws(self, new, coins, choices, wait_choices):
         selected = torch.as_tensor(new, device=self.order.device)
         self.species_coins.copy_(torch.where(selected, coins, self.species_coins))
         self.species_choices.copy_(torch.where(selected, choices, self.species_choices))
+        self.wait_species_choices.copy_(
+            torch.where(selected, wait_choices, self.wait_species_choices)
+        )
 
     def commit(self, issued, executing):
         executing = np.asarray(executing, bool)

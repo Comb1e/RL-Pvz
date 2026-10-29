@@ -189,6 +189,9 @@ def resume_protocol(cfg, condition):
     for key in ("total_games", "total_steps", "max_minutes", "finalization_minutes"):
         result["training"].pop(key, None)
     result["training"].pop("annotation", None)
+    # This trigger changes only at a collection boundary; probability schedules
+    # and every other learning setting remain part of strict resume identity.
+    result["training"]["exploration"].pop("plant_wait_check_seconds", None)
     return result
 
 

@@ -222,6 +222,8 @@ class ResearchCallback(BaseCallback):
                 self.hardware.record_window(cohort)
 
     def q_status(self):
+        from pvz_rl.learning.exploration import exploration_status
+
         buffer = getattr(self.model, "_buffer", None)
         stats = getattr(self.model, "_stats", {})
         return dict(
@@ -238,6 +240,12 @@ class ResearchCallback(BaseCallback):
             species_exploration_coins=stats.get("species_exploration_coins", 0),
             tile_exploration_coins=stats.get("tile_exploration_coins", 0),
             exploratory_changes=stats.get("exploratory_changes", 0),
+            **exploration_status(self.model),
+            **{
+                f"{trigger}_exploration_{suffix}": stats.get(f"{trigger}_exploration_{suffix}", 0)
+                for trigger in ("plant", "wait")
+                for suffix in ("checks", "commitments")
+            },
         )
 
     def task_counts(self):
@@ -562,6 +570,13 @@ class ResearchCallback(BaseCallback):
             "species_exploration_coins",
             "tile_exploration_coins",
             "exploratory_changes",
+            "plant_exploration_checks",
+            "wait_exploration_checks",
+            "plant_exploration_commitments",
+            "wait_exploration_commitments",
+            "plant_exploration_epsilon",
+            "plant_wait_check_seconds",
+            "requested_plant_wait_check_seconds",
             "learning_rate",
             "n_updates",
         )
