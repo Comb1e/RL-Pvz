@@ -1,5 +1,26 @@
 # Sources actually used
 
+## Passive late-game behavior — research directions, 2026-10-28
+
+These inspections support hypotheses and proposed controls, not implemented
+changes or confirmed explanations for the current issue.
+
+- Skalse et al., [Defining and Characterizing Reward Hacking](https://ar5iv.labs.arxiv.org/html/2209.13085):
+  inspected the policy-ordering definition, finite-policy comparisons and section
+  6.1 limitations. Compare economic farming against coordinated defence using
+  both complete shaped returns and victory rates before attributing passivity
+  to reward coefficients. Its restrictive theoretical assumptions do not prove
+  this agent is reward hacking. Cohort-dependent time rewards also need a
+  separate control with the focal episode held fixed.
+- Ecoffet et al., [First return, then explore](https://arxiv.org/html/2004.12919v5)
+  and the [Go-Explore project](https://github.com/uber-research/go-explore):
+  inspected archive/return/explore separation, detachment, derailment, state
+  restoration and stochastic-policy evaluation. Revisit reachable late-game
+  boards and explore coherent defensive sequences instead of relying only on
+  isolated plant choices after accepted plantings. This is a proposed
+  exploration direction; evaluation must still start from ordinary games with
+  exploration disabled. The archived project is a reference, not a dependency.
+
 ## Annotation fitting execution — 2026-10-23
 
 - [PyTorch performance tuning guide source](https://raw.githubusercontent.com/pytorch/tutorials/main/recipes_source/recipes/tuning_guide.py):
@@ -45,10 +66,16 @@
   returns while recording delayed physical effects against their source action.
   The implementation uses explicit simulator event provenance rather than a
   learned eligibility trace.
-- Ng, Harada and Russell, [Policy Invariance Under Reward Transformations](https://ai.stanford.edu/~ang/papers/icml99-shaping.pdf):
+- Ng, Harada and Russell, [Policy Invariance Under Reward Transformations](https://people.eecs.berkeley.edu/~russell/papers/icml99-shaping.pdf):
   used to separate diagnostic proximity/time shaping from the changed learning
   objective and to document that the new signed action terms are an intentional
   objective change, not a claim of policy invariance.
+  Re-inspected sections 2–3 on 2026-10-28 for a possible alternative to recurring
+  income bonuses: potential differences with correct terminal treatment. With
+  gamma one and zero terminal potentials, the complete shaping sum is
+  `-Phi(initial_state)`; this prevents a path-dependent farming advantage but
+  does not itself give complete-return regression new action-ranking evidence.
+  Replacing current bonuses would change the objective; no change was made.
 - The pinned [`pvz_game` event schema](../.venv/Lib/site-packages/pvz_game/cuda/schema.py)
   and engine event implementation were used directly for ordering guarantees:
   projectile source IDs, Sunflower entity IDs, `ZombieSwallowed`,
@@ -69,6 +96,10 @@ learning improvement; implementation verification is tracked in iteration histor
   targets. Existing online tables and the EMA forward are reused; the architecture,
   complete returns, exploration and probes are unchanged. Correlated estimators can
   still share errors; this is not a correctness guarantee or adoption of DQN.
+  Re-inspected the overoptimism discussion and equation 4 on 2026-10-28:
+  independently check species/tile predictions against completed outcomes;
+  a small online/EMA selection gap cannot establish calibration. Uniform Q
+  shifts alone preserve action rankings and cannot explain passivity.
 - [PyTorch 2.8 `HuberLoss` implementation](https://github.com/pytorch/pytorch/blob/v2.8.0/torch/nn/modules/loss.py):
   inspected its piecewise half-squared/linear formula. Species consistency uses
   twice unreduced Huber with delta 1.0 to retain MSE loss/gradients for small errors
@@ -156,6 +187,12 @@ established by these papers.
 - Hester et al., [Deep Q-learning from Demonstrations](https://arxiv.org/abs/1704.03732):
   accepted-demonstration action ranking alongside value regression. The project uses
   only its supervised preference idea, not its replay or DQN implementation.
+  Re-inspected [the full text](https://arxiv.org/html/1704.03732v4), equation 2 and
+  its discussion of ungrounded actions on 2026-10-28. A legality-ranking margin
+  anchored to finite legal values is a proposed alternative to repeatedly fitting
+  an invalid output below the minimum that can include itself. This is a local
+  adaptation, not DQfD's demonstration objective. Any tile-level adaptation needs
+  an explicit full-board/no-legal-tile case and must retain selective head routing.
 - van Hasselt et al., [Learning values across many orders of magnitude](https://arxiv.org/abs/1602.07714):
   reward/target scale sensitivity motivated separating raw ledger values from the
   development multiplier; PopArt is not used.
@@ -195,6 +232,11 @@ established by these papers.
   independent species predictions; normal inference does not derive species Q
   values from maxima. The current inspection/adoption is detailed above; the
   paper's off-policy algorithm is not adopted.
+  Re-inspected section 2.2 and equations 7–8 on 2026-10-28 for the current
+  passivity discussion: conditional-max consistency is a learning constraint,
+  not independent outcome evidence. Matched-board complete rollouts under a
+  common continuation policy are proposed calibration controls, not current
+  training probes or a change to the official framework.
   [SB3 2.7.1 QNetwork](https://github.com/DLR-RM/stable-baselines3/blob/v2.7.1/stable_baselines3/dqn/policies.py)
   supplied the inspected raw-value/argmax reference; greedy normal branches,
   tile sampling and accepted-plant commitments are local decisions.
