@@ -1,23 +1,21 @@
 ## Initial learning gains and passive late-game behavior — 2026-10-28
 
-- Observed progress: training begins to teach the agent to wait when planting
-  is unavailable and to plant when a plant becomes usable. It also learns the
-  desired opening of planting a Sunflower in the first frame, showing an initial
-  ability to distinguish action availability and invest in early income.
-- Time incentives: average game duration clearly decreases with training,
-  consistent with completion-time rewards and penalties influencing behavior.
-  Shorter games alone do not establish better play, since they can also end in
-  earlier defeat.
-- Comparison and possible reasons: compared with the previous recorded version,
-  the separation between species selection and placement, followed by learning
-  from complete games, is unchanged. Recent corrections to how invalid choices
-  train the responsible stage may have helped distinguish unavailable planting
-  from waiting. Existing time incentives and extra credit for early Sunflower
-  income may help explain the duration trend and opening choice; their individual
-  effects have not been isolated.
-- Evidence: these outcomes are the user's training observations. The current
-  learning and reward rules support the explanations above, but no new training
-  experiment or controlled comparison was performed for this record.
-- Remaining issue: later play remains passive, tending to plant Sunflowers with
-  only one or two other plants. The initial learning gains have not yet
-  produced a varied, sustained defensive strategy; the cause remains unconfirmed.
+- Reported improvements: the agent begins to wait when planting is unavailable
+  and plant when a plant becomes usable. It also learns the first-frame Sunflower
+  opening the user identifies as optimal, showing initial availability awareness
+  and early economic planning.
+- Reported time trend: average game duration clearly decreases during training,
+  suggesting that time incentives influence behavior. This does not establish
+  stronger play, since shorter games can also mean earlier defeats.
+- Immediate-predecessor comparison: the preceding recorded version, Saved-run
+  cohort reward reports, added reward inspection without changing policy learning.
+  Species selection, conditional placement, and complete-game learning retain
+  their existing responsibilities and flow. Better reporting may help interpret
+  outcomes, but no new structural change explains the observed gains. Existing
+  availability supervision, time incentives, and early-income credit are possible
+  explanations whose effects have not been isolated.
+- Discovered problem: later play remains passive, tending to plant Sunflowers
+  with only one or two other plants. The initial gains have not yet produced a
+  varied, sustained defensive strategy.
+- Evidence: outcomes are user-reported observations, consistent with the current
+  learning and reward rules; no new training or controlled comparison was run.
