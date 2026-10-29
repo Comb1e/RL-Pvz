@@ -1,0 +1,2929 @@
+## Saved-run cohort reward reports — 2026-10-28
+
+- Problem/root cause: the generic action-shaping warning omits its quantities
+  and cohort identity. It compares per-episode absolute action sums, including
+  mower penalties and excluding assets; the separate dense warning compares
+  per-decision return standard deviations, excluding mowers and including assets.
+  Confusing the two obscured the cause of warnings in the new easy run.
+- Improvement: add `tools/report_rewards.py RUN_FOLDER COHORT`, backed by the
+  shared monitoring report interface and production reward conversion. The
+  second argument is the one-based number displayed in the training log; saved
+  episode IDs are translated from their zero-based counter. Read saved config,
+  complete JSONL records, matching status summaries and contextual warning events
+  without touching checkpoints or starting simulator/GPU work. Report event
+  prices, component means/std/extrema, exact absolute-action warning quantities,
+  recorded dense-return diagnostics, outcomes, usage, accounting errors, routes,
+  compaction and recent cohorts. Mark incomplete data provisional and ignore
+  disclosed unfinished tails within bounded file reads.
+- Preserve and commit the user's existing parameter adjustments: value scale
+  500, early-sun extra multiplier 6, and both exploration floors 3%. No additional
+  reward or learning changes. Update current reward examples and ownership;
+  leave historical evidence, runs, datasets and architecture documentation intact.
+- Evidence: new-run cohort 6 has mean absolute action shaping 0.3029903935,
+  mean absolute terminal 1.0023994048, threshold 0.2505998512, ratio 30.2265%.
+  Mean mower contribution -0.34765625 outweighs +0.0446658565 in damage,
+  blocking and sun. Its separate dense ratio is 7.1099%, above the 5% threshold.
+  Reports for new cohorts 1/6 and previous cohort 156 reconstruct saved fitted
+  means within 1e-10; raw accounting errors are below 1e-10.
+- Verification: temporary independent FP64 controls cover cancellation across
+  episodes, the strict 25% boundary, zero terminal/physical values, cohort indexing,
+  duplicate revisions, pending episodes, missing/matching summaries, unfinished
+  and malformed lines, and appends during reads. No permanent tests are added.
+  The existing two CPU smoke tests passed once (4.43 s); focused Ruff, formatting,
+  AST syntax and diff checks passed. No formal training, push or PR.
+- Limits: separate files are not an atomic multi-file snapshot. Missing raw
+  per-decision statistics remain unavailable rather than inferred from episode
+  totals. Warnings remain diagnostics and do not change fitting or imply a
+  particular reward balance is optimal.
+
+## Empty-board Dig species attribution — 2026-10-28
+
+- Problem/root cause: the latest easy run collapses to rejected Dig proposals
+  from cohort 23. Empty-board Dig was marked available and therefore fitted only
+  through the tile stage. The independently selected Dig species value stopped
+  receiving gradients despite negative game rewards. The inspected cohort-32
+  checkpoint has species/tile Adam counters 88/116 and Dig species Q -0.765625
+  versus conditional tile values near -6.67 at the empty seed-1 board.
+- Improvement: share the complete public plant-count/permission gate across
+  CPU/CUDA availability and direct policy inference. Empty-board Dig now skips
+  tile inference and receives species-only minimum-Q-offset fitting; on a
+  populated board an empty selected tile remains tile-invalid. Preserve the
+  simulator's empty_tile reason, actual wait execution, original-slot draws,
+  rewards, compaction, observation encoding and model architecture. Demonstration
+  reconstruction uses the same pre-action plant count. Advance objective,
+  trajectory and autonomous recovery to v7; explicitly retain v6 weight-only
+  loading and the annotation ranking/resume identities. Reward settings remain
+  unchanged. Correct stale documentation of the actual damage price 50 and
+  early-sun extra multiplier 4.
+- Verification: temporary controls passed for real CPU/CUDA transitions and
+  availability, empty/populated Dig forward counts, species-only/tile-only
+  gradients on both devices, no invalid EMA, unchanged complete-return fields,
+  full-board plant availability, permission/inactive gates, contradictory
+  evidence, old recovery rejection and compatible autonomous/demo weights.
+  All three existing smoke tests passed once (12.08 s), including short CUDA
+  collection/fitting/checkpoint reload. Focused Ruff/format, AST syntax and
+  diff checks passed. Temporary controls were removed; no permanent tests,
+  formal training, push or PR. Datasets, runs, pre-training script and architecture
+  documentation remain untouched.
+- Evidence/limits: [run audit](evidence/empty-board-dig-collapse-20261028.md).
+  Mower penalties dominate individual physical credits, and time shaping still
+  favors earlier losses over later ones by up to 0.3. Those existing settings
+  are documented, not retuned. The requested moving minimum-Q target remains
+  unbounded; the routing fix has no claimed convergence or win-rate result.
+
+## Detached minimum-Q illegal-action targets — 2026-10-28
+
+- Problem/root cause: fitting every illegal proposal toward the fixed -0.1
+  prediction could make it outrank legal actions with lower game returns.
+- Improvement: objective v6 fits a branch-invalid proposal to the detached
+  minimum of the current ten species outputs minus 0.1, and a tile-invalid
+  proposal to the detached minimum of its current 45 conditional tile outputs
+  minus 0.1. The configured `invalid_action_q_offset` controls that offset.
+  Every pass reuses existing online forwards; only the selected responsible
+  output receives direct regression gradients. No EMA/other-head forward is
+  added for invalid rows. Accepted actions and genuine waits retain complete
+  returns. Collection retains the head minimum in its existing handoff for
+  matching prefit diagnostics, advancing private trajectory/recovery formats
+  to v6. Game rewards, model/observation/annotation identities are unchanged.
+  Old optimizer resumes fail; compatible v5 and earlier weights remain usable
+  for fresh initialization. The user's existing two-row compaction setting is
+  retained and included in this commit.
+- Verification: temporary independent CPU/CUDA controls passed for routed
+  losses and gradients, detached targets, different illegal selections, an
+  already-minimal selection, negative/zero/positive minima, partial batches,
+  trusted/ordinary transport, unchanged complete returns, prefit errors,
+  trajectory restore, old-resume rejection, and zero-pass v5 annotation weight
+  loading. The existing three smoke tests passed (14.43 seconds), including
+  short CUDA collection/fitting/checkpoint reload. Focused Ruff, Python syntax,
+  and `git diff --check` passed.
+  No permanent tests, formal training, push or PR; user artifacts and architecture
+  documentation remain untouched.
+- Limit: the minimum includes invalid outputs and moves with each update. An
+  already-lowest illegal output is pushed another offset lower; no floor is
+  imposed and no convergence or policy-quality improvement is claimed.
+
+## Configurable 10 Hz agent cadence — 2026-10-27
+
+- Problem/root cause: the autonomous agent was making one decision per pinned
+  100 Hz simulator tick, while the desired control cadence was 10 Hz and the
+  interval was split between a hard-coded `per_tick` mode and `decision_ticks`.
+- Improvement: add `environment.action_frequency_hz` to `train.toml`, defaulting
+  to 10 Hz. Configuration resolves it to an exact simulator-tick interval and
+  derives fixed/per-tick timing. CPU and CUDA collection now use the resolved
+  interval; accepted proposals, rejected proposals, waits, execution records,
+  and episode metrics agree in both backends. CUDA allocation accepts the
+  configured step bound rather than assuming one tick.
+- Verification: configuration resolution, CPU smoke, CUDA learning smoke, Python
+  syntax, Ruff and diff checks pass with the new fixed cadence. No formal
+  training or user artifacts were changed.
+- Remaining issue: old autonomous recovery configurations with the previous
+  timing contract are intentionally incompatible; use compatible weights for a
+  fresh run.
+
+## Branch-first simulator rejection and fitting evidence — 2026-10-27
+
+- Problem/root cause: CPU/CUDA occupancy checks hid cooldown/sunlight failures;
+  restricted CUDA boards rewrote unrelated failures and omitted rejection events.
+  CUDA branch availability ignored disabled digging, and the classifier could
+  infer branch usability from placement geometry on full/empty boards.
+- Improvement: pin game package 1.7.1, checking permission, cooldown, sunlight,
+  then occupancy with matching rejection events. Require explicit availability;
+  reject contradictory outcomes, classify only executed rows, honor disabled
+  digging, and supply valid accepted-Wait metadata in prepared annotation inputs.
+  Selective targets, all-45 proposals, rewards, compaction and model/schema layouts
+  remain unchanged. Exact engine pins reject old recoveries and demo archives;
+  the explicitly allowlisted previous pin supports weights and annotation resume.
+- Verification: 464 temporary CPU/CUDA cases matched acceptance, reasons, events,
+  ticks, state/hashes, observations, RNG and legal masks. Engine/replay checks:
+  58 passed. CPU smoke: 2 passed; CUDA learning/checkpoint smoke: 1 passed.
+  Temporary controls covered unavailable-branch tile skipping, invalid-route
+  online/EMA skipping, full boards, contradictory evidence, disabled digging,
+  CPU/CUDA availability, journals, pin rejection before simulator allocation,
+  and fresh weight-only loading. Tile/action v3/v4 progress resumed with exact
+  model/Adam/RNG/phase/metrics across old/current pins; unfinished and zero-pass
+  weights remained usable. Ruff, Python/inline-JavaScript syntax, source-pin
+  verification, dependency checks and `git diff --check` passed. No permanent
+  tests were added.
+- Limits: old research archives require new recordings; old simulator recovery
+  has no migration. Native state/replay layouts retain simulation 1.4.0. No formal
+  training, push or PR; architecture documents and user artifacts were untouched.
+
+## Configurable ten-row invalid fitting compaction — 2026-10-27
+
+- Problem/root cause: the shared fitting compactor still retained only the first
+  row of each 100-row invalid-action run, which kept too much repeated invalid
+  supervision in the next fitting pass.
+- Improvement: `training.objective.invalid_fit_group_size` is now explicitly
+  configured in `train.toml` as `10`. The shared autonomous and demonstration
+  compactor uses that setting for identical invalid proposals and genuine wait
+  runs, retaining rows 1, 11, 21, and so on while complete returns continue to
+  include every executed decision.
+- Verification: configuration loading, source fallback defaults, and the CPU
+  smoke/static checks were run after the change. Existing historical evidence
+  retains the earlier 100-row measurements for reproducibility.
+
+## Shared first-of-100 wait fitting — 2026-10-27
+
+- Problem/root cause: genuine waits bypassed invalid-row compaction, allowing
+  all-wait cohorts to fit millions of redundant decisions.
+- Improvement: one shared bounded segmented compactor handles genuine waits
+  and identical invalid proposals in autonomous/demo fitting. It preserves
+  accepted non-wait rows and all raw returns/credits. Representative counts
+  normalize fitting without frequency weights; wait/invalid diagnostics remain
+  separate. Existing episode/decision/inactive/terminal boundaries and chunk
+  carry are retained. The existing configured window size controls both.
+- Verification: temporary independent scalar controls matched exact selected
+  indices at 1/99/100/101/200/201 rows, interleaved environments, changing routes
+  and reasons, resets, decision gaps, inactive rows, terminals, seven chunk
+  sizes and restart. Forced-disk spool/restore retained [0,100,200,300] for 301
+  waits and left complete targets unchanged. No permanent tests added.
+- Remaining delivery work: v5 compatibility, quadratic rewards and smoke/static
+  checks. No formal training, push or PR.
+
+## Same-unit return diagnostics and finalized HUD — 2026-10-27
+
+- Problem/root cause: CUDA diagnostics compared physical units against fitted
+  returns and ignored covariance; progress repeated its last warning. Terminal
+  HUD frames never received the later cohort ranking.
+- Improvement: bounded FP64 centered moments compare summed physical returns in
+  fitted units, publish the ratio/flag and emit cohort-specific warning events.
+  Zero physical variation remains a valid warning. The adjacent action-shaping
+  magnitude diagnostic now uses fitted units too. Targets are unchanged.
+  Cohort finalization replaces episode-identified HUD totals, marks provisional
+  outcomes, fences delayed captures and refreshes native render caches. Episode
+  metric finalization is idempotent.
+- Verification: temporary FP64 reference controls covered correlated/cancelling
+  components, zero dense/target variation, unchanged complete targets, chunked
+  moments, warning events, delayed/duplicate HUD updates, episode reset and
+  repeated finalization. They passed; no permanent tests or formal training added.
+- Remaining delivery work: shared wait compaction and quadratic endgame rewards,
+  then the existing smoke/static checks.
+
+## Direct mower penalties and environment reward HUD — 2026-10-26
+
+- Problem/root cause: the mower cost was expressed in sunlight, so changing the
+  physical value scale or dense multiplier also changed the final penalty.
+  Live game windows showed sun and Q values but no accumulated environment reward.
+- Improvement: replace `mower_value` with `reward.mower_penalty=0.1`. Each
+  activation contributes -0.1 directly to raw and training rewards on CPU/CUDA,
+  outside physical development, sunlight conversion, and dense scaling. The
+  existing action-mower component retains source attribution; complete returns,
+  summaries, and replay repricing share the new conversion. Historical recording
+  verification still recognizes its original sun-priced mower accounting.
+  Reward/objective v4 rejects earlier optimizer resumes; compatible weight-only
+  initialization remains supported without changing model tensors or observations.
+- Display: native and browser live boards show each environment's accumulated
+  training reward, including causal credits. CUDA capture stages FP64 totals only
+  for subscribed boards under the public-state copy fence; no new hot-step
+  synchronization or policy input is introduced. Gym RGB rendering shares the
+  reward formatter. Episode resets clear the display; terminal time ranking is
+  pending until cohort completion.
+- Verification: temporary controls compared five actual CPU/CUDA simulator cases
+  with zero, one, two, and five simultaneous mower activations at different sun
+  amounts; all reward fields matched. Additional controls verified independent
+  physical/dense scales, historical replay integrity and altered-total rejection,
+  causal complete returns, prior weight compatibility/old-optimizer rejection,
+  immutable viewer captures, episode reset, and native rendering. Native/browser
+  HUDs were visually checked. All three smoke tests passed, including short CUDA
+  learning/checkpoint reload. Focused Ruff, current Node inline-JavaScript syntax,
+  and `git diff --check` passed; no permanent tests were added.
+- Remaining limits: displayed terminal reward uses the base outcome until the
+  cohort's time ranks exist. No formal training, push, or PR. User datasets,
+  previous runs, architecture documentation, and pre-training script are untouched.
+
+## Reward conversion at value scale 2000 — 2026-10-26
+
+- Problem/root cause: changing `reward.value_scale` from 900 to 2000 reduced
+  every physical reward, although only Sunflower production was meant to shrink.
+  Production income and plant asset loss share the global asset component, so
+  scaling that entire component would also preserve unwanted sunlight value.
+- Improvement: retain the user's value scale 2000 and compensate damage,
+  blocking, and plant asset loss by 2000/900. A configurable asset-loss multiplier
+  prices losses separately on CPU and CUDA; missing multipliers preserve saved
+  configurations' original unit pricing. Both actual Sunflower-income components
+  retain the reduced scale: 25 sun gives +0.0025 normally or +0.005 early.
+  `mower_value=2000` makes one activation cost -0.1 in fitting. Terminal rewards,
+  sky exclusion, purchase neutrality, and source-action attribution are unchanged.
+- Verification: temporary independent controls covered 17 idle, purchase/removal,
+  partial/full damage, bite, early/late/capped sun, sky, mower, terminal, and
+  simultaneous-event cases. CPU and the actual CUDA reward kernel agreed under
+  both current and legacy pricing; unchanged contributions matched the prior
+  profile to FP64 rounding. Validation rejected nonfinite, boolean, and negative
+  loss multipliers; delayed source credits retained their original fitted value.
+  CPU smoke checks passed (2 passed, 1 deselected); focused Ruff lint/format and
+  `git diff --check` passed. No permanent tests were added.
+- Remaining limits: changed reward settings require fresh weight-only
+  initialization rather than optimizer resume. These accounting
+  checks establish reward conversion, not training effectiveness. No formal
+  training, push, or PR; architecture, datasets, runs, and pre-training script remain
+  unchanged.
+
+## Faster annotation fitting — 2026-10-23
+
+- Problem/root cause: every annotation pass repeated raw-input transport and
+  many small model/Adam D2H transfers before its durable save. Train/validation
+  evaluation also performed separate host metric readbacks.
+- Improvement: shared checkpoint staging packs immutable CPU snapshots by CUDA
+  device/dtype with bounded direct-copy fallback. Prepared annotation inputs
+  retain exact batches/padding on the GPU when both train/validation fit the
+  central cap and headroom. Streaming remains available; caches release on exit
+  and rebuild on resume. Evaluation retains separate split totals and uses one
+  final readback. Reports include admission, bytes, staging mode and limits.
+  Stage fitting limits are opt-in, compilation remains inactive, and existing
+  L2/Adam/clipping arithmetic is preserved. Checkpoint protocols are unchanged.
+- Verification: both-head temporary controls matched baseline losses, metrics,
+  gradients, all weights, Adam/RNG and counters exactly. Checks covered partial
+  batches, empty validation, snapshot ownership, memory rejection/fallback,
+  resource release, interruption/resume, v3 upgrade, fixed train membership,
+  zero-pass/incomplete initialization, publication/test gating and concurrent
+  Windows save/load. CPU smoke checks passed (2 passed, 1 deselected), focused
+  Ruff lint/format and `git diff --check` passed. No permanent tests were added.
+- Measurement: production-fitter ABBA controls on the 4070 Laptop included
+  backward, fresh evaluation and per-pass durable saving. Warm tile passes fell
+  129.75→111.66 ms (initial) and 147.15→128.04 ms (L2); action fell
+  93.69→72.84 and 99.55→84.65 ms. All paired trials improved; final numerical
+  states matched exactly. [Evidence and limitations](evidence/annotation-fitting-performance-20261023.md)
+  includes configuration/digests, cold behavior, memory and optional controls.
+- Remaining limits: these are execution timings, not convergence or grokking
+  evidence. Tile 192/256 limits were faster but changed BF16 values/updates, so
+  they remain opt-in. Grouped L2 matched arithmetic but failed timing acceptance
+  and was rejected. No formal training, push or PR; datasets, existing runs,
+  architecture and the user's pre-training script remain unchanged. Scratch
+  controls were deleted after retaining concise measurements.
+
+## Annotation resume and unfinished-weight initialization — 2026-10-23
+
+- Problem/root cause: annotation pass limits were part of resume compatibility,
+  omitted CLI options reverted to current defaults, and progress lacked the
+  configuration needed by the shared weight loader. An unfinished fit could not
+  initialize another stage without satisfying the final publication gate.
+- Improvement: `--passes N` now permits N additional passes per invocation, outside
+  fitting identity. Resume inherits saved fitting settings and restores model,
+  Adam, RNG, phase, and metrics. Atomic commits defer Ctrl+C; history tail repair
+  uses the durable pass rather than repeating updates. Self-contained v4 progress
+  initializes tile/action/demo/autonomous stages with weights alone, including
+  zero-pass states. Compatible v3 resume writes v4 while ignoring its old cap.
+  Loaded bytes and provenance hashes share one snapshot; Windows sharing errors
+  use bounded retries. Exact final train/validation and held-out test gates remain.
+- Verification: temporary CPU controls for both heads used real BF16 forwards,
+  FP32 gradients and Adam commits, with controlled evaluation gates to exercise
+  phase transitions. Interrupted/resumed three-pass runs matched uninterrupted
+  model, optimizer, RNG, frozen parameters and L2 state exactly. Controls covered
+  additional/unlimited limits, dataset/split and explicit-option rejection without
+  replacing progress, torn/duplicate history repair, v3 resume, unfinished/zero-pass
+  weight handoff, corrupt/nonfinite/shape-invalid rejection and SIGINT during
+  commit. Independent real-metric zero-pass controls verified both convergence
+  gates and test evaluation. Concurrent Windows replacement/load matched each
+  snapshot hash; errno-only sharing failures found during the control were fixed.
+  Default CPU smoke checks passed (2 passed, 1 deselected); focused Ruff lint/format,
+  CLI help, and `git diff --check` passed.
+- Remaining limits: these short CPU controls establish state and loader behavior,
+  not CUDA recovery parity or annotation learning/generalization quality. No formal
+  training, remote push, or PR; datasets and existing run artifacts are untouched.
+- Cleanup: automatic approval review rejected both recursive and individual-file
+  cleanup as "blocked by policy". Temporary controls/checkpoints remain under
+  the system temp directory's `pvz-annotation-progress-controls` folder; they are
+  outside the repository and excluded from the commit.
+
+## Annotation validation-phase L2 regularization — 2026-10-22
+
+- Problem: annotation fitting stopped once the training split reached exact
+  accuracy, even when the held-out validation split remained incorrect. Long
+  histories were also difficult to inspect with dense static plots.
+- Improvement: tile and action fitting now keeps the original grouped split,
+  activates explicit FP32-master L2 pressure only after training convergence,
+  and publishes only after both train and validation feasible/bottom metrics are
+  exact. Phase state, penalty values, and metrics are recoverable. Added a
+  standalone HTML canvas viewer that retains every history point and draws
+  per-pixel min/max envelopes with zoom, drag, and raw-point hover.
+- Verification: a temporary CPU fitter control completed the normal history and
+  progress path; standalone L2-gradient, split-convergence, CLI, viewer-JavaScript,
+  smoke, Ruff, and diff checks passed. No formal training ran.
+
+## Core smoke-test suite — 2026-10-22
+
+- Problem/root cause: 44 test modules and shared fixtures contained 431 test
+  functions across 13,388 lines, including archived protocols and detailed
+  subsystem regressions beyond the user's requested smoke-only coverage.
+- Improvement: replaced the entire suite with three core workflow smoke checks
+  in one 95-line file (99.29% less test code), capped at 200 lines. Default pytest
+  selects CLI/CPU inference;
+  explicit `-m learning` selects bounded CUDA learning and checkpoint reload.
+  Removed Hypothesis and its otherwise unused sortedcontainers lock entry,
+  updated current test guidance, and retained previous regressions in Git only.
+- Verification: collection finds exactly three tests. Default CPU selection passes
+  two tests in 3.81 seconds; explicit CUDA selection passes one in 8.69 seconds,
+  including game-budget completion, an optimizer update, checkpoint reload and
+  prediction. Each group ran once. Ruff lint/format, the test-size limit, removed
+  suite-reference checks and `git diff --check` pass.
+- Remaining limits: this suite establishes startup/inference/tiny-learning
+  availability only. Mathematical, boundary, backend-parity, interruption/recovery
+  and peripheral workflow regressions are intentionally removed. Production code,
+  bundled parameters and architecture documentation are unchanged.
+- Cleanup: automatic approval review rejected cache and temporary-directory
+  removal with "blocked by policy"; ignored test artifacts remain.
+
+## Agent model architecture documentation - 2026-10-22
+
+- Problem/root cause: the framework overview described the policy's two stages
+  without exposing their inputs, token construction, intermediate layers or
+  output shapes, leaving the requested model topology implicit.
+- Improvement: added the configured input schemas, embedding paths, both
+  Transformer stacks and Q heads, and every operation inside a repeated block.
+  A diagram connects the stages to action selection; tables give dimensions,
+  activations, residuals, masks and conditional placement outputs.
+- Verification: inspected the configured model and checked the documented
+  topology against source, including state/type vocabularies, coordinate queries
+  and output ordering. CPU inference on empty/single-plant boards verified all
+  ten blocks' projection/activation shapes, both Q heads, plant/dig requests and
+  wait's tile-stage skip. Local links and `git diff --check` pass.
+- Remaining limits: documentation adds no learning-quality or performance
+  evidence. Runtime code and parameters are unchanged; no formal training ran.
+
+## Architecture framework review - 2026-10-22
+
+- Problem/root cause: architecture prose mixed the project framework with code
+  inventories, parameter values and implementation mechanics, obscuring the
+  system boundaries for a new developer.
+- Improvement: rewrote the page under the revised collaborator skill as a
+  conceptual map of simulation, policy, complete-game learning, human supervision,
+  evaluation, persistence and presentation. Diagrams explain information flow
+  and cohort transitions; code navigation and detailed contracts are linked.
+  Preserved verified boundaries for private inputs, aggregate CUDA versus causal
+  CPU/demo attribution, annotation publication, validation and recovery.
+- Verification: checked the framework against implementation and configuration,
+  reviewed diagram transitions and local links, and ran `git diff --check`.
+  No runtime code or parameters changed; no training or regression suite ran.
+- Remaining limits: documentation verification supplies no new learning-quality
+  or performance evidence. Detailed math and historical pages remain separate
+  sources and were not comprehensively revised in this task.
+
+## Documentation removal - 2026-10-22
+
+- Removed the training guide, live-view guide, and validation page as requested.
+  Updated README links and code-ownership references. Architecture is unchanged;
+  archived external evidence links remain available.
+- Verification: confirmed all three files are absent, removed local links to
+  them, and ran `git diff --check`. No tests were rerun for documentation deletion.
+
+## Action annotation save and retry recovery - 2026-10-22
+
+- Problem/root cause: on empty boards, validation required Dig in the automatic
+  locked set even though the live store deliberately removed it. Saving could
+  persist the current labels and then fail while preparing the next map. The
+  browser also sent GET to the POST-only retry endpoint and discarded successful
+  save responses containing a next-map generation error.
+- Improvement: sampler and validation share automatic label derivation, with
+  impossible plant labels mandatory and Dig editable. Legacy locked-Dig records
+  remain readable. Generation failures return the saved record and a retryable
+  session error; Retry generation uses POST on the existing server.
+- Verification: the owning annotation suite passes 76 tests, including empty and
+  populated boards, legacy records, mandatory plant-label rejection, save/next,
+  retry on the same port, stale replies, and Save and exit. Ruff, inline JavaScript
+  syntax validation, and `git diff --check` pass.
+- Remaining limits: bounded sampler failures still require a retry; this fix
+  preserves the saved labels rather than guaranteeing every generation succeeds.
+  No formal training, PR, or push; user datasets and scripts are untouched.
+
+## Compact CPU/GPU training pipeline — 2026-10-21
+
+- Problem/root cause: inactive slot metadata, repeated collation/routing and demo
+  forwards, fixed maximum-width pinned staging, tiny per-batch coefficient work,
+  and cohort-long telemetry event retention added CPU work and memory pressure.
+  The fitter benchmark also hid production batch size behind a 64-row clamp and
+  aggregated unrelated workloads with an inappropriate median.
+- Improvements: production lifecycle measurements and synthetic/trajectory/full
+  cycle tuner modes; active-only v4 storage with stable source identities and
+  atomic validated credits; chunk-carried segmented compaction and bounded spool
+  preparation; shared prepared transport, bucket-sized fenced pinned slots,
+  shared demo forwards, vectorized annotation losses/metrics, cached cohort
+  coefficients and foreach master/runtime/EMA operations. Collection caches
+  immutable constants, avoids duplicate-request machinery on its trusted path,
+  passes array-backed results to callbacks, and fetches detailed terminal data
+  only for completed slots. Actual execution flags use the existing handoff.
+  Bounded nonblocking telemetry replaces cohort-long event accumulation.
+- Configuration/recovery: independent collection/fitting compilation settings;
+  the old switch gives a replacement error. Only trajectory/autonomous recovery
+  advance to v4; older runs cannot resume, while compatible historical weights
+  still initialize fresh models. Model, observations, rewards and objective
+  semantics remain unchanged. The 4070 profile retains its current defaults.
+- Verification: focused storage, routing/math, annotation/demo, configuration,
+  checkpoints, diagnostics, CUDA policy/graph ownership, reward accounting and
+  fitting interruption/allocation controls pass. A short serialization/replay
+  integration control passes. Added independent shared-forward gradients,
+  indexed tie gradients, exact compaction/recovery identities, spool failure
+  cleanup and paired-promotion rejection controls. Existing reward tests now use
+  the configured physical conversion and compare aggregate accounting at the
+  same level; the old parity assumption also failed on the baseline. No
+  training-parameter-constant tests were added.
+- Measurements: within a 57.75-minute performance window, the baseline stops in
+  pass four at its 1,400 s limit. One intermediate candidate completes the cycle
+  in 1,022.94 s, with four passes totaling 457.32 s, but collection regresses
+  486.01 → 561.34 s and sampled VRAM headroom fails. Metadata rows fall from
+  4,058,368 to 2,290,461 without losing active decisions/entities. Short crowded,
+  accepted-action, four-active and 32 MiB forced-spill controls pass; later
+  identity/telemetry refinements lack repeated full-cycle measurements.
+- Remaining limits: no two completed paired comparisons, no profile promotion,
+  and no claim of total training speedup. Thread/group/compiler calibration and
+  final full-cycle evidence remain incomplete. Windows allocator pressure and
+  periodic whole-device samples require care. See the
+  [retained evidence and limitations](evidence/training-pipeline-optimization-20261021.md).
+  No PR, push or formal training; user data, scripts and run artifacts remain
+  untouched. Scratch cohorts and the baseline worktree are removed. Automatic
+  approval review blocked deletion of external scratch JSON/JSONL logs.
+
+## RTX 4070 CPU/GPU pipeline audit — 2026-10-21
+
+- Problem: isolated throughput measurements do not reproduce the jointly
+  scheduled training pipeline. Inspect the user's `runs/compact-stages-101`
+  telemetry and saved public trajectory before recommending performance settings.
+- Findings: collection took 552.8 s for 2,320,769 active rows, with median
+  process CPU 92.4% and GPU utilization 39%. The run predates current v3
+  semantics and stopped in fitting pass 1 with zero optimizer commits, so it
+  cannot establish completed-cycle fitting time. Shared compaction retains
+  776,429 representatives; accepted EMA rows are only 3,352.
+- Verification: a 12,139-record stratified replay from those representatives
+  uses the shared CPU producer, pinned transport, routed loss, backward,
+  clipping, Adam and EMA over four passes. Microbatch/token budget 128/32,768
+  gives 4.57 s warmed versus 8.12 s for 64/16,384, with peak PyTorch memory
+  1,396.8 versus 1,387.6 MiB. Synthetic dense controls instead slow down, and
+  the existing compiled fitting backend also slows the measured medium case.
+- Outcome: documented prioritized opportunities and measurement limits in
+  [the audit](evidence/training-performance-audit-20261021.md), with raw evidence
+  alongside it. Model, settings, source code and user artifacts are unchanged;
+  no formal training or PR. CPU preparation/transfer are small in this in-RAM
+  replay. Full current-contract cycle, production memory headroom, disk spill
+  and sustained/alternating A/B measurements remain necessary before promotion.
+
+## Dig defaults to editable absolute-infeasible in action annotation — 2026-10-20
+
+- Problem/root cause: action annotation could inherit the sampler's raw dig
+  availability and leave Dig unlabeled on boards that happened to contain a
+  plant, even though action labels are intended to be chosen deliberately by
+  the annotator.
+- Improvement: every newly generated or imported pending action record starts
+  Dig in the editable absolute-infeasible set. Dig is no longer added to the
+  automatic locked labels, so the annotator can move it to feasible or erase
+  the default. The complete simulator `action_availability.dig` fact remains
+  unchanged for audit and display, and legacy records using the old
+  availability-derived or locked-Dig automatic set remain readable.
+- Verification: the focused annotation suite passes 68 tests, direct sampled-board
+  checks cover populated and empty boards, and Ruff plus `git diff --check`
+  pass.
+- Remaining limits: existing completed records are not rewritten on disk; they
+  retain their historical automatic labels until re-annotated.
+
+## Action annotation states no longer carry a sampler-selected action — 2026-10-20
+
+- Problem/root cause: action annotation reused tile sampling’s requirement for a
+  currently usable plant and retained one randomly selected plant as the apparent
+  current action. This biased action records toward plant-available states and
+  made the displayed target look like supervision.
+- Improvement: action sampling now accepts any running endpoint, stores a null
+  selected plant with generic availability, and keeps complete branch metadata
+  for wait, all plants, and dig. The browser hides tile-only plant metadata,
+  keeps plant cards directly selectable, and adds synchronized Wait/Dig controls
+  for feasible, absolute-infeasible, and erase modes. Tile sampling remains
+  conditioned on one usable plant and is unchanged.
+- Verification: the focused annotation suite passes 67 cases, including action
+  sampling without usable cards, empty-board automatic dig infeasibility, branch
+  control mode synchronization, locked labels, and unchanged tile painting.
+  Inline browser JavaScript is exercised by the suite; static checks remain to
+  be run after documentation review.
+- Remaining limits: the sampler still chooses autonomous rollout actions only
+  to create reachable state diversity; it does not provide interactive simulator
+  stepping. A live Jupyter proxy check is still a manual acceptance task.
+
+## Canvas action-card annotation controls — 2026-10-20
+
+- Problem/root cause: action annotation rendered plant cards as graphics but
+  required separate HTML buttons for every action label, so the board and the
+  annotation interaction did not match tile mode. The command name also
+  described only the tile branch even though the workflow supports action
+  annotations.
+- Improvement: shared Canvas card hit testing now maps responsive and high-DPI
+  pointer coordinates to plant actions. Feasible, absolute-infeasible, and
+  erase modes update the action sets directly; the duplicate per-action HTML
+  button strip is removed, automatic absolute labels remain locked, and action
+  clicks cannot enter the tile painter. Tile absolute labels are rendered,
+  editable when manual, and included in save payloads. The CLI is now
+  `annotate --kind tile|action`.
+- Verification: focused annotation tests cover card bounds, mode transitions,
+  locked labels, no accidental tile writes, synchronized controls, and the
+  removed command name. Browser JavaScript syntax and static checks are run with
+  the owning annotation suite.
+- Remaining limits: wait and dig have no plant cards and therefore require a
+  follow-up non-card control if those labels must be selected in action mode;
+  visual acceptance through a live Jupyter proxy still requires a manual browser
+  check.
+
+## Annotation convergence and selective invalid fitting — 2026-10-18
+
+- Problem/root cause: all-positive-versus-negative ranking overconstrained loose
+  tile labels, while a fixed pass count could publish incorrect training choices.
+  Rejected proposals also incurred reward penalties and paid for irrelevant
+  online/EMA tile inference during fitting.
+- Improvement: annotation fitting uses the best-positive/best-legal-negative
+  margin hinge, equal record weights and complete BF16 legal top-1 evaluation.
+  Unlimited passes stop only at exact training-set success; explicit caps and
+  interruptions retain separate atomic weights/Adam/RNG/pass progress. Resume
+  requires matching data, splits and settings. Freshly reloaded verification gates
+  initialization publication, including honestly reported zero-pass success.
+- Formal fitting: rejected proposals execute ordinary wait with zero rejection
+  audit penalties. Shared pre-action availability/outcome routing sends fixed
+  `-1` supervision only to the responsible species or tile output and skips EMA.
+  Accepted actions retain detached consistency and chronological complete returns.
+  CPU-prepared indices, bucket/route grouping and pinned transport share this path
+  with verified demonstrations. Four formal passes, one commit per pass, clipping
+  and EMA decay remain unchanged. The objective and recovery/trajectory identities
+  are versioned; old-objective resume fails, while compatible BF16-master weights
+  still support inference and fresh initialization.
+- Verification: focused mathematical, annotation, storage, fitting/recovery,
+  reward-equivalence, demonstration, checkpoint, configuration, viewer and tuner
+  controls passed. The final owning runs included 136 fitting/annotation cases,
+  60 checkpoint/configuration/tuner/interruption cases and eight precision/compiler/
+  graph-ownership controls. No repeated full-suite run or formal game training was
+  launched. The local 4070 rehearsal completed 24 action/width cases with three
+  warmed repetitions; rejected-only work performed zero EMA inference. A generated
+  reachable annotation converged in seven passes, survived resume and reloaded
+  through the CPU weight-initialization path. See
+  [the bounded evidence](evidence/selective-invalid-4070.md).
+- Remaining limits: the existing user dataset has three identical-input wall-nut
+  pairs with disjoint labels (JSONL lines 29/51, 34/56 and 36/58). All affected IDs
+  are reported before fitting; the original records were not modified. These
+  labels need reconciliation or explicit discard before 100% deterministic
+  fitting is possible. Training convergence does not establish held-out accuracy,
+  game quality, production speedup or cloud-GPU performance; those were not tested.
+
+## Equal annotation rollout proposals — 2026-10-18
+
+- Problem/root cause: rollout selection filtered to currently legal species before
+  drawing, favoring available plants and omitting an explicit wait choice.
+- Improvement: every 500–1,500-step interval draws wait or one of the eight
+  configured plant types with probability 1/9 each. Cooldown, insufficient sun,
+  missing cards, no legal plots or the existing sparse cap convert the selected
+  plant to wait without resampling. Usable plants select a uniform legal plot.
+  Live and batch generation share this path; snapshot-card filtering is unchanged.
+- Verification: 20 focused sampler and random-choice cases passed, covering all nine draw
+  options, availability boundaries, no-redraw failures, interval timing, sparse
+  caps, terminal/unusable retries and exact independent simulator replay. Ruff
+  lint and formatting checks passed; no training was launched.
+- Limits: executed wait frequency exceeds 1/9 when choices are unavailable; final
+  maps remain conditioned on survival and at least one usable annotation card.
+
+## Editable annotation history — 2026-10-18
+
+- Problem/root cause: the live session exposed only the pending record and its
+  resolution API refused completed records, so earlier labels could not be
+  corrected from the browser.
+- Improvement: Previous/Next browse persisted maps; Save changes revises labels
+  in place, Discard can exclude a labeled map, and saving a discarded map restores
+  it. Return to current resumes the pending map. Historical edits preserve the
+  snapshot, pending record, generation count and selected next-map difficulty.
+  Revision checks reject conflicting edits; request checks prevent stale browser
+  responses from replacing the board, and difficulty changes preserve drafts.
+- Verification: 47 focused annotation cases passed, including persistence/restart,
+  history boundaries, invalid/conflicting saves, HTTP protocol, legacy records,
+  generation failure, and Node.js browser-state controls. Existing generation
+  and CPU weight-initialization controls also pass. Ruff and formatting passed.
+- Limitations: unsaved drafts are browser-local; navigation/reload warns before
+  discarding them. Saved revisions replace the previous labels rather than
+  preserving a separate version archive. Existing fitted artifacts are unchanged.
+
+## Annotation rollout diversity — 2026-10-18
+
+- Problem/root cause: the short 2,000-step horizon sampled easy preparation
+  before zombies appeared. Frequent planting spent new sun immediately and
+  favored cheap plants; frozenset action order also defeated cross-process seeds.
+- Improvement: both annotation entry paths share one sampler. Each fresh game
+  draws an inclusive uniform 0–20,000-action endpoint. Terminal or unusable
+  endpoints are abandoned within bounded retries. Random planting attempts occur
+  every 500–1,500 steps, choose uniformly among usable species and then legal
+  plots, and retain at most eight plants. Defaults belong to `training.annotation`.
+  Source metadata records action steps separately from simulator ticks.
+- Longer rollouts exposed valid negative zombie X coordinates near the house.
+  Snapshot validation now accepts signed integer coordinates while continuing
+  to reject booleans, fractional values, strings and nonfinite values. Combat
+  health, sun, cooldowns and mower states are still taken from the simulator.
+- Verification: 32 focused annotation and 45 configuration cases passed,
+  including inclusive endpoints, final-step termination, retry exhaustion,
+  endpoint availability, interval timing, plant caps, species coverage, hash-order
+  independence and exact replay through a separate simulator. Ruff and formatting
+  checks passed. Eight easy samples at seed 4070 had 1–8 plants, zombie health
+  values 150/190/270, sun values 75/100/125/175/250, and ready/spent mowers.
+- Limits: zero/early endpoints can legitimately lack zombies or plants. Accepted
+  maps are conditioned on survival and usable cards. Individual random samples
+  do not guarantee every species, health value or mower state. No formal training
+  was launched, and no model, learning or browser-rendering behavior changed.
+
+## Reachable tile annotation warm-start — 2026-10-18
+
+- Problem: random board snapshots can be semantically meaningless, and manually
+  judging placement plots needs the complete public state and a fast way to mark
+  many cells. Unavailable cards must not become training examples.
+- Improvement: added reachable simulator snapshot sampling and validation for
+  full sun/card/cooldown/entity/projectile/mower/wave observations. The standalone
+  CPU web annotator paints feasible tile sets with left-button drag, supports
+  add/erase/clear, and durably records a discard reason so unusable states remain
+  audit-only. Relative proxy APIs and the shared Canvas renderer work without a
+  simulator or GPU in the browser.
+- Learning: added grouped 80/10/10 annotation splits and a permutation-invariant
+  tile-only margin fit. The species stage is frozen, BF16 runtime/FP32 master
+  storage remains unchanged, and the output is accepted only through fresh
+  weight-only `--init-from`; autonomous complete-return fitting is unchanged.
+- Verification: sampler generation, annotation persistence/discard, full-state
+  validation, browser drag/discard protocol, relative API checks, focused web
+  tests, Python compilation, Ruff checks, and Node syntax checks pass. A one-row
+  CPU smoke fit produced a compatible annotation initialization artifact and was
+  accepted by the existing weight-transfer validator.
+- Remaining limits: human label quality and the value of the pretraining stage
+  require a held-out annotation set and equal-budget game comparison. Empty or
+  all-positive sets provide coverage metrics but no pairwise ranking gradient.
+
+## Provisional RTX 5090 execution preset — 2026-10-15
+
+- Finding: the complete local 4070 calibration favored the stable 64/64,
+  16,384-token, four-group family; the larger 192/192 cases were not used
+  because their extended run was incomplete and the synthetic tuner does not
+  represent a full training cohort.
+- Improvement: set the RTX 5090 profile to compiled 128/128 fitting,
+  32,768 tokens, four grouped batches, one CPU thread and a 6,554 MiB
+  collection reserve. This is one bounded doubling of the validated 4070
+  family for the 5090's 32 GiB device, while preserving the provisional
+  status until native 5090 measurements complete.
+- Verification: GPU-profile configuration tests cover automatic RTX 5090
+  selection and every execution value. No learning, model architecture or
+  checkpoint contract changed.
+- Remaining limits: this is a scaled recommendation from the 4070, not a
+  measured 5090 preset. Confirm it with an actual-cohort fit run after the
+  cloud compiler and data-flow behavior are available.
+
+## Extended fitting underfeeding calibration — 2026-10-15
+
+- Finding: 4080 SUPER telemetry shows low sustained busy intervals, low temperature/power and a training process near one CPU core, so the observed utilization is a pipeline/workload signal rather than a GPU thermal or power limit.
+- Improvement: kept all existing `tune_gpu.py` candidates and combined ten larger species/tile microbatch, grouped-batch and 1/2/4 CPU-thread cases into the default candidate list. A run with `--rows-per-width 32` makes preparation overhead visible.
+- Remaining limits: existing 4080 results are execution calibration on synthetic fitting rows; only a cloud run with the extended cases and matched full-training telemetry can determine whether the larger settings improve end-to-end cohort time.
+
+## Client-side web board rendering — 2026-10-15
+
+- Problem: the Jupyter browser viewer exposed the live JSON payload directly,
+  making board state, entities and decisions difficult to inspect remotely.
+- Improvement: kept the JSON/state and history APIs unchanged and added a
+  dependency-free Canvas 2D renderer in the page. It draws normalized public
+  observations, cards, entities, HUD/outcomes and readable action history while
+  retaining raw frame/settings diagnostics in expandable sections.
+- Verification: existing web viewer protocol and fixed-port controls pass;
+  the inline JavaScript passes Node syntax checking and focused HTML tests cover
+  canvas, normalization, entity fields, relative proxy API paths and diagnostics.
+- Remaining limits: procedural browser artwork is a portable visual equivalent,
+  not pixel-identical to the pygame desktop renderer; malformed snapshots are
+  displayed with safe defaults and remain inspectable in raw diagnostics.
+
+## GPU fitting and viewer implementation — 2026-10-14
+
+- Problem: cloud fitting spent most wall time in eager shape fallbacks, collection-cache churn and row preparation; GPU identity and headless viewing were also machine-specific.
+- Improvement: fitting rows now use bounded masked entity buckets, CPU-owned selections, vectorized spool/pinned preparation, a fitting-only EMA graph owner, capability-based GPU/profile selection, isolated calibration trials and an optional CPU web viewer through Jupyter Server Proxy.
+- Verification: local 4070 baseline was captured before edits; bucketed fitting, storage, math, GPU-profile, web-history and live-view controls pass. The existing interruption journal control still reports BF16 readout quantization and a resume digest mismatch on the current baseline, so it is retained as an unresolved recovery signal rather than a speed or quality claim.
+- Remaining limits: no cloud machine is available in this environment; learning-rate promotion and final per-device presets require paired two-cohort studies on the returned measurements. The interruption mismatch needs a separate recovery investigation before claiming exact resumed-training parity.
+
+# Iteration history
+
+## Cloud fitting diagnostics — 2026-10-14
+
+- Problem: the reported 164 one-second fitting GPU samples average 21.72%,
+  with median 4.5%, 77 zero samples (46.95%) and a longest zero run of 14 samples.
+  Utilization alone cannot attribute those gaps to preparation, compilation,
+  synchronization, eager execution, storage or cloud CPU limits.
+- Inspection: CPU preparation validates/pads packed inputs row by row. Exact
+  transport widths can exceed the four fitting shapes admitted per encoder;
+  subsequent shapes take eager BF16. CUDA nonzero/boolean selections occur
+  outside the compiled encoders. No-grad teacher tile forwards use collection
+  graph caches during fit. These are code-supported suspects, not established
+  causes of the cloud observations. Existing whole-pass CUDA-event time also
+  includes stream idle gaps and cannot prove device busy time.
+- Improvement: `tools/collect_fit_diagnostics.py` forwards the existing train
+  arguments and temporarily records inclusive host spans, streaming batch/worker
+  events, exact widths, compiler paths, graph state, storage/fallback settings
+  and memory. Reuse the hardware sampler with an optional failure-isolated host
+  detail provider for thread CPU, process I/O/faults, pressure and Linux cgroup
+  quota counters. GPU startup snapshots identify the device, driver and limits.
+  An opt-in finite CPU/CUDA trace records one warmup plus requested active batches.
+  Training/recovery behavior, weights, objective and user parameters are unchanged.
+- Sources: NVIDIA utilization documentation and PyTorch's profiler project/recipe
+  and explicit CUDA nonzero synchronization contract, recorded in references.
+- Verification: 39 distinct focused controls pass across the collector, hardware
+  sampler and existing Bash/staging change. The final 16 collector cases pass
+  in 7.52 seconds, including exact CPU loss/master-gradient parity, exception and
+  hook restoration, bounded/partial CPU traces, output preservation, invalid
+  options and independently calculated CPU/throttle deltas. A short real CUDA
+  control verifies compiled/eager loss and gradient parity and exports CUDA kernel
+  events. Optional sampler/export failures remain diagnostic data. Bash controls
+  preserve pinned/dirty source facts and clean temporary archives on success/failure.
+  Repository Ruff lint/format, collector help and diff whitespace checks pass.
+- Remaining limits: no formal training or cloud 5090 measurements were run.
+  Detailed profiling adds overhead and may synchronize; lightweight host wrappers
+  add logging overhead but no CUDA waits/readbacks/events. Nested host spans
+  overlap, platform facts may be unavailable, CUDA Graph trace visibility depends
+  on the build, and early interruption can leave a partial trace. Actual cloud
+  data is required before choosing a performance change.
+
+## Bash CUDA environment installation — 2026-10-14
+
+- Problem/root cause: the verified local game installer was exposed only through
+  PowerShell, leaving Linux/WSL and Git Bash without an equivalent setup command.
+- Improvement: add `tools/bootstrap.sh` with explicit game-checkout and Python
+  options, Python 3.12 validation, POSIX/Windows virtual-environment detection,
+  the existing dependency locks and PyTorch `2.8.0+cu128`. Reuse `stage_game.py`
+  to verify the pinned commit and source hashes before dependency installation.
+  Never change the game checkout. Temporary archive cleanup runs on success,
+  errors and handled interruption; dependency failures stop subsequent commands.
+- Sources: pip local-project installation and Bash exit-trap documentation,
+  recorded in `references.md`. No training or model changes.
+- Verification: 17 focused installation/staging controls passed in 20.26 seconds.
+  Controls use real Git archives with independent pinned/dirty source facts and
+  mocked package commands: fresh/reused POSIX and Windows virtual environments,
+  paths containing spaces, execution outside the project, missing commits,
+  mismatched manifests, argument errors and failure cleanup. Bash syntax/help,
+  focused Ruff lint/format and diff whitespace checks pass.
+- Remaining limits: no dependency downloads, real Linux GPU installation or
+  formal training were performed. An existing game checkout containing the
+  pinned commit is required; cloning and changing the game branch are not included.
+
+## Encoder compiler cache ownership — 2026-10-14
+
+- Problem/root cause: padding partial fitting microbatches removed one shape
+  variation but did not isolate Dynamo caches. Both stages and subsequent model
+  instances compiled the same `_encode` code object. Their guarded stage/shape
+  variants shared the default eight-entry recompilation allowance; clearing the
+  local shape ledger at a phase boundary did not clear that compiler cache.
+- Improvement: the shared fitting backend compiles an independently copied code
+  object bound to each encoder. Quiescent fitting release renews only that owner's
+  compiler wrapper after releasing its captures. Keep four admitted static shapes,
+  trimmed microbatch padding, eager BF16 for additional shapes and explicit backend
+  failure handling. No global compiler-limit increase or unrelated cache reset.
+  Model structure, checkpoint contracts, rewards, exploration and optimizer cadence
+  are unchanged; current-contract weights/recovery do not need regeneration.
+- Sources: inspected PyTorch 2.8's compile API and Dynamo cache-size source for
+  code-object ownership, and Python 3.12's `code.replace()` contract for isolated
+  bytecode copies. These are execution ideas only, recorded in the references.
+- Verification: the independent CUDA regression first reproduced the eight-entry
+  warning on the preceding code. After the fix, 15 focused compiler/graph and
+  checkpointing controls pass in 37.24 seconds. They cover both stages, four entity
+  widths, partial batches, three changing-microbatch phases, extra-shape eager
+  execution, cache replay, output/gradient parity, owned release, memory fallback
+  and injected compiler failure. Ruff lint/format and `git diff --check` pass.
+- Bounded integration: [planting collection/fitting control](evidence/compiler-cache-collection-20261014.json)
+  uses four noncontiguous live games in 128 slots, the default architecture/BF16
+  runtime, four decisions per measurement and a one-second cutoff for fitting.
+  All four optimizer commits finish without compilation-limit warnings; fitting
+  takes 3.354 seconds and the cycle peaks at 1,859.79 MiB of PyTorch allocations.
+  Last-pass selected error is 0.008298, consistency Huber loss 0.019043, consistency
+  MAE 0.132202, saturation fraction zero, estimator gap 0.006042 and placement gap
+  0.025781. The expected short-cutoff dense-return diagnostic remains unchanged.
+- Remaining limits: this tiny control measures 468.46 warmed actual transitions/s
+  before fitting versus 315.42 after (-32.67%). The policy changes during fitting,
+  so this is not an identical-action performance comparison or evidence of a causal
+  compiler regression. No throughput or learning-quality improvement is claimed.
+  Restart a running process to load the fix. No full suite or formal training was
+  run for this compiler change.
+
+## 0.39.0 (unreleased) — 2026-10-13
+
+- Problem/root cause: a species target selected and evaluated by the same EMA tile
+  estimator can inherit a high erroneous tile prediction. Consistency MSE also gives
+  large residuals unbounded influence. These are target/loss design concerns, not
+  proof that a particular run's species choices were caused by tile overestimation.
+- Improvement: keep both stateless Transformers and parameter layout unchanged.
+  Select the geometry-candidate argmax from detached online tile predictions, then
+  evaluate only that selected tile with the frozen EMA tile network. The shared
+  autonomous/demo target path returns detached targets, tile IDs and estimator gaps,
+  reusing existing online tables/EMA forward with no additional Transformer calls.
+  Actual proposals, including rejection and commitment, determine the branch; wait
+  and probe rows have no species-consistency term. Geometry, tile-zero full-board
+  fallback and lowest-index ties remain unchanged.
+- Robust loss/defaults: use twice unreduced Huber with
+  `species_consistency_huber_delta=1.0` (finite, positive, non-boolean) and existing
+  consistency weight 1.0. Small-error MSE gradients remain; large residual influence
+  is bounded without clipping rewards/targets, weighting by disagreement, confidence
+  gates or excluding samples. Preserve whole-cohort plant/dig and 50/50 outcome
+  denominators. Actual MSE, probe coefficient 0.25, ranking coefficient 0.10/margin
+  0.05, four autonomous/twenty demo passes, Adam 0.0003, clipping 5 and EMA 0.95 stay.
+  Architecture, rewards, exploration, probe selection and scheduling are unchanged.
+- Contracts: advance objective to `complete_return_sequential_tile_probe_v2`, demo
+  checkpoint to v8 and autonomous recovery to v7; keep policy
+  `two_stage_transformer_q_v1`, model-state v1 and trajectory v8/layout unchanged.
+  All preceding weights/resumes must fail before simulator allocation, including a
+  recently regenerated preceding-contract `human-init\initialization.pt`. Verified
+  recordings can produce fresh initialization in an unused directory. Preserve
+  recordings, current runs/checkpoints and evidence; add no migration/runtime option.
+- Diagnostics/documentation: balanced `species_consistency_loss` replaces the
+  misleading consistency-error metric. Add whole-pass `species_consistency_mae`,
+  `species_consistency_saturation_fraction` and `species_selection_evaluation_gap`;
+  absent non-wait rows are nullable/`n/a`. Accumulate on device through existing pass
+  boundaries, with no per-batch synchronization. Gap is EMA candidate maximum minus
+  EMA evaluation of the online-selected tile: disagreement, not proven overestimation.
+  Selected-action error and conditional placement-gap definitions stay unchanged.
+  README, repository instructions, lean architecture, training/math/validation and
+  reference attribution now describe the new contract; prior research additions
+  and historical measurements remain preserved.
+- Sources: inspected Double DQN equation 4 for separate selection/evaluation and
+  PyTorch 2.8 `HuberLoss` for the half-MSE convention, doubled locally to preserve
+  small-error scale. Adopt these concepts, not DQN or new dependencies. Huber limits
+  outlier influence; it does not establish correct targets or independent estimators.
+- Verification: one owning-suite run passes 281 tests in 75.44 seconds, with nine
+  expected dense-variation/injected-fallback warnings. Controls cover online/EMA
+  disagreement, geometry/ties/fallback, detached gradients, independent piecewise
+  values/derivatives, complete-cohort partition/RAM/spill/demo balancing, nullable
+  diagnostics, unchanged forward counts and gameplay, optimizer/EMA cadence,
+  interrupted/restored execution and pre-allocation contract rejection. Repository
+  Ruff lint/format and `git diff --check` pass. No full suite was run.
+- Bounded measurement: [four-pass control](evidence/double-estimator-collection.json)
+  uses four noncontiguous live games in 128 original slots, eager execution, one
+  auxiliary lane, four alternative tiles and an explicitly shortened 0.1-second
+  probe horizon. Four optimizer commits take 0.574 seconds for fitting; the
+  collection/fit cycle peaks at 185.68 MiB of PyTorch allocations. Last-pass selected
+  MSE is 0.882803, balanced consistency Huber 0.905008, consistency MAE 0.951319,
+  saturation fraction 0, estimator gap 0.00004318 and placement gap 0.00100919.
+  Warmed actual-transition median is 169.75/s before fitting versus 166.59/s after
+  (-1.86%). Separate drains are retained in the evidence. This small eager control
+  is neither a default 30-second-horizon measurement nor full-cohort performance or
+  mastery evidence. Independent mathematical tests cover saturated residuals.
+- Remaining issues: correlated estimator errors, indirect target contamination and
+  GPU/probe contention remain. No guaranteed win-rate improvement, elimination of
+  overestimation, commit, push, PR, merge or formal training is included.
+
+## 0.38.0 — 2026-10-13
+
+- Problem/root cause: the preceding joint Transformer–LSTM added learned event
+  history and derived species values from tile maxima. The requested replacement
+  separates species and placement prediction using the current public board only.
+  Poor sampled-tile returns must not directly train species toward that placement's
+  outcome. Recent-run observations motivate the change but do not establish a causal
+  recurrence defect or guarantee that removing memory improves learning.
+- Model: independent species Transformer (width 128, 4 layers, 8 heads, FF 512)
+  and conditional tile Transformer (width 192, 6 layers, 12 heads, FF 768), with
+  pre-normalized spatial attention, zero dropout and 16 features per head. Species
+  uses one global token and a direct ten-output head; tiles use the same raw board,
+  global/branch tokens and 45 coordinate queries. Only requested board/branch
+  pairs execute, with duplicate reuse. No scalar bypass, LSTM, event encoder,
+  learned-history state, fusion or cross-network feature path remains.
+- Learning: actual complete returns supervise species wait or actual non-wait tile
+  only. Species consistency (weight 1.0) targets detached frozen-EMA candidate-tile
+  maxima, with full-cohort plant/dig outcome denominators. Probe Huber coefficient
+  0.25 and demonstration ranking coefficient 0.10/margin 0.05 remain. Branch demo
+  ranking uses species values; tile ranking uses conditional values. Both networks
+  have EMA copies, updated with decay 0.95 after committed steps. Four autonomous
+  and twenty demonstration passes, Adam 0.0003 and clipping 5 remain unchanged.
+- Execution/storage: flat active-decision batches replace sequence fitting and
+  temporal detach boundaries. Chronological episode returns and canonical slot
+  evidence remain. Ordered double-buffer transport, whole-pass accumulation and
+  `fit_batch_groups=4` use base batch size 1024. Both encoders use active packing,
+  token overheads 1/47 and phase-owned graph/headroom fallback. Source/lane/recovery
+  accounting no longer contains model memory. Background same-species tile probes,
+  local retained-decision backpressure, exact-once RAM/spill endpoint patches and
+  drain-before-save/fitting remain; endpoint bootstrap uses maximum EMA species Q.
+- Contracts/cleanup: policy `two_stage_transformer_q_v1`, objective
+  `complete_return_sequential_tile_probe_v1`, demo v7, trajectory v8, autonomous
+  recovery v6 and stateless model-state v1 require fresh weights and reject all
+  earlier weights/resumes before simulator allocation. There is no conversion,
+  partial transfer or historical collector. Verified recordings can be refitted
+  under current rewards into a new directory. User recordings, runs, checkpoints
+  and raw evidence are preserved. Obsolete recurrent code/tests/current-framework
+  documentation and memory diagnostics are removed.
+- Defaults/documentation: preserve existing rewards and both exploration schedules,
+  including shipped `reward.loss_penalty=1.0`. Correct the current reward guide's
+  stale -2 terminal-loss description/bound to match that unchanged setting. README,
+  repository ownership, lean architecture, training/math/validation and viewer
+  settings guidance describe stateless execution. Learning math moves to
+  `docs/math/sequential-training.md`. Placement gap means conditional candidate
+  maximum minus actual sampled tile, not species Q minus tile Q. Record inspected
+  SDQN §2.2, Relational DRL and Set Transformer paper/project in references; adopt
+  conditional consistency and spatial set attention, not their algorithms.
+- Verification: coordinated owning controls cover both-stage attention/gradients,
+  stateless inputs, attribution, global loss denominators, flat transport/spill,
+  demonstration reconstruction, checkpoint rejection, background scheduling and
+  interrupted recovery. Initial stale fixture/history assertions were corrected
+  with focused reruns rather than repeated full suites. Precision controls retain
+  strict original-head Q tolerances; stable-region gradient comparisons supplement
+  independent ReLU-boundary controls instead of treating gate flips as numerical
+  gradient failures. Final 14 focused controls pass, including multi-step auxiliary
+  endpoint retention and EMA allocation retry. Evaluation/journal controls pass
+  (13); checkpoint/configuration owners report 125 passing controls. Lint,
+  formatting and whitespace checks pass. Detailed scope and corrections are in
+  [verification evidence](evidence/two-stage-verification.json). No full-suite
+  success is claimed: baseline reward tests expecting loss penalty 2.0 disagree
+  with the unchanged shipped 1.0 default.
+- Bounded measurements: eager sparse/mixed collection uses fixed 128 simulator
+  slots with 128/64/1 live games. A completed wait-only cohort fits four passes in
+  0.304 s; warmed post-fit median throughput changes -1.6%. A separate four-live
+  planting control uses an explicitly shortened 0.25 s probe horizon, retains
+  four triggers/16 alternatives, and fits four passes in 0.398 s. Its last selected
+  MSE is 0.8831, species consistency MSE 0.9051 and conditional placement gap
+  0.001475; warmed post-fit median throughput changes -8.3%, so no general
+  no-regression claim is supported. One default 30 s horizon probe independently
+  completes 3,001 transitions/3,000 ticks while its real planting owner executes
+  nine more decisions before drain. Horizon bootstrap is 1.0, workspace 4.12 MB,
+  wall time 29.9 s and drain 29.49 s. At 128 boards/40 entities, measured species/
+  tile inference takes 5.10/23.49 ms and separate fitting controls 139.75/40.98 ms;
+  these single bounded measurements are not mastery or broad throughput evidence.
+  Raw controls are [collection](evidence/two-stage-collection-control.json),
+  [plant/fit](evidence/two-stage-plant-fit-control.json) and
+  [default probe](evidence/two-stage-default-probe-control.json).
+- Remaining issues: correctness, recovery and bounded fair scheduling are the
+  acceptance criteria, not promised throughput or win-rate improvement. GPU
+  contention and long probe drain costs remain. No formal training, commit, push
+  or merge is part of this work.
+
+## 0.37.0 — 2026-10-10
+
+- Problem/root cause: collection ran every post-plant counterfactual to completion
+  before the next real decision. A single planting therefore parked all real
+  games, including its owner. Branch alternatives also mixed species comparisons
+  with the requested same-species placement evidence.
+- Improvement: remove branch probes and their cursors/categories/configuration.
+  Accepted normal/exploratory planting queues up to four distinct other empty
+  tiles of that species, excluding its actual tile. Separate zero-time placements
+  remain separate jobs. Frozen greedy EMA continuations may choose ordinary
+  actions but never spawn probes or commitments. Rewards, event memory, joint
+  network, 128-game cohorts, four autonomous/twenty demonstration passes and
+  optimizer settings stay unchanged.
+- Execution: `CollectionScheduler`, `ProbeJob` and `ProbePool` retain selected
+  decisions, immutable pre-action sources and independent occupied auxiliary
+  lanes. Each round advances ready real slots and one auxiliary transition by
+  default; the planting owner continues. FIFO admission reserves source capacity
+  before eligible execution. Only a source-limited slot holds its original
+  proposal/draws, without invented waits or ticks. Defaults are 256 auxiliary
+  lanes and 128 outstanding sources. Headroom/budget fallback reduces allocations
+  to one source/lane, retaining every probe; minimum failure is explicit and
+  occurs before behavior inference/RNG consumption. Heavy reporting remains at
+  64 continuation rounds.
+- Evidence/recovery: actual transitions append immediately with stable row IDs
+  and pending counts. Owned endpoints, exact full-state deduplication and compact
+  tail inference patch RAM/spilled rows exactly once, including out-of-order
+  completions and multiple jobs from one slot. Real terminal games do not cancel
+  their jobs or count auxiliary victories as cohort games. Finalization/fitting/
+  EMA updates require complete evidence. Interruption/save stops new selection,
+  finishes issued decisions and drains every job/transfer/patch; no fork is
+  serialized. Canonical counters/cursors recover; pool/maps rebuild.
+- Sequence/memory: chronological per-slot maps omit capacity gaps and keep
+  256-actual-decision detach boundaries. Maps share staging accounting, spill to
+  temporary disk maps and release on early close. Reusable pinned views are
+  consumed before reuse. Retained tickets, source/lane recurrent state, endpoints
+  and private workspaces are charged/reported. Publishing a larger reservation
+  now follows spilling, and prefetch establishes its initial map reservation
+  before returning, fixing an independently caught budget-publication race.
+- Contract/cleanup: objective/method `complete_return_joint_tile_probe_v1`, demo
+  v6, trajectory v7 and autonomous recovery v5 reject previous weights/resumes
+  before simulator allocation. Network `transformer_lstm_q_v4` and public
+  event-memory interfaces stay unchanged. Verified recordings can be refitted
+  into a fresh directory. Synchronous collectors, branch-probe paths and the
+  obsolete bootstrap-only patch interface are removed. Recordings, runs,
+  checkpoints, evidence and prior uncommitted work remain untouched.
+- Monitoring/documentation: report active lanes, queued jobs, blocked slots,
+  queue-only age, oldest outstanding-job age, workspace, rollout work/stops and
+  drain duration. Auxiliary/tail inference has separate device profiler labels.
+  `rollout_enqueue_seconds` is host enqueue overhead, not GPU wall time.
+  Quick start, training/math/validation and repository ownership instructions
+  describe the sole framework; architecture remains 217 lines and three diagrams.
+  Sample Factory and EnvPool papers/projects inform independent batched scheduling
+  only; sources inspected are recorded in [references](references.md).
+- Verification: seven owning suites ran once, initially producing 150 passes
+  and eight fixture/retired-API failures. Corrected controls passed ten and then
+  fourteen selected cases. Fixtures now respect Sunflower/Peashooter ordering,
+  initial sun/cooldown and saved exploration settings; retired benchmark assumptions
+  were replaced rather than weakening constraints. Final focused storage/map/
+  minimum-allocation/queue-age/preflight controls passed twelve cases. Subsequent
+  prefetch/fallback checks caught the budget-publication race above; after repair,
+  three prefetch layouts and the independent partition-gradient control passed
+  four cases. Selections overlap and are not a unique suite total. No full suite
+  was repeated. Ruff lint/format and whitespace checks pass. Prior unrelated
+  assertions recorded under 0.35 remain outside this change; full-suite success
+  is not claimed.
+
+Bounded eager controls use the default network and 128 original simulator slots,
+noncontiguous one/four live games, four auxiliary lanes, eight actual decisions per
+window and **0.05 simulated seconds**, not the default 30-second horizon. Setup,
+actual-window and remaining drain time are separate; three warmed trials give:
+
+| Case | Live games | Median actual window seconds | Median drain seconds | Decisions/game/s |
+|---|---:|---:|---:|---:|
+| Sparse | 4 | 0.14106 | <0.00001 | 56.72 |
+| Sparse | 1 | 0.14588 | <0.00001 | 54.85 |
+| Planting | 4 | 0.19221 | 0.22931 | 41.63 |
+| Planting | 1 | 0.19099 | 0.00535 | 41.89 |
+
+- The bounded collect/four-pass-fit/collect cycle committed exactly four updates;
+  fitting took 0.34851 seconds and maximum reported workspace was 271,353,588
+  bytes. See [short control](evidence/collection-background-v037-short.json) and
+  its hardware stream. This earlier artifact's `rollout_wall_seconds` field
+  measured enqueue overhead; the implementation now names that quantity accurately.
+- A final one-lane, one-live-game, four-decision control after map/ownership fixes
+  also completed exactly four updates. Median warmed actual window was 0.08931
+  seconds, versus 0.08920 after 0.32412 seconds of fitting. Last selected-action
+  error was 3.94696 and probe Huber error 1.48699. See
+  [final control](evidence/collection-background-v037-final.json) and hardware
+  stream. This is another 0.05-second-horizon check, not a full benchmark matrix.
+- These measurements and serial references establish bounded execution and
+  continued real-slot progress, not default-30-second/full-cohort speed, a proven
+  fix for every historical slowdown, mastery or improved win rate. Shared GPU
+  contention and source-capacity backpressure remain. No formal training or Git
+  publication was launched.
+
+## 0.36.0 — 2026-10-10
+
+- Problem/root cause: periodic probes spent work on quiet/rejected decisions and
+  did not compare every successful placement with same-species alternatives.
+  Architecture mixed workflow explanations with low-level inventories and
+  duplicated owning documents. The approved replacement changes probe triggering,
+  coverage and horizon, not the joint network or ordinary gameplay.
+- Improvement: each actual accepted normal/exploratory planting triggers exactly
+  once, including separate zero-time placements. Four distinct other branches
+  rotate through nine alternatives; up to four distinct other empty tiles keep
+  the planted species fixed and exclude its actual tile. Only accepted triggers
+  advance cursors. Waits, digs, rejected plants, initial entities and probe-only
+  plants trigger none. Selection consumes no behavior RNG and retains ordinary
+  resource/cooldown rejection for alternative branches.
+- Execution: the pinned simulator's read-only legality mask gates pre-action
+  source copies on device without changing policy geometry. Real acceptance from
+  the existing actual-transition handoff authorizes forks. An immutable source
+  bank includes simulator/accounting state; forks gather complete pre-action EMA
+  memory after consuming source events. Frozen greedy EMA continuations stop at
+  real terminal/cutoff, 30 simulated seconds or 4096 transitions. Existing pinned
+  control boundaries compact survivors every 64 continuation rounds; serial lane
+  fallback retains all valid proposals. Sources, scratch and endpoint memory are
+  accounted/reported. Fork events and rewards never enter actual histories.
+- Learning/recovery: gamma-one accumulated-reward-plus-EMA-tail targets, initial
+  acceptance strata, exact endpoint deduplication and probe coefficient 0.25 stay
+  unchanged. Once an actual decision starts, bounded probes/storage finish and
+  bootstrap drains before checkpointing. Transient forks are never serialized.
+  The selected complete-action objective, reward settings, event memory, exploration,
+  128-game cohorts, four autonomous/twenty demo passes and optimizer are unchanged.
+- Contract/cleanup: shared `ProbeLayout` supplies storage/transport/execution
+  shapes for 0–9 branches and 0–44 tiles, with at least one enabled. Objective
+  `complete_return_joint_probe_v2`, demo v5, trajectory v6 and autonomous recovery
+  v4 reject previous weights/resumes before simulator allocation, despite unchanged
+  `transformer_lstm_q_v4` network structure. Periodic scheduling, decision cursors,
+  fixed four-probe shapes, obsolete rollback and historical checkpoint hydration
+  are removed; current demo loading refreshes execution settings only. Verified
+  recordings remain reusable through fresh initialization into an unused directory.
+  User recordings, runs, checkpoints, evidence and prior uncommitted work remain.
+- Documentation/sources: architecture is 207 lines with three focused diagrams,
+  linking field/math/execution detail to owning documents. Quick start, training,
+  validation and repository ownership instructions describe the sole framework.
+  Re-inspected MVE definition 3.1 and its project README, recorded in
+  [references](references.md). Bounded rollout-plus-tail comes from that source;
+  accepted-plant triggering and coverage are local decisions.
+- Verification: seven owning suites ran once (153 passed and one fixture failure).
+  Follow-up demonstration/math/rejection controls produced 58 passes and one
+  fixture failure. Corrected preflight/interruption/fallback checks passed eight
+  cases; the consecutive zero-time control passed separately. Final nondefault
+  spill/recovery/prefetch, CPU/CUDA demo reload and cutoff-budget checks passed nine
+  cases. These selections overlap and are not a unique suite total. Fixtures were
+  corrected for initial cooldowns, distinct zero-time tiles and lane batch counts;
+  production constraints were not weakened. No full suite was repeated. Ruff
+  lint/format and whitespace checks pass. The unrelated assertions recorded under
+  0.35 remain outside this change; the full suite is not claimed green.
+
+Bounded eager planting controls use one noncontiguous live game in 128 original
+slots, two scratch lanes, two actual decisions/window and three warmed trials.
+A forced Sunflower-dominant policy yields one accepted planting/window. Setup/cold
+work is separate; these are not steady-state or full-cohort training rates.
+
+| Coverage | Horizon | Warm median window seconds | Probe transitions/window | Stops/window |
+|---|---:|---:|---:|---|
+| 2 branches + 2 tiles | 20 s | 15.6841 | 8,013 | 4 horizon |
+| 4 branches + 4 tiles | 20 s | 16.2540 | 16,025 | 8 horizon |
+| 4 branches + 4 tiles | 30 s | 23.1315 | 24,033 | 8 horizon |
+
+- Evidence: [lighter coverage](evidence/collection-plant-v036-coverage-20s.json),
+  [wide coverage](evidence/collection-plant-v036-wide-20s.json) and
+  [default horizon/four-pass cycle](evidence/collection-plant-v036-default-30s.json),
+  each with matching hardware JSONL. The default case records one trigger, four
+  branch/four tile probes, 96 rollout event writes and 24,832 padded inference rows.
+  Eight endpoints reduce to six nonterminal bootstrap representatives.
+- Four-pass cycle: three actual transitions finish one natural one-second cutoff
+  game, with eight cutoff probes totaling 25 transitions. Exactly four optimizer
+  commits take 0.349 seconds; prefit plant MSE is 4.0001, last-pass selected-action
+  error is 3.9469 and probe Huber error is 0.6878. The post-fit warm median window
+  is 22.3971 seconds, versus 23.1315 beforehand (+3.28% active transition rate).
+  This tiny matched eager control shows no repeatable greater-than-5% regression;
+  it does not establish default full-cohort or compiled performance.
+- Control correction: the first cycle attempt assumed every decision advanced a
+  tick and stopped one tick before cutoff after accepted zero-time planting, before
+  any optimizer update. Cutoff collection now allows a bounded additional 45
+  ordinary decisions and stops at completion, without forced waits or changed
+  snapshot windows. Only the missing cycle was rerun; completed trials were retained.
+- Memory: reported default source/scratch/endpoint workspace is 818,833,152 bytes,
+  including the immutable bank. Torch peak is 47.35 MiB before fitting and 60.64 MiB
+  afterward. FIT entry drops CuPy pool reservation from 772.75 to 254.58 MiB and
+  Torch reservation to 24 MiB. These are separate pools/workspaces, not total process
+  VRAM. Small accounting additions occurred between coverage controls, so tiny
+  workspace differences are not an isolated coverage-cost measurement.
+- Limits: crowded/default 128-live cost and learning quality remain unmeasured.
+  Longer and more frequent probes materially increase collection work; no faster
+  learning, win-rate improvement or previous throughput is promised. No formal
+  training, commit, push, PR or merge was performed. Benchmark-owned temporary
+  trajectory directories were closed/removed; durable measurements are preserved.
+
+## 0.35.0 — 2026-10-09
+
+- Problem/root cause: independent species and tile predictions both received the
+  sampled placement's return, directly blaming a good species for a bad tile.
+  One-transition probes could not observe delayed shooting, mine arming or
+  Sunflower production. The approved replacement changes attribution and probe
+  consequences, not reward coefficients, event memory, exploration or optimization.
+- Improvement: the sole `transformer_lstm_q_v4` model predicts wait and conditional
+  joint-tile values. Shared `ActionQValues` derives species/dig values from candidate
+  maxima; only the actual complete action receives selected-return regression.
+  Occupancy, full-board tile-zero fallback, resource/cooldown rejection and original
+  slot-shaped exploration draws retain their semantics. Tile tables are computed
+  once and head temporaries obey the encoder microbatch bound.
+- Objective: `complete_return_joint_probe_v1` retains complete gamma-one returns,
+  whole-cohort wait/plant/dig group weights and accepted/rejected 50/50 strata.
+  Each probe contributes one initial complete-action Huber error, equally weighted
+  across represented branches and balanced outcomes, with coefficient 0.25.
+  Demonstration ranking anchors the demonstrated complete action against other
+  branches' best executable placements and other tiles; coefficient 0.10, margin
+  0.05 and normalization remain unchanged. Autonomous/demo passes stay four/twenty.
+  Selected-action error and placement gap replace duplicated head-return metrics.
+- Probes: original games schedule alternatives at decisions 0, 512, 1024, ...
+  Every valid initial proposal forks simulator/accounting and complete consumed
+  EMA event memory. Frozen greedy continuations stop at real terminal/cutoff,
+  20 simulated seconds or 4096 executed transitions, including the initial action.
+  Horizon/cap endpoints bootstrap; terminal/cutoff endpoints do not. No exploration,
+  forced wait, synthetic time advance or fabricated defeat is introduced.
+- Execution/recovery: bounded scratch lanes retain valid forks only, with one-lane
+  allocation fallback. Device masks stop finished forks; reusable pinned controls
+  compact survivors every 64 continuation rounds. Public growth bounds include
+  pending spawns, possible plant additions and projectile bursts without inspecting
+  future schedules. Only endpoint evidence persists. Final bootstrap dedup compares
+  public inputs and complete hidden/cell/event/timing state, never merging ongoing
+  simulations. Probe interruption rewinds source memory, RNG and scheduling cursors;
+  actual execution completes its handoff/storage before checkpointing.
+- Compatibility/cleanup: demonstration, trajectory and recurrent recovery contracts
+  are versioned. All earlier weights/resumes fail before CUDA probing or simulator
+  allocation; no partial migration exists. Verified archives/native replays remain
+  reusable by refitting into a new directory. Replaced independent-head losses,
+  one-step helpers and previous-contract-only tests were removed. Existing recordings,
+  runs, checkpoints and prior evidence were preserved.
+- Graph ownership: switching evaluation inference mode and ordinary no-grad
+  collection exposed mutable CUDA graph/RNG buffers allocated as inference tensors.
+  Capture-owned storage is now allocated outside inference mode. The explicit
+  mode-switch, capture-cache reuse and owned-output control passes.
+- Verification: the shared-contract full suite ran once: 661 passed, 22 failed and
+  one setup error. New-contract failures were repaired and targeted rechecks passed
+  26 cases; no second full run was made. Final shared-selector/growth-bound,
+  microbatch value/gradient and v3 preflight checks passed 25 cases. Benchmark
+  controls passed 27 cases, including retaining fit metrics across collection reset;
+  the mode-switch ownership check passed separately. These selections overlap and
+  must not be added into a unique suite total. Ruff lint/format and whitespace
+  checks passed.
+- Remaining unrelated assertions: ten reward/timing controls expect the retired
+  loss penalty 2 although unchanged HEAD/default configuration uses 1; one viewer
+  test expects timestamped durable lines in compact interactive output. Reward and
+  progress behavior were not altered to satisfy these assertions. The full suite
+  is not claimed green.
+- Sources: inspected SDQN section 2.2 equations 7/8 and Model-Based Value Expansion
+  definition 3.1/project README, recorded in [references](references.md). Conditional
+  maxima and bounded rollout-plus-tail ideas are used; learned dynamics, SDQN's
+  component networks and its off-policy algorithm are not adopted.
+
+Bounded eager snapshot controls retain 128 original slots, two scratch lanes,
+two actual decisions per measured window and three warmed trials. They use a
+forced wait-dominant teacher on a sparse board, with two valid branch alternatives
+at each scheduled source. They are not formal training or steady-state rates.
+
+| Live games | Horizon | Cadence | Warm median window seconds | Actual transitions/s | Probe transitions/window |
+|---|---:|---:|---:|---:|---:|
+| 128 | 0.02 s | 512 | 0.7510 | 340.87 | 768 |
+| 1 | 0.02 s | 512 | 0.4355 | 4.59 | 6 |
+| 1 | 20 s | 512 | 12.9570 | 0.154 | 4002 |
+| 1 | 0.02 s | 1 | 0.8560 | 2.34 | 10 |
+
+- Evidence: [final short-horizon/cycle](evidence/collection-joint-v035-final.json),
+  [default-horizon cost](evidence/collection-joint-v035-default-horizon.json) and
+  [dense-cadence control](evidence/collection-joint-v035-dense-cadence.json), each
+  with its matching hardware JSONL. All snapshot forks stopped at their horizons.
+  The first decision schedules probes; these short windows intentionally emphasize
+  their cost and must not be extrapolated to a 512-decision average or a full-cohort
+  default-horizon workload. Longer probes are substantially more expensive.
+- Four-pass cycle: 256 complete cutoff transitions from 128 games, exactly four
+  optimizer commits in 0.685 seconds. Wait prefit MSE was 4; last-pass selected MSE
+  was 3.970 and probe Huber error 0.4875. Warm median post-fit throughput was 353.86
+  versus 340.87 active transitions/s (+3.81%); this matched short-horizon control
+  shows no greater-than-5% median regression, not a guarantee for 20-second probes.
+- Memory: cycle collection cleanup reduced Torch reservation from 166 to 24 MiB;
+  FIT entry reduced CuPy pool reservation from 771.75 to 255.17 MiB. Retained probe
+  workspace was 544,196,608 bytes; default-horizon one-live Torch peak was 36.70 MiB.
+  These pool/workspace measurements are not total process VRAM or promised savings.
+  The earlier isolated short-horizon artifact remains intact but its selected-error
+  field was lost at collection reset; final evidence fixes that measurement bug.
+  Two newly generated overlapping benchmark files were discarded, not user evidence.
+- Limits: no formal/unbounded training, commit, push or merge was performed. No
+  improved win rate or unchanged collection throughput is promised; crowded/default
+  full-cohort rollout cost remains unmeasured in these bounded controls.
+
+## 0.34.0 — 2026-10-09
+
+- Problem/root cause: fixed slot-capacity inference kept doing encoder/tile work
+  as games finished; invalid, terminal or duplicate probe rows could still consume
+  EMA inference. Long-lived graph buffers crossed collection/fitting phases, and
+  lifetime throughput obscured shrinking active-game workloads. These are execution
+  costs, not evidence of a policy/objective defect.
+- Improvement: the host `ActiveBatchPlan` uses `enabled_envs` and published public
+  `summary_host` counts for entity-width/power-of-two buckets. Canonical gathers/
+  scatters preserve live identities and freeze inactive event memory. Online/actual
+  EMA and the tile wrapper process active rows; selection/exploration RNG keeps
+  original slot-shaped draws. Scheduled probes, model inputs, rewards, exploration,
+  loss denominators and four whole-pass optimizer updates are unchanged.
+- Scratch/transfer scope: shallow batch/feature prefix views reuse existing scratch
+  allocation. Source-ID remapping copies original live slots into compact lanes;
+  public feature/metadata rows scatter back to canonical game/probe identities.
+  Private simulator capacity/bounds remain unchanged. Behavior globals transfer
+  active rows only and rebuild zero-filled canonical host rows; probe globals use
+  the same compact/scatter contract. Compact views preserve original-slot RNG,
+  accounting and proximity state without reallocating the simulator for each live count.
+- Probe pipeline: GPU exact dedup representatives become known through the existing
+  host handoff. Current canonical rows append before valid unique nonterminal EMA
+  bootstrap is queued; its CPU copy is consumed at the next existing handoff and
+  patches stored rows through `buffer.update_probe_bootstrap` before targets/fitting.
+  Terminal bootstraps are zero. Quiescent finalization/checkpoint/interruption drains
+  flush the final copy; there is no new ordinary per-decision count/bootstrap wait.
+- Graph ownership: direct no-grad collection graphs and custom AOT owned fitting
+  graphs apply on all CUDA platforms, with no Windows/Inductor split. Separate
+  phase owners release outgoing captures/workspaces. Collection LRU defaults are
+  eight entries per encoder and 512 MiB headroom; retired captures release at the
+  existing handoff. Capacity/headroom/allocation pressure retains eager inference.
+  Active maps, captures and caches are rebuilt, not serialized; recovery/trajectory
+  contracts remain unchanged from 0.33.0.
+- Monitoring/benchmark: host-only intervals separate active games, decisions/game/s
+  and active transitions/s from lifetime totals and exclude fitting/recovery
+  downtime. Snapshot controls retain 128 original simulator slots with
+  noncontiguous 128/64/32/16/4/1 live-game subsets on sparse, mixed and crowded
+  boards, not six allocation sizes. They separate cold/warmed measurements and an
+  opt-in bounded collect/four-pass-fit/collect cycle. Default snapshot checks do no fitting.
+- Sources: inspected WarpDrive's JMLR paper/project README, NVIDIA CCCL
+  `cub/device/device_select.cuh` and PyTorch 2.8 `cuda.rst`; specific uses and the
+  DeviceSelect/NVRTC incompatibility are recorded in [references](references.md).
+  CUB is inspiration only, not a new dependency.
+- Verification: the remaining owning selection covered 185 cases:
+  183 passed initially; two new storage-fixture expectations used FP64 instead of
+  the stored FP32 dtype, and both targeted rechecks passed after correcting the
+  expectations. Shrinking 128 → 64 → 1 live games passed one control; exact compiled
+  collection recovery passed one; existing configuration controls passed eight.
+  Five compact-probe controls passed after a representation fixture checked batch
+  `n` and the accounting pointer rather than assuming `__self__` on a weak partial.
+  Additional graph/probe/progress selections passed, but overlap prevents summing
+  their counts. Independent constant-bootstrap parity and the one-row encoder limit
+  passed after updating the constant teacher fixture's execution settings. Seven
+  final width/cutoff/comparison controls and three updated probe boundaries passed.
+  Ruff lint/format and whitespace checks passed. No full suite was run.
+- Evidence: [collection-active-v034.json](evidence/collection-active-v034.json)
+  and [hardware samples](evidence/collection-active-v034.hardware.jsonl). The matrix
+  has 73 top-level records: 18 cold and 54 warmed records across three boards and
+  six live counts, plus one mixed/128-live four-pass cycle. All arms retain 128
+  original slots and use two scratch lanes. Each measured window has 16 decisions;
+  warmed arms use eight warmup decisions and three repeats. Cold means fresh
+  environment/policy, not necessarily cold process or disk kernel caches.
+  The cycle contains one post-fit cold window and three post-fit warmed windows;
+  those nested windows are not additional matrix records. Only the cycle performs
+  optimizer updates, exactly four.
+
+Warmed median decisions/game/s, with fixed 128 original slots:
+
+| Board | 128 live | 64 live | 32 live | 16 live | 4 live | 1 live |
+|---|---:|---:|---:|---:|---:|---:|
+| Sparse | 41.40 | 49.13 | 52.51 | 51.63 | 54.45 | 49.09 |
+| Mixed | 39.50 | 46.64 | 51.45 | 49.55 | 54.08 | 56.59 |
+| Crowded | 22.99 | 31.91 | 37.29 | 36.30 | 44.75 | 46.57 |
+
+- Post-fit control: mixed/128-live warmed median was 5,073.68 active transitions/s
+  against the primary warmed median of 5,055.38, a +0.36% change. There was no
+  greater-than-5% median regression in this matched control. The default model
+  completed four actual fitting passes on 2,048 cutoff transitions in 1.833 seconds.
+  The one-second cutoff terminal reward matched the configured loss penalty;
+  the actual/probe CUDA feature modules were rebuilt for that cutoff and the 1,200-second
+  setting restored afterward. This is a bounded execution control, not
+  a long formal cohort or learning-quality result.
+- Phase memory: post-fit collection-entry cleanup reduced Torch reserved memory
+  from 452 to 174 MiB, with allocation falling from 131.93 to 77.20 MiB. At FIT
+  entry, releasing probe scratch workspaces reduced CuPy pool reservation from
+  1,257.34 to 503.53 MiB. These are phase-boundary pool/allocation measurements,
+  not total process memory or promised savings for every workload.
+- Active work: mixed controls with 128 → 64 → 1 live games used online logical
+  rows 128 → 64 → 1, scratch probe rows 512 → 256 → 4 and unique bootstrap rows
+  128 → 64 → 1. Pinned staging was 1.952 → 1.154 → 0.368 MiB. Reported scratch
+  feature capacity remained 512 rows: compact execution did not replace the fixed
+  original-slot allocation with smaller simulators.
+- Limits/remaining issues: earlier short stdout-only 35/36/42 figures were not
+  fully workload-matched and are not an exact pre-feature speedup baseline. The
+  reported cohort-19 14.5× collection cliff is still not proven fixed; the bounded
+  post-fit control establishes absence of the measured regression only. Short windows
+  do not reproduce prolonged full-cohort residency. Cleanup of this session's
+  checked workspace test/cache directories was blocked by tool policy, so those
+  directories remain; no alternative deletion was attempted. Earlier denied
+  temporary-folder cleanup was not retried. The preceding 0.33.0 patch, settings,
+  recordings, runs, checkpoints and evidence were preserved. No formal training,
+  commit, push or merge was launched.
+
+## 0.33.0 — 2026-10-08
+
+- Problem/evidence: the latest recorded 128-game cohort used only Peashooters
+  and Potato Mines, produced no Sunflower sunlight and won 63 games. This shows
+  action concentration, not proof of a local optimum. Tile-only exploration could
+  not discover a different species during actual play.
+- Improvement: actual capped Sunflower income has triple development value while
+  cumulative spawns are strictly below one-third of the public total roster.
+  Event-time CPU/CUDA accounting excludes sky/discarded income and zero-total
+  scenarios. Early income/bonus are separate diagnostics, included in development
+  once; physical net-value facts and event-memory inputs are unchanged.
+- User parameters: tile exploration stays 50% to 1%, with decay extended from
+  5,000 to 10,000 stage games. Accepted-normal-plant species exploration starts at
+  10%, reaches 1% after 10,000 stage games and chooses uniformly among the other
+  seven species. Probabilities freeze per cohort and reset on stage promotion.
+  Commitments wait indefinitely for sun/cooldown/empty geometry, then use current
+  tile Q-values. Exploratory planting cannot retrigger the species coin.
+- Learning/recovery: actual waits/plants and their selected Q-values supervise
+  unchanged complete-return/outcome-balanced losses. Original policy proposals,
+  mode/pending/next species and cohort probabilities share existing trajectories,
+  journals, RAM/disk budgets and pinned transfers. Model/optimizer remain unchanged:
+  four autonomous passes, twenty demonstration passes. Removed the obsolete
+  tile-only schedule contract and unused schedule wrappers/arguments.
+- Compatibility: autonomous recovery and trajectories have new protocols;
+  malformed/missing commitments reject before simulation. Full compatible event-
+  memory weights remain usable with fresh `--init-from`, without loading old
+  optimizers/collectors. Verified old reward ledgers reconstruct the bonus without
+  rewriting recordings. Existing latest.zip transferred all 55 parameter tensors;
+  its source metadata recorded 2,048 completed games. User artifacts were preserved.
+- Presentation: compact terminal/cohort-boundary records include current-cohort
+  completed/win counts and mean raw/training returns, with explicit pending markers.
+  Host-only records persist through fitting/recovery and clear before the next
+  cohort. Narrow interactive lines prioritize these fields; durable logs stay full.
+- Verification: owning selection initially passed 201/202 cases; the omitted fitted
+  summary was fixed. Additional math/precision/journal selection passed 45/47 and
+  lifecycle/stage/settings selection passed 68/70 before fixture repairs. Repairs
+  preserve exact assertions: deterministic journal controls now disable both coins,
+  the native replay allows the independently verified 2,257-tick natural defeat,
+  and checkpoint mocks accept the explicit weights-only inspection argument.
+  Every failed case was rechecked. Final combined schedule/four-pass committed
+  recovery/preflight selection passed 11 cases; three independent corrupt-state
+  preflight controls also passed. No full suite was run. Ruff lint/format checks
+  and whitespace checks passed.
+- Limits: the bounded two-game, one-second/four-pass recovery control establishes
+  execution and exact recovery, not improved win rate. The no-timeout controller
+  can delay defence. No formal training, commit or push was launched. Only this
+  session's disposable pytest workspace cleanup was attempted but blocked by tool
+  policy; those temporary workspaces remain. Pre-existing caches and
+  recordings/runs/checkpoints/evidence remain untouched.
+
+## 0.32.0 — 2026-10-07
+
+- Demonstration-pass adjustment: changed `training.demo.passes` from 5 to 20;
+  the existing independent autonomous `training.n_epochs` remains 4. Configuration
+  and `--passes` overrides still apply only to demonstration initialization;
+  the 30-minute budget is unchanged. Tiny replay controls verify the 20-pass
+  default, custom pass counts, the one-pass override and rejection of zero passes.
+  The demonstration suite and execution-refresh control passed all 29 cases;
+  repository-wide Ruff lint/format and whitespace checks passed before commit.
+- Problem/root cause: per-decision recurrence repeatedly stored quiet/rejected
+  decisions; branch Q had no direct current-board path. Group-only regression
+  let abundant rejected actions dominate rare accepted outcomes.
+- Improvement: deterministic gross sunlight/zombie/plant events write memory
+  once with resulting board context; initial entities are not fabricated writes.
+  Current board features reach both heads every decision through 256-wide fusion.
+  Sparse chronological event fitting preserves all decisions and 256-decision
+  detach boundaries. Whole-cohort group and probe head/branch losses balance
+  accepted/rejected strata equally when both exist. Rewards, exploration, four
+  passes, clipping, Adam settings and action timing remain unchanged.
+- Recovery/cleanup: shared pending-event/timing state, isolated complete EMA forks,
+  event-aware deduplication and versioned metadata use the existing pinned handoff
+  and RAM/disk budget. Removed action/outcome recurrent embeddings and unused
+  architecture fields. Old checkpoints cannot resume or initialize weights;
+  verified recordings remain reusable in new initialization directories.
+- Verification: independent CPU/CUDA cap, gross-flow, spawn/removal, defeat-before-
+  removal, plant-death and zero-time controls; sparse/serial gradients, hierarchical
+  losses, pending recovery, replay reconstruction and spill/corruption controls.
+  Exact recovery exposed repeated-read atomic gradient accumulation; deterministic
+  matrix reduction fixes it without loosening equality checks. Direct checkpoint
+  reload also lost online/EMA compilation state; recovery now retains both paths
+  and their bounded shape sets. Checkpoint rejection precedes the CUDA availability
+  probe as well as collector allocation.
+- Test execution: owning suites and one shared-contract full-suite run (537 passed,
+  24 failed on that initial run). Stale expectations/retired-only controls and the
+  recovery/compiler failures were then corrected or retired and rechecked with
+  focused selections; no second full-suite run. The final focused selection passed
+  all 11 cases. Ruff lint/format checks and `git diff --check` passed.
+- Bounded diagnostic: 16 games, four passes, 30-second cutoff, 48,016 decisions;
+  91 writes (0.1895%), approximately 796 transitions/second. Actual final memory
+  had no cells above absolute 5; fixed-history board interventions retained
+  measurable branch/tile Q sensitivity. Raw summary:
+  [event-memory-v032.json](evidence/event-memory-v032.json).
+- Existing demonstration: reconstructed all 15,372 decisions from the unchanged
+  human recording and completed five fitting passes in `runs/human-init-events-v032`.
+  The new initialization reloads and transfers strictly under current settings;
+  old initialization files remain untouched.
+- Limits: truncated fresh-weight games establish mechanical behavior, not a
+  win-rate improvement. Dense-return variation warning remains visible. No formal
+  training, commit or push was launched.
+
+## 0.31.7 — 2026-09-30
+
+- Problem/root cause: collection used serial probe simulation/inference, repeated
+  device width reads and host comparisons; terminal refreshes mixed detailed
+  telemetry with human-facing output. The unfinished optimization also left
+  removed transfer imports and aliased next-observation buffers between passes.
+- Improvement: two independent scratch lanes execute branch/tile pairs in two
+  passes, preserving RNG/accounting/proximity state. One stacked EMA next-state
+  evaluation follows actual history only. Persistent canonical stores, exact
+  device deduplication, packed offset ingestion and one reusable pinned handoff
+  remove per-probe host boundaries. Public-count padding buckets do not inspect
+  future schedules. Scratch allocation failure runs every slot through one lane.
+  Owned-output encoder graphs also cover inference; fitting/model/reward settings
+  and loss denominators remain unchanged.
+- Terminal/configuration cleanup: 15-second detailed snapshots are separate from
+  material-change/60-second terminal updates. Compact interactive/redirected
+  events, warning routing, duplicate suppression and checkpoint notices replace
+  multiline dashboards. Resume refreshes current execution/logging automatically
+  without changing saved learning parameters or rewards. Removed transfer/per-slot
+  implementations, explicit refresh flag, historical FP32/output/runtime defaults,
+  replay sidecar annotations, archived training CLI flags, PPO report/old-run
+  branches, the retired two-coin epsilon helper and the duplicate collection
+  benchmark path. Current replay/CPU mathematical references and recovery
+  validation remain necessary. Recordings, checkpoints and verification evidence
+  are preserved.
+- Verification: serial/batched simulator headers (including RNG), ledgers,
+  proposals/execution, rejection, durations, components, canonical next inputs and
+  bootstrap controls passed, including four separate real-network next-state
+  calls from the actual EMA history. Independent CPU danger-zone/constant-bootstrap
+  controls, deduplication counterexamples, compiled inference buckets, spilled
+  slab recovery, recurrent interrupted-collection/fitting controls and compact
+  reporting controls passed. Owning suites ran rather than repeated full suites.
+  Availability/engine hash, CUDA compilation/accounting/shared-stream and replay
+  checks passed. Ruff lint, changed-file formatting and whitespace checks passed;
+  one untouched pre-existing formatting issue remains in `policy/transformer_lstm.py`.
+  New defaults retain user reward prices and `max_grad_norm = 5`. No formal
+  training or learning-quality measurement was launched.
+- Snapshot benchmark: 128 environments, eight warmup decisions, three warmed
+  32-decision trials per arm/case, zero optimizer steps. Mean transitions/s for
+  one-lane reference → two-lane execution: sparse 5,959 → 6,621; mixed 5,451 →
+  5,946; crowded 2,447 → 2,524; rejection-heavy 6,105 → 6,966; accepted-action
+  4,691 → 5,017. This is roughly 1.03–1.14× against the current memory fallback,
+  not the earlier serial trainer. Raw subphases, CPU/GPU samples and memory are in
+  `docs/evidence/collection-v031.json` and its hardware JSONL. Two-lane peak Torch
+  allocation was 166.2 MiB, sampled process RSS up to 1,565.3 MiB and pinned
+  handoff allocation up to 7.23 MiB for these bounded, headless controls.
+- Limits/remaining issues: the requested 1.5–2× historical collection improvement
+  and total-cohort reduction are not established. No formal cohort or fitting
+  benchmark was added to infer them. Hardware sampling is coarse for subsecond
+  trials; missing samples stay null and observed GPU utilization includes warmup
+  and boundary effects. Public pending-roster bounds can overpad. Packed transfer
+  retains a bounded unused tail; deduplication is not proportional DMA compression.
+  Viewer history is covered by integration controls, not the headless snapshot
+  benchmark. Sparse/mixed fixture corrections were rerun only where relevant.
+- Local cleanup limitation: shell execution policy rejected deletion of the
+  verified, ignored `build/`, `dist/`, `.pytest_cache/` and `.ruff_cache/`
+  directories. Those generated copies and local Python bytecode caches remain;
+  none is required by the active source or installed pinned game package.
+
+## 0.31.6 — 2026-09-29
+
+- Problem/root cause: complete-return fitting provided almost no direct targets for
+  unselected branches, while development events, rejection costs and house threats
+  were recorded at incompatible scales. A cohort also needed deferred victory-time
+  rewards, and the CUDA proximity-ledger overflow sentinel could otherwise be read
+  as a positive reward during corruption.
+- Improvement: the official `complete_return_probe_v2` objective now keeps six
+  reward components, multiplies only development by 10 for fitting, charges each
+  living non-headless zombie once at `x < 2000` and `x < 1000`, and finalizes victory
+  time against the actual-game median. Every decision probes two round-robin
+  alternative branches and two alternative tiles through isolated CUDA state. A
+  frozen EMA teacher supplies branch-head bootstrap targets; accepted demonstrations
+  add balanced pairwise ranking. Probe cadence/counts are configurable up to the
+  fixed four-record storage shape. Finalization, EMA state, probe cursors, ledgers
+  and pending reports are recoverable and idempotent. CUDA ledger corruption now
+  fails at the host boundary; recovery validates IDs, stages, gaps and duplicates.
+  Progress output labels terminal records as provisional until finalization.
+- Verification: the new six-component scaling, deduplicated probe storage with
+  median finalization/spill recovery, partitioned probe/ranking gradients, and EMA
+  recovery controls passed. The CPU/CUDA counterfactual parity control passed for
+  rejected and danger-zone proposals, comparing proposal, execution, reason,
+  duration, components, next observation, simulator hash, RNG and ledger state.
+  The existing reward boundary and one CUDA recovery case also passed. Changed-file
+  Ruff, format, compile and whitespace checks passed. No broad suite or formal
+  training was run.
+- Bounded diagnostic: two 16-game cohorts and four fitting passes per arm were run
+  from a fresh five-pass demonstration initialization with identical probes. Full
+  objective wall time was 1,374.1 s and reward-only was 1,321.9 s; peak Torch
+  memory was 3,185 MiB and 1,457 MiB respectively. Cohort medians were 164.705 s
+  and 165.98 s for the full arm; target standard deviation was 0.1564 and 0.2109.
+  Probe coverage was about 56–58k samples per branch per cohort. Cell magnitudes
+  remained unsaturated (maximum about 0.43, no values over 5). Fixed-history
+  sensitivity still showed tiny zombie-position/health deltas (about 1e-6–5e-5)
+  compared with sun/cooldown changes (about 0.003–0.012), so the diagnostic does
+  not establish that state-dependent action preferences are solved. Raw and compact
+  measurements are in [objective-v032](evidence/objective-v032.json).
+
+## 0.31.5 — 2026-09-29
+
+- Problem/root cause: initialization compared historical reward prices against
+  current TOML, then would have fitted archived totals. The human recording's
+  decision 4930 rejected a recharging plant at the old penalty of 0.001; the
+  current 0.003 penalty incorrectly triggered a reconstruction failure.
+- Improvement: verify native replay hashes, observations, actions, outcomes,
+  terminal states and configuration-independent reward facts. Check historical
+  ledger arithmetic, finite values and penalty applicability, then recompute
+  rewards through the shared reward function using current coefficients. Fitting
+  consumes the verified in-memory transitions, so it cannot reread old targets.
+  Keep original files unchanged and report reward changes/settings in verification
+  metadata. No model, precision, dependency or user parameter changes.
+- Verification: 26 focused checks passed for unchanged/changed rewards, independent
+  returns, rejected plant/dig and terminal boundaries, corruption and CLI config.
+  One additional tiny complete-pass CUDA initialization/reload check passed.
+  The user's complete 15,372-decision recording verified with exactly one repriced
+  reward; decision 4930 now costs -0.003 and next feedback remains `(0, 0, 1)`.
+  SHA-256 checks confirmed archive, replay and manifest stayed unchanged. Ruff
+  lint/format and Git whitespace checks passed. No full suite or formal training.
+- Remaining limits: old archives store a configuration digest without original
+  reward coefficients, so historical prices cannot be authenticated. Replay facts
+  and accounting remain validated; those prices never train the model. Pinned
+  engine and observation/action compatibility requirements remain in force.
+
+## 0.31.4 — 2026-09-29
+
+- Problem/root cause: demo and autonomous fitting read separate clipping limits.
+  Fresh `--init-from` also copied the source configuration, so both easy runs
+  inherited the initialization's invalid-plant penalty of 0.001 despite TOML
+  having 0.003. The viewer correctly exposed the effective, unintended value.
+- Improvement: keep only `training.max_grad_norm = 5`, preserving the user's
+  clipping adjustment for both fitting paths. Remove the demo-only setting and
+  override. Fresh initialization now resolves all settings from current TOML
+  and transfers only compatible weights; reward changes do not block transfer.
+  Resume keeps saved learning settings and rewards. Recording verification checks
+  engine/schema and replay facts without binding optimizer settings to its digest.
+- Verification: 22 focused controls passed, including the real tiny CLI
+  initialization/training/evaluation/resume flow, shared clipping, archive
+  corruption, architecture mismatch and retained viewer values. The existing
+  human initialization transferred all 56 parameter tensors exactly and the
+  user's command resolved penalty 0.003, clipping 5 and `features_bf16` without
+  a refresh flag or starting simulation. Changed-file Ruff lint/format and Git
+  whitespace checks passed. No full suite or formal training ran.
+- Remaining limits: existing runs retain their saved penalty on resume; only a
+  new run adopts changed learning settings. Old recordings still require their
+  original reward configuration when verifying stored reward facts.
+
+## 0.31.3 — 2026-09-29
+
+- Problem/root cause: autonomous resume retains learning settings, but the live
+  viewer only received display preferences, leaving active clipping and reward
+  values invisible when the current TOML differed from a checkpoint.
+- Improvement: send a one-time snapshot of the resolved run configuration to the
+  viewer. A read-only strip shows learning rate, `max_grad_norm`, batch size,
+  epochs, discount, sequence length, rewards and tile exploration. It wraps at
+  narrow widths and **S** hides/shows it; small panels omit history footers when
+  they would overlap board details. Demo-only clipping is not presented as an
+  autonomous setting. No training parameters or checkpoint semantics changed.
+- Verification: eight existing focused viewer controls passed. Offscreen review
+  covered 1600×1050, 944×668 and 640×480, grid/focus layouts, hidden/visible settings,
+  and the real S-key event loop before any board arrived. A deliberately different
+  saved configuration retained its displayed values after performance refresh.
+  The two layout controls passed again after the narrow-window adjustment.
+  Ruff lint/format and Git whitespace checks passed. No formal training or full
+  suite was run.
+- Remaining limits: existing viewer processes receive the strip on their next
+  launch; narrow windows still benefit from Focus or hiding settings for history.
+
+## 0.31.2 — 2026-09-29
+
+- Problem/root cause: the Windows CUDA-graphs encoder was replayed for successive
+  entity microbatches while the recurrent loss still held the previous outputs
+  for backward. CUDA-graphs reclaimed that storage, producing an overwritten
+  tensor error and a pending-backward warning at fit startup.
+- Improvement: capture AOT forward/backward separately and copy all outputs
+  into independently owned storage, including saved activations and gradients.
+  Preserve SDPA strides and refresh input weights on every invocation. Backward
+  capture failure restarts the uncommitted pass eagerly at the same precision.
+  CUDA-graphs compilation remains enabled; model shapes and precision are unchanged.
+- Verification: five focused CUDA controls passed: compiled/eager FP32 and BF16
+  output, gradient and update comparisons across empty/mixed/capped observations,
+  partial microbatches and gradient accumulation, plus memory, nonfinite and
+  backward-compilation retries without duplicated optimizer updates. A marker-only
+  repair removed the warning but still produced about 11% gradient error during
+  replay and was discarded. The owned-buffer implementation's BF16 gradient
+  difference against eager measured 0.12–0.14% across four small updates.
+- Device smoke check: three BF16 forward/backward/Adam steps per population on the
+  RTX 4070 Laptop completed with `compiled / cudagraphs_owned` and no warnings.
+  The 4,096-frame/40-entity case took 0.164–0.168 seconds per warmed step with
+  1,730 MiB peak Torch allocation; 256 entities took 0.373–0.376 seconds and
+  4,551 MiB. Initial tracing/capture steps took 1.078/1.194 seconds respectively.
+  A truly empty 32-frame case also passed. These exclude simulation/storage and
+  do not measure learning quality; owned copies add memory overhead. No formal
+  training or full suite was run. Ruff lint, changed-file formatting, syntax and
+  whitespace checks passed. The repository-wide format check flagged an existing
+  assertion layout in `tests/test_demo_initialization.py`; that unrelated file
+  was left unchanged.
+
+## 0.31.1 — 2026-09-29
+
+- Problem/root cause: enabling the fixed-shape encoder through the default
+  Windows Inductor path traced PyTorch SDPA's pybind11 capability object, then
+  fell back because the Windows environment has no Triton. The simulator also
+  reserved only the proved future projectile bound, so a mid-game recovery
+  snapshot containing active shots could exceed capacity.
+- Improvement: keep SDPA capability probing out of Dynamo traces, use the
+  available CUDA-graphs compiler on Windows, retain a one-time eager fallback,
+  and allocate current-snapshot plus future projectile headroom. The shared
+  reward table now has one invalid-plant penalty; the demo profile inherits it
+  while preserving `training.demo.gradient_clip = 5`.
+- Verification: direct CUDA forward/backward compilation completed with
+  `compilation_status = compiled` and `compilation_backend = cudagraphs`; no
+  pybind or max-autotune warning was emitted. Ruff, syntax and configuration
+  checks were run without starting training.
+
+## 0.31.0 — 2026-09-29
+
+- Problem/root cause: recurrent fitting processed only four 256-step sequences
+  per call, created a CUDA timing event for every chunk, and used a no-op
+  compilation hook. Cohort telemetry showed 887–978 seconds of fitting with
+  about 30–40% GPU utilization while transfer wait stayed below 0.1 seconds.
+- Improvement: fuse four independent execution batches, increase the encoder
+  execution budget to 128 observations/65,536 tokens, cache sequence indexes and
+  ragged gathers, defer intermediate synchronization, and add bounded fixed-shape
+  encoder compilation with an eager fallback. The learning batch, recurrent
+  boundaries, complete-return weighting, precision boundaries and five demo
+  passes remain unchanged.
+- Verification: focused transport, recurrent-state, compilation-fallback and
+  precision controls passed. The synthetic BF16 benchmark reached 11,318–11,356
+  frames/s for mixed entity populations and 11,455–11,707 frames/s at the
+  256-entity cap, with 838 MiB peak Torch allocation. The short CUDA collection
+  check reached 2,939–3,249 decisions/s without the viewer and 2,938–3,121 with
+  it; fitting preparation stayed below 0.05 seconds and transfer wait below
+  0.005 seconds. The Windows compiler rejected the entity encoder because of a
+  pinned-game pybind object, so the run recorded `compilation_status = fallback`
+  and used the exact eager path. These checks are throughput evidence only, not
+  a learning-quality claim.
+
+## Documentation and test cleanup — 2026-09-28 (0.30.0 unchanged)
+
+- Problem/root cause: guides accumulated retired event-memory, regional-input,
+  two-coin exploration and minibatch-update descriptions alongside the current
+  entity model. Validation and reference pages duplicated release narratives.
+  Test suites retained obsolete training-mode exercises and repeated assertions.
+- Improvement: delete eight redundant/retired guides; keep one current home for
+  entity inputs, recurrent learning, rewards, rejection penalties and precision.
+  Shorten the README to quick start, replace validation history with coverage
+  ownership, and retain source attribution relevant to the current system.
+  Historical narratives remain accessible through versioned Git links; raw
+  evidence and recordings are preserved.
+- Test cleanup: static inventory falls from 270 to 251 test functions and from
+  36 to 35 test files. Remove two-coin/fixed/hybrid training exercises, duplicate
+  report/reload runs, reward checks and viewer checks. Move unique deadline,
+  profile, probe-size and rejected-dig assertions to their existing owners.
+  Rename the retained SC2/compact/warmup suites for their current purpose.
+  Keep independent math, CPU/CUDA parity, supported-reader compatibility,
+  incompatible-checkpoint rejection and atomic interruption controls.
+- Verification: Ruff lint and format checks, in-memory syntax compilation of
+  104 Python files, PowerShell parsing and local Markdown link/anchor checks
+  passed. No tests were collected or executed, and no benchmarks or simulation
+  ran, as requested. These are static checks, not a new runtime validation claim.
+- Isolation/limits: changes were made in a separate worktree. Runtime source,
+  configuration, dependency pin, running training and run artifacts were untouched;
+  the user's parameters remain intact. Behavioral validation is unexecuted.
+
+## 0.30.1 — 2026-09-28
+
+- Problem/root cause: `train --init-from` inherited stale encoder and precision
+  settings from the demonstration checkpoint, so changing the current training
+  profile required `--refresh-performance`.
+- Improvement: new `initialization.pt` files omit execution-only performance
+  fields. Loading a demonstration keeps structural metadata for validation and
+  overlays the current train profile's execution settings automatically.
+- Compatibility: demonstration weights and existing autonomous resume semantics
+  remain unchanged; `--refresh-performance` remains an explicit autonomous-resume
+  control.
+- Verification: demonstration initialization, checkpoint hydration, CLI transfer,
+  and performance-refresh controls passed in the focused test set; Ruff and
+  whitespace checks passed.
+
+## 0.30.0 — 2026-09-28
+
+- Problem/root cause: small encoder batches, unconditional query splitting and
+  nested activation checkpoints multiplied kernel launches and recomputation.
+  Collection repeatedly extracted GPU scalars; fitting rebuilt dictionaries and
+  synchronized each chunk. Sparse-game GPU utilization stayed near 35%.
+- Improvement: full efficient SDPA, a 64-frame/32,768-token encoder budget,
+  cached normalization constants, bulk ragged gathers, ordered double-buffer
+  pinned prefetch, batched collection copies and deferred telemetry. Unsupported
+  attention backends retain an exact query fallback.
+- Precision: BF16 temporary features, embeddings and auxiliary projections;
+  FP32 master weights, normalization/residual accumulation, recurrent core/state,
+  Q heads, loss, accumulated gradients and optimizer state. No loss scaler.
+  Failed BF16 passes restart in FP32 without losing an update. Allocation retries
+  reduce only encoder microbatches and then enable one outer checkpoint.
+- Compatibility: entity inputs, all parameter names/shapes, action semantics,
+  rewards and the game pin remain unchanged. Ordinary resume preserves saved
+  execution precision (older entity checkpoints default to FP32).
+  `--refresh-performance` replaces only execution settings. Saved cohort fallback
+  state survives SB3 policy reconstruction and uncommitted-pass recovery.
+- Preserved user choices: `training.demo.passes=5`, four autonomous passes,
+  128 environments, 1,024-decision batches, 256-step chunks, 256 entities, and
+  train/demo invalid-plant penalties of 0.003/0.001. Demo fitting remains FP32.
+- Test consolidation: eight overlapping test functions were removed; unique
+  assertions moved into the existing owners. Batching, profile defaults,
+  obsolete-checkpoint rejection, occupancy and collection recovery each have
+  consolidated controls. New BF16, prefetch and retry coverage lives in existing
+  model/storage/recurrent files. The final suite contains 536 cases, versus 537
+  before this change; atomic signal interruption and independent math controls
+  remain covered.
+- Verification: 213 focused tests passed on the final implementation. An earlier
+  full-suite run passed 545 cases before test consolidation and recovery refinements.
+  The final 536-case full-suite rerun was stopped at the user's request; it is not
+  reported as a completed run. Ruff lint, dependency checks, packaging and local
+  documentation links passed. The existing five-pass entity demo checkpoint loads
+  with FP32 parameters. No further tests were run after the stop request.
+- Measured improvement on RTX 4070 Laptop: median short end-to-end throughput
+  rose from 318 to 1,553 decisions/s without the viewer (4.89x), and 307 to 1,638
+  with it (5.34x). Four-pass fitting fell from 35.97 to 6.27 seconds without the
+  viewer (5.73x), and 37.55 to 5.84 seconds with it (6.43x). Synthetic fitting
+  improved 7.37–16.05x across sparse, mixed and capped populations. Crowded
+  synthetic Torch allocation peaked at 859.6 MiB; short real collection peaked
+  at 143.0 MiB plus a separate 128.6 MiB CuPy pool.
+- Evidence and limits: [raw repetitions and phase/memory measurements](evidence/training-throughput-v030.json).
+  Collection used one-second cutoffs and three warmed repetitions per viewer
+  setting, keeping four passes and the normal batch dimensions. Hardware sampling
+  includes warmup. Baseline zero transport counters were uninstrumented.
+  No formal training or learning-quality claim. Long-run throughput, disk-heavy
+  cohorts and other GPUs require their own measurements; Windows FlashAttention
+  and Triton are unavailable in the tested installation.
+
+## 0.29.0 — 2026-09-28
+
+- Problem/root cause: regional zombie aggregates detached health/armor and state
+  from individual positions, fixed flat vectors omitted projectiles, and the
+  alternative event-memory runtime duplicated storage and dispatch paths.
+- Improvement: one `entity_v1` schema stores 11 integer public fields per physical
+  entity and 18 globals, with shared 32-dimensional embeddings, a global plus 45
+  tile readouts, two masked attention layers and the retained 256-unit LSTM.
+  Public timers, headless zombies, projectiles and spent mowers are represented;
+  IDs, RNGs, schedules and private movement state remain excluded.
+- User-directed cap: default 256 based on RTX 4070 Laptop measurements, configurable
+  in the single TOML. Retain mowers → plants → zombies → projectiles; omit
+  projectiles first, then zombies, then plants, with nearest-house zombies first.
+  Globals keep pre-cap counts and action journals/viewers expose omissions.
+- Runtime/storage: GPU encoding stays on device, packs present slots and matches
+  CPU public formulas. Ragged metadata/entity slabs share RAM and disk spill,
+  recover with validated offsets/counts, and use versioned schemas. Encoder
+  microbatches, query chunks and activation checkpointing bound attention memory.
+  Refilled evaluation slots explicitly refresh their newly allocated observation.
+- Removal/compatibility: event-memory model, temporal encoder, banks, caches,
+  profile and dispatch are removed. Checkpoints, demos and trajectories require
+  fresh entity-based initialization; existing recordings/run files are preserved.
+  Greedy ten-way proposals, tile-only exploration, penalty targets and rejected
+  `(previous_action=0, accepted=0, ticks=1)` feedback remain. The user's 0.003 train
+  and 0.001 demo plant penalties are preserved; the game pin is unchanged.
+- Verification: information counterexamples, all categories/public states,
+  duplicates, caps, ID isolation, CPU/CUDA parity, padding/permutation invariance,
+  independent float64 attention/gradient controls, causal recurrence, ragged spill,
+  archive corruption, demo/viewer/replay, checkpoint and interruption recovery.
+  All 537 collected tests verified: 489 in the full-suite run, then 48 after
+  correcting two obsolete fixture assertions; production code was unchanged.
+  The focused 92-case suite, Ruff, dependency checks, sdist/wheel builds and
+  local documentation links pass. The wheel contains one bundled TOML and no
+  retired model modules.
+- Resource evidence: 256/512-entity fitting measured 686/247 frames/s; both fit
+  in VRAM. A warmed 128-slot one-second collection/fitting check measured 1,080
+  decisions/s, 95.4 MiB Torch peak allocation and 128.6 MiB CuPy pool reservation.
+  A default 1,024-frame fitting-chunk control peaked at 46.3 MiB Torch allocation.
+  [Full measurements](evidence/entity-inputs-v029.json) separate synthetic inputs,
+  collection and memory counters. No formal training or learning-quality claim.
+- Remaining limits: the cap loses individual facts above its limit; 32 dimensions
+  and the cap require future learning evaluation. Quadratic attention arithmetic
+  remains, while short-cutoff throughput is not a full-game speed estimate.
+
+## 0.28.4 — 2026-09-27
+
+- Problem/root cause: the same profile parameters were copied across root
+  `configs/` files and bundled package data, so changing a setting could leave
+  source and installed behavior out of sync.
+- Improvement: keep one bundled `src/pvz_rl/data/train.toml` with sparse `demo`,
+  `event-memory`, and `gpu_defaults` overlays. Loaders and the CLI resolve those
+  overlays through one profile interface; `--profile event-memory` preserves the
+  archived model choice.
+- Verification: profile equivalence, custom-path loading, CLI training and the
+  complete regression suite (546 tests) pass; no formal training was launched.
+- Remaining limits: external scripts that refer to deleted `configs/*.toml`
+  paths must use the bundled file and profile option.
+
+## 0.28.3 — 2026-09-27
+
+- Problem/root cause: collection still applied a species exploration coin after
+  the ten-way comparison, so the submitted branch could differ from the
+  highest-Q proposal. This made action exploration change the rejection and
+  penalty distribution rather than only the requested tile target.
+- Improvement: keep all ten branch choices greedy and apply the cohort budget
+  only to the selected non-wait tile. Plant occupancy masks and unrestricted dig
+  tiles remain unchanged; the branch coin field stays zero for journal/schema
+  compatibility. The scheduler is recorded as `sequential_tile_epsilon_v1` so
+  older two-coin checkpoints cannot be resumed under the new distribution.
+- Verification: policy controls cover greedy branch selection at budgets 0, 10%
+  and 100%, tile-only plant sampling, tile sampling for dig, and the existing
+  rejection/environment parity cases. No formal training was launched.
+- Remaining limits: the retained `per_head_epsilon` helper is a compatibility
+  reader for archived schedule reports; current collection uses one tile coin.
+
+## 0.28.2 — 2026-09-27
+
+- Problem/root cause: the selector retained an illegal highest-Q proposal for
+  penalty learning, but recurrent history could still describe that proposal as
+  the previous action. Execution, metrics and diagnostics therefore disagreed
+  about whether the simulator had waited.
+- Improvement: keep proposal and execution channels separate across CPU, CUDA,
+  recurrent collection, evaluation, event memory and journals. Rejected
+  proposals remain targets and diagnostics; execution is wait (`0`) with
+  `accepted=false`, the pinned reason, configured penalty and one-tick duration.
+- Verification: focused policy, environment, recurrent, journal and CUDA parity
+  controls cover unaffordable, cooling, full-board and empty-dig proposals plus
+  legal and boundary actions. No formal training run was launched.
+- Remaining limits: CUDA parity requires the pinned CUDA runtime; CPU fixed-tick
+  compatibility retains its configured decision duration.
+
+## 0.28.1 — 2026-09-27
+
+- Previous problem/root cause: the ten-way selector was correct for the current
+  occupancy masks, but the CPU/CUDA boundary did not make the proposal channel
+  and CUDA rejection metadata explicit. Legacy executed-action history could
+  therefore be mistaken for the recurrent proposal history when diagnosing an
+  unavailable high-Q plant.
+- Improvement: make the shared selector's all-ten-branch comparison explicit;
+  keep plant tile masks independent of affordability and cooldown; retain the
+  selected proposal through CUDA collection/evaluation; and publish CUDA
+  acceptance, rejection reason and one-tick duration alongside the reward.
+  Legacy event-memory keeps its executed-action convention, while recurrent
+  Transformer–LSTM history uses the selected proposal and public outcome.
+- Regression coverage: higher-Q peashooter at 50 sun, a cooling-down sunflower,
+  occupied-tile geometry, full-board fallback, tie order, species/tile
+  exploration, one-tick rejection, no plant creation, reason propagation and
+  invalid-plant penalty. No formal training was launched.
+- Verification: focused policy/environment/recurrent tests pass after the repair;
+  full pytest, Ruff, dependency and doctor results are recorded with the final
+  run. Remaining limitation: CUDA-specific execution still requires the pinned
+  CUDA runtime and is skipped when unavailable.
+
+## 0.28.0 — 2026-09-27
+
+- Previous problems/root causes: demo weights could not enter autonomous training;
+  training assumed an event-memory model and shuffled decisions. Initialization
+  device/time CLI options mutated the recording verification configuration.
+  The saving lesson was embedded in curriculum stages, CPU rules and CUDA hooks.
+- Improvements: recurrent defaults throughout recording, initialization, training,
+  evaluation and replay. Shared model/protocol inspection accepts demonstration
+  weights or autonomous ZIPs, records source hashes and rejects incompatible
+  transfers before creating environments. Resume restores optimizer and recovery
+  state; weights-only initialization starts fresh. ZIPs embed run configuration.
+- Recurrent lifecycle: fixed-weight cohorts retain previous proposals and public
+  acceptance/duration, freeze completed slots and limit the final cohort to the
+  remaining games. Whole-cohort equal-group regression recomputes episode states,
+  carries detached state across 256-decision chunks and applies one clipped Adam
+  update per full pass. Batch size 1,024 represents four sequences. Interrupted
+  fitting restarts only the uncommitted pass; completed updates are preserved.
+- User adjustments: remove the saving curriculum, rehearsal mixtures, custom sky
+  rules, scenario generation, unused lesson defaults and obsolete feasibility
+  tests/docs. Curriculum now starts at easy, then standard, then shared. Remove
+  the max-minutes CLI flag; time allowances remain configuration settings. Keep
+  recurrent 50%→1% tile exploration over 5,000 stage games, species-coin algebra,
+  reward coefficients, engine pin and four autonomous passes. Event memory stays
+  available through the event-memory overlay in the bundled train.toml profile.
+- Verification: the existing human-1000 archive reconstructed all 16,364 decisions
+  and the winning final state in 34.72 seconds, without fitting. Tiny complete-demo
+  weights and same-device predictions transferred exactly, then autonomous fitting
+  changed the weights. CLI initialization→training→evaluation→in-place resume
+  passed. CPU/CUDA evaluation traces agree; collection/fitting interruption tests
+  match uninterrupted weights and Adam state exactly. Independent returns, group
+  means, padding, rejected/zero-tick actions, resets, gradient partitioning and
+  atomic-save failure controls pass.
+- Bounded GPU evidence: RTX 4070 Laptop GPU (8 GiB), 128 active slots, 384 collected
+  decisions plus one synthetic 1,024-decision fitting chunk; peak PyTorch allocation
+  924.68 MiB. That memory check completed zero games and performed zero optimizer
+  updates. This allocation metric excludes CuPy/driver allocations and is not a
+  full-game throughput or learning result.
+- Final checks: full regression suite 536/536 passed; focused recurrent suite
+  17/17 passed, including three added migration and CPU/CUDA sequence controls.
+  The subsequent in-place elapsed-time control passed. Ruff lint/format, dependency
+  checks and CLI help checks passed. In-place resume retains both elapsed status
+  time and the prior best validation score.
+- Remaining limits: no formal training or win-rate claim. Removed-lesson runtime
+  checkpoints cannot resume those unavailable scenarios; compatible weights can
+  initialize a fresh run. The exact archive digest migration permits only the
+  known curriculum-only change; other recording modifications still fail checks.
+
+## 0.27.0 — 2026-09-27
+
+- Previous problems/root causes: early engine contact clamping, uncadenced bite
+  transitions, inclusive pea tangency, missed mower crossings and low-HP defeat
+  accounting. The human recorder conflated native/research settings and lacked
+  its action codec. Shared demo defaults and unconditional cooldown encoding
+  also changed the established collector's input contract.
+- Improvements: pin merged game 1.7.0 / simulation 1.4.0 at
+  `1424b4d802e783a36772091c49d96aa7c6036d7a` (engine PR #4).
+  Share F/button follow-latest transitions, invalidate stale history responses,
+  preserve horizontal scroll and isolate pending game replacements. Validate
+  every recording artifact before opening the window; enforce one easy-stage
+  attempt and keep interruptions incomplete. Give demo and collector commands
+  separate bundled/configurable profiles; gate cooldowns to event_v8 on CPU/CUDA.
+- Preserved work: integrate the unmerged Transformer–LSTM initialization and
+  its complete archives; retain demo settings of 20 passes, 256-decision chunks,
+  0.0003 learning rate, 0.5 gradient clipping and a 30-minute ceiling. Preserve
+  the 50% to 1% tile-exploration schedule over 5,000 games in the recurrent
+  profile and the existing collector's separate recipe.
+- Cleanup: remove retired Q checkpoint inference, alternate CPU/CUDA masking,
+  redundant mask/action helpers, unused transport flags and lesson-roster
+  settings. Remove spatial/event-memory parameters from the recurrent demo
+  profile. The active event-memory collector and historical recordings remain.
+  Old model protocols fail before deserialization; current workflow instructions
+  distinguish demo fitting from CUDA training.
+- Regression correction: the unmerged demo tile-exploration adjustment had also
+  changed the collector's coin probability. Restore its independently tested
+  two-coin budget without changing the demo's 50% to 1% schedule or weakening
+  the empirical distribution controls.
+- Initialization correction: replace duplicated chunk-local group averaging
+  with the shared complete-game balanced Q loss. Verify replay hashes, reward
+  reconstruction and completion metadata before fitting; save each completed
+  pass atomically and check recurrent checkpoint protocol on reload. A tiny
+  complete replay independently checks group weights across unequal chunks.
+  Recurrent selection now shares the public occupancy/branch selectors and
+  applies full-board fallback per board, so one full board cannot unmask tiles
+  on other boards. Remove unused record types and recurrent API aliases.
+- Verification: independent collision and CPU/CUDA controls pass in the engine;
+  headless native recorder startup, accepted/rejected actions, pause, disabled
+  restarts/stage changes, interruption, natural loss, native replay and reusable
+  archive verification pass. Grid/focused F and button event-loop checks cover
+  repeated presses, stale responses, empty histories and unavailable panels.
+  Exact collector regressions and final totals are recorded in validation.
+  Final affected suites: 108 passes; engine rerun: 427 passes. The full research
+  sweep and repaired-case rechecks are recorded explicitly in validation.
+- Baseline compatibility: the unchanged research controller wins all nine
+  versioned cases with new exact ticks. In particular, the previous hard/4 loss
+  now wins at tick 43424. Independent failure/boundary controls remain strict;
+  no controller or collision assertion was relaxed to recover wins.
+- Limits: 1.6.0 recordings require their original engine. The recurrent demo
+  checkpoint is a one-demonstration fit, not an event-memory collector resume.
+  No formal training was launched.
+
+Dates and results belong to their recorded version. Current behavior lives in
+[architecture](architecture.md). Archived test counts,
+artifact locations and learning outcomes remain in the historical validation snapshot.
+The longer pre-consolidation notes remain in `git show b642c9c:docs/iteration.md`.
+
+## 0.26.0 — 2026-09-26
+
+- Problem: the previous controller used a compact 286-value spatial encoder and
+  bounded event attention, with no recurrent state shared by waits, rejected
+  proposals or duplicate digs. Human play could not be used as a verified
+  initialization artifact.
+- Cause: card countdowns were omitted from policy observations and the native
+  replay was separate from learning transitions. No protocol linked a complete
+  demonstration to recurrent Q fitting.
+- Improvement: `event_v8` appends eight normalized cooldowns; the new entity
+  Transformer–LSTM policy exposes shared single-step and sequence interfaces.
+  `record-demo` preserves zero-tick action phases, pause queue order, native
+  replay hashes and append-only transition records. `initialize-demo` verifies
+  action order and observations, fits complete reward-to-go in 256-decision
+  chunks, and publishes an initialization checkpoint, curves, coverage and a
+  replay report.
+- Verification: CPU encoding checks cover ready, initial recharge, immediate
+  planting and cooldown normalization. Step/sequence recurrent parity, reset
+  isolation, action/tile outputs, synthetic archive spill and native replay
+  reconstruction pass. No formal autonomous training was launched.
+- Remaining issues: CUDA kernel compilation and full 128-game recurrent
+  sequence training need hardware runs; one demonstration gives no evidence of
+  generalization or mastery. Legacy 0.25.0 checkpoints remain inference-only.
+
+- Parameter adjustment: the later autonomous collector's tile exploration coin
+  now starts at 50%, decays to 1% over 5,000 completed games, and stays at the
+  floor. Deterministic validation clears both exploration budgets before any
+  evaluation action.
+
+## Full-game memory research — 2026-09-26
+
+- Problem: a bounded event bank can lose early planting details, and rejected
+  proposals become wait markers before entering policy memory.
+- Cause: finite event/summary queues and executed-action-only memory inputs.
+- Proposal: an append-only public event archive and joint causal sparse attention;
+  record non-wait attempts, deduplicate consecutive digs at the same unchanged
+  tile, and retain encoded plant/zombie/sun/mower-spent changes even during waits,
+  using the existing observation schema without adding mower states.
+  Compare reversible layers separately as an activation-storage optimization.
+- Verification: inspected papers/project sources, ran synthetic existing-memory
+  retention probes, independently enumerated sparse edge counts and same-tick
+  causal counterexamples, and checked local runtime/GPU availability. Calculations
+  are in [archived memory math](https://github.com/Comb1e/RL-Pvz/blob/40529687133cf897ad401034991f755bada34954/docs/math/history-attention.md).
+- Remaining issues: framework only; retrieval quality, actual sparse backend,
+  gradients, throughput and learning quality are unverified. No policy change or
+  training run was made. Current architecture documentation remains authoritative.
+
+## 0.25.0 — 2026-09-26
+
+- Request motivation: the user observed that earlier training often dug
+  immediately after planting, even though the planting Q value was higher but
+  masked. The previous controller removed unaffordable/cooling-down plant branches
+  before comparison, allowing digging to win that restricted comparison.
+  Historical viewer pages also truncated themselves when a row was selected,
+  making the recorded reason difficult to inspect.
+- Changes: all ten first-level Q values are now compared on every active state;
+  plant tile masks describe occupancy only and digging covers all tiles.
+  Rejected plant proposals remain in trajectories as automatic waits with a
+  configurable penalty, while empty digs receive their own small penalty. CPU
+  and CUDA use the same accounting. Journal paging keeps absolute offsets and
+  immutable collection-time Q vectors.
+- Verification: 544 maintained regressions passed, followed by 111 focused
+  policy/environment/reward/journal/viewer controls after final adjustments.
+  CPU/CUDA penalties, exact 128-game resume, old inference, viewer isolation,
+  paging and reduced-size rendering pass; lint, doctor, dependencies and
+  packaging pass. See validation for timings and artifact locations. No formal
+  learning run or comparison was launched.
+- Compatibility: the new identifiers are `event_sequential_q_v2`,
+  `sequential_q_unmasked_penalty_v1`, and `sequential_q_mc_v2`. Previous
+  0.24.0 checkpoints retain original inference and report reading but are rejected
+  for new training, initialization, or resume.
+- Remaining limitation: repeated invalid proposals can outweigh a victory reward;
+  the earlier outcome-separation bounds cover only the economic/outcome component.
+  This change does not establish that immediate digging or learning failure is fixed.
+
+## 0.24.0 — 2026-09-26
+
+- Problems: coarse zombie displacement/contact geometry omitted source gait and
+  vault details. The viewer kept only a few selected-worker actions and discarded
+  useful history on switching. Smaller cohorts limited measured device throughput.
+- Causes and changes: source animation/ground-track and collision rules now drive
+  independently implemented fixed-point CPU/CUDA mechanics in game 1.6.0. Speed,
+  gait phase/remainders and portable RNG restore exactly. Mine trigger eligibility
+  is separate from blast eligibility; airborne exclusions, chilling, vault landing,
+  targeting and mower contact use inspected source rules. Matching mechanics remain.
+- Research uses 128 complete games per unchanged sequential-Q update. Ten actual
+  pre-action Q outputs piggyback on the existing collector readback. Every worker's
+  entire current-game plant/dig journal uses bounded RAM and disk spill and streams
+  into checkpoints. Focus/fullscreen, paged browsing and follow-latest expose raw
+  historical returns without tile maps. Switching replaces board and history together.
+- Verification: independent math/boundary controls preceded mechanics changes;
+  CPU/CUDA states, events, RNG, snapshots/replays and all ten saving combinations
+  pass. A 128-game short interruption control preserves policy, optimizer, RNG and
+  history. Three warmed five-second cutoff viewer pairs measured **3.04% median
+  overhead** and identical paired policy hashes, within 183.20 seconds total.
+  See [archived validation](https://github.com/Comb1e/RL-Pvz/blob/40529687133cf897ad401034991f755bada34954/docs/validation.md) for regression checks, full measurements and scope.
+- Compatibility: game simulation/snapshot identifiers and strict pin changed;
+  fresh experiments are required. Q architecture and optimizer/exploration protocols
+  are unchanged. Existing files and offline report readability are preserved.
+- Remaining limits: reconstruction evidence and compact numerical mechanics are
+  not original-binary equivalence. The frozen baseline now loses hard seed 4;
+  this is recorded without tuning the lesson. Larger cohorts delay feedback and
+  repeat the frozen controller longer. Five-second performance controls establish
+  neither full-game throughput nor learning improvement. No formal training ran.
+
+## 0.23.0 — 2026-09-26
+
+- Problem: action kinds/digging used critic values while species/tiles used a
+  separate PPO actor and alternating roles. The user requested one agent assembling
+  commands through two Q-value judgments.
+- Change: one shared spatial/history encoder, ten branch values and a shared
+  nine-branch-conditioned 45-tile value head. Full-game Monte Carlo targets fit
+  selected outputs with a balanced wait/plant/dig loss and one Adam optimizer.
+  The actor, PPO/KL/entropy machinery and role schedule are removed. Compact
+  simulator action transport, observations, memory, rewards and game pin remain.
+- Exploration: only a winning planting branch explores. Independent species/tile
+  coins use 1−sqrt(1−budget), preserving the requested 10% → 0.1% combined budget.
+  The viewer shows raw Q values, branch comparisons, tile maps and overrides;
+  terminal and report metrics expose pre-fit errors and missing action coverage.
+- Evidence: derivation and independent controls preceded implementation. Bounded
+  CUDA checks for seeds 101/102 finished in 8.61 seconds with real planting and
+  16 Q optimizer steps each; complete throughput was 2,141/2,178 transitions/s.
+  These one-second episodes establish operability only. See validation for tests,
+  memory/timings and limitations; no formal learning was launched.
+- Compatibility: fresh models required. Protocol manifests reject retired archives
+  before class loading. New-protocol resume preserves one optimizer, RNGs, incomplete
+  trajectories and fitting cursor. Historical runs, recordings and reports remain.
+- Remaining limits: greedy selection cannot force exploration from waiting; untried
+  values can still be wrong. Shared targets do not enforce exact branch/tile agreement.
+  Neither the short controls nor the sequential-Q paper prove this agent will learn.
+
+## 0.22.0 — 2026-09-25
+
+Viewer follow-up: the Q row did not explain the comparison and could show a
+planting value even when planting was unavailable. The controller and diagnostics
+now share legal-value masking. Panels show the selected kind's lead over the next
+legal kind, deterministic ties or a forced choice, with more precise Q values.
+Independent arithmetic, legality/RNG controls and resized renders verify this
+presentation change. Values can still be inaccurate; training and coverage are
+unchanged. Existing checkpoints and runs remain compatible and preserved.
+
+- Problem: the previous scheduler fitted both networks after every complete-game
+  cohort, unlike the requested 256-game alternation. Long cohorts spent most time
+  gathering full structured history and creating pinned buffers before critic work.
+- Changes: an explicit saved role counter credits each optimized 32-game cohort,
+  switches after 256 games, resets at stage changes, and records empty actor coverage.
+  Inactive network/optimizer state stays fixed. Raw-only float32 gathering, bounded
+  GPU token caching, reusable staging and one-batch-ahead transfer preparation reduce
+  host work while preserving the authoritative CPU/disk trajectory and sample order.
+- Viewer: critic return estimates and actual conditional planting probabilities,
+  species-selectable tile heatmaps and decision timestamps. Manual and automatic
+  replacement wait for unfinished undisplayed games; no viewer input resets a game.
+- Verification: independent returns/token/gradient/Adam/RNG controls, role and
+  interruption boundaries, viewer parity and matched bounded CUDA workloads.
+  Measured median transport-control throughput improved 58.6%; see validation for
+  conditions and limits. No learning-performance conclusion is drawn.
+- Compatibility: new optimizer protocol rejects previous full resume; compatible
+  0.21.0 inference/weight initialization and every existing artifact remain available.
+  Greedy all-wait behavior and missing plant experience remain unresolved risks.
+
+## 0.21.0 — 2026-09-25
+
+The prior model sampled action kinds and fitted short-rollout values. The user
+requested greedy top-level decisions with conditional planting PPO and actual
+complete returns. The new controller has 47 critic outputs and an eight-species,
+eight-tile-map actor, each with independent temporal features and Adam state.
+Collection uses 32 complete games followed by separate critic and actor phases.
+Short-rollout GAE, periodic overlap and initial actor warm-up are removed.
+
+Game 1.5.0 corrects production/recharge/combat/headless mechanics and adds a
+portable per-game RNG. Research adds five frontmost headless flags and compact
+phase mapping, giving 286 observations and 289-value raw temporal tokens.
+Old files remain preserved; changed signatures require fresh models. The old
+five-flower/three-shooter saving control now loses; a revised public controller
+uses a mine while saving for defense without changing the lesson configuration.
+
+The architecture is rewritten around exact inputs and training responsibilities.
+Derivations and source limits are in docs/math; verification evidence is recorded
+in validation. Greedy untried values remain a coverage risk. No claim is made
+that learning collapse is resolved, and no formal learning run was launched.
+
+## 0.20.0 — 2026-09-25
+
+- Problem: training exposes numerical curves but no live games; users cannot see
+  sampled plant/dig behavior or follow individual games. The console also omitted
+  cumulative net value and discounted return despite recording them in JSONL.
+- Cause: full game state remains on CUDA and existing rendering serves offline
+  recordings; per-tick synchronous rendering would interfere with the collector.
+- Changes: one spawned four-panel renderer, private random subscriptions, manual
+  per-panel switching, final-board retention and automatic replacement. Two pinned
+  staging buffers sample selected present state before resets; bounded queues and
+  generation/sequence checks discard stale frames. Closing/failing the UI leaves
+  training active. The terminal adds explicitly scoped game reward/economy means.
+- Organization: replace the flat implementation directory with `envs`, `policy`,
+  `learning`, `evaluation`, `monitoring` and `presentation` packages. Update imports,
+  resource ownership, tests and package data. Narrow deserialization aliases keep
+  compatible 0.19.0 class references loadable without duplicate source files.
+- Compatibility: output-only settings preserve 0.19.0 resume/weight transfer and the
+  engine pin. Existing runs/artifacts remain intact. No formal training launched.
+- Verification and overhead results are recorded in [archived validation](https://github.com/Comb1e/RL-Pvz/blob/40529687133cf897ad401034991f755bada34954/docs/validation.md).
+  The final median viewer overhead was 0.55% (2,466 → 2,452 transitions/s), with
+  matching final policy hashes in all three pairs. Individual comparisons ranged
+  from −2.74% to +8.91%; performance remains hardware/load dependent.
+  The viewer samples wall-clock frames, so it cannot display every intermediate
+  state and is not a statistical replacement for completed-game diagnostics.
+
+## 0.19.0 — 2026-09-25
+
+- Problem: placement remained around 20% wins in the reported long run. Equal
+  wait/plant-kind initialization did not give equal species probabilities, and
+  injected branch exploration retained learned tile preferences. Ordinary training
+  did not save hardware load samples, so stopping left no utilization history.
+- Changes: remove placement and start with unrestricted, three-lane saving at 100
+  sun. A checked no-income argument rules out winning without flower production;
+  five public-state flower investments and reactive shooters win all ten lane
+  combinations at 136.52 seconds on CPU and CUDA. These controls do not prove PPO
+  will learn the lesson.
+- Action initialization: wait weight 1.2, weight one per available species,
+  exp(−12) total digging weight, and uniform legal tiles. A complete-action injected
+  prior also explores uniform tiles. Joint likelihood, entropy and KL use that same
+  mixture. Reward, architecture, engine pin, environment count and phase schedules
+  are unchanged. New distribution signature requires fresh models.
+- Hardware: one bounded background monitor for training/benchmarks; flushed raw
+  JSONL, UUID-selected device metrics, session/activity labels, atomic hardware
+  panels after evaluation attempts and graceful stopping, and model-free report
+  regeneration. The terminal distinguishes recent task, window and run averages.
+- Verification discovered unavailable compiler tracing interfering with same-seed
+  reproducibility. The installed Torch compiler restores global CUDA RNG state;
+  entering it beside collection is unsafe when tracing is unnecessary. Missing
+  Triton is now detected before tracing. The strict output-enabled/disabled
+  parameter-equality control then passed without relaxing its assertion.
+- Current verification and telemetry overhead are recorded in
+  [archived validation](https://github.com/Comb1e/RL-Pvz/blob/40529687133cf897ad401034991f755bada34954/docs/validation.md): 606 research regressions and 224 pinned game tests
+  passed. Three paired telemetry checks retained identical policy hashes, with a
+  2.16% median sampling cost. All existing runs and artifacts remain preserved.
+  No formal training or learning comparison was launched. Lesson mastery and
+  improved learned competence remain unmeasured.
+
+## 0.18.0 — 2026-09-25
+
+- Problem: the stopped placement run reached 3,781 games without mastery. Injected
+  exploration fell from 10% during critic warm-up to about 0.016%, while recent wins
+  declined to 8–10%. Actor learning also reduced the observed rate from about 4,068
+  to 2,680 transitions/s.
+- Exploration change: separate warm-up and formal schedules. Formal exploration starts
+  at 5%, entropy starts at full strength, both decay over 3,000 actor-learning games,
+  and floors of 0.1% injected noise and 10% entropy remain until mastery. Stage entry
+  resets the clock. Validation explicitly disables injected exploration.
+- Runtime change: CUDA sequence index templates avoid rebuilding full Python index
+  lists; frozen evaluation uses inference mode; masked categorical hot paths use
+  tensor-only operations; fixed-shape feature paths can use `torch.compile` without
+  changing checkpoint keys. Host/device phase telemetry is recorded per rollout slot.
+- Compatibility: retired-schedule checkpoints remain readable for inference but cannot
+  resume or initialize new training. Same-protocol resume and stage handoff remain
+  available. Existing `runs/` and artifacts are preserved.
+- Verification: the final research regression passed 618 tests; CUDA doctor,
+  dependency checks, packaging and Ruff passed. Three warmed eager benchmark
+  repetitions reached a median 2,608 transitions/s, while the compiled path did not
+  complete its bounded third repetition. The required 20% throughput gain was not
+  demonstrated, so the result is inconclusive. No formal training comparison was
+  launched by this change.
+
+## 0.17.0 — 2026-09-24
+
+- Problem: rare digging probabilities could rise abruptly despite sampled KL
+  stopping; the 100 Hz discount weakened late outcomes enough for failed saving
+  controls to outrank a successful control. Completed-game curves lagged policy
+  changes and sparse action statistics could disappear during slot aggregation.
+- Math first: documented and independently checked accounting, finite-game outcome
+  bounds, GAE timing, exact hierarchical KL and a rare-action counterexample in
+  [the math record](math/training-objective.md) before changing training behavior.
+- Objective: gamma 1 preserves late outcomes; smaller development weight and mower
+  expenditure prioritize natural wins under the documented default bounds. GAE
+  retains a calibrated time-based trace. Values remain configurable, and no
+  plant-retention rule or special digging reward is added.
+- Updates: exact KL checks each available slot against frozen behavior. Excessive
+  or non-finite movement restores actor weights and Adam state for the whole window;
+  critic updates and collection continue. Sampled stopping persists across slots,
+  advantages normalize once per rollout, and entropy decays with stage progress.
+- Diagnostics: action-category sums/counts and pooled explained variance preserve
+  sparse evidence; attempted/retained actor steps, rejection reasons, effective
+  entropy and discounted reward components separate policy updates from past games.
+- Compatibility: one architecture, one recipe, 128×128 collection and the same game
+  pin. Existing runs are preserved. Earlier compatible weights support inference
+  and initialization; full resume requires the new optimizer protocol.
+- Verification: mathematical controls, CUDA integration, independent PPO/Adam,
+  checkpoint/replay checks and complete regressions are recorded in validation.
+  No learning comparison or formal training was launched; collapse resolution and
+  throughput effects remain unmeasured. The user will run learning experiments.
+
+## 0.16.0 — 2026-09-24
+
+- Problem: the synchronous scheduler left the CUDA simulator idle during PPO updates
+  and the learner idle during rollout collection; live traces showed roughly 1.7 s
+  collection followed by 2.7–2.8 s updates.
+- Change: periodic two-slot on-policy collection is now the only training scheduler.
+  A frozen behavior snapshot fills both slots while the learner consumes the first;
+  policy-version hashes, CUDA-stream events, queue waits and overlap are recorded.
+- Compatibility: checkpoints require the periodic pipeline signature and fresh models
+  are required. Files under `runs/` are preserved for the next session; historical
+  generated artifacts outside `runs/` are cleanup candidates.
+- Verification: compact-policy regression, CUDA smoke, checkpoint reload and periodic
+  resume passed. Three short warmed measurements improved median throughput by
+  5.8% (2,570 vs 2,430 transitions/s) at 46% more allocated VRAM. No games completed;
+  learning effects remain unmeasured. Final review also replaced estimated overlap
+  with interval measurements, made slots reusable, and deferred Ctrl+C until both
+  updates and the episode ledger are committed.
+
+## 0.15.0 — 2026-09-24
+
+- Problem: plant species competed directly with waiting and digging, and stage runs
+  could exhaust their time/game allowance before meeting mastery.
+- Changes: a three-way wait/dig/plant head, conditional species head and nine tile
+  maps use one forward pass with consistent masked mixture probabilities and PPO
+  ratios. The initial dig bias stays -12. Conditional species entropy is explicit.
+- Stage execution: optional `--until-stage-complete` disables both training ceilings,
+  keeps completed-game probes and episode cutoffs, and stops only after the selected
+  stage passes. Interruption/resume retains both optimizers, counters and pending
+  validation; ordinary bounded runs remain the default.
+- Representation: centralized command dimensions preserve compact simulator IDs.
+  The factorized history trial was 4–5% slower and its bounded competence checks
+  were inconclusive, so the existing history embedding remains. Temporary comparison
+  code is removed; measurements are in [archived validation](https://github.com/Comb1e/RL-Pvz/blob/40529687133cf897ad401034991f755bada34954/docs/validation.md).
+- Compatibility: event_transformer_v2 requires fresh weights; one policy/recipe,
+  281 observations, 128 environments, game checkout and dependency pin remain unchanged.
+- Verification: independent probability/gradient/PPO controls, stage state-machine
+  tests, current regression suites and bounded CUDA checks are recorded in validation.
+  Neither the hierarchy nor unlimited stopping establishes improved playing strength.
+
+## 0.14.0 — 2026-09-24
+
+- Problem: placement frequently dug its single shooter during actor warm-up; training
+  throughput was dominated by PPO updates rather than simulation.
+- Cause/evidence: repeated stochastic choices accumulated a substantial dig hazard at
+  100 Hz. Small categorical embedding backward sorted many repeated history indices.
+  These findings do not establish the sole cause of poor lesson success.
+- Changes: event_v6 has 281 public inputs, omitting projectiles, spawned counts and all
+  mower details except spent. Small trainable tables use equivalent matrix products
+  during backpropagation. Distribution construction applies masking once. Initial dig
+  bias is -12; the user reduced parallelism to 128, with 128 transitions each.
+- Compatibility: fresh models; one architecture/recipe, existing runs and reports preserved,
+  game checkout and pin unchanged. Warm-up, rewards, learning rates and PPO remain unchanged.
+- Verification and limitations: measured checks and bounded comparison results are recorded
+  in [archived validation](https://github.com/Comb1e/RL-Pvz/blob/40529687133cf897ad401034991f755bada34954/docs/validation.md). No formal training or claim of solved lesson learning.
+
+## 0.13.0 — 2026-09-24
+
+- Problem: each region duplicated zombie state/pole counts alongside threat composition.
+- Change: nine regional values and 342 total inputs; nearest unused-pole distance
+  replaces the pole count and five state counts. Negative distance sentinels preserve
+  presence changes without retaining every movement tick. CPU/CUDA share layout offsets.
+- Compatibility: fresh event_v5 models; game 1.4.0, simulation 1.1.0 and source pin unchanged.
+- Maintenance: remove duplicate historical lesson/observation tests and consolidate
+  the standalone dig-bias test into policy controls. Current lesson and math controls remain.
+- Verification/results: see validation. Learning benefit and sufficiency of the
+  reduced behavior information remain unmeasured; no formal training or comparisons.
+
+## 0.12.0 — 2026-09-24
+
+- Problem: explicit countdowns bypass temporal inference, while dense tick history
+  would grow excessively at 100 Hz.
+- Change: 417 timer-free inputs, independent actor/critic event Transformers,
+  deduplicated raw history, contiguous chunks with public-prefix reconstruction,
+  actor-only evaluation and 25 FPS presentation independent of simulation.
+- Engine: game 1.4.0 / simulation 1.1.0 at 100 Hz. Fresh models are required.
+  Local 20 Hz recordings were removed by metadata; the other game checkout is untouched.
+- Checks and measurements: see validation. Retaining gamma/lambda 0.999 per tick
+  shortens physical credit; per-tick exploration also occurs more often per second.
+  Both are explicit confounds. Correctness is not a learning success claim.
+- The timer/history controls passed, but the bounded paired learning check did not:
+  the candidate reached about 1.6k transitions/s versus 8.7–9.9k for the archived
+  feed-forward source and completed no training games in either 120-second window.
+  Saving validation remained 0/3 for both seeds. Keep this method experimental.
+
+## 0.11.1 — 2026-09-23
+
+- Problem: saving collapsed into waiting; the transferred critic was optimistic
+  about saving and the final critic undervalued rarely visited planting states.
+- Change: configurable wait/plant exploration starts at 10%, holds during 1,024-game
+  critic-only adaptation, then exponentially reaches 0.1% at stage game 3,000 and
+  continues toward zero. Ordinary masked PPO uses the actual mixed probabilities.
+  Digging remains legal and trainable. No reward or network changes.
+- Compatibility: 0.11.0 weights still load. Explicit current configuration enables
+  the new settings on weights-only transfer; resume retains the saved experiment.
+  Warm-up and decay reuse saved stage residency and preserve optimizer identities.
+- Verification and bounded learning findings: see [archived validation](https://github.com/Comb1e/RL-Pvz/blob/40529687133cf897ad401034991f755bada34954/docs/validation.md).
+  The initial 256-game adaptation was insufficient; 1,024 games retained placement
+  in short checks, but saving still failed and critic errors remained mixed.
+  Only three actor-updating rollouts fit each final check. Remains experimental.
+
+## 0.11.0 — 2026-09-23
+
+- Problem: saving-stage destructive digging remained despite tighter lessons.
+  Prior logs showed zero saving wins and a late window of 200 digs per 200 plants.
+  Digging itself was negatively rewarded, but potential shaping telescoped and
+  zero-time actions advanced decision discounting. These are mechanisms to test,
+  not a proven sole explanation of the learned behavior.
+- Change: one `net_value_v1` account values actual production, effective plant
+  damage, health-weighted assets and mower expenditure. Purchases conserve value;
+  losses and damage are charged/credited once. Historical maximum/drawdown is
+  diagnostic. Gamma and lambda now advance with simulation ticks.
+- Implementation: shared CPU/CUDA metric schema, research-local integer event
+  counters, duration tensors, terminal-observation timeout targets and physical-time
+  GAE. Actor/critic, input, curriculum, PPO settings and game pin remain unchanged.
+- Compatibility: fresh 0.11 models required; retired reward and checkpoint
+  conversion removed. New-method stage initialization and resume remain supported.
+  Old generated outputs are retired; one recipe remains.
+- Verification: independent ledger/time controls, complete regressions and the
+  bounded two-seed fresh-saving comparison are recorded in [archived validation](https://github.com/Comb1e/RL-Pvz/blob/40529687133cf897ad401034991f755bada34954/docs/validation.md).
+  No formal training or final-test evaluation is launched. Learning remains experimental.
+
+## 0.10.4 — 2026-09-23
+
+- Problem/hypothesis: early digging recurred. Free lesson income and spare time
+  may make wasted purchases too recoverable; this is a curriculum trial, not a
+  proven explanation of the easy-stage collapse.
+- Change: the current recipe disables sky income in placement/saving. Placement
+  has 100 sun and ticks 1/21/41; saving has 150 sun, two lanes and repeated waves
+  at ticks 860/1100/1340. All quantities remain configurable. No legacy lesson
+  mode, behavioral restriction, extra reward or alternative policy is added.
+- Implementation: detached CPU episode rules and a narrow checked CUDA adapter
+  supply per-game sky amounts, preserving mixed batches, reset boundaries,
+  recording hashes and the installed game pin. No game checkout changes.
+- Verification: income/rate calculations, all lane cases, exact delay boundaries,
+  plant/dig failures, mixed income/cap events, CPU/CUDA agreement, recordings
+  and regressions are recorded in [archived validation](https://github.com/Comb1e/RL-Pvz/blob/40529687133cf897ad401034991f755bada34954/docs/validation.md).
+- Limit: verified feasibility does not demonstrate improved learning. Tight
+  lessons can hurt exploration and transfer; normal wins and planting must be
+  measured alongside digs. No formal training launched.
+
+## 0.10.3 — 2026-09-23
+
+- Problem/cause: rollout wording suggested a 128-action game cap, and the requested
+  default parallelism is now 256. The actual collector continues unfinished games
+  across updates; waiting was included in the ambiguous decision count.
+- Change: 256 environments, 32,768 transitions per rollout; explicit CLI/startup
+  wording and separate accepted plant/dig diagnostics in episode records, progress
+  and reports. Waits/rejections do not increment that diagnostic. Existing saved
+  configurations retain their own parallelism on resume.
+- Investigation: archived comparisons contain about 99.2% waiting transitions,
+  often with alternatives still legal. Record weighted waiting-sample optimization
+  and temporal-abstraction tradeoffs in the existing research/reference documents.
+  Neither proposal is enabled; rewards, per-tick choices and PPO losses are unchanged.
+- Verification: see [archived validation](https://github.com/Comb1e/RL-Pvz/blob/40529687133cf897ad401034991f755bada34954/docs/validation.md) for regression and continuation
+  controls. No formal training or stronger-learning claim.
+
+## 0.10.2 — 2026-09-23
+
+- Problem/cause: normal easy/standard/hard evaluation ran periodically and at
+  completion even while the current curriculum stage had not passed; 500-game
+  probes added frequent evaluation work.
+- Change: mastery probes every 2,000 completed games; normal validation only
+  after each individual stage succeeds. Keep 100/100 mastery and all evaluation
+  cases. Save pending stage-success evaluations so resume can finish them before
+  further learning; avoid duplicate final evaluation. Reports/checkpoints remain
+  available without a validated model, and suites label missing evaluations.
+- Compatibility: saved periodic recipes keep their schedules. Explicit current
+  config with weights-only initialization adopts the change. Game pin, policy,
+  rewards and optimizer settings are unchanged.
+- Verification: 388 research, 207 CPU game and 222 CUDA game tests passed;
+  scheduling, deadlines, checkpoint/resume, verified demos, reports, packaging
+  and documentation checks are recorded in [archived validation](https://github.com/Comb1e/RL-Pvz/blob/40529687133cf897ad401034991f755bada34954/docs/validation.md).
+- Limit: fewer normal validation points delay detection of within-stage
+  regressions. No formal training or learned-performance claim.
+
+## 0.10.1 — 2026-09-23
+
+- Problem: free sky sun let the single-lane saving lesson pass without any
+  sunflower. Mastery mainly repeated placement; living-resource shaping was
+  stronger than requested, and hardware comparisons stopped at 128 games.
+- Change: three simultaneous basic zombies in three distinct lanes at tick 1000,
+  still 50 starting sun and ordinary rules. The 275-sun pre-breach budget cannot
+  buy three shooters; a two-sunflower control supplies a feasible win in every
+  lane combination. Lane count is configurable; omitted counts retain old cases.
+- Reward: reduce economy weight from 0.5 to 0.1 without adding reward terms,
+  planting restrictions or a direct purchase bonus. Death/digging shaping also
+  becomes weaker; no win-rate improvement is claimed from this change alone.
+- Runtime: configurable CUDA benchmark sizes through 1024 games, three repetitions,
+  failed/incomplete-profile exclusion, warmup separation and load/memory records.
+  New default is 1024×128 after a 41.87% median throughput gain and a longer
+  completion/reset confirmation of 42.40%; peak sampled GPU memory is 1427 MiB.
+  Verification: 376 research, 207 CPU game and 222 CUDA game tests pass, plus
+  focused controls and a 1024-game batch smoke with three verified demos.
+  Full measurements and limits are recorded in [archived validation](https://github.com/Comb1e/RL-Pvz/blob/40529687133cf897ad401034991f755bada34954/docs/validation.md).
+- Compatibility: unchanged network and game pin. Explicit current-config
+  weights-only initialization adopts new settings; resume retains saved settings.
+- Remaining limits: task feasibility is not learned mastery; the old saving
+  scores are not comparable to the new task. Larger rollouts may change learning
+  behavior. No formal training or new learning-performance comparison is launched.
+
+## 0.10.0 — 2026-09-22–23
+
+- Problem: easy-stage training rapidly increased early digs and lost lesson skill.
+  Mixed completed-game logs initially showed 100% wins from short rehearsals alone.
+  Shared learned features let value-loss updates directly alter action probabilities;
+  their causal contribution to collapse requires comparison evidence.
+- Change: independent actor/value encoders (169,467 total parameters), separate Adam
+  states and clipping, critic epochs continuing after actor KL stop. Frozen critic
+  inference is batched after action collection. Rewards and exploration are unchanged.
+- Diagnostics: separate task windows, plant usage, episode/transition composition,
+  legal-dig probabilities, gradient norms, optimizer steps and post-update drift.
+- Compatibility: tensor-only 0.9.0 weights conversion duplicates the shared encoder;
+  current checkpoints resume both optimizers. Preserve runs and the game pin.
+- Sources: inspected DeepSeek report, What Matters architecture findings and SB3
+  interfaces; adopted gradient isolation and phase-specific work, not LLM algorithms.
+- Verification/results: independent controls, full regressions and paired five-minute
+  transfer comparisons are recorded in [archived validation](https://github.com/Comb1e/RL-Pvz/blob/40529687133cf897ad401034991f755bada34954/docs/validation.md). The first 200
+  games are examined separately. No formal training is launched.
+- Remaining problem: easy validation improved for both transfer seeds, but saving
+  retention failed and seed 102 developed destructive digging later. Throughput
+  was lower. The method remains experimental; separation alone is not a fix.
+
+## 0.9.0 — 2026-09-22
+
+- Problems: too many recipes and reward terms; destructive digging, unstable saving
+  mastery and large PPO divergence. Choice-only reduction amplified a small subset
+  of transitions; the old representation duplicated several signals.
+- Changes: one 500-value categorical observation, one 118,611-parameter spatial
+  grouped policy, one TOML recipe, three reward components and standard PPO means
+  with configurable KL stopping. Remove old policies, recipes, comparison commands,
+  event rewards and the unused early-dig penalty proposal. Keep digging legal.
+- Checkpoint behavior: structural signatures gate weights-only initialization;
+  new optimizer/counters/schedules allow explicit reward/PPO/curriculum changes.
+  Resume preserves the saved experiment. Retired weights cannot load; reports and
+  recordings remain independent. Obsolete local checkpoints were deleted at the
+  user's request, preserving their recorded evidence.
+- Verification: complete research/game regression, CPU/CUDA math and gameplay
+  controls, reload/transfer/stage/report/replay tests, packaging and bounded fresh
+  comparisons. Exact counts and results are in validation.md.
+- Results/limits: both compact pilots scored 0/20 deterministic placement wins,
+  versus 20/20 for both references; the improvement criterion failed. The method
+  remains experimental. Regional compression is partial observation, resume resets
+  active episodes, and the short comparison cannot isolate individual changes.
+
+## 0.8.1 — 2026-09-22
+
+- Follow-up: The user requested perfect 100-game mastery and less frequent validation.
+  Replace the permissive 20-case gates with 100/100 per required task, including
+  final shared-stage mastery. Probe every 500 training games; validate checkpoints
+  every 2,000 with the original 50 cases/difficulty. A separate 100-case curriculum
+  seed range avoids enlarging normal validation or touching held-out seeds.
+  Resume preserves saved gates; explicit stage handoff can select the new protocol.
+  README now lists every stage's pass criteria and the two schedules.
+- Problem/cause: teaching stages advanced within one run; strict resume restored
+  the same budget and offered no explicit checkpoint handoff to another stage.
+- Change: select one stage, retain its rehearsal mix, stop on mastery or budget,
+  and save probe/final checkpoints. Initialize a chosen stage from compatible
+  weights and optimizer state with fresh local schedules and parent provenance.
+  Existing automatic curriculum and same-stage resume remain available.
+- Verification: stage/state boundaries, CUDA handoffs through all five stages,
+  exact restored weights/Adam moments, interrupted resume, mismatch rejection,
+  normal-game checkpoint selection, CLI/report smoke and regression suites;
+  recorded results are in validation.md.
+- Remaining limits: inherited learning settings must match; stage budgets do not
+  certify mastery. Short checks establish integration, not improved win rates.
+
+## 0.8.0 — 2026-09-22
+
+- Problem/cause: CPU collectors, hybrid jobs, and old recipes remained reachable;
+  installer HEAD requirements and README examples did not match the current folders.
+- Change: CUDA-only training preflight; remove CPU collectors/transport, hybrid
+  training, four standalone recipes, and legacy pilot/benchmark commands. Keep
+  four direct conditions, CUDA SC2 comparisons, and CPU verification/inference.
+  Archive the pinned game commit without switching its source checkout. README
+  now maps the actual folders and uses consistent fresh output names.
+- Compatibility: CUDA weights, optimizer state, learning settings and engine pin
+  remain compatible. Ignore dormant conditions for individual resume; replace
+  retired buffer metadata for historical inference. CPU/hybrid resume is rejected.
+- Verification: full research and both game suites, CUDA smoke/report/replay,
+  checkpoint action/hash controls, pinned source staging, documentation examples,
+  lint, dependency checks and packaging; exact results are in validation.md.
+- Remaining limits: CUDA hardware is required for training. The plant-reward
+  candidate remains experimental; this cleanup establishes no learning improvement.
+  The CPU simulator remains necessary for correctness checks and replay verification.
+
+## Documentation consolidation — 2026-09-22 (0.7.1 unchanged)
+
+- Problem/cause: release notes accumulated into repeated installation, reward,
+  architecture and experiment guides, leaving obsolete advice beside current behavior.
+- Change: replace the 1,000-line README with a daily-use guide; combine paper/SC2/
+  reward notes into `research.md`, GPU measurements into `validation.md`, and game/
+  GPU integration into `architecture.md`. Deduplicate references and version history;
+  remove the seven superseded documents after moving their useful content.
+- Verification: local links/anchors, CLI examples and source/config references are
+  checked; committed evidence files and executable settings remain unchanged.
+  No learning run or new performance claim is part of this documentation change.
+- Limit: older external bookmarks to removed documents need the new README index;
+  detailed historical prose remains in Git and local artifact paths may be absent
+  from fresh clones.
+
+## 0.7.1 — 2026-09-21
+
+- Problem/cause: native viewers rejected zero-time research recordings; SC2 normal
+  validation remained 42%/0%/0%; frequent early digging and forced-action samples
+  motivated exploration/credit hypotheses. Mower-free lesson logs lacked context.
+- Change: compatible source readers in both game branches; optional choice-state
+  PPO, GAE 0.999 and minibatches 1,024; refilled GPU validation; lesson-aware logs;
+  offensive potential, small non-nut eaten penalty and trainable initial dig bias.
+  Installed game stays pinned at 1.3.0; legacy profiles retain their semantics.
+- Verification: 374 research, 207 CPU-game and 222 CUDA-game tests; exact replay
+  hashes, gradients/optimizer, reward boundaries, reload and shared-demo checks.
+- Limit: final candidate improved early lesson learning but normal validation was
+  2/15 and 0/15 in two three-minute checks. Experimental; no two-hour advantage proved.
+
+## 0.7.0 — 2026-09-21
+
+- Problem/cause: absent sustained attackers, joint entropy favoring large action
+  groups, frequent validation and no cumulative runtime bound.
+- Change: balanced type/tile exploration, spatial grouped policy, stage-start
+  residency, 100-game probes, 1,000-game validation, result reuse, cumulative time
+  allowance and explicit A–F comparisons. Game remains 1.3.0.
+- Verification: 338 research/214 game tests, later focused deadline checks and
+  two five-minute diagnostics; single environment/workspace consolidated.
+- Limit: both diagnostics failed placement; normal validation incomplete at the
+  deadline. No candidate recommended or A–F/formal matrix launched.
+
+## 0.6.0 — 2026-09-21
+
+- Problem/cause: CPU simulation and transfers dominated small-policy GPU learning.
+- Change: game 1.3.0 CuPy/NVRTC backend, ordered batched combat, tensor PPO/GAE,
+  CPU-verified demos, capacity checks and 128 decisions per parallel game.
+  Promote 128 GPU games after correctness/speed gates; retain explicit CPU hybrid.
+- Verification: 312 research/214 game tests; three-repeat benchmark 10,733 vs
+  2,835 decisions/s (3.79×); installed pin `8861824`, simulation 1.0.0.
+- Limit: gain combines backend and larger rollouts; eight-game CUDA is slower.
+  Compact host synchronization remains. No thermal-soak or convergence claim.
+  Temporary development environment was moved to Recycle Bin; one research `.venv` remains.
+
+## 0.5.0 — 2026-09-20
+
+- Problem/cause: ten-tick decisions limited immediate actions; reward lacked defense
+  events; decision counts did not reflect the requested game-based progress.
+- Change: zero-time plant/dig adapter and versioned replays; one-tick wait/rejection;
+  loss −2, activation sun cost, wall-nut absorption, empty-blast cost; completed-game
+  budgets/curriculum/validation and checkpoint counters. Game stays 1.2.1.
+- Verification: 283 research/199 game tests, all-lane lesson controls, source/tick
+  rewards, game overshoot/resume, Windows/CUDA and native video checks.
+- Limit: discount remains per decision; final rollouts can exceed targets; action
+  adapter uses pinned private hooks. No new learning pilot validated these changes.
+
+## 0.4.1 — 2026-09-20
+
+- Problem/cause: kill-only feedback ignored partial damage; capped economy omitted
+  valuable living plants and wealth above the scale.
+- Change: mower kill −2/N, nonlethal HP reward, empty activation −0.2; uncapped
+  plant-plus-sun potential; separate logs and legacy compatibility. Game stays 1.2.1.
+- Verification: 207 research/199 game tests, 40 new reward controls and native outputs.
+- Limit: gradual damage can outscore instant kills; empty mower activations normally
+  do not occur; previous pilot results used a different objective.
+
+## 0.4.0 — 2026-09-20
+
+- Problem/cause: 10,229-game archive lacked sustained attackers; flat sampling gave
+  wait 1/136, weak economic scaling and no mastery gates.
+- Change: tactical 1,140-value encoder, grouped type/tile policy, teaching state
+  machine, capped paired pilot, +1/N plant and −1/N mower kill reward. Game stays 1.2.1.
+- Verification: 166 research/199 game tests; original pilot interrupted for reward
+  change, revised matched 65,536-decision results inconclusive; both diagnostics failed.
+- Limit: immediate plant/dig cycles persisted; joint entropy still preferred large
+  groups. Separate kill objectives and incomplete studies cannot be pooled.
+
+## 0.3.2 — 2026-09-20
+
+- Problem/cause: repeated mask IPC/legality queries and rollout copies; game had
+  advanced to 1.2.1 while research pinned 1.2.0.
+- Change: cached authoritative legality, masks sent with observations, reusable
+  CUDA rollout, phase timings/paired benchmark and non-editable 1.2.1 installation.
+- Verification: 120 research/199 game tests; exact learned tensors/Adam state in
+  reference comparisons; final three-pair speed gain 22.4% (2,176→2,664 decisions/s).
+- Limit: CPU simulation and small inference batches remained; startup/validation
+  excluded from timing; no learned-skill claim. New game pin required fresh training.
+
+## 0.3.1 — 2026-09-20
+
+- Problem/cause: configuration selected CPU despite available CUDA.
+- Change: default policy device CUDA, explicit CPU override and unavailable-device
+  errors; simulation still on CPU. Game stays 1.2.0.
+- Verification: 87 research/199 game tests; CUDA-tagged policy/Adam tensors and reload.
+- Limit: availability did not establish speed; existing CPU runs retain saved settings.
+
+## 0.3.0 — 2026-09-20
+
+- Problem/cause: duplicate rendering, bulky outputs and conflated package/simulation
+  identity while game 1.2.0 introduced native presentation APIs.
+- Change: pin `a47056d`, native renderer, metadata, compressed demos and seekable
+  viewer; MP4 optional, separate versions and strict old-checkpoint rejection.
+- Verification: 87 research/199 game tests, no-FFmpeg default demos, archive reads,
+  native/browser playback, source staging, render/hash purity and packaging.
+- Limit: old weights need their original pin; metadata needs whole-recording hashes.
+
+## 0.2.0 — 2026-09-20
+
+- Problem/cause: little operational output and manual visualization; shared model
+  identity and presentation-vs-research compatibility were unclear.
+- Change: throttled logs, post-update metrics/TensorBoard, offline curves, shared
+  checkpoint demos/video and export recovery with separate compatibility settings.
+- Verification: 154 combined research/game checks; shared hashes, unchanged weights
+  with output toggled, old/empty reports, interruption, corruption and browser video.
+- Limit: rendering/FFmpeg dependencies, extra export time and missing historical metrics.
+
+## 0.1.0 — 2026-09-20
+
+- Problem/cause: empty research directory; game lacked an RL wrapper and protocol.
+- Change: Gym adapter, fixed 406 actions, spatial encoder, masked PPO, baseline/hybrid
+  controls, seed separation, reward shaping, checkpoint recovery, benchmark/reporting
+  tools and pin `b3cfbd8` from the independent game.
+- Verification: action/mask/terminal controls, known heuristic wins/losses, short
+  CPU/CUDA/Windows learning, full miniature protocol and package checks.
+- Limit: no trained-skill/generalization claim; partial observation and inexact
+  rollout/RNG resume. Formal runs remain user initiated; no remote was configured.
+## 2026-09-29 — probe objective and staged reward shaping
+
+The compact-stages run showed repeated rejection penalties dominating development
+returns and branch Q values changing by less than four decimal places after recurrent
+state saturation. The current objective adds scaled development targets, fixed
+per-zombie house-entry charges, cohort-median victory-time shaping, isolated
+alternative-action probes, EMA targets, and accepted-demonstration ranking. Focused
+CUDA collection/fitting smoke checks passed; reward, storage, recurrent recovery and
+demonstration controls pass, including 66 affected recurrent/reward/storage tests and
+23 demonstration tests. Long training and learning-quality claims remain intentionally
+unperformed.
+# 2026-10-13 — BF16 runtime and no-counterfactual collection
+
+- Problem/root cause: accepted-plant counterfactual rollouts added simulator,
+  storage and fitting work that was no longer part of the selected training
+  method; the previous BF16 path only autocast features and optimized FP32
+  module parameters.
+- Improvement: remove rollout pools, probe schema, endpoint patching and probe
+  losses. Actual planting now returns directly to independent real-game
+  collection. Runtime models use BF16, while separate FP32 masters and FP32
+  Adam state provide stable updates.
+- Contracts: `complete_return_sequential_no_probe_v1`,
+  `stateless-no-probe-trajectory-v1` and `stateless-no-probe-state-v1` require
+  fresh weights/resumes. No migration or FP32 inference fallback exists.
+- Verification: configuration/model import checks, owning stateless-Q, BF16,
+  storage, checkpoint and progress suites passed; no formal training was launched.
+## RTX 4080 SUPER execution profile — 2026-10-15
+
+- Problem: the cloud 4080 SUPER needed a portable execution preset without changing the measured local 4070 Laptop settings.
+- Evidence: `artifacts/tune-4080-super/recommendation.json` covered sparse, medium, dense and bucket-boundary widths with wait, mixed and tile-heavy actions across three repetitions. The 64/64, 16,384-token, two-group candidate completed all 12 workloads with no fitting capture failures or OOM fallbacks; the 192/192 stress candidate failed the 20% headroom gate, so the artifact remains globally incomplete.
+- Improvement: added `gpu_profiles.rtx4080-super` with compilation enabled, 64 species/tile microbatches, 16,384 tokens, two groups, one CPU thread and a 6,554 MiB collection reserve for the measured 32 GiB device. The existing 4070 Laptop profile is unchanged.
+- Remaining limits: this is execution calibration only; learning quality, full end-to-end training and cross-device checkpoint inference still require their separate gates.
+## Fixed web viewer port — 2026-10-15
+
+- Problem: cloud port forwarding needed the browser viewer to bind a known loopback port instead of an ephemeral port.
+- Improvement: added `train --viewer-port PORT`; the web viewer binds `127.0.0.1:PORT` and retains ephemeral allocation when the option is omitted. Port values are validated from 0 through 65,535.
+- Verification: CLI forwarding and invalid-port controls cover the new setting; existing viewer process and browser protocol controls remain unchanged.
+## On-demand tile annotation session — 2026-10-18
+
+- Problem: annotation required a pre-generated snapshot JSONL and a separate
+  server invocation, which made difficulty selection and continuous labeling
+  cumbersome.
+- Improvement: `annotate-tiles` now starts a CPU session that generates one
+  reachable `easy`, `standard`, or `hard` state at a time. The browser selects
+  difficulty, paints legal plots by drag, persists pending/labeled/discarded
+  records under `data/`, resumes pending maps after restart, and generates the
+  next map automatically after Save or Discard.
+- Verification: focused annotation tests cover live generation, durable pending
+  recovery, automatic progression, rich observation validation, relative APIs,
+  drag controls, and tile-only fitting with pending/discarded rows excluded.
+- Remaining issue: map generation is bounded by the configured step and retry
+  limits; a rare difficulty/session exhaustion reports a retryable browser error.
+
+## Conflict-first annotation review — 2026-10-19
+
+- Problem/root cause: repeated annotation of an identical board/plant input could
+  leave disjoint feasible-tile labels in the JSONL file. Fitting correctly rejected
+  those records, but the browser did not help identify or repair them.
+- Improvement: shared canonical-input conflict grouping now opens the first
+  contradictory group at annotator startup, displays all existing member labels,
+  applies one corrected label set atomically to every member, and advances through
+  the queue. Pending maps remain durable. **Save and exit** commits the current
+  map/group and asynchronously stops the CPU server without generating another map.
+- Verification: focused tile-annotation tests cover grouped conflicts, compatible
+  duplicates, pending/discarded exclusion, atomic revisions, stale protection,
+  conflict-first startup, automatic queue progression, relative APIs, and browser
+  controls. The current data set exposes three conflict groups for correction.
+- Remaining issue: conflicts must be corrected before tile fitting; this workflow
+  does not infer the intended labels automatically.
+
+## Invalid fitting compaction and entropy-seeded annotation — 2026-10-19
+
+- Problem/root cause: repeated invalid proposals can dominate fitting work even
+  though every such row has the same fixed responsible-head target; the default
+  annotation session seed also replayed the same map sequence after restart.
+- Improvement: fitting now keeps all waits and accepted actions, but partitions
+  consecutive invalid action/route/reason runs per environment episode into
+  100-row windows and fits the first row of each window. Complete-return
+  accounting remains unchanged. On-demand annotation uses a system-entropy
+  session seed unless `--seed` is supplied, and records the session seed in the
+  manifest.
+- Verification: added boundary, interleaving, storage, representative-count,
+  protocol/configuration, and explicit-versus-entropy seed controls; focused
+  routing, storage, annotation, checkpoint, configuration, and demo suites were
+  run. No formal training or PR was started.
+- Remaining issue: compaction intentionally samples the first state in each
+  repeated 100-row run; it is an execution reduction, not a claim that all
+  intermediate invalid states are equivalent.
+## Causal action/global rewards — 2026-10-19
+
+- Problem/root cause: the former development reward mixed terminal, resource,
+  combat, proximity and victory-time shaping in one channel. Delayed damage and
+  sunlight were paid on the transition where the event arrived, so a placement
+  could not receive causal credit; Wall-nut and ordinary plant bites also had no
+  signed local distinction.
+- Improvement: the new `action_global_value_v1` ledger keeps global terminal and
+  `sun + living-plant value` (minus sky income) separate from action damage,
+  blocking, produced sun and mower cost. CPU events retain private plant,
+  projectile and source-action identities, while CUDA emits the same aggregate
+  physical fields. Source credits can be applied retroactively to trajectory
+  rows before complete returns. Home proximity and victory-time remain reports.
+  Peashooter bites are negative; Wall-nut blocking can be positive while its
+  global health value falls. Invalid execution and 100-row fitting compaction are
+  unchanged. Demonstration recording and replay verification now use the same
+  ledger, replacing only in-memory fitting rows so source credits reach the
+  original placement before returns are accumulated.
+- Verification: reward contract, CUDA/CPU parity, source-ledger controls,
+  demonstration reconstruction, retroactive buffer updates, nonfinite checks,
+  and compile checks were run once. Focused configuration, checkpoint, demo,
+  flat-fitting and causal-ledger suites pass under the new protocol.
+  Weight-only compatibility remains available, while autonomous and optimizer
+  recovery identities reject the old reward protocol.
+- Remaining limits: CUDA collection currently publishes aggregate action fields;
+  detailed device-side source-row provenance is available through the shared
+  host mutation API when an event adapter supplies it. Initial simulator plants
+  and environmental events remain explicitly unattributable to a learner action.
+
+## Dual annotation heads — 2026-10-19
+
+- Problem: tile-only annotation could express neither action-branch feasibility nor the distinction between a preferred label and a simulator-impossible output. It also required a human/demo artifact before supervised fitting.
+- Improvement: annotation protocol v2 stores separate tile/action datasets, feasible and absolute-bottom sets, locked automatic impossibility labels, and a shared conflict detector. `fit-tile-annotations` trains only the tile stage; `fit-action-annotations` trains only the species stage; both support fresh weights. `initialize-demo --init-from` starts a new demo optimizer/EMA from either artifact.
+- Verification: existing tile annotation controls remain green; action sampler records validate and a CPU action-head fit publishes a compatible weight-only artifact. Runtime action masks and the model/checkpoint layout remain unchanged.
+- Remaining issue: visual action controls are intentionally compact; held-out and game-quality effects still require an equal-budget training comparison.
+
+## Ranked endgame reward economics — 2026-10-20
+
+- Problem: combat, blocker and mower values did not match the requested sunlight-equivalent economics, and completion time was only a report diagnostic.
+- Improvement: the reward profile now values 270 effective basic-zombie damage at 30 sunlight, a full Wall-nut block at 100, a full ordinary-plant block at 10 without a separate bite penalty, and one mower at 500. Terminal rows are ranked by completion time once each 128-game cohort completes: winners range from +1.5 to +0.5, losses stay at -1 through the median and become more negative afterward, reaching -1.5 for the last rank.
+- Compatibility: the reward, objective, trajectory and autonomous recovery identities were bumped to v2; structurally compatible weight-only initialization remains available, while old optimizer/recovery state is rejected.
+- Verification: added cohort-rank terminal calculations and preserved CPU/CUDA physical reward accounting; focused reward and configuration checks are being updated for the new constants.
+- Remaining limit: equal-duration games share an average rank, and a partial final cohort is ranked over the games that actually completed.
+
+## Unmasked tile proposals and selective invalid fitting — 2026-10-20
+
+- Problem/root cause: occupancy was encoded in the learning tile mask, so a
+  full board or occupied proposal disappeared before the tile Transformer could
+  express that it was invalid. Branch-level failures also paid for tile
+  inference even though only the species head could receive supervision.
+- Improvement: active plant and dig branches now expose all 45 tile outputs.
+  Card presence, cooldown and sunlight are checked immediately after species
+  selection; unavailable branches skip tile inference and route a fixed `-1`
+  target to species. Usable branches validate occupancy after selecting a tile;
+  occupied plants and empty digs route only the tile head to `-1`. Invalid
+  proposals still execute as ordinary waits, and every original row remains in
+  chronological complete-return accounting.
+- Fitting: the shared compaction path keeps the first row of each 100-row
+  window in consecutive identical invalid runs, while waits, accepted actions,
+  route changes, episode boundaries and raw reward rows remain unchanged. The
+  reward value scale is `900`, so the configured progress conversion is
+  `0.01 / 900` and the existing dense multiplier is applied once.
+- Compatibility: reward, objective, action-distribution, trajectory and
+  autonomous recovery identities are now v3. Structural weight-only transfer
+  remains available; optimizer and autonomous recovery states from earlier
+  protocols are rejected.
+- Verification: the focused environment, routing, flat-fitting, checkpoint,
+  configuration, Transformer, and annotation suites pass (323 tests); Ruff,
+  bytecode compilation, and `git diff --check` also pass. CUDA mask generation
+  was smoke-checked after reset and exposes all 406 active proposals. The older
+  reward-contract tests still contain fixed `/30000` expectations and
+  immediate aggregate CUDA comparisons from the previous reward protocol, so
+  they are not treated as validation for this change. Formal training and a
+  pull request are intentionally not run.
+## Quadratic endgame rewards, wait compaction and finalized diagnostics — 2026-10-27
+
+- Problem/root cause: the dense-return warning compared different units and
+  ignored covariance, genuine waits were fitted at full trajectory volume, and
+  completion-time shaping remained linear. Standalone evaluation and live HUD
+  records also exposed base terminal values after a cohort had finished ranking.
+- Improvement: dense diagnostics now take FP64 moments of the summed physical
+  return after its fitted-unit conversion, with cohort-scoped warning events.
+  Genuine waits share the first-of-100 segmented compactor with identical
+  invalid proposals; raw rows and returns remain complete. Cohort terminal
+  shaping uses `a=0.3*u*abs(u)` with actual cohort size, average tie ranks and
+  idempotent applied adjustments. CPU/CUDA evaluation reports and live panels
+  refresh finalized terminal totals, while reset episode serials fence delayed
+  captures. Reward, objective, trajectory, recovery and demo identities advance
+  to v5/v11; old optimizer/recovery resumes remain rejected and compatible
+  weight-only initialization remains available.
+- Verification: temporary FP64 covariance/cancellation, zero-variance and
+  target-preservation controls passed. Wait/invalid representatives matched
+  independent references across boundaries, gaps, interleaving, spill and
+  restart. Quadratic endpoints, ties, singleton cohorts and repeated
+  finalization passed. Actual tile/action annotation resume controls passed for
+  v4 progress provenance under current v5 autonomous settings. Existing
+  autonomous weight-only loading and old-resume rejection passed. A 4070
+  production fitting control retained 21/2048 all-wait rows and 530/2048 mixed
+  rows; targets were unchanged. CPU and short CUDA evaluation published
+  finalized JSONL records. CPU/CUDA smoke checks and Ruff/syntax checks are
+  retained below; no formal training, push or PR was performed.
+- Remaining limits: the 4070 control is synthetic and excludes collection,
+  complete returns and checkpoint serialization, so it does not prove end-to-end
+  training speed or convergence. Existing run files and user datasets remain
+  untouched.
+
+## Configurable invalid-action fitting target — 2026-10-28
+
+- Problem/root cause: `train.toml` was changed to use
+  `training.objective.invalid_action_target=-0.1`, but configuration validation
+  still rejected every value except the retired `-1.0` literal.
+- Improvement: validate the target as a finite non-positive number, so the
+  bundled `-0.1` target reaches the existing selective species/tile fitting
+  path without changing simulator rewards or episode returns.
+- Verification: configuration loading, CPU smoke checks, Ruff, Python syntax,
+  and `git diff --check` pass. No formal training was launched.
