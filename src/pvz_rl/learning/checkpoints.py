@@ -178,7 +178,7 @@ def execution_config(cfg):
         "performance",
         "batch_size",
         "n_epochs",
-        "tile_warmup_passes",
+        "tile_only_cohorts",
         "max_grad_norm",
     ):
         cfg["training"].setdefault(key, copy.deepcopy(defaults["training"][key]))
@@ -428,6 +428,7 @@ def inspect_checkpoint(path, *, weights_only=False):
         if not weights_only and protocol != protocol_for(cfg["policy"]["kind"]):
             raise ValueError("Checkpoint model family disagrees with saved configuration")
         metadata["initialization_type"] = "autonomous"
+        metadata["fit_schedule_protocol"] = protocol["optimizer"]
     if weights_only:
         return metadata
     if metadata["initialization_type"] == "demonstration":

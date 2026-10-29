@@ -156,10 +156,14 @@ check. Rejected actions break the streak, and commitment waits do not count.
 See [exploration and recovery](docs/math/sequential-training.md#plant-exploration)
 for species selection and cohort-boundary behavior.
 
-Each complete-game cohort runs five tile-only fitting passes followed by one
-joint action/tile pass. The tile-only phase learns from accepted plant/dig rows
-and tile-invalid proposals; waits and species-invalid proposals do not enter its
-loss. The joint pass retains the normal route-aware objective.
+Fitting repeats a six-cohort cycle: cohorts 1–5 each run four tile-only passes,
+cohort 6 runs four joint action/tile passes, then cohorts 7–11 are tile-only and
+cohort 12 is joint. Configure `training.tile_only_cohorts = 5` and
+`training.n_epochs = 4` in `train.toml`. Every pass uses that cohort's collected
+games; there are four optimizer commits per cohort. Tile-only fitting learns
+from accepted plant/dig rows and tile-invalid proposals, leaving action weights
+and action EMA unchanged. Joint fitting retains the normal route-aware objective
+and EMA consistency.
 
 Resume an interrupted run created with this fitting schedule:
 
@@ -175,7 +179,7 @@ settings for an already collected cohort. The current wait interval and
 `[reward.passivity]` values take effect at the next collection cohort. A saved
 3% rate means a 3% chance per check, not guaranteed planting.
 
-Checkpoints created with the previous four-joint-pass schedule cannot resume
+Checkpoints created before this cohort-cycle schedule cannot resume
 their optimizer or simulator state. They remain usable with `--init-from` for a
 fresh run; that transfers weights only and starts new optimizer, RNG and game
 state. For example:

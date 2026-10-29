@@ -14,6 +14,7 @@ from pvz_rl.learning.action_routing import classify_actions, workload_counts
 from pvz_rl.learning.batch_transport import BatchPrefetch, FittingSpool
 from pvz_rl.learning.cuda_buffer import CompleteGameBuffer
 from pvz_rl.learning.flat_q import CohortCoefficients, batch_loss
+from pvz_rl.learning.training_requirements import fitting_schedule
 from pvz_rl.monitoring.entity_benchmark import observation
 from pvz_rl.policy.two_stage_transformer import TwoStageTransformerPolicy
 from pvz_rl.provenance import write_json
@@ -107,8 +108,9 @@ def benchmark_rows(cfg, widths, rows_per_width, action_mix, dtype):
     return rows, boards
 
 
-def measure(cfg, *, repeats=3, rows_per_width=16, trajectory=None, initial=None):
-    """Each repetition commits configured tile-only warmup and joint passes."""
+def measure(cfg, *, repeats=3, rows_per_width=16, trajectory=None, initial=None, cohort=1):
+    """Each repetition commits the configured passes for the selected cohort."""
+    schedule = fitting_schedule(cfg, cohort)
     torch.set_num_threads(cfg["training"]["torch_threads"])
     torch.manual_seed(101)
     model = TwoStageTransformerPolicy(cfg).cuda().train()
@@ -162,14 +164,12 @@ def measure(cfg, *, repeats=3, rows_per_width=16, trajectory=None, initial=None)
                     "cuda",
                     cfg["training"]["objective"]["accepted_outcome_share"],
                 )
-                total_passes = (
-                    cfg["training"]["tile_warmup_passes"] + cfg["training"]["n_epochs"]
-                )
+                total_passes = schedule.passes
 
                 def passes():
-                    for pass_index in range(total_passes):
-                        tile_only = pass_index < cfg["training"]["tile_warmup_passes"]
-                        fit_stage = "tile_only" if tile_only else "joint"
+                    for _ in range(total_passes):
+                        fit_stage = schedule.stage
+                        tile_only = fit_stage == "tile_only"
                         pass_counts = spool.tile_outcome_counts if tile_only else counts
                         pass_coefficients = tile_coefficients if tile_only else coefficients
                         model.zero_grad(set_to_none=True)
@@ -248,8 +248,7 @@ def measure(cfg, *, repeats=3, rows_per_width=16, trajectory=None, initial=None)
                         representatives=len(spool),
                         compaction=spool.compaction,
                         passes=total_passes,
-                        tile_warmup_passes=cfg["training"]["tile_warmup_passes"],
-                        joint_passes=cfg["training"]["n_epochs"],
+                        fit_schedule=schedule.summary(),
                         spool_seconds=spool_seconds,
                         cold_seconds=cold_seconds,
                         routed_workload=workload_counts(spool.rows),
@@ -297,6 +296,9 @@ def main():
     parser.add_argument("--threads", type=int)
     parser.add_argument("--repeats", type=int, default=3)
     parser.add_argument(
+        "--cohort", type=int, default=1, help="one-based cohort whose fitting stage is measured"
+    )
+    parser.add_argument(
         "--no-compile",
         action="store_true",
         help="use eager fitting for a low-memory correctness rehearsal",
@@ -328,6 +330,7 @@ def main():
             rows_per_width=args.rows_per_width,
             trajectory=args.trajectory,
             initial=args.init_from,
+            cohort=args.cohort,
         ),
     )
 

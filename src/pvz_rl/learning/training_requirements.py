@@ -1,5 +1,6 @@
 """Training eligibility, separate from reading historical experiment metadata."""
 
+from dataclasses import asdict, dataclass
 from functools import lru_cache
 
 from pvz_rl.config import research_config, simulator, validate_config
@@ -11,11 +12,39 @@ from pvz_rl.provenance import weight_engine_config
 TRAINING_CONDITIONS = ("masked",)
 CURRENT_OBJECTIVE = "complete_return_action_global_v7"
 CURRENT_REWARD = "action_global_value_v5"
-FIT_SCHEDULE_PROTOCOL = "tile_warmup_then_joint_v1"
+FIT_SCHEDULE_PROTOCOL = "cyclic_tile_joint_cohorts_v2"
 WEIGHT_ACTION_DISTRIBUTIONS = {
     "sequential_q_unmasked_penalty_v1",
     ACTION_DISTRIBUTION,
 }
+
+
+@dataclass(frozen=True)
+class CohortFitSchedule:
+    cohort: int
+    cycle_position: int
+    cycle_cohorts: int
+    stage: str
+    passes: int
+
+    def summary(self):
+        return dict(protocol=FIT_SCHEDULE_PROTOCOL, **asdict(self))
+
+
+def fitting_schedule(cfg, cohort):
+    """Choose one fitting stage for an entire one-based collection cohort."""
+    if type(cohort) is not int or cohort < 1:
+        raise ValueError("Fitting schedule requires a positive integer cohort number")
+    tile_cohorts = cfg["training"]["tile_only_cohorts"]
+    cycle = tile_cohorts + 1
+    position = (cohort - 1) % cycle + 1
+    return CohortFitSchedule(
+        cohort,
+        position,
+        cycle,
+        "tile_only" if position <= tile_cohorts else "joint",
+        cfg["training"]["n_epochs"],
+    )
 
 
 def current_model_config(cfg):
@@ -89,6 +118,7 @@ def inference_config(cfg):
     # Execution options are disposable when loading weights. Keep the strict
     # retired-option error for user configuration and optimizer recovery only.
     result["training"].get("performance", {}).pop("compile_kernels", None)
+    result["training"].pop("tile_warmup_passes", None)
     if current_model_config(cfg):
         return result
     result["training"]["method"] = CURRENT_OBJECTIVE
@@ -96,6 +126,7 @@ def inference_config(cfg):
     result["training"]["objective"].pop("invalid_action_target", None)
     result["policy"]["action_distribution"] = ACTION_DISTRIBUTION
     defaults = load_config()
+    result["training"].setdefault("tile_only_cohorts", defaults["training"]["tile_only_cohorts"])
     for key, value in defaults["training"]["objective"].items():
         result["training"]["objective"].setdefault(key, copy.deepcopy(value))
     # Weight-only transfer keeps architecture and observation compatibility but

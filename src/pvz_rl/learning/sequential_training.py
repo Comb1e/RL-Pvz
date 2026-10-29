@@ -34,7 +34,7 @@ from pvz_rl.learning.objective import (
     finalize_episode_metrics,
 )
 from pvz_rl.learning.performance import compilation_requested
-from pvz_rl.learning.training_requirements import FIT_SCHEDULE_PROTOCOL
+from pvz_rl.learning.training_requirements import FIT_SCHEDULE_PROTOCOL, fitting_schedule
 from pvz_rl.policy.active_batch import ActiveBatchPlan
 from pvz_rl.policy.cudagraph_backend import EncoderCompilationError
 from pvz_rl.policy.runner import PolicyRunner
@@ -62,16 +62,16 @@ class CudaSequentialQ(CudaCohortLifecycle):
     optimizer_version = FIT_SCHEDULE_PROTOCOL
 
     @property
-    def tile_warmup_passes(self):
-        return int(self.cfg["training"]["tile_warmup_passes"])
+    def fit_schedule(self):
+        return fitting_schedule(self.cfg, getattr(self, "cohort_number", self._n_updates + 1))
 
     @property
     def total_fit_passes(self):
-        return self.tile_warmup_passes + self.n_epochs
+        return self.fit_schedule.passes
 
     @property
     def fit_stage(self):
-        return "tile_only" if self._fit_epoch < self.tile_warmup_passes else "joint"
+        return self.fit_schedule.stage
 
     def _setup_model(self):
         super()._setup_model()
@@ -836,7 +836,8 @@ class CudaSequentialQ(CudaCohortLifecycle):
             self._optimizer_events.append((start, end))
             self.policy.zero_grad(set_to_none=True)
             self._stats["q_optimizer_steps"] += 1
-            phase_key = "tile_warmup" if self._fit_kind == "tile_only" else "joint"
+            self.optimizer_commits += 1
+            phase_key = self._fit_kind
             self._stats[f"{phase_key}_optimizer_steps"] += 1
             self._stats[f"{phase_key}_fit_examples"] += self._cached_fit_examples
             self._fit_epoch += 1
@@ -893,11 +894,7 @@ class CudaSequentialQ(CudaCohortLifecycle):
         self._stats["encoder_microbatch"] = self.execution_state["microbatch"]
         self._stats["encoder_token_budget"] = self.execution_state["token_budget"]
         self._stats["execution_fallbacks"] = list(self.execution_state["fallbacks"])
-        self._stats["fit_schedule"] = dict(
-            tile_warmup_passes=self.tile_warmup_passes,
-            joint_passes=self.n_epochs,
-            total_passes=self.total_fit_passes,
-        )
+        self._stats["fit_schedule"] = self.fit_schedule.summary()
         self._stats["fitting_spool_rows"] = len(getattr(self, "_fitting_spool", None) or ())
         spool = getattr(self, "_fitting_spool", None)
         self._stats["fitting_compaction"] = dict(spool.compaction) if spool is not None else {}

@@ -178,7 +178,7 @@ def learning_settings(cfg):
                     "learning_rate",
                     "max_grad_norm",
                     "batch_size",
-                    "tile_warmup_passes",
+                    "tile_only_cohorts",
                     "n_epochs",
                     "gamma",
                 )

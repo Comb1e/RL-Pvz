@@ -148,9 +148,10 @@
   draws and per-slot counters. Accepted planting returns immediately to normal
   collection; there is no counterfactual source, probe lane or rollout state.
 - `learning/sequential_training.py` owns `CudaSequentialQ`: canonical collection,
-  background drains, complete returns, five tile-only whole-cohort warmup passes,
-  then one joint action/tile pass. The committed pass index determines its
-  recovery stage.
+  background drains and complete returns. `training_requirements.py` resolves
+  the repeating five tile-only cohorts/one joint cohort cycle, with four
+  whole-cohort passes per cohort. Saved cohort number and committed pass index
+  determine the recovery stage; the schedule has its own checkpoint identity.
   `learning/flat_q.py` owns shared autonomous/demo fitting: selected regression,
   double-estimator species consistency and demo ranking.
   `learning/objective.py` owns shared NumPy/PyTorch selected-action targets:
@@ -168,7 +169,8 @@
   proposals. Selected counts are 3x2 wait/plant/dig by acceptance; consistency
   counts are 2x2 plant/dig with rejected columns zero. Denominators cover the whole cohort. No non-wait sampled
   return directly trains species. One clipped Adam update commits per pass, then
-  both EMA networks update with decay 0.95. No detach boundaries or recurrent fitting.
+  the trained EMA networks update with decay 0.95 (tile only in tile-only cohorts).
+  No detach boundaries or recurrent fitting.
 - `learning/cuda_buffer.py` stores executed active metadata and ragged entity
   slabs under one RAM/disk budget. `source_actions.py` defines private
   `(environment, episode, ordinal)` references and append receipts. Per-episode
@@ -301,7 +303,7 @@
   rewriting recordings.
 - `evaluation/` uses the stateless runner and CPU-verifies CUDA action traces.
   `monitoring/` owns availability, both-stage entity/throughput benchmarks, bounded
-  collection/tile-warmup+joint-fit/collection controls and objective diagnostics.
+  collection/cohort-stage-fit/collection controls and objective diagnostics.
   `monitoring/moments.py` supplies bounded FP64 centered population moments for
   same-unit dense/total return diagnostics, including covariance. Warnings identify
   their cohort and are not repeated in routine progress.

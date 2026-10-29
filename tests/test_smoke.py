@@ -64,7 +64,8 @@ def test_cuda_learning_and_checkpoint(tmp_path):
         cfg = load_config()
         cfg["environment"]["cutoff_seconds"] = 1
         cfg["training"].update(
-            n_envs=2, total_games=2, n_epochs=1, batch_size=32, max_minutes=2
+            n_envs=2, total_games=2, n_epochs=1, tile_only_cohorts=0,
+            batch_size=32, max_minutes=2
         )
         cfg["training"]["performance"].update(
             compile_collection=False, compile_fitting=False

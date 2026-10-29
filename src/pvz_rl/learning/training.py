@@ -115,7 +115,9 @@ class TrainingStageComplete(Exception):
 
 
 def optimizer_step(model):
-    """Adam's host-side step counter; capturable device counters are never read."""
+    """Count commits independently of selectively updated Adam parameters."""
+    if hasattr(model, "optimizer_commits"):
+        return model.optimizer_commits
     optimizer = getattr(getattr(model, "policy", None), "optimizer", None)
     for state in getattr(optimizer, "state", {}).values():
         step = state.get("step")
@@ -232,6 +234,7 @@ class ResearchCallback(BaseCallback):
             if buffer is not None and buffer.finalized
             else getattr(self.model, "_planting_samples", 0),
             q_optimizer_steps=stats.get("q_optimizer_steps", 0),
+            fit_schedule=self.model.fit_schedule.summary(),
             tile_exploration_epsilon=getattr(
                 getattr(self.model, "policy", None), "tile_exploration_epsilon", 0.0
             ),
@@ -494,11 +497,9 @@ class ResearchCallback(BaseCallback):
         elif phase == "fit":
             if model._fit_epoch >= model.total_fit_passes:
                 marker = "fit complete"
-            elif model.fit_stage == "tile_only":
-                marker = f"tile-only pass {model._fit_epoch + 1}/{model.tile_warmup_passes}"
             else:
-                joint_pass = model._fit_epoch - model.tile_warmup_passes + 1
-                marker = f"joint pass {joint_pass}/{model.n_epochs}"
+                stage = "tile-only" if model.fit_stage == "tile_only" else "joint"
+                marker = f"{stage} pass {model._fit_epoch + 1}/{model.total_fit_passes}"
         else:
             marker = phase
         games = f"games total {row['training_games']:,}"
@@ -574,6 +575,8 @@ class ResearchCallback(BaseCallback):
             "q_grad_norm",
             "fit_batch_groups",
             "q_optimizer_steps",
+            "tile_only_optimizer_steps",
+            "joint_optimizer_steps",
             "species_exploration_coins",
             "tile_exploration_coins",
             "exploratory_changes",
@@ -944,7 +947,7 @@ class ResearchCallback(BaseCallback):
         cohort = self.model.cohort_metrics
         self.progress.emit(
             f"Cohort {self.model._n_updates} fitted: {cohort.get('q_optimizer_steps', 0)} passes "
-            f"({cohort.get('tile_warmup_optimizer_steps', 0)} tile-only + "
+            f"({cohort.get('tile_only_optimizer_steps', 0)} tile-only + "
             f"{cohort.get('joint_optimizer_steps', 0)} joint) "
             f"in {cohort['fit_seconds']:.1f}s after {cohort['collection_seconds']:.1f}s "
             f"collection; {cohort['transitions_per_second']:,.0f} transitions/s; "
@@ -1142,6 +1145,7 @@ def load_policy(checkpoint, device="cpu", *, for_resume=False):
         data["initialization_type"] in ("demonstration", "annotation")
         or not current_model_config(data["config"])
         or not current_engine_config(data["config"])
+        or (not for_resume and data.get("fit_schedule_protocol") != FIT_SCHEDULE_PROTOCOL)
     ):
         model = model_class(cfg)(
             TwoStageQPolicy,
@@ -1291,8 +1295,8 @@ def train(
             "learning_rate": cfg["training"]["learning_rate"],
             "adam_epsilon": 1e-8,
             "batch_size": cfg["training"]["batch_size"],
-            "tile_warmup_passes": cfg["training"]["tile_warmup_passes"],
-            "joint_passes": cfg["training"]["n_epochs"],
+            "tile_only_cohorts": cfg["training"]["tile_only_cohorts"],
+            "passes_per_cohort": cfg["training"]["n_epochs"],
             "independent_encoders": True,
             "runtime_dtype": "bf16",
             "master_dtype": "fp32",
@@ -1322,8 +1326,8 @@ def train(
     progress.emit(f"Data transport: {runtime_settings(cfg)}", force=True)
     progress.emit(
         f"Policy: {cfg.get('policy', {'kind': 'flat'})}; actual returns; "
-        f"{cfg['training']['tile_warmup_passes']} tile-only passes then "
-        f"{cfg['training']['n_epochs']} joint action/tile pass(es); "
+        f"repeat {cfg['training']['tile_only_cohorts']} tile-only cohorts then one joint cohort; "
+        f"{cfg['training']['n_epochs']} passes per cohort; "
         f"minibatch {cfg['training']['batch_size']}",
         force=True,
     )

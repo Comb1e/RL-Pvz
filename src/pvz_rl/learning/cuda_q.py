@@ -37,13 +37,17 @@ def checkpoint_metadata(path, *, weights_only=False):
     from pvz_rl.learning.checkpoints import protocol_for
 
     expected = protocol_for(metadata.get("policy"))
-    if not weights_only and metadata.get("optimizer") == OBJECTIVE_PROTOCOL:
+    if not weights_only and metadata.get("optimizer") in (
+        OBJECTIVE_PROTOCOL,
+        "tile_warmup_then_joint_v1",
+    ):
         raise ValueError(
-            "Checkpoint uses the previous four-joint-pass schedule and cannot resume. "
+            "Checkpoint uses a previous fitting schedule and cannot resume. "
             "Use --init-from for a fresh run with compatible weights."
         )
     if weights_only and metadata.get("optimizer") not in (
         FIT_SCHEDULE_PROTOCOL,
+        "tile_warmup_then_joint_v1",
         OBJECTIVE_PROTOCOL,
         "complete_return_action_global_v6",
         "complete_return_action_global_v5",
@@ -113,6 +117,7 @@ class CudaCohortLifecycle(BaseAlgorithm):
         self.action_distribution_protocol = ACTION_DISTRIBUTION
         self.phase = CohortPhase.IDLE
         self.training_games = self._n_updates = 0
+        self.optimizer_commits = 0
         self.cohort_metrics = {}
         self.runtime_state = None
         self._buffer = self._runner = None
@@ -236,9 +241,9 @@ class CudaCohortLifecycle(BaseAlgorithm):
             self.logger.record("train/" + key, None)
         self._stats = dict(
             q_optimizer_steps=0,
-            tile_warmup_optimizer_steps=0,
+            tile_only_optimizer_steps=0,
             joint_optimizer_steps=0,
-            tile_warmup_fit_examples=0,
+            tile_only_fit_examples=0,
             joint_fit_examples=0,
             species_exploration_coins=0,
             tile_exploration_coins=0,

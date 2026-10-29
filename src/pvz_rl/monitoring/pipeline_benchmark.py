@@ -1,4 +1,4 @@
-"""Bounded production collect/finalize/tile-warmup+joint-fit/collect measurements.
+"""Bounded production collect/finalize/cohort-stage-fit/collect measurements.
 
 No learner loop is reimplemented: the worker calls the same phase operations as
 the autonomous lifecycle, on fresh temporary games, optimizer and EMA state.
@@ -160,10 +160,7 @@ def measure(cfg, output, *, initial=None, seed=101, seconds=1800, trajectory=Non
                             check()
                             model._fit_step(callback)
 
-                    if index < model.tile_warmup_passes:
-                        label = f"fit_tile_pass_{index + 1}"
-                    else:
-                        label = f"fit_joint_pass_{index - model.tile_warmup_passes + 1}"
+                    label = f"fit_{model.fit_stage}_pass_{index + 1}"
                     phase(label, fit_pass)
                 model._phase_times["fit"] = sum(
                     v for k, v in result["phases"].items() if k.startswith("fit_")
