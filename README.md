@@ -135,6 +135,26 @@ agent decision. `decision_ticks` and `action_timing` are derived and validated;
 edit `action_frequency_hz` when changing the cadence. A frequency must divide the
 engine tick rate exactly.
 
+Plant exploration also checks after each 15 simulated seconds of continuous
+ordinary waiting. Configure `training.exploration.plant_wait_check_seconds` in
+`train.toml`; the same saved planting-exploration probability applies to each
+check. Rejected actions break the streak, and commitment waits do not count.
+See [exploration and recovery](docs/math/sequential-training.md#plant-exploration)
+for species selection and cohort-boundary behavior.
+
+Resume an interrupted compatible run with its optimizer, RNG and fitting progress:
+
+```powershell
+.\.venv\Scripts\python.exe -m pvz_rl train `
+  --resume runs\compact-stages-101-new\easy\interrupted.zip `
+  --output runs\compact-stages-101-new\easy `
+  --gpu 0 --gpu-profile rtx4070-laptop
+```
+
+Resume retains saved exploration rates and decay schedules. Only the wait
+interval comes from current configuration, taking effect at the next collection
+cohort. A saved 3% rate means a 3% chance per check, not guaranteed planting.
+
 ## Common checks
 
 Inspect one cohort's saved settings, event rewards, component breakdown,

@@ -127,12 +127,21 @@
   `learning/objective.py` owns shared average-rank terminal finalization for
   trajectories, episode reports, demonstrations and evaluation. Recording fact
   checks remain configuration-independent.
-- `learning/exploration.py` owns persistent accepted-plant species commitments.
+- `learning/exploration.py` owns persistent planting/wait-triggered species commitments.
   Choose another species uniformly; wait ordinarily for sun/cooldown, with no
   timeout. All 45 tiles remain proposal candidates, so occupancy is classified
   after selection. Success clears commitment without recursively drawing a new one.
   Provenance and original policy proposals remain diagnostics. Exploration is
   disabled for evaluation, demonstrations and auxiliary games.
+  Ordinary accepted Wait decisions accumulate actual ticks per environment and
+  check once per configured `plant_wait_check_seconds` interval. Rejections break
+  the streak; commitments and terminals clear it; deferred slots preserve it.
+  Controller v2 saves counters/active interval and restores v1 with the trigger
+  disabled for its existing cohort. `refresh_wait_exploration` imports only the
+  requested interval on resume; saved probability schedules remain fixed and the
+  next cohort activates it. Scheduler tickets retain separate all-eight wait
+  species draws; collection reports checks/commitments by trigger through its
+  existing handoff, without changing trajectory fields or fitting.
 - `learning/collection_scheduler.py` retains actual decision tickets, original-slot
   draws and per-slot counters. Accepted planting returns immediately to normal
   collection; there is no counterfactual source, probe lane or rollout state.

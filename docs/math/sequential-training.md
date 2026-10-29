@@ -75,6 +75,45 @@ zero-total episodes are excluded. Actual proposals, rejected actions,
 commitments and exploration provenance remain separate from diagnostic greedy
 proposals. No rollout row, probe target or auxiliary reward exists.
 
+## Plant exploration
+
+Normal accepted planting and prolonged ordinary waiting share the same
+cohort-frozen `plant_epsilon` probability check. After normal planting, success
+chooses uniformly among the seven other species. After waiting, success chooses
+uniformly among all eight, without filtering by sunlight, cooldown or occupancy.
+Either starts the existing commitment on the next decision: wait for branch
+availability, select among all 45 tiles using tile exploration, and retain the
+commitment until a planting succeeds or the episode ends. Completing a commitment
+does not immediately draw another one. Evaluation and demonstrations do not use
+this controller.
+
+`training.exploration.plant_wait_check_seconds=15.0` is converted to exact engine
+ticks. Each environment counts only actual transition ticks from accepted Wait
+proposals in normal mode with no pending commitment. Any executed plant/dig
+proposal, including a rejection, breaks the streak. Commitment modes and episode
+completion/reset clear it; inactive and deferred slots neither advance nor clear
+it. Reaching the interval performs one check and resets the counter even when
+the probability check fails, requiring another full interval for a retry.
+
+Probability and species draws retain original-slot shape and are owned by issued
+scheduler tickets. Deferred tickets reuse their saved draws. Wait-triggered checks
+have a separate all-eight-species draw; the existing post-planting mapping stays
+unchanged. Collection reports `plant_exploration_checks`,
+`wait_exploration_checks`, and matching `*_commitments` counters, alongside the
+existing aggregate exploration counts. `plant_wait_check_seconds` reports the
+active interval; `requested_plant_wait_check_seconds` identifies a pending change.
+`plant_exploration_epsilon` reports the probability actually used.
+
+Controller state v2 saves elapsed waiting ticks and the active interval. Matching
+v1 autonomous recovery remains supported: pending species and probabilities are
+preserved, and the old active cohort retains its disabled wait trigger. Newly
+introduced counters start at zero. Resume imports only the wait interval from
+current configuration; all probability schedules and other learning settings
+retain their existing compatibility checks. Requested settings persist in model
+configuration while the active interval persists in controller state. The next
+collection cohort activates the request with zero waiting counters. Reward,
+objective, optimizer and trajectory identities remain unchanged.
+
 ## Recovery
 
 Canonical rows retain public entities, masks, globals, action, acceptance,
