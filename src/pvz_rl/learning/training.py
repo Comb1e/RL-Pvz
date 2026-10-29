@@ -1153,10 +1153,15 @@ def load_policy(checkpoint, device="cpu", *, for_resume=False):
         model.policy.load_state_dict(weights, strict=True)
     else:
         model = model_class(cfg).load(checkpoint, device=device)
-        if (
-            transfer_protocol(model.cfg) != transfer_protocol(cfg)
-            or model.cfg["reward"] != cfg["reward"]
-        ):
+        saved_reward = copy.deepcopy(model.cfg["reward"])
+        current_reward = copy.deepcopy(cfg["reward"])
+        if for_resume:
+            # Passivity is an explicit cohort-scoped reward update. It is
+            # refreshed after loading and takes effect at the next cohort;
+            # every other reward field remains part of the strict identity.
+            saved_reward.pop("passivity", None)
+            current_reward.pop("passivity", None)
+        if transfer_protocol(model.cfg) != transfer_protocol(cfg) or saved_reward != current_reward:
             raise ValueError("Checkpoint contents disagree with saved model configuration")
     if any(not torch.isfinite(value).all() for value in model.policy.state_dict().values()):
         raise ValueError("Checkpoint contains non-finite model weights")
