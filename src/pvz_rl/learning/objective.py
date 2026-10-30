@@ -261,7 +261,7 @@ def endgame_terminal_rewards(durations, won, *, win_reward=1.0, loss_penalty=1.0
     return terminal, adjustment
 
 
-def finalize_episode_metrics(rows, cfg, *, median=None, wait_penalties=None):
+def finalize_episode_metrics(rows, cfg, *, median=None, wait_penalties=None, time_weight=None):
     """Finalize one cohort idempotently, including standalone evaluation batches."""
     if not rows:
         return 0.0
@@ -272,7 +272,7 @@ def finalize_episode_metrics(rows, cfg, *, median=None, wait_penalties=None):
         won,
         win_reward=cfg["reward"]["win_reward"],
         loss_penalty=cfg["reward"]["loss_penalty"],
-        weight=cfg["reward"].get("win_time_weight", 0.3),
+        weight=cfg["reward"].get("win_time_weight", 0.3) if time_weight is None else time_weight,
     )
     wait_penalties = wait_penalties or {}
     for row, value, delta in zip(rows, terminal, adjustment, strict=True):

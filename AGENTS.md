@@ -16,10 +16,13 @@ rules. This file adds project-specific constraints and ownership.
 - Keep independent, stateless species and conditional tile networks behind the
   shared policy runner. All 45 tiles remain proposal candidates; classify occupied
   cells after selection. Branch impossibility precedes tile invalidity.
-- Fit complete returns through shared objective/routing code. Invalid targets use
-  the detached responsible-head minimum plus the configured offset; accepted
-  non-wait species targets use online selection and detached EMA tile evaluation.
-  Tile-only fitting must freeze species parameters and species EMA.
+- Fresh autonomous training fits confirmed search values/differences and finite
+  feasibility bounds through shared fitting. Legacy/diagnostic complete-return
+  fitting retains its minimum-Q invalid targets and EMA species consistency.
+  Tile-only fitting freezes species parameters and species EMA in both modes.
+- Search uses public-board priors, one bounded root budget and fresh-world
+  confirmation. Private world state never enters selection or network inputs.
+  Only real episodes advance budgets; mastery validation never uses search.
 - Preserve CPU/CUDA action cadence, legality, reward conversion and source credit
   agreement. Diagnostics and viewers must not change learning or add hot-loop CUDA
   synchronization.
@@ -59,6 +62,7 @@ Paths below are relative to `src/pvz_rl/` unless stated otherwise.
 | `learning/training.py`, `cuda_q.py`, `sequential_training.py` | Training orchestration, cohort lifecycle, collection, finalization and atomic recovery. |
 | `learning/tile_curriculum.py`, `validation_trigger.py`, `training_requirements.py` | Prerequisite state machine, cohort validation gate and normal fitting schedule. |
 | `learning/flat_q.py`, `objective.py`, `action_routing.py` | Shared autonomous/demo fitting, selected-action targets, consistency, ranking and wait/invalid compaction. |
+| `envs/search_worlds.py`, `learning/search_teacher.py`, `search_targets.py`, `search_settings.py` | Public world reconstruction, interruptible CUDA search/continuations, confirmed targets and versioned settings/recovery. |
 | `learning/cuda_buffer.py`, `batch_transport.py`, `collection_scheduler.py`, `exploration.py` | Trajectories, bounded transport, decision tickets and persistent exploration commitments. |
 | `learning/checkpoints.py`, `performance.py` | Compatibility contracts, durable snapshots and execution-only refresh settings. |
 | `annotation/`, `learning/annotation_fit.py`, `demo_initialization.py` | Reachable-state sampling, atomic labels/conflicts, head-specific convergence and verified demo initialization. |
@@ -76,8 +80,8 @@ temporary independent controls for targeted integration and boundary checks.
   valid dimensions, and an action submitted to the simulator.
 - Explicit `learning` check: two one-second CUDA games, two environments, one fitting
   pass, checkpoint reload and prediction. Disable compilation, presentation and
-  prerequisites; use batch size 32, a two-minute allowance and a 180-second subprocess
-  timeout. Missing CUDA requirements fail.
+  prerequisites and search; use batch size 32, a two-minute allowance and a
+  180-second subprocess timeout. Missing CUDA requirements fail.
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest -q

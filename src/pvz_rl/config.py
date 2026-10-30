@@ -191,6 +191,9 @@ def load_demo_config(path: str | Path | None = None, *, profile: str = "demo") -
 
 
 def validate_config(cfg: dict) -> None:
+    from pvz_rl.learning.search_settings import validate_search
+
+    validate_search(cfg)
     objective = cfg["training"].get("objective")
     if not isinstance(objective, dict):
         raise ValueError("training.objective must describe the stateless two-stage objective")
@@ -775,7 +778,9 @@ def validate_config(cfg: dict) -> None:
         )
     if type(train.get("tile_only_cohorts")) is not int or train["tile_only_cohorts"] < 0:
         raise ValueError("training.tile_only_cohorts must be a nonnegative integer")
-    if train.get("discount_clock") != "simulation_ticks" or train["gamma"] != 1:
+    if train.get("discount_clock") != "simulation_ticks" or (
+        train["gamma"] != 1 and not train.get("search", {}).get("enabled", False)
+    ):
         raise ValueError("Complete actual returns require gamma 1; start fresh")
     if train["batch_size"] > 1024:
         raise ValueError("Bounded minibatches must not exceed 1024")

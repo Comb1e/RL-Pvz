@@ -119,6 +119,32 @@ ranking_margin = 1.0
 ram_gib = 6
 block_rows = 32768
 
+[training.search]
+enabled = true
+protocol = "bounded_public_search_v1"
+target_protocol = "confirmed_same_board_returns_v1"
+root_candidates = 8
+node_candidates = 4
+discovery_worlds = 4
+confirmation_worlds = 4
+rollouts = 128
+max_nodes = 512
+max_depth = 32
+expansions_per_rollout = 4
+queries_per_episode = 8
+minimum_interval_seconds = 5.0
+frontier_seconds = 5.0
+peashooter_query_probability = 0.5
+normal_query_probability = 0.25
+scratch_envs = 32
+scratch_vram_mib = 512
+uct_c = 1.4142135623730951
+value_weight = 1.0
+difference_weight = 1.0
+feasibility_weight = 1.0
+huber_delta = 1.0
+tie_tolerance = 0.000001
+
 [training.objective]
 protocol = "complete_return_action_global_v7"
 accepted_outcome_share = 0.5

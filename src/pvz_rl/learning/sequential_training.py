@@ -35,6 +35,7 @@ from pvz_rl.learning.objective import (
     finalize_episode_metrics,
 )
 from pvz_rl.learning.performance import compilation_requested
+from pvz_rl.learning.search_settings import search_enabled
 from pvz_rl.learning.tile_curriculum import TILE_SCENARIO_PROTOCOL, TileSkillState
 from pvz_rl.learning.training_requirements import FIT_SCHEDULE_PROTOCOL, fitting_schedule
 from pvz_rl.policy.active_batch import ActiveBatchPlan
@@ -103,6 +104,38 @@ class CudaSequentialQ(CudaCohortLifecycle):
     def _new_runner(self):
         return PolicyRunner(self.policy)
 
+    @property
+    def search_training(self):
+        return search_enabled(self.cfg) and self.tile_skills.phase != "cherry_bomb"
+
+    def _ensure_search(self, state=None):
+        if search_enabled(self.cfg) and getattr(self, "_search", None) is None:
+            from pvz_rl.learning.search_teacher import SearchTeacher
+
+            self._search = SearchTeacher(self.policy, self.cfg, self.seed, state)
+
+    def _prepare_collection(self, callback):
+        if not self.search_training:
+            return True
+        self._ensure_search()
+        if hasattr(callback, "check_deadline"):
+            callback.check_deadline()
+        ready = self._scheduler.ready(self.env.enabled_envs)
+        started = perf_counter()
+        try:
+            with atomic_transition(), self.env.device_context():
+                complete = self._search.prepare(
+                    self.env, ready, pea=self.tile_skills.phase == "peashooter"
+                )
+                if not self._buffer.reserve_staging(self._search.estimated_bytes):
+                    raise MemoryError("Shared trajectory RAM budget cannot hold pending search")
+        finally:
+            self._phase_times["collect"] += perf_counter() - started
+        self._stats["search"] = dict(self._search.metrics)
+        if hasattr(callback, "log_progress"):
+            callback.log_progress()
+        return complete
+
     def _begin(self, callback):
         # A restored cohort keeps the buffer configuration it was collected
         # with. New buffers receive the current requested reward settings.
@@ -156,6 +189,9 @@ class CudaSequentialQ(CudaCohortLifecycle):
             device=self.device,
         )
         self._ensure_teacher()
+        self._ensure_search()
+        if getattr(self, "_search", None) is not None:
+            self._search.begin_cohort(self.cfg, (self.cohort_number, self.optimizer_commits))
         self._scheduler = CollectionScheduler(self.n_envs, self.device)
         if compilation_requested(self.cfg["training"]["performance"]):
             for encoder in self._teacher.encoders:
@@ -191,7 +227,9 @@ class CudaSequentialQ(CudaCohortLifecycle):
         self.env.handoff.clear()
         self._buffer.reserve_staging(0)
         pending = getattr(self, "_pending_episodes", {})
-        summary = self._buffer.finalize_rewards(pending)
+        summary = self._buffer.finalize_rewards(
+            pending, time_weight=0.0 if self.search_training else None
+        )
         passivity = summary.get("passivity", {}).get("episodes", {})
         for slot, item in pending.items():
             episode = item.get("episode")
@@ -224,6 +262,7 @@ class CudaSequentialQ(CudaCohortLifecycle):
             [p["metrics"] for p in pending.values()],
             self.cfg,
             median=summary["duration_median_seconds"],
+            time_weight=0.0 if self.search_training else None,
         )
         viewer = getattr(self.env, "live_view", None)
         if viewer is not None and viewer.enabled:
@@ -250,6 +289,8 @@ class CudaSequentialQ(CudaCohortLifecycle):
 
     def _phase(self, phase, callback):
         if phase == CohortPhase.FIT:
+            if getattr(self, "_search", None) is not None:
+                self._search.close()
             for encoder in self.policy.encoders:
                 encoder.release_collection()
             if getattr(self, "_teacher", None) is not None:
@@ -315,6 +356,27 @@ class CudaSequentialQ(CudaCohortLifecycle):
                         branch_usable=branch_available, plan=plan,
                     )
                 self._runner.valid &= details["valid"]
+                if self.search_training and not draining:
+                    overrides, sources = self._search.consume()
+                    if overrides:
+                        slots = torch.tensor(list(overrides), device=self.device)
+                        chosen = torch.tensor(list(overrides.values()), device=self.device)
+                        actions = actions.clone()
+                        actions[slots] = chosen
+                        details["exploration_mode"][slots] = 0
+                        details["pending_species"][slots] = 0
+                        self._plant_exploration.pending[slots] = 0
+                        self._plant_exploration.wait_ticks[slots] = 0
+                        # Values are diagnostics of the actually proposed branch/tile.
+                        branches, tiles = action_parts(chosen)
+                        values = values.clone()
+                        tile_values = tile_values.clone()
+                        values[slots] = details["branch_q"][slots, branches]
+                        tables = self.policy.conditional_tiles(self._last_obs, branches, rows=slots)
+                        tile_values[slots] = tables.gather(1, tiles[:, None]).flatten()
+                        details["tile_q"][slots] = tables
+                        details["placement_gap"][slots] = tables.max(-1).values - tile_values[slots]
+                    self._search_sources = sources
             if not hasattr(self, "_collection_packed"):
                 self._collection_packed = torch.empty(
                     self.n_envs * env.features.limit,
@@ -391,7 +453,12 @@ class CudaSequentialQ(CudaCohortLifecycle):
                 actions,
                 env.header_tensor[:, 12].bool(),
                 columns[:, 21].long(),
-                env._device_active,
+                (
+                    env._device_active & ~torch.tensor(
+                        [i in getattr(self, "_search_sources", {}) for i in range(self.n_envs)],
+                        device=self.device,
+                    ) if self.search_training else env._device_active
+                ),
                 env._step_device_result[1],
                 env.transition_ticks,
                 draws=(
@@ -475,6 +542,8 @@ class CudaSequentialQ(CudaCohortLifecycle):
                 :, [REWARD_FIELDS.index(k) for k in ("home_outer_entries", "home_inner_entries")]
             ]
             staging = env.handoff.nbytes + self._scheduler.retained_bytes
+            if self.search_training:
+                staging += self._search.estimated_bytes
             if not self._buffer.reserve_staging(staging):
                 raise MemoryError("RAM budget cannot hold actual collection staging")
             presentation_started = perf_counter()
@@ -488,6 +557,13 @@ class CudaSequentialQ(CudaCohortLifecycle):
             rows["executed_action"] = np.where(rows["accepted"], rows["action"], 0)
             rows[~active] = np.zeros((), dtype=rows.dtype)
             rows["env"] = np.arange(self.n_envs)
+            if self.search_training:
+                self._search.observe(rows, getattr(self, "_search_sources", {}))
+                for slot, source in getattr(self, "_search_sources", {}).items():
+                    if active[slot]:
+                        key = "behavior_" + source
+                        self._stats[key] = self._stats.get(key, 0) + 1
+                self._stats["search"] = dict(self._search.metrics)
             storage_started = perf_counter()
             self._buffer.append(
                 rows, observations, identities=(env._episode_serial, source_decisions)
@@ -753,6 +829,17 @@ class CudaSequentialQ(CudaCohortLifecycle):
             )
             encoder.token_budget = self.execution_state["token_budget"]
         groups = self.execution_state["fit_batch_groups"]
+        if self.search_training:
+            self._fit_kind = self.fit_stage
+            records = self._search.records
+            size = self.batch_size
+            self._batch_iterator = iter(
+                (records[i : i + size], None) for i in range(0, len(records), size)
+            )
+            self._fit_pass_start = torch.cuda.Event(enable_timing=True)
+            self._fit_pass_start.record()
+            self._search_pass_metrics = torch.zeros(3, device=self.device)
+            return
         if getattr(self, "_fitting_spool", None) is None:
             self._fitting_spool = FittingSpool(self._buffer)
         self._fit_kind = self.fit_stage
@@ -813,6 +900,13 @@ class CudaSequentialQ(CudaCohortLifecycle):
             self._cached_fit_examples = (
                 self.cohort_games if self.tile_skills.phase == "cherry_bomb" else int(selected_n)
             )
+            if self.search_training:
+                self._cached_fit_examples = len(self._search.records)
+                for key, number in zip(
+                    ("teacher_value_loss", "teacher_difference_loss", "teacher_feasibility_loss"),
+                    self._search_pass_metrics.cpu().tolist(), strict=True,
+                ):
+                    self.logger.record("train/" + key, number)
         loss, selected_error, placement_gap = self._cached_metrics
         self.logger.record("train/q_loss", loss)
         self.logger.record(
@@ -875,7 +969,20 @@ class CudaSequentialQ(CudaCohortLifecycle):
         else:
             rows, observations, *metadata = item
             self.policy.set_training_mode(True)
-            if self.tile_skills.phase == "cherry_bomb":
+            if self.search_training:
+                from pvz_rl.learning.search_targets import teacher_loss
+
+                loss, detail = teacher_loss(
+                    self.policy, rows, stage=self._fit_kind,
+                    total_roots=len(self._search.records), settings=self.cfg["training"]["search"],
+                    invalid_offset=self.cfg["training"]["objective"]["invalid_action_q_offset"],
+                )
+                self._search_pass_metrics += detail
+                selected_error = loss.new_empty(0)
+                placement_gap = loss.new_empty(0)
+                self.policy._last_species_consistency_loss = loss.detach() * 0
+                self.policy._last_species_consistency_metrics = loss.new_zeros(4, dtype=torch.float64)
+            elif self.tile_skills.phase == "cherry_bomb":
                 loss, selected_error, placement_gap = self._bomb_loss(rows, observations)
             else:
                 loss, selected_error, placement_gap = batch_loss(
@@ -929,6 +1036,8 @@ class CudaSequentialQ(CudaCohortLifecycle):
 
     def _synchronize(self, callback):
         self._drain()
+        if getattr(self, "_search", None) is not None:
+            self._stats["search"] = dict(self._search.metrics)
         self._stats["trajectory_bytes"] = (
             self._buffer.size * self._buffer.dtype.itemsize + self._buffer.entity_size * 44
         )
@@ -989,6 +1098,14 @@ class CudaSequentialQ(CudaCohortLifecycle):
 
     def _restore_runtime(self):
         extra = self.runtime_state
+        if search_enabled(self.cfg):
+            if extra and self.phase != CohortPhase.IDLE and extra.get("search_teacher") is None:
+                raise ValueError("Missing search recovery; use fresh --init-from to change target protocols")
+            self._ensure_search(extra.get("search_teacher") if extra else None)
+            if self.phase == CohortPhase.COLLECT and self._search.policy_identity != (
+                self.cohort_number, self.optimizer_commits
+            ):
+                raise ValueError("Pending search was generated against different frozen policy updates")
         if extra and extra.get("tile_scenarios") is not None:
             if extra.get("tile_scenario_protocol") != TILE_SCENARIO_PROTOCOL:
                 raise ValueError("Unsupported tile prerequisite recovery protocol")
@@ -1088,6 +1205,7 @@ class CudaSequentialQ(CudaCohortLifecycle):
         skills = dict(
             tile_scenarios=self.tile_skill_state,
             tile_scenario_protocol=TILE_SCENARIO_PROTOCOL,
+            search_teacher=self._search.snapshot() if getattr(self, "_search", None) else None,
         )
         if getattr(self, "_teacher", None) is None:
             return skills
@@ -1131,5 +1249,8 @@ class CudaSequentialQ(CudaCohortLifecycle):
             "_teacher",
             "_plant_exploration",
             "_plant_costs",
+            "_search",
+            "_search_sources",
+            "_search_pass_metrics",
             "_pending_episodes",
         ]

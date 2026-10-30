@@ -145,7 +145,12 @@ def report_charts(segments, cfg, output, save):
                 images.append((f"{title}: {heading}", name + ".png"))
 
         behavior = [
-            ("rolling_win_rate", "Rolling training success rate"),
+            (
+                "rolling_win_rate",
+                "Collection success (search-assisted where enabled)"
+                if cfg["training"].get("search", {}).get("enabled", False)
+                else "Rolling training success rate",
+            ),
             ("rolling_return", "Episode reward"),
             ("rolling_seconds", "Episode duration (simulated seconds)"),
             ("invalid_action_rate", "Invalid-action rate"),
@@ -186,12 +191,50 @@ def report_charts(segments, cfg, output, save):
 
         fitting = fields(
             [
-                ("optimization.q_loss", "Balanced Q loss"),
+                (
+                    "optimization.q_loss",
+                    "Teacher composite loss"
+                    if cfg["training"].get("search", {}).get("enabled", False)
+                    else "Balanced Q loss",
+                ),
                 ("optimization.selected_action_error", "Selected-action fitting error"),
                 ("optimization.placement_gap", "Best-tile minus sampled-tile Q"),
                 ("optimization.q_grad_norm", "Gradient norm before clipping"),
             ]
         )
+        search_fields = fields(
+            [
+                ("search.queries", "Completed search queries"),
+                ("search.rollouts", "Completed oracle rollouts (excluded from games)"),
+                ("search.simulated_ticks", "Oracle simulator ticks"),
+                ("search.wall_seconds", "Search wall time (seconds)"),
+                ("search.scratch_reserved_bytes", "Scratch storage reservation (bytes)"),
+                ("search.rollout_budget_fraction", "Current query rollout-budget utilization"),
+                ("search.generation_failures", "World generation failures"),
+                ("search.overrides", "Root choices differing from network"),
+                ("search.continuation_actions", "Public-plan actions"),
+                ("search.fallback_actions", "Plan fallback actions"),
+                ("search.discovery_score", "Best discovery score"),
+                ("search.confirmation_score", "Fresh confirmation score"),
+                ("search.confirmation_duration_adjustment", "Chosen duration adjustment"),
+                ("search.confirmation_standard_error", "Confirmation standard error (diagnostic)"),
+                ("search.duration_reversals", "Preferences reversed by duration shaping"),
+                ("optimization.teacher_value_loss", "Confirmed value calibration"),
+                ("optimization.teacher_difference_loss", "Same-board difference loss"),
+                ("optimization.teacher_feasibility_loss", "Finite-reference feasibility loss"),
+            ]
+        )
+        search_fields = [
+            (
+                key,
+                text,
+                lambda row, get=get: (
+                    get(row) if row.get("collection_policy") == "search_assisted" else None
+                ),
+            )
+            for key, text, get in search_fields
+        ]
+        add("search", "search-assisted collection and confirmed teacher fitting", search_fields)
         if pre:
             fitting = [
                 (
@@ -220,7 +263,7 @@ def report_charts(segments, cfg, output, save):
                 ),
             )
         else:
-            fitting += fields(
+            consistency_fields = fields(
                 [
                     ("optimization.species_consistency_loss", "Species consistency loss"),
                     ("optimization.species_consistency_mae", "Species consistency absolute error"),
@@ -234,6 +277,16 @@ def report_charts(segments, cfg, output, save):
                     ),
                 ]
             )
+            fitting += [
+                (
+                    key,
+                    text,
+                    lambda row, get=get: (
+                        get(row) if row.get("collection_policy") != "search_assisted" else None
+                    ),
+                )
+                for key, text, get in consistency_fields
+            ]
         for action in ("plant",) if pre else ("wait", "plant", "dig"):
             if any(
                 (value(r, f"optimization.action_count_{action}") or 0) > 0

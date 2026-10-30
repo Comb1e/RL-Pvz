@@ -391,6 +391,13 @@ def inspect_checkpoint(path, *, weights_only=False):
             else:
                 validate_runtime_identity(runtime)
             if not weights_only:
+                from pvz_rl.learning.search_settings import search_enabled, validate_search_recovery
+
+                validate_search_recovery(
+                    runtime.get("search_teacher"),
+                    cfg,
+                    required=search_enabled(cfg) and runtime.get("buffer") is not None,
+                )
                 if runtime.get("buffer") is not None:
                     from pvz_rl.learning.collection_scheduler import CollectionScheduler
                     from pvz_rl.learning.exploration import CommittedPlantExploration

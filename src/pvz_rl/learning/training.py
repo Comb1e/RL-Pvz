@@ -324,6 +324,8 @@ class ResearchCallback(BaseCallback):
             "training_steps": self.model.num_timesteps,
             "training_games": games,
             "tile_scenarios": self.model.tile_skills.to_dict(),
+            "search": dict(getattr(getattr(self.model, "_search", None), "metrics", {})),
+            "collection_policy": "search_assisted" if self.model.search_training else "network",
             "validation_trigger": self.validation_trigger.snapshot(
                 "pre" if self.model.tile_skills.active or pre_stage(self.cfg) else "normal"
             ),
@@ -601,6 +603,9 @@ class ResearchCallback(BaseCallback):
         row = self.snapshot()
         values = self.model.logger.name_to_value
         keys = (
+            "teacher_value_loss",
+            "teacher_difference_loss",
+            "teacher_feasibility_loss",
             "q_loss",
             "tile_ranking_loss",
             "selected_action_error",
@@ -1443,6 +1448,10 @@ def train(
 ):
     started = perf_counter()
     cfg = copy.deepcopy(cfg)
+    if family == "diagnostic" and "search" in cfg["training"]:
+        cfg["training"]["search"]["enabled"] = False
+    if cfg["training"].get("search", {}).get("enabled", False) and family != "preset":
+        raise ValueError("Search training needs the supported preset public-world generator")
     validate_config(cfg)
     output = Path(output)
     require_cuda_training(cfg, condition, runtime=False)
@@ -1571,14 +1580,23 @@ def train(
         force=True,
     )
     progress.emit(f"Data transport: {runtime_settings(cfg)}", force=True)
+    target_kind = ("confirmed same-board search targets" if cfg["training"].get("search", {}).get("enabled", False)
+                   else "actual returns")
     progress.emit(
-        f"Policy: {cfg.get('policy', {'kind': 'flat'})}; actual returns; "
+        f"Policy: {cfg.get('policy', {'kind': 'flat'})}; {target_kind}; "
         f"repeat {cfg['training']['tile_only_cohorts']} tile-only cohorts then one joint cohort; "
         f"{cfg['training']['n_epochs']} passes per cohort; "
         f"minibatch {cfg['training']['batch_size']}",
         force=True,
     )
     progress.emit(f"Reward settings: {cfg['reward']}", force=True)
+    if cfg["training"].get("search", {}).get("enabled", False):
+        progress.emit(
+            f"Search-assisted collection: {cfg['training']['search']['rollouts']} rollouts/query, "
+            f"up to {cfg['training']['search']['queries_per_episode']} queries/game; "
+            "oracle games excluded from budgets; validation uses only the greedy network",
+            force=True,
+        )
     progress.emit(
         f"Committed plant/tile exploration {cfg['training']['exploration']}; "
         "normal branches greedy; accepted planting can commit to another species; "
@@ -1825,6 +1843,8 @@ def train(
     finally:
         if callback:
             callback.close()
+        if model is not None and getattr(model, "_search", None) is not None:
+            model._search.close()
         if model is not None and getattr(model, "_buffer", None) is not None:
             model._buffer.close()
         if env:

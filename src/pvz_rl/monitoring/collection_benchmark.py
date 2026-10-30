@@ -418,6 +418,7 @@ def benchmark(
         raise ValueError("Use a cycle wall budget in (0, 300] seconds")
     output.parent.mkdir(parents=True, exist_ok=True)
     cfg = load_config()
+    cfg["training"]["search"]["enabled"] = False
     from pvz_rl.config import validate_config
 
     validate_config(cfg)

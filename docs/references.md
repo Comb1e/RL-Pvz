@@ -1,8 +1,8 @@
 # Research references
 
 Papers and projects that informed design or research directions, listed once per
-source. Design influences describe local adaptations; research comparisons are
-unimplemented. Historical entries preserve attribution for removed designs.
+source. Entries distinguish adopted ideas from algorithms that remain comparison
+references. Historical entries preserve attribution for removed designs.
 Routine library/API documentation, implementation details and version history are
 outside this index.
 
@@ -64,12 +64,12 @@ outside this index.
 ## Research comparisons
 
 - Anthony, Tian and Barber, [Thinking Fast and Slow with Deep Learning and Tree Search](https://arxiv.org/html/1705.08439v1):
-  expert iteration informs a proposed bounded simulator-search teacher whose
+  expert iteration informs the bounded simulator-search teacher whose
   action comparisons train the existing networks. Search and distillation gains
   in Hex do not establish improvement or computational feasibility here.
 - [DeepMind mctx search policies](https://github.com/google-deepmind/mctx/blob/main/mctx/_src/policies.py):
   inspected Gumbel root sampling, sequential halving and explicit simulation/depth
-  budgets as allocation references. Neither JAX nor learned dynamics is proposed;
+  budgets as allocation references. Neither JAX nor learned dynamics is used;
   the linked Gumbel paper's PDF was blocked, so no theorem is transferred.
 - Meulemans et al., [Would I have gotten that reward?](https://proceedings.neurips.cc/paper_files/paper/2023/file/d8bd445c2abe1343cce0e14b361b2fb3-Paper-Conference.pdf):
   COCOA's reward-outcome contributions inform distinguishing strategic value from
@@ -95,6 +95,10 @@ outside this index.
   horizon myopia and terminal-value accuracy inform testing search beyond Sunflower
   payback and defense delays. Robot-navigation results do not validate this game's
   current value estimates or a shortened rollout horizon.
+- Sunberg and Kochenderfer, [Online Algorithms for POMDPs with Continuous State, Action, and Observation Spaces](https://cdn.aaai.org/ojs/13882/13882-40-17400-1-2-20201228.pdf):
+  observation-tree particle collapse motivates public-state sharing and fresh-world
+  confirmation controls. The teacher uses an approximate public-board prior,
+  not POMCPOW's weighted belief filter or its convergence claims.
 - Harutyunyan et al., [Hindsight Credit Assignment](https://papers.neurips.cc/paper/9413-hindsight-credit-assignment.pdf):
   relevance-weighted advantages motivated same-board action comparisons that
   separate useful decisions from continuation noise. Paired simulator rollouts are

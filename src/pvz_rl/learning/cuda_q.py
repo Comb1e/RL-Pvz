@@ -248,6 +248,9 @@ class CudaCohortLifecycle(BaseAlgorithm):
         for key in (
             "q_loss",
             "tile_ranking_loss",
+            "teacher_value_loss",
+            "teacher_difference_loss",
+            "teacher_feasibility_loss",
             "selected_action_error",
             "species_consistency_loss",
             "species_consistency_mae",
@@ -374,6 +377,10 @@ class CudaCohortLifecycle(BaseAlgorithm):
                     self._begin(callback)
                 continue
             phase = self.phase
+            # Search owns bounded resumable units, outside the action transaction.
+            if phase == CohortPhase.COLLECT and hasattr(self, "_prepare_collection"):
+                if not self._prepare_collection(callback):
+                    continue
             start = perf_counter()
             try:
                 with atomic_transition():
@@ -383,13 +390,16 @@ class CudaCohortLifecycle(BaseAlgorithm):
                         self._finalize_rewards(callback)
                     elif phase == CohortPhase.RETURNS:
                         ranking = self.tile_skills.phase == "cherry_bomb"
+                        search = getattr(self, "search_training", False)
                         self.prefit_errors = self._buffer.finalize(
                             cohort=self.cohort_number,
-                            diagnostics=not ranking,
+                            diagnostics=not (ranking or search),
                         )
-                        if ranking:
+                        if ranking or search:
                             self.prefit_errors = {}
-                            self._buffer.reward_summary["supervision"] = "tile_set_ranking"
+                            self._buffer.reward_summary["supervision"] = (
+                                "confirmed_search_returns" if search else "tile_set_ranking"
+                            )
                         for name, values in self.prefit_errors.items():
                             self.logger.record("train/action_count_" + name, values["count"])
                             self.logger.record("train/value_target_error_" + name, values["mse"])

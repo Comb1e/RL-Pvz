@@ -642,7 +642,7 @@ class CompleteGameBuffer:
             summary["episodes"][f"{key[0]}:{key[1]}"] = episode_summary
         return summary
 
-    def finalize_rewards(self, pending=None):
+    def finalize_rewards(self, pending=None, *, time_weight=None):
         if self.rewards_finalized:
             return self.reward_summary
         terminal = []
@@ -666,7 +666,7 @@ class CompleteGameBuffer:
                 wins,
                 win_reward=self.cfg["reward"]["win_reward"],
                 loss_penalty=self.cfg["reward"]["loss_penalty"],
-                weight=self.cfg["reward"].get("win_time_weight", 0.3),
+                weight=self.cfg["reward"].get("win_time_weight", 0.3) if time_weight is None else time_weight,
             )
             for (block, index, _, _won), value in zip(terminal, terminal_rewards, strict=True):
                 row = block[index]
@@ -688,7 +688,8 @@ class CompleteGameBuffer:
             endgame_terminal_rewards=terminal_rewards.tolist(),
             endgame_time_adjustments=adjustments.tolist(),
             endgame_time_weight=(
-                self.cfg["reward"].get("win_time_weight", 0.3) if self.cfg else 0.0
+                (self.cfg["reward"].get("win_time_weight", 0.3) if time_weight is None else time_weight)
+                if self.cfg else 0.0
             ),
             # Compatibility alias for existing viewers and reports.
             victory_time_adjustments=adjustments.tolist(),

@@ -577,6 +577,17 @@ class FitDiagnostics:
         self.output.mkdir(parents=True, exist_ok=False)
         self.stream = (self.output / "fit-events.jsonl").open("w", encoding="utf-8")
         self.patches = ExitStack()
+        from pvz_rl.learning import training
+
+        ordinary_train = training.train
+
+        def diagnostic_train(cfg, *args, **kwargs):
+            cfg = deepcopy(cfg)
+            if "search" in cfg["training"]:
+                cfg["training"]["search"]["enabled"] = False
+            return ordinary_train(cfg, *args, **kwargs)
+
+        self.patches.enter_context(patch.object(training, "train", diagnostic_train))
         for owner, method, name in (
             (sequential_training.CudaSequentialQ, "_start_pass", "start_pass"),
             (sequential_training.CudaSequentialQ, "_publish_fit_metrics", "pass_metrics"),
