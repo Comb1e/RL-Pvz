@@ -1,17 +1,21 @@
-## Initial learning gains and passive late-game behavior — 2026-10-28
+## Residual-sun incentives and tile-first training — 2026-10-29
 
-- Reported problem and impact: later play remains passive, tending to plant
-  Sunflowers with only one or two other plants. Initial availability awareness
-  and the learned opening have not developed into a varied, sustained defence.
+- Reported problem and impact: winning games do not produce useful learning.
+  Training appears to eliminate choices from losing games and can also eliminate
+  correct actions, preventing reliable reinforcement of winning play despite
+  improved incentives and additional placement training. The user suspects
+  backpropagation or related learning rules; the faulty component is unconfirmed.
 - Possible causes below are hypotheses, not confirmed findings:
-  - **Farming before defeat may be a stable local optimum.** Sunflower income
-    earns credit even in losing games, while effective defence requires several
-    coordinated choices. A narrow economic strategy may therefore be easier to
-    reinforce than the sequence needed to win.
-  - **The two-stage value loop may reinforce its own narrow choices.** Plant
-    preferences depend on learned placement values; repeatedly choosing familiar
-    plants may strengthen those estimates while rarely used alternatives remain
-    poorly understood, creating a self-reinforcing restriction of the strategy.
-  - **Time incentives may reward abandoning weak games early.** Earlier defeats
-    avoid the additional penalty on later losses. Falling average duration may
-    therefore partly reflect earlier failure rather than improved defence.
+  - **Outcome credit may confuse useful decisions with the trajectory around
+    them.** A correct move in an eventual loss can inherit an unfavorable target,
+    while incidental moves in a win can share its reward. The resulting learning
+    signal may suppress good decisions without identifying what caused victory.
+  - **Fitting values may fail to preserve the ranking of winning choices.**
+    Reducing prediction error on successful games need not make their useful
+    actions outrank alternatives. Updates from losing games may also generalize
+    across similar states and overwrite preferences learned from wins.
+  - **Placement-to-action supervision may sustain a pessimistic feedback loop.**
+    Inaccurate placement estimates can undervalue a useful plant; choosing it
+    less often then reduces opportunities to correct that estimate through
+    successful play. Extra placement training may reduce noise without resolving
+    this coupled credit problem.

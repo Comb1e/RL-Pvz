@@ -19,3 +19,26 @@
   varied, sustained defensive strategy.
 - Evidence: outcomes are user-reported observations, consistent with the current
   learning and reward rules; no new training or controlled comparison was run.
+
+## Residual-sun incentives and tile-first training — 2026-10-29
+
+- Reported improvements: settling remaining sunlight according to victory or
+  defeat prevents the near-always-wait-and-lose behavior. Placement requires more
+  training than action selection; two placement pretraining scenarios and repeated
+  placement-only training before action fitting reportedly reduce misleading
+  placement-value information passed to the action stage.
+- Immediate-predecessor comparison: relative to Initial learning gains and passive
+  late-game behavior, reward accounting now links unused sunlight to the outcome.
+  The independent action and placement stages retain their roles, while the
+  workflow adds Peashooter/Cherry Bomb prerequisites and cycles several
+  placement-only cohorts before a joint action/placement cohort. These changes
+  may discourage passive defeat and improve placement estimates before they
+  supervise action selection; their individual effects have not been isolated.
+- Discovered problem: the user reports that winning games do not produce useful
+  learning. Training appears to eliminate choices from losing games and can also
+  eliminate correct actions, preventing reliable reinforcement of winning play.
+  Backpropagation or the surrounding learning rules remain under suspicion;
+  the source of the failure is unconfirmed.
+- Evidence: improvements and failures are user-reported. Review confirms the
+  reward and training workflow, not their behavioral effects; no new training
+  or controlled comparison was run.
