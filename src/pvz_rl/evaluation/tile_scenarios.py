@@ -16,10 +16,12 @@ from pvz_rl.learning.deadline import check_deadline
 from pvz_rl.policy.runner import PolicyRunner
 
 
-def validate_tile_skills(cfg, model, seeds, *, deadline=None, progress=None):
+def validate_tile_skills(cfg, model, seeds, *, deadline=None, progress=None, skills=SKILLS):
     results = {}
     with deterministic_validation(model):
-        for skill in SKILLS:
+        if not skills or len(set(skills)) != len(skills) or any(skill not in SKILLS for skill in skills):
+            raise ValueError("Select at least one distinct supported tile skill")
+        for skill in skills:
             cases = [namespace_seed(f"tile-validation/{skill}", seed) for seed in seeds]
             rows = []
             for offset in range(0, len(cases), cfg["training"]["n_envs"]):

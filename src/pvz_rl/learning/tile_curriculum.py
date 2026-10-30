@@ -3,6 +3,7 @@
 from dataclasses import asdict, dataclass, field
 
 from pvz_rl.envs.tile_scenarios import SKILLS
+from pvz_rl.learning.curriculum import TILE_STAGES
 
 TILE_SCENARIO_PROTOCOL = "tile-skill-prerequisites-v1"
 
@@ -15,10 +16,21 @@ class TileSkillState:
     scores: dict = field(default_factory=dict)
     cohorts: int = 0
     generation_failures: int = 0
+    stage_order: list | None = None
+    stage_probes: dict = field(default_factory=dict)
 
     def __post_init__(self):
         self.episodes = dict(self.episodes)
         self.scores = dict(self.scores)
+        self.stage_probes = dict(self.stage_probes)
+        if self.stage_order is not None:
+            self.stage_order = list(self.stage_order)
+            if (
+                len(set(self.stage_order)) != len(self.stage_order)
+                or any(skill not in TILE_STAGES for skill in self.stage_order)
+                or self.active and self.phase not in self.stage_order
+            ):
+                raise ValueError("Invalid independent tile-stage order")
         if self.phase not in (*SKILLS, "complete"):
             raise ValueError("Unknown tile prerequisite phase")
         if set(self.episodes) != set(SKILLS) or any(
@@ -32,11 +44,20 @@ class TileSkillState:
             raise ValueError("Invalid tile prerequisite progress")
         if self.last_probe > self.total:
             raise ValueError("Tile prerequisite probe exceeds completed episodes")
-        if self.scores and (
+        invalid_score_keys = (
             set(self.scores) != set(SKILLS)
+            if self.stage_order is None else bool(set(self.scores) - set(SKILLS))
+        )
+        if self.scores and (
+            invalid_score_keys
             or any(type(value) is not int or value < 0 for value in self.scores.values())
         ):
             raise ValueError("Invalid tile prerequisite scores")
+        if any(
+            skill not in SKILLS or type(value) is not int or not 0 <= value <= self.episodes[skill]
+            for skill, value in self.stage_probes.items()
+        ):
+            raise ValueError("Invalid tile-stage probe counters")
 
     @property
     def active(self):
@@ -46,18 +67,42 @@ class TileSkillState:
     def total(self):
         return sum(self.episodes.values())
 
+    @property
+    def validation_skills(self):
+        return SKILLS if self.stage_order is None else (self.phase,) if self.active else ()
+
+    @property
+    def validation_domain(self):
+        return "pre" if self.stage_order is None else self.phase
+
+    @property
+    def progress(self):
+        return self.total if self.stage_order is None else self.episodes.get(self.phase, 0)
+
     def due(self, cfg):
+        previous = (
+            self.last_probe if self.stage_order is None else self.stage_probes.get(self.phase, 0)
+        )
         return (
             self.active
-            and self.total - self.last_probe >= cfg["curriculum"]["probe_interval_games"]
+            and self.progress - previous >= cfg["curriculum"]["probe_interval_games"]
         )
 
     def observe(self, scores, cfg):
         count = cfg["curriculum"]["probe_cases"]
-        if set(scores) != set(SKILLS) or any(
+        if set(scores) != set(self.validation_skills) or any(
             type(value) is not int or not 0 <= value <= count for value in scores.values()
         ):
             raise ValueError("Incomplete or invalid tile prerequisite probe")
+        if self.stage_order is not None:
+            skill = self.phase
+            self.stage_probes[skill] = self.episodes[skill]
+            self.scores.update(scores)
+            self.last_probe = self.total
+            if scores[skill] == count:
+                index = self.stage_order.index(skill) + 1
+                self.phase = self.stage_order[index] if index < len(self.stage_order) else "complete"
+            return self.phase
         failed = [skill for skill in SKILLS if scores[skill] != count]
         self.scores = dict(scores)
         self.last_probe = self.total
@@ -72,10 +117,18 @@ class TileSkillState:
 
 
 def initial_tile_state(cfg, family="preset"):
+    stage = cfg["curriculum"].get("run_stage")
+    if stage == "pre":
+        raise ValueError(
+            "The combined pre stage is retired for fresh runs; select cherry_bomb or peashooter"
+        )
     enabled = (
         cfg["training"].get("tile_scenarios", {}).get("enabled", False)
         and family == "preset"
         and cfg["curriculum"].get("mode") == "teaching"
-        and cfg["curriculum"].get("run_stage") in (None, "pre")
+        and stage in (None, *TILE_STAGES)
     )
-    return TileSkillState(phase="peashooter" if enabled else "complete").to_dict()
+    order = list(TILE_STAGES) if stage is None else [stage] if stage in TILE_STAGES else []
+    return TileSkillState(
+        phase=order[0] if enabled else "complete", stage_order=order
+    ).to_dict()

@@ -33,19 +33,20 @@ rules. This file adds project-specific constraints and ownership.
 
 ## Training stages and validation
 
-- Default progression is `pre → easy → standard → shared`. Explicit fresh normal
-  stages skip prerequisites; legacy checkpoints retain their saved workflow.
-- `pre` uses the Peashooter/Cherry Bomb state machine, joint validation and revisits
-  of a failing skill. Preserve configured Peashooter sky-sun scaling and saved
-  countdowns without rescaling recovery state.
-- Keep pre episodes and normal games, budgets, exploration and cohort-cycle counters
-  separate. Validation and label-oracle rollouts do not count as training episodes.
+- Default progression is `cherry_bomb → peashooter → easy → standard → shared`.
+  Each tile stage is separately selectable and validates only its own skill.
+  Explicit fresh normal stages skip tile stages; legacy checkpoints retain their
+  saved combined-stage workflow. Cherry Bomb collection has no exploration.
+- Preserve configured Peashooter sky-sun scaling and saved countdowns without
+  rescaling recovery state. Keep tile-stage episodes, budgets and validation clocks
+  separate from one another and from normal games, exploration and cohort cycles.
+  Validation and label-oracle rollouts do not count as training episodes.
 - Autonomous validation checks occur at configured episode intervals after a fully
   fitted cohort. Use authoritative outcomes from the entire configured cohort,
   including attributed bomb hits; shortened cohorts and rolling statistics cannot
   qualify. A skipped check waits another interval.
 - Keep cohort qualification separate from perfect validation mastery. Persist
-  separate pre/normal clocks and pending validation; retry interrupted validation
+  separate tile-stage/normal clocks and pending validation; retry interrupted validation
   against preserved weights before further fitting. Missing saved trigger settings
   preserve legacy behavior. Manual evaluation and annotation convergence are separate.
 
@@ -60,7 +61,7 @@ Paths below are relative to `src/pvz_rl/` unless stated otherwise.
 | `envs/` | CPU/CUDA simulator adapters, public encoding, actions, rewards and source credit; `tile_scenarios.py` and `sky_sun.py` own scenario generation and sun scaling. |
 | `policy/` | Independent two-stage Transformers, shared runner, all-tile selection, active batching and bounded collection/fitting CUDA graphs. |
 | `learning/training.py`, `cuda_q.py`, `sequential_training.py` | Training orchestration, cohort lifecycle, collection, finalization and atomic recovery. |
-| `learning/tile_curriculum.py`, `validation_trigger.py`, `training_requirements.py` | Prerequisite state machine, cohort validation gate and normal fitting schedule. |
+| `learning/tile_curriculum.py`, `validation_trigger.py`, `training_requirements.py` | Independent tile-stage progression, legacy prerequisite recovery, cohort validation gate and normal fitting schedule. |
 | `learning/flat_q.py`, `objective.py`, `action_routing.py` | Shared autonomous/demo fitting, selected-action targets, consistency, ranking and wait/invalid compaction. |
 | `envs/search_worlds.py`, `learning/search_teacher.py`, `search_targets.py`, `search_settings.py` | Public world reconstruction, interruptible CUDA search/continuations, confirmed targets and versioned settings/recovery. |
 | `learning/cuda_buffer.py`, `batch_transport.py`, `collection_scheduler.py`, `exploration.py` | Trajectories, bounded transport, decision tickets and persistent exploration commitments. |

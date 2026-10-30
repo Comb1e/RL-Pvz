@@ -49,17 +49,23 @@ To start autonomous training when ready:
   --output runs\my-run --gpu 0 --gpu-profile rtx4070-laptop
 ```
 
-Default progression is `pre → easy → standard → shared`. Explicit `--stage easy`,
-`standard`, or `shared` skips prerequisites. Standalone prerequisites:
+Default progression is `cherry_bomb → peashooter → easy → standard → shared`.
+Each stage can also run independently. Explicit normal stages skip tile training:
 
 ```powershell
-.\.venv\Scripts\python.exe -m pvz_rl train --stage pre --until-stage-complete `
-  --seed 101 --output runs\pre --gpu 0 --gpu-profile rtx4070-laptop
+.\.venv\Scripts\python.exe -m pvz_rl train --stage cherry_bomb --until-stage-complete `
+  --seed 101 --output runs\cherry --gpu 0 --gpu-profile rtx4070-laptop
+.\.venv\Scripts\python.exe -m pvz_rl train --stage peashooter --until-stage-complete `
+  --seed 101 --output runs\peashooter --init-from runs\cherry\final.zip `
+  --gpu 0 --gpu-profile rtx4070-laptop
 ```
 
 Without `--until-stage-complete`, `--games` limits completed real episodes.
 Peashooter uses easy waves, 50 starting sun, disabled mowers and configurable
-1.5× sky-sun frequency. Cherry Bomb retains its exact attributed-hit oracle.
+1.5× sky-sun frequency. Cherry Bomb uses its exact attributed-hit oracle with no
+exploration. Each tile stage has its own episode budget and validation clock;
+automatic progression preserves optimizer state, while separate `--init-from`
+runs transfer weights into a fresh optimizer.
 Normal fitting keeps three tile-only cohorts followed by one joint cohort, with
 four passes each. Tile-only fitting freezes species parameters and species EMA.
 
@@ -76,7 +82,9 @@ losing defense can still score worse because the configured duration penalty rem
 Every 2,000 completed episodes, rounded to a fitted cohort boundary, a full cohort
 must exceed 90% success to launch validation (normally 116/128). Collection may be
 search-assisted; mastery still requires 100/100 greedy network validation.
-Pre requires both skills to pass together and revisits a failing skill.
+Each tile stage requires 100/100 on that skill alone, then completes or advances;
+there is no joint probe or skill revisit in fresh runs. The combined `--stage pre`
+is retired; old checkpoints retain their saved combined-stage workflow on resume.
 
 Resume saved weights, optimizer, pending search, simulator and fitting progress:
 
@@ -105,7 +113,7 @@ two one-second CUDA games, one fitting pass and checkpoint reload, with search a
 prerequisites disabled. These establish availability, not mastery. Bounded
 diagnostic commands disable search; manual evaluation never uses it.
 
-Reports separate real pre/normal progress from oracle work, teacher losses and
+Reports separate Cherry Bomb, Peashooter and normal progress from oracle work, teacher losses and
 greedy validation. `--report-only` loads no policy and starts no training. Reward
 reports accept the one-based cohort number shown in logs.
 

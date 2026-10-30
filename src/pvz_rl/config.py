@@ -527,8 +527,10 @@ def validate_config(cfg: dict) -> None:
             cfg["environment"]["cutoff_seconds"] * rules.game["tick_rate"]
             + cfg["environment"]["decision_ticks"],
         )
-    if c.get("run_stage") == "pre" and not (tile and tile["enabled"]):
-        raise ValueError("--stage pre requires training.tile_scenarios.enabled")
+    from pvz_rl.learning.curriculum import TILE_STAGES
+
+    if c.get("run_stage") in ("pre", *TILE_STAGES) and not (tile and tile["enabled"]):
+        raise ValueError("Tile stages require training.tile_scenarios.enabled")
     if c.get("lessons") or set(c.get("stages", {})) - {"easy", "standard", "shared"}:
         raise ValueError("Retired curriculum lesson; use easy, standard and shared stages")
     unlimited = cfg["training"].get("until_stage_complete", False)
@@ -540,7 +542,7 @@ def validate_config(cfg: dict) -> None:
         )
     if (
         unlimited
-        and c.get("run_stage") != "pre"
+        and c.get("run_stage") not in ("pre", *TILE_STAGES)
         and not c.get("stages", {}).get(c.get("run_stage"), {}).get("requirements")
     ):
         raise ValueError("until_stage_complete requires a stage with mastery requirements")
@@ -549,7 +551,7 @@ def validate_config(cfg: dict) -> None:
     if c.get("run_stage") is not None:
         from pvz_rl.learning.curriculum import SELECTABLE_STAGES
 
-        if c.get("mode") != "teaching" or c["run_stage"] not in SELECTABLE_STAGES:
+        if c.get("mode") != "teaching" or c["run_stage"] not in (*SELECTABLE_STAGES, "pre"):
             raise ValueError("curriculum.run_stage requires a teaching recipe and a valid stage")
     if c.get("mode") == "teaching":
         from pvz_rl.learning.curriculum import STAGES

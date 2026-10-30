@@ -57,7 +57,7 @@ def training_options(parser):
     parser.add_argument(
         "--games",
         type=int,
-        help="total completed games across all workers; scenario episodes for --stage pre",
+        help="total completed games across all workers; scenario episodes for cherry_bomb or peashooter",
     )
     parser.add_argument("--n-envs", type=int)
     parser.add_argument("--device", choices=("cuda",))
@@ -234,7 +234,7 @@ def main(argv=None):
     training.add_argument(
         "--stage",
         choices=SELECTABLE_STAGES,
-        help="train only pre (both tile skills), easy, standard or shared; stop at mastery or budget",
+        help="train only cherry_bomb, peashooter, easy, standard or shared; stop at mastery or budget",
     )
     training.add_argument(
         "--until-stage-complete",

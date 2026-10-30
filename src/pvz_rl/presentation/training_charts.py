@@ -4,9 +4,16 @@ from math import isfinite
 
 import matplotlib.pyplot as plt
 
+from pvz_rl.learning.curriculum import TILE_STAGES
+
 
 def domain(row):
     skills = row.get("tile_scenarios") or {}
+    stage = row.get("curriculum_stage")
+    if stage in TILE_STAGES:
+        return stage
+    if skills.get("stage_order") is not None and skills.get("phase") in TILE_STAGES:
+        return skills["phase"]
     return (
         "pre"
         if (
@@ -19,13 +26,17 @@ def domain(row):
 
 
 def episodes(row):
-    return sum((row.get("tile_scenarios") or {}).get("episodes", {}).values())
+    counts = (row.get("tile_scenarios") or {}).get("episodes", {})
+    scope = domain(row)
+    return counts.get(scope, 0) if scope in TILE_STAGES else sum(counts.values())
 
 
 def phase(row):
+    if domain(row) in TILE_STAGES:
+        return domain(row)
     return (
         row.get("active_skill") or (row.get("tile_scenarios") or {}).get("phase")
-        if domain(row) == "pre"
+        if domain(row) != "normal"
         else row.get("curriculum_stage", "normal")
     )
 
@@ -110,15 +121,18 @@ def plot_panels(
 
 def report_charts(segments, cfg, output, save):
     images = []
-    for scope in ("pre", "normal"):
+    for scope in (*TILE_STAGES, "pre", "normal"):
         records = [
             (label, [r for r in series["training-metrics"] if domain(r) == scope])
             for label, series in segments
         ]
         if not any(rows for _, rows in records):
             continue
-        pre = scope == "pre"
-        title = "Pre stage" if pre else "Normal training"
+        pre = scope != "normal"
+        title = (
+            scope.replace("_", " ").title() + " stage" if scope in TILE_STAGES
+            else "Legacy pre stage" if pre else "Normal training"
+        )
         xvalue = (
             episodes
             if pre
@@ -330,7 +344,7 @@ def report_charts(segments, cfg, output, save):
         add(
             "exploration",
             "exploration",
-            fields(
+            [] if scope == "cherry_bomb" else fields(
                 [
                     ("tile_exploration_epsilon", "Tile exploration probability"),
                     ("optimization.tile_exploration_coins", "Tile exploration draws / cohort"),
@@ -425,10 +439,13 @@ def report_charts(segments, cfg, output, save):
             for label, series in segments:
                 rows = []
                 for probe in series.get("tile-skill-probes", []):
+                    stage = probe.get("stage", "pre")
+                    if stage != scope:
+                        continue
                     row = dict(
                         probe,
                         active_skill=probe.get("previous", "peashooter"),
-                        curriculum_stage="pre",
+                        curriculum_stage=stage,
                     )
                     for skill, wins in probe["scores"].items():
                         count = (
@@ -440,13 +457,13 @@ def report_charts(segments, cfg, output, save):
                 validation.append((label, rows))
             spec = fields(
                 [
-                    ("peashooter", "Peashooter validation success"),
-                    ("cherry_bomb", "Cherry Bomb validation success"),
+                    (skill, skill.replace("_", " ").title() + " validation success")
+                    for skill in (TILE_STAGES if scope == "pre" else (scope,))
                 ]
             )
 
             def vx(row):
-                return row["episodes"]
+                return row.get("stage_episodes", row["episodes"])
         else:
             for label, series in segments:
                 rows = []

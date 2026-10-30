@@ -5,11 +5,13 @@ from dataclasses import asdict, dataclass
 from pvz_rl.learning.budget import uses_games
 
 STAGES = ("easy", "standard", "shared")
-SELECTABLE_STAGES = ("pre", *STAGES)
+TILE_STAGES = ("cherry_bomb", "peashooter")
+SELECTABLE_STAGES = (*TILE_STAGES, *STAGES)
 
 
 def pre_stage(cfg):
-    return cfg["curriculum"].get("run_stage") == "pre"
+    """Selected tile stage; ``pre`` is accepted only for saved legacy workflows."""
+    return cfg["curriculum"].get("run_stage") in ("pre", *TILE_STAGES)
 
 
 def teaching_enabled(cfg):

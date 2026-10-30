@@ -283,7 +283,7 @@ class CudaCohortLifecycle(BaseAlgorithm):
             **self._stats,
             "validation_cohort": dict(
                 cohort=self.cohort_number,
-                domain="pre" if self.tile_skills.active else "normal",
+                domain=self.tile_skills.validation_domain if self.tile_skills.active else "normal",
                 skill=self.tile_skills.phase if self.tile_skills.active else None,
                 stage=getattr(self, "curriculum_state", {}).get("stage"),
                 games=len(self._pending_episodes),

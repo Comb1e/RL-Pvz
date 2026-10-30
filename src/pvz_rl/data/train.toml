@@ -109,7 +109,7 @@ enabled = true # Missing in older checkpoints: retain their original validation 
 cohort_success_threshold = 0.9 # Strictly above; full configured cohorts only (normally 116/128).
 
 [training.tile_scenarios]
-enabled = true # Automatic pre stage, or explicit --stage pre; selected normal stages skip it.
+enabled = true # Automatic cherry_bomb then peashooter stages; selected normal stages skip them.
 peashooter_sky_sun_rate = 1.5 # Divide sky-drop delays by this rate; keep each drop at 25 sun.
 bomb_initial_sun = 150
 bomb_plants = [1, 8]

@@ -14,6 +14,7 @@ import matplotlib.pyplot as plt
 
 from pvz_rl.config import output_settings
 from pvz_rl.evaluation.runner import evaluate
+from pvz_rl.learning.curriculum import TILE_STAGES, pre_stage
 from pvz_rl.learning.deadline import BudgetExpired, check_deadline
 from pvz_rl.monitoring.progress import Phase, ProgressReporter
 from pvz_rl.presentation.training_charts import domain, episodes, report_charts
@@ -316,9 +317,9 @@ def build_run_report(run, cfg=None):
     policy_description = (
         "Restricted diagnostic policy; this run does not evaluate the full game"
         if meta.get("family") in ("diagnostic",)
-        else "Tile-skill prerequisites"
-        if cfg["curriculum"].get("run_stage") == "pre"
-        else "One shared policy for pre, easy, standard, and shared stages"
+        else "Tile-skill training stage"
+        if pre_stage(cfg)
+        else "One shared policy for Cherry Bomb, Peashooter, easy, standard, and shared stages"
     )
     completion = (
         "Curriculum incomplete" if status.get("curriculum_incomplete") else "Curriculum status"
@@ -335,17 +336,26 @@ def build_run_report(run, cfg=None):
     )
     skills = status.get("tile_scenarios") or {}
     has_pre = (
-        any(domain(row) == "pre" for row in metrics) or cfg["curriculum"].get("run_stage") == "pre"
+        any(domain(row) != "normal" for row in metrics) or pre_stage(cfg)
+        or skills.get("phase") in TILE_STAGES
+    )
+    mastered = ", ".join(
+        skill for skill in skills.get("stage_order") or []
+        if skills.get("scores", {}).get(skill) == cfg["curriculum"]["probe_cases"]
+    )
+    mastery = (
+        f"Joint mastery: {escape(skills.get('phase') == 'complete')}. "
+        if skills.get("stage_order") is None else f"Completed stages: {escape(mastered or 'none')}. "
     )
     pre_progress = (
         (
-            f"<p>Pre stage: <b>{escape(skills.get('phase', 'not recorded'))}</b>. "
+            f"<p>Tile stage: <b>{escape(status.get('curriculum_stage', skills.get('phase', 'not recorded')))}</b>. "
             f"Completed scenario episodes: {escape(sum(skills.get('episodes', {}).values()))}. "
             f"Peashooter: {escape(skills.get('episodes', {}).get('peashooter', 0))}; "
             f"Cherry Bomb: {escape(skills.get('episodes', {}).get('cherry_bomb', 0))}. "
             f"Generation failures: {escape(skills.get('generation_failures', 0))}. "
-            f"Joint mastery: {escape(skills.get('phase') == 'complete')}. "
-            f"Latest validation successes: {escape(skills.get('scores') or 'not recorded')}. "
+            + mastery
+            + f"Latest validation successes: {escape(skills.get('scores') or 'not recorded')}. "
             f"Stop reason: {escape(status.get('stop_reason') or status.get('state', 'in progress'))}.</p>"
         )
         if has_pre
@@ -374,14 +384,16 @@ def build_run_report(run, cfg=None):
         run_progress += "</table></details>"
     probes = [row for _, series in segments for row in series.get("tile-skill-probes", [])]
     if probes:
-        run_progress += "<details><summary>Tile-skill validation and transitions</summary><table><tr><th>Scenario episodes</th><th>Peashooter</th><th>Cherry Bomb</th><th>Training skill</th></tr>"
+        run_progress += "<details><summary>Tile-stage validation and transitions</summary><table><tr><th>Stage</th><th>Completed episodes</th><th>Cherry Bomb</th><th>Peashooter</th><th>Training stage</th></tr>"
         for probe in probes:
             counts = {skill: len(rows) for skill, rows in probe.get("cases", {}).items()}
             run_progress += (
-                f"<tr><td>{probe['episodes']}</td>"
+                f"<tr><td>{escape(probe.get('stage', 'pre'))}</td>"
+                f"<td>{probe.get('stage_episodes', probe['episodes'])}</td>"
                 + "".join(
                     f"<td>{probe['scores'][skill]}/{counts.get(skill, cfg['curriculum']['probe_cases'])}</td>"
-                    for skill in ("peashooter", "cherry_bomb")
+                    if skill in probe["scores"] else "<td>—</td>"
+                    for skill in TILE_STAGES
                 )
                 + f"<td>{escape(probe.get('previous'))} → {escape(probe.get('next'))}</td></tr>"
             )
