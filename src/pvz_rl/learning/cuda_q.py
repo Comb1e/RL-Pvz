@@ -206,7 +206,8 @@ class CudaCohortLifecycle(BaseAlgorithm):
 
     def _begin(self, callback):
         callback.on_rollout_start()
-        from pvz_rl.learning.budget import budget_target, uses_games
+        from pvz_rl.learning.budget import budget_target, progress_value, uses_games
+        from pvz_rl.learning.curriculum import pre_stage
 
         count = self.n_envs
         target = budget_target(self.env.cfg)
@@ -214,8 +215,12 @@ class CudaCohortLifecycle(BaseAlgorithm):
         self.env.tile_scenario = self.env.queue.tile_scenario = skills.phase
         self.env.queue.tile_boards = {}
         self.env.tile_boards = {}
-        if not skills.active and uses_games(self.env.cfg) and target is not None:
-            count = min(count, max(0, target - self.training_games))
+        if (
+            (pre_stage(self.env.cfg) or not skills.active)
+            and uses_games(self.env.cfg)
+            and target is not None
+        ):
+            count = min(count, max(0, target - progress_value(self.env.cfg, self)))
         if count < 1:
             from pvz_rl.learning.training import TrainingGamesComplete
 
@@ -341,14 +346,17 @@ class CudaCohortLifecycle(BaseAlgorithm):
             self.tile_skills.active or self.num_timesteps < total or self.phase != CohortPhase.IDLE
         ):
             if self.phase == CohortPhase.IDLE:
-                from pvz_rl.learning.budget import budget_target, uses_games
+                from pvz_rl.learning.budget import budget_target, progress_value, uses_games
+                from pvz_rl.learning.curriculum import pre_stage
 
                 target = budget_target(self.env.cfg)
+                if pre_stage(self.env.cfg) and not self.tile_skills.active:
+                    break
                 if (
                     uses_games(self.env.cfg)
-                    and not self.tile_skills.active
+                    and (pre_stage(self.env.cfg) or not self.tile_skills.active)
                     and target is not None
-                    and self.training_games >= target
+                    and progress_value(self.env.cfg, self) >= target
                 ):
                     break
                 with atomic_transition():

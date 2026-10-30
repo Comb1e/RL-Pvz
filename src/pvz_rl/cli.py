@@ -55,7 +55,9 @@ def training_options(parser):
     common(parser)
     parser.add_argument("--hardware", type=Path, help="benchmark recommendation.json")
     parser.add_argument(
-        "--games", type=int, help="total completed training games across all workers"
+        "--games",
+        type=int,
+        help="total completed games across all workers; scenario episodes for --stage pre",
     )
     parser.add_argument("--n-envs", type=int)
     parser.add_argument("--device", choices=("cuda",))
@@ -227,10 +229,12 @@ def main(argv=None):
     training.add_argument("--output", required=True, type=Path)
     training.add_argument("--validation-count", type=int, help="reduced validation set for checks")
     training.add_argument("--family", choices=("preset", "diagnostic"), default="preset")
-    from pvz_rl.learning.curriculum import STAGES
+    from pvz_rl.learning.curriculum import SELECTABLE_STAGES
 
     training.add_argument(
-        "--stage", choices=STAGES, help="train only this teaching stage; stop at mastery or budget"
+        "--stage",
+        choices=SELECTABLE_STAGES,
+        help="train only pre (both tile skills), easy, standard or shared; stop at mastery or budget",
     )
     training.add_argument(
         "--until-stage-complete",

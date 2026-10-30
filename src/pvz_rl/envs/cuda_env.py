@@ -20,6 +20,7 @@ from pvz_rl.envs.cuda_accounting import AccountingCudaBatch
 from pvz_rl.envs.cuda_features import LEDGER_INDICES, METRIC_INDICES, CudaFeatures
 from pvz_rl.envs.rewards import REWARD_METRICS
 from pvz_rl.envs.scenarios import difficulty_weights, scenario
+from pvz_rl.envs.sky_sun import peashooter_sky_sun_rate
 from pvz_rl.envs.step_result import PackedStepResult
 from pvz_rl.envs.tile_scenarios import peashooter_level, sample_bomb
 from pvz_rl.learning.budget import budget_target
@@ -85,7 +86,9 @@ class ScenarioQueue:
                 try:
                     board = sample_bomb(cfg, seed, rules=self.rules, deadline=self.deadline)
                 except RuntimeError:
-                    self.generation_failures += cfg["training"]["annotation"]["sampling_max_attempts"]
+                    self.generation_failures += cfg["training"]["annotation"][
+                        "sampling_max_attempts"
+                    ]
                     raise
                 self.generation_failures += board["generation_failures"]
                 self.tile_boards[index] = board
@@ -236,6 +239,9 @@ class CudaVecEnv(VecEnv):
             self._episode_stages[index] = self.queue.stage
         if self.live_view is not None:
             self.live_view.reset_episodes(indices)
+        self.batch.set_sky_sun_rate(
+            peashooter_sky_sun_rate(self.cfg) if self.tile_scenario == "peashooter" else 1.0
+        )
         self.batch.reset(
             [s[4] for s in staged],
             [s[3] for s in staged],
@@ -244,7 +250,8 @@ class CudaVecEnv(VecEnv):
         if self.tile_scenario == "cherry_bomb":
             self.tile_boards = deepcopy(self.queue.tile_boards)
             self.batch.restore(
-                [self.tile_boards[i]["snapshot"] for i in indices], indices=indices,
+                [self.tile_boards[i]["snapshot"] for i in indices],
+                indices=indices,
             )
         self._refresh_growth_bounds(indices)
         self.features.initialize_home(indices)
@@ -467,13 +474,16 @@ class CudaVecEnv(VecEnv):
                     branch = 1 + (action - 1) // 45 if action else 0
                     expected = self.cfg["environment"]["plants"].index("cherry_bomb") + 1
                     success = bool(
-                        self.last_action_result_host[index, 0] and branch == expected
+                        self.last_action_result_host[index, 0]
+                        and branch == expected
                         and (action - 1) % 45 in self.tile_boards[index]["feasible_tiles"]
                     )
                     metrics = completed[index]["episode_metrics"]
                     metrics.update(
-                        engine_status=metrics["status"], status="won" if success else "lost",
-                        win=int(success), tile_scenario="cherry_bomb",
+                        engine_status=metrics["status"],
+                        status="won" if success else "lost",
+                        win=int(success),
+                        tile_scenario="cherry_bomb",
                     )
                 self.finished_outcomes[index] = completed[index]["episode_metrics"]["status"]
             if autoreset:
@@ -511,6 +521,7 @@ class CudaVecEnv(VecEnv):
             "queue_progress": self.queue.progress,
             "queue_stage": self.queue.stage,
             "tile_scenario": self.tile_scenario,
+            "sky_sun_rate": self.batch.sky_sun_rate,
             "tile_boards": deepcopy(self.tile_boards),
             "tile_generation_failures": self.queue.generation_failures,
             "attributes": {
@@ -548,6 +559,12 @@ class CudaVecEnv(VecEnv):
                 if len(np.unique(occupied)) != len(occupied) or np.any(row[: len(occupied)] == 0):
                     raise ValueError("Invalid proximity ledger duplicate ID or gap")
         with self.device_context():
+            skill = state.get("tile_scenario", "complete")
+            rate = state.get("sky_sun_rate", 1.0)
+            expected = peashooter_sky_sun_rate(self.cfg) if skill == "peashooter" else 1.0
+            if rate != expected:
+                raise ValueError("Saved sky-sun rate differs from scenario configuration")
+            self.batch.set_sky_sun_rate(rate)
             self.batch.restore(state["games"], allowed=state["allowed"], digging=state["digging"])
             self._refresh_growth_bounds(range(self.num_envs))
             self.batch.header[:, 17] = self.cp.asarray(state["enabled"])

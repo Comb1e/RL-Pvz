@@ -156,25 +156,45 @@ check. Rejected actions break the streak, and commitment waits do not count.
 See [exploration and recovery](docs/math/sequential-training.md#plant-exploration)
 for species selection and cohort-boundary behavior.
 
-Fresh preset teaching runs first train two tile-placement prerequisites, including
-runs using `--init-from` or `--stage easy`. Peashooter uses easy waves, 50 starting
-sun and sky income, with mowers disabled. Cherry Bomb uses generated, solvable
-boards and engine-verified placement labels. Both freeze the species network.
+Fresh preset teaching runs without `--stage` follow `pre → easy → standard → shared`.
+The `pre` stage trains both tile-placement skills; explicit `--stage easy`,
+`standard`, or `shared` starts directly at that normal stage. Peashooter uses easy
+waves, 50 starting sun and 1.5× sky-sun frequency, with mowers disabled. Configure
+`training.tile_scenarios.peashooter_sky_sun_rate` in `train.toml` to change this rate:
+first-drop and later delays are divided by it, while each drop remains 25 sun.
+Normal games and Cherry Bomb retain ordinary sky timing. Cherry Bomb uses
+generated, solvable boards and engine-verified placement labels. Both freeze the
+species network.
 Every 2,000 scenario episodes, rounded up to a fitted cohort boundary (normally
 2,048), a frozen policy validates 100 cases of each skill without exploration.
 Both must score 100/100 together; otherwise training revisits the failing skill.
-Scenario episodes have separate counters and do not consume `--games` or the
-normal exploration schedule. The same optimizer and weights continue afterward.
+Scenario episodes have separate counters and do not consume the normal game budget
+or exploration schedule. Automatic progression preserves the optimizer and weights.
+For standalone `--stage pre`, `--games` instead limits total scenario episodes;
+the last cohort is capped and fitted before stopping. `--until-stage-complete`
+removes time/game ceilings. Validation and label generation consume no game budget.
+
+```powershell
+.\.venv\Scripts\python.exe -m pvz_rl train `
+  --stage pre --until-stage-complete --seed 101 `
+  --output runs\my-run\pre --gpu 0 --gpu-profile rtx4070-laptop
+```
+
+Standalone `pre` stops at joint mastery or budget. Start a separate easy run with
+`--stage easy --init-from runs\my-run\pre\final.zip`; this transfers weights into
+a fresh optimizer.
 `status.json` reports `tile_scenarios`; `tile-skill-probes.jsonl` records both scores.
 Recovery retains the active exercise, labels, counters and committed passes.
-Older checkpoints without prerequisite state continue normal training.
+Older checkpoints retain their saved workflow; missing sky-rate settings mean 1.0×.
+Resume keeps the saved rate and pending countdowns. Use fresh `--init-from` training
+to apply a changed rate.
 Configure `[training.tile_scenarios]` in `train.toml`; set `enabled = false` for
 bounded diagnostic runs. The bomb exercise needs a cutoff longer than its initial
 35-second card cooldown.
 
-After both prerequisites pass, fitting repeats a six-cohort cycle: cohorts 1–5 each run four tile-only passes,
-cohort 6 runs four joint action/tile passes, then cohorts 7–11 are tile-only and
-cohort 12 is joint. Configure `training.tile_only_cohorts = 5` and
+Normal fitting repeats a four-cohort cycle: cohorts 1–3 each run four tile-only passes,
+cohort 4 runs four joint action/tile passes, then the cycle repeats.
+Configure `training.tile_only_cohorts = 3` and
 `training.n_epochs = 4` in `train.toml`. Every pass uses that cohort's collected
 games; there are four optimizer commits per cohort. Tile-only fitting learns
 from accepted plant/dig rows and tile-invalid proposals, leaving action weights

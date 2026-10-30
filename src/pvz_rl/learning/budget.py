@@ -29,6 +29,8 @@ def evaluation_interval(cfg):
 
 
 def progress_value(cfg, model):
+    if cfg["curriculum"].get("run_stage") == "pre":
+        return model.tile_skills.total
     return getattr(model, "training_games", 0) if uses_games(cfg) else model.num_timesteps
 
 

@@ -498,6 +498,19 @@ def validate_config(cfg: dict) -> None:
             raise ValueError("tile scenario ranking_margin must be finite and positive")
         if tile["enabled"] and not uses_games(cfg):
             raise ValueError("Tile prerequisites require game-based training")
+        from pvz_game import Rules
+
+        from pvz_rl.envs.sky_sun import validate_sky_sun_rate
+
+        rules = Rules()
+        validate_sky_sun_rate(
+            tile.get("peashooter_sky_sun_rate", 1.0),
+            rules,
+            cfg["environment"]["cutoff_seconds"] * rules.game["tick_rate"]
+            + cfg["environment"]["decision_ticks"],
+        )
+    if c.get("run_stage") == "pre" and not (tile and tile["enabled"]):
+        raise ValueError("--stage pre requires training.tile_scenarios.enabled")
     if c.get("lessons") or set(c.get("stages", {})) - {"easy", "standard", "shared"}:
         raise ValueError("Retired curriculum lesson; use easy, standard and shared stages")
     unlimited = cfg["training"].get("until_stage_complete", False)
@@ -507,14 +520,18 @@ def validate_config(cfg: dict) -> None:
         raise ValueError(
             "until_stage_complete requires a selected teaching stage and game-based scheduling"
         )
-    if unlimited and not c.get("stages", {}).get(c.get("run_stage"), {}).get("requirements"):
+    if (
+        unlimited
+        and c.get("run_stage") != "pre"
+        and not c.get("stages", {}).get(c.get("run_stage"), {}).get("requirements")
+    ):
         raise ValueError("until_stage_complete requires a stage with mastery requirements")
     if c.get("mode", "fixed") not in ("fixed", "teaching"):
         raise ValueError("Unsupported curriculum mode")
     if c.get("run_stage") is not None:
-        from pvz_rl.learning.curriculum import STAGES
+        from pvz_rl.learning.curriculum import SELECTABLE_STAGES
 
-        if c.get("mode") != "teaching" or c["run_stage"] not in STAGES:
+        if c.get("mode") != "teaching" or c["run_stage"] not in SELECTABLE_STAGES:
             raise ValueError("curriculum.run_stage requires a teaching recipe and a valid stage")
     if c.get("mode") == "teaching":
         from pvz_rl.learning.curriculum import STAGES

@@ -29,8 +29,15 @@
   require 100/100 together; training revisits the failing skill. Scenario counters
   and the normal game budget/cohort cycle remain separate. Autonomous recovery
   persists phase, labels and commits; older runs continue their saved normal path.
-  `training.tile_scenarios.enabled` controls fresh preset teaching runs, including
-  `--init-from` and selected normal stages. The learning smoke disables it.
+  `--stage pre` runs both skills and stops at joint mastery or its scenario-episode
+  budget; `--until-stage-complete` removes time/game ceilings. Fresh selected normal
+  stages skip pre; unselected preset runs enter it when
+  `training.tile_scenarios.enabled` is true. Normal stage indices stay unchanged.
+  `envs/sky_sun.py` shares Peashooter's configurable sky-delay scaling between the
+  CPU adapter and guarded CUDA accounting hooks. The default
+  `training.tile_scenarios.peashooter_sky_sun_rate=1.5` affects only Peashooter;
+  recovery preserves saved countdowns/rates, with 1.0 for older configurations.
+  The learning smoke disables prerequisites.
 
 - `tools/bootstrap.ps1` and `tools/bootstrap.sh` install the CUDA environment from
   an existing game checkout. Both reuse `tools/stage_game.py` for verified,

@@ -76,5 +76,6 @@ def initial_tile_state(cfg, family="preset"):
         cfg["training"].get("tile_scenarios", {}).get("enabled", False)
         and family == "preset"
         and cfg["curriculum"].get("mode") == "teaching"
+        and cfg["curriculum"].get("run_stage") in (None, "pre")
     )
     return TileSkillState(phase="peashooter" if enabled else "complete").to_dict()

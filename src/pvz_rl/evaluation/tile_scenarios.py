@@ -9,6 +9,7 @@ import torch
 from pvz_rl.envs.cuda_env import CudaVecEnv
 from pvz_rl.envs.env import PvZEnv
 from pvz_rl.envs.scenarios import namespace_seed
+from pvz_rl.envs.sky_sun import peashooter_sky_sun_rate
 from pvz_rl.envs.tile_scenarios import SKILLS, bomb_hit, peashooter_level
 from pvz_rl.evaluation.cuda_evaluation import deterministic_validation
 from pvz_rl.learning.deadline import check_deadline
@@ -68,7 +69,13 @@ def validate_tile_skills(cfg, model, seeds, *, deadline=None, progress=None):
                                         rules=env.queue.rules,
                                     )
                                 else:
-                                    with closing(PvZEnv(local, training=False)) as cpu:
+                                    with closing(
+                                        PvZEnv(
+                                            local,
+                                            training=False,
+                                            sky_sun_rate=peashooter_sky_sun_rate(local),
+                                        )
+                                    ) as cpu:
                                         cpu.reset(
                                             seed=chunk[index],
                                             options={

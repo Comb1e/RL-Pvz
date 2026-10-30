@@ -97,7 +97,7 @@ finalization_minutes = 15
 # Ordinary waits trigger the same plant probability check once per interval.
 exploration = {objective = "committed_plant_tile_epsilon_v1", epsilon_start = 0.5, epsilon_floor = 0.03, decay_games = 10000, plant_epsilon_start = 0.1, plant_epsilon_floor = 0.03, plant_decay_games = 10000, plant_wait_check_seconds = 15.0}
 batch_size = 1024
-tile_only_cohorts = 5 # Repeat five tile-only cohorts, then one joint cohort.
+tile_only_cohorts = 3 # Repeat three tile-only cohorts, then one joint cohort.
 n_epochs = 4 # Complete fitting passes per cohort, all using that cohort's stage.
 learning_rate = 0.0003
 max_grad_norm = 5 # Shared by autonomous training and demonstration initialization.
@@ -105,7 +105,8 @@ eval_interval = 250000 # Used only by bounded decision-window diagnostics.
 torch_threads = 1
 
 [training.tile_scenarios]
-enabled = true # Tile prerequisites precede fresh preset teaching runs.
+enabled = true # Automatic pre stage, or explicit --stage pre; selected normal stages skip it.
+peashooter_sky_sun_rate = 1.5 # Divide sky-drop delays by this rate; keep each drop at 25 sun.
 bomb_initial_sun = 150
 bomb_plants = [1, 8]
 ranking_margin = 1.0

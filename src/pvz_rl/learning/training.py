@@ -23,6 +23,7 @@ from pvz_rl.config import (
 )
 from pvz_rl.envs.rewards import LEDGER_METRICS, REWARD_METRICS
 from pvz_rl.envs.scenarios import difficulty_weights
+from pvz_rl.envs.sky_sun import peashooter_sky_sun_rate
 from pvz_rl.evaluation.runner import evaluate, summarize
 from pvz_rl.learning.budget import (
     budget_target,
@@ -36,6 +37,7 @@ from pvz_rl.learning.cohort import atomic_transition
 from pvz_rl.learning.curriculum import (
     CurriculumState,
     initial_state,
+    pre_stage,
     selected_stage,
     stage_distribution,
     teaching_enabled,
@@ -157,6 +159,7 @@ class ResearchCallback(BaseCallback):
         self.started = perf_counter()
         self.initial_steps = 0
         self.initial_games = 0
+        self.initial_budget_progress = 0
         self.eval_seconds = 0.0
         self.stream = None
         self.settings = output_settings(cfg)
@@ -218,7 +221,7 @@ class ResearchCallback(BaseCallback):
         if self.hardware:
             cohort = getattr(self.model, "cohort_metrics", {})
             self.hardware.update(
-                stage=self.curriculum.name if self.curriculum else self.family,
+                stage=self.active_stage,
                 phase=getattr(self.model, "phase", "starting"),
                 activity=self.hardware_activity,
                 training_steps=self.model.num_timesteps,
@@ -278,7 +281,7 @@ class ResearchCallback(BaseCallback):
         games = getattr(self.model, "training_games", 0)
         game_rate = (games - self.initial_games) / active
         progress = progress_value(self.cfg, self.model)
-        budget_rate = game_rate if uses_games(self.cfg) else rate
+        budget_rate = (progress - self.initial_budget_progress) / active
         rows = list(self.recent)
         decisions = sum(r["decisions"] for r in rows)
         purchases = sum(sum(r.get("plant_usage", {}).values()) for r in rows)
@@ -319,6 +322,8 @@ class ResearchCallback(BaseCallback):
             "training_steps": self.model.num_timesteps,
             "training_games": games,
             "tile_scenarios": self.model.tile_skills.to_dict(),
+            "peashooter_sky_sun_rate": peashooter_sky_sun_rate(self.cfg),
+            "active_skill": self.model.tile_skills.phase if self.model.tile_skills.active else None,
             "tile_validation_pending": self.model.tile_skills.due(self.cfg),
             "normal_cohorts": self.model.normal_updates,
             "budget_unit": "games" if uses_games(self.cfg) else "decisions",
@@ -341,9 +346,11 @@ class ResearchCallback(BaseCallback):
                 else None
             ),
             "until_stage_complete": until_stage_complete(self.cfg),
-            "next_episode_difficulty_weights": None if self.curriculum else weights,
+            "next_episode_difficulty_weights": None
+            if self.curriculum or self.model.tile_skills.active or pre_stage(self.cfg)
+            else weights,
             "curriculum": self.curriculum.to_dict() if self.curriculum else None,
-            "curriculum_stage": self.curriculum.name if self.curriculum else "fixed",
+            "curriculum_stage": self.active_stage,
             "training_phase": str(getattr(self.model, "phase", "starting")),
             "q_prefit": getattr(self.model, "prefit_errors", {}),
             "exploration_rate": getattr(self.model, "exploration_rate", 0.0),
@@ -371,13 +378,13 @@ class ResearchCallback(BaseCallback):
                 else None
             ),
             "selected_stage": selected_stage(self.cfg),
-            "stage_mastered": bool(self.curriculum and self.curriculum.mastered),
+            "stage_mastered": self.stage_mastered,
             "curriculum_incomplete": bool(
                 self.curriculum and not self.curriculum.complete(self.cfg)
             ),
-            "next_episode_tasks": stage_distribution(self.cfg, self.curriculum.stage)
-            if self.curriculum
-            else None,
+            "next_episode_tasks": ([self.model.tile_skills.phase], [1.0])
+            if self.model.tile_skills.active
+            else (stage_distribution(self.cfg, self.curriculum.stage) if self.curriculum else None),
             "rolling_episodes": len(rows),
             "rolling_pending_rewards": sum(bool(r.get("time_reward_pending")) for r in rows),
             "rolling_truncations": sum(r.get("status") == "truncated" for r in rows),
@@ -513,7 +520,11 @@ class ResearchCallback(BaseCallback):
                 marker = f"{stage} pass {model._fit_epoch + 1}/{model.total_fit_passes}"
         else:
             marker = phase
-        games = f"games total {row['training_games']:,}"
+        games = (
+            f"scenario episodes {row['budget_progress']:,}"
+            if pre_stage(self.cfg)
+            else f"normal games total {row['training_games']:,}"
+        )
         if row["target_games"] is not None:
             games += f"/{row['target_games']:,}"
         step = optimizer_step(model)
@@ -521,6 +532,8 @@ class ResearchCallback(BaseCallback):
             f"tile prerequisite {self.model.tile_skills.phase} "
             f"({self.model.tile_skills.total:,} episodes)"
             if self.model.tile_skills.active
+            else "pre stage complete"
+            if pre_stage(self.cfg)
             else "normal training",
             f"cohort {cohort} {self.cohort_text()}",
             CollectionProgress.text(row["collection_progress"], getattr(model, "cohort_games", 0)),
@@ -659,12 +672,13 @@ class ResearchCallback(BaseCallback):
         self.initial_steps = self.model.num_timesteps
         self.initial_games = getattr(self.model, "training_games", 0)
         progress = progress_value(self.cfg, self.model)
+        self.initial_budget_progress = progress
         self.restore_schedule()
         self.training_env.env_method("set_progress", progress)
         self.stream = (self.output / "training-episodes.jsonl").open("a", encoding="utf-8")
         self.metrics_stream = (self.output / "training-metrics.jsonl").open("a", encoding="utf-8")
         self.last_updates = self.model._n_updates
-        if teaching_enabled(self.cfg) and self.family == "preset":
+        if teaching_enabled(self.cfg) and self.family == "preset" and not pre_stage(self.cfg):
             self.curriculum = CurriculumState(
                 **getattr(self.model, "curriculum_state", initial_state(self.cfg).to_dict())
             )
@@ -769,6 +783,10 @@ class ResearchCallback(BaseCallback):
             self.probe_tile_skills()
             self.check_deadline()
         self.model.env.queue.deadline = self.operation_deadline()
+        if pre_stage(self.cfg):
+            self.check_stage_complete()
+            if self.target is not None and progress_value(self.cfg, self.model) >= self.target:
+                raise TrainingGamesComplete()
         if self.model.tile_skills.active:
             skills = self.model.tile_skills
             state = exploration_state(self.cfg, skills.episodes[skills.phase])
@@ -807,6 +825,18 @@ class ResearchCallback(BaseCallback):
         self.progress.phase(Phase.COLLECTING)
 
     @property
+    def active_stage(self):
+        if pre_stage(self.cfg) or self.model.tile_skills.active:
+            return "pre"
+        return self.curriculum.name if self.curriculum else "fixed"
+
+    @property
+    def stage_mastered(self):
+        if pre_stage(self.cfg):
+            return not self.model.tile_skills.active
+        return bool(self.curriculum and self.curriculum.mastered)
+
+    @property
     def stage_validation(self):
         return validation_after_stage(self.cfg, self.family)
 
@@ -828,7 +858,7 @@ class ResearchCallback(BaseCallback):
                 raise TrainingDeadline()
 
     def check_stage_complete(self):
-        if self.curriculum and self.curriculum.mastered:
+        if self.stage_mastered:
             raise TrainingStageComplete()
 
     def check_deadline(self):
@@ -925,6 +955,7 @@ class ResearchCallback(BaseCallback):
     def probe_curriculum(self, *, final=False):
         if (
             self.model.tile_skills.active
+            or pre_stage(self.cfg)
             or not self.curriculum
             or not self.curriculum.due(progress_value(self.cfg, self.model), self.cfg)
         ):
@@ -988,7 +1019,9 @@ class ResearchCallback(BaseCallback):
                 self.recent.clear()
                 self.recent_by_task.clear()
                 self.progress.emit(
-                    "Both tile skills mastered; normal game budget and schedules start at zero",
+                    "Both tile skills mastered; pre stage complete"
+                    if pre_stage(self.cfg)
+                    else "Both tile skills mastered; normal game budget and schedules start at zero",
                     force=True,
                 )
 
@@ -1147,6 +1180,10 @@ class ResearchCallback(BaseCallback):
 
     def _on_training_end(self):
         self.capture_update()
+        if pre_stage(self.cfg):
+            if not self.budget_stopped:
+                self.probe_tile_skills(final=True)
+            return
         if self.model.tile_skills.active:
             if not self.budget_stopped:
                 self.probe_tile_skills(final=True)
@@ -1517,7 +1554,12 @@ def train(
                 f"Tile prerequisites: {model.tile_skills.phase}; validate both skills every "
                 f"{cfg['curriculum']['probe_interval_games']:,} scenario episodes at a fitted "
                 f"cohort boundary; require {cfg['curriculum']['probe_cases']}/"
-                f"{cfg['curriculum']['probe_cases']} each; normal game budget remains separate",
+                f"{cfg['curriculum']['probe_cases']} each; "
+                + (
+                    "scenario episodes count toward the pre stage budget"
+                    if pre_stage(cfg)
+                    else "normal game budget remains separate"
+                ),
                 force=True,
             )
         remaining = (
@@ -1582,10 +1624,13 @@ def train(
             callback.init_callback(model)
             callback.initial_steps = model.num_timesteps
             callback.initial_games = getattr(model, "training_games", 0)
+            callback.initial_budget_progress = progress_value(cfg, model)
             callback.restore_schedule()
-            if teaching_enabled(cfg) and family == "preset":
+            if teaching_enabled(cfg) and family == "preset" and not pre_stage(cfg):
                 callback.curriculum = CurriculumState(**getattr(model, "curriculum_state", {}))
-            if callback.stage_validation:
+            if pre_stage(cfg):
+                callback._on_training_end()
+            elif callback.stage_validation:
                 if callback.pending_stage_validation:
                     callback.validate(final=True)
             else:
@@ -1599,7 +1644,7 @@ def train(
             "wall_seconds": perf_counter() - started,
             "budget_stopped": callback.budget_stopped,
             "stop_reason": "stage_mastered"
-            if selected_stage(cfg) and callback.curriculum and callback.curriculum.mastered
+            if selected_stage(cfg) and callback.stage_mastered
             else "curriculum_mastered"
             if callback.curriculum and callback.curriculum.mastered
             else "time_budget"
