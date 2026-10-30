@@ -25,6 +25,8 @@ def effective_limits(cfg):
 
 
 def evaluation_interval(cfg):
+    if uses_games(cfg) and cfg["training"].get("validation_trigger", {}).get("enabled", False):
+        return cfg["curriculum"]["probe_interval_games"]
     return cfg["training"]["eval_interval_games" if uses_games(cfg) else "eval_interval"]
 
 
@@ -32,11 +34,3 @@ def progress_value(cfg, model):
     if cfg["curriculum"].get("run_stage") == "pre":
         return model.tile_skills.total
     return getattr(model, "training_games", 0) if uses_games(cfg) else model.num_timesteps
-
-
-def curve_axis(cfg):
-    return (
-        ("training_games", "Completed training games")
-        if uses_games(cfg)
-        else ("training_steps", "Training decisions")
-    )

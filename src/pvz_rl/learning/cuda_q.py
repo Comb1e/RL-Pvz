@@ -278,6 +278,17 @@ class CudaCohortLifecycle(BaseAlgorithm):
         transitions = int(self._buffer.group_counts.sum())
         self.cohort_metrics = {
             **self._stats,
+            "validation_cohort": dict(
+                cohort=self.cohort_number,
+                domain="pre" if self.tile_skills.active else "normal",
+                skill=self.tile_skills.phase if self.tile_skills.active else None,
+                stage=getattr(self, "curriculum_state", {}).get("stage"),
+                games=len(self._pending_episodes),
+                configured_games=self.n_envs,
+                wins=sum(bool(item["metrics"]["win"]) for item in self._pending_episodes.values()),
+                training_steps=self.num_timesteps,
+                optimizer_step=self.optimizer_commits,
+            ),
             "prefit_errors": self.prefit_errors,
             "objective": self._buffer.reward_summary,
             **self._buffer.transport_metrics,

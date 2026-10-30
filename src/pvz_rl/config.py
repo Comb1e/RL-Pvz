@@ -478,6 +478,21 @@ def validate_config(cfg: dict) -> None:
     if type(reserve) not in (int, float) or not math.isfinite(reserve) or reserve < 0:
         raise ValueError("finalization_minutes must be finite and nonnegative")
     c = cfg["curriculum"]
+    trigger = cfg["training"].get("validation_trigger")
+    if trigger is not None:
+        threshold = trigger.get("cohort_success_threshold")
+        if type(trigger.get("enabled")) is not bool:
+            raise ValueError("training.validation_trigger.enabled must be a boolean")
+        if (
+            type(threshold) not in (int, float)
+            or not math.isfinite(threshold)
+            or not 0 <= threshold < 1
+        ):
+            raise ValueError("cohort_success_threshold must be finite and in [0, 1)")
+        if trigger["enabled"] and (
+            type(c.get("probe_interval_games")) is not int or c["probe_interval_games"] < 1
+        ):
+            raise ValueError("Validation triggers require a positive probe_interval_games")
     tile = cfg["training"].get("tile_scenarios")
     if tile is not None:
         if type(tile.get("enabled")) is not bool:

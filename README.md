@@ -166,7 +166,9 @@ Normal games and Cherry Bomb retain ordinary sky timing. Cherry Bomb uses
 generated, solvable boards and engine-verified placement labels. Both freeze the
 species network.
 Every 2,000 scenario episodes, rounded up to a fitted cohort boundary (normally
-2,048), a frozen policy validates 100 cases of each skill without exploration.
+2,048), validation becomes eligible when that full cohort exceeds 90% success
+(normally at least 116/128). Otherwise the check is skipped until another 2,000
+episodes have completed. A frozen policy validates 100 cases of each skill without exploration.
 Both must score 100/100 together; otherwise training revisits the failing skill.
 Scenario episodes have separate counters and do not consume the normal game budget
 or exploration schedule. Automatic progression preserves the optimizer and weights.
@@ -185,6 +187,11 @@ Standalone `pre` stops at joint mastery or budget. Start a separate easy run wit
 a fresh optimizer.
 `status.json` reports `tile_scenarios`; `tile-skill-probes.jsonl` records both scores.
 Recovery retains the active exercise, labels, counters and committed passes.
+`[training.validation_trigger]` configures the cohort threshold for all autonomous
+training validations; the same 2,000-episode checks apply in normal stages. Partial
+final cohorts cannot qualify. Pending validation resumes with the same weights;
+pre and normal clocks remain separate. Existing checkpoints without this setting
+retain their original validation behavior. Validation mastery still requires 100/100.
 Older checkpoints retain their saved workflow; missing sky-rate settings mean 1.0×.
 Resume keeps the saved rate and pending countdowns. Use fresh `--init-from` training
 to apply a changed rate.
@@ -229,6 +236,16 @@ state. For example:
 ```
 
 ## Common checks
+
+Rebuild training charts without loading a policy or starting training:
+
+```powershell
+.\.venv\Scripts\python.exe -m pvz_rl visualize --run runs\my-run\pre --report-only
+```
+
+Reports separate pre-stage scenario episodes from normal games, include both skill
+validation histories and validation-trigger decisions, and omit duplicate or
+unavailable curves. Interrupted reports retain recorded progress.
 
 Inspect one cohort's saved settings, event rewards, component breakdown,
 warnings, action mix and fitting compaction while training continues:

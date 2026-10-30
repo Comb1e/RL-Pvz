@@ -61,6 +61,7 @@ from pvz_rl.learning.training_requirements import (
     resume_protocol,
     transfer_protocol,
 )
+from pvz_rl.learning.validation_trigger import ValidationTrigger
 from pvz_rl.monitoring.metrics import episode_task, mean_agent_actions, task_statistics
 from pvz_rl.monitoring.progress import CollectionProgress, Phase, ProgressReporter
 from pvz_rl.monitoring.timing import TrainingTimings
@@ -182,6 +183,7 @@ class ResearchCallback(BaseCallback):
         self.cache_steps = -1
         self.budget_stopped = False
         self.curriculum = None
+        self.validation_trigger = ValidationTrigger(cfg)
         self.hardware = None
         self.hardware_activity = "training"
         self.simulation_ticks = 0
@@ -322,9 +324,14 @@ class ResearchCallback(BaseCallback):
             "training_steps": self.model.num_timesteps,
             "training_games": games,
             "tile_scenarios": self.model.tile_skills.to_dict(),
+            "validation_trigger": self.validation_trigger.snapshot(
+                "pre" if self.model.tile_skills.active or pre_stage(self.cfg) else "normal"
+            ),
             "peashooter_sky_sun_rate": peashooter_sky_sun_rate(self.cfg),
             "active_skill": self.model.tile_skills.phase if self.model.tile_skills.active else None,
-            "tile_validation_pending": self.model.tile_skills.due(self.cfg),
+            "tile_validation_pending": self.validation_trigger.pending == "tile"
+            if self.validation_trigger.enabled
+            else self.model.tile_skills.due(self.cfg),
             "normal_cohorts": self.model.normal_updates,
             "budget_unit": "games" if uses_games(self.cfg) else "decisions",
             "budget_progress": progress,
@@ -432,7 +439,8 @@ class ResearchCallback(BaseCallback):
                 else None
             ),
             "time_budget": self.wall_budget.state() if self.wall_budget else None,
-            "validation_pending": self.validation_pending,
+            "validation_pending": self.validation_pending
+            or self.validation_trigger.pending is not None,
             "validation_schedule": "stage_success" if self.stage_validation else "periodic",
             "pending_stage_validation": self.pending_stage_validation,
             "validation_deferred": self.stage_validation and not self.pending_stage_validation,
@@ -631,6 +639,9 @@ class ResearchCallback(BaseCallback):
                 float(value) if value is not None and math.isfinite(float(value)) else None
             )
         row.update(optimization=metrics, completed_updates=self.model._n_updates)
+        if row.get("active_skill") == "cherry_bomb":
+            metrics["tile_ranking_loss"] = metrics["q_loss"]
+            metrics["q_loss"] = None
         append_jsonl(self.metrics_stream, row)
         self.last_updates = self.model._n_updates
         self.last_optimizer_metrics = dict(values)
@@ -778,9 +789,16 @@ class ResearchCallback(BaseCallback):
         # This hook runs after the preceding Q update. A step callback would
         # save pre-update weights while labeling them with the newly collected steps.
         self.capture_update()
+        if self.validation_trigger.pending in ("evaluation", "stage_evaluation"):
+            self.validate()
+            self.require_validation_complete()
+        elif self.validation_trigger.pending == "curriculum":
+            self.probe_curriculum()
+            self.require_validation_complete()
         if self.model.tile_skills.active:
             self.check_deadline()
             self.probe_tile_skills()
+            self.require_validation_complete()
             self.check_deadline()
         self.model.env.queue.deadline = self.operation_deadline()
         if pre_stage(self.cfg):
@@ -809,8 +827,10 @@ class ResearchCallback(BaseCallback):
             while self.next_eval <= progress_value(self.cfg, self.model):
                 self.next_eval += evaluation_interval(self.cfg)
             self.validate(nominal_games=nominal)
+            self.require_validation_complete()
         self.check_deadline()
         self.probe_curriculum()
+        self.require_validation_complete()
         self.finish_stage_validation()
         self.check_stage_complete()
         self.check_deadline()
@@ -848,6 +868,48 @@ class ResearchCallback(BaseCallback):
         self.last_eval = schedule.get("last_eval", -1)
         self.pending_stage_validation = copy.deepcopy(schedule.get("pending_stage_validation"))
         self.validation_pending = self.pending_stage_validation is not None
+        self.validation_trigger = ValidationTrigger(self.cfg, schedule.get("validation_trigger"))
+        self.validation_pending |= self.validation_trigger.pending is not None
+
+    def request_validation(self, kind):
+        domain = "pre" if kind == "tile" else "normal"
+        progress = self.model.tile_skills.total if domain == "pre" else self.model.training_games
+        cohort = self.model.cohort_metrics.get("validation_cohort", {})
+        current = cohort.get("training_steps") == self.model.num_timesteps and cohort.get(
+            "optimizer_step"
+        ) == optimizer_step(self.model)
+        if self.validation_trigger.enabled and not current:
+            if self.validation_trigger.pending:
+                raise ValueError("Pending validation weights or cohort changed")
+            return False
+        allowed, checked = self.validation_trigger.request(kind, domain, progress, cohort)
+        if checked:
+            decision = self.validation_trigger.state["decision"]
+            with (self.output / "validation-checks.jsonl").open("a", encoding="utf-8") as stream:
+                append_jsonl(
+                    stream,
+                    dict(
+                        **decision,
+                        kind=kind,
+                        training_steps=self.model.num_timesteps,
+                        optimizer_step=optimizer_step(self.model),
+                    ),
+                )
+            self.progress.emit(
+                f"Validation check: {cohort.get('wins', 0)}/{cohort.get('games', 0)} "
+                f"cohort successes; {'launch' if allowed else 'skip'}; "
+                f"next check after {progress + self.validation_trigger.interval:,} {domain} episodes",
+                force=True,
+            )
+        if (allowed and self.validation_trigger.enabled) or checked:
+            self.save_checkpoint("latest.zip")
+            write_json(self.output / "status.json", self.snapshot())
+        return allowed
+
+    def require_validation_complete(self):
+        if self.validation_trigger.pending:
+            self.budget_stopped = True
+            raise TrainingDeadline()
 
     def finish_stage_validation(self):
         if self.stage_validation and self.pending_stage_validation:
@@ -896,6 +958,7 @@ class ResearchCallback(BaseCallback):
             "next_eval": self.next_eval,
             "last_eval": self.last_eval,
             "pending_stage_validation": copy.deepcopy(self.pending_stage_validation),
+            "validation_trigger": copy.deepcopy(self.validation_trigger.state),
         }
         self.sync_curriculum()
         self.model.save(self.output / name)
@@ -960,11 +1023,15 @@ class ResearchCallback(BaseCallback):
             or not self.curriculum.due(progress_value(self.cfg, self.model), self.cfg)
         ):
             return
+        if not self.request_validation("curriculum"):
+            return
         return self.evaluation_event(self._probe_curriculum, final=final)
 
     def probe_tile_skills(self, *, final=False):
         skills = self.model.tile_skills
         if not skills.due(self.cfg):
+            return
+        if not self.request_validation("tile"):
             return
         from pvz_rl.evaluation.tile_scenarios import validate_tile_skills
 
@@ -993,8 +1060,10 @@ class ResearchCallback(BaseCallback):
                 raise ValueError("Incomplete tile validation cannot certify mastery")
             scores = {skill: sum(row["win"] for row in rows) for skill, rows in results.items()}
             previous = skills.phase
-            skills.observe(scores, self.cfg)
             with atomic_transition():
+                skills.observe(scores, self.cfg)
+                self.validation_trigger.complete("tile")
+                self.validation_pending = False
                 self.model.tile_skill_state = skills.to_dict()
                 with (self.output / "tile-skill-probes.jsonl").open(
                     "a", encoding="utf-8"
@@ -1008,6 +1077,7 @@ class ResearchCallback(BaseCallback):
                             next=skills.phase,
                             cases=results,
                             optimizer_step=optimizer_step(self.model),
+                            training_steps=self.model.num_timesteps,
                         ),
                     )
                 self.save_checkpoint("latest.zip")
@@ -1024,6 +1094,10 @@ class ResearchCallback(BaseCallback):
                     else "Both tile skills mastered; normal game budget and schedules start at zero",
                     force=True,
                 )
+            elif skills.phase != previous:
+                self.recent.clear()
+                self.recent_by_task.clear()
+            write_json(self.output / "status.json", self.snapshot())
 
         return self.evaluation_event(probe)
 
@@ -1050,41 +1124,45 @@ class ResearchCallback(BaseCallback):
             if len(rows) != self.cfg["curriculum"]["probe_cases"]:
                 raise ValueError("Incomplete curriculum probe cannot certify mastery")
             wins[task] = sum(bool(row["win"]) for row in rows)
-        advanced = self.curriculum.observe(
-            wins, progress, self.cfg, advance=selected_stage(self.cfg) is None
-        )
-        self.sync_curriculum()
-        if advanced:
-            self.training_env.env_method("set_curriculum_stage", self.curriculum.stage)
-        if self.stage_validation and (advanced or self.curriculum.mastered):
-            self.pending_stage_validation = {
-                "stage": previous,
-                "training_steps": self.model.num_timesteps,
-                "training_games": getattr(self.model, "training_games", 0),
-            }
-            self.validation_pending = True
-        with (self.output / "curriculum-probes.jsonl").open("a", encoding="utf-8") as stream:
-            append_jsonl(
-                stream,
-                {
+        with atomic_transition():
+            advanced = self.curriculum.observe(
+                wins, progress, self.cfg, advance=selected_stage(self.cfg) is None
+            )
+            self.validation_trigger.complete("curriculum")
+            self.validation_pending = False
+            self.sync_curriculum()
+            if advanced:
+                self.training_env.env_method("set_curriculum_stage", self.curriculum.stage)
+            if self.stage_validation and (advanced or self.curriculum.mastered):
+                self.pending_stage_validation = {
+                    "stage": previous,
                     "training_steps": self.model.num_timesteps,
                     "training_games": getattr(self.model, "training_games", 0),
-                    "stage": previous,
-                    "wins": wins,
-                    "advanced": advanced,
-                    "stage_mastered": self.curriculum.mastered,
-                    "state": self.curriculum.to_dict(),
-                },
+                }
+                self.validation_pending = True
+            with (self.output / "curriculum-probes.jsonl").open("a", encoding="utf-8") as stream:
+                append_jsonl(
+                    stream,
+                    {
+                        "training_steps": self.model.num_timesteps,
+                        "training_games": getattr(self.model, "training_games", 0),
+                        "stage": previous,
+                        "wins": wins,
+                        "advanced": advanced,
+                        "stage_mastered": self.curriculum.mastered,
+                        "state": self.curriculum.to_dict(),
+                    },
+                )
+            self.progress.emit(
+                f"Curriculum {previous}: {wins}; next-reset stage {self.curriculum.name}; "
+                f"consecutive passes {self.curriculum.consecutive_passes}; "
+                f"stage mastered {self.curriculum.mastered}",
+                force=True,
             )
-        self.progress.emit(
-            f"Curriculum {previous}: {wins}; next-reset stage {self.curriculum.name}; "
-            f"consecutive passes {self.curriculum.consecutive_passes}; "
-            f"stage mastered {self.curriculum.mastered}",
-            force=True,
-        )
-        if selected_stage(self.cfg) or self.stage_validation:
-            self.save_checkpoint("latest.zip")
-            self.progress.emit("Saved stage progress to latest.zip", force=True)
+            if selected_stage(self.cfg) or self.stage_validation:
+                self.save_checkpoint("latest.zip")
+                self.progress.emit("Saved stage progress to latest.zip", force=True)
+            write_json(self.output / "status.json", self.snapshot())
 
     def _on_rollout_end(self):
         self.timings.record_window(self.model.cohort_metrics)
@@ -1105,6 +1183,9 @@ class ResearchCallback(BaseCallback):
 
     def validate(self, *, nominal_games=None, final=False):
         if self.stage_validation and not self.pending_stage_validation:
+            return False
+        kind = "stage_evaluation" if self.pending_stage_validation else "evaluation"
+        if not self.request_validation(kind):
             return False
         return self.evaluation_event(self._validate, nominal_games=nominal_games, final=final)
 
@@ -1133,53 +1214,64 @@ class ResearchCallback(BaseCallback):
                 "Validation pending; partial results cannot select best.zip", force=True
             )
             return False
-        scores = summarize(rows)
-        score = sum(r["win_rate"] for r in scores.values()) / len(scores)
-        self.validation_pending = False
-        self.pending_stage_validation = None
-        self.last_eval = self.model.num_timesteps
-        self.progress.emit(
-            "Validation "
-            + ", ".join(f"{key}: {value['win_rate']:.1%}" for key, value in scores.items())
-            + f"; shared-policy mean {score:.1%}",
-            force=True,
-        )
-        if score > self.best_score:
-            self.best_score = score
-            self.save_checkpoint("best.zip")
-            write_json(
-                self.output / "best.json",
-                {
-                    "steps": self.model.num_timesteps,
-                    "games": getattr(self.model, "training_games", 0),
-                    "macro_win_rate": score,
-                    "checkpoint_hash": file_hash(self.output / "best.zip"),
-                    "stage_success": milestone,
-                },
+        with atomic_transition():
+            scores = summarize(rows)
+            score = sum(r["win_rate"] for r in scores.values()) / len(scores)
+            self.validation_pending = False
+            self.validation_trigger.complete("stage_evaluation" if milestone else "evaluation")
+            self.pending_stage_validation = None
+            self.last_eval = self.model.num_timesteps
+            self.progress.emit(
+                "Validation "
+                + ", ".join(f"{key}: {value['win_rate']:.1%}" for key, value in scores.items())
+                + f"; shared-policy mean {score:.1%}",
+                force=True,
             )
-            self.progress.emit(f"Saved shared best.zip at {score:.1%}", force=True)
-        self.save_checkpoint("latest.zip")
-        self.progress.emit("Saved latest.zip", force=True)
-        self.last_eval = self.model.num_timesteps
-        with (self.output / "learning-curve.jsonl").open("a", encoding="utf-8") as stream:
-            append_jsonl(
-                stream,
-                {
-                    "training_steps": self.model.num_timesteps,
-                    "training_games": getattr(self.model, "training_games", 0),
-                    "budget_unit": "games" if uses_games(self.cfg) else "decisions",
-                    "nominal_games": nominal_games,
-                    "final": final,
-                    "stage_success": milestone,
-                    "wall_seconds": perf_counter() - self.started,
-                    "macro_win_rate": score,
-                    "levels": scores,
-                },
-            )
-        write_json(self.output / "status.json", self.snapshot())
+            if score > self.best_score:
+                self.best_score = score
+                self.save_checkpoint("best.zip")
+                write_json(
+                    self.output / "best.json",
+                    {
+                        "steps": self.model.num_timesteps,
+                        "games": getattr(self.model, "training_games", 0),
+                        "macro_win_rate": score,
+                        "checkpoint_hash": file_hash(self.output / "best.zip"),
+                        "stage_success": milestone,
+                    },
+                )
+                self.progress.emit(f"Saved shared best.zip at {score:.1%}", force=True)
+            self.save_checkpoint("latest.zip")
+            self.progress.emit("Saved latest.zip", force=True)
+            self.last_eval = self.model.num_timesteps
+            with (self.output / "learning-curve.jsonl").open("a", encoding="utf-8") as stream:
+                append_jsonl(
+                    stream,
+                    {
+                        "training_steps": self.model.num_timesteps,
+                        "training_games": getattr(self.model, "training_games", 0),
+                        "budget_unit": "games" if uses_games(self.cfg) else "decisions",
+                        "nominal_games": nominal_games,
+                        "final": final,
+                        "stage_success": milestone,
+                        "wall_seconds": perf_counter() - self.started,
+                        "macro_win_rate": score,
+                        "levels": scores,
+                    },
+                )
+            write_json(self.output / "status.json", self.snapshot())
 
     def _on_training_end(self):
         self.capture_update()
+        pending = self.validation_trigger.pending
+        if pending == "tile":
+            self.probe_tile_skills(final=True)
+        elif pending == "curriculum":
+            self.probe_curriculum(final=True)
+        elif pending:
+            self.validate(final=True)
+        if self.validation_trigger.pending:
+            return
         if pre_stage(self.cfg):
             if not self.budget_stopped:
                 self.probe_tile_skills(final=True)
@@ -1496,7 +1588,7 @@ def train(
     if validation_after_stage(cfg, family):
         probe_key = "probe_interval_games" if game_budget else "probe_interval"
         progress.emit(
-            f"Mastery probes every {cfg['curriculum'][probe_key]:,} "
+            f"Mastery checks every {cfg['curriculum'][probe_key]:,} "
             f"{'completed games' if game_budget else 'decisions'}; "
             "normal easy/standard/hard validation only after each stage passes",
             force=True,
@@ -1551,7 +1643,7 @@ def train(
         model.research_metadata = details
         if model.tile_skills.active:
             progress.emit(
-                f"Tile prerequisites: {model.tile_skills.phase}; validate both skills every "
+                f"Tile prerequisites: {model.tile_skills.phase}; check joint validation every "
                 f"{cfg['curriculum']['probe_interval_games']:,} scenario episodes at a fitted "
                 f"cohort boundary; require {cfg['curriculum']['probe_cases']}/"
                 f"{cfg['curriculum']['probe_cases']} each; "
@@ -1621,20 +1713,17 @@ def train(
                 callback._on_training_end()
         else:
             # Recover an interrupted final evaluation without collecting extra data.
+            if model.runtime_state:
+                model._restore_runtime()
             callback.init_callback(model)
+            callback.last_updates = model._n_updates
             callback.initial_steps = model.num_timesteps
             callback.initial_games = getattr(model, "training_games", 0)
             callback.initial_budget_progress = progress_value(cfg, model)
             callback.restore_schedule()
             if teaching_enabled(cfg) and family == "preset" and not pre_stage(cfg):
                 callback.curriculum = CurriculumState(**getattr(model, "curriculum_state", {}))
-            if pre_stage(cfg):
-                callback._on_training_end()
-            elif callback.stage_validation:
-                if callback.pending_stage_validation:
-                    callback.validate(final=True)
-            else:
-                callback.validate(final=True)
+            callback._on_training_end()
         callback.save_checkpoint("final.zip")
         callback.save_checkpoint("latest.zip")
         final_status = {
@@ -1709,9 +1798,16 @@ def train(
                 callback.save_checkpoint("interrupted.zip")
             else:
                 model.save(output / "interrupted.zip")
+        failure_status = {}
+        if callback is not None and model is not None:
+            try:
+                failure_status = callback.snapshot()
+            except Exception:
+                pass  # Preserve the original failure even if its environment is unavailable.
         write_json(
             output / "status.json",
             {
+                **failure_status,
                 "state": "interrupted" if isinstance(exc, KeyboardInterrupt) else "failed",
                 "error": repr(exc),
                 "steps": model.num_timesteps if model else 0,

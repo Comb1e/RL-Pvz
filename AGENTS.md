@@ -25,7 +25,7 @@
   `learning/tile_curriculum.py` owns the prerequisite state machine; the existing
   CUDA cohort trainer runs tile-only Q/ranking fits before the normal curriculum.
   `evaluation/tile_scenarios.py` probes both skills with frozen weights and CPU
-  verification every 2,000 scenario episodes at a fitted cohort boundary. Both
+  verification at 2,000-scenario-episode fitted-cohort checkpoints. Both
   require 100/100 together; training revisits the failing skill. Scenario counters
   and the normal game budget/cohort cycle remain separate. Autonomous recovery
   persists phase, labels and commits; older runs continue their saved normal path.
@@ -38,6 +38,20 @@
   `training.tile_scenarios.peashooter_sky_sun_rate=1.5` affects only Peashooter;
   recovery preserves saved countdowns/rates, with 1.0 for older configurations.
   The learning smoke disables prerequisites.
+
+- `learning/validation_trigger.py` owns full-cohort qualification for autonomous
+  validation: fresh runs require success strictly above the centrally configured
+  90% threshold, normally 116/128, before launching a probe. Skips advance the
+  separate pre/normal check clock by another 2,000 episodes; shortened cohorts
+  cannot qualify. `cuda_q.py` publishes fitted-cohort counts from authoritative
+  episode outcomes. `training.py` persists clocks, qualification and pending
+  validation in the existing research schedule; retries retain weights and
+  mastery remains 100/100. Missing saved settings preserve legacy behavior.
+  `presentation/training_charts.py` owns stage-aware metric panels and line
+  boundaries. `visualization.py` reconciles resume history, recovers interrupted
+  summaries, and displays scenario validation/trigger histories without loading
+  policies for report-only rebuilds. Each metric has one display owner; gamma=1
+  has one episode-return curve, and unavailable panels are omitted.
 
 - `tools/bootstrap.ps1` and `tools/bootstrap.sh` install the CUDA environment from
   an existing game checkout. Both reuse `tools/stage_game.py` for verified,
@@ -168,7 +182,7 @@
   collection; there is no counterfactual source, probe lane or rollout state.
 - `learning/sequential_training.py` owns `CudaSequentialQ`: canonical collection,
   background drains and complete returns. `training_requirements.py` resolves
-  the repeating five tile-only cohorts/one joint cohort cycle, with four
+  the repeating three tile-only cohorts/one joint cohort cycle, with four
   whole-cohort passes per cohort. Saved cohort number and committed pass index
   determine the recovery stage; the schedule has its own checkpoint identity.
   `learning/flat_q.py` owns shared autonomous/demo fitting: selected regression,

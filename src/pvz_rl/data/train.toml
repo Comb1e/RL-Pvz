@@ -104,6 +104,10 @@ max_grad_norm = 5 # Shared by autonomous training and demonstration initializati
 eval_interval = 250000 # Used only by bounded decision-window diagnostics.
 torch_threads = 1
 
+[training.validation_trigger]
+enabled = true # Missing in older checkpoints: retain their original validation workflow.
+cohort_success_threshold = 0.9 # Strictly above; full configured cohorts only (normally 116/128).
+
 [training.tile_scenarios]
 enabled = true # Automatic pre stage, or explicit --stage pre; selected normal stages skip it.
 peashooter_sky_sun_rate = 1.5 # Divide sky-drop delays by this rate; keep each drop at 25 sun.

@@ -14,9 +14,9 @@ import matplotlib.pyplot as plt
 
 from pvz_rl.config import output_settings
 from pvz_rl.evaluation.runner import evaluate
-from pvz_rl.learning.budget import curve_axis
 from pvz_rl.learning.deadline import BudgetExpired, check_deadline
 from pvz_rl.monitoring.progress import Phase, ProgressReporter
+from pvz_rl.presentation.training_charts import domain, episodes, report_charts
 from pvz_rl.presentation.video import export_replay, video_settings
 from pvz_rl.provenance import current_engine_config, file_hash, write_json
 
@@ -46,29 +46,73 @@ def read_series(path, *, tolerate_partial_tail=False):
 
 def run_segments(run):
     """Only link ancestors with a recorded resume boundary; label times separately."""
-    result, seen, cutoff = [], set(), None
+    result, seen, cutoff, recorded = [], set(), None, {}
     current = Path(run).resolve()
     while current not in seen:
         seen.add(current)
         meta = read_json(current / "metadata.json", {})
         series = {}
-        for name in ("learning-curve", "training-metrics"):
-            rows = read_series(current / f"{name}.jsonl")
-            # Updates at a repeated step supersede progress-only rows at that step.
-            series[name] = list(
-                {
-                    row["training_steps"]: row
-                    for row in rows
-                    if cutoff is None or row["training_steps"] <= cutoff
-                }.values()
-            )
+        for name in (
+            "training-metrics",
+            "learning-curve",
+            "tile-skill-probes",
+            "curriculum-probes",
+            "validation-checks",
+        ):
+            rows = read_series(current / f"{name}.jsonl", tolerate_partial_tail=True)
+            unique = {}
+            for row in rows:
+                if "training_steps" not in row:
+                    # Historical tile probes recorded scenario episodes and optimizer commits.
+                    match = next(
+                        (
+                            r
+                            for r in series.get("training-metrics", [])
+                            if episodes(r) == row.get("episodes")
+                        ),
+                        None,
+                    )
+                    if match:
+                        row = dict(row, training_steps=match["training_steps"])
+                step = row.get("training_steps")
+                if cutoff is not None and (step is None or step > cutoff):
+                    continue
+                identity = (
+                    step,
+                    row.get("completed_updates"),
+                    row.get("optimizer_step"),
+                    row.get("episodes"),
+                    row.get("stage"),
+                    row.get("kind"),
+                )
+                unique[identity] = row
+            used = recorded.setdefault(name, set())
+            series[name] = [row for key, row in unique.items() if key not in used]
+            used.update(unique)
         series["hardware"] = [
             row
             for row in read_series(current / "hardware-metrics.jsonl", tolerate_partial_tail=True)
             if cutoff is None or row.get("training_steps", 0) <= cutoff
         ]
-        result.append((current.name, series))
         boundary = meta.get("resume_steps")
+        if (
+            meta.get("resume")
+            and boundary is not None
+            and Path(meta["resume"]).resolve().parent == current
+        ):
+            for newer in (True, False):
+                part = {
+                    name: [
+                        row for row in rows if (row.get("training_steps", 0) > boundary) == newer
+                    ]
+                    for name, rows in series.items()
+                }
+                if any(part.values()):
+                    result.append(
+                        (current.name + (" / resumed" if newer else " / before resume"), part)
+                    )
+            break
+        result.append((current.name, series))
         if not meta.get("resume") or boundary is None:
             break
         cutoff = boundary if cutoff is None else min(boundary, cutoff)
@@ -99,7 +143,9 @@ def hardware_panels(segments, output):
         for label, series in segments
         for row in series["hardware"]
     ]
-    fig, axes = plt.subplots(3, 2, figsize=(14, 11), sharex=True)
+    for row in rows:
+        if row.get("fit_seconds") is None:
+            row["fit_seconds"] = row.get("update_seconds")
     panels = (
         (
             "CPU load",
@@ -135,12 +181,20 @@ def hardware_panels(segments, output):
             "Seconds",
             (
                 ("collection_seconds", "Collection"),
-                ("update_seconds", "Update"),
                 ("fit_seconds", "Q fitting"),
                 ("window_seconds", "Critical path"),
             ),
         ),
     )
+    panels = [
+        panel
+        for panel in panels
+        if any(row.get(key) is not None for row in rows for key, _ in panel[2])
+    ]
+    if not panels:
+        return None
+    count = (len(panels) + 1) // 2
+    fig, axes = plt.subplots(count, 2, figsize=(14, count * 3.6), sharex=True, squeeze=False)
     sessions = list(dict.fromkeys(r.get("session", "unknown") for r in rows))
     for ax, (title, unit, fields) in zip(axes.flat, panels):
         plotted = False
@@ -188,6 +242,8 @@ def hardware_panels(segments, output):
         "Hardware telemetry • blue: collection • green: fitting • purple: reporting • amber: validation",
         fontsize=11,
     )
+    for ax in list(axes.flat)[len(panels) :]:
+        ax.set_visible(False)
     _save(fig, output, "hardware")
     return ("Hardware utilization (device-wide GPU)", "hardware.png")
 
@@ -199,293 +255,17 @@ def build_run_report(run, cfg=None):
     output = run / "visualizations"
     output.mkdir(parents=True, exist_ok=True)
     segments = run_segments(run)
-    progress_key, progress_label = curve_axis(cfg)
-    images = [hardware_panels(segments, output)]
-    fig, axes = plt.subplots(1, 2, figsize=(12, 4))
-    colors = {"macro": "#233d37", "easy": "#399471", "standard": "#d69536", "hard": "#b54e59"}
-    for ax, xkey, xlabel in zip(
-        axes,
-        (progress_key, "wall_seconds"),
-        (progress_label, "Wall time within each run segment (hours)"),
-    ):
-        plotted = False
-        for label, series in segments:
-            rows = series["learning-curve"]
-            for level in colors:
-                points = []
-                for row in rows:
-                    value = (
-                        row.get("macro_win_rate")
-                        if level == "macro"
-                        else next(
-                            (
-                                score["win_rate"]
-                                for key, score in row.get("levels", {}).items()
-                                if key.endswith("/" + level)
-                            ),
-                            None,
-                        )
-                    )
-                    if value is not None and row.get(xkey) is not None:
-                        points.append((row[xkey] / (3600 if xkey == "wall_seconds" else 1), value))
-                if points:
-                    x, y = zip(*points)
-                    ax.plot(
-                        x,
-                        y,
-                        marker="o",
-                        markersize=3,
-                        color=colors[level],
-                        label=f"{label}: {level}",
-                        alpha=0.85,
-                    )
-                    plotted = True
-        ax.set(xlabel=xlabel, ylabel="Validation win rate", ylim=(-0.02, 1.02))
-        ax.grid(alpha=0.2)
-        if plotted:
-            ax.legend(fontsize=7)
-            ax.set_xlim(left=0)
-        else:
-            _empty(ax, "Validation has not finished yet")
-    _save(fig, output, "validation-curves")
-    images.append(("Validation performance", "validation-curves.png"))
-
-    panels = [
-        ("rolling_win_rate", "Rolling training win rate"),
-        ("rolling_return", "Undiscounted episode reward"),
-        ("rolling_discounted_return", "Simulation-time-discounted episode return"),
-        ("rolling_seconds", "Rolling episode duration (simulated seconds)"),
-        ("invalid_action_rate", "Rolling invalid-action rate"),
-        (
-            "decisions_per_second",
-            "Learning transitions / second\n(includes waits; excludes evaluation)",
-        ),
-        ("end_to_end_decisions_per_second", "Learning transitions / wall second (including waits)"),
-        ("rolling_agent_actions", "Accepted plant + dig actions / game (excludes waits)"),
-        ("rolling_plant_kills", "Plant kills / training episode"),
-        ("rolling_mower_kills", "Mower kills / training episode"),
-        ("rolling_nonlethal_health_damage", "Nonlethal damage / training episode"),
-        ("rolling_empty_mower_activations", "Empty mower activations / training episode"),
-        ("rolling_mower_activation_penalty", "Mower activation cost / game"),
-        ("rolling_invalid_plant_penalty", "Rejected plant penalty / game"),
-        ("rolling_empty_dig_penalty", "Empty dig penalty / game"),
-        ("rolling_wall_nut_damage", "Wall-nut damage / training episode"),
-        ("rolling_empty_explosions", "Empty explosions / training episode"),
-        ("simulation_ticks_per_second", "Simulation ticks / training second"),
-        ("instant_action_fraction", "Fraction of decisions without advancing time"),
-        ("rolling_early_voluntary_digs", "Early voluntary digs / game (configured window)"),
-        ("early_digs_per_planting", "Early voluntary digs / accepted planting"),
-        ("rolling_attacker_purchases", "Sustained attackers purchased / game"),
-        ("rolling_maximum_sun", "Maximum sun / game"),
-        ("rolling_first_attacker_seconds", "First sustained attacker (seconds; purchasing games)"),
-    ]
-    fig, axes = plt.subplots((len(panels) + 1) // 2, 2, figsize=(12, 3 * ((len(panels) + 1) // 2)))
-    for ax, (key, title) in zip(axes.flat, panels):
-        plotted = False
-        for label, series in segments:
-            rows = [
-                r
-                for r in series["training-metrics"]
-                if r.get(key) is not None and r.get(progress_key) is not None
-            ]
-            if rows:
-                ax.plot(
-                    [r[progress_key] for r in rows],
-                    [r[key] for r in rows],
-                    marker=".",
-                    label=label,
-                )
-                plotted = True
-        ax.set(title=title, xlabel=progress_label)
-        ax.grid(alpha=0.2)
-        if plotted:
-            ax.legend(fontsize=7)
-        else:
-            has_metrics = any(s["training-metrics"] for _, s in segments)
-            has_episodes = any(
-                row.get("rolling_episodes", 0) > 0
-                for _, series in segments
-                for row in series["training-metrics"]
-            )
-            _empty(
-                ax,
-                "Metric unavailable in this run"
-                if has_episodes
-                else "No completed training episodes yet"
-                if has_metrics
-                else "No aggregated metrics available",
-            )
-    _save(fig, output, "training-curves")
-    images.append(("Training behavior and throughput", "training-curves.png"))
-
-    accounting_panels = [
-        ("produced_sun", "Actual sunflower income (sun)"),
-        ("sky_income", "Actual sky income (excluded from reward)"),
-        ("effective_damage", "Plant-caused HP + armor removed"),
-        ("plant_value_loss", "Lost plant value (sun equivalents)"),
-        ("combat_value", "Damage value (sun equivalents)"),
-        ("mower_expenditure", "Mower expenditure (sun equivalents)"),
-        ("invalid_plant_penalty", "Rejected plant penalty"),
-        ("empty_dig_penalty", "Empty dig penalty"),
-        ("development", "Net development reward"),
-        ("terminal", "Outcome reward"),
-        ("cumulative_net_value", "Cumulative net value per game"),
-        ("maximum_net_value", "Historical maximum net value per game"),
-        ("value_drawdown", "Drawdown from maximum (diagnostic only)"),
-    ]
-    panel_rows = (len(accounting_panels) + 1) // 2
-    fig, axes = plt.subplots(panel_rows, 2, figsize=(12, 3 * panel_rows))
-    for ax, (key, title) in zip(axes.flat, accounting_panels):
-        plotted = False
-        for label, series in segments:
-            rows = [
-                r
-                for r in series["training-metrics"]
-                if r.get("rolling_" + key) is not None and r.get(progress_key) is not None
-            ]
-            if rows:
-                ax.plot(
-                    [r[progress_key] for r in rows],
-                    [r["rolling_" + key] for r in rows],
-                    label=label,
-                )
-                plotted = True
-        ax.set(title=title, xlabel=progress_label)
-        ax.grid(alpha=0.2)
-        if plotted:
-            ax.legend(fontsize=7)
-        else:
-            _empty(ax, "Accounting unavailable in this run")
-    for ax in list(axes.flat)[len(accounting_panels) :]:
-        ax.set_visible(False)
-    _save(fig, output, "accounting-curves")
-    images.append(("Net realized value accounting", "accounting-curves.png"))
-
-    optimizer_panels = [
-        ("q_loss", "Balanced Q loss"),
-        ("selected_action_error", "Complete-action MSE"),
-        ("placement_gap", "Best-tile minus sampled-tile Q"),
-        ("q_grad_norm", "Q gradient norm before clipping"),
-        ("q_optimizer_steps", "Q optimizer steps per cohort"),
-    ]
-    optimizer_panels += [
-        *(
-            (f"{key}_{group}", f"{group.title()}: {label}")
-            for group in ("wait", "plant", "dig")
-            for key, label in (
-                ("value_target_error", "pre-fit error against routed fitting targets"),
-                ("action_count", "completed-cohort decisions"),
-            )
-        ),
-    ]
-    panel_rows = (len(optimizer_panels) + 1) // 2
-    fig, axes = plt.subplots(panel_rows, 2, figsize=(12, 3 * panel_rows))
-    for ax, (key, title) in zip(axes.flat, optimizer_panels):
-        plotted = False
-        for label, series in segments:
-            rows = [
-                r
-                for r in series["training-metrics"]
-                if r.get("optimization", {}).get(key) is not None
-                and r.get(progress_key) is not None
-            ]
-            if rows:
-                ax.plot(
-                    [r[progress_key] for r in rows],
-                    [r["optimization"][key] for r in rows],
-                    marker=".",
-                    label=label,
-                )
-                plotted = True
-        ax.set(title=title, xlabel=progress_label + " at completed cohort")
-        ax.grid(alpha=0.2)
-        if plotted:
-            ax.legend(fontsize=7)
-        else:
-            _empty(ax, "Optimizer metrics unavailable")
-    for ax in list(axes.flat)[len(optimizer_panels) :]:
-        ax.set_visible(False)
-    _save(fig, output, "optimization-curves")
-    images.append(("Optimization diagnostics", "optimization-curves.png"))
-
-    fig, axes = plt.subplots(2, 3, figsize=(15, 7))
-    for ax, key, title in zip(
-        axes.flat,
-        (
-            "rolling_attacker_purchases",
-            "rolling_maximum_sun",
-            "exploration_rate",
-            "species_exploration_coins",
-            "tile_exploration_coins",
-            "exploratory_changes",
-        ),
-        (
-            "Sustained attackers purchased / episode",
-            "Maximum sun / episode",
-            "Tile exploration fraction",
-            "Branch exploration coins per cohort (always zero)",
-            "Tile exploration coins per cohort",
-            "Commands changed by exploration per cohort",
-        ),
-    ):
-        plotted = False
-        for label, series in segments:
-            points = [
-                (r.get(progress_key), r.get(key, r.get("optimization", {}).get(key)))
-                for r in series["training-metrics"]
-            ]
-            points = [(x, y) for x, y in points if x is not None and y is not None]
-            if points:
-                x, y = zip(*points)
-                ax.plot(x, y, marker="o", markersize=3, label=label)
-                plotted = True
-        ax.set(title=title, xlabel=progress_label)
-        if plotted:
-            ax.legend(fontsize=7)
-        else:
-            _empty(ax)
-    _save(fig, output, "learning-diagnostics")
-    images.append(("Economy and exploration", "learning-diagnostics.png"))
-
-    status = read_json(run / "status.json", {})
+    images = report_charts(segments, cfg, output, _save)
+    if any(series["hardware"] for _, series in segments):
+        hardware = hardware_panels(segments, output)
+        if hardware:
+            images.append(hardware)
+    metrics = [row for _, series in segments for row in series["training-metrics"]]
+    status = {**(metrics[-1] if metrics else {}), **read_json(run / "status.json", {})}
     best = read_json(run / "best.json", {})
     visual_status = read_json(output / "status.json", {})
     demos = read_json(output / "demos.json", {}).get("demos", [])
-    # Never display stale videos as demonstrations of a newly selected checkpoint.
     demos = [d for d in demos if d.get("checkpoint_hash") == best.get("checkpoint_hash")]
-
-    task_panels = (
-        ("win_rate", "Training win rate by task"),
-        ("early_digs_per_game", "Early digs per game by task"),
-        ("early_digs_per_planting", "Early digs / accepted planting by task"),
-        ("attacker_purchases_per_game", "Attacker purchases per game by task"),
-        ("simulated_seconds", "Episode seconds by task"),
-        ("completed_games", "Games in each task's rolling window"),
-    )
-    fig, axes = plt.subplots(3, 2, figsize=(12, 10))
-    for ax, (key, title) in zip(axes.flat, task_panels):
-        plotted = False
-        for label, series in segments:
-            records = series["training-metrics"]
-            tasks = sorted({task for row in records for task in row.get("rolling_by_task", {})})
-            for task in tasks:
-                points = [
-                    (row.get(progress_key), row.get("rolling_by_task", {}).get(task, {}).get(key))
-                    for row in records
-                ]
-                points = [(x, y) for x, y in points if x is not None and y is not None]
-                if points:
-                    x, y = zip(*points)
-                    ax.plot(x, y, label=f"{label}: {task}")
-                    plotted = True
-        ax.set(title=title, xlabel=progress_label)
-        ax.grid(alpha=0.2)
-        if plotted:
-            ax.legend(fontsize=7)
-        else:
-            _empty(ax, "Task-specific metrics unavailable")
-    _save(fig, output, "task-curves")
-    images.append(("Task-specific training diagnostics", "task-curves.png"))
 
     def escape(value):
         return html.escape(str(value), quote=True)
@@ -526,19 +306,24 @@ def build_run_report(run, cfg=None):
         "selected_shared_checkpoint": best or "No validated checkpoint yet",
         "visualization_status": visual_status,
     }
-    charts = "".join(
-        f'<section><h2>{title}</h2><a href="{name}"><img src="{name}" alt="{title}"></a></section>'
-        for title, name in images
-    )
+    charts = ""
+    for title, name in images:
+        plot = f'<a href="{name}"><img src="{name}" alt="{title}" loading="lazy"></a>'
+        if any(group in name for group in ("accounting", "exploration", "diagnostics", "tasks")):
+            charts += f"<section><details><summary>{title}</summary>{plot}</details></section>"
+        else:
+            charts += f"<section><h2>{title}</h2>{plot}</section>"
     policy_description = (
         "Restricted diagnostic policy; this run does not evaluate the full game"
         if meta.get("family") in ("diagnostic",)
-        else "One shared policy for easy, standard, and hard"
+        else "Tile-skill prerequisites"
+        if cfg["curriculum"].get("run_stage") == "pre"
+        else "One shared policy for pre, easy, standard, and shared stages"
     )
     completion = (
         "Curriculum incomplete" if status.get("curriculum_incomplete") else "Curriculum status"
     )
-    run_progress = (
+    normal_progress = (
         f"<p>Completed games: {escape(status.get('training_games', 'not recorded'))}. "
         f"{completion}: {escape(status.get('curriculum_stage', 'not recorded'))}. "
         f"Stop reason: {escape(status.get('stop_reason') or 'not recorded / in progress')}. "
@@ -548,6 +333,59 @@ def build_run_report(run, cfg=None):
             else f"Game target reached: {escape(status.get('budget_complete', 'in progress'))}.</p>"
         )
     )
+    skills = status.get("tile_scenarios") or {}
+    has_pre = (
+        any(domain(row) == "pre" for row in metrics) or cfg["curriculum"].get("run_stage") == "pre"
+    )
+    pre_progress = (
+        (
+            f"<p>Pre stage: <b>{escape(skills.get('phase', 'not recorded'))}</b>. "
+            f"Completed scenario episodes: {escape(sum(skills.get('episodes', {}).values()))}. "
+            f"Peashooter: {escape(skills.get('episodes', {}).get('peashooter', 0))}; "
+            f"Cherry Bomb: {escape(skills.get('episodes', {}).get('cherry_bomb', 0))}. "
+            f"Generation failures: {escape(skills.get('generation_failures', 0))}. "
+            f"Joint mastery: {escape(skills.get('phase') == 'complete')}. "
+            f"Latest validation successes: {escape(skills.get('scores') or 'not recorded')}. "
+            f"Stop reason: {escape(status.get('stop_reason') or status.get('state', 'in progress'))}.</p>"
+        )
+        if has_pre
+        else ""
+    )
+    run_progress = pre_progress + (
+        normal_progress if any(domain(r) == "normal" for r in metrics) or not has_pre else ""
+    )
+    trigger = status.get("validation_trigger", {})
+    if trigger.get("enabled"):
+        run_progress += (
+            f"<p>Validation requires full-cohort success strictly above {trigger['cohort_success_threshold']:.0%}. "
+            f"Next check: {escape(trigger.get('next_check'))} completed episodes. "
+            f"Pending validation: {escape(trigger.get('pending') or 'none')}.</p>"
+        )
+    checks = [row for _, series in segments for row in series.get("validation-checks", [])]
+    if checks:
+        run_progress += "<details><summary>Validation trigger history</summary><table><tr><th>Stage / skill</th><th>Episodes</th><th>Cohort success</th><th>Decision</th></tr>"
+        for check in checks:
+            cohort = check["cohort"]
+            run_progress += (
+                f"<tr><td>{escape(cohort.get('skill') or check['domain'])}</td>"
+                f"<td>{check['progress']}</td><td>{cohort.get('wins', 0)}/{cohort.get('games', 0)}</td>"
+                f"<td>{'Launch' if check['eligible'] else 'Skip'} ({escape(check['reason'])})</td></tr>"
+            )
+        run_progress += "</table></details>"
+    probes = [row for _, series in segments for row in series.get("tile-skill-probes", [])]
+    if probes:
+        run_progress += "<details><summary>Tile-skill validation and transitions</summary><table><tr><th>Scenario episodes</th><th>Peashooter</th><th>Cherry Bomb</th><th>Training skill</th></tr>"
+        for probe in probes:
+            counts = {skill: len(rows) for skill, rows in probe.get("cases", {}).items()}
+            run_progress += (
+                f"<tr><td>{probe['episodes']}</td>"
+                + "".join(
+                    f"<td>{probe['scores'][skill]}/{counts.get(skill, cfg['curriculum']['probe_cases'])}</td>"
+                    for skill in ("peashooter", "cherry_bomb")
+                )
+                + f"<td>{escape(probe.get('previous'))} → {escape(probe.get('next'))}</td></tr>"
+            )
+        run_progress += "</table></details>"
     run_progress += (
         "<p>Episode curves summarize completed games and can lag behind the current policy. "
         "Optimizer and conditional planting measurements describe the current cohort. "
@@ -585,7 +423,7 @@ def build_run_report(run, cfg=None):
                 )
                 + "</tr>"
             )
-        task_table += "</table><p>Task curves use a separate completed-game window for each task. Configured mixtures select episodes, not equal numbers of transitions. Restarts add new starts.</p>"
+        task_table += "</table><p>Configured mixtures select episodes, not equal numbers of transitions. Restarts add new starts.</p>"
         task_table += (
             "<details><summary>Accepted plant purchases within task windows</summary><pre>"
             + escape(
@@ -615,7 +453,7 @@ height:auto;border-radius:6px}}pre{{white-space:pre-wrap;overflow-wrap:anywhere;
 fixed validation demonstrations do not establish held-out performance.</p>
 <p>Training curves use up to {output_settings(cfg)["logging"]["rolling_window"]} completed episodes;
 difficulty composition changes with the curriculum. Reward is not comparable across reward settings.
-Resumed segments have separate wall-time axes and lines. Missing older metrics are left blank.</p>
+Pre and normal counters have separate charts. Lines break at skill/stage and resume boundaries. Unavailable metrics are omitted.</p>
 <details><summary>Settings, checkpoint, and export status</summary>
 <pre>{escape(json.dumps(details, indent=2))}</pre></details></header>{charts}
 <section><h2>Shared checkpoint demonstrations</h2>
@@ -625,6 +463,15 @@ Diagnostic runs show only the diagnostic task. A short smoke run may end at its 
     temporary = output / "index.tmp.html"
     temporary.write_text(page, encoding="utf-8")
     temporary.replace(output / "index.html")
+    for retired in (
+        "validation-curves",
+        "training-curves",
+        "accounting-curves",
+        "optimization-curves",
+        "learning-diagnostics",
+        "task-curves",
+    ):
+        (output / f"{retired}.png").unlink(missing_ok=True)
     return output / "index.html"
 
 
