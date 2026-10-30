@@ -104,6 +104,12 @@ max_grad_norm = 5 # Shared by autonomous training and demonstration initializati
 eval_interval = 250000 # Used only by bounded decision-window diagnostics.
 torch_threads = 1
 
+[training.tile_scenarios]
+enabled = true # Tile prerequisites precede fresh preset teaching runs.
+bomb_initial_sun = 150
+bomb_plants = [1, 8]
+ranking_margin = 1.0
+
 [training.storage]
 ram_gib = 6
 block_rows = 32768

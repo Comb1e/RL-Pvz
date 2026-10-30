@@ -156,7 +156,23 @@ check. Rejected actions break the streak, and commitment waits do not count.
 See [exploration and recovery](docs/math/sequential-training.md#plant-exploration)
 for species selection and cohort-boundary behavior.
 
-Fitting repeats a six-cohort cycle: cohorts 1–5 each run four tile-only passes,
+Fresh preset teaching runs first train two tile-placement prerequisites, including
+runs using `--init-from` or `--stage easy`. Peashooter uses easy waves, 50 starting
+sun and sky income, with mowers disabled. Cherry Bomb uses generated, solvable
+boards and engine-verified placement labels. Both freeze the species network.
+Every 2,000 scenario episodes, rounded up to a fitted cohort boundary (normally
+2,048), a frozen policy validates 100 cases of each skill without exploration.
+Both must score 100/100 together; otherwise training revisits the failing skill.
+Scenario episodes have separate counters and do not consume `--games` or the
+normal exploration schedule. The same optimizer and weights continue afterward.
+`status.json` reports `tile_scenarios`; `tile-skill-probes.jsonl` records both scores.
+Recovery retains the active exercise, labels, counters and committed passes.
+Older checkpoints without prerequisite state continue normal training.
+Configure `[training.tile_scenarios]` in `train.toml`; set `enabled = false` for
+bounded diagnostic runs. The bomb exercise needs a cutoff longer than its initial
+35-second card cooldown.
+
+After both prerequisites pass, fitting repeats a six-cohort cycle: cohorts 1–5 each run four tile-only passes,
 cohort 6 runs four joint action/tile passes, then cohorts 7–11 are tile-only and
 cohort 12 is joint. Configure `training.tile_only_cohorts = 5` and
 `training.n_epochs = 4` in `train.toml`. Every pass uses that cohort's collected

@@ -210,7 +210,11 @@ class CudaCohortLifecycle(BaseAlgorithm):
 
         count = self.n_envs
         target = budget_target(self.env.cfg)
-        if uses_games(self.env.cfg) and target is not None:
+        skills = self.tile_skills
+        self.env.tile_scenario = self.env.queue.tile_scenario = skills.phase
+        self.env.queue.tile_boards = {}
+        self.env.tile_boards = {}
+        if not skills.active and uses_games(self.env.cfg) and target is not None:
             count = min(count, max(0, target - self.training_games))
         if count < 1:
             from pvz_rl.learning.training import TrainingGamesComplete
@@ -218,7 +222,15 @@ class CudaCohortLifecycle(BaseAlgorithm):
             raise TrainingGamesComplete
         self._pending_episodes = {}
         self.cohort_number = self._n_updates + 1
-        self._last_obs = self.env.reset_cohort(count)
+        from pvz_rl.learning.deadline import BudgetExpired
+
+        try:
+            self._last_obs = self.env.reset_cohort(count)
+        except BudgetExpired:
+            from pvz_rl.learning.training import TrainingDeadline
+
+            callback.budget_stopped = True
+            raise TrainingDeadline() from None
         self._runner = self._new_runner()
         self._first = True
         self._buffer = self._new_buffer()
@@ -230,6 +242,7 @@ class CudaCohortLifecycle(BaseAlgorithm):
         self._planting_samples = 0
         for key in (
             "q_loss",
+            "tile_ranking_loss",
             "selected_action_error",
             "species_consistency_loss",
             "species_consistency_mae",
@@ -239,6 +252,9 @@ class CudaCohortLifecycle(BaseAlgorithm):
             "q_grad_norm",
         ):
             self.logger.record("train/" + key, None)
+        for action in ("wait", "plant", "dig"):
+            for metric in ("action_count", "value_target_error", "placement_gap"):
+                self.logger.record(f"train/{metric}_{action}", None)
         self._stats = dict(
             q_optimizer_steps=0,
             tile_only_optimizer_steps=0,
@@ -279,6 +295,13 @@ class CudaCohortLifecycle(BaseAlgorithm):
             self.logger.record("train/" + key, value)
         self.logger.record("train/learning_rate", self.policy.optimizer.param_groups[0]["lr"])
         self._n_updates += 1
+        skills = self.tile_skills
+        if skills.active:
+            skills.cohorts += 1
+            skills.generation_failures = self.env.queue.generation_failures
+            self.tile_skill_state = skills.to_dict()
+        else:
+            self.normal_updates += 1
         self.logger.record("train/n_updates", self._n_updates)
         self._buffer.close()
         self._buffer = self._runner = None
@@ -314,13 +337,16 @@ class CudaCohortLifecycle(BaseAlgorithm):
         if self.runtime_state:
             self._restore_runtime()
         callback.on_training_start(locals(), globals())
-        while self.num_timesteps < total or self.phase != CohortPhase.IDLE:
+        while (
+            self.tile_skills.active or self.num_timesteps < total or self.phase != CohortPhase.IDLE
+        ):
             if self.phase == CohortPhase.IDLE:
                 from pvz_rl.learning.budget import budget_target, uses_games
 
                 target = budget_target(self.env.cfg)
                 if (
                     uses_games(self.env.cfg)
+                    and not self.tile_skills.active
                     and target is not None
                     and self.training_games >= target
                 ):
@@ -337,7 +363,14 @@ class CudaCohortLifecycle(BaseAlgorithm):
                     elif phase == CohortPhase.FINALIZE_REWARDS:
                         self._finalize_rewards(callback)
                     elif phase == CohortPhase.RETURNS:
-                        self.prefit_errors = self._buffer.finalize(cohort=self.cohort_number)
+                        ranking = self.tile_skills.phase == "cherry_bomb"
+                        self.prefit_errors = self._buffer.finalize(
+                            cohort=self.cohort_number,
+                            diagnostics=not ranking,
+                        )
+                        if ranking:
+                            self.prefit_errors = {}
+                            self._buffer.reward_summary["supervision"] = "tile_set_ranking"
                         for name, values in self.prefit_errors.items():
                             self.logger.record("train/action_count_" + name, values["count"])
                             self.logger.record("train/value_target_error_" + name, values["mse"])

@@ -32,6 +32,7 @@ from pvz_rl.learning.budget import (
     until_stage_complete,
     uses_games,
 )
+from pvz_rl.learning.cohort import atomic_transition
 from pvz_rl.learning.curriculum import (
     CurriculumState,
     initial_state,
@@ -49,6 +50,7 @@ from pvz_rl.learning.exploration import (
 )
 from pvz_rl.learning.objective import components, training_rewards
 from pvz_rl.learning.performance import compilation_requested
+from pvz_rl.learning.tile_curriculum import initial_tile_state
 from pvz_rl.learning.training_requirements import (
     FIT_SCHEDULE_PROTOCOL,
     parameter_changes,
@@ -71,6 +73,7 @@ def vector_env(cfg, condition, learner_seed, family="preset"):
 
 
 def build_model(cfg, condition, env, seed, log_dir=None):
+    """Build the shared learner; train() enables prerequisites for fresh runs."""
     from pvz_rl.envs.cuda_env import CudaVecEnv
 
     require_cuda_training(cfg, condition)
@@ -315,6 +318,9 @@ class ResearchCallback(BaseCallback):
             "steps": self.model.num_timesteps,
             "training_steps": self.model.num_timesteps,
             "training_games": games,
+            "tile_scenarios": self.model.tile_skills.to_dict(),
+            "tile_validation_pending": self.model.tile_skills.due(self.cfg),
+            "normal_cohorts": self.model.normal_updates,
             "budget_unit": "games" if uses_games(self.cfg) else "decisions",
             "budget_progress": progress,
             "budget_target": self.target,
@@ -450,6 +456,11 @@ class ResearchCallback(BaseCallback):
 
     def cohort_text(self):
         summary = self.cohort_summary()
+        if self.model.tile_skills.phase == "cherry_bomb":
+            return (
+                f"done {summary['completed']}/{summary['games']} "
+                f"correct {summary['wins']}/{summary['games']}; tile ranking supervision"
+            )
         raw = "n/a" if summary["raw_return"] is None else f"{summary['raw_return']:.3g}"
         fitted = (
             "n/a" if summary["training_return"] is None else f"{summary['training_return']:.3g}"
@@ -507,6 +518,10 @@ class ResearchCallback(BaseCallback):
             games += f"/{row['target_games']:,}"
         step = optimizer_step(model)
         parts = [
+            f"tile prerequisite {self.model.tile_skills.phase} "
+            f"({self.model.tile_skills.total:,} episodes)"
+            if self.model.tile_skills.active
+            else "normal training",
             f"cohort {cohort} {self.cohort_text()}",
             CollectionProgress.text(row["collection_progress"], getattr(model, "cohort_games", 0)),
             marker,
@@ -566,6 +581,7 @@ class ResearchCallback(BaseCallback):
         values = self.model.logger.name_to_value
         keys = (
             "q_loss",
+            "tile_ranking_loss",
             "selected_action_error",
             "species_consistency_loss",
             "species_consistency_mae",
@@ -669,11 +685,20 @@ class ResearchCallback(BaseCallback):
                 self.simulation_ticks += info["ticks_advanced"]
                 self.instant_actions += int(info["ticks_advanced"] == 0)
             if "episode_metrics" in info:
-                self.model.training_games = getattr(self.model, "training_games", 0) + 1
+                skills = self.model.tile_skills
+                if skills.active:
+                    skills.episodes[skills.phase] += 1
+                    self.model.tile_skill_state = skills.to_dict()
+                else:
+                    self.model.training_games = getattr(self.model, "training_games", 0) + 1
                 completed += 1
-                if self.curriculum and (
-                    self.cfg["curriculum"].get("residency") == "episode_start_stage"
-                    or self.cfg["training"]["exploration"].get("decay_games", 0) > 0
+                if (
+                    not skills.active
+                    and self.curriculum
+                    and (
+                        self.cfg["curriculum"].get("residency") == "episode_start_stage"
+                        or self.cfg["training"]["exploration"].get("decay_games", 0) > 0
+                    )
                 ):
                     self.curriculum.completed_episode(
                         info["episode_metrics"].get("episode_start_stage")
@@ -689,6 +714,7 @@ class ResearchCallback(BaseCallback):
                     "learner_seed": self.learner_seed,
                     "training_steps": self.num_timesteps,
                     "training_games": self.model.training_games,
+                    "tile_scenarios": self.model.tile_skills.to_dict(),
                 }
                 if info["episode_metrics"].get("time_reward_pending"):
                     self.model._pending_episodes[info["episode_slot"]]["report"] = report
@@ -738,6 +764,19 @@ class ResearchCallback(BaseCallback):
         # This hook runs after the preceding Q update. A step callback would
         # save pre-update weights while labeling them with the newly collected steps.
         self.capture_update()
+        if self.model.tile_skills.active:
+            self.check_deadline()
+            self.probe_tile_skills()
+            self.check_deadline()
+        self.model.env.queue.deadline = self.operation_deadline()
+        if self.model.tile_skills.active:
+            skills = self.model.tile_skills
+            state = exploration_state(self.cfg, skills.episodes[skills.phase])
+            apply_exploration_state(self.model, state)
+            self.model.plant_exploration_rate = 0.0
+            self.hardware_context("training")
+            self.progress.phase(Phase.COLLECTING)
+            return
         self.finish_stage_validation()
         self.check_stage_complete()
         if (
@@ -805,11 +844,21 @@ class ResearchCallback(BaseCallback):
             raise TrainingDeadline()
 
     def operation_deadline(self, final=False):
-        if self.wall_budget is None:
-            return None
-        return self.wall_budget.deadline if final else self.wall_budget.learning_deadline
+        wall = (
+            None
+            if self.wall_budget is None
+            else (self.wall_budget.deadline if final else self.wall_budget.learning_deadline)
+        )
+        limits = [value for value in (self.deadline, wall) if value is not None]
+        return min(limits) if limits else None
 
     def save_checkpoint(self, name):
+        skills = self.model.tile_skills
+        skills.generation_failures = max(
+            skills.generation_failures,
+            self.model.env.queue.generation_failures,
+        )
+        self.model.tile_skill_state = skills.to_dict()
         self.task_counts()
         if self.wall_budget:
             self.model.wall_budget_state = self.wall_budget.state()
@@ -874,11 +923,76 @@ class ResearchCallback(BaseCallback):
             self.hardware_context(previous_activity)
 
     def probe_curriculum(self, *, final=False):
-        if not self.curriculum or not self.curriculum.due(
-            progress_value(self.cfg, self.model), self.cfg
+        if (
+            self.model.tile_skills.active
+            or not self.curriculum
+            or not self.curriculum.due(progress_value(self.cfg, self.model), self.cfg)
         ):
             return
         return self.evaluation_event(self._probe_curriculum, final=final)
+
+    def probe_tile_skills(self, *, final=False):
+        skills = self.model.tile_skills
+        if not skills.due(self.cfg):
+            return
+        from pvz_rl.evaluation.tile_scenarios import validate_tile_skills
+
+        def probe():
+            self.progress.phase(Phase.VALIDATING, "Tile prerequisite validation: both skills")
+            for network in (self.model.policy, getattr(self.model, "_teacher", None)):
+                if network is not None:
+                    for encoder in network.encoders:
+                        encoder.release_fitting()
+                        encoder.release_collection()
+            try:
+                results = validate_tile_skills(
+                    self.cfg,
+                    self.model,
+                    curriculum_probe_seeds(self.cfg),
+                    deadline=self.operation_deadline(final),
+                    progress=self.progress,
+                )
+            except BudgetExpired:
+                self.progress.emit(
+                    "Tile validation incomplete; mastery remains pending", force=True
+                )
+                return
+            count = self.cfg["curriculum"]["probe_cases"]
+            if any(len(rows) != count for rows in results.values()):
+                raise ValueError("Incomplete tile validation cannot certify mastery")
+            scores = {skill: sum(row["win"] for row in rows) for skill, rows in results.items()}
+            previous = skills.phase
+            skills.observe(scores, self.cfg)
+            with atomic_transition():
+                self.model.tile_skill_state = skills.to_dict()
+                with (self.output / "tile-skill-probes.jsonl").open(
+                    "a", encoding="utf-8"
+                ) as stream:
+                    append_jsonl(
+                        stream,
+                        dict(
+                            episodes=skills.total,
+                            scores=scores,
+                            previous=previous,
+                            next=skills.phase,
+                            cases=results,
+                            optimizer_step=optimizer_step(self.model),
+                        ),
+                    )
+                self.save_checkpoint("latest.zip")
+            self.progress.emit(
+                f"Tile validation: {scores}; next phase {skills.phase}",
+                force=True,
+            )
+            if not skills.active:
+                self.recent.clear()
+                self.recent_by_task.clear()
+                self.progress.emit(
+                    "Both tile skills mastered; normal game budget and schedules start at zero",
+                    force=True,
+                )
+
+        return self.evaluation_event(probe)
 
     def _probe_curriculum(self, *, final=False):
         progress = progress_value(self.cfg, self.model)
@@ -1033,6 +1147,10 @@ class ResearchCallback(BaseCallback):
 
     def _on_training_end(self):
         self.capture_update()
+        if self.model.tile_skills.active:
+            if not self.budget_stopped:
+                self.probe_tile_skills(final=True)
+            return
         if self.stage_validation:
             if not self.budget_stopped and not self.pending_stage_validation:
                 self.probe_curriculum(final=True)
@@ -1384,6 +1502,7 @@ def train(
             )
         else:
             model = build_model(cfg, condition, env, learner_seed, output / "tensorboard")
+            model.tile_skill_state = initial_tile_state(cfg, family)
             if initialized_model is not None:
                 model.policy.load_state_dict(initialized_model, strict=True)
                 progress.emit(
@@ -1393,6 +1512,14 @@ def train(
             if teaching_enabled(cfg) and family == "preset":
                 model.curriculum_state = initial_state(cfg).to_dict()
         model.research_metadata = details
+        if model.tile_skills.active:
+            progress.emit(
+                f"Tile prerequisites: {model.tile_skills.phase}; validate both skills every "
+                f"{cfg['curriculum']['probe_interval_games']:,} scenario episodes at a fitted "
+                f"cohort boundary; require {cfg['curriculum']['probe_cases']}/"
+                f"{cfg['curriculum']['probe_cases']} each; normal game budget remains separate",
+                force=True,
+            )
         remaining = (
             None
             if unlimited
@@ -1543,6 +1670,7 @@ def train(
                 "state": "interrupted" if isinstance(exc, KeyboardInterrupt) else "failed",
                 "error": repr(exc),
                 "steps": model.num_timesteps if model else 0,
+                "tile_scenarios": model.tile_skill_state if model else None,
                 "time_budget": wall_budget.state(),
             },
         )

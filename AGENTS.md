@@ -20,6 +20,18 @@
 
 ## Code structure
 
+- `envs/tile_scenarios.py` builds mower-free Peashooter exercises and legal,
+  solvable Cherry Bomb boards with private engine-rollout labels.
+  `learning/tile_curriculum.py` owns the prerequisite state machine; the existing
+  CUDA cohort trainer runs tile-only Q/ranking fits before the normal curriculum.
+  `evaluation/tile_scenarios.py` probes both skills with frozen weights and CPU
+  verification every 2,000 scenario episodes at a fitted cohort boundary. Both
+  require 100/100 together; training revisits the failing skill. Scenario counters
+  and the normal game budget/cohort cycle remain separate. Autonomous recovery
+  persists phase, labels and commits; older runs continue their saved normal path.
+  `training.tile_scenarios.enabled` controls fresh preset teaching runs, including
+  `--init-from` and selected normal stages. The learning smoke disables it.
+
 - `tools/bootstrap.ps1` and `tools/bootstrap.sh` install the CUDA environment from
   an existing game checkout. Both reuse `tools/stage_game.py` for verified,
   non-editable installation of the engine lock, without changing the game checkout.

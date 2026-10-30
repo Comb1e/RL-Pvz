@@ -708,7 +708,7 @@ class CompleteGameBuffer:
         self.rewards_finalized = True
         return self.reward_summary
 
-    def finalize(self, *, cohort=None):
+    def finalize(self, *, cohort=None, diagnostics=True):
         """Actual per-game returns and errors measured before fitting either head."""
         self.finalize_rewards()
         running = np.zeros(self.n_envs, np.float64)
@@ -891,7 +891,7 @@ class CompleteGameBuffer:
         self.reward_summary["causal_source_credits"] = self.causal_sources
         import warnings
 
-        if low_variation:
+        if diagnostics and low_variation:
             warnings.warn(
                 f"Cohort {cohort if cohort is not None else self.path.name}: dense return "
                 f"variation is below 5% of target variation "
@@ -900,7 +900,7 @@ class CompleteGameBuffer:
                 RuntimeWarning,
                 stacklevel=2,
             )
-        if live.any():
+        if diagnostics and live.any():
             scale = (
                 self.cfg["reward"]["progress_weight"] / self.cfg["reward"]["value_scale"]
                 if self.cfg

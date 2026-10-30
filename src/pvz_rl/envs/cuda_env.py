@@ -8,7 +8,7 @@ from time import perf_counter
 import numpy as np
 import torch
 from gymnasium import spaces
-from pvz_game import Game, Rules
+from pvz_game import Game, LevelSpec, Rules
 from pvz_game.config import PLANT_TYPES
 from pvz_game.cuda.backend import projectile_bound
 from pvz_game.cuda.schema import HEADER
@@ -21,6 +21,7 @@ from pvz_rl.envs.cuda_features import LEDGER_INDICES, METRIC_INDICES, CudaFeatur
 from pvz_rl.envs.rewards import REWARD_METRICS
 from pvz_rl.envs.scenarios import difficulty_weights, scenario
 from pvz_rl.envs.step_result import PackedStepResult
+from pvz_rl.envs.tile_scenarios import peashooter_level, sample_bomb
 from pvz_rl.learning.budget import budget_target
 from pvz_rl.learning.curriculum import stage_distribution, teaching_enabled
 from pvz_rl.learning.host_transfer import HostHandoff
@@ -52,13 +53,17 @@ class ScenarioQueue:
         self.pending = deque(maxlen=n)
         self.progress, self.stage = 0, 0
         self.rules = Rules()
+        self.tile_scenario = "complete"
+        self.tile_boards = {}
+        self.generation_failures = 0
+        self.deadline = None
 
-    def prepare(self, indices):
+    def prepare(self, indices, seeds=None):
         cfg = self.cfg
-        for index in indices:
+        for offset, index in enumerate(indices):
             rng = self.rngs[index]
             lo, hi = cfg["splits"]["train"]
-            seed = int(rng.integers(lo, hi + 1))
+            seed = int(rng.integers(lo, hi + 1)) if seeds is None else int(seeds[offset])
             weights = difficulty_weights(
                 cfg,
                 self.progress,
@@ -71,9 +76,21 @@ class ScenarioQueue:
                 tasks, weights = stage_distribution(cfg, self.stage)
                 task = str(rng.choice(tasks, p=weights))
                 family, level = ("preset", task)
-            self.pending.append(
-                (index, level, family, seed, scenario(level, family, seed, self.rules, cfg))
-            )
+            spec = scenario(level, family, seed, self.rules, cfg)
+            if self.tile_scenario == "peashooter":
+                level, family = "easy", "tile_peashooter"
+                spec = peashooter_level(self.rules, seed)
+            elif self.tile_scenario == "cherry_bomb":
+                level, family = "easy", "tile_cherry_bomb"
+                try:
+                    board = sample_bomb(cfg, seed, rules=self.rules, deadline=self.deadline)
+                except RuntimeError:
+                    self.generation_failures += cfg["training"]["annotation"]["sampling_max_attempts"]
+                    raise
+                self.generation_failures += board["generation_failures"]
+                self.tile_boards[index] = board
+                spec = LevelSpec.from_dict(board["snapshot"]["level"])
+            self.pending.append((index, level, family, seed, spec))
         result = list(self.pending)
         self.pending.clear()
         return result
@@ -124,6 +141,8 @@ class CudaVecEnv(VecEnv):
         self.active_tasks, self._tasks = Counter(), {}
         self.enabled_envs = np.ones(cfg["training"]["n_envs"], dtype=bool)
         self._pending_spawns = np.zeros(cfg["training"]["n_envs"], dtype=np.int64)
+        self.tile_scenario = "complete"
+        self.tile_boards = {}
         # All shipped scenario families preserve roster size. Lessons use smaller
         # rosters. Custom batches derive their capacity from the supplied cases.
         game = Game()
@@ -184,7 +203,7 @@ class CudaVecEnv(VecEnv):
         ):
             yield
 
-    def reset_indices(self, indices, cases=None):
+    def reset_indices(self, indices, cases=None, *, tile_seeds=None):
         started = perf_counter()
         if self.live_view is not None:
             try:
@@ -193,7 +212,7 @@ class CudaVecEnv(VecEnv):
                 self.live_view.fail(exc)
         self.enabled_envs[indices] = True
         if cases is None:
-            staged = self.queue.prepare(indices)
+            staged = self.queue.prepare(indices, seeds=tile_seeds)
         else:
             staged = [
                 (i, level, family, seed, scenario(level, family, seed, self.queue.rules, self.cfg))
@@ -222,6 +241,11 @@ class CudaVecEnv(VecEnv):
             [s[3] for s in staged],
             indices=indices,
         )
+        if self.tile_scenario == "cherry_bomb":
+            self.tile_boards = deepcopy(self.queue.tile_boards)
+            self.batch.restore(
+                [self.tile_boards[i]["snapshot"] for i in indices], indices=indices,
+            )
         self._refresh_growth_bounds(indices)
         self.features.initialize_home(indices)
         self.proposed_actions[indices] = 0
@@ -385,6 +409,11 @@ class CudaVecEnv(VecEnv):
             self.task_transitions.update(self._tasks[i] for i in np.flatnonzero(self._step_active))
         self._pending_spawns[:] = self._step_state_host["pending_spawns"].numpy()
         compact = host[:, RECORD_OUTCOME]
+        if self.tile_scenario == "cherry_bomb":
+            # A supervised exercise ends after its one proposal. Its success
+            # is the private engine-verified label, not a whole-game outcome.
+            compact[self._step_active, 0] = 1
+            compact[self._step_active, 1] = 0
         self.last_transition_host = compact
         self.last_action_result_host = host[:, RECORD_RESULT]
         actions = host[:, RECORD_ACTIONS]
@@ -408,6 +437,9 @@ class CudaVecEnv(VecEnv):
             compact, actions, self.last_action_result_host, truncation, self._step_active, completed
         )
         reward, done, timed_out = self._step_device_result
+        if self.tile_scenario == "cherry_bomb":
+            done = self._device_active.clone()
+            timed_out = torch.zeros_like(done)
         reward = reward.clone()
         indices = np.flatnonzero(compact[:, 0]).tolist()
         terminal_observations = None
@@ -430,6 +462,19 @@ class CudaVecEnv(VecEnv):
                     episode_metrics=self.episode_metrics(index, header, total),
                     **{"TimeLimit.truncated": bool(compact[index, 1])},
                 )
+                if self.tile_scenario == "cherry_bomb":
+                    action = int(actions[index, 0])
+                    branch = 1 + (action - 1) // 45 if action else 0
+                    expected = self.cfg["environment"]["plants"].index("cherry_bomb") + 1
+                    success = bool(
+                        self.last_action_result_host[index, 0] and branch == expected
+                        and (action - 1) % 45 in self.tile_boards[index]["feasible_tiles"]
+                    )
+                    metrics = completed[index]["episode_metrics"]
+                    metrics.update(
+                        engine_status=metrics["status"], status="won" if success else "lost",
+                        win=int(success), tile_scenario="cherry_bomb",
+                    )
                 self.finished_outcomes[index] = completed[index]["episode_metrics"]["status"]
             if autoreset:
                 self.reset_indices(indices)
@@ -465,6 +510,9 @@ class CudaVecEnv(VecEnv):
             "queue_rng": [deepcopy(r.bit_generator.state) for r in self.queue.rngs],
             "queue_progress": self.queue.progress,
             "queue_stage": self.queue.stage,
+            "tile_scenario": self.tile_scenario,
+            "tile_boards": deepcopy(self.tile_boards),
+            "tile_generation_failures": self.queue.generation_failures,
             "attributes": {
                 k: deepcopy(getattr(self, k))
                 for k in (
@@ -513,6 +561,10 @@ class CudaVecEnv(VecEnv):
             for rng, saved in zip(self.queue.rngs, state["queue_rng"], strict=True):
                 rng.bit_generator.state = deepcopy(saved)
             self.queue.progress, self.queue.stage = state["queue_progress"], state["queue_stage"]
+            self.tile_scenario = self.queue.tile_scenario = state.get("tile_scenario", "complete")
+            self.tile_boards = deepcopy(state.get("tile_boards", {}))
+            self.queue.tile_boards = deepcopy(self.tile_boards)
+            self.queue.generation_failures = state.get("tile_generation_failures", 0)
             for key, value in state["attributes"].items():
                 setattr(self, key, deepcopy(value))
             self._reset_seeds()  # Saved per-worker RNG replaces constructor seed requests.

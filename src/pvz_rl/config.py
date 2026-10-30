@@ -478,6 +478,26 @@ def validate_config(cfg: dict) -> None:
     if type(reserve) not in (int, float) or not math.isfinite(reserve) or reserve < 0:
         raise ValueError("finalization_minutes must be finite and nonnegative")
     c = cfg["curriculum"]
+    tile = cfg["training"].get("tile_scenarios")
+    if tile is not None:
+        if type(tile.get("enabled")) is not bool:
+            raise ValueError("training.tile_scenarios.enabled must be a boolean")
+        sun, plants, margin = (
+            tile.get(k) for k in ("bomb_initial_sun", "bomb_plants", "ranking_margin")
+        )
+        if type(sun) is not int or not 150 <= sun <= 9990:
+            raise ValueError("tile scenario bomb_initial_sun must be between 150 and 9990")
+        if (
+            not isinstance(plants, list)
+            or len(plants) != 2
+            or any(type(n) is not int for n in plants)
+            or not 1 <= plants[0] <= plants[1] <= 44
+        ):
+            raise ValueError("tile scenario bomb_plants must be an inclusive range in [1, 44]")
+        if type(margin) not in (float, int) or not math.isfinite(margin) or margin <= 0:
+            raise ValueError("tile scenario ranking_margin must be finite and positive")
+        if tile["enabled"] and not uses_games(cfg):
+            raise ValueError("Tile prerequisites require game-based training")
     if c.get("lessons") or set(c.get("stages", {})) - {"easy", "standard", "shared"}:
         raise ValueError("Retired curriculum lesson; use easy, standard and shared stages")
     unlimited = cfg["training"].get("until_stage_complete", False)

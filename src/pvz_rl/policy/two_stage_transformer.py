@@ -332,6 +332,7 @@ class TwoStageTransformerPolicy(nn.Module):
         active=None,
         active_plan=None,
         branch_usable=None,
+        supplied_branches=None,
     ):
         observations = collate_observations(observations, self.device)
         species = self.species_values(observations, plan=active_plan)
@@ -339,7 +340,13 @@ class TwoStageTransformerPolicy(nn.Module):
             action_masks = observation_tile_masks(observations)
         if action_masks.shape != (len(observations), A.size):
             raise ValueError("Action masks must match the board batch")
-        branches = species.argmax(-1)
+        branches = species.argmax(-1) if supplied_branches is None else supplied_branches
+        if branches.shape != (len(observations),) or branches.dtype != torch.long:
+            raise ValueError("Supplied branches must be an int64 vector matching the board batch")
+        if supplied_branches is not None:
+            branches = branches.to(device=self.device)
+            supplied_valid = ((branches >= 0) & (branches < 10)).all()
+            branches = branches.clamp(0, 9)
         if active_plan is not None and active is None:
             active = torch.as_tensor(active_plan.compact_indices >= 0, device=self.device)
         if active is not None:
@@ -373,8 +380,11 @@ class TwoStageTransformerPolicy(nn.Module):
             deterministic=deterministic,
             tile_exploration_epsilon=getattr(self, "tile_exploration_epsilon", 0.0),
             active=active,
+            supplied_branches=branches if supplied_branches is not None else None,
         )
         details["branch_usable"] = branch_usable
+        if supplied_branches is not None:
+            details["valid"] &= supplied_valid
         details["tile_inference_skipped"] = (branches > 0) & ~tile_rows
         details["observations"] = observations
         return actions, details
