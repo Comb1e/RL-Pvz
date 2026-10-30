@@ -63,6 +63,38 @@ outside this index.
 
 ## Research comparisons
 
+- Anthony, Tian and Barber, [Thinking Fast and Slow with Deep Learning and Tree Search](https://arxiv.org/html/1705.08439v1):
+  expert iteration informs a proposed bounded simulator-search teacher whose
+  action comparisons train the existing networks. Search and distillation gains
+  in Hex do not establish improvement or computational feasibility here.
+- [DeepMind mctx search policies](https://github.com/google-deepmind/mctx/blob/main/mctx/_src/policies.py):
+  inspected Gumbel root sampling, sequential halving and explicit simulation/depth
+  budgets as allocation references. Neither JAX nor learned dynamics is proposed;
+  the linked Gumbel paper's PDF was blocked, so no theorem is transferred.
+- Meulemans et al., [Would I have gotten that reward?](https://proceedings.neurips.cc/paper_files/paper/2023/file/d8bd445c2abe1343cce0e14b361b2fb3-Paper-Conference.pdf):
+  COCOA's reward-outcome contributions inform distinguishing strategic value from
+  reproducing a particular later board or action sequence. Its learned contribution
+  estimator is not adopted by the simulator-search proposal.
+- Triantafyllou et al., [Counterfactual Effect Decomposition in Multi-Agent Sequential Decision Making](https://arxiv.org/html/2410.12539v1):
+  effects through later actions and state transitions inform preserving income and
+  occupancy consequences. This is conceptual guidance for a single-agent planner,
+  without implementing the paper's mediation or Shapley estimators.
+- Arjona-Medina et al., [RUDDER: Return Decomposition for Delayed Rewards](https://papers.nips.cc/paper/2019/file/16105fb9cc614fc29e1bda00dab60d41-Paper.pdf):
+  return equivalence informs checking reward redistribution against the original
+  objective. Redistribution alone neither supplies missing counterfactual evidence
+  nor repairs an undesirable reward ordering; no extra sequence model is proposed.
+- Silver and Veness, [Monte-Carlo Planning in Large POMDPs](https://papers.nips.cc/paper_files/paper/2010/file/edfbe1afcf9246bb0d40eb4d8027d90f-Paper.pdf):
+  sampled hidden states and observation-history search inform evaluating plausible
+  futures without giving action selection private schedule information. POMCP's
+  belief/history machinery and convergence guarantees are not adopted wholesale.
+- Cowling, Powley and Whitehouse, [Information Set Monte Carlo Tree Search](https://eprints.whiterose.ac.uk/id/eprint/75048/1/CowlingPowleyWhitehouse2012.pdf):
+  strategy fusion motivates a teacher control: indistinguishable public inputs
+  cannot justify different actions using hidden futures. Full information-set
+  search is a comparison reference, not a second training framework.
+- Hatch and Boots, [The Value of Planning for Infinite-Horizon Model Predictive Control](https://homes.cs.washington.edu/~bboots/files/ValueOfPlanning.pdf):
+  horizon myopia and terminal-value accuracy inform testing search beyond Sunflower
+  payback and defense delays. Robot-navigation results do not validate this game's
+  current value estimates or a shortened rollout horizon.
 - Harutyunyan et al., [Hindsight Credit Assignment](https://papers.neurips.cc/paper/9413-hindsight-credit-assignment.pdf):
   relevance-weighted advantages motivated same-board action comparisons that
   separate useful decisions from continuation noise. Paired simulator rollouts are
