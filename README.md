@@ -38,9 +38,15 @@ Record a game into unused paths and finish with a natural win or loss:
 Or label public boards in the browser:
 
 ```powershell
-.\.venv\Scripts\python.exe -m pvz_rl annotate --kind action --port 6006
-.\.venv\Scripts\python.exe -m pvz_rl annotate --kind tile --port 6006
+.\.venv\Scripts\python.exe -m pvz_rl annotate --port 6006
 ```
+
+The studio labels positive tile sets only. Manual action labeling and explicit
+absolute-infeasible labels are removed. Existing tile records reuse their positive
+sets; legality still prevents labeling occupied cells as positive. Cherry Bomb and
+tile annotation fitting use one top-1 ranking hinge, with all 45 outputs competing.
+Older annotation progress and active Cherry Bomb runs require `--init-from` to
+start fitting with the changed objective; their compatible weights remain usable.
 
 To start autonomous training when ready:
 

@@ -514,6 +514,8 @@ def validate_config(cfg: dict) -> None:
             raise ValueError("tile scenario bomb_plants must be an inclusive range in [1, 44]")
         if type(margin) not in (float, int) or not math.isfinite(margin) or margin <= 0:
             raise ValueError("tile scenario ranking_margin must be finite and positive")
+        if tile.get("ranking_objective", "top1_hinge_v1") != "top1_hinge_v1":
+            raise ValueError("Unsupported tile scenario ranking_objective")
         if tile["enabled"] and not uses_games(cfg):
             raise ValueError("Tile prerequisites require game-based training")
         from pvz_game import Rules

@@ -26,8 +26,10 @@ from pvz_rl.learning.training_requirements import (
 DEMO_PROTOCOL = "pvz-rl/demo-initialization-checkpoint-v11"
 LEGACY_DEMO_PROTOCOL = "pvz-rl/demo-initialization-checkpoint-v10"
 LEGACY_DEMO_PROTOCOL_V9 = "pvz-rl/demo-initialization-checkpoint-v9"
-ANNOTATION_CHECKPOINT_PROTOCOL = "pvz-rl/annotation-initialization-v3"
-ANNOTATION_PROGRESS_PROTOCOL = "pvz-rl/annotation-progress-v4"
+ANNOTATION_CHECKPOINT_PROTOCOL = "pvz-rl/annotation-initialization-v4"
+PREVIOUS_ANNOTATION_CHECKPOINT_PROTOCOL = "pvz-rl/annotation-initialization-v3"
+ANNOTATION_PROGRESS_PROTOCOL = "pvz-rl/annotation-progress-v5"
+PREVIOUS_ANNOTATION_PROGRESS_PROTOCOL = "pvz-rl/annotation-progress-v4"
 LEGACY_ANNOTATION_PROGRESS_PROTOCOL = "pvz-rl/annotation-progress-v3"
 LEGACY_ANNOTATION_CHECKPOINT_PROTOCOL_V2 = "pvz-rl/annotation-initialization-v2"
 LEGACY_ANNOTATION_CHECKPOINT_PROTOCOL = "pvz-rl/tile-annotation-initialization-v1"
@@ -212,11 +214,14 @@ def inspect_checkpoint(path, *, weights_only=False):
         path = path.with_suffix(".zip")
     if path.suffix == ".pt":
         saved, snapshot_sha256 = load_torch_snapshot(path)
-        progress = saved.get("protocol") == ANNOTATION_PROGRESS_PROTOCOL
+        progress = saved.get("protocol") in (
+            ANNOTATION_PROGRESS_PROTOCOL,
+            PREVIOUS_ANNOTATION_PROGRESS_PROTOCOL,
+        )
         if saved.get("protocol") == LEGACY_ANNOTATION_PROGRESS_PROTOCOL:
             raise ValueError(
-                "Annotation progress v3 must first be loaded with the annotation fitter's "
-                "--resume-from to write v4 progress; then use that file with --init-from"
+                "Annotation progress v3 is retired; use a compatible v4/v5 BF16-master "
+                "progress file or a completed compatible checkpoint with --init-from"
             )
         if progress and not weights_only:
             raise ValueError(
@@ -229,7 +234,9 @@ def inspect_checkpoint(path, *, weights_only=False):
             LEGACY_DEMO_PROTOCOL: "demonstration",
             LEGACY_DEMO_PROTOCOL_V9: "demonstration",
             ANNOTATION_CHECKPOINT_PROTOCOL: "annotation",
+            PREVIOUS_ANNOTATION_CHECKPOINT_PROTOCOL: "annotation",
             ANNOTATION_PROGRESS_PROTOCOL: "annotation",
+            PREVIOUS_ANNOTATION_PROGRESS_PROTOCOL: "annotation",
             LEGACY_ANNOTATION_CHECKPOINT_PROTOCOL_V2: "annotation",
             LEGACY_ANNOTATION_CHECKPOINT_PROTOCOL: "annotation",
         }.get(saved.get("protocol"))
@@ -251,7 +258,10 @@ def inspect_checkpoint(path, *, weights_only=False):
         convergence = saved.get("convergence", {})
         if not isinstance(convergence, dict):
             raise ValueError("Checkpoint convergence metadata must be a dictionary")
-        current_annotation_convergence = saved.get("protocol") == ANNOTATION_CHECKPOINT_PROTOCOL
+        current_annotation_convergence = saved.get("protocol") in (
+            ANNOTATION_CHECKPOINT_PROTOCOL,
+            PREVIOUS_ANNOTATION_CHECKPOINT_PROTOCOL,
+        )
         zero_pass_verified = (
             initialization_type == "annotation"
             and convergence.get("verified") is True
@@ -261,12 +271,17 @@ def inspect_checkpoint(path, *, weights_only=False):
             and (
                 not current_annotation_convergence
                 or (
-                    convergence.get("absolute_bottom_hits") == convergence["records"]
-                    and type(convergence.get("validation_records")) is int
+                    type(convergence.get("validation_records")) is int
                     and convergence["validation_records"] >= 0
                     and convergence.get("validation_hits") == convergence["validation_records"]
-                    and convergence.get("validation_absolute_bottom_hits")
-                    == convergence["validation_records"]
+                    and (
+                        saved.get("protocol") != PREVIOUS_ANNOTATION_CHECKPOINT_PROTOCOL
+                        or (
+                            convergence.get("absolute_bottom_hits") == convergence["records"]
+                            and convergence.get("validation_absolute_bottom_hits")
+                            == convergence["validation_records"]
+                        )
+                    )
                 )
             )
         )
@@ -282,7 +297,12 @@ def inspect_checkpoint(path, *, weights_only=False):
             identity = saved.get("identity")
             settings = identity.get("settings") if isinstance(identity, dict) else None
             if (
-                saved.get("annotation_kind") not in ("tile", "action")
+                saved.get("annotation_kind")
+                not in (
+                    ("tile",)
+                    if saved["protocol"] == ANNOTATION_PROGRESS_PROTOCOL
+                    else ("tile", "action")
+                )
                 or not isinstance(settings, dict)
                 or settings.get("annotation_kind") != saved["annotation_kind"]
             ):

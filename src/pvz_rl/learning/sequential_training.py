@@ -1027,7 +1027,6 @@ class CudaSequentialQ(CudaCohortLifecycle):
         ).float()
         loss = set_ranking_loss(
             values, [label["feasible_tiles"] for label in labels],
-            [label["absolute_infeasible_tiles"] for label in labels],
             margin=self.cfg["training"]["tile_scenarios"]["ranking_margin"],
         ) * (len(rows) / self.cohort_games)
         self.policy._last_species_consistency_loss = loss.detach() * 0
@@ -1107,6 +1106,20 @@ class CudaSequentialQ(CudaCohortLifecycle):
             ):
                 raise ValueError("Pending search was generated against different frozen policy updates")
         if extra and extra.get("tile_scenarios") is not None:
+            if (
+                (
+                    self.tile_skills.phase == "cherry_bomb"
+                    or (self.tile_skills.active and self.tile_skills.stage_order is None)
+                )
+                and (
+                    self.cfg["training"]["tile_scenarios"].get("ranking_objective")
+                    != "top1_hinge_v1"
+                    or extra.get("tile_ranking_objective") != "top1_hinge_v1"
+                )
+            ):
+                raise ValueError(
+                    "Cherry Bomb ranking objective changed; use --init-from for fresh top-1 fitting"
+                )
             if extra.get("tile_scenario_protocol") != TILE_SCENARIO_PROTOCOL:
                 raise ValueError("Unsupported tile prerequisite recovery protocol")
             if extra["tile_scenarios"] != self.tile_skill_state:
@@ -1205,6 +1218,9 @@ class CudaSequentialQ(CudaCohortLifecycle):
         skills = dict(
             tile_scenarios=self.tile_skill_state,
             tile_scenario_protocol=TILE_SCENARIO_PROTOCOL,
+            tile_ranking_objective=self.cfg["training"].get("tile_scenarios", {}).get(
+                "ranking_objective"
+            ),
             search_teacher=self._search.snapshot() if getattr(self, "_search", None) else None,
         )
         if getattr(self, "_teacher", None) is None:

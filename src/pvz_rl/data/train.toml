@@ -114,6 +114,7 @@ peashooter_sky_sun_rate = 1.5 # Divide sky-drop delays by this rate; keep each d
 bomb_initial_sun = 150
 bomb_plants = [1, 8]
 ranking_margin = 1.0
+ranking_objective = "top1_hinge_v1" # Positive-set ranking; occupied tiles are ordinary alternatives.
 
 [training.storage]
 ram_gib = 6

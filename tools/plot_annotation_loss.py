@@ -18,10 +18,6 @@ from urllib.parse import quote, urlsplit
 SERIES = (
     ("train loss", "train", "loss", "#65e5b2"),
     ("validation loss", "validation", "loss", "#ffbd66"),
-    ("train top loss", "train", "top_loss", "#78baff"),
-    ("validation top loss", "validation", "top_loss", "#ff7f9c"),
-    ("train bottom loss", "train", "bottom_loss", "#40d9df"),
-    ("validation bottom loss", "validation", "bottom_loss", "#f5ed8b"),
     ("L2 penalty", "", "regularization_loss", "#cd9dff"),
 )
 

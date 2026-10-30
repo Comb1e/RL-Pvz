@@ -63,6 +63,22 @@ outside this index.
 
 ## Research comparisons
 
+- Ben-Baruch et al., [Asymmetric Loss For Multi-Label Classification](https://arxiv.org/html/2009.14119v4):
+  dense positive/negative supervision and reduced easy-negative weight motivate a
+  Cherry Bomb classification experiment. This remains a proposal, not the adopted
+  top-1 hinge; simulator hit labels are complete, so missing-label filtering is unnecessary.
+- Shaw et al., [Self-Attention with Relative Position Representations](https://aclanthology.org/N18-2074/):
+  relation-aware attention motivates explicit tile/entity spatial offsets as an
+  alternative to learning blast geometry from absolute coordinates. Language-task
+  results do not establish improvement on this board.
+- Dong, Cordonnier and Loukas, [Attention is not all you need: pure attention loses rank doubly exponentially with depth](https://proceedings.mlr.press/v139/dong21a.html):
+  token-uniformity analysis motivates shallow readouts and spatial skip-path controls
+  for nearly identical tile features. The pure-attention theorem does not establish
+  collapse in the current residual Transformer with MLPs.
+- Kaushik, Hovy and Lipton, [Learning the Difference that Makes a Difference with Counterfactually-Augmented Data](https://arxiv.org/abs/1909.12434):
+  minimally changed examples motivate paired boards with moved zombies and
+  simulator-recomputed labels to challenge location shortcuts. This is an untested
+  adaptation from text classification, not counterfactual game-return evaluation.
 - Anthony, Tian and Barber, [Thinking Fast and Slow with Deep Learning and Tree Search](https://arxiv.org/html/1705.08439v1):
   expert iteration informs the bounded simulator-search teacher whose
   action comparisons train the existing networks. Search and distillation gains

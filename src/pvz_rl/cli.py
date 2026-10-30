@@ -259,9 +259,6 @@ def main(argv=None):
         help="directory for annotation JSONL and manifest",
     )
     annotate.add_argument(
-        "--kind", choices=("tile", "action"), default="tile", help="annotation head to label"
-    )
-    annotate.add_argument(
         "--port", type=int, default=0, help="loopback port; 0 selects an ephemeral port"
     )
     annotate.add_argument(
@@ -304,32 +301,6 @@ def main(argv=None):
         "--l2-strength", type=float, help="post-training validation-phase L2 strength"
     )
     fit_annotations.add_argument("--seed", type=int)
-    fit_action = subs.add_parser(
-        "fit-action-annotations", help="pretrain the species/action Transformer from annotations"
-    )
-    common(fit_action)
-    fit_action.add_argument("--annotations", required=True, type=Path)
-    fit_action.add_argument("--output", required=True, type=Path)
-    action_source = fit_action.add_mutually_exclusive_group()
-    action_source.add_argument(
-        "--init-from",
-        type=Path,
-        help="fresh fit from compatible weights or unfinished .progress.pt",
-    )
-    action_source.add_argument(
-        "--resume-from",
-        type=Path,
-        help="restore matching progress, Adam, RNG and L2 phase; inherit saved fitting settings",
-    )
-    fit_action.add_argument("--device", choices=("cpu", "cuda"), default="cuda")
-    fit_action.add_argument(
-        "--passes", type=int, help="additional passes this invocation, also on resume; 0 unlimited"
-    )
-    fit_action.add_argument("--learning-rate", type=float)
-    fit_action.add_argument("--batch-size", type=int)
-    fit_action.add_argument("--margin", type=float)
-    fit_action.add_argument("--l2-strength", type=float)
-    fit_action.add_argument("--seed", type=int)
     demo = subs.add_parser(
         "record-demo",
         help="open one easy seed-1000 game and record a verified human transition archive",
@@ -466,9 +437,7 @@ def main(argv=None):
         "benchmark-gpu",
         "initialize-demo",
         "doctor",
-    ) or (
-        args.command in ("fit-tile-annotations", "fit-action-annotations") and args.device == "cuda"
-    ):
+    ) or (args.command == "fit-tile-annotations" and args.device == "cuda"):
         import torch
 
         if args.gpu is not None or torch.cuda.is_available():
@@ -497,8 +466,7 @@ def main(argv=None):
         settings = cfg["training"].get("annotation", {})
         profile_seed = settings.get("sampling_seed", "random")
         serve_annotations(
-            args.data_dir
-            / ("action-annotations.jsonl" if args.kind == "action" else "tile-annotations.jsonl"),
+            args.data_dir / "tile-annotations.jsonl",
             cfg=cfg,
             port=args.port,
             seed=args.seed
@@ -511,7 +479,6 @@ def main(argv=None):
             max_attempts=settings.get("sampling_max_attempts", 100)
             if args.max_attempts is None
             else args.max_attempts,
-            kind=args.kind,
         )
     elif args.command == "fit-tile-annotations":
         from pvz_rl.learning.annotation_fit import fit_annotations
@@ -519,29 +486,6 @@ def main(argv=None):
         print(
             json.dumps(
                 fit_annotations(
-                    args.annotations,
-                    args.output,
-                    cfg=cfg,
-                    init_from=args.init_from,
-                    resume_from=args.resume_from,
-                    device=args.device,
-                    passes=args.passes,
-                    learning_rate=args.learning_rate,
-                    batch_size=args.batch_size,
-                    margin=args.margin,
-                    l2_strength=args.l2_strength,
-                    seed=args.seed,
-                    kind="tile",
-                ),
-                indent=2,
-            )
-        )
-    elif args.command == "fit-action-annotations":
-        from pvz_rl.learning.annotation_fit import fit_action_annotations
-
-        print(
-            json.dumps(
-                fit_action_annotations(
                     args.annotations,
                     args.output,
                     cfg=cfg,

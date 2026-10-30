@@ -16,6 +16,9 @@ rules. This file adds project-specific constraints and ownership.
 - Keep independent, stateless species and conditional tile networks behind the
   shared policy runner. All 45 tiles remain proposal candidates; classify occupied
   cells after selection. Branch impossibility precedes tile invalidity.
+- Manual annotations are positive tile sets only; there is no action annotation
+  workflow or absolute-infeasible tile labeling. Cherry Bomb and tile annotation
+  fitting share one top-1 hinge over all 45 outputs.
 - Fresh autonomous training fits confirmed search values/differences and finite
   feasibility bounds through shared fitting. Legacy/diagnostic complete-return
   fitting retains its minimum-Q invalid targets and EMA species consistency.
@@ -66,7 +69,7 @@ Paths below are relative to `src/pvz_rl/` unless stated otherwise.
 | `envs/search_worlds.py`, `learning/search_teacher.py`, `search_targets.py`, `search_settings.py` | Public world reconstruction, interruptible CUDA search/continuations, confirmed targets and versioned settings/recovery. |
 | `learning/cuda_buffer.py`, `batch_transport.py`, `collection_scheduler.py`, `exploration.py` | Trajectories, bounded transport, decision tickets and persistent exploration commitments. |
 | `learning/checkpoints.py`, `performance.py` | Compatibility contracts, durable snapshots and execution-only refresh settings. |
-| `annotation/`, `learning/annotation_fit.py`, `demo_initialization.py` | Reachable-state sampling, atomic labels/conflicts, head-specific convergence and verified demo initialization. |
+| `annotation/`, `learning/annotation_fit.py`, `demo_initialization.py` | Reachable-state sampling, atomic positive tile sets/conflicts, top-1 convergence and verified demo initialization. |
 | `evaluation/`, `monitoring/`, repository diagnostic tools | Stateless evaluation, CPU verification of CUDA traces, bounded profiling, benchmarks and read-only reward reports. |
 | `presentation/` | Shared renderers, annotation/live viewers and recordings; `training_charts.py` owns panels, while `visualization.py` reconciles resume history and builds policy-free reports. |
 
