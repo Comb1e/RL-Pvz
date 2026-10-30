@@ -1,5 +1,36 @@
 # Sources actually used
 
+## Useful-action suppression — research directions, 2026-10-29
+
+These sources inform proposals for the current issue, not confirmed causes or
+implemented changes. No learning experiment was run. Existing DQfD and SDQN
+entries below are extended in place rather than duplicated.
+
+- Harutyunyan et al., [Hindsight Credit Assignment](https://papers.neurips.cc/paper/9413-hindsight-credit-assignment.pdf):
+  inspected the noisy-continuation example and section 3's relevance-weighted
+  advantage. This motivates comparing actions from the same reachable board
+  using paired simulator continuations, then supervising verified preferences
+  alongside complete returns. Paired rollouts are a local proposal, not HCA's
+  algorithm; their estimates concern the frozen continuation policy, not optimal
+  values. A helpful move in a loss and an irrelevant move in a win are essential
+  controls; terminal outcome alone is not an expert-action label.
+- Liu et al., [Towards a practical measure of interference for reinforcement learning](https://arxiv.org/html/2007.03807v1):
+  inspected section 4.2's before/after-update policy-return measure and section
+  4.3's warning that average interference can conceal damaging spikes. Propose
+  holding boards and continuation randomness fixed while measuring how an actual
+  committed update changes known action preferences and rollout outcomes.
+  Gradient cosine and training loss are secondary diagnostics; the paper's TD-error
+  proxy is not automatically appropriate for this complete-return objective.
+- Yu et al., [Gradient Surgery for Multi-Task Learning](https://arxiv.org/html/2001.06782v3)
+  and the [official PCGrad project](https://github.com/tianheyu927/PCGrad):
+  inspected sections 2.2–2.4 and the project's per-task-loss optimizer interface.
+  Conflicting gradients alone need not be harmful; magnitude imbalance and
+  curvature matter. If actual harmful interference is demonstrated, compare
+  conflict-aware combination of accepted, rejected and consistency gradients
+  while retaining every sample group. Grouping this agent's losses is a local
+  adaptation, with no guaranteed improvement under Adam. The reference project
+  uses TensorFlow; no framework, dependency or code is adopted.
+
 ## Passive late-game behavior — research directions, 2026-10-28
 
 These inspections support hypotheses and proposed controls, not implemented
@@ -140,6 +171,12 @@ learning improvement; implementation verification is tracked in iteration histor
   and tile-probe schedule are project choices; SDQN's off-policy algorithm is not
   implemented. This is a learned consistency target, not an exact species maximum
   substituted into normal branch selection.
+  Re-inspected section 2.2 and equations 7–8 on 2026-10-29: internal conditional
+  maxima need an externally grounded final-action value. Propose checking both
+  local heads against the same completed simulator comparisons, including a
+  deliberately pessimistic useful branch. Agreement between online and EMA
+  estimates alone cannot certify correctness; rollout estimates still depend on
+  the continuation policy. This is a proposed diagnostic/target adaptation.
 - Zambaldi et al., [Relational Deep Reinforcement Learning](https://arxiv.org/abs/1806.01830):
   inspected spatial/entity self-attention for reasoning about relations in current
   observations. This informs separate current-board species and conditional spatial
@@ -193,6 +230,13 @@ established by these papers.
   an invalid output below the minimum that can include itself. This is a local
   adaptation, not DQfD's demonstration objective. Any tile-level adaptation needs
   an explicit full-board/no-legal-tile case and must retain selective head routing.
+  Re-inspected equation 2 on 2026-10-29 for useful-action suppression: finite
+  legality margins and rankings from verified action comparisons are candidates,
+  while labeling every move in a win as expert is unsupported. Independently
+  check the local moving target with an isolated minimum-valued invalid output:
+  `q = q - 0.1` has no finite self-consistent solution. Finite-difference controls
+  must freeze the detached target within each update. This algebraic property
+  does not establish that it caused the reported policy failure.
 - van Hasselt et al., [Learning values across many orders of magnitude](https://arxiv.org/abs/1602.07714):
   reward/target scale sensitivity motivated separating raw ledger values from the
   development multiplier; PopArt is not used.
