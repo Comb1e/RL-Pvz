@@ -9,7 +9,7 @@ from tempfile import TemporaryDirectory
 from time import perf_counter
 
 
-def measure(cfg, count, workers, oracle, repetitions, warmups, workspace):
+def measure(cfg, count, workers, oracle, repetitions, warmups, workspace, *, cuda_warmup=None):
     # Keep Torch out of the module scope: Windows CPU workers import __mp_main__.
     import torch
     from stable_baselines3.common.callbacks import BaseCallback
@@ -30,6 +30,13 @@ def measure(cfg, count, workers, oracle, repetitions, warmups, workspace):
         cherry_prepare_workers=workers,
         cherry_oracle=oracle,
         cherry_prefetch=False,
+    )
+    if cuda_warmup is not None:
+        cfg["training"]["performance"]["cherry_cuda_warmup"] = cuda_warmup
+    warmup_backend = (
+        "cuda"
+        if oracle == "cuda" and cfg["training"]["performance"].get("cherry_cuda_warmup", False)
+        else "cpu"
     )
     cfg["training"].update(
         total_games=count * (repetitions + warmups + 1), until_stage_complete=False
@@ -88,6 +95,7 @@ def measure(cfg, count, workers, oracle, repetitions, warmups, workspace):
             envs=count,
             workers=workers,
             oracle=oracle,
+            warmup_backend=warmup_backend,
             mean_seconds_per_env=sum(r["seconds_per_env"] for r in measured) / repetitions,
             samples=rows,
         )
@@ -111,6 +119,7 @@ def main():
     parser.add_argument("--envs", nargs="+", type=int, default=[256, 512, 640, 1024])
     parser.add_argument("--workers", nargs="+", type=int, default=[8, 16, 24, 32])
     parser.add_argument("--oracles", nargs="+", choices=["cpu", "cuda"], default=["cpu", "cuda"])
+    parser.add_argument("--warmup-backends", nargs="+", choices=["cpu", "cuda"], default=["cuda"])
     parser.add_argument("--lanes", type=int)
     parser.add_argument("--vram-mib", type=int)
     parser.add_argument("--repetitions", type=int, default=4)
@@ -134,16 +143,25 @@ def main():
         for count in args.envs:
             for oracle in args.oracles:
                 for workers in args.workers:
-                    result = measure(
-                        cfg, count, workers, oracle, args.repetitions, args.warmups, workspace
-                    )
-                    report["combinations"].append(result)
-                    best = min(report["combinations"], key=lambda row: row["mean_seconds_per_env"])
-                    report["fastest"] = {k: v for k, v in best.items() if k != "samples"}
-                    args.output.write_text(json.dumps(report, indent=2), encoding="utf-8")
-                    print(
-                        json.dumps({k: v for k, v in result.items() if k != "samples"}), flush=True
-                    )
+                    for backend in args.warmup_backends if oracle == "cuda" else ["cpu"]:
+                        result = measure(
+                            cfg,
+                            count,
+                            workers,
+                            oracle,
+                            args.repetitions,
+                            args.warmups,
+                            workspace,
+                            cuda_warmup=backend == "cuda",
+                        )
+                        report["combinations"].append(result)
+                        best = min(report["combinations"], key=lambda r: r["mean_seconds_per_env"])
+                        report["fastest"] = {k: v for k, v in best.items() if k != "samples"}
+                        args.output.write_text(json.dumps(report, indent=2), encoding="utf-8")
+                        print(
+                            json.dumps({k: v for k, v in result.items() if k != "samples"}),
+                            flush=True,
+                        )
 
 
 if __name__ == "__main__":

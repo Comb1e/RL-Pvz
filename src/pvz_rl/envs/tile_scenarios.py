@@ -7,7 +7,13 @@ from pvz_game import LevelSpec, Place, Spawn, Status, Wait
 from pvz_game.config import InitialPlant, resolve_level
 
 from pvz_rl.envs.scenarios import namespace_seed
-from pvz_rl.envs.scratch_game import EngineSnapshot, fork_game, restored_game, scratch_game
+from pvz_rl.envs.scratch_game import (
+    EngineSnapshot,
+    fork_game,
+    restored_game,
+    scratch_game,
+    set_initial_mowers,
+)
 from pvz_rl.learning.deadline import check_deadline
 
 SKILLS = ("peashooter", "cherry_bomb")
@@ -90,6 +96,16 @@ def generation_failure(cfg, seed):
 
 def bomb_candidates(cfg, seed, *, start=0, rules=None, deadline=None):
     """Engine-authored candidates in stable seed/attempt order, without labels."""
+    for game, attempt in bomb_initials(cfg, seed, start=start, rules=rules, deadline=deadline):
+        tick = game.rules.plants["cherry_bomb"]["initial_recharge_ticks"] + 2
+        observation = game.step(Wait(), ticks=tick).observation
+        targets = [z for z in observation.zombies if z.health > 0 and not z.headless]
+        if observation.status == Status.RUNNING and len(targets) == 1:
+            yield game, targets[0].id, attempt
+
+
+def bomb_initials(cfg, seed, *, start=0, rules=None, deadline=None):
+    """Validated initial boards, shared by CPU and CUDA natural cooldown advances."""
     game = scratch_game(rules)
     rules = game.rules
     settings = cfg["training"]["tile_scenarios"]
@@ -120,8 +136,8 @@ def bomb_candidates(cfg, seed, *, start=0, rules=None, deadline=None):
         if attempt < start:
             continue
         game.reset(level, seed)
-        observation = game.step(Wait(), ticks=tick).observation
-        targets = [z for z in observation.zombies if z.health > 0 and not z.headless]
-        if observation.status != Status.RUNNING or len(targets) != 1:
-            continue
-        yield game, targets[0].id, attempt
+        # A separate stream leaves board proposals and gameplay RNG unchanged.
+        mower_rng = random.Random(namespace_seed(f"tile-cherry-bomb-mowers/{attempt}", seed))
+        ready = settings.get("bomb_mower_ready_probability", 0.0)
+        set_initial_mowers(game, [row for row in range(rows) if mower_rng.random() < ready])
+        yield game, attempt

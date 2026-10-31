@@ -114,6 +114,7 @@ cherry_bomb_n_envs = 640 # Fastest measured collection time/env with 32 workers 
 peashooter_sky_sun_rate = 1.5 # Divide sky-drop delays by this rate; keep each drop at 25 sun.
 bomb_initial_sun = 150
 bomb_plants = [1, 8]
+bomb_mower_ready_probability = 0.5 # Independent per row; otherwise disappeared (spent).
 ranking_margin = 1.0
 ranking_objective = "top1_hinge_v1" # Positive-set ranking; occupied tiles are ordinary alternatives.
 
@@ -170,6 +171,7 @@ cherry_prepare_workers = 32 # Capped by logical CPUs and the shared host-memory 
 cherry_worker_ram_mib = 96 # Reserved per worker, deducted from trajectory storage.
 cherry_prefetch = true # One uncommitted CPU cohort overlaps fitting; resume regenerates it.
 cherry_oracle = "cuda" # "cpu" retains the exact fork-based reference implementation.
+cherry_cuda_warmup = true # Advance initial cooldowns in the existing CUDA scratch lanes.
 cherry_oracle_lanes = 2048 # Shrinks to fit VRAM without changing labels.
 cherry_oracle_vram_mib = 2048
 annotation_input_cache = "auto"

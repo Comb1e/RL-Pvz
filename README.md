@@ -72,18 +72,23 @@ Peashooter uses easy waves, 50 starting sun, disabled mowers and configurable
 exploration. Each tile stage has its own episode budget and validation clock;
 automatic progression preserves optimizer state, while separate `--init-from`
 runs transfer weights into a fresh optimizer.
+Cherry Bomb boards independently randomize each row's cart between ready and
+disappeared; `training.tile_scenarios.bomb_mower_ready_probability` defaults to 0.5.
+Resume keeps the saved probability; older runs without it keep all carts disappeared.
 The live viewer follows new cohorts automatically. In Cherry Bomb, **Switch**
 browses completed boards from the current cohort, including while fitting runs.
 Cherry Bomb defaults to 640 envs through `training.tile_scenarios.cherry_bomb_n_envs`
 (`--cherry-bomb-envs`); `training.n_envs` (`--n-envs`) controls other stages.
 Its preparation shares validated simulator setup, uses up to 32 persistent CPU
-workers, and batches exact attributed-hit rollouts on CUDA. Under
+workers, and batches natural cooldown warmup and exact attributed-hit rollouts
+on CUDA. Under
 `training.performance`, `cherry_prepare_workers`, `cherry_oracle_lanes` and
 `cherry_oracle_vram_mib` control execution (defaults: 32, 2048, 2048).
 Workers respect the host-memory budget; scratch lanes shrink to retain GPU
 headroom. Larger limits are allowed. `cherry_oracle = "cpu"` selects the exact CPU
-reference. One speculative CPU cohort overlaps fitting; unfinished preparation
-is regenerated from unconsumed seeds on resume. Learning targets stay unchanged.
+reference; `cherry_cuda_warmup = false` keeps CPU cooldown advancement with the
+CUDA oracle. One speculative CPU cohort overlaps fitting; unfinished preparation
+is regenerated from unconsumed seeds on resume.
 Normal fitting keeps three tile-only cohorts followed by one joint cohort, with
 four passes each. Tile-only fitting freezes species parameters and species EMA.
 
@@ -133,6 +138,7 @@ Completed weights cannot be resumed; start a new run with `--init-from`.
 .\.venv\Scripts\python.exe tools\report_rewards.py runs\my-run 1
 .\.venv\Scripts\python.exe tools\benchmark_cherry_collection.py `
   --envs 256 512 640 1024 --workers 8 16 24 32 --oracles cpu cuda `
+  --warmup-backends cpu cuda `
   --output artifacts\cherry-collection.json
 ```
 

@@ -6,7 +6,7 @@ from weakref import proxy
 from pvz_game.cuda import CudaBatch
 from pvz_game.cuda.backend import projectile_bound
 
-from pvz_rl.envs.cuda_snapshots import GROUPS, pack_snapshots
+from pvz_rl.envs.cuda_snapshots import GROUPS, download_snapshots, pack_snapshots, upload_snapshots
 from pvz_rl.envs.scratch_game import scratch_rules
 from pvz_rl.learning.cohort import check_transition_interruption
 from pvz_rl.learning.deadline import check_deadline
@@ -73,7 +73,7 @@ class CudaBombOracle:
                     projectile_capacity=qcap,
                     rules=self.rules,
                     device=cp.cuda.runtime.getDevice(),
-                    max_step_ticks=self.rules.plants["cherry_bomb"]["first_ticks"] + 1,
+                    max_step_ticks=max(256, self.rules.plants["cherry_bomb"]["first_ticks"] + 1),
                 )
                 return
             except cp.cuda.memory.OutOfMemoryError:
@@ -82,6 +82,40 @@ class CudaBombOracle:
         raise MemoryError(
             "Cherry oracle cannot allocate one scratch lane; free VRAM or use cherry_oracle = 'cpu'"
         )
+
+    def warmup(self, boards, *, deadline=None):
+        """Advance initial boards naturally, sharing existing bounded scratch lanes."""
+        if not boards:
+            return []
+        check_deadline(deadline)
+        self._allocate(boards)
+        batch, result = self.batch, []
+        ticks = self.rules.plants["cherry_bomb"]["initial_recharge_ticks"] + 2
+        actions = batch.cp.zeros(batch.n, dtype=batch.cp.int64)
+        for start in range(0, len(boards), batch.n):
+            check_transition_interruption()
+            check_deadline(deadline)
+            chunk = boards[start : start + batch.n]
+            if any(board["snapshot"]["tick"] != 0 for board in chunk):
+                raise ValueError("Cherry warmup requires initial snapshots")
+            batch.header[:, 17] = 0
+            upload_snapshots(batch, [b["snapshot"] for b in chunk], indices=range(len(chunk)))
+            batch.credit.fill(0)
+            for offset in range(0, ticks, 256):
+                check_transition_interruption()
+                check_deadline(deadline)
+                batch.step_device(actions, ticks=min(256, ticks - offset), per_tick=False)
+            snapshots = download_snapshots(batch, indices=range(len(chunk)))
+            for board, snapshot in zip(chunk, snapshots, strict=True):
+                targets = [z for z in snapshot["zombies"] if z["health"] > 0 and not z["headless"]]
+                target = (
+                    targets[0]["id"]
+                    if snapshot["status"] == "running" and len(targets) == 1
+                    else None
+                )
+                result.append(dict(board, snapshot=snapshot, target_id=target))
+        check_deadline(deadline)
+        return result
 
     def labels(self, boards, *, deadline=None):
         """CPU-validated starting states; one compact result per simulated tile."""
@@ -104,6 +138,7 @@ class CudaBombOracle:
                 occupied = {p["row"] * 9 + p["col"] for p in row["plants"]}
                 usable = (
                     row["status"] == "running"
+                    and chunk[i].get("target_id") is not None
                     and row["cooldowns"]["cherry_bomb"] == 0
                     and row["sun"] >= self.rules.plants["cherry_bomb"]["cost"]
                 )
@@ -132,7 +167,8 @@ class CudaBombOracle:
                 batch.credit[:count, 1] = batch.header[:count, 3]  # next_id is this new bomb
                 actions = cp.zeros(batch.n, dtype=cp.int64)
                 actions[:count] = cp.asarray([1 + 3 * 45 + tile for _, tile in panel])
-                batch.step_device(actions, ticks=batch.max_step_ticks, per_tick=False)
+                fuse = self.rules.plants["cherry_bomb"]["first_ticks"] + 1
+                batch.step_device(actions, ticks=fuse, per_tick=False)
                 hits = batch.credit[:count, 2].get()
                 for (i, tile), hit in zip(panel, hits, strict=True):
                     if hit:

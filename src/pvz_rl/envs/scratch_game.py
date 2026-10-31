@@ -53,7 +53,12 @@ class EngineSnapshot(dict):
     def capture(cls, game):
         if type(game) is not Game:
             raise TypeError("Expected an engine-owned Game")
-        result = cls(game.snapshot())
+        return cls._seal(game.snapshot())
+
+    @classmethod
+    def _seal(cls, snapshot):
+        # Internal only: CPU capture or owned CUDA snapshot download.
+        result = cls(snapshot)
         result._captured_digest = canonical_hash(result)
         return result
 
@@ -76,6 +81,17 @@ def restored_game(snapshot, rules=None):
     # The public engine validator runs once at the external snapshot boundary.
     game.restore(snapshot)
     return game
+
+
+def set_initial_mowers(game, ready_rows):
+    """Select only ready/spent carts on a freshly reset owned scratch game."""
+    if type(game) is not Game or not game._ready or game._tick != 0:
+        raise ValueError("Initial mower states require a freshly reset engine game")
+    rows = set(ready_rows)
+    if any(type(row) is not int or not 0 <= row < game.rules.game["rows"] for row in rows):
+        raise ValueError("Initial mower rows must be within the board")
+    for mower in game._mowers:
+        mower.state = "ready" if mower.row in rows else "spent"
 
 
 def fork_game(game):

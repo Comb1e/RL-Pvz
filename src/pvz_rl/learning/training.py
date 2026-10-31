@@ -1614,6 +1614,7 @@ def train(
     progress.emit(
         f"Cherry preparation: {preparation.get('cherry_prepare_workers', 0)} requested CPU workers; "
         f"{preparation.get('cherry_oracle', 'cpu')} oracle; "
+        f"CUDA warmup {preparation.get('cherry_cuda_warmup', False)}; "
         f"prefetch {preparation.get('cherry_prefetch', False)}; workers/scratch respect RAM/VRAM limits",
         force=True,
     )

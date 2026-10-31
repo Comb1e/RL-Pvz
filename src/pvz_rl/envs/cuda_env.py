@@ -164,6 +164,12 @@ class ScenarioQueue:
             self.preparation_metrics = dict(
                 workers=prep.workers,
                 oracle=prep.oracle,
+                warmup_backend=(
+                    "cuda"
+                    if prep.oracle == "cuda"
+                    and self.cfg["training"].get("performance", {}).get("cherry_cuda_warmup", False)
+                    else "cpu"
+                ),
                 prefetched=prefetched,
                 scratch_lanes=prep.cuda.batch.n if prep.cuda is not None else 0,
                 host_reserved_bytes=self.reserved_bytes,

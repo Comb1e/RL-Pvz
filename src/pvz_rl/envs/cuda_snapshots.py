@@ -1,4 +1,6 @@
-"""Validated snapshot packing with one host transfer per storage slab."""
+"""Validated snapshot transport with one transfer per occupied storage slab."""
+
+from copy import deepcopy
 
 import numpy as np
 from pvz_game.config import PLANT_TYPES, ZOMBIE_TYPES
@@ -94,3 +96,62 @@ def upload_snapshots(batch, snapshots, *, indices):
     batch.facts[ix] = 0
     batch._event_counts[ix] = 0
     batch.action_masks_device()
+
+
+def download_snapshots(batch, *, indices):
+    """Capture owned CUDA states using the pinned snapshot schema, in one batch."""
+    indices = batch._indices(indices)
+    if not indices:
+        return []
+    if any(batch._templates[i] is None for i in indices):
+        raise RuntimeError("Reset before taking snapshots")
+    ix = batch.cp.asarray(indices)
+    headers = batch.header[ix].get()
+    cooldowns = batch.cooldowns[ix].get().tolist()
+    counts = [headers[:, s.HEADER.index(name)] for name in ("np", "nz", "nq")]
+    counts.append(np.full(len(indices), batch.rules.game["rows"]))
+    slabs = [
+        getattr(batch, name)[ix, : int(size.max())].get().tolist()
+        for name, size in zip(GROUPS, counts, strict=True)
+    ]
+    snapshots = []
+    for i, index in enumerate(indices):
+        raw = deepcopy(batch._templates[index])
+        header = dict(zip(s.HEADER, headers[i].tolist(), strict=True))
+        for key in (
+            "tick",
+            "sun",
+            "next_id",
+            "spawn_index",
+            "defeated",
+            "wave",
+            "gameplay_rng",
+            "sky_due",
+            "sky_drops",
+        ):
+            raw[key] = header[key]
+        raw["status"] = s.STATUSES[header["status"]]
+        raw["cooldowns"] = dict(zip(PLANT_TYPES, cooldowns[i], strict=True))
+        for name, schema, slab, size in zip(
+            GROUPS, (s.PLANT, s.ZOMBIE, s.PROJECTILE, s.MOWER), slabs, counts, strict=True
+        ):
+            raw[name] = []
+            for values in slab[i][: int(size[i])]:
+                item = dict(zip(schema, values, strict=True))
+                item.pop("previous_x", None)
+                if name in ("plants", "zombies"):
+                    kinds = PLANT_TYPES if name == "plants" else ZOMBIE_TYPES
+                    item["kind"] = kinds[item["kind"]]
+                if "state" in item:
+                    states = {
+                        "plants": s.PLANT_STATES,
+                        "zombies": s.ZOMBIE_STATES,
+                        "mowers": s.MOWER_STATES,
+                    }[name]
+                    item["state"] = states[item["state"]]
+                for key in ("icy", "has_pole", "headless"):
+                    if key in item:
+                        item[key] = bool(item[key])
+                raw[name].append(item)
+        snapshots.append(EngineSnapshot._seal(raw))
+    return snapshots

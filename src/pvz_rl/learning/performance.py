@@ -13,6 +13,7 @@ PERFORMANCE_SETTINGS = (
     "cherry_worker_ram_mib",
     "cherry_prefetch",
     "cherry_oracle",
+    "cherry_cuda_warmup",
     "cherry_oracle_lanes",
     "cherry_oracle_vram_mib",
     "compile_collection",

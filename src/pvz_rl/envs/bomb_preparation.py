@@ -4,7 +4,12 @@ import multiprocessing
 from concurrent.futures import ProcessPoolExecutor, TimeoutError
 
 from pvz_rl.envs.scratch_game import EngineSnapshot, scratch_rules
-from pvz_rl.envs.tile_scenarios import bomb_candidates, generation_failure, sample_bomb
+from pvz_rl.envs.tile_scenarios import (
+    bomb_candidates,
+    bomb_initials,
+    generation_failure,
+    sample_bomb,
+)
 from pvz_rl.learning.deadline import check_deadline
 
 _WORKER_CFG = None
@@ -24,6 +29,12 @@ def _prepare(job, cfg=None):
     seed, start, labels, deadline = job
     if labels:
         return sample_bomb(cfg, seed, deadline=deadline)
+    if cfg["training"].get("performance", {}).get("cherry_cuda_warmup", False):
+        candidate = next(bomb_initials(cfg, seed, start=start, deadline=deadline), None)
+        if candidate is None:
+            raise generation_failure(cfg, seed)
+        game, attempt = candidate
+        return dict(snapshot=EngineSnapshot.capture(game), generation_failures=attempt)
     candidate = next(bomb_candidates(cfg, seed, start=start, deadline=deadline), None)
     if candidate is None:
         raise generation_failure(cfg, seed)
@@ -94,6 +105,8 @@ class BombPreparation:
                     from pvz_rl.envs.cuda_bomb_oracle import CudaBombOracle
 
                     self.cuda = CudaBombOracle(self.cfg)
+                if self.cfg["training"].get("performance", {}).get("cherry_cuda_warmup", False):
+                    candidates = self.cuda.warmup(candidates, deadline=deadline)
                 labels = self.cuda.labels(candidates, deadline=deadline)
                 retry, starts = [], []
                 for index, board, (positive, absolute) in zip(

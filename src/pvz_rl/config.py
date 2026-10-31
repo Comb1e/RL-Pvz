@@ -536,6 +536,9 @@ def validate_config(cfg: dict) -> None:
         )
         if type(sun) is not int or not 150 <= sun <= 9990:
             raise ValueError("tile scenario bomb_initial_sun must be between 150 and 9990")
+        ready = tile.get("bomb_mower_ready_probability", 0.0)
+        if type(ready) not in (int, float) or not math.isfinite(ready) or not 0 <= ready <= 1:
+            raise ValueError("tile scenario bomb_mower_ready_probability must be in [0, 1]")
         if (
             not isinstance(plants, list)
             or len(plants) != 2
@@ -697,8 +700,9 @@ def validate_config(cfg: dict) -> None:
         raise ValueError("training.performance.annotation_cache_mib must be a nonnegative integer")
     if type(performance.get("annotation_use_fit_limits", False)) is not bool:
         raise ValueError("training.performance.annotation_use_fit_limits must be a boolean")
-    if type(performance.get("cherry_prefetch", False)) is not bool:
-        raise ValueError("training.performance.cherry_prefetch must be a boolean")
+    for key in ("cherry_prefetch", "cherry_cuda_warmup"):
+        if type(performance.get(key, False)) is not bool:
+            raise ValueError(f"training.performance.{key} must be a boolean")
     workers = performance.get("cherry_prepare_workers", 0)
     if type(workers) is not int or workers < 0:
         raise ValueError(
@@ -728,6 +732,7 @@ def validate_config(cfg: dict) -> None:
         "cherry_worker_ram_mib",
         "cherry_prefetch",
         "cherry_oracle",
+        "cherry_cuda_warmup",
         "cherry_oracle_lanes",
         "cherry_oracle_vram_mib",
         "fit_batch_groups",
