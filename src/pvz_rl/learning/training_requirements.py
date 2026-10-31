@@ -228,6 +228,9 @@ def resume_protocol(cfg, condition):
     # This trigger changes only at a collection boundary; probability schedules
     # and every other learning setting remain part of strict resume identity.
     result["training"]["exploration"].pop("plant_wait_check_seconds", None)
+    # Only the Cherry probe interval may refresh; pending probes still run
+    # against their saved weights before any further fitting.
+    result["curriculum"].pop("cherry_bomb_probe_interval_games", None)
     return result
 
 

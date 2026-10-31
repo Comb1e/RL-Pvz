@@ -56,6 +56,9 @@ rules. This file adds project-specific constraints and ownership.
   fitted cohort. Use authoritative outcomes from the entire configured cohort,
   including attributed bomb hits; shortened cohorts and rolling statistics cannot
   qualify. A skipped check waits another interval.
+- Cherry Bomb owns its configured probe interval; resume refreshes that interval
+  but retries pending validation first. Validation releases idle collection scratch
+  and graph storage without discarding CPU workers or speculative seed state.
 - Keep cohort qualification separate from perfect validation mastery. Persist
   separate tile-stage/normal clocks and pending validation; retry interrupted validation
   against preserved weights before further fitting. Missing saved trigger settings
@@ -73,7 +76,7 @@ Paths below are relative to `src/pvz_rl/` unless stated otherwise.
 | `envs/scratch_game.py`, `bomb_preparation.py`, `cuda_bomb_oracle.py`, `cuda_snapshots.py` | Validated forks/cart setup, persistent workers/prefetch, CUDA cooldown warmup/attributed labels and batched snapshot transfers. |
 | `policy/` | Independent two-stage Transformers, shared runner, all-tile selection, active batching and bounded collection/fitting CUDA graphs. |
 | `learning/training.py`, `cuda_q.py`, `sequential_training.py` | Training orchestration, cohort lifecycle, collection, finalization and atomic recovery. |
-| `learning/tile_curriculum.py`, `validation_trigger.py`, `training_requirements.py` | Independent tile-stage progression, legacy prerequisite recovery, cohort validation gate and normal fitting schedule. |
+| `learning/tile_curriculum.py`, `validation_trigger.py`, `budget.py`, `training_requirements.py` | Independent tile-stage clocks/progression, legacy prerequisite recovery, cohort validation gate and normal fitting schedule. |
 | `learning/flat_q.py`, `objective.py`, `action_routing.py` | Shared autonomous/demo fitting, selected-action targets, consistency, ranking and wait/invalid compaction. |
 | `envs/search_worlds.py`, `learning/search_teacher.py`, `search_targets.py`, `search_settings.py` | Public world reconstruction, interruptible CUDA search/continuations, confirmed targets and versioned settings/recovery. |
 | `learning/cuda_buffer.py`, `batch_transport.py`, `collection_scheduler.py`, `exploration.py` | Trajectories, bounded transport, decision tickets and persistent exploration commitments. |

@@ -2,14 +2,22 @@
 
 from copy import deepcopy
 
+from pvz_rl.learning.budget import validation_interval_games
+
 
 class ValidationTrigger:
     def __init__(self, cfg, state=None):
         settings = cfg["training"].get("validation_trigger", {})
         self.enabled = settings.get("enabled", False)
         self.threshold = settings.get("cohort_success_threshold", 0.9)
-        self.interval = cfg["curriculum"]["probe_interval_games"]
+        self.intervals = {
+            domain: validation_interval_games(cfg, domain)
+            for domain in ("normal", "pre", "peashooter", "cherry_bomb")
+        }
         self.state = deepcopy(state) if state else dict(last_check={}, decision=None, pending=None)
+
+    def interval_for(self, domain):
+        return self.intervals[domain]
 
     @property
     def pending(self):
@@ -33,7 +41,7 @@ class ValidationTrigger:
                 self.state["pending"] = kind
             return allowed, False
         last = self.state["last_check"].get(domain, 0)
-        if progress - last < self.interval:
+        if progress - last < self.interval_for(domain):
             return False, False
         full = (
             cohort.get("games", 0) == cohort.get("configured_games") and cohort.get("games", 0) > 0
@@ -64,7 +72,7 @@ class ValidationTrigger:
         return dict(
             enabled=self.enabled,
             cohort_success_threshold=self.threshold,
-            interval_episodes=self.interval,
-            next_check=self.state["last_check"].get(domain, 0) + self.interval,
+            interval_episodes=self.interval_for(domain),
+            next_check=self.state["last_check"].get(domain, 0) + self.interval_for(domain),
             **deepcopy(self.state),
         )

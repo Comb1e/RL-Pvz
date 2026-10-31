@@ -102,12 +102,17 @@ Search preserves reward economics and duration shaping, with the duration refere
 frozen within each queried board. Its hidden-state prior is approximate. A longer
 losing defense can still score worse because the configured duration penalty remains.
 
-Every 2,000 completed episodes, rounded to a fitted cohort boundary, a full cohort
+Cherry Bomb checks validation every 10,000 completed episodes through
+`curriculum.cherry_bomb_probe_interval_games`; Peashooter and normal stages check
+every 2,000. Intervals round up to a fitted cohort boundary. A full cohort
 must exceed 90% success to launch validation (normal 116/128; Cherry Bomb 577/640). Collection may be
 search-assisted; mastery still requires 100/100 greedy network validation.
 Each tile stage requires 100/100 on that skill alone, then completes or advances;
 there is no joint probe or skill revisit in fresh runs. The combined `--stage pre`
 is retired; old checkpoints retain their saved combined-stage workflow on resume.
+Validation releases idle collection scratch storage and unused GPU caches before
+allocating its oracle. Resume refreshes the configured Cherry interval, while an
+already pending validation retries against the saved weights first.
 
 Resume saved weights, optimizer, pending search, simulator and fitting progress:
 

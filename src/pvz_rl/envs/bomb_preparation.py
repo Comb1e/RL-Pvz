@@ -132,10 +132,14 @@ class BombPreparation:
             if hasattr(task, "cancel"):
                 task.cancel()
 
+    def release_scratch(self):
+        """Hand GPU storage to validation without discarding workers or CPU prefetch."""
+        if self.cuda is not None:
+            self.cuda.close()
+            self.cuda = None
+
     def close(self):
         if self.pool is not None:
             self.pool.shutdown(wait=True, cancel_futures=True)
             self.pool = None
-        if self.cuda is not None:
-            self.cuda.close()
-        self.cuda = None
+        self.release_scratch()

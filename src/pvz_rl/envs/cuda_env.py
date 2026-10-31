@@ -181,6 +181,10 @@ class ScenarioQueue:
             self.rngs[i].bit_generator.state = rngs[i].bit_generator.state
         return staged
 
+    def release_scratch(self):
+        if self._preparation is not None:
+            self._preparation.release_scratch()
+
     def close(self):
         self.discard_prefetch()
         if self._preparation is not None:

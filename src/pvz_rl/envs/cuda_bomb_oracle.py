@@ -48,6 +48,7 @@ class CudaBombOracle:
             cp.get_default_memory_pool().free_all_blocks()
 
     def _allocate(self, boards):
+        import torch
         from pvz_game.cuda.backend import cupy_runtime
 
         cp = cupy_runtime()
@@ -57,6 +58,10 @@ class CudaBombOracle:
         if self.batch is not None and self.batch.qcap >= qcap and self.batch.zcap >= zcap:
             return
         self.batch = None
+        # CuPy cannot reuse PyTorch's inactive blocks. Reclaim them only at an
+        # allocation boundary, before applying the unchanged headroom limit.
+        with torch.cuda.device(cp.cuda.runtime.getDevice()):
+            torch.cuda.empty_cache()
         free, _ = cp.cuda.runtime.memGetInfo()
         free += cp.get_default_memory_pool().free_bytes()
         budget = min(
@@ -80,7 +85,10 @@ class CudaBombOracle:
                 cp.get_default_memory_pool().free_all_blocks()
                 count //= 2
         raise MemoryError(
-            "Cherry oracle cannot allocate one scratch lane; free VRAM or use cherry_oracle = 'cpu'"
+            "Cherry oracle cannot allocate one scratch lane "
+            f"({free / 1024**2:.0f} MiB reusable, "
+            f"{perf.get('collection_vram_headroom_mib', 0)} MiB headroom); "
+            "free VRAM or use cherry_oracle = 'cpu'"
         )
 
     def warmup(self, boards, *, deadline=None):

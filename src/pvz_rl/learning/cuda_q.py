@@ -215,7 +215,7 @@ class CudaCohortLifecycle(BaseAlgorithm):
         trigger = getattr(callback, "validation_trigger", None)
         if trigger is not None and trigger.enabled:
             last = trigger.state["last_check"].get(skills.validation_domain, 0)
-            if skills.progress - last >= trigger.interval:
+            if skills.progress - last >= trigger.interval_for(skills.validation_domain):
                 return
         elif skills.due(self.cfg):
             return

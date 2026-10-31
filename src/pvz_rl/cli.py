@@ -131,6 +131,7 @@ def configured(args):
         )
         cfg = refresh_performance(cfg, current)
     if args.command == "train":
+        from pvz_rl.learning.budget import refresh_validation_schedule
         from pvz_rl.learning.exploration import refresh_wait_exploration
         from pvz_rl.learning.performance import refresh_performance
 
@@ -141,6 +142,7 @@ def configured(args):
             )
         cfg = refresh_performance(cfg, current)
         cfg = refresh_wait_exploration(cfg, current)
+        cfg = refresh_validation_schedule(cfg, current)
         cfg["logging"] = copy.deepcopy(current["logging"])
         args.seed = 101 if getattr(args, "seed", None) is None else args.seed
         args.condition = getattr(args, "condition", None) or "masked"

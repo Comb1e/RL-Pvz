@@ -3,6 +3,7 @@
 from dataclasses import asdict, dataclass, field
 
 from pvz_rl.envs.tile_scenarios import SKILLS
+from pvz_rl.learning.budget import validation_interval_games
 from pvz_rl.learning.curriculum import TILE_STAGES
 
 TILE_SCENARIO_PROTOCOL = "tile-skill-prerequisites-v1"
@@ -85,7 +86,7 @@ class TileSkillState:
         )
         return (
             self.active
-            and self.progress - previous >= cfg["curriculum"]["probe_interval_games"]
+            and self.progress - previous >= validation_interval_games(cfg, self.validation_domain)
         )
 
     def observe(self, scores, cfg):

@@ -507,6 +507,11 @@ def validate_config(cfg: dict) -> None:
     if type(reserve) not in (int, float) or not math.isfinite(reserve) or reserve < 0:
         raise ValueError("finalization_minutes must be finite and nonnegative")
     c = cfg["curriculum"]
+    cherry_interval = c.get("cherry_bomb_probe_interval_games")
+    if "cherry_bomb_probe_interval_games" in c and (
+        type(cherry_interval) is not int or cherry_interval < 1
+    ):
+        raise ValueError("cherry_bomb_probe_interval_games must be a positive integer")
     trigger = cfg["training"].get("validation_trigger")
     if trigger is not None:
         threshold = trigger.get("cohort_success_threshold")

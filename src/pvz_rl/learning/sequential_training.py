@@ -692,11 +692,13 @@ class CudaSequentialQ(CudaCohortLifecycle):
         self._fit_pass_start = None
 
     def configure_execution(self, cfg):
-        """Apply only approved execution settings to a resumed model."""
+        """Apply approved execution settings and the requested validation interval."""
+        from pvz_rl.learning.budget import refresh_validation_schedule
         from pvz_rl.learning.performance import refresh_performance
 
         previous = self.cfg
         self.policy.cfg = refresh_wait_exploration(refresh_performance(previous, cfg), cfg)
+        self.policy.cfg = refresh_validation_schedule(self.policy.cfg, cfg)
         self.policy.cfg["logging"] = dict(cfg["logging"])
         self.policy.features_extractor.cfg = self.policy.cfg
         self.policy_kwargs["features_extractor_kwargs"]["layout_cfg"] = self.policy.cfg

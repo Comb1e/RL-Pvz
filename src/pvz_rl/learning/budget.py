@@ -1,6 +1,27 @@
 """One training-progress unit shared by scheduling, logging, and reports."""
 
 
+def validation_interval_games(cfg, domain="normal"):
+    """Independent Cherry clock; absent overrides retain the saved common interval."""
+    curriculum = cfg["curriculum"]
+    if domain == "cherry_bomb":
+        return curriculum.get("cherry_bomb_probe_interval_games", curriculum["probe_interval_games"])
+    return curriculum["probe_interval_games"]
+
+
+def refresh_validation_schedule(cfg, current):
+    """Refresh the requested Cherry interval while preserving pending validation state."""
+    from copy import deepcopy
+
+    result = deepcopy(cfg)
+    key = "cherry_bomb_probe_interval_games"
+    if key in current["curriculum"]:
+        result["curriculum"][key] = current["curriculum"][key]
+    else:
+        result["curriculum"].pop(key, None)
+    return result
+
+
 def until_stage_complete(cfg):
     return cfg["training"].get("until_stage_complete", False)
 

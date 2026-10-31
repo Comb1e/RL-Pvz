@@ -919,7 +919,8 @@ class ResearchCallback(BaseCallback):
             self.progress.emit(
                 f"Validation check: {cohort.get('wins', 0)}/{cohort.get('games', 0)} "
                 f"cohort successes; {'launch' if allowed else 'skip'}; "
-                f"next check after {progress + self.validation_trigger.interval:,} {domain} episodes",
+                f"next check after {progress + self.validation_trigger.interval_for(domain):,} "
+                f"{domain} episodes",
                 force=True,
             )
         if (allowed and self.validation_trigger.enabled) or checked:
@@ -1030,6 +1031,18 @@ class ResearchCallback(BaseCallback):
         self.hardware_context("validation")
         started = perf_counter()
         try:
+            # Validation owns a separate environment. Retire idle collection
+            # scratch and graph buffers before it asks CuPy for another panel.
+            self.model.env.queue.release_scratch()
+            for network in (self.model.policy, getattr(self.model, "_teacher", None)):
+                if network is not None:
+                    for encoder in network.encoders:
+                        encoder.release_fitting()
+                        encoder.release_collection()
+            from pvz_rl.learning.performance import phase_memory
+
+            phase_memory(self.model.device, empty_cache=True)
+            self.model.env.cp.get_default_memory_pool().free_all_blocks()
             return operation(**kwargs)
         finally:
             self.eval_seconds += perf_counter() - started
@@ -1050,7 +1063,7 @@ class ResearchCallback(BaseCallback):
 
     def probe_tile_skills(self, *, final=False):
         skills = self.model.tile_skills
-        if not skills.due(self.cfg):
+        if not skills.due(self.cfg) and self.validation_trigger.pending != "tile":
             return
         if not self.request_validation("tile"):
             return
@@ -1059,11 +1072,6 @@ class ResearchCallback(BaseCallback):
         def probe():
             names = ", ".join(skills.validation_skills)
             self.progress.phase(Phase.VALIDATING, f"Tile stage validation: {names}")
-            for network in (self.model.policy, getattr(self.model, "_teacher", None)):
-                if network is not None:
-                    for encoder in network.encoders:
-                        encoder.release_fitting()
-                        encoder.release_collection()
             try:
                 results = validate_tile_skills(
                     self.cfg,
@@ -1702,10 +1710,13 @@ def train(
                 model.curriculum_state = initial_state(cfg).to_dict()
         model.research_metadata = details
         if model.tile_skills.active:
+            from pvz_rl.learning.budget import validation_interval_games
+
             progress.emit(
                 f"Tile stage: {model.tile_skills.phase}; validate "
                 f"{', '.join(model.tile_skills.validation_skills)} every "
-                f"{cfg['curriculum']['probe_interval_games']:,} stage episodes at a fitted "
+                f"{validation_interval_games(cfg, model.tile_skills.validation_domain):,} "
+                "stage episodes at a fitted "
                 f"cohort boundary; require {cfg['curriculum']['probe_cases']}/"
                 f"{cfg['curriculum']['probe_cases']}; "
                 + (
