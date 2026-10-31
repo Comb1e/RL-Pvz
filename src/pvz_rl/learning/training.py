@@ -1850,11 +1850,7 @@ def train(
                 or callback.pending_stage_validation
             )
         )
-        if (
-            not completed_learning
-            and settings["visualization"]["enabled"]
-            and (output / "best.zip").exists()
-        ):
+        if settings["visualization"]["enabled"]:
             from pvz_rl.presentation.visualization import visualize_run
 
             write_json(output / "status.json", {**final_status, "state": "exporting"})
@@ -1864,6 +1860,7 @@ def train(
                 videos=settings["visualization"]["videos"],
                 progress=progress,
                 deadline=wall_budget.deadline,
+                report_only=not (output / "best.zip").exists(),
             )
             final_status.update(
                 visualization_state=visual["state"], export_seconds=visual.get("export_seconds", 0)

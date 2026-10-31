@@ -1,4 +1,4 @@
-"""Completed-run retention; unfinished runs keep their full recovery artifacts."""
+"""Completed runs keep portable weights and visualizations; unfinished runs keep recovery."""
 
 import json
 import shutil
@@ -28,7 +28,6 @@ AUTONOMOUS_OUTPUTS = (
     "latest.zip",
     "interrupted.zip",
     "tensorboard",
-    "visualizations",
     "curriculum-probes",
     "validation",
 )
@@ -55,7 +54,7 @@ def retain_files(root, keep, *, candidates=None):
 
 
 def finish_autonomous_run(output):
-    """Atomically replace final.zip with portable weights before discarding recovery."""
+    """Compact final.zip and discard recovery while retaining generated visualizations."""
     output = Path(output).resolve(strict=True)
     final = output / "final.zip"
     status = json.loads((output / "status.json").read_text("utf-8"))

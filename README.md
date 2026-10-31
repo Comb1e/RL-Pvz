@@ -144,11 +144,13 @@ Use `--init-from PATH` for a fresh optimizer and the current search configuratio
 Annotation progress also supports compatible weight initialization; it is not an
 autonomous recovery checkpoint.
 
-After successful completion, autonomous training leaves only `final.zip`, containing
-portable weights and the configuration needed for inference or `--init-from`.
+Validation refreshes the report even when mastery passes. After successful completion,
+autonomous training keeps `final.zip`, containing portable weights and the configuration
+needed for inference or `--init-from`, together with generated `visualizations/` reports,
+charts and recordings. Stages without a validated `best.zip` still generate a report.
 Completed annotation/demo fitting likewise keeps only its `.pt` weight output;
-annotation and demonstration inputs are preserved. Reports and recovery files are
-kept while a run is interrupted, failed, time-limited or otherwise incomplete.
+annotation and demonstration inputs are preserved. Recovery files are kept while a
+run is interrupted, failed, time-limited or otherwise incomplete.
 Completed weights cannot be resumed; start a new run with `--init-from`.
 
 ## Common checks
