@@ -425,14 +425,6 @@ class CudaVecEnv(VecEnv):
         self.last_action_result_host = host[:, RECORD_RESULT]
         actions = host[:, RECORD_ACTIONS]
         self.last_reward_parts_host = host[:, RECORD_PARTS]
-        viewer = self.live_view
-        if viewer is not None and viewer.enabled:
-            presentation_started = perf_counter()
-            try:
-                viewer.after_step(compact)
-            except Exception as exc:
-                viewer.fail(exc)
-            self.profiler.host("presentation", perf_counter() - presentation_started)
         if not np.isfinite(self.last_reward_parts_host).all():
             raise RuntimeError("Invalid CUDA reward accounting or exhausted proximity ledger")
         summary = host[:, RECORD_SUMMARY].astype(np.int64)
@@ -486,6 +478,17 @@ class CudaVecEnv(VecEnv):
                         tile_scenario="cherry_bomb",
                     )
                 self.finished_outcomes[index] = completed[index]["episode_metrics"]["status"]
+        # Supervised outcomes are authoritative only after attribution above.
+        # Capture before autoreset, including all one-shot cohort results.
+        viewer = self.live_view
+        if viewer is not None and viewer.enabled:
+            presentation_started = perf_counter()
+            try:
+                viewer.after_step(compact)
+            except Exception as exc:
+                viewer.fail(exc)
+            self.profiler.host("presentation", perf_counter() - presentation_started)
+        if indices:
             if autoreset:
                 self.reset_indices(indices)
                 obs = self.features.obs_tensor

@@ -65,6 +65,7 @@ class Selection:
         self.pending = set()
         self.finalized_rewards = {}
         self.episode_floor = {}
+        self.completed_frames = {}
 
     def refresh(self, active):
         self.active = set(active)
@@ -80,43 +81,82 @@ class Selection:
         if generation != old.generation:
             return False
         occupied = {p.env for p in self.panels}
-        candidates = sorted(self.active - occupied)
+        candidates = sorted((self.active | self.completed_frames.keys()) - occupied)
+        if not candidates and old.env in self.completed_frames:
+            candidates = [old.env]  # All games are already displayed; acknowledge the request.
         if not candidates:
             self.pending.add(panel)
             old.state = PanelState.SELECTING
             return False
         selected = self.rng.choice(candidates)
         self.pending.discard(panel)
-        self.panels[panel] = Panel(selected, old.generation + 1, PanelState.SELECTING, old.frame)
+        replacement = Panel(selected, old.generation + 1, PanelState.SELECTING)
+        self.panels[panel] = replacement
+        if selected in self.completed_frames:
+            self.accept(panel, replacement.generation, self.completed_frames[selected])
+        else:
+            replacement.frame = old.frame
         return True
+
+    def _finalized_frame(self, frame):
+        env = frame["env"]
+        if frame["episode"] < self.episode_floor.get(env, 0):
+            return None
+        saved = self.finalized_rewards.get(env)
+        if saved is not None:
+            episode, reward = saved
+            if frame["episode"] < episode:
+                return None
+            if frame["episode"] == episode:
+                frame = dict(frame, reward=reward, reward_pending=False)
+            else:
+                del self.finalized_rewards[env]
+        return frame
+
+    def remember_completed(self, frame):
+        """Keep one public result per worker for browsing a one-decision cohort."""
+        frame = self._finalized_frame(frame)
+        if frame is None or frame["outcome"] == "running":
+            return
+        previous = self.completed_frames.get(frame["env"])
+        if previous is None or frame["sequence"] > previous["sequence"]:
+            self.completed_frames[frame["env"]] = frame
 
     def accept(self, panel, generation, frame):
         p = self.panels[panel]
         if generation != p.generation or frame.get("env", p.env) != p.env:
             return False
-        if frame["episode"] < self.episode_floor.get(p.env, 0):
+        previous = p.frame
+        if (
+            previous is not None
+            and previous.get("env", p.env) == p.env
+            and previous["episode"] == frame["episode"]
+            and frame["sequence"] <= previous["sequence"]
+        ):
             return False
-        if p.frame is not None and frame["sequence"] <= p.frame["sequence"]:
+        frame = self._finalized_frame(frame)
+        if frame is None:
             return False
-        saved = self.finalized_rewards.get(p.env)
-        if saved is not None:
-            episode, reward = saved
-            if frame["episode"] < episode:
-                return False
-            if frame["episode"] == episode:
-                frame = dict(frame, reward=reward, reward_pending=False)
-            else:
-                del self.finalized_rewards[p.env]
         p.frame = frame
         if panel not in self.pending:
             p.state = PanelState.RESULT if frame["outcome"] != "running" else PanelState.WATCHING
         return True
 
-    def reset_episodes(self, episodes):
+    def reset_episodes(self, episodes, *, active=None):
         """Expire finalized overrides and fence captures from reset episodes."""
-        for env, episode in episodes:
+        episodes = dict(episodes)
+        self.completed_frames.clear()
+        for env, episode in episodes.items():
             self.episode_floor[env] = max(episode, self.episode_floor.get(env, 0))
             self.finalized_rewards.pop(env, None)
+        for index, panel in enumerate(self.panels):
+            if panel.env in episodes:
+                panel.generation += 1
+                panel.state = PanelState.SELECTING
+                self.pending.discard(index)
+            elif active is not None and panel.env not in active:
+                panel.state = PanelState.SELECTING
+                self.pending.add(index)
 
     def finalize_rewards(self, episodes):
         """Replace rewards by stable episode identity, including delayed captures."""
@@ -127,6 +167,9 @@ class Selection:
             if saved is not None and episode < saved[0]:
                 continue
             self.finalized_rewards[env] = (episode, reward)
+            cached = self.completed_frames.get(env)
+            if cached is not None and cached["episode"] == episode:
+                self.completed_frames[env] = dict(cached, reward=reward, reward_pending=False)
             for panel in self.panels:
                 frame = panel.frame
                 if (

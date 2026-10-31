@@ -71,7 +71,7 @@ Paths below are relative to `src/pvz_rl/` unless stated otherwise.
 | `learning/checkpoints.py`, `performance.py` | Compatibility contracts, durable snapshots and execution-only refresh settings. |
 | `annotation/`, `learning/annotation_fit.py`, `demo_initialization.py` | Reachable-state sampling, atomic positive tile sets/conflicts, top-1 convergence and verified demo initialization. |
 | `evaluation/`, `monitoring/`, repository diagnostic tools | Stateless evaluation, CPU verification of CUDA traces, bounded profiling, benchmarks and read-only reward reports. |
-| `presentation/` | Shared renderers, annotation/live viewers and recordings; `training_charts.py` owns panels, while `visualization.py` reconciles resume history and builds policy-free reports. |
+| `presentation/` | Shared renderers, annotation/live viewers and recordings; `live_capture.py`/`live_view.py` own cohort subscriptions and public result caching. `training_charts.py` owns panels; `visualization.py` reconciles resume history and builds policy-free reports. |
 
 ## Test ownership
 

@@ -920,7 +920,7 @@ class CudaSequentialQ(CudaCohortLifecycle):
     def _fit_chunk(self, callback):
         viewer = getattr(self.env, "live_view", None)
         if viewer is not None and viewer.session.enabled:
-            viewer.session.poll()
+            viewer.poll()
             viewer.session.publish()
         if self._fit_epoch >= self.total_fit_passes:
             self._phase(CohortPhase.SYNCHRONIZE, callback)

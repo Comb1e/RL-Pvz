@@ -72,6 +72,8 @@ Peashooter uses easy waves, 50 starting sun, disabled mowers and configurable
 exploration. Each tile stage has its own episode budget and validation clock;
 automatic progression preserves optimizer state, while separate `--init-from`
 runs transfer weights into a fresh optimizer.
+The live viewer follows new cohorts automatically. In Cherry Bomb, **Switch**
+browses completed boards from the current cohort, including while fitting runs.
 Normal fitting keeps three tile-only cohorts followed by one joint cohort, with
 four passes each. Tile-only fitting freezes species parameters and species EMA.
 
