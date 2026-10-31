@@ -48,8 +48,9 @@ fitting keeps its top-1 ranking hinge. Fresh Cherry Bomb stages use only
 `-log(sum(successful-tile softmax probabilities))`: ordinary cross-entropy for the
 obstacle stage's sole successful tile, and no prescribed probability split among
 ordinary Cherry Bomb's successful tiles. All 45 outputs compete, including occupied
-cells. `training.cherry_bomb.softmax_temperature` specifies finite positive
-`zero_success` and `full_success` endpoints. Temperature changes linearly with the
+cells. Set `softmax_temperature` independently in `[training.cherry_bomb]` and
+`[training.cherry_bomb_obstacle]`, using finite positive `zero_success` and
+`full_success` endpoints. Temperature changes linearly with the
 completed training cohort's attributed-hit rate and stays fixed for its fitting
 passes, including replay after interruption. A scalar retains a fixed temperature.
 There is no hinge or distance penalty. Reports show cross-entropy and temperature;
@@ -59,7 +60,8 @@ is also studied in [partial-label learning](https://www.proceedings.com/content/
 
 To start autonomous training when ready:
 
-Tune both bomb stages in `[training.cherry_bomb]`, Peashooter in
+Tune shared bomb settings in `[training.cherry_bomb]`, with an independent temperature
+in `[training.cherry_bomb_obstacle]`, Peashooter in
 `[training.peashooter]`, and normal play in `[training.normal]` (including its
 `curriculum` tables). Shared fitting, rewards and resource limits retain their
 common tables. The loader resolves stage tables into the existing runtime layout;

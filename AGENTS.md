@@ -10,7 +10,8 @@ rules. This file adds project-specific constraints and ownership.
 - `src/pvz_rl/data/train.toml` is the single parameter source for training and demo
   overlays. Preserve the user's reward, exploration and cohort-cycle adjustments;
   read current values from configuration instead of duplicating them here. Group
-  stage tuning under `training.cherry_bomb`, `training.peashooter` and `training.normal`;
+  stage tuning under `training.cherry_bomb`, `training.cherry_bomb_obstacle`,
+  `training.peashooter` and `training.normal`;
   resolve these once at loading into the checkpoint-compatible runtime layout.
 - Short integration checks are allowed. Do not launch formal training unless asked.
 - Policy inputs contain public board facts only. Keep seeds, future schedules,
@@ -22,7 +23,7 @@ rules. This file adds project-specific constraints and ownership.
   workflow or absolute-infeasible tile labeling. Annotation fitting keeps its top-1
   hinge. Fresh bomb stages use only successful-set cross-entropy over all 45 outputs,
   including occupied cells; successful tiles have no prescribed probability split.
-  Its configurable temperature uses the completed cohort's attributed-hit rate,
+  Each bomb stage's configurable temperature uses its completed cohort's attributed-hit rate,
   fixed across fitting passes; saved scalar settings retain a fixed temperature.
   Legacy recovery retains its saved hinge/distance objective and settings.
 - Fresh autonomous training fits confirmed search values/differences and finite

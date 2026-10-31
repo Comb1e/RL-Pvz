@@ -15,6 +15,7 @@ from stable_baselines3.common.callbacks import BaseCallback
 
 from pvz_rl.config import (
     bomb_ranking_margin,
+    bomb_softmax_temperature,
     cohort_envs,
     curriculum_probe_seeds,
     output_settings,
@@ -1727,8 +1728,11 @@ def train(
                 bomb = cfg["training"]["tile_scenarios"]
                 objective = bomb.get("ranking_objective", "top1_hinge_v1")
                 fitting = (
-                    f"set cross-entropy only, temperature {bomb['softmax_temperature']} "
-                    "(fixed scalar or linear in this cohort's attributed-hit rate)"
+                    "set cross-entropy only, temperature "
+                    f"{bomb_softmax_temperature(bomb, 0.0, skill=model.tile_skills.phase):g}"
+                    " at 0% success to "
+                    f"{bomb_softmax_temperature(bomb, 1.0, skill=model.tile_skills.phase):g}"
+                    " at 100% (linear in this cohort's attributed-hit rate)"
                     if objective == BOMB_OBJECTIVE else (
                         f"ranking margin {bomb_ranking_margin(bomb)}, "
                         f"distance weight {bomb.get('distance_weight', 0)}, "

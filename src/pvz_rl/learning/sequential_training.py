@@ -828,7 +828,9 @@ class CudaSequentialQ(CudaCohortLifecycle):
         if not episodes or len(episodes) != self.cohort_games:
             raise RuntimeError("Bomb fitting temperature requires a completed cohort")
         rate = sum(bool(item["metrics"]["win"]) for item in episodes.values()) / len(episodes)
-        self._bomb_fit_temperature = bomb_softmax_temperature(settings, rate)
+        self._bomb_fit_temperature = bomb_softmax_temperature(
+            settings, rate, skill=self.tile_skills.phase,
+        )
         self.logger.record("train/bomb_softmax_temperature", self._bomb_fit_temperature)
 
     def _start_pass(self):

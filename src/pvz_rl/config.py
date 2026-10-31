@@ -14,7 +14,7 @@ from pathlib import Path
 from pvz_game.config import PLANT_TYPES, ZOMBIE_TYPES
 from pvz_game.cuda.schema import MOWER_STATES, PLANT_STATES, ZOMBIE_STATES
 
-from pvz_rl.envs.tile_scenarios import is_bomb_skill
+from pvz_rl.envs.tile_scenarios import BOMB_SKILLS, is_bomb_skill
 from pvz_rl.learning.budget import uses_games
 
 _CONFIG_RESOURCE = "data/train.toml"
@@ -44,6 +44,9 @@ _STAGE_PARAMETERS = {
             "oracle_lanes", "oracle_vram_mib",
         )},
         "probe_interval_games": "curriculum.cherry_bomb_probe_interval_games",
+    },
+    "cherry_bomb_obstacle": {
+        "softmax_temperature": "training.tile_scenarios.obstacle_softmax_temperature",
     },
     "peashooter": {
         "sky_sun_rate": "training.tile_scenarios.peashooter_sky_sun_rate",
@@ -130,9 +133,11 @@ def bomb_max_illegal_distance(settings):
     )
 
 
-def bomb_softmax_temperature(settings, success_rate):
-    """Resolve a fixed saved temperature or a linear cohort-success schedule."""
+def bomb_softmax_temperature(settings, success_rate, *, skill="cherry_bomb"):
+    """Resolve this bomb stage's fixed temperature or cohort-success schedule."""
     value = settings.get("softmax_temperature")
+    if skill == "cherry_bomb_obstacle":
+        value = settings.get("obstacle_softmax_temperature", value)
     if isinstance(value, dict):
         if set(value) != {"zero_success", "full_success"}:
             raise ValueError("Bomb softmax_temperature requires zero_success and full_success")
@@ -647,7 +652,8 @@ def validate_config(cfg: dict) -> None:
         ):
             raise ValueError("Unsupported tile scenario ranking_objective")
         if objective == "set_cross_entropy_v1":
-            bomb_softmax_temperature(tile, 0.0)
+            for skill in BOMB_SKILLS:
+                bomb_softmax_temperature(tile, 0.0, skill=skill)
         if objective == "top1_hinge_v1":
             margin = tile.get("ranking_margin")
             if type(margin) not in (float, int) or not math.isfinite(margin) or margin <= 0:

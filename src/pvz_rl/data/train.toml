@@ -105,7 +105,7 @@ cohort_success_threshold = 0.9 # Strictly above; full configured cohorts only (n
 enabled = true # Automatic cherry_bomb, cherry_bomb_obstacle, then peashooter; selected normal stages skip them.
 
 [training.cherry_bomb]
-# Shared by cherry_bomb and cherry_bomb_obstacle; no exploration or search.
+# Shared by both bomb stages except softmax_temperature; no exploration or search.
 n_envs = 640 # Fastest measured collection time/env with 32 workers and the CUDA oracle.
 probe_interval_games = 10000 # Independent clock for each bomb stage; pending probes retry first.
 initial_sun = 150
@@ -121,6 +121,9 @@ oracle = "cuda" # "cpu" retains the exact fork-based reference implementation.
 cuda_warmup = true # Advance initial cooldowns in the existing CUDA scratch lanes.
 oracle_lanes = 2048 # Shrinks to fit VRAM without changing labels.
 oracle_vram_mib = 2048
+
+[training.cherry_bomb_obstacle]
+softmax_temperature = { zero_success = 0.5, full_success = 0.05 } # Independent schedule; other bomb settings are shared above.
 
 [training.peashooter]
 # Uses the shared cohort size/fitting settings; only this stage scales sky sun.
