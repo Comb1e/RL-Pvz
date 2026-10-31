@@ -14,6 +14,7 @@ import numpy as np
 import torch
 from stable_baselines3.common.base_class import BaseAlgorithm
 
+from pvz_rl.config import cohort_envs
 from pvz_rl.learning.cohort import (
     CohortPhase,
     atomic_transition,
@@ -209,7 +210,7 @@ class CudaCohortLifecycle(BaseAlgorithm):
         from pvz_rl.learning.budget import budget_target, progress_value, uses_games
         from pvz_rl.learning.curriculum import pre_stage
 
-        count = self.n_envs
+        count = cohort_envs(self.cfg, self.tile_skills.phase)
         target = budget_target(self.env.cfg)
         skills = self.tile_skills
         self.env.tile_scenario = self.env.queue.tile_scenario = skills.phase
@@ -287,7 +288,7 @@ class CudaCohortLifecycle(BaseAlgorithm):
                 skill=self.tile_skills.phase if self.tile_skills.active else None,
                 stage=getattr(self, "curriculum_state", {}).get("stage"),
                 games=len(self._pending_episodes),
-                configured_games=self.n_envs,
+                configured_games=cohort_envs(self.cfg, self.tile_skills.phase),
                 wins=sum(bool(item["metrics"]["win"]) for item in self._pending_episodes.values()),
                 training_steps=self.num_timesteps,
                 optimizer_step=self.optimizer_commits,

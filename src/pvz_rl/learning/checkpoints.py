@@ -12,7 +12,7 @@ from zipfile import ZipFile
 
 import torch
 
-from pvz_rl.config import digest, load_config, validate_config
+from pvz_rl.config import digest, load_config, training_env_capacity, validate_config
 from pvz_rl.learning.performance import ENCODER_SETTINGS, refresh_performance
 from pvz_rl.learning.training_requirements import (
     FIT_SCHEDULE_PROTOCOL,
@@ -212,6 +212,11 @@ def inspect_checkpoint(path, *, weights_only=False):
     path = Path(path).resolve()
     if not path.suffix:
         path = path.with_suffix(".zip")
+    if path.suffix == ".zip":
+        with ZipFile(path) as archive:
+            portable = "weights-only.json" in archive.namelist()
+        if portable:
+            return _inspect_completed_weights(path, weights_only=weights_only)
     if path.suffix == ".pt":
         saved, snapshot_sha256 = load_torch_snapshot(path)
         progress = saved.get("protocol") in (
@@ -432,14 +437,13 @@ def inspect_checkpoint(path, *, weights_only=False):
                         )
                     ):
                         raise ValueError("Incomplete no-probe recovery state")
-                    CollectionScheduler(cfg["training"]["n_envs"], "cpu").restore(
-                        runtime["collection_scheduler"]
-                    )
+                    capacity = training_env_capacity(cfg, metadata["family"])
+                    CollectionScheduler(capacity, "cpu").restore(runtime["collection_scheduler"])
                     controller = runtime.get("plant_exploration")
                     if not isinstance(controller, dict):
                         raise ValueError("Incomplete committed plant recovery state")
                     state = CommittedPlantExploration(
-                        cfg["training"]["n_envs"],
+                        capacity,
                         "cpu",
                         stored.get("plant_exploration_rate", float("nan")),
                         stored.get("exploration_rate", float("nan")),
@@ -464,6 +468,46 @@ def inspect_checkpoint(path, *, weights_only=False):
         cfg = execution_config(metadata["config"])
     validate_config(cfg)
     metadata["config"] = cfg
+    return metadata
+
+
+def _inspect_completed_weights(path, *, weights_only):
+    from pvz_game import Rules
+
+    from pvz_rl.envs.encoding import ObservationEncoder
+    from pvz_rl.learning.cuda_q import checkpoint_metadata
+    from pvz_rl.learning.training_artifacts import WEIGHTS_PROTOCOL
+
+    if not weights_only:
+        raise ValueError(
+            "Completed runs retain weights only; use --init-from or inference. "
+            "Resume requires an interrupted/latest recovery checkpoint."
+        )
+    checkpoint_metadata(path, weights_only=True)
+    with ZipFile(path) as archive:
+        required = {
+            "policy.pth",
+            "protocol.json",
+            "observation-schema.json",
+            "run.json",
+            "weights-only.json",
+        }
+        if set(archive.namelist()) != required:
+            raise ValueError("Completed weight archive has unexpected or missing entries")
+        marker = json.loads(archive.read("weights-only.json"))
+        metadata = json.loads(archive.read("run.json"))
+        cfg = metadata["config"]
+        if marker != dict(protocol=WEIGHTS_PROTOCOL, config_digest=digest(cfg)):
+            raise ValueError("Completed weights configuration or protocol does not match")
+        validate_config(execution_config(inference_config(cfg)))
+        if (
+            json.loads(archive.read("observation-schema.json"))
+            != ObservationEncoder(cfg, Rules()).schema()
+        ):
+            raise ValueError("Completed weights entity schema disagrees with configuration")
+        if metadata.get("completion", {}).get("state") != "complete":
+            raise ValueError("Completed weights are missing completion metadata")
+    metadata["initialization_type"] = "weights"
     return metadata
 
 

@@ -899,4 +899,24 @@ def _fit_annotations(
 
 def fit_annotations(annotations, output, **kwargs):
     with ExitStack() as resources:
-        return _fit_annotations(annotations, output, _resources=resources, **kwargs)
+        report = _fit_annotations(annotations, output, _resources=resources, **kwargs)
+    if report["status"] == "complete":
+        from pvz_rl.learning.checkpoints import inspect_checkpoint
+        from pvz_rl.learning.training_artifacts import retain_files
+
+        checkpoint = Path(report["checkpoint"])
+        inspect_checkpoint(checkpoint, weights_only=True)
+        retain_files(
+            checkpoint.parent,
+            [checkpoint],
+            candidates=[
+                checkpoint.with_suffix(suffix)
+                for suffix in (
+                    ".progress.pt",
+                    ".history.jsonl",
+                    ".report.json",
+                )
+            ],
+        )
+        report.update(progress=None, history=None)
+    return report

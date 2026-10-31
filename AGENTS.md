@@ -33,6 +33,9 @@ rules. This file adds project-specific constraints and ownership.
   retains saved learning settings and committed updates; `--init-from` transfers
   compatible weights into fresh optimizer state. Do not silently migrate formats,
   replay committed passes or treat annotation progress as autonomous recovery.
+- Cherry Bomb has its own configured cohort size; other stages retain `n_envs`.
+  Completed training retains only its portable weight file. Interrupted, failed
+  and incomplete runs keep recovery artifacts; annotation inputs remain intact.
 
 ## Training stages and validation
 
@@ -68,7 +71,7 @@ Paths below are relative to `src/pvz_rl/` unless stated otherwise.
 | `learning/flat_q.py`, `objective.py`, `action_routing.py` | Shared autonomous/demo fitting, selected-action targets, consistency, ranking and wait/invalid compaction. |
 | `envs/search_worlds.py`, `learning/search_teacher.py`, `search_targets.py`, `search_settings.py` | Public world reconstruction, interruptible CUDA search/continuations, confirmed targets and versioned settings/recovery. |
 | `learning/cuda_buffer.py`, `batch_transport.py`, `collection_scheduler.py`, `exploration.py` | Trajectories, bounded transport, decision tickets and persistent exploration commitments. |
-| `learning/checkpoints.py`, `performance.py` | Compatibility contracts, durable snapshots and execution-only refresh settings. |
+| `learning/checkpoints.py`, `training_artifacts.py`, `performance.py` | Compatibility contracts, durable snapshots, completed-run weight retention and execution-only refresh settings. |
 | `annotation/`, `learning/annotation_fit.py`, `demo_initialization.py` | Reachable-state sampling, atomic positive tile sets/conflicts, top-1 convergence and verified demo initialization. |
 | `evaluation/`, `monitoring/`, repository diagnostic tools | Stateless evaluation, CPU verification of CUDA traces, bounded profiling, benchmarks and read-only reward reports. |
 | `presentation/` | Shared renderers, annotation/live viewers and recordings; `live_capture.py`/`live_view.py` own cohort subscriptions and public result caching. `training_charts.py` owns panels; `visualization.py` reconciles resume history and builds policy-free reports. |
@@ -83,8 +86,8 @@ temporary independent controls for targeted integration and boundary checks.
 - CPU inference: a real public board, both policy stages, finite Q values with
   valid dimensions, and an action submitted to the simulator.
 - Explicit `learning` check: two one-second CUDA games, two environments, one fitting
-  pass, checkpoint reload and prediction. Disable compilation, presentation and
-  prerequisites and search; use batch size 32, a two-minute allowance and a
+  pass, recovery/portable weight reload, completion cleanup and prediction. Disable
+  compilation, presentation, prerequisites and search; use batch size 32, a two-minute allowance and a
   180-second subprocess timeout. Missing CUDA requirements fail.
 
 ```powershell

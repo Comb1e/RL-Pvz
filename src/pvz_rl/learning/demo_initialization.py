@@ -779,4 +779,25 @@ def load_demo_checkpoint(path: str | Path, cfg: dict | None = None, *, device="c
 
 def initialize_demo(archive, replay, output, **kwargs):
     with ExitStack() as resources:
-        return _initialize_demo(archive, replay, output, _resources=resources, **kwargs)
+        result = _initialize_demo(archive, replay, output, _resources=resources, **kwargs)
+    if result["state"] == "complete":
+        from pvz_rl.learning.checkpoints import inspect_checkpoint
+        from pvz_rl.learning.training_artifacts import retain_files
+
+        checkpoint = Path(result["checkpoint"])
+        inspect_checkpoint(checkpoint, weights_only=True)
+        retain_files(
+            checkpoint.parent,
+            [checkpoint],
+            candidates=[
+                checkpoint.parent / name
+                for name in (
+                    "learning-curves.json",
+                    "fitting-compaction.json",
+                    "action-coverage.json",
+                    "replay-verification.json",
+                    "status.json",
+                )
+            ],
+        )
+    return result

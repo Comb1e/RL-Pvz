@@ -14,6 +14,7 @@ import torch
 from stable_baselines3.common.callbacks import BaseCallback
 
 from pvz_rl.config import (
+    cohort_envs,
     curriculum_probe_seeds,
     output_settings,
     runtime_settings,
@@ -327,8 +328,11 @@ class ResearchCallback(BaseCallback):
             "search": dict(getattr(getattr(self.model, "_search", None), "metrics", {})),
             "collection_policy": "search_assisted" if self.model.search_training else "network",
             "validation_trigger": self.validation_trigger.snapshot(
-                self.model.tile_skills.validation_domain if self.model.tile_skills.active
-                else selected_stage(self.cfg) if pre_stage(self.cfg) else "normal"
+                self.model.tile_skills.validation_domain
+                if self.model.tile_skills.active
+                else selected_stage(self.cfg)
+                if pre_stage(self.cfg)
+                else "normal"
             ),
             "peashooter_sky_sun_rate": peashooter_sky_sun_rate(self.cfg),
             "active_skill": self.model.tile_skills.phase if self.model.tile_skills.active else None,
@@ -1414,7 +1418,7 @@ def load_policy(checkpoint, device="cpu", *, for_resume=False):
     require_supported_policy(cfg, data["condition"])
     torch.set_num_threads(cfg["training"]["torch_threads"])
     if (
-        data["initialization_type"] in ("demonstration", "annotation")
+        data["initialization_type"] in ("demonstration", "annotation", "weights")
         or not current_model_config(data["config"])
         or not current_engine_config(data["config"])
         or (not for_resume and data.get("fit_schedule_protocol") != FIT_SCHEDULE_PROTOCOL)
@@ -1434,6 +1438,11 @@ def load_policy(checkpoint, device="cpu", *, for_resume=False):
         else:
             weights, _ = initial_weights(checkpoint, cfg)
         model.policy.load_state_dict(weights, strict=True)
+        if data["initialization_type"] == "weights":
+            counters = data["source_counters"]
+            model.num_timesteps = counters["steps"]
+            model.training_games = counters["games"]
+            model._n_updates = counters["updates"]
     else:
         model = model_class(cfg).load(checkpoint, device=device)
         saved_reward = copy.deepcopy(model.cfg["reward"])
@@ -1593,15 +1602,19 @@ def train(
     )
     progress.emit(
         f"Shared {condition} {cfg['policy']['kind']} policy; learner seed {learner_seed}; {cfg['training']['device']}; "
-        f"{cfg['training']['n_envs']} parallel games; simulator {simulator(cfg)}; "
+        f"{cohort_envs(cfg)} Peashooter/normal lanes, "
+        f"{cohort_envs(cfg, 'cherry_bomb')} Cherry Bomb lanes; simulator {simulator(cfg)}; "
         "one complete game per environment per cohort; "
         f"{budget_label}; "
         f"family {family}; output {output.resolve()}",
         force=True,
     )
     progress.emit(f"Data transport: {runtime_settings(cfg)}", force=True)
-    target_kind = ("confirmed same-board search targets" if cfg["training"].get("search", {}).get("enabled", False)
-                   else "actual returns")
+    target_kind = (
+        "confirmed same-board search targets"
+        if cfg["training"].get("search", {}).get("enabled", False)
+        else "actual returns"
+    )
     progress.emit(
         f"Policy: {cfg.get('policy', {'kind': 'flat'})}; {target_kind}; "
         f"repeat {cfg['training']['tile_only_cohorts']} tile-only cohorts then one joint cohort; "
@@ -1645,6 +1658,7 @@ def train(
         force=True,
     )
     training_complete = False
+    retain_weights = False
     wall_budget = RunBudget(cfg, elapsed=prior_time, started=started)
     try:
         env = vector_env(cfg, condition, learner_seed, family)
@@ -1795,7 +1809,20 @@ def train(
         env.close()
         env = None
         visual = None
-        if settings["visualization"]["enabled"] and (output / "best.zip").exists():
+        completed_learning = (
+            not callback.budget_stopped
+            and model.phase == "idle"
+            and not (
+                callback.validation_trigger.pending
+                or callback.validation_pending
+                or callback.pending_stage_validation
+            )
+        )
+        if (
+            not completed_learning
+            and settings["visualization"]["enabled"]
+            and (output / "best.zip").exists()
+        ):
             from pvz_rl.presentation.visualization import visualize_run
 
             write_json(output / "status.json", {**final_status, "state": "exporting"})
@@ -1815,6 +1842,7 @@ def train(
         callback.refresh_report()
         final_status.update(time_budget=wall_budget.state(), wall_seconds=perf_counter() - started)
         write_json(output / "status.json", final_status)
+        retain_weights = completed_learning
         return output
     except BaseException as exc:
         if training_complete:
@@ -1868,6 +1896,10 @@ def train(
             model._search.close()
         if model is not None and getattr(model, "_buffer", None) is not None:
             model._buffer.close()
+        if model is not None and getattr(model, "_fitting_spool", None) is not None:
+            model._close_batches()
+        if model is not None and getattr(model, "_logger", None) is not None:
+            model.logger.close()
         if env:
             env.close()
         progress.close()
@@ -1878,3 +1910,7 @@ def train(
             status = json.loads(status_path.read_text("utf-8"))
             status.update(time_budget=wall_budget.state(), wall_seconds=perf_counter() - started)
             write_json(status_path, status)
+        if retain_weights:
+            from pvz_rl.learning.training_artifacts import finish_autonomous_run
+
+            finish_autonomous_run(output)

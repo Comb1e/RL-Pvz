@@ -110,6 +110,7 @@ cohort_success_threshold = 0.9 # Strictly above; full configured cohorts only (n
 
 [training.tile_scenarios]
 enabled = true # Automatic cherry_bomb then peashooter stages; selected normal stages skip them.
+cherry_bomb_n_envs = 256 # Measured RTX 4070 Laptop; collection is dominated by CPU labeling.
 peashooter_sky_sun_rate = 1.5 # Divide sky-drop delays by this rate; keep each drop at 25 sun.
 bomb_initial_sun = 150
 bomb_plants = [1, 8]

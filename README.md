@@ -74,6 +74,8 @@ automatic progression preserves optimizer state, while separate `--init-from`
 runs transfer weights into a fresh optimizer.
 The live viewer follows new cohorts automatically. In Cherry Bomb, **Switch**
 browses completed boards from the current cohort, including while fitting runs.
+Cherry Bomb defaults to 256 envs through `training.tile_scenarios.cherry_bomb_n_envs`
+(`--cherry-bomb-envs`); `training.n_envs` (`--n-envs`) controls other stages.
 Normal fitting keeps three tile-only cohorts followed by one joint cohort, with
 four passes each. Tile-only fitting freezes species parameters and species EMA.
 
@@ -88,7 +90,7 @@ frozen within each queried board. Its hidden-state prior is approximate. A longe
 losing defense can still score worse because the configured duration penalty remains.
 
 Every 2,000 completed episodes, rounded to a fitted cohort boundary, a full cohort
-must exceed 90% success to launch validation (normally 116/128). Collection may be
+must exceed 90% success to launch validation (normal 116/128; Cherry Bomb 231/256). Collection may be
 search-assisted; mastery still requires 100/100 greedy network validation.
 Each tile stage requires 100/100 on that skill alone, then completes or advances;
 there is no joint probe or skill revisit in fresh runs. The combined `--stage pre`
@@ -106,6 +108,13 @@ resumable checkpoints without search settings continue their original workflow.
 Use `--init-from PATH` for a fresh optimizer and the current search configuration.
 Annotation progress also supports compatible weight initialization; it is not an
 autonomous recovery checkpoint.
+
+After successful completion, autonomous training leaves only `final.zip`, containing
+portable weights and the configuration needed for inference or `--init-from`.
+Completed annotation/demo fitting likewise keeps only its `.pt` weight output;
+annotation and demonstration inputs are preserved. Reports and recovery files are
+kept while a run is interrupted, failed, time-limited or otherwise incomplete.
+Completed weights cannot be resumed; start a new run with `--init-from`.
 
 ## Common checks
 

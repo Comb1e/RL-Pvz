@@ -52,6 +52,32 @@ def runtime_settings(cfg: dict) -> dict:
     return cfg["runtime"]
 
 
+def cohort_envs(cfg, skill=None):
+    """Configured real-episode cohort size; missing stage settings retain legacy size."""
+    if skill == "cherry_bomb":
+        return (
+            cfg["training"]
+            .get("tile_scenarios", {})
+            .get("cherry_bomb_n_envs", cfg["training"]["n_envs"])
+        )
+    return cfg["training"]["n_envs"]
+
+
+def training_env_capacity(cfg, family="preset"):
+    """Allocate enough lanes for selected stages without changing their cohort sizes."""
+    stage = cfg["curriculum"].get("run_stage")
+    tile = cfg["training"].get("tile_scenarios", {})
+    if (
+        family == "preset"
+        and tile.get("enabled", False)
+        and cfg["curriculum"].get("mode") == "teaching"
+        and stage in (None, "pre", "cherry_bomb")
+    ):
+        cherry = cohort_envs(cfg, "cherry_bomb")
+        return cherry if stage == "cherry_bomb" else max(cherry, cohort_envs(cfg))
+    return cohort_envs(cfg)
+
+
 def simulator(cfg):
     return cfg["simulation"]["backend"]
 
@@ -500,6 +526,11 @@ def validate_config(cfg: dict) -> None:
     if tile is not None:
         if type(tile.get("enabled")) is not bool:
             raise ValueError("training.tile_scenarios.enabled must be a boolean")
+        count = tile.get("cherry_bomb_n_envs", cfg["training"]["n_envs"])
+        if type(count) is not int or count < 1:
+            raise ValueError(
+                "training.tile_scenarios.cherry_bomb_n_envs must be a positive integer"
+            )
         sun, plants, margin = (
             tile.get(k) for k in ("bomb_initial_sun", "bomb_plants", "ranking_margin")
         )

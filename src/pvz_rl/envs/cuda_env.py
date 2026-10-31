@@ -14,6 +14,7 @@ from pvz_game.cuda.backend import projectile_bound
 from pvz_game.cuda.schema import HEADER
 from stable_baselines3.common.vec_env import VecEnv
 
+from pvz_rl.config import training_env_capacity
 from pvz_rl.envs.actions import ActionSchema as A
 from pvz_rl.envs.actions import dig_branch_available
 from pvz_rl.envs.cuda_accounting import AccountingCudaBatch
@@ -117,33 +118,34 @@ class CudaVecEnv(VecEnv):
         self.cfg, self.condition, self.family, self.training = cfg, condition, family, training
         self._per_tick = cfg["environment"].get("action_timing") == "per_tick"
         self._decision_ticks = int(cfg["environment"]["decision_ticks"])
-        self.queue = ScenarioQueue(cfg, condition, learner_seed, family, cfg["training"]["n_envs"])
+        count = training_env_capacity(cfg, family) if training else cfg["training"]["n_envs"]
+        self.queue = ScenarioQueue(cfg, condition, learner_seed, family, count)
         self.stream = torch.cuda.current_stream()
         self.handoff = HostHandoff(self.stream)
         self.cases = cases
-        self._episode = [None] * cfg["training"]["n_envs"]
-        self._episode_serial = [0] * cfg["training"]["n_envs"]
-        self._level_names = [None] * cfg["training"]["n_envs"]
+        self._episode = [None] * count
+        self._episode_serial = [0] * count
+        self._level_names = [None] * count
         self.live_view = None
         from pvz_rl.config import output_settings
         from pvz_rl.presentation.action_journal import ActionJournal
 
         self.action_journal = ActionJournal(
-            cfg["training"]["n_envs"],
+            count,
             ram_bytes=output_settings(cfg)["visualization"]["live_history_ram_mib"] * 1024**2,
             reward_settings=cfg["reward"],
         )
         self._record = None
         self.finished_outcomes = {}
-        self._episode_stages = [0] * cfg["training"]["n_envs"]
+        self._episode_stages = [0] * count
         self.task_started, self.task_transitions, self.task_completed = (
             Counter(),
             Counter(),
             Counter(),
         )
         self.active_tasks, self._tasks = Counter(), {}
-        self.enabled_envs = np.ones(cfg["training"]["n_envs"], dtype=bool)
-        self._pending_spawns = np.zeros(cfg["training"]["n_envs"], dtype=np.int64)
+        self.enabled_envs = np.ones(count, dtype=bool)
+        self._pending_spawns = np.zeros(count, dtype=np.int64)
         self.tile_scenario = "complete"
         self.tile_boards = {}
         # All shipped scenario families preserve roster size. Lessons use smaller
@@ -158,7 +160,7 @@ class CudaVecEnv(VecEnv):
                 game.reset(scenario(level, fam, seed, self.queue.rules, cfg), seed)
                 counts.append(game.observe().counts.initial_total)
         self.batch = AccountingCudaBatch(
-            cfg["training"]["n_envs"],
+            count,
             zombie_capacity=max(1, *counts),
             # A mid-game recovery snapshot already owns some projectile slots;
             # the pinned backend also reserves its full reachable-shot bound for

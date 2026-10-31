@@ -59,7 +59,8 @@ def training_options(parser):
         type=int,
         help="total completed games across all workers; scenario episodes for cherry_bomb or peashooter",
     )
-    parser.add_argument("--n-envs", type=int)
+    parser.add_argument("--n-envs", type=int, help="Peashooter/normal cohort size")
+    parser.add_argument("--cherry-bomb-envs", type=int, help="Cherry Bomb cohort size")
     parser.add_argument("--device", choices=("cuda",))
     parser.add_argument("--simulator", choices=("cuda",))
     parser.add_argument("--batch-size", type=int)
@@ -170,6 +171,8 @@ def configured(args):
         value = getattr(args, arg, None)
         if value is not None and args.command != "initialize-demo":
             cfg["training"][key] = value
+    if getattr(args, "cherry_bomb_envs", None) is not None:
+        cfg["training"]["tile_scenarios"]["cherry_bomb_n_envs"] = args.cherry_bomb_envs
     if getattr(args, "games", None) is not None:
         cfg["training"]["budget_unit"] = "games"
     selected_simulator = getattr(args, "simulator", None)
