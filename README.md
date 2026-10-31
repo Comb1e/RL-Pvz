@@ -144,7 +144,8 @@ Use `--init-from PATH` for a fresh optimizer and the current search configuratio
 Annotation progress also supports compatible weight initialization; it is not an
 autonomous recovery checkpoint.
 
-Validation refreshes the report even when mastery passes. After successful completion,
+Validation checks create or refresh the report even when skipped; completed validation
+refreshes it even when mastery passes. After successful completion,
 autonomous training keeps `final.zip`, containing portable weights and the configuration
 needed for inference or `--init-from`, together with generated `visualizations/` reports,
 charts and recordings. Stages without a validated `best.zip` still generate a report.

@@ -44,8 +44,9 @@ rules. This file adds project-specific constraints and ownership.
   commit seeds/outcomes only on consumption, regenerate unfinished work on resume,
   and share the RAM/VRAM budgets. CUDA warmup reuses the same bounded oracle lanes.
   Completed autonomous training retains portable weights and generated visualizations;
-  validation and completion refresh reports even when mastery passes. Interrupted,
-  failed and incomplete runs keep recovery artifacts; annotation inputs remain intact.
+  validation and completion create or refresh reports even when a check skips or
+  mastery passes. Interrupted, failed and incomplete runs keep recovery artifacts;
+  annotation inputs remain intact.
 
 ## Training stages and validation
 

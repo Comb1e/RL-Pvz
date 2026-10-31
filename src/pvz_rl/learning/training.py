@@ -930,6 +930,8 @@ class ResearchCallback(BaseCallback):
         if (allowed and self.validation_trigger.enabled) or checked:
             self.save_checkpoint("latest.zip")
             write_json(self.output / "status.json", self.snapshot())
+        if checked and not allowed:
+            self.refresh_report()
         return allowed
 
     def require_validation_complete(self):
