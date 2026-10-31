@@ -1,13 +1,14 @@
-"""Zero-margin hit ranking with bounded, differentiable spatial guidance."""
+"""Configurable-margin hit ranking with differentiable spatial guidance."""
 
 import torch
 
 from pvz_rl.learning.annotation_fit import _label_masks
 
-BOMB_OBJECTIVE = "zero_margin_distance_v1"
+BOMB_OBJECTIVE = "margin_distance_v2"
+LEGACY_BOMB_OBJECTIVE = "zero_margin_distance_v1"
 
 
-def bomb_distance_loss(values, feasible_tiles, *, rows, cols, weight, temperature):
+def bomb_distance_loss(values, feasible_tiles, *, rows, cols, margin, weight, temperature):
     """Return equally weighted board losses and detached hinge/distance diagnostics.
 
     Every output participates, including occupied cells. Only oracle-confirmed
@@ -26,7 +27,7 @@ def bomb_distance_loss(values, feasible_tiles, *, rows, cols, weight, temperatur
     best = values.masked_fill(~positive, -torch.inf).max(-1).values
     has_other = (~positive).any(-1)
     competitor = values.masked_fill(positive, -torch.inf).max(-1).values
-    hinge = torch.relu(torch.where(has_other, competitor, best) - best)
+    hinge = torch.where(has_other, torch.relu(margin + competitor - best), 0)
     distance = weight * (
         torch.softmax((values - values.max(-1, keepdim=True).values) / temperature, dim=-1)
         * (nearest / (rows + cols - 2))

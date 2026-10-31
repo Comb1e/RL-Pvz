@@ -19,6 +19,57 @@ from pvz_rl.learning.budget import uses_games
 
 _CONFIG_RESOURCE = "data/train.toml"
 
+# User-facing stage tables resolve once into the checkpoint-compatible runtime layout.
+_STAGE_PARAMETERS = {
+    "normal": {
+        **{key: f"training.{key}" for key in (
+            "n_envs", "tile_only_cohorts", "exploration", "validation_schedule",
+            "eval_interval_games",
+        )},
+        "search_query_probability": "training.search.normal_query_probability",
+        "curriculum": "curriculum",
+    },
+    "cherry_bomb": {
+        "n_envs": "training.tile_scenarios.cherry_bomb_n_envs",
+        "initial_sun": "training.tile_scenarios.bomb_initial_sun",
+        "plants": "training.tile_scenarios.bomb_plants",
+        "obstacle_plants": "training.tile_scenarios.bomb_obstacle_plants",
+        "mower_ready_probability": "training.tile_scenarios.bomb_mower_ready_probability",
+        **{key: f"training.tile_scenarios.{key}" for key in (
+            "ranking_objective", "ranking_margin", "distance_weight", "distance_temperature",
+        )},
+        **{key: f"training.performance.cherry_{key}" for key in (
+            "prepare_workers", "worker_ram_mib", "prefetch", "oracle", "cuda_warmup",
+            "oracle_lanes", "oracle_vram_mib",
+        )},
+        "probe_interval_games": "curriculum.cherry_bomb_probe_interval_games",
+    },
+    "peashooter": {
+        "sky_sun_rate": "training.tile_scenarios.peashooter_sky_sun_rate",
+        "search_query_probability": "training.search.peashooter_query_probability",
+        "probe_interval_games": "curriculum.peashooter_probe_interval_games",
+    },
+}
+
+
+def _resolve_training_sections(cfg):
+    """Accept grouped tuning tables or legacy flat inputs, rejecting duplicate sources."""
+    training = cfg.get("training", {})
+    for name, fields in _STAGE_PARAMETERS.items():
+        section = training.pop(name, None)
+        if section is None:
+            continue
+        if not isinstance(section, dict) or set(section) - fields.keys():
+            raise ValueError(f"Unsupported settings in training.{name}")
+        for key, value in section.items():
+            path = fields[key].split(".")
+            target = cfg
+            for part in path[:-1]:
+                target = target.setdefault(part, {})
+            if path[-1] in target:
+                raise ValueError(f"Duplicate setting: training.{name}.{key} and {fields[key]}")
+            target[path[-1]] = value
+
 
 def digest(value: object) -> str:
     return hashlib.sha256(
@@ -62,6 +113,13 @@ def cohort_envs(cfg, skill=None):
             .get("cherry_bomb_n_envs", cfg["training"]["n_envs"])
         )
     return cfg["training"]["n_envs"]
+
+
+def bomb_ranking_margin(settings):
+    """Saved zero-margin objectives stay zero, even with an unused old margin key."""
+    if settings.get("ranking_objective", "top1_hinge_v1") == "zero_margin_distance_v1":
+        return 0.0
+    return settings["ranking_margin"]
 
 
 def training_env_capacity(cfg, family="preset"):
@@ -112,6 +170,7 @@ def _read_config(path: str | Path | None) -> dict:
 
 def _resolve_profile(raw: dict, profile: str) -> dict:
     raw = copy.deepcopy(raw)
+    _resolve_training_sections(raw)
     profiles = raw.pop("profiles", {})
     for catalogue in ("gpu_profiles", "learning_profiles", "tuning"):
         raw.pop(catalogue, None)
@@ -123,6 +182,7 @@ def _resolve_profile(raw: dict, profile: str) -> dict:
             raise ValueError(f"Configuration profile {profile!r} is not available")
         return raw
     selected = copy.deepcopy(selected)
+    _resolve_training_sections(selected)
     removals = selected.pop("remove", [])
     _deep_update(raw, selected)
     for path in removals:
@@ -508,11 +568,9 @@ def validate_config(cfg: dict) -> None:
     if type(reserve) not in (int, float) or not math.isfinite(reserve) or reserve < 0:
         raise ValueError("finalization_minutes must be finite and nonnegative")
     c = cfg["curriculum"]
-    cherry_interval = c.get("cherry_bomb_probe_interval_games")
-    if "cherry_bomb_probe_interval_games" in c and (
-        type(cherry_interval) is not int or cherry_interval < 1
-    ):
-        raise ValueError("cherry_bomb_probe_interval_games must be a positive integer")
+    for key in ("cherry_bomb_probe_interval_games", "peashooter_probe_interval_games"):
+        if key in c and (type(c[key]) is not int or c[key] < 1):
+            raise ValueError(f"{key} must be a positive integer")
     trigger = cfg["training"].get("validation_trigger")
     if trigger is not None:
         threshold = trigger.get("cohort_success_threshold")
@@ -551,13 +609,17 @@ def validate_config(cfg: dict) -> None:
         ):
             raise ValueError("tile scenario bomb_plants must be an inclusive range in [1, 44]")
         objective = tile.get("ranking_objective", "top1_hinge_v1")
-        if objective not in ("top1_hinge_v1", "zero_margin_distance_v1"):
+        if objective not in ("top1_hinge_v1", "zero_margin_distance_v1", "margin_distance_v2"):
             raise ValueError("Unsupported tile scenario ranking_objective")
         if objective == "top1_hinge_v1":
             margin = tile.get("ranking_margin")
             if type(margin) not in (float, int) or not math.isfinite(margin) or margin <= 0:
                 raise ValueError("legacy tile ranking_margin must be finite and positive")
-        if objective == "zero_margin_distance_v1":
+        if objective == "margin_distance_v2":
+            margin = tile.get("ranking_margin")
+            if type(margin) not in (float, int) or not math.isfinite(margin) or margin < 0:
+                raise ValueError("tile ranking_margin must be finite and nonnegative")
+        if objective in ("zero_margin_distance_v1", "margin_distance_v2"):
             weight, temperature = tile.get("distance_weight"), tile.get("distance_temperature")
             if (
                 type(weight) not in (int, float) or not math.isfinite(weight)

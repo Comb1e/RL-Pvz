@@ -8,7 +8,7 @@ from time import perf_counter
 import numpy as np
 import torch
 
-from pvz_rl.config import passivity_settings, plant_wait_check_ticks
+from pvz_rl.config import bomb_ranking_margin, passivity_settings, plant_wait_check_ticks
 from pvz_rl.envs.actions import ActionSchema as A
 from pvz_rl.envs.cuda_features import REWARD_FIELDS
 from pvz_rl.envs.encoding import ENTITY_WIDTH, PackedEntityBatch
@@ -1019,7 +1019,11 @@ class CudaSequentialQ(CudaCohortLifecycle):
     def _bomb_loss(self, rows, observations):
         from pvz_rl.envs.encoding import collate_observations
         from pvz_rl.learning.annotation_fit import set_ranking_loss
-        from pvz_rl.learning.bomb_objective import BOMB_OBJECTIVE, bomb_distance_loss
+        from pvz_rl.learning.bomb_objective import (
+            BOMB_OBJECTIVE,
+            LEGACY_BOMB_OBJECTIVE,
+            bomb_distance_loss,
+        )
 
         labels = [self.env.tile_boards[int(index)] for index in rows["env"]]
         observations = collate_observations(observations, self.device)
@@ -1030,10 +1034,13 @@ class CudaSequentialQ(CudaCohortLifecycle):
         ).float()
         settings = self.cfg["training"]["tile_scenarios"]
         positives = [label["feasible_tiles"] for label in labels]
-        if settings.get("ranking_objective", "top1_hinge_v1") == BOMB_OBJECTIVE:
+        if settings.get("ranking_objective", "top1_hinge_v1") in (
+            BOMB_OBJECTIVE, LEGACY_BOMB_OBJECTIVE,
+        ):
             loss, detail = bomb_distance_loss(
                 values, positives, rows=self.cfg["environment"]["rows"],
-                cols=self.cfg["environment"]["cols"], weight=settings["distance_weight"],
+                cols=self.cfg["environment"]["cols"], margin=bomb_ranking_margin(settings),
+                weight=settings["distance_weight"],
                 temperature=settings["distance_temperature"],
             )
         else:

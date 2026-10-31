@@ -44,14 +44,24 @@ Or label public boards in the browser:
 The studio labels positive tile sets only. Manual action labeling and explicit
 absolute-infeasible labels are removed. Existing tile records reuse their positive
 sets; legality still prevents labeling occupied cells as positive. Tile annotation
-fitting keeps its top-1 ranking hinge. Both Cherry Bomb stages use a zero-margin
-hit hinge plus expected Manhattan distance to the nearest successful tile, with
-all 45 outputs competing. The distance weight defaults to 0.1 and softmax
-temperature to 1.0 in `training.tile_scenarios`; distance is normalized by the
+fitting keeps its top-1 ranking hinge. Both Cherry Bomb stages use a configurable
+hit hinge, `max(0, ranking_margin + max_unsuccessful_Q - max_successful_Q)`, plus
+expected Manhattan distance to the nearest successful tile, with all 45 outputs
+competing. Set `training.cherry_bomb.ranking_margin` to a finite nonnegative
+value (default 0.1); positive values require a gap above unsuccessful tiles.
+Resume preserves the saved margin; older zero-margin runs stay at zero. Use
+`--init-from` to start with changed fitting settings. The distance weight defaults
+to 0.6 and softmax temperature to 1.0 in the same table; distance is normalized by the
 maximum board distance (12 cells). This adapts
 [minimum-risk training](https://aclanthology.org/P16-1159/).
 
 To start autonomous training when ready:
+
+Tune both bomb stages in `[training.cherry_bomb]`, Peashooter in
+`[training.peashooter]`, and normal play in `[training.normal]` (including its
+`curriculum` tables). Shared fitting, rewards and resource limits retain their
+common tables. The loader resolves stage tables into the existing runtime layout;
+legacy configuration files and saved checkpoints remain supported.
 
 ```powershell
 .\.venv\Scripts\python.exe -m pvz_rl train --seed 101 `
@@ -78,20 +88,20 @@ hit; ordinary boards retain 1–8 plants. Each tile stage has its own episode bu
 automatic progression preserves optimizer state, while separate `--init-from`
 runs transfer weights into a fresh optimizer.
 Cherry Bomb boards independently randomize each row's cart between ready and
-disappeared; `training.tile_scenarios.bomb_mower_ready_probability` defaults to 0.5.
+disappeared; `training.cherry_bomb.mower_ready_probability` defaults to 0.5.
 Resume keeps the saved probability; older runs without it keep all carts disappeared.
 The live viewer follows new cohorts automatically. In Cherry Bomb, **Switch**
 browses completed boards from the current cohort, including while fitting runs.
-Both bomb stages default to 640 envs through `training.tile_scenarios.cherry_bomb_n_envs`
-(`--cherry-bomb-envs`); `training.n_envs` (`--n-envs`) controls other stages.
+Both bomb stages default to 640 envs through `training.cherry_bomb.n_envs`
+(`--cherry-bomb-envs`); `training.normal.n_envs` (`--n-envs`) controls other stages.
 Its preparation shares validated simulator setup, uses up to 32 persistent CPU
 workers, and batches natural cooldown warmup and exact attributed-hit rollouts
 on CUDA. Under
-`training.performance`, `cherry_prepare_workers`, `cherry_oracle_lanes` and
-`cherry_oracle_vram_mib` control execution (defaults: 32, 2048, 2048).
+`training.cherry_bomb`, `prepare_workers`, `oracle_lanes` and
+`oracle_vram_mib` control execution (defaults: 32, 2048, 2048).
 Workers respect the host-memory budget; scratch lanes shrink to retain GPU
-headroom. Larger limits are allowed. `cherry_oracle = "cpu"` selects the exact CPU
-reference; `cherry_cuda_warmup = false` keeps CPU cooldown advancement with the
+headroom. Larger limits are allowed. `oracle = "cpu"` selects the exact CPU
+reference; `cuda_warmup = false` keeps CPU cooldown advancement with the
 CUDA oracle. One speculative CPU cohort overlaps fitting; unfinished preparation
 is regenerated from unconsumed seeds on resume.
 Normal fitting keeps three tile-only cohorts followed by one joint cohort, with
@@ -108,7 +118,7 @@ frozen within each queried board. Its hidden-state prior is approximate. A longe
 losing defense can still score worse because the configured duration penalty remains.
 
 Each bomb stage independently checks validation every 10,000 completed episodes through
-`curriculum.cherry_bomb_probe_interval_games`; Peashooter and normal stages check
+`training.cherry_bomb.probe_interval_games`; Peashooter and normal stages check
 every 2,000. Intervals round up to a fitted cohort boundary. A full cohort
 must exceed 90% success to launch validation (normal 116/128; Cherry Bomb 577/640). Collection may be
 search-assisted; mastery still requires 100/100 greedy network validation.

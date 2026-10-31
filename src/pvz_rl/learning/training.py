@@ -14,6 +14,7 @@ import torch
 from stable_baselines3.common.callbacks import BaseCallback
 
 from pvz_rl.config import (
+    bomb_ranking_margin,
     cohort_envs,
     curriculum_probe_seeds,
     output_settings,
@@ -1719,6 +1720,7 @@ def train(
                 bomb = cfg["training"]["tile_scenarios"]
                 progress.emit(
                     f"Bomb fitting: {bomb.get('ranking_objective', 'top1_hinge_v1')}; "
+                    f"ranking margin {bomb_ranking_margin(bomb)}, "
                     f"distance weight {bomb.get('distance_weight', 0)}, "
                     f"temperature {bomb.get('distance_temperature', 1)}; no search or exploration",
                     force=True,

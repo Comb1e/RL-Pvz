@@ -2,10 +2,12 @@
 
 
 def validation_interval_games(cfg, domain="normal"):
-    """Independent Cherry clock; absent overrides retain the saved common interval."""
+    """Stage clocks; absent overrides retain the saved common interval."""
     curriculum = cfg["curriculum"]
     if domain in ("cherry_bomb", "cherry_bomb_obstacle"):
         return curriculum.get("cherry_bomb_probe_interval_games", curriculum["probe_interval_games"])
+    if domain == "peashooter":
+        return curriculum.get("peashooter_probe_interval_games", curriculum["probe_interval_games"])
     return curriculum["probe_interval_games"]
 
 

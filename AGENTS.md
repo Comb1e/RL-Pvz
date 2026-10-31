@@ -9,7 +9,9 @@ rules. This file adds project-specific constraints and ownership.
   pinned game dependency. Smoke checks must not download dependencies.
 - `src/pvz_rl/data/train.toml` is the single parameter source for training and demo
   overlays. Preserve the user's reward, exploration and cohort-cycle adjustments;
-  read current values from configuration instead of duplicating them here.
+  read current values from configuration instead of duplicating them here. Group
+  stage tuning under `training.cherry_bomb`, `training.peashooter` and `training.normal`;
+  resolve these once at loading into the checkpoint-compatible runtime layout.
 - Short integration checks are allowed. Do not launch formal training unless asked.
 - Policy inputs contain public board facts only. Keep seeds, future schedules,
   snapshots, target identities, oracle labels and accounting metadata private.
@@ -18,8 +20,8 @@ rules. This file adds project-specific constraints and ownership.
   cells after selection. Branch impossibility precedes tile invalidity.
 - Manual annotations are positive tile sets only; there is no action annotation
   workflow or absolute-infeasible tile labeling. Annotation fitting keeps its top-1
-  hinge. Both bomb stages use a zero-margin hit hinge plus bounded expected
-  distance over all 45 outputs; legacy recovery retains its saved objective.
+  hinge. Both bomb stages use a configurable hit-ranking margin plus bounded
+  expected distance over all 45 outputs; legacy recovery retains its saved objective.
 - Fresh autonomous training fits confirmed search values/differences and finite
   feasibility bounds through shared fitting. Legacy/diagnostic complete-return
   fitting retains its minimum-Q invalid targets and EMA species consistency.
@@ -74,13 +76,13 @@ Paths below are relative to `src/pvz_rl/` unless stated otherwise.
 | Area | Ownership |
 | --- | --- |
 | Repository `tools/bootstrap.*`, `tools/stage_game.py` | Verified, non-editable installation of the pinned engine from an existing checkout. |
-| `config.py`, `data/train.toml`, `gpu.py` | Shared settings, validation and device selection. |
+| `config.py`, `data/train.toml`, `gpu.py` | Grouped stage tuning, shared settings, validation and device selection; configuration loading preserves the saved runtime layout. |
 | `envs/` | CPU/CUDA simulator adapters, public encoding, actions, rewards and source credit; `tile_scenarios.py` and `sky_sun.py` own scenario generation and sun scaling. |
 | `envs/scratch_game.py`, `bomb_preparation.py`, `cuda_bomb_oracle.py`, `cuda_snapshots.py` | Validated forks/cart setup, persistent workers/prefetch, CUDA cooldown warmup/attributed labels and batched snapshot transfers. |
 | `policy/` | Independent two-stage Transformers, shared runner, all-tile selection, active batching and bounded collection/fitting CUDA graphs. |
 | `learning/training.py`, `cuda_q.py`, `sequential_training.py` | Training orchestration, cohort lifecycle, collection, finalization and atomic recovery. |
 | `learning/tile_curriculum.py`, `validation_trigger.py`, `budget.py`, `training_requirements.py` | Independent tile-stage clocks/progression, legacy prerequisite recovery, cohort validation gate and normal fitting schedule. |
-| `learning/flat_q.py`, `objective.py`, `action_routing.py`, `bomb_objective.py` | Shared fitting/routing, legacy targets/consistency, annotation ranking and zero-margin bomb hit/distance loss. |
+| `learning/flat_q.py`, `objective.py`, `action_routing.py`, `bomb_objective.py` | Shared fitting/routing, legacy targets/consistency, annotation ranking and configurable-margin bomb hit/distance loss. |
 | `envs/search_worlds.py`, `learning/search_teacher.py`, `search_targets.py`, `search_settings.py` | Public world reconstruction, interruptible CUDA search/continuations, confirmed targets and versioned settings/recovery. |
 | `learning/cuda_buffer.py`, `batch_transport.py`, `collection_scheduler.py`, `exploration.py` | Trajectories, bounded transport, decision tickets and persistent exploration commitments. |
 | `learning/checkpoints.py`, `training_artifacts.py`, `performance.py` | Compatibility contracts, durable snapshots, completed-run weight retention and execution-only refresh settings. |

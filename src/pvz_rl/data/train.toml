@@ -85,19 +85,12 @@ method = "complete_return_action_global_v7"
 budget_unit = "games"
 until_stage_complete = false # With --stage: stop only when its mastery gate passes.
 total_games = 10000
-validation_schedule = "stage_success" # Normal-game evaluation only after each stage passes.
-eval_interval_games = 2000 # Used by periodic game-count diagnostic/fixed checks.
 total_steps = 3000000 # Inactive in normal training; bounded decision-window controls only.
 learner_seeds = [101, 102]
-n_envs = 128
 device = "cuda"
 max_minutes = 120
 finalization_minutes = 15
-# Both exploration probabilities are fixed throughout each complete-game cohort.
-# Ordinary waits trigger the same plant probability check once per interval.
-exploration = {objective = "committed_plant_tile_epsilon_v1", epsilon_start = 0.5, epsilon_floor = 0.03, decay_games = 10000, plant_epsilon_start = 0.1, plant_epsilon_floor = 0.03, plant_decay_games = 10000, plant_wait_check_seconds = 15.0}
 batch_size = 1024
-tile_only_cohorts = 3 # Repeat three tile-only cohorts, then one joint cohort.
 n_epochs = 4 # Complete fitting passes per cohort, all using that cohort's stage.
 learning_rate = 0.0003
 max_grad_norm = 5 # Shared by autonomous training and demonstration initialization.
@@ -110,15 +103,71 @@ cohort_success_threshold = 0.9 # Strictly above; full configured cohorts only (n
 
 [training.tile_scenarios]
 enabled = true # Automatic cherry_bomb, cherry_bomb_obstacle, then peashooter; selected normal stages skip them.
-cherry_bomb_n_envs = 640 # Fastest measured collection time/env with 32 workers and the CUDA oracle.
-peashooter_sky_sun_rate = 1.5 # Divide sky-drop delays by this rate; keep each drop at 25 sun.
-bomb_initial_sun = 150
-bomb_plants = [1, 8]
-bomb_obstacle_plants = [1, 15] # Fill competing blast cells first; reserve exactly one successful tile.
-bomb_mower_ready_probability = 0.5 # Independent per row; otherwise disappeared (spent).
-ranking_objective = "zero_margin_distance_v1" # Both bomb stages; annotation fitting remains unchanged.
-distance_weight = 0.1 # Expected normalized Manhattan distance; outcome hinge has coefficient one.
+
+[training.cherry_bomb]
+# Shared by cherry_bomb and cherry_bomb_obstacle; no exploration or search.
+n_envs = 640 # Fastest measured collection time/env with 32 workers and the CUDA oracle.
+probe_interval_games = 10000 # Independent clock for each bomb stage; pending probes retry first.
+initial_sun = 150
+plants = [1, 8]
+obstacle_plants = [1, 15] # Fill competing blast cells first; reserve exactly one successful tile.
+mower_ready_probability = 0.5 # Independent per row; otherwise disappeared (spent).
+ranking_objective = "margin_distance_v2" # Both bomb stages; annotation fitting remains unchanged.
+ranking_margin = 0.1 # x in max(0, x + max_unsuccessful_Q - max_successful_Q); finite and >= 0.
+distance_weight = 0.6 # Expected normalized Manhattan distance; outcome hinge has coefficient one.
 distance_temperature = 1.0 # Softmax temperature; require 0 <= distance_weight < 4 * temperature.
+prepare_workers = 32 # Capped by logical CPUs and the shared host-memory budget.
+worker_ram_mib = 96 # Reserved per worker, deducted from trajectory storage.
+prefetch = true # One uncommitted CPU cohort overlaps fitting; resume regenerates it.
+oracle = "cuda" # "cpu" retains the exact fork-based reference implementation.
+cuda_warmup = true # Advance initial cooldowns in the existing CUDA scratch lanes.
+oracle_lanes = 2048 # Shrinks to fit VRAM without changing labels.
+oracle_vram_mib = 2048
+
+[training.peashooter]
+# Uses the shared cohort size/fitting settings; only this stage scales sky sun.
+sky_sun_rate = 1.5 # Divide sky-drop delays by this rate; keep each drop at 25 sun.
+probe_interval_games = 2000
+search_query_probability = 0.5
+
+[training.normal]
+n_envs = 128 # Also the shared Peashooter cohort size.
+tile_only_cohorts = 3 # Repeat three tile-only cohorts, then one joint cohort.
+validation_schedule = "stage_success" # Evaluate normal games only after each stage passes.
+eval_interval_games = 2000 # Periodic game-count diagnostic/fixed checks.
+search_query_probability = 0.25
+# Both exploration probabilities are fixed throughout each complete-game cohort.
+# Ordinary waits trigger the same plant probability check once per interval.
+exploration = {objective = "committed_plant_tile_epsilon_v1", epsilon_start = 0.5, epsilon_floor = 0.03, decay_games = 10000, plant_epsilon_start = 0.1, plant_epsilon_floor = 0.03, plant_decay_games = 10000, plant_wait_check_seconds = 15.0}
+
+[training.normal.curriculum]
+mode = "teaching"
+residency = "episode_start_stage"
+probe_interval_games = 2000
+minimum_stage_games = 100
+probe_interval = 16384
+probe_cases = 100 # Shared validation panel size for every stage.
+consecutive_passes = 1
+minimum_stage_steps = 16384
+boundaries = [0.1, 0.4]
+easy_weights = [1.0, 0.0, 0.0]
+intermediate_weights = [0.5, 0.5, 0.0]
+final_weights = [0.2, 0.4, 0.4]
+
+[training.normal.curriculum.stages.easy]
+tasks = ["easy"]
+weights = [1.0]
+requirements = {easy = 100}
+
+[training.normal.curriculum.stages.standard]
+tasks = ["easy", "standard"]
+weights = [0.5, 0.5]
+requirements = {easy = 100, standard = 100}
+
+[training.normal.curriculum.stages.shared]
+tasks = ["easy", "standard", "hard"]
+weights = [0.2, 0.4, 0.4]
+requirements = {easy = 100, standard = 100, hard = 100}
 
 [training.storage]
 ram_gib = 6
@@ -139,8 +188,6 @@ expansions_per_rollout = 4
 queries_per_episode = 8
 minimum_interval_seconds = 5.0
 frontier_seconds = 5.0
-peashooter_query_probability = 0.5
-normal_query_probability = 0.25
 scratch_envs = 32
 scratch_vram_mib = 512
 uct_c = 1.4142135623730951
@@ -169,13 +216,6 @@ telemetry = true
 telemetry_span_limit = 1024
 fit_precision = "bf16_master"
 prefetch = true
-cherry_prepare_workers = 32 # Capped by logical CPUs and the shared host-memory budget.
-cherry_worker_ram_mib = 96 # Reserved per worker, deducted from trajectory storage.
-cherry_prefetch = true # One uncommitted CPU cohort overlaps fitting; resume regenerates it.
-cherry_oracle = "cuda" # "cpu" retains the exact fork-based reference implementation.
-cherry_cuda_warmup = true # Advance initial cooldowns in the existing CUDA scratch lanes.
-cherry_oracle_lanes = 2048 # Shrinks to fit VRAM without changing labels.
-cherry_oracle_vram_mib = 2048
 annotation_input_cache = "auto"
 annotation_cache_mib = 256
 annotation_use_fit_limits = false
@@ -187,22 +227,6 @@ fit_entity_buckets = [8, 16, 32, 64, 128, 256]
 fit_token_budget = 65536
 collection_graph_cache_entries = 8
 collection_vram_headroom_mib = 512
-
-[curriculum]
-mode = "teaching"
-residency = "episode_start_stage"
-probe_interval_games = 2000
-cherry_bomb_probe_interval_games = 10000 # Independent stage; refreshed on resume, pending probes retry first.
-minimum_stage_games = 100
-probe_interval = 16384
-probe_cases = 100
-consecutive_passes = 1
-minimum_stage_steps = 16384
-
-boundaries = [0.1, 0.4]
-easy_weights = [1.0, 0.0, 0.0]
-intermediate_weights = [0.5, 0.5, 0.0]
-final_weights = [0.2, 0.4, 0.4]
 
 [splits]
 train = [1000, 99999]
@@ -264,21 +288,6 @@ sampling_max_steps = 20000
 sampling_max_attempts = 100
 sampling_plant_interval_steps = [500, 1500]
 sampling_max_plants = 8
-
-[curriculum.stages.easy]
-tasks = ["easy"]
-weights = [1.0]
-requirements = {easy = 100}
-
-[curriculum.stages.standard]
-tasks = ["easy", "standard"]
-weights = [0.5, 0.5]
-requirements = {easy = 100, standard = 100}
-
-[curriculum.stages.shared]
-tasks = ["easy", "standard", "hard"]
-weights = [0.2, 0.4, 0.4]
-requirements = {easy = 100, standard = 100, hard = 100}
 
 [simulation]
 backend = "cuda"
