@@ -274,6 +274,7 @@ class CudaCohortLifecycle(BaseAlgorithm):
             "q_loss",
             "tile_ranking_loss",
             "bomb_cross_entropy_loss",
+            "bomb_softmax_temperature",
             "bomb_hinge_loss",
             "bomb_distance_loss",
             "teacher_value_loss",

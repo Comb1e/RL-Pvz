@@ -22,6 +22,8 @@ rules. This file adds project-specific constraints and ownership.
   workflow or absolute-infeasible tile labeling. Annotation fitting keeps its top-1
   hinge. Fresh bomb stages use only successful-set cross-entropy over all 45 outputs,
   including occupied cells; successful tiles have no prescribed probability split.
+  Its configurable temperature uses the completed cohort's attributed-hit rate,
+  fixed across fitting passes; saved scalar settings retain a fixed temperature.
   Legacy recovery retains its saved hinge/distance objective and settings.
 - Fresh autonomous training fits confirmed search values/differences and finite
   feasibility bounds through shared fitting. Legacy/diagnostic complete-return

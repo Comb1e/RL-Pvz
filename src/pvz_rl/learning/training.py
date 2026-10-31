@@ -619,6 +619,7 @@ class ResearchCallback(BaseCallback):
             "q_loss",
             "tile_ranking_loss",
             "bomb_cross_entropy_loss",
+            "bomb_softmax_temperature",
             "bomb_hinge_loss",
             "bomb_distance_loss",
             "selected_action_error",
@@ -1726,7 +1727,8 @@ def train(
                 bomb = cfg["training"]["tile_scenarios"]
                 objective = bomb.get("ranking_objective", "top1_hinge_v1")
                 fitting = (
-                    f"set cross-entropy only, temperature {bomb['softmax_temperature']}"
+                    f"set cross-entropy only, temperature {bomb['softmax_temperature']} "
+                    "(fixed scalar or linear in this cohort's attributed-hit rate)"
                     if objective == BOMB_OBJECTIVE else (
                         f"ranking margin {bomb_ranking_margin(bomb)}, "
                         f"distance weight {bomb.get('distance_weight', 0)}, "

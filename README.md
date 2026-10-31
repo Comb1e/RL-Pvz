@@ -48,8 +48,11 @@ fitting keeps its top-1 ranking hinge. Fresh Cherry Bomb stages use only
 `-log(sum(successful-tile softmax probabilities))`: ordinary cross-entropy for the
 obstacle stage's sole successful tile, and no prescribed probability split among
 ordinary Cherry Bomb's successful tiles. All 45 outputs compete, including occupied
-cells. Tune the finite positive `training.cherry_bomb.softmax_temperature`; there
-is no hinge or distance penalty. Reports show one cross-entropy loss;
+cells. `training.cherry_bomb.softmax_temperature` specifies finite positive
+`zero_success` and `full_success` endpoints. Temperature changes linearly with the
+completed training cohort's attributed-hit rate and stays fixed for its fitting
+passes, including replay after interruption. A scalar retains a fixed temperature.
+There is no hinge or distance penalty. Reports show cross-entropy and temperature;
 selected-tile distance remains a diagnostic. Resume preserves saved legacy objectives
 and settings; use `--init-from` for fresh fitting with the new loss. The set objective
 is also studied in [partial-label learning](https://www.proceedings.com/content/079/079017-2841open.pdf).

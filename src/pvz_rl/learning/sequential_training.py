@@ -11,6 +11,7 @@ import torch
 from pvz_rl.config import (
     bomb_max_illegal_distance,
     bomb_ranking_margin,
+    bomb_softmax_temperature,
     passivity_settings,
     plant_wait_check_ticks,
 )
@@ -813,7 +814,25 @@ class CudaSequentialQ(CudaCohortLifecycle):
             if retry == "memory":
                 torch.cuda.empty_cache()
 
+    def _prepare_bomb_temperature(self):
+        settings = self.cfg["training"].get("tile_scenarios", {})
+        if (
+            not is_bomb_skill(self.tile_skills.phase)
+            or settings.get("ranking_objective") != BOMB_OBJECTIVE
+        ):
+            return
+        # These attributed-hit outcomes and the settings are already checkpointed.
+        # Reconstruct the same scalar on pass replay; never use validation or a
+        # rolling window, and never change it between microbatches/passes.
+        episodes = self._pending_episodes
+        if not episodes or len(episodes) != self.cohort_games:
+            raise RuntimeError("Bomb fitting temperature requires a completed cohort")
+        rate = sum(bool(item["metrics"]["win"]) for item in episodes.values()) / len(episodes)
+        self._bomb_fit_temperature = bomb_softmax_temperature(settings, rate)
+        self.logger.record("train/bomb_softmax_temperature", self._bomb_fit_temperature)
+
     def _start_pass(self):
+        self._prepare_bomb_temperature()
         self._ensure_teacher()
         if self.execution_state["precision"] != "bf16_master":
             raise RuntimeError("BF16 master-weight fitting is required")
@@ -1047,7 +1066,7 @@ class CudaSequentialQ(CudaCohortLifecycle):
         objective = settings.get("ranking_objective", "top1_hinge_v1")
         if objective == BOMB_OBJECTIVE:
             loss = bomb_set_cross_entropy(
-                values, positives, temperature=settings["softmax_temperature"],
+                values, positives, temperature=self._bomb_fit_temperature,
             )
             detail = loss.detach().reshape(1)
         elif objective in DISTANCE_OBJECTIVES:

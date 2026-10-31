@@ -130,6 +130,30 @@ def bomb_max_illegal_distance(settings):
     )
 
 
+def bomb_softmax_temperature(settings, success_rate):
+    """Resolve a fixed saved temperature or a linear cohort-success schedule."""
+    value = settings.get("softmax_temperature")
+    if isinstance(value, dict):
+        if set(value) != {"zero_success", "full_success"}:
+            raise ValueError("Bomb softmax_temperature requires zero_success and full_success")
+        start, end = value["zero_success"], value["full_success"]
+    else:
+        start = end = value
+    if any(
+        type(t) not in (int, float) or not math.isfinite(t) or t <= 0
+        for t in (start, end)
+    ):
+        raise ValueError("Bomb softmax_temperature must be finite and positive")
+    if end > start:
+        raise ValueError("Bomb full_success temperature must not exceed zero_success")
+    if (
+        type(success_rate) not in (int, float) or not math.isfinite(success_rate)
+        or not 0 <= success_rate <= 1
+    ):
+        raise ValueError("Bomb cohort success rate must be finite and in [0, 1]")
+    return (1 - success_rate) * start + success_rate * end
+
+
 def training_env_capacity(cfg, family="preset"):
     """Allocate enough lanes for selected stages without changing their cohort sizes."""
     stage = cfg["curriculum"].get("run_stage")
@@ -623,12 +647,7 @@ def validate_config(cfg: dict) -> None:
         ):
             raise ValueError("Unsupported tile scenario ranking_objective")
         if objective == "set_cross_entropy_v1":
-            temperature = tile.get("softmax_temperature")
-            if (
-                type(temperature) not in (int, float) or not math.isfinite(temperature)
-                or temperature <= 0
-            ):
-                raise ValueError("Bomb softmax_temperature must be finite and positive")
+            bomb_softmax_temperature(tile, 0.0)
         if objective == "top1_hinge_v1":
             margin = tile.get("ranking_margin")
             if type(margin) not in (float, int) or not math.isfinite(margin) or margin <= 0:

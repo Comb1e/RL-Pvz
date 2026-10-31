@@ -281,6 +281,7 @@ def report_charts(segments, cfg, output, save):
                 ),
             )
             fitting += fields([
+                ("optimization.bomb_softmax_temperature", "Bomb softmax temperature"),
                 ("optimization.bomb_hinge_loss", "Bomb ranking hinge"),
                 ("optimization.bomb_distance_loss", "Bomb weighted expected distance"),
                 ("cohort.bomb_selected_tile_distance", "Selected tile Manhattan distance"),
