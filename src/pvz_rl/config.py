@@ -122,6 +122,11 @@ def bomb_ranking_margin(settings):
     return settings["ranking_margin"]
 
 
+def bomb_max_illegal_distance(settings):
+    """Saved distance objectives keep their original occupied-cell guidance."""
+    return settings.get("ranking_objective") == "margin_distance_illegal_v3"
+
+
 def training_env_capacity(cfg, family="preset"):
     """Allocate enough lanes for selected stages without changing their cohort sizes."""
     stage = cfg["curriculum"].get("run_stage")
@@ -609,17 +614,22 @@ def validate_config(cfg: dict) -> None:
         ):
             raise ValueError("tile scenario bomb_plants must be an inclusive range in [1, 44]")
         objective = tile.get("ranking_objective", "top1_hinge_v1")
-        if objective not in ("top1_hinge_v1", "zero_margin_distance_v1", "margin_distance_v2"):
+        if objective not in (
+            "top1_hinge_v1", "zero_margin_distance_v1", "margin_distance_v2",
+            "margin_distance_illegal_v3",
+        ):
             raise ValueError("Unsupported tile scenario ranking_objective")
         if objective == "top1_hinge_v1":
             margin = tile.get("ranking_margin")
             if type(margin) not in (float, int) or not math.isfinite(margin) or margin <= 0:
                 raise ValueError("legacy tile ranking_margin must be finite and positive")
-        if objective == "margin_distance_v2":
+        if objective in ("margin_distance_v2", "margin_distance_illegal_v3"):
             margin = tile.get("ranking_margin")
             if type(margin) not in (float, int) or not math.isfinite(margin) or margin < 0:
                 raise ValueError("tile ranking_margin must be finite and nonnegative")
-        if objective in ("zero_margin_distance_v1", "margin_distance_v2"):
+        if objective in (
+            "zero_margin_distance_v1", "margin_distance_v2", "margin_distance_illegal_v3",
+        ):
             weight, temperature = tile.get("distance_weight"), tile.get("distance_temperature")
             if (
                 type(weight) not in (int, float) or not math.isfinite(weight)

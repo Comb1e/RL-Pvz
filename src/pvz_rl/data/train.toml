@@ -112,9 +112,9 @@ initial_sun = 150
 plants = [1, 8]
 obstacle_plants = [1, 15] # Fill competing blast cells first; reserve exactly one successful tile.
 mower_ready_probability = 0.5 # Independent per row; otherwise disappeared (spent).
-ranking_objective = "margin_distance_v2" # Both bomb stages; annotation fitting remains unchanged.
+ranking_objective = "margin_distance_illegal_v3" # Both bomb stages; illegal tiles get maximum distance.
 ranking_margin = 0.1 # x in max(0, x + max_unsuccessful_Q - max_successful_Q); finite and >= 0.
-distance_weight = 0.6 # Expected normalized Manhattan distance; outcome hinge has coefficient one.
+distance_weight = 0.6 # Expected normalized distance; illegal tiles = 1, outcome hinge coefficient = 1.
 distance_temperature = 1.0 # Softmax temperature; require 0 <= distance_weight < 4 * temperature.
 prepare_workers = 32 # Capped by logical CPUs and the shared host-memory budget.
 worker_ram_mib = 96 # Reserved per worker, deducted from trajectory storage.

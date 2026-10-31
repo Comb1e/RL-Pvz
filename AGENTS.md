@@ -21,7 +21,8 @@ rules. This file adds project-specific constraints and ownership.
 - Manual annotations are positive tile sets only; there is no action annotation
   workflow or absolute-infeasible tile labeling. Annotation fitting keeps its top-1
   hinge. Both bomb stages use a configurable hit-ranking margin plus bounded
-  expected distance over all 45 outputs; legacy recovery retains its saved objective.
+  expected distance over all 45 outputs; illegal tiles use maximum board distance.
+  Legacy recovery retains its saved objective.
 - Fresh autonomous training fits confirmed search values/differences and finite
   feasibility bounds through shared fitting. Legacy/diagnostic complete-return
   fitting retains its minimum-Q invalid targets and EMA species consistency.
@@ -82,7 +83,7 @@ Paths below are relative to `src/pvz_rl/` unless stated otherwise.
 | `policy/` | Independent two-stage Transformers, shared runner, all-tile selection, active batching and bounded collection/fitting CUDA graphs. |
 | `learning/training.py`, `cuda_q.py`, `sequential_training.py` | Training orchestration, cohort lifecycle, collection, finalization and atomic recovery. |
 | `learning/tile_curriculum.py`, `validation_trigger.py`, `budget.py`, `training_requirements.py` | Independent tile-stage clocks/progression, legacy prerequisite recovery, cohort validation gate and normal fitting schedule. |
-| `learning/flat_q.py`, `objective.py`, `action_routing.py`, `bomb_objective.py` | Shared fitting/routing, legacy targets/consistency, annotation ranking and configurable-margin bomb hit/distance loss. |
+| `learning/flat_q.py`, `objective.py`, `action_routing.py`, `bomb_objective.py` | Shared fitting/routing, legacy targets/consistency, annotation ranking and bomb hit/distance loss; `envs/tile_scenarios.py` shares illegal-aware distance labels with reporting. |
 | `envs/search_worlds.py`, `learning/search_teacher.py`, `search_targets.py`, `search_settings.py` | Public world reconstruction, interruptible CUDA search/continuations, confirmed targets and versioned settings/recovery. |
 | `learning/cuda_buffer.py`, `batch_transport.py`, `collection_scheduler.py`, `exploration.py` | Trajectories, bounded transport, decision tickets and persistent exploration commitments. |
 | `learning/checkpoints.py`, `training_artifacts.py`, `performance.py` | Compatibility contracts, durable snapshots, completed-run weight retention and execution-only refresh settings. |

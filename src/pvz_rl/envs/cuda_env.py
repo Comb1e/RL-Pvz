@@ -14,7 +14,7 @@ from pvz_game.cuda.backend import projectile_bound
 from pvz_game.cuda.schema import HEADER
 from stable_baselines3.common.vec_env import VecEnv
 
-from pvz_rl.config import training_env_capacity
+from pvz_rl.config import bomb_max_illegal_distance, training_env_capacity
 from pvz_rl.envs.actions import ActionSchema as A
 from pvz_rl.envs.actions import dig_branch_available
 from pvz_rl.envs.cuda_accounting import AccountingCudaBatch
@@ -23,7 +23,12 @@ from pvz_rl.envs.rewards import REWARD_METRICS
 from pvz_rl.envs.scenarios import difficulty_weights, scenario
 from pvz_rl.envs.sky_sun import peashooter_sky_sun_rate
 from pvz_rl.envs.step_result import PackedStepResult
-from pvz_rl.envs.tile_scenarios import BombGenerationFailure, is_bomb_skill, peashooter_level
+from pvz_rl.envs.tile_scenarios import (
+    BombGenerationFailure,
+    bomb_tile_distances,
+    is_bomb_skill,
+    peashooter_level,
+)
 from pvz_rl.learning.budget import budget_target
 from pvz_rl.learning.curriculum import stage_distribution, teaching_enabled
 from pvz_rl.learning.host_transfer import HostHandoff
@@ -576,10 +581,12 @@ class CudaVecEnv(VecEnv):
                     action = int(actions[index, 0])
                     branch = 1 + (action - 1) // 45 if action else 0
                     expected = self.cfg["environment"]["plants"].index("cherry_bomb") + 1
+                    board = self.tile_boards[index]
+                    settings = self.cfg["training"]["tile_scenarios"]
                     success = bool(
                         self.last_action_result_host[index, 0]
                         and branch == expected
-                        and (action - 1) % 45 in self.tile_boards[index]["feasible_tiles"]
+                        and (action - 1) % 45 in board["feasible_tiles"]
                     )
                     metrics = completed[index]["episode_metrics"]
                     metrics.update(
@@ -587,11 +594,13 @@ class CudaVecEnv(VecEnv):
                         status="won" if success else "lost",
                         win=int(success),
                         tile_scenario=self.tile_scenario,
-                        selected_tile_distance=min(
-                            abs((action - 1) % 45 // 9 - tile // 9)
-                            + abs((action - 1) % 9 - tile % 9)
-                            for tile in self.tile_boards[index]["feasible_tiles"]
-                        ) if action > 0 and branch == expected else None,
+                        selected_tile_distance=bomb_tile_distances(
+                            board["feasible_tiles"],
+                            board["absolute_infeasible_tiles"]
+                            if bomb_max_illegal_distance(settings) else [],
+                            rows=self.cfg["environment"]["rows"],
+                            cols=self.cfg["environment"]["cols"],
+                        )[(action - 1) % 45] if action > 0 and branch == expected else None,
                     )
                 self.finished_outcomes[index] = completed[index]["episode_metrics"]["status"]
         # Supervised outcomes are authoritative only after attribution above.

@@ -46,10 +46,12 @@ absolute-infeasible labels are removed. Existing tile records reuse their positi
 sets; legality still prevents labeling occupied cells as positive. Tile annotation
 fitting keeps its top-1 ranking hinge. Both Cherry Bomb stages use a configurable
 hit hinge, `max(0, ranking_margin + max_unsuccessful_Q - max_successful_Q)`, plus
-expected Manhattan distance to the nearest successful tile, with all 45 outputs
-competing. Set `training.cherry_bomb.ranking_margin` to a finite nonnegative
+expected Manhattan distance to the nearest successful tile. Illegal tiles receive
+the maximum board distance (12), including occupied cells next to a target; all 45
+outputs still compete. Set `training.cherry_bomb.ranking_margin` to a finite nonnegative
 value (default 0.1); positive values require a gap above unsuccessful tiles.
-Resume preserves the saved margin; older zero-margin runs stay at zero. Use
+Resume preserves the saved objective and margin; older runs keep their original
+illegal-tile distances and zero-margin runs stay at zero. Use
 `--init-from` to start with changed fitting settings. The distance weight defaults
 to 0.6 and softmax temperature to 1.0 in the same table; distance is normalized by the
 maximum board distance (12 cells). This adapts

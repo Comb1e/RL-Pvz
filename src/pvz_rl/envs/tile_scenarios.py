@@ -30,6 +30,19 @@ def skill_plant(skill):
     return "cherry_bomb" if is_bomb_skill(skill) else skill
 
 
+def bomb_tile_distances(positive, illegal, *, rows, cols):
+    """Private spatial targets: illegal placements get the full board distance."""
+    illegal = set(illegal)
+    maximum = rows + cols - 2
+    return [
+        maximum if tile in illegal else min(
+            abs(tile // cols - target // cols) + abs(tile % cols - target % cols)
+            for target in positive
+        )
+        for tile in range(rows * cols)
+    ]
+
+
 def valid_bomb_labels(board, positive, skill):
     if not positive:
         return False
