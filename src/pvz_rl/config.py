@@ -134,7 +134,7 @@ def bomb_max_illegal_distance(settings):
 
 
 def bomb_softmax_temperature(settings, success_rate, *, skill="cherry_bomb"):
-    """Resolve this bomb stage's fixed temperature or cohort-success schedule."""
+    """Resolve a fixed temperature or a rising/falling cohort-success schedule."""
     value = settings.get("softmax_temperature")
     if skill == "cherry_bomb_obstacle":
         value = settings.get("obstacle_softmax_temperature", value)
@@ -149,8 +149,6 @@ def bomb_softmax_temperature(settings, success_rate, *, skill="cherry_bomb"):
         for t in (start, end)
     ):
         raise ValueError("Bomb softmax_temperature must be finite and positive")
-    if end > start:
-        raise ValueError("Bomb full_success temperature must not exceed zero_success")
     if (
         type(success_rate) not in (int, float) or not math.isfinite(success_rate)
         or not 0 <= success_rate <= 1

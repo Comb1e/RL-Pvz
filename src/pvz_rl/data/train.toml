@@ -113,7 +113,7 @@ plants = [1, 8]
 obstacle_plants = [1, 15] # Fill competing blast cells first; reserve exactly one successful tile.
 mower_ready_probability = 0.5 # Independent per row; otherwise disappeared (spent).
 ranking_objective = "set_cross_entropy_v1" # Sole loss: -log(total successful-tile probability).
-softmax_temperature = { zero_success = 0.5, full_success = 0.05 } # Linear in completed cohort hit rate; fixed during its fitting passes.
+softmax_temperature = { zero_success = 0.5, full_success = 1 } # Linear in completed cohort hit rate; fixed during its fitting passes.
 prepare_workers = 32 # Capped by logical CPUs and the shared host-memory budget.
 worker_ram_mib = 96 # Reserved per worker, deducted from trajectory storage.
 prefetch = true # One uncommitted CPU cohort overlaps fitting; resume regenerates it.
@@ -123,7 +123,7 @@ oracle_lanes = 2048 # Shrinks to fit VRAM without changing labels.
 oracle_vram_mib = 2048
 
 [training.cherry_bomb_obstacle]
-softmax_temperature = { zero_success = 0.5, full_success = 0.05 } # Independent schedule; other bomb settings are shared above.
+softmax_temperature = { zero_success = 1, full_success = 1 } # Independent schedule; other bomb settings are shared above.
 
 [training.peashooter]
 # Uses the shared cohort size/fitting settings; only this stage scales sky sun.

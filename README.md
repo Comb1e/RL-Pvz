@@ -50,7 +50,8 @@ obstacle stage's sole successful tile, and no prescribed probability split among
 ordinary Cherry Bomb's successful tiles. All 45 outputs compete, including occupied
 cells. Set `softmax_temperature` independently in `[training.cherry_bomb]` and
 `[training.cherry_bomb_obstacle]`, using finite positive `zero_success` and
-`full_success` endpoints. Temperature changes linearly with the
+`full_success` endpoints; increasing, decreasing and constant schedules are supported.
+Temperature changes linearly with the
 completed training cohort's attributed-hit rate and stays fixed for its fitting
 passes, including replay after interruption. A scalar retains a fixed temperature.
 There is no hinge or distance penalty. Reports show cross-entropy and temperature;
