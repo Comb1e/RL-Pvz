@@ -2,7 +2,7 @@
 
 from dataclasses import asdict, dataclass, field
 
-from pvz_rl.envs.tile_scenarios import SKILLS
+from pvz_rl.envs.tile_scenarios import LEGACY_SKILLS, SKILLS
 from pvz_rl.learning.budget import validation_interval_games
 from pvz_rl.learning.curriculum import TILE_STAGES
 
@@ -22,6 +22,8 @@ class TileSkillState:
 
     def __post_init__(self):
         self.episodes = dict(self.episodes)
+        # Old saved stage orders and joint probes never acquire a new lesson.
+        self.episodes.setdefault("cherry_bomb_obstacle", 0)
         self.scores = dict(self.scores)
         self.stage_probes = dict(self.stage_probes)
         if self.stage_order is not None:
@@ -46,7 +48,7 @@ class TileSkillState:
         if self.last_probe > self.total:
             raise ValueError("Tile prerequisite probe exceeds completed episodes")
         invalid_score_keys = (
-            set(self.scores) != set(SKILLS)
+            set(self.scores) != set(LEGACY_SKILLS)
             if self.stage_order is None else bool(set(self.scores) - set(SKILLS))
         )
         if self.scores and (
@@ -70,7 +72,7 @@ class TileSkillState:
 
     @property
     def validation_skills(self):
-        return SKILLS if self.stage_order is None else (self.phase,) if self.active else ()
+        return LEGACY_SKILLS if self.stage_order is None else (self.phase,) if self.active else ()
 
     @property
     def validation_domain(self):
@@ -104,7 +106,7 @@ class TileSkillState:
                 index = self.stage_order.index(skill) + 1
                 self.phase = self.stage_order[index] if index < len(self.stage_order) else "complete"
             return self.phase
-        failed = [skill for skill in SKILLS if scores[skill] != count]
+        failed = [skill for skill in LEGACY_SKILLS if scores[skill] != count]
         self.scores = dict(scores)
         self.last_probe = self.total
         if not failed:
@@ -121,7 +123,7 @@ def initial_tile_state(cfg, family="preset"):
     stage = cfg["curriculum"].get("run_stage")
     if stage == "pre":
         raise ValueError(
-            "The combined pre stage is retired for fresh runs; select cherry_bomb or peashooter"
+            "The combined pre stage is retired for fresh runs; select an independent tile stage"
         )
     enabled = (
         cfg["training"].get("tile_scenarios", {}).get("enabled", False)

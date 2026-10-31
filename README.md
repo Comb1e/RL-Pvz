@@ -43,10 +43,13 @@ Or label public boards in the browser:
 
 The studio labels positive tile sets only. Manual action labeling and explicit
 absolute-infeasible labels are removed. Existing tile records reuse their positive
-sets; legality still prevents labeling occupied cells as positive. Cherry Bomb and
-tile annotation fitting use one top-1 ranking hinge, with all 45 outputs competing.
-Older annotation progress and active Cherry Bomb runs require `--init-from` to
-start fitting with the changed objective; their compatible weights remain usable.
+sets; legality still prevents labeling occupied cells as positive. Tile annotation
+fitting keeps its top-1 ranking hinge. Both Cherry Bomb stages use a zero-margin
+hit hinge plus expected Manhattan distance to the nearest successful tile, with
+all 45 outputs competing. The distance weight defaults to 0.1 and softmax
+temperature to 1.0 in `training.tile_scenarios`; distance is normalized by the
+maximum board distance (12 cells). This adapts
+[minimum-risk training](https://aclanthology.org/P16-1159/).
 
 To start autonomous training when ready:
 
@@ -55,21 +58,23 @@ To start autonomous training when ready:
   --output runs\my-run --gpu 0 --gpu-profile rtx4070-laptop
 ```
 
-Default progression is `cherry_bomb → peashooter → easy → standard → shared`.
+Default progression is `cherry_bomb → cherry_bomb_obstacle → peashooter → easy → standard → shared`.
 Each stage can also run independently. Explicit normal stages skip tile training:
 
 ```powershell
 .\.venv\Scripts\python.exe -m pvz_rl train --stage cherry_bomb --until-stage-complete `
   --seed 101 --output runs\cherry --gpu 0 --gpu-profile rtx4070-laptop
-.\.venv\Scripts\python.exe -m pvz_rl train --stage peashooter --until-stage-complete `
-  --seed 101 --output runs\peashooter --init-from runs\cherry\final.zip `
+.\.venv\Scripts\python.exe -m pvz_rl train --stage cherry_bomb_obstacle --until-stage-complete `
+  --seed 101 --output runs\cherry-obstacle --init-from runs\cherry\final.zip `
   --gpu 0 --gpu-profile rtx4070-laptop
 ```
 
 Without `--until-stage-complete`, `--games` limits completed real episodes.
 Peashooter uses easy waves, 50 starting sun, disabled mowers and configurable
 1.5× sky-sun frequency. Cherry Bomb uses its exact attributed-hit oracle with no
-exploration. Each tile stage has its own episode budget and validation clock;
+exploration or search in either bomb stage. Obstacle boards contain 1–15 plants,
+blocking competing blast cells so exactly one legal placement gives an attributed
+hit; ordinary boards retain 1–8 plants. Each tile stage has its own episode budget and validation clock;
 automatic progression preserves optimizer state, while separate `--init-from`
 runs transfer weights into a fresh optimizer.
 Cherry Bomb boards independently randomize each row's cart between ready and
@@ -77,7 +82,7 @@ disappeared; `training.tile_scenarios.bomb_mower_ready_probability` defaults to 
 Resume keeps the saved probability; older runs without it keep all carts disappeared.
 The live viewer follows new cohorts automatically. In Cherry Bomb, **Switch**
 browses completed boards from the current cohort, including while fitting runs.
-Cherry Bomb defaults to 640 envs through `training.tile_scenarios.cherry_bomb_n_envs`
+Both bomb stages default to 640 envs through `training.tile_scenarios.cherry_bomb_n_envs`
 (`--cherry-bomb-envs`); `training.n_envs` (`--n-envs`) controls other stages.
 Its preparation shares validated simulator setup, uses up to 32 persistent CPU
 workers, and batches natural cooldown warmup and exact attributed-hit rollouts
@@ -102,7 +107,7 @@ Search preserves reward economics and duration shaping, with the duration refere
 frozen within each queried board. Its hidden-state prior is approximate. A longer
 losing defense can still score worse because the configured duration penalty remains.
 
-Cherry Bomb checks validation every 10,000 completed episodes through
+Each bomb stage independently checks validation every 10,000 completed episodes through
 `curriculum.cherry_bomb_probe_interval_games`; Peashooter and normal stages check
 every 2,000. Intervals round up to a fitted cohort boundary. A full cohort
 must exceed 90% success to launch validation (normal 116/128; Cherry Bomb 577/640). Collection may be
@@ -121,7 +126,7 @@ Resume saved weights, optimizer, pending search, simulator and fitting progress:
   --output runs\my-run --gpu 0 --gpu-profile rtx4070-laptop
 ```
 
-Resume retains the saved search mode/settings and sky countdowns. Older currently
+Resume retains the saved bomb objective, stage order, search mode/settings and sky countdowns. Older currently
 resumable checkpoints without search settings continue their original workflow.
 Use `--init-from PATH` for a fresh optimizer and the current search configuration.
 Annotation progress also supports compatible weight initialization; it is not an

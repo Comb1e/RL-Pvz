@@ -4,6 +4,7 @@ from math import isfinite
 
 import matplotlib.pyplot as plt
 
+from pvz_rl.envs.tile_scenarios import LEGACY_SKILLS, is_bomb_skill
 from pvz_rl.learning.curriculum import TILE_STAGES
 
 
@@ -18,8 +19,8 @@ def domain(row):
         "pre"
         if (
             row.get("curriculum_stage") == "pre"
-            or row.get("active_skill") in ("peashooter", "cherry_bomb")
-            or skills.get("phase") in ("peashooter", "cherry_bomb")
+            or row.get("active_skill") in TILE_STAGES
+            or skills.get("phase") in TILE_STAGES
         )
         else "normal"
     )
@@ -66,6 +67,7 @@ def plot_panels(
     colors = dict(
         peashooter="#399471",
         cherry_bomb="#b54e59",
+        cherry_bomb_obstacle="#9b69ad",
         easy="#399471",
         standard="#d69536",
         shared="#5379ac",
@@ -264,18 +266,24 @@ def report_charts(segments, cfg, output, save):
                 1,
                 (
                     "ranking",
-                    "Cherry Bomb set-ranking loss",
+                    "Bomb total fitting loss",
                     lambda r: (
                         (
                             value(r, "optimization.tile_ranking_loss")
                             if value(r, "optimization.tile_ranking_loss") is not None
                             else value(r, "optimization.q_loss")
                         )
-                        if phase(r) == "cherry_bomb"
+                        if is_bomb_skill(phase(r))
                         else None
                     ),
                 ),
             )
+            fitting += fields([
+                ("optimization.bomb_hinge_loss", "Bomb zero-margin hinge (legacy: saved margin)"),
+                ("optimization.bomb_distance_loss", "Bomb weighted expected distance"),
+                ("cohort.bomb_selected_tile_distance", "Selected tile Manhattan distance"),
+                ("tile_scenarios.generation_failures", "Scenario generation failures"),
+            ])
         else:
             consistency_fields = fields(
                 [
@@ -344,7 +352,7 @@ def report_charts(segments, cfg, output, save):
         add(
             "exploration",
             "exploration",
-            [] if scope == "cherry_bomb" else fields(
+            [] if is_bomb_skill(scope) else fields(
                 [
                     ("tile_exploration_epsilon", "Tile exploration probability"),
                     ("optimization.tile_exploration_coins", "Tile exploration draws / cohort"),
@@ -458,7 +466,7 @@ def report_charts(segments, cfg, output, save):
             spec = fields(
                 [
                     (skill, skill.replace("_", " ").title() + " validation success")
-                    for skill in (TILE_STAGES if scope == "pre" else (scope,))
+                    for skill in (LEGACY_SKILLS if scope == "pre" else (scope,))
                 ]
             )
 

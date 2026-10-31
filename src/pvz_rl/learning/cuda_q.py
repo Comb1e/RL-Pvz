@@ -15,6 +15,7 @@ import torch
 from stable_baselines3.common.base_class import BaseAlgorithm
 
 from pvz_rl.config import cohort_envs
+from pvz_rl.envs.tile_scenarios import is_bomb_skill
 from pvz_rl.learning.cohort import (
     CohortPhase,
     atomic_transition,
@@ -209,7 +210,7 @@ class CudaCohortLifecycle(BaseAlgorithm):
         from pvz_rl.learning.budget import budget_target, progress_value
         from pvz_rl.learning.curriculum import pre_stage
 
-        if self.tile_skills.phase != "cherry_bomb":
+        if not is_bomb_skill(self.tile_skills.phase):
             return
         skills = self.tile_skills
         trigger = getattr(callback, "validation_trigger", None)
@@ -235,7 +236,7 @@ class CudaCohortLifecycle(BaseAlgorithm):
         target = budget_target(self.env.cfg)
         skills = self.tile_skills
         self.env.tile_scenario = self.env.queue.tile_scenario = skills.phase
-        if skills.phase != "cherry_bomb":
+        if not is_bomb_skill(skills.phase):
             self.env.queue.close()
         self.env.queue.tile_boards = {}
         self.env.tile_boards = {}
@@ -272,6 +273,8 @@ class CudaCohortLifecycle(BaseAlgorithm):
         for key in (
             "q_loss",
             "tile_ranking_loss",
+            "bomb_hinge_loss",
+            "bomb_distance_loss",
             "teacher_value_loss",
             "teacher_difference_loss",
             "teacher_feasibility_loss",
@@ -417,7 +420,7 @@ class CudaCohortLifecycle(BaseAlgorithm):
                     elif phase == CohortPhase.FINALIZE_REWARDS:
                         self._finalize_rewards(callback)
                     elif phase == CohortPhase.RETURNS:
-                        ranking = self.tile_skills.phase == "cherry_bomb"
+                        ranking = is_bomb_skill(self.tile_skills.phase)
                         search = getattr(self, "search_training", False)
                         self.prefit_errors = self._buffer.finalize(
                             cohort=self.cohort_number,
@@ -426,7 +429,9 @@ class CudaCohortLifecycle(BaseAlgorithm):
                         if ranking or search:
                             self.prefit_errors = {}
                             self._buffer.reward_summary["supervision"] = (
-                                "confirmed_search_returns" if search else "tile_set_ranking"
+                                "confirmed_search_returns" if search else self.cfg["training"][
+                                    "tile_scenarios"
+                                ].get("ranking_objective", "top1_hinge_v1")
                             )
                         for name, values in self.prefit_errors.items():
                             self.logger.record("train/action_count_" + name, values["count"])

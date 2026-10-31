@@ -23,7 +23,7 @@ from pvz_rl.envs.rewards import REWARD_METRICS
 from pvz_rl.envs.scenarios import difficulty_weights, scenario
 from pvz_rl.envs.sky_sun import peashooter_sky_sun_rate
 from pvz_rl.envs.step_result import PackedStepResult
-from pvz_rl.envs.tile_scenarios import BombGenerationFailure, peashooter_level
+from pvz_rl.envs.tile_scenarios import BombGenerationFailure, is_bomb_skill, peashooter_level
 from pvz_rl.learning.budget import budget_target
 from pvz_rl.learning.curriculum import stage_distribution, teaching_enabled
 from pvz_rl.learning.host_transfer import HostHandoff
@@ -85,8 +85,8 @@ class ScenarioQueue:
             if self.tile_scenario == "peashooter":
                 level, family = "easy", "tile_peashooter"
                 spec = peashooter_level(self.rules, seed)
-            elif self.tile_scenario == "cherry_bomb":
-                level, family = "easy", "tile_cherry_bomb"
+            elif is_bomb_skill(self.tile_scenario):
+                level, family = "easy", "tile_" + self.tile_scenario
             else:
                 spec = scenario(level, family, seed, self.rules, cfg)
             staged.append((index, level, family, seed, spec))
@@ -101,7 +101,7 @@ class ScenarioQueue:
 
     def prefetch(self, count):
         """Speculate one CPU cohort without committing RNGs, progress or labels."""
-        if self.tile_scenario != "cherry_bomb" or self._prefetched is not None:
+        if not is_bomb_skill(self.tile_scenario) or self._prefetched is not None:
             return
         if not self.cfg["training"].get("performance", {}).get("cherry_prefetch", False):
             return
@@ -109,8 +109,10 @@ class ScenarioQueue:
             return
         rngs = deepcopy(self.rngs)
         staged = self._draft(list(range(count)), rngs)
-        tasks = self._bomb_preparation().submit([s[3] for s in staged], self.deadline)
-        self._prefetched = (staged, rngs, tasks)
+        tasks = self._bomb_preparation().submit(
+            [s[3] for s in staged], self.deadline, skill=self.tile_scenario
+        )
+        self._prefetched = (staged, rngs, tasks, self.tile_scenario)
 
     def discard_prefetch(self):
         if self._prefetched is not None:
@@ -126,9 +128,10 @@ class ScenarioQueue:
         tasks = None
         prefetched = False
         if self._prefetched is not None:
-            staged, saved_rngs, saved_tasks = self._prefetched
+            staged, saved_rngs, saved_tasks, saved_skill = self._prefetched
             if (
-                self.tile_scenario == "cherry_bomb"
+                is_bomb_skill(self.tile_scenario)
+                and self.tile_scenario == saved_skill
                 and seeds is None
                 and indices == [s[0] for s in staged[: len(indices)]]
             ):
@@ -142,13 +145,15 @@ class ScenarioQueue:
                 self.discard_prefetch()
         if tasks is None:
             staged = self._draft(indices, rngs, seeds)
-        if self.tile_scenario == "cherry_bomb":
+        if is_bomb_skill(self.tile_scenario):
             prep = self._bomb_preparation()
             selected_seeds = [s[3] for s in staged]
             if tasks is None:
-                tasks = prep.submit(selected_seeds, self.deadline)
+                tasks = prep.submit(selected_seeds, self.deadline, skill=self.tile_scenario)
             try:
-                boards = prep.collect(tasks, selected_seeds, deadline=self.deadline)
+                boards = prep.collect(
+                    tasks, selected_seeds, deadline=self.deadline, skill=self.tile_scenario
+                )
             except BombGenerationFailure:
                 self.generation_failures += self.cfg["training"]["annotation"][
                     "sampling_max_attempts"
@@ -343,7 +348,7 @@ class CudaVecEnv(VecEnv):
         self.batch.set_sky_sun_rate(
             peashooter_sky_sun_rate(self.cfg) if self.tile_scenario == "peashooter" else 1.0
         )
-        if self.tile_scenario == "cherry_bomb":
+        if is_bomb_skill(self.tile_scenario):
             self.tile_boards = deepcopy(self.queue.tile_boards)
             from pvz_rl.envs.cuda_snapshots import upload_snapshots
 
@@ -522,7 +527,7 @@ class CudaVecEnv(VecEnv):
             self.task_transitions.update(self._tasks[i] for i in np.flatnonzero(self._step_active))
         self._pending_spawns[:] = self._step_state_host["pending_spawns"].numpy()
         compact = host[:, RECORD_OUTCOME]
-        if self.tile_scenario == "cherry_bomb":
+        if is_bomb_skill(self.tile_scenario):
             # A supervised exercise ends after its one proposal. Its success
             # is the private engine-verified label, not a whole-game outcome.
             compact[self._step_active, 0] = 1
@@ -542,7 +547,7 @@ class CudaVecEnv(VecEnv):
             compact, actions, self.last_action_result_host, truncation, self._step_active, completed
         )
         reward, done, timed_out = self._step_device_result
-        if self.tile_scenario == "cherry_bomb":
+        if is_bomb_skill(self.tile_scenario):
             done = self._device_active.clone()
             timed_out = torch.zeros_like(done)
         reward = reward.clone()
@@ -567,7 +572,7 @@ class CudaVecEnv(VecEnv):
                     episode_metrics=self.episode_metrics(index, header, total),
                     **{"TimeLimit.truncated": bool(compact[index, 1])},
                 )
-                if self.tile_scenario == "cherry_bomb":
+                if is_bomb_skill(self.tile_scenario):
                     action = int(actions[index, 0])
                     branch = 1 + (action - 1) // 45 if action else 0
                     expected = self.cfg["environment"]["plants"].index("cherry_bomb") + 1
@@ -581,7 +586,12 @@ class CudaVecEnv(VecEnv):
                         engine_status=metrics["status"],
                         status="won" if success else "lost",
                         win=int(success),
-                        tile_scenario="cherry_bomb",
+                        tile_scenario=self.tile_scenario,
+                        selected_tile_distance=min(
+                            abs((action - 1) % 45 // 9 - tile // 9)
+                            + abs((action - 1) % 9 - tile % 9)
+                            for tile in self.tile_boards[index]["feasible_tiles"]
+                        ) if action > 0 and branch == expected else None,
                     )
                 self.finished_outcomes[index] = completed[index]["episode_metrics"]["status"]
         # Supervised outcomes are authoritative only after attribution above.

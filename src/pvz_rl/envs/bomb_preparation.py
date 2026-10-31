@@ -9,6 +9,7 @@ from pvz_rl.envs.tile_scenarios import (
     bomb_initials,
     generation_failure,
     sample_bomb,
+    valid_bomb_labels,
 )
 from pvz_rl.learning.deadline import check_deadline
 
@@ -26,21 +27,21 @@ def _initialize(cfg):
 
 def _prepare(job, cfg=None):
     cfg = _WORKER_CFG if cfg is None else cfg
-    seed, start, labels, deadline = job
+    seed, start, labels, deadline, skill = job
     if labels:
-        return sample_bomb(cfg, seed, deadline=deadline)
+        return sample_bomb(cfg, seed, deadline=deadline, skill=skill)
     if cfg["training"].get("performance", {}).get("cherry_cuda_warmup", False):
-        candidate = next(bomb_initials(cfg, seed, start=start, deadline=deadline), None)
+        candidate = next(bomb_initials(cfg, seed, start=start, deadline=deadline, skill=skill), None)
         if candidate is None:
-            raise generation_failure(cfg, seed)
-        game, attempt = candidate
-        return dict(snapshot=EngineSnapshot.capture(game), generation_failures=attempt)
-    candidate = next(bomb_candidates(cfg, seed, start=start, deadline=deadline), None)
+            raise generation_failure(cfg, seed, skill)
+        game, attempt, metadata = candidate
+        return dict(snapshot=EngineSnapshot.capture(game), generation_failures=attempt, **metadata)
+    candidate = next(bomb_candidates(cfg, seed, start=start, deadline=deadline, skill=skill), None)
     if candidate is None:
-        raise generation_failure(cfg, seed)
-    game, target, attempt = candidate
+        raise generation_failure(cfg, seed, skill)
+    game, target, attempt, metadata = candidate
     return dict(
-        snapshot=EngineSnapshot.capture(game), target_id=target, generation_failures=attempt
+        snapshot=EngineSnapshot.capture(game), target_id=target, generation_failures=attempt, **metadata
     )
 
 
@@ -65,7 +66,7 @@ class BombPreparation:
     def reserved_bytes(self):
         return self.workers * self.worker_ram_mib * 1024**2
 
-    def submit(self, seeds, deadline=None, *, starts=None):
+    def submit(self, seeds, deadline=None, *, starts=None, skill="cherry_bomb"):
         if self.workers and self.pool is None:
             self.pool = ProcessPoolExecutor(
                 max_workers=self.workers,
@@ -75,7 +76,7 @@ class BombPreparation:
             )
         starts = [0] * len(seeds) if starts is None else starts
         jobs = [
-            (seed, start, self.oracle == "cpu", deadline)
+            (seed, start, self.oracle == "cpu", deadline, skill)
             for seed, start in zip(seeds, starts, strict=True)
         ]
         return [self.pool.submit(_prepare, job) for job in jobs] if self.pool else jobs
@@ -93,7 +94,7 @@ class BombPreparation:
             except TimeoutError:
                 pass
 
-    def collect(self, tasks, seeds, *, deadline=None):
+    def collect(self, tasks, seeds, *, deadline=None, skill="cherry_bomb"):
         boards = [None] * len(tasks)
         remaining = list(range(len(tasks)))
         try:
@@ -112,7 +113,7 @@ class BombPreparation:
                 for index, board, (positive, absolute) in zip(
                     remaining, candidates, labels, strict=True
                 ):
-                    if positive:
+                    if valid_bomb_labels(board, positive, skill):
                         boards[index] = dict(
                             board, feasible_tiles=positive, absolute_infeasible_tiles=absolute
                         )
@@ -120,7 +121,7 @@ class BombPreparation:
                         retry.append(index)
                         starts.append(board["generation_failures"] + 1)
                 remaining = retry
-                tasks = self.submit([seeds[i] for i in retry], deadline, starts=starts)
+                tasks = self.submit([seeds[i] for i in retry], deadline, starts=starts, skill=skill)
             return boards
         except BaseException:
             self.cancel(tasks)

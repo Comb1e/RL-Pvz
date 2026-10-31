@@ -109,14 +109,16 @@ enabled = true # Missing in older checkpoints: retain their original validation 
 cohort_success_threshold = 0.9 # Strictly above; full configured cohorts only (normally 116/128).
 
 [training.tile_scenarios]
-enabled = true # Automatic cherry_bomb then peashooter stages; selected normal stages skip them.
+enabled = true # Automatic cherry_bomb, cherry_bomb_obstacle, then peashooter; selected normal stages skip them.
 cherry_bomb_n_envs = 640 # Fastest measured collection time/env with 32 workers and the CUDA oracle.
 peashooter_sky_sun_rate = 1.5 # Divide sky-drop delays by this rate; keep each drop at 25 sun.
 bomb_initial_sun = 150
 bomb_plants = [1, 8]
+bomb_obstacle_plants = [1, 15] # Fill competing blast cells first; reserve exactly one successful tile.
 bomb_mower_ready_probability = 0.5 # Independent per row; otherwise disappeared (spent).
-ranking_margin = 1.0
-ranking_objective = "top1_hinge_v1" # Positive-set ranking; occupied tiles are ordinary alternatives.
+ranking_objective = "zero_margin_distance_v1" # Both bomb stages; annotation fitting remains unchanged.
+distance_weight = 0.1 # Expected normalized Manhattan distance; outcome hinge has coefficient one.
+distance_temperature = 1.0 # Softmax temperature; require 0 <= distance_weight < 4 * temperature.
 
 [training.storage]
 ram_gib = 6

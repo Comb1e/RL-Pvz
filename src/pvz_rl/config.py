@@ -14,6 +14,7 @@ from pathlib import Path
 from pvz_game.config import PLANT_TYPES, ZOMBIE_TYPES
 from pvz_game.cuda.schema import MOWER_STATES, PLANT_STATES, ZOMBIE_STATES
 
+from pvz_rl.envs.tile_scenarios import is_bomb_skill
 from pvz_rl.learning.budget import uses_games
 
 _CONFIG_RESOURCE = "data/train.toml"
@@ -54,7 +55,7 @@ def runtime_settings(cfg: dict) -> dict:
 
 def cohort_envs(cfg, skill=None):
     """Configured real-episode cohort size; missing stage settings retain legacy size."""
-    if skill == "cherry_bomb":
+    if is_bomb_skill(skill):
         return (
             cfg["training"]
             .get("tile_scenarios", {})
@@ -71,10 +72,10 @@ def training_env_capacity(cfg, family="preset"):
         family == "preset"
         and tile.get("enabled", False)
         and cfg["curriculum"].get("mode") == "teaching"
-        and stage in (None, "pre", "cherry_bomb")
+        and (stage in (None, "pre") or is_bomb_skill(stage))
     ):
         cherry = cohort_envs(cfg, "cherry_bomb")
-        return cherry if stage == "cherry_bomb" else max(cherry, cohort_envs(cfg))
+        return cherry if is_bomb_skill(stage) else max(cherry, cohort_envs(cfg))
     return cohort_envs(cfg)
 
 
@@ -536,9 +537,7 @@ def validate_config(cfg: dict) -> None:
             raise ValueError(
                 "training.tile_scenarios.cherry_bomb_n_envs must be a positive integer"
             )
-        sun, plants, margin = (
-            tile.get(k) for k in ("bomb_initial_sun", "bomb_plants", "ranking_margin")
-        )
+        sun, plants = (tile.get(k) for k in ("bomb_initial_sun", "bomb_plants"))
         if type(sun) is not int or not 150 <= sun <= 9990:
             raise ValueError("tile scenario bomb_initial_sun must be between 150 and 9990")
         ready = tile.get("bomb_mower_ready_probability", 0.0)
@@ -551,10 +550,28 @@ def validate_config(cfg: dict) -> None:
             or not 1 <= plants[0] <= plants[1] <= 44
         ):
             raise ValueError("tile scenario bomb_plants must be an inclusive range in [1, 44]")
-        if type(margin) not in (float, int) or not math.isfinite(margin) or margin <= 0:
-            raise ValueError("tile scenario ranking_margin must be finite and positive")
-        if tile.get("ranking_objective", "top1_hinge_v1") != "top1_hinge_v1":
+        objective = tile.get("ranking_objective", "top1_hinge_v1")
+        if objective not in ("top1_hinge_v1", "zero_margin_distance_v1"):
             raise ValueError("Unsupported tile scenario ranking_objective")
+        if objective == "top1_hinge_v1":
+            margin = tile.get("ranking_margin")
+            if type(margin) not in (float, int) or not math.isfinite(margin) or margin <= 0:
+                raise ValueError("legacy tile ranking_margin must be finite and positive")
+        if objective == "zero_margin_distance_v1":
+            weight, temperature = tile.get("distance_weight"), tile.get("distance_temperature")
+            if (
+                type(weight) not in (int, float) or not math.isfinite(weight)
+                or type(temperature) not in (int, float) or not math.isfinite(temperature)
+                or temperature <= 0 or not 0 <= weight < 4 * temperature
+            ):
+                raise ValueError("Bomb distance settings require finite tau > 0 and 0 <= weight < 4*tau")
+        obstacle = tile.get("bomb_obstacle_plants", [1, 15])
+        if (
+            not isinstance(obstacle, list) or len(obstacle) != 2
+            or any(type(n) is not int for n in obstacle)
+            or not 1 <= obstacle[0] <= obstacle[1] <= 44
+        ):
+            raise ValueError("bomb_obstacle_plants must be an inclusive range in [1, 44]")
         if tile["enabled"] and not uses_games(cfg):
             raise ValueError("Tile prerequisites require game-based training")
         from pvz_game import Rules

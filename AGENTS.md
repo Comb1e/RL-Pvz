@@ -17,8 +17,9 @@ rules. This file adds project-specific constraints and ownership.
   shared policy runner. All 45 tiles remain proposal candidates; classify occupied
   cells after selection. Branch impossibility precedes tile invalidity.
 - Manual annotations are positive tile sets only; there is no action annotation
-  workflow or absolute-infeasible tile labeling. Cherry Bomb and tile annotation
-  fitting share one top-1 hinge over all 45 outputs.
+  workflow or absolute-infeasible tile labeling. Annotation fitting keeps its top-1
+  hinge. Both bomb stages use a zero-margin hit hinge plus bounded expected
+  distance over all 45 outputs; legacy recovery retains its saved objective.
 - Fresh autonomous training fits confirmed search values/differences and finite
   feasibility bounds through shared fitting. Legacy/diagnostic complete-return
   fitting retains its minimum-Q invalid targets and EMA species consistency.
@@ -44,10 +45,12 @@ rules. This file adds project-specific constraints and ownership.
 
 ## Training stages and validation
 
-- Default progression is `cherry_bomb → peashooter → easy → standard → shared`.
+- Default progression is `cherry_bomb → cherry_bomb_obstacle → peashooter → easy → standard → shared`.
   Each tile stage is separately selectable and validates only its own skill.
   Explicit fresh normal stages skip tile stages; legacy checkpoints retain their
-  saved combined-stage workflow. Cherry Bomb collection has no exploration.
+  saved combined-stage workflow. Both bomb stages have no exploration or search.
+  Obstacle boards use 1–15 plants and require exactly one engine-verified legal hit;
+  scenario identity travels with worker/prefetch jobs and never enters policy input.
 - Preserve configured Peashooter sky-sun scaling and saved countdowns without
   rescaling recovery state. Keep tile-stage episodes, budgets and validation clocks
   separate from one another and from normal games, exploration and cohort cycles.
@@ -56,7 +59,7 @@ rules. This file adds project-specific constraints and ownership.
   fitted cohort. Use authoritative outcomes from the entire configured cohort,
   including attributed bomb hits; shortened cohorts and rolling statistics cannot
   qualify. A skipped check waits another interval.
-- Cherry Bomb owns its configured probe interval; resume refreshes that interval
+- Both bomb stages independently use the Cherry Bomb probe interval; resume refreshes that interval
   but retries pending validation first. Validation releases idle collection scratch
   and graph storage without discarding CPU workers or speculative seed state.
 - Keep cohort qualification separate from perfect validation mastery. Persist
@@ -77,7 +80,7 @@ Paths below are relative to `src/pvz_rl/` unless stated otherwise.
 | `policy/` | Independent two-stage Transformers, shared runner, all-tile selection, active batching and bounded collection/fitting CUDA graphs. |
 | `learning/training.py`, `cuda_q.py`, `sequential_training.py` | Training orchestration, cohort lifecycle, collection, finalization and atomic recovery. |
 | `learning/tile_curriculum.py`, `validation_trigger.py`, `budget.py`, `training_requirements.py` | Independent tile-stage clocks/progression, legacy prerequisite recovery, cohort validation gate and normal fitting schedule. |
-| `learning/flat_q.py`, `objective.py`, `action_routing.py` | Shared autonomous/demo fitting, selected-action targets, consistency, ranking and wait/invalid compaction. |
+| `learning/flat_q.py`, `objective.py`, `action_routing.py`, `bomb_objective.py` | Shared fitting/routing, legacy targets/consistency, annotation ranking and zero-margin bomb hit/distance loss. |
 | `envs/search_worlds.py`, `learning/search_teacher.py`, `search_targets.py`, `search_settings.py` | Public world reconstruction, interruptible CUDA search/continuations, confirmed targets and versioned settings/recovery. |
 | `learning/cuda_buffer.py`, `batch_transport.py`, `collection_scheduler.py`, `exploration.py` | Trajectories, bounded transport, decision tickets and persistent exploration commitments. |
 | `learning/checkpoints.py`, `training_artifacts.py`, `performance.py` | Compatibility contracts, durable snapshots, completed-run weight retention and execution-only refresh settings. |

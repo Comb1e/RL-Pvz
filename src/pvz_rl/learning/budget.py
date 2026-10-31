@@ -4,7 +4,7 @@
 def validation_interval_games(cfg, domain="normal"):
     """Independent Cherry clock; absent overrides retain the saved common interval."""
     curriculum = cfg["curriculum"]
-    if domain == "cherry_bomb":
+    if domain in ("cherry_bomb", "cherry_bomb_obstacle"):
         return curriculum.get("cherry_bomb_probe_interval_games", curriculum["probe_interval_games"])
     return curriculum["probe_interval_games"]
 
@@ -53,7 +53,7 @@ def evaluation_interval(cfg):
 
 def progress_value(cfg, model):
     stage = cfg["curriculum"].get("run_stage")
-    if stage in ("cherry_bomb", "peashooter"):
+    if stage in ("cherry_bomb", "cherry_bomb_obstacle", "peashooter"):
         return model.tile_skills.episodes[stage]
     if stage == "pre":
         return model.tile_skills.total

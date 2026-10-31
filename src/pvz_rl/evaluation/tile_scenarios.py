@@ -10,13 +10,20 @@ from pvz_rl.envs.cuda_env import CudaVecEnv
 from pvz_rl.envs.env import PvZEnv
 from pvz_rl.envs.scenarios import namespace_seed
 from pvz_rl.envs.sky_sun import peashooter_sky_sun_rate
-from pvz_rl.envs.tile_scenarios import SKILLS, bomb_hit, peashooter_level
+from pvz_rl.envs.tile_scenarios import (
+    LEGACY_SKILLS,
+    SKILLS,
+    bomb_hit,
+    is_bomb_skill,
+    peashooter_level,
+    skill_plant,
+)
 from pvz_rl.evaluation.cuda_evaluation import deterministic_validation
 from pvz_rl.learning.deadline import check_deadline
 from pvz_rl.policy.runner import PolicyRunner
 
 
-def validate_tile_skills(cfg, model, seeds, *, deadline=None, progress=None, skills=SKILLS):
+def validate_tile_skills(cfg, model, seeds, *, deadline=None, progress=None, skills=LEGACY_SKILLS):
     results = {}
     with deterministic_validation(model):
         if not skills or len(set(skills)) != len(skills) or any(skill not in SKILLS for skill in skills):
@@ -44,7 +51,7 @@ def validate_tile_skills(cfg, model, seeds, *, deadline=None, progress=None, ski
                                     env.enabled_envs.copy(), device=model.device
                                 )
                                 availability = env.branch_availability(active=active)
-                                branch = cfg["environment"]["plants"].index(skill) + 1
+                                branch = cfg["environment"]["plants"].index(skill_plant(skill)) + 1
                                 supplied = torch.where(availability[:, branch], branch, 0).long()
                                 actions = runner.decide(
                                     obs,
@@ -61,7 +68,7 @@ def validate_tile_skills(cfg, model, seeds, *, deadline=None, progress=None, ski
                                     continue
                                 check_deadline(deadline)
                                 metrics = info["episode_metrics"]
-                                if skill == "cherry_bomb":
+                                if is_bomb_skill(skill):
                                     action = traces[index][0]
                                     board = env.tile_boards[index]
                                     success = action > 0 and bomb_hit(
@@ -107,7 +114,7 @@ def validate_tile_skills(cfg, model, seeds, *, deadline=None, progress=None, ski
                                         seed=chunk[index],
                                         win=bool(success),
                                         selected_action=traces[index][0]
-                                        if skill == "cherry_bomb"
+                                        if is_bomb_skill(skill)
                                         else None,
                                         decisions=len(traces[index]),
                                         cpu_verified=True,

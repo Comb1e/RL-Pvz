@@ -25,6 +25,7 @@ from pvz_rl.config import (
 from pvz_rl.envs.rewards import LEDGER_METRICS, REWARD_METRICS
 from pvz_rl.envs.scenarios import difficulty_weights
 from pvz_rl.envs.sky_sun import peashooter_sky_sun_rate
+from pvz_rl.envs.tile_scenarios import is_bomb_skill
 from pvz_rl.evaluation.runner import evaluate, summarize
 from pvz_rl.learning.budget import (
     budget_target,
@@ -479,12 +480,12 @@ class ResearchCallback(BaseCallback):
     def cohort_text(self):
         summary = self.cohort_summary()
         if (
-            self.model.tile_skills.phase == "cherry_bomb"
-            or getattr(self.model.env, "tile_scenario", None) == "cherry_bomb"
+            is_bomb_skill(self.model.tile_skills.phase)
+            or is_bomb_skill(getattr(self.model.env, "tile_scenario", None))
         ):
             return (
                 f"done {summary['completed']}/{summary['games']} "
-                f"correct {summary['wins']}/{summary['games']}; tile ranking supervision"
+                f"correct {summary['wins']}/{summary['games']}; bomb tile supervision"
             )
         raw = "n/a" if summary["raw_return"] is None else f"{summary['raw_return']:.3g}"
         fitted = (
@@ -616,6 +617,8 @@ class ResearchCallback(BaseCallback):
             "teacher_feasibility_loss",
             "q_loss",
             "tile_ranking_loss",
+            "bomb_hinge_loss",
+            "bomb_distance_loss",
             "selected_action_error",
             "species_consistency_loss",
             "species_consistency_mae",
@@ -652,7 +655,7 @@ class ResearchCallback(BaseCallback):
                 float(value) if value is not None and math.isfinite(float(value)) else None
             )
         row.update(optimization=metrics, completed_updates=self.model._n_updates)
-        if row.get("active_skill") == "cherry_bomb":
+        if is_bomb_skill(row.get("active_skill")):
             metrics["tile_ranking_loss"] = metrics["q_loss"]
             metrics["q_loss"] = None
         append_jsonl(self.metrics_stream, row)
@@ -822,7 +825,7 @@ class ResearchCallback(BaseCallback):
             skills = self.model.tile_skills
             state = exploration_state(self.cfg, skills.episodes[skills.phase])
             apply_exploration_state(self.model, state)
-            if skills.phase == "cherry_bomb" and skills.stage_order is not None:
+            if is_bomb_skill(skills.phase) and skills.stage_order is not None:
                 from pvz_rl.learning.exploration import set_exploration_rate
 
                 set_exploration_rate(self.model, 0.0, plant_rate=0.0)
@@ -1712,6 +1715,14 @@ def train(
         if model.tile_skills.active:
             from pvz_rl.learning.budget import validation_interval_games
 
+            if is_bomb_skill(model.tile_skills.phase):
+                bomb = cfg["training"]["tile_scenarios"]
+                progress.emit(
+                    f"Bomb fitting: {bomb.get('ranking_objective', 'top1_hinge_v1')}; "
+                    f"distance weight {bomb.get('distance_weight', 0)}, "
+                    f"temperature {bomb.get('distance_temperature', 1)}; no search or exploration",
+                    force=True,
+                )
             progress.emit(
                 f"Tile stage: {model.tile_skills.phase}; validate "
                 f"{', '.join(model.tile_skills.validation_skills)} every "

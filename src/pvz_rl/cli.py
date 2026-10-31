@@ -57,10 +57,10 @@ def training_options(parser):
     parser.add_argument(
         "--games",
         type=int,
-        help="total completed games across all workers; scenario episodes for cherry_bomb or peashooter",
+        help="total completed games across all workers; scenario episodes for a selected tile stage",
     )
     parser.add_argument("--n-envs", type=int, help="Peashooter/normal cohort size")
-    parser.add_argument("--cherry-bomb-envs", type=int, help="Cherry Bomb cohort size")
+    parser.add_argument("--cherry-bomb-envs", type=int, help="cohort size for both Cherry Bomb stages")
     parser.add_argument("--device", choices=("cuda",))
     parser.add_argument("--simulator", choices=("cuda",))
     parser.add_argument("--batch-size", type=int)
@@ -239,7 +239,7 @@ def main(argv=None):
     training.add_argument(
         "--stage",
         choices=SELECTABLE_STAGES,
-        help="train only cherry_bomb, peashooter, easy, standard or shared; stop at mastery or budget",
+        help="train only cherry_bomb, cherry_bomb_obstacle, peashooter, easy, standard or shared; stop at mastery or budget",
     )
     training.add_argument(
         "--until-stage-complete",
