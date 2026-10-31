@@ -36,7 +36,8 @@ _STAGE_PARAMETERS = {
         "obstacle_plants": "training.tile_scenarios.bomb_obstacle_plants",
         "mower_ready_probability": "training.tile_scenarios.bomb_mower_ready_probability",
         **{key: f"training.tile_scenarios.{key}" for key in (
-            "ranking_objective", "ranking_margin", "distance_weight", "distance_temperature",
+            "ranking_objective", "softmax_temperature", "ranking_margin",
+            "distance_weight", "distance_temperature",
         )},
         **{key: f"training.performance.cherry_{key}" for key in (
             "prepare_workers", "worker_ram_mib", "prefetch", "oracle", "cuda_warmup",
@@ -123,8 +124,10 @@ def bomb_ranking_margin(settings):
 
 
 def bomb_max_illegal_distance(settings):
-    """Saved distance objectives keep their original occupied-cell guidance."""
-    return settings.get("ranking_objective") == "margin_distance_illegal_v3"
+    """Use maximum illegal distance for current diagnostics and saved v3 fitting."""
+    return settings.get("ranking_objective") in (
+        "margin_distance_illegal_v3", "set_cross_entropy_v1",
+    )
 
 
 def training_env_capacity(cfg, family="preset"):
@@ -616,9 +619,16 @@ def validate_config(cfg: dict) -> None:
         objective = tile.get("ranking_objective", "top1_hinge_v1")
         if objective not in (
             "top1_hinge_v1", "zero_margin_distance_v1", "margin_distance_v2",
-            "margin_distance_illegal_v3",
+            "margin_distance_illegal_v3", "set_cross_entropy_v1",
         ):
             raise ValueError("Unsupported tile scenario ranking_objective")
+        if objective == "set_cross_entropy_v1":
+            temperature = tile.get("softmax_temperature")
+            if (
+                type(temperature) not in (int, float) or not math.isfinite(temperature)
+                or temperature <= 0
+            ):
+                raise ValueError("Bomb softmax_temperature must be finite and positive")
         if objective == "top1_hinge_v1":
             margin = tile.get("ranking_margin")
             if type(margin) not in (float, int) or not math.isfinite(margin) or margin <= 0:

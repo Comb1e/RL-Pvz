@@ -44,18 +44,15 @@ Or label public boards in the browser:
 The studio labels positive tile sets only. Manual action labeling and explicit
 absolute-infeasible labels are removed. Existing tile records reuse their positive
 sets; legality still prevents labeling occupied cells as positive. Tile annotation
-fitting keeps its top-1 ranking hinge. Both Cherry Bomb stages use a configurable
-hit hinge, `max(0, ranking_margin + max_unsuccessful_Q - max_successful_Q)`, plus
-expected Manhattan distance to the nearest successful tile. Illegal tiles receive
-the maximum board distance (12), including occupied cells next to a target; all 45
-outputs still compete. Set `training.cherry_bomb.ranking_margin` to a finite nonnegative
-value (default 0.1); positive values require a gap above unsuccessful tiles.
-Resume preserves the saved objective and margin; older runs keep their original
-illegal-tile distances and zero-margin runs stay at zero. Use
-`--init-from` to start with changed fitting settings. The distance weight defaults
-to 0.6 and softmax temperature to 1.0 in the same table; distance is normalized by the
-maximum board distance (12 cells). This adapts
-[minimum-risk training](https://aclanthology.org/P16-1159/).
+fitting keeps its top-1 ranking hinge. Fresh Cherry Bomb stages use only
+`-log(sum(successful-tile softmax probabilities))`: ordinary cross-entropy for the
+obstacle stage's sole successful tile, and no prescribed probability split among
+ordinary Cherry Bomb's successful tiles. All 45 outputs compete, including occupied
+cells. Tune the finite positive `training.cherry_bomb.softmax_temperature`; there
+is no hinge or distance penalty. Reports show one cross-entropy loss;
+selected-tile distance remains a diagnostic. Resume preserves saved legacy objectives
+and settings; use `--init-from` for fresh fitting with the new loss. The set objective
+is also studied in [partial-label learning](https://www.proceedings.com/content/079/079017-2841open.pdf).
 
 To start autonomous training when ready:
 

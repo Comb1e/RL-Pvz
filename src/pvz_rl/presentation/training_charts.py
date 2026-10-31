@@ -187,7 +187,7 @@ def report_charts(segments, cfg, output, save):
             ]
         behavior_fields = fields(behavior)
         if pre:
-            # A one-proposal bomb board has ranking supervision, not an episode-return objective.
+            # A one-proposal bomb board has supervised fitting, not an episode-return objective.
             behavior_fields = [
                 (
                     key,
@@ -265,11 +265,13 @@ def report_charts(segments, cfg, output, save):
             fitting.insert(
                 1,
                 (
-                    "ranking",
-                    "Bomb total fitting loss",
+                    "bomb_loss",
+                    "Bomb fitting loss",
                     lambda r: (
                         (
-                            value(r, "optimization.tile_ranking_loss")
+                            value(r, "optimization.bomb_cross_entropy_loss")
+                            if value(r, "optimization.bomb_cross_entropy_loss") is not None
+                            else value(r, "optimization.tile_ranking_loss")
                             if value(r, "optimization.tile_ranking_loss") is not None
                             else value(r, "optimization.q_loss")
                         )

@@ -25,6 +25,13 @@ from pvz_rl.learning.batch_transport import (
     batch_rows,
     fitting_metadata,
 )
+from pvz_rl.learning.bomb_objective import (
+    BOMB_OBJECTIVE,
+    DISTANCE_OBJECTIVES,
+    bomb_distance_loss,
+    bomb_loss_metrics,
+    bomb_set_cross_entropy,
+)
 from pvz_rl.learning.cohort import CohortPhase, atomic_transition, check_transition_interruption
 from pvz_rl.learning.collection_scheduler import CollectionScheduler
 from pvz_rl.learning.cuda_q import CudaCohortLifecycle
@@ -814,7 +821,10 @@ class CudaSequentialQ(CudaCohortLifecycle):
             raise RuntimeError("BF16 runtime inference is unavailable on this CUDA device")
         self.policy.zero_grad(set_to_none=True)
         self._pass_metrics = torch.zeros(10, device=self.device, dtype=torch.float64)
-        self._bomb_pass_metrics = torch.zeros(2, device=self.device)
+        self._bomb_pass_metrics = torch.zeros(
+            len(bomb_loss_metrics(self.cfg["training"].get("tile_scenarios", {}))),
+            device=self.device,
+        )
         for encoder in self.policy.encoders:
             encoder.fitting = True
             encoder.microbatch = min(
@@ -907,7 +917,7 @@ class CudaSequentialQ(CudaCohortLifecycle):
             if is_bomb_skill(self.tile_skills.phase):
                 self._cached_fit_examples = self.cohort_games
                 for key, number in zip(
-                    ("bomb_hinge_loss", "bomb_distance_loss"),
+                    bomb_loss_metrics(self.cfg["training"]["tile_scenarios"]),
                     self._bomb_pass_metrics.cpu().tolist(), strict=True,
                 ):
                     self.logger.record("train/" + key, number)
@@ -1024,10 +1034,6 @@ class CudaSequentialQ(CudaCohortLifecycle):
     def _bomb_loss(self, rows, observations):
         from pvz_rl.envs.encoding import collate_observations
         from pvz_rl.learning.annotation_fit import set_ranking_loss
-        from pvz_rl.learning.bomb_objective import (
-            DISTANCE_OBJECTIVES,
-            bomb_distance_loss,
-        )
 
         labels = [self.env.tile_boards[int(index)] for index in rows["env"]]
         observations = collate_observations(observations, self.device)
@@ -1038,7 +1044,13 @@ class CudaSequentialQ(CudaCohortLifecycle):
         ).float()
         settings = self.cfg["training"]["tile_scenarios"]
         positives = [label["feasible_tiles"] for label in labels]
-        if settings.get("ranking_objective", "top1_hinge_v1") in DISTANCE_OBJECTIVES:
+        objective = settings.get("ranking_objective", "top1_hinge_v1")
+        if objective == BOMB_OBJECTIVE:
+            loss = bomb_set_cross_entropy(
+                values, positives, temperature=settings["softmax_temperature"],
+            )
+            detail = loss.detach().reshape(1)
+        elif objective in DISTANCE_OBJECTIVES:
             illegal = [
                 label["absolute_infeasible_tiles"] if bomb_max_illegal_distance(settings) else []
                 for label in labels

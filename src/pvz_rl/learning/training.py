@@ -618,6 +618,7 @@ class ResearchCallback(BaseCallback):
             "teacher_feasibility_loss",
             "q_loss",
             "tile_ranking_loss",
+            "bomb_cross_entropy_loss",
             "bomb_hinge_loss",
             "bomb_distance_loss",
             "selected_action_error",
@@ -657,7 +658,8 @@ class ResearchCallback(BaseCallback):
             )
         row.update(optimization=metrics, completed_updates=self.model._n_updates)
         if is_bomb_skill(row.get("active_skill")):
-            metrics["tile_ranking_loss"] = metrics["q_loss"]
+            if metrics["bomb_cross_entropy_loss"] is None:
+                metrics["tile_ranking_loss"] = metrics["q_loss"]
             metrics["q_loss"] = None
         append_jsonl(self.metrics_stream, row)
         self.last_updates = self.model._n_updates
@@ -1719,12 +1721,20 @@ def train(
             from pvz_rl.learning.budget import validation_interval_games
 
             if is_bomb_skill(model.tile_skills.phase):
+                from pvz_rl.learning.bomb_objective import BOMB_OBJECTIVE
+
                 bomb = cfg["training"]["tile_scenarios"]
+                objective = bomb.get("ranking_objective", "top1_hinge_v1")
+                fitting = (
+                    f"set cross-entropy only, temperature {bomb['softmax_temperature']}"
+                    if objective == BOMB_OBJECTIVE else (
+                        f"ranking margin {bomb_ranking_margin(bomb)}, "
+                        f"distance weight {bomb.get('distance_weight', 0)}, "
+                        f"temperature {bomb.get('distance_temperature', 1)}"
+                    )
+                )
                 progress.emit(
-                    f"Bomb fitting: {bomb.get('ranking_objective', 'top1_hinge_v1')}; "
-                    f"ranking margin {bomb_ranking_margin(bomb)}, "
-                    f"distance weight {bomb.get('distance_weight', 0)}, "
-                    f"temperature {bomb.get('distance_temperature', 1)}; no search or exploration",
+                    f"Bomb fitting: {objective}; {fitting}; no search or exploration",
                     force=True,
                 )
             progress.emit(

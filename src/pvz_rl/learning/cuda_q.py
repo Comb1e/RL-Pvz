@@ -273,6 +273,7 @@ class CudaCohortLifecycle(BaseAlgorithm):
         for key in (
             "q_loss",
             "tile_ranking_loss",
+            "bomb_cross_entropy_loss",
             "bomb_hinge_loss",
             "bomb_distance_loss",
             "teacher_value_loss",
