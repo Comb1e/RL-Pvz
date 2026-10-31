@@ -56,7 +56,7 @@ from pvz_rl.learning.exploration import (
 )
 from pvz_rl.learning.objective import components, training_rewards
 from pvz_rl.learning.performance import compilation_requested
-from pvz_rl.learning.tile_curriculum import initial_tile_state
+from pvz_rl.learning.tile_curriculum import initial_tile_state, required_validation_wins
 from pvz_rl.learning.training_requirements import (
     FIT_SCHEDULE_PROTOCOL,
     parameter_changes,
@@ -1743,13 +1743,25 @@ def train(
                     f"Bomb fitting: {objective}; {fitting}; no search or exploration",
                     force=True,
                 )
+            requirements = {
+                skill: (
+                    required_validation_wins(cfg, skill)
+                    if model.tile_skills.stage_order is not None
+                    else cfg["curriculum"]["probe_cases"]
+                )
+                for skill in model.tile_skills.validation_skills
+            }
             progress.emit(
                 f"Tile stage: {model.tile_skills.phase}; validate "
                 f"{', '.join(model.tile_skills.validation_skills)} every "
                 f"{validation_interval_games(cfg, model.tile_skills.validation_domain):,} "
                 "stage episodes at a fitted "
-                f"cohort boundary; require {cfg['curriculum']['probe_cases']}/"
-                f"{cfg['curriculum']['probe_cases']}; "
+                "cohort boundary; require "
+                + ", ".join(
+                    f"{skill} {wins}/{cfg['curriculum']['probe_cases']}"
+                    for skill, wins in requirements.items()
+                )
+                + "; "
                 + (
                     "scenario episodes count toward the selected tile stage budget"
                     if pre_stage(cfg)

@@ -44,6 +44,7 @@ _STAGE_PARAMETERS = {
             "oracle_lanes", "oracle_vram_mib",
         )},
         "probe_interval_games": "curriculum.cherry_bomb_probe_interval_games",
+        "validation_success_threshold": "curriculum.cherry_bomb_validation_success_threshold",
     },
     "cherry_bomb_obstacle": {
         "softmax_temperature": "training.tile_scenarios.obstacle_softmax_temperature",
@@ -606,6 +607,12 @@ def validate_config(cfg: dict) -> None:
     for key in ("cherry_bomb_probe_interval_games", "peashooter_probe_interval_games"):
         if key in c and (type(c[key]) is not int or c[key] < 1):
             raise ValueError(f"{key} must be a positive integer")
+    key = "cherry_bomb_validation_success_threshold"
+    if key in c and (
+        type(c[key]) not in (int, float) or not math.isfinite(c[key])
+        or not 0 <= c[key] < 1
+    ):
+        raise ValueError(f"{key} must be finite and in [0, 1)")
     trigger = cfg["training"].get("validation_trigger")
     if trigger is not None:
         threshold = trigger.get("cohort_success_threshold")

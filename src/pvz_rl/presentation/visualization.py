@@ -16,6 +16,7 @@ from pvz_rl.config import output_settings
 from pvz_rl.evaluation.runner import evaluate
 from pvz_rl.learning.curriculum import TILE_STAGES, pre_stage
 from pvz_rl.learning.deadline import BudgetExpired, check_deadline
+from pvz_rl.learning.tile_curriculum import required_validation_wins
 from pvz_rl.monitoring.progress import Phase, ProgressReporter
 from pvz_rl.presentation.training_charts import domain, episodes, report_charts
 from pvz_rl.presentation.video import export_replay, video_settings
@@ -341,7 +342,7 @@ def build_run_report(run, cfg=None):
     )
     mastered = ", ".join(
         skill for skill in skills.get("stage_order") or []
-        if skills.get("scores", {}).get(skill) == cfg["curriculum"]["probe_cases"]
+        if skills.get("scores", {}).get(skill, -1) >= required_validation_wins(cfg, skill)
     )
     mastery = (
         f"Joint mastery: {escape(skills.get('phase') == 'complete')}. "

@@ -70,7 +70,9 @@ rules. This file adds project-specific constraints and ownership.
 - Both bomb stages independently use the Cherry Bomb probe interval; resume refreshes that interval
   but retries pending validation first. Validation releases idle collection scratch
   and graph storage without discarding CPU workers or speculative seed state.
-- Keep cohort qualification separate from perfect validation mastery. Persist
+- Keep cohort qualification separate from validation mastery. Cherry Bomb must
+  strictly exceed its configured validation success threshold; other fresh stages
+  require perfect validation. Legacy combined probes retain perfect joint mastery. Persist
   separate tile-stage/normal clocks and pending validation; retry interrupted validation
   against preserved weights before further fitting. Missing saved trigger settings
   preserve legacy behavior. Manual evaluation and annotation convergence are separate.

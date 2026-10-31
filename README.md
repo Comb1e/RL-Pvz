@@ -126,8 +126,10 @@ Each bomb stage independently checks validation every 10,000 completed episodes 
 `training.cherry_bomb.probe_interval_games`; Peashooter and normal stages check
 every 2,000. Intervals round up to a fitted cohort boundary. A full cohort
 must exceed 90% success to launch validation (normal 116/128; Cherry Bomb 577/640). Collection may be
-search-assisted; mastery still requires 100/100 greedy network validation.
-Each tile stage requires 100/100 on that skill alone, then completes or advances;
+search-assisted; mastery uses greedy network validation without search.
+Cherry Bomb must strictly exceed `training.cherry_bomb.validation_success_threshold`
+(default 0.95: 96/100 passes; 95/100 fails). Obstacle, Peashooter and normal stages
+still require 100/100. Each tile stage validates its own skill, then completes or advances;
 there is no joint probe or skill revisit in fresh runs. The combined `--stage pre`
 is retired; old checkpoints retain their saved combined-stage workflow on resume.
 Validation releases idle collection scratch storage and unused GPU caches before

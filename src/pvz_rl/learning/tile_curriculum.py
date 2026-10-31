@@ -9,6 +9,18 @@ from pvz_rl.learning.curriculum import TILE_STAGES
 TILE_SCENARIO_PROTOCOL = "tile-skill-prerequisites-v1"
 
 
+def required_validation_wins(cfg, skill):
+    """Strict Cherry threshold; absent settings and other skills require every case."""
+    count = cfg["curriculum"]["probe_cases"]
+    threshold = (
+        cfg["curriculum"].get("cherry_bomb_validation_success_threshold")
+        if skill == "cherry_bomb" else None
+    )
+    if threshold is None:
+        return count
+    return next(wins for wins in range(1, count + 1) if wins / count > threshold)
+
+
 @dataclass
 class TileSkillState:
     phase: str = "complete"
@@ -102,7 +114,7 @@ class TileSkillState:
             self.stage_probes[skill] = self.episodes[skill]
             self.scores.update(scores)
             self.last_probe = self.total
-            if scores[skill] == count:
+            if scores[skill] >= required_validation_wins(cfg, skill):
                 index = self.stage_order.index(skill) + 1
                 self.phase = self.stage_order[index] if index < len(self.stage_order) else "complete"
             return self.phase

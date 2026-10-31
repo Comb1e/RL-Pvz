@@ -105,9 +105,10 @@ cohort_success_threshold = 0.9 # Strictly above; full configured cohorts only (n
 enabled = true # Automatic cherry_bomb, cherry_bomb_obstacle, then peashooter; selected normal stages skip them.
 
 [training.cherry_bomb]
-# Shared by both bomb stages except softmax_temperature; no exploration or search.
+# Shared by both bomb stages except temperature and validation mastery; no exploration or search.
 n_envs = 640 # Fastest measured collection time/env with 32 workers and the CUDA oracle.
 probe_interval_games = 10000 # Independent clock for each bomb stage; pending probes retry first.
+validation_success_threshold = 0.95 # Cherry Bomb only: strictly exceed this rate (96/100).
 initial_sun = 150
 plants = [1, 8]
 obstacle_plants = [1, 15] # Fill competing blast cells first; reserve exactly one successful tile.
@@ -123,7 +124,7 @@ oracle_lanes = 2048 # Shrinks to fit VRAM without changing labels.
 oracle_vram_mib = 2048
 
 [training.cherry_bomb_obstacle]
-softmax_temperature = { zero_success = 1, full_success = 1 } # Independent schedule; other bomb settings are shared above.
+softmax_temperature = { zero_success = 1, full_success = 1 } # Independent schedule; mastery still requires 100/100.
 
 [training.peashooter]
 # Uses the shared cohort size/fitting settings; only this stage scales sky sun.
