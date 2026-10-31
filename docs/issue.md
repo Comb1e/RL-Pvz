@@ -1,21 +1,27 @@
-## Residual-sun incentives and tile-first training — 2026-10-29
+## Separate tile stages and comparative search — 2026-10-31
 
-- Reported problem and impact: winning games do not produce useful learning.
-  Training appears to eliminate choices from losing games and can also eliminate
-  correct actions, preventing reliable reinforcement of winning play despite
-  improved incentives and additional placement training. The user suspects
-  backpropagation or related learning rules; the faulty component is unconfirmed.
-- Possible causes below are hypotheses, not confirmed findings:
-  - **Outcome credit may confuse useful decisions with the trajectory around
-    them.** A correct move in an eventual loss can inherit an unfavorable target,
-    while incidental moves in a win can share its reward. The resulting learning
-    signal may suppress good decisions without identifying what caused victory.
-  - **Fitting values may fail to preserve the ranking of winning choices.**
-    Reducing prediction error on successful games need not make their useful
-    actions outrank alternatives. Updates from losing games may also generalize
-    across similar states and overwrite preferences learned from wins.
-  - **Placement-to-action supervision may sustain a pessimistic feedback loop.**
-    Inaccurate placement estimates can undervalue a useful plant; choosing it
-    less often then reduces opportunities to correct that estimate through
-    successful play. Extra placement training may reduce noise without resolving
-    this coupled credit problem.
+- Learning from winning games remains unverified after an attempted correction.
+  The user confirms the preceding version's defect: winning play failed to
+  reinforce useful choices, and correct actions could be suppressed. The
+  correction has not yet undergone actual training, so recovery is unproven.
+  Possible causes of the confirmed defect remain hypotheses:
+  - **Game outcomes may obscure the causal value of individual choices.** A
+    useful decision can inherit an eventual loss, while incidental decisions
+    share a win; fitting those outcomes can reward or suppress the wrong choices.
+  - **Accurate value fitting may still fail to establish useful preferences.**
+    Winning choices need to outrank alternatives, and shared updates may erase
+    that ordering even while reducing prediction error.
+- Cherry Bomb still chooses occupied plots. The user reports largely learning
+  useful bomb placement after about 50,000 environments, but these invalid
+  selections keep the stage training rather than reaching completion.
+  **The policy may learn attack-value cues without learning occupancy as a
+  general constraint.** Strong target-location preferences could dominate plant
+  presence, leaving a small but persistent class of invalid choices despite
+  broad tactical improvement. This explanation is speculative.
+- Performance gains beyond Cherry Bomb remain untested. Its reported near-100x
+  improvement suggests substantial optimization opportunities elsewhere, but
+  neither transferable speedups nor equivalent bottlenecks are established.
+  **Other stages may share preparation and coordination costs, or spend most
+  of their time on fundamentally different work.** Cherry Bomb's specialized
+  workload may therefore expose either a common inefficiency or a stage-specific
+  advantage; this is a hypothesis, not a measured finding about other stages.

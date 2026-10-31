@@ -42,3 +42,31 @@
 - Evidence: improvements and failures are user-reported. Review confirms the
   reward and training workflow, not their behavioral effects; no new training
   or controlled comparison was run.
+
+## Separate tile stages and comparative search — 2026-10-31
+
+- Completed changes: Cherry Bomb and Peashooter scenario training now have
+  separate progression and validation. Process parallelism, CUDA acceleration,
+  and workflow optimizations reportedly make Cherry Bomb training nearly 100
+  times faster; useful bomb placement is largely learned after about 50,000
+  environments, although the stage has not completed.
+- A main-environment/sub-environment search now compares alternative placements
+  from the same public board and supplies confirmed comparative learning targets.
+  Action annotation and absolute-unacceptable-option annotation/fitting were
+  removed as inefficient; manual supervision retains positive tile sets.
+- Immediate-predecessor comparison: relative to Residual-sun incentives and
+  tile-first training, the shared placement-prerequisite workflow now separates
+  the two skills and their mastery gates. Placement learning gains branch
+  comparisons alongside the earlier complete-game feedback, while manual
+  supervision narrows to acceptable placements. Separating workloads may permit
+  specialized acceleration, and comparing alternatives may better distinguish
+  a decision's value from its eventual game outcome; learning benefits remain
+  unverified.
+- Discovered problems: the user confirms the preceding version's failure to
+  learn reliably from winning games; a correction has been attempted but has
+  not yet been checked through actual training. Cherry Bomb still selects plots
+  containing plants, preventing completion despite useful placement learning.
+  Whether comparable performance gains extend to other stages remains untested.
+- Evidence: speed and behavioral observations are user-reported. Code review
+  confirms the revised workflow, not the reported speedup or the correction's
+  effectiveness; no training or benchmark was run for this record update.

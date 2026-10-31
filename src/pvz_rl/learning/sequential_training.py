@@ -36,8 +36,8 @@ from pvz_rl.learning.objective import (
 )
 from pvz_rl.learning.performance import compilation_requested
 from pvz_rl.learning.search_settings import search_enabled
-from pvz_rl.learning.tile_curriculum import TILE_SCENARIO_PROTOCOL, TileSkillState
 from pvz_rl.learning.training_requirements import FIT_SCHEDULE_PROTOCOL, fitting_schedule
+from pvz_rl.learning.tile_curriculum import TILE_SCENARIO_PROTOCOL, TileSkillState
 from pvz_rl.policy.active_batch import ActiveBatchPlan
 from pvz_rl.policy.cudagraph_backend import EncoderCompilationError
 from pvz_rl.policy.runner import PolicyRunner
@@ -535,9 +535,6 @@ class CudaSequentialQ(CudaCohortLifecycle):
             ]
             rows["components_valid"] = active
             rows["won"] = rows["components"][:, 0] > 0
-            if self.tile_skills.phase == "cherry_bomb":
-                for slot, info in step.completed.items():
-                    rows["won"][slot] = bool(info["episode_metrics"]["win"])
             rows["home_entries"] = env.last_reward_parts_host[
                 :, [REWARD_FIELDS.index(k) for k in ("home_outer_entries", "home_inner_entries")]
             ]
@@ -899,9 +896,7 @@ class CudaSequentialQ(CudaCohortLifecycle):
                 selected_sum / selected_n if selected_n else None,
                 gap_sum / gap_n if gap_n else None,
             )
-            self._cached_fit_examples = (
-                self.cohort_games if self.tile_skills.phase == "cherry_bomb" else int(selected_n)
-            )
+            self._cached_fit_examples = int(selected_n)
             if self.search_training:
                 self._cached_fit_examples = len(self._search.records)
                 for key, number in zip(
@@ -911,10 +906,6 @@ class CudaSequentialQ(CudaCohortLifecycle):
                     self.logger.record("train/" + key, number)
         loss, selected_error, placement_gap = self._cached_metrics
         self.logger.record("train/q_loss", loss)
-        self.logger.record(
-            "train/tile_ranking_loss",
-            loss if self.tile_skills.phase == "cherry_bomb" else None,
-        )
         self.logger.record("train/selected_action_error", selected_error)
         self.logger.record("train/placement_gap", placement_gap)
         self._last_metrics_at = perf_counter()
@@ -1052,9 +1043,6 @@ class CudaSequentialQ(CudaCohortLifecycle):
         self._stats["encoder_token_budget"] = self.execution_state["token_budget"]
         self._stats["execution_fallbacks"] = list(self.execution_state["fallbacks"])
         self._stats["fit_schedule"] = self.fit_schedule.summary()
-        self._stats["tile_supervision"] = (
-            "ranking" if self.tile_skills.phase == "cherry_bomb" else "complete_return_q"
-        )
         self._stats["fitting_spool_rows"] = len(getattr(self, "_fitting_spool", None) or ())
         spool = getattr(self, "_fitting_spool", None)
         self._stats["fitting_compaction"] = dict(spool.compaction) if spool is not None else {}
