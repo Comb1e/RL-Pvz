@@ -697,6 +697,23 @@ def validate_config(cfg: dict) -> None:
         raise ValueError("training.performance.annotation_cache_mib must be a nonnegative integer")
     if type(performance.get("annotation_use_fit_limits", False)) is not bool:
         raise ValueError("training.performance.annotation_use_fit_limits must be a boolean")
+    if type(performance.get("cherry_prefetch", False)) is not bool:
+        raise ValueError("training.performance.cherry_prefetch must be a boolean")
+    workers = performance.get("cherry_prepare_workers", 0)
+    if type(workers) is not int or workers < 0:
+        raise ValueError(
+            "training.performance.cherry_prepare_workers must be a nonnegative integer"
+        )
+    if performance.get("cherry_oracle", "cpu") not in ("cpu", "cuda"):
+        raise ValueError("training.performance.cherry_oracle must be cpu or cuda")
+    for key, default in (
+        ("cherry_oracle_lanes", 256),
+        ("cherry_oracle_vram_mib", 256),
+        ("cherry_worker_ram_mib", 96),
+    ):
+        value = performance.get(key, default)
+        if type(value) is not int or value < 1:
+            raise ValueError(f"training.performance.{key} must be a positive integer")
     if set(performance) - {
         "compile_collection",
         "compile_fitting",
@@ -707,6 +724,12 @@ def validate_config(cfg: dict) -> None:
         "annotation_input_cache",
         "annotation_cache_mib",
         "annotation_use_fit_limits",
+        "cherry_prepare_workers",
+        "cherry_worker_ram_mib",
+        "cherry_prefetch",
+        "cherry_oracle",
+        "cherry_oracle_lanes",
+        "cherry_oracle_vram_mib",
         "fit_batch_groups",
         "fit_encoder_microbatch",
         "fit_species_microbatch",

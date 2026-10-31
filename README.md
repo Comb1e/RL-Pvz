@@ -74,8 +74,16 @@ automatic progression preserves optimizer state, while separate `--init-from`
 runs transfer weights into a fresh optimizer.
 The live viewer follows new cohorts automatically. In Cherry Bomb, **Switch**
 browses completed boards from the current cohort, including while fitting runs.
-Cherry Bomb defaults to 256 envs through `training.tile_scenarios.cherry_bomb_n_envs`
+Cherry Bomb defaults to 640 envs through `training.tile_scenarios.cherry_bomb_n_envs`
 (`--cherry-bomb-envs`); `training.n_envs` (`--n-envs`) controls other stages.
+Its preparation shares validated simulator setup, uses up to 32 persistent CPU
+workers, and batches exact attributed-hit rollouts on CUDA. Under
+`training.performance`, `cherry_prepare_workers`, `cherry_oracle_lanes` and
+`cherry_oracle_vram_mib` control execution (defaults: 32, 2048, 2048).
+Workers respect the host-memory budget; scratch lanes shrink to retain GPU
+headroom. Larger limits are allowed. `cherry_oracle = "cpu"` selects the exact CPU
+reference. One speculative CPU cohort overlaps fitting; unfinished preparation
+is regenerated from unconsumed seeds on resume. Learning targets stay unchanged.
 Normal fitting keeps three tile-only cohorts followed by one joint cohort, with
 four passes each. Tile-only fitting freezes species parameters and species EMA.
 
@@ -90,7 +98,7 @@ frozen within each queried board. Its hidden-state prior is approximate. A longe
 losing defense can still score worse because the configured duration penalty remains.
 
 Every 2,000 completed episodes, rounded to a fitted cohort boundary, a full cohort
-must exceed 90% success to launch validation (normal 116/128; Cherry Bomb 231/256). Collection may be
+must exceed 90% success to launch validation (normal 116/128; Cherry Bomb 577/640). Collection may be
 search-assisted; mastery still requires 100/100 greedy network validation.
 Each tile stage requires 100/100 on that skill alone, then completes or advances;
 there is no joint probe or skill revisit in fresh runs. The combined `--stage pre`
@@ -123,12 +131,17 @@ Completed weights cannot be resumed; start a new run with `--init-from`.
 .\.venv\Scripts\python.exe -m pytest -q -m learning
 .\.venv\Scripts\python.exe -m pvz_rl visualize --run runs\my-run --report-only
 .\.venv\Scripts\python.exe tools\report_rewards.py runs\my-run 1
+.\.venv\Scripts\python.exe tools\benchmark_cherry_collection.py `
+  --envs 256 512 640 1024 --workers 8 16 24 32 --oracles cpu cuda `
+  --output artifacts\cherry-collection.json
 ```
 
 Default pytest runs two CPU checks. The explicitly selected learning check runs
 two one-second CUDA games, one fitting pass and checkpoint reload, with search and
 prerequisites disabled. These establish availability, not mastery. Bounded
 diagnostic commands disable search; manual evaluation never uses it.
+The Cherry benchmark performs collection without fitting and ranks combinations
+by total collection seconds per completed env, including board preparation.
 
 Reports separate Cherry Bomb, Peashooter and normal progress from oracle work, teacher losses and
 greedy validation. `--report-only` loads no policy and starts no training. Reward

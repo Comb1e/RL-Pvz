@@ -3,13 +3,18 @@
 import random
 from dataclasses import replace
 
-from pvz_game import Game, LevelSpec, Place, Spawn, Status, Wait
+from pvz_game import LevelSpec, Place, Spawn, Status, Wait
 from pvz_game.config import InitialPlant, resolve_level
 
 from pvz_rl.envs.scenarios import namespace_seed
+from pvz_rl.envs.scratch_game import EngineSnapshot, fork_game, restored_game, scratch_game
 from pvz_rl.learning.deadline import check_deadline
 
 SKILLS = ("peashooter", "cherry_bomb")
+
+
+class BombGenerationFailure(RuntimeError):
+    pass
 
 
 def peashooter_level(rules, seed):
@@ -23,8 +28,10 @@ def peashooter_level(rules, seed):
 
 def bomb_hit(snapshot, tile, target_id, *, rules=None):
     """Credit only damage caused by this bomb, including its real fuse/geometry."""
-    game = Game(rules)
-    game.restore(snapshot)
+    return _bomb_hit(restored_game(snapshot, rules), tile, target_id)
+
+
+def _bomb_hit(game, tile, target_id):
     row, col = divmod(tile, game.rules.game["cols"])
     action = Place("cherry_bomb", row, col)
     if not game.validate_action(action).accepted:
@@ -45,22 +52,45 @@ def bomb_hit(snapshot, tile, target_id, *, rules=None):
 
 
 def bomb_labels(snapshot, target_id, *, rules=None, deadline=None):
-    game = Game(rules)
-    game.restore(snapshot)
+    return _bomb_labels(restored_game(snapshot, rules), target_id, deadline=deadline)
+
+
+def _bomb_labels(game, target_id, *, deadline=None):
     positive, absolute = [], []
     for tile in range(game.rules.game["rows"] * game.rules.game["cols"]):
         check_deadline(deadline)
         action = Place("cherry_bomb", *divmod(tile, game.rules.game["cols"]))
         if not game.validate_action(action).accepted:
             absolute.append(tile)
-        elif bomb_hit(snapshot, tile, target_id, rules=game.rules):
+        elif _bomb_hit(fork_game(game), tile, target_id):
             positive.append(tile)
     return positive, absolute
 
 
 def sample_bomb(cfg, seed, *, rules=None, deadline=None):
-    """Generate a legal single-decision exercise; never edit simulator internals."""
-    game = Game(rules)
+    for game, target_id, attempt in bomb_candidates(cfg, seed, rules=rules, deadline=deadline):
+        positive, absolute = _bomb_labels(game, target_id, deadline=deadline)
+        if positive:
+            return dict(
+                snapshot=EngineSnapshot.capture(game),
+                target_id=target_id,
+                feasible_tiles=positive,
+                absolute_infeasible_tiles=absolute,
+                generation_failures=attempt,
+            )
+    raise generation_failure(cfg, seed)
+
+
+def generation_failure(cfg, seed):
+    attempts = cfg["training"]["annotation"]["sampling_max_attempts"]
+    return BombGenerationFailure(
+        f"No solvable Cherry Bomb board after {attempts} attempts (seed {seed})"
+    )
+
+
+def bomb_candidates(cfg, seed, *, start=0, rules=None, deadline=None):
+    """Engine-authored candidates in stable seed/attempt order, without labels."""
+    game = scratch_game(rules)
     rules = game.rules
     settings = cfg["training"]["tile_scenarios"]
     attempts = cfg["training"]["annotation"]["sampling_max_attempts"]
@@ -87,19 +117,11 @@ def sample_bomb(cfg, seed, *, rules=None, deadline=None):
             plants=plants,
             mowers=False,
         )
+        if attempt < start:
+            continue
         game.reset(level, seed)
         observation = game.step(Wait(), ticks=tick).observation
         targets = [z for z in observation.zombies if z.health > 0 and not z.headless]
         if observation.status != Status.RUNNING or len(targets) != 1:
             continue
-        snapshot = game.snapshot()
-        positive, absolute = bomb_labels(snapshot, targets[0].id, rules=rules, deadline=deadline)
-        if positive:
-            return dict(
-                snapshot=snapshot,
-                target_id=targets[0].id,
-                feasible_tiles=positive,
-                absolute_infeasible_tiles=absolute,
-                generation_failures=attempt,
-            )
-    raise RuntimeError(f"No solvable Cherry Bomb board after {attempts} attempts (seed {seed})")
+        yield game, targets[0].id, attempt

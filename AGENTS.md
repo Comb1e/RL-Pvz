@@ -34,6 +34,9 @@ rules. This file adds project-specific constraints and ownership.
   compatible weights into fresh optimizer state. Do not silently migrate formats,
   replay committed passes or treat annotation progress as autonomous recovery.
 - Cherry Bomb has its own configured cohort size; other stages retain `n_envs`.
+  CPU preparation and the bounded CUDA oracle must preserve exact attributed-hit
+  labels. Prefetch is speculative: commit seeds/outcomes only on consumption,
+  regenerate unfinished work on resume, and share the RAM/VRAM budgets.
   Completed training retains only its portable weight file. Interrupted, failed
   and incomplete runs keep recovery artifacts; annotation inputs remain intact.
 
@@ -65,6 +68,7 @@ Paths below are relative to `src/pvz_rl/` unless stated otherwise.
 | Repository `tools/bootstrap.*`, `tools/stage_game.py` | Verified, non-editable installation of the pinned engine from an existing checkout. |
 | `config.py`, `data/train.toml`, `gpu.py` | Shared settings, validation and device selection. |
 | `envs/` | CPU/CUDA simulator adapters, public encoding, actions, rewards and source credit; `tile_scenarios.py` and `sky_sun.py` own scenario generation and sun scaling. |
+| `envs/scratch_game.py`, `bomb_preparation.py`, `cuda_bomb_oracle.py`, `cuda_snapshots.py` | Validated forks, bounded persistent workers/prefetch, attributed CUDA labels and batched snapshot transfers. |
 | `policy/` | Independent two-stage Transformers, shared runner, all-tile selection, active batching and bounded collection/fitting CUDA graphs. |
 | `learning/training.py`, `cuda_q.py`, `sequential_training.py` | Training orchestration, cohort lifecycle, collection, finalization and atomic recovery. |
 | `learning/tile_curriculum.py`, `validation_trigger.py`, `training_requirements.py` | Independent tile-stage progression, legacy prerequisite recovery, cohort validation gate and normal fitting schedule. |
@@ -73,7 +77,7 @@ Paths below are relative to `src/pvz_rl/` unless stated otherwise.
 | `learning/cuda_buffer.py`, `batch_transport.py`, `collection_scheduler.py`, `exploration.py` | Trajectories, bounded transport, decision tickets and persistent exploration commitments. |
 | `learning/checkpoints.py`, `training_artifacts.py`, `performance.py` | Compatibility contracts, durable snapshots, completed-run weight retention and execution-only refresh settings. |
 | `annotation/`, `learning/annotation_fit.py`, `demo_initialization.py` | Reachable-state sampling, atomic positive tile sets/conflicts, top-1 convergence and verified demo initialization. |
-| `evaluation/`, `monitoring/`, repository diagnostic tools | Stateless evaluation, CPU verification of CUDA traces, bounded profiling, benchmarks and read-only reward reports. |
+| `evaluation/`, `monitoring/`, repository diagnostic tools | Stateless evaluation, CPU verification of CUDA traces, bounded profiling, benchmarks and read-only reward reports; `tools/benchmark_cherry_collection.py` ranks env/worker/oracle combinations by total collection time per env. |
 | `presentation/` | Shared renderers, annotation/live viewers and recordings; `live_capture.py`/`live_view.py` own cohort subscriptions and public result caching. `training_charts.py` owns panels; `visualization.py` reconciles resume history and builds policy-free reports. |
 
 ## Test ownership

@@ -1610,6 +1610,13 @@ def train(
         force=True,
     )
     progress.emit(f"Data transport: {runtime_settings(cfg)}", force=True)
+    preparation = cfg["training"].get("performance", {})
+    progress.emit(
+        f"Cherry preparation: {preparation.get('cherry_prepare_workers', 0)} requested CPU workers; "
+        f"{preparation.get('cherry_oracle', 'cpu')} oracle; "
+        f"prefetch {preparation.get('cherry_prefetch', False)}; workers/scratch respect RAM/VRAM limits",
+        force=True,
+    )
     target_kind = (
         "confirmed same-board search targets"
         if cfg["training"].get("search", {}).get("enabled", False)

@@ -191,7 +191,7 @@ class CudaCohortLifecycle(BaseAlgorithm):
         buffer = CompleteGameBuffer(
             path,
             self.n_envs,
-            ram_bytes=spec["ram_gib"] * 1024**3,
+            ram_bytes=spec["ram_gib"] * 1024**3 - self.env.queue.reserved_bytes,
             block_rows=spec["block_rows"],
             schema=self.policy.layout.schema(),
             cfg=self.cfg,
@@ -205,6 +205,27 @@ class CudaCohortLifecycle(BaseAlgorithm):
         if hasattr(callback, "cohort_phase"):
             callback.cohort_phase(previous, phase)
 
+    def _prefetch_cohort(self, callback):
+        from pvz_rl.learning.budget import budget_target, progress_value
+        from pvz_rl.learning.curriculum import pre_stage
+
+        if self.tile_skills.phase != "cherry_bomb":
+            return
+        skills = self.tile_skills
+        trigger = getattr(callback, "validation_trigger", None)
+        if trigger is not None and trigger.enabled:
+            last = trigger.state["last_check"].get(skills.validation_domain, 0)
+            if skills.progress - last >= trigger.interval:
+                return
+        elif skills.due(self.cfg):
+            return
+        count = cohort_envs(self.cfg, "cherry_bomb")
+        target = budget_target(self.env.cfg)
+        if pre_stage(self.env.cfg) and target is not None:
+            count = min(count, max(0, target - progress_value(self.env.cfg, self)))
+        if count:
+            self.env.queue.prefetch(count)
+
     def _begin(self, callback):
         callback.on_rollout_start()
         from pvz_rl.learning.budget import budget_target, progress_value, uses_games
@@ -214,6 +235,8 @@ class CudaCohortLifecycle(BaseAlgorithm):
         target = budget_target(self.env.cfg)
         skills = self.tile_skills
         self.env.tile_scenario = self.env.queue.tile_scenario = skills.phase
+        if skills.phase != "cherry_bomb":
+            self.env.queue.close()
         self.env.queue.tile_boards = {}
         self.env.tile_boards = {}
         if (
@@ -303,6 +326,10 @@ class CudaCohortLifecycle(BaseAlgorithm):
             "planting_samples": int(self._buffer.group_counts[1]),
             "species_counts": self._buffer.species_counts.tolist(),
             "collection_seconds": self._phase_times["collect"],
+            "scenario_preparation_seconds": self.env.last_preparation_seconds,
+            "total_collection_seconds": self._phase_times["collect"]
+            + self.env.last_preparation_seconds,
+            "scenario_preparation": self.env.queue.preparation_metrics,
             "fit_seconds": self._phase_times["fit"],
             "returns_seconds": self._phase_times["returns"],
             "window_seconds": elapsed,
@@ -408,6 +435,7 @@ class CudaCohortLifecycle(BaseAlgorithm):
                                 "train/placement_gap_" + name, values["placement_gap"]
                             )
                         self._phase(CohortPhase.FIT, callback)
+                        self._prefetch_cohort(callback)
                     elif phase == CohortPhase.FIT:
                         self._fit_step(callback)
                     elif phase == CohortPhase.SYNCHRONIZE:

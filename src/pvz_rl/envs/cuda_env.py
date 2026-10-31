@@ -1,6 +1,6 @@
 """Tensor vector environment; only compact completion information crosses to CPU."""
 
-from collections import Counter, deque
+from collections import Counter
 from contextlib import contextmanager
 from copy import deepcopy
 from time import perf_counter
@@ -23,7 +23,7 @@ from pvz_rl.envs.rewards import REWARD_METRICS
 from pvz_rl.envs.scenarios import difficulty_weights, scenario
 from pvz_rl.envs.sky_sun import peashooter_sky_sun_rate
 from pvz_rl.envs.step_result import PackedStepResult
-from pvz_rl.envs.tile_scenarios import peashooter_level, sample_bomb
+from pvz_rl.envs.tile_scenarios import BombGenerationFailure, peashooter_level
 from pvz_rl.learning.budget import budget_target
 from pvz_rl.learning.curriculum import stage_distribution, teaching_enabled
 from pvz_rl.learning.host_transfer import HostHandoff
@@ -52,18 +52,21 @@ class ScenarioQueue:
     def __init__(self, cfg, condition, seed, family, n):
         self.cfg, self.condition, self.family = cfg, condition, family
         self.rngs = [np.random.default_rng(seed * 1000 + i) for i in range(n)]
-        self.pending = deque(maxlen=n)
         self.progress, self.stage = 0, 0
         self.rules = Rules()
         self.tile_scenario = "complete"
         self.tile_boards = {}
         self.generation_failures = 0
         self.deadline = None
+        self._preparation = None
+        self._prefetched = None
+        self.preparation_metrics = {}
 
-    def prepare(self, indices, seeds=None):
+    def _draft(self, indices, rngs, seeds=None):
         cfg = self.cfg
+        staged = []
         for offset, index in enumerate(indices):
-            rng = self.rngs[index]
+            rng = rngs[index]
             lo, hi = cfg["splits"]["train"]
             seed = int(rng.integers(lo, hi + 1)) if seeds is None else int(seeds[offset])
             weights = difficulty_weights(
@@ -78,26 +81,111 @@ class ScenarioQueue:
                 tasks, weights = stage_distribution(cfg, self.stage)
                 task = str(rng.choice(tasks, p=weights))
                 family, level = ("preset", task)
-            spec = scenario(level, family, seed, self.rules, cfg)
+            spec = None
             if self.tile_scenario == "peashooter":
                 level, family = "easy", "tile_peashooter"
                 spec = peashooter_level(self.rules, seed)
             elif self.tile_scenario == "cherry_bomb":
                 level, family = "easy", "tile_cherry_bomb"
-                try:
-                    board = sample_bomb(cfg, seed, rules=self.rules, deadline=self.deadline)
-                except RuntimeError:
-                    self.generation_failures += cfg["training"]["annotation"][
-                        "sampling_max_attempts"
-                    ]
-                    raise
-                self.generation_failures += board["generation_failures"]
-                self.tile_boards[index] = board
-                spec = LevelSpec.from_dict(board["snapshot"]["level"])
-            self.pending.append((index, level, family, seed, spec))
-        result = list(self.pending)
-        self.pending.clear()
-        return result
+            else:
+                spec = scenario(level, family, seed, self.rules, cfg)
+            staged.append((index, level, family, seed, spec))
+        return staged
+
+    def _bomb_preparation(self):
+        if self._preparation is None:
+            from pvz_rl.envs.bomb_preparation import BombPreparation
+
+            self._preparation = BombPreparation(self.cfg)
+        return self._preparation
+
+    def prefetch(self, count):
+        """Speculate one CPU cohort without committing RNGs, progress or labels."""
+        if self.tile_scenario != "cherry_bomb" or self._prefetched is not None:
+            return
+        if not self.cfg["training"].get("performance", {}).get("cherry_prefetch", False):
+            return
+        if self.deadline is not None and perf_counter() >= self.deadline:
+            return
+        rngs = deepcopy(self.rngs)
+        staged = self._draft(list(range(count)), rngs)
+        tasks = self._bomb_preparation().submit([s[3] for s in staged], self.deadline)
+        self._prefetched = (staged, rngs, tasks)
+
+    def discard_prefetch(self):
+        if self._prefetched is not None:
+            self._preparation.cancel(self._prefetched[2])
+            self._prefetched = None
+
+    def prepare(self, indices, seeds=None):
+        from pvz_rl.learning.deadline import check_deadline
+
+        check_deadline(self.deadline)
+        indices = list(indices)
+        rngs = deepcopy(self.rngs)
+        tasks = None
+        prefetched = False
+        if self._prefetched is not None:
+            staged, saved_rngs, saved_tasks = self._prefetched
+            if (
+                self.tile_scenario == "cherry_bomb"
+                and seeds is None
+                and indices == [s[0] for s in staged[: len(indices)]]
+            ):
+                staged, tasks = staged[: len(indices)], saved_tasks[: len(indices)]
+                self._preparation.cancel(saved_tasks[len(indices) :])
+                for i in indices:
+                    rngs[i] = saved_rngs[i]
+                self._prefetched = None
+                prefetched = True
+            else:
+                self.discard_prefetch()
+        if tasks is None:
+            staged = self._draft(indices, rngs, seeds)
+        if self.tile_scenario == "cherry_bomb":
+            prep = self._bomb_preparation()
+            selected_seeds = [s[3] for s in staged]
+            if tasks is None:
+                tasks = prep.submit(selected_seeds, self.deadline)
+            try:
+                boards = prep.collect(tasks, selected_seeds, deadline=self.deadline)
+            except BombGenerationFailure:
+                self.generation_failures += self.cfg["training"]["annotation"][
+                    "sampling_max_attempts"
+                ]
+                raise
+            staged = [
+                (*s[:4], LevelSpec.from_dict(board["snapshot"]["level"]))
+                for s, board in zip(staged, boards, strict=True)
+            ]
+            check_deadline(self.deadline)
+            self.tile_boards.update(zip(indices, boards, strict=True))
+            self.generation_failures += sum(b["generation_failures"] for b in boards)
+            self.preparation_metrics = dict(
+                workers=prep.workers,
+                oracle=prep.oracle,
+                prefetched=prefetched,
+                scratch_lanes=prep.cuda.batch.n if prep.cuda is not None else 0,
+                host_reserved_bytes=self.reserved_bytes,
+            )
+        else:
+            self.preparation_metrics = {}
+        # Atomic consumption: unfinished preparation can be regenerated on resume.
+        for i in indices:
+            self.rngs[i].bit_generator.state = rngs[i].bit_generator.state
+        return staged
+
+    def close(self):
+        self.discard_prefetch()
+        if self._preparation is not None:
+            self._preparation.close()
+            self._preparation = None
+
+    @property
+    def reserved_bytes(self):
+        if self._preparation is None:
+            return 0
+        return self._preparation.reserved_bytes + len(self.rngs) * 65536
 
 
 class CudaVecEnv(VecEnv):
@@ -148,6 +236,7 @@ class CudaVecEnv(VecEnv):
         self._pending_spawns = np.zeros(count, dtype=np.int64)
         self.tile_scenario = "complete"
         self.tile_boards = {}
+        self.last_preparation_seconds = 0.0
         # All shipped scenario families preserve roster size. Lessons use smaller
         # rosters. Custom batches derive their capacity from the supplied cases.
         game = Game()
@@ -244,15 +333,19 @@ class CudaVecEnv(VecEnv):
         self.batch.set_sky_sun_rate(
             peashooter_sky_sun_rate(self.cfg) if self.tile_scenario == "peashooter" else 1.0
         )
-        self.batch.reset(
-            [s[4] for s in staged],
-            [s[3] for s in staged],
-            indices=indices,
-        )
         if self.tile_scenario == "cherry_bomb":
             self.tile_boards = deepcopy(self.queue.tile_boards)
-            self.batch.restore(
+            from pvz_rl.envs.cuda_snapshots import upload_snapshots
+
+            upload_snapshots(
+                self.batch,
                 [self.tile_boards[i]["snapshot"] for i in indices],
+                indices=indices,
+            )
+        else:
+            self.batch.reset(
+                [s[4] for s in staged],
+                [s[3] for s in staged],
                 indices=indices,
             )
         self._refresh_growth_bounds(indices)
@@ -264,7 +357,8 @@ class CudaVecEnv(VecEnv):
         self.features.totals[ix, 8] = self.batch.header[ix, 2]
         self.features.totals[ix, 11] = -1
         self.features.encode()
-        self.profiler.host("scenario_preparation", perf_counter() - started)
+        self.last_preparation_seconds = perf_counter() - started
+        self.profiler.host("scenario_preparation", self.last_preparation_seconds)
 
     def reset(self):
         for index, seed in enumerate(self._seeds):
@@ -527,8 +621,14 @@ class CudaVecEnv(VecEnv):
             "queue_stage": self.queue.stage,
             "tile_scenario": self.tile_scenario,
             "sky_sun_rate": self.batch.sky_sun_rate,
-            "tile_boards": deepcopy(self.tile_boards),
+            "tile_boards": deepcopy(
+                {
+                    i: dict(board, snapshot=dict(board["snapshot"]))
+                    for i, board in self.tile_boards.items()
+                }
+            ),
             "tile_generation_failures": self.queue.generation_failures,
+            "tile_preparation_metrics": deepcopy(self.queue.preparation_metrics),
             "attributes": {
                 k: deepcopy(getattr(self, k))
                 for k in (
@@ -542,6 +642,7 @@ class CudaVecEnv(VecEnv):
                     "task_completed",
                     "active_tasks",
                     "finished_outcomes",
+                    "last_preparation_seconds",
                 )
             },
         }
@@ -587,6 +688,7 @@ class CudaVecEnv(VecEnv):
             self.tile_boards = deepcopy(state.get("tile_boards", {}))
             self.queue.tile_boards = deepcopy(self.tile_boards)
             self.queue.generation_failures = state.get("tile_generation_failures", 0)
+            self.queue.preparation_metrics = deepcopy(state.get("tile_preparation_metrics", {}))
             for key, value in state["attributes"].items():
                 setattr(self, key, deepcopy(value))
             self._reset_seeds()  # Saved per-worker RNG replaces constructor seed requests.
@@ -688,6 +790,7 @@ class CudaVecEnv(VecEnv):
         return [False] * len(list(self._get_indices(indices)))
 
     def close(self):
+        self.queue.close()
         if self.live_view is not None:
             try:
                 self.live_view.close()
