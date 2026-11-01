@@ -36,6 +36,7 @@ class TileSkillState:
         self.episodes = dict(self.episodes)
         # Old saved stage orders and joint probes never acquire a new lesson.
         self.episodes.setdefault("cherry_bomb_obstacle", 0)
+        self.episodes.setdefault("attacker_pre", 0)
         self.scores = dict(self.scores)
         self.stage_probes = dict(self.stage_probes)
         if self.stage_order is not None:
@@ -144,6 +145,8 @@ def initial_tile_state(cfg, family="preset"):
         and stage in (None, *TILE_STAGES)
     )
     order = list(TILE_STAGES) if stage is None else [stage] if stage in TILE_STAGES else []
+    if "attacker" not in cfg["training"].get("tile_scenarios", {}):
+        order = [skill for skill in order if skill != "attacker_pre"]
     return TileSkillState(
         phase=order[0] if enabled else "complete", stage_order=order
     ).to_dict()

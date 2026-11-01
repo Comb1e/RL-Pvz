@@ -8,6 +8,7 @@ from pvz_rl.envs.tile_scenarios import (
     bomb_candidates,
     bomb_initials,
     generation_failure,
+    preparation_settings,
     sample_bomb,
     valid_bomb_labels,
 )
@@ -27,7 +28,17 @@ def _initialize(cfg):
 
 def _prepare(job, cfg=None):
     cfg = _WORKER_CFG if cfg is None else cfg
-    seed, start, labels, deadline, skill = job
+    seed, start, labels, deadline, skill, case = job
+    if skill == "attacker_pre":
+        from pvz_rl.envs.attacker_scenarios import attacker_initials, sample_attacker
+
+        if not preparation_settings(cfg, skill).get("cuda_warmup", False):
+            return sample_attacker(cfg, seed, start=start, deadline=deadline, case=case)
+        candidate = next(attacker_initials(cfg, seed, start=start, deadline=deadline, case=case), None)
+        if candidate is None:
+            raise generation_failure(cfg, seed, skill)
+        game, attempt, metadata = candidate
+        return dict(snapshot=EngineSnapshot.capture(game), generation_failures=attempt, **metadata)
     if labels:
         return sample_bomb(cfg, seed, deadline=deadline, skill=skill)
     if cfg["training"].get("performance", {}).get("cherry_cuda_warmup", False):
@@ -48,17 +59,18 @@ def _prepare(job, cfg=None):
 class BombPreparation:
     """One pending cohort; workers never import Torch or own CUDA contexts."""
 
-    def __init__(self, cfg):
+    def __init__(self, cfg, skill="cherry_bomb"):
         import os
 
         self.cfg = cfg
-        perf = cfg["training"].get("performance", {})
-        requested = perf.get("cherry_prepare_workers", 0)
+        self.skill = skill
+        perf = preparation_settings(cfg, skill)
+        requested = perf.get("prepare_workers", 0)
         # Leave at least half the configured host budget for trajectories/fitting.
-        self.worker_ram_mib = perf.get("cherry_worker_ram_mib", 96)
+        self.worker_ram_mib = perf.get("worker_ram_mib", 96)
         ram_workers = int(cfg["training"]["storage"]["ram_gib"] * 1024 / (2 * self.worker_ram_mib))
         self.workers = min(requested, os.cpu_count() or 1, max(0, ram_workers))
-        self.oracle = perf.get("cherry_oracle", "cpu")
+        self.oracle = perf.get("oracle", "cpu")
         self.pool = None
         self.cuda = None
 
@@ -66,7 +78,7 @@ class BombPreparation:
     def reserved_bytes(self):
         return self.workers * self.worker_ram_mib * 1024**2
 
-    def submit(self, seeds, deadline=None, *, starts=None, skill="cherry_bomb"):
+    def submit(self, seeds, deadline=None, *, starts=None, skill="cherry_bomb", cases=None):
         if self.workers and self.pool is None:
             self.pool = ProcessPoolExecutor(
                 max_workers=self.workers,
@@ -75,9 +87,10 @@ class BombPreparation:
                 initargs=(self.cfg,),
             )
         starts = [0] * len(seeds) if starts is None else starts
+        cases = [None] * len(seeds) if cases is None else cases
         jobs = [
-            (seed, start, self.oracle == "cpu", deadline, skill)
-            for seed, start in zip(seeds, starts, strict=True)
+            (seed, start, self.oracle == "cpu", deadline, skill, case)
+            for seed, start, case in zip(seeds, starts, cases, strict=True)
         ]
         return [self.pool.submit(_prepare, job) for job in jobs] if self.pool else jobs
 
@@ -94,14 +107,43 @@ class BombPreparation:
             except TimeoutError:
                 pass
 
-    def collect(self, tasks, seeds, *, deadline=None, skill="cherry_bomb"):
+    def collect(self, tasks, seeds, *, deadline=None, skill="cherry_bomb", cases=None):
         boards = [None] * len(tasks)
         remaining = list(range(len(tasks)))
+        cases = [None] * len(seeds) if cases is None else cases
         try:
             while remaining:
                 candidates = [self._resolve(task, deadline) for task in tasks]
                 if self.oracle == "cpu":
                     return candidates
+                if skill == "attacker_pre":
+                    from pvz_rl.envs.attacker_scenarios import (
+                        attacker_settings,
+                        label_attacker,
+                        warmup_ticks,
+                    )
+
+                    if preparation_settings(self.cfg, skill).get("cuda_warmup", False):
+                        if self.cuda is None:
+                            from pvz_rl.envs.cuda_bomb_oracle import CudaBombOracle
+
+                            self.cuda = CudaBombOracle(self.cfg)
+                        candidates = self.cuda.warmup(
+                            candidates, deadline=deadline,
+                            ticks=warmup_ticks(self.cuda.rules, attacker_settings(self.cfg)),
+                        )
+                    retry, starts = [], []
+                    for index, candidate in zip(remaining, candidates, strict=True):
+                        board = label_attacker(candidate, scratch_rules())
+                        if board is not None:
+                            boards[index] = board
+                        else:
+                            retry.append(index)
+                            starts.append(candidate["generation_failures"] + 1)
+                    remaining = retry
+                    tasks = self.submit([seeds[i] for i in retry], deadline, starts=starts,
+                                        skill=skill, cases=[cases[i] for i in retry])
+                    continue
                 if self.cuda is None:
                     from pvz_rl.envs.cuda_bomb_oracle import CudaBombOracle
 

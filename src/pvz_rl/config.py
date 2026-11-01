@@ -14,7 +14,7 @@ from pathlib import Path
 from pvz_game.config import PLANT_TYPES, ZOMBIE_TYPES
 from pvz_game.cuda.schema import MOWER_STATES, PLANT_STATES, ZOMBIE_STATES
 
-from pvz_rl.envs.tile_scenarios import BOMB_SKILLS, is_bomb_skill
+from pvz_rl.envs.tile_scenarios import BOMB_SKILLS, is_bomb_skill, is_placement_skill
 from pvz_rl.learning.budget import uses_games
 
 _CONFIG_RESOURCE = "data/train.toml"
@@ -48,6 +48,16 @@ _STAGE_PARAMETERS = {
     },
     "cherry_bomb_obstacle": {
         "softmax_temperature": "training.tile_scenarios.obstacle_softmax_temperature",
+    },
+    "attacker_pre": {
+        **{key: f"training.tile_scenarios.attacker.{key}" for key in (
+            "n_envs", "plants", "zombie_count", "provided_plants", "initial_sun",
+            "mower_ready_probability", "softmax_temperature", "ranking_objective",
+        )},
+        **{key: f"training.performance.attacker_{key}" for key in (
+            "prepare_workers", "worker_ram_mib", "prefetch", "cuda_warmup",
+        )},
+        "probe_interval_games": "curriculum.attacker_pre_probe_interval_games",
     },
     "peashooter": {
         "sky_sun_rate": "training.tile_scenarios.peashooter_sky_sun_rate",
@@ -111,6 +121,8 @@ def runtime_settings(cfg: dict) -> dict:
 
 def cohort_envs(cfg, skill=None):
     """Configured real-episode cohort size; missing stage settings retain legacy size."""
+    if skill == "attacker_pre":
+        return cfg["training"]["tile_scenarios"]["attacker"]["n_envs"]
     if is_bomb_skill(skill):
         return (
             cfg["training"]
@@ -166,10 +178,13 @@ def training_env_capacity(cfg, family="preset"):
         family == "preset"
         and tile.get("enabled", False)
         and cfg["curriculum"].get("mode") == "teaching"
-        and (stage in (None, "pre") or is_bomb_skill(stage))
+        and (stage in (None, "pre") or is_placement_skill(stage))
     ):
         cherry = cohort_envs(cfg, "cherry_bomb")
-        return cherry if is_bomb_skill(stage) else max(cherry, cohort_envs(cfg))
+        if is_placement_skill(stage):
+            return cohort_envs(cfg, stage)
+        attacker = tile.get("attacker", {}).get("n_envs", 0)
+        return max(cherry, attacker, cohort_envs(cfg))
     return cohort_envs(cfg)
 
 
@@ -604,7 +619,7 @@ def validate_config(cfg: dict) -> None:
     if type(reserve) not in (int, float) or not math.isfinite(reserve) or reserve < 0:
         raise ValueError("finalization_minutes must be finite and nonnegative")
     c = cfg["curriculum"]
-    for key in ("cherry_bomb_probe_interval_games", "peashooter_probe_interval_games"):
+    for key in ("cherry_bomb_probe_interval_games", "peashooter_probe_interval_games", "attacker_pre_probe_interval_games"):
         if key in c and (type(c[key]) is not int or c[key] < 1):
             raise ValueError(f"{key} must be a positive integer")
     key = "cherry_bomb_validation_success_threshold"
@@ -691,6 +706,43 @@ def validate_config(cfg: dict) -> None:
         from pvz_rl.envs.sky_sun import validate_sky_sun_rate
 
         rules = Rules()
+        attacker = tile.get("attacker")
+        if attacker is not None:
+            from pvz_rl.envs.attacker_scenarios import ATTACKERS, attacker_bounds, warmup_ticks
+
+            for key in ("n_envs", "initial_sun"):
+                if type(attacker.get(key)) is not int or attacker[key] < 1:
+                    raise ValueError(f"attacker_pre.{key} must be a positive integer")
+            for key, lo, hi in (("plants", 4, 8), ("zombie_count", 1, 2)):
+                value = attacker.get(key)
+                if (not isinstance(value, list) or len(value) != 2
+                        or any(type(n) is not int for n in value)
+                        or not lo <= value[0] <= value[1] <= hi):
+                    raise ValueError(f"attacker_pre.{key} must be a range in [{lo}, {hi}]")
+            kinds = attacker.get("provided_plants")
+            if (not isinstance(kinds, list) or not kinds or any(type(k) is not str for k in kinds)
+                    or len(set(kinds)) != len(kinds)
+                    or set(kinds) - set(ATTACKERS) or set(kinds) - set(cfg["environment"]["plants"])):
+                raise ValueError("attacker_pre.provided_plants must be distinct configured attackers")
+            if not max(rules.plants[k]["cost"] for k in kinds) <= attacker["initial_sun"] <= rules.game["sun_cap"]:
+                raise ValueError("attacker_pre.initial_sun must afford every supplied plant")
+            ready = attacker.get("mower_ready_probability")
+            if type(ready) not in (int, float) or not math.isfinite(ready) or not 0 <= ready <= 1:
+                raise ValueError("attacker_pre.mower_ready_probability must be in [0, 1]")
+            if attacker.get("ranking_objective") != "set_cross_entropy_v1":
+                raise ValueError("attacker_pre requires successful-set cross-entropy")
+            bomb_softmax_temperature(attacker, 0.0)
+            horizon = max(v["horizon"] for k, table in attacker_bounds(rules)["table"].items()
+                          if k in kinds for v in table.values())
+            # Slowest Basic must also reach a left-column mine within the cutoff.
+            from pvz_rl.envs.attacker_scenarios import _arrival
+
+            horizon = max(horizon, _arrival(rules, rules.game["cols"] * rules.game["units_per_tile"], latest=True))
+            if (tile["enabled"] and c.get("run_stage") in (None, "attacker_pre")
+                    and warmup_ticks(rules, attacker) + horizon >= cfg["environment"]["cutoff_seconds"] * rules.game["tick_rate"]):
+                raise ValueError("attacker_pre cutoff is too short for cooldown and conservative completion")
+            if tile["enabled"] and c.get("run_stage") in (None, "attacker_pre") and "basic" not in cfg["environment"]["zombies"]:
+                raise ValueError("attacker_pre requires Basic zombies in the configured roster")
         validate_sky_sun_rate(
             tile.get("peashooter_sky_sun_rate", 1.0),
             rules,
@@ -701,6 +753,8 @@ def validate_config(cfg: dict) -> None:
 
     if c.get("run_stage") in ("pre", *TILE_STAGES) and not (tile and tile["enabled"]):
         raise ValueError("Tile stages require training.tile_scenarios.enabled")
+    if c.get("run_stage") == "attacker_pre" and "attacker" not in tile:
+        raise ValueError("attacker_pre requires its training configuration section")
     if c.get("lessons") or set(c.get("stages", {})) - {"easy", "standard", "shared"}:
         raise ValueError("Retired curriculum lesson; use easy, standard and shared stages")
     unlimited = cfg["training"].get("until_stage_complete", False)
@@ -834,7 +888,7 @@ def validate_config(cfg: dict) -> None:
         raise ValueError("training.performance.annotation_cache_mib must be a nonnegative integer")
     if type(performance.get("annotation_use_fit_limits", False)) is not bool:
         raise ValueError("training.performance.annotation_use_fit_limits must be a boolean")
-    for key in ("cherry_prefetch", "cherry_cuda_warmup"):
+    for key in ("cherry_prefetch", "cherry_cuda_warmup", "attacker_prefetch", "attacker_cuda_warmup"):
         if type(performance.get(key, False)) is not bool:
             raise ValueError(f"training.performance.{key} must be a boolean")
     workers = performance.get("cherry_prepare_workers", 0)
@@ -842,6 +896,10 @@ def validate_config(cfg: dict) -> None:
         raise ValueError(
             "training.performance.cherry_prepare_workers must be a nonnegative integer"
         )
+    for key in ("attacker_prepare_workers", "attacker_worker_ram_mib"):
+        value = performance.get(key, 0 if key.endswith("workers") else 96)
+        if type(value) is not int or value < (0 if key.endswith("workers") else 1):
+            raise ValueError(f"Invalid training.performance.{key}")
     if performance.get("cherry_oracle", "cpu") not in ("cpu", "cuda"):
         raise ValueError("training.performance.cherry_oracle must be cpu or cuda")
     for key, default in (
@@ -862,6 +920,10 @@ def validate_config(cfg: dict) -> None:
         "annotation_input_cache",
         "annotation_cache_mib",
         "annotation_use_fit_limits",
+        "attacker_prepare_workers",
+        "attacker_worker_ram_mib",
+        "attacker_prefetch",
+        "attacker_cuda_warmup",
         "cherry_prepare_workers",
         "cherry_worker_ram_mib",
         "cherry_prefetch",

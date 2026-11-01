@@ -8,6 +8,8 @@ def validation_interval_games(cfg, domain="normal"):
         return curriculum.get("cherry_bomb_probe_interval_games", curriculum["probe_interval_games"])
     if domain == "peashooter":
         return curriculum.get("peashooter_probe_interval_games", curriculum["probe_interval_games"])
+    if domain == "attacker_pre":
+        return curriculum.get("attacker_pre_probe_interval_games", curriculum["probe_interval_games"])
     return curriculum["probe_interval_games"]
 
 
@@ -55,7 +57,7 @@ def evaluation_interval(cfg):
 
 def progress_value(cfg, model):
     stage = cfg["curriculum"].get("run_stage")
-    if stage in ("cherry_bomb", "cherry_bomb_obstacle", "peashooter"):
+    if stage in ("cherry_bomb", "cherry_bomb_obstacle", "attacker_pre", "peashooter"):
         return model.tile_skills.episodes[stage]
     if stage == "pre":
         return model.tile_skills.total

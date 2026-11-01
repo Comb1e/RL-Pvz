@@ -11,7 +11,7 @@ rules. This file adds project-specific constraints and ownership.
   overlays. Preserve the user's reward, exploration and cohort-cycle adjustments;
   read current values from configuration instead of duplicating them here. Group
   stage tuning under `training.cherry_bomb`, `training.cherry_bomb_obstacle`,
-  `training.peashooter` and `training.normal`;
+  `training.attacker_pre`, `training.peashooter` and `training.normal`;
   resolve these once at loading into the checkpoint-compatible runtime layout.
 - Short integration checks are allowed. Do not launch formal training unless asked.
 - Policy inputs contain public board facts only. Keep seeds, future schedules,
@@ -40,7 +40,7 @@ rules. This file adds project-specific constraints and ownership.
   retains saved learning settings and committed updates; `--init-from` transfers
   compatible weights into fresh optimizer state. Do not silently migrate formats,
   replay committed passes or treat annotation progress as autonomous recovery.
-- Cherry Bomb has its own configured cohort size; other stages retain `n_envs`.
+- Cherry Bomb and attacker_pre have separate configured cohort sizes; other stages retain `n_envs`.
   CPU preparation and the bounded CUDA oracle must preserve exact attributed-hit
   labels. Cherry carts start independently ready or spent, never moving; saved
   configurations without the setting retain all-spent carts. Prefetch is speculative:
@@ -53,12 +53,18 @@ rules. This file adds project-specific constraints and ownership.
 
 ## Training stages and validation
 
-- Default progression is `cherry_bomb → cherry_bomb_obstacle → peashooter → easy → standard → shared`.
+- Default progression is `cherry_bomb → cherry_bomb_obstacle → attacker_pre → peashooter → easy → standard → shared`.
   Each tile stage is separately selectable and validates only its own skill.
   Explicit fresh normal stages skip tile stages; legacy checkpoints retain their
   saved combined-stage workflow. Both bomb stages have no exploration or search.
   Obstacle boards use 1–15 plants and require exactly one engine-verified legal hit;
   scenario identity travels with worker/prefetch jobs and never enters policy input.
+- `attacker_pre` supplies one of four attackers per board, fits successful-set
+  cross-entropy with frozen species/EMA, and uses versioned conservative distance
+  labels without placement rollouts. Four background lanes contain 4–8 plants;
+  the empty lane has 1–2 Basic zombies. Shooters target all; mines target the
+  initially closest zombie. A first-cell fallback is a correct task response,
+  reported separately from actual attributed kills. No exploration or search.
 - Preserve configured Peashooter sky-sun scaling and saved countdowns without
   rescaling recovery state. Keep tile-stage episodes, budgets and validation clocks
   separate from one another and from normal games, exploration and cohort cycles.
@@ -87,6 +93,7 @@ Paths below are relative to `src/pvz_rl/` unless stated otherwise.
 | `config.py`, `data/train.toml`, `gpu.py` | Grouped stage tuning, shared settings, validation and device selection; configuration loading preserves the saved runtime layout. |
 | `envs/` | CPU/CUDA simulator adapters, public encoding, actions, rewards and source credit; `tile_scenarios.py` and `sky_sun.py` own scenario generation and sun scaling. |
 | `envs/scratch_game.py`, `bomb_preparation.py`, `cuda_bomb_oracle.py`, `cuda_snapshots.py` | Validated forks/cart setup, persistent workers/prefetch, CUDA cooldown warmup/attributed labels and batched snapshot transfers. |
+| `envs/attacker_scenarios.py` | Rules-derived conservative bounds, mixed supplied-plant boards, private fallback labels and CPU source-attributed validation. |
 | `policy/` | Independent two-stage Transformers, shared runner, all-tile selection, active batching and bounded collection/fitting CUDA graphs. |
 | `learning/training.py`, `cuda_q.py`, `sequential_training.py` | Training orchestration, cohort lifecycle, collection, finalization and atomic recovery. |
 | `learning/tile_curriculum.py`, `validation_trigger.py`, `budget.py`, `training_requirements.py` | Independent tile-stage clocks/progression, legacy prerequisite recovery, cohort validation gate and normal fitting schedule. |

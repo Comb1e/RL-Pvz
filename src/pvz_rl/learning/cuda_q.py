@@ -15,7 +15,7 @@ import torch
 from stable_baselines3.common.base_class import BaseAlgorithm
 
 from pvz_rl.config import cohort_envs
-from pvz_rl.envs.tile_scenarios import is_bomb_skill
+from pvz_rl.envs.tile_scenarios import BombGenerationFailure, is_placement_skill, placement_settings
 from pvz_rl.learning.cohort import (
     CohortPhase,
     atomic_transition,
@@ -210,7 +210,7 @@ class CudaCohortLifecycle(BaseAlgorithm):
         from pvz_rl.learning.budget import budget_target, progress_value
         from pvz_rl.learning.curriculum import pre_stage
 
-        if not is_bomb_skill(self.tile_skills.phase):
+        if not is_placement_skill(self.tile_skills.phase):
             return
         skills = self.tile_skills
         trigger = getattr(callback, "validation_trigger", None)
@@ -220,7 +220,7 @@ class CudaCohortLifecycle(BaseAlgorithm):
                 return
         elif skills.due(self.cfg):
             return
-        count = cohort_envs(self.cfg, "cherry_bomb")
+        count = cohort_envs(self.cfg, self.tile_skills.phase)
         target = budget_target(self.env.cfg)
         if pre_stage(self.env.cfg) and target is not None:
             count = min(count, max(0, target - progress_value(self.env.cfg, self)))
@@ -236,7 +236,7 @@ class CudaCohortLifecycle(BaseAlgorithm):
         target = budget_target(self.env.cfg)
         skills = self.tile_skills
         self.env.tile_scenario = self.env.queue.tile_scenario = skills.phase
-        if not is_bomb_skill(skills.phase):
+        if not is_placement_skill(skills.phase):
             self.env.queue.close()
         self.env.queue.tile_boards = {}
         self.env.tile_boards = {}
@@ -261,6 +261,11 @@ class CudaCohortLifecycle(BaseAlgorithm):
 
             callback.budget_stopped = True
             raise TrainingDeadline() from None
+        except BombGenerationFailure:
+            failed = self.tile_skills
+            failed.generation_failures = self.env.queue.generation_failures
+            self.tile_skill_state = failed.to_dict()
+            raise
         self._runner = self._new_runner()
         self._first = True
         self._buffer = self._new_buffer()
@@ -275,6 +280,8 @@ class CudaCohortLifecycle(BaseAlgorithm):
             "tile_ranking_loss",
             "bomb_cross_entropy_loss",
             "bomb_softmax_temperature",
+            "attacker_cross_entropy_loss",
+            "attacker_softmax_temperature",
             "bomb_hinge_loss",
             "bomb_distance_loss",
             "teacher_value_loss",
@@ -422,7 +429,7 @@ class CudaCohortLifecycle(BaseAlgorithm):
                     elif phase == CohortPhase.FINALIZE_REWARDS:
                         self._finalize_rewards(callback)
                     elif phase == CohortPhase.RETURNS:
-                        ranking = is_bomb_skill(self.tile_skills.phase)
+                        ranking = is_placement_skill(self.tile_skills.phase)
                         search = getattr(self, "search_training", False)
                         self.prefit_errors = self._buffer.finalize(
                             cohort=self.cohort_number,
@@ -431,9 +438,9 @@ class CudaCohortLifecycle(BaseAlgorithm):
                         if ranking or search:
                             self.prefit_errors = {}
                             self._buffer.reward_summary["supervision"] = (
-                                "confirmed_search_returns" if search else self.cfg["training"][
-                                    "tile_scenarios"
-                                ].get("ranking_objective", "top1_hinge_v1")
+                                "confirmed_search_returns" if search else placement_settings(
+                                    self.cfg, self.tile_skills.phase
+                                ).get("ranking_objective", "top1_hinge_v1")
                             )
                         for name, values in self.prefit_errors.items():
                             self.logger.record("train/action_count_" + name, values["count"])

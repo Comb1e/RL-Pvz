@@ -27,7 +27,7 @@ from pvz_rl.config import (
 from pvz_rl.envs.rewards import LEDGER_METRICS, REWARD_METRICS
 from pvz_rl.envs.scenarios import difficulty_weights
 from pvz_rl.envs.sky_sun import peashooter_sky_sun_rate
-from pvz_rl.envs.tile_scenarios import is_bomb_skill
+from pvz_rl.envs.tile_scenarios import is_placement_skill, placement_settings
 from pvz_rl.evaluation.runner import evaluate, summarize
 from pvz_rl.learning.budget import (
     budget_target,
@@ -482,12 +482,12 @@ class ResearchCallback(BaseCallback):
     def cohort_text(self):
         summary = self.cohort_summary()
         if (
-            is_bomb_skill(self.model.tile_skills.phase)
-            or is_bomb_skill(getattr(self.model.env, "tile_scenario", None))
+            is_placement_skill(self.model.tile_skills.phase)
+            or is_placement_skill(getattr(self.model.env, "tile_scenario", None))
         ):
             return (
                 f"done {summary['completed']}/{summary['games']} "
-                f"correct {summary['wins']}/{summary['games']}; bomb tile supervision"
+                f"correct {summary['wins']}/{summary['games']}; placement supervision"
             )
         raw = "n/a" if summary["raw_return"] is None else f"{summary['raw_return']:.3g}"
         fitted = (
@@ -621,6 +621,8 @@ class ResearchCallback(BaseCallback):
             "tile_ranking_loss",
             "bomb_cross_entropy_loss",
             "bomb_softmax_temperature",
+            "attacker_cross_entropy_loss",
+            "attacker_softmax_temperature",
             "bomb_hinge_loss",
             "bomb_distance_loss",
             "selected_action_error",
@@ -659,8 +661,8 @@ class ResearchCallback(BaseCallback):
                 float(value) if value is not None and math.isfinite(float(value)) else None
             )
         row.update(optimization=metrics, completed_updates=self.model._n_updates)
-        if is_bomb_skill(row.get("active_skill")):
-            if metrics["bomb_cross_entropy_loss"] is None:
+        if is_placement_skill(row.get("active_skill")):
+            if metrics["bomb_cross_entropy_loss"] is None and metrics["attacker_cross_entropy_loss"] is None:
                 metrics["tile_ranking_loss"] = metrics["q_loss"]
             metrics["q_loss"] = None
         append_jsonl(self.metrics_stream, row)
@@ -830,7 +832,7 @@ class ResearchCallback(BaseCallback):
             skills = self.model.tile_skills
             state = exploration_state(self.cfg, skills.episodes[skills.phase])
             apply_exploration_state(self.model, state)
-            if is_bomb_skill(skills.phase) and skills.stage_order is not None:
+            if is_placement_skill(skills.phase) and skills.stage_order is not None:
                 from pvz_rl.learning.exploration import set_exploration_rate
 
                 set_exploration_rate(self.model, 0.0, plant_rate=0.0)
@@ -1621,7 +1623,8 @@ def train(
     progress.emit(
         f"Shared {condition} {cfg['policy']['kind']} policy; learner seed {learner_seed}; {cfg['training']['device']}; "
         f"{cohort_envs(cfg)} Peashooter/normal lanes, "
-        f"{cohort_envs(cfg, 'cherry_bomb')} Cherry Bomb lanes; simulator {simulator(cfg)}; "
+        f"{cohort_envs(cfg, 'cherry_bomb')} Cherry Bomb lanes, "
+        f"{cfg['training'].get('tile_scenarios', {}).get('attacker', {}).get('n_envs', 0)} attacker-pre lanes; simulator {simulator(cfg)}; "
         "one complete game per environment per cohort; "
         f"{budget_label}; "
         f"family {family}; output {output.resolve()}",
@@ -1637,6 +1640,8 @@ def train(
         force=True,
     )
     target_kind = (
+        "successful-set placement supervision"
+        if is_placement_skill(selected_stage(cfg)) else
         "confirmed same-board search targets"
         if cfg["training"].get("search", {}).get("enabled", False)
         else "actual returns"
@@ -1651,7 +1656,7 @@ def train(
     progress.emit(f"Reward settings: {cfg['reward']}", force=True)
     if cfg["training"].get("search", {}).get("enabled", False):
         progress.emit(
-            f"Search-assisted collection: {cfg['training']['search']['rollouts']} rollouts/query, "
+            f"Search for Peashooter/normal stages: {cfg['training']['search']['rollouts']} rollouts/query, "
             f"up to {cfg['training']['search']['queries_per_episode']} queries/game; "
             "oracle games excluded from budgets; validation uses only the greedy network",
             force=True,
@@ -1722,17 +1727,17 @@ def train(
         if model.tile_skills.active:
             from pvz_rl.learning.budget import validation_interval_games
 
-            if is_bomb_skill(model.tile_skills.phase):
+            if is_placement_skill(model.tile_skills.phase):
                 from pvz_rl.learning.bomb_objective import BOMB_OBJECTIVE
 
-                bomb = cfg["training"]["tile_scenarios"]
+                bomb = placement_settings(cfg, model.tile_skills.phase)
                 objective = bomb.get("ranking_objective", "top1_hinge_v1")
                 fitting = (
                     "set cross-entropy only, temperature "
                     f"{bomb_softmax_temperature(bomb, 0.0, skill=model.tile_skills.phase):g}"
                     " at 0% success to "
                     f"{bomb_softmax_temperature(bomb, 1.0, skill=model.tile_skills.phase):g}"
-                    " at 100% (linear in this cohort's attributed-hit rate)"
+                    " at 100% (linear in this cohort's target accuracy)"
                     if objective == BOMB_OBJECTIVE else (
                         f"ranking margin {bomb_ranking_margin(bomb)}, "
                         f"distance weight {bomb.get('distance_weight', 0)}, "
@@ -1740,7 +1745,7 @@ def train(
                     )
                 )
                 progress.emit(
-                    f"Bomb fitting: {objective}; {fitting}; no search or exploration",
+                    f"Placement fitting: {objective}; {fitting}; no search or exploration",
                     force=True,
                 )
             requirements = {

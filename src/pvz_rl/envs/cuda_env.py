@@ -26,8 +26,10 @@ from pvz_rl.envs.step_result import PackedStepResult
 from pvz_rl.envs.tile_scenarios import (
     BombGenerationFailure,
     bomb_tile_distances,
-    is_bomb_skill,
+    is_placement_skill,
     peashooter_level,
+    preparation_settings,
+    skill_plant,
 )
 from pvz_rl.learning.budget import budget_target
 from pvz_rl.learning.curriculum import stage_distribution, teaching_enabled
@@ -66,6 +68,7 @@ class ScenarioQueue:
         self._preparation = None
         self._prefetched = None
         self.preparation_metrics = {}
+        self.validation_cases = None
 
     def _draft(self, indices, rngs, seeds=None):
         cfg = self.cfg
@@ -90,7 +93,7 @@ class ScenarioQueue:
             if self.tile_scenario == "peashooter":
                 level, family = "easy", "tile_peashooter"
                 spec = peashooter_level(self.rules, seed)
-            elif is_bomb_skill(self.tile_scenario):
+            elif is_placement_skill(self.tile_scenario):
                 level, family = "easy", "tile_" + self.tile_scenario
             else:
                 spec = scenario(level, family, seed, self.rules, cfg)
@@ -98,17 +101,23 @@ class ScenarioQueue:
         return staged
 
     def _bomb_preparation(self):
+        if self._preparation is not None and (
+            (self._preparation.skill == "attacker_pre") != (self.tile_scenario == "attacker_pre")
+        ):
+            self.discard_prefetch()
+            self._preparation.close()
+            self._preparation = None
         if self._preparation is None:
             from pvz_rl.envs.bomb_preparation import BombPreparation
 
-            self._preparation = BombPreparation(self.cfg)
+            self._preparation = BombPreparation(self.cfg, self.tile_scenario)
         return self._preparation
 
     def prefetch(self, count):
         """Speculate one CPU cohort without committing RNGs, progress or labels."""
-        if not is_bomb_skill(self.tile_scenario) or self._prefetched is not None:
+        if not is_placement_skill(self.tile_scenario) or self._prefetched is not None:
             return
-        if not self.cfg["training"].get("performance", {}).get("cherry_prefetch", False):
+        if not preparation_settings(self.cfg, self.tile_scenario).get("prefetch", False):
             return
         if self.deadline is not None and perf_counter() >= self.deadline:
             return
@@ -135,7 +144,7 @@ class ScenarioQueue:
         if self._prefetched is not None:
             staged, saved_rngs, saved_tasks, saved_skill = self._prefetched
             if (
-                is_bomb_skill(self.tile_scenario)
+                is_placement_skill(self.tile_scenario)
                 and self.tile_scenario == saved_skill
                 and seeds is None
                 and indices == [s[0] for s in staged[: len(indices)]]
@@ -150,14 +159,16 @@ class ScenarioQueue:
                 self.discard_prefetch()
         if tasks is None:
             staged = self._draft(indices, rngs, seeds)
-        if is_bomb_skill(self.tile_scenario):
+        if is_placement_skill(self.tile_scenario):
             prep = self._bomb_preparation()
             selected_seeds = [s[3] for s in staged]
             if tasks is None:
-                tasks = prep.submit(selected_seeds, self.deadline, skill=self.tile_scenario)
+                tasks = prep.submit(selected_seeds, self.deadline, skill=self.tile_scenario,
+                                    cases=self.validation_cases)
             try:
                 boards = prep.collect(
-                    tasks, selected_seeds, deadline=self.deadline, skill=self.tile_scenario
+                    tasks, selected_seeds, deadline=self.deadline, skill=self.tile_scenario,
+                    cases=self.validation_cases,
                 )
             except BombGenerationFailure:
                 self.generation_failures += self.cfg["training"]["annotation"][
@@ -176,8 +187,8 @@ class ScenarioQueue:
                 oracle=prep.oracle,
                 warmup_backend=(
                     "cuda"
-                    if prep.oracle == "cuda"
-                    and self.cfg["training"].get("performance", {}).get("cherry_cuda_warmup", False)
+                    if prep.oracle in ("cuda", "distance")
+                    and preparation_settings(self.cfg, self.tile_scenario).get("cuda_warmup", False)
                     else "cpu"
                 ),
                 prefetched=prefetched,
@@ -353,7 +364,7 @@ class CudaVecEnv(VecEnv):
         self.batch.set_sky_sun_rate(
             peashooter_sky_sun_rate(self.cfg) if self.tile_scenario == "peashooter" else 1.0
         )
-        if is_bomb_skill(self.tile_scenario):
+        if is_placement_skill(self.tile_scenario):
             self.tile_boards = deepcopy(self.queue.tile_boards)
             from pvz_rl.envs.cuda_snapshots import upload_snapshots
 
@@ -379,6 +390,21 @@ class CudaVecEnv(VecEnv):
         self.features.encode()
         self.last_preparation_seconds = perf_counter() - started
         self.profiler.host("scenario_preparation", self.last_preparation_seconds)
+
+    def supplied_branches(self, skill, availability):
+        """Public exercise instruction, independently supplied for each board."""
+        if skill == "attacker_pre":
+            branches = torch.tensor([
+                self.cfg["environment"]["plants"].index(board["supplied_plant"]) + 1
+                if (board := self.tile_boards.get(i)) is not None else 0
+                for i in range(self.num_envs)
+            ], device=availability.device, dtype=torch.long)
+        else:
+            branches = torch.full((self.num_envs,),
+                self.cfg["environment"]["plants"].index(skill_plant(skill)) + 1,
+                device=availability.device, dtype=torch.long)
+        usable = availability.gather(1, branches[:, None]).squeeze(1)
+        return torch.where(usable, branches, 0)
 
     def reset(self):
         for index, seed in enumerate(self._seeds):
@@ -532,9 +558,9 @@ class CudaVecEnv(VecEnv):
             self.task_transitions.update(self._tasks[i] for i in np.flatnonzero(self._step_active))
         self._pending_spawns[:] = self._step_state_host["pending_spawns"].numpy()
         compact = host[:, RECORD_OUTCOME]
-        if is_bomb_skill(self.tile_scenario):
+        if is_placement_skill(self.tile_scenario):
             # A supervised exercise ends after its one proposal. Its success
-            # is the private engine-verified label, not a whole-game outcome.
+            # is its private target label, not a whole-game outcome.
             compact[self._step_active, 0] = 1
             compact[self._step_active, 1] = 0
         self.last_transition_host = compact
@@ -552,7 +578,7 @@ class CudaVecEnv(VecEnv):
             compact, actions, self.last_action_result_host, truncation, self._step_active, completed
         )
         reward, done, timed_out = self._step_device_result
-        if is_bomb_skill(self.tile_scenario):
+        if is_placement_skill(self.tile_scenario):
             done = self._device_active.clone()
             timed_out = torch.zeros_like(done)
         reward = reward.clone()
@@ -577,11 +603,11 @@ class CudaVecEnv(VecEnv):
                     episode_metrics=self.episode_metrics(index, header, total),
                     **{"TimeLimit.truncated": bool(compact[index, 1])},
                 )
-                if is_bomb_skill(self.tile_scenario):
+                if is_placement_skill(self.tile_scenario):
                     action = int(actions[index, 0])
                     branch = 1 + (action - 1) // 45 if action else 0
-                    expected = self.cfg["environment"]["plants"].index("cherry_bomb") + 1
                     board = self.tile_boards[index]
+                    expected = self.cfg["environment"]["plants"].index(skill_plant(self.tile_scenario, board)) + 1
                     settings = self.cfg["training"]["tile_scenarios"]
                     success = bool(
                         self.last_action_result_host[index, 0]
@@ -597,11 +623,17 @@ class CudaVecEnv(VecEnv):
                         selected_tile_distance=bomb_tile_distances(
                             board["feasible_tiles"],
                             board["absolute_infeasible_tiles"]
-                            if bomb_max_illegal_distance(settings) else [],
+                            if self.tile_scenario == "attacker_pre" or bomb_max_illegal_distance(settings) else [],
                             rows=self.cfg["environment"]["rows"],
                             cols=self.cfg["environment"]["cols"],
                         )[(action - 1) % 45] if action > 0 and branch == expected else None,
                     )
+                    if self.tile_scenario == "attacker_pre":
+                        metrics.update(
+                            target_correct=success, fallback=board["fallback"],
+                            supplied_plant=board["supplied_plant"], zombie_count=board["zombie_count"],
+                            actual_kill=None,
+                        )
                 self.finished_outcomes[index] = completed[index]["episode_metrics"]["status"]
         # Supervised outcomes are authoritative only after attribution above.
         # Capture before autoreset, including all one-shot cohort results.
@@ -677,6 +709,12 @@ class CudaVecEnv(VecEnv):
         }
 
     def restore_training(self, state):
+        if state.get("tile_scenario") == "attacker_pre":
+            from pvz_rl.envs.attacker_scenarios import label_attacker
+
+            for board in state.get("tile_boards", {}).values():
+                if label_attacker(board, self.queue.rules) != board:
+                    raise ValueError("Saved attacker labels or conservative bounds changed")
         ledger = state.get("home_ledger")
         if ledger is not None:
             ledger = np.asarray(ledger)

@@ -4,7 +4,7 @@ from math import isfinite
 
 import matplotlib.pyplot as plt
 
-from pvz_rl.envs.tile_scenarios import LEGACY_SKILLS, is_bomb_skill
+from pvz_rl.envs.tile_scenarios import LEGACY_SKILLS, is_placement_skill
 from pvz_rl.learning.curriculum import TILE_STAGES
 
 
@@ -68,6 +68,7 @@ def plot_panels(
         peashooter="#399471",
         cherry_bomb="#b54e59",
         cherry_bomb_obstacle="#9b69ad",
+        attacker_pre="#c58e46",
         easy="#399471",
         standard="#d69536",
         shared="#5379ac",
@@ -275,12 +276,17 @@ def report_charts(segments, cfg, output, save):
                             if value(r, "optimization.tile_ranking_loss") is not None
                             else value(r, "optimization.q_loss")
                         )
-                        if is_bomb_skill(phase(r))
+                        if is_placement_skill(phase(r))
                         else None
                     ),
                 ),
             )
             fitting += fields([
+                ("optimization.attacker_cross_entropy_loss", "Attacker successful-set cross-entropy"),
+                ("optimization.attacker_softmax_temperature", "Attacker softmax temperature"),
+                ("cohort.attacker_selected_tile_distance", "Attacker selected tile Manhattan distance"),
+                ("cohort.attacker_fallback_rate", "Attacker fallback fraction"),
+                ("cohort.attacker_accuracy", "Attacker target accuracy"),
                 ("optimization.bomb_softmax_temperature", "Bomb softmax temperature"),
                 ("optimization.bomb_hinge_loss", "Bomb ranking hinge"),
                 ("optimization.bomb_distance_loss", "Bomb weighted expected distance"),
@@ -326,7 +332,8 @@ def report_charts(segments, cfg, output, save):
                         )
                     ]
                 )
-        add("fitting", "fitting", fitting)
+        add("fitting", "fitting", fitting,
+            ("cohort.attacker_accuracy", "cohort.attacker_fallback_rate"))
 
         accounting = fields(
             [
@@ -355,7 +362,7 @@ def report_charts(segments, cfg, output, save):
         add(
             "exploration",
             "exploration",
-            [] if is_bomb_skill(scope) else fields(
+            [] if is_placement_skill(scope) else fields(
                 [
                     ("tile_exploration_epsilon", "Tile exploration probability"),
                     ("optimization.tile_exploration_coins", "Tile exploration draws / cohort"),
@@ -464,6 +471,16 @@ def report_charts(segments, cfg, output, save):
                             or cfg["curriculum"]["probe_cases"]
                         )
                         row[skill] = wins / count
+                    if scope == "attacker_pre":
+                        cases = probe.get("cases", {}).get("attacker_pre", [])
+                        if cases:
+                            for key in ("actual_kill", "target_correct", "fallback"):
+                                row["attacker_" + key] = sum(bool(c.get(key)) for c in cases) / len(cases)
+                            for kind in cfg["training"]["tile_scenarios"]["attacker"]["provided_plants"]:
+                                for count in (1, 2):
+                                    group = [c for c in cases if c.get("supplied_plant") == kind and c.get("zombie_count") == count]
+                                    if group:
+                                        row[f"attacker/{kind}/{count}"] = sum(c["win"] for c in group) / len(group)
                     rows.append(row)
                 validation.append((label, rows))
             spec = fields(
@@ -472,6 +489,16 @@ def report_charts(segments, cfg, output, save):
                     for skill in (LEGACY_SKILLS if scope == "pre" else (scope,))
                 ]
             )
+
+            if scope == "attacker_pre":
+                spec += fields([
+                    ("attacker_actual_kill", "Engine-attributed task kills (includes fallback cases)"),
+                    ("attacker_target_correct", "Conservative target-set accuracy"),
+                    ("attacker_fallback", "Fallback case fraction"),
+                    *[(f"attacker/{kind}/{count}", f"{kind.replace('_', ' ').title()}, {count} zombie(s): task success")
+                      for kind in cfg["training"]["tile_scenarios"]["attacker"]["provided_plants"]
+                      for count in (1, 2)],
+                ])
 
             def vx(row):
                 return row.get("stage_episodes", row["episodes"])

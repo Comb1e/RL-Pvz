@@ -102,7 +102,7 @@ enabled = true # Missing in older checkpoints: retain their original validation 
 cohort_success_threshold = 0.9 # Strictly above; full configured cohorts only (normally 116/128).
 
 [training.tile_scenarios]
-enabled = true # Automatic cherry_bomb, cherry_bomb_obstacle, then peashooter; selected normal stages skip them.
+enabled = true # Automatic bomb stages, attacker_pre, then peashooter; selected normal stages skip them.
 
 [training.cherry_bomb]
 # Shared by both bomb stages except temperature and validation mastery; no exploration or search.
@@ -125,6 +125,21 @@ oracle_vram_mib = 2048
 
 [training.cherry_bomb_obstacle]
 softmax_temperature = { zero_success = 1, full_success = 1 } # Independent schedule; mastery still requires 100/100.
+
+[training.attacker_pre]
+n_envs = 128
+plants = [4, 8] # Total across four non-zombie lanes; at least one in each.
+zombie_count = [1, 2] # Basic zombies, all in the remaining empty lane.
+provided_plants = ["potato_mine", "peashooter", "repeater", "snow_pea"]
+initial_sun = 200
+mower_ready_probability = 0.5
+ranking_objective = "set_cross_entropy_v1"
+softmax_temperature = { zero_success = 0.5, full_success = 1.0 }
+probe_interval_games = 2000
+prepare_workers = 32
+worker_ram_mib = 96
+prefetch = true
+cuda_warmup = true # Natural initial cooldown only; distance labels use no candidate rollouts.
 
 [training.peashooter]
 # Uses the shared cohort size/fitting settings; only this stage scales sky sun.

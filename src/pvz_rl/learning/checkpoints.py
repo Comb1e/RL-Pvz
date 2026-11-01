@@ -416,12 +416,14 @@ def inspect_checkpoint(path, *, weights_only=False):
             else:
                 validate_runtime_identity(runtime)
             if not weights_only:
+                from pvz_rl.envs.tile_scenarios import is_placement_skill
                 from pvz_rl.learning.search_settings import search_enabled, validate_search_recovery
 
                 validate_search_recovery(
                     runtime.get("search_teacher"),
                     cfg,
-                    required=search_enabled(cfg) and runtime.get("buffer") is not None,
+                    required=(search_enabled(cfg) and runtime.get("buffer") is not None
+                              and not is_placement_skill((runtime.get("tile_scenarios") or {}).get("phase"))),
                 )
                 if runtime.get("buffer") is not None:
                     from pvz_rl.learning.collection_scheduler import CollectionScheduler

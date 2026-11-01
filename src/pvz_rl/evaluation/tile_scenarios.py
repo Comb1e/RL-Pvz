@@ -15,8 +15,8 @@ from pvz_rl.envs.tile_scenarios import (
     SKILLS,
     bomb_hit,
     is_bomb_skill,
+    is_placement_skill,
     peashooter_level,
-    skill_plant,
 )
 from pvz_rl.evaluation.cuda_evaluation import deterministic_validation
 from pvz_rl.learning.deadline import check_deadline
@@ -39,6 +39,14 @@ def validate_tile_skills(cfg, model, seeds, *, deadline=None, progress=None, ski
                 with closing(CudaVecEnv(local, "masked", 0, training=False)) as env:
                     env.tile_scenario = env.queue.tile_scenario = skill
                     env.queue.deadline = deadline
+                    if skill == "attacker_pre":
+                        settings = local["training"]["tile_scenarios"]["attacker"]
+                        kinds = settings["provided_plants"]
+                        counts = list(range(settings["zombie_count"][0], settings["zombie_count"][1] + 1))
+                        env.queue.validation_cases = [
+                            (kinds[i % len(kinds)], counts[(i // len(kinds) + i % len(kinds)) % len(counts)])
+                            for i in range(offset, offset + len(chunk))
+                        ]
                     traces = [[] for _ in chunk]
                     with env.device_context():
                         env.reset_indices(list(range(len(chunk))), tile_seeds=chunk)
@@ -51,8 +59,7 @@ def validate_tile_skills(cfg, model, seeds, *, deadline=None, progress=None, ski
                                     env.enabled_envs.copy(), device=model.device
                                 )
                                 availability = env.branch_availability(active=active)
-                                branch = cfg["environment"]["plants"].index(skill_plant(skill)) + 1
-                                supplied = torch.where(availability[:, branch], branch, 0).long()
+                                supplied = env.supplied_branches(skill, availability)
                                 actions = runner.decide(
                                     obs,
                                     env.action_masks(),
@@ -68,7 +75,18 @@ def validate_tile_skills(cfg, model, seeds, *, deadline=None, progress=None, ski
                                     continue
                                 check_deadline(deadline)
                                 metrics = info["episode_metrics"]
-                                if is_bomb_skill(skill):
+                                details = {}
+                                if skill == "attacker_pre":
+                                    from pvz_rl.envs.attacker_scenarios import attacker_result
+
+                                    action = traces[index][0]
+                                    board = env.tile_boards[index]
+                                    details = attacker_result(
+                                        local, board, (action - 1) % 45 if action else -1,
+                                        rules=env.queue.rules, deadline=deadline,
+                                    ) if action else dict(win=False, target_correct=False, actual_kill=False)
+                                    success = details.pop("win")
+                                elif is_bomb_skill(skill):
                                     action = traces[index][0]
                                     board = env.tile_boards[index]
                                     success = action > 0 and bomb_hit(
@@ -114,10 +132,11 @@ def validate_tile_skills(cfg, model, seeds, *, deadline=None, progress=None, ski
                                         seed=chunk[index],
                                         win=bool(success),
                                         selected_action=traces[index][0]
-                                        if is_bomb_skill(skill)
+                                        if is_placement_skill(skill)
                                         else None,
                                         decisions=len(traces[index]),
                                         cpu_verified=True,
+                                        **details,
                                     )
                                 )
                             if progress:

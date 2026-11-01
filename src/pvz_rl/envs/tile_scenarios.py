@@ -19,14 +19,36 @@ from pvz_rl.learning.deadline import check_deadline
 
 LEGACY_SKILLS = ("peashooter", "cherry_bomb")
 BOMB_SKILLS = ("cherry_bomb", "cherry_bomb_obstacle")
-SKILLS = (*LEGACY_SKILLS, "cherry_bomb_obstacle")
+SKILLS = (*LEGACY_SKILLS, "cherry_bomb_obstacle", "attacker_pre")
 
 
 def is_bomb_skill(skill):
     return skill in BOMB_SKILLS
 
 
-def skill_plant(skill):
+def is_placement_skill(skill):
+    return is_bomb_skill(skill) or skill == "attacker_pre"
+
+
+def placement_settings(cfg, skill):
+    settings = cfg["training"].get("tile_scenarios", {})
+    return settings["attacker"] if skill == "attacker_pre" else settings
+
+
+def preparation_settings(cfg, skill):
+    """One resource interface for all single-placement exercises."""
+    perf = cfg["training"].get("performance", {})
+    result = {k.removeprefix("cherry_"): v for k, v in perf.items() if k.startswith("cherry_")}
+    if skill == "attacker_pre":
+        result.update({k.removeprefix("attacker_"): v for k, v in perf.items()
+                       if k.startswith("attacker_")})
+        result["oracle"] = "distance"
+    return result
+
+
+def skill_plant(skill, board=None):
+    if skill == "attacker_pre":
+        return board["supplied_plant"]
     return "cherry_bomb" if is_bomb_skill(skill) else skill
 
 

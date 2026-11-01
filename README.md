@@ -62,8 +62,8 @@ is also studied in [partial-label learning](https://www.proceedings.com/content/
 To start autonomous training when ready:
 
 Tune shared bomb settings in `[training.cherry_bomb]`, with an independent temperature
-in `[training.cherry_bomb_obstacle]`, Peashooter in
-`[training.peashooter]`, and normal play in `[training.normal]` (including its
+in `[training.cherry_bomb_obstacle]`, the mixed attacker exercise in
+`[training.attacker_pre]`, Peashooter in `[training.peashooter]`, and normal play in `[training.normal]` (including its
 `curriculum` tables). Shared fitting, rewards and resource limits retain their
 common tables. The loader resolves stage tables into the existing runtime layout;
 legacy configuration files and saved checkpoints remain supported.
@@ -73,7 +73,7 @@ legacy configuration files and saved checkpoints remain supported.
   --output runs\my-run --gpu 0 --gpu-profile rtx4070-laptop
 ```
 
-Default progression is `cherry_bomb → cherry_bomb_obstacle → peashooter → easy → standard → shared`.
+Default progression is `cherry_bomb → cherry_bomb_obstacle → attacker_pre → peashooter → easy → standard → shared`.
 Each stage can also run independently. Explicit normal stages skip tile training:
 
 ```powershell
@@ -82,9 +82,24 @@ Each stage can also run independently. Explicit normal stages skip tile training
 .\.venv\Scripts\python.exe -m pvz_rl train --stage cherry_bomb_obstacle --until-stage-complete `
   --seed 101 --output runs\cherry-obstacle --init-from runs\cherry\final.zip `
   --gpu 0 --gpu-profile rtx4070-laptop
+.\.venv\Scripts\python.exe -m pvz_rl train --stage attacker_pre --until-stage-complete `
+  --seed 101 --output runs\attacker-pre --init-from runs\cherry-obstacle\final.zip `
+  --gpu 0 --gpu-profile rtx4070-laptop
 ```
 
 Without `--until-stage-complete`, `--games` limits completed real episodes.
+`attacker_pre` supplies a random Potato Mine, Peashooter, Repeater or Snow Pea.
+Its boards contain 4–8 background plants across four occupied lanes, 1–2 Basic
+zombies in the empty lane, and random ready/disappeared carts. Rules-derived
+conservative firing/arming distances label placements without candidate rollouts.
+Shooters must defeat both zombies; Potato Mine targets the zombie initially
+closest to home. If no tile qualifies, that lane's first cell is the fallback.
+Fitting uses successful-set cross-entropy, without search or exploration.
+Validation counts a correct fallback as success and reports actual kills separately;
+this exercise teaches lane selection, not optimal placement. Conservative bounds
+can produce many fallbacks, particularly for two-zombie Peashooter/Snow Pea cases.
+Tune its cohort size, mixture, generation, temperature and preparation settings
+under `[training.attacker_pre]`; its default cohort size is 128.
 Peashooter uses easy waves, 50 starting sun, disabled mowers and configurable
 1.5× sky-sun frequency. Cherry Bomb uses its exact attributed-hit oracle with no
 exploration or search in either bomb stage. Obstacle boards contain 1–15 plants,
@@ -98,7 +113,7 @@ Resume keeps the saved probability; older runs without it keep all carts disappe
 The live viewer follows new cohorts automatically. In Cherry Bomb, **Switch**
 browses completed boards from the current cohort, including while fitting runs.
 Both bomb stages default to 640 envs through `training.cherry_bomb.n_envs`
-(`--cherry-bomb-envs`); `training.normal.n_envs` (`--n-envs`) controls other stages.
+(`--cherry-bomb-envs`); `training.normal.n_envs` (`--n-envs`) controls Peashooter and normal stages.
 Its preparation shares validated simulator setup, uses up to 32 persistent CPU
 workers, and batches natural cooldown warmup and exact attributed-hit rollouts
 on CUDA. Under
@@ -123,12 +138,12 @@ frozen within each queried board. Its hidden-state prior is approximate. A longe
 losing defense can still score worse because the configured duration penalty remains.
 
 Each bomb stage independently checks validation every 10,000 completed episodes through
-`training.cherry_bomb.probe_interval_games`; Peashooter and normal stages check
+`training.cherry_bomb.probe_interval_games`; attacker_pre, Peashooter and normal stages check
 every 2,000. Intervals round up to a fitted cohort boundary. A full cohort
 must exceed 90% success to launch validation (normal 116/128; Cherry Bomb 577/640). Collection may be
 search-assisted; mastery uses greedy network validation without search.
 Cherry Bomb must strictly exceed `training.cherry_bomb.validation_success_threshold`
-(default 0.95: 96/100 passes; 95/100 fails). Obstacle, Peashooter and normal stages
+(default 0.95: 96/100 passes; 95/100 fails). Obstacle, attacker_pre, Peashooter and normal stages
 still require 100/100. Each tile stage validates its own skill, then completes or advances;
 there is no joint probe or skill revisit in fresh runs. The combined `--stage pre`
 is retired; old checkpoints retain their saved combined-stage workflow on resume.

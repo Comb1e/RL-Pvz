@@ -5,7 +5,7 @@ from dataclasses import asdict, dataclass
 from pvz_rl.learning.budget import uses_games
 
 STAGES = ("easy", "standard", "shared")
-TILE_STAGES = ("cherry_bomb", "cherry_bomb_obstacle", "peashooter")
+TILE_STAGES = ("cherry_bomb", "cherry_bomb_obstacle", "attacker_pre", "peashooter")
 SELECTABLE_STAGES = (*TILE_STAGES, *STAGES)
 
 

@@ -14,10 +14,10 @@ DISTANCE_OBJECTIVES = (
 )
 
 
-def bomb_loss_metrics(settings):
+def bomb_loss_metrics(settings, *, prefix="bomb"):
     """Only publish components belonging to the saved objective."""
     if settings.get("ranking_objective") == BOMB_OBJECTIVE:
-        return ("bomb_cross_entropy_loss",)
+        return (f"{prefix}_cross_entropy_loss",)
     return ("bomb_hinge_loss", "bomb_distance_loss")
 
 

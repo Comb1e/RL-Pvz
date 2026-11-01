@@ -239,7 +239,7 @@ def main(argv=None):
     training.add_argument(
         "--stage",
         choices=SELECTABLE_STAGES,
-        help="train only cherry_bomb, cherry_bomb_obstacle, peashooter, easy, standard or shared; stop at mastery or budget",
+        help="train only cherry_bomb, cherry_bomb_obstacle, attacker_pre, peashooter, easy, standard or shared; stop at mastery or budget",
     )
     training.add_argument(
         "--until-stage-complete",

@@ -84,21 +84,26 @@ class CudaBombOracle:
             except cp.cuda.memory.OutOfMemoryError:
                 cp.get_default_memory_pool().free_all_blocks()
                 count //= 2
+        attacker = all(b.get("scenario") == "attacker_pre" for b in boards)
+        hint = (
+            "set training.attacker_pre.cuda_warmup = false for CPU preparation"
+            if attacker else "use cherry_oracle = 'cpu'"
+        )
         raise MemoryError(
-            "Cherry oracle cannot allocate one scratch lane "
+            f"{'Attacker warmup' if attacker else 'Cherry oracle'} cannot allocate one scratch lane "
             f"({free / 1024**2:.0f} MiB reusable, "
             f"{perf.get('collection_vram_headroom_mib', 0)} MiB headroom); "
-            "free VRAM or use cherry_oracle = 'cpu'"
+            f"free VRAM or {hint}"
         )
 
-    def warmup(self, boards, *, deadline=None):
+    def warmup(self, boards, *, deadline=None, ticks=None):
         """Advance initial boards naturally, sharing existing bounded scratch lanes."""
         if not boards:
             return []
         check_deadline(deadline)
         self._allocate(boards)
         batch, result = self.batch, []
-        ticks = self.rules.plants["cherry_bomb"]["initial_recharge_ticks"] + 2
+        ticks = self.rules.plants["cherry_bomb"]["initial_recharge_ticks"] + 2 if ticks is None else ticks
         actions = batch.cp.zeros(batch.n, dtype=batch.cp.int64)
         for start in range(0, len(boards), batch.n):
             check_transition_interruption()
@@ -121,7 +126,10 @@ class CudaBombOracle:
                     if snapshot["status"] == "running" and len(targets) == 1
                     else None
                 )
-                result.append(dict(board, snapshot=snapshot, target_id=target))
+                if board.get("scenario") == "attacker_pre":
+                    result.append(dict(board, snapshot=snapshot))
+                else:
+                    result.append(dict(board, snapshot=snapshot, target_id=target))
         check_deadline(deadline)
         return result
 

@@ -18,7 +18,7 @@ from pvz_rl.config import (
 from pvz_rl.envs.actions import ActionSchema as A
 from pvz_rl.envs.cuda_features import REWARD_FIELDS
 from pvz_rl.envs.encoding import ENTITY_WIDTH, PackedEntityBatch
-from pvz_rl.envs.tile_scenarios import is_bomb_skill, skill_plant
+from pvz_rl.envs.tile_scenarios import is_placement_skill, placement_settings
 from pvz_rl.learning.action_routing import classify_actions
 from pvz_rl.learning.batch_transport import (
     BatchPrefetch,
@@ -120,10 +120,10 @@ class CudaSequentialQ(CudaCohortLifecycle):
 
     @property
     def search_training(self):
-        return search_enabled(self.cfg) and not is_bomb_skill(self.tile_skills.phase)
+        return search_enabled(self.cfg) and not is_placement_skill(self.tile_skills.phase)
 
     def _ensure_search(self, state=None):
-        if search_enabled(self.cfg) and getattr(self, "_search", None) is None:
+        if (self.search_training or state is not None) and getattr(self, "_search", None) is None:
             from pvz_rl.learning.search_teacher import SearchTeacher
 
             self._search = SearchTeacher(self.policy, self.cfg, self.seed, state)
@@ -204,7 +204,7 @@ class CudaSequentialQ(CudaCohortLifecycle):
         )
         self._ensure_teacher()
         self._ensure_search()
-        if getattr(self, "_search", None) is not None:
+        if self.search_training and getattr(self, "_search", None) is not None:
             self._search.begin_cohort(self.cfg, (self.cohort_number, self.optimizer_commits))
         self._scheduler = CollectionScheduler(self.n_envs, self.device)
         if compilation_requested(self.cfg["training"]["performance"]):
@@ -344,8 +344,7 @@ class CudaSequentialQ(CudaCohortLifecycle):
             if new.any():
                 supplied = None
                 if self.tile_skills.active:
-                    branch = self.cfg["environment"]["plants"].index(skill_plant(self.tile_skills.phase)) + 1
-                    supplied = torch.where(branch_available[:, branch], branch, 0).long()
+                    supplied = env.supplied_branches(self.tile_skills.phase, branch_available)
                 with env.profiler.track("online_inference"):
                     result = self._runner.decide(
                         self._last_obs,
@@ -815,9 +814,9 @@ class CudaSequentialQ(CudaCohortLifecycle):
                 torch.cuda.empty_cache()
 
     def _prepare_bomb_temperature(self):
-        settings = self.cfg["training"].get("tile_scenarios", {})
+        settings = placement_settings(self.cfg, self.tile_skills.phase)
         if (
-            not is_bomb_skill(self.tile_skills.phase)
+            not is_placement_skill(self.tile_skills.phase)
             or settings.get("ranking_objective") != BOMB_OBJECTIVE
         ):
             return
@@ -831,7 +830,8 @@ class CudaSequentialQ(CudaCohortLifecycle):
         self._bomb_fit_temperature = bomb_softmax_temperature(
             settings, rate, skill=self.tile_skills.phase,
         )
-        self.logger.record("train/bomb_softmax_temperature", self._bomb_fit_temperature)
+        prefix = "attacker" if self.tile_skills.phase == "attacker_pre" else "bomb"
+        self.logger.record(f"train/{prefix}_softmax_temperature", self._bomb_fit_temperature)
 
     def _start_pass(self):
         self._prepare_bomb_temperature()
@@ -843,7 +843,7 @@ class CudaSequentialQ(CudaCohortLifecycle):
         self.policy.zero_grad(set_to_none=True)
         self._pass_metrics = torch.zeros(10, device=self.device, dtype=torch.float64)
         self._bomb_pass_metrics = torch.zeros(
-            len(bomb_loss_metrics(self.cfg["training"].get("tile_scenarios", {}))),
+            len(bomb_loss_metrics(placement_settings(self.cfg, self.tile_skills.phase))),
             device=self.device,
         )
         for encoder in self.policy.encoders:
@@ -935,10 +935,11 @@ class CudaSequentialQ(CudaCohortLifecycle):
                 gap_sum / gap_n if gap_n else None,
             )
             self._cached_fit_examples = int(selected_n)
-            if is_bomb_skill(self.tile_skills.phase):
+            if is_placement_skill(self.tile_skills.phase):
                 self._cached_fit_examples = self.cohort_games
                 for key, number in zip(
-                    bomb_loss_metrics(self.cfg["training"]["tile_scenarios"]),
+                    bomb_loss_metrics(placement_settings(self.cfg, self.tile_skills.phase),
+                                      prefix="attacker" if self.tile_skills.phase == "attacker_pre" else "bomb"),
                     self._bomb_pass_metrics.cpu().tolist(), strict=True,
                 ):
                     self.logger.record("train/" + key, number)
@@ -1020,7 +1021,7 @@ class CudaSequentialQ(CudaCohortLifecycle):
                 placement_gap = loss.new_empty(0)
                 self.policy._last_species_consistency_loss = loss.detach() * 0
                 self.policy._last_species_consistency_metrics = loss.new_zeros(4, dtype=torch.float64)
-            elif is_bomb_skill(self.tile_skills.phase):
+            elif is_placement_skill(self.tile_skills.phase):
                 loss, selected_error, placement_gap = self._bomb_loss(rows, observations)
             else:
                 loss, selected_error, placement_gap = batch_loss(
@@ -1058,12 +1059,13 @@ class CudaSequentialQ(CudaCohortLifecycle):
 
         labels = [self.env.tile_boards[int(index)] for index in rows["env"]]
         observations = collate_observations(observations, self.device)
-        branch = self.cfg["environment"]["plants"].index("cherry_bomb") + 1
+        branches = [self.cfg["environment"]["plants"].index(label.get("supplied_plant", "cherry_bomb")) + 1
+                    for label in labels]
         values = self.policy.fitting_tiles(
-            observations, torch.full((len(rows),), branch, device=self.device, dtype=torch.long),
+            observations, torch.tensor(branches, device=self.device, dtype=torch.long),
             rows=torch.arange(len(rows), device=self.device),
         ).float()
-        settings = self.cfg["training"]["tile_scenarios"]
+        settings = placement_settings(self.cfg, self.tile_skills.phase)
         positives = [label["feasible_tiles"] for label in labels]
         objective = settings.get("ranking_objective", "top1_hinge_v1")
         if objective == BOMB_OBJECTIVE:
@@ -1109,7 +1111,7 @@ class CudaSequentialQ(CudaCohortLifecycle):
         self._stats["encoder_microbatch"] = self.execution_state["microbatch"]
         self._stats["encoder_token_budget"] = self.execution_state["token_budget"]
         self._stats["execution_fallbacks"] = list(self.execution_state["fallbacks"])
-        if is_bomb_skill(self.tile_skills.phase):
+        if is_placement_skill(self.tile_skills.phase):
             distances = [
                 item["metrics"]["selected_tile_distance"]
                 for item in self._pending_episodes.values()
@@ -1118,6 +1120,20 @@ class CudaSequentialQ(CudaCohortLifecycle):
             self._stats["bomb_selected_tile_distance"] = (
                 sum(distances) / len(distances) if distances else None
             )
+            if self.tile_skills.phase == "attacker_pre":
+                metrics = [item["metrics"] for item in self._pending_episodes.values()]
+                self._stats["attacker_selected_tile_distance"] = self._stats.pop("bomb_selected_tile_distance")
+                self._stats["attacker_fallback_rate"] = sum(m["fallback"] for m in metrics) / len(metrics)
+                self._stats["attacker_accuracy"] = sum(m["win"] for m in metrics) / len(metrics)
+                self._stats["attacker_breakdown"] = {
+                    f"{kind}/{count}": dict(
+                        episodes=len(group), correct=sum(m["win"] for m in group),
+                        fallbacks=sum(m["fallback"] for m in group),
+                    )
+                    for kind in self.cfg["training"]["tile_scenarios"]["attacker"]["provided_plants"]
+                    for count in (1, 2)
+                    if (group := [m for m in metrics if m["supplied_plant"] == kind and m["zombie_count"] == count])
+                }
         self._stats["fit_schedule"] = self.fit_schedule.summary()
         self._stats["fitting_spool_rows"] = len(getattr(self, "_fitting_spool", None) or ())
         spool = getattr(self, "_fitting_spool", None)
@@ -1163,22 +1179,23 @@ class CudaSequentialQ(CudaCohortLifecycle):
 
     def _restore_runtime(self):
         extra = self.runtime_state
-        if search_enabled(self.cfg):
-            if extra and self.phase != CohortPhase.IDLE and extra.get("search_teacher") is None:
+        saved_search = extra.get("search_teacher") if extra else None
+        if self.search_training or saved_search is not None:
+            if self.search_training and extra and self.phase != CohortPhase.IDLE and saved_search is None:
                 raise ValueError("Missing search recovery; use fresh --init-from to change target protocols")
-            self._ensure_search(extra.get("search_teacher") if extra else None)
-            if self.phase == CohortPhase.COLLECT and self._search.policy_identity != (
+            self._ensure_search(saved_search)
+            if self.search_training and self.phase == CohortPhase.COLLECT and self._search.policy_identity != (
                 self.cohort_number, self.optimizer_commits
             ):
                 raise ValueError("Pending search was generated against different frozen policy updates")
         if extra and extra.get("tile_scenarios") is not None:
             if (
                 (
-                    is_bomb_skill(self.tile_skills.phase)
+                    is_placement_skill(self.tile_skills.phase)
                     or (self.tile_skills.active and self.tile_skills.stage_order is None)
                 )
                 and (
-                    self.cfg["training"]["tile_scenarios"].get("ranking_objective", "top1_hinge_v1")
+                    placement_settings(self.cfg, self.tile_skills.phase).get("ranking_objective", "top1_hinge_v1")
                     != extra.get("tile_ranking_objective")
                 )
             ):
@@ -1283,7 +1300,7 @@ class CudaSequentialQ(CudaCohortLifecycle):
         skills = dict(
             tile_scenarios=self.tile_skill_state,
             tile_scenario_protocol=TILE_SCENARIO_PROTOCOL,
-            tile_ranking_objective=self.cfg["training"].get("tile_scenarios", {}).get(
+            tile_ranking_objective=placement_settings(self.cfg, self.tile_skills.phase).get(
                 "ranking_objective"
             ),
             search_teacher=self._search.snapshot() if getattr(self, "_search", None) else None,

@@ -20,7 +20,7 @@ from pvz_game.types import (
 
 from pvz_rl.envs.cuda_features import METRIC_INDICES
 from pvz_rl.envs.rewards import REWARD_METRICS
-from pvz_rl.envs.tile_scenarios import is_bomb_skill
+from pvz_rl.envs.tile_scenarios import is_placement_skill
 from pvz_rl.learning.objective import COMPONENTS, components, training_rewards
 from pvz_rl.presentation.live_view import Activity, LiveSession, PanelState
 
@@ -180,7 +180,7 @@ class CudaLiveCapture:
         # Copy their public results once, in one batch, for CPU-only browsing.
         capacity = (
             self.env.num_envs
-            if is_bomb_skill(self.env.tile_scenario)
+            if is_placement_skill(self.env.tile_scenario)
             else len(self.session.selection.panels)
         )
         if capacity != self.capacity:
@@ -191,7 +191,7 @@ class CudaLiveCapture:
         if self.indices is None:
             self.indices = torch.tensor(
                 list(range(capacity))
-                if is_bomb_skill(self.env.tile_scenario)
+                if is_placement_skill(self.env.tile_scenario)
                 else [p.env for p in self.session.selection.panels],
                 device=self.env.header_tensor.device,
             )
@@ -202,7 +202,7 @@ class CudaLiveCapture:
     def after_step(self, compact):
         started = perf_counter()
         panels = self.session.selection.panels
-        cache_completed = is_bomb_skill(self.env.tile_scenario)
+        cache_completed = is_placement_skill(self.env.tile_scenario)
         terminal = []
         for i, p in enumerate(panels):
             if p.state == PanelState.RESULT or i in self.session.selection.pending:
