@@ -8,6 +8,7 @@ from pvz_game.cuda.backend import projectile_bound
 
 from pvz_rl.envs.cuda_snapshots import GROUPS, download_snapshots, pack_snapshots, upload_snapshots
 from pvz_rl.envs.scratch_game import scratch_rules
+from pvz_rl.envs.tile_scenarios import preparation_settings
 from pvz_rl.learning.cohort import check_transition_interruption
 from pvz_rl.learning.deadline import check_deadline
 
@@ -53,6 +54,8 @@ class CudaBombOracle:
 
         cp = cupy_runtime()
         perf = self.cfg["training"]["performance"]
+        attacker = all(b.get("scenario") == "attacker_pre" for b in boards)
+        resources = preparation_settings(self.cfg, "attacker_pre" if attacker else "cherry_bomb")
         qcap = projectile_bound(self.rules) + max(len(b["snapshot"]["projectiles"]) for b in boards)
         zcap = max(1, *(len(b["snapshot"]["level"]["spawns"]) for b in boards))
         if self.batch is not None and self.batch.qcap >= qcap and self.batch.zcap >= zcap:
@@ -65,11 +68,11 @@ class CudaBombOracle:
         free, _ = cp.cuda.runtime.memGetInfo()
         free += cp.get_default_memory_pool().free_bytes()
         budget = min(
-            perf.get("cherry_oracle_vram_mib", 256) * 1024**2,
+            resources.get("oracle_vram_mib", 256) * 1024**2,
             max(0, free - perf.get("collection_vram_headroom_mib", 0) * 1024**2),
         )
         per_lane = qcap * 6 * 8 + zcap * 32 * 8 + 65536
-        count = min(perf.get("cherry_oracle_lanes", 256), int(budget // per_lane))
+        count = min(resources.get("oracle_lanes", 256), int(budget // per_lane))
         while count:
             try:
                 self.batch = _BombBatch(
@@ -84,7 +87,6 @@ class CudaBombOracle:
             except cp.cuda.memory.OutOfMemoryError:
                 cp.get_default_memory_pool().free_all_blocks()
                 count //= 2
-        attacker = all(b.get("scenario") == "attacker_pre" for b in boards)
         hint = (
             "set training.attacker_pre.cuda_warmup = false for CPU preparation"
             if attacker else "use cherry_oracle = 'cpu'"

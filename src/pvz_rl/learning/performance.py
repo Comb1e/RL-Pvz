@@ -13,6 +13,8 @@ PERFORMANCE_SETTINGS = (
     "attacker_worker_ram_mib",
     "attacker_prefetch",
     "attacker_cuda_warmup",
+    "attacker_oracle_lanes",
+    "attacker_oracle_vram_mib",
     "cherry_prepare_workers",
     "cherry_worker_ram_mib",
     "cherry_prefetch",

@@ -56,6 +56,7 @@ _STAGE_PARAMETERS = {
         )},
         **{key: f"training.performance.attacker_{key}" for key in (
             "prepare_workers", "worker_ram_mib", "prefetch", "cuda_warmup",
+            "oracle_lanes", "oracle_vram_mib",
         )},
         "probe_interval_games": "curriculum.attacker_pre_probe_interval_games",
     },
@@ -906,6 +907,8 @@ def validate_config(cfg: dict) -> None:
         ("cherry_oracle_lanes", 256),
         ("cherry_oracle_vram_mib", 256),
         ("cherry_worker_ram_mib", 96),
+        ("attacker_oracle_lanes", 256),
+        ("attacker_oracle_vram_mib", 256),
     ):
         value = performance.get(key, default)
         if type(value) is not int or value < 1:
@@ -924,6 +927,8 @@ def validate_config(cfg: dict) -> None:
         "attacker_worker_ram_mib",
         "attacker_prefetch",
         "attacker_cuda_warmup",
+        "attacker_oracle_lanes",
+        "attacker_oracle_vram_mib",
         "cherry_prepare_workers",
         "cherry_worker_ram_mib",
         "cherry_prefetch",

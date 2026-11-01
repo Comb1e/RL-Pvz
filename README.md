@@ -99,7 +99,10 @@ Validation counts a correct fallback as success and reports actual kills separat
 this exercise teaches lane selection, not optimal placement. Conservative bounds
 can produce many fallbacks, particularly for two-zombie Peashooter/Snow Pea cases.
 Tune its cohort size, mixture, generation, temperature and preparation settings
-under `[training.attacker_pre]`; its default cohort size is 128.
+under `[training.attacker_pre]`; its scratch `oracle_lanes` and `oracle_vram_mib`
+limits are independent of Cherry Bomb and apply only to cooldown warmup.
+Measured RTX 4070 Laptop defaults are 640 envs, 16 workers, 640 scratch lanes and
+a 1024 MiB scratch cap. Rebenchmark on other hardware.
 Peashooter uses easy waves, 50 starting sun, disabled mowers and configurable
 1.5× sky-sun frequency. Cherry Bomb uses its exact attributed-hit oracle with no
 exploration or search in either bomb stage. Obstacle boards contain 1–15 plants,
@@ -138,8 +141,9 @@ frozen within each queried board. Its hidden-state prior is approximate. A longe
 losing defense can still score worse because the configured duration penalty remains.
 
 Each bomb stage independently checks validation every 10,000 completed episodes through
-`training.cherry_bomb.probe_interval_games`; attacker_pre, Peashooter and normal stages check
-every 2,000. Intervals round up to a fitted cohort boundary. A full cohort
+`training.cherry_bomb.probe_interval_games`; attacker_pre uses its own
+`probe_interval_games`. Peashooter and normal stages check every 2,000.
+Intervals round up to a fitted cohort boundary. A full cohort
 must exceed 90% success to launch validation (normal 116/128; Cherry Bomb 577/640). Collection may be
 search-assisted; mastery uses greedy network validation without search.
 Cherry Bomb must strictly exceed `training.cherry_bomb.validation_success_threshold`
@@ -185,14 +189,22 @@ Completed weights cannot be resumed; start a new run with `--init-from`.
   --envs 256 512 640 1024 --workers 8 16 24 32 --oracles cpu cuda `
   --warmup-backends cpu cuda `
   --output artifacts\cherry-collection.json
+.\.venv\Scripts\python.exe tools\benchmark_cherry_collection.py --stage attacker_pre `
+  --envs 128 256 512 1024 --workers 4 8 16 32 --lanes 128 512 1024 `
+  --vram-mib 128 512 --warmup-games 4096 --output artifacts\attacker-collection.json
 ```
 
 Default pytest runs two CPU checks. The explicitly selected learning check runs
 two one-second CUDA games, one fitting pass and checkpoint reload, with search and
 prerequisites disabled. These establish availability, not mastery. Bounded
 diagnostic commands disable search; manual evaluation never uses it.
-The Cherry benchmark performs collection without fitting and ranks combinations
-by total collection seconds per completed env, including board preparation.
+The placement benchmark performs collection without fitting and ranks combinations
+by total collection seconds per completed env, including board preparation and
+policy inference. Worker startup and warmup samples are reported separately and
+excluded from steady-state ranking. `--resume` continues an interrupted parameter sweep;
+resource-infeasible combinations are recorded without stopping the sweep.
+Attacker comparisons reset the distance-bound cache; `--warmup-games` sets the
+minimum warmup episode count before fresh measurement panels.
 
 Reports separate Cherry Bomb, Peashooter and normal progress from oracle work, teacher losses and
 greedy validation. `--report-only` loads no policy and starts no training. Reward

@@ -45,7 +45,8 @@ rules. This file adds project-specific constraints and ownership.
   labels. Cherry carts start independently ready or spent, never moving; saved
   configurations without the setting retain all-spent carts. Prefetch is speculative:
   commit seeds/outcomes only on consumption, regenerate unfinished work on resume,
-  and share the RAM/VRAM budgets. CUDA warmup reuses the same bounded oracle lanes.
+  and share the RAM/VRAM budgets. CUDA warmup reuses bounded oracle lanes;
+  attacker_pre has independent worker, lane and VRAM controls.
   Completed autonomous training retains portable weights and generated visualizations;
   validation and completion create or refresh reports even when a check skips or
   mastery passes. Interrupted, failed and incomplete runs keep recovery artifacts;
@@ -102,7 +103,7 @@ Paths below are relative to `src/pvz_rl/` unless stated otherwise.
 | `learning/cuda_buffer.py`, `batch_transport.py`, `collection_scheduler.py`, `exploration.py` | Trajectories, bounded transport, decision tickets and persistent exploration commitments. |
 | `learning/checkpoints.py`, `training_artifacts.py`, `performance.py` | Compatibility contracts, durable snapshots, completed-run weight/report retention and execution-only refresh settings. |
 | `annotation/`, `learning/annotation_fit.py`, `demo_initialization.py` | Reachable-state sampling, atomic positive tile sets/conflicts, top-1 convergence and verified demo initialization. |
-| `evaluation/`, `monitoring/`, repository diagnostic tools | Stateless evaluation, CPU verification of CUDA traces, bounded profiling, benchmarks and read-only reward reports; `tools/benchmark_cherry_collection.py` ranks env/worker/oracle combinations by total collection time per env. |
+| `evaluation/`, `monitoring/`, repository diagnostic tools | Stateless evaluation, CPU verification of CUDA traces, bounded profiling, benchmarks and read-only reward reports; `tools/benchmark_cherry_collection.py` ranks bomb/attacker env, worker and scratch-resource combinations by total collection time per env. |
 | `presentation/` | Shared renderers, annotation/live viewers and recordings; `live_capture.py`/`live_view.py` own cohort subscriptions and public result caching. `training_charts.py` owns panels; `visualization.py` reconciles resume history and builds policy-free reports. |
 
 ## Test ownership
