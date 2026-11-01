@@ -126,6 +126,7 @@ def run(checkpoint, output):
     output = Path(output)
     output.mkdir(parents=True, exist_ok=False)
     cfg = load_config()
+    cfg["training"].pop("peashooter_rules", None)
     for stage in ("normal", "peashooter"):
         cfg["training"].get("counterfactual", {}).get(stage, {})["enabled"] = False
     cfg["training"].update(n_envs=16, total_games=16)

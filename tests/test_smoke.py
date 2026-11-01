@@ -65,7 +65,8 @@ def test_cuda_learning_and_checkpoint(tmp_path):
         cfg = load_config()
         cfg["training"]["tile_scenarios"]["enabled"] = False
         cfg["training"]["counterfactual"]["normal"]["enabled"] = False
-        cfg["training"]["counterfactual"]["peashooter"]["enabled"] = False
+        cfg["training"]["counterfactual"].get("peashooter", {})["enabled"] = False
+        cfg["training"].pop("peashooter_rules", None)
         cfg["environment"]["cutoff_seconds"] = 1
         cfg["training"].update(
             n_envs=2, total_games=2, n_epochs=1, tile_only_cohorts=0,

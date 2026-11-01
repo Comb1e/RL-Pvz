@@ -63,6 +63,10 @@ _STAGE_PARAMETERS = {
     },
     "peashooter": {
         "sky_sun_rate": "training.tile_scenarios.peashooter_sky_sun_rate",
+        **{key: f"training.peashooter_rules.{key}" for key in (
+            "fitting_objective", "column_decay", "softmax_temperature",
+            "oracle_lanes", "oracle_vram_mib", "oracle_chunk_ticks",
+        )},
         "counterfactual_enabled": "training.counterfactual.peashooter.enabled",
         "comparison_temperature": "training.counterfactual.peashooter.temperature",
         "probe_interval_games": "curriculum.peashooter_probe_interval_games",
@@ -335,6 +339,9 @@ def validate_config(cfg: dict) -> None:
     from pvz_rl.learning.counterfactual_settings import validate_counterfactual
 
     validate_counterfactual(cfg)
+    from pvz_rl.learning.peashooter_rules import validate_rule_settings
+
+    validate_rule_settings(cfg)
     objective = cfg["training"].get("objective")
     if not isinstance(objective, dict):
         raise ValueError("training.objective must describe the stateless two-stage objective")

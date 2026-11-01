@@ -418,6 +418,9 @@ def inspect_checkpoint(path, *, weights_only=False):
             if not weights_only:
                 from pvz_rl.learning.counterfactual_settings import validate_counterfactual_recovery
                 validate_counterfactual_recovery(runtime, cfg)
+                from pvz_rl.learning.peashooter_teacher import validate_rule_recovery
+
+                validate_rule_recovery(runtime, cfg)
                 if runtime.get("buffer") is not None:
                     from pvz_rl.learning.collection_scheduler import CollectionScheduler
                     from pvz_rl.learning.exploration import CommittedPlantExploration

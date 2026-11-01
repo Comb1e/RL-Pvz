@@ -59,6 +59,7 @@ def measure(cfg, output, *, initial=None, seed=101, seconds=1800, trajectory=Non
         raise ValueError("Use a new benchmark output path")
     output.parent.mkdir(parents=True, exist_ok=True)
     cfg = copy.deepcopy(cfg)
+    cfg["training"].pop("peashooter_rules", None)
     if "counterfactual" in cfg["training"]:
         for stage in ("normal", "peashooter"):
             cfg["training"].get("counterfactual", {}).get(stage, {})["enabled"] = False

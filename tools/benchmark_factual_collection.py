@@ -25,6 +25,9 @@ def measure(base, cap, vram, chunk, repetitions, workspace):
             return True
 
     cfg = deepcopy(base)
+    # Keep the historical Peashooter workload for reproducible replay benchmarks.
+    cfg["training"].pop("peashooter_rules", None)
+    cfg["training"]["counterfactual"]["peashooter"] = deepcopy(cfg["training"]["counterfactual"]["normal"])
     cfg["training"]["counterfactual"].update(
         resident_envs=cap, scratch_vram_mib=vram, chunk_decisions=chunk
     )

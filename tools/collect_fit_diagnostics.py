@@ -583,6 +583,7 @@ class FitDiagnostics:
 
         def diagnostic_train(cfg, *args, **kwargs):
             cfg = deepcopy(cfg)
+            cfg["training"].pop("peashooter_rules", None)
             for stage in ("normal", "peashooter"):
                 cfg["training"].get("counterfactual", {}).get(stage, {})["enabled"] = False
             return ordinary_train(cfg, *args, **kwargs)

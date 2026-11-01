@@ -276,6 +276,8 @@ class CudaCohortLifecycle(BaseAlgorithm):
         self._simulation_ticks = 0
         self._planting_samples = 0
         for key in (
+            "peashooter_cross_entropy_loss",
+            "peashooter_preferred_column_accuracy",
             "q_loss",
             "tile_ranking_loss",
             "bomb_cross_entropy_loss",
@@ -368,6 +370,9 @@ class CudaCohortLifecycle(BaseAlgorithm):
         if getattr(self, "_counterfactual", None) is not None:
             self._counterfactual.close()
             self._counterfactual = None
+        if getattr(self, "_peashooter_teacher", None) is not None:
+            self._peashooter_teacher.close()
+            self._peashooter_teacher = None
         self.phase = CohortPhase.IDLE
         callback.on_rollout_end()
 
@@ -421,7 +426,7 @@ class CudaCohortLifecycle(BaseAlgorithm):
                     self._begin(callback)
                 continue
             phase = self.phase
-            # Search owns bounded resumable units, outside the action transaction.
+            # Oracles/replay own bounded resumable units outside main actions.
             if phase == CohortPhase.COLLECT and hasattr(self, "_prepare_collection"):
                 if not self._prepare_collection(callback):
                     continue
@@ -435,13 +440,15 @@ class CudaCohortLifecycle(BaseAlgorithm):
                     elif phase == CohortPhase.RETURNS:
                         ranking = is_placement_skill(self.tile_skills.phase)
                         search = getattr(self, "counterfactual_training", False)
+                        rules = getattr(self, "peashooter_rule_training", False)
                         self.prefit_errors = self._buffer.finalize(
                             cohort=self.cohort_number,
-                            diagnostics=not (ranking or search),
+                            diagnostics=not (ranking or search or rules),
                         )
-                        if ranking or search:
+                        if ranking or search or rules:
                             self.prefit_errors = {}
                             self._buffer.reward_summary["supervision"] = (
+                                "prioritized_lane_cross_entropy_v1" if rules else
                                 "paired_tile_cross_entropy_v1" if search else placement_settings(
                                     self.cfg, self.tile_skills.phase
                                 ).get("ranking_objective", "top1_hinge_v1")
@@ -587,6 +594,8 @@ class CudaCohortLifecycle(BaseAlgorithm):
                                     shutil.copyfileobj(inp, out, length=1024 * 1024)
                 if getattr(self, "_counterfactual", None) is not None:
                     self._counterfactual.write_archive(archive)
+                if getattr(self, "_peashooter_teacher", None) is not None:
+                    self._peashooter_teacher.write_archive(archive)
                 if self._buffer is not None:
                     self._buffer.write_archive(archive)
                 elif runtime.get("buffer") is not None:

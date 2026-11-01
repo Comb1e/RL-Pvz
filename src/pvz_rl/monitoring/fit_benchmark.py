@@ -305,6 +305,7 @@ def main():
     )
     args = parser.parse_args()
     cfg = load_config(args.config)
+    cfg["training"].pop("peashooter_rules", None)
     if "counterfactual" in cfg["training"]:
         for stage in ("normal", "peashooter"):
             cfg["training"].get("counterfactual", {}).get(stage, {})["enabled"] = False

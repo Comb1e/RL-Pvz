@@ -56,6 +56,7 @@ from pvz_rl.learning.exploration import (
     exploration_state,
 )
 from pvz_rl.learning.objective import components, training_rewards
+from pvz_rl.learning.peashooter_rules import RULE_OBJECTIVE
 from pvz_rl.learning.performance import compilation_requested
 from pvz_rl.learning.tile_curriculum import initial_tile_state, required_validation_wins
 from pvz_rl.learning.training_requirements import (
@@ -331,8 +332,11 @@ class ResearchCallback(BaseCallback):
             "tile_scenarios": self.model.tile_skills.to_dict(),
             "counterfactual": dict(getattr(getattr(self.model, "_counterfactual", None), "metrics",
                                             self.model.cohort_metrics.get("counterfactual", {}))),
+            "peashooter_teacher": dict(getattr(getattr(self.model, "_peashooter_teacher", None), "metrics",
+                                            self.model.cohort_metrics.get("peashooter_teacher", {}))),
             "collection_policy": "network",
             "fitting_objective": (
+                RULE_OBJECTIVE if self.model.peashooter_rule_training else
                 COUNTERFACTUAL_OBJECTIVE if self.model.counterfactual_training else None
             ),
             "validation_trigger": self.validation_trigger.snapshot(
@@ -619,6 +623,8 @@ class ResearchCallback(BaseCallback):
         row = self.snapshot()
         values = self.model.logger.name_to_value
         keys = (
+            "peashooter_cross_entropy_loss",
+            "peashooter_preferred_column_accuracy",
             "comparison_loss",
             "feasibility_loss",
             "comparison_accuracy",
@@ -1504,6 +1510,7 @@ def train(
     started = perf_counter()
     cfg = copy.deepcopy(cfg)
     if family == "diagnostic":
+        cfg["training"].pop("peashooter_rules", None)
         for stage in ("peashooter", "normal"):
             cfg["training"].get("counterfactual", {}).get(stage, {})["enabled"] = False
     validate_config(cfg)
@@ -1665,6 +1672,9 @@ def train(
             "main actions stay greedy; only real episodes count; validation is branch-free",
             force=True,
         )
+    if cfg["training"].get("peashooter_rules"):
+        progress.emit("Peashooter: prioritized visible-lane oracle targets; column-decaying cross-entropy; "
+                      "greedy main actions, no factual followers", force=True)
     progress.emit(
         f"Committed plant/tile exploration {cfg['training']['exploration']}; "
         "normal branches greedy; accepted planting can commit to another species; "
@@ -1962,6 +1972,8 @@ def train(
             callback.close()
         if model is not None and getattr(model, "_counterfactual", None) is not None:
             model._counterfactual.close()
+        if model is not None and getattr(model, "_peashooter_teacher", None) is not None:
+            model._peashooter_teacher.close()
         if model is not None and getattr(model, "_buffer", None) is not None:
             model._buffer.close()
         if model is not None and getattr(model, "_fitting_spool", None) is not None:

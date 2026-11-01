@@ -9,7 +9,10 @@ OBJECTIVE = "paired_tile_cross_entropy_v1"
 def counterfactual_settings(cfg, phase=None):
     settings = cfg["training"].get("counterfactual", {})
     stage = "peashooter" if phase == "peashooter" else "normal"
-    return {**settings, **settings.get(stage, {})}
+    result = {**settings, **settings.get(stage, {})}
+    if stage == "peashooter" and "peashooter" not in settings and "enabled" not in settings:
+        result.update(enabled=False, temperature=1.0)
+    return result
 
 
 def counterfactual_enabled(cfg, phase=None):

@@ -26,7 +26,12 @@ rules. This file adds project-specific constraints and ownership.
   Each bomb stage's configurable temperature uses its completed cohort's attributed-hit rate,
   fixed across fitting passes; saved scalar settings retain a fixed temperature.
   Legacy recovery retains its saved hinge/distance objective and settings.
-- Fresh Peashooter/normal planting tiles fit same-board pairwise cross-entropy.
+- Fresh Peashooter fits prioritized visible-lane engine labels with column-decaying
+  cross-entropy over all 45 outputs. Capture compacted planting attempts, including
+  occupied rejections; label after collection without future spawns or more planting.
+  Rule 1 requires all visible threats covered; rule 2 precedes rule 3. Labels never
+  override actions. Keep its oracle progress private and resumable.
+- Fresh normal planting tiles fit same-board pairwise cross-entropy.
   Legal plantings create at most two factual followers; replay accepted main
   commands without policy calls, recursive forks or main-action overrides.
   Occupancy discards; resource waits queue. Only main episodes count.
@@ -100,6 +105,7 @@ Paths below are relative to `src/pvz_rl/` unless stated otherwise.
 | `learning/tile_curriculum.py`, `validation_trigger.py`, `budget.py`, `training_requirements.py` | Independent tile-stage clocks/progression, legacy prerequisite recovery, cohort validation gate and normal fitting schedule. |
 | `learning/flat_q.py`, `objective.py`, `action_routing.py`, `bomb_objective.py` | Shared fitting/routing, legacy targets/consistency, annotation ranking and bomb set cross-entropy/legacy losses; `envs/tile_scenarios.py` owns diagnostic distance labels. |
 | `learning/counterfactual.py`, `counterfactual_settings.py`, `counterfactual_objective.py`, `envs/counterfactual_replay.cu` | Factual clones, bounded host/disk roots, shared command replay, GPU accounting, same-board comparisons and versioned recovery; `tools/benchmark_factual_collection.py` measures complete collection time per main env. |
+| `learning/peashooter_rules.py`, `peashooter_teacher.py` | Prioritized lane targets, column-distribution fitting, bounded CUDA lane oracle and private snapshot/recovery storage. |
 | `learning/cuda_buffer.py`, `batch_transport.py`, `collection_scheduler.py`, `exploration.py` | Trajectories, bounded transport, decision tickets and persistent exploration commitments. |
 | `learning/checkpoints.py`, `training_artifacts.py`, `performance.py` | Compatibility contracts, durable snapshots, completed-run weight/report retention and execution-only refresh settings. |
 | `annotation/`, `learning/annotation_fit.py`, `demo_initialization.py` | Reachable-state sampling, atomic positive tile sets/conflicts, top-1 convergence and verified demo initialization. |
@@ -117,7 +123,7 @@ temporary independent controls for targeted integration and boundary checks.
   valid dimensions, and an action submitted to the simulator.
 - Explicit `learning` check: two one-second CUDA games, two environments, one fitting
   pass, recovery/portable weight reload, completion cleanup and prediction. Disable
-  compilation, presentation, prerequisites and counterfactuals; use batch size 32, a two-minute allowance and a
+  compilation, presentation, prerequisites, rule labels and counterfactuals; use batch size 32, a two-minute allowance and a
   180-second subprocess timeout. Missing CUDA requirements fail.
 
 ```powershell

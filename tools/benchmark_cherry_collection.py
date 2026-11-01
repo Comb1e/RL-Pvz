@@ -50,7 +50,8 @@ def measure(
     else:
         tile["cherry_bomb_n_envs"] = count
     cfg["training"]["counterfactual"]["normal"]["enabled"] = False
-    cfg["training"]["counterfactual"]["peashooter"]["enabled"] = False
+    cfg["training"]["counterfactual"].get("peashooter", {})["enabled"] = False
+    cfg["training"].pop("peashooter_rules", None)
     perf = cfg["training"]["performance"]
     prefix = "attacker" if attacker else "cherry"
     perf.update({f"{prefix}_prepare_workers": workers, f"{prefix}_prefetch": False})

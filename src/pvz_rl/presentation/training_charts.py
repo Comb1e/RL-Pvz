@@ -7,6 +7,7 @@ import matplotlib.pyplot as plt
 from pvz_rl.envs.tile_scenarios import LEGACY_SKILLS, is_placement_skill
 from pvz_rl.learning.counterfactual_settings import OBJECTIVE as COUNTERFACTUAL_OBJECTIVE
 from pvz_rl.learning.curriculum import TILE_STAGES
+from pvz_rl.learning.peashooter_rules import RULE_OBJECTIVE
 
 
 def domain(row):
@@ -218,6 +219,11 @@ def report_charts(segments, cfg, output, save):
                 ("optimization.q_grad_norm", "Gradient norm before clipping"),
             ]
         )
+        fitting = [
+            (key, title, lambda row, get=get: get(row) if row.get("fitting_objective") != RULE_OBJECTIVE else None)
+            if key == "optimization.q_loss" else (key, title, get)
+            for key, title, get in fitting
+        ]
         add("counterfactual", "factual branch completion and pairwise fitting", fields([
             ("counterfactual.roots", "Factual planting roots"),
             ("counterfactual.completed", "Completed branch episodes (excluded from games)"),
@@ -237,6 +243,29 @@ def report_charts(segments, cfg, output, save):
             ("optimization.comparison_accuracy", "Comparison accuracy"),
             ("optimization.feasibility_accuracy", "Feasibility accuracy"),
         ]))
+        rule_fields = fields([
+            ("peashooter_teacher.rule_1", "Covered-board reinforcement labels"),
+            ("peashooter_teacher.rule_2", "Undefended-lane labels"),
+            ("peashooter_teacher.rule_3", "Endangered-lane assistance labels"),
+            ("peashooter_teacher.preferred_tiles", "Preferred tiles across labeled decisions"),
+            ("peashooter_teacher.mean_preferred_set_size", "Mean preferred-set size"),
+            ("peashooter_teacher.fallback_lanes", "Rule-2 fallback lanes"),
+            ("peashooter_teacher.blocked_lanes", "Fully occupied endangered lanes"),
+            ("peashooter_teacher.unlabeled", "Decisions without a preferred legal tile"),
+            ("peashooter_teacher.pending", "Pending oracle continuations"),
+            ("peashooter_teacher.queued_boards", "Boards awaiting coverage preparation"),
+            ("peashooter_teacher.completed_rollouts", "Completed oracle continuations (excluded from games)"),
+            ("peashooter_teacher.oracle_successes", "Successful oracle continuations"),
+            ("peashooter_teacher.oracle_timeouts", "Oracle timeouts"),
+            ("peashooter_teacher.simulated_ticks", "Oracle simulated ticks"),
+            ("peashooter_teacher.oracle_seconds", "Oracle wall time (seconds)"),
+            ("optimization.peashooter_cross_entropy_loss", "Column-distribution cross-entropy"),
+            ("optimization.peashooter_preferred_column_accuracy", "Preferred-column accuracy"),
+        ])
+        add("peashooter-rules", "Peashooter rule labels and visible-lane oracle", [
+            (key, title, lambda row, get=get: get(row) if row.get("fitting_objective") == RULE_OBJECTIVE else None)
+            for key, title, get in rule_fields
+        ])
         if pre:
             fitting = [
                 (
@@ -300,7 +329,7 @@ def report_charts(segments, cfg, output, save):
                     lambda row, get=get: (
                         get(row)
                         if row.get("collection_policy") != "search_assisted"
-                        and row.get("fitting_objective") != COUNTERFACTUAL_OBJECTIVE
+                        and row.get("fitting_objective") not in (COUNTERFACTUAL_OBJECTIVE, RULE_OBJECTIVE)
                         else None
                     ),
                 )

@@ -49,6 +49,7 @@ from pvz_rl.learning.objective import (
     consistency_diagnostics,
     finalize_episode_metrics,
 )
+from pvz_rl.learning.peashooter_rules import RULE_OBJECTIVE, PeashooterObjective, rules_enabled
 from pvz_rl.learning.performance import compilation_requested
 from pvz_rl.learning.tile_curriculum import TILE_SCENARIO_PROTOCOL, TileSkillState
 from pvz_rl.learning.training_requirements import FIT_SCHEDULE_PROTOCOL, fitting_schedule
@@ -122,7 +123,30 @@ class CudaSequentialQ(CudaCohortLifecycle):
     def counterfactual_training(self):
         return counterfactual_enabled(self.cfg, self.tile_skills.phase)
 
+    @property
+    def peashooter_rule_training(self):
+        return rules_enabled(self.cfg, self.tile_skills.phase)
+
     def _prepare_collection(self, callback):
+        if self.peashooter_rule_training:
+            draining = not self.env.enabled_envs.any() and not self._scheduler.pending.any()
+            if not draining:
+                return True
+            if hasattr(callback, "check_deadline"):
+                callback.check_deadline()
+            started = perf_counter()
+            try:
+                with atomic_transition(), self.env.device_context():
+                    if self._peashooter_teacher.advance():
+                        self._phase(CohortPhase.FINALIZE_REWARDS, callback)
+                    if not self._buffer.reserve_staging(self._peashooter_teacher.estimated_bytes):
+                        raise MemoryError("Shared RAM budget cannot hold Peashooter oracle metadata")
+            finally:
+                self._phase_times["collect"] += perf_counter() - started
+            self._stats["peashooter_teacher"] = dict(self._peashooter_teacher.metrics)
+            if hasattr(callback, "log_progress"):
+                callback.log_progress()
+            return False
         if not self.counterfactual_training:
             return True
         if hasattr(callback, "check_deadline"):
@@ -157,6 +181,9 @@ class CudaSequentialQ(CudaCohortLifecycle):
         if getattr(self, "_counterfactual", None) is not None:
             self._counterfactual.close()
             self._counterfactual = None
+        if getattr(self, "_peashooter_teacher", None) is not None:
+            self._peashooter_teacher.close()
+            self._peashooter_teacher = None
         boundary = self._phase_memory("before_collection_release")
         for encoder in self.policy.encoders:
             encoder.release_fitting()
@@ -203,6 +230,13 @@ class CudaSequentialQ(CudaCohortLifecycle):
             device=self.device,
         )
         self._ensure_teacher()
+        if self.peashooter_rule_training:
+            from pvz_rl.learning.peashooter_teacher import PeashooterTeacher
+
+            self._stats["fitting_objective"] = RULE_OBJECTIVE
+            self._peashooter_teacher = PeashooterTeacher(
+                self.env, self._buffer, (self.cohort_number, self.optimizer_commits),
+            )
         if self.counterfactual_training:
             from pvz_rl.learning.counterfactual import CounterfactualRunner
             self._counterfactual = CounterfactualRunner(
@@ -242,7 +276,9 @@ class CudaSequentialQ(CudaCohortLifecycle):
 
     def _finalize_rewards(self, callback):
         self.env.handoff.clear()
-        self._buffer.reserve_staging(0)
+        self._buffer.reserve_staging(
+            self._peashooter_teacher.estimated_bytes if self.peashooter_rule_training else 0
+        )
         pending = getattr(self, "_pending_episodes", {})
         summary = self._buffer.finalize_rewards(
             pending
@@ -305,6 +341,9 @@ class CudaSequentialQ(CudaCohortLifecycle):
 
     def _phase(self, phase, callback):
         if phase == CohortPhase.FIT:
+            if getattr(self, "_peashooter_teacher", None) is not None:
+                self._peashooter_teacher.release()
+                self._buffer.reserve_staging(self._peashooter_teacher.estimated_bytes)
             if getattr(self, "_counterfactual", None) is not None:
                 self._counterfactual.release()
             for encoder in self.policy.encoders:
@@ -451,6 +490,8 @@ class CudaSequentialQ(CudaCohortLifecycle):
                     actions, self._counterfactual_tiles, masks, executing,
                     env._episode_serial, source_decisions,
                 )
+            if self.peashooter_rule_training:
+                self._peashooter_teacher.before(actions, executing, branch_available)
             env.step_device(actions, active=executing)
             checks = self._plant_exploration.observe(
                 actions,
@@ -539,6 +580,8 @@ class CudaSequentialQ(CudaCohortLifecycle):
             staging = env.handoff.nbytes + self._scheduler.retained_bytes
             if self.counterfactual_training:
                 staging += self._counterfactual.estimated_bytes
+            if self.peashooter_rule_training:
+                staging += self._peashooter_teacher.estimated_bytes
             if not self._buffer.reserve_staging(staging):
                 raise MemoryError("RAM budget cannot hold actual collection staging")
             presentation_started = perf_counter()
@@ -558,9 +601,11 @@ class CudaSequentialQ(CudaCohortLifecycle):
                 )
                 self._stats["counterfactual"] = dict(self._counterfactual.metrics)
             storage_started = perf_counter()
-            self._buffer.append(
+            receipt = self._buffer.append(
                 rows, observations, identities=(env._episode_serial, source_decisions)
             )
+            if self.peashooter_rule_training:
+                self._peashooter_teacher.observe(receipt)
             env.profiler.host("storage", perf_counter() - storage_started)
             self._stats["collection_logical_rows"] = (
                 self._stats.get("collection_logical_rows", 0) + plan.logical_rows
@@ -646,7 +691,8 @@ class CudaSequentialQ(CudaCohortLifecycle):
                 }
             )
             # Publish the phase before callbacks may request an interruption.
-            if not env.enabled_envs.any() and not self._scheduler.pending.any() and not self.counterfactual_training:
+            if (not env.enabled_envs.any() and not self._scheduler.pending.any()
+                    and not self.counterfactual_training and not self.peashooter_rule_training):
                 self._phase(CohortPhase.FINALIZE_REWARDS, callback)
             if not callback.on_step() and not draining:
                 raise KeyboardInterrupt
@@ -851,6 +897,11 @@ class CudaSequentialQ(CudaCohortLifecycle):
         groups = self.execution_state["fit_batch_groups"]
         if getattr(self, "_fitting_spool", None) is None:
             self._fitting_spool = FittingSpool(self._buffer)
+        if self.peashooter_rule_training:
+            self._peashooter_objective = PeashooterObjective(
+                self._peashooter_teacher, self._fitting_spool, self.device,
+            )
+            self._peashooter_pass_metrics = torch.zeros(3, device=self.device)
         if self.counterfactual_training:
             from pvz_rl.learning.counterfactual_objective import CounterfactualObjective
             self._counterfactual_objective = CounterfactualObjective(
@@ -931,6 +982,11 @@ class CudaSequentialQ(CudaCohortLifecycle):
                 values = self._counterfactual_pass_metrics.cpu().tolist()
                 self.logger.record("train/comparison_accuracy", values[2] / values[3] if values[3] else None)
                 self.logger.record("train/feasibility_accuracy", values[4] / values[5] if values[5] else None)
+            if self.peashooter_rule_training:
+                values = self._peashooter_pass_metrics.cpu().tolist()
+                self._cached_fit_examples = self._peashooter_objective.examples
+                self.logger.record("train/peashooter_cross_entropy_loss", values[0])
+                self.logger.record("train/peashooter_preferred_column_accuracy", values[1] / values[2] if values[2] else None)
         loss, selected_error, placement_gap = self._cached_metrics
         self.logger.record("train/q_loss", loss)
         self.logger.record("train/selected_action_error", selected_error)
@@ -989,7 +1045,12 @@ class CudaSequentialQ(CudaCohortLifecycle):
         else:
             rows, observations, *metadata = item
             self.policy.set_training_mode(True)
-            if self.counterfactual_training:
+            if self.peashooter_rule_training:
+                loss, selected_error, placement_gap, detail = self._peashooter_objective.loss(
+                    self.policy, rows, observations,
+                )
+                self._peashooter_pass_metrics += detail
+            elif self.counterfactual_training:
                 loss, selected_error, placement_gap, detail = self._counterfactual_objective.loss(
                     self.policy, rows, observations, self._fit_kind,
                 )
@@ -1128,6 +1189,7 @@ class CudaSequentialQ(CudaCohortLifecycle):
             self._fitting_spool.close()
             self._fitting_spool = None
         self._counterfactual_objective = None
+        self._peashooter_objective = None
         super()._synchronize(callback)
 
     def save(self, *args, **kwargs):
@@ -1156,6 +1218,9 @@ class CudaSequentialQ(CudaCohortLifecycle):
         from pvz_rl.learning.counterfactual_settings import validate_counterfactual_recovery
         if extra:
             validate_counterfactual_recovery(extra, self.cfg)
+            from pvz_rl.learning.peashooter_teacher import validate_rule_recovery
+
+            validate_rule_recovery(extra, self.cfg)
         if extra and extra.get("tile_scenarios") is not None:
             if (
                 (
@@ -1191,6 +1256,18 @@ class CudaSequentialQ(CudaCohortLifecycle):
             ):
                 raise ValueError("Incomplete objective recovery state")
         super()._restore_runtime()
+        if extra and extra.get("peashooter_teacher") is not None:
+            from zipfile import ZipFile
+
+            from pvz_rl.learning.peashooter_teacher import PeashooterTeacher
+
+            identity = tuple(extra["peashooter_teacher"]["identity"])
+            if self.phase == CohortPhase.COLLECT and identity != (self.cohort_number, self.optimizer_commits):
+                raise ValueError("Peashooter oracle weights differ from saved cohort")
+            with ZipFile(self._checkpoint_source) as archive:
+                self._peashooter_teacher = PeashooterTeacher(
+                    self.env, self._buffer, identity, extra["peashooter_teacher"], archive,
+                )
         if extra and extra.get("counterfactual") is not None:
             from zipfile import ZipFile
 
@@ -1285,6 +1362,7 @@ class CudaSequentialQ(CudaCohortLifecycle):
                 "ranking_objective"
             ),
             counterfactual=self._counterfactual.snapshot() if getattr(self, "_counterfactual", None) else None,
+            peashooter_teacher=self._peashooter_teacher.snapshot() if getattr(self, "_peashooter_teacher", None) else None,
         )
         if getattr(self, "_teacher", None) is None:
             return skills
@@ -1332,6 +1410,9 @@ class CudaSequentialQ(CudaCohortLifecycle):
             "_counterfactual_objective",
             "_counterfactual_pass_metrics",
             "_counterfactual_tiles",
+            "_peashooter_teacher",
+            "_peashooter_objective",
+            "_peashooter_pass_metrics",
             "_bomb_pass_metrics",
             "_pending_episodes",
         ]

@@ -130,8 +130,17 @@ is regenerated from unconsumed seeds on resume.
 Normal fitting keeps three tile-only cohorts followed by one joint cohort, with
 four passes each. Tile-only fitting freezes species parameters and species EMA.
 
-Settings live in [train.toml](src/pvz_rl/data/train.toml). Peashooter and normal
-stages expose `counterfactual_enabled` and `comparison_temperature` (default 1.0).
+Settings live in [train.toml](src/pvz_rl/data/train.toml). Peashooter uses
+prioritized engine-labeled targets: spread Peashooters across lanes on a safe board,
+defend a zombie lane without a Peashooter, then help an endangered defended lane.
+The oracle tests only current visible zombies, without future spawns or further
+planting. Main games stay greedy; labels never override actions. Tune
+`column_decay` (0.5), `softmax_temperature` (1.0), `oracle_lanes` (256),
+`oracle_vram_mib` (512) and `oracle_chunk_ticks` (256) under `[training.peashooter]`.
+All 45 cells participate in cross-entropy. Existing recovery retains its saved
+objective; use `--init-from` to transfer weights into the new fitting mode.
+
+Normal stages expose `counterfactual_enabled` and `comparison_temperature` (default 1.0).
 Every legal planting forks up to two same-species alternatives: next-best legal
 tile and a distinct random legal tile. Followers replay accepted main commands,
 without Transformer calls or recursive branching. Occupancy conflicts discard the
