@@ -1,246 +1,225 @@
 # System architecture
 
 This project learns plant placement in a pinned Plants vs. Zombies simulator.
-It has one stateless two-stage Transformer Q policy and one autonomous learning
-framework. Human annotations and verified demonstrations can provide starting
-weights for that same policy.
+One stateless two-stage Transformer policy serves autonomous learning,
+evaluation and human-supervised initialization. The project owns learning,
+reward interpretation and experiment artifacts; the separately installed game
+owns combat, legal actions and game rules.
 
-The project owns learning, reward interpretation and experimental evidence.
-The separately installed game owns combat, legal actions and game rules.
 Autonomous collection and fitting require CUDA with native BF16 support. CPU
 simulation supports annotation, recording, baselines and reference checks.
+Installation verifies the game pin without modifying its source checkout.
 
-## Components and data flow
+## Components and information flow
 
-| Component | Responsibility |
+| Component | Responsibility and connections |
 |---|---|
-| Simulation boundary | Execute proposals, expose public boards and report actual outcomes |
-| Policy and exploration | Choose an action category and location; manage collection-time exploration |
-| Complete-game learner | Finalize trajectories, prepare targets and update the policy |
-| Human supervision | Preserve labels and verified recordings; fit compatible initializations |
-| Experiment control | Resolve settings, coordinate curriculum and budgets, validate progress and recover runs |
-| Evidence and presentation | Evaluate frozen policies, preserve provenance and display actual execution |
+| Experiment control | Resolve settings and source identities; coordinate stages, budgets, validation and recovery |
+| Simulation boundary | Execute policy proposals; expose public boards, actual outcomes and private accounting evidence |
+| Shared policy runner | Apply independent species and conditional tile networks to public observations |
+| Cohort learner and teaching pipelines | Turn completed experience, private labels and simulator comparisons into policy updates |
+| Human supervision | Preserve positive tile annotations and verified demonstrations; produce compatible starting weights |
+| Evaluation and presentation | Measure frozen policies and derive reports, charts, recordings and live views |
 
-```mermaid
-flowchart LR
-    Game[Pinned game] --> Adapter[Simulation boundary]
-    Adapter -->|public board| Policy[Two-stage policy]
-    Policy -->|proposal| Adapter
-    Adapter -->|execute| Game
-    Adapter -->|outcomes and reward evidence| Experience[Game trajectories]
-    Experience --> Learner[Complete-game learner]
-    Learner -->|updated weights| Policy
-    Human[Human labels and recordings] --> Supervision[Supervision fitting]
-    Supervision -->|starting weights| Policy
-    Policy -->|frozen weights| Evaluation[Evaluation]
-    Evaluation --> Results[Results and reports]
-```
+The [training configuration](../src/pvz_rl/data/train.toml) supplies task, model,
+learning and demo-overlay settings. Stage settings resolve into the runtime
+layout when loaded. Hardware profiles control execution resources. Effective
+settings and engine, model and schema identities travel with saved run state.
 
-The interaction loop produces experience; the learning loop consumes completed
-games. Experiment control coordinates both. Evaluation supplies evidence from a
-frozen policy, and viewers observe execution.
+Engine observations become normalized public entities and global features.
+Executed proposals produce trajectories and reward evidence. Teaching pipelines
+attach private targets or comparisons; fitting consumes the completed cohort
+and updates weights. Evaluation freezes those weights, while presentation
+consumes execution and result data.
 
-A single [training configuration](../src/pvz_rl/data/train.toml) supplies the
-bundled task, model and learning settings. Commands resolve effective settings
-and record them with source identities in their output artifacts. Hardware
-profiles adjust execution. Installation verifies the separate game source pin;
-experiments check the installed engine and rules.
+## Public observations and action decisions
 
-## Public inputs and action decisions
+Both networks receive current public board facts: plants, zombies, projectiles,
+mowers, sun, cards, cooldowns and public progress counters. Entity storage is
+bounded; truncation is reported and global counts describe the complete board.
+Seeds, future spawn schedules, snapshots, target identities, oracle labels and
+reward ledgers remain private. The policy retains no learned state between
+decisions.
 
-The policy sees the current public board: plants, zombies, projectiles, mowers,
-resources, card cooldowns and public progress counters. Both stages receive the
-same normalized entity and global representation. Entity storage is bounded;
-truncation is reported and global counts still describe the complete board.
-Transport padding creates no actions or supervision.
+The species network scores Wait, the eight plant species and Dig. An independent
+tile network conditions on the chosen category and scores all 45 cells. The
+shared runner applies the same decision semantics in collection and evaluation;
+tile inference is needed only for usable non-Wait choices.
 
-Seeds, future spawn schedules, simulator snapshots, source identities and reward
-ledgers remain private execution data. Annotation provenance and viewer history
-also stay outside model inputs. The policy has no learned memory between decisions.
+Category availability precedes tile validity: resource or cooldown failure
+belongs to the species decision before placement is considered. Dig requires a
+plant on the board. Occupied planting cells and empty digging cells remain
+proposal candidates; the engine validates the selection. Rejections retain
+their proposal and reason while advancing through configured wait behavior.
+CPU and CUDA adapters share action cadence, legality and reward-conversion
+contracts.
 
-The first Transformer predicts values for wait, the eight plant species and dig.
-For a usable non-wait choice, an independent conditional Transformer scores all
-45 plots from the category and public board. Each stage has its own learned
-parameters. Category choice uses its direct predictions; placement inference
-runs only for requested board/category pairs.
+Normal collection can explore species through persistent commitments that wait
+for resources and attempt placement until success or episode end. Tile exercises
+use their supplied species. Evaluation disables collection exploration. Private
+labels and simulator followers never replace the main policy's chosen action.
 
-Ordinary category selection includes resource- or cooldown-unavailable choices.
-The simulation boundary checks category availability before attributing a failure
-to placement, and can skip placement inference for an impossible category. Dig
-requires a plant somewhere on the board. Once a category is available, every plot
-remains a candidate, including occupied planting plots and empty digging plots.
-The engine validates the resulting proposal.
+## Autonomous learning
 
-At the default cadence, accepted actions and waits use the same ten-tick
-decision interval. Rejected proposals execute wait for that interval
-while retaining their proposal and rejection reason. The supported action-phase
-mode instead applies accepted planting/digging immediately and advances a tick
-on wait or rejection. Cadence is resolved consistently for CPU and CUDA adapters.
-
-Collection can explore tile choices or commit to another plant species after an
-accepted planting or a configured interval of continuous ordinary waiting.
-Commitments wait for sun/cooldown availability, then attempt placement until
-success or episode end. Success returns to ordinary collection. Rejection breaks
-an ordinary-wait streak; commitment waits do not extend it. Exploration rates are
-fixed within a cohort and decay with stage games. Evaluation and demonstrations
-disable these collection exploration mechanisms.
-
-## Learning from complete games
-
-Training collects a fixed cohort of games with frozen policy weights. Finished
-games remain paused until the entire cohort finishes. Only actual active
-decisions enter trajectories; stable episode/action identities associate boards,
-outcomes and reward evidence through storage and recovery.
+Each cohort collects a fixed set of main episodes under frozen weights. Finished
+episodes pause until the cohort completes. Stable episode and decision identities
+connect observations, proposals, outcomes and accounting evidence through
+storage and recovery. Only main episodes advance training budgets; oracle
+rollouts, followers and validation have separate accounting.
 
 ```mermaid
 stateDiagram-v2
-    [*] --> Collect
-    Collect --> Finalize: all games and issued decisions finish
-    Finalize --> Fit: rewards and complete returns ready
+    [*] --> Prepare
+    Prepare --> Collect: cohort boards ready
+    Collect --> Finalize: main episodes and follower work complete
+    Finalize --> Fit: returns and stage targets ready
     Fit --> Fit: next complete pass
-    Fit --> Boundary: all passes committed
-    Boundary --> Collect: continue
-    Boundary --> Evaluate: mastery check or validation due
-    Evaluate --> Boundary: required evaluation completes
-    Boundary --> [*]: mastery or budget stop
+    Fit --> Boundary: fitting passes committed
+    Boundary --> Validate: interval due and cohort qualifies
+    Validate --> Validate: interrupted panel retried with saved weights
+    Validate --> Boundary: complete results recorded
+    Boundary --> Prepare: next cohort or stage
+    Boundary --> [*]: mastery or run stop
 ```
 
-Finalization combines terminal outcome, resource and living-plant asset changes,
-damage, blocking, produced sun and mower expenditure. Mower costs use final reward
-units independently of physical-value conversion. Cohort completion-time ranking
-adjusts terminal rewards. Residual sun can add a win-terminal reward or penalize
-each accepted ordinary wait in a loss according to its consecutive run length;
-commitment waits and rejections are excluded. Complete undiscounted remaining
-returns are then computed chronologically for each episode.
+Finalization combines terminal outcomes, resource and plant-asset changes,
+damage, blocking, produced sun and mower expenditure. Cohort duration shaping
+and configured endgame rewards contribute before complete remaining returns
+are calculated. Repeated waits or invalid attempts may be compacted for fitting;
+their original reward accounting remains intact.
 
-Credit attribution has a backend boundary. CPU/reference games and reconstructed
-demonstrations can assign delayed owned effects to their originating placement.
-The CUDA collector currently records aggregate effects on the transition where
-they occur. Equal aggregate accounting therefore does not establish identical
-placement-time targets.
+Fresh runs use stage-specific teaching signals:
 
-Fitting routes each actual proposal to its responsible stage. Wait returns train
-the category stage; accepted plant/dig returns train the selected tile. Impossible
-categories and invalid tiles train only their respective stage toward a detached
-target below that head's current minimum value. This target changes with the
-current forward pass and leaves episode rewards and stored returns unchanged.
-Accepted non-wait category values learn through consistency: the online tile
-network chooses a candidate and an exponential-moving-average (EMA) reference
-evaluates it.
+| Stage | Experience and fitting signal |
+|---|---|
+| Cherry Bomb | Prepared boards and exact source-attributed engine hits define successful tile sets; fitting increases total probability on each set |
+| Cherry Bomb obstacle | Obstructed boards retain exactly one engine-verified legal hit; the same set objective teaches that tile |
+| Attacker preparation | A supplied attacker uses conservative distance labels on mixed boards; a first-cell fallback can satisfy the task, with actual kills reported separately |
+| Peashooter | Learner-visited planting attempts, including occupied rejections, receive prioritized visible-lane engine labels after collection; fitting uses column-decaying tile targets |
+| Normal games | Legal plantings fork up to two same-species alternatives on the same board; outcomes teach pairwise tile preferences, while species/Wait and legal Dig retain complete-return fitting |
 
-The default schedule repeats five tile-only cohorts followed by one joint
-category/tile cohort. Each cohort receives four complete fitting passes. Tile-only
-cohorts update tile weights and tile EMA, preserving category weights and EMA.
-Joint cohorts apply the full routed objective and category consistency. Every
-pass covers its prepared cohort before one clipped optimizer update and the
-corresponding EMA update commit.
+Bomb and attacker set objectives include all 45 outputs without prescribing a
+probability split within the successful set. Configured bomb temperature
+schedules use the completed cohort's attributed-hit rate and stay fixed across
+fitting passes; saved scalar settings retain a constant temperature.
+Peashooter labels test current visible threats without future spawns or further
+planting. Covered threats permit lane balancing; otherwise undefended threatened
+lanes take priority over endangered defended lanes.
 
-Balancing uses cohort-wide populations. Fitting can retain representatives from
-windows of repeated waits or identical invalid proposals; reward accounting and
-complete returns retain every decision. Trajectories use bounded RAM with disk
-spill and are released after their cohort is fitted.
+Normal followers replay accepted main commands without policy calls or recursive
+forks. Occupancy conflicts discard a follower; resource shortages queue commands
+in order. Comparisons teach tile preferences without tile-max consistency
+targets for species. Unavailable categories and invalid placements have distinct
+fitting routes. Configured tile-only cohorts freeze species weights and their
+EMA reference; joint cohorts also fit species. Complete fitting passes define
+durable update boundaries.
+
+## Curriculum and validation
+
+Default progression is Cherry Bomb → Cherry Bomb obstacle → attacker preparation
+→ Peashooter → easy → standard → shared normal games. Tile stages have separately
+configured cohort sizes and independent episode budgets and validation clocks.
+Each validates its own skill. Explicit fresh normal stages skip tile lessons.
+Automatic progression preserves optimizer state; independently selected stages
+finish at their own mastery gate. Legacy recovery retains its saved stage order
+and combined-stage behavior.
+
+At configured episode intervals, qualification uses authoritative outcomes from
+the entire most recent fully fitted cohort, including attributed bomb hits.
+Shortened cohorts and rolling statistics cannot qualify; a skipped check waits
+another interval. Qualification permits validation and does not certify mastery.
+
+Every validation samples fresh random seeds outside reserved splits and saves
+the panel before execution. Interrupted panels remain pending against the same
+weights and must finish before further fitting. Cherry Bomb and Peashooter must
+strictly exceed their own configured validation thresholds; other fresh stages
+require perfect validation. Normal advancement also respects residency
+requirements and applies to future resets.
+
+Under the default normal workflow, stage mastery triggers broader validation
+across difficulties, which can select a shared best policy. Tile-stage mastery
+is separate. Manual evaluation freezes the policy without fitting or followers;
+its validation split also uses fresh random cases, while development, test and
+changed-scenario splits retain configured seeds. Baseline comparisons and
+selected CPU-verified CUDA recordings provide additional evidence.
 
 ## Human supervision and initialization
 
-Annotation and demonstration workflows run independently of autonomous learning
-and supply full-model weights for a fresh run. They can be composed by starting
-demonstration fitting from annotation weights.
+The annotation studio samples reachable boards and records positive tile sets
+for an available plant. Pending, labeled and discarded records persist;
+identical-input conflicts are resolved together with revision checks. Manual
+action-category labels and absolute-infeasible tile labels are unsupported.
 
-Annotations come from reachable simulator states. Separate action-category and
-tile datasets retain public snapshots, model inputs, availability evidence and
-human label sets. Pending, labeled and discarded records persist. Contradictory
-labels for identical inputs are resolved together; revision checks protect edits.
-A next-board generation failure preserves saved labels and supports retry.
+Annotation fitting freezes species and trains tiles with a top-1 hinge.
+Publication requires every greedy choice on both training and validation splits
+to belong to its positive set, verified again after reloading saved weights.
+An L2 phase can support validation convergence after training converges; test
+metrics remain diagnostic. Atomic progress snapshots support annotation resume
+or compatible initialization before convergence.
 
-Annotation fitting trains the selected stage while freezing the other. Exact
-feasible-winner and absolute-bottom requirements on both training and validation
-splits gate final publication. Once training first converges, fitting can enter
-an L2 regularization phase while retaining the training split. Freshly reloaded
-BF16 runtime weights must pass the same convergence checks before publication;
-test results remain diagnostics. Atomic progress snapshots preserve resumable
-work and can also supply fresh starting weights before convergence, including
-before the first fitting pass.
+Demonstration initialization requires a complete natural win or loss.
+Reconstruction verifies observations, proposals, timing, outcomes and replay
+identity, then reprices evidence under selected reward settings. Return fitting
+and demonstration ranking train both stages. Annotation weights can seed
+demonstration fitting, and either workflow can initialize autonomous learning.
 
-Demonstrations require a complete natural win or loss. Reconstruction verifies
-observations, proposals, outcomes, timing and replay identity, then reprices the
-verified evidence under the selected reward settings without rewriting recordings.
-Shared return fitting trains both stages, with demonstration ranking supervision.
-Its own pass/time allowance and completed-pass publication boundary apply.
-
-## Curriculum and evaluation
-
-The teaching curriculum advances from easy games to mixed easy/standard games,
-then a shared mix including hard games. Separate deterministic mastery cases and
-residency criteria govern advancement. Stage changes apply to future resets and
-preserve the ongoing run's learning state.
-
-Under the default schedule, stage success triggers ordinary validation across
-difficulties. Complete validation can select one shared best policy. Incomplete
-required validation stays pending and blocks further updates. A run that reaches
-its budget without qualifying validation can finish without a selected best policy.
-
-Training, mastery, validation, final test and changed-scenario evaluation use
-separate case pools. Evaluation freezes weights, disables exploration and performs
-no fitting. Recorded CUDA traces are replayed and checked on CPU before publication;
-this verification covers the selected recordings. Reports compare policies and
-fixed baselines on paired scenarios. Research orchestration coordinates explicit
-learner attempts, frozen evaluations and reports with restart journals.
-
-## Durable state and recovery
+## Durable state and artifact lifecycle
 
 | Artifact | Source and destination |
 |---|---|
-| Supervision datasets and recordings | Simulator/human evidence retained for review, reconstruction and reusable initialization |
-| Portable model weights | Autonomous or supervised fitting outputs consumed by inference and fresh runs |
-| Recovery checkpoints | Coherent autonomous run state consumed by resume, including unfinished experience |
-| Annotation fitting progress | Weights, optimizer, split/settings identity, RNG and phase consumed by annotation resume or fresh initialization |
-| Provenance and results | Effective settings, source identities, metrics and evaluation cases retained with run/report outputs |
+| Annotations and demonstrations | Human/simulator evidence retained as reusable supervision inputs |
+| Recovery checkpoints | Coherent unfinished autonomous state consumed by resume |
+| Annotation fitting progress | Supervised weights, optimizer, split identity and phase consumed by annotation resume or weight transfer |
+| Portable weights | Completed or compatible saved models consumed by inference and fresh initialization |
+| Results and visualizations | Settings, provenance, metrics and evaluation evidence transformed into reports, charts and recordings |
 
-Fresh initialization transfers compatible complete model weights and starts new
-optimizer, curriculum, budget and random state. Autonomous resume restores the
-simulator, unfinished trajectories, optimizer, online/EMA networks, exploration,
-cohort/pass schedule and random state. Annotation progress has a separate resume
-contract and cannot recover an autonomous run.
+Autonomous resume restores simulators, unfinished experience, optimizer,
+online/EMA weights, exploration, cohort/pass progress, pending teaching work,
+validation panels and random state. Compatibility checks validate model,
+objective, public schema and engine identities before collection. Saved learning
+settings remain authoritative; supported execution and explicit resume-refresh
+settings are handled separately. Annotation progress has its own resume contract.
 
-Compatibility checks validate engine identity, public representation, model
-structure and the relevant learning/state contracts before collectors allocate.
-A checkpoint ineligible for resume may still provide compatible starting weights.
-Resume preserves saved learning settings; supported wait-trigger and passivity
-setting refreshes take effect only at the next cohort, preserving the current
-cohort's interpretation.
+Fresh initialization transfers compatible weights into new optimizer,
+curriculum, budget and random state. Legacy non-search recovery preserves its
+saved objective; retired search recovery permits weights-only transfer. Formats
+are validated explicitly rather than silently migrated.
 
-Saving stops new selection and finishes issued work before atomically replacing
-the recovery checkpoint. A partial fitting pass restarts; committed updates are
-not repeated. Temporary transfer, batching, compilation and graph caches rebuild
-from authoritative state.
+Saving drains issued decisions and atomically replaces recovery state. Partial
+fitting passes restart; committed updates are never replayed. Unfinished
+speculative preparation is regenerated, with seeds and outcomes committed only
+when consumed. Temporary execution caches rebuild from authoritative state.
 
-## Execution, diagnostics and presentation
+Successful autonomous completion retains portable final weights and generated
+visualizations, then removes owned recovery outputs. Interrupted, failed,
+time-limited or otherwise incomplete runs retain recovery artifacts. Completed
+annotation and demonstration fitting retain portable weights and preserve
+supervision inputs. Portable completion weights start fresh runs and cannot
+resume autonomous state.
 
-GPU batching, compilation and bounded caches change execution while preserving
-public inputs and learning semantics. Collection and fitting have separate
-execution resources. Memory pressure can spill host storage or use bounded eager
-fallbacks. Exhausted recovery or nonfinite learning values fail explicitly.
+## Execution and presentation
 
-Viewers, journals, progress and hardware sampling observe actual execution.
-Bounded presentation queues allow slow or failed viewers to be detached while
-learning continues. Native/browser viewers consume public frames and diagnostic
-decisions; the learner retains model and simulator ownership. Displayed training
-rewards remain outside policy inputs and are refreshed after cohort finalization.
+Persistent CPU preparation workers, bounded CUDA oracles, batching, compilation
+and CUDA graphs share explicit host/device memory budgets. Trajectories and
+private roots can spill to owned disk storage. Speculative preparation overlaps
+fitting. Validation releases idle scratch and graph allocations while preserving
+workers and speculative seed state. Execution mechanisms preserve public inputs,
+labels and learning semantics.
 
-Read-only reward reports derive component accounting, action routes, fitting
-compaction and warnings from saved settings and bounded log snapshots. They mark
-unfinished data as provisional. Replay videos, plots and reports are derived
-artifacts with export status separate from completed learning. Availability and
-performance diagnostics establish workflow or execution evidence; gameplay quality
-requires evaluation results.
+Live viewers and diagnostics observe execution while the learner owns policy
+and simulator state. Slow presentation can detach through bounded queues.
+Training rewards stay outside policy inputs and refresh after finalization.
+Validation checks and completion refresh reports, including skipped checks and
+mastered stages. Offline reports can be generated without policy inference;
+recordings and other exports have separate completion status. Workflow checks
+establish availability and performance; gameplay quality comes from evaluation.
 
 ## Further reading
 
-- [Quick start](../README.md) for requirements, installation and commands.
+- [Quick start](../README.md) for installation and commands.
 - [Entity inputs](math/entity-inputs.md) for representation and attention details.
 - [Sequential learning](math/sequential-training.md), [reward economics](math/training-objective.md)
-  and [invalid-action attribution](math/invalid-action-penalties.md) for learning contracts.
-- [Execution controls and diagnostics](math/training-throughput.md) for performance work.
+  and [invalid-action attribution](math/invalid-action-penalties.md) for detailed learning contracts.
+- [Execution controls](math/training-throughput.md) for resource and diagnostic details.
 - [Code and test ownership](../AGENTS.md#code-structure) for implementation navigation.
-- [References](references.md), [iteration history](iteration.md) and
-  [retained measurements](evidence/) for research attribution and evidence.
+- [References](references.md) for research attribution.
