@@ -70,3 +70,32 @@
 - Evidence: speed and behavioral observations are user-reported. Code review
   confirms the revised workflow, not the reported speedup or the correction's
   effectiveness; no training or benchmark was run for this record update.
+
+## Rule-guided scenario training and unresolved exploration — 2026-11-01
+
+- Reported improvements: a dedicated Cherry Bomb obstacle stage resolves the
+  occupied-plot blockage, reaching 100% accuracy after 2 hours 40 minutes of
+  training. Attacker preparation and Peashooter training teach attackers to
+  favor lanes containing zombies and positions from which they can kill them,
+  with balanced defensive preparation when no zombies are present. Both attacker
+  stages reportedly reach 100% success quickly.
+- Reported efficiency gains: cross-entropy supervision replaces sparse feedback
+  in scenario fitting, while simple strategies with clearly correct targets
+  replace unguided exploration in those exercises. Learning efficiency improves
+  substantially; scenario-training performance improves by more than 100 times
+  in the best stage, without establishing that speedup for every stage.
+- Immediate-predecessor comparison: relative to Separate tile stages and
+  comparative search, the independently validated curriculum adds obstacle and
+  attacker-preparation stages. Dedicated teaching pipelines supply scenario
+  targets; normal placement now uses factual same-board comparisons in place of
+  the preceding search. Species and tile decisions retain separate roles, while
+  specialized preparation and fitting workflows extend scenario acceleration.
+  Clearer targets may reduce ambiguous feedback, and focused workloads may
+  reduce training cost; their individual contributions have not been isolated.
+- Discovered problem: exploration remains unresolved for scenarios without a
+  clearly correct answer. How to judge better behavior and provide useful reward
+  signals is still unclear, limiting the transition from taught scenario skills
+  to general play.
+- Evidence: accuracy, training time and performance gains are user-reported.
+  Repository review confirms the workflow, not those measured outcomes; no new
+  training or benchmark was run for this record update.
