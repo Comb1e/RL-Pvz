@@ -144,18 +144,21 @@ oracle_lanes = 640 # Independent scratch limits; used only for natural cooldown 
 oracle_vram_mib = 1024
 
 [training.peashooter]
-# Uses the shared cohort size/fitting settings; only this stage scales sky sun.
+# Independent cohort/preparation sizing; shared optimizer and fitting passes.
+n_envs = 128
 sky_sun_rate = 1.5 # Divide sky-drop delays by this rate; keep each drop at 25 sun.
 probe_interval_games = 2000
 fitting_objective = "prioritized_lane_cross_entropy_v1"
 column_decay = 0.5 # Preferred-cell target weight halves with each column to the right.
 softmax_temperature = 1.0
-oracle_lanes = 256
-oracle_vram_mib = 512
-oracle_chunk_ticks = 256
+prepare_workers = 0 # In-process projection beat persistent worker IPC after setup reuse.
+snapshot_cache_mib = 256 # Charged against the shared RAM budget; excess spills to owned storage.
+oracle_lanes = 1024 # Fastest repeated 90-second resource screen on the RTX 4070 Laptop.
+oracle_vram_mib = 4096 # Upper bound; actual lanes shrink to preserve profile headroom.
+oracle_chunk_ticks = 4096
 
 [training.normal]
-n_envs = 128 # Also the shared Peashooter cohort size.
+n_envs = 128
 tile_only_cohorts = 3 # Repeat three tile-only cohorts, then one joint cohort.
 validation_schedule = "stage_success" # Evaluate normal games only after each stage passes.
 eval_interval_games = 2000 # Periodic game-count diagnostic/fixed checks.

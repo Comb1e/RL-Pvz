@@ -65,7 +65,8 @@ _STAGE_PARAMETERS = {
         "sky_sun_rate": "training.tile_scenarios.peashooter_sky_sun_rate",
         **{key: f"training.peashooter_rules.{key}" for key in (
             "fitting_objective", "column_decay", "softmax_temperature",
-            "oracle_lanes", "oracle_vram_mib", "oracle_chunk_ticks",
+            "oracle_lanes", "oracle_vram_mib", "oracle_chunk_ticks", "prepare_workers", "n_envs",
+            "snapshot_cache_mib",
         )},
         "counterfactual_enabled": "training.counterfactual.peashooter.enabled",
         "comparison_temperature": "training.counterfactual.peashooter.temperature",
@@ -130,6 +131,8 @@ def cohort_envs(cfg, skill=None):
     """Configured real-episode cohort size; missing stage settings retain legacy size."""
     if skill == "attacker_pre":
         return cfg["training"]["tile_scenarios"]["attacker"]["n_envs"]
+    if skill == "peashooter":
+        return cfg["training"].get("peashooter_rules", {}).get("n_envs", cfg["training"]["n_envs"])
     if is_bomb_skill(skill):
         return (
             cfg["training"]
@@ -191,7 +194,9 @@ def training_env_capacity(cfg, family="preset"):
         if is_placement_skill(stage):
             return cohort_envs(cfg, stage)
         attacker = tile.get("attacker", {}).get("n_envs", 0)
-        return max(cherry, attacker, cohort_envs(cfg))
+        return max(cherry, attacker, cohort_envs(cfg, "peashooter"), cohort_envs(cfg))
+    if stage == "peashooter":
+        return cohort_envs(cfg, "peashooter")
     return cohort_envs(cfg)
 
 

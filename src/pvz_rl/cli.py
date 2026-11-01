@@ -175,6 +175,9 @@ def configured(args):
             cfg["training"][key] = value
     if getattr(args, "cherry_bomb_envs", None) is not None:
         cfg["training"]["tile_scenarios"]["cherry_bomb_n_envs"] = args.cherry_bomb_envs
+    if getattr(args, "n_envs", None) is not None and cfg["curriculum"].get("run_stage") == "peashooter":
+        if cfg["training"].get("peashooter_rules"):
+            cfg["training"]["peashooter_rules"]["n_envs"] = args.n_envs
     if getattr(args, "games", None) is not None:
         cfg["training"]["budget_unit"] = "games"
     selected_simulator = getattr(args, "simulator", None)

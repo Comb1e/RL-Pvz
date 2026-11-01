@@ -1634,7 +1634,7 @@ def train(
     )
     progress.emit(
         f"Shared {condition} {cfg['policy']['kind']} policy; learner seed {learner_seed}; {cfg['training']['device']}; "
-        f"{cohort_envs(cfg)} Peashooter/normal lanes, "
+        f"{cohort_envs(cfg, 'peashooter')} Peashooter lanes, {cohort_envs(cfg)} normal lanes, "
         f"{cohort_envs(cfg, 'cherry_bomb')} Cherry Bomb lanes, "
         f"{cfg['training'].get('tile_scenarios', {}).get('attacker', {}).get('n_envs', 0)} attacker-pre lanes; simulator {simulator(cfg)}; "
         "one complete game per environment per cohort; "

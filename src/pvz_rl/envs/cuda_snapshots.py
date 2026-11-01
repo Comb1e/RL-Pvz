@@ -7,9 +7,30 @@ from pvz_game.config import PLANT_TYPES, ZOMBIE_TYPES
 from pvz_game.cuda import schema as s
 from pvz_game.cuda.backend import CapacityError, projectile_bound
 
-from pvz_rl.envs.scratch_game import EngineSnapshot, restored_game
+from pvz_rl.envs.scratch_game import EngineSnapshot, restored_game, scratch_game
 
 GROUPS = ("plants", "zombies", "projectiles", "mowers")
+
+
+def reset_owned(batch, levels, seeds, *, indices):
+    """Resolve fresh scenarios with shared validated rules, then batch one upload.
+
+    No external snapshot bypasses validation. The engine still resolves every
+    level and seed; only repeated construction/restoration of Rules is removed.
+    """
+    if len(levels) != len(seeds) or len(levels) != len(indices):
+        raise ValueError("One level and seed required per reset index")
+    snapshots = []
+    for level, seed in zip(levels, seeds, strict=True):
+        game = scratch_game(batch.rules)
+        game.reset(level, seed)
+        snapshots.append(EngineSnapshot.capture(game))
+    upload_snapshots(batch, snapshots, indices=indices)
+    if batch.sky_sun_rate != 1.0:
+        cp = batch.cp
+        ix = cp.asarray(indices)
+        due = s.HEADER.index("sky_due")
+        batch.header[ix, due] = cp.maximum(1, cp.floor(batch.header[ix, due] / batch.sky_sun_rate)).astype(cp.int64)
 
 
 def pack_snapshots(batch, snapshots):
@@ -98,7 +119,7 @@ def upload_snapshots(batch, snapshots, *, indices):
     batch.action_masks_device()
 
 
-def download_snapshots(batch, *, indices):
+def download_snapshots(batch, *, indices, share_metadata=False):
     """Capture owned CUDA states using the pinned snapshot schema, in one batch."""
     indices = batch._indices(indices)
     if not indices:
@@ -116,7 +137,9 @@ def download_snapshots(batch, *, indices):
     ]
     snapshots = []
     for i, index in enumerate(indices):
-        raw = deepcopy(batch._templates[index])
+        # Internal oracle consumers never mutate rules, level or RNG metadata.
+        # Other callers retain the ordinary fully detached snapshot contract.
+        raw = dict(batch._templates[index]) if share_metadata else deepcopy(batch._templates[index])
         header = dict(zip(s.HEADER, headers[i].tolist(), strict=True))
         for key in (
             "tick",

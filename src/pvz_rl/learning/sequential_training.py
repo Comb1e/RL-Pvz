@@ -184,6 +184,9 @@ class CudaSequentialQ(CudaCohortLifecycle):
         if getattr(self, "_peashooter_teacher", None) is not None:
             self._peashooter_teacher.close()
             self._peashooter_teacher = None
+        if not self.peashooter_rule_training and getattr(self.env, "lane_preparation", None) is not None:
+            self.env.lane_preparation.close()
+            self.env.lane_preparation = None
         boundary = self._phase_memory("before_collection_release")
         for encoder in self.policy.encoders:
             encoder.release_fitting()

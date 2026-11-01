@@ -3,6 +3,7 @@
 from collections import Counter
 from contextlib import contextmanager
 from copy import deepcopy
+from functools import partial
 from time import perf_counter
 
 import numpy as np
@@ -374,7 +375,9 @@ class CudaVecEnv(VecEnv):
                 indices=indices,
             )
         else:
-            self.batch.reset(
+            from pvz_rl.envs.cuda_snapshots import reset_owned
+            reset = partial(reset_owned, self.batch) if self.tile_scenario == "peashooter" else self.batch.reset
+            reset(
                 [s[4] for s in staged],
                 [s[3] for s in staged],
                 indices=indices,
@@ -858,6 +861,9 @@ class CudaVecEnv(VecEnv):
 
     def close(self):
         self.queue.close()
+        if getattr(self, "lane_preparation", None) is not None:
+            self.lane_preparation.close()
+            self.lane_preparation = None
         if self.live_view is not None:
             try:
                 self.live_view.close()

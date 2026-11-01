@@ -45,7 +45,8 @@ rules. This file adds project-specific constraints and ownership.
   retains saved learning settings and committed updates; `--init-from` transfers
   compatible weights into fresh optimizer state. Do not silently migrate formats,
   replay committed passes or treat annotation progress as autonomous recovery.
-- Cherry Bomb and attacker_pre have separate configured cohort sizes; other stages retain `n_envs`.
+- Cherry Bomb, attacker_pre and Peashooter have separate configured cohort sizes;
+  normal stages retain `training.normal.n_envs`.
   CPU preparation and the bounded CUDA oracle must preserve exact attributed-hit
   labels. Cherry carts start independently ready or spent, never moving; saved
   configurations without the setting retain all-spent carts. Prefetch is speculative:
@@ -105,7 +106,7 @@ Paths below are relative to `src/pvz_rl/` unless stated otherwise.
 | `learning/tile_curriculum.py`, `validation_trigger.py`, `budget.py`, `training_requirements.py` | Independent tile-stage clocks/progression, legacy prerequisite recovery, cohort validation gate and normal fitting schedule. |
 | `learning/flat_q.py`, `objective.py`, `action_routing.py`, `bomb_objective.py` | Shared fitting/routing, legacy targets/consistency, annotation ranking and bomb set cross-entropy/legacy losses; `envs/tile_scenarios.py` owns diagnostic distance labels. |
 | `learning/counterfactual.py`, `counterfactual_settings.py`, `counterfactual_objective.py`, `envs/counterfactual_replay.cu` | Factual clones, bounded host/disk roots, shared command replay, GPU accounting, same-board comparisons and versioned recovery; `tools/benchmark_factual_collection.py` measures complete collection time per main env. |
-| `learning/peashooter_rules.py`, `peashooter_teacher.py` | Prioritized lane targets, column-distribution fitting, bounded CUDA lane oracle and private snapshot/recovery storage. |
+| `learning/peashooter_rules.py`, `peashooter_teacher.py`, `envs/lane_preparation.py`, `envs/cuda_lane_oracle.py` | Prioritized lane targets, bounded preparation/device-root caching, batched lane simulation and private snapshot/recovery storage. `tools/benchmark_peashooter.py` ranks full cohort time per main env, including fitting. |
 | `learning/cuda_buffer.py`, `batch_transport.py`, `collection_scheduler.py`, `exploration.py` | Trajectories, bounded transport, decision tickets and persistent exploration commitments. |
 | `learning/checkpoints.py`, `training_artifacts.py`, `performance.py` | Compatibility contracts, durable snapshots, completed-run weight/report retention and execution-only refresh settings. |
 | `annotation/`, `learning/annotation_fit.py`, `demo_initialization.py` | Reachable-state sampling, atomic positive tile sets/conflicts, top-1 convergence and verified demo initialization. |

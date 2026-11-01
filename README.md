@@ -2,8 +2,9 @@
 
 Train a stateless two-stage Transformer against a pinned Plants vs. Zombies
 simulator. One network selects species/Wait/Dig; another scores all 45 tiles.
-Both consume only public board facts. Fresh Peashooter and normal runs compare factual simulator forks to teach tile
-preferences; main play and validation use the network alone.
+Both consume only public board facts. Peashooter uses prioritized visible-lane
+labels; normal play compares factual simulator forks to teach tile preferences.
+Main play and validation use the network alone.
 
 ## Requirements
 
@@ -116,8 +117,10 @@ Resume keeps the saved probability; older runs without it keep all carts disappe
 The live viewer follows new cohorts automatically. In Cherry Bomb, **Switch**
 browses completed boards from the current cohort, including while fitting runs.
 Both bomb stages default to 640 envs through `training.cherry_bomb.n_envs`
-(`--cherry-bomb-envs`); `training.normal.n_envs` (`--n-envs`) controls Peashooter and normal stages.
-Its preparation shares validated simulator setup, uses up to 32 persistent CPU
+(`--cherry-bomb-envs`); `training.normal.n_envs` (`--n-envs`) controls normal stages.
+Peashooter has its own `training.peashooter.n_envs`; missing saved settings retain
+the shared cohort size. `--stage peashooter --n-envs` overrides that stage's size.
+Bomb preparation shares validated simulator setup, uses up to 32 persistent CPU
 workers, and batches natural cooldown warmup and exact attributed-hit rollouts
 on CUDA. Under
 `training.cherry_bomb`, `prepare_workers`, `oracle_lanes` and
@@ -135,8 +138,14 @@ prioritized engine-labeled targets: spread Peashooters across lanes on a safe bo
 defend a zombie lane without a Peashooter, then help an endangered defended lane.
 The oracle tests only current visible zombies, without future spawns or further
 planting. Main games stay greedy; labels never override actions. Tune
-`column_decay` (0.5), `softmax_temperature` (1.0), `oracle_lanes` (256),
-`oracle_vram_mib` (512) and `oracle_chunk_ticks` (256) under `[training.peashooter]`.
+`column_decay`, `softmax_temperature`, `n_envs`, `oracle_lanes`,
+`oracle_vram_mib`, `oracle_chunk_ticks`, `snapshot_cache_mib` and `prepare_workers`
+under `[training.peashooter]`. Live-prefix capture, shared snapshot metadata and
+cached device roots avoid repeated full-reserve copies and candidate uploads.
+An isolated scratch pool releases oracle allocations before PyTorch fitting.
+Spilled roots share one owned storage file; recovery keeps validated JSON snapshots.
+Preparation workers persist across cohorts; zero performs preparation in process.
+Fixed column targets are built as one FP32 panel per fitting batch.
 All 45 cells participate in cross-entropy. Existing recovery retains its saved
 objective; use `--init-from` to transfer weights into the new fitting mode.
 
@@ -213,6 +222,10 @@ Completed weights cannot be resumed; start a new run with `--init-from`.
 .\.venv\Scripts\python.exe tools\benchmark_factual_collection.py --automatic-layout `
   --caps 768 1024 1536 2048 --vram 1280 1536 2048 --chunks 1 4 16 `
   --output artifacts\factual-collection.json
+.\.venv\Scripts\python.exe tools\benchmark_peashooter.py `
+  --weights runs\attacker-pre\final.zip --envs 128 256 --automatic-layout `
+  --lanes 1024 --vram-mib 4096 --workers 0 --chunks 4096 `
+  --seconds 90 --repetitions 2 --output artifacts\peashooter-timing.json
 ```
 
 Default pytest runs two CPU checks. The explicitly selected learning check runs
@@ -230,6 +243,14 @@ minimum warmup episode count before fresh measurement panels.
 The factual benchmark includes cloning, replay, spilling and final draining in
 collection seconds per main env. It refuses concurrent training and runs no fitting;
 its bounded workload does not predict full-game throughput.
+
+The Peashooter benchmark ranks main collection, oracle completion and all configured
+fitting passes together, divided by completed main envs. It resets weights and
+optimizer state between cohorts, repeats a fixed seed panel, reports warmup
+separately and refuses concurrent training. `--automatic-layout` retains inactive
+capacity from other stages. Completed samples are journaled as the sweep runs;
+`--seconds 1200` checks natural games under the configured ceiling. Timings depend on the
+policy, cutoff and hardware; they do not establish mastery.
 
 Reports separate tile-stage and normal progress from oracle/branch work, pairwise
 losses and greedy validation. `--report-only` loads no policy and starts no training. Reward

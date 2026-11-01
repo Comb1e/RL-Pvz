@@ -38,6 +38,13 @@ def validate_rule_settings(cfg):
     for key in ("oracle_lanes", "oracle_vram_mib", "oracle_chunk_ticks"):
         if type(settings.get(key)) is not int or settings[key] < 1:
             raise ValueError(f"Peashooter {key} must be a positive integer")
+    for key in ("prepare_workers",):
+        if type(settings.get(key, 0)) is not int or settings.get(key, 0) < 0:
+            raise ValueError(f"Peashooter {key} must be a nonnegative integer")
+    if "n_envs" in settings and (type(settings["n_envs"]) is not int or settings["n_envs"] < 1):
+        raise ValueError("Peashooter n_envs must be a positive integer")
+    if "snapshot_cache_mib" in settings and (type(settings["snapshot_cache_mib"]) is not int or settings["snapshot_cache_mib"] < 1):
+        raise ValueError("Peashooter snapshot_cache_mib must be a positive integer")
     if cfg["training"].get("counterfactual", {}).get("peashooter", {}).get("enabled"):
         raise ValueError("Peashooter rule labels and counterfactual fitting are mutually exclusive")
 
@@ -118,15 +125,18 @@ def lane_snapshot(snapshot, row, rules):
 
 def column_targets(preferred, *, decay, device=None):
     """Dense labels only; zeros never become an inference mask."""
-    target = torch.zeros((len(preferred), A.tiles), device=device, dtype=torch.float32)
+    # These labels are fixed data, not differentiable model outputs. Build one
+    # FP32 host panel and transfer it once instead of launching several CUDA
+    # kernels and tiny host transfers separately for every board.
+    target = np.zeros((len(preferred), A.tiles), dtype=np.float32)
     for index, tiles in enumerate(preferred):
         if not tiles or len(set(tiles)) != len(tiles) or any(t < 0 or t >= A.tiles for t in tiles):
             raise ValueError("Peashooter preferred set must contain distinct valid tiles")
-        ids = torch.as_tensor(tiles, device=device, dtype=torch.long)
-        columns = ids.remainder(A.cols)
-        weights = decay ** (columns - columns.min()).float()
-        target[index, ids] = weights / weights.sum()
-    return target
+        ids = np.asarray(tiles, dtype=np.int64)
+        columns = ids % A.cols
+        weights = np.power(np.float32(decay), columns - columns.min(), dtype=np.float32)
+        target[index, ids] = weights / weights.sum(dtype=np.float32)
+    return torch.from_numpy(target).to(device=device)
 
 
 def column_cross_entropy(values, preferred, *, decay, temperature):
