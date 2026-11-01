@@ -10,11 +10,11 @@ TILE_SCENARIO_PROTOCOL = "tile-skill-prerequisites-v1"
 
 
 def required_validation_wins(cfg, skill):
-    """Strict Cherry threshold; absent settings and other skills require every case."""
+    """Strict per-skill thresholds; absent settings and other skills require every case."""
     count = cfg["curriculum"]["probe_cases"]
     threshold = (
-        cfg["curriculum"].get("cherry_bomb_validation_success_threshold")
-        if skill == "cherry_bomb" else None
+        cfg["curriculum"].get(f"{skill}_validation_success_threshold")
+        if skill in ("cherry_bomb", "peashooter") else None
     )
     if threshold is None:
         return count

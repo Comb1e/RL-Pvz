@@ -83,8 +83,10 @@ rules. This file adds project-specific constraints and ownership.
 - Both bomb stages independently use the Cherry Bomb probe interval; resume refreshes that interval
   but retries pending validation first. Validation releases idle collection scratch
   and graph storage without discarding CPU workers or speculative seed state.
-- Keep cohort qualification separate from validation mastery. Cherry Bomb must
-  strictly exceed its configured validation success threshold; other fresh stages
+- Every validation uses fresh random seeds outside reserved splits. Persist the sampled
+  panel before execution and reuse it for interrupted retries against the same weights.
+- Keep cohort qualification separate from validation mastery. Cherry Bomb and Peashooter must
+  strictly exceed their own configured validation success thresholds; other fresh stages
   require perfect validation. Legacy combined probes retain perfect joint mastery. Persist
   separate tile-stage/normal clocks and pending validation; retry interrupted validation
   against preserved weights before further fitting. Missing saved trigger settings
@@ -97,7 +99,7 @@ Paths below are relative to `src/pvz_rl/` unless stated otherwise.
 | Area | Ownership |
 | --- | --- |
 | Repository `tools/bootstrap.*`, `tools/stage_game.py` | Verified, non-editable installation of the pinned engine from an existing checkout. |
-| `config.py`, `data/train.toml`, `gpu.py` | Grouped stage tuning, shared settings, validation and device selection; configuration loading preserves the saved runtime layout. |
+| `config.py`, `data/train.toml`, `gpu.py` | Grouped stage tuning, random validation panels, shared validation and device selection; loading preserves the saved runtime layout. |
 | `envs/` | CPU/CUDA simulator adapters, public encoding, actions, rewards and source credit; `tile_scenarios.py` and `sky_sun.py` own scenario generation and sun scaling. |
 | `envs/scratch_game.py`, `bomb_preparation.py`, `cuda_bomb_oracle.py`, `cuda_snapshots.py` | Validated forks/cart setup, persistent workers/prefetch, CUDA cooldown warmup/attributed labels and batched snapshot transfers. |
 | `envs/attacker_scenarios.py` | Rules-derived conservative bounds, mixed supplied-plant boards, private fallback labels and CPU source-attributed validation. |

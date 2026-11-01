@@ -148,6 +148,7 @@ oracle_vram_mib = 1024
 n_envs = 128
 sky_sun_rate = 1.5 # Divide sky-drop delays by this rate; keep each drop at 25 sun.
 probe_interval_games = 2000
+validation_success_threshold = 0.98 # Strictly exceed this rate (99/100); separate from cohort qualification.
 fitting_objective = "prioritized_lane_cross_entropy_v1"
 column_decay = 0.5 # Preferred-cell target weight halves with each column to the right.
 softmax_temperature = 1.0
@@ -241,8 +242,8 @@ collection_vram_headroom_mib = 512
 
 [splits]
 train = [1000, 99999]
-validation = [100000, 100049]
-curriculum = [100050, 100149] # Separate mastery cases; never final-test seeds.
+validation = [100000, 100049] # Panel size; actual validation seeds are freshly sampled.
+curriculum = [100050, 100149] # Mastery panel capacity; validation draws fresh seeds outside reserved splits.
 test = [200000, 200299]
 ood = [300000, 300099]
 

@@ -10,6 +10,7 @@ import tomllib
 from functools import lru_cache
 from importlib.resources import files
 from pathlib import Path
+from random import SystemRandom
 
 from pvz_game.config import PLANT_TYPES, ZOMBIE_TYPES
 from pvz_game.cuda.schema import MOWER_STATES, PLANT_STATES, ZOMBIE_STATES
@@ -71,6 +72,7 @@ _STAGE_PARAMETERS = {
         "counterfactual_enabled": "training.counterfactual.peashooter.enabled",
         "comparison_temperature": "training.counterfactual.peashooter.temperature",
         "probe_interval_games": "curriculum.peashooter_probe_interval_games",
+        "validation_success_threshold": "curriculum.peashooter_validation_success_threshold",
     },
 }
 
@@ -641,12 +643,12 @@ def validate_config(cfg: dict) -> None:
     for key in ("cherry_bomb_probe_interval_games", "peashooter_probe_interval_games", "attacker_pre_probe_interval_games"):
         if key in c and (type(c[key]) is not int or c[key] < 1):
             raise ValueError(f"{key} must be a positive integer")
-    key = "cherry_bomb_validation_success_threshold"
-    if key in c and (
-        type(c[key]) not in (int, float) or not math.isfinite(c[key])
-        or not 0 <= c[key] < 1
-    ):
-        raise ValueError(f"{key} must be finite and in [0, 1)")
+    for key in ("cherry_bomb_validation_success_threshold", "peashooter_validation_success_threshold"):
+        if key in c and (
+            type(c[key]) not in (int, float) or not math.isfinite(c[key])
+            or not 0 <= c[key] < 1
+        ):
+            raise ValueError(f"{key} must be finite and in [0, 1)")
     trigger = cfg["training"].get("validation_trigger")
     if trigger is not None:
         threshold = trigger.get("cohort_success_threshold")
@@ -807,7 +809,8 @@ def validate_config(cfg: dict) -> None:
         for key in (*schedule, "probe_cases", "consecutive_passes"):
             if type(c[key]) is not int or c[key] < 1:
                 raise ValueError(f"curriculum.{key} must be a positive integer")
-        curriculum_probe_seeds(cfg)
+        split = "curriculum" if "curriculum" in cfg["splits"] else "validation"
+        seed_values(cfg, split, c["probe_cases"])
         for name in STAGES:
             stage = c["stages"][name]
             if (
@@ -1191,6 +1194,16 @@ def seed_values(cfg: dict, split: str, limit: int | None = None) -> list[int]:
 
 
 def curriculum_probe_seeds(cfg: dict) -> list[int]:
-    """New mastery cases are separate; saved recipes retain their original seeds."""
+    """Draw a fresh mastery panel; callers retain it while validation is pending."""
     split = "curriculum" if "curriculum" in cfg["splits"] else "validation"
-    return seed_values(cfg, split, cfg["curriculum"]["probe_cases"])
+    return random_validation_seeds(cfg, split, cfg["curriculum"]["probe_cases"])
+
+
+def random_validation_seeds(cfg: dict, split="validation", limit: int | None = None) -> list[int]:
+    """Independent fresh cases outside every reserved split; splits still set counts."""
+    count = len(seed_values(cfg, split, limit))
+    start = max(hi for _, hi in cfg["splits"].values()) + 1
+    population = range(start, 2**63)
+    if len(population) < count:
+        raise ValueError("Reserved seed splits leave insufficient space for random validation")
+    return SystemRandom().sample(population, count)

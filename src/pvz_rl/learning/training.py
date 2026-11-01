@@ -19,8 +19,8 @@ from pvz_rl.config import (
     cohort_envs,
     curriculum_probe_seeds,
     output_settings,
+    random_validation_seeds,
     runtime_settings,
-    seed_values,
     simulator,
     validate_config,
 )
@@ -185,6 +185,7 @@ class ResearchCallback(BaseCallback):
         self.wall_budget = wall_budget
         self.validation_pending = False
         self.pending_stage_validation = None
+        self.validation_panels = {}
         self.evaluation_cache = {}
         self.cache_steps = -1
         self.budget_stopped = False
@@ -348,7 +349,7 @@ class ResearchCallback(BaseCallback):
             ),
             "peashooter_sky_sun_rate": peashooter_sky_sun_rate(self.cfg),
             "active_skill": self.model.tile_skills.phase if self.model.tile_skills.active else None,
-            "tile_validation_pending": self.validation_trigger.pending == "tile"
+            "tile_validation_pending": self.pending_validation == "tile"
             if self.validation_trigger.enabled
             else self.model.tile_skills.due(self.cfg),
             "normal_cohorts": self.model.normal_updates,
@@ -459,7 +460,7 @@ class ResearchCallback(BaseCallback):
             ),
             "time_budget": self.wall_budget.state() if self.wall_budget else None,
             "validation_pending": self.validation_pending
-            or self.validation_trigger.pending is not None,
+            or self.pending_validation is not None,
             "validation_schedule": "stage_success" if self.stage_validation else "periodic",
             "pending_stage_validation": self.pending_stage_validation,
             "validation_deferred": self.stage_validation and not self.pending_stage_validation,
@@ -824,10 +825,10 @@ class ResearchCallback(BaseCallback):
         # This hook runs after the preceding Q update. A step callback would
         # save pre-update weights while labeling them with the newly collected steps.
         self.capture_update()
-        if self.validation_trigger.pending in ("evaluation", "stage_evaluation"):
+        if self.pending_validation in ("evaluation", "stage_evaluation"):
             self.validate()
             self.require_validation_complete()
-        elif self.validation_trigger.pending == "curriculum":
+        elif self.pending_validation == "curriculum":
             self.probe_curriculum()
             self.require_validation_complete()
         if self.model.tile_skills.active:
@@ -911,7 +912,13 @@ class ResearchCallback(BaseCallback):
         self.pending_stage_validation = copy.deepcopy(schedule.get("pending_stage_validation"))
         self.validation_pending = self.pending_stage_validation is not None
         self.validation_trigger = ValidationTrigger(self.cfg, schedule.get("validation_trigger"))
-        self.validation_pending |= self.validation_trigger.pending is not None
+        self.validation_panels = copy.deepcopy(schedule.get("validation_panels", {}))
+        self.validation_pending |= self.pending_validation is not None
+
+    @property
+    def pending_validation(self):
+        """Random panels remain pending even for recipes without cohort gating."""
+        return self.validation_trigger.pending or next(iter(self.validation_panels), None)
 
     def request_validation(self, kind):
         skills = self.model.tile_skills
@@ -926,6 +933,16 @@ class ResearchCallback(BaseCallback):
                 raise ValueError("Pending validation weights or cohort changed")
             return False
         allowed, checked = self.validation_trigger.request(kind, domain, progress, cohort)
+        if allowed:
+            if self.validation_panels and kind not in self.validation_panels:
+                raise ValueError("Another validation panel remains pending")
+            if kind not in self.validation_panels:
+                self.validation_panels[kind] = (
+                    curriculum_probe_seeds(self.cfg)
+                    if kind in ("tile", "curriculum")
+                    else random_validation_seeds(self.cfg, limit=self.validation_limit)
+                )
+            self.validation_pending = True
         if checked:
             decision = self.validation_trigger.state["decision"]
             with (self.output / "validation-checks.jsonl").open("a", encoding="utf-8") as stream:
@@ -945,15 +962,20 @@ class ResearchCallback(BaseCallback):
                 f"{domain} episodes",
                 force=True,
             )
-        if (allowed and self.validation_trigger.enabled) or checked:
+        if allowed or checked:
             self.save_checkpoint("latest.zip")
             write_json(self.output / "status.json", self.snapshot())
         if checked and not allowed:
             self.refresh_report()
         return allowed
 
+    def complete_validation(self, kind):
+        self.validation_trigger.complete(kind)
+        self.validation_panels.pop(kind, None)
+        self.validation_pending = False
+
     def require_validation_complete(self):
-        if self.validation_trigger.pending:
+        if self.pending_validation:
             self.budget_stopped = True
             raise TrainingDeadline()
 
@@ -1005,6 +1027,7 @@ class ResearchCallback(BaseCallback):
             "last_eval": self.last_eval,
             "pending_stage_validation": copy.deepcopy(self.pending_stage_validation),
             "validation_trigger": copy.deepcopy(self.validation_trigger.state),
+            "validation_panels": copy.deepcopy(self.validation_panels),
         }
         self.sync_curriculum()
         self.model.save(self.output / name)
@@ -1087,7 +1110,7 @@ class ResearchCallback(BaseCallback):
 
     def probe_tile_skills(self, *, final=False):
         skills = self.model.tile_skills
-        if not skills.due(self.cfg) and self.validation_trigger.pending != "tile":
+        if not skills.due(self.cfg) and self.pending_validation != "tile":
             return
         if not self.request_validation("tile"):
             return
@@ -1100,7 +1123,7 @@ class ResearchCallback(BaseCallback):
                 results = validate_tile_skills(
                     self.cfg,
                     self.model,
-                    curriculum_probe_seeds(self.cfg),
+                    self.validation_panels["tile"],
                     deadline=self.operation_deadline(final),
                     progress=self.progress,
                     skills=skills.validation_skills,
@@ -1117,8 +1140,7 @@ class ResearchCallback(BaseCallback):
             previous = skills.phase
             with atomic_transition():
                 skills.observe(scores, self.cfg)
-                self.validation_trigger.complete("tile")
-                self.validation_pending = False
+                self.complete_validation("tile")
                 self.model.tile_skill_state = skills.to_dict()
                 with (self.output / "tile-skill-probes.jsonl").open(
                     "a", encoding="utf-8"
@@ -1172,7 +1194,7 @@ class ResearchCallback(BaseCallback):
         for task in self.curriculum.requirements(self.cfg):
             try:
                 rows = self.cached_evaluation(
-                    curriculum_probe_seeds(self.cfg),
+                    self.validation_panels["curriculum"],
                     [task],
                     "preset",
                     self.output / "curriculum-probes" / str(self.model.num_timesteps) / task,
@@ -1189,8 +1211,8 @@ class ResearchCallback(BaseCallback):
             advanced = self.curriculum.observe(
                 wins, progress, self.cfg, advance=selected_stage(self.cfg) is None
             )
-            self.validation_trigger.complete("curriculum")
-            self.validation_pending = False
+            seeds = self.validation_panels["curriculum"]
+            self.complete_validation("curriculum")
             self.sync_curriculum()
             if advanced:
                 self.training_env.env_method("set_curriculum_stage", self.curriculum.stage)
@@ -1209,6 +1231,7 @@ class ResearchCallback(BaseCallback):
                         "training_games": getattr(self.model, "training_games", 0),
                         "stage": previous,
                         "wins": wins,
+                        "seeds": seeds,
                         "advanced": advanced,
                         "stage_mastered": self.curriculum.mastered,
                         "state": self.curriculum.to_dict(),
@@ -1262,7 +1285,7 @@ class ResearchCallback(BaseCallback):
         write_json(self.output / "status.json", self.snapshot())
         try:
             rows = self.cached_evaluation(
-                seed_values(self.cfg, "validation", self.validation_limit),
+                self.validation_panels["stage_evaluation" if milestone else "evaluation"],
                 ["easy"] if self.family in ("diagnostic",) else self.cfg["evaluation"]["levels"],
                 self.family,
                 self.output / "validation" / str(self.model.num_timesteps),
@@ -1278,8 +1301,7 @@ class ResearchCallback(BaseCallback):
         with atomic_transition():
             scores = summarize(rows)
             score = sum(r["win_rate"] for r in scores.values()) / len(scores)
-            self.validation_pending = False
-            self.validation_trigger.complete("stage_evaluation" if milestone else "evaluation")
+            self.complete_validation("stage_evaluation" if milestone else "evaluation")
             self.pending_stage_validation = None
             self.last_eval = self.model.num_timesteps
             self.progress.emit(
@@ -1324,14 +1346,14 @@ class ResearchCallback(BaseCallback):
 
     def _on_training_end(self):
         self.capture_update()
-        pending = self.validation_trigger.pending
+        pending = self.pending_validation
         if pending == "tile":
             self.probe_tile_skills(final=True)
         elif pending == "curriculum":
             self.probe_curriculum(final=True)
         elif pending:
             self.validate(final=True)
-        if self.validation_trigger.pending:
+        if self.pending_validation:
             return
         if pre_stage(self.cfg):
             if not self.budget_stopped:

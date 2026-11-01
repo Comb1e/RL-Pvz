@@ -10,6 +10,7 @@ from pathlib import Path
 from pvz_rl.config import (
     load_config,
     load_demo_config,
+    random_validation_seeds,
     research_config,
     seed_values,
     validate_config,
@@ -670,7 +671,10 @@ def main(argv=None):
                 raise ValueError("Development evaluation uses seeds 0-9")
             seeds = list(range(count))
         else:
-            seeds = seed_values(cfg, args.split, args.count)
+            seeds = (
+                random_validation_seeds(cfg, args.split, args.count)
+                if args.split == "validation" else seed_values(cfg, args.split, args.count)
+            )
         levels = args.levels or cfg["evaluation"]["ood_levels" if args.split == "ood" else "levels"]
         details = metadata(
             cfg,
