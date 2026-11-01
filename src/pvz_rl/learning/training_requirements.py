@@ -1,19 +1,50 @@
 """Training eligibility, separate from reading historical experiment metadata."""
 
+from dataclasses import asdict, dataclass
 from functools import lru_cache
 
 from pvz_rl.config import research_config, simulator, validate_config
 from pvz_rl.envs.actions import ActionSchema
 from pvz_rl.learning.curriculum import selected_stage
 from pvz_rl.policy.sequential_q import ACTION_DISTRIBUTION
+from pvz_rl.provenance import weight_engine_config
 
 TRAINING_CONDITIONS = ("masked",)
-CURRENT_OBJECTIVE = "complete_return_action_global_v5"
+CURRENT_OBJECTIVE = "complete_return_action_global_v7"
 CURRENT_REWARD = "action_global_value_v5"
+FIT_SCHEDULE_PROTOCOL = "cyclic_tile_joint_cohorts_v2"
 WEIGHT_ACTION_DISTRIBUTIONS = {
     "sequential_q_unmasked_penalty_v1",
     ACTION_DISTRIBUTION,
 }
+
+
+@dataclass(frozen=True)
+class CohortFitSchedule:
+    cohort: int
+    cycle_position: int
+    cycle_cohorts: int
+    stage: str
+    passes: int
+
+    def summary(self):
+        return dict(protocol=FIT_SCHEDULE_PROTOCOL, **asdict(self))
+
+
+def fitting_schedule(cfg, cohort):
+    """Choose one fitting stage for an entire one-based collection cohort."""
+    if type(cohort) is not int or cohort < 1:
+        raise ValueError("Fitting schedule requires a positive integer cohort number")
+    tile_cohorts = cfg["training"]["tile_only_cohorts"]
+    cycle = tile_cohorts + 1
+    position = (cohort - 1) % cycle + 1
+    return CohortFitSchedule(
+        cohort,
+        position,
+        cycle,
+        "tile_only" if position <= tile_cohorts else "joint",
+        cfg["training"]["n_epochs"],
+    )
 
 
 def current_model_config(cfg):
@@ -55,6 +86,8 @@ def weight_model_config(cfg):
             "complete_return_action_global_v2",
             "complete_return_action_global_v3",
             "complete_return_action_global_v4",
+            "complete_return_action_global_v5",
+            "complete_return_action_global_v6",
             CURRENT_OBJECTIVE,
         )
         and train.get("objective", {}).get("protocol") == train.get("method")
@@ -81,16 +114,19 @@ def inference_config(cfg):
 
     if not weight_model_config(cfg):
         raise ValueError("Incompatible model/encoding or objective protocol weight contract")
-    result = copy.deepcopy(cfg)
+    result = weight_engine_config(cfg)
     # Execution options are disposable when loading weights. Keep the strict
     # retired-option error for user configuration and optimizer recovery only.
     result["training"].get("performance", {}).pop("compile_kernels", None)
+    result["training"].pop("tile_warmup_passes", None)
     if current_model_config(cfg):
         return result
     result["training"]["method"] = CURRENT_OBJECTIVE
     result["training"]["objective"]["protocol"] = CURRENT_OBJECTIVE
+    result["training"]["objective"].pop("invalid_action_target", None)
     result["policy"]["action_distribution"] = ACTION_DISTRIBUTION
     defaults = load_config()
+    result["training"].setdefault("tile_only_cohorts", defaults["training"]["tile_only_cohorts"])
     for key, value in defaults["training"]["objective"].items():
         result["training"]["objective"].setdefault(key, copy.deepcopy(value))
     # Weight-only transfer keeps architecture and observation compatibility but
@@ -151,10 +187,6 @@ def require_cuda_training(cfg, condition="masked", *, runtime=True):
             "CPU training is not supported. "
             "Start a fresh complete-game CUDA run with the bundled train profile."
         )
-    if cfg["environment"].get("action_timing") != "per_tick":
-        raise ValueError(
-            "CUDA training requires per_tick actions; legacy timing is inference-only."
-        )
     if (
         cfg["conditions"][condition]
         != {"masked": True, "shaped": True, "curriculum": True, "hybrid": False}
@@ -189,6 +221,16 @@ def resume_protocol(cfg, condition):
     for key in ("total_games", "total_steps", "max_minutes", "finalization_minutes"):
         result["training"].pop(key, None)
     result["training"].pop("annotation", None)
+    # Residual-sun passivity shaping is a cohort-scoped reward update. The
+    # current settings are applied at the next collection boundary, so they do
+    # not invalidate the optimizer or simulator state of an older run.
+    result.get("reward", {}).pop("passivity", None)
+    # This trigger changes only at a collection boundary; probability schedules
+    # and every other learning setting remain part of strict resume identity.
+    result["training"]["exploration"].pop("plant_wait_check_seconds", None)
+    # Only the Cherry probe interval may refresh; pending probes still run
+    # against their saved weights before any further fitting.
+    result["curriculum"].pop("cherry_bomb_probe_interval_games", None)
     return result
 
 
@@ -198,7 +240,11 @@ def transfer_protocol(cfg, condition="masked"):
     return {
         "engine": [cfg[k] for k in ("engine_commit", "engine_version", "engine_package_version")],
         "encoding": cfg["encoding"],
-        "timing": {k: env[k] for k in ("action_timing", "decision_ticks", "cutoff_seconds")},
+        "timing": {
+            k: env[k]
+            for k in ("action_frequency_hz", "action_timing", "decision_ticks", "cutoff_seconds")
+            if k in env
+        },
         "actions": ActionSchema.version,
         "action_distribution": p.get("action_distribution"),
         "board": {
@@ -241,7 +287,7 @@ def weight_transfer_protocol(cfg):
     network dimensions, but do not require matching reward, return, optimizer,
     or execution batch settings.
     """
-    result = transfer_protocol(cfg)
+    result = transfer_protocol(weight_engine_config(cfg))
     for name in ("timing", "method", "return", "action_distribution"):
         result.pop(name)
     return result

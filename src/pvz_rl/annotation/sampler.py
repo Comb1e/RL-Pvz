@@ -13,9 +13,7 @@ from pvz_game import Place, Status, Wait
 from pvz_rl.annotation.dataset import (
     SNAPSHOT_PROTOCOL,
     _atomic_jsonl,
-    _automatic_action_labels,
     _jsonable,
-    action_names,
     dataset_digest,
     validate_record,
     write_manifest,
@@ -74,12 +72,10 @@ class ReachableSnapshotSampler:
     def levels(self):
         return tuple(self.cfg["evaluation"]["levels"])
 
-    def sample(self, level, *, annotation_kind="tile"):
+    def sample(self, level):
         """Return one validated record for ``level`` or raise a bounded error."""
         if level not in self.levels:
             raise ValueError(f"unknown annotation difficulty: {level}")
-        if annotation_kind not in ("tile", "action"):
-            raise ValueError("annotation_kind must be tile or action")
         for _attempt in range(self.max_attempts):
             self.episodes += 1
             scenario_seed = self.rng.randrange(1, 2**31 - 1)
@@ -103,23 +99,15 @@ class ReachableSnapshotSampler:
                 # continue beyond the randomly selected simulation limit.
                 if self.env.state != "running" or self.env.public.status != Status.RUNNING:
                     continue
-                # Tile records deliberately condition on one usable card so
-                # their plot labels have a concrete branch.  Action records
-                # label the complete species branch, so a sampler-selected
-                # plant is neither required nor supervision; any running
-                # endpoint is useful, including boards with no usable card.
-                candidate = None
-                if annotation_kind == "tile":
-                    available = _available(self.env)
-                    if not available:
-                        continue
-                    candidate = self.rng.choice(available)["plant_type"]
+                available = _available(self.env)
+                if not available:
+                    continue
+                candidate = self.rng.choice(available)["plant_type"]
                 record = snapshot_record(
                     self.env,
                     plant_type=candidate,
                     group_id=group_id,
                     record_id=f"annotation-{uuid.uuid4().hex}",
-                    annotation_kind=annotation_kind,
                 )
                 record["difficulty"] = level
                 record["source"]["simulation_steps"] = target_steps
@@ -184,35 +172,11 @@ def _rollout_action(env, rng, *, max_plants=None):
     return Place(kind, *divmod(tile, env.codec.cols))
 
 
-def _action_availability(env):
-    cards = {card.plant_type: card for card in env.public.cards}
-    usable = {row["plant_type"] for row in _available(env)}
-    result = {"wait": {"feasible": True, "absolute_infeasible": False, "reason": None}}
-    for kind in env.codec.plants:
-        card = cards.get(kind)
-        if card is None:
-            reason = "absent_card"
-        elif card.cooldown_ticks:
-            reason = "cooldown"
-        elif env.public.sun < card.cost:
-            reason = "insufficient_sun"
-        elif kind not in usable:
-            reason = "no_legal_placement"
-        else:
-            reason = None
-        legal_tiles = sorted(set(next((row["legal_tiles"] for row in _available(env) if row["plant_type"] == kind), [])))
-        result[kind] = {"feasible": reason is None, "absolute_infeasible": reason is not None, "reason": reason, "legal_tiles": legal_tiles, "cost": int(card.cost) if card else None, "cooldown_ticks": int(card.cooldown_ticks) if card else None}
-    result["dig"] = {"feasible": bool(env.public.plants), "absolute_infeasible": not bool(env.public.plants), "reason": None if env.public.plants else "empty_board"}
-    return result
-
-
-def snapshot_record(env, *, plant_type=None, group_id, record_id, annotation_kind="tile"):
+def snapshot_record(env, *, plant_type, group_id, record_id):
     if env.state != "running" or env.public.status != Status.RUNNING:
         raise ValueError("annotation snapshots must come from a running game")
-    if annotation_kind not in ("tile", "action"):
-        raise ValueError("annotation_kind must be tile or action")
     available = {row["plant_type"]: row for row in _available(env)}
-    if annotation_kind == "tile" and plant_type not in available:
+    if plant_type not in available:
         raise ValueError(f"plant is not currently available: {plant_type}")
     observation = env.public
     encoder = env.encoder
@@ -226,10 +190,7 @@ def snapshot_record(env, *, plant_type=None, group_id, record_id, annotation_kin
         "encoded_observation": _jsonable(encoded),
         "observation_schema": encoder.schema(),
         "rules_hash": env.rules.digest,
-        # Action records do not carry a sampler-selected branch.  Keep the
-        # generic field for protocol compatibility, but action fitting uses
-        # action_availability below instead.
-        "availability": available[plant_type] if annotation_kind == "tile" else {},
+        "availability": available[plant_type],
         "source": {
             "level": env.episode_level,
             "family": env.episode_family,
@@ -237,33 +198,8 @@ def snapshot_record(env, *, plant_type=None, group_id, record_id, annotation_kin
             "tick": int(observation.tick),
         },
     }
-    if annotation_kind == "action":
-        record["annotation_kind"] = "action"
-        metadata = _action_availability(env)
-        record["action_availability"] = metadata
-        record["branch_availability"] = metadata
-        # Dig is intentionally an annotation default rather than a sampler
-        # choice.  Even when a board currently contains a plant, the action
-        # annotator starts with Dig in the absolute-infeasible set so users
-        # must explicitly opt into another action set instead of inheriting a
-        # rollout artifact.  It is a human-editable default, so it must not be
-        # part of the automatic (locked) labels.  Keep the simulator's actual
-        # dig feasibility in ``action_availability`` for display and audit
-        # purposes.
-        automatic = set(_automatic_action_labels(record, env.codec.plants))
-        record["automatic_absolute_infeasible_actions"] = sorted(
-            automatic, key=action_names(env.codec.plants).index
-        )
-        record["absolute_infeasible_actions"] = sorted(
-            automatic | {"dig"}, key=action_names(env.codec.plants).index
-        )
-        record["feasible_actions"] = []
-    else:
-        record["annotation_kind"] = "tile"
-        legal_tiles = set(record["availability"]["legal_tiles"])
-        record["automatic_absolute_infeasible_tiles"] = sorted(set(range(45)) - legal_tiles)
-        record["absolute_infeasible_tiles"] = list(record["automatic_absolute_infeasible_tiles"])
-        record["feasible_tiles"] = []
+    record["annotation_kind"] = "tile"
+    record["feasible_tiles"] = []
     validate_record(record, plant_types=env.codec.plants)
     return record
 

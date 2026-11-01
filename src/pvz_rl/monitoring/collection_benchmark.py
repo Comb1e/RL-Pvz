@@ -1,4 +1,4 @@
-"""Headless cold/warm snapshot controls and opt-in bounded four-pass fitting.
+"""Headless cold/warm snapshot controls and opt-in bounded six-pass fitting.
 
 Warmup and replicates follow PyTorch 2.8's torch.utils.benchmark.Timer. Collection
 uses its existing host handoff, not a new per-step wait. The optional cycle uses
@@ -35,8 +35,7 @@ ENVIRONMENT_COUNTS = (128, 64, 32, 16, 4, 1)
 ORIGINAL_ENVIRONMENTS = ENVIRONMENT_COUNTS[0]
 WARMUP_DECISIONS = 8
 REPETITIONS = 3
-FIT_PASSES = 4
-PROTOCOL = "collection-two-stage-tile-snapshot-v8"
+PROTOCOL = "collection-two-stage-tile-snapshot-v9"
 
 
 class CollectionCallback(BaseCallback):
@@ -267,7 +266,7 @@ def warmed_comparison(primary, after):
 
 
 def fit_cycle(model, callback, raw, decisions, hardware, process, context, seconds):
-    """One bounded collect -> four-pass fit -> collect; normal terminal cutoffs."""
+    """One bounded collect -> configured tile-warmup/joint fit -> collect."""
     env = model.env
     previous_cutoff = env.cfg["environment"]["cutoff_seconds"]
     terminal_raw = copy.deepcopy(raw)
@@ -312,7 +311,7 @@ def fit_cycle(model, callback, raw, decisions, hardware, process, context, secon
         model._phase_times["returns"] = preparation
         model._phase(CohortPhase.FIT, callback)
         started = perf_counter()
-        while model._fit_epoch < FIT_PASSES:
+        while model._fit_epoch < model.total_fit_passes:
             check_cycle_budget(deadline)
             model._fit_step(callback)
         model._phase_times["fit"] = perf_counter() - started
@@ -367,8 +366,9 @@ def fit_cycle(model, callback, raw, decisions, hardware, process, context, secon
         check_cycle_budget(deadline)
     return dict(
         **context,
-        optimizer_steps=FIT_PASSES,
-        passes=FIT_PASSES,
+        optimizer_steps=model.total_fit_passes,
+        passes=model.total_fit_passes,
+        fit_schedule=model.cohort_metrics["fit_schedule"],
         cutoff_seconds=1,
         setup_scope="actual cutoff feature rebuild and reset; excluded from collection and fit timings",
         preparation_seconds=preparation,
@@ -418,11 +418,14 @@ def benchmark(
         raise ValueError("Use a cycle wall budget in (0, 300] seconds")
     output.parent.mkdir(parents=True, exist_ok=True)
     cfg = load_config()
+    cfg["training"].pop("peashooter_rules", None)
+    for stage in ("normal", "peashooter"):
+        cfg["training"].get("counterfactual", {}).get(stage, {})["enabled"] = False
     from pvz_rl.config import validate_config
 
     validate_config(cfg)
     cfg["visualization"].update(enabled=False, live_enabled=False, demos=False, videos=False)
-    cfg["training"].update(until_stage_complete=False, total_games=10000, n_epochs=FIT_PASSES)
+    cfg["training"].update(until_stage_complete=False, total_games=10000)
     cfg["training"]["n_envs"] = ORIGINAL_ENVIRONMENTS
     cfg["training"]["performance"].update(
         compile_collection=not eager, compile_fitting=not eager, telemetry=telemetry

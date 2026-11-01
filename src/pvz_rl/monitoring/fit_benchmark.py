@@ -14,6 +14,7 @@ from pvz_rl.learning.action_routing import classify_actions, workload_counts
 from pvz_rl.learning.batch_transport import BatchPrefetch, FittingSpool
 from pvz_rl.learning.cuda_buffer import CompleteGameBuffer
 from pvz_rl.learning.flat_q import CohortCoefficients, batch_loss
+from pvz_rl.learning.training_requirements import fitting_schedule
 from pvz_rl.monitoring.entity_benchmark import observation
 from pvz_rl.policy.two_stage_transformer import TwoStageTransformerPolicy
 from pvz_rl.provenance import write_json
@@ -107,8 +108,9 @@ def benchmark_rows(cfg, widths, rows_per_width, action_mix, dtype):
     return rows, boards
 
 
-def measure(cfg, *, repeats=3, rows_per_width=16, trajectory=None, initial=None):
-    """Each repetition commits four complete passes with fixed cohort denominators."""
+def measure(cfg, *, repeats=3, rows_per_width=16, trajectory=None, initial=None, cohort=1):
+    """Each repetition commits the configured passes for the selected cohort."""
+    schedule = fitting_schedule(cfg, cohort)
     torch.set_num_threads(cfg["training"]["torch_threads"])
     torch.manual_seed(101)
     model = TwoStageTransformerPolicy(cfg).cuda().train()
@@ -156,9 +158,20 @@ def measure(cfg, *, repeats=3, rows_per_width=16, trajectory=None, initial=None)
                     "cuda",
                     cfg["training"]["objective"]["accepted_outcome_share"],
                 )
+                tile_coefficients = CohortCoefficients.prepare(
+                    spool.tile_outcome_counts,
+                    np.zeros((2, 2), dtype=np.int64),
+                    "cuda",
+                    cfg["training"]["objective"]["accepted_outcome_share"],
+                )
+                total_passes = schedule.passes
 
                 def passes():
-                    for _ in range(cfg["training"]["n_epochs"]):
+                    for _ in range(total_passes):
+                        fit_stage = schedule.stage
+                        tile_only = fit_stage == "tile_only"
+                        pass_counts = spool.tile_outcome_counts if tile_only else counts
+                        pass_coefficients = tile_coefficients if tile_only else coefficients
                         model.zero_grad(set_to_none=True)
                         with_transport = BatchPrefetch(
                             buffer,
@@ -172,12 +185,13 @@ def measure(cfg, *, repeats=3, rows_per_width=16, trajectory=None, initial=None)
                                 loss, *_ = batch_loss(
                                     model,
                                     chunk,
-                                    counts,
+                                    pass_counts,
                                     obs,
                                     fields,
                                     teacher=teacher,
                                     consistency_counts=spool.consistency_counts,
-                                    coefficients=coefficients,
+                                    coefficients=pass_coefficients,
+                                    fit_stage=fit_stage,
                                 )
                                 loss.backward()
                                 model.accumulate_master_gradients()
@@ -185,16 +199,22 @@ def measure(cfg, *, repeats=3, rows_per_width=16, trajectory=None, initial=None)
                         finally:
                             with_transport.close()
                         torch.nn.utils.clip_grad_norm_(
-                            model.master_parameters(),
+                            model.master_parameters("tile") if tile_only else model.master_parameters(),
                             cfg["training"]["max_grad_norm"],
                             error_if_nonfinite=True,
                         )
                         optimizer.step()
                         model.sync_runtime_from_masters()
                         with torch.no_grad():
+                            teacher_parameters = teacher.runtime_parameters(
+                                "tile" if tile_only else None
+                            )
+                            model_parameters = model.runtime_parameters(
+                                "tile" if tile_only else None
+                            )
                             torch._foreach_lerp_(
-                                list(teacher.parameters()),
-                                list(model.parameters()),
+                                list(teacher_parameters),
+                                list(model_parameters),
                                 1 - cfg["training"]["objective"]["ema_decay"],
                             )
 
@@ -227,7 +247,8 @@ def measure(cfg, *, repeats=3, rows_per_width=16, trajectory=None, initial=None)
                         rows=buffer.size,
                         representatives=len(spool),
                         compaction=spool.compaction,
-                        passes=cfg["training"]["n_epochs"],
+                        passes=total_passes,
+                        fit_schedule=schedule.summary(),
                         spool_seconds=spool_seconds,
                         cold_seconds=cold_seconds,
                         routed_workload=workload_counts(spool.rows),
@@ -275,12 +296,19 @@ def main():
     parser.add_argument("--threads", type=int)
     parser.add_argument("--repeats", type=int, default=3)
     parser.add_argument(
+        "--cohort", type=int, default=1, help="one-based cohort whose fitting stage is measured"
+    )
+    parser.add_argument(
         "--no-compile",
         action="store_true",
         help="use eager fitting for a low-memory correctness rehearsal",
     )
     args = parser.parse_args()
     cfg = load_config(args.config)
+    cfg["training"].pop("peashooter_rules", None)
+    if "counterfactual" in cfg["training"]:
+        for stage in ("normal", "peashooter"):
+            cfg["training"].get("counterfactual", {}).get(stage, {})["enabled"] = False
     from pvz_rl.gpu import apply_gpu_profile, select_gpu
 
     device = select_gpu(args.gpu)
@@ -306,6 +334,7 @@ def main():
             rows_per_width=args.rows_per_width,
             trajectory=args.trajectory,
             initial=args.init_from,
+            cohort=args.cohort,
         ),
     )
 

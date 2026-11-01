@@ -289,6 +289,8 @@ class FitDiagnostics:
             storage=cfg["training"]["storage"],
             batch_size=model.batch_size,
             n_epochs=model.n_epochs,
+            tile_warmup_passes=model.tile_warmup_passes,
+            total_fit_passes=model.total_fit_passes,
             encoding=cfg["encoding"],
             diagnostics=dict(
                 sample_seconds=self.sample_seconds,
@@ -575,6 +577,18 @@ class FitDiagnostics:
         self.output.mkdir(parents=True, exist_ok=False)
         self.stream = (self.output / "fit-events.jsonl").open("w", encoding="utf-8")
         self.patches = ExitStack()
+        from pvz_rl.learning import training
+
+        ordinary_train = training.train
+
+        def diagnostic_train(cfg, *args, **kwargs):
+            cfg = deepcopy(cfg)
+            cfg["training"].pop("peashooter_rules", None)
+            for stage in ("normal", "peashooter"):
+                cfg["training"].get("counterfactual", {}).get(stage, {})["enabled"] = False
+            return ordinary_train(cfg, *args, **kwargs)
+
+        self.patches.enter_context(patch.object(training, "train", diagnostic_train))
         for owner, method, name in (
             (sequential_training.CudaSequentialQ, "_start_pass", "start_pass"),
             (sequential_training.CudaSequentialQ, "_publish_fit_metrics", "pass_metrics"),

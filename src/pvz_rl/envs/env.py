@@ -22,6 +22,7 @@ from pvz_rl.envs.actions import ActionCodec
 from pvz_rl.envs.encoding import ObservationEncoder
 from pvz_rl.envs.rewards import LEDGER_METRICS, REWARD_METRICS, HomeProximityLedger, reward_parts
 from pvz_rl.envs.scenarios import difficulty_weights, scenario
+from pvz_rl.envs.sky_sun import SkySunGame, validate_sky_sun_rate
 from pvz_rl.evaluation.controllers import PublicBoard, strategy_candidates
 from pvz_rl.learning.action_routing import branch_availability
 from pvz_rl.learning.budget import budget_target, uses_games
@@ -54,6 +55,7 @@ class PvZEnv(gym.Env):
         replay_metadata=None,
         render_mode=None,
         rules=None,
+        sky_sun_rate=1.0,
     ):
         super().__init__()
         self.cfg = copy.deepcopy(cfg or load_config())
@@ -71,7 +73,13 @@ class PvZEnv(gym.Env):
             raise ValueError("Only rgb_array rendering is supported")
         self.rules = rules or Rules()
         self.per_tick = per_tick_actions(self.cfg)
-        self.game = ActionPhaseGame(self.rules) if self.per_tick else Game(self.rules)
+        self.sky_sun_rate = validate_sky_sun_rate(
+            sky_sun_rate,
+            self.rules,
+            self.cfg["environment"]["cutoff_seconds"] * self.rules.game["tick_rate"]
+            + self.cfg["environment"]["decision_ticks"],
+        )
+        self.game = self._new_game()
         self.metadata = {
             **self.metadata,
             "render_fps": self.rules.game["tick_rate"]
@@ -94,6 +102,11 @@ class PvZEnv(gym.Env):
         self.cache_legal_actions = runtime_settings(self.cfg)["cache_legal_actions"]
         self._candidates = None
         self.causal_credit = CausalCreditLedger(self.cfg, self.rules)
+
+    def _new_game(self):
+        if self.sky_sun_rate != 1.0:
+            return SkySunGame(self.rules, sky_sun_rate=self.sky_sun_rate)
+        return ActionPhaseGame(self.rules) if self.per_tick else Game(self.rules)
 
     def set_progress(self, decisions: int):
         self.progress = int(decisions)
@@ -135,7 +148,7 @@ class PvZEnv(gym.Env):
             raise TypeError("Scenario must be a preset, LevelSpec or WaveSpec")
         rules = self.rules
         if self.game.rules.digest != rules.digest:
-            self.game = ActionPhaseGame(rules) if self.per_tick else Game(rules)
+            self.game = self._new_game()
         self.public = self.game.reset(resolved, game_seed)
         self.causal_credit.reset((level, family, game_seed))
         self.causal_credit.seed_observation(self.public)
@@ -232,12 +245,13 @@ class PvZEnv(gym.Env):
         return self._direct_mask.copy()
 
     def branch_availability(self):
-        """Return pre-action branch availability without tile geometry."""
+        """Return card availability and reject Dig when there are no plants."""
         cards = {card.plant_type: card for card in self.public.cards}
         return branch_availability(
             [self.public.sun if self.state == EpisodeState.RUNNING else 0],
             [[cards[kind].cooldown_ticks if kind in cards else -1 for kind in self.codec.plants]],
             [self.rules.plants[kind]["cost"] for kind in self.codec.plants],
+            plant_count=[len(self.public.plants)],
             active=[self.state == EpisodeState.RUNNING],
             card_present=[[kind in cards for kind in self.codec.plants]],
         )[0]
@@ -452,6 +466,7 @@ class PvZEnv(gym.Env):
             "status": self.state.value,
             "win": int(self.state == EpisodeState.WON),
             "tick": obs.tick,
+            "remaining_sun": float(obs.sun),
             "simulated_seconds": obs.elapsed_seconds,
             "return": self.episode_reward,
             "decisions": self.metrics["decisions"],

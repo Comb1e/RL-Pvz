@@ -1,4 +1,4 @@
-"""Reachable board snapshots and human tile/action annotations."""
+"""Reachable board snapshots and human positive tile annotations."""
 
 from .dataset import (
     ANNOTATION_PROTOCOL,
@@ -6,7 +6,6 @@ from .dataset import (
     SNAPSHOT_PROTOCOL,
     AnnotationStore,
     LiveAnnotationStore,
-    action_names,
     load_records,
     read_jsonl,
     validate_record,
@@ -23,7 +22,6 @@ __all__ = [
     "load_records",
     "read_jsonl",
     "validate_record",
-    "action_names",
     "write_manifest",
     "ReachableSnapshotSampler",
 ]

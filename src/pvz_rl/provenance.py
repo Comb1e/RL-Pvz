@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import importlib.metadata
 import json
@@ -72,13 +73,30 @@ def current_engine_config(cfg: dict) -> bool:
     )
 
 
+def weight_engine_config(cfg: dict) -> dict:
+    """Resolve only explicitly compatible source pins for model-weight use.
+
+    Simulator recovery and demonstration verification never call this adapter.
+    The original source configuration remains available for provenance.
+    """
+    expected = engine_pin()
+    source = {key: cfg.get(f"engine_{key}") for key in ("commit", "version", "package_version")}
+    current = {key: expected[key] for key in source}
+    if source != current and source not in expected.get("weight_compatible", []):
+        raise ValueError("Checkpoint engine pin is not compatible for model-weight loading")
+    result = copy.deepcopy(cfg)
+    result.update({f"engine_{key}": value for key, value in current.items()})
+    return result
+
+
 def verify_engine(cfg: dict) -> dict:
     expected = engine_pin()
     if not current_engine_config(cfg):
         raise RuntimeError(
             "This configuration/checkpoint uses an older or different game source pin. "
             f"Start a fresh training run with the bundled PVZ {expected['package_version']} configuration. "
-            "Checkpoint migration is unsupported; use current 100 Hz recordings."
+            "Simulator recovery migration is unsupported. Use compatible weights with "
+            "--init-from and record new demonstrations with the current engine."
         )
     package_version = importlib.metadata.version("pvz-research-game")
     if (

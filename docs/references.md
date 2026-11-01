@@ -1,480 +1,186 @@
-# Sources actually used
+# Research references
 
-## Annotation fitting execution — 2026-10-23
+Papers and projects that informed design or research directions, listed once per
+source. Entries distinguish adopted ideas from algorithms that remain comparison
+references. Historical entries preserve attribution for removed designs.
+Routine library/API documentation, implementation details and version history are
+outside this index.
 
-- [PyTorch performance tuning guide source](https://raw.githubusercontent.com/pytorch/tutorials/main/recipes_source/recipes/tuning_guide.py):
-  consulted synchronization, repeated setup, memory allocation and small-operation
-  overhead. Prepared raw inputs are reused; learned activations recompute. Encoder
-  limits are opt-in because batching changed BF16 arithmetic in the controls.
-- [PyTorch pinned/nonblocking transfer tutorial source](https://raw.githubusercontent.com/pytorch/tutorials/main/intermediate_source/pinmem_nonblock.py):
-  consulted D2H completion and buffer mutation hazards. Packed CPU snapshots use
-  blocking transfer before serialization; streaming retains the existing pinned
-  transport rather than pinning each tensor on every pass.
-- [PyTorch asynchronous checkpoint recipe source](https://raw.githubusercontent.com/pytorch/tutorials/main/recipes_source/distributed_async_checkpoint_recipe.rst):
-  consulted immutable CPU staging, staging memory cost and limiting in-flight
-  snapshots. The local adaptation is synchronous and retains per-pass `fsync`
-  and atomic replacement; it adds no distributed checkpoint dependency.
+## Design influences
 
-## Smoke-test selection — 2026-10-22
-
-- [pytest custom-marker examples](https://github.com/pytest-dev/pytest/blob/main/doc/en/example/markers.rst):
-  consulted marker-based selection for the default CPU checks and explicit
-  `-m learning` CUDA smoke command. This uses pytest's existing marker support
-  without another test dependency.
-
-## CPU/GPU pipeline audit — 2026-10-21
-
-- [PyTorch 2.8 CUDA semantics](https://raw.githubusercontent.com/pytorch/pytorch/v2.8.0/docs/source/notes/cuda.rst):
-  rechecked asynchronous execution, explicit stream dependencies and synchronized
-  timing. The audit treats producer, copy and device spans as overlapping work,
-  not additive stages, and keeps buffer reuse fences.
-- [PyTorch pinned/nonblocking tutorial](https://raw.githubusercontent.com/pytorch/tutorials/main/intermediate_source/pinmem_nonblock.py):
-  rechecked the separate-stream and pinned-source requirements for overlapping
-  transfer with compute. Reusing the existing producer/pinned-slot path is
-  preferred to pinning batches on the main thread on every pass.
-- [PyTorch 2.8 Adam source](https://raw.githubusercontent.com/pytorch/pytorch/v2.8.0/torch/optim/adam.py):
-  inspected foreach/fused execution options as a secondary kernel-launch
-  opportunity; no optimizer setting or arithmetic was changed. Four commits per
-  cohort make this lower priority than repeated forward/backward launch work.
-
-## Causal reward attribution — 2026-10-19
-
-- Sutton, Richard S., [Learning to Predict by the Methods of Temporal
-  Differences](https://www.cs.utexas.edu/~shivaram/readings/b2hd-Sutton1988.html):
-  used as the credit-assignment reference for keeping chronological complete
-  returns while recording delayed physical effects against their source action.
-  The implementation uses explicit simulator event provenance rather than a
-  learned eligibility trace.
-- Ng, Harada and Russell, [Policy Invariance Under Reward Transformations](https://ai.stanford.edu/~ang/papers/icml99-shaping.pdf):
-  used to separate diagnostic proximity/time shaping from the changed learning
-  objective and to document that the new signed action terms are an intentional
-  objective change, not a claim of policy invariance.
-- The pinned [`pvz_game` event schema](../.venv/Lib/site-packages/pvz_game/cuda/schema.py)
-  and engine event implementation were used directly for ordering guarantees:
-  projectile source IDs, Sunflower entity IDs, `ZombieSwallowed`,
-  `PlantDamaged`, `PlantRemoved` and mower activation events. IDs remain private
-  accounting metadata and never enter observations.
-
-## Tile-to-species target reliability — research inspection, 2026-10-13
-
-The current objective adopts online selection/EMA evaluation and robust Huber
-consistency below. Other inspected directions remain research comparisons, not
-supported runtime alternatives. None establishes target correctness or a guaranteed
-learning improvement; implementation verification is tracked in iteration history.
-
+- Metz et al., [Discrete Sequential Prediction of Continuous Actions for Deep RL](https://arxiv.org/html/1705.05035v3):
+  conditional action decomposition and cross-stage value consistency informed the
+  species/tile model. Its Bellman algorithm is not adopted; consistency alone
+  does not independently ground either head's values.
 - van Hasselt et al., [Deep Reinforcement Learning with Double Q-learning](https://arxiv.org/html/1509.06461v3):
-  inspected equation 4 and the Double DQN selection/evaluation separation. A local
-  adaptation selects a geometry-candidate tile using detached online tile values,
-  then evaluates that tile with frozen EMA weights for detached species consistency
-  targets. Existing online tables and the EMA forward are reused; the architecture,
-  complete returns, exploration and probes are unchanged. Correlated estimators can
-  still share errors; this is not a correctness guarantee or adoption of DQN.
-- [PyTorch 2.8 `HuberLoss` implementation](https://github.com/pytorch/pytorch/blob/v2.8.0/torch/nn/modules/loss.py):
-  inspected its piecewise half-squared/linear formula. Species consistency uses
-  twice unreduced Huber with delta 1.0 to retain MSE loss/gradients for small errors
-  and bound large-error influence. Global group/outcome balancing remains unchanged.
-  Delta is in training-return units; targets/rewards are not clipped and samples
-  are not gated or excluded. Robust gradients do not establish target correctness.
-- Lan et al., [Maxmin Q-learning: Controlling the Estimation Bias of Q-learning, section 4](https://arxiv.org/html/2002.06487v2):
-  inspected the minimum across estimators for each action before maximization,
-  and random data subsampling to reduce estimator dependence. Two independently
-  trained tile estimators could supply a conservative species target. Additional
-  memory/inference and underestimation are tradeoffs; the paper's tabular results
-  do not guarantee accuracy for this project's Transformers.
-- Anschel et al., [Averaged-DQN, section 3](https://arxiv.org/html/1611.01929v4):
-  inspected averaging previous value predictions to reduce target variance.
-  Averaging tile predictions before selecting a maximum is an alternative to a
-  hard minimum, not a cure for shared systematic error. Averaging network weights
-  is not generally equivalent to averaging nonlinear network predictions.
-- Feinberg et al., [Model-Based Value Estimation, definition 3.1](https://arxiv.org/html/1803.00101v1):
-  re-inspected bounded rewards plus a tail value. A project-specific adaptation
-  could reserve same-species probes for predicted winner tiles and use completed
-  rollout evidence to check species targets. Rotating four tiles does not verify
-  the maximum over all candidates; actual exploratory returns and frozen-policy
-  probe returns also have different continuation policies. With gamma one, a
-  longer rollout does not discount away endpoint value error. The planting trigger
-  and winner verification are local proposals, not claims of the paper.
-- [Explorer project README](https://github.com/qlan3/Explorer): inspected its
-  documented Double DQN, Maxmin DQN, Averaged DQN and ensemble implementations as
-  implementation references. The project is no longer actively maintained; no
-  dependency, code, replay algorithm or benchmark claim is adopted.
-
-## Stateless two-stage attention — 2026-10-13
-
-- Metz et al., [Discrete Sequential Prediction of Continuous Actions for Deep RL, §2.2](https://arxiv.org/html/1705.05035v3):
-  inspected equation 7's internal conditional-max consistency and equation 8's
-  final-action consistency. The species network learns a stopped-gradient target
-  from EMA evaluation of the online-selected best geometry candidate, rather than
-  a sampled poor tile's return. The two local networks, complete-return regression, EMA balancing
-  and tile-probe schedule are project choices; SDQN's off-policy algorithm is not
-  implemented. This is a learned consistency target, not an exact species maximum
-  substituted into normal branch selection.
+  online selection and separate EMA evaluation inform species consistency targets.
+  Correlated estimators can share errors; agreement does not establish calibration.
 - Zambaldi et al., [Relational Deep Reinforcement Learning](https://arxiv.org/abs/1806.01830):
-  inspected spatial/entity self-attention for reasoning about relations in current
-  observations. This informs separate current-board species and conditional spatial
-  tile encoders. No agent algorithm, recurrence, dependencies or performance claims
-  are adopted.
-- Lee et al., [Set Transformer](https://arxiv.org/abs/1810.00825) and the
-  [official project](https://github.com/juho-lee/set_transformer): inspected
-  permutation-invariant attention over sets and query-based readouts. Public entity
-  tokens plus global/coordinate queries use these spatial set-attention ideas;
-  learned parameters remain independent between stages. Inducing-point attention,
-  the paper's algorithm and project dependencies are not used. Network widths,
-  depths, heads and the 256-entity cap are local choices, not proven optimal.
-
-Current sources below are distinguished from explicitly historical inspections.
-Historical references preserve attribution only; they are not runtime alternatives.
-Measurements and version narratives belong in [iteration history](iteration.md).
-
-## Persistent exploration
-
+  entity/spatial attention informed reasoning over the current public board.
+- Lee et al., [Set Transformer](https://arxiv.org/abs/1810.00825) and
+  [project](https://github.com/juho-lee/set_transformer): permutation-invariant
+  entity attention and query readouts informed the independent encoders.
+- Vinyals et al., [AlphaStar](https://www.nature.com/articles/s41586-019-1724-z),
+  its [unit encoder](https://github.com/google-deepmind/alphastar/blob/700b1e74364ed5dfc66f6cd2574c5ffac2fa474e/alphastar/architectures/components/units.py)
+  and [mini-AlphaStar §3.2](https://arxiv.org/html/2104.06890v2#S3.SS2): entity
+  embeddings, masks and structured action arguments informed encoding; recurrence
+  and league training are not used.
+- Hester et al., [Deep Q-learning from Demonstrations](https://arxiv.org/html/1704.03732v4):
+  supervised action preferences alongside value regression informed demo/annotation
+  initialization. Finite legality margins and rankings from verified comparisons
+  are research proposals; a winning trajectory does not make every action expert.
+- [AlphaStar Unplugged](https://arxiv.org/abs/2308.03526): offline return learning
+  motivated demonstration initialization, without reproducing its algorithm or data.
 - Dabney et al., [Temporally-Extended epsilon-Greedy Exploration](https://arxiv.org/abs/2006.01782):
-  inspected temporal persistence as a way to reduce dithering. This project commits
-  to an alternative species until it can be planted; it does not sample random
-  repetition durations or claim the paper's performance results.
+  temporal persistence informed species commitments that reduce dithering.
 - Bacon et al., [The Option-Critic Architecture](https://arxiv.org/abs/1609.05140)
-  and its [project](https://github.com/jeanharb/option_critic): inspected temporal
-  abstraction and explicit option termination. The local controller has deterministic
-  readiness/episode termination, not learned options, option critics or policy gradients.
-
-## Historical selective-memory inspection
-
-- Campos et al., [Skip RNN: Learning to Skip State Updates in Recurrent Neural Networks](https://arxiv.org/abs/1708.06834)
-  and the [official project](https://imatge-upc.github.io/skiprnn-2017-telecombcn/):
-  inspected for selective recurrent-state updates on low-information sequences.
-  The former event-memory implementation used deterministic public events instead
-  of learned skip gates. That implementation and its fusion/history paths have
-  been removed; the current two-stage policy is stateless. This reference records
-  the prior inspection, not a supported memory mechanism.
-
-This index records adopted ideas and explicitly labelled historical/comparative
-inspections. Entity caps, embedding widths, rewards and mastery gates are not
-established by these papers.
-
-## Entities, values and demonstration supervision
-
-- Hester et al., [Deep Q-learning from Demonstrations](https://arxiv.org/abs/1704.03732):
-  accepted-demonstration action ranking alongside value regression. The project uses
-  only its supervised preference idea, not its replay or DQN implementation.
+  and [project](https://github.com/jeanharb/option_critic): explicit termination
+  informed readiness-based commitments; options and termination are not learned.
+- Cour, Sapp and Taskar, [Learning from Partial Labels](https://www.jmlr.org/papers/v12/cour11a.html):
+  candidate-label supervision informed accepting any annotated feasible tile.
+  Multiple tiles can be correct here; the local set-ranking loss is an adaptation.
+- Sutton, [Learning to Predict by the Methods of Temporal Differences](https://www.cs.utexas.edu/~shivaram/readings/b2hd-Sutton1988.html):
+  credit-assignment background for chronological returns and delayed effects.
+  The implementation uses simulator provenance rather than learned traces.
+- Ng, Harada and Russell, [Policy Invariance Under Reward Transformations](https://people.eecs.berkeley.edu/~russell/papers/icml99-shaping.pdf):
+  distinguishes potential shaping from intentional objective changes. With gamma
+  one and zero terminal potentials, its sum is constant for a fixed initial state;
+  this alone supplies no new ranking evidence to complete-return regression.
 - van Hasselt et al., [Learning values across many orders of magnitude](https://arxiv.org/abs/1602.07714):
-  reward/target scale sensitivity motivated separating raw ledger values from the
-  development multiplier; PopArt is not used.
+  scale sensitivity motivated separating raw ledger values from fitted rewards;
+  PopArt is not implemented.
+- Cobbe et al., [Leveraging Procedural Generation to Benchmark Reinforcement Learning](https://arxiv.org/abs/1912.01588)
+  and [Procgen](https://github.com/openai/procgen): procedural diversity and held-out
+  scenarios informed independent training/validation splits and reachable sampling.
+- Agarwal et al., [Deep Reinforcement Learning at the Edge of the Statistical Precipice](https://arxiv.org/abs/2108.13264)
+  and [rliable](https://github.com/google-research/rliable/tree/3ccd9f4dea577a04d3d2b557f259aac08badbd81):
+  independent runs, uncertainty and equal-budget comparisons informed evaluation;
+  the crossed paired bootstrap is local.
+- [WarpDrive: Fast End-to-End Deep Multi-Agent Reinforcement Learning on a GPU](https://jmlr.org/papers/v23/22-0185.html)
+  and [project](https://github.com/salesforce/warp-drive/blob/master/README.md):
+  device-resident simulation and reduced host/device round trips informed batching.
+  No code or published throughput result is adopted.
 
-- Vinyals et al., [AlphaStar](https://www.nature.com/articles/s41586-019-1724-z):
-  entity observations and structured action arguments. Its recurrence is not used
-  by the current stateless model.
-  No model weights, game features, league training or reported performance are adopted.
-- [Official AlphaStar unit encoder and Transformer](https://github.com/google-deepmind/alphastar/blob/700b1e74364ed5dfc66f6cd2574c5ffac2fa474e/alphastar/architectures/components/units.py):
-  shared numerical/categorical entity embeddings, absent-unit masks and contextual
-  attention. [mini-AlphaStar §3.2](https://arxiv.org/html/2104.06890v2#S3.SS2)
-  informed the distinction between raw entity lists and learned vectors.
-- [AlphaStar Unplugged](https://arxiv.org/abs/2308.03526): inspected offline
-  demonstration and return-learning motivation. The local one-game initialization
-  does not reproduce its dataset, algorithm or generalization evidence.
-- [SB3 2.7.0 HER replay buffer](https://github.com/DLR-RM/stable-baselines3/blob/v2.7.0/stable_baselines3/her/her_replay_buffer.py):
-  inspected reward recomputation through the environment reward function before
-  tensor conversion. Demonstration reuse applies that separation to verified
-  replay observations/events and current reward coefficients; it does not use
-  hindsight goals or the HER algorithm.
-- Hausknecht and Stone, [Deep Recurrent Q-Learning](https://arxiv.org/abs/1507.06527):
-  historical abstract inspection for memory under partial observation. Recurrence
-  has been removed; this source supplies no current runtime mechanism or claim
-  that statelessness improves learning.
-- [SB3-Contrib 2.7.1 recurrent policies](https://github.com/Stable-Baselines-Team/stable-baselines3-contrib/blob/v2.7.1/sb3_contrib/common/recurrent/policies.py)
-  and [buffers](https://github.com/Stable-Baselines-Team/stable-baselines3-contrib/blob/v2.7.1/sb3_contrib/common/recurrent/buffers.py):
-  historically inspected sequence processing, episode-start resets and padding.
-  Those recurrent paths are removed; PPO/GAE was never adopted. Inspected source
-  SHA-256 values: `7b2314050c1325f2ebbd051b570e5811eb1e0219ebeabf91cb5bca621b88e6df`
-  and `b1c5632149bfe8db3472f8608ed0f28e0686d8bb937aec05890ca2cee57ef75c`.
-- Metz et al., [Discrete Sequential Prediction of Continuous Actions for Deep RL, §2.2](https://arxiv.org/html/1705.05035v3):
-  assemble action components before executing one command. Its off-policy Bellman
-  backups are not used. For the 2026-10-09 species/tile credit discussion, inspected
-  equation 7's internal maximization backup and equation 8's terminal-component
-  consistency, rather than assigning the sampled placement return to both heads.
-  These conditional-max ideas now inform stopped-gradient, online-selected/EMA-evaluated tile targets for
-  independent species predictions; normal inference does not derive species Q
-  values from maxima. The current inspection/adoption is detailed above; the
-  paper's off-policy algorithm is not adopted.
-  [SB3 2.7.1 QNetwork](https://github.com/DLR-RM/stable-baselines3/blob/v2.7.1/stable_baselines3/dqn/policies.py)
-  supplied the inspected raw-value/argmax reference; greedy normal branches,
-  tile sampling and accepted-plant commitments are local decisions.
+## Research comparisons
 
-## Species/tile credit research — 2026-10-09
-
-This earlier comparison motivated conditional species/tile attribution and bounded
-greedy-EMA probes. The current objective uses double-estimator two-stage consistency, described
-above, not exact derived branch maxima. COMA and action
-branching remain comparisons only, not adopted actors, advantages or privileged inputs.
-
+- Ben-Baruch et al., [Asymmetric Loss For Multi-Label Classification](https://arxiv.org/html/2009.14119v4):
+  dense positive/negative supervision and reduced easy-negative weight motivate a
+  Cherry Bomb classification experiment. This remains a proposal, not the adopted
+  top-1 hinge; simulator hit labels are complete, so missing-label filtering is unnecessary.
+- Shaw et al., [Self-Attention with Relative Position Representations](https://aclanthology.org/N18-2074/):
+  relation-aware attention motivates explicit tile/entity spatial offsets as an
+  alternative to learning blast geometry from absolute coordinates. Language-task
+  results do not establish improvement on this board.
+- Dong, Cordonnier and Loukas, [Attention is not all you need: pure attention loses rank doubly exponentially with depth](https://proceedings.mlr.press/v139/dong21a.html):
+  token-uniformity analysis motivates shallow readouts and spatial skip-path controls
+  for nearly identical tile features. The pure-attention theorem does not establish
+  collapse in the current residual Transformer with MLPs.
+- Kaushik, Hovy and Lipton, [Learning the Difference that Makes a Difference with Counterfactually-Augmented Data](https://arxiv.org/abs/1909.12434):
+  minimally changed examples motivate paired boards with moved zombies and
+  simulator-recomputed labels to challenge location shortcuts. This is an untested
+  adaptation from text classification, not counterfactual game-return evaluation.
+- Anthony, Tian and Barber, [Thinking Fast and Slow with Deep Learning and Tree Search](https://arxiv.org/html/1705.08439v1):
+  expert iteration informs the bounded simulator-search teacher whose
+  action comparisons train the existing networks. Search and distillation gains
+  in Hex do not establish improvement or computational feasibility here.
+- [DeepMind mctx search policies](https://github.com/google-deepmind/mctx/blob/main/mctx/_src/policies.py):
+  inspected Gumbel root sampling, sequential halving and explicit simulation/depth
+  budgets as allocation references. Neither JAX nor learned dynamics is used;
+  the linked Gumbel paper's PDF was blocked, so no theorem is transferred.
+- Meulemans et al., [Would I have gotten that reward?](https://proceedings.neurips.cc/paper_files/paper/2023/file/d8bd445c2abe1343cce0e14b361b2fb3-Paper-Conference.pdf):
+  COCOA's reward-outcome contributions inform distinguishing strategic value from
+  reproducing a particular later board or action sequence. Its learned contribution
+  estimator is not adopted by the simulator-search proposal.
+- Triantafyllou et al., [Counterfactual Effect Decomposition in Multi-Agent Sequential Decision Making](https://arxiv.org/html/2410.12539v1):
+  effects through later actions and state transitions inform preserving income and
+  occupancy consequences. This is conceptual guidance for a single-agent planner,
+  without implementing the paper's mediation or Shapley estimators.
+- Arjona-Medina et al., [RUDDER: Return Decomposition for Delayed Rewards](https://papers.nips.cc/paper/2019/file/16105fb9cc614fc29e1bda00dab60d41-Paper.pdf):
+  return equivalence informs checking reward redistribution against the original
+  objective. Redistribution alone neither supplies missing counterfactual evidence
+  nor repairs an undesirable reward ordering; no extra sequence model is proposed.
+- Silver and Veness, [Monte-Carlo Planning in Large POMDPs](https://papers.nips.cc/paper_files/paper/2010/file/edfbe1afcf9246bb0d40eb4d8027d90f-Paper.pdf):
+  sampled hidden states and observation-history search inform evaluating plausible
+  futures without giving action selection private schedule information. POMCP's
+  belief/history machinery and convergence guarantees are not adopted wholesale.
+- Cowling, Powley and Whitehouse, [Information Set Monte Carlo Tree Search](https://eprints.whiterose.ac.uk/id/eprint/75048/1/CowlingPowleyWhitehouse2012.pdf):
+  strategy fusion motivates a teacher control: indistinguishable public inputs
+  cannot justify different actions using hidden futures. Full information-set
+  search is a comparison reference, not a second training framework.
+- Hatch and Boots, [The Value of Planning for Infinite-Horizon Model Predictive Control](https://homes.cs.washington.edu/~bboots/files/ValueOfPlanning.pdf):
+  horizon myopia and terminal-value accuracy inform testing search beyond Sunflower
+  payback and defense delays. Robot-navigation results do not validate this game's
+  current value estimates or a shortened rollout horizon.
+- Sunberg and Kochenderfer, [Online Algorithms for POMDPs with Continuous State, Action, and Observation Spaces](https://cdn.aaai.org/ojs/13882/13882-40-17400-1-2-20201228.pdf):
+  observation-tree particle collapse motivates public-state sharing and fresh-world
+  confirmation controls. The teacher uses an approximate public-board prior,
+  not POMCPOW's weighted belief filter or its convergence claims.
+- Harutyunyan et al., [Hindsight Credit Assignment](https://papers.neurips.cc/paper/9413-hindsight-credit-assignment.pdf):
+  relevance-weighted advantages motivated same-board action comparisons that
+  separate useful decisions from continuation noise. Paired simulator rollouts are
+  a local proposal and estimate the chosen continuation policy, not optimal values.
+- Liu et al., [Towards a practical measure of interference for reinforcement learning](https://arxiv.org/html/2007.03807v1):
+  before/after-update policy returns motivated measuring actual behavioral damage;
+  average losses can conceal damaging updates. Its TD-error proxy is not assumed
+  valid for complete-return fitting.
+- Yu et al., [Gradient Surgery for Multi-Task Learning](https://arxiv.org/html/2001.06782v3)
+  and [PCGrad](https://github.com/tianheyu927/PCGrad): per-loss gradient projection
+  is a candidate if harmful interference is demonstrated. Negative alignment alone
+  is insufficient evidence; grouping this agent's losses is an unverified adaptation.
+- Skalse et al., [Defining and Characterizing Reward Hacking](https://ar5iv.labs.arxiv.org/html/2209.13085):
+  policy-order comparisons motivated checking shaped returns against victory rates.
+  Its restrictive assumptions do not establish reward hacking in this agent.
+- Ecoffet et al., [First return, then explore](https://arxiv.org/html/2004.12919v5)
+  and [Go-Explore](https://github.com/uber-research/go-explore): archive/return/explore
+  separation motivated coherent exploration from reachable late-game states.
+- Lan et al., [Maxmin Q-learning: Controlling the Estimation Bias of Q-learning](https://arxiv.org/html/2002.06487v2):
+  minima across estimators motivated conservative target comparisons, with possible
+  underestimation; its tabular results do not guarantee Transformer accuracy.
+- Anschel et al., [Averaged-DQN](https://arxiv.org/html/1611.01929v4): averaging past
+  predictions motivated variance-reduction comparisons. Averaging nonlinear model
+  weights is not equivalent to averaging predictions and cannot remove shared bias.
+- Feinberg et al., [Model-Based Value Estimation for Efficient Model-Free Reinforcement Learning](https://arxiv.org/html/1803.00101v1)
+  and [project](https://github.com/vlad17/mve/blob/19835bba87a2e5abc9bca653d011bf2eed68dd62/README.md):
+  bounded rewards plus a tail estimate informed earlier probes and later calibration
+  proposals. Learned dynamics are not used; gamma one does not discount tail error.
+- [Explorer](https://github.com/qlan3/Explorer): Double, Maxmin and Averaged DQN
+  implementations supplied comparison references; no code or dependency is adopted.
 - Foerster et al., [Counterfactual Multi-Agent Policy Gradients](https://arxiv.org/html/1705.08926v3)
   and [PyMARL's COMA learner](https://github.com/oxwhirl/pymarl/blob/c971afdceb34635d31b778021b0ef90d7af51e86/src/learners/coma_learner.py):
-  inspected the conditional counterfactual baseline, detached advantage and actor
-  loss. Holding species fixed while comparing tiles can inform placement-specific
-  credit. This is an adaptation of the comparison idea: action components are not
-  independent agents, and advantages cannot replace absolute Q-return targets
-  without a matching objective. The paper's privileged critic inputs are not
-  proposed as policy inputs here.
-- Feinberg et al., [Model-Based Value Estimation for Efficient Model-Free Reinforcement Learning](https://arxiv.org/html/1803.00101v1)
-  and its [project README](https://github.com/vlad17/mve/blob/19835bba87a2e5abc9bca653d011bf2eed68dd62/README.md):
-  inspected definition 3.1's bounded rollout rewards plus terminal value estimate.
-  Bounded isolated probes expose delayed placement effects before EMA
-  bootstrap. The project already has a simulator; this implementation does not use
-  learned dynamics or old dependencies, nor does it treat one-step neural
-  estimates as observed counterfactual outcomes. Re-inspected definition 3.1 and
-  the project README on 2026-10-10 for accepted-plant 30-second probes. The
-  planting trigger and same-species alternative-tile coverage are local design
-  choices, not claims from the paper. The current species-tail bootstrap retains
-  the bounded reward-plus-tail idea, not a learned dynamics model.
+  holding one action component fixed informed placement-credit comparisons.
+  Species and tiles are not independent agents; advantages cannot replace absolute
+  value targets without a matching objective.
 - Tavakoli et al., [Action Branching Architectures for Deep Reinforcement Learning](https://arxiv.org/abs/1711.08946)
-  and the [authors' project](https://github.com/atavakol/action-branching-agents/tree/1e026011505779e0ad30060ab3422f97eff08300):
-  inspected the abstract and project README as a contrasting factorized-action
-  design. Independent branches alone do not establish which component caused a
-  poor result; species-dependent placement interactions must remain represented.
-
-## Precision and device execution
-
-- [PyTorch 2.8 gradient clipping](https://github.com/pytorch/pytorch/blob/v2.8.0/torch/nn/utils/clip_grad.py):
-  `clip_grad_norm_` uses one total parameter-gradient norm and a clamped scaling
-  factor. Both fitting paths supply the same configured limit after accumulation.
-- [PyTorch 2.8 AMP examples](https://github.com/pytorch/pytorch/blob/v2.8.0/docs/source/notes/amp_examples.rst):
-  accumulation and selective autocast, used with FP32 master weights and BF16
-  feature computation. No FP16 scaler is used. Inspected SHA-256:
-  `ca4e1c814873b1191b2ea7aae208d2be27e355d2e221f59c10e9f6afa8b874e4`.
-- [PyTorch 2.8 SDPA](https://github.com/pytorch/pytorch/blob/v2.8.0/torch/nn/functional.py):
-  efficient backend selection and numerical differences; one full call with an
-  exact query-chunk fallback. Inspected SHA-256:
-  `2b6eb4aff305990cff9e32c6ff40ff82c1fec4b5ceba1f43540146a8eb64e952`.
-- [PyTorch pinned/nonblocking transfer tutorial](https://github.com/pytorch/tutorials/blob/main/intermediate_source/pinmem_nonblock.py):
-  buffer reuse, copy completion and stream dependencies for pinned staging.
-  Inspected SHA-256: `c19188e197f5bccb7c26be751ce894c71091c02470164a5431f3829bad604c33`.
+  and [project](https://github.com/atavakol/action-branching-agents/tree/1e026011505779e0ad30060ab3422f97eff08300):
+  contrasting factorized actions highlighted the need to retain species/tile interactions.
+- Settles, [Active Learning Literature Survey](https://burrsettles.com/pub/settles.activelearning.pdf):
+  pool-based selection informed possible annotation-budget reduction; active
+  selection remains unimplemented.
 - Rabe and Staats, [Self-attention Does Not Need O(n²) Memory](https://arxiv.org/abs/2112.05682):
-  abstract inspected to distinguish arithmetic from storage cost; no published
-  speed or memory ratios are transferred to this project.
-- [CuPy 13.6 kernel guide](https://raw.githubusercontent.com/cupy/cupy/v13.6.0/docs/source/user_guide/kernel.rst)
-  and [interoperability guide](https://raw.githubusercontent.com/cupy/cupy/v13.6.0/docs/source/user_guide/interoperability.rst):
-  RawModule/NVRTC and DLPack/ExternalStream ownership for CUDA adapters.
-- [WarpDrive: Fast End-to-End Deep Multi-Agent Reinforcement Learning on a GPU](https://jmlr.org/papers/v23/22-0185.html)
-  and its [project README](https://github.com/salesforce/warp-drive/blob/master/README.md):
-  inspected device-resident simulation/learning and reduced CPU/GPU round trips.
-  These inform independent batched scratch execution, device packing and compact
-  live-game/valid-probe inference through existing handoffs. The host active plan,
-  compact scratch prefix views over shared allocation, canonical scatter,
-  deferred bootstrap patching and graph lifetime rules are local choices; no code
-  or published throughput claim is adopted.
+  abstract-only background distinguished attention arithmetic from storage cost;
+  no published performance ratios are transferred to this project.
 
-## Simulator, evaluation and presentation
+## Simulator projects
 
-- Pinned game **1.7.0**, commit `1424b4d802e783a36772091c49d96aa7c6036d7a`:
-  public observation formulas, species constants, validation reasons, per-tick
-  execution, CPU/CUDA state schemas and damage events define the adapter contract.
-  The [engine lock](../src/pvz_rl/data/engine-lock.json) is authoritative.
+- [pvz_game inspected source](https://github.com/Comb1e/pvz-cuda-work/tree/1424b4d802e783a36772091c49d96aa7c6036d7a):
+  public observations, legality, events and differential controls informed adapter
+  contracts and CPU/CUDA checks. The [engine lock](../src/pvz_rl/data/engine-lock.json)
+  is authoritative for the current dependency pin.
 - [Patoke reconstruction](https://github.com/Patoke/re-plants-vs-zombies/tree/c4692036c5e11d227c8fb7c593b734dac96da028)
   and [Bamcane animation reference](https://github.com/Bamcane/re-plants-vs-zombies/tree/0f6bbd39302acf69484ba8b3e071724e35cfba17/pak/reanim):
-  attack/body rectangles, movement cadence, explosions, projectile and mower
-  contact informed the pinned game's mechanics audit. Reconstruction is not
-  proof of original-binary equivalence; no artwork is distributed here.
-- [Gymnasium environment API](https://gymnasium.farama.org/api/env/): reset/step
-  contracts and explicit termination versus truncation.
-- Cobbe et al., [Procedural Generation and RL Generalization](https://arxiv.org/abs/1912.01588):
-  abstract inspected for separated training, validation and held-out scenarios.
-- Agarwal et al., [Statistical Precipice](https://arxiv.org/abs/2108.13264) and
-  [rliable](https://github.com/google-research/rliable/tree/3ccd9f4dea577a04d3d2b557f259aac08badbd81):
-  independent runs and interval reporting; the crossed paired bootstrap is local.
-- [SB3 callbacks](https://stable-baselines3.readthedocs.io/en/master/guide/callbacks.html)
-  and [logger](https://stable-baselines3.readthedocs.io/en/master/common/logger.html):
-  collection/update reporting and serialization infrastructure.
-- [pygame-ce events](https://pyga.me/docs/ref/event.html): bounded event queues,
-  wheel/resize handling and continuous pumping in a separate viewer process.
-- [pygame-ce Surface API](https://pyga.me/docs/ref/surface.html): rendered text
-  widths and blitting for the responsive, read-only learning-settings strip.
-- [FFmpeg](https://ffmpeg.org/), inspected local 8.1 help and encoders:
-  optional RGB-to-H.264/yuv420p export with explicit dimensions and frame rate.
+  collision geometry, cadence and explosion/contact behavior informed the engine
+  mechanics audit; reconstruction does not prove original-binary equivalence.
 
-## Batched encoder execution
+## Historical influences
 
-- [PyTorch `torch.compile` documentation](https://pytorch.org/docs/stable/torch.compiler.html):
-  fixed-shape encoder compilation with a bounded eager fallback. Flat transport,
-  accounting and ragged storage remain outside the compiled region.
-- [PyTorch 2.8 compile API/source](https://github.com/pytorch/pytorch/blob/v2.8.0/torch/__init__.py)
-  and [Dynamo cache limits](https://github.com/pytorch/pytorch/blob/v2.8.0/torch/_dynamo/cache_size.py):
-  inspected code-object cache ownership and the per-cache recompilation limits.
-  Species/tile fitting caches must not share their shape allowance; quiescent
-  phase releases renew the owner's cache instead of raising global limits.
-- [Python 3.12 code objects](https://docs.python.org/3.12/reference/datamodel.html#codeobject.replace):
-  inspected `code.replace()` to create an independent code object while preserving
-  encoder bytecode, globals, defaults and bound model parameters. This is an
-  execution-cache boundary, not a model or checkpoint-format change.
-- [PyTorch 2.8 CUDA-graphs backend](https://github.com/pytorch/pytorch/blob/v2.8.0/torch/_dynamo/backends/cudagraphs.py):
-  inspected AOT forward/backward compilation and `cudagraphs_inner`'s static
-  input copies, side-stream warmup and output cloning. The local backend extends
-  ownership to every saved activation and returned gradient, retaining exact
-  strides for SDPA and copying updated weights before replay. It does not use
-  CUDA-graph tree lifetime inference for delayed whole-pass backward.
-- [PyTorch LSTM documentation](https://pytorch.org/docs/stable/generated/torch.nn.LSTM.html):
-  historical inspection for independent sequence/state ownership. LSTM and
-  sequence fitting have been removed; current fitting uses active flat batches.
-
-These references support execution controls only; the flat-group arithmetic,
-whole-pass gradient accumulation and one-event timing boundary are local
-implementation decisions. No learning-quality result is inferred from the
-throughput measurements.
-
-## Collection and terminal reporting
-
-- [PyTorch 2.8 CUDA semantics and graphs](https://github.com/pytorch/pytorch/blob/v2.8.0/docs/source/notes/cuda.rst):
-  inspected static-shape/control-flow constraints, stream synchronization and
-  long-lived static input/output buffers with stable addresses across replay.
-  These inform direct no-grad collection graphs, the owned AOT fitting backend on
-  all CUDA platforms, separate phase owners and handoff-safe release of retired
-  captures. Outputs are copied before reuse; timing uses the existing host boundary
-  rather than waiting per event. LRU limits and headroom values are local controls.
-- [NVIDIA CCCL CUB `DeviceSelect`](https://github.com/NVIDIA/cccl/blob/main/cub/cub/device/device_select.cuh):
-  inspected selected-item compaction as inspiration for canonical gather/scatter.
-  This header explicitly does not support NVRTC, which the local CuPy adapter uses;
-  it is not imported, compiled or adopted as an implementation dependency. The host
-  planner uses published live flags/counts; probe endpoint facts cross only
-  the existing handoff.
-- [PyTorch pinned/nonblocking tutorial](https://github.com/pytorch/tutorials/blob/main/intermediate_source/pinmem_nonblock.py):
-  inspected pinned transfer ownership and copy-completion requirements. The single
-  reusable handoff waits before CPU consumption and before a named buffer is reused.
-- The compact terminal cadence, duplicate keys and separation from detailed JSON
-  snapshots are local implementation decisions, not research-derived claims.
-
-## Independent background tile probes
-
-- [Sample Factory paper](https://arxiv.org/abs/2006.11751) and
-  [project README](https://github.com/alex-petrenko/sample-factory):
-  inspected the abstract and synchronous/asynchronous sampling and multi-policy
-  descriptions. They inspire separating runnable environment work from a long
-  counterfactual task. No PPO, off-policy correction, dependency or claimed
-  throughput is adopted; both local policies remain frozen within each cohort.
-- [EnvPool paper](https://arxiv.org/abs/2206.10558) and
-  [project README](https://github.com/sail-sg/envpool):
-  inspected the abstract and batched pool/asynchronous API descriptions.
-  Reusable independent lanes and stable environment identities inform the local
-  scheduler; EnvPool itself is not integrated. GPU contention, local FIFO source
-  backpressure, retained decisions, exact-once endpoint patches and drain-before-save
-  are project choices, not performance guarantees from these sources.
-# Current implementation sources
-
-- [NVIDIA `nvidia-smi` documentation](https://docs.nvidia.com/deploy/nvidia-smi/index.html):
-  inspected GPU utilization's kernel-active sample-window definition (product
-  dependent, roughly 1 second to 1/6 second) and device/process queries. This
-  informs device-wide utilization interpretation and UUID-targeted snapshots,
-  rather than treating utilization as SM occupancy or achieved compute rate.
-- [PyTorch profiler recipe source](https://github.com/pytorch/tutorials/blob/main/recipes_source/recipes/profiler_recipe.py)
-  and [PyTorch 2.8 profiler implementation](https://github.com/pytorch/pytorch/blob/v2.8.0/torch/profiler/profiler.py):
-  inspected CPU/CUDA activities, user ranges, finite warmup/active schedules,
-  compressed Chrome trace export and profiler overhead. The fitting collector
-  wraps the existing learner with host timings and enables one bounded trace
-  only on request; shapes, allocation profiling and stacks stay disabled.
-- [PyTorch 2.8 `nonzero` documentation source](https://github.com/pytorch/pytorch/blob/v2.8.0/torch/_torch_docs.py):
-  inspected its explicit CUDA host/device synchronization note. Existing
-  fitting boolean selections/nonzero and variable request sizes are profiling
-  suspects, not a confirmed cloud bottleneck or a reason to change attribution.
-
-- [pip local project installs](https://pip.pypa.io/en/stable/topics/local-project-installs/)
-  and [Bash builtins / traps](https://www.gnu.org/software/bash/manual/html_node/Bourne-Shell-Builtins.html):
-  inspected regular versus editable local installs and exit-trap cleanup. The Bash
-  bootstrap uses the existing verified archive installer for a non-editable pinned
-  game, an editable research checkout and temporary-source cleanup on exit.
-- PyTorch, [BF16 CUDA semantics](https://pytorch.org/docs/stable/notes/amp_examples.html)
-  and [Adam](https://pytorch.org/docs/stable/generated/torch.optim.Adam.html):
-  informed the BF16 runtime / FP32-master separation and explicit nonfinite
-  handling. No INT8 or INT4 runtime path was adopted.
-- The accepted-plant counterfactual rollout design was removed rather than
-  retained as a zero-count compatibility path; earlier historical measurements
-  remain evidence only and are not current performance claims.
-
-
-## Execution calibration and web delivery — 2026-10-14
-
-- [PyTorch 2.8 CUDA Graph notes](https://raw.githubusercontent.com/pytorch/pytorch/v2.8.0/docs/source/notes/cuda.rst): static shapes, owned pointers and reduced CPU launch overhead guide the bounded fitting graph owners.
-- [Jupyter Server Proxy](https://github.com/jupyterhub/jupyter-server-proxy): authenticated loopback proxying and prefix-safe relative URLs guide the optional browser viewer.
-- Agarwal et al., [Deep Reinforcement Learning at the Edge of the Statistical Precipice](https://arxiv.org/abs/2108.13264), with the [rliable project](https://github.com/google-research/rliable): paired seeds, uncertainty and equal-game comparisons guide the bounded learning study; no new evaluation dependency is added.
-
-## Annotation resume and unfinished-weight handoff — 2026-10-23
-
-- [PyTorch saving/loading models](https://docs.pytorch.org/tutorials/beginner/saving_loading_models.html):
-  consulted the general-checkpoint and warmstarting sections. Continuing optimization
-  requires saved optimizer state in addition to model weights; fresh initialization
-  loads weights alone. Annotation progress follows these separate paths, adding
-  fixed-split/objective identity, RNG, phase, and immutable-snapshot provenance.
-
-## Reachable tile annotation — 2026-10-18
-
-- [MDN Using the Fetch API](https://developer.mozilla.org/en-US/docs/Web/API/Fetch_API/Using_Fetch):
-  consulted HTTP method selection and `Response.ok` error handling for annotation
-  retry recovery. Retry uses POST; successful save responses retain their session
-  state even when next-map generation reports an error. HTTP failures still
-  preserve the unsaved browser draft.
-- [Python random sequence sampling](https://docs.python.org/3/library/random.html#random.choice): reviewed the single-element sequence draw for equal wait/eight-species proposals. Availability is checked after this draw, with failed choices becoming wait rather than resampling; sorted legal tile IDs preserve seeded replay across public-board iteration orders.
-- [MDN conditional requests: optimistic locking](https://developer.mozilla.org/en-US/docs/Web/HTTP/Guides/Conditional_requests#avoiding_the_lost_update_problem_with_optimistic_locking): reviewed the lost-update failure between concurrent editors. Annotation edits carry the loaded record revision in the JSON protocol and reject mismatches under the session lock; the application does not introduce ETag headers or change model inputs.
-- [Procgen project](https://github.com/openai/procgen): reviewed its procedural
-  environment diversity and generalization motivation. This informs seeded
-  episode and rollout-time variation; the local 0–20,000-step limits, legal
-  planting intervals and sparse cap are application choices, not Procgen
-  algorithms or a new dependency. The pinned game's public observation and
-  legal action APIs supply all combat, sun, cooldown and mower state.
-
-- Settles, [Active Learning Literature Survey](https://burrsettles.com/pub/settles.activelearning.pdf): reviewed pool-based selection and label-budget tradeoffs. The annotator keeps discarded states for audit and leaves active selection as a later data-reduction step; no active-learning dependency is added.
-- [W3C Pointer Events Level 3](https://www.w3.org/TR/pointerevents3/): reviewed pointer capture and interrupted-drag behavior. The browser annotator uses pointer capture for left-button painting and keeps all state changes behind the relative HTTP API.
-
-
-## Top-1 annotation convergence and selective fitting — 2026-10-18
-
-- Cour, Sapp and Taskar, [Learning from Partial Labels](https://www.jmlr.org/papers/v12/cour11a.html), JMLR 2011: candidate-label supervision informed accepting any annotated tile. Their ambiguity setting assumes one hidden correct label; here several placements can actually be acceptable. The local best-positive versus best-legal-negative hinge is an application-specific adaptation, not their published algorithm or a guarantee of held-out accuracy.
-- [PyTorch 2.8 MarginRankingLoss source](https://raw.githubusercontent.com/pytorch/pytorch/v2.8.0/torch/nn/modules/loss.py): checked `max(0, -y*(x1-x2)+margin)`. Local fitting sets `y=1`, `x1=max annotated`, `x2=max legal unannotated`, margin 1, and normalizes records across the full training split. Complete legal top-1 evaluation, rather than margin satisfaction or validation score, gates publication.
-- The existing Double-Q reference remains applicable only to accepted non-wait consistency. Fixed invalid targets use direct supervised attribution and require no EMA evaluation; no invalid-action policy masking is introduced.
-
-## Set and partial-label annotation — 2026-10-19
-
-- [PyTorch `MarginRankingLoss`](https://pytorch.org/docs/stable/generated/torch.nn.MarginRankingLoss.html): used as the finite margin reference for the local two-set top-1/bottom-k hinge. The implementation takes a maximum over each unordered label set, so it does not impose an order inside feasible or absolute-infeasible labels.
-- [Hester et al., Deep Q-learning from Demonstrations](https://arxiv.org/abs/1704.03732): used as the supervision/initialization reference for fitting a head from human labels before fresh reinforcement-learning optimization. No demonstration loss or architecture is copied.
-
-## CPU/GPU pipeline optimization — 2026-10-21
-
-- [PyTorch 2.8 CUDA semantics and CUDA Graph notes](https://raw.githubusercontent.com/pytorch/pytorch/v2.8.0/docs/source/notes/cuda.rst):
-  consulted stream dependencies, `record_stream`, asynchronous copies and static
-  graph pointer ownership. The existing copy-stream event and owned graph caches
-  remain authoritative; host staging is reused or resized only after its fence.
-- [PyTorch pinned/nonblocking transfer tutorial](https://raw.githubusercontent.com/pytorch/tutorials/main/intermediate_source/pinmem_nonblock.py):
-  consulted the separate-stream/pinned-source requirements for overlap and source
-  mutation hazards. The local adaptation uses one producer and two bucket-sized
-  pinned slots under the shared budget, rather than pinning per batch or retaining
-  the entire cohort on the GPU.
-- [PyTorch 2.8 Adam implementation](https://raw.githubusercontent.com/pytorch/pytorch/v2.8.0/torch/optim/adam.py):
-  inspected grouped/foreach execution and its memory tradeoff. This implementation
-  batches master-gradient additions, runtime copies and EMA lerps; it preserves
-  Adam, FP32 masters, clipping and one optimizer commit per pass.
-- [PyTorch 2.8 profiler implementation](https://raw.githubusercontent.com/pytorch/pytorch/v2.8.0/torch/profiler/profiler.py):
-  consulted finite warmup/active schedules and step boundaries. Collection and
-  fitting traces are optional bounded diagnostics and are excluded from timing
-  comparisons. The production lifecycle remains the only learner.
-
-## Annotation validation-phase regularization — 2026-10-22
-
-- [PyTorch Adam documentation](https://pytorch.org/docs/stable/generated/torch.optim.Adam.html):
-  checked the optimizer's L2/weight-decay distinction. Annotation fitting uses
-  an explicit differentiable \(\lambda\lVert\theta\rVert^2/2\) term on FP32
-  master parameters so its activation and contribution are recorded separately
-  from the existing Adam update.
-
-
-## Environment reward display — 2026-10-26
-
-- [Gymnasium Env API](https://gymnasium.farama.org/api/env/): consulted the
-  distinction between the reward returned by `step` and auxiliary diagnostic
-  `info`. The viewer displays accumulated learning reward outside observations;
-  delayed causal credits and cohort-finalized outcomes remain explicit.
-
-## Return diagnostics and completion-time ranks — 2026-10-27
-
-- [NumPy variance documentation](https://numpy.org/doc/stable/reference/generated/numpy.var.html):
-  consulted the installed NumPy docstring for population variance (`ddof=0`),
-  centered deviations and FP64 accumulation. Bounded centered chunks measure a
-  converted scalar sum, preserving covariance.
-- [SciPy rankdata implementation](https://raw.githubusercontent.com/scipy/scipy/main/scipy/stats/_stats_py.py):
-  consulted average ranks for equal values. Local ranking keeps this convention
-  with zero-based ranks; signed-square shaping and its cap are user-selected
-  economics, not a research guarantee. No dependency is added.
+- Campos et al., [Skip RNN: Learning to Skip State Updates in Recurrent Neural Networks](https://arxiv.org/abs/1708.06834)
+  and [project](https://imatge-upc.github.io/skiprnn-2017-telecombcn/): informed the
+  former selective event-memory design. Current policies are stateless.
+- Hausknecht and Stone, [Deep Recurrent Q-Learning](https://arxiv.org/abs/1507.06527):
+  abstract-only motivation for the removed recurrent policy.
+- [Sample Factory](https://arxiv.org/abs/2006.11751) and
+  [project](https://github.com/alex-petrenko/sample-factory): independent runnable
+  work informed the former background counterfactual scheduler.
+- [EnvPool](https://arxiv.org/abs/2206.10558) and
+  [project](https://github.com/sail-sg/envpool): batched/asynchronous environments
+  informed independent lanes in that removed scheduler.

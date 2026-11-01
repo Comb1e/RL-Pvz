@@ -18,14 +18,18 @@ from pvz_rl.envs.encoding import (
 from pvz_rl.learning.action_routing import FitRoute, validate_routes
 from pvz_rl.learning.objective import (
     COMPONENTS,
+    PASSIVITY_WAIT_ATTRIBUTION,
     endgame_terminal_rewards,
     raw_rewards,
+    residual_sun_adjustment,
+    residual_sun_wait_penalties,
+    selected_action_targets,
     training_rewards,
 )
 from pvz_rl.learning.source_actions import AppendReceipt, SourceActionRef
 from pvz_rl.monitoring.moments import RunningMoments
 
-TRAJECTORY_PROTOCOL = "pvz-rl/action-global-trajectory-v5"
+TRAJECTORY_PROTOCOL = "pvz-rl/action-global-trajectory-v7"
 
 
 def trajectory_dtype(cfg=None):
@@ -51,6 +55,7 @@ def trajectory_dtype(cfg=None):
             ("home_entries", "<u4", 2),
             ("branch_value", "<f4"),
             ("tile_value", "<f4"),
+            ("minimum_q", "<f4"),
             ("placement_gap", "<f4"),
             ("greedy_action", "<u2"),
             ("policy_action", "<u2"),
@@ -516,7 +521,128 @@ class CompleteGameBuffer:
                 )
         return {"rows_updated": len({index for index, updates, _ in normalized if updates})}
 
-    def finalize_rewards(self):
+    def _passivity_episode_metadata(self, pending):
+        """Index completed episode facts by canonical slot and episode serial."""
+        if not pending:
+            return {}
+        result = {}
+        for slot, item in pending.items():
+            if not isinstance(item, dict) or not isinstance(item.get("metrics"), dict):
+                continue
+            metrics = item["metrics"]
+            episode = item.get("episode")
+            if type(episode) is int:
+                result[(int(slot), episode)] = metrics
+        return result
+
+    def _apply_residual_sun_shaping(self, pending):
+        """Apply final sunlight rewards and loss wait attribution once."""
+        by_episode = self._passivity_episode_metadata(pending)
+        settings = self.cfg.get("reward", {}).get("passivity") if self.cfg else None
+        summary = {
+            "settings": dict(settings)
+            if isinstance(settings, dict)
+            else {
+                "win_max_reward": 0.0,
+                "win_reserve": 0.0,
+                "loss_max_penalty": 0.0,
+                "loss_reserve": 0.0,
+                "sun_reference": 1000.0,
+            },
+            "episodes": {},
+            "win_final_rewards": 0.0,
+            "loss_wait_penalties": 0.0,
+            "eligible_wait_rows": 0,
+            "eligible_wait_duration": 0,
+            "skipped_no_wait_losses": 0,
+            "loss_wait_attribution": PASSIVITY_WAIT_ATTRIBUTION,
+        }
+        if not by_episode or settings is None:
+            return summary
+
+        terminal_rows = {}
+        episode_rows = {}
+        for block_index, block in enumerate(self.blocks):
+            rows = block[: min(self.block_rows, self.size - block_index * self.block_rows)]
+            for index in np.flatnonzero(rows["active"] & rows["components_valid"]):
+                row = rows[index]
+                key = int(row["env"]), int(row["episode"])
+                if key not in by_episode:
+                    continue
+                episode_rows.setdefault(key, []).append((block, int(index)))
+                if row["done"]:
+                    terminal_rows[key] = (block, int(index))
+
+        for key, metrics in by_episode.items():
+            terminal = terminal_rows.get(key)
+            if terminal is None or "remaining_sun" not in metrics:
+                continue
+            remaining_sun = float(metrics["remaining_sun"])
+            won = bool(metrics.get("win", False))
+            magnitude = abs(float(residual_sun_adjustment(remaining_sun, won, self.cfg)))
+            episode_summary = {
+                "remaining_sun": remaining_sun,
+                "won": won,
+                "residual_sun_amount": magnitude,
+                "wait_rows": 0,
+                "wait_duration": 0,
+                "run_count": 0,
+                "shortest_run": 0,
+                "longest_run": 0,
+                "run_details": [],
+                "minimum_penalty": 0.0,
+                "maximum_penalty": 0.0,
+                "loss_wait_penalty": 0.0,
+                "skipped_no_wait": False,
+            }
+            block, index = terminal
+            if won:
+                block[index]["components"][0] += magnitude
+                block[index]["reward"] = raw_rewards(block[index]["components"], self.cfg)
+                summary["win_final_rewards"] += magnitude
+            else:
+                references = episode_rows.get(key, [])
+                references.sort(key=lambda item: int(item[0][item[1]]["decision"]))
+                raw = np.asarray([candidate_block[candidate_index] for candidate_block, candidate_index in references])
+                penalties, details = residual_sun_wait_penalties(raw, magnitude)
+                for (candidate_block, candidate_index), penalty in zip(
+                    references, penalties, strict=True
+                ):
+                    if penalty == 0:
+                        continue
+                    candidate_block[candidate_index]["components"][0] += penalty
+                    candidate_block[candidate_index]["reward"] = raw_rewards(
+                        candidate_block[candidate_index]["components"], self.cfg
+                    )
+                episode_summary.update(
+                    wait_rows=details["wait_rows"],
+                    wait_duration=int(
+                        sum(
+                            int(candidate_block[candidate_index]["duration"])
+                            for (candidate_block, candidate_index), penalty in zip(
+                                references, penalties, strict=True
+                            )
+                            if penalty < 0
+                        )
+                    ),
+                    run_count=details["run_count"],
+                    shortest_run=details["shortest_run"],
+                    longest_run=details["longest_run"],
+                    run_details=details["run_details"],
+                    minimum_penalty=details["minimum_penalty"],
+                    maximum_penalty=details["maximum_penalty"],
+                    loss_wait_penalty=details["total_penalty"],
+                    skipped_no_wait=details["wait_rows"] == 0,
+                )
+                summary["loss_wait_penalties"] += details["total_penalty"]
+                summary["eligible_wait_rows"] += details["wait_rows"]
+                summary["eligible_wait_duration"] += episode_summary["wait_duration"]
+                if details["wait_rows"] == 0:
+                    summary["skipped_no_wait_losses"] += 1
+            summary["episodes"][f"{key[0]}:{key[1]}"] = episode_summary
+        return summary
+
+    def finalize_rewards(self, pending=None, *, time_weight=None):
         if self.rewards_finalized:
             return self.reward_summary
         terminal = []
@@ -540,7 +666,7 @@ class CompleteGameBuffer:
                 wins,
                 win_reward=self.cfg["reward"]["win_reward"],
                 loss_penalty=self.cfg["reward"]["loss_penalty"],
-                weight=self.cfg["reward"].get("win_time_weight", 0.3),
+                weight=self.cfg["reward"].get("win_time_weight", 0.3) if time_weight is None else time_weight,
             )
             for (block, index, _, _won), value in zip(terminal, terminal_rewards, strict=True):
                 row = block[index]
@@ -549,6 +675,9 @@ class CompleteGameBuffer:
         else:
             terminal_rewards = np.asarray([], dtype=np.float64)
             adjustments = np.asarray([], dtype=np.float64)
+        # Apply residual-sun shaping after ranked terminal rewards so the
+        # positive winning amount cannot be overwritten by time finalization.
+        passivity_summary = self._apply_residual_sun_shaping(pending)
         median = float(np.median(durations)) if len(durations) else 0.0
         # The pinned simulator clock is the only clock used for the median.
         from pvz_game import Rules
@@ -559,7 +688,8 @@ class CompleteGameBuffer:
             endgame_terminal_rewards=terminal_rewards.tolist(),
             endgame_time_adjustments=adjustments.tolist(),
             endgame_time_weight=(
-                self.cfg["reward"].get("win_time_weight", 0.3) if self.cfg else 0.0
+                (self.cfg["reward"].get("win_time_weight", 0.3) if time_weight is None else time_weight)
+                if self.cfg else 0.0
             ),
             # Compatibility alias for existing viewers and reports.
             victory_time_adjustments=adjustments.tolist(),
@@ -575,10 +705,11 @@ class CompleteGameBuffer:
             if self.blocks
             else [0, 0],
         )
+        self.reward_summary["passivity"] = passivity_summary
         self.rewards_finalized = True
         return self.reward_summary
 
-    def finalize(self, *, cohort=None):
+    def finalize(self, *, cohort=None, diagnostics=True):
         """Actual per-game returns and errors measured before fitting either head."""
         self.finalize_rewards()
         running = np.zeros(self.n_envs, np.float64)
@@ -597,8 +728,8 @@ class CompleteGameBuffer:
         routed_counts = np.zeros(4, np.int64)
         from pvz_rl.config import load_config
 
-        invalid_target = (self.cfg or load_config())["training"]["objective"][
-            "invalid_action_target"
+        invalid_offset = (self.cfg or load_config())["training"]["objective"][
+            "invalid_action_q_offset"
         ]
         species_counts = np.zeros(A.plant_types, np.int64)
         sums = np.zeros((3, 3), np.float64)
@@ -664,10 +795,8 @@ class CompleteGameBuffer:
                     rows["route"][ix] == FitRoute.SPECIES_INVALID
                 )
                 selected = np.where(species_only, rows["branch_value"][ix], rows["tile_value"][ix])
-                target = np.where(
-                    rows["route"][ix] >= FitRoute.SPECIES_INVALID,
-                    invalid_target,
-                    rows["target"][ix],
+                target = selected_action_targets(
+                    rows["target"][ix], rows["route"][ix], rows["minimum_q"][ix], invalid_offset
                 )
                 first = selected.astype(np.float64) - target
                 second = rows["placement_gap"][ix].astype(np.float64)
@@ -763,7 +892,7 @@ class CompleteGameBuffer:
         self.reward_summary["causal_source_credits"] = self.causal_sources
         import warnings
 
-        if low_variation:
+        if diagnostics and low_variation:
             warnings.warn(
                 f"Cohort {cohort if cohort is not None else self.path.name}: dense return "
                 f"variation is below 5% of target variation "
@@ -772,7 +901,7 @@ class CompleteGameBuffer:
                 RuntimeWarning,
                 stacklevel=2,
             )
-        if live.any():
+        if diagnostics and live.any():
             scale = (
                 self.cfg["reward"]["progress_weight"] / self.cfg["reward"]["value_scale"]
                 if self.cfg

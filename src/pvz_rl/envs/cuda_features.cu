@@ -177,6 +177,16 @@ extern "C" __global__ void pack_entities(const int *entities, const I *summary,
     target[k] = source[k];
 }
 
+// Scratch replay shares the exact asset calculation without public encoding.
+extern "C" __global__ void accounting_assets(const I *headers, const I *plants,
+                                            double *assets, I n) {
+  I i = blockIdx.x * blockDim.x + threadIdx.x;
+  if (i < n) {
+    Header h = ((const Header *)headers)[i];
+    assets[i] = asset_value(h, ((Plant *)plants) + i * 45);
+  }
+}
+
 // Each episode's total roster is bounded by ZCAP. Keep IDs only in accounting.
 extern "C" __global__ void home_entries(const I *headers, const I *zombies,
     I *ledger, I *entries, const bool *selected, I n) {
@@ -279,6 +289,10 @@ reward_metrics(const I *headers, const I *old_headers, const I *old_cd,
   t[T_discounted_development_return] += pow(GAMMA, t[2]) * v[F_development];
   t[1]++;
   t[2] += h.advanced;
+  // Keep accepted non-wait actions separate from the legacy instant-action
+  // counter below so fixed-cadence collection reports the same metric as CPU.
+  if (action && h.accepted)
+    t[34]++;
   t[3] += h.advanced == 0;
   if (action && h.accepted) {
     t[4]++;
@@ -287,8 +301,8 @@ reward_metrics(const I *headers, const I *old_headers, const I *old_cd,
   if (h.advanced)
     t[4] = 0;
   t[6] += !h.accepted;
-  // Rejected proposals advance one tick as automatic waits, so metrics count
-  // their resolved execution action rather than only explicit Wait commands.
+  // Rejected proposals advance as automatic waits, so metrics count their
+  // resolved execution action rather than only explicit Wait commands.
   t[7] += action == 0 || !h.accepted;
   t[8] = fmax(t[8], (double)hi(b.sun, h.sun));
   bool opportunity = false;

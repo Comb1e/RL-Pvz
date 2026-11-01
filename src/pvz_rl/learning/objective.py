@@ -4,6 +4,7 @@ import numpy as np
 import torch
 from torch.nn import functional as F
 
+from pvz_rl.learning.action_routing import FitRoute
 from pvz_rl.policy.sequential_q import (
     action_groups,
     action_parts,
@@ -13,7 +14,147 @@ from pvz_rl.policy.sequential_q import (
     tile_candidates,
 )
 
-OBJECTIVE_PROTOCOL = "complete_return_action_global_v5"
+PASSIVITY_WAIT_ATTRIBUTION = "per_wait_run_quadratic_v1"
+
+
+def residual_sun_adjustment(remaining_sun, won, cfg):
+    """Return the bounded final-unit residual-sun outcome amount.
+
+    Wins start shaping at zero sunlight; losses start above their configured
+    reserve. Both reach their separate caps at ``sun_reference``. Legacy saved
+    profiles that predate this setting return zero shaping.
+    """
+    settings = cfg.get("reward", {}).get("passivity")
+    if settings is None:
+        if np.ndim(remaining_sun) == 0:
+            return 0.0
+        return np.zeros_like(np.asarray(remaining_sun, dtype=np.float64))
+    sun = np.asarray(remaining_sun, dtype=np.float64)
+    if not np.isfinite(sun).all():
+        raise ValueError("remaining sunlight must be finite")
+    reference = float(settings["sun_reference"])
+    won_array = np.asarray(won, dtype=bool)
+    if won_array.ndim == 0:
+        maximum = float(
+            settings["win_max_reward"] if bool(won_array) else settings["loss_max_penalty"]
+        )
+        reserve = float(settings["win_reserve"] if bool(won_array) else settings["loss_reserve"])
+    else:
+        maximum = np.where(won_array, settings["win_max_reward"], settings["loss_max_penalty"])
+        reserve = np.where(won_array, settings["win_reserve"], settings["loss_reserve"])
+    fraction = np.clip((sun - reserve) / (reference - reserve), 0.0, 1.0)
+    # Quadratic growth keeps the signal mild near the reserve and steepens as
+    # unused sunlight approaches the configured cap.
+    magnitude = maximum * np.square(fraction)
+    result = np.where(won_array, magnitude, -magnitude)
+    return float(result) if result.ndim == 0 else result
+
+
+def residual_sun_wait_penalties(rows, amount):
+    """Return per-row loss penalties for uninterrupted ordinary-wait runs.
+
+    ``rows`` must contain the raw, un-compacted trajectory rows for one
+    episode.  The returned array is aligned with ``rows`` and contains
+    negative global-terminal adjustments.  A non-wait row breaks a run, even
+    when it is not itself eligible for passivity attribution.  Run lengths are
+    measured in decisions; row durations deliberately do not weight the
+    penalty.
+    """
+    rows = np.asarray(rows)
+    names = set(rows.dtype.names or ())
+    required = {
+        "active",
+        "accepted",
+        "action",
+        "route",
+        "exploration_mode",
+        "decision",
+    }
+    missing = required - names
+    if rows.ndim != 1 or missing:
+        raise ValueError(f"wait penalty rows are missing fields: {sorted(missing)}")
+    if not np.isfinite(amount) or amount < 0:
+        raise ValueError("wait penalty amount must be finite and nonnegative")
+    if len(rows) == 0:
+        return np.empty(0, dtype=np.float64), {
+            "wait_rows": 0,
+            "run_count": 0,
+            "shortest_run": 0,
+            "longest_run": 0,
+            "run_details": [],
+            "total_penalty": 0.0,
+            "minimum_penalty": 0.0,
+            "maximum_penalty": 0.0,
+        }
+
+    order = np.argsort(rows["decision"], kind="stable")
+    ordered = rows[order]
+    eligible = (
+        ordered["active"]
+        & ordered["accepted"]
+        & (ordered["action"] == 0)
+        & (ordered["route"] == int(FitRoute.WAIT_RETURN))
+        & (ordered["exploration_mode"] == 0)
+    )
+    starts, stops = [], []
+    start = None
+    for index, is_eligible in enumerate(eligible):
+        continues = bool(is_eligible and start is not None)
+        if continues:
+            previous = index - 1
+            continues = bool(
+                eligible[previous]
+                and int(ordered["decision"][index])
+                == int(ordered["decision"][previous]) + 1
+                and not (
+                    ("reset" in names and ordered["reset"][index])
+                    or ("run_break" in names and ordered["run_break"][index])
+                    or ("done" in names and ordered["done"][previous])
+                )
+            )
+        if not continues:
+            if start is not None:
+                stops.append(index)
+            start = index if is_eligible else None
+            if start is not None:
+                starts.append(start)
+    if start is not None:
+        stops.append(len(ordered))
+
+    lengths = [stop - begin for begin, stop in zip(starts, stops, strict=True)]
+    minimum = min(lengths, default=0)
+    maximum = max(lengths, default=0)
+    penalties = np.zeros(len(rows), dtype=np.float64)
+    details = []
+    for begin, stop, length in zip(starts, stops, lengths, strict=True):
+        if maximum == minimum:
+            fraction = 1.0
+        else:
+            fraction = (length - minimum) / (maximum - minimum)
+        factor = 0.2 + 0.8 * fraction * fraction
+        per_wait = float(amount) * factor
+        penalties[order[begin:stop]] = -per_wait
+        details.append(
+            {
+                "length": int(length),
+                "penalty_per_wait": per_wait,
+                "penalty_total": per_wait * length,
+            }
+        )
+    positive = -penalties[penalties < 0]
+    return penalties, {
+        "wait_rows": int(sum(lengths)),
+        "run_count": len(lengths),
+        "shortest_run": int(minimum),
+        "longest_run": int(maximum),
+        "run_details": details,
+        "total_penalty": float(positive.sum()),
+        "minimum_penalty": float(positive.min()) if len(positive) else 0.0,
+        "maximum_penalty": float(positive.max()) if len(positive) else 0.0,
+    }
+
+
+OBJECTIVE_PROTOCOL = "complete_return_action_global_v7"
 # These are the only reward components that train the policy.  The simulator
 # still publishes the older diagnostic fields (combat_value, home_proximity,
 # victory_time, and so on) for reports and replay verification. Cohort-ranked
@@ -26,6 +167,18 @@ COMPONENTS = (
     "action_sun",
     "action_mower",
 )
+
+
+def selected_action_targets(returns, routes, minimum_q, invalid_offset):
+    """Fit invalid proposals below their responsible head's detached minimum.
+
+    Shared by autonomous/demo regression and NumPy prefit diagnostics. Ordinary
+    waits and accepted actions keep their original complete-return targets.
+    """
+    invalid = (routes == FitRoute.SPECIES_INVALID) | (routes == FitRoute.TILE_INVALID)
+    if isinstance(returns, torch.Tensor):
+        return torch.where(invalid, minimum_q.detach() + invalid_offset, returns)
+    return np.where(invalid, minimum_q + invalid_offset, returns)
 
 
 def components(parts):
@@ -108,7 +261,7 @@ def endgame_terminal_rewards(durations, won, *, win_reward=1.0, loss_penalty=1.0
     return terminal, adjustment
 
 
-def finalize_episode_metrics(rows, cfg, *, median=None):
+def finalize_episode_metrics(rows, cfg, *, median=None, wait_penalties=None, time_weight=None):
     """Finalize one cohort idempotently, including standalone evaluation batches."""
     if not rows:
         return 0.0
@@ -119,19 +272,44 @@ def finalize_episode_metrics(rows, cfg, *, median=None):
         won,
         win_reward=cfg["reward"]["win_reward"],
         loss_penalty=cfg["reward"]["loss_penalty"],
-        weight=cfg["reward"].get("win_time_weight", 0.3),
+        weight=cfg["reward"].get("win_time_weight", 0.3) if time_weight is None else time_weight,
     )
+    wait_penalties = wait_penalties or {}
     for row, value, delta in zip(rows, terminal, adjustment, strict=True):
         baseline = cfg["reward"]["win_reward"] if row["win"] else -cfg["reward"]["loss_penalty"]
-        change = float(value - row.get("terminal_reward", baseline))
+        final_sun = row.get("remaining_sun")
+        outcome_adjustment = (
+            float(residual_sun_adjustment(final_sun, True, cfg))
+            if row["win"] and final_sun is not None
+            else 0.0
+        )
+        change = float(value + outcome_adjustment - row.get("terminal_reward", baseline))
         for key in ("terminal", "global_terminal"):
             if key in row:
                 row[key] += change
+        passivity_done = bool(row.get("passivity_finalized", False))
+        reported_penalty = float(
+            row.get(
+                "wait_passivity_penalty",
+                wait_penalties.get(row.get("record_id"), 0.0),
+            )
+        )
+        penalty = 0.0 if passivity_done else reported_penalty
+        # The loss shaping was attributed to individual wait rows in the
+        # trajectory.  Episode summaries have one aggregate field, so mirror
+        # that amount into the accumulated global-terminal metric used by the
+        # HUD and report conversion.  The legacy terminal event itself stays
+        # at the ranked outcome value.
+        if penalty and "global_terminal" in row:
+            row["global_terminal"] += penalty
         for key in ("return", "discounted_return", "discounted_outcome_return"):
             if key in row:
-                row[key] += change
+                row[key] += change + penalty
         row.update(
-            terminal_reward=float(value),
+            terminal_reward=float(value + outcome_adjustment),
+            residual_sun_reward=outcome_adjustment,
+            wait_passivity_penalty=reported_penalty,
+            passivity_finalized=True,
             endgame_time_adjustment=float(delta),
             # Retain the field for report readers that understand the old
             # provisional protocol; the actual terminal adjustment is now in

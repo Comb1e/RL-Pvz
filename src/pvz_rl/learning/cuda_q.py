@@ -14,6 +14,8 @@ import numpy as np
 import torch
 from stable_baselines3.common.base_class import BaseAlgorithm
 
+from pvz_rl.config import cohort_envs
+from pvz_rl.envs.tile_scenarios import BombGenerationFailure, is_placement_skill, placement_settings
 from pvz_rl.learning.cohort import (
     CohortPhase,
     atomic_transition,
@@ -21,6 +23,7 @@ from pvz_rl.learning.cohort import (
 from pvz_rl.learning.cuda_buffer import CompleteGameBuffer
 from pvz_rl.learning.exploration import EXPLORATION_PROTOCOL, configure_exploration
 from pvz_rl.learning.objective import OBJECTIVE_PROTOCOL
+from pvz_rl.learning.training_requirements import FIT_SCHEDULE_PROTOCOL
 from pvz_rl.policy.sequential_q import ACTION_DISTRIBUTION, POLICY_SIGNATURE
 
 
@@ -36,8 +39,20 @@ def checkpoint_metadata(path, *, weights_only=False):
     from pvz_rl.learning.checkpoints import protocol_for
 
     expected = protocol_for(metadata.get("policy"))
-    if weights_only and metadata.get("optimizer") not in (
+    if not weights_only and metadata.get("optimizer") in (
         OBJECTIVE_PROTOCOL,
+        "tile_warmup_then_joint_v1",
+    ):
+        raise ValueError(
+            "Checkpoint uses a previous fitting schedule and cannot resume. "
+            "Use --init-from for a fresh run with compatible weights."
+        )
+    if weights_only and metadata.get("optimizer") not in (
+        FIT_SCHEDULE_PROTOCOL,
+        "tile_warmup_then_joint_v1",
+        OBJECTIVE_PROTOCOL,
+        "complete_return_action_global_v6",
+        "complete_return_action_global_v5",
         "complete_return_action_global_v4",
         "complete_return_action_global_v3",
         "complete_return_action_global_v2",
@@ -69,7 +84,7 @@ def checkpoint_optimizer_protocol(path):
 
 class CudaCohortLifecycle(BaseAlgorithm):
     policy_protocol = POLICY_SIGNATURE
-    optimizer_version = OBJECTIVE_PROTOCOL
+    optimizer_version = FIT_SCHEDULE_PROTOCOL
 
     def __init__(
         self,
@@ -78,7 +93,7 @@ class CudaCohortLifecycle(BaseAlgorithm):
         *,
         learning_rate=3e-4,
         batch_size=1024,
-        n_epochs=4,
+        n_epochs=1,
         max_grad_norm=5,
         policy_kwargs=None,
         seed=None,
@@ -104,6 +119,7 @@ class CudaCohortLifecycle(BaseAlgorithm):
         self.action_distribution_protocol = ACTION_DISTRIBUTION
         self.phase = CohortPhase.IDLE
         self.training_games = self._n_updates = 0
+        self.optimizer_commits = 0
         self.cohort_metrics = {}
         self.runtime_state = None
         self._buffer = self._runner = None
@@ -176,7 +192,7 @@ class CudaCohortLifecycle(BaseAlgorithm):
         buffer = CompleteGameBuffer(
             path,
             self.n_envs,
-            ram_bytes=spec["ram_gib"] * 1024**3,
+            ram_bytes=spec["ram_gib"] * 1024**3 - self.env.queue.reserved_bytes,
             block_rows=spec["block_rows"],
             schema=self.policy.layout.schema(),
             cfg=self.cfg,
@@ -190,21 +206,66 @@ class CudaCohortLifecycle(BaseAlgorithm):
         if hasattr(callback, "cohort_phase"):
             callback.cohort_phase(previous, phase)
 
+    def _prefetch_cohort(self, callback):
+        from pvz_rl.learning.budget import budget_target, progress_value
+        from pvz_rl.learning.curriculum import pre_stage
+
+        if not is_placement_skill(self.tile_skills.phase):
+            return
+        skills = self.tile_skills
+        trigger = getattr(callback, "validation_trigger", None)
+        if trigger is not None and trigger.enabled:
+            last = trigger.state["last_check"].get(skills.validation_domain, 0)
+            if skills.progress - last >= trigger.interval_for(skills.validation_domain):
+                return
+        elif skills.due(self.cfg):
+            return
+        count = cohort_envs(self.cfg, self.tile_skills.phase)
+        target = budget_target(self.env.cfg)
+        if pre_stage(self.env.cfg) and target is not None:
+            count = min(count, max(0, target - progress_value(self.env.cfg, self)))
+        if count:
+            self.env.queue.prefetch(count)
+
     def _begin(self, callback):
         callback.on_rollout_start()
-        from pvz_rl.learning.budget import budget_target, uses_games
+        from pvz_rl.learning.budget import budget_target, progress_value, uses_games
+        from pvz_rl.learning.curriculum import pre_stage
 
-        count = self.n_envs
+        count = cohort_envs(self.cfg, self.tile_skills.phase)
         target = budget_target(self.env.cfg)
-        if uses_games(self.env.cfg) and target is not None:
-            count = min(count, max(0, target - self.training_games))
+        skills = self.tile_skills
+        self.env.tile_scenario = self.env.queue.tile_scenario = skills.phase
+        if not is_placement_skill(skills.phase):
+            self.env.queue.close()
+        self.env.queue.tile_boards = {}
+        self.env.tile_boards = {}
+        if (
+            (pre_stage(self.env.cfg) or not skills.active)
+            and uses_games(self.env.cfg)
+            and target is not None
+        ):
+            count = min(count, max(0, target - progress_value(self.env.cfg, self)))
         if count < 1:
             from pvz_rl.learning.training import TrainingGamesComplete
 
             raise TrainingGamesComplete
         self._pending_episodes = {}
         self.cohort_number = self._n_updates + 1
-        self._last_obs = self.env.reset_cohort(count)
+        from pvz_rl.learning.deadline import BudgetExpired
+
+        try:
+            self._last_obs = self.env.reset_cohort(count)
+        except BudgetExpired:
+            from pvz_rl.learning.training import TrainingDeadline
+
+            callback.budget_stopped = True
+            raise TrainingDeadline() from None
+        except BombGenerationFailure:
+            failed = self.tile_skills
+            failed.generation_failures = self.env.queue.generation_failures
+            self.tile_skill_state = failed.to_dict()
+            raise
         self._runner = self._new_runner()
         self._first = True
         self._buffer = self._new_buffer()
@@ -215,7 +276,20 @@ class CudaCohortLifecycle(BaseAlgorithm):
         self._simulation_ticks = 0
         self._planting_samples = 0
         for key in (
+            "peashooter_cross_entropy_loss",
+            "peashooter_preferred_column_accuracy",
             "q_loss",
+            "tile_ranking_loss",
+            "bomb_cross_entropy_loss",
+            "bomb_softmax_temperature",
+            "attacker_cross_entropy_loss",
+            "attacker_softmax_temperature",
+            "bomb_hinge_loss",
+            "bomb_distance_loss",
+            "comparison_loss",
+            "feasibility_loss",
+            "comparison_accuracy",
+            "feasibility_accuracy",
             "selected_action_error",
             "species_consistency_loss",
             "species_consistency_mae",
@@ -225,8 +299,15 @@ class CudaCohortLifecycle(BaseAlgorithm):
             "q_grad_norm",
         ):
             self.logger.record("train/" + key, None)
+        for action in ("wait", "plant", "dig"):
+            for metric in ("action_count", "value_target_error", "placement_gap"):
+                self.logger.record(f"train/{metric}_{action}", None)
         self._stats = dict(
             q_optimizer_steps=0,
+            tile_only_optimizer_steps=0,
+            joint_optimizer_steps=0,
+            tile_only_fit_examples=0,
+            joint_fit_examples=0,
             species_exploration_coins=0,
             tile_exploration_coins=0,
             exploratory_changes=0,
@@ -239,6 +320,17 @@ class CudaCohortLifecycle(BaseAlgorithm):
         transitions = int(self._buffer.group_counts.sum())
         self.cohort_metrics = {
             **self._stats,
+            "validation_cohort": dict(
+                cohort=self.cohort_number,
+                domain=self.tile_skills.validation_domain if self.tile_skills.active else "normal",
+                skill=self.tile_skills.phase if self.tile_skills.active else None,
+                stage=getattr(self, "curriculum_state", {}).get("stage"),
+                games=len(self._pending_episodes),
+                configured_games=cohort_envs(self.cfg, self.tile_skills.phase),
+                wins=sum(bool(item["metrics"]["win"]) for item in self._pending_episodes.values()),
+                training_steps=self.num_timesteps,
+                optimizer_step=self.optimizer_commits,
+            ),
             "prefit_errors": self.prefit_errors,
             "objective": self._buffer.reward_summary,
             **self._buffer.transport_metrics,
@@ -249,6 +341,10 @@ class CudaCohortLifecycle(BaseAlgorithm):
             "planting_samples": int(self._buffer.group_counts[1]),
             "species_counts": self._buffer.species_counts.tolist(),
             "collection_seconds": self._phase_times["collect"],
+            "scenario_preparation_seconds": self.env.last_preparation_seconds,
+            "total_collection_seconds": self._phase_times["collect"]
+            + self.env.last_preparation_seconds,
+            "scenario_preparation": self.env.queue.preparation_metrics,
             "fit_seconds": self._phase_times["fit"],
             "returns_seconds": self._phase_times["returns"],
             "window_seconds": elapsed,
@@ -261,9 +357,22 @@ class CudaCohortLifecycle(BaseAlgorithm):
             self.logger.record("train/" + key, value)
         self.logger.record("train/learning_rate", self.policy.optimizer.param_groups[0]["lr"])
         self._n_updates += 1
+        skills = self.tile_skills
+        if skills.active:
+            skills.cohorts += 1
+            skills.generation_failures = self.env.queue.generation_failures
+            self.tile_skill_state = skills.to_dict()
+        else:
+            self.normal_updates += 1
         self.logger.record("train/n_updates", self._n_updates)
         self._buffer.close()
         self._buffer = self._runner = None
+        if getattr(self, "_counterfactual", None) is not None:
+            self._counterfactual.close()
+            self._counterfactual = None
+        if getattr(self, "_peashooter_teacher", None) is not None:
+            self._peashooter_teacher.close()
+            self._peashooter_teacher = None
         self.phase = CohortPhase.IDLE
         callback.on_rollout_end()
 
@@ -296,21 +405,31 @@ class CudaCohortLifecycle(BaseAlgorithm):
         if self.runtime_state:
             self._restore_runtime()
         callback.on_training_start(locals(), globals())
-        while self.num_timesteps < total or self.phase != CohortPhase.IDLE:
+        while (
+            self.tile_skills.active or self.num_timesteps < total or self.phase != CohortPhase.IDLE
+        ):
             if self.phase == CohortPhase.IDLE:
-                from pvz_rl.learning.budget import budget_target, uses_games
+                from pvz_rl.learning.budget import budget_target, progress_value, uses_games
+                from pvz_rl.learning.curriculum import pre_stage
 
                 target = budget_target(self.env.cfg)
+                if pre_stage(self.env.cfg) and not self.tile_skills.active:
+                    break
                 if (
                     uses_games(self.env.cfg)
+                    and (pre_stage(self.env.cfg) or not self.tile_skills.active)
                     and target is not None
-                    and self.training_games >= target
+                    and progress_value(self.env.cfg, self) >= target
                 ):
                     break
                 with atomic_transition():
                     self._begin(callback)
                 continue
             phase = self.phase
+            # Oracles/replay own bounded resumable units outside main actions.
+            if phase == CohortPhase.COLLECT and hasattr(self, "_prepare_collection"):
+                if not self._prepare_collection(callback):
+                    continue
             start = perf_counter()
             try:
                 with atomic_transition():
@@ -319,7 +438,21 @@ class CudaCohortLifecycle(BaseAlgorithm):
                     elif phase == CohortPhase.FINALIZE_REWARDS:
                         self._finalize_rewards(callback)
                     elif phase == CohortPhase.RETURNS:
-                        self.prefit_errors = self._buffer.finalize(cohort=self.cohort_number)
+                        ranking = is_placement_skill(self.tile_skills.phase)
+                        search = getattr(self, "counterfactual_training", False)
+                        rules = getattr(self, "peashooter_rule_training", False)
+                        self.prefit_errors = self._buffer.finalize(
+                            cohort=self.cohort_number,
+                            diagnostics=not (ranking or search or rules),
+                        )
+                        if ranking or search or rules:
+                            self.prefit_errors = {}
+                            self._buffer.reward_summary["supervision"] = (
+                                "prioritized_lane_cross_entropy_v1" if rules else
+                                "paired_tile_cross_entropy_v1" if search else placement_settings(
+                                    self.cfg, self.tile_skills.phase
+                                ).get("ranking_objective", "top1_hinge_v1")
+                            )
                         for name, values in self.prefit_errors.items():
                             self.logger.record("train/action_count_" + name, values["count"])
                             self.logger.record("train/value_target_error_" + name, values["mse"])
@@ -327,6 +460,7 @@ class CudaCohortLifecycle(BaseAlgorithm):
                                 "train/placement_gap_" + name, values["placement_gap"]
                             )
                         self._phase(CohortPhase.FIT, callback)
+                        self._prefetch_cohort(callback)
                     elif phase == CohortPhase.FIT:
                         self._fit_step(callback)
                     elif phase == CohortPhase.SYNCHRONIZE:
@@ -458,6 +592,10 @@ class CudaCohortLifecycle(BaseAlgorithm):
                                     archive.open(name, "w", force_zip64=True) as out,
                                 ):
                                     shutil.copyfileobj(inp, out, length=1024 * 1024)
+                if getattr(self, "_counterfactual", None) is not None:
+                    self._counterfactual.write_archive(archive)
+                if getattr(self, "_peashooter_teacher", None) is not None:
+                    self._peashooter_teacher.write_archive(archive)
                 if self._buffer is not None:
                     self._buffer.write_archive(archive)
                 elif runtime.get("buffer") is not None:

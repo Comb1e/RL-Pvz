@@ -235,6 +235,7 @@ def _verify_action_order(archive_rows: list[dict], replay_path: Path, cfg: dict)
                 [before.sun],
                 [[cards[kind].cooldown_ticks if kind in cards else -1 for kind in codec.plants]],
                 [game.rules.plants[kind]["cost"] for kind in codec.plants],
+                plant_count=[len(before.plants)],
                 card_present=[[kind in cards for kind in codec.plants]],
             )[0]
         )
@@ -424,7 +425,11 @@ def _load_verified_demo(
         "version": cfg["engine_version"],
         "package_version": cfg["engine_package_version"],
     }:
-        raise ValueError("Archive engine does not match the configured pinned engine")
+        raise ValueError(
+            "Archive engine does not match the configured pinned engine; "
+            "record a fresh demonstration with the current engine. "
+            "Historical rejection reasons are not migrated."
+        )
     if manifest.get("observation_schema") != ObservationEncoder(cfg, Rules()).schema():
         raise ValueError("Archive entity schema does not match; record a fresh demonstration")
     if manifest.get("replay") != file_hash(replay):
@@ -587,7 +592,7 @@ def _initialize_demo(
         rows["rejection_reason"][index] = int(reason)
     compact_positions, compact_counts, compaction = compact_repeated_rows(
         rows,
-        group_size=objective.get("invalid_fit_group_size", 100),
+        group_size=objective.get("invalid_fit_group_size", 10),
     )
     rows = rows[compact_positions]
     observations = [observations[index] for index in compact_positions]
@@ -774,4 +779,25 @@ def load_demo_checkpoint(path: str | Path, cfg: dict | None = None, *, device="c
 
 def initialize_demo(archive, replay, output, **kwargs):
     with ExitStack() as resources:
-        return _initialize_demo(archive, replay, output, _resources=resources, **kwargs)
+        result = _initialize_demo(archive, replay, output, _resources=resources, **kwargs)
+    if result["state"] == "complete":
+        from pvz_rl.learning.checkpoints import inspect_checkpoint
+        from pvz_rl.learning.training_artifacts import retain_files
+
+        checkpoint = Path(result["checkpoint"])
+        inspect_checkpoint(checkpoint, weights_only=True)
+        retain_files(
+            checkpoint.parent,
+            [checkpoint],
+            candidates=[
+                checkpoint.parent / name
+                for name in (
+                    "learning-curves.json",
+                    "fitting-compaction.json",
+                    "action-coverage.json",
+                    "replay-verification.json",
+                    "status.json",
+                )
+            ],
+        )
+    return result

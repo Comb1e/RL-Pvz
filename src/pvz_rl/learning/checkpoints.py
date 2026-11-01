@@ -12,9 +12,10 @@ from zipfile import ZipFile
 
 import torch
 
-from pvz_rl.config import digest, load_config, validate_config
+from pvz_rl.config import digest, load_config, training_env_capacity, validate_config
 from pvz_rl.learning.performance import ENCODER_SETTINGS, refresh_performance
 from pvz_rl.learning.training_requirements import (
+    FIT_SCHEDULE_PROTOCOL,
     current_model_config,
     inference_config,
     transfer_protocol,
@@ -25,13 +26,15 @@ from pvz_rl.learning.training_requirements import (
 DEMO_PROTOCOL = "pvz-rl/demo-initialization-checkpoint-v11"
 LEGACY_DEMO_PROTOCOL = "pvz-rl/demo-initialization-checkpoint-v10"
 LEGACY_DEMO_PROTOCOL_V9 = "pvz-rl/demo-initialization-checkpoint-v9"
-ANNOTATION_CHECKPOINT_PROTOCOL = "pvz-rl/annotation-initialization-v3"
-ANNOTATION_PROGRESS_PROTOCOL = "pvz-rl/annotation-progress-v4"
+ANNOTATION_CHECKPOINT_PROTOCOL = "pvz-rl/annotation-initialization-v4"
+PREVIOUS_ANNOTATION_CHECKPOINT_PROTOCOL = "pvz-rl/annotation-initialization-v3"
+ANNOTATION_PROGRESS_PROTOCOL = "pvz-rl/annotation-progress-v5"
+PREVIOUS_ANNOTATION_PROGRESS_PROTOCOL = "pvz-rl/annotation-progress-v4"
 LEGACY_ANNOTATION_PROGRESS_PROTOCOL = "pvz-rl/annotation-progress-v3"
 LEGACY_ANNOTATION_CHECKPOINT_PROTOCOL_V2 = "pvz-rl/annotation-initialization-v2"
 LEGACY_ANNOTATION_CHECKPOINT_PROTOCOL = "pvz-rl/tile-annotation-initialization-v1"
 MODEL_STATE_PROTOCOL = "pvz-rl/stateless-two-stage-bf16-master-state-v2"
-AUTONOMOUS_STATE_PROTOCOL = "pvz-rl/action-global-state-v5"
+AUTONOMOUS_STATE_PROTOCOL = "pvz-rl/action-global-state-v7"
 
 
 class SnapshotStager:
@@ -139,16 +142,13 @@ def load_torch_snapshot(path):
 
 
 def protocol_for(kind):
-    methods = {
-        "two_stage_transformer_q_v1": "complete_return_action_global_v5",
-    }
-    if kind not in methods:
+    if kind != "two_stage_transformer_q_v1":
         raise ValueError(
             f"Incompatible checkpoint model family: {kind}; entity_v1 requires fresh initialization"
         )
     from pvz_rl.learning.exploration import EXPLORATION_PROTOCOL
 
-    return dict(policy=kind, optimizer=methods[kind], exploration=EXPLORATION_PROTOCOL)
+    return dict(policy=kind, optimizer=FIT_SCHEDULE_PROTOCOL, exploration=EXPLORATION_PROTOCOL)
 
 
 def compatible_config(source, target, *, weights_only=False):
@@ -175,7 +175,14 @@ def execution_config(cfg):
         cfg["policy"].setdefault(key, copy.deepcopy(defaults["policy"][key]))
     for key in ("logging", "visualization", "runtime", "simulation"):
         cfg.setdefault(key, copy.deepcopy(defaults[key]))
-    for key in ("storage", "performance", "batch_size", "n_epochs", "max_grad_norm"):
+    for key in (
+        "storage",
+        "performance",
+        "batch_size",
+        "n_epochs",
+        "tile_only_cohorts",
+        "max_grad_norm",
+    ):
         cfg["training"].setdefault(key, copy.deepcopy(defaults["training"][key]))
     for key, value in defaults["training"]["performance"].items():
         cfg["training"]["performance"].setdefault(key, copy.deepcopy(value))
@@ -205,13 +212,21 @@ def inspect_checkpoint(path, *, weights_only=False):
     path = Path(path).resolve()
     if not path.suffix:
         path = path.with_suffix(".zip")
+    if path.suffix == ".zip":
+        with ZipFile(path) as archive:
+            portable = "weights-only.json" in archive.namelist()
+        if portable:
+            return _inspect_completed_weights(path, weights_only=weights_only)
     if path.suffix == ".pt":
         saved, snapshot_sha256 = load_torch_snapshot(path)
-        progress = saved.get("protocol") == ANNOTATION_PROGRESS_PROTOCOL
+        progress = saved.get("protocol") in (
+            ANNOTATION_PROGRESS_PROTOCOL,
+            PREVIOUS_ANNOTATION_PROGRESS_PROTOCOL,
+        )
         if saved.get("protocol") == LEGACY_ANNOTATION_PROGRESS_PROTOCOL:
             raise ValueError(
-                "Annotation progress v3 must first be loaded with the annotation fitter's "
-                "--resume-from to write v4 progress; then use that file with --init-from"
+                "Annotation progress v3 is retired; use a compatible v4/v5 BF16-master "
+                "progress file or a completed compatible checkpoint with --init-from"
             )
         if progress and not weights_only:
             raise ValueError(
@@ -224,7 +239,9 @@ def inspect_checkpoint(path, *, weights_only=False):
             LEGACY_DEMO_PROTOCOL: "demonstration",
             LEGACY_DEMO_PROTOCOL_V9: "demonstration",
             ANNOTATION_CHECKPOINT_PROTOCOL: "annotation",
+            PREVIOUS_ANNOTATION_CHECKPOINT_PROTOCOL: "annotation",
             ANNOTATION_PROGRESS_PROTOCOL: "annotation",
+            PREVIOUS_ANNOTATION_PROGRESS_PROTOCOL: "annotation",
             LEGACY_ANNOTATION_CHECKPOINT_PROTOCOL_V2: "annotation",
             LEGACY_ANNOTATION_CHECKPOINT_PROTOCOL: "annotation",
         }.get(saved.get("protocol"))
@@ -246,7 +263,10 @@ def inspect_checkpoint(path, *, weights_only=False):
         convergence = saved.get("convergence", {})
         if not isinstance(convergence, dict):
             raise ValueError("Checkpoint convergence metadata must be a dictionary")
-        current_annotation_convergence = saved.get("protocol") == ANNOTATION_CHECKPOINT_PROTOCOL
+        current_annotation_convergence = saved.get("protocol") in (
+            ANNOTATION_CHECKPOINT_PROTOCOL,
+            PREVIOUS_ANNOTATION_CHECKPOINT_PROTOCOL,
+        )
         zero_pass_verified = (
             initialization_type == "annotation"
             and convergence.get("verified") is True
@@ -256,12 +276,17 @@ def inspect_checkpoint(path, *, weights_only=False):
             and (
                 not current_annotation_convergence
                 or (
-                    convergence.get("absolute_bottom_hits") == convergence["records"]
-                    and type(convergence.get("validation_records")) is int
+                    type(convergence.get("validation_records")) is int
                     and convergence["validation_records"] >= 0
                     and convergence.get("validation_hits") == convergence["validation_records"]
-                    and convergence.get("validation_absolute_bottom_hits")
-                    == convergence["validation_records"]
+                    and (
+                        saved.get("protocol") != PREVIOUS_ANNOTATION_CHECKPOINT_PROTOCOL
+                        or (
+                            convergence.get("absolute_bottom_hits") == convergence["records"]
+                            and convergence.get("validation_absolute_bottom_hits")
+                            == convergence["validation_records"]
+                        )
+                    )
                 )
             )
         )
@@ -277,7 +302,12 @@ def inspect_checkpoint(path, *, weights_only=False):
             identity = saved.get("identity")
             settings = identity.get("settings") if isinstance(identity, dict) else None
             if (
-                saved.get("annotation_kind") not in ("tile", "action")
+                saved.get("annotation_kind")
+                not in (
+                    ("tile",)
+                    if saved["protocol"] == ANNOTATION_PROGRESS_PROTOCOL
+                    else ("tile", "action")
+                )
                 or not isinstance(settings, dict)
                 or settings.get("annotation_kind") != saved["annotation_kind"]
             ):
@@ -331,6 +361,10 @@ def inspect_checkpoint(path, *, weights_only=False):
                 else json.loads((path.parent / "metadata.json").read_text("utf-8"))
             )
         cfg = metadata["config"]
+        if not weights_only:
+            from pvz_rl.provenance import verify_engine
+
+            verify_engine(cfg)
         validate_config(execution_config(inference_config(cfg) if weights_only else cfg))
         from pvz_game import Rules
 
@@ -366,6 +400,8 @@ def inspect_checkpoint(path, *, weights_only=False):
                     runtime.get("protocol")
                     not in (
                         AUTONOMOUS_STATE_PROTOCOL,
+                        "pvz-rl/action-global-state-v6",
+                        "pvz-rl/action-global-state-v5",
                         "pvz-rl/action-global-state-v4",
                         "pvz-rl/action-global-state-v3",
                         "pvz-rl/action-global-state-v2",
@@ -380,6 +416,11 @@ def inspect_checkpoint(path, *, weights_only=False):
             else:
                 validate_runtime_identity(runtime)
             if not weights_only:
+                from pvz_rl.learning.counterfactual_settings import validate_counterfactual_recovery
+                validate_counterfactual_recovery(runtime, cfg)
+                from pvz_rl.learning.peashooter_teacher import validate_rule_recovery
+
+                validate_rule_recovery(runtime, cfg)
                 if runtime.get("buffer") is not None:
                     from pvz_rl.learning.collection_scheduler import CollectionScheduler
                     from pvz_rl.learning.exploration import CommittedPlantExploration
@@ -394,14 +435,13 @@ def inspect_checkpoint(path, *, weights_only=False):
                         )
                     ):
                         raise ValueError("Incomplete no-probe recovery state")
-                    CollectionScheduler(cfg["training"]["n_envs"], "cpu").restore(
-                        runtime["collection_scheduler"]
-                    )
+                    capacity = training_env_capacity(cfg, metadata["family"])
+                    CollectionScheduler(capacity, "cpu").restore(runtime["collection_scheduler"])
                     controller = runtime.get("plant_exploration")
                     if not isinstance(controller, dict):
                         raise ValueError("Incomplete committed plant recovery state")
                     state = CommittedPlantExploration(
-                        cfg["training"]["n_envs"],
+                        capacity,
                         "cpu",
                         stored.get("plant_exploration_rate", float("nan")),
                         stored.get("exploration_rate", float("nan")),
@@ -417,6 +457,7 @@ def inspect_checkpoint(path, *, weights_only=False):
         if not weights_only and protocol != protocol_for(cfg["policy"]["kind"]):
             raise ValueError("Checkpoint model family disagrees with saved configuration")
         metadata["initialization_type"] = "autonomous"
+        metadata["fit_schedule_protocol"] = protocol["optimizer"]
     if weights_only:
         return metadata
     if metadata["initialization_type"] == "demonstration":
@@ -425,6 +466,46 @@ def inspect_checkpoint(path, *, weights_only=False):
         cfg = execution_config(metadata["config"])
     validate_config(cfg)
     metadata["config"] = cfg
+    return metadata
+
+
+def _inspect_completed_weights(path, *, weights_only):
+    from pvz_game import Rules
+
+    from pvz_rl.envs.encoding import ObservationEncoder
+    from pvz_rl.learning.cuda_q import checkpoint_metadata
+    from pvz_rl.learning.training_artifacts import WEIGHTS_PROTOCOL
+
+    if not weights_only:
+        raise ValueError(
+            "Completed runs retain weights only; use --init-from or inference. "
+            "Resume requires an interrupted/latest recovery checkpoint."
+        )
+    checkpoint_metadata(path, weights_only=True)
+    with ZipFile(path) as archive:
+        required = {
+            "policy.pth",
+            "protocol.json",
+            "observation-schema.json",
+            "run.json",
+            "weights-only.json",
+        }
+        if set(archive.namelist()) != required:
+            raise ValueError("Completed weight archive has unexpected or missing entries")
+        marker = json.loads(archive.read("weights-only.json"))
+        metadata = json.loads(archive.read("run.json"))
+        cfg = metadata["config"]
+        if marker != dict(protocol=WEIGHTS_PROTOCOL, config_digest=digest(cfg)):
+            raise ValueError("Completed weights configuration or protocol does not match")
+        validate_config(execution_config(inference_config(cfg)))
+        if (
+            json.loads(archive.read("observation-schema.json"))
+            != ObservationEncoder(cfg, Rules()).schema()
+        ):
+            raise ValueError("Completed weights entity schema disagrees with configuration")
+        if metadata.get("completion", {}).get("state") != "complete":
+            raise ValueError("Completed weights are missing completion metadata")
+    metadata["initialization_type"] = "weights"
     return metadata
 
 

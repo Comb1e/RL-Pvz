@@ -10,6 +10,7 @@ from pathlib import Path
 from pvz_rl.config import (
     load_config,
     load_demo_config,
+    random_validation_seeds,
     research_config,
     seed_values,
     validate_config,
@@ -55,9 +56,12 @@ def training_options(parser):
     common(parser)
     parser.add_argument("--hardware", type=Path, help="benchmark recommendation.json")
     parser.add_argument(
-        "--games", type=int, help="total completed training games across all workers"
+        "--games",
+        type=int,
+        help="total completed games across all workers; scenario episodes for a selected tile stage",
     )
-    parser.add_argument("--n-envs", type=int)
+    parser.add_argument("--n-envs", type=int, help="Peashooter/normal cohort size")
+    parser.add_argument("--cherry-bomb-envs", type=int, help="cohort size for both Cherry Bomb stages")
     parser.add_argument("--device", choices=("cuda",))
     parser.add_argument("--simulator", choices=("cuda",))
     parser.add_argument("--batch-size", type=int)
@@ -128,6 +132,8 @@ def configured(args):
         )
         cfg = refresh_performance(cfg, current)
     if args.command == "train":
+        from pvz_rl.learning.budget import refresh_validation_schedule
+        from pvz_rl.learning.exploration import refresh_wait_exploration
         from pvz_rl.learning.performance import refresh_performance
 
         current = load_config(args.config)
@@ -136,6 +142,8 @@ def configured(args):
                 current, gpu_profile, device=getattr(args, "gpu_info", None), path=args.config
             )
         cfg = refresh_performance(cfg, current)
+        cfg = refresh_wait_exploration(cfg, current)
+        cfg = refresh_validation_schedule(cfg, current)
         cfg["logging"] = copy.deepcopy(current["logging"])
         args.seed = 101 if getattr(args, "seed", None) is None else args.seed
         args.condition = getattr(args, "condition", None) or "masked"
@@ -166,6 +174,11 @@ def configured(args):
         value = getattr(args, arg, None)
         if value is not None and args.command != "initialize-demo":
             cfg["training"][key] = value
+    if getattr(args, "cherry_bomb_envs", None) is not None:
+        cfg["training"]["tile_scenarios"]["cherry_bomb_n_envs"] = args.cherry_bomb_envs
+    if getattr(args, "n_envs", None) is not None and cfg["curriculum"].get("run_stage") == "peashooter":
+        if cfg["training"].get("peashooter_rules"):
+            cfg["training"]["peashooter_rules"]["n_envs"] = args.n_envs
     if getattr(args, "games", None) is not None:
         cfg["training"]["budget_unit"] = "games"
     selected_simulator = getattr(args, "simulator", None)
@@ -225,10 +238,12 @@ def main(argv=None):
     training.add_argument("--output", required=True, type=Path)
     training.add_argument("--validation-count", type=int, help="reduced validation set for checks")
     training.add_argument("--family", choices=("preset", "diagnostic"), default="preset")
-    from pvz_rl.learning.curriculum import STAGES
+    from pvz_rl.learning.curriculum import SELECTABLE_STAGES
 
     training.add_argument(
-        "--stage", choices=STAGES, help="train only this teaching stage; stop at mastery or budget"
+        "--stage",
+        choices=SELECTABLE_STAGES,
+        help="train only cherry_bomb, cherry_bomb_obstacle, attacker_pre, peashooter, easy, standard or shared; stop at mastery or budget",
     )
     training.add_argument(
         "--until-stage-complete",
@@ -251,9 +266,6 @@ def main(argv=None):
         type=Path,
         default=Path("data"),
         help="directory for annotation JSONL and manifest",
-    )
-    annotate.add_argument(
-        "--kind", choices=("tile", "action"), default="tile", help="annotation head to label"
     )
     annotate.add_argument(
         "--port", type=int, default=0, help="loopback port; 0 selects an ephemeral port"
@@ -298,32 +310,6 @@ def main(argv=None):
         "--l2-strength", type=float, help="post-training validation-phase L2 strength"
     )
     fit_annotations.add_argument("--seed", type=int)
-    fit_action = subs.add_parser(
-        "fit-action-annotations", help="pretrain the species/action Transformer from annotations"
-    )
-    common(fit_action)
-    fit_action.add_argument("--annotations", required=True, type=Path)
-    fit_action.add_argument("--output", required=True, type=Path)
-    action_source = fit_action.add_mutually_exclusive_group()
-    action_source.add_argument(
-        "--init-from",
-        type=Path,
-        help="fresh fit from compatible weights or unfinished .progress.pt",
-    )
-    action_source.add_argument(
-        "--resume-from",
-        type=Path,
-        help="restore matching progress, Adam, RNG and L2 phase; inherit saved fitting settings",
-    )
-    fit_action.add_argument("--device", choices=("cpu", "cuda"), default="cuda")
-    fit_action.add_argument(
-        "--passes", type=int, help="additional passes this invocation, also on resume; 0 unlimited"
-    )
-    fit_action.add_argument("--learning-rate", type=float)
-    fit_action.add_argument("--batch-size", type=int)
-    fit_action.add_argument("--margin", type=float)
-    fit_action.add_argument("--l2-strength", type=float)
-    fit_action.add_argument("--seed", type=int)
     demo = subs.add_parser(
         "record-demo",
         help="open one easy seed-1000 game and record a verified human transition archive",
@@ -460,9 +446,7 @@ def main(argv=None):
         "benchmark-gpu",
         "initialize-demo",
         "doctor",
-    ) or (
-        args.command in ("fit-tile-annotations", "fit-action-annotations") and args.device == "cuda"
-    ):
+    ) or (args.command == "fit-tile-annotations" and args.device == "cuda"):
         import torch
 
         if args.gpu is not None or torch.cuda.is_available():
@@ -491,8 +475,7 @@ def main(argv=None):
         settings = cfg["training"].get("annotation", {})
         profile_seed = settings.get("sampling_seed", "random")
         serve_annotations(
-            args.data_dir
-            / ("action-annotations.jsonl" if args.kind == "action" else "tile-annotations.jsonl"),
+            args.data_dir / "tile-annotations.jsonl",
             cfg=cfg,
             port=args.port,
             seed=args.seed
@@ -505,7 +488,6 @@ def main(argv=None):
             max_attempts=settings.get("sampling_max_attempts", 100)
             if args.max_attempts is None
             else args.max_attempts,
-            kind=args.kind,
         )
     elif args.command == "fit-tile-annotations":
         from pvz_rl.learning.annotation_fit import fit_annotations
@@ -513,29 +495,6 @@ def main(argv=None):
         print(
             json.dumps(
                 fit_annotations(
-                    args.annotations,
-                    args.output,
-                    cfg=cfg,
-                    init_from=args.init_from,
-                    resume_from=args.resume_from,
-                    device=args.device,
-                    passes=args.passes,
-                    learning_rate=args.learning_rate,
-                    batch_size=args.batch_size,
-                    margin=args.margin,
-                    l2_strength=args.l2_strength,
-                    seed=args.seed,
-                    kind="tile",
-                ),
-                indent=2,
-            )
-        )
-    elif args.command == "fit-action-annotations":
-        from pvz_rl.learning.annotation_fit import fit_action_annotations
-
-        print(
-            json.dumps(
-                fit_action_annotations(
                     args.annotations,
                     args.output,
                     cfg=cfg,
@@ -620,7 +579,9 @@ def main(argv=None):
             details["compact_replay"] = {
                 "available": read_recording(replay_path)["metadata"]["policy_id"] == "doctor",
                 "seek_supported": hasattr(probe, "seek"),
+                "action_frequency_hz": cfg["environment"].get("action_frequency_hz"),
                 "action_timing": cfg["environment"].get("action_timing", "fixed"),
+                "decision_ticks": cfg["environment"].get("decision_ticks"),
                 "instant_placement": info["ticks_advanced"] == 0,
             }
         try:
@@ -710,7 +671,10 @@ def main(argv=None):
                 raise ValueError("Development evaluation uses seeds 0-9")
             seeds = list(range(count))
         else:
-            seeds = seed_values(cfg, args.split, args.count)
+            seeds = (
+                random_validation_seeds(cfg, args.split, args.count)
+                if args.split == "validation" else seed_values(cfg, args.split, args.count)
+            )
         levels = args.levels or cfg["evaluation"]["ood_levels" if args.split == "ood" else "levels"]
         details = metadata(
             cfg,

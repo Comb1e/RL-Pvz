@@ -130,7 +130,7 @@ class ActionJournal:
         # resolved simulator command independently for viewer diagnostics.
         records["executed_action"] = np.where(records["accepted"], records["action"], 0)
         records["legal"][:] = rows["active"][:, None]
-        records["penalty"] = 0  # Audit field; fixed invalid targets are fitting-only.
+        records["penalty"] = 0  # Audit field; minimum-Q invalid targets are fitting-only.
         for env in np.flatnonzero(rows["active"]):
             if self.episodes[env] != episodes[env]:
                 self.reset(env, episodes[env])

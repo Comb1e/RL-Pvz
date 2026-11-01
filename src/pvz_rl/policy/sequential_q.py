@@ -117,6 +117,7 @@ def select_q_actions(
     deterministic=False,
     tile_exploration_epsilon=0.0,
     active=None,
+    supplied_branches=None,
 ):
     """Shared ten-way Q comparison and tile-only exploration.
 
@@ -140,7 +141,13 @@ def select_q_actions(
         wait_only = torch.zeros_like(legal)
         wait_only[:, 0] = True
         legal = torch.where(active[:, None], legal, wait_only)
-    branches = greedy_choice(species_q, legal)
+    branches = greedy_choice(species_q, legal) if supplied_branches is None else supplied_branches
+    if branches.shape != (len(species_q),) or branches.dtype != torch.long:
+        raise ValueError("Supplied branches must be an int64 vector matching the board batch")
+    branch_valid = ((branches >= 0) & (branches < legal.shape[1])).all()
+    branches = branches.clamp(0, legal.shape[1] - 1)
+    if active is not None:
+        branches = torch.where(active, branches, 0)
     nonwait = branches > 0
     tile_epsilon = 0.0 if deterministic else tile_exploration_epsilon
     selected, preferred, fired, tile_q = select_q_tiles(
@@ -163,7 +170,7 @@ def select_q_actions(
         placement_gap=torch.where(
             nonwait, candidate_maxima(tile_q, action_masks, branches) - tile_value, 0
         ),
-        valid=torch.isfinite(species_q).all()
+        valid=branch_valid & torch.isfinite(species_q).all()
         & legal.any(-1).all()
         & (torch.isfinite(tile_q) | ~nonwait[:, None]).all(),
     )

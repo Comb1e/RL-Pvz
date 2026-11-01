@@ -1,4 +1,4 @@
-"""Bounded production collect/finalize/four-pass-fit/collect measurements.
+"""Bounded production collect/finalize/cohort-stage-fit/collect measurements.
 
 No learner loop is reimplemented: the worker calls the same phase operations as
 the autonomous lifecycle, on fresh temporary games, optimizer and EMA state.
@@ -59,6 +59,10 @@ def measure(cfg, output, *, initial=None, seed=101, seconds=1800, trajectory=Non
         raise ValueError("Use a new benchmark output path")
     output.parent.mkdir(parents=True, exist_ok=True)
     cfg = copy.deepcopy(cfg)
+    cfg["training"].pop("peashooter_rules", None)
+    if "counterfactual" in cfg["training"]:
+        for stage in ("normal", "peashooter"):
+            cfg["training"].get("counterfactual", {}).get(stage, {})["enabled"] = False
     cfg["visualization"].update(enabled=False, live_enabled=False, demos=False, videos=False)
     cfg["training"].update(until_stage_complete=False, total_games=2 * cfg["training"]["n_envs"])
     torch.set_num_threads(cfg["training"]["torch_threads"])
@@ -153,16 +157,17 @@ def measure(cfg, output, *, initial=None, seed=101, seconds=1800, trajectory=Non
                     result["trajectory"] = str(Path(trajectory).resolve())
                     write_json(Path(trajectory) / "metadata.json", model._buffer.save(trajectory))
                 model._phase(CohortPhase.FIT, callback)
-                for index in range(model.n_epochs):
+                for index in range(model.total_fit_passes):
 
                     def fit_pass():
                         while model._fit_epoch <= index:
                             check()
                             model._fit_step(callback)
 
-                    phase(f"fit_pass_{index + 1}", fit_pass)
+                    label = f"fit_{model.fit_stage}_pass_{index + 1}"
+                    phase(label, fit_pass)
                 model._phase_times["fit"] = sum(
-                    v for k, v in result["phases"].items() if k.startswith("fit_pass_")
+                    v for k, v in result["phases"].items() if k.startswith("fit_")
                 )
                 result["transport"] = dict(model._buffer.transport_metrics)
                 result["compaction"] = copy.deepcopy(model._fitting_spool.compaction)
@@ -185,7 +190,7 @@ def measure(cfg, output, *, initial=None, seed=101, seconds=1800, trajectory=Non
                 model._drain()
                 result["cycle_seconds"] = perf_counter() - cycle_started
                 result["optimizer_commits"] = result["cohort"]["q_optimizer_steps"]
-                result["complete"] = result["optimizer_commits"] == model.n_epochs
+                result["complete"] = result["optimizer_commits"] == model.total_fit_passes
             except BaseException as exc:
                 result["error"] = repr(exc)
                 result["timed_out"] = isinstance(exc, TimeoutError)

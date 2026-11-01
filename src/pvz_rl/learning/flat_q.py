@@ -5,9 +5,14 @@ from dataclasses import dataclass
 import numpy as np
 import torch
 
+from pvz_rl.envs.actions import ActionSchema as A
 from pvz_rl.envs.encoding import collate_observations
-from pvz_rl.learning.action_routing import FitRoute, route_indices
-from pvz_rl.learning.objective import species_consistency_loss, species_consistency_targets
+from pvz_rl.learning.action_routing import route_indices
+from pvz_rl.learning.objective import (
+    selected_action_targets,
+    species_consistency_loss,
+    species_consistency_targets,
+)
 from pvz_rl.policy.sequential_q import (
     action_parts,
     balanced_q_loss,
@@ -48,6 +53,7 @@ def batch_loss(
     teacher,
     consistency_counts=None,
     coefficients=None,
+    fit_stage="joint",
     return_forward=False,
 ):
     """CPU-planned routes skip all irrelevant encoders, including rejected EMA."""
@@ -74,7 +80,11 @@ def batch_loss(
     targets = tensor("target", torch.float32)
     routes = tensor("route", torch.long)
     if not len(actions):
-        zero = next(policy.parameters()).sum() * 0
+        zero = (
+            torch.zeros((), device=device, requires_grad=True)
+            if fit_stage == "tile_only"
+            else next(policy.parameters()).sum() * 0
+        )
         policy._last_selected_loss = policy._last_species_consistency_loss = zero.detach()
         policy._last_species_consistency_metrics = zero.new_zeros(4, dtype=torch.float64)
         result = zero, zero.new_empty(0), zero.new_empty(0)
@@ -86,12 +96,64 @@ def batch_loss(
     branch, positions = action_parts(actions)
     objective = policy.cfg["training"]["objective"]
     species_rows, tile_rows, ema_rows = plan["species"], plan["tiles"], plan["ema"]
+    if fit_stage == "tile_only":
+        if not len(tile_rows):
+            zero = torch.zeros((), device=device, requires_grad=True)
+            policy._last_selected_loss = policy._last_species_consistency_loss = zero.detach()
+            policy._last_species_consistency_metrics = zero.new_zeros(4, dtype=torch.float64)
+            result = zero, zero.new_empty(0), zero.new_empty(0)
+            if return_forward:
+                return (*result, FittingForwardResult(zero.new_empty((0, 10)), zero.new_empty((0, 45))))
+            return result
+        tile_actions = actions[tile_rows]
+        tile_accepted = accepted[tile_rows]
+        tile_targets = targets[tile_rows]
+        tile_routes = routes[tile_rows]
+        tile_tables = policy.fitting_tiles(observations, branch[tile_rows], rows=tile_rows)
+        tile_selected = tile_tables.float().gather(1, positions[tile_rows, None]).flatten()
+        tile_minimum = tile_tables.detach().float().amin(-1)
+        fitting_targets = selected_action_targets(
+            tile_targets, tile_routes, tile_minimum, objective["invalid_action_q_offset"]
+        )
+        loss, selected_errors = balanced_q_loss(
+            tile_selected,
+            fitting_targets,
+            tile_actions,
+            counts,
+            accepted=tile_accepted,
+            accepted_share=objective["accepted_outcome_share"],
+            weights=coefficients.selected if coefficients is not None else None,
+        )
+        maxima = (
+            tile_tables.float().max(-1).values
+            if trusted
+            else candidate_maxima(
+                tile_tables.float(),
+                observation_tile_masks(observations[tile_rows]),
+                branch[tile_rows],
+            )
+        )
+        gap = (maxima - tile_selected).detach()
+        policy._last_selected_loss = loss.detach()
+        policy._last_species_consistency_loss = loss.detach() * 0
+        policy._last_species_consistency_metrics = loss.new_zeros(4, dtype=torch.float64)
+        result = loss, selected_errors, gap
+        if return_forward:
+            dense_species = loss.new_zeros(len(actions), 10)
+            dense_tiles = tile_tables.new_zeros(len(actions), A.tiles)
+            dense_tiles = dense_tiles.index_copy(0, tile_rows, tile_tables)
+            return (*result, FittingForwardResult(dense_species, dense_tiles))
+        return result
+    if fit_stage != "joint":
+        raise ValueError("fit_stage must be tile_only or joint")
     selected = torch.zeros(len(actions), device=device, dtype=torch.float32)
+    minimum_q = torch.zeros_like(selected)
     species = None
     if len(species_rows):
         species = policy.species_values(observations[species_rows])
         predictions = species.float().gather(1, branch[species_rows, None]).flatten()
         selected = selected.index_copy(0, species_rows, predictions)
+        minimum_q = minimum_q.index_copy(0, species_rows, species.detach().float().amin(-1))
     tile_forward = (
         policy.fitting_tiles
         if trusted and hasattr(policy, "fitting_tiles")
@@ -102,9 +164,9 @@ def batch_loss(
         tables = tile_forward(observations, branch[tile_rows], rows=tile_rows)
         predictions = tables.float().gather(1, positions[tile_rows, None]).flatten()
         selected = selected.index_copy(0, tile_rows, predictions)
-    invalid = (routes == FitRoute.SPECIES_INVALID) | (routes == FitRoute.TILE_INVALID)
-    fitting_targets = torch.where(
-        invalid, targets.new_tensor(objective["invalid_action_target"]), targets
+        minimum_q = minimum_q.index_copy(0, tile_rows, tables.detach().float().amin(-1))
+    fitting_targets = selected_action_targets(
+        targets, routes, minimum_q, objective["invalid_action_q_offset"]
     )
     loss, selected_errors = balanced_q_loss(
         selected,

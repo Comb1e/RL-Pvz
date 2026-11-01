@@ -8,6 +8,7 @@ from pvz_game import Rules
 from torch import nn
 
 from pvz_rl.envs.actions import ActionSchema as A
+from pvz_rl.envs.actions import dig_branch_available
 from pvz_rl.envs.encoding import collate_observations
 from pvz_rl.policy.active_batch import ActiveBatchPlan, encode_active
 from pvz_rl.policy.entity_attention import SpatialTransformer
@@ -102,8 +103,17 @@ class TwoStageTransformerPolicy(nn.Module):
                 master.grad = fn(master.grad).float()
         return result
 
-    def master_parameters(self):
-        return tuple(self._master_parameters)
+    def master_parameters(self, stage=None):
+        if stage is None:
+            return tuple(self._master_parameters)
+        if stage not in ("species", "tile"):
+            raise ValueError("Parameter stage must be species or tile")
+        prefix = f"{stage}_"
+        return tuple(
+            master
+            for name, master in zip(self._master_names, self._master_parameters, strict=True)
+            if name.startswith(prefix)
+        )
 
     def requires_grad_(self, requires_grad=True):
         super().requires_grad_(requires_grad)
@@ -111,8 +121,18 @@ class TwoStageTransformerPolicy(nn.Module):
             master.requires_grad_(requires_grad)
         return self
 
-    def runtime_parameters(self):
-        return tuple(super().parameters())
+    def runtime_parameters(self, stage=None):
+        parameters = tuple(super().parameters())
+        if stage is None:
+            return parameters
+        if stage not in ("species", "tile"):
+            raise ValueError("Parameter stage must be species or tile")
+        prefix = f"{stage}_"
+        return tuple(
+            parameter
+            for name, parameter in zip(self._master_names, parameters, strict=True)
+            if name.startswith(prefix)
+        )
 
     def master_state_dict(self):
         return {
@@ -312,6 +332,7 @@ class TwoStageTransformerPolicy(nn.Module):
         active=None,
         active_plan=None,
         branch_usable=None,
+        supplied_branches=None,
     ):
         observations = collate_observations(observations, self.device)
         species = self.species_values(observations, plan=active_plan)
@@ -319,7 +340,13 @@ class TwoStageTransformerPolicy(nn.Module):
             action_masks = observation_tile_masks(observations)
         if action_masks.shape != (len(observations), A.size):
             raise ValueError("Action masks must match the board batch")
-        branches = species.argmax(-1)
+        branches = species.argmax(-1) if supplied_branches is None else supplied_branches
+        if branches.shape != (len(observations),) or branches.dtype != torch.long:
+            raise ValueError("Supplied branches must be an int64 vector matching the board batch")
+        if supplied_branches is not None:
+            branches = branches.to(device=self.device)
+            supplied_valid = ((branches >= 0) & (branches < 10)).all()
+            branches = branches.clamp(0, 9)
         if active_plan is not None and active is None:
             active = torch.as_tensor(active_plan.compact_indices >= 0, device=self.device)
         if active is not None:
@@ -334,6 +361,14 @@ class TwoStageTransformerPolicy(nn.Module):
             )
             if branch_usable.shape != (len(observations), 10):
                 raise ValueError("Branch availability must have shape [batch, 10]")
+        # Public plant count includes all plants, even when entity truncation
+        # drops a record. Also enforce the branch check for weight-only callers
+        # that have no simulator availability tensor. Never mutate a borrowed one.
+        branch_usable = branch_usable.clone()
+        branch_usable[:, -1] = dig_branch_available(
+            observations.globals[:, self.layout.global_fields["plant_count"]],
+            branch_usable[:, -1],
+        )
         selected_usable = branch_usable.gather(1, branches[:, None]).flatten()
         tile_rows = (branches > 0) & selected_usable
         requests = torch.where(tile_rows, branches, torch.zeros_like(branches))
@@ -345,8 +380,11 @@ class TwoStageTransformerPolicy(nn.Module):
             deterministic=deterministic,
             tile_exploration_epsilon=getattr(self, "tile_exploration_epsilon", 0.0),
             active=active,
+            supplied_branches=branches if supplied_branches is not None else None,
         )
         details["branch_usable"] = branch_usable
+        if supplied_branches is not None:
+            details["valid"] &= supplied_valid
         details["tile_inference_skipped"] = (branches > 0) & ~tile_rows
         details["observations"] = observations
         return actions, details

@@ -195,6 +195,7 @@ class FittingSpool(PreparedPlans):
             entities += int(counts.sum())
             used += len(selected)
         self.compaction, self.outcome_counts = compactor.diagnostics, compactor.counts
+        self.tile_outcome_counts = compactor.tile_counts
         self.indices = self._allocate("indices", (used,), np.dtype("<i8"))
         starts = np.r_[0, np.cumsum(populations)]
         cursor = starts[:-1].copy()
@@ -349,6 +350,7 @@ class PreparedDataSource(PreparedPlans):
                     metadata[:] = rows[start : start + len(current)]
                 else:
                     metadata["accepted"] = True
+                    metadata["branch_usable"] = True
                 metadata["active"] = True
                 # This cache has its own physical order. Original identities are
                 # restored on read, after caller-owned demo partitioning/shuffling.

@@ -20,6 +20,7 @@ from pvz_game.types import (
 
 from pvz_rl.envs.cuda_features import METRIC_INDICES
 from pvz_rl.envs.rewards import REWARD_METRICS
+from pvz_rl.envs.tile_scenarios import is_placement_skill
 from pvz_rl.learning.objective import COMPONENTS, components, training_rewards
 from pvz_rl.presentation.live_view import Activity, LiveSession, PanelState
 
@@ -119,16 +120,26 @@ class CudaLiveCapture:
         self.widths = {k: int(np.prod(shape)) for k, shape in self.shapes.items()}
         self.width = sum(self.widths.values())
         self.capacity = len(self.session.selection.panels)
-        self.slots = [
+        self.slots = self._allocate_slots()
+        self.indices = None
+        self.sequence = 0
+        self.last_capture = -float("inf")
+        self.prepared = False
+        self.stats = {"captures": 0, "capture_seconds": 0.0, "skipped": 0}
+
+    def _allocate_slots(self):
+        return [
             dict(
                 device=torch.empty(
-                    (self.capacity, self.width), dtype=torch.int64, device=env.header_tensor.device
+                    (self.capacity, self.width),
+                    dtype=torch.int64,
+                    device=self.env.header_tensor.device,
                 ),
                 host=torch.empty((self.capacity, self.width), dtype=torch.int64, pin_memory=True),
                 reward_device=torch.empty(
                     (self.capacity, self.reward_totals.shape[1]),
                     dtype=torch.float64,
-                    device=env.header_tensor.device,
+                    device=self.env.header_tensor.device,
                 ),
                 reward_host=torch.empty(
                     (self.capacity, self.reward_totals.shape[1]),
@@ -140,11 +151,6 @@ class CudaLiveCapture:
             )
             for _ in range(2)
         ]
-        self.indices = None
-        self.sequence = 0
-        self.last_capture = -float("inf")
-        self.prepared = False
-        self.stats = {"captures": 0, "capture_seconds": 0.0, "skipped": 0}
 
     @property
     def enabled(self):
@@ -156,29 +162,38 @@ class CudaLiveCapture:
     def set_activity(self, activity):
         self.session.set_activity(activity)
 
-    def prepare(self):
+    def poll(self):
+        """Serve cached results and switches during collection and fitting."""
+        self.drain()
         changed = self.session.selection.refresh(np.flatnonzero(self.env.enabled_envs))
         changed = self.session.poll() or changed
-        # A new game in the same worker can recover a small all-displayed batch.
-        # Honor queued manual switches first, and preserve other one-second holds.
-        for i in tuple(self.session.selection.pending):
-            panel = self.session.selection.panels[i]
-            if (
-                panel.frame
-                and panel.frame["episode"] != self.env._episode_serial[panel.env]
-                and self.env.enabled_envs[panel.env]
-            ):
-                self.session.selection.pending.discard(i)
-                panel.generation += 1
-                panel.state = PanelState.SELECTING
-                changed = True
+        if changed:
+            self.indices = None
+            self.session.publish(force=True)
+
+    def prepare(self):
+        self.poll()
         if not self.enabled:
             return
         self.set_activity(Activity.COLLECTING)
-        self.drain()
-        if self.indices is None or changed:
+        # One-shot exercises finish every worker before a switch can be polled.
+        # Copy their public results once, in one batch, for CPU-only browsing.
+        capacity = (
+            self.env.num_envs
+            if is_placement_skill(self.env.tile_scenario)
+            else len(self.session.selection.panels)
+        )
+        if capacity != self.capacity:
+            self.drain(wait=True)
+            self.capacity = capacity
+            self.slots = self._allocate_slots()
+            self.indices = None
+        if self.indices is None:
             self.indices = torch.tensor(
-                [p.env for p in self.session.selection.panels], device=self.env.header_tensor.device
+                list(range(capacity))
+                if is_placement_skill(self.env.tile_scenario)
+                else [p.env for p in self.session.selection.panels],
+                device=self.env.header_tensor.device,
             )
             self.last_capture = -float("inf")
             self.session.publish(force=True)
@@ -187,6 +202,7 @@ class CudaLiveCapture:
     def after_step(self, compact):
         started = perf_counter()
         panels = self.session.selection.panels
+        cache_completed = is_placement_skill(self.env.tile_scenario)
         terminal = []
         for i, p in enumerate(panels):
             if p.state == PanelState.RESULT or i in self.session.selection.pending:
@@ -194,19 +210,20 @@ class CudaLiveCapture:
             if compact[p.env, 0] or not self.env.enabled_envs[p.env]:
                 terminal.append(i)
         now = perf_counter()
-        if not terminal and now - self.last_capture < 1 / self.session.fps:
+        if not cache_completed and not terminal and now - self.last_capture < 1 / self.session.fps:
             return
         watched = [
             i
             for i, p in enumerate(panels)
             if p.state != PanelState.RESULT and i not in self.session.selection.pending
         ]
-        if not watched:
+        captured = np.flatnonzero(self.env._step_active).tolist() if cache_completed else watched
+        if not captured:
             self.session.publish()
             return
         self.drain()
         slot = next((slot for slot in self.slots if slot["pending"] is None), None)
-        if slot is None and terminal:
+        if slot is None and (terminal or cache_completed):
             # Terminal states cannot be reconstructed after autoreset. Normally
             # the existing compact host transfer has already completed both copies.
             self.slots[0]["event"].synchronize()
@@ -233,25 +250,28 @@ class CudaLiveCapture:
         slot["event"].record(self.env.stream)
         self.sequence += 1
         pending = []
-        for i in watched:
-            p = panels[i]
-            outcome = "truncated" if compact[p.env, 1] else self.env.finished_outcomes.get(p.env)
+        for row in captured:
+            env = row if cache_completed else panels[row].env
+            subscribers = [(i, p.generation) for i, p in enumerate(panels) if p.env == env]
+            outcome = "truncated" if compact[env, 1] else self.env.finished_outcomes.get(env)
             pending.append(
                 (
-                    i,
-                    p.generation,
+                    row,
+                    subscribers,
+                    cache_completed,
                     dict(
-                        env=p.env,
-                        level=self.env._level_names[p.env],
-                        task=self.env._tasks[p.env],
-                        episode=self.env._episode_serial[p.env],
+                        env=env,
+                        level=self.env._level_names[env],
+                        task=self.env._tasks[env],
+                        episode=self.env._episode_serial[env],
                         sequence=self.sequence,
                         outcome=outcome,
                     ),
                 )
             )
-            if i in terminal:
-                p.state = PanelState.RESULT
+            for i, _ in subscribers:
+                if compact[env, 0] or not self.env.enabled_envs[env]:
+                    panels[i].state = PanelState.RESULT
         slot["pending"] = pending
         self.last_capture = now
         self.stats["captures"] += 1
@@ -267,34 +287,39 @@ class CudaLiveCapture:
                 continue
             raw = slot["host"].numpy()
             reward_totals = slot["reward_host"].numpy()
-            for i, generation, frame in slot["pending"]:
+            for row, subscribers, cache_completed, frame in slot["pending"]:
                 arrays, offset = {}, 0
                 for key, width in self.widths.items():
-                    arrays[key] = raw[i, offset : offset + width].reshape(self.shapes[key])
+                    arrays[key] = raw[row, offset : offset + width].reshape(self.shapes[key])
                     offset += width
                 obs = public_observation(arrays, self.env.batch.rules, frame.pop("level"))
                 frame["observation"] = obs
                 frame["reward"] = float(
-                    training_rewards(reward_totals[i, self.reward_columns], self.env.cfg)
+                    training_rewards(reward_totals[row, self.reward_columns], self.env.cfg)
                 )
                 frame["outcome"] = frame["outcome"] or obs.status.value
                 frame["reward_pending"] = frame["outcome"] != "running"
-                panel = self.session.selection.panels[i]
-                history = self.env.action_journal.page(panel.env, frame["episode"])
+                history = self.env.action_journal.page(frame["env"], frame["episode"])
                 frame["history"] = history
                 frame["decision"] = history["latest"] if history else None
 
-                # A previous ordinary capture must not undo a pending terminal state.
-                pending_terminal = panel.state == PanelState.RESULT
-                if self.session.selection.accept(i, generation, frame) and pending_terminal:
-                    panel.state = PanelState.RESULT
+                if cache_completed:
+                    self.session.selection.remember_completed(frame)
+                for i, generation in subscribers:
+                    panel = self.session.selection.panels[i]
+                    # An ordinary capture must not undo a pending terminal state.
+                    pending_terminal = panel.state == PanelState.RESULT
+                    if self.session.selection.accept(i, generation, frame) and pending_terminal:
+                        panel.state = PanelState.RESULT
             slot["pending"] = None
         self.session.publish()
 
     def reset_episodes(self, indices):
         self.session.selection.reset_episodes(
-            (int(env), int(self.env._episode_serial[env])) for env in indices
+            ((int(env), int(self.env._episode_serial[env])) for env in indices),
+            active=set(np.flatnonzero(self.env.enabled_envs)),
         )
+        self.indices = None
 
     def finalize_rewards(self, pending):
         """At the cohort boundary, publish authoritative host episode totals."""

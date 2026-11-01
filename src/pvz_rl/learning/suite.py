@@ -55,6 +55,12 @@ def run_suite(cfg, output, *, resume=False):
                     status = (
                         json.loads(status_path.read_text("utf-8")) if status_path.exists() else {}
                     )
+                    if not status and (last / "final.zip").exists():
+                        from pvz_rl.learning.checkpoints import inspect_checkpoint
+
+                        status = inspect_checkpoint(last / "final.zip", weights_only=True).get(
+                            "completion", {}
+                        )
                     if status.get("state") == "complete":
                         continue
                     for name in ("interrupted.zip", "latest.zip"):
@@ -84,16 +90,19 @@ def run_suite(cfg, output, *, resume=False):
                 )
             else:
                 run = Path(journal["jobs"][policy][-1])
-                if not (run / "best.zip").exists():
+                checkpoint = run / "best.zip"
+                if not checkpoint.exists():
+                    checkpoint = run / "final.zip"
+                if not checkpoint.exists():
                     journal.setdefault("skipped_evaluations", {})[policy] = (
                         "No validated checkpoint: no stage passed or its evaluation is pending."
                     )
                     write_json(journal_path, journal)
                     continue
-                model, data = load_policy(run / "best.zip")
+                model, data = load_policy(checkpoint)
                 evaluation_cfg = data["config"]
                 condition, learner_seed, baseline = data["condition"], data["learner_seed"], None
-                checkpoint_hash = file_hash(run / "best.zip")
+                checkpoint_hash = file_hash(checkpoint)
             for family in families:
                 key = f"{policy}/{family}"
                 attempts = evaluations.setdefault(key, [])

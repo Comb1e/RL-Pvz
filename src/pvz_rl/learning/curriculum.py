@@ -5,6 +5,13 @@ from dataclasses import asdict, dataclass
 from pvz_rl.learning.budget import uses_games
 
 STAGES = ("easy", "standard", "shared")
+TILE_STAGES = ("cherry_bomb", "cherry_bomb_obstacle", "attacker_pre", "peashooter")
+SELECTABLE_STAGES = (*TILE_STAGES, *STAGES)
+
+
+def pre_stage(cfg):
+    """Selected tile stage; ``pre`` is accepted only for saved legacy workflows."""
+    return cfg["curriculum"].get("run_stage") in ("pre", *TILE_STAGES)
 
 
 def teaching_enabled(cfg):
@@ -19,6 +26,7 @@ def validation_after_stage(cfg, family="preset"):
     """Archived recipes retain periodic validation; lessons need no full-game gate."""
     return (
         teaching_enabled(cfg)
+        and not pre_stage(cfg)
         and family == "preset"
         and cfg["training"].get("validation_schedule", "periodic") == "stage_success"
     )
@@ -26,7 +34,7 @@ def validation_after_stage(cfg, family="preset"):
 
 def initial_state(cfg):
     stage = selected_stage(cfg)
-    return CurriculumState(stage=STAGES.index(stage) if stage else 0)
+    return CurriculumState(stage=STAGES.index(stage) if stage in STAGES else 0)
 
 
 @dataclass
