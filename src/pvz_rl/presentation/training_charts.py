@@ -5,6 +5,7 @@ from math import isfinite
 import matplotlib.pyplot as plt
 
 from pvz_rl.envs.tile_scenarios import LEGACY_SKILLS, is_placement_skill
+from pvz_rl.learning.counterfactual_settings import OBJECTIVE as COUNTERFACTUAL_OBJECTIVE
 from pvz_rl.learning.curriculum import TILE_STAGES
 
 
@@ -164,9 +165,7 @@ def report_charts(segments, cfg, output, save):
         behavior = [
             (
                 "rolling_win_rate",
-                "Collection success (search-assisted where enabled)"
-                if cfg["training"].get("search", {}).get("enabled", False)
-                else "Rolling training success rate",
+                "Rolling main-game success rate",
             ),
             ("rolling_return", "Episode reward"),
             ("rolling_seconds", "Episode duration (simulated seconds)"),
@@ -210,8 +209,8 @@ def report_charts(segments, cfg, output, save):
             [
                 (
                     "optimization.q_loss",
-                    "Teacher composite loss"
-                    if cfg["training"].get("search", {}).get("enabled", False)
+                    "Tile preference + return loss"
+                    if cfg["training"].get("counterfactual")
                     else "Balanced Q loss",
                 ),
                 ("optimization.selected_action_error", "Selected-action fitting error"),
@@ -219,39 +218,25 @@ def report_charts(segments, cfg, output, save):
                 ("optimization.q_grad_norm", "Gradient norm before clipping"),
             ]
         )
-        search_fields = fields(
-            [
-                ("search.queries", "Completed search queries"),
-                ("search.rollouts", "Completed oracle rollouts (excluded from games)"),
-                ("search.simulated_ticks", "Oracle simulator ticks"),
-                ("search.wall_seconds", "Search wall time (seconds)"),
-                ("search.scratch_reserved_bytes", "Scratch storage reservation (bytes)"),
-                ("search.rollout_budget_fraction", "Current query rollout-budget utilization"),
-                ("search.generation_failures", "World generation failures"),
-                ("search.overrides", "Root choices differing from network"),
-                ("search.continuation_actions", "Public-plan actions"),
-                ("search.fallback_actions", "Plan fallback actions"),
-                ("search.discovery_score", "Best discovery score"),
-                ("search.confirmation_score", "Fresh confirmation score"),
-                ("search.confirmation_duration_adjustment", "Chosen duration adjustment"),
-                ("search.confirmation_standard_error", "Confirmation standard error (diagnostic)"),
-                ("search.duration_reversals", "Preferences reversed by duration shaping"),
-                ("optimization.teacher_value_loss", "Confirmed value calibration"),
-                ("optimization.teacher_difference_loss", "Same-board difference loss"),
-                ("optimization.teacher_feasibility_loss", "Finite-reference feasibility loss"),
-            ]
-        )
-        search_fields = [
-            (
-                key,
-                text,
-                lambda row, get=get: (
-                    get(row) if row.get("collection_policy") == "search_assisted" else None
-                ),
-            )
-            for key, text, get in search_fields
-        ]
-        add("search", "search-assisted collection and confirmed teacher fitting", search_fields)
+        add("counterfactual", "factual branch completion and pairwise fitting", fields([
+            ("counterfactual.roots", "Factual planting roots"),
+            ("counterfactual.completed", "Completed branch episodes (excluded from games)"),
+            ("counterfactual.branch_wins", "Branch victories"),
+            ("counterfactual.branch_failures", "Branch failures"),
+            ("counterfactual.shortages", "Unavailable alternative slots"),
+            ("counterfactual.pending", "Pending logical branches"),
+            ("counterfactual.resident", "Resident scratch branches"),
+            ("counterfactual.discarded", "Occupied-ground discards"),
+            ("counterfactual.resource_waits", "Resource wait decisions"),
+            ("counterfactual.queue_lag_ticks", "Maximum queue lag (ticks)"),
+            ("counterfactual.spill_bytes", "Disk spill volume (bytes)"),
+            ("counterfactual.simulated_ticks", "Branch simulation ticks"),
+            ("counterfactual.drain_seconds", "Final drain wall time (seconds)"),
+            ("optimization.comparison_loss", "Pairwise cross-entropy"),
+            ("optimization.feasibility_loss", "Feasibility cross-entropy"),
+            ("optimization.comparison_accuracy", "Comparison accuracy"),
+            ("optimization.feasibility_accuracy", "Feasibility accuracy"),
+        ]))
         if pre:
             fitting = [
                 (
@@ -313,7 +298,10 @@ def report_charts(segments, cfg, output, save):
                     key,
                     text,
                     lambda row, get=get: (
-                        get(row) if row.get("collection_policy") != "search_assisted" else None
+                        get(row)
+                        if row.get("collection_policy") != "search_assisted"
+                        and row.get("fitting_objective") != COUNTERFACTUAL_OBJECTIVE
+                        else None
                     ),
                 )
                 for key, text, get in consistency_fields

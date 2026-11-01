@@ -35,6 +35,7 @@ from pvz_rl.learning.bomb_objective import (
 )
 from pvz_rl.learning.cohort import CohortPhase, atomic_transition, check_transition_interruption
 from pvz_rl.learning.collection_scheduler import CollectionScheduler
+from pvz_rl.learning.counterfactual_settings import counterfactual_enabled
 from pvz_rl.learning.cuda_q import CudaCohortLifecycle
 from pvz_rl.learning.exploration import (
     CommittedPlantExploration,
@@ -49,7 +50,6 @@ from pvz_rl.learning.objective import (
     finalize_episode_metrics,
 )
 from pvz_rl.learning.performance import compilation_requested
-from pvz_rl.learning.search_settings import search_enabled
 from pvz_rl.learning.tile_curriculum import TILE_SCENARIO_PROTOCOL, TileSkillState
 from pvz_rl.learning.training_requirements import FIT_SCHEDULE_PROTOCOL, fitting_schedule
 from pvz_rl.policy.active_batch import ActiveBatchPlan
@@ -119,44 +119,44 @@ class CudaSequentialQ(CudaCohortLifecycle):
         return PolicyRunner(self.policy)
 
     @property
-    def search_training(self):
-        return search_enabled(self.cfg) and not is_placement_skill(self.tile_skills.phase)
-
-    def _ensure_search(self, state=None):
-        if (self.search_training or state is not None) and getattr(self, "_search", None) is None:
-            from pvz_rl.learning.search_teacher import SearchTeacher
-
-            self._search = SearchTeacher(self.policy, self.cfg, self.seed, state)
+    def counterfactual_training(self):
+        return counterfactual_enabled(self.cfg, self.tile_skills.phase)
 
     def _prepare_collection(self, callback):
-        if not self.search_training:
+        if not self.counterfactual_training:
             return True
-        self._ensure_search()
         if hasattr(callback, "check_deadline"):
             callback.check_deadline()
-        ready = self._scheduler.ready(self.env.enabled_envs)
         started = perf_counter()
         try:
             with atomic_transition(), self.env.device_context():
-                complete = self._search.prepare(
-                    self.env, ready, pea=self.tile_skills.phase == "peashooter"
-                )
-                if not self._buffer.reserve_staging(self._search.estimated_bytes):
-                    raise MemoryError("Shared trajectory RAM budget cannot hold pending search")
+                draining = not self.env.enabled_envs.any() and not self._scheduler.pending.any()
+                complete = self._counterfactual.advance(draining=draining)
+                if not self._buffer.reserve_staging(self._counterfactual.estimated_bytes):
+                    raise MemoryError("Shared trajectory RAM budget cannot hold factual replay metadata")
+                if draining and complete:
+                    self._phase(CohortPhase.FINALIZE_REWARDS, callback)
         finally:
             self._phase_times["collect"] += perf_counter() - started
-        self._stats["search"] = dict(self._search.metrics)
+        self._stats["counterfactual"] = dict(self._counterfactual.metrics)
         if hasattr(callback, "log_progress"):
             callback.log_progress()
-        return complete
+        # Scratch completion never blocks live main games. Only final draining
+        # owns additional collection units after every main episode has ended.
+        return not draining
 
     def _begin(self, callback):
+        from pvz_rl.learning.counterfactual_settings import reject_search_resume
+        reject_search_resume({"tile_scenarios": self.tile_skill_state}, self.cfg)
         # A restored cohort keeps the buffer configuration it was collected
         # with. New buffers receive the current requested reward settings.
         self.cfg["reward"]["passivity"] = copy.deepcopy(self._passivity_requested)
         self._passivity_active = copy.deepcopy(self._passivity_requested)
         self._drain()
         self._close_batches()
+        if getattr(self, "_counterfactual", None) is not None:
+            self._counterfactual.close()
+            self._counterfactual = None
         boundary = self._phase_memory("before_collection_release")
         for encoder in self.policy.encoders:
             encoder.release_fitting()
@@ -203,9 +203,12 @@ class CudaSequentialQ(CudaCohortLifecycle):
             device=self.device,
         )
         self._ensure_teacher()
-        self._ensure_search()
-        if self.search_training and getattr(self, "_search", None) is not None:
-            self._search.begin_cohort(self.cfg, (self.cohort_number, self.optimizer_commits))
+        if self.counterfactual_training:
+            from pvz_rl.learning.counterfactual import CounterfactualRunner
+            self._counterfactual = CounterfactualRunner(
+                self.env, self._buffer, self.seed, self.tile_skills.phase,
+                (self.cohort_number, self.optimizer_commits),
+            )
         self._scheduler = CollectionScheduler(self.n_envs, self.device)
         if compilation_requested(self.cfg["training"]["performance"]):
             for encoder in self._teacher.encoders:
@@ -242,7 +245,7 @@ class CudaSequentialQ(CudaCohortLifecycle):
         self._buffer.reserve_staging(0)
         pending = getattr(self, "_pending_episodes", {})
         summary = self._buffer.finalize_rewards(
-            pending, time_weight=0.0 if self.search_training else None
+            pending
         )
         passivity = summary.get("passivity", {}).get("episodes", {})
         for slot, item in pending.items():
@@ -276,7 +279,6 @@ class CudaSequentialQ(CudaCohortLifecycle):
             [p["metrics"] for p in pending.values()],
             self.cfg,
             median=summary["duration_median_seconds"],
-            time_weight=0.0 if self.search_training else None,
         )
         viewer = getattr(self.env, "live_view", None)
         if viewer is not None and viewer.enabled:
@@ -303,8 +305,8 @@ class CudaSequentialQ(CudaCohortLifecycle):
 
     def _phase(self, phase, callback):
         if phase == CohortPhase.FIT:
-            if getattr(self, "_search", None) is not None:
-                self._search.close()
+            if getattr(self, "_counterfactual", None) is not None:
+                self._counterfactual.release()
             for encoder in self.policy.encoders:
                 encoder.release_collection()
             if getattr(self, "_teacher", None) is not None:
@@ -369,27 +371,10 @@ class CudaSequentialQ(CudaCohortLifecycle):
                         branch_usable=branch_available, plan=plan,
                     )
                 self._runner.valid &= details["valid"]
-                if self.search_training and not draining:
-                    overrides, sources = self._search.consume()
-                    if overrides:
-                        slots = torch.tensor(list(overrides), device=self.device)
-                        chosen = torch.tensor(list(overrides.values()), device=self.device)
-                        actions = actions.clone()
-                        actions[slots] = chosen
-                        details["exploration_mode"][slots] = 0
-                        details["pending_species"][slots] = 0
-                        self._plant_exploration.pending[slots] = 0
-                        self._plant_exploration.wait_ticks[slots] = 0
-                        # Values are diagnostics of the actually proposed branch/tile.
-                        branches, tiles = action_parts(chosen)
-                        values = values.clone()
-                        tile_values = tile_values.clone()
-                        values[slots] = details["branch_q"][slots, branches]
-                        tables = self.policy.conditional_tiles(self._last_obs, branches, rows=slots)
-                        tile_values[slots] = tables.gather(1, tiles[:, None]).flatten()
-                        details["tile_q"][slots] = tables
-                        details["placement_gap"][slots] = tables.max(-1).values - tile_values[slots]
-                    self._search_sources = sources
+                if self.counterfactual_training:
+                    if not hasattr(self, "_counterfactual_tiles"):
+                        self._counterfactual_tiles = torch.zeros_like(details["tile_q"])
+                    self._counterfactual_tiles[enabled] = details["tile_q"][enabled]
             if not hasattr(self, "_collection_packed"):
                 self._collection_packed = torch.empty(
                     self.n_envs * env.features.limit,
@@ -461,17 +446,17 @@ class CudaSequentialQ(CudaCohortLifecycle):
                         valid=self._runner.valid,
                     ),
                 )
+            if self.counterfactual_training:
+                self._counterfactual.before(
+                    actions, self._counterfactual_tiles, masks, executing,
+                    env._episode_serial, source_decisions,
+                )
             env.step_device(actions, active=executing)
             checks = self._plant_exploration.observe(
                 actions,
                 env.header_tensor[:, 12].bool(),
                 columns[:, 21].long(),
-                (
-                    env._device_active & ~torch.tensor(
-                        [i in getattr(self, "_search_sources", {}) for i in range(self.n_envs)],
-                        device=self.device,
-                    ) if self.search_training else env._device_active
-                ),
+                env._device_active,
                 env._step_device_result[1],
                 env.transition_ticks,
                 draws=(
@@ -552,8 +537,8 @@ class CudaSequentialQ(CudaCohortLifecycle):
                 :, [REWARD_FIELDS.index(k) for k in ("home_outer_entries", "home_inner_entries")]
             ]
             staging = env.handoff.nbytes + self._scheduler.retained_bytes
-            if self.search_training:
-                staging += self._search.estimated_bytes
+            if self.counterfactual_training:
+                staging += self._counterfactual.estimated_bytes
             if not self._buffer.reserve_staging(staging):
                 raise MemoryError("RAM budget cannot hold actual collection staging")
             presentation_started = perf_counter()
@@ -567,13 +552,11 @@ class CudaSequentialQ(CudaCohortLifecycle):
             rows["executed_action"] = np.where(rows["accepted"], rows["action"], 0)
             rows[~active] = np.zeros((), dtype=rows.dtype)
             rows["env"] = np.arange(self.n_envs)
-            if self.search_training:
-                self._search.observe(rows, getattr(self, "_search_sources", {}))
-                for slot, source in getattr(self, "_search_sources", {}).items():
-                    if active[slot]:
-                        key = "behavior_" + source
-                        self._stats[key] = self._stats.get(key, 0) + 1
-                self._stats["search"] = dict(self._search.metrics)
+            if self.counterfactual_training:
+                self._counterfactual.observe(
+                    rows, wait_available=branch_available_host[:, 1:].any(axis=1),
+                )
+                self._stats["counterfactual"] = dict(self._counterfactual.metrics)
             storage_started = perf_counter()
             self._buffer.append(
                 rows, observations, identities=(env._episode_serial, source_decisions)
@@ -663,7 +646,7 @@ class CudaSequentialQ(CudaCohortLifecycle):
                 }
             )
             # Publish the phase before callbacks may request an interruption.
-            if not env.enabled_envs.any() and not self._scheduler.pending.any():
+            if not env.enabled_envs.any() and not self._scheduler.pending.any() and not self.counterfactual_training:
                 self._phase(CohortPhase.FINALIZE_REWARDS, callback)
             if not callback.on_step() and not draining:
                 raise KeyboardInterrupt
@@ -866,19 +849,14 @@ class CudaSequentialQ(CudaCohortLifecycle):
             )
             encoder.token_budget = self.execution_state["token_budget"]
         groups = self.execution_state["fit_batch_groups"]
-        if self.search_training:
-            self._fit_kind = self.fit_stage
-            records = self._search.records
-            size = self.batch_size
-            self._batch_iterator = iter(
-                (records[i : i + size], None) for i in range(0, len(records), size)
-            )
-            self._fit_pass_start = torch.cuda.Event(enable_timing=True)
-            self._fit_pass_start.record()
-            self._search_pass_metrics = torch.zeros(3, device=self.device)
-            return
         if getattr(self, "_fitting_spool", None) is None:
             self._fitting_spool = FittingSpool(self._buffer)
+        if self.counterfactual_training:
+            from pvz_rl.learning.counterfactual_objective import CounterfactualObjective
+            self._counterfactual_objective = CounterfactualObjective(
+                self._counterfactual, self._fitting_spool, self.device,
+            )
+            self._counterfactual_pass_metrics = torch.zeros(6, device=self.device)
         self._fit_kind = self.fit_stage
         self._fit_outcome_counts = (
             self._fitting_spool.tile_outcome_counts
@@ -943,13 +921,16 @@ class CudaSequentialQ(CudaCohortLifecycle):
                     self._bomb_pass_metrics.cpu().tolist(), strict=True,
                 ):
                     self.logger.record("train/" + key, number)
-            if self.search_training:
-                self._cached_fit_examples = len(self._search.records)
+            if self.counterfactual_training:
                 for key, number in zip(
-                    ("teacher_value_loss", "teacher_difference_loss", "teacher_feasibility_loss"),
-                    self._search_pass_metrics.cpu().tolist(), strict=True,
+                    ("comparison_loss", "feasibility_loss", "comparison_accuracy_sum", "comparison_weight",
+                     "feasibility_accuracy_sum", "feasibility_weight"),
+                    self._counterfactual_pass_metrics.cpu().tolist(), strict=True,
                 ):
                     self.logger.record("train/" + key, number)
+                values = self._counterfactual_pass_metrics.cpu().tolist()
+                self.logger.record("train/comparison_accuracy", values[2] / values[3] if values[3] else None)
+                self.logger.record("train/feasibility_accuracy", values[4] / values[5] if values[5] else None)
         loss, selected_error, placement_gap = self._cached_metrics
         self.logger.record("train/q_loss", loss)
         self.logger.record("train/selected_action_error", selected_error)
@@ -1008,19 +989,11 @@ class CudaSequentialQ(CudaCohortLifecycle):
         else:
             rows, observations, *metadata = item
             self.policy.set_training_mode(True)
-            if self.search_training:
-                from pvz_rl.learning.search_targets import teacher_loss
-
-                loss, detail = teacher_loss(
-                    self.policy, rows, stage=self._fit_kind,
-                    total_roots=len(self._search.records), settings=self.cfg["training"]["search"],
-                    invalid_offset=self.cfg["training"]["objective"]["invalid_action_q_offset"],
+            if self.counterfactual_training:
+                loss, selected_error, placement_gap, detail = self._counterfactual_objective.loss(
+                    self.policy, rows, observations, self._fit_kind,
                 )
-                self._search_pass_metrics += detail
-                selected_error = loss.new_empty(0)
-                placement_gap = loss.new_empty(0)
-                self.policy._last_species_consistency_loss = loss.detach() * 0
-                self.policy._last_species_consistency_metrics = loss.new_zeros(4, dtype=torch.float64)
+                self._counterfactual_pass_metrics += detail
             elif is_placement_skill(self.tile_skills.phase):
                 loss, selected_error, placement_gap = self._bomb_loss(rows, observations)
             else:
@@ -1097,8 +1070,8 @@ class CudaSequentialQ(CudaCohortLifecycle):
 
     def _synchronize(self, callback):
         self._drain()
-        if getattr(self, "_search", None) is not None:
-            self._stats["search"] = dict(self._search.metrics)
+        if getattr(self, "_counterfactual", None) is not None:
+            self._stats["counterfactual"] = dict(self._counterfactual.metrics)
         self._stats["trajectory_bytes"] = (
             self._buffer.size * self._buffer.dtype.itemsize + self._buffer.entity_size * 44
         )
@@ -1154,6 +1127,7 @@ class CudaSequentialQ(CudaCohortLifecycle):
         if getattr(self, "_fitting_spool", None) is not None:
             self._fitting_spool.close()
             self._fitting_spool = None
+        self._counterfactual_objective = None
         super()._synchronize(callback)
 
     def save(self, *args, **kwargs):
@@ -1179,15 +1153,9 @@ class CudaSequentialQ(CudaCohortLifecycle):
 
     def _restore_runtime(self):
         extra = self.runtime_state
-        saved_search = extra.get("search_teacher") if extra else None
-        if self.search_training or saved_search is not None:
-            if self.search_training and extra and self.phase != CohortPhase.IDLE and saved_search is None:
-                raise ValueError("Missing search recovery; use fresh --init-from to change target protocols")
-            self._ensure_search(saved_search)
-            if self.search_training and self.phase == CohortPhase.COLLECT and self._search.policy_identity != (
-                self.cohort_number, self.optimizer_commits
-            ):
-                raise ValueError("Pending search was generated against different frozen policy updates")
+        from pvz_rl.learning.counterfactual_settings import validate_counterfactual_recovery
+        if extra:
+            validate_counterfactual_recovery(extra, self.cfg)
         if extra and extra.get("tile_scenarios") is not None:
             if (
                 (
@@ -1223,6 +1191,19 @@ class CudaSequentialQ(CudaCohortLifecycle):
             ):
                 raise ValueError("Incomplete objective recovery state")
         super()._restore_runtime()
+        if extra and extra.get("counterfactual") is not None:
+            from zipfile import ZipFile
+
+            from pvz_rl.learning.counterfactual import CounterfactualRunner
+            if self.phase == CohortPhase.COLLECT and tuple(extra["counterfactual"]["identity"]) != (
+                self.cohort_number, self.optimizer_commits
+            ):
+                raise ValueError("Factual collection weights differ from the saved policy identity")
+            with ZipFile(self._checkpoint_source) as archive:
+                self._counterfactual = CounterfactualRunner(
+                    self.env, self._buffer, self.seed, self.tile_skills.phase,
+                    tuple(extra["counterfactual"]["identity"]), extra["counterfactual"], archive,
+                )
         if extra and extra.get("plant_exploration") is not None:
             self._plant_exploration = CommittedPlantExploration(
                 self.n_envs, self.device, self.plant_exploration_rate, self.exploration_rate
@@ -1303,7 +1284,7 @@ class CudaSequentialQ(CudaCohortLifecycle):
             tile_ranking_objective=placement_settings(self.cfg, self.tile_skills.phase).get(
                 "ranking_objective"
             ),
-            search_teacher=self._search.snapshot() if getattr(self, "_search", None) else None,
+            counterfactual=self._counterfactual.snapshot() if getattr(self, "_counterfactual", None) else None,
         )
         if getattr(self, "_teacher", None) is None:
             return skills
@@ -1347,9 +1328,10 @@ class CudaSequentialQ(CudaCohortLifecycle):
             "_teacher",
             "_plant_exploration",
             "_plant_costs",
-            "_search",
-            "_search_sources",
-            "_search_pass_metrics",
+            "_counterfactual",
+            "_counterfactual_objective",
+            "_counterfactual_pass_metrics",
+            "_counterfactual_tiles",
             "_bomb_pass_metrics",
             "_pending_episodes",
         ]

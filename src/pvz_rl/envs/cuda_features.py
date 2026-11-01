@@ -39,8 +39,9 @@ class CudaFeatures:
     width. Views stay valid until the next encode on the same stream.
     """
 
-    def __init__(self, batch, cfg, condition, *, store_rows=None):
+    def __init__(self, batch, cfg, condition, *, store_rows=None, accounting_only=False):
         self.batch, self.cfg = batch, cfg
+        self.accounting_only = accounting_only
         batch.sun_spawn_fraction = tuple(cfg["reward"]["early_sun_spawn_fraction"])
         cp = batch.cp
         self.profiler = None
@@ -110,19 +111,21 @@ class CudaFeatures:
         ).replace(
             "METRIC_ACCUMULATION", "\n".join(f"t[T_{k}] += v[F_{k}];" for k in REWARD_METRICS)
         )
+        self.source = source
         self.module = cp.RawModule(code=source, options=("--std=c++11", "--fmad=false"))
         self.encode_kernel = self.module.get_function("encode_canonical")
         self.policy_mask_kernel = self.module.get_function("policy_masks")
         self.reward_kernel = self.module.get_function("reward_metrics")
         self.home_kernel = self.module.get_function("home_entries")
         self.pack_kernel = self.module.get_function("pack_entities")
-        rows = batch.n if store_rows is None else store_rows
+        self.asset_kernel = self.module.get_function("accounting_assets")
+        rows = 0 if accounting_only else (batch.n if store_rows is None else store_rows)
         self.entities = cp.zeros((rows, self.limit, ENTITY_WIDTH), cp.int32)
         self.entity_mask = cp.zeros((rows, self.limit), cp.bool_)
         self.globals = cp.zeros((rows, GLOBAL_WIDTH), cp.float32)
         # Kept count, then plants/zombies/projectiles omitted by the entity cap.
         self.summary = cp.zeros((rows, 4), cp.int64)
-        self.records = cp.zeros((batch.n, 50 + batch.zcap, ENTITY_WIDTH), cp.int32)
+        self.records = cp.zeros((0 if accounting_only else batch.n, 50 + batch.zcap, ENTITY_WIDTH), cp.int32)
         self.truncation_counts = self.summary[: batch.n, 1:]
         self.entity_tensor = torch.from_dlpack(self.entities)
         self.entity_mask_tensor = torch.from_dlpack(self.entity_mask)
@@ -266,7 +269,12 @@ class CudaFeatures:
             cp.copyto(self.enabled, b.header[:, 17], casting="unsafe")
             if observation_active is not None:
                 b.header[:, 17] = observation_active
-            observation = self.encode(offset=offset, publish=publish)
+            if self.accounting_only:
+                self.asset_kernel(((b.n + 63) // 64,), (64,),
+                                  (b.header, b.plants, self.assets, b.n))
+                observation = None
+            else:
+                observation = self.encode(offset=offset, publish=publish)
         with self._track(phase):
             self.home_kernel(
                 ((b.n + 63) // 64,),

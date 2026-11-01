@@ -147,17 +147,19 @@ oracle_vram_mib = 1024
 # Uses the shared cohort size/fitting settings; only this stage scales sky sun.
 sky_sun_rate = 1.5 # Divide sky-drop delays by this rate; keep each drop at 25 sun.
 probe_interval_games = 2000
-search_query_probability = 0.5
+counterfactual_enabled = true
+comparison_temperature = 1.0
 
 [training.normal]
 n_envs = 128 # Also the shared Peashooter cohort size.
 tile_only_cohorts = 3 # Repeat three tile-only cohorts, then one joint cohort.
 validation_schedule = "stage_success" # Evaluate normal games only after each stage passes.
 eval_interval_games = 2000 # Periodic game-count diagnostic/fixed checks.
-search_query_probability = 0.25
-# Both exploration probabilities are fixed throughout each complete-game cohort.
+counterfactual_enabled = true
+comparison_temperature = 1.0
+# Species exploration stays fixed throughout a cohort; tile proposals are greedy.
 # Ordinary waits trigger the same plant probability check once per interval.
-exploration = {objective = "committed_plant_tile_epsilon_v1", epsilon_start = 0.5, epsilon_floor = 0.03, decay_games = 10000, plant_epsilon_start = 0.1, plant_epsilon_floor = 0.03, plant_decay_games = 10000, plant_wait_check_seconds = 15.0}
+exploration = {objective = "committed_species_epsilon_v1", plant_epsilon_start = 0.1, plant_epsilon_floor = 0.03, plant_decay_games = 10000, plant_wait_check_seconds = 15.0}
 
 [training.normal.curriculum]
 mode = "teaching"
@@ -192,29 +194,12 @@ requirements = {easy = 100, standard = 100, hard = 100}
 ram_gib = 6
 block_rows = 32768
 
-[training.search]
-enabled = true
-protocol = "bounded_public_search_v1"
-target_protocol = "confirmed_same_board_returns_v1"
-root_candidates = 8
-node_candidates = 4
-discovery_worlds = 4
-confirmation_worlds = 4
-rollouts = 128
-max_nodes = 512
-max_depth = 32
-expansions_per_rollout = 4
-queries_per_episode = 8
-minimum_interval_seconds = 5.0
-frontier_seconds = 5.0
-scratch_envs = 32
-scratch_vram_mib = 512
-uct_c = 1.4142135623730951
-value_weight = 1.0
-difference_weight = 1.0
-feasibility_weight = 1.0
-huber_delta = 1.0
-tie_tolerance = 0.000001
+[training.counterfactual]
+protocol = "factual_tile_replay_v1"
+objective = "paired_tile_cross_entropy_v1"
+resident_envs = 1536 # Main allocation plus scratch; fastest bounded automatic-layout mean.
+scratch_vram_mib = 1536 # Includes command storage; lanes shrink to preserve GPU headroom.
+chunk_decisions = 1 # Lowest repeated mean in the bounded automatic-layout refinement.
 
 [training.objective]
 protocol = "complete_return_action_global_v7"

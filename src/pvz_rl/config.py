@@ -26,7 +26,8 @@ _STAGE_PARAMETERS = {
             "n_envs", "tile_only_cohorts", "exploration", "validation_schedule",
             "eval_interval_games",
         )},
-        "search_query_probability": "training.search.normal_query_probability",
+        "counterfactual_enabled": "training.counterfactual.normal.enabled",
+        "comparison_temperature": "training.counterfactual.normal.temperature",
         "curriculum": "curriculum",
     },
     "cherry_bomb": {
@@ -62,7 +63,8 @@ _STAGE_PARAMETERS = {
     },
     "peashooter": {
         "sky_sun_rate": "training.tile_scenarios.peashooter_sky_sun_rate",
-        "search_query_probability": "training.search.peashooter_query_probability",
+        "counterfactual_enabled": "training.counterfactual.peashooter.enabled",
+        "comparison_temperature": "training.counterfactual.peashooter.temperature",
         "probe_interval_games": "curriculum.peashooter_probe_interval_games",
     },
 }
@@ -330,9 +332,9 @@ def load_demo_config(path: str | Path | None = None, *, profile: str = "demo") -
 
 
 def validate_config(cfg: dict) -> None:
-    from pvz_rl.learning.search_settings import validate_search
+    from pvz_rl.learning.counterfactual_settings import validate_counterfactual
 
-    validate_search(cfg)
+    validate_counterfactual(cfg)
     objective = cfg["training"].get("objective")
     if not isinstance(objective, dict):
         raise ValueError("training.objective must describe the stateless two-stage objective")
@@ -522,7 +524,7 @@ def validate_config(cfg: dict) -> None:
         raise ValueError("reward.asset_loss_multiplier must be finite and nonnegative")
     if "actor_objective" in cfg["training"] or "ent_coef" in cfg["training"]:
         raise ValueError("Retired PPO objective; use sequential Q fitting")
-    if cfg["training"]["exploration"].get("objective") != "committed_plant_tile_epsilon_v1":
+    if cfg["training"]["exploration"].get("objective") not in ("committed_plant_tile_epsilon_v1", "committed_species_epsilon_v1"):
         raise ValueError("Only committed plant and conditional tile exploration is supported")
     for key in (
         "win_reward",
@@ -600,15 +602,19 @@ def validate_config(cfg: dict) -> None:
         raise ValueError("hardware_sample_seconds must be finite and at least 0.1")
     exploration = cfg["training"]["exploration"]
     plant_wait_check_ticks(cfg)
-    for key in ("epsilon_start", "epsilon_floor", "plant_epsilon_start", "plant_epsilon_floor"):
+    legacy_tiles = exploration["objective"] == "committed_plant_tile_epsilon_v1"
+    keys = ("plant_epsilon_start", "plant_epsilon_floor")
+    if legacy_tiles:
+        keys += ("epsilon_start", "epsilon_floor")
+    for key in keys:
         value = exploration.get(key)
         if type(value) not in (int, float) or not math.isfinite(value) or not 0 < value <= 1:
             raise ValueError(f"exploration.{key} must be finite and in (0, 1]")
-    if exploration["epsilon_floor"] > exploration["epsilon_start"]:
+    if legacy_tiles and exploration["epsilon_floor"] > exploration["epsilon_start"]:
         raise ValueError("exploration floor exceeds start")
     if exploration["plant_epsilon_floor"] > exploration["plant_epsilon_start"]:
         raise ValueError("plant exploration floor exceeds start")
-    for key in ("decay_games", "plant_decay_games"):
+    for key in (("decay_games", "plant_decay_games") if legacy_tiles else ("plant_decay_games",)):
         if type(exploration.get(key)) is not int or exploration[key] < 1:
             raise ValueError(f"exploration.{key} must be a positive integer")
     minutes = cfg["training"].get("max_minutes")
@@ -1043,7 +1049,7 @@ def validate_config(cfg: dict) -> None:
     if type(train.get("tile_only_cohorts")) is not int or train["tile_only_cohorts"] < 0:
         raise ValueError("training.tile_only_cohorts must be a nonnegative integer")
     if train.get("discount_clock") != "simulation_ticks" or (
-        train["gamma"] != 1 and not train.get("search", {}).get("enabled", False)
+        train["gamma"] != 1 and not (train.get("counterfactual") or train.get("search", {}).get("enabled", False))
     ):
         raise ValueError("Complete actual returns require gamma 1; start fresh")
     if train["batch_size"] > 1024:

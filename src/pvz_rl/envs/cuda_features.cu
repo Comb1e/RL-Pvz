@@ -177,6 +177,16 @@ extern "C" __global__ void pack_entities(const int *entities, const I *summary,
     target[k] = source[k];
 }
 
+// Scratch replay shares the exact asset calculation without public encoding.
+extern "C" __global__ void accounting_assets(const I *headers, const I *plants,
+                                            double *assets, I n) {
+  I i = blockIdx.x * blockDim.x + threadIdx.x;
+  if (i < n) {
+    Header h = ((const Header *)headers)[i];
+    assets[i] = asset_value(h, ((Plant *)plants) + i * 45);
+  }
+}
+
 // Each episode's total roster is bounded by ZCAP. Keep IDs only in accounting.
 extern "C" __global__ void home_entries(const I *headers, const I *zombies,
     I *ledger, I *entries, const bool *selected, I n) {

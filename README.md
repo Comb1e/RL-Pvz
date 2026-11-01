@@ -2,8 +2,8 @@
 
 Train a stateless two-stage Transformer against a pinned Plants vs. Zombies
 simulator. One network selects species/Wait/Dig; another scores all 45 tiles.
-Both consume only public board facts. Fresh autonomous runs use bounded simulator
-search to teach action values and comparisons; validation uses the network alone.
+Both consume only public board facts. Fresh Peashooter and normal runs compare factual simulator forks to teach tile
+preferences; main play and validation use the network alone.
 
 ## Requirements
 
@@ -130,22 +130,30 @@ is regenerated from unconsumed seeds on resume.
 Normal fitting keeps three tile-only cohorts followed by one joint cohort, with
 four passes each. Tile-only fitting freezes species parameters and species EMA.
 
-Settings live in [train.toml](src/pvz_rl/data/train.toml). `[training.search]`
-controls the public-board prior, query frequency and search budget. Defaults allow
-128 terminal continuations per query and eight queries per real episode; search
-can be expensive. Confirmation uses fresh sampled worlds before publishing labels.
-Only the real games count toward training and validation schedules.
+Settings live in [train.toml](src/pvz_rl/data/train.toml). Peashooter and normal
+stages expose `counterfactual_enabled` and `comparison_temperature` (default 1.0).
+Every legal planting forks up to two same-species alternatives: next-best legal
+tile and a distinct random legal tile. Followers replay accepted main commands,
+without Transformer calls or recursive branching. Occupancy conflicts discard the
+follower; resource shortages wait in order. Main actions stay greedy across all
+45 tiles; normal species exploration is retained.
 
-Search preserves reward economics and duration shaping, with the duration reference
-frozen within each queried board. Its hidden-state prior is approximate. A longer
-losing defense can still score worse because the configured duration penalty remains.
+`[training.counterfactual]` bounds total resident environments, scratch VRAM and
+chunk length. Pending roots share compact host/disk state under the trajectory RAM
+budget. Collection includes final branch draining. Only main games advance budgets.
+Defaults are 1,536 total lanes, a 1,536 MiB scratch budget and one decision per chunk,
+selected using bounded collection benchmarks. The total includes inactive simulator
+capacity retained by an automatic pipeline; the actual scratch allocation may shrink.
+Planting tiles fit pairwise cross-entropy; species and accepted legal Dig retain
+complete-return targets. Same-board duration shaping remains: a useful longer loss
+can still rank below a shorter wasteful loss.
 
 Each bomb stage independently checks validation every 10,000 completed episodes through
 `training.cherry_bomb.probe_interval_games`; attacker_pre uses its own
 `probe_interval_games`. Peashooter and normal stages check every 2,000.
 Intervals round up to a fitted cohort boundary. A full cohort
-must exceed 90% success to launch validation (normal 116/128; Cherry Bomb 577/640). Collection may be
-search-assisted; mastery uses greedy network validation without search.
+must exceed 90% success to launch validation (normal 116/128; Cherry Bomb 577/640). Collection outcomes are the unassisted main games; mastery uses greedy network
+validation without branches.
 Cherry Bomb must strictly exceed `training.cherry_bomb.validation_success_threshold`
 (default 0.95: 96/100 passes; 95/100 fails). Obstacle, attacker_pre, Peashooter and normal stages
 still require 100/100. Each tile stage validates its own skill, then completes or advances;
@@ -155,16 +163,17 @@ Validation releases idle collection scratch storage and unused GPU caches before
 allocating its oracle. Resume refreshes the configured Cherry interval, while an
 already pending validation retries against the saved weights first.
 
-Resume saved weights, optimizer, pending search, simulator and fitting progress:
+Resume saved weights, optimizer, pending factual forks, simulator and fitting progress:
 
 ```powershell
 .\.venv\Scripts\python.exe -m pvz_rl train --resume runs\my-run\latest.zip `
   --output runs\my-run --gpu 0 --gpu-profile rtx4070-laptop
 ```
 
-Resume retains the saved bomb objective, stage order, search mode/settings and sky countdowns. Older currently
-resumable checkpoints without search settings continue their original workflow.
-Use `--init-from PATH` for a fresh optimizer and the current search configuration.
+Resume retains saved objectives, stage order, replay settings and sky countdowns.
+Old non-search and placement-only recovery retains its saved workflow. Retired
+slow search-teacher checkpoints require `--init-from PATH`; this transfers compatible
+weights into a fresh optimizer and counters rather than resuming search.
 Annotation progress also supports compatible weight initialization; it is not an
 autonomous recovery checkpoint.
 
@@ -192,12 +201,15 @@ Completed weights cannot be resumed; start a new run with `--init-from`.
 .\.venv\Scripts\python.exe tools\benchmark_cherry_collection.py --stage attacker_pre `
   --envs 128 256 512 1024 --workers 4 8 16 32 --lanes 128 512 1024 `
   --vram-mib 128 512 --warmup-games 4096 --output artifacts\attacker-collection.json
+.\.venv\Scripts\python.exe tools\benchmark_factual_collection.py --automatic-layout `
+  --caps 768 1024 1536 2048 --vram 1280 1536 2048 --chunks 1 4 16 `
+  --output artifacts\factual-collection.json
 ```
 
 Default pytest runs two CPU checks. The explicitly selected learning check runs
-two one-second CUDA games, one fitting pass and checkpoint reload, with search and
+two one-second CUDA games, one fitting pass and checkpoint reload, with counterfactuals and
 prerequisites disabled. These establish availability, not mastery. Bounded
-diagnostic commands disable search; manual evaluation never uses it.
+diagnostic commands disable counterfactuals; manual evaluation never creates branches.
 The placement benchmark performs collection without fitting and ranks combinations
 by total collection seconds per completed env, including board preparation and
 policy inference. Worker startup and warmup samples are reported separately and
@@ -206,8 +218,12 @@ resource-infeasible combinations are recorded without stopping the sweep.
 Attacker comparisons reset the distance-bound cache; `--warmup-games` sets the
 minimum warmup episode count before fresh measurement panels.
 
-Reports separate Cherry Bomb, Peashooter and normal progress from oracle work, teacher losses and
-greedy validation. `--report-only` loads no policy and starts no training. Reward
+The factual benchmark includes cloning, replay, spilling and final draining in
+collection seconds per main env. It refuses concurrent training and runs no fitting;
+its bounded workload does not predict full-game throughput.
+
+Reports separate tile-stage and normal progress from oracle/branch work, pairwise
+losses and greedy validation. `--report-only` loads no policy and starts no training. Reward
 reports accept the one-based cohort number shown in logs.
 
 - [Test ownership and code structure](AGENTS.md)

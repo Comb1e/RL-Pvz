@@ -78,14 +78,15 @@ class ExplorationState:
 
 def exploration_state(cfg, stage_games):
     settings = cfg["training"]["exploration"]
-    progress = min(1.0, max(0, stage_games) / settings["decay_games"])
+    species_only = settings["objective"] == "committed_species_epsilon_v1"
+    progress = min(1.0, max(0, stage_games) / settings.get("decay_games", 1))
     plant_progress = min(1.0, max(0, stage_games) / settings["plant_decay_games"])
-    start, floor = settings["epsilon_start"], settings["epsilon_floor"]
+    start, floor = settings.get("epsilon_start", 1.0), settings.get("epsilon_floor", 1.0)
     plant_start, plant_floor = settings["plant_epsilon_start"], settings["plant_epsilon_floor"]
     return ExplorationState(
         "formal",
         progress,
-        start * (floor / start) ** progress,
+        0.0 if species_only else start * (floor / start) ** progress,
         progress >= 1,
         plant_progress,
         plant_start * (plant_floor / plant_start) ** plant_progress,
@@ -97,7 +98,7 @@ def configure_exploration(model, cfg):
     model.exploration_settings = dict(cfg["training"]["exploration"])
     set_exploration_rate(
         model,
-        getattr(model, "exploration_rate", model.exploration_settings["epsilon_start"]),
+        getattr(model, "exploration_rate", model.exploration_settings.get("epsilon_start", 0.0)),
         plant_rate=getattr(
             model, "plant_exploration_rate", model.exploration_settings["plant_epsilon_start"]
         ),
@@ -105,6 +106,10 @@ def configure_exploration(model, cfg):
 
 
 def set_exploration_rate(model, rate, *, plant_rate=None):
+    from pvz_rl.learning.counterfactual_settings import counterfactual_enabled
+    phase = getattr(model, "tile_skill_state", {}).get("phase")
+    if counterfactual_enabled(model.cfg, phase) or model.cfg["training"]["exploration"]["objective"] == "committed_species_epsilon_v1":
+        rate = 0.0
     model.exploration_rate = float(rate)
     model.policy.exploration_epsilon = 0.0
     model.policy.tile_exploration_epsilon = float(rate)

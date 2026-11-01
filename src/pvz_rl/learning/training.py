@@ -38,6 +38,7 @@ from pvz_rl.learning.budget import (
     uses_games,
 )
 from pvz_rl.learning.cohort import atomic_transition
+from pvz_rl.learning.counterfactual_settings import OBJECTIVE as COUNTERFACTUAL_OBJECTIVE
 from pvz_rl.learning.curriculum import (
     CurriculumState,
     initial_state,
@@ -328,8 +329,12 @@ class ResearchCallback(BaseCallback):
             "training_steps": self.model.num_timesteps,
             "training_games": games,
             "tile_scenarios": self.model.tile_skills.to_dict(),
-            "search": dict(getattr(getattr(self.model, "_search", None), "metrics", {})),
-            "collection_policy": "search_assisted" if self.model.search_training else "network",
+            "counterfactual": dict(getattr(getattr(self.model, "_counterfactual", None), "metrics",
+                                            self.model.cohort_metrics.get("counterfactual", {}))),
+            "collection_policy": "network",
+            "fitting_objective": (
+                COUNTERFACTUAL_OBJECTIVE if self.model.counterfactual_training else None
+            ),
             "validation_trigger": self.validation_trigger.snapshot(
                 self.model.tile_skills.validation_domain
                 if self.model.tile_skills.active
@@ -614,9 +619,10 @@ class ResearchCallback(BaseCallback):
         row = self.snapshot()
         values = self.model.logger.name_to_value
         keys = (
-            "teacher_value_loss",
-            "teacher_difference_loss",
-            "teacher_feasibility_loss",
+            "comparison_loss",
+            "feasibility_loss",
+            "comparison_accuracy",
+            "feasibility_accuracy",
             "q_loss",
             "tile_ranking_loss",
             "bomb_cross_entropy_loss",
@@ -1497,10 +1503,9 @@ def train(
 ):
     started = perf_counter()
     cfg = copy.deepcopy(cfg)
-    if family == "diagnostic" and "search" in cfg["training"]:
-        cfg["training"]["search"]["enabled"] = False
-    if cfg["training"].get("search", {}).get("enabled", False) and family != "preset":
-        raise ValueError("Search training needs the supported preset public-world generator")
+    if family == "diagnostic":
+        for stage in ("peashooter", "normal"):
+            cfg["training"].get("counterfactual", {}).get(stage, {})["enabled"] = False
     validate_config(cfg)
     output = Path(output)
     require_cuda_training(cfg, condition, runtime=False)
@@ -1642,8 +1647,8 @@ def train(
     target_kind = (
         "successful-set placement supervision"
         if is_placement_skill(selected_stage(cfg)) else
-        "confirmed same-board search targets"
-        if cfg["training"].get("search", {}).get("enabled", False)
+        "factual tile preferences and species returns"
+        if cfg["training"].get("counterfactual")
         else "actual returns"
     )
     progress.emit(
@@ -1654,11 +1659,10 @@ def train(
         force=True,
     )
     progress.emit(f"Reward settings: {cfg['reward']}", force=True)
-    if cfg["training"].get("search", {}).get("enabled", False):
+    if cfg["training"].get("counterfactual"):
         progress.emit(
-            f"Search for Peashooter/normal stages: {cfg['training']['search']['rollouts']} rollouts/query, "
-            f"up to {cfg['training']['search']['queries_per_episode']} queries/game; "
-            "oracle games excluded from budgets; validation uses only the greedy network",
+            "Factual tile replay: up to two alternatives per legal planting; "
+            "main actions stay greedy; only real episodes count; validation is branch-free",
             force=True,
         )
     progress.emit(
@@ -1956,8 +1960,8 @@ def train(
     finally:
         if callback:
             callback.close()
-        if model is not None and getattr(model, "_search", None) is not None:
-            model._search.close()
+        if model is not None and getattr(model, "_counterfactual", None) is not None:
+            model._counterfactual.close()
         if model is not None and getattr(model, "_buffer", None) is not None:
             model._buffer.close()
         if model is not None and getattr(model, "_fitting_spool", None) is not None:

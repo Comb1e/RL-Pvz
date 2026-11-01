@@ -284,9 +284,10 @@ class CudaCohortLifecycle(BaseAlgorithm):
             "attacker_softmax_temperature",
             "bomb_hinge_loss",
             "bomb_distance_loss",
-            "teacher_value_loss",
-            "teacher_difference_loss",
-            "teacher_feasibility_loss",
+            "comparison_loss",
+            "feasibility_loss",
+            "comparison_accuracy",
+            "feasibility_accuracy",
             "selected_action_error",
             "species_consistency_loss",
             "species_consistency_mae",
@@ -364,6 +365,9 @@ class CudaCohortLifecycle(BaseAlgorithm):
         self.logger.record("train/n_updates", self._n_updates)
         self._buffer.close()
         self._buffer = self._runner = None
+        if getattr(self, "_counterfactual", None) is not None:
+            self._counterfactual.close()
+            self._counterfactual = None
         self.phase = CohortPhase.IDLE
         callback.on_rollout_end()
 
@@ -430,7 +434,7 @@ class CudaCohortLifecycle(BaseAlgorithm):
                         self._finalize_rewards(callback)
                     elif phase == CohortPhase.RETURNS:
                         ranking = is_placement_skill(self.tile_skills.phase)
-                        search = getattr(self, "search_training", False)
+                        search = getattr(self, "counterfactual_training", False)
                         self.prefit_errors = self._buffer.finalize(
                             cohort=self.cohort_number,
                             diagnostics=not (ranking or search),
@@ -438,7 +442,7 @@ class CudaCohortLifecycle(BaseAlgorithm):
                         if ranking or search:
                             self.prefit_errors = {}
                             self._buffer.reward_summary["supervision"] = (
-                                "confirmed_search_returns" if search else placement_settings(
+                                "paired_tile_cross_entropy_v1" if search else placement_settings(
                                     self.cfg, self.tile_skills.phase
                                 ).get("ranking_objective", "top1_hinge_v1")
                             )
@@ -581,6 +585,8 @@ class CudaCohortLifecycle(BaseAlgorithm):
                                     archive.open(name, "w", force_zip64=True) as out,
                                 ):
                                     shutil.copyfileobj(inp, out, length=1024 * 1024)
+                if getattr(self, "_counterfactual", None) is not None:
+                    self._counterfactual.write_archive(archive)
                 if self._buffer is not None:
                     self._buffer.write_archive(archive)
                 elif runtime.get("buffer") is not None:
