@@ -62,7 +62,9 @@ This file owns project-specific invariants and the code map.
   attributed labels. Respect independent configured stage cohort/resource sizes.
 - Completed autonomous runs retain portable weights and visualizations. Interrupted,
   failed and incomplete runs retain recovery. Validation passes/skips/completion
-  create or refresh reports. Leave `docs/` untouched unless explicitly requested.
+  create or refresh reports. Close cohort sidecar owners before the trajectory
+  directory owner; recovery archives retain unfinished work independently.
+  Leave `docs/` untouched unless explicitly requested.
 
 ## Stages and validation
 

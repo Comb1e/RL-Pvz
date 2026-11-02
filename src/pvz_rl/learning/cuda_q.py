@@ -342,11 +342,12 @@ class CudaCohortLifecycle(BaseAlgorithm):
         if getattr(self, "_reach", None) is not None:
             self._reach.close()
             self._reach = None
-        self._buffer.close()
-        self._buffer = self._runner = None
         if getattr(self, "_peashooter_teacher", None) is not None:
             self._peashooter_teacher.close()
             self._peashooter_teacher = None
+        # Sidecar owners must release their files before the directory owner closes.
+        self._buffer.close()
+        self._buffer = self._runner = None
         self.phase = CohortPhase.IDLE
         callback.on_rollout_end()
 

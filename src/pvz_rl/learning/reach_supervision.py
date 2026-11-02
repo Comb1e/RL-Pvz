@@ -342,5 +342,7 @@ class ReachSupervision:
 
     def close(self):
         self.stream.close()
+        # Recovery owns its archived copy; this sidecar belongs to the live cohort.
+        self.path.unlink(missing_ok=True)
         self._trace = None
         self.env.batch.disable_reach()

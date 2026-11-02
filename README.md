@@ -82,6 +82,8 @@ cohorts must strictly exceed the configured qualification threshold before a due
 validation launches. Cherry Bomb and Peashooter use their configurable mastery
 thresholds; other fresh stages require perfect validation. Completed runs retain
 portable `final.zip` weights and visualizations; unfinished runs retain recovery.
+Temporary cohort files are removed after fitting; interrupted work is preserved
+in recovery checkpoints.
 
 ## Common checks
 
