@@ -105,7 +105,7 @@ Paths are relative to `src/pvz_rl/` unless stated otherwise.
 | `learning/tile_curriculum.py`, `validation_trigger.py`, `budget.py`, `training_requirements.py` | Stage transitions, validation qualification, budgets and model/objective identities. |
 | `learning/checkpoints.py`, `training_artifacts.py`, `performance.py`, `demo_initialization.py` | Recovery/weights, artifact retention, execution settings and verified human demo fitting. |
 | `evaluation/`, `monitoring/`, repository diagnostic tools | Greedy evaluation, CPU verification, bounded profiling and benchmarks. |
-| `presentation/` | Demo recording/replay, live cohort subscriptions and retained reports. `reach_view.py` distinguishes predicted/factual penetration. |
+| `presentation/` | Demo recording/replay, live cohort subscriptions and retained reports. `reach_view.py` distinguishes predicted/factual penetration; both viewers place the latest timestamped prediction beside each board, using the episode-scoped journal cache without model calls. |
 
 ## Test ownership
 

@@ -74,8 +74,10 @@ gameplay cutoff. Private continuation has no simulated-time cutoff and supplies
 observed reach without changing recorded task results, timeout outcomes or rewards.
 Wall-time limits save unfinished work; old recoveries retain their saved endpoints.
 Normal games keep their existing factual reach. These continuations add no episodes
-or policy calls. Focused live viewing and reports show predictions and supervision
-targets.
+or policy calls. Native and browser game viewers show predicted penetration beside
+each live board, including in grid mode. The map is timestamped to the latest tile
+decision and stays visible during Wait; it needs no additional model calls. Focused
+viewing and reports also show observed supervision targets.
 
 Validation uses fresh random panels, saved for interrupted retries. Full fitted
 cohorts must strictly exceed the configured qualification threshold before a due

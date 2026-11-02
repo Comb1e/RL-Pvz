@@ -59,6 +59,7 @@ class ActionJournal:
         self.sequences = [0] * count
         self.blocks = [[] for _ in range(count)]
         self.latest = [None] * count
+        self.latest_reach = [None] * count
         try:
             self.workspace = tempfile.TemporaryDirectory(prefix="pvz-action-history-")
             self.root = Path(self.workspace.name)
@@ -78,6 +79,7 @@ class ActionJournal:
         blocks, self.blocks[env] = self.blocks[env], []
         self.sizes[env] = self.sequences[env] = 0
         self.episodes[env], self.latest[env] = int(episode), None
+        self.latest_reach[env] = None
         for block in blocks:
             if isinstance(block, np.memmap):
                 try:
@@ -146,6 +148,8 @@ class ActionJournal:
             row = records[env]
             row["sequence"] = self.sequences[env]
             self.latest[env] = row.copy()
+            if row["reach_valid"]:
+                self.latest_reach[env] = row.copy()
             if row["action"]:
                 index, offset = divmod(self.sizes[env], self.block_rows)
                 if index == len(self.blocks[env]):
@@ -166,13 +170,13 @@ class ActionJournal:
                 if episode != self.episodes[env]:
                     continue
                 sequence = int(row["decision"]) + 1
-                latest = self.latest[env]
-                if latest is not None and latest["sequence"] == sequence:
-                    latest["reach_labels"] = row["reach_labels"]
-                    if conservative_lanes is not None:
-                        latest["reach_conservative"] = sum(
-                            1 << i for i, flag in enumerate(conservative_lanes[env]) if flag
-                        )
+                for latest in (self.latest[env], self.latest_reach[env]):
+                    if latest is not None and latest["sequence"] == sequence:
+                        latest["reach_labels"] = row["reach_labels"]
+                        if conservative_lanes is not None:
+                            latest["reach_conservative"] = sum(
+                                1 << i for i, flag in enumerate(conservative_lanes[env]) if flag
+                            )
                 while cursors[env] < self.sizes[env]:
                     number, offset = divmod(cursors[env], self.block_rows)
                     target = self.blocks[env][number][offset]
@@ -204,6 +208,9 @@ class ActionJournal:
             total=size,
             rows=rows,
             latest=None if self.latest[env] is None else public_record(self.latest[env]),
+            latest_reach=(
+                None if self.latest_reach[env] is None else public_record(self.latest_reach[env])
+            ),
         )
 
     def write_archive(self, archive):
@@ -268,6 +275,11 @@ class ActionJournal:
                     target[: len(block)]["executed_action"] = np.where(
                         target[: len(block)]["accepted"], target[: len(block)]["action"], 0
                     )
+                # Derive this optional viewer cache from archived decisions, including
+                # older recoveries; Wait records never displace the last prediction.
+                valid = np.flatnonzero(target[: len(block)]["reach_valid"])
+                if len(valid):
+                    self.latest_reach[env] = target[valid[-1]].copy()
 
     def close(self):
         for env in range(self.count):

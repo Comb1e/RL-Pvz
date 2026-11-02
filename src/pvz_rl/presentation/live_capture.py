@@ -302,6 +302,7 @@ class CudaLiveCapture:
                 history = self.env.action_journal.page(frame["env"], frame["episode"])
                 frame["history"] = history
                 frame["decision"] = history["latest"] if history else None
+                frame["reach_decision"] = history.get("latest_reach") if history else None
 
                 if cache_completed:
                     self.session.selection.remember_completed(frame)
@@ -329,6 +330,7 @@ class CudaLiveCapture:
             history = self.env.action_journal.page(frame["env"], frame["episode"])
             frame["history"] = history
             frame["decision"] = history["latest"] if history else None
+            frame["reach_decision"] = history.get("latest_reach") if history else None
         self.session.publish(force=True)
 
     def finalize_rewards(self, pending):
