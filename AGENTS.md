@@ -25,11 +25,12 @@ This file owns project-specific invariants and the code map.
   No factual followers or normal tile-max species consistency.
 - Reach tracks only active non-headless zombies retained by the root observation.
   Include root positions, exclude later spawns/headless movement and capture
-  between-decision movement. Peashooter/normal use full factual continuations.
-  One-placement stages use Wait-only continuation in the existing batch: bombs
-  stop at explosion; attackers at task-target defeat or new-plant removal.
-  Survivors receive a separately reported conservative entire-lane target;
-  rejected/behind-target attacker placements resolve immediately. These tails
+  between-decision movement. Fresh scenario stages observe until natural victory
+  or first home entry, including rejected placements. One-placement stages use
+  Wait after their proposal; Peashooter uses Wait after its gameplay cutoff.
+  Private continuations have no simulated-time cutoff and use observed reach only;
+  preserve primary outcomes/rewards and checkpoint unfinished wall-time work.
+  Saved endpoint versions retain legacy semantics and conservative labels. These tails
   add no episodes, rewards, fitting actions or policy calls. Categories
   are columns 1–9 plus outside; absent lanes have no loss. Normalize by eligible
   lanes then equally by decisions. Reach is neither reward nor a mastery gate.
@@ -92,7 +93,7 @@ Paths are relative to `src/pvz_rl/` unless stated otherwise.
 | Repository `tools/bootstrap.*`, `tools/stage_game.py` | Verified installation of the pinned engine. |
 | `config.py`, `data/train.toml`, `gpu.py` | Stage tuning, validation panels, model dimensions and device selection. |
 | `policy/` | Shared public encoder, conditional tile decoder, action/tile/reach readouts, stateless runner and bounded graphs/batching. |
-| `envs/` | CPU/CUDA adapters, public encoding, actions, rewards, source credit and scenarios. `reach_tracking.py` owns guarded identity/movement hooks; `reach_exercise.py` owns device-side one-placement endpoints. |
+| `envs/` | CPU/CUDA adapters, public encoding, actions, rewards, source credit and scenarios. `reach_tracking.py` owns guarded identity/movement hooks; `reach_exercise.py` owns versioned natural-game-end scenario endpoints. |
 | `envs/scratch_game.py`, `bomb_preparation.py`, `cuda_bomb_oracle.py`, `cuda_snapshots.py`, `attacker_scenarios.py` | Validated automatic exercises, persistent preparation, bounded oracles and conservative attacker labels. |
 | `learning/training.py`, `cuda_q.py`, `sequential_training.py` | Cohort orchestration, collection/fitting, reporting and atomic recovery. |
 | `learning/reach_supervision.py`, `reach_objective.py` | Private targets, resumable Wait-only continuations, observed/conservative labels, categorical reach loss and normalization. |

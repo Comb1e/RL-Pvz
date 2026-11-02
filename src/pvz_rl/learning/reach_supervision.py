@@ -7,11 +7,13 @@ from time import perf_counter
 import numpy as np
 import torch
 
+from pvz_rl.envs.reach_exercise import LEGACY_ENDPOINT_POLICY, NATURAL_ENDPOINT_POLICY
 from pvz_rl.envs.reach_tracking import position_category, suffix_labels
 from pvz_rl.envs.tile_scenarios import is_placement_skill
 
 REACH_PROTOCOL = "visible-zombie-suffix-reach-v1"
 EXERCISE_PROTOCOL = "placement-reach-endpoints-v1"
+NATURAL_EXERCISE_PROTOCOL = "scenario-natural-end-reach-v1"
 TARGET_DTYPE = np.dtype([("id", "<i8"), ("lane", "<i8"), ("initial", "<i8")])
 
 
@@ -39,7 +41,21 @@ class ReachSupervision:
             conservative_lanes=0,
             stop_reasons={},
         )
-        self.exercise = is_placement_skill(env.tile_scenario)
+        self.endpoint_policy = env.cfg["training"]["tile_scenarios"].get(
+            "reach_endpoint", LEGACY_ENDPOINT_POLICY
+        )
+        self.natural_end = self.endpoint_policy == NATURAL_ENDPOINT_POLICY and (
+            is_placement_skill(env.tile_scenario) or env.tile_scenario == "peashooter"
+        )
+        self.exercise = is_placement_skill(env.tile_scenario) or (
+            self.natural_end and env.tile_scenario == "peashooter"
+        )
+        self.exercise_protocol = (
+            NATURAL_EXERCISE_PROTOCOL if self.natural_end else EXERCISE_PROTOCOL
+        )
+        self.metrics["endpoint_policy"] = (
+            self.endpoint_policy if self.exercise else "factual_game_v1"
+        )
         self._exercise_state = None
         self.conservative_lanes = np.zeros((env.batch.n, 5), bool)
         if state is not None:
@@ -78,16 +94,17 @@ class ReachSupervision:
             if self.exercise:
                 from pvz_rl.envs.reach_exercise import EXERCISE_WIDTH
 
-                if state.get("exercise_protocol") != EXERCISE_PROTOCOL:
-                    raise ValueError("Missing placement reach recovery identity")
+                if state.get("exercise_protocol") != self.exercise_protocol:
+                    raise ValueError("Scenario reach endpoint policy differs from recovery")
                 saved = state["exercise"]
                 if saved.shape != (env.batch.n, EXERCISE_WIDTH) or saved.dtype != torch.int64:
                     raise ValueError("Corrupt placement reach continuation")
                 values = saved.numpy()
-                mode = 2 if env.tile_scenario == "attacker_pre" else 1
+                mode = 3 if self.natural_end else (2 if env.tile_scenario == "attacker_pre" else 1)
+                reasons = (0, 8, 9) if self.natural_end else range(8)
                 if (
                     np.any(~np.isin(values[:, 0], (0, mode)))
-                    or np.any((values[:, 2] < 0) | (values[:, 2] > 7))
+                    or np.any(~np.isin(values[:, 2], reasons))
                     or np.any(values[:, 1:7] < 0)
                     or np.any(~np.isin(values[:, 7:9], (0, 1)))
                 ):
@@ -97,6 +114,10 @@ class ReachSupervision:
                 flags = state["conservative_lanes"]
                 if flags.shape != (env.batch.n, 5) or flags.dtype != torch.bool:
                     raise ValueError("Corrupt reach label provenance")
+                if self.natural_end and flags.any():
+                    raise ValueError(
+                        "Natural-end recovery cannot contain conservative reach labels"
+                    )
                 self.conservative_lanes[:] = flags.numpy()
         else:
             self.path.write_bytes(b"")
@@ -120,6 +141,11 @@ class ReachSupervision:
         from pvz_rl.envs.reach_exercise import EXERCISE_WIDTH
 
         cp, batch = self.env.cp, self.env.batch
+        selected = cp.from_dlpack(active)
+        if self.natural_end:
+            batch.reach_exercise[:, 0] = cp.where(selected, 3, batch.reach_exercise[:, 0])
+            self._exercise_state = None
+            return
         data = np.zeros((batch.n, EXERCISE_WIDTH), np.int64)
         for i, board in self.env.tile_boards.items():
             data[i, 0] = 2 if self.env.tile_scenario == "attacker_pre" else 1
@@ -132,7 +158,6 @@ class ReachSupervision:
         )
         staged = cp.asarray(data)
         staged[:, 1] = batch.header[:, 3]
-        selected = cp.from_dlpack(active)
         batch.reach_exercise[:] = cp.where(selected[:, None], staged, batch.reach_exercise)
         self._exercise_state = None
 
@@ -175,6 +200,7 @@ class ReachSupervision:
         self.metrics["stop_reasons"] = {
             name: int(np.count_nonzero((current[:, 0] != 0) & (current[:, 2] == code)))
             for code, name in STOP_REASONS.items()
+            if (code in (8, 9)) == self.natural_end
         }
         return True
 
@@ -247,7 +273,7 @@ class ReachSupervision:
                     ):
                         raise ValueError("Invalid private reach target membership")
                     labels = suffix_labels(targets, self._trace[int(row["env"])], int(row["tick"]))
-                    if self.exercise:
+                    if self.exercise and not self.natural_end:
                         trace = {int(x[0]): x for x in self._trace[int(row["env"])] if x[0]}
                         for identity, lane, _ in targets:
                             if not trace[int(identity)][3]:
@@ -301,7 +327,7 @@ class ReachSupervision:
             metrics=dict(self.metrics),
             trace=torch.from_numpy(self.env.batch.reach_trace.get()),
             errors=torch.from_numpy(self.env.batch.reach_error.get()),
-            exercise_protocol=EXERCISE_PROTOCOL if self.exercise else None,
+            exercise_protocol=self.exercise_protocol if self.exercise else None,
             exercise=torch.from_numpy(self.env.batch.reach_exercise.get())
             if self.exercise
             else None,

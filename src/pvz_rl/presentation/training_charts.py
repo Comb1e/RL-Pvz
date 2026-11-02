@@ -254,10 +254,15 @@ def report_charts(segments, cfg, output, save):
                     ("reach_tracking.conservative_lanes", "Full-lane failure targets"),
                     ("reach_tracking.continuation_seconds", "Wait-only continuation (seconds)"),
                     ("reach_tracking.continuation_ticks", "Wait-only simulated ticks"),
+                    (
+                        "reach_tracking.stop_reasons.natural_win",
+                        "Reach continuations: natural victory",
+                    ),
+                    ("reach_tracking.stop_reasons.home_breach", "Reach continuations: home entry"),
                     ("optimization.total_loss", "Combined fitting loss"),
                 ]
             )
-            if not is_placement_skill(scope):
+            if not is_placement_skill(scope) and scope != "peashooter":
                 reach_fields = [
                     item
                     for item in reach_fields
@@ -267,6 +272,14 @@ def report_charts(segments, cfg, output, save):
                         "reach_tracking.continuation_seconds",
                         "reach_tracking.continuation_ticks",
                     )
+                ]
+            if not any(
+                value(row, "reach_tracking.conservative_lanes")
+                for _, rows in records
+                for row in rows
+            ):
+                reach_fields = [
+                    item for item in reach_fields if item[0] != "reach_tracking.conservative_lanes"
                 ]
             add(
                 "reach",

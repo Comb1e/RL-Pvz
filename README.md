@@ -67,12 +67,15 @@ the shared encoder/decoder and reach heads while leaving the action readout
 untouched. Normal cohorts jointly fit action/tile returns and reach cross-entropy,
 using four passes. Each stage table has its own `reach_prediction_weight`, default
 0.1; zero disables its gradient. Reach categories are columns 1–9 plus “did not
-enter”; empty target lanes have no auxiliary loss. Bomb exercises wait through
-the explosion; attacker exercises wait until target defeat or plant removal.
-Survivors at these endpoints receive a conservative full-lane target, marked
-separately from observed reach. Peashooter and normal games retain full-game
-factual reach. These continuations add no episodes or policy calls. Focused live
-viewing and reports show predictions and supervision targets.
+enter”; empty target lanes have no auxiliary loss. Scenario stages finish reach
+observation at natural engine victory or the first home entry. Bomb and attacker
+exercises use Wait after their one placement; Peashooter uses Wait after its
+gameplay cutoff. Private continuation has no simulated-time cutoff and supplies
+observed reach without changing recorded task results, timeout outcomes or rewards.
+Wall-time limits save unfinished work; old recoveries retain their saved endpoints.
+Normal games keep their existing factual reach. These continuations add no episodes
+or policy calls. Focused live viewing and reports show predictions and supervision
+targets.
 
 Validation uses fresh random panels, saved for interrupted retries. Full fitted
 cohorts must strictly exceed the configured qualification threshold before a due

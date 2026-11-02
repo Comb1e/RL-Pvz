@@ -47,8 +47,11 @@ def report_reach_maps(metrics, output, save, *, stage="normal"):
                         ax.text(0, lane, "full-lane failure", color="white", fontsize=8)
     name = f"{stage}-reach-maps"
     save(fig, output, name)
+    legacy = any(any(sample.get("conservative_lanes", [])) for sample in examples)
     return (
-        f"{stage.replace('_', ' ').title()} reach: prediction and target; full-lane failures are marked; grey lanes have no targets",
+        f"{stage.replace('_', ' ').title()} reach: prediction and observed target; "
+        + ("historical conservative full-lane targets are marked; " if legacy else "")
+        + "grey lanes have no targets",
         name + ".png",
     )
 
@@ -65,7 +68,12 @@ def draw_reach(surface, font, decision, x, y, width):
     for panel, (title, values) in enumerate(
         (
             ("Predicted penetration", decision["reach_prediction"]),
-            ("Reach target (may use full-lane failure)", factual),
+            (
+                "Reach target (historical full-lane label)"
+                if decision.get("reach_conservative", 0)
+                else "Observed reach target",
+                factual,
+            ),
         )
     ):
         left = x + panel * (9 * cell_w + 22)

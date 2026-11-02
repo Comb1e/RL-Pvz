@@ -1,6 +1,9 @@
-"""Exact device-side endpoints for private one-placement reach continuations."""
+"""Guarded device-side endpoints for private scenario reach continuations."""
 
+# Modes 1/2 retain saved bomb/attacker endpoints; mode 3 observes natural termination.
 EXERCISE_WIDTH = 9  # mode, source, reason, tick, cutoff, two task ids, started, continuing
+LEGACY_ENDPOINT_POLICY = "placement_endpoints_v1"
+NATURAL_ENDPOINT_POLICY = "natural_game_end_v1"
 STOP_REASONS = {
     1: "exploded",
     2: "targets_defeated",
@@ -9,6 +12,8 @@ STOP_REASONS = {
     5: "cutoff",
     6: "rejected",
     7: "behind_target",
+    8: "natural_win",
+    9: "home_breach",
 }
 
 METHODS = r"""
@@ -19,7 +24,7 @@ METHODS = r"""
     }
   }
   __device__ void reach_event(I kind, I id) {
-    if (!exercise[0] || !exercise[7] || exercise[2]) return;
+    if (!exercise[0] || exercise[0] == 3 || !exercise[7] || exercise[2]) return;
     if (kind == 6 && exercise[0] == 2) {
       if (exercise[5] == id) exercise[5] = 0;
       if (exercise[6] == id) exercise[6] = 0;
@@ -33,6 +38,7 @@ METHODS = r"""
   __device__ void reach_start(I action) {
     if (!exercise[0] || exercise[7]) return;
     exercise[7] = 1;
+    if (exercise[0] == 3) return;
     if (!h->accepted || !action) { reach_stop(6); return; }
     if (exercise[0] == 2) {
       I tile = (action - 1) % 45;
@@ -58,7 +64,9 @@ def exercise_kernel_source(source):
         "    for (I i = 0; i < ticks && !h->status; i++)": "    for (I i = 0; i < ticks && !h->status && (!exercise[8] || !exercise[2]); i++)",
         "    if (h->status)\n      emit(17, 0, h->status);": "    if (h->status)\n      emit(17, 0, h->status);\n"
         "    if (exercise[0]) {\n"
-        "      if (h->status) reach_stop(4);\n"
+        "      if (exercise[0] == 3) {\n"
+        "        if (h->status) reach_stop(h->status == 1 ? 8 : 9);\n"
+        "      } else if (h->status) reach_stop(4);\n"
         "      else if (h->tick >= exercise[4]) reach_stop(5);\n    }",
     }
     for before, after in hooks.items():

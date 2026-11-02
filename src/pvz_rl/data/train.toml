@@ -102,6 +102,7 @@ enabled = true # Missing in older checkpoints: retain their original validation 
 cohort_success_threshold = 0.9 # Strictly above; full configured cohorts only (normally 116/128).
 
 [training.tile_scenarios]
+reach_endpoint = "natural_game_end_v1" # Private Wait-only reach tails have no simulated cutoff.
 enabled = true # Automatic preliminary stages; selected normal stages skip them.
 sampling_max_attempts = 100
 

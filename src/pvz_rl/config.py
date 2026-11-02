@@ -670,6 +670,13 @@ def validate_config(cfg: dict) -> None:
     chunk = cfg["training"]["performance"].get("reach_chunk_ticks", 256)
     if type(chunk) is not int or chunk < 1:
         raise ValueError("reach_chunk_ticks must be a positive integer")
+    from pvz_rl.envs.reach_exercise import LEGACY_ENDPOINT_POLICY, NATURAL_ENDPOINT_POLICY
+
+    if cfg["training"]["tile_scenarios"].get("reach_endpoint", LEGACY_ENDPOINT_POLICY) not in (
+        LEGACY_ENDPOINT_POLICY,
+        NATURAL_ENDPOINT_POLICY,
+    ):
+        raise ValueError("Unsupported scenario reach endpoint policy")
     attempts = cfg["training"]["tile_scenarios"].get("sampling_max_attempts")
     if type(attempts) is not int or attempts < 1:
         raise ValueError("training.tile_scenarios.sampling_max_attempts must be positive")
