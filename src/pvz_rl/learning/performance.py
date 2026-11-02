@@ -4,6 +4,7 @@ import copy
 
 ENCODER_SETTINGS = ("encoder_microbatch", "encoder_token_budget", "attention_query_chunk")
 PERFORMANCE_SETTINGS = (
+    "reach_chunk_ticks",
     "fit_precision",
     "prefetch",
     "attacker_prepare_workers",

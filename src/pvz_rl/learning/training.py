@@ -637,6 +637,7 @@ class ResearchCallback(BaseCallback):
             "peashooter_cross_entropy_loss",
             "peashooter_preferred_column_accuracy",
             "total_loss",
+            "primary_loss",
             "reach_loss",
             "reach_boundary_accuracy",
             "reach_mean_column_error",

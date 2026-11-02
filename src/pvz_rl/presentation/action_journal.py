@@ -30,6 +30,7 @@ RECORD = np.dtype(
         ("reach_valid", "?"),
         ("reach_prediction", "<f2", (5, 9)),
         ("reach_labels", "i1", 5),
+        ("reach_conservative", "u1"),
     ]
 )
 
@@ -152,7 +153,7 @@ class ActionJournal:
                 self.blocks[env][index][offset] = row
                 self.sizes[env] += 1
 
-    def finalize_reach(self, buffer):
+    def finalize_reach(self, buffer, *, conservative_lanes=None):
         if self.disabled:
             return
         # Both streams preserve each environment's decision order. Merge them
@@ -168,6 +169,10 @@ class ActionJournal:
                 latest = self.latest[env]
                 if latest is not None and latest["sequence"] == sequence:
                     latest["reach_labels"] = row["reach_labels"]
+                    if conservative_lanes is not None:
+                        latest["reach_conservative"] = sum(
+                            1 << i for i, flag in enumerate(conservative_lanes[env]) if flag
+                        )
                 while cursors[env] < self.sizes[env]:
                     number, offset = divmod(cursors[env], self.block_rows)
                     target = self.blocks[env][number][offset]
@@ -176,6 +181,10 @@ class ActionJournal:
                     cursors[env] += 1
                     if target["sequence"] == sequence:
                         target["reach_labels"] = row["reach_labels"]
+                        if conservative_lanes is not None:
+                            target["reach_conservative"] = sum(
+                                1 << i for i, flag in enumerate(conservative_lanes[env]) if flag
+                            )
                         break
 
     def page(self, env, episode, start=None, limit=PAGE_ROWS):

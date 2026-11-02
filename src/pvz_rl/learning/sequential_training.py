@@ -14,6 +14,7 @@ from pvz_rl.config import (
     bomb_softmax_temperature,
     passivity_settings,
     plant_wait_check_ticks,
+    reach_prediction_weight,
 )
 from pvz_rl.envs.actions import ActionSchema as A
 from pvz_rl.envs.cuda_features import REWARD_FIELDS
@@ -124,51 +125,53 @@ class CudaSequentialQ(CudaCohortLifecycle):
 
     @property
     def reach_training(self):
-        return not self.tile_skills.active and self.cfg.get("diagnostics", {}).get(
-            "reach_tracking", True
-        )
+        available = not self.tile_skills.active or self.tile_skills.phase in self.cfg[
+            "training"
+        ].get("stage_reach_weights", {})
+        return available and self.cfg.get("diagnostics", {}).get("reach_tracking", True)
+
+    @property
+    def reach_weight(self):
+        return reach_prediction_weight(self.cfg, self.tile_skills.phase)
+
+    @property
+    def fitting_parameter_stage(self):
+        if self._fit_kind != "tile_only":
+            return None
+        return "tile_reach" if self.reach_training and self.reach_weight > 0 else "tile"
 
     def _prepare_collection(self, callback):
-        if (
-            self.reach_training
-            and not self.env.enabled_envs.any()
-            and not self._scheduler.pending.any()
-        ):
-            if hasattr(callback, "check_deadline"):
-                callback.check_deadline()
-            started = perf_counter()
-            try:
-                with atomic_transition(), self.env.device_context():
-                    if self._reach.prepare():
-                        self._stats["reach_tracking"] = dict(self._reach.metrics)
-                        self.env.action_journal.finalize_reach(self._buffer)
-                        viewer = getattr(self.env, "live_view", None)
-                        if viewer is not None:
-                            viewer.finalize_reach()
-                        self._phase(CohortPhase.FINALIZE_REWARDS, callback)
-                    if not self._buffer.reserve_staging(self._reach.estimated_bytes):
-                        raise MemoryError("RAM budget cannot hold reach traces")
-            finally:
-                self._phase_times["collect"] += perf_counter() - started
-            return False
-        if self.peashooter_rule_training:
-            draining = not self.env.enabled_envs.any() and not self._scheduler.pending.any()
-            if not draining:
+        if self.reach_training or self.peashooter_rule_training:
+            if self.env.enabled_envs.any() or self._scheduler.pending.any():
                 return True
             if hasattr(callback, "check_deadline"):
                 callback.check_deadline()
             started = perf_counter()
             try:
                 with atomic_transition(), self.env.device_context():
-                    if self._peashooter_teacher.advance():
+                    ready, staging = True, 0
+                    if self.reach_training:
+                        ready = self._reach.prepare()
+                        staging += self._reach.estimated_bytes
+                        self._stats["reach_tracking"] = dict(self._reach.metrics)
+                    if self.peashooter_rule_training:
+                        ready = self._peashooter_teacher.advance() and ready
+                        staging += self._peashooter_teacher.estimated_bytes
+                        self._stats["peashooter_teacher"] = dict(self._peashooter_teacher.metrics)
+                    if not self._buffer.reserve_staging(staging):
+                        raise MemoryError("Shared RAM budget cannot hold placement/reach metadata")
+                    if ready:
+                        if self.reach_training:
+                            self.env.action_journal.finalize_reach(
+                                self._buffer,
+                                conservative_lanes=self._reach.conservative_lanes,
+                            )
+                            viewer = getattr(self.env, "live_view", None)
+                            if viewer is not None:
+                                viewer.finalize_reach()
                         self._phase(CohortPhase.FINALIZE_REWARDS, callback)
-                    if not self._buffer.reserve_staging(self._peashooter_teacher.estimated_bytes):
-                        raise MemoryError(
-                            "Shared RAM budget cannot hold Peashooter oracle metadata"
-                        )
             finally:
                 self._phase_times["collect"] += perf_counter() - started
-            self._stats["peashooter_teacher"] = dict(self._peashooter_teacher.metrics)
             if hasattr(callback, "log_progress"):
                 callback.log_progress()
             return False
@@ -287,13 +290,11 @@ class CudaSequentialQ(CudaCohortLifecycle):
 
     def _finalize_rewards(self, callback):
         self.env.handoff.clear()
-        self._buffer.reserve_staging(
-            self._peashooter_teacher.estimated_bytes
-            if self.peashooter_rule_training
-            else self._reach.estimated_bytes
-            if self.reach_training
-            else 0
-        )
+        if not self._buffer.reserve_staging(
+            (self._peashooter_teacher.estimated_bytes if self.peashooter_rule_training else 0)
+            + (self._reach.estimated_bytes if self.reach_training else 0)
+        ):
+            raise MemoryError("Shared RAM budget cannot hold placement/reach metadata")
         pending = getattr(self, "_pending_episodes", {})
         summary = self._buffer.finalize_rewards(pending)
         passivity = summary.get("passivity", {}).get("episodes", {})
@@ -350,7 +351,11 @@ class CudaSequentialQ(CudaCohortLifecycle):
         if phase == CohortPhase.FIT:
             if getattr(self, "_peashooter_teacher", None) is not None:
                 self._peashooter_teacher.release()
-                self._buffer.reserve_staging(self._peashooter_teacher.estimated_bytes)
+                if not self._buffer.reserve_staging(
+                    self._peashooter_teacher.estimated_bytes
+                    + (self._reach.estimated_bytes if self.reach_training else 0)
+                ):
+                    raise MemoryError("Shared RAM budget cannot hold placement/reach metadata")
             for encoder in self.policy.encoders:
                 encoder.release_collection()
             if getattr(self, "_teacher", None) is not None:
@@ -513,6 +518,8 @@ class CudaSequentialQ(CudaCohortLifecycle):
                 )
             if self.peashooter_rule_training:
                 self._peashooter_teacher.before(actions, executing, branch_available)
+            if self.reach_training:
+                self._reach.before(actions, executing)
             env.step_device(actions, active=executing)
             checks = self._plant_exploration.observe(
                 actions,
@@ -1020,8 +1027,9 @@ class CudaSequentialQ(CudaCohortLifecycle):
                 )
                 self.logger.record("train/reach_eligible_decisions", decisions)
                 self.logger.record("train/total_loss", loss)
-                loss -= self.cfg["training"].get("reach_prediction_weight", 0.1) * auxiliary
+                loss -= self.reach_weight * auxiliary
                 self._cached_metrics = (loss, self._cached_metrics[1], self._cached_metrics[2])
+            self.logger.record("train/primary_loss", loss)
             if is_placement_skill(self.tile_skills.phase):
                 self._cached_fit_examples = self.cohort_games
                 for key, number in zip(
@@ -1067,9 +1075,7 @@ class CudaSequentialQ(CudaCohortLifecycle):
             self._publish_fit_metrics(final=True)
             if not torch.isfinite(self._pass_metrics).all():
                 raise FloatingPointError("Non-finite two-stage Q loss")
-            parameters = self.policy.master_parameters(
-                "tile" if self._fit_kind == "tile_only" else None
-            )
+            parameters = self.policy.master_parameters(self.fitting_parameter_stage)
             try:
                 norm = torch.nn.utils.clip_grad_norm_(
                     parameters, self.max_grad_norm, error_if_nonfinite=True
@@ -1083,7 +1089,7 @@ class CudaSequentialQ(CudaCohortLifecycle):
             self._optimizer_committing = True
             self.policy.optimizer.step()
             self.policy.sync_runtime_from_masters()
-            self._update_teacher("tile" if self._fit_kind == "tile_only" else None)
+            self._update_teacher(self.fitting_parameter_stage)
             self._optimizer_committing = False
             end.record()
             self._optimizer_events.append((start, end))
@@ -1099,7 +1105,9 @@ class CudaSequentialQ(CudaCohortLifecycle):
         else:
             rows, observations, *metadata = item
             self.policy.set_training_mode(True)
-            if self.peashooter_rule_training:
+            if self.tile_skills.active and self.reach_training:
+                loss, selected_error, placement_gap = self._placement_reach_loss(rows, observations)
+            elif self.peashooter_rule_training:
                 loss, selected_error, placement_gap, detail = self._peashooter_objective.loss(
                     self.policy,
                     rows,
@@ -1147,7 +1155,54 @@ class CudaSequentialQ(CudaCohortLifecycle):
         if hasattr(callback, "log_progress"):
             callback.log_progress()
 
-    def _bomb_loss(self, rows, observations):
+    def _placement_reach_loss(self, rows, observations):
+        from pvz_rl.envs.encoding import collate_observations
+        from pvz_rl.learning.reach_objective import reach_loss
+
+        observations = collate_observations(observations, self.device)
+        branches, _ = action_parts(torch.as_tensor(np.array(rows["action"]), device=self.device))
+        requested = np.flatnonzero(rows["active"] & rows["branch_usable"] & (rows["action"] > 0))
+        at = torch.as_tensor(requested, device=self.device)
+        features = next(self.policy.parameters()).new_zeros(
+            (len(rows), 45, self.cfg["policy"]["shared_width"])
+        )
+        with self.policy.board_context(observations) as memory:
+            if len(at):
+                features = features.index_copy(
+                    0,
+                    at,
+                    self.policy.tile_features(observations, branches[at], rows=at, memory=memory),
+                )
+            if self.peashooter_rule_training:
+                loss, error, gap, detail = self._peashooter_objective.loss(
+                    self.policy, rows, observations, features=features
+                )
+                self._peashooter_pass_metrics += detail
+            else:
+                loss, error, gap = self._bomb_loss(rows, observations, features=features)
+            eligible = np.flatnonzero(
+                rows["reach_valid"]
+                & (rows["reach_labels"] >= 0).any(-1)
+                & (rows["reach_count"] > 0)
+            )
+            self.policy._last_reach_metrics = torch.zeros(
+                5, device=self.device, dtype=torch.float64
+            )
+            if len(eligible):
+                with torch.set_grad_enabled(torch.is_grad_enabled() and self.reach_weight > 0):
+                    auxiliary, metrics = reach_loss(
+                        self.policy.reach_values(
+                            features[torch.as_tensor(eligible, device=self.device)]
+                        ),
+                        np.array(rows["reach_labels"])[eligible],
+                        decision_count=self._reach_decisions,
+                    )
+                if self.reach_weight:
+                    loss = loss + self.reach_weight * auxiliary
+                self.policy._last_reach_metrics = metrics
+        return loss, error, gap
+
+    def _bomb_loss(self, rows, observations, *, features=None):
         from pvz_rl.envs.encoding import collate_observations
         from pvz_rl.learning.placement_labels import set_ranking_loss
 
@@ -1157,11 +1212,15 @@ class CudaSequentialQ(CudaCohortLifecycle):
             self.cfg["environment"]["plants"].index(label.get("supplied_plant", "cherry_bomb")) + 1
             for label in labels
         ]
-        values = self.policy.fitting_tiles(
-            observations,
-            torch.tensor(branches, device=self.device, dtype=torch.long),
-            rows=torch.arange(len(rows), device=self.device),
-        ).float()
+        values = (
+            self.policy.fitting_tiles(
+                observations,
+                torch.tensor(branches, device=self.device, dtype=torch.long),
+                rows=torch.arange(len(rows), device=self.device),
+            ).float()
+            if features is None
+            else self.policy.tile_head(features).squeeze(-1).float()
+        )
         settings = placement_settings(self.cfg, self.tile_skills.phase)
         positives = [label["feasible_tiles"] for label in labels]
         objective = settings.get("ranking_objective", "top1_hinge_v1")

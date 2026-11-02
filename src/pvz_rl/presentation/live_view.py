@@ -229,6 +229,16 @@ def learning_settings(cfg):
             + (f"fit_batch_groups={training['performance']['fit_batch_groups']}",),
         ),
         (
+            "Reach weights",
+            tuple(
+                f"{stage}={weight}"
+                for stage, weight in {
+                    "normal": training.get("reach_prediction_weight", 0.1),
+                    **training.get("stage_reach_weights", {}),
+                }.items()
+            ),
+        ),
+        (
             "Rewards",
             tuple(f"{key}={value}" for key, value in cfg["reward"].items() if key != "version"),
         ),

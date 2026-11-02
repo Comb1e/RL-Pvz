@@ -232,27 +232,47 @@ def report_charts(segments, cfg, output, save):
             else (key, title, get)
             for key, title, get in fitting
         ]
-        if not pre:
+        if any(
+            value(row, "optimization.reach_loss") is not None for _, rows in records for row in rows
+        ):
+            reach_fields = fields(
+                [
+                    ("optimization.reach_loss", "Reach categorical cross-entropy"),
+                    ("optimization.reach_boundary_accuracy", "Leftmost-column accuracy"),
+                    (
+                        "optimization.reach_mean_column_error",
+                        "Mean column error (outside = column 10)",
+                    ),
+                    ("optimization.reach_eligible_decisions", "Eligible retained decisions"),
+                    ("reach_tracking.tracked_zombies", "Tracked decision/zombie memberships"),
+                    (
+                        "reach_tracking.tracking_seconds",
+                        "Tracking and label preparation (seconds)",
+                    ),
+                    ("reach_tracking.storage_bytes", "Private reach storage (bytes)"),
+                    ("reach_tracking.observed_lanes", "Observed lane targets"),
+                    ("reach_tracking.conservative_lanes", "Full-lane failure targets"),
+                    ("reach_tracking.continuation_seconds", "Wait-only continuation (seconds)"),
+                    ("reach_tracking.continuation_ticks", "Wait-only simulated ticks"),
+                    ("optimization.total_loss", "Combined fitting loss"),
+                ]
+            )
+            if not is_placement_skill(scope):
+                reach_fields = [
+                    item
+                    for item in reach_fields
+                    if item[0]
+                    not in (
+                        "reach_tracking.conservative_lanes",
+                        "reach_tracking.continuation_seconds",
+                        "reach_tracking.continuation_ticks",
+                    )
+                ]
             add(
                 "reach",
                 "visible-zombie reach prediction",
-                fields(
-                    [
-                        ("optimization.reach_loss", "Reach categorical cross-entropy"),
-                        ("optimization.reach_boundary_accuracy", "Leftmost-column accuracy"),
-                        (
-                            "optimization.reach_mean_column_error",
-                            "Mean column error (outside = column 10)",
-                        ),
-                        ("optimization.reach_eligible_decisions", "Eligible retained decisions"),
-                        ("reach_tracking.tracked_zombies", "Tracked decision/zombie memberships"),
-                        (
-                            "reach_tracking.tracking_seconds",
-                            "Tracking and label preparation (seconds)",
-                        ),
-                        ("reach_tracking.storage_bytes", "Private reach storage (bytes)"),
-                    ]
-                ),
+                reach_fields,
+                ("optimization.reach_boundary_accuracy",),
             )
         rule_fields = fields(
             [

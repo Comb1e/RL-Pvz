@@ -36,6 +36,7 @@ _STAGE_PARAMETERS = {
         "curriculum": "curriculum",
     },
     "cherry_bomb": {
+        "reach_prediction_weight": "training.stage_reach_weights.cherry_bomb",
         "n_envs": "training.tile_scenarios.cherry_bomb_n_envs",
         "initial_sun": "training.tile_scenarios.bomb_initial_sun",
         "plants": "training.tile_scenarios.bomb_plants",
@@ -67,9 +68,11 @@ _STAGE_PARAMETERS = {
         "validation_success_threshold": "curriculum.cherry_bomb_validation_success_threshold",
     },
     "cherry_bomb_obstacle": {
+        "reach_prediction_weight": "training.stage_reach_weights.cherry_bomb_obstacle",
         "softmax_temperature": "training.tile_scenarios.obstacle_softmax_temperature",
     },
     "attacker_pre": {
+        "reach_prediction_weight": "training.stage_reach_weights.attacker_pre",
         **{
             key: f"training.tile_scenarios.attacker.{key}"
             for key in (
@@ -97,6 +100,7 @@ _STAGE_PARAMETERS = {
         "probe_interval_games": "curriculum.attacker_pre_probe_interval_games",
     },
     "peashooter": {
+        "reach_prediction_weight": "training.stage_reach_weights.peashooter",
         "sky_sun_rate": "training.tile_scenarios.peashooter_sky_sun_rate",
         **{
             key: f"training.peashooter_rules.{key}"
@@ -116,6 +120,14 @@ _STAGE_PARAMETERS = {
         "validation_success_threshold": "curriculum.peashooter_validation_success_threshold",
     },
 }
+
+
+def reach_prediction_weight(cfg, stage="normal"):
+    """Missing preliminary settings retain saved normal-only supervision."""
+    training = cfg["training"]
+    if stage in ("cherry_bomb", "cherry_bomb_obstacle", "attacker_pre", "peashooter"):
+        return training.get("stage_reach_weights", {}).get(stage, 0.0)
+    return training.get("reach_prediction_weight", 0.1)
 
 
 def _resolve_training_sections(cfg):
@@ -646,13 +658,18 @@ def validate_config(cfg: dict) -> None:
             raise ValueError(f"policy.{key} must be a positive integer")
     if policy["shared_width"] % policy["attention_heads"]:
         raise ValueError("shared_width must be divisible by attention_heads")
-    reach_weight = cfg["training"].get("reach_prediction_weight", 0.1)
-    if (
-        type(reach_weight) not in (int, float)
-        or not math.isfinite(reach_weight)
-        or reach_weight < 0
-    ):
-        raise ValueError("training.normal.reach_prediction_weight must be finite and nonnegative")
+    stages = ("normal", "cherry_bomb", "cherry_bomb_obstacle", "attacker_pre", "peashooter")
+    if set(cfg["training"].get("stage_reach_weights", {})) - set(stages[1:]):
+        raise ValueError("Unknown preliminary reach stage")
+    for stage in stages:
+        weight = reach_prediction_weight(cfg, stage)
+        if type(weight) not in (int, float) or not math.isfinite(weight) or weight < 0:
+            raise ValueError(
+                f"training.{stage}.reach_prediction_weight must be finite and nonnegative"
+            )
+    chunk = cfg["training"]["performance"].get("reach_chunk_ticks", 256)
+    if type(chunk) is not int or chunk < 1:
+        raise ValueError("reach_chunk_ticks must be a positive integer")
     attempts = cfg["training"]["tile_scenarios"].get("sampling_max_attempts")
     if type(attempts) is not int or attempts < 1:
         raise ValueError("training.tile_scenarios.sampling_max_attempts must be positive")
@@ -1030,6 +1047,7 @@ def validate_config(cfg: dict) -> None:
         if type(value) is not int or value < 1:
             raise ValueError(f"training.performance.{key} must be a positive integer")
     if set(performance) - {
+        "reach_chunk_ticks",
         "compile_collection",
         "compile_fitting",
         "telemetry",

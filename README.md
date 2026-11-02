@@ -2,9 +2,9 @@
 
 Train a sequential Q policy against a pinned Plants vs. Zombies simulator. A
 shared Transformer understands the public board, an action readout chooses
-Wait/species/Dig, and a conditional decoder scores all 45 tiles. Normal training
-also predicts how far the currently visible zombies will reach in the actual
-continuation. Labels never override actions; validation uses the greedy network.
+Wait/species/Dig, and a conditional decoder scores all 45 tiles. Every autonomous
+stage also learns visible-zombie reach. Labels never override actions; validation
+uses the greedy network.
 
 ## Requirements
 
@@ -63,12 +63,16 @@ Tune [train.toml](src/pvz_rl/data/train.toml): stage settings live under
 `training.cherry_bomb`, `training.cherry_bomb_obstacle`, `training.attacker_pre`,
 `training.peashooter` and `training.normal`; architecture dimensions live under
 `policy`. Preliminary stages retain their automatic placement targets and train
-the shared encoder/decoder while leaving the action readout untouched. Normal
-cohorts jointly fit action/tile returns and reach cross-entropy, using four passes.
-`training.normal.reach_prediction_weight` defaults to 0.1; zero disables its
-gradient. Reach categories are columns 1–9 plus “did not enter”; empty target
-lanes have no auxiliary loss. Focused live viewing and reports distinguish
-predicted penetration from factual outcomes.
+the shared encoder/decoder and reach heads while leaving the action readout
+untouched. Normal cohorts jointly fit action/tile returns and reach cross-entropy,
+using four passes. Each stage table has its own `reach_prediction_weight`, default
+0.1; zero disables its gradient. Reach categories are columns 1–9 plus “did not
+enter”; empty target lanes have no auxiliary loss. Bomb exercises wait through
+the explosion; attacker exercises wait until target defeat or plant removal.
+Survivors at these endpoints receive a conservative full-lane target, marked
+separately from observed reach. Peashooter and normal games retain full-game
+factual reach. These continuations add no episodes or policy calls. Focused live
+viewing and reports show predictions and supervision targets.
 
 Validation uses fresh random panels, saved for interrupted retries. Full fitted
 cohorts must strictly exceed the configured qualification threshold before a due

@@ -244,6 +244,12 @@ class CudaCohortLifecycle(BaseAlgorithm):
         self._simulation_ticks = 0
         self._planting_samples = 0
         for key in (
+            "reach_loss",
+            "reach_boundary_accuracy",
+            "reach_mean_column_error",
+            "reach_eligible_decisions",
+            "primary_loss",
+            "total_loss",
             "peashooter_cross_entropy_loss",
             "peashooter_preferred_column_accuracy",
             "q_loss",

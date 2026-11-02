@@ -265,9 +265,12 @@ def build_run_report(run, cfg=None):
     metrics = [row for _, series in segments for row in series["training-metrics"]]
     from pvz_rl.presentation.reach_view import report_reach_maps
 
-    reach_maps = report_reach_maps(metrics, output, _save)
-    if reach_maps:
-        images.append(reach_maps)
+    for stage in dict.fromkeys(domain(row) for row in metrics):
+        reach_maps = report_reach_maps(
+            [row for row in metrics if domain(row) == stage], output, _save, stage=stage
+        )
+        if reach_maps:
+            images.append(reach_maps)
     status = {**(metrics[-1] if metrics else {}), **read_json(run / "status.json", {})}
     best = read_json(run / "best.json", {})
     visual_status = read_json(output / "status.json", {})

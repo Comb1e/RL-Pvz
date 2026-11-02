@@ -57,6 +57,8 @@ class TwoStageTransformerPolicy(nn.Module):
 
     @staticmethod
     def _eligible(name, stage):
+        if stage == "tile_reach":
+            return not name.startswith("species_head.")
         if stage == "tile":
             return not name.startswith("species_head.") and not name.startswith("reach_")
         return name.startswith(("board_encoder.", "species_head."))
@@ -119,8 +121,8 @@ class TwoStageTransformerPolicy(nn.Module):
     def master_parameters(self, stage=None):
         if stage is None:
             return tuple(self._master_parameters)
-        if stage not in ("species", "tile"):
-            raise ValueError("Parameter stage must be species or tile")
+        if stage not in ("species", "tile", "tile_reach"):
+            raise ValueError("Parameter stage must be species, tile or tile_reach")
         return tuple(
             master
             for name, master in zip(self._master_names, self._master_parameters, strict=True)
@@ -137,8 +139,8 @@ class TwoStageTransformerPolicy(nn.Module):
         parameters = tuple(super().parameters())
         if stage is None:
             return parameters
-        if stage not in ("species", "tile"):
-            raise ValueError("Parameter stage must be species or tile")
+        if stage not in ("species", "tile", "tile_reach"):
+            raise ValueError("Parameter stage must be species, tile or tile_reach")
         return tuple(
             parameter
             for name, parameter in zip(self._master_names, parameters, strict=True)

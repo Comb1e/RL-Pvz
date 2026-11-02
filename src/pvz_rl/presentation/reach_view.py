@@ -9,7 +9,7 @@ def factual_map(labels):
     return np.where(labels[:, None] >= 0, cells.astype(float), np.nan)
 
 
-def report_reach_maps(metrics, output, save):
+def report_reach_maps(metrics, output, save, *, stage="normal"):
     import matplotlib.pyplot as plt
 
     examples = next(
@@ -29,7 +29,7 @@ def report_reach_maps(metrics, output, save):
         for ax, values, title in zip(
             pair,
             (sample["prediction"], factual_map(sample["labels"])),
-            ("Predicted penetration", "Factual visible-target penetration"),
+            ("Predicted penetration", "Reach supervision target"),
             strict=True,
         ):
             ax.imshow(values, vmin=0, vmax=1, cmap=cmap, aspect="auto")
@@ -41,10 +41,15 @@ def report_reach_maps(metrics, output, save):
                 yticklabels=list("ABCDE"),
                 xlabel="Column (home is to the left)",
             )
-    save(fig, output, "normal-reach-maps")
+            if ax is pair[1]:
+                for lane, conservative in enumerate(sample.get("conservative_lanes", [])):
+                    if conservative:
+                        ax.text(0, lane, "full-lane failure", color="white", fontsize=8)
+    name = f"{stage}-reach-maps"
+    save(fig, output, name)
     return (
-        "Visible-zombie reach: probability versus observed outcome (grey lanes have no targets)",
-        "normal-reach-maps.png",
+        f"{stage.replace('_', ' ').title()} reach: prediction and target; full-lane failures are marked; grey lanes have no targets",
+        name + ".png",
     )
 
 
@@ -60,7 +65,7 @@ def draw_reach(surface, font, decision, x, y, width):
     for panel, (title, values) in enumerate(
         (
             ("Predicted penetration", decision["reach_prediction"]),
-            ("Factual (pending lanes grey)", factual),
+            ("Reach target (may use full-lane failure)", factual),
         )
     ):
         left = x + panel * (9 * cell_w + 22)
@@ -77,5 +82,9 @@ def draw_reach(surface, font, decision, x, y, width):
                     surface,
                     color,
                     (left + col * cell_w, y + 21 + row * cell_h, cell_w - 1, cell_h - 1),
+                )
+            if panel and decision.get("reach_conservative", 0) & (1 << row):
+                pygame.draw.rect(
+                    surface, (245, 245, 235), (left, y + 21 + row * cell_h, 9 * cell_w, cell_h), 1
                 )
     return 21 + 5 * cell_h + 8
