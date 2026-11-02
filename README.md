@@ -90,5 +90,5 @@ learning/reload. They establish workflow availability, not mastery. Report-only
 visualization loads no policy and starts no training.
 
 - [Code structure and test ownership](AGENTS.md)
-- [Detailed documentation](docs/architecture.md) (historical architecture notes)
+- [Architecture and workflows](docs/architecture.md)
 - [Research references](docs/references.md)

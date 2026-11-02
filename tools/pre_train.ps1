@@ -2,6 +2,13 @@ $ErrorActionPreference = "Stop"
 
 .\.venv\Scripts\python.exe -m pvz_rl initialize-demo --archive data\human-1000.jsonl --replay data\human-1000.pvzdemo --output runs\human-init --device cuda
 
+.\.venv\Scripts\python.exe -m pvz_rl train --until-stage-complete --stage cherry_bomb --seed 101 --output runs\compact-stages-101\cherry_bomb --init-from runs\human-init\initialization.pt --gpu 0 --gpu-profile rtx4070-laptop
+
+.\.venv\Scripts\python.exe -m pvz_rl train --until-stage-complete --stage cherry_bomb_obstacle --seed 101 --output runs\compact-stages-101\cherry_bomb_obstacle --init-from runs\compact-stages-101\cherry_bomb\final.zip --gpu 0 --gpu-profile rtx4070-laptop
+
+.\.venv\Scripts\python.exe -m pvz_rl train --until-stage-complete --stage attacker_pre --seed 101 --output runs\compact-stages-101\attacker_pre --init-from runs\compact-stages-101\cherry_bomb_obstacle\final.zip --gpu 0 --gpu-profile rtx4070-laptop
+
+.\.venv\Scripts\python.exe -m pvz_rl train --until-stage-complete --stage peashooter --seed 101 --output runs\compact-stages-101\peashooter --init-from runs\compact-stages-101\attacker_pre\final.zip --gpu 0 --gpu-profile rtx4070-laptop
 # cherry_bomb
 #.\.venv\Scripts\python.exe -m pvz_rl train --until-stage-complete --stage cherry_bomb --seed 101 --output runs\compact-stages-101\cherry_bomb --init-from runs\human-init\initialization.pt --gpu 0 --gpu-profile rtx4070-laptop
 #.\.venv\Scripts\python.exe -m pvz_rl train --until-stage-complete --stage cherry_bomb --seed 101 --output runs\compact-stages-101\cherry_bomb --resume runs\compact-stages-101\cherry_bomb\interrupted.zip --gpu 0 --gpu-profile rtx4070-laptop
