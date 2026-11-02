@@ -27,6 +27,9 @@ RECORD = np.dtype(
         ("coins", "?", 2),
         ("legal", "?", 10),
         ("q", "<f4", 10),
+        ("reach_valid", "?"),
+        ("reach_prediction", "<f2", (5, 9)),
+        ("reach_labels", "i1", 5),
     ]
 )
 
@@ -122,6 +125,10 @@ class ActionJournal:
             "next_species",
         ):
             records[name] = rows[name]
+        if "reach_valid" in rows.dtype.names:
+            records["reach_valid"] = rows["reach_valid"]
+            records["reach_prediction"] = rows["reach_prediction"]
+        records["reach_labels"] = -1
         records["coins"][:, 0] = rows["species_coin"]
         records["coins"][:, 1] = rows["tile_coin"]
         records["q"] = scores
@@ -144,6 +151,32 @@ class ActionJournal:
                     self._allocate(env)
                 self.blocks[env][index][offset] = row
                 self.sizes[env] += 1
+
+    def finalize_reach(self, buffer):
+        if self.disabled:
+            return
+        # Both streams preserve each environment's decision order. Merge them
+        # with one cursor per journal instead of retaining cohort-wide labels.
+        cursors = [0] * self.count
+        for block, rows in enumerate(buffer.blocks):
+            rows = rows[: min(buffer.block_rows, buffer.size - block * buffer.block_rows)]
+            for row in rows[rows["reach_count"] > 0]:
+                env, episode = int(row["env"]), int(row["episode"])
+                if episode != self.episodes[env]:
+                    continue
+                sequence = int(row["decision"]) + 1
+                latest = self.latest[env]
+                if latest is not None and latest["sequence"] == sequence:
+                    latest["reach_labels"] = row["reach_labels"]
+                while cursors[env] < self.sizes[env]:
+                    number, offset = divmod(cursors[env], self.block_rows)
+                    target = self.blocks[env][number][offset]
+                    if target["sequence"] > sequence:
+                        break
+                    cursors[env] += 1
+                    if target["sequence"] == sequence:
+                        target["reach_labels"] = row["reach_labels"]
+                        break
 
     def page(self, env, episode, start=None, limit=PAGE_ROWS):
         if self.disabled or not 0 <= env < self.count or self.episodes[env] != episode:

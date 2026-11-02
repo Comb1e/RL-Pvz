@@ -125,7 +125,10 @@ class CudaFeatures:
         self.globals = cp.zeros((rows, GLOBAL_WIDTH), cp.float32)
         # Kept count, then plants/zombies/projectiles omitted by the entity cap.
         self.summary = cp.zeros((rows, 4), cp.int64)
-        self.records = cp.zeros((0 if accounting_only else batch.n, 50 + batch.zcap, ENTITY_WIDTH), cp.int32)
+        self.identities = cp.zeros((rows, self.limit), cp.int64)
+        self.records = cp.zeros(
+            (0 if accounting_only else batch.n, 50 + batch.zcap, ENTITY_WIDTH), cp.int32
+        )
         self.truncation_counts = self.summary[: batch.n, 1:]
         self.entity_tensor = torch.from_dlpack(self.entities)
         self.entity_mask_tensor = torch.from_dlpack(self.entity_mask)
@@ -217,6 +220,7 @@ class CudaFeatures:
                 self.globals[rows],
                 self.assets,
                 self.summary[rows],
+                self.identities[rows],
                 b.n,
             ),
         )
@@ -270,8 +274,9 @@ class CudaFeatures:
             if observation_active is not None:
                 b.header[:, 17] = observation_active
             if self.accounting_only:
-                self.asset_kernel(((b.n + 63) // 64,), (64,),
-                                  (b.header, b.plants, self.assets, b.n))
+                self.asset_kernel(
+                    ((b.n + 63) // 64,), (64,), (b.header, b.plants, self.assets, b.n)
+                )
                 observation = None
             else:
                 observation = self.encode(offset=offset, publish=publish)

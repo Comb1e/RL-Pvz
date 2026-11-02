@@ -106,9 +106,7 @@ def configure_exploration(model, cfg):
 
 
 def set_exploration_rate(model, rate, *, plant_rate=None):
-    from pvz_rl.learning.counterfactual_settings import counterfactual_enabled
-    phase = getattr(model, "tile_skill_state", {}).get("phase")
-    if counterfactual_enabled(model.cfg, phase) or model.cfg["training"]["exploration"]["objective"] == "committed_species_epsilon_v1":
+    if model.cfg["training"]["exploration"]["objective"] == "committed_species_epsilon_v1":
         rate = 0.0
     model.exploration_rate = float(rate)
     model.policy.exploration_epsilon = 0.0
@@ -175,7 +173,16 @@ class CommittedPlantExploration:
         policy_branches, _ = action_parts(actions)
         reuse = ready & (policy_branches == pending)
         requests = torch.where(ready & ~reuse, pending, 0)
-        conditional = policy.conditional_tiles(details["observations"], requests, plan=plan)
+        conditional, reach = policy.conditional_tiles(
+            details["observations"],
+            requests,
+            plan=plan,
+            memory=details["board_memory"],
+            return_reach=True,
+        )
+        details["reach_logits"] = torch.where(
+            (ready & ~reuse)[:, None, None], reach, details["reach_logits"]
+        )
         conditional = torch.where(reuse[:, None], details["tile_q"], conditional)
         tiles, _, fired, tile_q = select_q_tiles(
             conditional,

@@ -4,10 +4,10 @@ from math import isfinite
 
 import matplotlib.pyplot as plt
 
-from pvz_rl.envs.tile_scenarios import LEGACY_SKILLS, is_placement_skill
-from pvz_rl.learning.counterfactual_settings import OBJECTIVE as COUNTERFACTUAL_OBJECTIVE
+from pvz_rl.envs.tile_scenarios import LEGACY_SKILLS, is_bomb_skill, is_placement_skill
 from pvz_rl.learning.curriculum import TILE_STAGES
 from pvz_rl.learning.peashooter_rules import RULE_OBJECTIVE
+from pvz_rl.learning.training_requirements import CURRENT_OBJECTIVE
 
 
 def domain(row):
@@ -135,8 +135,11 @@ def report_charts(segments, cfg, output, save):
             continue
         pre = scope != "normal"
         title = (
-            scope.replace("_", " ").title() + " stage" if scope in TILE_STAGES
-            else "Legacy pre stage" if pre else "Normal training"
+            scope.replace("_", " ").title() + " stage"
+            if scope in TILE_STAGES
+            else "Legacy pre stage"
+            if pre
+            else "Normal training"
         )
         xvalue = (
             episodes
@@ -210,9 +213,7 @@ def report_charts(segments, cfg, output, save):
             [
                 (
                     "optimization.q_loss",
-                    "Tile preference + return loss"
-                    if cfg["training"].get("counterfactual")
-                    else "Balanced Q loss",
+                    "Balanced Q loss",
                 ),
                 ("optimization.selected_action_error", "Selected-action fitting error"),
                 ("optimization.placement_gap", "Best-tile minus sampled-tile Q"),
@@ -220,52 +221,77 @@ def report_charts(segments, cfg, output, save):
             ]
         )
         fitting = [
-            (key, title, lambda row, get=get: get(row) if row.get("fitting_objective") != RULE_OBJECTIVE else None)
-            if key == "optimization.q_loss" else (key, title, get)
+            (
+                key,
+                title,
+                lambda row, get=get: (
+                    get(row) if row.get("fitting_objective") != RULE_OBJECTIVE else None
+                ),
+            )
+            if key == "optimization.q_loss"
+            else (key, title, get)
             for key, title, get in fitting
         ]
-        add("counterfactual", "factual branch completion and pairwise fitting", fields([
-            ("counterfactual.roots", "Factual planting roots"),
-            ("counterfactual.completed", "Completed branch episodes (excluded from games)"),
-            ("counterfactual.branch_wins", "Branch victories"),
-            ("counterfactual.branch_failures", "Branch failures"),
-            ("counterfactual.shortages", "Unavailable alternative slots"),
-            ("counterfactual.pending", "Pending logical branches"),
-            ("counterfactual.resident", "Resident scratch branches"),
-            ("counterfactual.discarded", "Occupied-ground discards"),
-            ("counterfactual.resource_waits", "Resource wait decisions"),
-            ("counterfactual.queue_lag_ticks", "Maximum queue lag (ticks)"),
-            ("counterfactual.spill_bytes", "Disk spill volume (bytes)"),
-            ("counterfactual.simulated_ticks", "Branch simulation ticks"),
-            ("counterfactual.drain_seconds", "Final drain wall time (seconds)"),
-            ("optimization.comparison_loss", "Pairwise cross-entropy"),
-            ("optimization.feasibility_loss", "Feasibility cross-entropy"),
-            ("optimization.comparison_accuracy", "Comparison accuracy"),
-            ("optimization.feasibility_accuracy", "Feasibility accuracy"),
-        ]))
-        rule_fields = fields([
-            ("peashooter_teacher.rule_1", "Covered-board reinforcement labels"),
-            ("peashooter_teacher.rule_2", "Undefended-lane labels"),
-            ("peashooter_teacher.rule_3", "Endangered-lane assistance labels"),
-            ("peashooter_teacher.preferred_tiles", "Preferred tiles across labeled decisions"),
-            ("peashooter_teacher.mean_preferred_set_size", "Mean preferred-set size"),
-            ("peashooter_teacher.fallback_lanes", "Rule-2 fallback lanes"),
-            ("peashooter_teacher.blocked_lanes", "Fully occupied endangered lanes"),
-            ("peashooter_teacher.unlabeled", "Decisions without a preferred legal tile"),
-            ("peashooter_teacher.pending", "Pending oracle continuations"),
-            ("peashooter_teacher.queued_boards", "Boards awaiting coverage preparation"),
-            ("peashooter_teacher.completed_rollouts", "Completed oracle continuations (excluded from games)"),
-            ("peashooter_teacher.oracle_successes", "Successful oracle continuations"),
-            ("peashooter_teacher.oracle_timeouts", "Oracle timeouts"),
-            ("peashooter_teacher.simulated_ticks", "Oracle simulated ticks"),
-            ("peashooter_teacher.oracle_seconds", "Oracle wall time (seconds)"),
-            ("optimization.peashooter_cross_entropy_loss", "Column-distribution cross-entropy"),
-            ("optimization.peashooter_preferred_column_accuracy", "Preferred-column accuracy"),
-        ])
-        add("peashooter-rules", "Peashooter rule labels and visible-lane oracle", [
-            (key, title, lambda row, get=get: get(row) if row.get("fitting_objective") == RULE_OBJECTIVE else None)
-            for key, title, get in rule_fields
-        ])
+        if not pre:
+            add(
+                "reach",
+                "visible-zombie reach prediction",
+                fields(
+                    [
+                        ("optimization.reach_loss", "Reach categorical cross-entropy"),
+                        ("optimization.reach_boundary_accuracy", "Leftmost-column accuracy"),
+                        (
+                            "optimization.reach_mean_column_error",
+                            "Mean column error (outside = column 10)",
+                        ),
+                        ("optimization.reach_eligible_decisions", "Eligible retained decisions"),
+                        ("reach_tracking.tracked_zombies", "Tracked decision/zombie memberships"),
+                        (
+                            "reach_tracking.tracking_seconds",
+                            "Tracking and label preparation (seconds)",
+                        ),
+                        ("reach_tracking.storage_bytes", "Private reach storage (bytes)"),
+                    ]
+                ),
+            )
+        rule_fields = fields(
+            [
+                ("peashooter_teacher.rule_1", "Covered-board reinforcement labels"),
+                ("peashooter_teacher.rule_2", "Undefended-lane labels"),
+                ("peashooter_teacher.rule_3", "Endangered-lane assistance labels"),
+                ("peashooter_teacher.preferred_tiles", "Preferred tiles across labeled decisions"),
+                ("peashooter_teacher.mean_preferred_set_size", "Mean preferred-set size"),
+                ("peashooter_teacher.fallback_lanes", "Rule-2 fallback lanes"),
+                ("peashooter_teacher.blocked_lanes", "Fully occupied endangered lanes"),
+                ("peashooter_teacher.unlabeled", "Decisions without a preferred legal tile"),
+                ("peashooter_teacher.pending", "Pending oracle continuations"),
+                ("peashooter_teacher.queued_boards", "Boards awaiting coverage preparation"),
+                (
+                    "peashooter_teacher.completed_rollouts",
+                    "Completed oracle continuations (excluded from games)",
+                ),
+                ("peashooter_teacher.oracle_successes", "Successful oracle continuations"),
+                ("peashooter_teacher.oracle_timeouts", "Oracle timeouts"),
+                ("peashooter_teacher.simulated_ticks", "Oracle simulated ticks"),
+                ("peashooter_teacher.oracle_seconds", "Oracle wall time (seconds)"),
+                ("optimization.peashooter_cross_entropy_loss", "Column-distribution cross-entropy"),
+                ("optimization.peashooter_preferred_column_accuracy", "Preferred-column accuracy"),
+            ]
+        )
+        add(
+            "peashooter-rules",
+            "Peashooter rule labels and visible-lane oracle",
+            [
+                (
+                    key,
+                    title,
+                    lambda row, get=get: (
+                        get(row) if row.get("fitting_objective") == RULE_OBJECTIVE else None
+                    ),
+                )
+                for key, title, get in rule_fields
+            ],
+        )
         if pre:
             fitting = [
                 (
@@ -290,23 +316,31 @@ def report_charts(segments, cfg, output, save):
                             if value(r, "optimization.tile_ranking_loss") is not None
                             else value(r, "optimization.q_loss")
                         )
-                        if is_placement_skill(phase(r))
+                        if is_bomb_skill(phase(r))
                         else None
                     ),
                 ),
             )
-            fitting += fields([
-                ("optimization.attacker_cross_entropy_loss", "Attacker successful-set cross-entropy"),
-                ("optimization.attacker_softmax_temperature", "Attacker softmax temperature"),
-                ("cohort.attacker_selected_tile_distance", "Attacker selected tile Manhattan distance"),
-                ("cohort.attacker_fallback_rate", "Attacker fallback fraction"),
-                ("cohort.attacker_accuracy", "Attacker target accuracy"),
-                ("optimization.bomb_softmax_temperature", "Bomb softmax temperature"),
-                ("optimization.bomb_hinge_loss", "Bomb ranking hinge"),
-                ("optimization.bomb_distance_loss", "Bomb weighted expected distance"),
-                ("cohort.bomb_selected_tile_distance", "Selected tile Manhattan distance"),
-                ("tile_scenarios.generation_failures", "Scenario generation failures"),
-            ])
+            fitting += fields(
+                [
+                    (
+                        "optimization.attacker_cross_entropy_loss",
+                        "Attacker successful-set cross-entropy",
+                    ),
+                    ("optimization.attacker_softmax_temperature", "Attacker softmax temperature"),
+                    (
+                        "cohort.attacker_selected_tile_distance",
+                        "Attacker selected tile Manhattan distance",
+                    ),
+                    ("cohort.attacker_fallback_rate", "Attacker fallback fraction"),
+                    ("cohort.attacker_accuracy", "Attacker target accuracy"),
+                    ("optimization.bomb_softmax_temperature", "Bomb softmax temperature"),
+                    ("optimization.bomb_hinge_loss", "Bomb ranking hinge"),
+                    ("optimization.bomb_distance_loss", "Bomb weighted expected distance"),
+                    ("cohort.bomb_selected_tile_distance", "Selected tile Manhattan distance"),
+                    ("tile_scenarios.generation_failures", "Scenario generation failures"),
+                ]
+            )
         else:
             consistency_fields = fields(
                 [
@@ -329,7 +363,7 @@ def report_charts(segments, cfg, output, save):
                     lambda row, get=get: (
                         get(row)
                         if row.get("collection_policy") != "search_assisted"
-                        and row.get("fitting_objective") not in (COUNTERFACTUAL_OBJECTIVE, RULE_OBJECTIVE)
+                        and row.get("fitting_objective") not in (RULE_OBJECTIVE, CURRENT_OBJECTIVE)
                         else None
                     ),
                 )
@@ -349,8 +383,12 @@ def report_charts(segments, cfg, output, save):
                         )
                     ]
                 )
-        add("fitting", "fitting", fitting,
-            ("cohort.attacker_accuracy", "cohort.attacker_fallback_rate"))
+        add(
+            "fitting",
+            "fitting",
+            fitting,
+            ("cohort.attacker_accuracy", "cohort.attacker_fallback_rate"),
+        )
 
         accounting = fields(
             [
@@ -379,7 +417,9 @@ def report_charts(segments, cfg, output, save):
         add(
             "exploration",
             "exploration",
-            [] if is_placement_skill(scope) else fields(
+            []
+            if is_placement_skill(scope)
+            else fields(
                 [
                     ("tile_exploration_epsilon", "Tile exploration probability"),
                     ("optimization.tile_exploration_coins", "Tile exploration draws / cohort"),
@@ -492,12 +532,23 @@ def report_charts(segments, cfg, output, save):
                         cases = probe.get("cases", {}).get("attacker_pre", [])
                         if cases:
                             for key in ("actual_kill", "target_correct", "fallback"):
-                                row["attacker_" + key] = sum(bool(c.get(key)) for c in cases) / len(cases)
-                            for kind in cfg["training"]["tile_scenarios"]["attacker"]["provided_plants"]:
+                                row["attacker_" + key] = sum(bool(c.get(key)) for c in cases) / len(
+                                    cases
+                                )
+                            for kind in cfg["training"]["tile_scenarios"]["attacker"][
+                                "provided_plants"
+                            ]:
                                 for count in (1, 2):
-                                    group = [c for c in cases if c.get("supplied_plant") == kind and c.get("zombie_count") == count]
+                                    group = [
+                                        c
+                                        for c in cases
+                                        if c.get("supplied_plant") == kind
+                                        and c.get("zombie_count") == count
+                                    ]
                                     if group:
-                                        row[f"attacker/{kind}/{count}"] = sum(c["win"] for c in group) / len(group)
+                                        row[f"attacker/{kind}/{count}"] = sum(
+                                            c["win"] for c in group
+                                        ) / len(group)
                     rows.append(row)
                 validation.append((label, rows))
             spec = fields(
@@ -508,14 +559,26 @@ def report_charts(segments, cfg, output, save):
             )
 
             if scope == "attacker_pre":
-                spec += fields([
-                    ("attacker_actual_kill", "Engine-attributed task kills (includes fallback cases)"),
-                    ("attacker_target_correct", "Conservative target-set accuracy"),
-                    ("attacker_fallback", "Fallback case fraction"),
-                    *[(f"attacker/{kind}/{count}", f"{kind.replace('_', ' ').title()}, {count} zombie(s): task success")
-                      for kind in cfg["training"]["tile_scenarios"]["attacker"]["provided_plants"]
-                      for count in (1, 2)],
-                ])
+                spec += fields(
+                    [
+                        (
+                            "attacker_actual_kill",
+                            "Engine-attributed task kills (includes fallback cases)",
+                        ),
+                        ("attacker_target_correct", "Conservative target-set accuracy"),
+                        ("attacker_fallback", "Fallback case fraction"),
+                        *[
+                            (
+                                f"attacker/{kind}/{count}",
+                                f"{kind.replace('_', ' ').title()}, {count} zombie(s): task success",
+                            )
+                            for kind in cfg["training"]["tile_scenarios"]["attacker"][
+                                "provided_plants"
+                            ]
+                            for count in (1, 2)
+                        ],
+                    ]
+                )
 
             def vx(row):
                 return row.get("stage_episodes", row["episodes"])

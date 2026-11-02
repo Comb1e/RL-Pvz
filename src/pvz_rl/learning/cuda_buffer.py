@@ -29,7 +29,7 @@ from pvz_rl.learning.objective import (
 from pvz_rl.learning.source_actions import AppendReceipt, SourceActionRef
 from pvz_rl.monitoring.moments import RunningMoments
 
-TRAJECTORY_PROTOCOL = "pvz-rl/action-global-trajectory-v7"
+TRAJECTORY_PROTOCOL = "pvz-rl/shared-reach-trajectory-v1"
 
 
 def trajectory_dtype(cfg=None):
@@ -64,6 +64,11 @@ def trajectory_dtype(cfg=None):
             ("next_species", "u1"),
             ("species_coin", "?"),
             ("tile_coin", "?"),
+            ("reach_prediction", "<f2", (5, 9)),
+            ("reach_valid", "?"),
+            ("reach_offset", "<u8"),
+            ("reach_count", "<u2"),
+            ("reach_labels", "i1", 5),
             ("target", "<f4"),
             ("accepted", "?"),
             ("route", "u1"),
@@ -603,7 +608,12 @@ class CompleteGameBuffer:
             else:
                 references = episode_rows.get(key, [])
                 references.sort(key=lambda item: int(item[0][item[1]]["decision"]))
-                raw = np.asarray([candidate_block[candidate_index] for candidate_block, candidate_index in references])
+                raw = np.asarray(
+                    [
+                        candidate_block[candidate_index]
+                        for candidate_block, candidate_index in references
+                    ]
+                )
                 penalties, details = residual_sun_wait_penalties(raw, magnitude)
                 for (candidate_block, candidate_index), penalty in zip(
                     references, penalties, strict=True
@@ -666,7 +676,9 @@ class CompleteGameBuffer:
                 wins,
                 win_reward=self.cfg["reward"]["win_reward"],
                 loss_penalty=self.cfg["reward"]["loss_penalty"],
-                weight=self.cfg["reward"].get("win_time_weight", 0.3) if time_weight is None else time_weight,
+                weight=self.cfg["reward"].get("win_time_weight", 0.3)
+                if time_weight is None
+                else time_weight,
             )
             for (block, index, _, _won), value in zip(terminal, terminal_rewards, strict=True):
                 row = block[index]
@@ -688,8 +700,13 @@ class CompleteGameBuffer:
             endgame_terminal_rewards=terminal_rewards.tolist(),
             endgame_time_adjustments=adjustments.tolist(),
             endgame_time_weight=(
-                (self.cfg["reward"].get("win_time_weight", 0.3) if time_weight is None else time_weight)
-                if self.cfg else 0.0
+                (
+                    self.cfg["reward"].get("win_time_weight", 0.3)
+                    if time_weight is None
+                    else time_weight
+                )
+                if self.cfg
+                else 0.0
             ),
             # Compatibility alias for existing viewers and reports.
             victory_time_adjustments=adjustments.tolist(),
@@ -848,10 +865,8 @@ class CompleteGameBuffer:
                 online_tile_rows=int(
                     routed_counts[FitRoute.ACCEPTED] + routed_counts[FitRoute.TILE_INVALID]
                 ),
-                ema_tile_rows=int(routed_counts[FitRoute.ACCEPTED]),
-                skipped_ema_rows=int(
-                    routed_counts[FitRoute.SPECIES_INVALID] + routed_counts[FitRoute.TILE_INVALID]
-                ),
+                ema_tile_rows=0,
+                skipped_ema_rows=int(routed_counts.sum() - routed_counts[FitRoute.WAIT_RETURN]),
             ),
         )
         live = episode_count > 0
@@ -1062,6 +1077,11 @@ class CompleteGameBuffer:
             width = max(1, obj.block_rows // obj.n_envs) * obj.n_envs
             for at in range(0, obj.size, width):
                 rows = obj.take(np.arange(at, min(obj.size, at + width)))
+                if (
+                    np.any((rows["reach_labels"] < -1) | (rows["reach_labels"] > 9))
+                    or not np.isfinite(rows["reach_prediction"]).all()
+                ):
+                    raise ValueError("Invalid reach labels or predictions in trajectory")
                 if np.any(rows["action"] >= A.size) or np.any(rows["executed_action"] >= A.size):
                     raise ValueError("Corrupt trajectory action")
                 if not all(

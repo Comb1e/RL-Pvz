@@ -419,8 +419,7 @@ def benchmark(
     output.parent.mkdir(parents=True, exist_ok=True)
     cfg = load_config()
     cfg["training"].pop("peashooter_rules", None)
-    for stage in ("normal", "peashooter"):
-        cfg["training"].get("counterfactual", {}).get(stage, {})["enabled"] = False
+    cfg.setdefault("diagnostics", {})["reach_tracking"] = False
     from pvz_rl.config import validate_config
 
     validate_config(cfg)

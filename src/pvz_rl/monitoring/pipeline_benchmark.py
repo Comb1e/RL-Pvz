@@ -60,9 +60,7 @@ def measure(cfg, output, *, initial=None, seed=101, seconds=1800, trajectory=Non
     output.parent.mkdir(parents=True, exist_ok=True)
     cfg = copy.deepcopy(cfg)
     cfg["training"].pop("peashooter_rules", None)
-    if "counterfactual" in cfg["training"]:
-        for stage in ("normal", "peashooter"):
-            cfg["training"].get("counterfactual", {}).get(stage, {})["enabled"] = False
+    cfg.setdefault("diagnostics", {})["reach_tracking"] = False
     cfg["visualization"].update(enabled=False, live_enabled=False, demos=False, videos=False)
     cfg["training"].update(until_stage_complete=False, total_games=2 * cfg["training"]["n_envs"])
     torch.set_num_threads(cfg["training"]["torch_threads"])

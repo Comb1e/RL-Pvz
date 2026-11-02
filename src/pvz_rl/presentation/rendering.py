@@ -30,7 +30,7 @@ def render_context(values=None):
 
 
 def reward_label(value, pending=False):
-    """Accumulated training reward; absent on annotation-only public snapshots."""
+    """Accumulated training reward; absent on bare public snapshots."""
     label = f"Reward {value:+.6f}" if value is not None else "Reward —"
     return label + (" (time pending)" if pending else "")
 

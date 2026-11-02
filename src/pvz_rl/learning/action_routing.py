@@ -303,6 +303,7 @@ def compact_repeated_rows(rows, *, group_size=10):
 
 
 def workload_counts(rows):
+    """Autonomous Q routes; EMA forward inference is reserved for verified demos."""
     plans = route_indices(rows)
     return {
         "routes": {
@@ -310,6 +311,6 @@ def workload_counts(rows):
         },
         "online_species_rows": len(plans["species"]),
         "online_tile_rows": len(plans["tiles"]),
-        "ema_tile_rows": len(plans["ema"]),
-        "skipped_ema_rows": int(np.count_nonzero(rows["action"] != 0)) - len(plans["ema"]),
+        "ema_tile_rows": 0,
+        "skipped_ema_rows": int(np.count_nonzero(rows["action"] != 0)),
     }

@@ -263,6 +263,11 @@ def build_run_report(run, cfg=None):
         if hardware:
             images.append(hardware)
     metrics = [row for _, series in segments for row in series["training-metrics"]]
+    from pvz_rl.presentation.reach_view import report_reach_maps
+
+    reach_maps = report_reach_maps(metrics, output, _save)
+    if reach_maps:
+        images.append(reach_maps)
     status = {**(metrics[-1] if metrics else {}), **read_json(run / "status.json", {})}
     best = read_json(run / "best.json", {})
     visual_status = read_json(output / "status.json", {})
@@ -320,7 +325,7 @@ def build_run_report(run, cfg=None):
         if meta.get("family") in ("diagnostic",)
         else "Tile-skill training stage"
         if pre_stage(cfg)
-        else "One shared policy for Cherry Bomb, Peashooter, easy, standard, and shared stages"
+        else "One shared board encoder and conditional policy across all training stages"
     )
     completion = (
         "Curriculum incomplete" if status.get("curriculum_incomplete") else "Curriculum status"
@@ -337,16 +342,19 @@ def build_run_report(run, cfg=None):
     )
     skills = status.get("tile_scenarios") or {}
     has_pre = (
-        any(domain(row) != "normal" for row in metrics) or pre_stage(cfg)
+        any(domain(row) != "normal" for row in metrics)
+        or pre_stage(cfg)
         or skills.get("phase") in TILE_STAGES
     )
     mastered = ", ".join(
-        skill for skill in skills.get("stage_order") or []
+        skill
+        for skill in skills.get("stage_order") or []
         if skills.get("scores", {}).get(skill, -1) >= required_validation_wins(cfg, skill)
     )
     mastery = (
         f"Joint mastery: {escape(skills.get('phase') == 'complete')}. "
-        if skills.get("stage_order") is None else f"Completed stages: {escape(mastered or 'none')}. "
+        if skills.get("stage_order") is None
+        else f"Completed stages: {escape(mastered or 'none')}. "
     )
     pre_progress = (
         (
@@ -387,7 +395,12 @@ def build_run_report(run, cfg=None):
         run_progress += "</table></details>"
     probes = [row for _, series in segments for row in series.get("tile-skill-probes", [])]
     if probes:
-        run_progress += "<details><summary>Tile-stage validation and transitions</summary><table><tr><th>Stage</th><th>Completed episodes</th><th>Cherry Bomb</th><th>Peashooter</th><th>Training stage</th></tr>"
+        run_progress += (
+            "<details><summary>Tile-stage validation and transitions</summary><table><tr>"
+            "<th>Stage</th><th>Completed episodes</th>"
+            + "".join(f"<th>{escape(skill)}</th>" for skill in TILE_STAGES)
+            + "<th>Training stage</th></tr>"
+        )
         for probe in probes:
             counts = {skill: len(rows) for skill, rows in probe.get("cases", {}).items()}
             run_progress += (
@@ -395,7 +408,8 @@ def build_run_report(run, cfg=None):
                 f"<td>{probe.get('stage_episodes', probe['episodes'])}</td>"
                 + "".join(
                     f"<td>{probe['scores'][skill]}/{counts.get(skill, cfg['curriculum']['probe_cases'])}</td>"
-                    if skill in probe["scores"] else "<td>—</td>"
+                    if skill in probe["scores"]
+                    else "<td>—</td>"
                     for skill in TILE_STAGES
                 )
                 + f"<td>{escape(probe.get('previous'))} → {escape(probe.get('next'))}</td></tr>"

@@ -43,10 +43,10 @@ def validate_rule_settings(cfg):
             raise ValueError(f"Peashooter {key} must be a nonnegative integer")
     if "n_envs" in settings and (type(settings["n_envs"]) is not int or settings["n_envs"] < 1):
         raise ValueError("Peashooter n_envs must be a positive integer")
-    if "snapshot_cache_mib" in settings and (type(settings["snapshot_cache_mib"]) is not int or settings["snapshot_cache_mib"] < 1):
+    if "snapshot_cache_mib" in settings and (
+        type(settings["snapshot_cache_mib"]) is not int or settings["snapshot_cache_mib"] < 1
+    ):
         raise ValueError("Peashooter snapshot_cache_mib must be a positive integer")
-    if cfg["training"].get("counterfactual", {}).get("peashooter", {}).get("enabled"):
-        raise ValueError("Peashooter rule labels and counterfactual fitting are mutually exclusive")
 
 
 def lane_facts(snapshot):
@@ -60,8 +60,10 @@ def lane_facts(snapshot):
         if zombie["health"] > 0 and not zombie["headless"]:
             row = zombie["row"]
             threats[row] = min(threats.get(row, zombie["x"]), zombie["x"])
-    legal = [[r * A.cols + c for c in range(A.cols) if r * A.cols + c not in occupied]
-             for r in range(A.rows)]
+    legal = [
+        [r * A.cols + c for c in range(A.cols) if r * A.cols + c not in occupied]
+        for r in range(A.rows)
+    ]
     return counts, threats, legal
 
 
@@ -76,7 +78,9 @@ def choose_rule(snapshot, covered):
     empty = [r for r in threats if counts[r] == 0]
     if empty:
         closest = min(threats[r] for r in empty)
-        return dict(rule=2, tiles=[], rows=[r for r in empty if threats[r] == closest], blocked=blocked)
+        return dict(
+            rule=2, tiles=[], rows=[r for r in empty if threats[r] == closest], blocked=blocked
+        )
     endangered = [r for r in threats if not covered.get(r, False) and legal[r]]
     if endangered:
         closest = min(threats[r] for r in endangered)
@@ -111,12 +115,21 @@ def lane_snapshot(snapshot, row, rules):
         result[name] = [e for e in result[name] if e["row"] == row]
     zombies = result["zombies"]
     result["level"] = dict(
-        name="peashooter-visible-lane", initial_sun=result["sun"], plants=[], mowers=False,
-        spawns=[dict(tick=result["tick"], zombie_type=z["kind"], row=row, x=max(0, z["x"]), wave=1)
-                for z in zombies],
+        name="peashooter-visible-lane",
+        initial_sun=result["sun"],
+        plants=[],
+        mowers=False,
+        spawns=[
+            dict(tick=result["tick"], zombie_type=z["kind"], row=row, x=max(0, z["x"]), wave=1)
+            for z in zombies
+        ],
     )
-    result.update(spawn_index=len(zombies), defeated=sum(z["headless"] for z in zombies),
-                  wave=int(bool(zombies)), status="running" if any(not z["headless"] for z in zombies) else "won")
+    result.update(
+        spawn_index=len(zombies),
+        defeated=sum(z["headless"] for z in zombies),
+        wave=int(bool(zombies)),
+        status="running" if any(not z["headless"] for z in zombies) else "won",
+    )
     for mower in result["mowers"]:
         mower["state"] = "spent"
     game = restored_game(result, rules)
@@ -159,8 +172,12 @@ class PeashooterObjective:
             if self.label(row) is not None:
                 counts[1, int(row["accepted"])] += 1
                 self.examples += 1
-        self.weights = outcome_weights(counts, device=device, dtype=torch.float32,
-            accepted_share=teacher.cfg["training"]["objective"]["accepted_outcome_share"])
+        self.weights = outcome_weights(
+            counts,
+            device=device,
+            dtype=torch.float32,
+            accepted_share=teacher.cfg["training"]["objective"]["accepted_outcome_share"],
+        )
 
     def label(self, row):
         key = tuple(int(row[k]) for k in ("env", "episode", "decision"))
@@ -181,9 +198,15 @@ class PeashooterObjective:
             obs = collate_observations(observations, policy.device)
             branch = policy.cfg["environment"]["plants"].index("peashooter") + 1
             values = policy.fitting_tiles(obs, torch.full_like(at, branch), rows=at)
-            losses, correct = column_cross_entropy(values, preferred,
-                decay=self.teacher.settings["column_decay"], temperature=self.teacher.settings["softmax_temperature"])
-            accepted = torch.as_tensor(np.array(rows["accepted"][selected]), device=policy.device).long()
+            losses, correct = column_cross_entropy(
+                values,
+                preferred,
+                decay=self.teacher.settings["column_decay"],
+                temperature=self.teacher.settings["softmax_temperature"],
+            )
+            accepted = torch.as_tensor(
+                np.array(rows["accepted"][selected]), device=policy.device
+            ).long()
             weights = self.weights[1, accepted]
             loss = (losses * weights).sum()
             metrics = torch.stack((loss.detach(), (correct * weights).sum(), weights.sum()))

@@ -1,11 +1,10 @@
-"""Route-aware flat fitting with whole-cohort coefficients and detached EMA."""
+"""Joint shared-encoder Q fitting; verified demos retain their separate objectives."""
 
 from dataclasses import dataclass
 
 import numpy as np
 import torch
 
-from pvz_rl.envs.actions import ActionSchema as A
 from pvz_rl.envs.encoding import collate_observations
 from pvz_rl.learning.action_routing import route_indices
 from pvz_rl.learning.objective import (
@@ -15,9 +14,6 @@ from pvz_rl.learning.objective import (
 )
 from pvz_rl.policy.sequential_q import (
     action_parts,
-    balanced_q_loss,
-    candidate_maxima,
-    observation_tile_masks,
     outcome_weights,
 )
 
@@ -50,199 +46,143 @@ def batch_loss(
     observations,
     fields=None,
     *,
-    teacher,
+    teacher=None,
     consistency_counts=None,
     coefficients=None,
     fit_stage="joint",
     return_forward=False,
+    reach_decision_count=None,
+    reach_enabled=False,
+    demonstration=False,
 ):
-    """CPU-planned routes skip all irrelevant encoders, including rejected EMA."""
-    device = next(policy.parameters()).device
+    """One encoder pass; attempted-branch Q calibration and optional factual reach."""
+    from pvz_rl.learning.reach_objective import reach_loss
+    from pvz_rl.policy.sequential_q import action_groups
+
+    device = policy.device
     observations = collate_observations(observations, device).reshape(-1)
-    trusted = fields is not None and getattr(fields, "trusted", False)
-    if not trusted:
-        active = np.flatnonzero(rows["active"])
-        rows = rows[active]
-        observations = observations[torch.as_tensor(active, device=device)]
-        cpu_plan = route_indices(rows)
-        cpu_plan["ema_species"] = np.searchsorted(cpu_plan["species"], cpu_plan["ema"])
-        cpu_plan["ema_tiles"] = np.searchsorted(cpu_plan["tiles"], cpu_plan["ema"])
-        plan = {k: torch.as_tensor(v, device=device, dtype=torch.long) for k, v in cpu_plan.items()}
-    else:
-        plan = {k: v.to(device=device) for k, v in fields.plan.items()}
-
-    def tensor(name, dtype):
-        value = fields[name] if trusted else torch.as_tensor(np.array(rows[name]), device=device)
-        return value.to(device=device, dtype=dtype).reshape(-1)
-
-    actions = tensor("action", torch.long)
-    accepted = tensor("accepted", torch.bool)
-    targets = tensor("target", torch.float32)
-    routes = tensor("route", torch.long)
-    if not len(actions):
-        zero = (
-            torch.zeros((), device=device, requires_grad=True)
-            if fit_stage == "tile_only"
-            else next(policy.parameters()).sum() * 0
-        )
-        policy._last_selected_loss = policy._last_species_consistency_loss = zero.detach()
-        policy._last_species_consistency_metrics = zero.new_zeros(4, dtype=torch.float64)
-        result = zero, zero.new_empty(0), zero.new_empty(0)
-        return (
-            (*result, FittingForwardResult(zero.new_empty((0, 10)), zero.new_empty((0, 45))))
-            if return_forward
-            else result
-        )
-    branch, positions = action_parts(actions)
+    active = np.flatnonzero(rows["active"])
+    if len(active) != len(rows):
+        rows, observations = rows[active], observations[torch.as_tensor(active, device=device)]
+    plan = route_indices(rows)
+    actions = torch.as_tensor(np.array(rows["action"]), device=device, dtype=torch.long)
+    accepted = torch.as_tensor(np.array(rows["accepted"]), device=device, dtype=torch.bool)
+    targets = torch.as_tensor(np.array(rows["target"]), device=device, dtype=torch.float32)
+    routes = torch.as_tensor(np.array(rows["route"]), device=device, dtype=torch.long)
+    branches, positions = action_parts(actions)
     objective = policy.cfg["training"]["objective"]
-    species_rows, tile_rows, ema_rows = plan["species"], plan["tiles"], plan["ema"]
-    if fit_stage == "tile_only":
-        if not len(tile_rows):
-            zero = torch.zeros((), device=device, requires_grad=True)
-            policy._last_selected_loss = policy._last_species_consistency_loss = zero.detach()
-            policy._last_species_consistency_metrics = zero.new_zeros(4, dtype=torch.float64)
-            result = zero, zero.new_empty(0), zero.new_empty(0)
-            if return_forward:
-                return (*result, FittingForwardResult(zero.new_empty((0, 10)), zero.new_empty((0, 45))))
-            return result
-        tile_actions = actions[tile_rows]
-        tile_accepted = accepted[tile_rows]
-        tile_targets = targets[tile_rows]
-        tile_routes = routes[tile_rows]
-        tile_tables = policy.fitting_tiles(observations, branch[tile_rows], rows=tile_rows)
-        tile_selected = tile_tables.float().gather(1, positions[tile_rows, None]).flatten()
-        tile_minimum = tile_tables.detach().float().amin(-1)
-        fitting_targets = selected_action_targets(
-            tile_targets, tile_routes, tile_minimum, objective["invalid_action_q_offset"]
-        )
-        loss, selected_errors = balanced_q_loss(
-            tile_selected,
-            fitting_targets,
-            tile_actions,
+    n = len(rows)
+    species_rows = torch.as_tensor(
+        plan["species"] if fit_stage == "joint" else [], device=device, dtype=torch.long
+    )
+    tile_rows = torch.as_tensor(plan["tiles"], device=device, dtype=torch.long)
+    errors = torch.zeros(n, device=device)
+    heads = torch.zeros(n, device=device)
+    dense_species = torch.zeros((n, 10), device=device, dtype=torch.bfloat16)
+    dense_tiles = torch.zeros((n, 45), device=device, dtype=torch.bfloat16)
+    features = None
+    with policy.board_context(observations) as memory:
+        if len(species_rows):
+            # The complete board batch was encoded once, including tile-only routes.
+            species = policy.species_head(memory[0][species_rows, 0])
+            dense_species = dense_species.index_copy(0, species_rows, species)
+            prediction = species.float().gather(1, branches[species_rows, None]).flatten()
+            expected = selected_action_targets(
+                targets[species_rows],
+                routes[species_rows],
+                species.detach().float().amin(-1),
+                objective["invalid_action_q_offset"],
+            )
+            include = torch.ones_like(prediction)
+            if demonstration:
+                include = (routes[species_rows] != 1).to(prediction.dtype)
+            errors = errors.index_add(0, species_rows, (prediction - expected).square() * include)
+            heads = heads.index_add(0, species_rows, include)
+        if len(tile_rows):
+            features = policy.tile_features(
+                observations, branches[tile_rows], rows=tile_rows, memory=memory
+            )
+            tables = policy.tile_head(features).squeeze(-1)
+            dense_tiles = dense_tiles.index_copy(0, tile_rows, tables)
+            prediction = tables.float().gather(1, positions[tile_rows, None]).flatten()
+            expected = selected_action_targets(
+                targets[tile_rows],
+                routes[tile_rows],
+                tables.detach().float().amin(-1),
+                objective["invalid_action_q_offset"],
+            )
+            errors = errors.index_add(0, tile_rows, (prediction - expected).square())
+            heads = heads.index_add(0, tile_rows, torch.ones_like(prediction))
+    errors = errors / heads.clamp_min(1)
+    weights = (
+        coefficients.selected
+        if coefficients is not None
+        else outcome_weights(
             counts,
-            accepted=tile_accepted,
+            device=device,
+            dtype=torch.float32,
             accepted_share=objective["accepted_outcome_share"],
-            weights=coefficients.selected if coefficients is not None else None,
         )
-        maxima = (
-            tile_tables.float().max(-1).values
-            if trusted
-            else candidate_maxima(
-                tile_tables.float(),
-                observation_tile_masks(observations[tile_rows]),
-                branch[tile_rows],
+    )
+    q_loss = (errors * weights[action_groups(actions), accepted.long()]).sum()
+    loss = q_loss
+    policy._last_reach_metrics = torch.zeros(5, device=device, dtype=torch.float64)
+    if (
+        reach_enabled
+        and features is not None
+        and np.any(np.array(rows["reach_labels"])[plan["tiles"]] >= 0)
+    ):
+        labels = np.array(rows["reach_labels"])[plan["tiles"]]
+        weight = policy.cfg["training"].get("reach_prediction_weight", 0.1)
+        with torch.set_grad_enabled(torch.is_grad_enabled() and weight > 0):
+            auxiliary, metrics = reach_loss(
+                policy.reach_values(features), labels, decision_count=reach_decision_count
             )
-        )
-        gap = (maxima - tile_selected).detach()
-        policy._last_selected_loss = loss.detach()
-        policy._last_species_consistency_loss = loss.detach() * 0
-        policy._last_species_consistency_metrics = loss.new_zeros(4, dtype=torch.float64)
-        result = loss, selected_errors, gap
-        if return_forward:
-            dense_species = loss.new_zeros(len(actions), 10)
-            dense_tiles = tile_tables.new_zeros(len(actions), A.tiles)
-            dense_tiles = dense_tiles.index_copy(0, tile_rows, tile_tables)
-            return (*result, FittingForwardResult(dense_species, dense_tiles))
-        return result
-    if fit_stage != "joint":
-        raise ValueError("fit_stage must be tile_only or joint")
-    selected = torch.zeros(len(actions), device=device, dtype=torch.float32)
-    minimum_q = torch.zeros_like(selected)
-    species = None
-    if len(species_rows):
-        species = policy.species_values(observations[species_rows])
-        predictions = species.float().gather(1, branch[species_rows, None]).flatten()
-        selected = selected.index_copy(0, species_rows, predictions)
-        minimum_q = minimum_q.index_copy(0, species_rows, species.detach().float().amin(-1))
-    tile_forward = (
-        policy.fitting_tiles
-        if trusted and hasattr(policy, "fitting_tiles")
-        else policy.conditional_tiles
-    )
-    tables = None
-    if len(tile_rows):
-        tables = tile_forward(observations, branch[tile_rows], rows=tile_rows)
-        predictions = tables.float().gather(1, positions[tile_rows, None]).flatten()
-        selected = selected.index_copy(0, tile_rows, predictions)
-        minimum_q = minimum_q.index_copy(0, tile_rows, tables.detach().float().amin(-1))
-    fitting_targets = selected_action_targets(
-        targets, routes, minimum_q, objective["invalid_action_q_offset"]
-    )
-    loss, selected_errors = balanced_q_loss(
-        selected,
-        fitting_targets,
-        actions,
-        counts,
-        accepted=accepted,
-        accepted_share=objective["accepted_outcome_share"],
-        weights=coefficients.selected if coefficients is not None else None,
-    )
-    policy._last_selected_loss = loss.detach()
-    consistency = loss.detach() * 0
-    policy._last_species_consistency_metrics = selected.new_zeros(4, dtype=torch.float64)
-    if len(ema_rows) and objective["species_consistency_weight"]:
-        online = tables.index_select(0, plan["ema_tiles"])
-        current_species = species.index_select(0, plan["ema_species"]).float()
-        masks = None if trusted else observation_tile_masks(observations[ema_rows])
+        if weight:
+            loss = loss + weight * auxiliary
+        policy._last_reach_metrics = metrics
+    consistency = q_loss.detach() * 0
+    policy._last_species_consistency_metrics = q_loss.new_zeros(4, dtype=torch.float64)
+    if demonstration and len(plan["ema"]) and objective["species_consistency_weight"]:
+        ema = torch.as_tensor(plan["ema"], device=device, dtype=torch.long)
+        online = dense_tiles[ema]
         with torch.no_grad():
-            ema_forward = (
-                teacher.fitting_tiles
-                if trusted and hasattr(teacher, "fitting_tiles")
-                else teacher.conditional_tiles
-            )
-            ema_tiles = ema_forward(observations, branch[ema_rows], rows=ema_rows)
             expected, _, evaluation_gap = species_consistency_targets(
-                online, ema_tiles, masks, branch[ema_rows]
+                online,
+                teacher.conditional_tiles(observations, branches[ema], rows=ema),
+                None,
+                branches[ema],
             )
-            expected = expected.float()
-            residual = (
-                current_species.gather(1, branch[ema_rows, None]).flatten() - expected
-            ).abs()
-            policy._last_species_consistency_metrics = torch.stack(
-                (
-                    residual.double().sum(),
-                    (residual > objective["species_consistency_huber_delta"]).double().sum(),
-                    evaluation_gap.double().sum(),
-                    residual.new_tensor(len(ema_rows), dtype=torch.float64),
-                )
-            )
-        denominators = consistency_counts
-        if coefficients is None:
-            denominators = (
-                torch.as_tensor(counts)[1:].clone()
-                if consistency_counts is None
-                else torch.as_tensor(consistency_counts).clone()
-            )
-            denominators[:, 0] = 0
+        current = dense_species[ema].float()
         consistency = species_consistency_loss(
-            current_species,
-            expected,
-            actions[ema_rows],
-            accepted[ema_rows],
-            denominators,
+            current,
+            expected.float(),
+            actions[ema],
+            accepted[ema],
+            consistency_counts,
             delta=objective["species_consistency_huber_delta"],
             accepted_share=objective["accepted_outcome_share"],
             weights=coefficients.consistency if coefficients is not None else None,
         )
         loss = loss + objective["species_consistency_weight"] * consistency
-    policy._last_species_consistency_loss = consistency.detach()
-    gap = selected.new_empty(0)
-    if len(tile_rows):
-        maxima = (
-            tables.float().max(-1).values
-            if trusted
-            else candidate_maxima(
-                tables.float(), observation_tile_masks(observations[tile_rows]), branch[tile_rows]
+        residual = (current.gather(1, branches[ema, None]).flatten() - expected).abs().detach()
+        policy._last_species_consistency_metrics = torch.stack(
+            (
+                residual.double().sum(),
+                (residual > objective["species_consistency_huber_delta"]).double().sum(),
+                evaluation_gap.double().sum(),
+                residual.new_tensor(len(ema), dtype=torch.float64),
             )
         )
-        gap = maxima - selected[tile_rows]
-    result = loss, selected_errors, gap.detach()
-    if return_forward:
-        dense_species = (selected if species is None else species).new_zeros(len(actions), 10)
-        dense_tiles = (selected if tables is None else tables).new_zeros(len(actions), 45)
-        if species is not None:
-            dense_species = dense_species.index_copy(0, species_rows, species)
-        if tables is not None:
-            dense_tiles = dense_tiles.index_copy(0, tile_rows, tables)
-        return (*result, FittingForwardResult(dense_species, dense_tiles))
-    return result
+    if not loss.requires_grad:
+        loss = loss + next(policy.parameters()).sum() * 0
+    policy._last_selected_loss = q_loss.detach()
+    policy._last_species_consistency_loss = consistency.detach()
+    gap = loss.new_empty(0)
+    if len(tile_rows):
+        gap = (
+            tables.float().max(-1).values
+            - tables.float().gather(1, positions[tile_rows, None]).flatten()
+        )
+    result = loss, errors.detach(), gap.detach()
+    return (*result, FittingForwardResult(dense_species, dense_tiles)) if return_forward else result

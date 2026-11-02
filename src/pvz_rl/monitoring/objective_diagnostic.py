@@ -127,8 +127,7 @@ def run(checkpoint, output):
     output.mkdir(parents=True, exist_ok=False)
     cfg = load_config()
     cfg["training"].pop("peashooter_rules", None)
-    for stage in ("normal", "peashooter"):
-        cfg["training"].get("counterfactual", {}).get(stage, {})["enabled"] = False
+    cfg.setdefault("diagnostics", {})["reach_tracking"] = False
     cfg["training"].update(n_envs=16, total_games=16)
     cfg["environment"]["cutoff_seconds"] = 30
     cfg["visualization"].update(enabled=False, live_enabled=False)

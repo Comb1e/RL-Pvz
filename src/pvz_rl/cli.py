@@ -61,7 +61,9 @@ def training_options(parser):
         help="total completed games across all workers; scenario episodes for a selected tile stage",
     )
     parser.add_argument("--n-envs", type=int, help="Peashooter/normal cohort size")
-    parser.add_argument("--cherry-bomb-envs", type=int, help="cohort size for both Cherry Bomb stages")
+    parser.add_argument(
+        "--cherry-bomb-envs", type=int, help="cohort size for both Cherry Bomb stages"
+    )
     parser.add_argument("--device", choices=("cuda",))
     parser.add_argument("--simulator", choices=("cuda",))
     parser.add_argument("--batch-size", type=int)
@@ -176,7 +178,10 @@ def configured(args):
             cfg["training"][key] = value
     if getattr(args, "cherry_bomb_envs", None) is not None:
         cfg["training"]["tile_scenarios"]["cherry_bomb_n_envs"] = args.cherry_bomb_envs
-    if getattr(args, "n_envs", None) is not None and cfg["curriculum"].get("run_stage") == "peashooter":
+    if (
+        getattr(args, "n_envs", None) is not None
+        and cfg["curriculum"].get("run_stage") == "peashooter"
+    ):
         if cfg["training"].get("peashooter_rules"):
             cfg["training"]["peashooter_rules"]["n_envs"] = args.n_envs
     if getattr(args, "games", None) is not None:
@@ -255,61 +260,8 @@ def main(argv=None):
     continuation.add_argument(
         "--init-from",
         type=Path,
-        help="load compatible weights (including unfinished annotation .progress.pt) into a fresh experiment or stage",
+        help="load shared-encoder weights into a fresh experiment or stage",
     )
-    annotate = subs.add_parser(
-        "annotate", help="open the on-demand reachable-state annotation studio"
-    )
-    common(annotate)
-    annotate.add_argument(
-        "--data-dir",
-        type=Path,
-        default=Path("data"),
-        help="directory for annotation JSONL and manifest",
-    )
-    annotate.add_argument(
-        "--port", type=int, default=0, help="loopback port; 0 selects an ephemeral port"
-    )
-    annotate.add_argument(
-        "--seed", type=int, help="sampler seed; omitted means fresh system entropy"
-    )
-    annotate.add_argument(
-        "--family",
-        choices=("preset", "diagnostic", "redistributed", "faster", "concentrated"),
-        help="scenario family; defaults to the annotation profile",
-    )
-    annotate.add_argument(
-        "--max-steps", type=int, help="inclusive upper bound of random simulation action steps"
-    )
-    annotate.add_argument("--max-attempts", type=int, help="maximum map-generation attempts")
-    fit_annotations = subs.add_parser(
-        "fit-tile-annotations", help="pretrain the conditional tile Transformer from annotations"
-    )
-    common(fit_annotations)
-    fit_annotations.add_argument("--annotations", required=True, type=Path)
-    fit_annotations.add_argument("--output", required=True, type=Path)
-    annotation_source = fit_annotations.add_mutually_exclusive_group()
-    annotation_source.add_argument(
-        "--init-from",
-        type=Path,
-        help="fresh fit from compatible weights or unfinished .progress.pt",
-    )
-    annotation_source.add_argument(
-        "--resume-from",
-        type=Path,
-        help="restore matching progress, Adam, RNG and L2 phase; inherit saved fitting settings",
-    )
-    fit_annotations.add_argument("--device", choices=("cpu", "cuda"), default="cuda")
-    fit_annotations.add_argument(
-        "--passes", type=int, help="additional passes this invocation, also on resume; 0 unlimited"
-    )
-    fit_annotations.add_argument("--learning-rate", type=float)
-    fit_annotations.add_argument("--batch-size", type=int)
-    fit_annotations.add_argument("--margin", type=float)
-    fit_annotations.add_argument(
-        "--l2-strength", type=float, help="post-training validation-phase L2 strength"
-    )
-    fit_annotations.add_argument("--seed", type=int)
     demo = subs.add_parser(
         "record-demo",
         help="open one easy seed-1000 game and record a verified human transition archive",
@@ -337,7 +289,7 @@ def main(argv=None):
     initialize.add_argument(
         "--init-from",
         type=Path,
-        help="annotation weights, unfinished .progress.pt, or compatible weight-only checkpoint",
+        help="compatible shared-encoder weight-only checkpoint",
     )
     evaluation = subs.add_parser("evaluate", help="evaluate a checkpoint or non-learning baseline")
     common(evaluation)
@@ -446,7 +398,7 @@ def main(argv=None):
         "benchmark-gpu",
         "initialize-demo",
         "doctor",
-    ) or (args.command == "fit-tile-annotations" and args.device == "cuda"):
+    ):
         import torch
 
         if args.gpu is not None or torch.cuda.is_available():
@@ -465,48 +417,6 @@ def main(argv=None):
                     seed=args.seed,
                     speed=args.speed,
                     cfg=cfg,
-                ),
-                indent=2,
-            )
-        )
-    elif args.command == "annotate":
-        from pvz_rl.presentation.annotation_viewer import serve_annotations
-
-        settings = cfg["training"].get("annotation", {})
-        profile_seed = settings.get("sampling_seed", "random")
-        serve_annotations(
-            args.data_dir / "tile-annotations.jsonl",
-            cfg=cfg,
-            port=args.port,
-            seed=args.seed
-            if args.seed is not None
-            else (None if profile_seed == "random" else profile_seed),
-            family=settings.get("sampling_family", "preset")
-            if args.family is None
-            else args.family,
-            max_steps=args.max_steps,
-            max_attempts=settings.get("sampling_max_attempts", 100)
-            if args.max_attempts is None
-            else args.max_attempts,
-        )
-    elif args.command == "fit-tile-annotations":
-        from pvz_rl.learning.annotation_fit import fit_annotations
-
-        print(
-            json.dumps(
-                fit_annotations(
-                    args.annotations,
-                    args.output,
-                    cfg=cfg,
-                    init_from=args.init_from,
-                    resume_from=args.resume_from,
-                    device=args.device,
-                    passes=args.passes,
-                    learning_rate=args.learning_rate,
-                    batch_size=args.batch_size,
-                    margin=args.margin,
-                    l2_strength=args.l2_strength,
-                    seed=args.seed,
                 ),
                 indent=2,
             )
@@ -673,7 +583,8 @@ def main(argv=None):
         else:
             seeds = (
                 random_validation_seeds(cfg, args.split, args.count)
-                if args.split == "validation" else seed_values(cfg, args.split, args.count)
+                if args.split == "validation"
+                else seed_values(cfg, args.split, args.count)
             )
         levels = args.levels or cfg["evaluation"]["ood_levels" if args.split == "ood" else "levels"]
         details = metadata(

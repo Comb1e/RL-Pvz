@@ -356,6 +356,10 @@ def draw_view(surface, packets, activity, *, renderers, boards, pending=(), coun
                     ),
                 )
         table_y = top + 126
+        if focus is not None:
+            from pvz_rl.presentation.reach_view import draw_reach
+
+            table_y += draw_reach(surface, small, decision, x + 12, table_y, cell_w - 24)
         row_height = 22
         if table_y + row_height > y + cell_h - 27:
             continue  # Compact panels reserve their space for the board and decision.

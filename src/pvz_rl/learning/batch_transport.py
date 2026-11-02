@@ -76,7 +76,7 @@ def fitting_metadata(rows, device, *, plan=None):
 
 
 def collate_fitting_observations(observations, cfg, device):
-    """Shared masked width buckets for list-backed annotation/demo records."""
+    """Shared masked width buckets for list-backed demonstration records."""
     batch = collate_observations(observations, "cpu")
     width = batch.entities.shape[1]
     buckets = cfg["training"]["performance"]["fit_entity_buckets"]
@@ -322,7 +322,7 @@ class FittingSpool(PreparedPlans):
 
 
 class PreparedDataSource(PreparedPlans):
-    """One-time canonical preparation for list-backed demo/annotation inputs.
+    """One-time canonical preparation for list-backed demonstration inputs.
 
     The same ragged storage budget, padding and fenced transport serve all
     fitters. Order is caller-owned; preparation never shuffles or compacts.

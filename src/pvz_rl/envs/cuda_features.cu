@@ -1,6 +1,6 @@
 // Uses the game's integer structs/rule constants. Only documented public fields
-// contribute to the policy vector. Schedules, IDs and task names are never
-// read.
+// contribute to the policy vector. IDs populate a separate private tracking slab;
+// schedules, identities and task names never enter policy inputs.
 __device__ double asset_value(Header &h, Plant *p) {
   double value = h.sun;
   for (I j = 0; j < h.np; j++) value += (double)PC[p[j].kind] * p[j].health / PH[p[j].kind];
@@ -62,7 +62,7 @@ __device__ int shot_order(const Shot &a, const Shot &b) {
 extern "C" __global__ void encode_canonical(const I *headers, const I *plants,
     const I *zombies, const I *projectiles, const I *mowers, const I *cooldowns,
     int *records, int *entities, bool *mask, float *globals, double *assets,
-    I *summary, I n) {
+    I *summary, I *identities, I n) {
   I i = blockIdx.x;
   if (i >= n) return;
   Header h = ((Header *)headers)[i];
@@ -87,6 +87,8 @@ extern "C" __global__ void encode_canonical(const I *headers, const I *plants,
   int *out = entities + i * ENTITY_LIMIT * ENTITY_WIDTH;
   I staged_count = 5 + h.np + h.nz;
   I kept = lo(staged_count + h.nq, ENTITY_LIMIT);
+  for (I j = threadIdx.x; j < ENTITY_LIMIT; j += blockDim.x)
+    identities[i * ENTITY_LIMIT + j] = 0;
   if (!threadIdx.x) {
     float *g = globals + i * GLOBAL_WIDTH;
     g[O_sun] = (double)h.sun / COST_SCALE;
@@ -127,6 +129,10 @@ extern "C" __global__ void encode_canonical(const I *headers, const I *plants,
     }
     if (rank < ENTITY_LIMIT)
       for (I f = 0; f < ENTITY_WIDTH; f++) out[rank * ENTITY_WIDTH + f] = own[f];
+    if (rank < ENTITY_LIMIT && j >= 5 + h.np) {
+      Zombie a = z[j - 5 - h.np];
+      if (!a.headless && a.health > 0) identities[i * ENTITY_LIMIT + rank] = a.id;
+    }
   }
   I available = ENTITY_LIMIT - staged_count;
   for (I j = threadIdx.x; j < h.nq && available > 0; j += blockDim.x) {

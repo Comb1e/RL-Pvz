@@ -199,7 +199,9 @@ def measure(cfg, *, repeats=3, rows_per_width=16, trajectory=None, initial=None,
                         finally:
                             with_transport.close()
                         torch.nn.utils.clip_grad_norm_(
-                            model.master_parameters("tile") if tile_only else model.master_parameters(),
+                            model.master_parameters("tile")
+                            if tile_only
+                            else model.master_parameters(),
                             cfg["training"]["max_grad_norm"],
                             error_if_nonfinite=True,
                         )
@@ -306,9 +308,7 @@ def main():
     args = parser.parse_args()
     cfg = load_config(args.config)
     cfg["training"].pop("peashooter_rules", None)
-    if "counterfactual" in cfg["training"]:
-        for stage in ("normal", "peashooter"):
-            cfg["training"].get("counterfactual", {}).get(stage, {})["enabled"] = False
+    cfg.setdefault("diagnostics", {})["reach_tracking"] = False
     from pvz_rl.gpu import apply_gpu_profile, select_gpu
 
     device = select_gpu(args.gpu)

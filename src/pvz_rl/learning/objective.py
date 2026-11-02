@@ -104,8 +104,7 @@ def residual_sun_wait_penalties(rows, amount):
             previous = index - 1
             continues = bool(
                 eligible[previous]
-                and int(ordered["decision"][index])
-                == int(ordered["decision"][previous]) + 1
+                and int(ordered["decision"][index]) == int(ordered["decision"][previous]) + 1
                 and not (
                     ("reset" in names and ordered["reset"][index])
                     or ("run_break" in names and ordered["run_break"][index])
@@ -154,7 +153,7 @@ def residual_sun_wait_penalties(rows, amount):
     }
 
 
-OBJECTIVE_PROTOCOL = "complete_return_action_global_v7"
+OBJECTIVE_PROTOCOL = "complete_return_reach_v1"
 # These are the only reward components that train the policy.  The simulator
 # still publishes the older diagnostic fields (combat_value, home_proximity,
 # victory_time, and so on) for reports and replay verification. Cohort-ranked

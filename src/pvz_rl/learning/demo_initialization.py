@@ -647,6 +647,7 @@ def _initialize_demo(
                 consistency_counts=consistency_counts,
                 coefficients=coefficients,
                 return_forward=True,
+                demonstration=True,
             )
             selected = torch.as_tensor(np.flatnonzero(rows["accepted"][start:stop]), device=device)
             if len(selected):

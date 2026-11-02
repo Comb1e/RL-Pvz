@@ -49,6 +49,12 @@ class AccountingCudaBatch(CudaBatch):
         self.sky_sun_rate = 1.0
         self.accounting = self.cp.zeros((self.n, ACCOUNTING_WIDTH), self.cp.int64)
         self.source = accounting_kernel_source(self.source)
+        from pvz_rl.envs.reach_tracking import reach_kernel_source
+
+        self.source = reach_kernel_source(self.source)
+        self.reach_enabled = False
+        self.reach_trace = self.cp.zeros(1, self.cp.int64)
+        self.reach_error = self.cp.zeros(self.n, self.cp.int64)
         self.module = self.cp.RawModule(code=self.source, options=("--std=c++11", "--fmad=false"))
         self._step_kernel = self.module.get_function("step_games")
         self._mask = self.module.get_function("legal_masks")
@@ -57,9 +63,30 @@ class AccountingCudaBatch(CudaBatch):
     def set_sky_sun_rate(self, rate):
         self.sky_sun_rate = validate_sky_sun_rate(rate, self.rules)
 
+    def enable_reach(self, saved=None):
+        from pvz_rl.envs.reach_tracking import REACH_WIDTH
+
+        shape = (self.n, self.zcap, REACH_WIDTH)
+        if saved is None:
+            self.reach_trace = self.cp.zeros(shape, self.cp.int64)
+        else:
+            if tuple(saved.shape) != shape:
+                raise ValueError("Reach recovery capacity differs from simulator")
+            self.reach_trace = self.cp.asarray(saved)
+        self.reach_error.fill(0)
+        self.reach_enabled = True
+
+    def disable_reach(self):
+        self.reach_enabled = False
+        self.reach_trace = self.cp.zeros(1, self.cp.int64)
+        self.reach_error.fill(0)
+
     def reset(self, levels, seeds, *, indices=None, **kwargs):
         indices = self._indices(indices)
         super().reset(levels, seeds, indices=indices, **kwargs)
+        if self.reach_enabled:
+            self.reach_trace[self.cp.asarray(indices)] = 0
+            self.reach_error[self.cp.asarray(indices)] = 0
         if self.sky_sun_rate != 1.0:
             from pvz_game.cuda.schema import HEADER
 
@@ -91,6 +118,9 @@ class AccountingCudaBatch(CudaBatch):
         ):
             setattr(view, name, getattr(self, name)[:count])
         view._templates = self._templates[:count]
+        view.reach_error = self.reach_error[:count]
+        if self.reach_enabled:
+            view.reach_trace = self.reach_trace[:count]
         view._step = partial(type(view)._step_with_accounting, proxy(view))
         return view
 
@@ -103,5 +133,8 @@ class AccountingCudaBatch(CudaBatch):
                 self.accounting,
                 *map(self.cp.int64, self.sun_spawn_fraction),
                 self.cp.float64(self.sky_sun_rate),
+                self.reach_trace,
+                self.reach_error,
+                self.cp.int64(self.reach_enabled),
             ),
         )

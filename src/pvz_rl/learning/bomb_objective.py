@@ -5,12 +5,14 @@ import math
 import torch
 
 from pvz_rl.envs.tile_scenarios import bomb_tile_distances
-from pvz_rl.learning.annotation_fit import _label_masks
+from pvz_rl.learning.placement_labels import positive_set_mask
 
 BOMB_OBJECTIVE = "set_cross_entropy_v1"
 LEGACY_BOMB_OBJECTIVE = "zero_margin_distance_v1"
 DISTANCE_OBJECTIVES = (
-    "margin_distance_illegal_v3", "margin_distance_v2", LEGACY_BOMB_OBJECTIVE,
+    "margin_distance_illegal_v3",
+    "margin_distance_v2",
+    LEGACY_BOMB_OBJECTIVE,
 )
 
 
@@ -27,25 +29,28 @@ def bomb_set_cross_entropy(values, feasible_tiles, *, temperature):
     All outputs participate in the denominator, including occupied cells. No
     distribution is prescribed within the successful set. Reductions use FP32.
     """
-    if (
-        type(temperature) not in (int, float)
-        or not math.isfinite(temperature) or temperature <= 0
-    ):
+    if type(temperature) not in (int, float) or not math.isfinite(temperature) or temperature <= 0:
         raise ValueError("Bomb softmax_temperature must be finite and positive")
     if values.ndim != 2 or values.shape[0] != len(feasible_tiles):
         raise ValueError("Bomb outputs must match the labeled boards")
     values = values.float()
-    positive = _label_masks(feasible_tiles, values.shape[1]).to(values.device)
+    positive = positive_set_mask(feasible_tiles, values.shape[1]).to(values.device)
     if not len(values):
         return values.sum() * 0
     logits = (values - values.max(-1, keepdim=True).values) / temperature
-    return (
-        logits.logsumexp(-1) - logits.masked_fill(~positive, -torch.inf).logsumexp(-1)
-    ).mean()
+    return (logits.logsumexp(-1) - logits.masked_fill(~positive, -torch.inf).logsumexp(-1)).mean()
 
 
 def bomb_distance_loss(
-    values, feasible_tiles, illegal_tiles, *, rows, cols, margin, weight, temperature,
+    values,
+    feasible_tiles,
+    illegal_tiles,
+    *,
+    rows,
+    cols,
+    margin,
+    weight,
+    temperature,
 ):
     """Return equally weighted board losses and detached hinge/distance diagnostics.
 
@@ -54,7 +59,7 @@ def bomb_distance_loss(
     No engine or label data enters the encoder.
     """
     values = values.float()
-    positive = _label_masks(feasible_tiles, rows * cols).to(values.device)
+    positive = positive_set_mask(feasible_tiles, rows * cols).to(values.device)
     if values.shape != positive.shape or len(illegal_tiles) != len(feasible_tiles):
         raise ValueError("Bomb outputs must match the configured board")
     nearest = torch.tensor(

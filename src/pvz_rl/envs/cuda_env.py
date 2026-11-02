@@ -164,15 +164,22 @@ class ScenarioQueue:
             prep = self._bomb_preparation()
             selected_seeds = [s[3] for s in staged]
             if tasks is None:
-                tasks = prep.submit(selected_seeds, self.deadline, skill=self.tile_scenario,
-                                    cases=self.validation_cases)
+                tasks = prep.submit(
+                    selected_seeds,
+                    self.deadline,
+                    skill=self.tile_scenario,
+                    cases=self.validation_cases,
+                )
             try:
                 boards = prep.collect(
-                    tasks, selected_seeds, deadline=self.deadline, skill=self.tile_scenario,
+                    tasks,
+                    selected_seeds,
+                    deadline=self.deadline,
+                    skill=self.tile_scenario,
                     cases=self.validation_cases,
                 )
             except BombGenerationFailure:
-                self.generation_failures += self.cfg["training"]["annotation"][
+                self.generation_failures += self.cfg["training"]["tile_scenarios"][
                     "sampling_max_attempts"
                 ]
                 raise
@@ -376,7 +383,12 @@ class CudaVecEnv(VecEnv):
             )
         else:
             from pvz_rl.envs.cuda_snapshots import reset_owned
-            reset = partial(reset_owned, self.batch) if self.tile_scenario == "peashooter" else self.batch.reset
+
+            reset = (
+                partial(reset_owned, self.batch)
+                if self.tile_scenario == "peashooter"
+                else self.batch.reset
+            )
             reset(
                 [s[4] for s in staged],
                 [s[3] for s in staged],
@@ -397,15 +409,23 @@ class CudaVecEnv(VecEnv):
     def supplied_branches(self, skill, availability):
         """Public exercise instruction, independently supplied for each board."""
         if skill == "attacker_pre":
-            branches = torch.tensor([
-                self.cfg["environment"]["plants"].index(board["supplied_plant"]) + 1
-                if (board := self.tile_boards.get(i)) is not None else 0
-                for i in range(self.num_envs)
-            ], device=availability.device, dtype=torch.long)
+            branches = torch.tensor(
+                [
+                    self.cfg["environment"]["plants"].index(board["supplied_plant"]) + 1
+                    if (board := self.tile_boards.get(i)) is not None
+                    else 0
+                    for i in range(self.num_envs)
+                ],
+                device=availability.device,
+                dtype=torch.long,
+            )
         else:
-            branches = torch.full((self.num_envs,),
+            branches = torch.full(
+                (self.num_envs,),
                 self.cfg["environment"]["plants"].index(skill_plant(skill)) + 1,
-                device=availability.device, dtype=torch.long)
+                device=availability.device,
+                dtype=torch.long,
+            )
         usable = availability.gather(1, branches[:, None]).squeeze(1)
         return torch.where(usable, branches, 0)
 
@@ -610,7 +630,12 @@ class CudaVecEnv(VecEnv):
                     action = int(actions[index, 0])
                     branch = 1 + (action - 1) // 45 if action else 0
                     board = self.tile_boards[index]
-                    expected = self.cfg["environment"]["plants"].index(skill_plant(self.tile_scenario, board)) + 1
+                    expected = (
+                        self.cfg["environment"]["plants"].index(
+                            skill_plant(self.tile_scenario, board)
+                        )
+                        + 1
+                    )
                     settings = self.cfg["training"]["tile_scenarios"]
                     success = bool(
                         self.last_action_result_host[index, 0]
@@ -626,15 +651,21 @@ class CudaVecEnv(VecEnv):
                         selected_tile_distance=bomb_tile_distances(
                             board["feasible_tiles"],
                             board["absolute_infeasible_tiles"]
-                            if self.tile_scenario == "attacker_pre" or bomb_max_illegal_distance(settings) else [],
+                            if self.tile_scenario == "attacker_pre"
+                            or bomb_max_illegal_distance(settings)
+                            else [],
                             rows=self.cfg["environment"]["rows"],
                             cols=self.cfg["environment"]["cols"],
-                        )[(action - 1) % 45] if action > 0 and branch == expected else None,
+                        )[(action - 1) % 45]
+                        if action > 0 and branch == expected
+                        else None,
                     )
                     if self.tile_scenario == "attacker_pre":
                         metrics.update(
-                            target_correct=success, fallback=board["fallback"],
-                            supplied_plant=board["supplied_plant"], zombie_count=board["zombie_count"],
+                            target_correct=success,
+                            fallback=board["fallback"],
+                            supplied_plant=board["supplied_plant"],
+                            zombie_count=board["zombie_count"],
                             actual_kill=None,
                         )
                 self.finished_outcomes[index] = completed[index]["episode_metrics"]["status"]

@@ -221,7 +221,7 @@ def learning_settings(cfg):
                     "learning_rate",
                     "max_grad_norm",
                     "batch_size",
-                    "tile_only_cohorts",
+                    "reach_prediction_weight",
                     "n_epochs",
                     "gamma",
                 )

@@ -23,12 +23,16 @@ _CONFIG_RESOURCE = "data/train.toml"
 # User-facing stage tables resolve once into the checkpoint-compatible runtime layout.
 _STAGE_PARAMETERS = {
     "normal": {
-        **{key: f"training.{key}" for key in (
-            "n_envs", "tile_only_cohorts", "exploration", "validation_schedule",
-            "eval_interval_games",
-        )},
-        "counterfactual_enabled": "training.counterfactual.normal.enabled",
-        "comparison_temperature": "training.counterfactual.normal.temperature",
+        **{
+            key: f"training.{key}"
+            for key in (
+                "n_envs",
+                "reach_prediction_weight",
+                "exploration",
+                "validation_schedule",
+                "eval_interval_games",
+            )
+        },
         "curriculum": "curriculum",
     },
     "cherry_bomb": {
@@ -37,14 +41,28 @@ _STAGE_PARAMETERS = {
         "plants": "training.tile_scenarios.bomb_plants",
         "obstacle_plants": "training.tile_scenarios.bomb_obstacle_plants",
         "mower_ready_probability": "training.tile_scenarios.bomb_mower_ready_probability",
-        **{key: f"training.tile_scenarios.{key}" for key in (
-            "ranking_objective", "softmax_temperature", "ranking_margin",
-            "distance_weight", "distance_temperature",
-        )},
-        **{key: f"training.performance.cherry_{key}" for key in (
-            "prepare_workers", "worker_ram_mib", "prefetch", "oracle", "cuda_warmup",
-            "oracle_lanes", "oracle_vram_mib",
-        )},
+        **{
+            key: f"training.tile_scenarios.{key}"
+            for key in (
+                "ranking_objective",
+                "softmax_temperature",
+                "ranking_margin",
+                "distance_weight",
+                "distance_temperature",
+            )
+        },
+        **{
+            key: f"training.performance.cherry_{key}"
+            for key in (
+                "prepare_workers",
+                "worker_ram_mib",
+                "prefetch",
+                "oracle",
+                "cuda_warmup",
+                "oracle_lanes",
+                "oracle_vram_mib",
+            )
+        },
         "probe_interval_games": "curriculum.cherry_bomb_probe_interval_games",
         "validation_success_threshold": "curriculum.cherry_bomb_validation_success_threshold",
     },
@@ -52,25 +70,48 @@ _STAGE_PARAMETERS = {
         "softmax_temperature": "training.tile_scenarios.obstacle_softmax_temperature",
     },
     "attacker_pre": {
-        **{key: f"training.tile_scenarios.attacker.{key}" for key in (
-            "n_envs", "plants", "zombie_count", "provided_plants", "initial_sun",
-            "mower_ready_probability", "softmax_temperature", "ranking_objective",
-        )},
-        **{key: f"training.performance.attacker_{key}" for key in (
-            "prepare_workers", "worker_ram_mib", "prefetch", "cuda_warmup",
-            "oracle_lanes", "oracle_vram_mib",
-        )},
+        **{
+            key: f"training.tile_scenarios.attacker.{key}"
+            for key in (
+                "n_envs",
+                "plants",
+                "zombie_count",
+                "provided_plants",
+                "initial_sun",
+                "mower_ready_probability",
+                "softmax_temperature",
+                "ranking_objective",
+            )
+        },
+        **{
+            key: f"training.performance.attacker_{key}"
+            for key in (
+                "prepare_workers",
+                "worker_ram_mib",
+                "prefetch",
+                "cuda_warmup",
+                "oracle_lanes",
+                "oracle_vram_mib",
+            )
+        },
         "probe_interval_games": "curriculum.attacker_pre_probe_interval_games",
     },
     "peashooter": {
         "sky_sun_rate": "training.tile_scenarios.peashooter_sky_sun_rate",
-        **{key: f"training.peashooter_rules.{key}" for key in (
-            "fitting_objective", "column_decay", "softmax_temperature",
-            "oracle_lanes", "oracle_vram_mib", "oracle_chunk_ticks", "prepare_workers", "n_envs",
-            "snapshot_cache_mib",
-        )},
-        "counterfactual_enabled": "training.counterfactual.peashooter.enabled",
-        "comparison_temperature": "training.counterfactual.peashooter.temperature",
+        **{
+            key: f"training.peashooter_rules.{key}"
+            for key in (
+                "fitting_objective",
+                "column_decay",
+                "softmax_temperature",
+                "oracle_lanes",
+                "oracle_vram_mib",
+                "oracle_chunk_ticks",
+                "prepare_workers",
+                "n_envs",
+                "snapshot_cache_mib",
+            )
+        },
         "probe_interval_games": "curriculum.peashooter_probe_interval_games",
         "validation_success_threshold": "curriculum.peashooter_validation_success_threshold",
     },
@@ -154,7 +195,8 @@ def bomb_ranking_margin(settings):
 def bomb_max_illegal_distance(settings):
     """Use maximum illegal distance for current diagnostics and saved v3 fitting."""
     return settings.get("ranking_objective") in (
-        "margin_distance_illegal_v3", "set_cross_entropy_v1",
+        "margin_distance_illegal_v3",
+        "set_cross_entropy_v1",
     )
 
 
@@ -169,13 +211,11 @@ def bomb_softmax_temperature(settings, success_rate, *, skill="cherry_bomb"):
         start, end = value["zero_success"], value["full_success"]
     else:
         start = end = value
-    if any(
-        type(t) not in (int, float) or not math.isfinite(t) or t <= 0
-        for t in (start, end)
-    ):
+    if any(type(t) not in (int, float) or not math.isfinite(t) or t <= 0 for t in (start, end)):
         raise ValueError("Bomb softmax_temperature must be finite and positive")
     if (
-        type(success_rate) not in (int, float) or not math.isfinite(success_rate)
+        type(success_rate) not in (int, float)
+        or not math.isfinite(success_rate)
         or not 0 <= success_rate <= 1
     ):
         raise ValueError("Bomb cohort success rate must be finite and in [0, 1]")
@@ -336,16 +376,18 @@ def load_demo_config(path: str | Path | None = None, *, profile: str = "demo") -
     cfg = load_config(path, profile=profile)
     if (
         cfg["encoding"]["version"] != "entity_v1"
-        or cfg["policy"]["kind"] != "two_stage_transformer_q_v1"
+        or cfg["policy"]["kind"] != "shared_board_reach_q_v1"
     ):
         raise ValueError("Human demonstrations require the stateless two-stage Transformer profile")
     return copy.deepcopy(cfg)
 
 
 def validate_config(cfg: dict) -> None:
-    from pvz_rl.learning.counterfactual_settings import validate_counterfactual
-
-    validate_counterfactual(cfg)
+    removed = {"annotation", "counterfactual", "tile_only_cohorts"} & cfg["training"].keys()
+    if removed:
+        raise ValueError(
+            f"Removed training settings: {sorted(removed)}; start from the shared-encoder train.toml"
+        )
     from pvz_rl.learning.peashooter_rules import validate_rule_settings
 
     validate_rule_settings(cfg)
@@ -376,7 +418,7 @@ def validate_config(cfg: dict) -> None:
                 "training.objective contains retired or missing settings, including "
                 "species_consistency_huber_delta"
             )
-        if objective.get("protocol") != "complete_return_action_global_v7":
+        if objective.get("protocol") != "complete_return_reach_v1":
             raise ValueError(
                 "Unsupported training objective protocol; fresh initialization is required"
             )
@@ -439,7 +481,7 @@ def validate_config(cfg: dict) -> None:
         raise ValueError("win_time_weight must be finite and nonnegative")
     current_policy = (
         cfg.get("encoding", {}).get("version") == "entity_v1"
-        and cfg.get("policy", {}).get("kind") == "two_stage_transformer_q_v1"
+        and cfg.get("policy", {}).get("kind") == "shared_board_reach_q_v1"
     )
     if cfg["training"].get("validation_schedule", "periodic") not in (
         "periodic",
@@ -538,7 +580,10 @@ def validate_config(cfg: dict) -> None:
         raise ValueError("reward.asset_loss_multiplier must be finite and nonnegative")
     if "actor_objective" in cfg["training"] or "ent_coef" in cfg["training"]:
         raise ValueError("Retired PPO objective; use sequential Q fitting")
-    if cfg["training"]["exploration"].get("objective") not in ("committed_plant_tile_epsilon_v1", "committed_species_epsilon_v1"):
+    if cfg["training"]["exploration"].get("objective") not in (
+        "committed_plant_tile_epsilon_v1",
+        "committed_species_epsilon_v1",
+    ):
         raise ValueError("Only committed plant and conditional tile exploration is supported")
     for key in (
         "win_reward",
@@ -573,14 +618,11 @@ def validate_config(cfg: dict) -> None:
         raise ValueError("encoding.max_entities must be an integer of at least 5")
     policy = cfg["policy"]
     model_settings = {
-        "species_width": 128,
-        "species_layers": 4,
-        "species_heads": 8,
-        "species_feedforward": 512,
-        "tile_width": 192,
-        "tile_layers": 6,
-        "tile_heads": 12,
-        "tile_feedforward": 768,
+        "shared_width",
+        "encoder_blocks",
+        "tile_decoder_blocks",
+        "attention_heads",
+        "feedforward_width",
     }
     execution_settings = (
         "encoder_microbatch",
@@ -602,11 +644,18 @@ def validate_config(cfg: dict) -> None:
     ):
         if type(policy.get(key)) is not int or policy[key] < 1:
             raise ValueError(f"policy.{key} must be a positive integer")
-    for key, expected in model_settings.items():
-        if policy[key] != expected:
-            raise ValueError(
-                f"policy.{key} must be {expected} for the two-stage Transformer contract"
-            )
+    if policy["shared_width"] % policy["attention_heads"]:
+        raise ValueError("shared_width must be divisible by attention_heads")
+    reach_weight = cfg["training"].get("reach_prediction_weight", 0.1)
+    if (
+        type(reach_weight) not in (int, float)
+        or not math.isfinite(reach_weight)
+        or reach_weight < 0
+    ):
+        raise ValueError("training.normal.reach_prediction_weight must be finite and nonnegative")
+    attempts = cfg["training"]["tile_scenarios"].get("sampling_max_attempts")
+    if type(attempts) is not int or attempts < 1:
+        raise ValueError("training.tile_scenarios.sampling_max_attempts must be positive")
     sample_seconds = output_settings(cfg)["logging"]["hardware_sample_seconds"]
     if (
         type(sample_seconds) not in (int, float)
@@ -628,7 +677,7 @@ def validate_config(cfg: dict) -> None:
         raise ValueError("exploration floor exceeds start")
     if exploration["plant_epsilon_floor"] > exploration["plant_epsilon_start"]:
         raise ValueError("plant exploration floor exceeds start")
-    for key in (("decay_games", "plant_decay_games") if legacy_tiles else ("plant_decay_games",)):
+    for key in ("decay_games", "plant_decay_games") if legacy_tiles else ("plant_decay_games",):
         if type(exploration.get(key)) is not int or exploration[key] < 1:
             raise ValueError(f"exploration.{key} must be a positive integer")
     minutes = cfg["training"].get("max_minutes")
@@ -640,13 +689,19 @@ def validate_config(cfg: dict) -> None:
     if type(reserve) not in (int, float) or not math.isfinite(reserve) or reserve < 0:
         raise ValueError("finalization_minutes must be finite and nonnegative")
     c = cfg["curriculum"]
-    for key in ("cherry_bomb_probe_interval_games", "peashooter_probe_interval_games", "attacker_pre_probe_interval_games"):
+    for key in (
+        "cherry_bomb_probe_interval_games",
+        "peashooter_probe_interval_games",
+        "attacker_pre_probe_interval_games",
+    ):
         if key in c and (type(c[key]) is not int or c[key] < 1):
             raise ValueError(f"{key} must be a positive integer")
-    for key in ("cherry_bomb_validation_success_threshold", "peashooter_validation_success_threshold"):
+    for key in (
+        "cherry_bomb_validation_success_threshold",
+        "peashooter_validation_success_threshold",
+    ):
         if key in c and (
-            type(c[key]) not in (int, float) or not math.isfinite(c[key])
-            or not 0 <= c[key] < 1
+            type(c[key]) not in (int, float) or not math.isfinite(c[key]) or not 0 <= c[key] < 1
         ):
             raise ValueError(f"{key} must be finite and in [0, 1)")
     trigger = cfg["training"].get("validation_trigger")
@@ -688,8 +743,11 @@ def validate_config(cfg: dict) -> None:
             raise ValueError("tile scenario bomb_plants must be an inclusive range in [1, 44]")
         objective = tile.get("ranking_objective", "top1_hinge_v1")
         if objective not in (
-            "top1_hinge_v1", "zero_margin_distance_v1", "margin_distance_v2",
-            "margin_distance_illegal_v3", "set_cross_entropy_v1",
+            "top1_hinge_v1",
+            "zero_margin_distance_v1",
+            "margin_distance_v2",
+            "margin_distance_illegal_v3",
+            "set_cross_entropy_v1",
         ):
             raise ValueError("Unsupported tile scenario ranking_objective")
         if objective == "set_cross_entropy_v1":
@@ -704,18 +762,26 @@ def validate_config(cfg: dict) -> None:
             if type(margin) not in (float, int) or not math.isfinite(margin) or margin < 0:
                 raise ValueError("tile ranking_margin must be finite and nonnegative")
         if objective in (
-            "zero_margin_distance_v1", "margin_distance_v2", "margin_distance_illegal_v3",
+            "zero_margin_distance_v1",
+            "margin_distance_v2",
+            "margin_distance_illegal_v3",
         ):
             weight, temperature = tile.get("distance_weight"), tile.get("distance_temperature")
             if (
-                type(weight) not in (int, float) or not math.isfinite(weight)
-                or type(temperature) not in (int, float) or not math.isfinite(temperature)
-                or temperature <= 0 or not 0 <= weight < 4 * temperature
+                type(weight) not in (int, float)
+                or not math.isfinite(weight)
+                or type(temperature) not in (int, float)
+                or not math.isfinite(temperature)
+                or temperature <= 0
+                or not 0 <= weight < 4 * temperature
             ):
-                raise ValueError("Bomb distance settings require finite tau > 0 and 0 <= weight < 4*tau")
+                raise ValueError(
+                    "Bomb distance settings require finite tau > 0 and 0 <= weight < 4*tau"
+                )
         obstacle = tile.get("bomb_obstacle_plants", [1, 15])
         if (
-            not isinstance(obstacle, list) or len(obstacle) != 2
+            not isinstance(obstacle, list)
+            or len(obstacle) != 2
             or any(type(n) is not int for n in obstacle)
             or not 1 <= obstacle[0] <= obstacle[1] <= 44
         ):
@@ -736,16 +802,30 @@ def validate_config(cfg: dict) -> None:
                     raise ValueError(f"attacker_pre.{key} must be a positive integer")
             for key, lo, hi in (("plants", 4, 8), ("zombie_count", 1, 2)):
                 value = attacker.get(key)
-                if (not isinstance(value, list) or len(value) != 2
-                        or any(type(n) is not int for n in value)
-                        or not lo <= value[0] <= value[1] <= hi):
+                if (
+                    not isinstance(value, list)
+                    or len(value) != 2
+                    or any(type(n) is not int for n in value)
+                    or not lo <= value[0] <= value[1] <= hi
+                ):
                     raise ValueError(f"attacker_pre.{key} must be a range in [{lo}, {hi}]")
             kinds = attacker.get("provided_plants")
-            if (not isinstance(kinds, list) or not kinds or any(type(k) is not str for k in kinds)
-                    or len(set(kinds)) != len(kinds)
-                    or set(kinds) - set(ATTACKERS) or set(kinds) - set(cfg["environment"]["plants"])):
-                raise ValueError("attacker_pre.provided_plants must be distinct configured attackers")
-            if not max(rules.plants[k]["cost"] for k in kinds) <= attacker["initial_sun"] <= rules.game["sun_cap"]:
+            if (
+                not isinstance(kinds, list)
+                or not kinds
+                or any(type(k) is not str for k in kinds)
+                or len(set(kinds)) != len(kinds)
+                or set(kinds) - set(ATTACKERS)
+                or set(kinds) - set(cfg["environment"]["plants"])
+            ):
+                raise ValueError(
+                    "attacker_pre.provided_plants must be distinct configured attackers"
+                )
+            if (
+                not max(rules.plants[k]["cost"] for k in kinds)
+                <= attacker["initial_sun"]
+                <= rules.game["sun_cap"]
+            ):
                 raise ValueError("attacker_pre.initial_sun must afford every supplied plant")
             ready = attacker.get("mower_ready_probability")
             if type(ready) not in (int, float) or not math.isfinite(ready) or not 0 <= ready <= 1:
@@ -753,16 +833,33 @@ def validate_config(cfg: dict) -> None:
             if attacker.get("ranking_objective") != "set_cross_entropy_v1":
                 raise ValueError("attacker_pre requires successful-set cross-entropy")
             bomb_softmax_temperature(attacker, 0.0)
-            horizon = max(v["horizon"] for k, table in attacker_bounds(rules)["table"].items()
-                          if k in kinds for v in table.values())
+            horizon = max(
+                v["horizon"]
+                for k, table in attacker_bounds(rules)["table"].items()
+                if k in kinds
+                for v in table.values()
+            )
             # Slowest Basic must also reach a left-column mine within the cutoff.
             from pvz_rl.envs.attacker_scenarios import _arrival
 
-            horizon = max(horizon, _arrival(rules, rules.game["cols"] * rules.game["units_per_tile"], latest=True))
-            if (tile["enabled"] and c.get("run_stage") in (None, "attacker_pre")
-                    and warmup_ticks(rules, attacker) + horizon >= cfg["environment"]["cutoff_seconds"] * rules.game["tick_rate"]):
-                raise ValueError("attacker_pre cutoff is too short for cooldown and conservative completion")
-            if tile["enabled"] and c.get("run_stage") in (None, "attacker_pre") and "basic" not in cfg["environment"]["zombies"]:
+            horizon = max(
+                horizon,
+                _arrival(rules, rules.game["cols"] * rules.game["units_per_tile"], latest=True),
+            )
+            if (
+                tile["enabled"]
+                and c.get("run_stage") in (None, "attacker_pre")
+                and warmup_ticks(rules, attacker) + horizon
+                >= cfg["environment"]["cutoff_seconds"] * rules.game["tick_rate"]
+            ):
+                raise ValueError(
+                    "attacker_pre cutoff is too short for cooldown and conservative completion"
+                )
+            if (
+                tile["enabled"]
+                and c.get("run_stage") in (None, "attacker_pre")
+                and "basic" not in cfg["environment"]["zombies"]
+            ):
                 raise ValueError("attacker_pre requires Basic zombies in the configured roster")
         validate_sky_sun_rate(
             tile.get("peashooter_sky_sun_rate", 1.0),
@@ -870,7 +967,7 @@ def validate_config(cfg: dict) -> None:
     if not math.isfinite(visual["final_hold_seconds"]) or visual["final_hold_seconds"] < 0:
         raise ValueError("Visualization final_hold_seconds must be finite and nonnegative")
     env, train = cfg["environment"], cfg["training"]
-    expected_method = "complete_return_action_global_v7"
+    expected_method = "complete_return_reach_v1"
     if train.get("method") != expected_method:
         raise ValueError("Training requires a supported complete-return method and fresh models")
     if any(
@@ -903,14 +1000,12 @@ def validate_config(cfg: dict) -> None:
         raise ValueError("training.performance.fit_precision must be bf16_master")
     if type(performance.get("prefetch", False)) is not bool:
         raise ValueError("training.performance.prefetch must be a boolean")
-    if performance.get("annotation_input_cache", "auto") not in ("auto", "off"):
-        raise ValueError("training.performance.annotation_input_cache must be auto or off")
-    cache_mib = performance.get("annotation_cache_mib", 256)
-    if type(cache_mib) is not int or cache_mib < 0:
-        raise ValueError("training.performance.annotation_cache_mib must be a nonnegative integer")
-    if type(performance.get("annotation_use_fit_limits", False)) is not bool:
-        raise ValueError("training.performance.annotation_use_fit_limits must be a boolean")
-    for key in ("cherry_prefetch", "cherry_cuda_warmup", "attacker_prefetch", "attacker_cuda_warmup"):
+    for key in (
+        "cherry_prefetch",
+        "cherry_cuda_warmup",
+        "attacker_prefetch",
+        "attacker_cuda_warmup",
+    ):
         if type(performance.get(key, False)) is not bool:
             raise ValueError(f"training.performance.{key} must be a boolean")
     workers = performance.get("cherry_prepare_workers", 0)
@@ -941,9 +1036,6 @@ def validate_config(cfg: dict) -> None:
         "telemetry_span_limit",
         "fit_precision",
         "prefetch",
-        "annotation_input_cache",
-        "annotation_cache_mib",
-        "annotation_use_fit_limits",
         "attacker_prepare_workers",
         "attacker_worker_ram_mib",
         "attacker_prefetch",
@@ -1056,17 +1148,8 @@ def validate_config(cfg: dict) -> None:
     ):
         if type(train[key]) is not int or train[key] <= 0:
             raise ValueError(f"{key} must be a positive integer")
-    if "tile_warmup_passes" in train:
-        raise ValueError(
-            "training.tile_warmup_passes was replaced by training.tile_only_cohorts; "
-            "n_epochs now sets all fitting passes in each cohort"
-        )
-    if type(train.get("tile_only_cohorts")) is not int or train["tile_only_cohorts"] < 0:
-        raise ValueError("training.tile_only_cohorts must be a nonnegative integer")
-    if train.get("discount_clock") != "simulation_ticks" or (
-        train["gamma"] != 1 and not (train.get("counterfactual") or train.get("search", {}).get("enabled", False))
-    ):
-        raise ValueError("Complete actual returns require gamma 1; start fresh")
+    if train.get("discount_clock") != "simulation_ticks" or not 0 < train["gamma"] <= 1:
+        raise ValueError("Returns require tick-based discounting with 0 < gamma <= 1")
     if train["batch_size"] > 1024:
         raise ValueError("Bounded minibatches must not exceed 1024")
     demo = train.get("demo", {})
@@ -1082,74 +1165,6 @@ def validate_config(cfg: dict) -> None:
             or demo.get(key, 1.0) <= 0
         ):
             raise ValueError(f"training.demo.{key} must be finite and positive")
-    annotation = train.get("annotation", {})
-    if not isinstance(annotation, dict):
-        raise ValueError("training.annotation must be a table")
-    if set(annotation) - {
-        "passes",
-        "learning_rate",
-        "batch_size",
-        "margin",
-        "learner_seed",
-        "l2_strength",
-        "sampling_seed",
-        "sampling_family",
-        "sampling_max_steps",
-        "sampling_max_attempts",
-        "sampling_plant_interval_steps",
-        "sampling_max_plants",
-    }:
-        raise ValueError("training.annotation contains unsupported settings")
-    if type(annotation.get("passes", 0)) is not int or annotation.get("passes", 0) < 0:
-        raise ValueError(
-            "training.annotation.passes must be a nonnegative integer (0 means unlimited)"
-        )
-    if type(annotation.get("batch_size", 256)) is not int or annotation.get("batch_size", 256) < 1:
-        raise ValueError("training.annotation.batch_size must be a positive integer")
-    if (
-        type(annotation.get("learner_seed", 101)) is not int
-        or annotation.get("learner_seed", 101) < 0
-    ):
-        raise ValueError("training.annotation.learner_seed must be a nonnegative integer")
-    sampling_seed = annotation.get("sampling_seed", "random")
-    if sampling_seed != "random" and (type(sampling_seed) is not int or sampling_seed < 0):
-        raise ValueError(
-            "training.annotation.sampling_seed must be 'random' or a nonnegative integer"
-        )
-    if annotation.get("sampling_family", "preset") not in (
-        "preset",
-        "diagnostic",
-        "redistributed",
-        "faster",
-        "concentrated",
-    ):
-        raise ValueError("training.annotation.sampling_family is unsupported")
-    for key in ("sampling_max_steps", "sampling_max_attempts"):
-        if (
-            type(annotation.get(key, 20000 if key.endswith("steps") else 100)) is not int
-            or annotation.get(key, 20000 if key.endswith("steps") else 100) < 1
-        ):
-            raise ValueError(f"training.annotation.{key} must be a positive integer")
-    interval = annotation.get("sampling_plant_interval_steps", [500, 1500])
-    if (
-        not isinstance(interval, list)
-        or len(interval) != 2
-        or any(type(value) is not int or value < 1 for value in interval)
-        or interval[0] > interval[1]
-    ):
-        raise ValueError(
-            "training.annotation.sampling_plant_interval_steps must be ordered positive integers"
-        )
-    max_plants = annotation.get("sampling_max_plants", 8)
-    if type(max_plants) is not int or not 1 <= max_plants < env["rows"] * env["cols"]:
-        raise ValueError(
-            "training.annotation.sampling_max_plants must leave at least one empty tile"
-        )
-    annotation_defaults = {"learning_rate": 3e-4, "margin": 1.0, "l2_strength": 1e-4}
-    for key in ("learning_rate", "margin", "l2_strength"):
-        value = annotation.get(key, annotation_defaults[key])
-        if type(value) not in (int, float) or not math.isfinite(value) or value <= 0:
-            raise ValueError(f"training.annotation.{key} must be finite and positive")
     if train["device"] not in ("cpu", "cuda"):
         raise ValueError("Training device must be cpu or cuda")
     seeds = train["learner_seeds"]

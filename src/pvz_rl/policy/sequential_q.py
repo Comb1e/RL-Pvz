@@ -4,7 +4,7 @@ import torch
 
 from pvz_rl.envs.actions import ActionSchema as A
 
-POLICY_SIGNATURE = "two_stage_transformer_q_v1"
+POLICY_SIGNATURE = "shared_board_reach_q_v1"
 ACTION_DISTRIBUTION = "sequential_q_unmasked_tiles_v2"
 
 
@@ -170,7 +170,8 @@ def select_q_actions(
         placement_gap=torch.where(
             nonwait, candidate_maxima(tile_q, action_masks, branches) - tile_value, 0
         ),
-        valid=branch_valid & torch.isfinite(species_q).all()
+        valid=branch_valid
+        & torch.isfinite(species_q).all()
         & legal.any(-1).all()
         & (torch.isfinite(tile_q) | ~nonwait[:, None]).all(),
     )

@@ -38,7 +38,6 @@ from pvz_rl.learning.budget import (
     uses_games,
 )
 from pvz_rl.learning.cohort import atomic_transition
-from pvz_rl.learning.counterfactual_settings import OBJECTIVE as COUNTERFACTUAL_OBJECTIVE
 from pvz_rl.learning.curriculum import (
     CurriculumState,
     initial_state,
@@ -331,14 +330,27 @@ class ResearchCallback(BaseCallback):
             "training_steps": self.model.num_timesteps,
             "training_games": games,
             "tile_scenarios": self.model.tile_skills.to_dict(),
-            "counterfactual": dict(getattr(getattr(self.model, "_counterfactual", None), "metrics",
-                                            self.model.cohort_metrics.get("counterfactual", {}))),
-            "peashooter_teacher": dict(getattr(getattr(self.model, "_peashooter_teacher", None), "metrics",
-                                            self.model.cohort_metrics.get("peashooter_teacher", {}))),
+            "reach_tracking": dict(
+                getattr(
+                    getattr(self.model, "_reach", None),
+                    "metrics",
+                    self.model.cohort_metrics.get("reach_tracking", {}),
+                )
+            ),
+            "peashooter_teacher": dict(
+                getattr(
+                    getattr(self.model, "_peashooter_teacher", None),
+                    "metrics",
+                    self.model.cohort_metrics.get("peashooter_teacher", {}),
+                )
+            ),
             "collection_policy": "network",
             "fitting_objective": (
-                RULE_OBJECTIVE if self.model.peashooter_rule_training else
-                COUNTERFACTUAL_OBJECTIVE if self.model.counterfactual_training else None
+                RULE_OBJECTIVE
+                if self.model.peashooter_rule_training
+                else "complete_return_reach_v1"
+                if not self.model.tile_skills.active
+                else None
             ),
             "validation_trigger": self.validation_trigger.snapshot(
                 self.model.tile_skills.validation_domain
@@ -459,8 +471,7 @@ class ResearchCallback(BaseCallback):
                 else None
             ),
             "time_budget": self.wall_budget.state() if self.wall_budget else None,
-            "validation_pending": self.validation_pending
-            or self.pending_validation is not None,
+            "validation_pending": self.validation_pending or self.pending_validation is not None,
             "validation_schedule": "stage_success" if self.stage_validation else "periodic",
             "pending_stage_validation": self.pending_stage_validation,
             "validation_deferred": self.stage_validation and not self.pending_stage_validation,
@@ -491,9 +502,8 @@ class ResearchCallback(BaseCallback):
 
     def cohort_text(self):
         summary = self.cohort_summary()
-        if (
-            is_placement_skill(self.model.tile_skills.phase)
-            or is_placement_skill(getattr(self.model.env, "tile_scenario", None))
+        if is_placement_skill(self.model.tile_skills.phase) or is_placement_skill(
+            getattr(self.model.env, "tile_scenario", None)
         ):
             return (
                 f"done {summary['completed']}/{summary['games']} "
@@ -626,10 +636,11 @@ class ResearchCallback(BaseCallback):
         keys = (
             "peashooter_cross_entropy_loss",
             "peashooter_preferred_column_accuracy",
-            "comparison_loss",
-            "feasibility_loss",
-            "comparison_accuracy",
-            "feasibility_accuracy",
+            "total_loss",
+            "reach_loss",
+            "reach_boundary_accuracy",
+            "reach_mean_column_error",
+            "reach_eligible_decisions",
             "q_loss",
             "tile_ranking_loss",
             "bomb_cross_entropy_loss",
@@ -675,7 +686,10 @@ class ResearchCallback(BaseCallback):
             )
         row.update(optimization=metrics, completed_updates=self.model._n_updates)
         if is_placement_skill(row.get("active_skill")):
-            if metrics["bomb_cross_entropy_loss"] is None and metrics["attacker_cross_entropy_loss"] is None:
+            if (
+                metrics["bomb_cross_entropy_loss"] is None
+                and metrics["attacker_cross_entropy_loss"] is None
+            ):
                 metrics["tile_ranking_loss"] = metrics["q_loss"]
             metrics["q_loss"] = None
         append_jsonl(self.metrics_stream, row)
@@ -1420,7 +1434,7 @@ def initial_weights(checkpoint, cfg):
         weights_only=True,
     )
     verify_engine(cfg)
-    if saved["initialization_type"] in ("demonstration", "annotation"):
+    if saved["initialization_type"] == "demonstration":
         weights = saved["payload"]["model"]
     else:
         import io
@@ -1446,7 +1460,6 @@ def initial_weights(checkpoint, cfg):
         "checkpoint": str(Path(checkpoint).resolve()),
         "checkpoint_sha256": saved.get("snapshot_sha256") or file_hash(checkpoint),
         "source_learner_seed": saved["learner_seed"],
-        **saved.get("source_annotation", {}),
         **saved.get("source_counters", {"steps": 0, "games": 0, "updates": 0}),
         "source_structural_signature": transfer_protocol(source_cfg),
         "parameter_changes": parameter_changes(source_cfg, cfg),
@@ -1472,7 +1485,7 @@ def load_policy(checkpoint, device="cpu", *, for_resume=False):
     require_supported_policy(cfg, data["condition"])
     torch.set_num_threads(cfg["training"]["torch_threads"])
     if (
-        data["initialization_type"] in ("demonstration", "annotation", "weights")
+        data["initialization_type"] in ("demonstration", "weights")
         or not current_model_config(data["config"])
         or not current_engine_config(data["config"])
         or (not for_resume and data.get("fit_schedule_protocol") != FIT_SCHEDULE_PROTOCOL)
@@ -1487,7 +1500,7 @@ def load_policy(checkpoint, device="cpu", *, for_resume=False):
         model.action_space = spaces.Discrete(ActionSchema.size)
         model.n_envs = cfg["training"]["n_envs"]
         model._setup_model()
-        if data["initialization_type"] in ("demonstration", "annotation"):
+        if data["initialization_type"] == "demonstration":
             weights = data.pop("payload")["model"]
         else:
             weights, _ = initial_weights(checkpoint, cfg)
@@ -1533,8 +1546,7 @@ def train(
     cfg = copy.deepcopy(cfg)
     if family == "diagnostic":
         cfg["training"].pop("peashooter_rules", None)
-        for stage in ("peashooter", "normal"):
-            cfg["training"].get("counterfactual", {}).get(stage, {})["enabled"] = False
+        cfg.setdefault("diagnostics", {})["reach_tracking"] = False
     validate_config(cfg)
     output = Path(output)
     require_cuda_training(cfg, condition, runtime=False)
@@ -1634,9 +1646,9 @@ def train(
             "learning_rate": cfg["training"]["learning_rate"],
             "adam_epsilon": 1e-8,
             "batch_size": cfg["training"]["batch_size"],
-            "tile_only_cohorts": cfg["training"]["tile_only_cohorts"],
+            "normal_fitting": "joint",
             "passes_per_cohort": cfg["training"]["n_epochs"],
-            "independent_encoders": True,
+            "shared_encoder": True,
             "runtime_dtype": "bf16",
             "master_dtype": "fp32",
         },
@@ -1675,28 +1687,23 @@ def train(
     )
     target_kind = (
         "successful-set placement supervision"
-        if is_placement_skill(selected_stage(cfg)) else
-        "factual tile preferences and species returns"
-        if cfg["training"].get("counterfactual")
-        else "actual returns"
+        if is_placement_skill(selected_stage(cfg))
+        else "actual returns and factual visible-zombie reach"
     )
     progress.emit(
         f"Policy: {cfg.get('policy', {'kind': 'flat'})}; {target_kind}; "
-        f"repeat {cfg['training']['tile_only_cohorts']} tile-only cohorts then one joint cohort; "
+        "joint normal cohorts; supervised preliminary cohorts; "
         f"{cfg['training']['n_epochs']} passes per cohort; "
         f"minibatch {cfg['training']['batch_size']}",
         force=True,
     )
     progress.emit(f"Reward settings: {cfg['reward']}", force=True)
-    if cfg["training"].get("counterfactual"):
+    if cfg["training"].get("peashooter_rules"):
         progress.emit(
-            "Factual tile replay: up to two alternatives per legal planting; "
-            "main actions stay greedy; only real episodes count; validation is branch-free",
+            "Peashooter: prioritized visible-lane oracle targets; column-decaying cross-entropy; "
+            "greedy main actions, no factual followers",
             force=True,
         )
-    if cfg["training"].get("peashooter_rules"):
-        progress.emit("Peashooter: prioritized visible-lane oracle targets; column-decaying cross-entropy; "
-                      "greedy main actions, no factual followers", force=True)
     progress.emit(
         f"Committed plant/tile exploration {cfg['training']['exploration']}; "
         "normal branches greedy; accepted planting can commit to another species; "
@@ -1774,7 +1781,8 @@ def train(
                     " at 0% success to "
                     f"{bomb_softmax_temperature(bomb, 1.0, skill=model.tile_skills.phase):g}"
                     " at 100% (linear in this cohort's target accuracy)"
-                    if objective == BOMB_OBJECTIVE else (
+                    if objective == BOMB_OBJECTIVE
+                    else (
                         f"ranking margin {bomb_ranking_margin(bomb)}, "
                         f"distance weight {bomb.get('distance_weight', 0)}, "
                         f"temperature {bomb.get('distance_temperature', 1)}"
@@ -1992,8 +2000,9 @@ def train(
     finally:
         if callback:
             callback.close()
-        if model is not None and getattr(model, "_counterfactual", None) is not None:
-            model._counterfactual.close()
+        if model is not None and getattr(model, "_reach", None) is not None:
+            model._reach.close()
+            model._reach = None
         if model is not None and getattr(model, "_peashooter_teacher", None) is not None:
             model._peashooter_teacher.close()
         if model is not None and getattr(model, "_buffer", None) is not None:

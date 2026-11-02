@@ -22,7 +22,6 @@ from pvz_rl.learning.cohort import (
 )
 from pvz_rl.learning.cuda_buffer import CompleteGameBuffer
 from pvz_rl.learning.exploration import EXPLORATION_PROTOCOL, configure_exploration
-from pvz_rl.learning.objective import OBJECTIVE_PROTOCOL
 from pvz_rl.learning.training_requirements import FIT_SCHEDULE_PROTOCOL
 from pvz_rl.policy.sequential_q import ACTION_DISTRIBUTION, POLICY_SIGNATURE
 
@@ -39,41 +38,10 @@ def checkpoint_metadata(path, *, weights_only=False):
     from pvz_rl.learning.checkpoints import protocol_for
 
     expected = protocol_for(metadata.get("policy"))
-    if not weights_only and metadata.get("optimizer") in (
-        OBJECTIVE_PROTOCOL,
-        "tile_warmup_then_joint_v1",
-    ):
+    if metadata != expected:
         raise ValueError(
-            "Checkpoint uses a previous fitting schedule and cannot resume. "
-            "Use --init-from for a fresh run with compatible weights."
-        )
-    if weights_only and metadata.get("optimizer") not in (
-        FIT_SCHEDULE_PROTOCOL,
-        "tile_warmup_then_joint_v1",
-        OBJECTIVE_PROTOCOL,
-        "complete_return_action_global_v6",
-        "complete_return_action_global_v5",
-        "complete_return_action_global_v4",
-        "complete_return_action_global_v3",
-        "complete_return_action_global_v2",
-        "complete_return_action_global_v1",
-        "complete_return_selective_invalid_v3",
-        "complete_return_selective_invalid_v2",
-        "complete_return_sequential_no_probe_v1",
-    ):
-        raise ValueError("Unsupported weight checkpoint objective protocol")
-    comparable = {
-        key: value
-        for key, value in metadata.items()
-        if not weights_only or key not in ("exploration", "optimizer")
-    }
-    if comparable != {
-        key: value
-        for key, value in expected.items()
-        if not weights_only or key not in ("exploration", "optimizer")
-    }:
-        raise ValueError(
-            "Retired model/optimizer/exploration checkpoint protocol; fresh initialization is required"
+            "Incompatible shared-model checkpoint protocol; start fresh. "
+            "Old architectures have no weight or optimizer migration."
         )
     return metadata
 
@@ -365,11 +333,11 @@ class CudaCohortLifecycle(BaseAlgorithm):
         else:
             self.normal_updates += 1
         self.logger.record("train/n_updates", self._n_updates)
+        if getattr(self, "_reach", None) is not None:
+            self._reach.close()
+            self._reach = None
         self._buffer.close()
         self._buffer = self._runner = None
-        if getattr(self, "_counterfactual", None) is not None:
-            self._counterfactual.close()
-            self._counterfactual = None
         if getattr(self, "_peashooter_teacher", None) is not None:
             self._peashooter_teacher.close()
             self._peashooter_teacher = None
@@ -439,19 +407,19 @@ class CudaCohortLifecycle(BaseAlgorithm):
                         self._finalize_rewards(callback)
                     elif phase == CohortPhase.RETURNS:
                         ranking = is_placement_skill(self.tile_skills.phase)
-                        search = getattr(self, "counterfactual_training", False)
                         rules = getattr(self, "peashooter_rule_training", False)
                         self.prefit_errors = self._buffer.finalize(
                             cohort=self.cohort_number,
-                            diagnostics=not (ranking or search or rules),
+                            diagnostics=not (ranking or rules),
                         )
-                        if ranking or search or rules:
+                        if ranking or rules:
                             self.prefit_errors = {}
                             self._buffer.reward_summary["supervision"] = (
-                                "prioritized_lane_cross_entropy_v1" if rules else
-                                "paired_tile_cross_entropy_v1" if search else placement_settings(
-                                    self.cfg, self.tile_skills.phase
-                                ).get("ranking_objective", "top1_hinge_v1")
+                                "prioritized_lane_cross_entropy_v1"
+                                if rules
+                                else placement_settings(self.cfg, self.tile_skills.phase).get(
+                                    "ranking_objective", "top1_hinge_v1"
+                                )
                             )
                         for name, values in self.prefit_errors.items():
                             self.logger.record("train/action_count_" + name, values["count"])
@@ -592,8 +560,8 @@ class CudaCohortLifecycle(BaseAlgorithm):
                                     archive.open(name, "w", force_zip64=True) as out,
                                 ):
                                     shutil.copyfileobj(inp, out, length=1024 * 1024)
-                if getattr(self, "_counterfactual", None) is not None:
-                    self._counterfactual.write_archive(archive)
+                if getattr(self, "_reach", None) is not None:
+                    self._reach.write_archive(archive)
                 if getattr(self, "_peashooter_teacher", None) is not None:
                     self._peashooter_teacher.write_archive(archive)
                 if self._buffer is not None:

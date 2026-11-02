@@ -22,8 +22,19 @@ def _worker_ready():
 
 
 def measure(
-    cfg, count, workers, oracle, repetitions, warmups, workspace, *, cuda_warmup=None,
-    stage="cherry_bomb", lanes=None, vram_mib=None, seed=101,
+    cfg,
+    count,
+    workers,
+    oracle,
+    repetitions,
+    warmups,
+    workspace,
+    *,
+    cuda_warmup=None,
+    stage="cherry_bomb",
+    lanes=None,
+    vram_mib=None,
+    seed=101,
     warmup_games=0,
 ):
     # Keep Torch out of the module scope: Windows CPU workers import __mp_main__.
@@ -49,8 +60,6 @@ def measure(
         tile["attacker"]["n_envs"] = count
     else:
         tile["cherry_bomb_n_envs"] = count
-    cfg["training"]["counterfactual"]["normal"]["enabled"] = False
-    cfg["training"]["counterfactual"].get("peashooter", {})["enabled"] = False
     cfg["training"].pop("peashooter_rules", None)
     perf = cfg["training"]["performance"]
     prefix = "attacker" if attacker else "cherry"
@@ -67,9 +76,7 @@ def measure(
 
     resources = preparation_settings(cfg, stage)
     warmup_backend = (
-        "cuda"
-        if oracle in ("cuda", "distance") and resources.get("cuda_warmup", False)
-        else "cpu"
+        "cuda" if oracle in ("cuda", "distance") and resources.get("cuda_warmup", False) else "cpu"
     )
     cfg["training"].update(
         total_games=count * (repetitions + warmups + 1), until_stage_complete=False
@@ -92,8 +99,10 @@ def measure(
         prep.submit([], skill=stage)
         ready = set()
         while prep.pool is not None and len(ready) < prep.workers:
-            ready.update(f.result() for f in [prep.pool.submit(_worker_ready)
-                                             for _ in range(2 * prep.workers)])
+            ready.update(
+                f.result()
+                for f in [prep.pool.submit(_worker_ready) for _ in range(2 * prep.workers)]
+            )
             if perf_counter() - startup > 30:
                 raise RuntimeError("Preparation workers did not become ready within 30 seconds")
         worker_startup_seconds = perf_counter() - startup
@@ -125,8 +134,13 @@ def measure(
                 raise RuntimeError(f"Collected {completed}/{count} episodes")
             prep = env.queue._preparation
             labels = [
-                (index, getattr(board["snapshot"], "_captured_digest", None),
-                 board.get("supplied_plant"), board["feasible_tiles"], board.get("fallback"))
+                (
+                    index,
+                    getattr(board["snapshot"], "_captured_digest", None),
+                    board.get("supplied_plant"),
+                    board["feasible_tiles"],
+                    board.get("fallback"),
+                )
                 for index, board in sorted(env.tile_boards.items())
             ]
             rows.append(
@@ -189,8 +203,11 @@ def main():
     from pvz_rl.gpu import apply_gpu_profile, select_gpu
 
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--stage", choices=["cherry_bomb", "cherry_bomb_obstacle", "attacker_pre"],
-                        default="cherry_bomb")
+    parser.add_argument(
+        "--stage",
+        choices=["cherry_bomb", "cherry_bomb_obstacle", "attacker_pre"],
+        default="cherry_bomb",
+    )
     parser.add_argument("--envs", nargs="+", type=int, default=[256, 512, 640, 1024])
     parser.add_argument("--workers", nargs="+", type=int, default=[8, 16, 24, 32])
     parser.add_argument("--oracles", nargs="+", choices=["cpu", "cuda", "distance"])
@@ -200,8 +217,12 @@ def main():
     parser.add_argument("--seed", type=int, default=101)
     parser.add_argument("--repetitions", type=int, default=4)
     parser.add_argument("--warmups", type=int, default=2)
-    parser.add_argument("--warmup-games", type=int, default=0,
-                        help="Warm at least this many episodes before measurements")
+    parser.add_argument(
+        "--warmup-games",
+        type=int,
+        default=0,
+        help="Warm at least this many episodes before measurements",
+    )
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--resume", action="store_true", help="Skip combinations already recorded")
     args = parser.parse_args()
@@ -217,14 +238,22 @@ def main():
     ):
         parser.error("attacker_pre uses distance labels; bomb stages use cpu/cuda oracles")
     cfg, profile = apply_gpu_profile(load_config(), device=select_gpu())
-    report = dict(protocol="placement_collection_v2", config_digest=digest(cfg),
-                  stage=args.stage, seed=args.seed, profile=profile,
-                  settings=cfg["training"]["performance"], combinations=[])
+    report = dict(
+        protocol="placement_collection_v2",
+        config_digest=digest(cfg),
+        stage=args.stage,
+        seed=args.seed,
+        profile=profile,
+        settings=cfg["training"]["performance"],
+        combinations=[],
+    )
     if args.resume and args.output.is_file():
         report = json.loads(args.output.read_text("utf-8"))
         if report.get("stage") != args.stage or report.get("seed") != args.seed:
             parser.error("The existing benchmark has a different stage or seed")
-        if report.get("protocol") != "placement_collection_v2" or report.get("config_digest") != digest(cfg):
+        if report.get("protocol") != "placement_collection_v2" or report.get(
+            "config_digest"
+        ) != digest(cfg):
             parser.error("Benchmark protocol/configuration changed; use a new output file")
     args.output.parent.mkdir(parents=True, exist_ok=True)
     combinations = [
@@ -242,23 +271,43 @@ def main():
             from pvz_rl.envs.tile_scenarios import preparation_settings
 
             defaults = preparation_settings(cfg, args.stage)
-            identity = dict(stage=args.stage, envs=count, workers=workers, oracle=oracle,
-                            warmup_backend=backend, oracle_lanes=lanes or defaults.get("oracle_lanes", 256),
-                            oracle_vram_mib=vram or defaults.get("oracle_vram_mib", 256))
-            previous = [row for row in report["combinations"]
-                        if all(row.get(k) == v for k, v in identity.items())]
+            identity = dict(
+                stage=args.stage,
+                envs=count,
+                workers=workers,
+                oracle=oracle,
+                warmup_backend=backend,
+                oracle_lanes=lanes or defaults.get("oracle_lanes", 256),
+                oracle_vram_mib=vram or defaults.get("oracle_vram_mib", 256),
+            )
+            previous = [
+                row
+                for row in report["combinations"]
+                if all(row.get(k) == v for k, v in identity.items())
+            ]
             if args.resume and any(
-                row.get("status") == "infeasible" or (
+                row.get("status") == "infeasible"
+                or (
                     sum(not s["warmup"] for s in row["samples"]) >= args.repetitions
                     and row.get("warmup_games", 0) >= max(args.warmup_games, args.warmups * count)
-                ) for row in previous
+                )
+                for row in previous
             ):
                 continue
             try:
                 result = measure(
-                    cfg, count, workers, oracle, args.repetitions, args.warmups, workspace,
-                    cuda_warmup=backend == "cuda", stage=args.stage,
-                    lanes=lanes, vram_mib=vram, seed=args.seed,
+                    cfg,
+                    count,
+                    workers,
+                    oracle,
+                    args.repetitions,
+                    args.warmups,
+                    workspace,
+                    cuda_warmup=backend == "cuda",
+                    stage=args.stage,
+                    lanes=lanes,
+                    vram_mib=vram,
+                    seed=args.seed,
                     warmup_games=args.warmup_games,
                 )
             except (MemoryError, torch.OutOfMemoryError) as error:

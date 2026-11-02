@@ -80,16 +80,16 @@ class AttentionBlock(nn.Module):
 
 
 class SpatialTransformer(nn.Module):
-    """Independent public-board encoder with stage-specific readout tokens."""
+    """Public-board memory encoder with one global token and contextual entities."""
 
     def __init__(self, layout, spec, stage):
         super().__init__()
-        if stage not in ("species", "tile"):
+        if stage != "board":
             raise ValueError("Unknown spatial Transformer stage")
         self.layout = layout
         self.stage = stage
-        self.token_overhead = 1 if stage == "species" else 47
-        self.width = width = spec[f"{stage}_width"]
+        self.token_overhead = 1
+        self.width = width = spec["shared_width"]
         self.microbatch = spec["encoder_microbatch"]
         self.token_budget = spec["encoder_token_budget"]
         self.activation_checkpointing = False
@@ -143,26 +143,15 @@ class SpatialTransformer(nn.Module):
         self.numeric = nn.Linear(9, width)
         self.input_norm = nn.LayerNorm(width)
         self.global_projection = nn.Linear(layout.global_width, width)
-        if stage == "tile":
-            self.branch_embedding = nn.Embedding(10, width, padding_idx=0)
-            self.tile_marker = nn.Parameter(torch.zeros(width))
-            coordinates = torch.zeros(layout.rows * layout.cols, 9)
-            indices = torch.arange(len(coordinates))
-            coordinates[:, 0] = (indices // layout.cols) / max(1, layout.rows - 1)
-            units = layout.rules.game["units_per_tile"]
-            coordinates[:, 1] = (
-                (indices % layout.cols) * units + units // 2 - layout.rules.game["house_x"]
-            ) / layout.position_scale
-            self.register_buffer("tile_coordinates", coordinates)
         self.layers = nn.ModuleList(
             [
                 AttentionBlock(
                     width,
-                    spec[f"{stage}_heads"],
-                    spec[f"{stage}_feedforward"],
+                    spec["attention_heads"],
+                    spec["feedforward_width"],
                     spec["attention_query_chunk"],
                 )
-                for _ in range(spec[f"{stage}_layers"])
+                for _ in range(spec["encoder_blocks"])
             ]
         )
         self.norm = nn.LayerNorm(width)
@@ -318,32 +307,19 @@ class SpatialTransformer(nn.Module):
             readouts = self.global_projection(globals_.to(self.global_projection.weight.dtype))[
                 :, None
             ]
-        if self.stage == "tile":
-            tiles = self.numeric(self.tile_coordinates.to(self.numeric.weight.dtype))
-            tiles = tiles + self.tile_marker.to(tiles.dtype)
-            readouts = torch.cat(
-                (
-                    readouts,
-                    self.branch_embedding(branches).to(readouts.dtype)[:, None],
-                    tiles[None].expand(entities.shape[0], -1, -1),
-                ),
-                1,
-            )
         x = torch.cat((readouts, embedded), 1)
         valid = torch.cat(
             (torch.ones(readouts.shape[:2], dtype=torch.bool, device=x.device), mask), 1
         )
         for layer in self.layers:
             x = layer(x, valid)
-        return stable_norm(self.norm, x[:, : readouts.shape[1]])
+        return stable_norm(self.norm, x)
 
     def forward(self, observations, branches=None):
         self.layout.validate(observations)
         if len(observations.shape) != 1:
             raise ValueError("Spatial inference requires flat board batches")
         if branches is None:
-            if self.stage == "tile":
-                raise ValueError("Tile inference requires selected branches")
             branches = torch.zeros(len(observations), dtype=torch.long, device=observations.device)
         if branches.shape != (len(observations),) or branches.dtype != torch.long:
             raise ValueError("Branches must be an int64 board vector")

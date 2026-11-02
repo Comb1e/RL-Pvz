@@ -40,8 +40,9 @@ def preparation_settings(cfg, skill):
     perf = cfg["training"].get("performance", {})
     result = {k.removeprefix("cherry_"): v for k, v in perf.items() if k.startswith("cherry_")}
     if skill == "attacker_pre":
-        result.update({k.removeprefix("attacker_"): v for k, v in perf.items()
-                       if k.startswith("attacker_")})
+        result.update(
+            {k.removeprefix("attacker_"): v for k, v in perf.items() if k.startswith("attacker_")}
+        )
         result["oracle"] = "distance"
     return result
 
@@ -57,7 +58,9 @@ def bomb_tile_distances(positive, illegal, *, rows, cols):
     illegal = set(illegal)
     maximum = rows + cols - 2
     return [
-        maximum if tile in illegal else min(
+        maximum
+        if tile in illegal
+        else min(
             abs(tile // cols - target // cols) + abs(tile % cols - target % cols)
             for target in positive
         )
@@ -146,10 +149,8 @@ def sample_bomb(cfg, seed, *, rules=None, deadline=None, skill="cherry_bomb"):
 
 
 def generation_failure(cfg, seed, skill="cherry_bomb"):
-    attempts = cfg["training"]["annotation"]["sampling_max_attempts"]
-    return BombGenerationFailure(
-        f"No valid {skill} board after {attempts} attempts (seed {seed})"
-    )
+    attempts = cfg["training"]["tile_scenarios"]["sampling_max_attempts"]
+    return BombGenerationFailure(f"No valid {skill} board after {attempts} attempts (seed {seed})")
 
 
 def bomb_candidates(cfg, seed, *, start=0, rules=None, deadline=None, skill="cherry_bomb"):
@@ -171,7 +172,7 @@ def bomb_initials(cfg, seed, *, start=0, rules=None, deadline=None, skill="cherr
     settings = cfg["training"]["tile_scenarios"]
     if not is_bomb_skill(skill):
         raise ValueError(f"Unknown bomb scenario: {skill}")
-    attempts = cfg["training"]["annotation"]["sampling_max_attempts"]
+    attempts = cfg["training"]["tile_scenarios"]["sampling_max_attempts"]
     namespace = "tile-cherry-bomb" if skill == "cherry_bomb" else "tile-cherry-bomb-obstacle"
     rng = random.Random(namespace_seed(namespace, seed))
     rows, cols = rules.game["rows"], rules.game["cols"]
@@ -197,7 +198,8 @@ def bomb_initials(cfg, seed, *, start=0, rules=None, deadline=None, skill="cherr
             row = rng.randrange(rows)
             x = rng.randrange(cols * rules.game["units_per_tile"])
             hit_cells = [
-                tile for tile in range(rows * cols)
+                tile
+                for tile in range(rows * cols)
                 if blast_hits(tile % cols, tile // cols, x, row, rules.game["units_per_tile"], True)
             ]
             reserved = rng.choice(hit_cells)
@@ -207,7 +209,8 @@ def bomb_initials(cfg, seed, *, start=0, rules=None, deadline=None, skill="cherr
                 continue
             count = rng.randint(max(lower, len(blockers)), upper)
             extra = rng.sample(
-                [tile for tile in range(rows * cols) if tile not in hit_cells], count - len(blockers)
+                [tile for tile in range(rows * cols) if tile not in hit_cells],
+                count - len(blockers),
             )
             plants = tuple(
                 InitialPlant(rng.choice(kinds), *divmod(tile, cols)) for tile in (*blockers, *extra)

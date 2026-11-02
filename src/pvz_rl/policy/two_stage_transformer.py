@@ -1,8 +1,7 @@
-"""Stateless, independent species and conditional-placement Q Transformers."""
+"""Shared public-board encoding with conditional spatial Q and reach readouts."""
 
 from contextlib import contextmanager
 
-import numpy as np
 import torch
 from pvz_game import Rules
 from torch import nn
@@ -10,7 +9,7 @@ from torch import nn
 from pvz_rl.envs.actions import ActionSchema as A
 from pvz_rl.envs.actions import dig_branch_available
 from pvz_rl.envs.encoding import collate_observations
-from pvz_rl.policy.active_batch import ActiveBatchPlan, encode_active
+from pvz_rl.policy.active_batch import encode_active
 from pvz_rl.policy.entity_attention import SpatialTransformer
 from pvz_rl.policy.sequential_q import (
     POLICY_SIGNATURE,
@@ -18,6 +17,7 @@ from pvz_rl.policy.sequential_q import (
     observation_tile_masks,
     select_q_actions,
 )
+from pvz_rl.policy.tile_decoder import TileDecoder
 
 
 class TwoStageTransformerPolicy(nn.Module):
@@ -31,22 +31,35 @@ class TwoStageTransformerPolicy(nn.Module):
         self.layout = ObservationEncoder(cfg, Rules())
         self.fit_precision = "bf16_master"
         spec = cfg["policy"]
-        self.species_encoder = SpatialTransformer(self.layout, spec, "species")
-        self.tile_encoder = SpatialTransformer(self.layout, spec, "tile")
-        self.species_head = nn.Sequential(
-            nn.Linear(spec["species_width"], 128), nn.ReLU(), nn.Linear(128, 10)
-        )
-        self.tile_head = nn.Sequential(
-            nn.Linear(spec["tile_width"], 128), nn.ReLU(), nn.Linear(128, 1)
-        )
+        self.board_encoder = SpatialTransformer(self.layout, spec, "board")
+        self.tile_decoder = TileDecoder(self.layout, spec)
+        width = spec["shared_width"]
+        self.species_head = nn.Sequential(nn.Linear(width, 128), nn.ReLU(), nn.Linear(128, 10))
+        self.tile_head = nn.Sequential(nn.Linear(width, 128), nn.ReLU(), nn.Linear(128, 1))
+        self.reach_head = nn.Linear(width, 1)
+        self.reach_outside_head = nn.Linear(width, 1)
         self._master_parameters = []
         self._master_names = []
         self._initialize_masters()
         self._set_runtime_dtype(torch.bfloat16)
 
     @property
+    def species_encoder(self):
+        return self.board_encoder
+
+    @property
+    def tile_encoder(self):
+        return self.tile_decoder
+
+    @property
     def encoders(self):
-        return self.species_encoder, self.tile_encoder
+        return self.board_encoder, self.tile_decoder
+
+    @staticmethod
+    def _eligible(name, stage):
+        if stage == "tile":
+            return not name.startswith("species_head.") and not name.startswith("reach_")
+        return name.startswith(("board_encoder.", "species_head."))
 
     @property
     def device(self):
@@ -108,11 +121,10 @@ class TwoStageTransformerPolicy(nn.Module):
             return tuple(self._master_parameters)
         if stage not in ("species", "tile"):
             raise ValueError("Parameter stage must be species or tile")
-        prefix = f"{stage}_"
         return tuple(
             master
             for name, master in zip(self._master_names, self._master_parameters, strict=True)
-            if name.startswith(prefix)
+            if self._eligible(name, stage)
         )
 
     def requires_grad_(self, requires_grad=True):
@@ -127,11 +139,10 @@ class TwoStageTransformerPolicy(nn.Module):
             return parameters
         if stage not in ("species", "tile"):
             raise ValueError("Parameter stage must be species or tile")
-        prefix = f"{stage}_"
         return tuple(
             parameter
             for name, parameter in zip(self._master_names, parameters, strict=True)
-            if name.startswith(prefix)
+            if self._eligible(name, stage)
         )
 
     def master_state_dict(self):
@@ -228,74 +239,96 @@ class TwoStageTransformerPolicy(nn.Module):
             else encode_active(encoder, observations, plan, branches)
         )
 
-    def species_values(self, observations, *, plan=None):
+    def encode_board(self, observations, *, plan=None):
         observations = collate_observations(observations, self.device)
-        encoded = self._encode(self.species_encoder, observations, plan=plan)[:, 0]
-        if plan is None:
-            return self.species_head(encoded)
-        rows = torch.as_tensor(plan.original_slot_ids, device=observations.device)
-        result = encoded.new_zeros(len(observations), 10)
-        return result.index_copy(0, rows, self.species_head(encoded[rows]))
-
-    def _request_plan(self, plan, rows):
-        """Bound tile padding by published live widths without copying request IDs."""
-        if plan is None:
-            return None
-        width = max((bucket.entity_width for bucket in plan.buckets), default=0)
-        return ActiveBatchPlan.from_counts(
-            np.ones(len(rows), dtype=bool),
-            np.full(len(rows), width, dtype=np.int64),
-            self.layout.max_entities,
-            self.tile_encoder.microbatch,
-            self.tile_encoder.token_budget,
-            token_overhead=self.tile_encoder.token_overhead,
+        memory = self._encode(self.board_encoder, observations, plan=plan)
+        valid = torch.cat(
+            (
+                torch.ones((len(observations), 1), device=self.device, dtype=torch.bool),
+                observations.entity_mask,
+            ),
+            1,
         )
+        return memory, valid
 
-    def conditional_tiles(self, observations, branches, *, rows=None, plan=None):
+    @contextmanager
+    def board_context(self, observations, *, plan=None):
+        # Explicit call-scoped memory, never an across-decision policy cache.
+        prior = getattr(self, "_board_context", None)
+        self._board_context = (observations, self.encode_board(observations, plan=plan))
+        try:
+            yield self._board_context[1]
+        finally:
+            self._board_context = prior
+
+    def _memory(self, observations, plan=None):
+        cached = getattr(self, "_board_context", None)
+        if cached is not None and cached[0] is observations:
+            return cached[1]
+        return self.encode_board(observations, plan=plan)
+
+    def species_values(self, observations, *, plan=None, memory=None):
+        observations = collate_observations(observations, self.device)
+        memory = self._memory(observations, plan) if memory is None else memory
+        return self.species_head(memory[0][:, 0])
+
+    def tile_features(self, observations, branches, *, rows=None, plan=None, memory=None):
         observations = collate_observations(observations, self.device)
         branches = torch.as_tensor(branches, device=self.device, dtype=torch.long)
-        if branches.ndim != 1:
-            raise ValueError("Conditional branches must be a vector")
-        if rows is None:
-            if len(branches) != len(observations):
-                raise ValueError("Conditional branches must match the board batch")
-            rows = torch.arange(len(branches), device=self.device)
-        else:
-            rows = torch.as_tensor(rows, device=self.device, dtype=torch.long)
-            if rows.shape != branches.shape:
-                raise ValueError("Requested rows and branches must have matching shapes")
+        rows = (
+            torch.arange(len(branches), device=self.device)
+            if rows is None
+            else torch.as_tensor(rows, device=self.device, dtype=torch.long)
+        )
+        if branches.ndim != 1 or rows.shape != branches.shape:
+            raise ValueError("Tile branches and rows must be matching vectors")
+        memory = self._memory(observations, plan) if memory is None else memory
+        return self.tile_decoder(memory[0][rows], memory[1][rows], branches)
+
+    def reach_values(self, features):
+        features = features.reshape(-1, 5, 9, self.cfg["policy"]["shared_width"])
+        cells = self.reach_head(features).squeeze(-1)
+        outside = self.reach_outside_head(features.mean(2))
+        return torch.cat((cells, outside), -1)
+
+    @staticmethod
+    def reach_map(logits):
+        return logits.float().softmax(-1)[..., :9].cumsum(-1)
+
+    def conditional_tiles(
+        self, observations, branches, *, rows=None, plan=None, memory=None, return_reach=False
+    ):
+        observations = collate_observations(observations, self.device)
+        branches = torch.as_tensor(branches, device=self.device, dtype=torch.long)
+        rows = (
+            torch.arange(len(branches), device=self.device)
+            if rows is None
+            else torch.as_tensor(rows, device=self.device, dtype=torch.long)
+        )
         result = next(self.parameters()).new_zeros(len(branches), A.tiles)
         requested = torch.nonzero(branches > 0, as_tuple=False).flatten()
+        reach = result.new_zeros((len(branches), 5, 10)) if return_reach else None
         if not len(requested):
-            return result
-        pairs = rows[requested] * 10 + branches[requested]
-        unique, inverse = torch.unique(pairs, sorted=True, return_inverse=True)
-        source_rows, source_branches = unique // 10, unique % 10
-        request_plan = self._request_plan(plan, source_rows)
-        encoded = self._encode(
-            self.tile_encoder, observations[source_rows], source_branches, request_plan
-        )[:, 2:]
-        values = self.tile_head(encoded).squeeze(-1)
-        return result.index_copy(0, requested, values[inverse])
+            return (result, reach) if return_reach else result
+        features = self.tile_features(
+            observations, branches[requested], rows=rows[requested], plan=plan, memory=memory
+        )
+        result = result.index_copy(0, requested, self.tile_head(features).squeeze(-1))
+        if return_reach:
+            reach = reach.index_copy(0, requested, self.reach_values(features))
+            return result, reach
+        return result
 
     def fitting_tiles(self, observations, branches, *, rows):
-        """Internal transport plan: one positive branch per distinct, validated row."""
-        encoded = self.tile_encoder(observations[rows], branches)[:, 2:]
-        return self.tile_head(encoded).squeeze(-1)
+        features = self.tile_features(observations, branches, rows=rows)
+        return self.tile_head(features).squeeze(-1)
 
-    def collection_tiles(self, observations, branches, *, plan=None):
-        """One branch per board: compact eligible rows once, without deduplication."""
-        requested = torch.nonzero(branches > 0, as_tuple=False).flatten()
-        result = next(self.parameters()).new_zeros(len(branches), A.tiles)
-        if not len(requested):
-            return result
-        encoded = self._encode(
-            self.tile_encoder,
-            observations[requested],
-            branches[requested],
-            self._request_plan(plan, requested),
-        )[:, 2:]
-        return result.index_copy(0, requested, self.tile_head(encoded).squeeze(-1))
+    def collection_tiles(
+        self, observations, branches, *, plan=None, memory=None, return_reach=False
+    ):
+        return self.conditional_tiles(
+            observations, branches, plan=plan, memory=memory, return_reach=return_reach
+        )
 
     def selected_values(self, observations, actions, *, species=None, tiles=None):
         observations = collate_observations(observations, self.device)
@@ -335,7 +368,8 @@ class TwoStageTransformerPolicy(nn.Module):
         supplied_branches=None,
     ):
         observations = collate_observations(observations, self.device)
-        species = self.species_values(observations, plan=active_plan)
+        memory = self.encode_board(observations, plan=active_plan)
+        species = self.species_values(observations, memory=memory)
         if action_masks is None:
             action_masks = observation_tile_masks(observations)
         if action_masks.shape != (len(observations), A.size):
@@ -372,7 +406,9 @@ class TwoStageTransformerPolicy(nn.Module):
         selected_usable = branch_usable.gather(1, branches[:, None]).flatten()
         tile_rows = (branches > 0) & selected_usable
         requests = torch.where(tile_rows, branches, torch.zeros_like(branches))
-        tiles = self.collection_tiles(observations, requests, plan=active_plan)
+        tiles, reach = self.collection_tiles(
+            observations, requests, plan=active_plan, memory=memory, return_reach=True
+        )
         actions, _, _, details = select_q_actions(
             species,
             tiles,
@@ -387,4 +423,6 @@ class TwoStageTransformerPolicy(nn.Module):
             details["valid"] &= supplied_valid
         details["tile_inference_skipped"] = (branches > 0) & ~tile_rows
         details["observations"] = observations
+        details["board_memory"] = memory
+        details["reach_logits"] = reach
         return actions, details
