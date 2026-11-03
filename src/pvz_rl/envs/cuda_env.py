@@ -487,6 +487,9 @@ class CudaVecEnv(VecEnv):
         if self.static_forks is None:
             from pvz_rl.envs.fork_service import ForkService
 
+            # Board preparation is finished. Its idle GPU oracle must not compete
+            # with collection forks; retain CPU workers and speculative seeds.
+            self.queue.release_scratch()
             settings = dict(self.cfg["training"]["forecasts"])
             settings.update(
                 {
@@ -803,7 +806,9 @@ class CudaVecEnv(VecEnv):
         if viewer is not None and viewer.enabled:
             presentation_started = perf_counter()
             try:
-                viewer.after_step(compact)
+                viewer.after_step(
+                    compact, completed_headers=(indices, headers) if indices else None
+                )
             except Exception as exc:
                 viewer.fail(exc)
             self.profiler.host("presentation", perf_counter() - presentation_started)

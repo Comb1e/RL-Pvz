@@ -66,6 +66,8 @@ This file owns project-specific invariants and the code map.
 - Preparation/prefetch is bounded and speculative: commit seeds only on consumption,
   regenerate unfinished work on resume, share RAM/VRAM limits, and preserve exact
   attributed labels. Respect independent configured stage cohort/resource sizes.
+  Release idle preparation scratch before allocating forks; live exercise viewing
+  sizes staging from transferred live counts, never the full projectile capacity.
   Fresh cohorts draw independent seeds; save pending draws before prefetch so
   recovery reproduces unfinished boards. Seed-matched diagnostics disable this mode.
 - Completed autonomous runs retain portable weights and visualizations. Interrupted,

@@ -86,6 +86,9 @@ rejections, rebasing breach times and checking the full physical state. Cache
 misses run fresh forks. Wait/rejected decisions still receive hypothetical action
 examples. Tune `fork_*` execution settings under `training.performance`; cache
 storage shares the existing fork VRAM cap. The encoder always sees the current board.
+The placement viewer stages only live entities from each board; idle preparation
+oracles release their GPU buffers before collection forks start. Keep existing
+cohort and VRAM settings when resuming a run affected by scratch-allocation failure.
 
 Threat targets summarize realized penetration at 2τ, 9τ and episode end, breach
 time and per-lane loss. τ is the reference Basic-zombie tile-crossing time,

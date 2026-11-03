@@ -68,7 +68,10 @@ class ForkService:
         if self.batch is None:
             raise MemoryError(
                 "Static forks cannot allocate one scratch lane within the VRAM cap/headroom. "
-                "Increase training.forecasts.vram_mib or free GPU memory; recovery is retained."
+                f"Reusable VRAM: {free / 2**20:.0f} MiB; reserved headroom: "
+                f"{settings.get('headroom_mib', 0)} MiB; fork cap: "
+                f"{settings['vram_mib']} MiB. Free GPU memory or increase "
+                "training.forecasts.vram_mib if the cap is limiting; recovery is retained."
             )
         occupied = sum(v.nbytes for v in vars(self.batch).values() if isinstance(v, cp.ndarray))
         queue_bytes = queue_fixed + count * 8

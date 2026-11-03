@@ -152,6 +152,18 @@ class CudaLiveCapture:
             for _ in range(2)
         ]
 
+    def _resize(self, capacity, shapes):
+        if capacity == self.capacity and shapes == self.shapes:
+            return
+        self.drain(wait=True)
+        # Drop old owners before allocating replacements. Placement snapshots use
+        # actual live counts, not every main environment's worst-case shot slab.
+        self.slots = []
+        self.capacity, self.shapes = capacity, shapes
+        self.widths = {k: int(np.prod(shape)) for k, shape in shapes.items()}
+        self.width = sum(self.widths.values())
+        self.slots = self._allocate_slots()
+
     @property
     def enabled(self):
         return self.session.enabled
@@ -177,16 +189,16 @@ class CudaLiveCapture:
             return
         self.set_activity(Activity.COLLECTING)
         # One-shot exercises finish every worker before a switch can be polled.
-        # Copy their public results once, in one batch, for CPU-only browsing.
+        # Copy their public results once for CPU-only browsing. Size staging
+        # after the step, from headers already transferred for episode outcomes.
         capacity = (
             self.env.num_envs
             if is_placement_skill(self.env.tile_scenario)
             else len(self.session.selection.panels)
         )
-        if capacity != self.capacity:
-            self.drain(wait=True)
-            self.capacity = capacity
-            self.slots = self._allocate_slots()
+        if not is_placement_skill(self.env.tile_scenario):
+            self._resize(capacity, {k: v.shape[1:] for k, v in self.source.items()})
+        if self.indices is not None and self.indices.numel() != capacity:
             self.indices = None
         if self.indices is None:
             self.indices = torch.tensor(
@@ -199,7 +211,7 @@ class CudaLiveCapture:
             self.session.publish(force=True)
         self.prepared = True
 
-    def after_step(self, compact):
+    def after_step(self, compact, *, completed_headers=None):
         started = perf_counter()
         panels = self.session.selection.panels
         cache_completed = is_placement_skill(self.env.tile_scenario)
@@ -221,6 +233,19 @@ class CudaLiveCapture:
         if not captured:
             self.session.publish()
             return
+        if cache_completed:
+            if completed_headers is None:
+                raise RuntimeError("Placement viewer requires completed public headers")
+            indices, headers = completed_headers
+            if list(indices) != captured:
+                raise RuntimeError("Placement viewer headers disagree with completed exercises")
+            shapes = {k: v.shape[1:] for k, v in self.source.items()}
+            for name, count in (("plants", "np"), ("zombies", "nz"), ("projectiles", "nq")):
+                live = int(headers[:, s.HEADER.index(count)].max())
+                if not 0 <= live <= shapes[name][0]:
+                    raise RuntimeError("Placement viewer live count exceeds physical storage")
+                shapes[name] = (live, shapes[name][1])
+            self._resize(self.env.num_envs, shapes)
         self.drain()
         slot = next((slot for slot in self.slots if slot["pending"] is None), None)
         if slot is None and (terminal or cache_completed):
@@ -235,6 +260,10 @@ class CudaLiveCapture:
         offset = 0
         for key, tensor in self.source.items():
             width = self.widths[key]
+            if not width:
+                continue
+            if tensor.ndim == 3:
+                tensor = tensor[:, : self.shapes[key][0]]
             torch.index_select(
                 tensor,
                 0,
