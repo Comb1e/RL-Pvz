@@ -69,12 +69,63 @@ def categorical_loss(logits, labels, *, censored=None):
     return torch.where(known, exact, 0), known
 
 
-def threat_loss(logits, depths, censored, times, losses, *, decision_count=None):
+def allowed_class_loss(logits, allowed):
+    """Zero/full bitsets are uninformative; partial sets describe censored futures."""
+    logits = logits.float()
+    bits = torch.as_tensor(
+        allowed if torch.is_tensor(allowed) else np.array(allowed),
+        device=logits.device,
+        dtype=torch.long,
+    )
+    full = (1 << logits.shape[-1]) - 1
+    known = (bits != 0) & (bits != full)
+    # Never evaluate logsumexp on an empty set, even in a masked-out branch.
+    bits = torch.where(known, bits, full)
+    support = torch.arange(logits.shape[-1], device=logits.device)
+    mask = (bits[..., None] & (1 << support)) != 0
+    logp = F.log_softmax(logits, -1)
+    loss = -torch.logsumexp(logp.masked_fill(~mask, -torch.inf), -1)
+    return torch.where(known, loss, 0), known
+
+
+def threat_eligible(rows):
+    if "threat_depth_allowed" in rows.dtype.names:
+        d, t = rows["threat_depth_allowed"], rows["threat_time_allowed"]
+        return (
+            ((d != 0) & (d != 2047)).any(axis=(-1, -2))
+            | ((t != 0) & (t != 63)).any(-1)
+            | (rows["threat_loss"] >= 0).any(-1)
+        )
+    informative = (rows["threat_depth"] >= 0) & ~(
+        rows["threat_censored"] & (rows["threat_depth"] == 0)
+    )
+    return (
+        informative.any(axis=(-1, -2))
+        | (rows["threat_time"] >= 0).any(-1)
+        | (rows["threat_loss"] >= 0).any(-1)
+    )
+
+
+def threat_loss(
+    logits,
+    depths,
+    censored,
+    times,
+    losses,
+    *,
+    decision_count=None,
+    depth_allowed=None,
+    time_allowed=None,
+):
     """Normalize terms within lane, lanes within root, and eligible roots equally."""
     logits = logits.float()
     depth_logits = logits[..., :33].reshape(*logits.shape[:-1], 3, 11)
-    dl, dm = categorical_loss(depth_logits, depths, censored=censored)
-    tl, tm = categorical_loss(logits[..., 33:39], times)
+    if depth_allowed is None:
+        dl, dm = categorical_loss(depth_logits, depths, censored=censored)
+        tl, tm = categorical_loss(logits[..., 33:39], times)
+    else:
+        dl, dm = allowed_class_loss(depth_logits, depth_allowed)
+        tl, tm = allowed_class_loss(logits[..., 33:39], time_allowed)
     target = torch.as_tensor(losses, device=logits.device, dtype=torch.float32)
     lm = target >= 0
     ll = F.binary_cross_entropy_with_logits(logits[..., 39], target.clamp_min(0), reduction="none")
@@ -94,6 +145,59 @@ def effect_loss(logits, labels, *, root_count=None):
         loss, known = categorical_loss(block, labels[..., index])
         losses.append(loss * known)
     return torch.stack(losses, -1).mean(-1)
+
+
+def conditional_effect_loss(logits, labels):
+    """Occurrence keeps natural frequencies; magnitude averages changed terms separately.
+
+    Return per-token gate/conditional losses and conditional eligibility. Callers
+    aggregate tokens within roots, never give roots with more alternatives more weight.
+    Occurrence/nonzero separation adapts Deep Hurdle Networks (arXiv:2010.16040).
+    """
+    gates, conditionals, changed = [], [], []
+    for term, block in enumerate(logits.float().split(EFFECT_SIZES, -1)):
+        zero = block.shape[-1] // 2
+        nonzero = torch.cat((block[..., :zero], block[..., zero + 1 :]), -1)
+        target = labels[..., term].long()
+        change = target != zero
+        gate = torch.logsumexp(nonzero, -1) - block[..., zero]
+        gates.append(F.binary_cross_entropy_with_logits(gate, change.float(), reduction="none"))
+        index = target - (target > zero).long()
+        error = (
+            -F.log_softmax(nonzero, -1)
+            .gather(-1, index.clamp_max(nonzero.shape[-1] - 1)[..., None])
+            .squeeze(-1)
+        )
+        conditionals.append(torch.where(change, error, 0))
+        changed.append(change)
+    gate = torch.stack(gates, -1).mean(-1).mean(-1)
+    changes = torch.stack(changed, -1)
+    count = changes.sum(-1)
+    lane = torch.stack(conditionals, -1).sum(-1) / count.clamp_min(1)
+    valid = count > 0
+    conditional = (lane * valid).sum(-1) / valid.sum(-1).clamp_min(1)
+    return gate, conditional, valid.any(-1)
+
+
+def effect_forecast(logits, baseline):
+    """Derive post-action field/probe CDFs from signed probabilities, not labels."""
+    baseline = torch.as_tensor(baseline, device=logits.device, dtype=torch.float32)
+    result = []
+    for term in (0, 3):
+        block = logits.float().split(EFFECT_SIZES, -1)[term]
+        support = torch.arange(-10, 11, device=logits.device)
+        after = baseline[..., term, None] + support
+        p = block.softmax(-1)
+        thresholds = torch.arange(9, 0, -1, device=logits.device)
+        cells = (p[..., None, :] * (after[..., None, :] >= thresholds[:, None])).sum(-1)
+        home = (p * (after >= 10)).sum(-1)
+        if term == 0:
+            loss_p = logits.float().split(EFFECT_SIZES, -1)[2].softmax(-1)
+            home = (
+                loss_p * (baseline[..., 2, None] + torch.arange(-1, 2, device=logits.device) >= 1)
+            ).sum(-1)
+        result.append(torch.cat((home[..., None], cells), -1))
+    return torch.stack(result, -3)
 
 
 def effect_summary(logits):

@@ -14,7 +14,7 @@ import numpy as np
 import torch
 from stable_baselines3.common.base_class import BaseAlgorithm
 
-from pvz_rl.config import cohort_envs
+from pvz_rl.config import cohort_envs, forecast_forks_enabled, forecast_version
 from pvz_rl.envs.tile_scenarios import BombGenerationFailure, is_placement_skill, placement_settings
 from pvz_rl.learning.cohort import (
     CohortPhase,
@@ -198,7 +198,10 @@ class CudaCohortLifecycle(BaseAlgorithm):
             self.env.queue.prefetch(count)
 
     def _begin(self, callback):
-        callback.on_rollout_start()
+        if getattr(self, "_rollout_start_notified", False):
+            self._rollout_start_notified = False
+        else:
+            callback.on_rollout_start()
         from pvz_rl.learning.budget import budget_target, progress_value, uses_games
         from pvz_rl.learning.curriculum import pre_stage
 
@@ -404,9 +407,31 @@ class CudaCohortLifecycle(BaseAlgorithm):
             self.tile_skills.active or self.num_timesteps < total or self.phase != CohortPhase.IDLE
         ):
             if self.phase == CohortPhase.IDLE:
-                settings = self.cfg["training"].get("forecasts", {})
+                from pvz_rl.learning.curriculum import pre_stage
+
+                # Probes may change the active skill. Resolve that handoff before
+                # deciding whether the next stage requires private pretraining.
+                if forecast_version(self.cfg) >= 2 and not getattr(
+                    self, "_rollout_start_notified", False
+                ):
+                    callback.on_rollout_start()
+                    self._rollout_start_notified = True
                 if (
-                    settings.get("enabled", False)
+                    forecast_version(self.cfg) >= 2
+                    and pre_stage(self.env.cfg)
+                    and not self.tile_skills.active
+                ):
+                    break
+                settings = self.cfg["training"].get("forecasts", {})
+                self.forecast_pretraining_state = (
+                    "complete"
+                    if self.forecaster_pretrained
+                    else "deferred"
+                    if not forecast_forks_enabled(self.cfg, self.tile_skills.phase)
+                    else "pending"
+                )
+                if (
+                    forecast_forks_enabled(self.cfg, self.tile_skills.phase)
                     and settings.get("pretrain_roots", 0)
                     and not self.forecaster_pretrained
                 ):
@@ -414,14 +439,18 @@ class CudaCohortLifecycle(BaseAlgorithm):
 
                     self._ensure_teacher()
                     self._pretrainer = ForecastPretraining(self)
+                    self.forecast_pretraining_state = "running"
                     self._phase(CohortPhase.PRETRAIN, callback)
                     continue
                 from pvz_rl.learning.budget import budget_target, progress_value, uses_games
-                from pvz_rl.learning.curriculum import pre_stage
 
                 target = budget_target(self.env.cfg)
-                if pre_stage(self.env.cfg) and not self.tile_skills.active:
-                    break
+                if (
+                    forecast_version(self.cfg) == 1
+                    and pre_stage(self.env.cfg)
+                    and not self.tile_skills.active
+                ):
+                    break  # Preserve the saved legacy ordering around pretraining.
                 if (
                     uses_games(self.env.cfg)
                     and (pre_stage(self.env.cfg) or not self.tile_skills.active)
@@ -448,6 +477,7 @@ class CudaCohortLifecycle(BaseAlgorithm):
                             self._pretrainer.close()
                             self._pretrainer = None
                             self.forecaster_pretrained = True
+                            self.forecast_pretraining_state = "complete"
                             self._phase(CohortPhase.IDLE, callback)
                         if hasattr(callback, "log_progress"):
                             callback.log_progress()

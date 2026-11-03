@@ -12,6 +12,7 @@ from pvz_game import Dig, Game, LevelSpec, Place, Rules, Status, Wait, WaveSpec
 from pvz_game.replay import Recorder
 
 from pvz_rl.config import (
+    forecast_forks_enabled,
     load_config,
     runtime_settings,
     validate_config,
@@ -45,7 +46,7 @@ class PvZEnv(gym.Env):
     def _encoded_public(self):
         baseline = None
         settings = self.cfg["training"].get("forecasts", {})
-        if settings.get("enabled", False):
+        if forecast_forks_enabled(self.cfg, getattr(self, "tile_scenario", None)):
             from pvz_rl.envs.static_fork import StaticFork, reference_tau
             from pvz_rl.learning.forecast_labels import baseline_features
 

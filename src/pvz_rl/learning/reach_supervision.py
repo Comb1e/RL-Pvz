@@ -5,11 +5,13 @@ from time import perf_counter
 
 import numpy as np
 
+from pvz_rl.config import forecast_mode, forecast_version
 from pvz_rl.envs.reach_tracking import FORECAST_HEADER
 from pvz_rl.envs.static_fork import reference_tau
 from pvz_rl.learning.forecast_labels import FORECAST_PROTOCOL, time_bin
 
 REACH_PROTOCOL = FORECAST_PROTOCOL
+CONSTRAINT_PROTOCOL = "lane-forecast-constraints-v2"
 
 
 class ReachPhase(StrEnum):
@@ -23,14 +25,21 @@ class ReachPhase(StrEnum):
 class ReachSupervision:
     def __init__(self, env, buffer, state=None, archive=None):
         self.env, self.buffer = env, buffer
+        self.version = forecast_version(env.cfg)
+        self.protocol = CONSTRAINT_PROTOCOL if self.version >= 2 else REACH_PROTOCOL
+        self.snapshot_only = forecast_mode(env.cfg, env.tile_scenario) == "snapshot_rules"
         self.exercise = env.tile_scenario == "peashooter"
         self.phase, self.cursor = ReachPhase.COLLECTING, 0
         self._started = env.cp.zeros(env.batch.n, env.cp.bool_)
         self.tail = []
         self._timelines = {}
         self._contacts = {}
+        self._finished = {}
         self.metrics = dict(
-            label_policy=FORECAST_PROTOCOL,
+            label_policy=self.protocol,
+            forecast_mode="snapshot_rules" if self.snapshot_only else "factual",
+            safe_lane_targets=0,
+            mower_home_targets=0,
             eligible_decisions=0,
             tracking_seconds=0.0,
             storage_bytes=0,
@@ -47,15 +56,17 @@ class ReachSupervision:
             contact_observations=0,
         )
         if state is None:
-            env.batch.enable_reach()
+            if not self.snapshot_only:
+                env.batch.enable_reach()
         else:
-            if state["protocol"] != REACH_PROTOCOL:
+            if state["protocol"] != self.protocol:
                 raise ValueError("Incompatible old reach supervision; start fresh")
             self.phase, self.cursor = ReachPhase(state["phase"]), state["cursor"]
             self._started[:] = env.cp.asarray(state["started"])
             self.tail = list(state["tail"])
             self.metrics.update(state["metrics"])
-            env.batch.enable_reach(state["trace"])
+            if not self.snapshot_only:
+                env.batch.enable_reach(state["trace"])
             env.batch.reach_error[:] = env.cp.asarray(state["errors"])
 
     @property
@@ -64,9 +75,10 @@ class ReachSupervision:
             self.env.batch.reach_trace.nbytes
             + self.env.batch.reach_error.nbytes
             + self._started.nbytes
-            + sum(x[2].nbytes + x[3].nbytes + x[4].nbytes for x in self.tail)
+            + sum(sum(a.nbytes for a in x[2:]) for x in self.tail)
             + sum(v[0].nbytes + v[1].nbytes for v in self._timelines.values())
             + sum(sum(a.nbytes for a in lanes) for lanes in self._contacts.values())
+            + sum(mask.nbytes for mask in self._finished.values())
         )
 
     def before(self, actions, active):
@@ -93,6 +105,7 @@ class ReachSupervision:
             )
             header = batch.header.get()
             trace = batch.reach_trace.get()
+            facts = self.env.features.capture_forecast_facts().get() if self.version >= 2 else None
             if bool(batch.reach_error.any()):
                 raise RuntimeError("Private threat continuation tracker failed; recovery retained")
             for env in np.flatnonzero(active):
@@ -102,15 +115,16 @@ class ReachSupervision:
                     .reshape(-1, 5)
                     .astype(np.uint8)
                 )
-                self.tail.append(
-                    (
-                        int(env),
-                        int(before[env]),
-                        values,
-                        trace[env, 1:6].copy(),
-                        trace[env, 6:11].copy(),
-                    )
+                entry = (
+                    int(env),
+                    int(before[env]),
+                    values,
+                    trace[env, 1:6].copy(),
+                    trace[env, 6:11].copy(),
                 )
+                if facts is not None:
+                    entry += ((facts[env, 0] == 0) & (facts[env, 1:6] == 0),)
+                self.tail.append(entry)
             self.metrics["continuation_ticks"] += int((header[active, 0] - before[active]).sum())
             self.metrics["continuation_seconds"] += perf_counter() - start
         finally:
@@ -122,6 +136,7 @@ class ReachSupervision:
         if key in self._timelines:
             return self._timelines[key]
         pieces, homes, end = [], np.full(5, -1, np.int64), 0
+        finished = np.zeros(5, bool)
         contacts = [[] for _ in range(5)]
         for block, length in zip(
             self.buffer.blocks, range(0, self.buffer.size, self.buffer.block_rows)
@@ -136,13 +151,18 @@ class ReachSupervision:
                     "forecast_breach"
                 ][seen & ((homes < 0) | (row["forecast_breach"] < homes))]
                 end = max(end, tick + count)
+                if self.version >= 2 and tick + count == end:
+                    finished = row["forecast_finished"].copy()
                 for lane, contact in enumerate(row["forecast_contacts"]):
                     if contact >= 0:
                         contacts[lane].append(int(contact))
-        for slot, tick, values, entries, bites in self.tail:
+        for entry in self.tail:
+            slot, tick, values, entries, bites = entry[:5]
             if slot == env:
                 pieces.append((tick, values))
                 end = max(end, tick + len(values) - 1)
+                if len(entry) > 5 and tick + len(values) - 1 == end:
+                    finished = entry[5].copy()
                 seen = entries >= 0
                 take = seen & ((homes < 0) | (entries < homes))
                 homes[take] = entries[take]
@@ -155,6 +175,7 @@ class ReachSupervision:
                 trace[tick : tick + len(values)], values, out=trace[tick : tick + len(values)]
             )
         self._timelines[key] = trace, homes
+        self._finished[key] = finished
         self._contacts[key] = [np.unique(lane) for lane in contacts]
         return trace, homes
 
@@ -178,6 +199,9 @@ class ReachSupervision:
             row["reach_labels"], row["home_labels"] = -1, -1
             if not row["reach_valid"]:
                 continue
+            if self.version >= 2 and self.snapshot_only:
+                self._constraint_row(row, headers, tau)
+                continue
             env, tick = int(row["env"]), int(row["tick"])
             trace, homes = self._timeline(env, int(row["episode"]))
             action = int(row["action"])
@@ -190,6 +214,9 @@ class ReachSupervision:
                 if len(future):
                     self.metrics["contact_lead_ticks"] += int(future[0] - tick)
                     self.metrics["contact_observations"] += 1
+            if self.version >= 2:
+                self._constraint_row(row, headers, tau)
+                continue
             end = len(trace) - 1
             won = headers[env, 1] == 1
             for horizon, stop in enumerate((tick + 2 * tau, tick + 9 * tau, end)):
@@ -236,6 +263,8 @@ class ReachSupervision:
                 home_breach=int((headers[:, 1] == 2).sum()),
                 censored=int(((headers[:, 1] == 0) & self.env.cp.asnumpy(self._started)).sum()),
             )
+            if self.snapshot_only:
+                self.metrics["stop_reasons"] = {"snapshot_rules": int(self._started.sum())}
             n, d = self.metrics["contact_observations"], self.metrics["defensive_placements"]
             self.metrics["defense_lead_time_to_lane_bite_seconds"] = (
                 self.metrics["contact_lead_ticks"] / n / self.env.batch.rules.game["tick_rate"]
@@ -247,13 +276,49 @@ class ReachSupervision:
             )
         return self.phase == ReachPhase.LABELS_READY
 
+    def _constraint_row(self, row, headers, tau):
+        from pvz_rl.learning.forecast_targets import factual_targets, snapshot_targets
+
+        if self.snapshot_only:
+            snapshot_targets(row)
+            safe = (row["forecast_pending"] == 0) & (row["lane_zombies"] == 0)
+            self.metrics["safe_lane_targets"] += int(safe.sum())
+            self.metrics["mower_home_targets"] += int(
+                ((row["forecast_pending"] == 0) & ~safe & row["forecast_mowers"]).sum()
+            )
+        else:
+            key = int(row["env"]), int(row["episode"])
+            trace, homes = self._timeline(*key)
+            factual_targets(row, trace, homes, self._finished[key], headers[key[0], 1] == 1, tau)
+            self.metrics["breach_targets"] += int((row["threat_loss"] == 1).sum())
+        allowed = row["threat_depth_allowed"]
+        exact = (allowed != 0) & ((allowed & (allowed - np.uint16(1))) == 0)
+        self.metrics["exact_depths"] += int(exact.sum())
+        self.metrics["censored_depths"] += int(((allowed != 0) & (allowed != 2047) & ~exact).sum())
+        if len(self.metrics["examples"]) < 3:
+            self.metrics["examples"].append(
+                dict(
+                    env=int(row["env"]),
+                    tick=int(row["tick"]),
+                    prediction=row["reach_prediction"].tolist(),
+                    home_prediction=row["home_prediction"].tolist(),
+                    labels=row["reach_labels"].tolist(),
+                    home_labels=row["home_labels"].tolist(),
+                    effect_prediction=row["effect_prediction"].tolist(),
+                    effect_prediction_valid=bool(row["effect_prediction_valid"]),
+                    provenance="Snapshot rules; zombie lane unknown except ready-mower home target"
+                    if self.snapshot_only
+                    else "Factual exact / censored targets",
+                )
+            )
+
     def snapshot(self):
         return dict(
-            protocol=REACH_PROTOCOL,
+            protocol=self.protocol,
             phase=self.phase.value,
             cursor=self.cursor,
             metrics=dict(self.metrics),
-            trace=self.env.batch.reach_trace.get(),
+            trace=None if self.snapshot_only else self.env.batch.reach_trace.get(),
             errors=self.env.batch.reach_error.get(),
             started=self.env.cp.asnumpy(self._started),
             tail=list(self.tail),
@@ -263,4 +328,5 @@ class ReachSupervision:
         self.tail.clear()
         self._timelines.clear()
         self._contacts.clear()
+        self._finished.clear()
         self.env.batch.disable_reach()

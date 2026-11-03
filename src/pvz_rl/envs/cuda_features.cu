@@ -62,7 +62,7 @@ __device__ int shot_order(const Shot &a, const Shot &b) {
 extern "C" __global__ void encode_canonical(const I *headers, const I *plants,
     const I *zombies, const I *projectiles, const I *mowers, const I *cooldowns,
     int *records, int *entities, bool *mask, float *globals, double *assets,
-    I *summary, short *lane_zombies, I n) {
+    I *summary, short *lane_zombies, I *forecast_facts, I n) {
   I i = blockIdx.x;
   if (i >= n) return;
   Header h = ((Header *)headers)[i];
@@ -93,6 +93,13 @@ extern "C" __global__ void encode_canonical(const I *headers, const I *plants,
     I counts[5] = {0};
     for (I j = 0; j < h.nz; j++) if (!z[j].headless) counts[z[j].row]++;
     for (I row = 0; row < 5; row++) lane_zombies[i * 5 + row] = counts[row];
+    I *facts = forecast_facts + i * 7;
+    facts[0] = h.total_spawns - h.spawn_index;
+    facts[6] = 0;
+    for (I row = 0; row < 5; row++) {
+      facts[1 + row] = counts[row];
+      if (m[row].state == 0) facts[6] |= 1 << row;
+    }
     float *g = globals + i * GLOBAL_WIDTH;
     g[O_sun] = (double)h.sun / COST_SCALE;
     g[O_elapsed] = (double)h.tick / G_tick_rate / CUTOFF_SECONDS;
@@ -150,6 +157,20 @@ extern "C" __global__ void encode_canonical(const I *headers, const I *plants,
     mask[i * ENTITY_LIMIT + index] = index < kept;
     if (index >= kept) clear_record(out + index * ENTITY_WIDTH);
   }
+}
+
+extern "C" __global__ void capture_forecast_facts(
+    const I *headers, const I *zombies, const I *mowers, I *facts, I n) {
+  I i = blockIdx.x * blockDim.x + threadIdx.x;
+  if (i >= n) return;
+  Header h = ((const Header *)headers)[i];
+  const Zombie *z = (const Zombie *)(zombies + i * ZCAP * GAME_ZOMBIE_WIDTH);
+  const Mower *m = (const Mower *)(mowers + i * 5 * GAME_MOWER_WIDTH);
+  I *out = facts + i * 7;
+  out[0] = h.total_spawns - h.spawn_index;
+  out[6] = 0;
+  for (I r = 0; r < 5; r++) {out[1+r] = 0; if (m[r].state == 0) out[6] |= 1 << r;}
+  for (I j = 0; j < h.nz; j++) if (!z[j].headless) out[1+z[j].row]++;
 }
 
 // Policy masks expose every tile for every active plant/dig branch. The

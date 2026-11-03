@@ -6,6 +6,7 @@ from pathlib import Path
 import numpy as np
 import torch
 
+from pvz_rl.config import forecast_version
 from pvz_rl.envs.actions import ActionSchema as A
 from pvz_rl.envs.encoding import (
     ENTITY_WIDTH,
@@ -30,6 +31,7 @@ from pvz_rl.learning.source_actions import AppendReceipt, SourceActionRef
 from pvz_rl.monitoring.moments import RunningMoments
 
 TRAJECTORY_PROTOCOL = "pvz-rl/fork-threat-effect-trajectory-v3"
+CONSTRAINT_TRAJECTORY_PROTOCOL = "pvz-rl/fork-threat-effect-trajectory-v4"
 
 
 def trajectory_dtype(cfg=None):
@@ -90,6 +92,18 @@ def trajectory_dtype(cfg=None):
         ("done", "?"),
         ("executed_action", "<u2"),
     ]
+    if cfg is not None and forecast_version(cfg) >= 2:
+        fields.extend(
+            [
+                ("forecast_pending", "<u4"),
+                ("forecast_mowers", "?", 5),
+                ("forecast_finished", "?", 5),
+                ("threat_depth_allowed", "<u2", (5, 3)),
+                ("threat_time_allowed", "u1", 5),
+                ("effect_prediction", "<f2", (2, 5, 10)),
+                ("effect_prediction_valid", "?"),
+            ]
+        )
     return np.dtype(fields)
 
 
@@ -968,7 +982,11 @@ class CompleteGameBuffer:
 
     def metadata(self):
         return dict(
-            protocol=TRAJECTORY_PROTOCOL,
+            protocol=(
+                CONSTRAINT_TRAJECTORY_PROTOCOL
+                if self.cfg is not None and forecast_version(self.cfg) >= 2
+                else TRAJECTORY_PROTOCOL
+            ),
             schema=self.schema,
             n_envs=self.n_envs,
             ram_bytes=self.ram_bytes,
@@ -1007,7 +1025,11 @@ class CompleteGameBuffer:
 
     @staticmethod
     def validate_metadata(state):
-        expected = TRAJECTORY_PROTOCOL
+        expected = (
+            CONSTRAINT_TRAJECTORY_PROTOCOL
+            if state.get("cfg") is not None and forecast_version(state["cfg"]) >= 2
+            else TRAJECTORY_PROTOCOL
+        )
         if state.get("protocol") != expected:
             raise ValueError("Retired trajectory schema; fresh initialization is required")
         if any(
@@ -1096,7 +1118,10 @@ class CompleteGameBuffer:
                     or not np.isfinite(rows["reach_prediction"]).all()
                     or np.any((rows["home_labels"] < -1) | (rows["home_labels"] > 1))
                     or not np.isfinite(rows["home_prediction"]).all()
-                    or np.any(rows["reach_provenance"] > 3)
+                    or np.any(
+                        rows["reach_provenance"]
+                        > (4 if "threat_depth_allowed" in rows.dtype.names else 3)
+                    )
                     or np.any(rows["forecast_trace"] > 10)
                     or np.any((rows["threat_depth"] < -1) | (rows["threat_depth"] > 10))
                     or np.any((rows["threat_time"] < -1) | (rows["threat_time"] > 5))
@@ -1108,6 +1133,12 @@ class CompleteGameBuffer:
                     raise ValueError("Invalid reach labels or predictions in trajectory")
                 if np.any(rows["action"] >= A.size) or np.any(rows["executed_action"] >= A.size):
                     raise ValueError("Corrupt trajectory action")
+                if "threat_depth_allowed" in rows.dtype.names and (
+                    np.any(rows["threat_depth_allowed"] > 2047)
+                    or np.any(rows["threat_time_allowed"] > 63)
+                    or not np.isfinite(rows["effect_prediction"]).all()
+                ):
+                    raise ValueError("Invalid forecast constraints or predictions")
                 if not all(
                     np.isfinite(rows[name]).all()
                     for name in ("branch_value", "tile_value", "placement_gap")

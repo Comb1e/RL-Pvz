@@ -13,6 +13,9 @@ from pvz_rl.config import (
     bomb_ranking_margin,
     bomb_softmax_temperature,
     effect_prediction_weight,
+    forecast_forks_enabled,
+    forecast_mode,
+    forecast_version,
     passivity_settings,
     plant_wait_check_ticks,
     threat_prediction_weight,
@@ -152,13 +155,17 @@ class CudaSequentialQ(CudaCohortLifecycle):
         if self._fit_kind != "tile_only":
             return None
         return (
-            "tile_reach"
+            (
+                "tile_reach"
+                if forecast_forks_enabled(self.cfg, self.tile_skills.phase)
+                else "tile_threat"
+            )
             if self.reach_training and (self.reach_weight > 0 or self.home_weight > 0)
             else "tile"
         )
 
     def _prepare_collection(self, callback):
-        if self.cfg["training"].get("forecasts", {}).get("enabled", False):
+        if forecast_forks_enabled(self.cfg, self.tile_skills.phase):
             from pvz_rl.learning.effect_collection import finish_effects
 
             if hasattr(callback, "check_deadline"):
@@ -248,7 +255,7 @@ class CudaSequentialQ(CudaCohortLifecycle):
         self.env.cp.get_default_memory_pool().free_all_blocks()
         released = self._phase_memory("after_collection_release")
         self.collection_execution = {}
-        for name in ("_collection_reach", "_collection_home"):
+        for name in ("_collection_reach", "_collection_home", "_collection_effect"):
             if hasattr(self, name):
                 delattr(self, name)
         super()._begin(callback)
@@ -284,7 +291,9 @@ class CudaSequentialQ(CudaCohortLifecycle):
         )
         self._ensure_teacher()
         settings = self.cfg["training"].get("forecasts", {})
-        injection = self.training_games >= settings.get("injection_after_games", 4096)
+        injection = forecast_forks_enabled(
+            self.cfg, self.tile_skills.phase
+        ) and self.training_games >= settings.get("injection_after_games", 4096)
         total = self.training_games + self.tile_skills.total
         half_life = (
             settings.get("discount_half_life_steps", 600)
@@ -301,9 +310,14 @@ class CudaSequentialQ(CudaCohortLifecycle):
         )
         self.cfg["training"]["forecasts"]["injection_active"] = injection
         for network in (self.policy, self._teacher):
+            network.forecast_stage = self.tile_skills.phase
             network.injection_enabled = injection
             network.auxiliary_scale = self._resolved_forecast_schedule["auxiliary_scale"]
         self._stats["forecast_schedule"] = dict(self._resolved_forecast_schedule)
+        self._stats["forecast_mode"] = forecast_mode(self.cfg, self.tile_skills.phase)
+        self._stats["forecast_pretraining_state"] = getattr(
+            self, "forecast_pretraining_state", "pending"
+        )
         if self.reach_training:
             from pvz_rl.learning.reach_supervision import ReachSupervision
 
@@ -508,6 +522,18 @@ class CudaSequentialQ(CudaCohortLifecycle):
                     self._collection_reach[enabled] = self.policy.reach_map(
                         details["reach_logits"]
                     )[enabled]
+                    if forecast_version(self.cfg) >= 2:
+                        if not hasattr(self, "_collection_effect"):
+                            self._collection_effect = torch.zeros(
+                                (self.n_envs, 2, 5, 10), device=self.device
+                            )
+                        self._collection_effect[enabled] = self.policy.effect_action_display(
+                            details["observations"],
+                            actions,
+                            details["board_memory"],
+                            branch_available,
+                        )[enabled]
+                self.policy._effect_decision_cache = None
             if not hasattr(self, "_collection_packed"):
                 self._collection_packed = torch.empty(
                     self.n_envs * env.features.limit,
@@ -561,7 +587,7 @@ class CudaSequentialQ(CudaCohortLifecycle):
             actions = columns[:, 1].long()
             executing = issued
             if (
-                self.cfg["training"].get("forecasts", {}).get("enabled", False)
+                forecast_forks_enabled(self.cfg, self.tile_skills.phase)
                 and getattr(self, "_pending_effect", None) is None
                 and issued_host.any()
             ):
@@ -595,6 +621,20 @@ class CudaSequentialQ(CudaCohortLifecycle):
                                 "lane_zombies": torch.from_dlpack(
                                     env.features.lane_zombies[: self.n_envs]
                                 ),
+                                **(
+                                    {
+                                        "forecast_facts": torch.from_dlpack(
+                                            env.features.forecast_facts[: self.n_envs]
+                                        )
+                                    }
+                                    if forecast_version(self.cfg) >= 2
+                                    else {}
+                                ),
+                                **(
+                                    {"effect_prediction": self._collection_effect}
+                                    if forecast_version(self.cfg) >= 2
+                                    else {}
+                                ),
                             }
                             if self.reach_training
                             else {}
@@ -607,7 +647,10 @@ class CudaSequentialQ(CudaCohortLifecycle):
                 self._reach.before(actions, executing)
             env.step_device(actions, active=executing)
             forecast_host = None
-            if self.reach_training:
+            if (
+                self.reach_training
+                and forecast_mode(self.cfg, self.tile_skills.phase) != "snapshot_rules"
+            ):
                 from pvz_rl.envs.reach_tracking import FORECAST_HEADER
 
                 count = self.cfg["environment"]["decision_ticks"] + 1
@@ -619,6 +662,11 @@ class CudaSequentialQ(CudaCohortLifecycle):
                         ).to(torch.uint8),
                         breaches=torch.from_dlpack(env.batch.reach_trace[:, 1:6]),
                         contacts=torch.from_dlpack(env.batch.reach_trace[:, 6:11]),
+                        **(
+                            {"finished": torch.from_dlpack(env.features.forecast_facts)}
+                            if forecast_version(self.cfg) >= 2
+                            else {}
+                        ),
                     ),
                 )
             checks = self._plant_exploration.observe(
@@ -721,9 +769,25 @@ class CudaSequentialQ(CudaCohortLifecycle):
                 rows["reach_valid"] = active
                 rows["home_prediction"] = host["home_prediction"].numpy()
                 rows["lane_zombies"] = host["lane_zombies"].numpy()
-                rows["forecast_trace"] = forecast_host["trace"].numpy().reshape(self.n_envs, -1, 5)
-                rows["forecast_breach"] = forecast_host["breaches"].numpy()
-                rows["forecast_contacts"] = forecast_host["contacts"].numpy()
+                if forecast_host is not None:
+                    rows["forecast_trace"] = (
+                        forecast_host["trace"].numpy().reshape(self.n_envs, -1, 5)
+                    )
+                    rows["forecast_breach"] = forecast_host["breaches"].numpy()
+                    rows["forecast_contacts"] = forecast_host["contacts"].numpy()
+                if forecast_version(self.cfg) >= 2:
+                    facts = host["forecast_facts"].numpy()
+                    rows["forecast_pending"] = facts[:, 0]
+                    rows["effect_prediction"] = host["effect_prediction"].numpy()
+                    rows["effect_prediction_valid"] = forecast_forks_enabled(
+                        self.cfg, self.tile_skills.phase
+                    )
+                    rows["forecast_mowers"] = (facts[:, 6, None] & (1 << np.arange(5))) != 0
+                    if forecast_host is not None:
+                        finished = forecast_host["finished"].numpy()
+                        rows["forecast_finished"] = (finished[:, 0, None] == 0) & (
+                            finished[:, 1:6] == 0
+                        )
             rows["threat_depth"], rows["threat_time"], rows["threat_loss"] = -1, -1, -1
             pending = getattr(self, "_pending_effect", None)
             if pending is not None:
@@ -1077,14 +1141,9 @@ class CudaSequentialQ(CudaCohortLifecycle):
             self._reach.phase = ReachPhase.FITTING
         if self.reach_training:
             targets = self._fitting_spool.rows
-            informative = (targets["threat_depth"] >= 0) & ~(
-                targets["threat_censored"] & (targets["threat_depth"] == 0)
-            )
-            threat = (
-                informative.any(axis=(-1, -2))
-                | (targets["threat_time"] >= 0).any(-1)
-                | (targets["threat_loss"] >= 0).any(-1)
-            )
+            from pvz_rl.learning.forecast_labels import threat_eligible
+
+            threat = threat_eligible(targets)
             self._reach_decisions = (int(threat.sum()), len(targets))
         else:
             self._reach_decisions = (0, 0)
@@ -1169,10 +1228,16 @@ class CudaSequentialQ(CudaCohortLifecycle):
                     loss_correct,
                     changed_correct,
                     changed,
-                ) = self.policy._forecast_score_totals.cpu().tolist()
+                ) = self.policy._forecast_score_totals[:8].cpu().tolist()
+                tp, fp, fn, change_brier, unchanged_correct, unchanged = (
+                    self.policy._forecast_score_totals[8:14].cpu().tolist()
+                )
+                conditional_correct, conditional_count = (
+                    self.policy._forecast_score_totals[14:].cpu().tolist()
+                )
                 for key, value in dict(
                     threat_loss=threat,
-                    effect_loss=effect,
+                    effect_loss=effect if effects else None,
                     threat_depth_brier=depth_brier / depths if depths else None,
                     effect_brier=effect_brier / effects if effects else None,
                     threat_depth_accuracy=depth_correct / depths if depths else None,
@@ -1182,6 +1247,13 @@ class CudaSequentialQ(CudaCohortLifecycle):
                     threat_loss_brier=loss_brier / losses if losses else None,
                     threat_loss_accuracy=loss_correct / losses if losses else None,
                     changed_effect_accuracy=changed_correct / changed if changed else None,
+                    unchanged_effect_accuracy=unchanged_correct / unchanged if unchanged else None,
+                    effect_change_precision=tp / (tp + fp) if tp + fp else None,
+                    effect_change_recall=tp / (tp + fn) if tp + fn else None,
+                    effect_change_brier=change_brier / effects if effects else None,
+                    effect_conditional_accuracy=conditional_correct / conditional_count
+                    if conditional_count
+                    else None,
                     threat_exact_depths=depths,
                     effect_labeled_terms=effects,
                     threat_eligible_decisions=decisions,
@@ -1541,6 +1613,12 @@ class CudaSequentialQ(CudaCohortLifecycle):
 
     def _restore_runtime_payload(self):
         extra = self.runtime_state
+        self._rollout_start_notified = (
+            extra.get("rollout_start_notified", False) if extra else False
+        )
+        self.forecast_pretraining_state = (
+            extra.get("forecast_pretraining_state", "pending") if extra else "pending"
+        )
         if extra:
             from pvz_rl.learning.peashooter_teacher import validate_rule_recovery
 
@@ -1677,11 +1755,16 @@ class CudaSequentialQ(CudaCohortLifecycle):
         if extra and extra.get("collection_reach") is not None:
             self._collection_reach = extra["collection_reach"].to(self.device)
             self._collection_home = extra["collection_home"].to(self.device)
+            if extra.get("collection_effect") is not None:
+                self._collection_effect = extra["collection_effect"].to(self.device)
         self._scheduler = CollectionScheduler(self.n_envs, self.device)
         if extra and extra.get("collection_scheduler") is not None:
             self._scheduler.restore(extra["collection_scheduler"])
         self._pending_effect = extra.get("pending_effect") if extra else None
-        if self.cfg["training"]["forecasts"]["enabled"] and self.phase == CohortPhase.COLLECT:
+        if (
+            forecast_forks_enabled(self.cfg, self.tile_skills.phase)
+            and self.phase == CohortPhase.COLLECT
+        ):
             from pvz_rl.learning.effect_collection import validate_effect_request
 
             validate_effect_request(self._pending_effect, self)
@@ -1693,6 +1776,7 @@ class CudaSequentialQ(CudaCohortLifecycle):
                 self._resolved_forecast_schedule["injection"]
             )
             for network in (self.policy, self._teacher):
+                network.forecast_stage = self.tile_skills.phase
                 network.injection_enabled = self._resolved_forecast_schedule["injection"]
                 network.auxiliary_scale = self._resolved_forecast_schedule["auxiliary_scale"]
         self._td_builder = None
@@ -1731,6 +1815,9 @@ class CudaSequentialQ(CudaCohortLifecycle):
             collection_valid=self._runner.valid.cpu() if getattr(self, "_runner", None) else None,
             collection_reach=getattr(self, "_collection_reach", None),
             collection_home=getattr(self, "_collection_home", None),
+            collection_effect=getattr(self, "_collection_effect", None),
+            forecast_pretraining_state=getattr(self, "forecast_pretraining_state", "pending"),
+            rollout_start_notified=getattr(self, "_rollout_start_notified", False),
             reach_supervision=self._reach.snapshot() if getattr(self, "_reach", None) else None,
             tile_scenarios=self.tile_skill_state,
             tile_scenario_protocol=TILE_SCENARIO_PROTOCOL,
@@ -1775,6 +1862,7 @@ class CudaSequentialQ(CudaCohortLifecycle):
             "_reach_pass_metrics",
             "_collection_reach",
             "_collection_home",
+            "_collection_effect",
             "_batch_iterator",
             "_fitting_spool",
             "_pass_metrics",

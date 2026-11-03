@@ -6,12 +6,14 @@ import torch
 from pvz_game import Rules
 from torch import nn
 
+from pvz_rl.config import forecast_forks_enabled, forecast_version
 from pvz_rl.envs.actions import ActionSchema as A
 from pvz_rl.envs.actions import dig_branch_available
 from pvz_rl.envs.encoding import collate_observations
 from pvz_rl.learning.forecast_labels import (
     EFFECT_WIDTH,
     THREAT_WIDTH,
+    effect_forecast,
     effect_summary,
     penetration_map,
     threat_summary,
@@ -74,6 +76,8 @@ class TwoStageTransformerPolicy(nn.Module):
             )
         if stage == "tile_reach":
             return not name.startswith("species_head.")
+        if stage == "tile_threat":
+            return not name.startswith(("species_head.", "effect_head.", "null_projection."))
         if stage == "tile":
             return not name.startswith(
                 ("species_head.", "threat_head.", "effect_head.", "null_projection.")
@@ -138,7 +142,7 @@ class TwoStageTransformerPolicy(nn.Module):
     def master_parameters(self, stage=None):
         if stage is None:
             return tuple(self._master_parameters)
-        if stage not in ("species", "tile", "tile_reach", "effect_pretrain"):
+        if stage not in ("species", "tile", "tile_reach", "tile_threat", "effect_pretrain"):
             raise ValueError("Parameter stage must be species, tile or tile_reach")
         return tuple(
             master
@@ -156,7 +160,7 @@ class TwoStageTransformerPolicy(nn.Module):
         parameters = tuple(super().parameters())
         if stage is None:
             return parameters
-        if stage not in ("species", "tile", "tile_reach", "effect_pretrain"):
+        if stage not in ("species", "tile", "tile_reach", "tile_threat", "effect_pretrain"):
             raise ValueError("Parameter stage must be species, tile or tile_reach")
         return tuple(
             parameter
@@ -316,11 +320,18 @@ class TwoStageTransformerPolicy(nn.Module):
         return self.null_projection(pooled + self.tile_decoder.branch_embedding(branches))
 
     def tile_values(self, features, *, null=None):
-        summaries = effect_summary(self.effect_values(features)).detach()
-        if null is not None:
-            summaries = summaries - effect_summary(self.effect_values(null)).detach()[:, None]
-        if not self.injection_enabled:
-            summaries = torch.zeros_like(summaries)
+        capture = getattr(self, "_effect_decision_cache", None) is not None
+        if self.injection_enabled or capture:
+            logits = self.effect_values(features)
+            if capture:
+                self._last_tile_effects = logits.detach()
+            summaries = effect_summary(logits).detach()
+            if null is not None and self.injection_enabled:
+                summaries = summaries - effect_summary(self.effect_values(null)).detach()[:, None]
+            if not self.injection_enabled:
+                summaries = torch.zeros_like(summaries)
+        else:
+            summaries = features.new_zeros((*features.shape[:-1], 20))
         return self.tile_head(torch.cat((features, summaries.to(features.dtype)), -1)).squeeze(-1)
 
     def tile_features(self, observations, branches, *, rows=None, plan=None, memory=None):
@@ -373,6 +384,11 @@ class TwoStageTransformerPolicy(nn.Module):
         memory = self._memory(observations, plan) if memory is None else memory
         null = self.null_features((memory[0][rows[requested]], memory[1][rows[requested]]))
         result = result.index_copy(0, requested, self.tile_values(features, null=null))
+        if getattr(self, "_effect_decision_cache", None) is not None:
+            self._effect_decision_cache.append(
+                (rows[requested], branches[requested], self._last_tile_effects)
+            )
+            self._last_tile_effects = None
         if return_reach:
             reach = self.forecast_display((memory[0][rows], memory[1][rows]))
             return result, reach
@@ -430,6 +446,12 @@ class TwoStageTransformerPolicy(nn.Module):
         supplied_branches=None,
     ):
         observations = collate_observations(observations, self.device)
+        self._effect_decision_cache = (
+            []
+            if forecast_version(self.cfg) >= 2
+            and forecast_forks_enabled(self.cfg, getattr(self, "forecast_stage", None))
+            else None
+        )
         memory = self.encode_board(observations, plan=active_plan)
         species = self.species_values(observations, memory=memory)
         if action_masks is None:
@@ -489,3 +511,28 @@ class TwoStageTransformerPolicy(nn.Module):
         details["reach_logits"] = self.forecast_display(memory)
         details["threat_logits"] = self.threat_values(memory=memory)
         return actions, details
+
+    def effect_action_display(self, observations, actions, memory, branch_usable):
+        """Gather cached tile effects; Wait/unavailable commands use the pooled null."""
+        from pvz_rl.envs.encoding import BOARD_GLOBAL_FIELDS
+
+        cache = getattr(self, "_effect_decision_cache", None)
+        if cache is None:
+            return observations.globals.new_zeros((len(actions), 2, 5, 10))
+        branches, tiles = action_parts(actions)
+        usable = branch_usable.gather(1, branches[:, None]).flatten()
+        # An unavailable attempted branch has no tile, but keeps the same
+        # branch-conditioned null representation used by its fitting record.
+        logits = self.effect_values(self.null_features(memory, branches))
+        for rows, candidates, predictions in cache:
+            chosen = predictions[torch.arange(len(rows), device=self.device), tiles[rows]]
+            selected = (branches[rows] == candidates) & usable[rows]
+            logits = logits.index_copy(
+                0, rows, torch.where(selected[:, None, None], chosen, logits[rows])
+            )
+        baseline = (
+            observations.globals[:, len(BOARD_GLOBAL_FIELDS) :].reshape(-1, 5, 4).float().clone()
+        )
+        baseline[..., 0] = (baseline[..., 0] * 10).round()
+        baseline[..., 3] = (baseline[..., 3] * 10).round()
+        return effect_forecast(logits, baseline)

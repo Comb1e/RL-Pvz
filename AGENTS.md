@@ -19,15 +19,19 @@ This file owns project-specific invariants and the code map.
   action-conditioned 45-query decoder. Wait/unavailable branches skip decoding;
   use a pooled null branch for effect labels. All tiles remain candidates. Cache
   memory within one forward only; branch impossibility precedes tile invalidity.
-- All autonomous stages train threat/effect heads. Threat uses hindsight depth at
-  2τ/9τ/end, breach-time bins and lane loss, with censored lower-bound NLL at loss
-  or cutoff. Effect predicts signed categorical changes from the static baseline,
-  including field/probe depth, time bin and loss. Normalize lanes/tokens/roots
-  equally; never invent labels for untested alternatives.
+- Forecast supervision is versioned and stage-resolved. Fresh bomb/attacker stages
+  train snapshot threat constraints: all-spawned empty lanes are safe; threatened
+  lanes are unknown except ready-mower home targets. They use zero baseline inputs,
+  no forecast forks/effect loss/tails, and freeze effect/null parameters and EMA.
+  Peashooter/normal retain factual depth at 2τ/9τ/end, breach-time bins and lane
+  loss. Allowed-class NLL preserves censored observations and exact permanently
+  safe lanes without erasing prior penetration. Effect predicts signed baseline
+  changes using occurrence BCE plus separately normalized conditional nonzero CE.
+  Normalize lanes/tokens/roots equally; never invent untested labels.
 - Static forks own physical/RNG storage, suppress actions/future spawns/logs and
   resolve mowers before recording home entry. Continue other lanes after a loss;
   probes inherit damaged plants and spent mowers. The real game is unchanged.
-  Baselines feed the encoder during collection, validation and inference. Effect
+  In fork-enabled stages, baselines feed collection, validation and inference. Effect
   samples are labels only; no rollout policy or action override.
 - Fork execution uses bounded refillable scratch workers and an exact field-suffix
   cache. Check full physical/RNG state before reuse; rebase times and exclude prior
@@ -37,13 +41,15 @@ This file owns project-specific invariants and the code map.
   Preserve economic conversion, tick discounting, rejection compaction/weighting,
   species exploration, greedy tiles, four passes, BF16 and FP32 masters. No
   counterfactual followers or tile-max species consistency. Forecast injection
-  is detached; potential shaping starts disabled. Private pretraining has separate
-  counters and updates encoder/decoder/effect parameters only.
+  is detached; potential shaping starts disabled. Private pretraining is deferred
+  until the first fork-enabled stage, has separate counters and updates
+  encoder/decoder/effect parameters only.
 - Main-game guarded CUDA traces record per-tick depth before defeat and actual home
   entries after mower resolution. Peashooter Waits privately past its gameplay
   cutoff; normal games add no tail. Loss/truncated futures remain censored.
   Fork/trace failures retain recovery; never convert resource errors to losses.
-- Preliminary stages keep their automatic targets. They train shared/tile/threat/effect parameters
+- Preliminary stages keep their automatic targets. They train shared/tile/threat parameters
+  and effect parameters only when their saved forecast mode enables them,
   while action-readout parameters and their EMA stay untouched; shared updates may
   change action predictions. Update EMA only for the phase's trained groups.
   Threat/effect weights are independent stage settings. Demo initialization has no auxiliary loss.
@@ -56,9 +62,10 @@ This file owns project-specific invariants and the code map.
   Preserve existing user datasets/recordings. Retain human recording, replay
   verification and demo initialization with their demonstration objectives and
   no auxiliary supervision.
-- New shared-model/objective identities reject old initialization and recovery;
-  no weight conversion. Compatible `--init-from` uses fresh optimizer/counters.
-  Resume preserves saved settings, pending fork panels/decision tickets, TD targets,
+- Older architectures reject initialization/recovery without conversion. Compatible
+  fork-model weights transfer with fresh optimizer/counters; saved v1 recoveries
+  retain their original forecast workflow and pending-record interpretation.
+  Resume preserves saved forecast modes/objectives, pending panels/decision tickets, TD targets,
   pretraining and committed passes. Hindsight lifecycle:
   `collecting → traces_complete → labels_ready → fitting → committed`.
 - Preserve CPU/CUDA cadence, legality, physical trajectories, reward conversion and
@@ -93,7 +100,7 @@ This file owns project-specific invariants and the code map.
   configured mastery thresholds; other fresh stages require perfect validation.
 - Every validation uses fresh random seeds outside reserved splits. Save panels
   before execution and retry interruptions against the same weights before fitting.
-  Greedy validation computes baseline inputs but has no exploration, effect-label
+  Greedy validation computes baseline inputs only in fork-enabled stages; it has no exploration, effect-label
   sampling or fitting updates.
   Release idle scratch/graphs without losing workers or speculative seed state.
 
@@ -110,7 +117,7 @@ Paths are relative to `src/pvz_rl/` unless stated otherwise.
 | `envs/scratch_game.py`, `bomb_preparation.py`, `cuda_bomb_oracle.py`, `cuda_snapshots.py`, `attacker_scenarios.py` | Validated automatic exercises, persistent preparation, bounded oracles and conservative attacker labels. |
 | `learning/training.py`, `cuda_q.py`, `sequential_training.py` | Cohort orchestration, collection/fitting, reporting and atomic recovery. |
 | `envs/static_fork.py`, `cuda_static_fork.py`, `fork_service.py`, `fork_execution.py/.cu` | Isolated field/probe phases, bounded refillable scratch workers, verified suffix caching and panel/queue recovery. |
-| `learning/reach_supervision.py`, `forecast_labels.py`, `forecast_objective.py`, `forecast_metrics.py` | Factual hindsight/censoring, signed effects, shared-forward losses and calibration. |
+| `learning/reach_supervision.py`, `forecast_targets.py`, `forecast_labels.py`, `forecast_objective.py`, `forecast_metrics.py` | Versioned snapshot/factual constraints, hindsight, factored signed effects, shared-forward losses and calibration. |
 | `learning/effect_collection.py`, `forecast_pretraining.py`, `td_targets.py` | Sampled effect labels, private pretraining and frozen-cohort n-step TD. |
 | `learning/flat_q.py`, `objective.py`, `action_routing.py`, `placement_labels.py`, `bomb_objective.py` | Shared Q fitting/economics, legality attribution and automatic placement losses. |
 | `learning/peashooter_rules.py`, `peashooter_teacher.py`, `envs/lane_preparation.py`, `cuda_lane_oracle.py` | Prioritized lane targets and resumable bounded lane oracles. |
@@ -118,7 +125,7 @@ Paths are relative to `src/pvz_rl/` unless stated otherwise.
 | `learning/tile_curriculum.py`, `validation_trigger.py`, `budget.py`, `training_requirements.py` | Stage transitions, validation qualification, budgets and model/objective identities. |
 | `learning/checkpoints.py`, `training_artifacts.py`, `performance.py`, `demo_initialization.py` | Recovery/weights, artifact retention, execution settings and verified human demo fitting. |
 | `evaluation/`, `monitoring/`, repository diagnostic tools | Greedy evaluation, CPU verification, bounded profiling and benchmarks. |
-| `presentation/` | Demo recording/replay, live cohort subscriptions and retained reports. `reach_view.py` distinguishes end-depth penetration forecasts from exact/censored targets; both viewers place the latest timestamped prediction beside each board, using the episode-scoped journal cache without model calls. |
+| `presentation/` | Demo recording/replay, live cohort subscriptions and retained reports. `reach_view.py` separates factual threat, proposed-action field/probe predictions and exact/partial targets; disabled effects and unknown targets are explicit. Viewers reuse timestamped episode-scoped journal predictions without model calls. |
 
 ## Test ownership
 

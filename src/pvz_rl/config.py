@@ -126,6 +126,30 @@ _STAGE_PARAMETERS = {
     },
 }
 
+for _stage, _fields in _STAGE_PARAMETERS.items():
+    _fields["forecast_mode"] = f"training.stage_forecast_modes.{_stage}"
+
+
+def forecast_version(cfg):
+    """Absent saved settings retain the original labels and fork workflow."""
+    return cfg["training"].get("forecasts", {}).get("supervision_version", 1)
+
+
+def forecast_mode(cfg, stage=None):
+    stage = stage or cfg.get("curriculum", {}).get("run_stage") or "normal"
+    if stage not in ("cherry_bomb", "cherry_bomb_obstacle", "attacker_pre", "peashooter"):
+        stage = "normal"
+    if forecast_version(cfg) == 1:
+        return "factual"
+    return cfg["training"].get("stage_forecast_modes", {}).get(stage, "factual")
+
+
+def forecast_forks_enabled(cfg, stage=None):
+    return (
+        cfg["training"].get("forecasts", {}).get("enabled", False)
+        and forecast_mode(cfg, stage) == "factual"
+    )
+
 
 def threat_prediction_weight(cfg, stage="normal"):
     """Resolve the stage-specific hindsight threat loss weight."""
@@ -136,6 +160,8 @@ def threat_prediction_weight(cfg, stage="normal"):
 
 
 def effect_prediction_weight(cfg, stage="normal"):
+    if not forecast_forks_enabled(cfg, stage):
+        return 0.0
     training = cfg["training"]
     if stage in ("cherry_bomb", "cherry_bomb_obstacle", "attacker_pre", "peashooter"):
         return training.get("stage_effect_weights", {}).get(stage, 0.0)
@@ -1011,6 +1037,26 @@ def validate_config(cfg: dict) -> None:
             "Training requires a supported n-step fork-forecast method and fresh models"
         )
     forecasts = train.get("forecasts", {})
+    if forecast_version(cfg) not in (1, 2):
+        raise ValueError("Unsupported forecast supervision version")
+    for stage, mode in train.get("stage_forecast_modes", {}).items():
+        if (
+            stage not in _STAGE_PARAMETERS
+            or mode not in ("factual", "snapshot_rules")
+            or (
+                mode == "snapshot_rules"
+                and stage not in ("cherry_bomb", "cherry_bomb_obstacle", "attacker_pre")
+            )
+        ):
+            raise ValueError(f"Unsupported forecast mode for {stage}")
+    if forecasts.get("effect_objective", "categorical_v1") not in (
+        "categorical_v1",
+        "change_conditional_v2",
+    ):
+        raise ValueError("Unsupported effect objective")
+    beta = forecasts.get("effect_conditional_weight", 1.0)
+    if type(beta) not in (int, float) or not math.isfinite(beta) or beta < 0:
+        raise ValueError("effect_conditional_weight must be finite and nonnegative")
     if forecasts.get("protocol") != "static-fork-threat-effect-v1":
         raise ValueError("Training requires fresh static-fork threat/effect settings")
     if type(forecasts.get("enabled")) is not bool:

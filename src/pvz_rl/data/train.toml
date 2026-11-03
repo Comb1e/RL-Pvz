@@ -104,6 +104,9 @@ cohort_success_threshold = 0.9 # Strictly above; full configured cohorts only (n
 
 [training.forecasts]
 enabled = true
+supervision_version = 2 # Missing in saved runs: preserve legacy labels and forks.
+effect_objective = "change_conditional_v2"
+effect_conditional_weight = 1.0
 protocol = "static-fork-threat-effect-v1"
 probe = "conehead" # One reference threat per lane; retain damaged field-phase defenses.
 extra_actions = 4 # Half near the selected branch's Q maximum, half uniformly legal.
@@ -127,6 +130,8 @@ enabled = true # Automatic preliminary stages; selected normal stages skip them.
 sampling_max_attempts = 100
 
 [training.cherry_bomb]
+forecast_mode = "snapshot_rules" # No forecast forks; safe lanes and ready-mower home targets.
+# Effect weights apply only in factual mode; saved recoveries keep their original mode.
 effect_prediction_weight = 0.1
 threat_prediction_weight = 0.1
 # Shared by both bomb stages except temperature and validation mastery; no exploration or search.
@@ -148,11 +153,13 @@ oracle_lanes = 2048 # Shrinks to fit VRAM without changing labels.
 oracle_vram_mib = 2048
 
 [training.cherry_bomb_obstacle]
+forecast_mode = "snapshot_rules"
 effect_prediction_weight = 0.1
 threat_prediction_weight = 0.1
 softmax_temperature = { zero_success = 1, full_success = 1 } # Independent schedule; mastery still requires 100/100.
 
 [training.attacker_pre]
+forecast_mode = "snapshot_rules"
 effect_prediction_weight = 0.1
 threat_prediction_weight = 0.1
 n_envs = 640 # Lowest measured collection time/env on the RTX 4070 Laptop profile.
@@ -172,6 +179,7 @@ oracle_lanes = 640 # Independent scratch limits; used only for natural cooldown 
 oracle_vram_mib = 1024
 
 [training.peashooter]
+forecast_mode = "factual"
 effect_prediction_weight = 0.1
 threat_prediction_weight = 0.1
 # Independent cohort/preparation sizing; shared optimizer and fitting passes.
@@ -189,6 +197,7 @@ oracle_vram_mib = 4096 # Upper bound; actual lanes shrink to preserve profile he
 oracle_chunk_ticks = 4096
 
 [training.normal]
+forecast_mode = "factual"
 n_envs = 128
 effect_prediction_weight = 0.1
 threat_prediction_weight = 0.1 # Categorical hindsight depth/time and lane loss.

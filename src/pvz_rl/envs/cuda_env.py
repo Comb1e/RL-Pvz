@@ -16,7 +16,7 @@ from pvz_game.cuda.backend import projectile_bound
 from pvz_game.cuda.schema import HEADER
 from stable_baselines3.common.vec_env import VecEnv
 
-from pvz_rl.config import bomb_max_illegal_distance, training_env_capacity
+from pvz_rl.config import bomb_max_illegal_distance, forecast_forks_enabled, training_env_capacity
 from pvz_rl.envs.actions import ActionSchema as A
 from pvz_rl.envs.actions import dig_branch_available
 from pvz_rl.envs.cuda_accounting import AccountingCudaBatch
@@ -63,7 +63,9 @@ class ScenarioQueue:
         seed = randbits(32) if seed is None else seed
         self.rngs = [np.random.default_rng(seed * 1000 + i) for i in range(n)]
         self.random_cohorts = (
-            training and family != "diagnostic" and cfg["training"].get("random_cohort_seeds", False)
+            training
+            and family != "diagnostic"
+            and cfg["training"].get("random_cohort_seeds", False)
         )
         self.cohort_seed = self.pending_cohort_seed = None
         self.progress, self.stage = 0, 0
@@ -109,7 +111,10 @@ class ScenarioQueue:
                 value is not None and (type(value) is not int or not 0 <= value < 2**63)
                 for value in (state.get("current"), state.get("pending"))
             )
-            or (not state["random"] and any(state.get(k) is not None for k in ("current", "pending")))
+            or (
+                not state["random"]
+                and any(state.get(k) is not None for k in ("current", "pending"))
+            )
         ):
             raise ValueError("Invalid or incompatible cohort seed recovery")
         self.cohort_seed, self.pending_cohort_seed = state["current"], state["pending"]
@@ -514,7 +519,10 @@ class CudaVecEnv(VecEnv):
 
     def prepare_baseline(self, active=None):
         """One bounded fork chunk, before policy encoding; retries are idempotent."""
-        if not self.cfg["training"].get("forecasts", {}).get("enabled", False):
+        if not forecast_forks_enabled(self.cfg, self.tile_scenario):
+            from pvz_rl.envs.encoding import BOARD_GLOBAL_FIELDS
+
+            self.features.globals[:, len(BOARD_GLOBAL_FIELDS) :] = 0
             return True
         from pvz_rl.envs.encoding import BOARD_GLOBAL_FIELDS
         from pvz_rl.envs.static_fork import reference_tau
@@ -941,8 +949,12 @@ class CudaVecEnv(VecEnv):
         from pvz_rl.envs.static_fork import reference_tau
         from pvz_rl.learning.forecast_labels import baseline_features
 
-        self.features.globals[:, len(BOARD_GLOBAL_FIELDS) :] = self.cp.asarray(
-            baseline_features(self._baseline_outcomes, reference_tau(self.batch.rules))
+        self.features.globals[:, len(BOARD_GLOBAL_FIELDS) :] = (
+            self.cp.asarray(
+                baseline_features(self._baseline_outcomes, reference_tau(self.batch.rules))
+            )
+            if forecast_forks_enabled(self.cfg, self.tile_scenario)
+            else 0
         )
         return self.features.obs_tensor
 

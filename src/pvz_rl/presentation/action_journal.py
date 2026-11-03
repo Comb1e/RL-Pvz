@@ -33,6 +33,9 @@ RECORD = np.dtype(
         ("home_prediction", "<f2", 5),
         ("home_labels", "i1", 5),
         ("reach_provenance", "u1"),
+        ("effect_prediction", "<f2", (2, 5, 10)),
+        ("effect_prediction_valid", "?"),
+        ("forecast_mode", "u1"),  # 0: not recorded, 1: factual, 2: snapshot rules.
     ]
 )
 
@@ -134,6 +137,12 @@ class ActionJournal:
             records["reach_valid"] = rows["reach_valid"]
             records["reach_prediction"] = rows["reach_prediction"]
         records["home_prediction"] = rows["home_prediction"]
+        if "effect_prediction" in rows.dtype.names:
+            records["effect_prediction"] = rows["effect_prediction"]
+            records["effect_prediction_valid"] = rows["effect_prediction_valid"]
+            records["forecast_mode"] = np.where(
+                rows["reach_valid"], np.where(rows["effect_prediction_valid"], 1, 2), 0
+            )
         records["reach_labels"], records["home_labels"] = -1, -1
         records["coins"][:, 0] = rows["species_coin"]
         records["coins"][:, 1] = rows["tile_coin"]

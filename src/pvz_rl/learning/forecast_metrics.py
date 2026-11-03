@@ -4,12 +4,16 @@ import torch
 
 
 def reset_calibration(policy):
-    policy._forecast_score_totals = torch.zeros(8, device=policy.device, dtype=torch.float64)
+    policy._forecast_score_totals = torch.zeros(16, device=policy.device, dtype=torch.float64)
     policy._forecast_calibration = {
         "depth": torch.zeros((5, 3, 11, 10, 3), device=policy.device, dtype=torch.float64),
         "breach_time": torch.zeros((5, 1, 6, 10, 3), device=policy.device, dtype=torch.float64),
         "loss": torch.zeros((5, 1, 2, 10, 3), device=policy.device, dtype=torch.float64),
         "effect": torch.zeros((5, 4, 21, 10, 3), device=policy.device, dtype=torch.float64),
+        "effect_change": torch.zeros((5, 4, 2, 10, 3), device=policy.device, dtype=torch.float64),
+        "effect_conditional": torch.zeros(
+            (5, 4, 20, 10, 3), device=policy.device, dtype=torch.float64
+        ),
     }
 
 

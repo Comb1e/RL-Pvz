@@ -3,8 +3,8 @@
 Train a sequential Q policy against a pinned Plants vs. Zombies simulator. A
 shared Transformer understands the public board, an action readout chooses
 Wait/species/Dig, and a conditional decoder scores all 45 tiles. Every autonomous
-stage also learns hindsight threats and baseline-relative action effects. Labels never override
-actions; validation uses the greedy network.
+stage also learns lane-threat predictions. Full-game stages learn baseline-relative
+action effects. Labels never override actions; validation uses the greedy network.
 
 ## Requirements
 
@@ -40,9 +40,9 @@ Record human gameplay into unused paths and finish with a natural win or loss:
 ```
 
 Demo initialization verifies the replay before fitting. Manual tile annotation is
-removed; existing datasets and recordings remain on disk. The shared-encoder
-architecture starts fresh: old model weights and autonomous checkpoints are
-incompatible. Compatible weights transfer with `--init-from`; interrupted runs
+removed; existing datasets and recordings remain on disk. Older architectures are
+incompatible; current fork-model weights remain compatible. Transfer with
+`--init-from`; interrupted runs
 resume with `--resume` and preserve optimizer updates and unfinished forks, hindsight labels and fitting passes.
 
 Start autonomous training when ready:
@@ -71,41 +71,30 @@ Normal stages jointly fit n-step Q targets; preliminary stages preserve their
 placement losses and freeze the action readout. Four fitting passes, greedy tiles
 and normal species exploration remain in use.
 
-`training.forecasts` controls isolated CUDA forks, sampled alternatives, private
-random/scripted effect pretraining, auxiliary warmup, feature injection and TD
-horizons. Every decision receives a static baseline: existing zombies finish with
-no actions or future spawns, then Conehead probes test the damaged defenses. Lanes
-continue independently after actual home entries. Executed and sampled actions
-receive signed categorical changes relative to that baseline; forks never select
-real actions or consume the real RNG. Baselines are required during inference and
-validation too. This work can be substantial; resource limits bound resident
-scratch lanes, not the simulated duration of a fork.
+The first three stages use `forecast_mode = "snapshot_rules"`: once all scenario
+zombies have appeared, empty lanes target zero threat. The zombie lane remains
+unknown, except that a ready mower targets zero home danger. These stages use a
+zero baseline-input sentinel, run no forecast forks or effect pretraining, and
+freeze the effect/null heads. Their placement oracles and objectives are unchanged.
 
-Fork execution reuses exact field-continuation checkpoints across Waits and
-rejections, rebasing breach times and checking the full physical state. Cache
-misses run fresh forks. Wait/rejected decisions still receive hypothetical action
-examples. Tune `fork_*` execution settings under `training.performance`; cache
-storage shares the existing fork VRAM cap. The encoder always sees the current board.
-The placement viewer stages only live entities from each board; idle preparation
-oracles release their GPU buffers before collection forks start. Keep existing
-cohort and VRAM settings when resuming a run affected by scratch-allocation failure.
+Peashooter and normal stages retain static field/probe forks, sampled effect
+labels and factual threat targets. Waits and rejected actions still receive
+hypothetical alternatives. Forks neither choose actions nor consume the real RNG;
+full-game inference and validation also compute baseline inputs. Tune execution
+limits under `training.performance` and pretraining/TD schedules under
+`training.forecasts`. Private pretraining starts at the first fork-enabled stage.
 
-Threat targets summarize realized penetration at 2τ, 9τ and episode end, breach
-time and per-lane loss. τ is the reference Basic-zombie tile-crossing time,
-including its gait. Loss and
-cutoff windows retain observed lower bounds instead of invented safe outcomes.
-Peashooter privately Waits after its cutoff for hindsight labels; normal cutoffs
-remain censored. The viewer shows the raw end-horizon penetration CDF and home
-risk, with unknown targets grey. Head predictions never override actions.
+Threat targets preserve exact windows and permanently safe lanes, including prior
+penetration. Losses/cutoffs leave unresolved futures partially labeled; Peashooter
+retains its private Wait tail. Effect fitting separates change occurrence from
+conditional signed change. Tune `effect_objective` and
+`effect_conditional_weight` under `training.forecasts`. Reports separate these
+losses, detection/calibration, fork cost and outcomes. Viewers show raw factual
+threat beside predicted static field/probe maps; unknown targets stay grey.
 
-Defaults pretrain on 2,048 private boards, warm auxiliary weights over 2,048 real
-episodes, and enable detached forecast features after 4,096 normal games. The TD
-schedule increases from 5 to 20 steps and from a 60-step to a 600-step discount
-half-life. Potential shaping starts disabled. Reports separate primary/threat/effect
-loss, calibration, gradient ratios, fork cost and real-game outcomes. Use
-`python -m pvz_rl.monitoring.forecast_ablation --help` for seed-matched ablations;
-these require their own explicit game and wall-time budgets. New fork-model weights
-start fresh; older models and recoveries are rejected without changing user files.
+Saved recoveries retain their original supervision. Compatible `--init-from`
+uses current settings with a fresh optimizer. For bounded seed-matched ablations,
+see `python -m pvz_rl.monitoring.forecast_ablation --help`.
 
 Validation uses fresh random panels, saved for interrupted retries. Full fitted
 cohorts must strictly exceed the configured qualification threshold before a due

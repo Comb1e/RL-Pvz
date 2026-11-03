@@ -1,5 +1,7 @@
 """Raw end-horizon penetration forecasts and realized/censored targets."""
 
+from textwrap import fill
+
 import numpy as np
 
 
@@ -39,21 +41,38 @@ def report_reach_maps(metrics, output, save, *, stage="normal"):
         return None
     cmap = plt.get_cmap("YlOrRd").copy()
     cmap.set_bad("#78817a")
-    fig, axes = plt.subplots(len(examples), 2, figsize=(12, 2.8 * len(examples)), squeeze=False)
+    effects = any(sample.get("effect_prediction_valid", False) for sample in examples)
+    columns = 4 if effects else 2
+    fig, axes = plt.subplots(
+        len(examples), columns, figsize=(6 * columns, 3.4 * len(examples)), squeeze=False
+    )
     for pair, sample in zip(axes, examples, strict=True):
-        values = (
+        values = [
             np.column_stack((sample.get("home_prediction", [np.nan] * 5), sample["prediction"])),
             factual_map(sample["labels"], sample.get("home_labels", [-1] * 5)),
-        )
+        ]
+        titles = ["Predicted factual future threat", sample.get("provenance", "Reach target")]
+        if not effects and sample.get("provenance", "").startswith("Snapshot rules"):
+            titles[0] += "\nField/probe forecasts disabled"
+        if effects:
+            effect = (
+                sample.get("effect_prediction")
+                if sample.get("effect_prediction_valid")
+                else np.full((2, 5, 10), np.nan)
+            )
+            values.extend(effect)
+            titles.extend(
+                ("Predicted static field after proposal", "Predicted probe after proposal")
+            )
         for ax, grid, title in zip(
             pair,
             values,
-            ("Predicted end-horizon penetration", sample.get("provenance", "Reach target")),
+            titles,
             strict=True,
         ):
             ax.imshow(grid, vmin=0, vmax=1, cmap=cmap, aspect="auto")
             ax.set(
-                title=f"{title} — env {sample['env']}, tick {sample['tick']}",
+                title=f"{fill(title, 58)}\nenv {sample['env']}, tick {sample['tick']}",
                 xticks=range(10),
                 xticklabels=["Home", *range(1, 10)],
                 yticks=range(5),
@@ -111,7 +130,7 @@ def draw_live_reach(surface, frame, rect):
     decision = frame.get("reach_decision") or frame.get("decision") or {}
     valid = decision.get("reach_valid")
     surface.blit(
-        font.render("Predicted penetration (end)", True, (237, 231, 188)), (rect.x + 8, rect.y + 5)
+        font.render("Factual future threat", True, (237, 231, 188)), (rect.x + 8, rect.y + 5)
     )
     rate = max(1, frame["observation"].tick_rate)
     stamp = (
@@ -120,7 +139,9 @@ def draw_live_reach(surface, frame, rect):
         else "Awaiting decision"
     )
     surface.blit(font.render(stamp, True, (184, 205, 186)), (rect.x + 8, rect.y + 23))
-    grid = pygame.Rect(rect.x + 20, rect.y + 56, max(10, rect.w - 28), max(10, rect.h - 80))
+    has_effects = bool(decision.get("effect_prediction_valid", False))
+    height = max(10, (rect.h - 130) // 3) if has_effects else max(10, rect.h - 98)
+    grid = pygame.Rect(rect.x + 20, rect.y + 56, max(10, rect.w - 28), height)
     axis_font = pygame.font.SysFont("Segoe UI", max(7, min(11, grid.h // 5 - 2)))
     for col, text in enumerate(("H", *map(str, range(1, 10)))):
         label = axis_font.render(text, True, (184, 205, 186))
@@ -134,6 +155,26 @@ def draw_live_reach(surface, frame, rect):
                 label, label.get_rect(midright=(grid.x - 3, grid.y + (row + 0.5) * grid.h / 5))
             )
     _draw_grid(surface, predicted_map(decision) if valid else np.full((5, 10), np.nan), grid, font)
+    if has_effects:
+        for index, title in enumerate(("Static field after proposal", "Probe after proposal")):
+            top = grid.bottom + 20 + index * (height + 23)
+            surface.blit(font.render(title, True, (237, 231, 188)), (rect.x + 8, top - 18))
+            _draw_grid(
+                surface,
+                decision["effect_prediction"][index],
+                pygame.Rect(grid.x, top, grid.w, height),
+                font,
+            )
+    else:
+        message = (
+            "Field/probe forecasts disabled"
+            if decision.get("forecast_mode") == 2 or decision.get("reach_provenance") == 4
+            else "Field/probe predictions not recorded"
+        )
+        surface.blit(
+            font.render(message, True, (184, 205, 186)),
+            (rect.x + 8, rect.bottom - 39),
+        )
     legend = "H = home danger | green 0% - red 100%" if rect.w >= 250 else "H = home | 0% - 100%"
     surface.blit(font.render(legend, True, (184, 205, 186)), (rect.x + 8, rect.bottom - 20))
     surface.set_clip(old_clip)
@@ -149,11 +190,22 @@ def draw_reach(surface, font, decision, x, y, width):
         if decision.get("reach_provenance") == 3
         else "historical reach target"
     )
-    surface.blit(font.render(f"Reach target: {kind}", True, (224, 231, 216)), (x, y))
-    surface.blit(
-        font.render("Home | 1–9; grey = unknown / pending", True, (184, 205, 186)), (x, y + 20)
-    )
-    grid = pygame.Rect(x, y + 42, min(360, width), 70)
+    if decision.get("reach_provenance") == 4:
+        kind = "safe-lane / ready-mower rules; grey = unknown"
+    words, lines, current = f"Reach target: {kind}".split(), [], ""
+    for word in words:
+        candidate = f"{current} {word}".strip()
+        if current and font.size(candidate)[0] > width:
+            lines.append(current)
+            current = word
+        else:
+            current = candidate
+    lines.append(current)
+    for line in lines:
+        surface.blit(font.render(line, True, (224, 231, 216)), (x, y))
+        y += 20
+    surface.blit(font.render("Home | 1–9; grey = unknown / pending", True, (184, 205, 186)), (x, y))
+    grid = pygame.Rect(x, y + 22, min(360, width), 70)
     _draw_grid(
         surface,
         factual_map(
@@ -161,4 +213,4 @@ def draw_reach(surface, font, decision, x, y, width):
         ),
         grid,
     )
-    return 120
+    return 100 + 20 * len(lines)
