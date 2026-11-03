@@ -659,6 +659,8 @@ def validate_config(cfg: dict) -> None:
     if policy["shared_width"] % policy["attention_heads"]:
         raise ValueError("shared_width must be divisible by attention_heads")
     stages = ("normal", "cherry_bomb", "cherry_bomb_obstacle", "attacker_pre", "peashooter")
+    if type(cfg["training"].get("reach_cleared_lanes", False)) is not bool:
+        raise ValueError("training.reach_cleared_lanes must be a boolean")
     if set(cfg["training"].get("stage_reach_weights", {})) - set(stages[1:]):
         raise ValueError("Unknown preliminary reach stage")
     for stage in stages:

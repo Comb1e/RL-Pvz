@@ -32,8 +32,12 @@ This file owns project-specific invariants and the code map.
   preserve primary outcomes/rewards and checkpoint unfinished wall-time work.
   Saved endpoint versions retain legacy semantics and conservative labels. These tails
   add no episodes, rewards, fitting actions or policy calls. Categories
-  are columns 1–9 plus outside; absent lanes have no loss. Normalize by eligible
-  lanes then equally by decisions. Reach is neither reward nor a mastery gate.
+  are columns 1–9 plus outside. With saved `training.reach_cleared_lanes` enabled,
+  pre-action lanes with no non-headless entities after the final spawn receive
+  outside/zero-penetration targets. Use the complete public roster before truncation;
+  otherwise absent lanes have no loss. Missing saved settings disable this rule.
+  Normalize by eligible lanes then equally by decisions. Reach is neither reward
+  nor a mastery gate.
 - CUDA reach hooks are owned, guarded extensions. No extra environments, policy
   calls or hot-loop host synchronization. Charge private storage to shared budgets;
   tracker/storage failures retain recovery rather than fabricating labels.
@@ -98,7 +102,7 @@ Paths are relative to `src/pvz_rl/` unless stated otherwise.
 | `envs/` | CPU/CUDA adapters, public encoding, actions, rewards, source credit and scenarios. `reach_tracking.py` owns guarded identity/movement hooks; `reach_exercise.py` owns versioned natural-game-end scenario endpoints. |
 | `envs/scratch_game.py`, `bomb_preparation.py`, `cuda_bomb_oracle.py`, `cuda_snapshots.py`, `attacker_scenarios.py` | Validated automatic exercises, persistent preparation, bounded oracles and conservative attacker labels. |
 | `learning/training.py`, `cuda_q.py`, `sequential_training.py` | Cohort orchestration, collection/fitting, reporting and atomic recovery. |
-| `learning/reach_supervision.py`, `reach_objective.py` | Private targets, resumable Wait-only continuations, observed/conservative labels, categorical reach loss and normalization. |
+| `learning/reach_supervision.py`, `reach_objective.py` | Private targets, pre-action cleared-lane provenance, resumable Wait-only continuations, observed/conservative labels, categorical reach loss and normalization. |
 | `learning/flat_q.py`, `objective.py`, `action_routing.py`, `placement_labels.py`, `bomb_objective.py` | Shared Q fitting/economics, legality attribution and automatic placement losses. |
 | `learning/peashooter_rules.py`, `peashooter_teacher.py`, `envs/lane_preparation.py`, `cuda_lane_oracle.py` | Prioritized lane targets and resumable bounded lane oracles. |
 | `learning/cuda_buffer.py`, `batch_transport.py`, `collection_scheduler.py`, `exploration.py` | Bounded trajectories/transport, decision tickets and committed species exploration. |

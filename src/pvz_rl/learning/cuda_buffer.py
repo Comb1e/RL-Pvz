@@ -30,54 +30,56 @@ from pvz_rl.learning.source_actions import AppendReceipt, SourceActionRef
 from pvz_rl.monitoring.moments import RunningMoments
 
 TRAJECTORY_PROTOCOL = "pvz-rl/shared-reach-trajectory-v1"
+TRAJECTORY_CLEARED_PROTOCOL = "pvz-rl/shared-reach-cleared-trajectory-v1"
 
 
 def trajectory_dtype(cfg=None):
-    return np.dtype(
-        [
-            ("entity_offset", "<u8"),
-            ("entity_count", "<u4"),
-            ("entity_omitted", "<u4", 3),
-            ("globals", "<f4", GLOBAL_WIDTH),
-            ("action", "<u2"),
-            ("tick", "<u4"),
-            ("reset", "?"),
-            ("active", "?"),
-            ("env", "<u2"),
-            ("episode", "<u8"),
-            ("decision", "<u8"),
-            ("run_break", "?"),
-            ("duration", "<u2"),
-            ("reward", "<f8"),
-            ("components", "<f8", len(COMPONENTS)),
-            ("components_valid", "?"),
-            ("won", "?"),
-            ("home_entries", "<u4", 2),
-            ("branch_value", "<f4"),
-            ("tile_value", "<f4"),
-            ("minimum_q", "<f4"),
-            ("placement_gap", "<f4"),
-            ("greedy_action", "<u2"),
-            ("policy_action", "<u2"),
-            ("exploration_mode", "u1"),
-            ("pending_species", "u1"),
-            ("next_species", "u1"),
-            ("species_coin", "?"),
-            ("tile_coin", "?"),
-            ("reach_prediction", "<f2", (5, 9)),
-            ("reach_valid", "?"),
-            ("reach_offset", "<u8"),
-            ("reach_count", "<u2"),
-            ("reach_labels", "i1", 5),
-            ("target", "<f4"),
-            ("accepted", "?"),
-            ("route", "u1"),
-            ("branch_usable", "?"),
-            ("rejection_reason", "u1"),
-            ("done", "?"),
-            ("executed_action", "<u2"),
-        ]
-    )
+    fields = [
+        ("entity_offset", "<u8"),
+        ("entity_count", "<u4"),
+        ("entity_omitted", "<u4", 3),
+        ("globals", "<f4", GLOBAL_WIDTH),
+        ("action", "<u2"),
+        ("tick", "<u4"),
+        ("reset", "?"),
+        ("active", "?"),
+        ("env", "<u2"),
+        ("episode", "<u8"),
+        ("decision", "<u8"),
+        ("run_break", "?"),
+        ("duration", "<u2"),
+        ("reward", "<f8"),
+        ("components", "<f8", len(COMPONENTS)),
+        ("components_valid", "?"),
+        ("won", "?"),
+        ("home_entries", "<u4", 2),
+        ("branch_value", "<f4"),
+        ("tile_value", "<f4"),
+        ("minimum_q", "<f4"),
+        ("placement_gap", "<f4"),
+        ("greedy_action", "<u2"),
+        ("policy_action", "<u2"),
+        ("exploration_mode", "u1"),
+        ("pending_species", "u1"),
+        ("next_species", "u1"),
+        ("species_coin", "?"),
+        ("tile_coin", "?"),
+        ("reach_prediction", "<f2", (5, 9)),
+        ("reach_valid", "?"),
+        ("reach_offset", "<u8"),
+        ("reach_count", "<u2"),
+        ("reach_labels", "i1", 5),
+        ("target", "<f4"),
+        ("accepted", "?"),
+        ("route", "u1"),
+        ("branch_usable", "?"),
+        ("rejection_reason", "u1"),
+        ("done", "?"),
+        ("executed_action", "<u2"),
+    ]
+    if (cfg or {}).get("training", {}).get("reach_cleared_lanes", False):
+        fields.append(("reach_cleared", "u1"))
+    return np.dtype(fields)
 
 
 class CompleteGameBuffer:
@@ -955,7 +957,9 @@ class CompleteGameBuffer:
 
     def metadata(self):
         return dict(
-            protocol=TRAJECTORY_PROTOCOL,
+            protocol=TRAJECTORY_CLEARED_PROTOCOL
+            if "reach_cleared" in self.dtype.names
+            else TRAJECTORY_PROTOCOL,
             schema=self.schema,
             n_envs=self.n_envs,
             ram_bytes=self.ram_bytes,
@@ -994,7 +998,12 @@ class CompleteGameBuffer:
 
     @staticmethod
     def validate_metadata(state):
-        if state.get("protocol") != TRAJECTORY_PROTOCOL:
+        expected = (
+            TRAJECTORY_CLEARED_PROTOCOL
+            if (state.get("cfg") or {}).get("training", {}).get("reach_cleared_lanes", False)
+            else TRAJECTORY_PROTOCOL
+        )
+        if state.get("protocol") != expected:
             raise ValueError("Retired trajectory schema; fresh initialization is required")
         if any(
             key in state for key in ("probes", "probe_pending", "pending_probes", "probe_endpoints")
@@ -1080,6 +1089,7 @@ class CompleteGameBuffer:
                 if (
                     np.any((rows["reach_labels"] < -1) | (rows["reach_labels"] > 9))
                     or not np.isfinite(rows["reach_prediction"]).all()
+                    or ("reach_cleared" in rows.dtype.names and np.any(rows["reach_cleared"] > 31))
                 ):
                     raise ValueError("Invalid reach labels or predictions in trajectory")
                 if np.any(rows["action"] >= A.size) or np.any(rows["executed_action"] >= A.size):

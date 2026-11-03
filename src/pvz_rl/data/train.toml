@@ -82,6 +82,7 @@ block_value_by_plant = { sunflower = 0.074074074, peashooter = 0.074074074, wall
 gamma = 1.0
 discount_clock = "simulation_ticks"
 method = "complete_return_reach_v1"
+reach_cleared_lanes = true # Zero-penetration targets for empty lanes after the final spawn.
 budget_unit = "games"
 until_stage_complete = false # With --stage: stop only when its mastery gate passes.
 total_games = 10000

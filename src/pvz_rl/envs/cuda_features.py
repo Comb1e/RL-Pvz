@@ -126,6 +126,7 @@ class CudaFeatures:
         # Kept count, then plants/zombies/projectiles omitted by the entity cap.
         self.summary = cp.zeros((rows, 4), cp.int64)
         self.identities = cp.zeros((rows, self.limit), cp.int64)
+        self.cleared_lanes = cp.zeros(rows, cp.uint8)
         self.records = cp.zeros(
             (0 if accounting_only else batch.n, 50 + batch.zcap, ENTITY_WIDTH), cp.int32
         )
@@ -221,6 +222,7 @@ class CudaFeatures:
                 self.assets,
                 self.summary[rows],
                 self.identities[rows],
+                self.cleared_lanes[rows],
                 b.n,
             ),
         )

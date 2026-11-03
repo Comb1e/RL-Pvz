@@ -8,7 +8,12 @@ import numpy as np
 import torch
 
 from pvz_rl.envs.reach_exercise import LEGACY_ENDPOINT_POLICY, NATURAL_ENDPOINT_POLICY
-from pvz_rl.envs.reach_tracking import position_category, suffix_labels
+from pvz_rl.envs.reach_tracking import (
+    CLEARED_LABEL_POLICY,
+    LEGACY_LABEL_POLICY,
+    position_category,
+    suffix_labels,
+)
 from pvz_rl.envs.tile_scenarios import is_placement_skill
 
 REACH_PROTOCOL = "visible-zombie-suffix-reach-v1"
@@ -30,6 +35,13 @@ class ReachSupervision:
         self.env, self.buffer = env, buffer
         self.path = Path(buffer.path) / "visible-reach-targets.bin"
         self.phase, self.cursor, self.targets = ReachPhase.COLLECTING, 0, 0
+        self.label_policy = (
+            CLEARED_LABEL_POLICY
+            if env.cfg["training"].get("reach_cleared_lanes", False)
+            else LEGACY_LABEL_POLICY
+        )
+        if ("reach_cleared" in buffer.dtype.names) != (self.label_policy == CLEARED_LABEL_POLICY):
+            raise ValueError("Reach label policy differs from trajectory schema")
         self.metrics = dict(
             tracked_zombies=0,
             eligible_decisions=0,
@@ -39,6 +51,9 @@ class ReachSupervision:
             continuation_ticks=0,
             observed_lanes=0,
             conservative_lanes=0,
+            cleared_lanes=0,
+            cleared_only_decisions=0,
+            label_policy=self.label_policy,
             stop_reasons={},
         )
         self.endpoint_policy = env.cfg["training"]["tile_scenarios"].get(
@@ -61,6 +76,8 @@ class ReachSupervision:
         if state is not None:
             if state.get("protocol") != REACH_PROTOCOL:
                 raise ValueError("Incompatible reach tracking recovery")
+            if state.get("label_policy", LEGACY_LABEL_POLICY) != self.label_policy:
+                raise ValueError("Reach label policy differs from recovery")
             self.phase, self.cursor, self.targets = (
                 ReachPhase(state["phase"]),
                 state["cursor"],
@@ -215,6 +232,11 @@ class ReachSupervision:
             selected = np.flatnonzero(ids > 0)
             rows["reach_offset"][slot] = self.targets
             rows["reach_count"][slot] = len(selected)
+            cleared = int(rows["reach_cleared"][slot]) if "reach_cleared" in rows.dtype.names else 0
+            if len(selected) or cleared:
+                self.metrics["eligible_decisions"] += 1
+            if cleared and not len(selected):
+                self.metrics["cleared_only_decisions"] += 1
             if not len(selected):
                 continue
             public = observations.entities[offset : offset + count][selected]
@@ -228,7 +250,6 @@ class ReachSupervision:
             self.stream.write(targets.tobytes())
             self.targets += len(targets)
             self.metrics["tracked_zombies"] += len(targets)
-            self.metrics["eligible_decisions"] += 1
         self.metrics["tracking_seconds"] += perf_counter() - started
         self.metrics["storage_bytes"] = self.targets * TARGET_DTYPE.itemsize + self.estimated_bytes
 
@@ -254,7 +275,7 @@ class ReachSupervision:
             data = np.memmap(self.path, dtype=TARGET_DTYPE, mode="r", shape=(self.targets,))
         else:
             data = np.empty(0, TARGET_DTYPE)
-        observed_lanes = conservative_lanes = 0
+        observed_lanes = conservative_lanes = cleared_lanes = 0
         try:
             for index in range(self.cursor, last):
                 block, offset = divmod(index, self.buffer.block_rows)
@@ -280,12 +301,19 @@ class ReachSupervision:
                                 conservative[int(lane)] = True
                         labels[conservative] = 0
                         self.conservative_lanes[int(row["env"])] = conservative
+                cleared = np.zeros(5, bool)
+                if "reach_cleared" in row.dtype.names:
+                    cleared = (int(row["reach_cleared"]) & (1 << np.arange(5))) != 0
+                    if np.any(labels[cleared] >= 0):
+                        raise ValueError("Cleared lane conflicts with pre-action zombie membership")
+                    labels[cleared] = 9
                 row["reach_labels"] = labels
-                observed_lanes += int(((labels >= 0) & ~conservative).sum())
+                observed_lanes += int(((labels >= 0) & ~conservative & ~cleared).sum())
                 conservative_lanes += int(conservative.sum())
+                cleared_lanes += int(cleared.sum())
                 examples = self.metrics.setdefault("examples", [])
                 if (
-                    row["reach_count"]
+                    (labels >= 0).any()
                     and len(examples) < 4
                     and not any(
                         item["env"] == int(row["env"]) and item["labels"] == labels.tolist()
@@ -300,6 +328,7 @@ class ReachSupervision:
                             prediction=row["reach_prediction"].astype(float).tolist(),
                             labels=labels.tolist(),
                             conservative_lanes=conservative.tolist(),
+                            cleared_lanes=cleared.tolist(),
                             stop_reason=int(self._exercise_state[int(row["env"]), 2])
                             if self.exercise
                             else None,
@@ -308,6 +337,7 @@ class ReachSupervision:
             self.cursor = last
             self.metrics["observed_lanes"] += observed_lanes
             self.metrics["conservative_lanes"] += conservative_lanes
+            self.metrics["cleared_lanes"] += cleared_lanes
         finally:
             if isinstance(data, np.memmap):
                 data._mmap.close()
@@ -321,6 +351,7 @@ class ReachSupervision:
         self.stream.flush()
         return dict(
             protocol=REACH_PROTOCOL,
+            label_policy=self.label_policy,
             phase=self.phase.value,
             cursor=self.cursor,
             targets=self.targets,

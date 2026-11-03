@@ -67,17 +67,21 @@ the shared encoder/decoder and reach heads while leaving the action readout
 untouched. Normal cohorts jointly fit action/tile returns and reach cross-entropy,
 using four passes. Each stage table has its own `reach_prediction_weight`, default
 0.1; zero disables its gradient. Reach categories are columns 1–9 plus “did not
-enter”; empty target lanes have no auxiliary loss. Scenario stages finish reach
-observation at natural engine victory or the first home entry. Bomb and attacker
+enter”. With `training.reach_cleared_lanes = true`, once all zombies have spawned,
+lanes without non-headless zombies receive zero-penetration targets. Other empty
+target lanes have no auxiliary loss. Clearance uses the pre-action board, including
+off-board zombies; it never changes actions or creates plants. Scenario stages
+finish reach observation at natural engine victory or the first home entry. Bomb and attacker
 exercises use Wait after their one placement; Peashooter uses Wait after its
 gameplay cutoff. Private continuation has no simulated-time cutoff and supplies
 observed reach without changing recorded task results, timeout outcomes or rewards.
-Wall-time limits save unfinished work; old recoveries retain their saved endpoints.
-Normal games keep their existing factual reach. These continuations add no episodes
+Wall-time limits save unfinished work; old recoveries retain their saved endpoints
+and cleared-lane setting (missing means disabled). Normal games keep their existing
+factual reach. These continuations add no episodes
 or policy calls. Native and browser game viewers show predicted penetration beside
 each live board, including in grid mode. The map is timestamped to the latest tile
 decision and stays visible during Wait; it needs no additional model calls. Focused
-viewing and reports also show observed supervision targets.
+viewing and reports also show observed supervision targets and mark cleared lanes.
 
 Validation uses fresh random panels, saved for interrupted retries. Full fitted
 cohorts must strictly exceed the configured qualification threshold before a due

@@ -45,11 +45,16 @@ def report_reach_maps(metrics, output, save, *, stage="normal"):
                 for lane, conservative in enumerate(sample.get("conservative_lanes", [])):
                     if conservative:
                         ax.text(0, lane, "full-lane failure", color="white", fontsize=8)
+                for lane, cleared in enumerate(sample.get("cleared_lanes", [])):
+                    if cleared:
+                        ax.text(0, lane, "cleared: no remaining spawns", color="black", fontsize=8)
     name = f"{stage}-reach-maps"
+    fig.tight_layout()
     save(fig, output, name)
     legacy = any(any(sample.get("conservative_lanes", [])) for sample in examples)
     return (
-        f"{stage.replace('_', ' ').title()} reach: prediction and observed target; "
+        f"{stage.replace('_', ' ').title()} reach: prediction and supervision target; "
+        + "cleared lanes are marked; "
         + ("historical conservative full-lane targets are marked; " if legacy else "")
         + "grey lanes have no targets",
         name + ".png",
@@ -129,7 +134,7 @@ def draw_reach(surface, font, decision, x, y, width):
     title = (
         "Reach target (historical full-lane label)"
         if decision.get("reach_conservative", 0)
-        else "Observed reach target (grey = pending / no targets)"
+        else "Reach target (grey = pending / no targets)"
     )
     surface.blit(font.render(title, True, (224, 231, 216)), (x, y))
     grid = pygame.Rect(x, y + 21, min(324, width), 70)
@@ -137,4 +142,11 @@ def draw_reach(surface, font, decision, x, y, width):
     for row in range(5):
         if decision.get("reach_conservative", 0) & (1 << row):
             pygame.draw.rect(surface, (245, 245, 235), (x, grid.y + row * 14, grid.w, 14), 1)
+    cleared = ", ".join(
+        chr(65 + r) for r in range(5) if decision.get("reach_cleared", 0) & (1 << r)
+    )
+    if cleared:
+        label = font.render(f"Lanes {cleared} cleared: no remaining spawns", True, (224, 231, 216))
+        surface.blit(label, (x, grid.bottom + 5))
+        return 120
     return 99

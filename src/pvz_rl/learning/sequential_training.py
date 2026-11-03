@@ -510,6 +510,11 @@ class CudaSequentialQ(CudaCohortLifecycle):
                                 "reach_ids": torch.from_dlpack(env.features.identities),
                                 "reach_errors": torch.from_dlpack(env.batch.reach_error),
                                 "reach_prediction": self._collection_reach,
+                                **(
+                                    {"reach_cleared": torch.from_dlpack(env.features.cleared_lanes)}
+                                    if self.cfg["training"].get("reach_cleared_lanes", False)
+                                    else {}
+                                ),
                             }
                             if self.reach_training
                             else {}
@@ -613,6 +618,10 @@ class CudaSequentialQ(CudaCohortLifecycle):
             if self.reach_training:
                 rows["reach_prediction"] = host["reach_prediction"].numpy()
                 rows["reach_valid"] = active & rows["branch_usable"] & (rows["action"] > 0)
+                if "reach_cleared" in rows.dtype.names:
+                    rows["reach_cleared"] = np.where(
+                        rows["reach_valid"], host["reach_cleared"].numpy(), 0
+                    )
             presentation_started = perf_counter()
             env.action_journal.record_batch_safe(
                 rows,
@@ -952,7 +961,7 @@ class CudaSequentialQ(CudaCohortLifecycle):
             int(
                 np.count_nonzero(
                     (self._fitting_spool.rows["reach_labels"] >= 0).any(-1)
-                    & (self._fitting_spool.rows["reach_count"] > 0)
+                    & self._fitting_spool.rows["reach_valid"]
                 )
             )
             if self.reach_training
@@ -1180,11 +1189,7 @@ class CudaSequentialQ(CudaCohortLifecycle):
                 self._peashooter_pass_metrics += detail
             else:
                 loss, error, gap = self._bomb_loss(rows, observations, features=features)
-            eligible = np.flatnonzero(
-                rows["reach_valid"]
-                & (rows["reach_labels"] >= 0).any(-1)
-                & (rows["reach_count"] > 0)
-            )
+            eligible = np.flatnonzero(rows["reach_valid"] & (rows["reach_labels"] >= 0).any(-1))
             self.policy._last_reach_metrics = torch.zeros(
                 5, device=self.device, dtype=torch.float64
             )

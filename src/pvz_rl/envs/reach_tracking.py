@@ -7,6 +7,20 @@ compaction cannot change identity. Nothing in this slab enters observations.
 """
 
 REACH_WIDTH = 14  # id, row, last category, defeat tick+1, ten entry ticks+1
+LEGACY_LABEL_POLICY = "visible-zombie-only-v1"
+CLEARED_LABEL_POLICY = "visible-zombie-cleared-lanes-v1"
+
+
+def cleared_lane_mask(observation):
+    """Public pre-action clearance; headless bodies are already defeated."""
+    if observation.counts.not_yet_spawned != 0:
+        return 0
+    mask = 31
+    for zombie in observation.zombies:
+        if not zombie.headless:
+            mask &= ~(1 << zombie.row)
+    return mask
+
 
 REACH_METHOD = r"""
   __device__ void track_reach(Zombie &a, bool defeated = false) {

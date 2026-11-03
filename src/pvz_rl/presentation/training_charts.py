@@ -251,6 +251,8 @@ def report_charts(segments, cfg, output, save):
                     ),
                     ("reach_tracking.storage_bytes", "Private reach storage (bytes)"),
                     ("reach_tracking.observed_lanes", "Observed lane targets"),
+                    ("reach_tracking.cleared_lanes", "Cleared lane targets (no remaining spawns)"),
+                    ("reach_tracking.cleared_only_decisions", "Decisions with only cleared lanes"),
                     ("reach_tracking.conservative_lanes", "Full-lane failure targets"),
                     ("reach_tracking.continuation_seconds", "Wait-only continuation (seconds)"),
                     ("reach_tracking.continuation_ticks", "Wait-only simulated ticks"),
