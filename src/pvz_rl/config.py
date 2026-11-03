@@ -1003,6 +1003,8 @@ def validate_config(cfg: dict) -> None:
     if not math.isfinite(visual["final_hold_seconds"]) or visual["final_hold_seconds"] < 0:
         raise ValueError("Visualization final_hold_seconds must be finite and nonnegative")
     env, train = cfg["environment"], cfg["training"]
+    if type(train.get("random_cohort_seeds", False)) is not bool:
+        raise ValueError("training.random_cohort_seeds must be boolean")
     expected_method = "nstep_fork_forecast_v3"
     if train.get("method") != expected_method:
         raise ValueError(

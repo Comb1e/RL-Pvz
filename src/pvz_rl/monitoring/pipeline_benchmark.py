@@ -59,6 +59,7 @@ def measure(cfg, output, *, initial=None, seed=101, seconds=1800, trajectory=Non
         raise ValueError("Use a new benchmark output path")
     output.parent.mkdir(parents=True, exist_ok=True)
     cfg = copy.deepcopy(cfg)
+    cfg["training"]["random_cohort_seeds"] = False  # Compare identical seeded cohorts.
     cfg["training"].pop("peashooter_rules", None)
     cfg.setdefault("diagnostics", {})["reach_tracking"] = False
     cfg["training"]["forecasts"]["enabled"] = False

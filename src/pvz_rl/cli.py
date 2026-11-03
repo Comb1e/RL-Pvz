@@ -147,7 +147,6 @@ def configured(args):
         cfg = refresh_wait_exploration(cfg, current)
         cfg = refresh_validation_schedule(cfg, current)
         cfg["logging"] = copy.deepcopy(current["logging"])
-        args.seed = 101 if getattr(args, "seed", None) is None else args.seed
         args.condition = getattr(args, "condition", None) or "masked"
         if getattr(args, "stage", None) is not None:
             cfg["curriculum"]["run_stage"] = args.stage
@@ -239,7 +238,9 @@ def main(argv=None):
         help="train headlessly without the live game window",
     )
     training.add_argument("--condition", choices=TRAINING_CONDITIONS, help="default: masked")
-    training.add_argument("--seed", type=int, help="learner seed; default: saved seed or 101")
+    training.add_argument(
+        "--seed", type=int, help="optional initialization seed; default: random, saved on resume"
+    )
     training.add_argument("--output", required=True, type=Path)
     training.add_argument("--validation-count", type=int, help="reduced validation set for checks")
     training.add_argument("--family", choices=("preset", "diagnostic"), default="preset")

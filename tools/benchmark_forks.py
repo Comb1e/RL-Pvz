@@ -150,7 +150,9 @@ def cohort(args):
     base = load_config()
     base["curriculum"]["run_stage"] = args.stage
     t = base["training"]
-    t.update(n_envs=args.envs, total_games=args.envs, max_minutes=args.minutes)
+    t.update(
+        n_envs=args.envs, total_games=args.envs, max_minutes=args.minutes, random_cohort_seeds=False
+    )
     t["forecasts"]["pretrain_roots"] = 0  # Separate startup phase, identical for both variants.
     t["tile_scenarios"]["cherry_bomb_n_envs"] = args.envs
     t["tile_scenarios"]["attacker"]["n_envs"] = args.envs

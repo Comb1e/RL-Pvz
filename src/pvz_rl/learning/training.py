@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import json
 import math
+import secrets
 import shutil
 from collections import Counter, deque
 from pathlib import Path
@@ -217,12 +218,15 @@ class ResearchCallback(BaseCallback):
             viewer.set_activity(
                 {
                     "training": Activity.UPDATING,
+                    "idle": Activity.UPDATING,
+                    "forecast_pretraining": Activity.UPDATING,
                     "validation": Activity.VALIDATING,
                     "reporting": Activity.REPORTING,
                     "collect": Activity.COLLECTING,
                     "finalize_rewards": Activity.UPDATING,
                     "fit": Activity.UPDATING,
                     "returns": Activity.UPDATING,
+                    "td_targets": Activity.UPDATING,
                     "synchronize": Activity.UPDATING,
                 }[self.hardware_activity]
             )
@@ -1578,6 +1582,8 @@ def train(
         from pvz_rl.learning.cuda_q import checkpoint_optimizer_protocol
 
         saved = inspect_checkpoint(resume)
+        if learner_seed is None:
+            learner_seed = saved["learner_seed"]
         if saved["initialization_type"] != "autonomous":
             raise ValueError(
                 "Demonstration weights require --init-from; --resume needs an autonomous ZIP"
@@ -1600,6 +1606,8 @@ def train(
             )
         if saved["learner_seed"] != learner_seed or saved["validation_limit"] != validation_limit:
             raise ValueError("Resume learner seed or validation limit differs")
+    elif learner_seed is None:
+        learner_seed = secrets.randbits(32)
     require_cuda_training(cfg, condition)
     resumed_model = (
         load_policy(resume, cfg["training"]["device"], for_resume=True)[0] if resume else None

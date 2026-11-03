@@ -52,6 +52,7 @@ def measure(
             return True
 
     cfg = deepcopy(cfg)
+    cfg["training"]["random_cohort_seeds"] = False  # Seed-matched performance panels.
     warmups = max(warmups, math.ceil(warmup_games / count))
     tile = cfg["training"]["tile_scenarios"]
     tile["enabled"] = True

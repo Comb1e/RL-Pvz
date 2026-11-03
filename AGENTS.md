@@ -66,6 +66,8 @@ This file owns project-specific invariants and the code map.
 - Preparation/prefetch is bounded and speculative: commit seeds only on consumption,
   regenerate unfinished work on resume, share RAM/VRAM limits, and preserve exact
   attributed labels. Respect independent configured stage cohort/resource sizes.
+  Fresh cohorts draw independent seeds; save pending draws before prefetch so
+  recovery reproduces unfinished boards. Seed-matched diagnostics disable this mode.
 - Completed autonomous runs retain portable weights and visualizations. Interrupted,
   failed and incomplete runs retain recovery. Validation passes/skips/completion
   create or refresh reports. Close cohort sidecar owners before the trajectory

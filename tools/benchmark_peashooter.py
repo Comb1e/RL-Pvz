@@ -45,6 +45,7 @@ def measure(base, settings, args, workspace):
             return True
 
     cfg = deepcopy(base)
+    cfg["training"]["random_cohort_seeds"] = False  # Seed-matched performance panels.
     count = settings["n_envs"]
     cfg["training"].update(n_envs=count, total_games=count * (args.repetitions + 2))
     cfg["training"]["peashooter_rules"].update(

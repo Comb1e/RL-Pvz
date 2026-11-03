@@ -4,6 +4,7 @@ from collections import Counter
 from contextlib import contextmanager
 from copy import deepcopy
 from functools import partial
+from secrets import randbits
 from time import perf_counter
 
 import numpy as np
@@ -57,9 +58,14 @@ class ScenarioQueue:
     stale curriculum weights and never places a seed or schedule in policy input.
     """
 
-    def __init__(self, cfg, condition, seed, family, n):
+    def __init__(self, cfg, condition, seed, family, n, *, training=True):
         self.cfg, self.condition, self.family = cfg, condition, family
+        seed = randbits(32) if seed is None else seed
         self.rngs = [np.random.default_rng(seed * 1000 + i) for i in range(n)]
+        self.random_cohorts = (
+            training and family != "diagnostic" and cfg["training"].get("random_cohort_seeds", False)
+        )
+        self.cohort_seed = self.pending_cohort_seed = None
         self.progress, self.stage = 0, 0
         self.rules = Rules()
         self.tile_scenario = "complete"
@@ -70,6 +76,43 @@ class ScenarioQueue:
         self._prefetched = None
         self.preparation_metrics = {}
         self.validation_cases = None
+
+    def _staging_rngs(self):
+        if not self.random_cohorts:
+            return deepcopy(self.rngs)
+        if self.pending_cohort_seed is None:
+            self.pending_cohort_seed = randbits(63)
+        return [
+            np.random.default_rng(np.random.SeedSequence([self.pending_cohort_seed, index]))
+            for index in range(len(self.rngs))
+        ]
+
+    def seed_state(self):
+        return dict(
+            version=1,
+            random=self.random_cohorts,
+            current=self.cohort_seed,
+            pending=self.pending_cohort_seed,
+        )
+
+    def restore_seeds(self, state):
+        if state is None:
+            # Missing metadata belongs to the saved sequential-RNG workflow.
+            self.random_cohorts = False
+            self.cohort_seed = self.pending_cohort_seed = None
+            return
+        if (
+            state.get("version") != 1
+            or type(state.get("random")) is not bool
+            or state["random"] != self.random_cohorts
+            or any(
+                value is not None and (type(value) is not int or not 0 <= value < 2**63)
+                for value in (state.get("current"), state.get("pending"))
+            )
+            or (not state["random"] and any(state.get(k) is not None for k in ("current", "pending")))
+        ):
+            raise ValueError("Invalid or incompatible cohort seed recovery")
+        self.cohort_seed, self.pending_cohort_seed = state["current"], state["pending"]
 
     def _draft(self, indices, rngs, seeds=None):
         cfg = self.cfg
@@ -122,7 +165,7 @@ class ScenarioQueue:
             return
         if self.deadline is not None and perf_counter() >= self.deadline:
             return
-        rngs = deepcopy(self.rngs)
+        rngs = self._staging_rngs()
         staged = self._draft(list(range(count)), rngs)
         tasks = self._bomb_preparation().submit(
             [s[3] for s in staged], self.deadline, skill=self.tile_scenario
@@ -133,6 +176,7 @@ class ScenarioQueue:
         if self._prefetched is not None:
             self._preparation.cancel(self._prefetched[2])
             self._prefetched = None
+            self.pending_cohort_seed = None
 
     def prepare(self, indices, seeds=None):
         from pvz_rl.learning.deadline import check_deadline
@@ -159,6 +203,7 @@ class ScenarioQueue:
             else:
                 self.discard_prefetch()
         if tasks is None:
+            rngs = self._staging_rngs() if seeds is None and indices else deepcopy(self.rngs)
             staged = self._draft(indices, rngs, seeds)
         if is_placement_skill(self.tile_scenario):
             prep = self._bomb_preparation()
@@ -208,6 +253,8 @@ class ScenarioQueue:
         # Atomic consumption: unfinished preparation can be regenerated on resume.
         for i in indices:
             self.rngs[i].bit_generator.state = rngs[i].bit_generator.state
+        if self.random_cohorts and seeds is None and indices:
+            self.cohort_seed, self.pending_cohort_seed = self.pending_cohort_seed, None
         return staged
 
     def release_scratch(self):
@@ -246,7 +293,7 @@ class CudaVecEnv(VecEnv):
         self._per_tick = cfg["environment"].get("action_timing") == "per_tick"
         self._decision_ticks = int(cfg["environment"]["decision_ticks"])
         count = training_env_capacity(cfg, family) if training else cfg["training"]["n_envs"]
-        self.queue = ScenarioQueue(cfg, condition, learner_seed, family, count)
+        self.queue = ScenarioQueue(cfg, condition, learner_seed, family, count, training=training)
         self.stream = torch.cuda.current_stream()
         self.handoff = HostHandoff(self.stream)
         self.cases = cases
@@ -793,6 +840,7 @@ class CudaVecEnv(VecEnv):
             "totals": self.features.totals.get(),
             "home_ledger": self.features.home_ledger.get(),
             "queue_rng": [deepcopy(r.bit_generator.state) for r in self.queue.rngs],
+            "queue_seed_state": self.queue.seed_state(),
             "queue_progress": self.queue.progress,
             "queue_stage": self.queue.stage,
             "tile_scenario": self.tile_scenario,
@@ -869,6 +917,7 @@ class CudaVecEnv(VecEnv):
             self.features.encode()
             for rng, saved in zip(self.queue.rngs, state["queue_rng"], strict=True):
                 rng.bit_generator.state = deepcopy(saved)
+            self.queue.restore_seeds(state.get("queue_seed_state"))
             self.queue.progress, self.queue.stage = state["queue_progress"], state["queue_stage"]
             self.tile_scenario = self.queue.tile_scenario = state.get("tile_scenario", "complete")
             self.tile_boards = deepcopy(state.get("tile_boards", {}))

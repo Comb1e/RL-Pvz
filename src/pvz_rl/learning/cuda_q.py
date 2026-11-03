@@ -308,6 +308,8 @@ class CudaCohortLifecycle(BaseAlgorithm):
         transitions = int(self._buffer.group_counts.sum())
         self.cohort_metrics = {
             **self._stats,
+            "cohort_seed": self.env.queue.cohort_seed,
+            "random_cohort_seeds": self.env.queue.random_cohorts,
             "validation_cohort": dict(
                 cohort=self.cohort_number,
                 domain=self.tile_skills.validation_domain if self.tile_skills.active else "normal",

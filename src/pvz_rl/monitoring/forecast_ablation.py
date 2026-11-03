@@ -67,6 +67,7 @@ def main():
         parser.error("Game/time budgets must be positive; pretraining roots nonnegative")
     args.output.mkdir(parents=True, exist_ok=False)
     base = load_config(args.config)
+    base["training"]["random_cohort_seeds"] = False  # Paired ablations share scenario panels.
     manifest = dict(protocol="pvz-rl/forecast-ablation-v1", seeds=args.seeds, runs=[])
     for half_life in args.half_lives or [None]:
         for seed in args.seeds:

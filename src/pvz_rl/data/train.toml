@@ -87,6 +87,7 @@ until_stage_complete = false # With --stage: stop only when its mastery gate pas
 total_games = 10000
 total_steps = 3000000 # Inactive in normal training; bounded decision-window controls only.
 learner_seeds = [101, 102]
+random_cohort_seeds = true # Independent fresh cohort seeds; pending draws persist for recovery.
 device = "cuda"
 max_minutes = 120
 finalization_minutes = 15

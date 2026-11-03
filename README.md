@@ -48,7 +48,7 @@ resume with `--resume` and preserve optimizer updates and unfinished forks, hind
 Start autonomous training when ready:
 
 ```powershell
-.\.venv\Scripts\python.exe -m pvz_rl train --seed 101 `
+.\.venv\Scripts\python.exe -m pvz_rl train `
   --init-from runs\human-init\initialization.pt --output runs\my-run `
   --gpu 0 --gpu-profile rtx4070-laptop
 ```
@@ -58,6 +58,12 @@ Default progression is
 Use `--stage NAME --until-stage-complete` for one stage, or `--games N` for a
 completed-episode budget. Explicit normal stages skip preliminary stages. Omit
 `--init-from` to start with random weights.
+
+No seed is required: initialization is random and every training cohort draws an
+independent random seed. Pending seeds are saved before preparation so recovery
+recreates the same unfinished boards. `--seed` optionally fixes initialization;
+`training.random_cohort_seeds = false` also restores reproducible scenario streams
+for controlled diagnostics. Existing recoveries retain their saved seed behavior.
 
 Tune [train.toml](src/pvz_rl/data/train.toml): stage tables own their placement
 settings and independent `threat_prediction_weight` / `effect_prediction_weight`.
