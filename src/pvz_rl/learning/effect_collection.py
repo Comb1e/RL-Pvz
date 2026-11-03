@@ -4,9 +4,42 @@ import numpy as np
 import torch
 
 from pvz_rl.envs.actions import ActionSchema
+from pvz_rl.envs.probe_intervals import ProbeState, interval_probes_enabled
 from pvz_rl.envs.static_fork import reference_tau
 from pvz_rl.learning.forecast_labels import effect_labels
 from pvz_rl.policy.sequential_q import action_parts
+
+
+def sampling_rng(model, slot, stream):
+    return np.random.default_rng(
+        np.random.SeedSequence(
+            [
+                int(model.seed or 0),
+                int(slot),
+                int(model.env._episode_serial[slot]),
+                int(model._scheduler.decisions[slot]),
+                stream,
+            ]
+        )
+    )
+
+
+def interval_alternatives(action, legal, branch, scores, rng):
+    """Two fixed slots: branch runner-up, then a uniform remaining legal action."""
+    candidates = np.flatnonzero(legal)
+    candidates = candidates[candidates != 0]
+    ranked = sorted(
+        (int(a) for a in candidates if (a - 1) // 45 + 1 == branch),
+        key=lambda a: (-float(scores[(a - 1) % 45]), a),
+    )
+    runner_up = ranked[1] if len(ranked) >= 2 and ranked[1] != action else None
+    remaining = (
+        candidates[(candidates != action) & (candidates != runner_up)]
+        if runner_up is not None
+        else candidates[candidates != action]
+    )
+    random = int(rng.choice(remaining)) if len(remaining) else None
+    return runner_up, random
 
 
 def begin_effects(model, actions, details, issued):
@@ -20,25 +53,37 @@ def begin_effects(model, actions, details, issued):
         (env.batch.header, env.batch.plants, env.batch.cooldowns, scratch_masks, env.batch.n),
     )
     legal = scratch_masks.get()
-    tables = details["tile_q"].float().clone()
-    branches, _ = action_parts(actions)
-    branch_legal = torch.as_tensor(legal[:, 1:].reshape(-1, 9, 45).any(-1), device=policy.device)
-    # Wait/unavailable decisions need a proposal branch for near-Q alternatives.
-    # Batch that decoder work over the already encoded memory; no second encoder.
-    best_branch = details["branch_q"][:, 1:].masked_fill(~branch_legal, -torch.inf).argmax(-1) + 1
-    replacement = (branches == 0) | ~torch.as_tensor(
-        legal[np.arange(env.num_envs), proposed], device=policy.device
-    )
-    at = torch.nonzero(
-        replacement & branch_legal.any(-1) & torch.as_tensor(issued, device=policy.device),
-        as_tuple=False,
-    ).flatten()
-    if len(at):
-        tables[at] = policy.conditional_tiles(
-            details["observations"], best_branch[at], rows=at, memory=details["board_memory"]
-        ).float()
-    near_branch = torch.where(replacement, best_branch, branches).cpu().numpy()
-    scores = tables.cpu().numpy()
+    interval = interval_probes_enabled(model.cfg)
+    effective_wait = (proposed == 0) | ~legal[np.arange(env.num_envs), proposed]
+    sampled = issued.copy()
+    if interval:
+        probability = model.cfg["training"]["forecasts"]["wait_effect_sample_probability"]
+        for slot in enabled[effective_wait[enabled]]:
+            sampled[slot] = sampling_rng(model, slot, 0xEFF0).random() < probability
+    if sampled.any():
+        tables = details["tile_q"].float().clone()
+        branches, _ = action_parts(actions)
+        branch_legal = torch.as_tensor(
+            legal[:, 1:].reshape(-1, 9, 45).any(-1), device=policy.device
+        )
+        # Wait/unavailable decisions need a proposal branch for near-Q alternatives.
+        # Batch that decoder work over the already encoded memory; no second encoder.
+        best_branch = (
+            details["branch_q"][:, 1:].masked_fill(~branch_legal, -torch.inf).argmax(-1) + 1
+        )
+        replacement = (branches == 0) | ~torch.as_tensor(
+            legal[np.arange(env.num_envs), proposed], device=policy.device
+        )
+        at = torch.nonzero(
+            replacement & branch_legal.any(-1) & torch.as_tensor(sampled, device=policy.device),
+            as_tuple=False,
+        ).flatten()
+        if len(at):
+            tables[at] = policy.conditional_tiles(
+                details["observations"], best_branch[at], rows=at, memory=details["board_memory"]
+            ).float()
+        near_branch = torch.where(replacement, best_branch, branches).cpu().numpy()
+        scores = tables.cpu().numpy()
     maximum = model.cfg["training"]["forecasts"]["extra_actions"]
     commands = np.zeros((env.num_envs, 5), np.uint16)
     valid = np.zeros((env.num_envs, 5), bool)
@@ -46,6 +91,23 @@ def begin_effects(model, actions, details, issued):
     jobs, shortages = [], 0
     for slot in enabled:
         action = int(proposed[slot])
+        if interval:
+            selected = [action, None, None]
+            if sampled[slot]:
+                selected[1:] = interval_alternatives(
+                    action,
+                    legal[slot],
+                    int(near_branch[slot]),
+                    scores[slot],
+                    sampling_rng(model, slot, 0xEFFE),
+                )
+            shortages += sum(a is None for a in selected[1:]) if sampled[slot] else 0
+            for token, candidate in enumerate(selected):
+                if candidate is not None:
+                    commands[slot, token], valid[slot, token] = candidate, True
+                    if candidate and legal[slot, candidate]:
+                        jobs.append((int(slot), token))
+            continue
         selected = [action]
         candidates = np.flatnonzero(legal[slot])
         candidates = candidates[(candidates != action) & (candidates != 0)]
@@ -55,17 +117,7 @@ def begin_effects(model, actions, details, issued):
         selected.extend(branch_candidates[: maximum // 2])
         remaining = np.array([a for a in candidates if a not in selected], np.int64)
         # Separate keyed RNG: neither policy exploration nor real engine RNG is consumed.
-        rng = np.random.default_rng(
-            np.random.SeedSequence(
-                [
-                    int(model.seed or 0),
-                    int(slot),
-                    int(env._episode_serial[slot]),
-                    int(model._scheduler.decisions[slot]),
-                    0xEFFE,
-                ]
-            )
-        )
+        rng = sampling_rng(model, slot, 0xEFFE)
         take = min(maximum + 1 - len(selected), len(remaining))
         if take:
             selected.extend(int(a) for a in rng.choice(remaining, take, replace=False))
@@ -79,13 +131,29 @@ def begin_effects(model, actions, details, issued):
         valid=valid,
         labels=labels,
         jobs=jobs,
-        ready=False,
+        ready=not bool(jobs),
         shortages=shortages,
         policy_identity=(model.cohort_number, model.optimizer_commits),
     )
-    env.fork_service().begin(
-        [slot for slot, _ in jobs], [commands[slot, token] for slot, token in jobs]
-    )
+    if interval:
+        request.update(
+            version=2,
+            sampled=sampled,
+            effective_wait=effective_wait & issued,
+            actual_probe=np.zeros((env.num_envs, 5), np.int64),
+            actual_anchor=np.full(env.num_envs, -1, np.int64),
+            actual_complete=np.zeros(env.num_envs, bool),
+        )
+        metrics = env.fork_service().metrics
+        metrics["sampled_waits"] += int((sampled & effective_wait).sum())
+        metrics["skipped_waits"] += int((issued & effective_wait & ~sampled).sum())
+    # Persist choices before launching scratch work; resume never samples again.
+    model._pending_effect = request
+    model._scheduler.pending |= issued
+    if jobs:
+        env.fork_service().begin(
+            [slot for slot, _ in jobs], [commands[slot, token] for slot, token in jobs]
+        )
     return request
 
 
@@ -94,15 +162,44 @@ def finish_effects(model):
     if req["ready"]:
         return True
     service = env.fork_service()
+    if service.request is None:
+        # Queue preparation may have failed before any job launched. Retain the
+        # original probability decision and candidates across that recovery too.
+        service.begin(
+            [slot for slot, _ in req["jobs"]],
+            [req["actions"][slot, token] for slot, token in req["jobs"]],
+        )
     if not service.advance():
         return False
+    anchors = service.execution.anchors[: len(req["jobs"])].get()
     outcomes = service.take()
-    for (slot, token), after in zip(req["jobs"], outcomes, strict=True):
+    for (slot, token), after, anchor in zip(req["jobs"], outcomes, anchors, strict=True):
         req["labels"][slot, token] = effect_labels(
             env._baseline_outcomes[slot], after, reference_tau(env.batch.rules)
         )
+        if req.get("version") == 2 and token == 0:
+            req["actual_probe"][slot] = after[:, 3]
+            req["actual_anchor"][slot] = anchor
+            req["actual_complete"][slot] = True
     req["ready"] = True
     return True
+
+
+def promote_executed_probes(env, request, active, done):
+    if request.get("version") != 2:
+        return
+    actions = request["actions"][:, 0]
+    accepted = env.last_action_result_host[:, 0].astype(bool)
+    indices = np.flatnonzero(
+        active & accepted & (actions != 0) & ~done & ~env._last_spawned & request["actual_complete"]
+    )
+    # step_host has already ended the old interval using actual execution facts.
+    if np.any(env.probe_intervals.state[indices] != ProbeState.UNINITIALIZED):
+        raise RuntimeError("Accepted action did not end its probe interval")
+    env.probe_intervals.begin(indices)
+    env.probe_intervals.complete(
+        indices, request["actual_probe"][indices], request["actual_anchor"][indices]
+    )
 
 
 def validate_effect_request(request, model):
@@ -111,6 +208,21 @@ def validate_effect_request(request, model):
             raise ValueError("Pending effect recovery is missing; use an intact checkpoint")
         return
     count = model.n_envs
+    if request.get("version", 1) not in (1, 2):
+        raise ValueError("Unsupported pending effect version")
+    if interval_probes_enabled(model.cfg) != (request.get("version") == 2):
+        raise ValueError("Pending effects disagree with saved collection protocol")
+    if request.get("version") == 2:
+        for name, shape, dtype in (
+            ("sampled", (count,), bool),
+            ("effective_wait", (count,), bool),
+            ("actual_probe", (count, 5), np.int64),
+            ("actual_anchor", (count,), np.int64),
+            ("actual_complete", (count,), bool),
+        ):
+            value = np.asarray(request[name])
+            if value.shape != shape or value.dtype != dtype:
+                raise ValueError("Invalid saved interval effect metadata")
     for name, shape, dtype in (
         ("actions", (count, 5), np.uint16),
         ("valid", (count, 5), bool),

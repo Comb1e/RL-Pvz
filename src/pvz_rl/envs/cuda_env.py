@@ -21,6 +21,7 @@ from pvz_rl.envs.actions import ActionSchema as A
 from pvz_rl.envs.actions import dig_branch_available
 from pvz_rl.envs.cuda_accounting import AccountingCudaBatch
 from pvz_rl.envs.cuda_features import LEDGER_INDICES, METRIC_INDICES, CudaFeatures
+from pvz_rl.envs.probe_intervals import ProbeIntervals, ProbeState, interval_probes_enabled
 from pvz_rl.envs.rewards import REWARD_METRICS
 from pvz_rl.envs.scenarios import difficulty_weights, scenario
 from pvz_rl.envs.sky_sun import peashooter_sky_sun_rate
@@ -328,6 +329,7 @@ class CudaVecEnv(VecEnv):
         self._baseline_ready = np.zeros(count, dtype=bool)
         self._baseline_outcomes = np.zeros((count, 5, 4), np.int64)
         self._baseline_indices = None
+        self.probe_intervals = ProbeIntervals(count)
         self._pending_spawns = np.zeros(count, dtype=np.int64)
         self.tile_scenario = "complete"
         self.tile_boards = {}
@@ -393,7 +395,8 @@ class CudaVecEnv(VecEnv):
             yield
 
     def reset_indices(self, indices, cases=None, *, tile_seeds=None):
-        self._baseline_ready[:] = False
+        self._baseline_ready[indices] = False
+        self.probe_intervals.end(indices)
         if self.static_forks is not None:
             self.static_forks.invalidate(indices)
         started = perf_counter()
@@ -530,17 +533,34 @@ class CudaVecEnv(VecEnv):
 
         active = self.enabled_envs if active is None else np.asarray(active, bool)
         if self._baseline_indices is None:
+            # Encoding/resetting another slot clears all global feature suffixes.
+            # Unexecuted tickets retain valid labels, but still need their inputs republished.
+            retained = np.flatnonzero(active & self._baseline_ready)
+            if len(retained):
+                self.restore_baseline_inputs(retained)
             indices = np.flatnonzero(active & ~self._baseline_ready)
             if not len(indices):
                 return True
             service = self.fork_service()
-            service.begin(indices)
+            if interval_probes_enabled(self.cfg):
+                ready = self.probe_intervals.state[indices] == ProbeState.READY
+                service.begin(indices, field_only=ready)
+                self.probe_intervals.begin(indices[~ready])
+                service.metrics["baseline_probe_reuses"] += int(ready.sum())
+            else:
+                service.begin(indices)
             self._baseline_indices = indices
         service = self.fork_service()
         if not service.advance():
             return False
         indices = self._baseline_indices
+        field_only = service.request["field_only"]
+        anchors = service.execution.anchors[: len(indices)].get()
         values = service.take()
+        if interval_probes_enabled(self.cfg):
+            new = ~field_only
+            self.probe_intervals.complete(indices[new], values[new, :, 3], anchors[new])
+            values[:, :, 3] = self.probe_intervals.probe[indices]
         self._baseline_outcomes[indices] = values
         self.features.globals[self.cp.asarray(indices), len(BOARD_GLOBAL_FIELDS) :] = (
             self.cp.asarray(baseline_features(values, reference_tau(self.batch.rules)))
@@ -650,12 +670,12 @@ class CudaVecEnv(VecEnv):
             except Exception as exc:
                 viewer.fail(exc)
             self.profiler.host("presentation", perf_counter() - presentation_started)
-        self._baseline_ready[:] = False
         self._step_active = self.enabled_envs.copy()
         self._device_active = (
             torch.as_tensor(self.enabled_envs, device=actions.device) if active is None else active
         )
         self.header_tensor[:, 17].copy_(self._device_active.long())
+        before_spawns = self.header_tensor[:, HEADER.index("spawn_index")].clone()
         _, reward = self.features.step(
             self.cp.from_dlpack(actions.detach().contiguous()),
             ticks=self._decision_ticks,
@@ -703,6 +723,7 @@ class CudaVecEnv(VecEnv):
                 "step_state",
                 dict(
                     executing=self._device_active,
+                    spawned=h[:, HEADER.index("spawn_index")] != before_spawns,
                     pending_spawns=h[:, HEADER.index("total_spawns")]
                     - h[:, HEADER.index("spawn_index")],
                 ),
@@ -728,6 +749,13 @@ class CudaVecEnv(VecEnv):
         self.last_transition_host = compact
         self.last_action_result_host = host[:, RECORD_RESULT]
         actions = host[:, RECORD_ACTIONS]
+        self._baseline_ready[executed] = False
+        self._last_spawned = self._step_state_host["spawned"].numpy().copy()
+        if interval_probes_enabled(self.cfg):
+            boundary = executed & (
+                (actions[:, 1] != 0) | self._last_spawned | compact[:, 0].astype(bool)
+            )
+            self.probe_intervals.end(np.flatnonzero(boundary))
         self.last_reward_parts_host = host[:, RECORD_PARTS]
         if not np.isfinite(self.last_reward_parts_host).all():
             raise RuntimeError("Invalid CUDA reward accounting or exhausted proximity ledger")
@@ -861,6 +889,7 @@ class CudaVecEnv(VecEnv):
             "baseline_ready": self._baseline_ready.copy(),
             "baseline_outcomes": self._baseline_outcomes.copy(),
             "baseline_indices": self._baseline_indices,
+            "probe_intervals": self.probe_intervals.snapshot(),
             "static_forks": self.static_forks.snapshot() if self.static_forks else None,
             "tile_boards": deepcopy(
                 {
@@ -943,8 +972,28 @@ class CudaVecEnv(VecEnv):
         self._baseline_ready[:] = state.get("baseline_ready", False)
         self._baseline_outcomes[:] = state.get("baseline_outcomes", 0)
         self._baseline_indices = state.get("baseline_indices")
+        if interval_probes_enabled(self.cfg):
+            self.probe_intervals.restore(state.get("probe_intervals"))
         if state.get("static_forks") is not None:
             self.fork_service().restore(state["static_forks"])
+        if interval_probes_enabled(self.cfg):
+            intervals = self.probe_intervals
+            if np.any(self._baseline_ready & (intervals.state != ProbeState.READY)):
+                raise ValueError("Ready baseline has no interval probe")
+            computing = np.flatnonzero(intervals.state == ProbeState.COMPUTING)
+            if self._baseline_indices is None:
+                if len(computing):
+                    raise ValueError("Computing interval has no pending baseline job")
+            else:
+                request = self.static_forks.request if self.static_forks else None
+                indices = np.asarray(self._baseline_indices)
+                if (
+                    request is None
+                    or not request["baseline"]
+                    or not np.array_equal(indices, request["indices"])
+                    or not np.array_equal(computing, indices[~request["field_only"]])
+                ):
+                    raise ValueError("Pending baseline disagrees with interval lifecycle")
         from pvz_rl.envs.encoding import BOARD_GLOBAL_FIELDS
         from pvz_rl.envs.static_fork import reference_tau
         from pvz_rl.learning.forecast_labels import baseline_features

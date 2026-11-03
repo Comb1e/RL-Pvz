@@ -81,7 +81,8 @@ extern "C" __global__ void run_fork_jobs(
     I *forecast, I *phases, I *starts, I *job_ids, I workers,
     const I *source_h, const I *source_p, const I *source_z, const I *source_q,
     const I *source_m, const I *source_cd,
-    const I *roots, const I *actions, I jobs, I *next_job, I *progress, I *results,
+    const I *roots, const I *actions, const I *field_only, I *anchors, I *cache_anchors,
+    I jobs, I *next_job, I *progress, I *results,
     I ticks, I probe, double sky_rate, bool baseline,
     I *cache_states, I *cache_ticks, I *cache_depths, I *cache_values, I *cache_origins,
     I cache_steps, I cache_stride, I source_zcap, I source_qcap, I wait_ticks,
@@ -113,13 +114,15 @@ extern "C" __global__ void run_fork_jobs(
       const I *om = source_m + root * 5 * GAME_MOWER_WIDTH;
       const I *oc = source_cd + root * 8;
       bool hit = false;
-      if (baseline && cache.steps) {
+      // Field-only entries cannot answer a legacy full-probe request.
+      if (baseline && cache.steps && (field_only[job] || cache_anchors[root] >= 0)) {
         for (I e = 0; e < cache.steps; e++) if (cache.ticks[root * cache.steps + e] == original->tick) {
           if (fork_equal(original, op, oz, oq, om, oc,
                          cache.states + (root * cache.steps + e) * cache.stride,
                          cache.zcap, cache.qcap)) {
             for (I k = 0; k < 20; k++)
               results[job * 20 + k] = cache.values[(root * cache.steps + e) * 20 + k];
+            anchors[job] = cache_anchors[root];
             fork_add(progress + 2, 1); fork_add(progress, 1); hit = true;
           } else {
             const I *saved = cache.states + (root * cache.steps + e) * cache.stride;
@@ -136,6 +139,13 @@ extern "C" __global__ void run_fork_jobs(
         for (I k = 0; k < original->nz; k++)
           active |= !present[k].headless && present[k].health > 0;
         if (!active) fork_add(progress + 7, 1);
+        if (field_only[job] && active) fork_add(progress + 10, 1);
+        if (field_only[job] && !active) {
+          // Empty fields have exact analytic labels; no cloning or simulation.
+          for (I k = 0; k < 20; k++) results[job * 20 + k] = k % 4 == 1 ? -1 : 0;
+          fork_add(progress, 1);
+          continue;
+        }
         if (cache.steps && cache.ticks[root * cache.steps + cache.steps - 1] >= 0 &&
             original->tick > cache.ticks[root * cache.steps + cache.steps - 1])
           fork_add(progress + 6, 1);
@@ -156,6 +166,7 @@ extern "C" __global__ void run_fork_jobs(
       s.suffix_steps = 0;
       if (baseline && cache.steps) {
         cache.origins[root] = s.h->tick;
+        cache_anchors[root] = -1;
         for (I e = 0; e < cache.steps; e++) {
           cache.ticks[root * cache.steps + e] = -1;
           for (I row = 0; row < 5; row++) cache.depths[(root * cache.steps + e) * 5 + row] = 0;
@@ -183,8 +194,15 @@ extern "C" __global__ void run_fork_jobs(
         for (I k = 0; k < s.h->nz; k++) s.forecast_position(s.z[k]);
       }
     }
-    if ((*s.forecast_phase == 0 || *s.forecast_phase == 1) && s.h->status)
-      fork_probe(s, probe);
+    if ((*s.forecast_phase == 0 || *s.forecast_phase == 1) && s.h->status) {
+      anchors[job] = s.h->tick;
+      if (caching) cache_anchors[root] = field_only[job] ? -1 : s.h->tick;
+      if (field_only[job]) *s.forecast_phase = 3;
+      else {
+        fork_add(progress + (baseline ? 8 : 9), 1);
+        fork_probe(s, probe);
+      }
+    }
     if ((*s.forecast_phase == 2 || *s.forecast_phase == 3) && s.h->status) {
       *s.forecast_phase = 3;
       for (I k = 0; k < 20; k++) results[job * 20 + k] = s.forecast[k];

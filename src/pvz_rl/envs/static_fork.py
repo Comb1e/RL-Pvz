@@ -39,11 +39,12 @@ def _reference_tau(units, minimum, maximum):
 
 
 class StaticFork:
-    def __init__(self, game, *, action=0, probe="conehead", sky_sun_rate=1.0):
+    def __init__(self, game, *, action=0, probe="conehead", sky_sun_rate=1.0, field_only=False):
         # Public snapshot boundary validates subclasses as well as external input.
         source = restored_game(game.snapshot(), game.rules) if type(game) is not Game else game
         self.game = fork_game(source)
         self.phase, self.start, self.probe = "field", source._tick, probe
+        self.field_only, self.anchor_tick = field_only, -1
         self.sky_sun_rate = sky_sun_rate
         self.labels = np.zeros((5, 4), np.int64)
         self.labels[:, 1] = -1
@@ -122,6 +123,7 @@ class StaticFork:
             }
 
     def _probe(self):
+        self.anchor_tick = self.game._tick
         self.phase = "probe"
         self.game._status = Status.RUNNING
         spec, g = self.game.rules.zombies[self.probe], self.game._g
@@ -143,7 +145,7 @@ class StaticFork:
         """Bounded resumable unit; no simulated-time failure is fabricated."""
         for _ in range(ticks):
             if not any(not z.headless and z.health > 0 for z in self.game._zombies.values()):
-                if self.phase == "probe":
+                if self.phase == "probe" or self.field_only:
                     self.phase = "complete"
                     return True
                 self._probe()

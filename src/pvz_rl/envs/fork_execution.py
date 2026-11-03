@@ -45,10 +45,13 @@ class ForkExecution:
         self.invalidate_kernel = self.module.get_function("invalidate_fork_cache")
         self.job_ids = cp.full(batch.n, -1, cp.int64)
         self.next_job = cp.zeros(1, cp.int64)
-        self.progress = cp.zeros(8, cp.int64)
+        self.progress = cp.zeros(11, cp.int64)
         self.capacity = 5 * source.n
         self.roots = cp.empty(self.capacity, cp.int64)
         self.actions = cp.empty_like(self.roots)
+        self.field_only = cp.zeros_like(self.roots)
+        self.anchors = cp.full_like(self.roots, -1)
+        self.cache_anchors = cp.full(source.n, -1, cp.int64)
         self.output = cp.zeros((self.capacity, 5, 4), cp.int64)
         self.cache_zcap = min(source.zcap, settings.get("fork_cache_zombies", 128))
         self.cache_qcap = min(source.qcap, settings.get("fork_cache_projectiles", 256))
@@ -111,7 +114,7 @@ class ForkExecution:
             (self.source.header, actions, active, self.cache_ticks, self.steps, self.source.n),
         )
 
-    def begin(self, indices, actions, *, baseline=False):
+    def begin(self, indices, actions, *, baseline=False, field_only=None):
         self.count, self.baseline = len(indices), baseline
         if self.count > self.capacity:
             raise ValueError("Fork request exceeds five actions per main environment")
@@ -119,6 +122,8 @@ class ForkExecution:
         self.batch.count = self.workers
         self.roots[: self.count].set(np.ascontiguousarray(indices, dtype=np.int64))
         self.actions[: self.count].set(np.ascontiguousarray(actions, dtype=np.int64))
+        self.field_only[: self.count] = 0 if field_only is None else self.cp.asarray(field_only)
+        self.anchors[: self.count] = -1
         self.progress.fill(0)
         self.next_job.fill(0)
         self.job_ids.fill(-1)
@@ -127,7 +132,7 @@ class ForkExecution:
 
     def advance(self, *, probe):
         if not self.count:
-            return np.zeros(8, np.int64)
+            return np.zeros(11, np.int64)
         b, source, cp = self.batch, self.source, self.cp
         grid = (
             ((self.workers + self.threads - 1) // self.threads,) if self.packed else (self.workers,)
@@ -149,6 +154,9 @@ class ForkExecution:
                 *(getattr(source, name) for name in PHYSICAL),
                 self.roots,
                 self.actions,
+                self.field_only,
+                self.anchors,
+                self.cache_anchors,
                 self.count,
                 self.next_job,
                 self.progress,
@@ -176,7 +184,7 @@ class ForkExecution:
 
     def snapshot(self):
         return dict(
-            version=1,
+            version=2,
             workers=self.workers,
             baseline=self.baseline,
             batch=self.batch.snapshot(),
@@ -184,15 +192,18 @@ class ForkExecution:
             next_job=int(self.next_job.get()[0]),
             progress=self.progress.get(),
             output=self.output[: self.count].get(),
+            anchors=self.anchors[: self.count].get(),
         )
 
     def restore(self, state):
-        if state.get("version") != 1:
+        if state.get("version") not in (1, 2):
             raise ValueError("Unsupported static-fork execution recovery version")
         if state["workers"] > self.batch.n:
             raise MemoryError("Pending forks need more scratch lanes; free GPU memory and resume")
         n = state["workers"]
         ids, progress, output = state["job_ids"], state["progress"], state["output"]
+        if state.get("version") == 1:
+            progress = np.pad(progress, (0, 3))
         live = ids[ids >= 0]
         if (
             not 0 <= n <= self.count
@@ -200,7 +211,7 @@ class ForkExecution:
             or ids.shape != (n,)
             or ids.dtype != np.int64
             or np.any((ids < -1) | (ids >= self.count))
-            or progress.shape != (8,)
+            or progress.shape != (11,)
             or progress.dtype != np.int64
             or np.any(progress < 0)
             or not 0 <= progress[0] <= self.count
@@ -220,6 +231,10 @@ class ForkExecution:
         self.next_job[0] = state["next_job"]
         self.progress[:] = self.cp.asarray(progress)
         self.output[: self.count] = self.cp.asarray(output)
+        anchors = state.get("anchors", np.full(self.count, -1, np.int64))
+        if anchors.shape != (self.count,) or anchors.dtype != np.int64:
+            raise ValueError("Invalid pending probe anchors")
+        self.anchors[: self.count] = self.cp.asarray(anchors)
         # Completed caches are optional. Never publish partially reconstructed suffixes.
         self.origins.fill(-1)
         self.invalidate()

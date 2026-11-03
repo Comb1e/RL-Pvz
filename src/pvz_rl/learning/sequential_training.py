@@ -797,6 +797,9 @@ class CudaSequentialQ(CudaCohortLifecycle):
                 rows["effect_valid"] = pending["valid"]
                 rows["effect_labels"] = pending["labels"]
                 rows["baseline_outcomes"] = env._baseline_outcomes
+                from pvz_rl.learning.effect_collection import promote_executed_probes
+
+                promote_executed_probes(env, pending, active, rows["done"])
                 if not self._scheduler.pending.any():
                     self._pending_effect = None
                     self._scheduler.draining = False

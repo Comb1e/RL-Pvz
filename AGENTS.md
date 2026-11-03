@@ -35,8 +35,17 @@ This file owns project-specific invariants and the code map.
   samples are labels only; no rollout policy or action override.
 - Fork execution uses bounded refillable scratch workers and an exact field-suffix
   cache. Check full physical/RNG state before reuse; rebase times and exclude prior
-  penetration. Wait/rejections still generate hypothetical action labels. Cache
-  storage shares the fork VRAM cap and is disposable on resume; pending jobs are not.
+  penetration. In `wait_interval_v2`, one semantic probe belongs to each interval
+  of executed Waits/rejections, anchored at the first field-clearing state. Only
+  accepted non-Waits, actual spawn-counter changes and reset/end close it; deaths
+  do not. Exact-cache misses rerun fields only. Completed accepted-action probes
+  may seed the next interval if no spawn occurred. Interval lifecycle, identity,
+  anchor and result survive recovery; field-cache storage is disposable and shares
+  the fork VRAM cap. Pending jobs and sampled choices are never disposable.
+  Legal non-Waits always receive effects; effective Waits sample at the configured
+  probability. Two fixed alternative slots hold a legal branch runner-up (ties by
+  action ID) and one uniform remaining legal action. Five-slot storage and private
+  pretraining remain unchanged. Saved collection protocols govern legacy resume.
 - Normal cohorts jointly fit frozen-cohort n-step Double-Q targets and auxiliaries.
   Preserve economic conversion, tick discounting, rejection compaction/weighting,
   species exploration, greedy tiles, four passes, BF16 and FP32 masters. No
@@ -116,7 +125,7 @@ Paths are relative to `src/pvz_rl/` unless stated otherwise.
 | `envs/` | CPU/CUDA adapters, public encoding, actions, rewards, source credit and scenarios. `reach_tracking.py` owns guarded per-tick depth, bite-contact and home-entry hooks. |
 | `envs/scratch_game.py`, `bomb_preparation.py`, `cuda_bomb_oracle.py`, `cuda_snapshots.py`, `attacker_scenarios.py` | Validated automatic exercises, persistent preparation, bounded oracles and conservative attacker labels. |
 | `learning/training.py`, `cuda_q.py`, `sequential_training.py` | Cohort orchestration, collection/fitting, reporting and atomic recovery. |
-| `envs/static_fork.py`, `cuda_static_fork.py`, `fork_service.py`, `fork_execution.py/.cu` | Isolated field/probe phases, bounded refillable scratch workers, verified suffix caching and panel/queue recovery. |
+| `envs/probe_intervals.py`, `static_fork.py`, `cuda_static_fork.py`, `fork_service.py`, `fork_execution.py/.cu` | Semantic interval probes, isolated field/probe phases, bounded refillable scratch workers, verified suffix caching and panel/queue recovery. |
 | `learning/reach_supervision.py`, `forecast_targets.py`, `forecast_labels.py`, `forecast_objective.py`, `forecast_metrics.py` | Versioned snapshot/factual constraints, hindsight, factored signed effects, shared-forward losses and calibration. |
 | `learning/effect_collection.py`, `forecast_pretraining.py`, `td_targets.py` | Sampled effect labels, private pretraining and frozen-cohort n-step TD. |
 | `learning/flat_q.py`, `objective.py`, `action_routing.py`, `placement_labels.py`, `bomb_objective.py` | Shared Q fitting/economics, legality attribution and automatic placement losses. |

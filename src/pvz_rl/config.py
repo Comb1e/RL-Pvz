@@ -1065,6 +1065,18 @@ def validate_config(cfg: dict) -> None:
         raise ValueError("Static probe must be basic, conehead or buckethead")
     if forecasts.get("extra_actions") not in (2, 3, 4):
         raise ValueError("training.forecasts.extra_actions must be 2, 3 or 4")
+    collection = forecasts.get("collection_protocol", "per_decision_v1")
+    if collection not in ("per_decision_v1", "wait_interval_v2"):
+        raise ValueError("Unsupported forecast collection protocol")
+    probability = forecasts.get("wait_effect_sample_probability", 1.0)
+    if (
+        type(probability) not in (int, float)
+        or not math.isfinite(probability)
+        or not 0 <= probability <= 1
+    ):
+        raise ValueError("wait_effect_sample_probability must be between zero and one")
+    if collection == "wait_interval_v2" and forecasts["extra_actions"] != 2:
+        raise ValueError("wait_interval_v2 requires exactly two alternative slots")
     for key in ("lanes", "vram_mib", "chunk_ticks", "n_step", "injected_n_step", "pretrain_passes"):
         if type(forecasts.get(key)) is not int or forecasts[key] <= 0:
             raise ValueError(f"training.forecasts.{key} must be a positive integer")

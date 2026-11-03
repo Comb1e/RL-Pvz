@@ -348,6 +348,13 @@ class ResearchCallback(BaseCallback):
                     self.model.cohort_metrics.get("peashooter_teacher", {}),
                 )
             ),
+            "static_forks": dict(
+                getattr(
+                    getattr(self.model.env, "static_forks", None),
+                    "metrics",
+                    self.model.cohort_metrics.get("static_forks", {}),
+                )
+            ),
             "collection_policy": "network",
             "fitting_objective": (
                 RULE_OBJECTIVE

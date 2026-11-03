@@ -59,6 +59,13 @@ Use `--stage NAME --until-stage-complete` for one stage, or `--games N` for a
 completed-episode budget. Explicit normal stages skip preliminary stages. Omit
 `--init-from` to start with random weights.
 
+Start fresh Peashooter training from the compatible attacker weights:
+
+```powershell
+.\.venv\Scripts\python.exe -m pvz_rl train --stage peashooter --until-stage-complete `
+  --init-from runs\compact-stages\attacker_pre\final.zip --output runs\peashooter-new
+```
+
 No seed is required: initialization is random and every training cohort draws an
 independent random seed. Pending seeds are saved before preparation so recovery
 recreates the same unfinished boards. `--seed` optionally fixes initialization;
@@ -78,8 +85,15 @@ zero baseline-input sentinel, run no forecast forks or effect pretraining, and
 freeze the effect/null heads. Their placement oracles and objectives are unchanged.
 
 Peashooter and normal stages retain static field/probe forks, sampled effect
-labels and factual threat targets. Waits and rejected actions still receive
-hypothetical alternatives. Forks neither choose actions nor consume the real RNG;
+labels and factual threat targets. With `collection_protocol = "wait_interval_v2"`,
+consecutive executed Waits (including rejections) share one probe, anchored at the
+first field-clearing state. Deaths and empty-board waiting preserve it; accepted
+placements/Dig, actual spawns and resets end the interval. Current field labels
+remain relative to the current decision; cache misses rerun only the field.
+Legal non-Wait proposals receive effects every time. Waits/rejections sample
+alternatives with probability `0.05`: the relevant branch's second-highest-Q legal
+tile and one uniform remaining legal action. Unavailable slots stay invalid.
+Forks neither choose actions nor consume the real RNG;
 full-game inference and validation also compute baseline inputs. Tune execution
 limits under `training.performance` and pretraining/TD schedules under
 `training.forecasts`. Private pretraining starts at the first fork-enabled stage.
@@ -92,8 +106,12 @@ conditional signed change. Tune `effect_objective` and
 losses, detection/calibration, fork cost and outcomes. Viewers show raw factual
 threat beside predicted static field/probe maps; unknown targets stay grey.
 
-Saved recoveries retain their original supervision. Compatible `--init-from`
-uses current settings with a fresh optimizer. For bounded seed-matched ablations,
+Saved recoveries retain their original supervision and collection protocol,
+including unfinished probes and saved alternative choices. Compatible `--init-from`
+uses current settings with a fresh optimizer, counters and interval state. Reports
+separate baseline probes/reuses, candidate probes, field-only rollouts and sampled/
+skipped Waits. The Peashooter teacher and private pretraining are unchanged.
+For bounded seed-matched ablations,
 see `python -m pvz_rl.monitoring.forecast_ablation --help`.
 
 Validation uses fresh random panels, saved for interrupted retries. Full fitted

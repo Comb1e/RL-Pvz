@@ -34,6 +34,12 @@ class ForkService:
             cache_spawn_misses=0,
             cache_exhausted=0,
             cache_empty=0,
+            baseline_probes=0,
+            baseline_probe_reuses=0,
+            candidate_probes=0,
+            field_only_rollouts=0,
+            sampled_waits=0,
+            skipped_waits=0,
         )
         torch.cuda.empty_cache()
         free, _ = cp.cuda.runtime.memGetInfo()
@@ -42,7 +48,7 @@ class ForkService:
             settings["vram_mib"] * 2**20, max(0, free - settings.get("headroom_mib", 0) * 2**20)
         )
         per_lane = sum(getattr(source, name)[0].nbytes for name in PHYSICAL) + 65536
-        queue_fixed = 5 * source.n * (20 + 2) * 8 + 72
+        queue_fixed = 5 * source.n * (20 + 4) * 8 + 96 + source.n * 8
         available = max(0, budget - queue_fixed - source.n * 8)
         count = min(
             settings["lanes"],
@@ -88,9 +94,9 @@ class ForkService:
         )
         if self.metrics["device_bytes"] > budget:
             raise MemoryError("Static fork storage exceeds its VRAM budget; increase vram_mib")
-        self._reported = np.zeros(8, np.int64)
+        self._reported = np.zeros(11, np.int64)
 
-    def begin(self, indices, actions=None):
+    def begin(self, indices, actions=None, *, field_only=None):
         if self.request is not None:
             raise RuntimeError("Finish or recover the current fork request before starting another")
         indices = np.asarray(indices, np.int64)
@@ -104,11 +110,22 @@ class ForkService:
             or (baseline and len(set(indices)) != len(indices))
         ):
             raise ValueError("One valid action is required per fork root; baselines must be unique")
-        self.request = dict(indices=indices, actions=actions, baseline=baseline)
+        field_only = np.zeros(len(indices), bool) if field_only is None else np.asarray(field_only)
+        if (
+            field_only.shape != indices.shape
+            or field_only.dtype != bool
+            or (field_only.any() and not baseline)
+        ):
+            raise ValueError("Field-only jobs must be baseline roots")
+        # Preparation has not launched a kernel. A failed allocation can retry
+        # from the retained root instead of publishing a half-prepared queue.
+        self.execution.begin(indices, actions, baseline=baseline, field_only=field_only)
+        self.request = dict(
+            version=2, indices=indices, actions=actions, baseline=baseline, field_only=field_only
+        )
         self.results = None
         self.cursor = 0
         self._reported.fill(0)
-        self.execution.begin(indices, actions, baseline=baseline)
 
     def advance(self):
         if self.request is None or self.results is not None:
@@ -129,6 +146,9 @@ class ForkService:
                     "cache_spawn_misses",
                     "cache_exhausted",
                     "cache_empty",
+                    "baseline_probes",
+                    "candidate_probes",
+                    "field_only_rollouts",
                 ),
                 delta,
                 strict=True,
@@ -157,7 +177,7 @@ class ForkService:
 
     def snapshot(self):
         return dict(
-            version=2,
+            version=3,
             protocol=FORECAST_PROTOCOL,
             settings=self.settings,
             metrics=self.metrics,
@@ -170,7 +190,7 @@ class ForkService:
 
     def restore(self, state):
         if (
-            state.get("version") not in (None, 2)
+            state.get("version") not in (None, 2, 3)
             or state["protocol"] != FORECAST_PROTOCOL
             or state["settings"]["probe"] != self.settings["probe"]
         ):
@@ -181,9 +201,11 @@ class ForkService:
                 raise ValueError("Idle static-fork recovery contains pending storage")
         else:
             self.begin(
-                request["indices"], None if request.get("baseline", False) else request["actions"]
+                request["indices"],
+                None if request.get("baseline", False) else request["actions"],
+                field_only=request.get("field_only"),
             )
-            if state.get("version") == 2:
+            if state.get("version") in (2, 3):
                 progress = state["execution"]["progress"]
                 result = state["results"]
                 if (
@@ -201,7 +223,8 @@ class ForkService:
                 ):
                     raise ValueError("Static-fork publication disagrees with pending progress")
                 self.execution.restore(state["execution"])
-                self._reported[:] = state["reported"]
+                reported = state["reported"]
+                self._reported[:] = np.pad(reported, (0, 11 - len(reported)))
                 self.cursor, self.results = state["cursor"], state["results"]
             else:
                 self._restore_panel(state)
@@ -216,6 +239,12 @@ class ForkService:
             "cache_spawn_misses",
             "cache_exhausted",
             "cache_empty",
+            "baseline_probes",
+            "baseline_probe_reuses",
+            "candidate_probes",
+            "field_only_rollouts",
+            "sampled_waits",
+            "skipped_waits",
         ):
             self.metrics[key] = state["metrics"].get(key, 0)
 
