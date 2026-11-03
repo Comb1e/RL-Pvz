@@ -3,8 +3,8 @@
 Train a sequential Q policy against a pinned Plants vs. Zombies simulator. A
 shared Transformer understands the public board, an action readout chooses
 Wait/species/Dig, and a conditional decoder scores all 45 tiles. Every autonomous
-stage also learns visible-zombie reach. Labels never override actions; validation
-uses the greedy network.
+stage also learns future cell reach and home danger. Labels never override
+actions; validation uses the greedy network.
 
 ## Requirements
 
@@ -64,24 +64,24 @@ Tune [train.toml](src/pvz_rl/data/train.toml): stage settings live under
 `training.peashooter` and `training.normal`; architecture dimensions live under
 `policy`. Preliminary stages retain their automatic placement targets and train
 the shared encoder/decoder and reach heads while leaving the action readout
-untouched. Normal cohorts jointly fit action/tile returns and reach cross-entropy,
-using four passes. Each stage table has its own `reach_prediction_weight`, default
-0.1; zero disables its gradient. Reach categories are columns 1–9 plus “did not
-enter”. With `training.reach_cleared_lanes = true`, once all zombies have spawned,
-lanes without non-headless zombies receive zero-penetration targets. Other empty
-target lanes have no auxiliary loss. Clearance uses the pre-action board, including
-off-board zombies; it never changes actions or creates plants. Scenario stages
-finish reach observation at natural engine victory or the first home entry. Bomb and attacker
-exercises use Wait after their one placement; Peashooter uses Wait after its
-gameplay cutoff. Private continuation has no simulated-time cutoff and supplies
-observed reach without changing recorded task results, timeout outcomes or rewards.
-Wall-time limits save unfinished work; old recoveries retain their saved endpoints
-and cleared-lane setting (missing means disabled). Normal games keep their existing
-factual reach. These continuations add no episodes
-or policy calls. Native and browser game viewers show predicted penetration beside
-each live board, including in grid mode. The map is timestamped to the latest tile
-decision and stays visible during Wait; it needs no additional model calls. Focused
-viewing and reports also show observed supervision targets and mark cleared lanes.
+untouched. Normal cohorts jointly fit action/tile returns and future cell reach,
+using four passes. Each stage table has independent `reach_prediction_weight`
+and `home_prediction_weight` settings, default 0.1; zero disables that loss.
+Cell forecasts include current positions and later spawns. Home danger is a
+separate per-lane probability, displayed left of column 1 in both game viewers.
+Predictions are raw, timestamped to the latest tile decision and remain visible
+during Wait, without extra model calls. Grey supervision cells are unknown.
+
+Bomb and attacker exercises use snapshot-only reach targets: current zombie cells
+are positive; after the last spawn, cells behind the rightmost zombie and empty
+lanes are negative. Other cells and threatened home outcomes remain unlabeled.
+These exercises have no private reach continuation; placement oracles and engine
+validation remain unchanged. Peashooter privately continues with Wait after its
+cutoff until natural victory or first home entry, without changing primary rewards
+or outcomes. Normal cutoffs retain uncertain future targets as unknown. Empty
+rows with pending spawns are never automatically labeled safe. Wall-time limits
+save unfinished work. This prediction version requires fresh training; old model
+initialization and recovery are rejected without modifying existing files.
 
 Validation uses fresh random panels, saved for interrupted retries. Full fitted
 cohorts must strictly exceed the configured qualification threshold before a due

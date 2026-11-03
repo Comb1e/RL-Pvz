@@ -37,7 +37,7 @@ class TwoStageTransformerPolicy(nn.Module):
         self.species_head = nn.Sequential(nn.Linear(width, 128), nn.ReLU(), nn.Linear(128, 10))
         self.tile_head = nn.Sequential(nn.Linear(width, 128), nn.ReLU(), nn.Linear(128, 1))
         self.reach_head = nn.Linear(width, 1)
-        self.reach_outside_head = nn.Linear(width, 1)
+        self.reach_home_head = nn.Linear(width, 1)
         self._master_parameters = []
         self._master_names = []
         self._initialize_masters()
@@ -290,12 +290,16 @@ class TwoStageTransformerPolicy(nn.Module):
     def reach_values(self, features):
         features = features.reshape(-1, 5, 9, self.cfg["policy"]["shared_width"])
         cells = self.reach_head(features).squeeze(-1)
-        outside = self.reach_outside_head(features.mean(2))
-        return torch.cat((cells, outside), -1)
+        home = self.reach_home_head(features.mean(2))
+        return torch.cat((cells, home), -1)
 
     @staticmethod
     def reach_map(logits):
-        return logits.float().softmax(-1)[..., :9].cumsum(-1)
+        return logits.float()[..., :9].sigmoid()
+
+    @staticmethod
+    def home_map(logits):
+        return logits.float()[..., 9].sigmoid()
 
     def conditional_tiles(
         self, observations, branches, *, rows=None, plan=None, memory=None, return_reach=False

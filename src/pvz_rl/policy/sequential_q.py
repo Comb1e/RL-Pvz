@@ -4,7 +4,7 @@ import torch
 
 from pvz_rl.envs.actions import ActionSchema as A
 
-POLICY_SIGNATURE = "shared_board_reach_q_v1"
+POLICY_SIGNATURE = "shared_board_reach_q_v2"
 ACTION_DISTRIBUTION = "sequential_q_unmasked_tiles_v2"
 
 

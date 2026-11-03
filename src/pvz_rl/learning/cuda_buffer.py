@@ -29,8 +29,7 @@ from pvz_rl.learning.objective import (
 from pvz_rl.learning.source_actions import AppendReceipt, SourceActionRef
 from pvz_rl.monitoring.moments import RunningMoments
 
-TRAJECTORY_PROTOCOL = "pvz-rl/shared-reach-trajectory-v1"
-TRAJECTORY_CLEARED_PROTOCOL = "pvz-rl/shared-reach-cleared-trajectory-v1"
+TRAJECTORY_PROTOCOL = "pvz-rl/future-cell-home-trajectory-v2"
 
 
 def trajectory_dtype(cfg=None):
@@ -66,9 +65,11 @@ def trajectory_dtype(cfg=None):
         ("tile_coin", "?"),
         ("reach_prediction", "<f2", (5, 9)),
         ("reach_valid", "?"),
-        ("reach_offset", "<u8"),
-        ("reach_count", "<u2"),
-        ("reach_labels", "i1", 5),
+        ("reach_facts", "<i2", (5, 3)),
+        ("reach_labels", "i1", (5, 9)),
+        ("home_labels", "i1", 5),
+        ("home_prediction", "<f2", 5),
+        ("reach_provenance", "u1"),
         ("target", "<f4"),
         ("accepted", "?"),
         ("route", "u1"),
@@ -77,8 +78,6 @@ def trajectory_dtype(cfg=None):
         ("done", "?"),
         ("executed_action", "<u2"),
     ]
-    if (cfg or {}).get("training", {}).get("reach_cleared_lanes", False):
-        fields.append(("reach_cleared", "u1"))
     return np.dtype(fields)
 
 
@@ -957,9 +956,7 @@ class CompleteGameBuffer:
 
     def metadata(self):
         return dict(
-            protocol=TRAJECTORY_CLEARED_PROTOCOL
-            if "reach_cleared" in self.dtype.names
-            else TRAJECTORY_PROTOCOL,
+            protocol=TRAJECTORY_PROTOCOL,
             schema=self.schema,
             n_envs=self.n_envs,
             ram_bytes=self.ram_bytes,
@@ -998,11 +995,7 @@ class CompleteGameBuffer:
 
     @staticmethod
     def validate_metadata(state):
-        expected = (
-            TRAJECTORY_CLEARED_PROTOCOL
-            if (state.get("cfg") or {}).get("training", {}).get("reach_cleared_lanes", False)
-            else TRAJECTORY_PROTOCOL
-        )
+        expected = TRAJECTORY_PROTOCOL
         if state.get("protocol") != expected:
             raise ValueError("Retired trajectory schema; fresh initialization is required")
         if any(
@@ -1087,9 +1080,14 @@ class CompleteGameBuffer:
             for at in range(0, obj.size, width):
                 rows = obj.take(np.arange(at, min(obj.size, at + width)))
                 if (
-                    np.any((rows["reach_labels"] < -1) | (rows["reach_labels"] > 9))
+                    np.any((rows["reach_labels"] < -1) | (rows["reach_labels"] > 1))
                     or not np.isfinite(rows["reach_prediction"]).all()
-                    or ("reach_cleared" in rows.dtype.names and np.any(rows["reach_cleared"] > 31))
+                    or np.any((rows["home_labels"] < -1) | (rows["home_labels"] > 1))
+                    or not np.isfinite(rows["home_prediction"]).all()
+                    or np.any((rows["reach_facts"] < 0) | (rows["reach_facts"] > 511))
+                    or np.any(rows["reach_facts"][:, :, 2] > 1)
+                    or np.any(rows["reach_facts"][:, :, 0] & rows["reach_facts"][:, :, 1])
+                    or np.any(rows["reach_provenance"] > 2)
                 ):
                     raise ValueError("Invalid reach labels or predictions in trajectory")
                 if np.any(rows["action"] >= A.size) or np.any(rows["executed_action"] >= A.size):

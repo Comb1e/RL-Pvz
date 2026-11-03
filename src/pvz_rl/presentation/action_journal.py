@@ -29,9 +29,10 @@ RECORD = np.dtype(
         ("q", "<f4", 10),
         ("reach_valid", "?"),
         ("reach_prediction", "<f2", (5, 9)),
-        ("reach_labels", "i1", 5),
-        ("reach_conservative", "u1"),
-        ("reach_cleared", "u1"),
+        ("reach_labels", "i1", (5, 9)),
+        ("home_prediction", "<f2", 5),
+        ("home_labels", "i1", 5),
+        ("reach_provenance", "u1"),
     ]
 )
 
@@ -132,9 +133,8 @@ class ActionJournal:
         if "reach_valid" in rows.dtype.names:
             records["reach_valid"] = rows["reach_valid"]
             records["reach_prediction"] = rows["reach_prediction"]
-        records["reach_labels"] = -1
-        if "reach_cleared" in rows.dtype.names:
-            records["reach_cleared"] = rows["reach_cleared"]
+        records["home_prediction"] = rows["home_prediction"]
+        records["reach_labels"], records["home_labels"] = -1, -1
         records["coins"][:, 0] = rows["species_coin"]
         records["coins"][:, 1] = rows["tile_coin"]
         records["q"] = scores
@@ -160,28 +160,22 @@ class ActionJournal:
                 self.blocks[env][index][offset] = row
                 self.sizes[env] += 1
 
-    def finalize_reach(self, buffer, *, conservative_lanes=None):
+    def finalize_reach(self, buffer):
         if self.disabled:
             return
-        # Both streams preserve each environment's decision order. Merge them
-        # with one cursor per journal instead of retaining cohort-wide labels.
         cursors = [0] * self.count
         for block, rows in enumerate(buffer.blocks):
             rows = rows[: min(buffer.block_rows, buffer.size - block * buffer.block_rows)]
-            for row in rows[rows["reach_valid"] & (rows["reach_labels"] >= 0).any(-1)]:
+            for row in rows[rows["reach_valid"]]:
                 env, episode = int(row["env"]), int(row["episode"])
                 if episode != self.episodes[env]:
                     continue
                 sequence = int(row["decision"]) + 1
-                for latest in (self.latest[env], self.latest_reach[env]):
-                    if latest is not None and latest["sequence"] == sequence:
-                        latest["reach_labels"] = row["reach_labels"]
-                        if "reach_cleared" in row.dtype.names:
-                            latest["reach_cleared"] = row["reach_cleared"]
-                        if conservative_lanes is not None:
-                            latest["reach_conservative"] = sum(
-                                1 << i for i, flag in enumerate(conservative_lanes[env]) if flag
-                            )
+                targets = [
+                    latest
+                    for latest in (self.latest[env], self.latest_reach[env])
+                    if latest is not None and latest["sequence"] == sequence
+                ]
                 while cursors[env] < self.sizes[env]:
                     number, offset = divmod(cursors[env], self.block_rows)
                     target = self.blocks[env][number][offset]
@@ -189,14 +183,11 @@ class ActionJournal:
                         break
                     cursors[env] += 1
                     if target["sequence"] == sequence:
-                        target["reach_labels"] = row["reach_labels"]
-                        if "reach_cleared" in row.dtype.names:
-                            target["reach_cleared"] = row["reach_cleared"]
-                        if conservative_lanes is not None:
-                            target["reach_conservative"] = sum(
-                                1 << i for i, flag in enumerate(conservative_lanes[env]) if flag
-                            )
+                        targets.append(target)
                         break
+                for target in targets:
+                    for name in ("reach_labels", "home_labels", "reach_provenance"):
+                        target[name] = row[name]
 
     def page(self, env, episode, start=None, limit=PAGE_ROWS):
         if self.disabled or not 0 <= env < self.count or self.episodes[env] != episode:

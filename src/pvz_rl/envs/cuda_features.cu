@@ -62,7 +62,7 @@ __device__ int shot_order(const Shot &a, const Shot &b) {
 extern "C" __global__ void encode_canonical(const I *headers, const I *plants,
     const I *zombies, const I *projectiles, const I *mowers, const I *cooldowns,
     int *records, int *entities, bool *mask, float *globals, double *assets,
-    I *summary, I *identities, unsigned char *cleared_lanes, I n) {
+    I *summary, short *reach_facts, I n) {
   I i = blockIdx.x;
   if (i >= n) return;
   Header h = ((Header *)headers)[i];
@@ -75,7 +75,7 @@ extern "C" __global__ void encode_canonical(const I *headers, const I *plants,
       globals[i * GLOBAL_WIDTH + index] = 0;
     if (!threadIdx.x) {
       assets[i] = 0;
-      cleared_lanes[i] = 0;
+      for (I j = 0; j < 15; j++) reach_facts[i * 15 + j] = 0;
       for (I index = 0; index < 4; index++) summary[i * 4 + index] = 0;
     }
     return;
@@ -88,14 +88,23 @@ extern "C" __global__ void encode_canonical(const I *headers, const I *plants,
   int *out = entities + i * ENTITY_LIMIT * ENTITY_WIDTH;
   I staged_count = 5 + h.np + h.nz;
   I kept = lo(staged_count + h.nq, ENTITY_LIMIT);
-  for (I j = threadIdx.x; j < ENTITY_LIMIT; j += blockDim.x)
-    identities[i * ENTITY_LIMIT + j] = 0;
   if (!threadIdx.x) {
-    // Public counts and the complete visible roster, before entity truncation.
-    unsigned char cleared = h.spawn_index == h.total_spawns ? 31 : 0;
-    for (I j = 0; j < h.nz; j++)
-      if (!z[j].headless) cleared &= ~(1 << z[j].row);
-    cleared_lanes[i] = cleared;
+    // Complete public roster, before encoding truncation. No schedules enter inputs.
+    I occupied[5] = {0}, present[5] = {0}, rightmost[5] = {-1, -1, -1, -1, -1};
+    for (I j = 0; j < h.nz; j++) if (!z[j].headless) {
+      I row = z[j].row, col = z[j].x < 0 ? -1 : z[j].x / G_units_per_tile;
+      present[row] = 1;
+      rightmost[row] = hi(rightmost[row], col);
+      if (col >= 0 && col < 9) occupied[row] |= 1 << col;
+    }
+    for (I row = 0; row < 5; row++) {
+      I safe = 0;
+      if (h.spawn_index == h.total_spawns)
+        for (I col = 0; col < 9; col++) if (col > rightmost[row]) safe |= 1 << col;
+      reach_facts[i * 15 + row * 3] = occupied[row];
+      reach_facts[i * 15 + row * 3 + 1] = safe;
+      reach_facts[i * 15 + row * 3 + 2] = h.spawn_index == h.total_spawns && !present[row];
+    }
     float *g = globals + i * GLOBAL_WIDTH;
     g[O_sun] = (double)h.sun / COST_SCALE;
     g[O_elapsed] = (double)h.tick / G_tick_rate / CUTOFF_SECONDS;
@@ -135,10 +144,7 @@ extern "C" __global__ void encode_canonical(const I *headers, const I *plants,
     }
     if (rank < ENTITY_LIMIT)
       for (I f = 0; f < ENTITY_WIDTH; f++) out[rank * ENTITY_WIDTH + f] = own[f];
-    if (rank < ENTITY_LIMIT && j >= 5 + h.np) {
-      Zombie a = z[j - 5 - h.np];
-      if (!a.headless && a.health > 0) identities[i * ENTITY_LIMIT + rank] = a.id;
-    }
+
   }
   I available = ENTITY_LIMIT - staged_count;
   for (I j = threadIdx.x; j < h.nq && available > 0; j += blockDim.x) {

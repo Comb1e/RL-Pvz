@@ -12,6 +12,7 @@ from pvz_rl.config import (
     bomb_max_illegal_distance,
     bomb_ranking_margin,
     bomb_softmax_temperature,
+    home_prediction_weight,
     passivity_settings,
     plant_wait_check_ticks,
     reach_prediction_weight,
@@ -76,7 +77,7 @@ def flat_batches(buffer, decision_budget, spool=None):
 
 
 class CudaSequentialQ(CudaCohortLifecycle):
-    policy_protocol = "shared_board_reach_q_v1"
+    policy_protocol = "shared_board_reach_q_v2"
     optimizer_version = FIT_SCHEDULE_PROTOCOL
 
     @property
@@ -135,10 +136,18 @@ class CudaSequentialQ(CudaCohortLifecycle):
         return reach_prediction_weight(self.cfg, self.tile_skills.phase)
 
     @property
+    def home_weight(self):
+        return home_prediction_weight(self.cfg, self.tile_skills.phase)
+
+    @property
     def fitting_parameter_stage(self):
         if self._fit_kind != "tile_only":
             return None
-        return "tile_reach" if self.reach_training and self.reach_weight > 0 else "tile"
+        return (
+            "tile_reach"
+            if self.reach_training and (self.reach_weight > 0 or self.home_weight > 0)
+            else "tile"
+        )
 
     def _prepare_collection(self, callback):
         if self.reach_training or self.peashooter_rule_training:
@@ -162,10 +171,7 @@ class CudaSequentialQ(CudaCohortLifecycle):
                         raise MemoryError("Shared RAM budget cannot hold placement/reach metadata")
                     if ready:
                         if self.reach_training:
-                            self.env.action_journal.finalize_reach(
-                                self._buffer,
-                                conservative_lanes=self._reach.conservative_lanes,
-                            )
+                            self.env.action_journal.finalize_reach(self._buffer)
                             viewer = getattr(self.env, "live_view", None)
                             if viewer is not None:
                                 viewer.finalize_reach()
@@ -210,8 +216,9 @@ class CudaSequentialQ(CudaCohortLifecycle):
         self.env.cp.get_default_memory_pool().free_all_blocks()
         released = self._phase_memory("after_collection_release")
         self.collection_execution = {}
-        if hasattr(self, "_collection_reach"):
-            del self._collection_reach
+        for name in ("_collection_reach", "_collection_home"):
+            if hasattr(self, name):
+                delattr(self, name)
         super()._begin(callback)
         self._stats["phase_memory"] = [boundary, released]
         self._stats["collection_logical_rows"] = 0
@@ -433,6 +440,11 @@ class CudaSequentialQ(CudaCohortLifecycle):
                         self._collection_reach = torch.zeros(
                             (self.n_envs, 5, 9), device=self.device
                         )
+                    if not hasattr(self, "_collection_home"):
+                        self._collection_home = torch.zeros((self.n_envs, 5), device=self.device)
+                    self._collection_home[enabled] = self.policy.home_map(details["reach_logits"])[
+                        enabled
+                    ]
                     self._collection_reach[enabled] = self.policy.reach_map(
                         details["reach_logits"]
                     )[enabled]
@@ -507,13 +519,11 @@ class CudaSequentialQ(CudaCohortLifecycle):
                         valid=self._runner.valid,
                         **(
                             {
-                                "reach_ids": torch.from_dlpack(env.features.identities),
                                 "reach_errors": torch.from_dlpack(env.batch.reach_error),
                                 "reach_prediction": self._collection_reach,
-                                **(
-                                    {"reach_cleared": torch.from_dlpack(env.features.cleared_lanes)}
-                                    if self.cfg["training"].get("reach_cleared_lanes", False)
-                                    else {}
+                                "home_prediction": self._collection_home,
+                                "reach_facts": torch.from_dlpack(
+                                    env.features.reach_facts[: self.n_envs]
                                 ),
                             }
                             if self.reach_training
@@ -618,10 +628,9 @@ class CudaSequentialQ(CudaCohortLifecycle):
             if self.reach_training:
                 rows["reach_prediction"] = host["reach_prediction"].numpy()
                 rows["reach_valid"] = active & rows["branch_usable"] & (rows["action"] > 0)
-                if "reach_cleared" in rows.dtype.names:
-                    rows["reach_cleared"] = np.where(
-                        rows["reach_valid"], host["reach_cleared"].numpy(), 0
-                    )
+                rows["home_prediction"] = host["home_prediction"].numpy()
+                rows["reach_facts"] = host["reach_facts"].numpy()
+            rows["reach_labels"], rows["home_labels"] = -1, -1
             presentation_started = perf_counter()
             env.action_journal.record_batch_safe(
                 rows,
@@ -635,8 +644,8 @@ class CudaSequentialQ(CudaCohortLifecycle):
             rows["env"] = np.arange(self.n_envs)
             if self.reach_training:
                 if bool(host["reach_errors"].any()):
-                    raise RuntimeError("CUDA reach identity/capacity failure; recovery retained")
-                self._reach.capture(rows, observations, host["reach_ids"].numpy())
+                    raise RuntimeError("CUDA future-reach tracker failure; recovery retained")
+                self._reach.capture(rows)
                 staging += self._reach.estimated_bytes
                 if not self._buffer.reserve_staging(staging):
                     raise MemoryError("RAM budget cannot hold reach tracking staging")
@@ -917,7 +926,7 @@ class CudaSequentialQ(CudaCohortLifecycle):
             raise RuntimeError("BF16 runtime inference is unavailable on this CUDA device")
         self.policy.zero_grad(set_to_none=True)
         self._pass_metrics = torch.zeros(10, device=self.device, dtype=torch.float64)
-        self._reach_pass_metrics = torch.zeros(5, device=self.device, dtype=torch.float64)
+        self._reach_pass_metrics = torch.zeros(10, device=self.device, dtype=torch.float64)
         self._bomb_pass_metrics = torch.zeros(
             len(bomb_loss_metrics(placement_settings(self.cfg, self.tile_skills.phase))),
             device=self.device,
@@ -958,14 +967,15 @@ class CudaSequentialQ(CudaCohortLifecycle):
                 raise RuntimeError("Reach labels must finish before fitting")
             self._reach.phase = ReachPhase.FITTING
         self._reach_decisions = (
-            int(
-                np.count_nonzero(
-                    (self._fitting_spool.rows["reach_labels"] >= 0).any(-1)
-                    & self._fitting_spool.rows["reach_valid"]
+            tuple(
+                int(np.count_nonzero(self._fitting_spool.rows["reach_valid"] & valid))
+                for valid in (
+                    (self._fitting_spool.rows["reach_labels"] >= 0).any(axis=(-2, -1)),
+                    (self._fitting_spool.rows["home_labels"] >= 0).any(-1),
                 )
             )
             if self.reach_training
-            else 0
+            else (0, 0)
         )
         self._fit_kind = self.fit_stage
         self._fit_outcome_counts = (
@@ -1024,19 +1034,33 @@ class CudaSequentialQ(CudaCohortLifecycle):
             )
             self._cached_fit_examples = int(selected_n)
             if self.reach_training:
-                auxiliary, correct, error, lanes, decisions = (
-                    self._reach_pass_metrics.cpu().tolist()
-                )
-                self.logger.record("train/reach_loss", auxiliary)
-                self.logger.record(
-                    "train/reach_boundary_accuracy", correct / lanes if lanes else None
-                )
-                self.logger.record(
-                    "train/reach_mean_column_error", error / lanes if lanes else None
-                )
-                self.logger.record("train/reach_eligible_decisions", decisions)
-                self.logger.record("train/total_loss", loss)
-                loss -= self.reach_weight * auxiliary
+                (
+                    cell,
+                    cell_brier,
+                    cells,
+                    decisions,
+                    home,
+                    home_brier,
+                    homes,
+                    home_decisions,
+                    cell_correct,
+                    home_correct,
+                ) = self._reach_pass_metrics.cpu().tolist()
+                for key, value in dict(
+                    reach_loss=cell,
+                    home_loss=home,
+                    reach_brier=cell_brier / cells if cells else None,
+                    home_brier=home_brier / homes if homes else None,
+                    reach_accuracy=cell_correct / cells if cells else None,
+                    home_accuracy=home_correct / homes if homes else None,
+                    reach_labeled_cells=cells,
+                    home_labeled_lanes=homes,
+                    reach_eligible_decisions=decisions,
+                    home_eligible_decisions=home_decisions,
+                    total_loss=loss,
+                ).items():
+                    self.logger.record("train/" + key, value)
+                loss -= self.reach_weight * cell + self.home_weight * home
                 self._cached_metrics = (loss, self._cached_metrics[1], self._cached_metrics[2])
             self.logger.record("train/primary_loss", loss)
             if is_placement_skill(self.tile_skills.phase):
@@ -1166,7 +1190,7 @@ class CudaSequentialQ(CudaCohortLifecycle):
 
     def _placement_reach_loss(self, rows, observations):
         from pvz_rl.envs.encoding import collate_observations
-        from pvz_rl.learning.reach_objective import reach_loss
+        from pvz_rl.learning.reach_objective import reach_auxiliary, reach_eligible
 
         observations = collate_observations(observations, self.device)
         branches, _ = action_parts(torch.as_tensor(np.array(rows["action"]), device=self.device))
@@ -1189,21 +1213,19 @@ class CudaSequentialQ(CudaCohortLifecycle):
                 self._peashooter_pass_metrics += detail
             else:
                 loss, error, gap = self._bomb_loss(rows, observations, features=features)
-            eligible = np.flatnonzero(rows["reach_valid"] & (rows["reach_labels"] >= 0).any(-1))
+            eligible = np.flatnonzero(reach_eligible(rows))
             self.policy._last_reach_metrics = torch.zeros(
-                5, device=self.device, dtype=torch.float64
+                10, device=self.device, dtype=torch.float64
             )
             if len(eligible):
-                with torch.set_grad_enabled(torch.is_grad_enabled() and self.reach_weight > 0):
-                    auxiliary, metrics = reach_loss(
-                        self.policy.reach_values(
-                            features[torch.as_tensor(eligible, device=self.device)]
-                        ),
-                        np.array(rows["reach_labels"])[eligible],
-                        decision_count=self._reach_decisions,
-                    )
-                if self.reach_weight:
-                    loss = loss + self.reach_weight * auxiliary
+                auxiliary, metrics = reach_auxiliary(
+                    self.policy,
+                    features[torch.as_tensor(eligible, device=self.device)],
+                    rows[eligible],
+                    decision_count=self._reach_decisions,
+                    stage=self.tile_skills.phase,
+                )
+                loss = loss + auxiliary
                 self.policy._last_reach_metrics = metrics
         return loss, error, gap
 
@@ -1488,6 +1510,7 @@ class CudaSequentialQ(CudaCohortLifecycle):
                         encoder.enable_compilation()
         if extra and extra.get("collection_reach") is not None:
             self._collection_reach = extra["collection_reach"].to(self.device)
+            self._collection_home = extra["collection_home"].to(self.device)
         self._scheduler = CollectionScheduler(self.n_envs, self.device)
         if extra and extra.get("collection_scheduler") is not None:
             self._scheduler.restore(extra["collection_scheduler"])
@@ -1512,6 +1535,7 @@ class CudaSequentialQ(CudaCohortLifecycle):
     def _extra_runtime(self):
         skills = dict(
             collection_reach=getattr(self, "_collection_reach", None),
+            collection_home=getattr(self, "_collection_home", None),
             reach_supervision=self._reach.snapshot() if getattr(self, "_reach", None) else None,
             tile_scenarios=self.tile_skill_state,
             tile_scenario_protocol=TILE_SCENARIO_PROTOCOL,
@@ -1555,6 +1579,7 @@ class CudaSequentialQ(CudaCohortLifecycle):
             "_reach",
             "_reach_pass_metrics",
             "_collection_reach",
+            "_collection_home",
             "_batch_iterator",
             "_fitting_spool",
             "_pass_metrics",

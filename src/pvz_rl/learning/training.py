@@ -348,7 +348,7 @@ class ResearchCallback(BaseCallback):
             "fitting_objective": (
                 RULE_OBJECTIVE
                 if self.model.peashooter_rule_training
-                else "complete_return_reach_v1"
+                else "complete_return_reach_v2"
                 if not self.model.tile_skills.active
                 else None
             ),
@@ -639,8 +639,14 @@ class ResearchCallback(BaseCallback):
             "total_loss",
             "primary_loss",
             "reach_loss",
-            "reach_boundary_accuracy",
-            "reach_mean_column_error",
+            "home_loss",
+            "reach_brier",
+            "home_brier",
+            "reach_accuracy",
+            "home_accuracy",
+            "reach_labeled_cells",
+            "home_labeled_lanes",
+            "home_eligible_decisions",
             "reach_eligible_decisions",
             "q_loss",
             "tile_ranking_loss",
@@ -1689,7 +1695,7 @@ def train(
     target_kind = (
         "successful-set placement supervision"
         if is_placement_skill(selected_stage(cfg))
-        else "actual returns and factual visible-zombie reach"
+        else "actual returns and factual future cell reach and home danger"
     )
     progress.emit(
         f"Policy: {cfg.get('policy', {'kind': 'flat'})}; {target_kind}; "

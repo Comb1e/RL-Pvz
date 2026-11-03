@@ -52,10 +52,6 @@ class AccountingCudaBatch(CudaBatch):
         from pvz_rl.envs.reach_tracking import reach_kernel_source
 
         self.source = reach_kernel_source(self.source)
-        from pvz_rl.envs.reach_exercise import EXERCISE_WIDTH, exercise_kernel_source
-
-        self.source = exercise_kernel_source(self.source)
-        self.reach_exercise = self.cp.zeros((self.n, EXERCISE_WIDTH), self.cp.int64)
         self.reach_enabled = False
         self.reach_trace = self.cp.zeros(1, self.cp.int64)
         self.reach_error = self.cp.zeros(self.n, self.cp.int64)
@@ -70,7 +66,7 @@ class AccountingCudaBatch(CudaBatch):
     def enable_reach(self, saved=None):
         from pvz_rl.envs.reach_tracking import REACH_WIDTH
 
-        shape = (self.n, self.zcap, REACH_WIDTH)
+        shape = (self.n, 5, REACH_WIDTH)
         if saved is None:
             self.reach_trace = self.cp.zeros(shape, self.cp.int64)
         else:
@@ -78,14 +74,12 @@ class AccountingCudaBatch(CudaBatch):
                 raise ValueError("Reach recovery capacity differs from simulator")
             self.reach_trace = self.cp.asarray(saved)
         self.reach_error.fill(0)
-        self.reach_exercise.fill(0)
         self.reach_enabled = True
 
     def disable_reach(self):
         self.reach_enabled = False
         self.reach_trace = self.cp.zeros(1, self.cp.int64)
         self.reach_error.fill(0)
-        self.reach_exercise.fill(0)
 
     def reset(self, levels, seeds, *, indices=None, **kwargs):
         indices = self._indices(indices)
@@ -93,7 +87,6 @@ class AccountingCudaBatch(CudaBatch):
         if self.reach_enabled:
             self.reach_trace[self.cp.asarray(indices)] = 0
             self.reach_error[self.cp.asarray(indices)] = 0
-        self.reach_exercise[self.cp.asarray(indices)] = 0
         if self.sky_sun_rate != 1.0:
             from pvz_game.cuda.schema import HEADER
 
@@ -126,7 +119,6 @@ class AccountingCudaBatch(CudaBatch):
             setattr(view, name, getattr(self, name)[:count])
         view._templates = self._templates[:count]
         view.reach_error = self.reach_error[:count]
-        view.reach_exercise = self.reach_exercise[:count]
         if self.reach_enabled:
             view.reach_trace = self.reach_trace[:count]
         view._step = partial(type(view)._step_with_accounting, proxy(view))
@@ -144,6 +136,5 @@ class AccountingCudaBatch(CudaBatch):
                 self.reach_trace,
                 self.reach_error,
                 self.cp.int64(self.reach_enabled),
-                self.reach_exercise,
             ),
         )

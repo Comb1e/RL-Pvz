@@ -237,57 +237,43 @@ def report_charts(segments, cfg, output, save):
         ):
             reach_fields = fields(
                 [
-                    ("optimization.reach_loss", "Reach categorical cross-entropy"),
-                    ("optimization.reach_boundary_accuracy", "Leftmost-column accuracy"),
-                    (
-                        "optimization.reach_mean_column_error",
-                        "Mean column error (outside = column 10)",
-                    ),
-                    ("optimization.reach_eligible_decisions", "Eligible retained decisions"),
-                    ("reach_tracking.tracked_zombies", "Tracked decision/zombie memberships"),
-                    (
-                        "reach_tracking.tracking_seconds",
-                        "Tracking and label preparation (seconds)",
-                    ),
+                    ("optimization.reach_loss", "Future-cell binary cross-entropy"),
+                    ("optimization.home_loss", "Home-danger binary cross-entropy"),
+                    ("optimization.reach_brier", "Future-cell Brier score"),
+                    ("optimization.home_brier", "Home-danger Brier score"),
+                    ("optimization.reach_accuracy", "Labeled-cell accuracy"),
+                    ("optimization.home_accuracy", "Labeled-home accuracy"),
+                    ("optimization.reach_labeled_cells", "Labeled cells"),
+                    ("optimization.home_labeled_lanes", "Labeled home lanes"),
+                    ("optimization.reach_eligible_decisions", "Cell-supervised decisions"),
+                    ("optimization.home_eligible_decisions", "Home-supervised decisions"),
+                    ("reach_tracking.observed_cells", "Factual future / safe cell targets"),
+                    ("reach_tracking.snapshot_cells", "Snapshot-only cell targets"),
+                    ("reach_tracking.unknown_cells", "Unknown cell targets"),
+                    ("reach_tracking.home_targets", "Known home targets"),
+                    ("reach_tracking.unknown_homes", "Unknown home targets"),
+                    ("reach_tracking.tracking_seconds", "Tracking and preparation (seconds)"),
                     ("reach_tracking.storage_bytes", "Private reach storage (bytes)"),
-                    ("reach_tracking.observed_lanes", "Observed lane targets"),
-                    ("reach_tracking.cleared_lanes", "Cleared lane targets (no remaining spawns)"),
-                    ("reach_tracking.cleared_only_decisions", "Decisions with only cleared lanes"),
-                    ("reach_tracking.conservative_lanes", "Full-lane failure targets"),
-                    ("reach_tracking.continuation_seconds", "Wait-only continuation (seconds)"),
-                    ("reach_tracking.continuation_ticks", "Wait-only simulated ticks"),
-                    (
-                        "reach_tracking.stop_reasons.natural_win",
-                        "Reach continuations: natural victory",
-                    ),
-                    ("reach_tracking.stop_reasons.home_breach", "Reach continuations: home entry"),
+                    ("reach_tracking.continuation_seconds", "Private continuation (seconds)"),
+                    ("reach_tracking.continuation_ticks", "Private continuation ticks"),
+                    ("reach_tracking.stop_reasons.natural_win", "Natural victories"),
+                    ("reach_tracking.stop_reasons.home_breach", "Home entries"),
                     ("optimization.total_loss", "Combined fitting loss"),
                 ]
             )
-            if not is_placement_skill(scope) and scope != "peashooter":
+            if scope != "peashooter":
                 reach_fields = [
                     item
                     for item in reach_fields
-                    if item[0]
-                    not in (
-                        "reach_tracking.conservative_lanes",
-                        "reach_tracking.continuation_seconds",
-                        "reach_tracking.continuation_ticks",
+                    if not item[0].startswith(
+                        ("reach_tracking.continuation_", "reach_tracking.stop_reasons.")
                     )
-                ]
-            if not any(
-                value(row, "reach_tracking.conservative_lanes")
-                for _, rows in records
-                for row in rows
-            ):
-                reach_fields = [
-                    item for item in reach_fields if item[0] != "reach_tracking.conservative_lanes"
                 ]
             add(
                 "reach",
-                "visible-zombie reach prediction",
+                "future reach and home danger",
                 reach_fields,
-                ("optimization.reach_boundary_accuracy",),
+                ("optimization.reach_accuracy", "optimization.home_accuracy"),
             )
         rule_fields = fields(
             [

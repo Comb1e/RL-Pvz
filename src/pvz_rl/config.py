@@ -28,6 +28,7 @@ _STAGE_PARAMETERS = {
             for key in (
                 "n_envs",
                 "reach_prediction_weight",
+                "home_prediction_weight",
                 "exploration",
                 "validation_schedule",
                 "eval_interval_games",
@@ -37,6 +38,7 @@ _STAGE_PARAMETERS = {
     },
     "cherry_bomb": {
         "reach_prediction_weight": "training.stage_reach_weights.cherry_bomb",
+        "home_prediction_weight": "training.stage_home_weights.cherry_bomb",
         "n_envs": "training.tile_scenarios.cherry_bomb_n_envs",
         "initial_sun": "training.tile_scenarios.bomb_initial_sun",
         "plants": "training.tile_scenarios.bomb_plants",
@@ -69,10 +71,12 @@ _STAGE_PARAMETERS = {
     },
     "cherry_bomb_obstacle": {
         "reach_prediction_weight": "training.stage_reach_weights.cherry_bomb_obstacle",
+        "home_prediction_weight": "training.stage_home_weights.cherry_bomb_obstacle",
         "softmax_temperature": "training.tile_scenarios.obstacle_softmax_temperature",
     },
     "attacker_pre": {
         "reach_prediction_weight": "training.stage_reach_weights.attacker_pre",
+        "home_prediction_weight": "training.stage_home_weights.attacker_pre",
         **{
             key: f"training.tile_scenarios.attacker.{key}"
             for key in (
@@ -101,6 +105,7 @@ _STAGE_PARAMETERS = {
     },
     "peashooter": {
         "reach_prediction_weight": "training.stage_reach_weights.peashooter",
+        "home_prediction_weight": "training.stage_home_weights.peashooter",
         "sky_sun_rate": "training.tile_scenarios.peashooter_sky_sun_rate",
         **{
             key: f"training.peashooter_rules.{key}"
@@ -123,11 +128,18 @@ _STAGE_PARAMETERS = {
 
 
 def reach_prediction_weight(cfg, stage="normal"):
-    """Missing preliminary settings retain saved normal-only supervision."""
+    """Resolve the stage-specific future-cell loss weight."""
     training = cfg["training"]
     if stage in ("cherry_bomb", "cherry_bomb_obstacle", "attacker_pre", "peashooter"):
         return training.get("stage_reach_weights", {}).get(stage, 0.0)
     return training.get("reach_prediction_weight", 0.1)
+
+
+def home_prediction_weight(cfg, stage="normal"):
+    training = cfg["training"]
+    if stage in ("cherry_bomb", "cherry_bomb_obstacle", "attacker_pre", "peashooter"):
+        return training.get("stage_home_weights", {}).get(stage, 0.0)
+    return training.get("home_prediction_weight", 0.1)
 
 
 def _resolve_training_sections(cfg):
@@ -388,7 +400,7 @@ def load_demo_config(path: str | Path | None = None, *, profile: str = "demo") -
     cfg = load_config(path, profile=profile)
     if (
         cfg["encoding"]["version"] != "entity_v1"
-        or cfg["policy"]["kind"] != "shared_board_reach_q_v1"
+        or cfg["policy"]["kind"] != "shared_board_reach_q_v2"
     ):
         raise ValueError("Human demonstrations require the stateless two-stage Transformer profile")
     return copy.deepcopy(cfg)
@@ -430,7 +442,7 @@ def validate_config(cfg: dict) -> None:
                 "training.objective contains retired or missing settings, including "
                 "species_consistency_huber_delta"
             )
-        if objective.get("protocol") != "complete_return_reach_v1":
+        if objective.get("protocol") != "complete_return_reach_v2":
             raise ValueError(
                 "Unsupported training objective protocol; fresh initialization is required"
             )
@@ -493,7 +505,7 @@ def validate_config(cfg: dict) -> None:
         raise ValueError("win_time_weight must be finite and nonnegative")
     current_policy = (
         cfg.get("encoding", {}).get("version") == "entity_v1"
-        and cfg.get("policy", {}).get("kind") == "shared_board_reach_q_v1"
+        and cfg.get("policy", {}).get("kind") == "shared_board_reach_q_v2"
     )
     if cfg["training"].get("validation_schedule", "periodic") not in (
         "periodic",
@@ -659,26 +671,21 @@ def validate_config(cfg: dict) -> None:
     if policy["shared_width"] % policy["attention_heads"]:
         raise ValueError("shared_width must be divisible by attention_heads")
     stages = ("normal", "cherry_bomb", "cherry_bomb_obstacle", "attacker_pre", "peashooter")
-    if type(cfg["training"].get("reach_cleared_lanes", False)) is not bool:
-        raise ValueError("training.reach_cleared_lanes must be a boolean")
     if set(cfg["training"].get("stage_reach_weights", {})) - set(stages[1:]):
         raise ValueError("Unknown preliminary reach stage")
+    if set(cfg["training"].get("stage_home_weights", {})) - set(stages[1:]):
+        raise ValueError("Unknown preliminary home stage")
     for stage in stages:
-        weight = reach_prediction_weight(cfg, stage)
-        if type(weight) not in (int, float) or not math.isfinite(weight) or weight < 0:
-            raise ValueError(
-                f"training.{stage}.reach_prediction_weight must be finite and nonnegative"
-            )
+        for name, resolve in (("reach", reach_prediction_weight), ("home", home_prediction_weight)):
+            weight = resolve(cfg, stage)
+            if type(weight) not in (int, float) or not math.isfinite(weight) or weight < 0:
+                raise ValueError(
+                    f"training.{stage}.{name}_prediction_weight must be finite and nonnegative"
+                )
     chunk = cfg["training"]["performance"].get("reach_chunk_ticks", 256)
     if type(chunk) is not int or chunk < 1:
         raise ValueError("reach_chunk_ticks must be a positive integer")
-    from pvz_rl.envs.reach_exercise import LEGACY_ENDPOINT_POLICY, NATURAL_ENDPOINT_POLICY
 
-    if cfg["training"]["tile_scenarios"].get("reach_endpoint", LEGACY_ENDPOINT_POLICY) not in (
-        LEGACY_ENDPOINT_POLICY,
-        NATURAL_ENDPOINT_POLICY,
-    ):
-        raise ValueError("Unsupported scenario reach endpoint policy")
     attempts = cfg["training"]["tile_scenarios"].get("sampling_max_attempts")
     if type(attempts) is not int or attempts < 1:
         raise ValueError("training.tile_scenarios.sampling_max_attempts must be positive")
@@ -993,7 +1000,7 @@ def validate_config(cfg: dict) -> None:
     if not math.isfinite(visual["final_hold_seconds"]) or visual["final_hold_seconds"] < 0:
         raise ValueError("Visualization final_hold_seconds must be finite and nonnegative")
     env, train = cfg["environment"], cfg["training"]
-    expected_method = "complete_return_reach_v1"
+    expected_method = "complete_return_reach_v2"
     if train.get("method") != expected_method:
         raise ValueError("Training requires a supported complete-return method and fresh models")
     if any(

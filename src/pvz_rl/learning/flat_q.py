@@ -56,7 +56,7 @@ def batch_loss(
     demonstration=False,
 ):
     """One encoder pass; attempted-branch Q calibration and optional factual reach."""
-    from pvz_rl.learning.reach_objective import reach_loss
+    from pvz_rl.learning.reach_objective import reach_auxiliary
     from pvz_rl.policy.sequential_q import action_groups
 
     device = policy.device
@@ -126,20 +126,15 @@ def batch_loss(
     )
     q_loss = (errors * weights[action_groups(actions), accepted.long()]).sum()
     loss = q_loss
-    policy._last_reach_metrics = torch.zeros(5, device=device, dtype=torch.float64)
-    if (
-        reach_enabled
-        and features is not None
-        and np.any(np.array(rows["reach_labels"])[plan["tiles"]] >= 0)
-    ):
-        labels = np.array(rows["reach_labels"])[plan["tiles"]]
-        weight = policy.cfg["training"].get("reach_prediction_weight", 0.1)
-        with torch.set_grad_enabled(torch.is_grad_enabled() and weight > 0):
-            auxiliary, metrics = reach_loss(
-                policy.reach_values(features), labels, decision_count=reach_decision_count
-            )
-        if weight:
-            loss = loss + weight * auxiliary
+    policy._last_reach_metrics = torch.zeros(10, device=device, dtype=torch.float64)
+    if reach_enabled and features is not None:
+        auxiliary, metrics = reach_auxiliary(
+            policy,
+            features,
+            rows[plan["tiles"]],
+            decision_count=reach_decision_count,
+        )
+        loss = loss + auxiliary
         policy._last_reach_metrics = metrics
     consistency = q_loss.detach() * 0
     policy._last_species_consistency_metrics = q_loss.new_zeros(4, dtype=torch.float64)

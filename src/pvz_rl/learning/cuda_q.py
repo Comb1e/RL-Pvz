@@ -245,8 +245,14 @@ class CudaCohortLifecycle(BaseAlgorithm):
         self._planting_samples = 0
         for key in (
             "reach_loss",
-            "reach_boundary_accuracy",
-            "reach_mean_column_error",
+            "home_loss",
+            "reach_brier",
+            "home_brier",
+            "reach_accuracy",
+            "home_accuracy",
+            "reach_labeled_cells",
+            "home_labeled_lanes",
+            "home_eligible_decisions",
             "reach_eligible_decisions",
             "primary_loss",
             "total_loss",
@@ -567,8 +573,6 @@ class CudaCohortLifecycle(BaseAlgorithm):
                                     archive.open(name, "w", force_zip64=True) as out,
                                 ):
                                     shutil.copyfileobj(inp, out, length=1024 * 1024)
-                if getattr(self, "_reach", None) is not None:
-                    self._reach.write_archive(archive)
                 if getattr(self, "_peashooter_teacher", None) is not None:
                     self._peashooter_teacher.write_archive(archive)
                 if self._buffer is not None:

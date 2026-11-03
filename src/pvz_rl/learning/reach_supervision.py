@@ -1,25 +1,14 @@
-"""Private factual target membership, compressed CUDA traces and resumable labels."""
+"""Resumable future-visit targets; one-placement exercises use snapshot constraints."""
 
 from enum import StrEnum
-from pathlib import Path
 from time import perf_counter
 
-import numpy as np
 import torch
 
-from pvz_rl.envs.reach_exercise import LEGACY_ENDPOINT_POLICY, NATURAL_ENDPOINT_POLICY
-from pvz_rl.envs.reach_tracking import (
-    CLEARED_LABEL_POLICY,
-    LEGACY_LABEL_POLICY,
-    position_category,
-    suffix_labels,
-)
+from pvz_rl.envs.reach_tracking import LABEL_POLICY, future_labels
 from pvz_rl.envs.tile_scenarios import is_placement_skill
 
-REACH_PROTOCOL = "visible-zombie-suffix-reach-v1"
-EXERCISE_PROTOCOL = "placement-reach-endpoints-v1"
-NATURAL_EXERCISE_PROTOCOL = "scenario-natural-end-reach-v1"
-TARGET_DTYPE = np.dtype([("id", "<i8"), ("lane", "<i8"), ("initial", "<i8")])
+REACH_PROTOCOL = "future-cell-home-supervision-v2"
 
 
 class ReachPhase(StrEnum):
@@ -33,166 +22,88 @@ class ReachPhase(StrEnum):
 class ReachSupervision:
     def __init__(self, env, buffer, state=None, archive=None):
         self.env, self.buffer = env, buffer
-        self.path = Path(buffer.path) / "visible-reach-targets.bin"
-        self.phase, self.cursor, self.targets = ReachPhase.COLLECTING, 0, 0
-        self.label_policy = (
-            CLEARED_LABEL_POLICY
-            if env.cfg["training"].get("reach_cleared_lanes", False)
-            else LEGACY_LABEL_POLICY
-        )
-        if ("reach_cleared" in buffer.dtype.names) != (self.label_policy == CLEARED_LABEL_POLICY):
-            raise ValueError("Reach label policy differs from trajectory schema")
+        self.snapshot_only = is_placement_skill(env.tile_scenario)
+        self.exercise = env.tile_scenario == "peashooter"
+        self.phase, self.cursor = ReachPhase.COLLECTING, 0
+        self._started = env.cp.zeros(env.batch.n, env.cp.bool_)
+        self._trace = self._final_header = self._final_facts = None
         self.metrics = dict(
-            tracked_zombies=0,
+            label_policy=LABEL_POLICY,
+            endpoint_policy="snapshot_only"
+            if self.snapshot_only
+            else ("natural_game_end" if self.exercise else "factual_game_or_cutoff"),
             eligible_decisions=0,
             tracking_seconds=0.0,
             storage_bytes=0,
             continuation_seconds=0.0,
             continuation_ticks=0,
-            observed_lanes=0,
-            conservative_lanes=0,
-            cleared_lanes=0,
-            cleared_only_decisions=0,
-            label_policy=self.label_policy,
+            observed_cells=0,
+            snapshot_cells=0,
+            unknown_cells=0,
+            home_targets=0,
+            unknown_homes=0,
             stop_reasons={},
         )
-        self.endpoint_policy = env.cfg["training"]["tile_scenarios"].get(
-            "reach_endpoint", LEGACY_ENDPOINT_POLICY
-        )
-        self.natural_end = self.endpoint_policy == NATURAL_ENDPOINT_POLICY and (
-            is_placement_skill(env.tile_scenario) or env.tile_scenario == "peashooter"
-        )
-        self.exercise = is_placement_skill(env.tile_scenario) or (
-            self.natural_end and env.tile_scenario == "peashooter"
-        )
-        self.exercise_protocol = (
-            NATURAL_EXERCISE_PROTOCOL if self.natural_end else EXERCISE_PROTOCOL
-        )
-        self.metrics["endpoint_policy"] = (
-            self.endpoint_policy if self.exercise else "factual_game_v1"
-        )
-        self._exercise_state = None
-        self.conservative_lanes = np.zeros((env.batch.n, 5), bool)
-        if state is not None:
-            if state.get("protocol") != REACH_PROTOCOL:
-                raise ValueError("Incompatible reach tracking recovery")
-            if state.get("label_policy", LEGACY_LABEL_POLICY) != self.label_policy:
-                raise ValueError("Reach label policy differs from recovery")
-            self.phase, self.cursor, self.targets = (
-                ReachPhase(state["phase"]),
-                state["cursor"],
-                state["targets"],
-            )
-            if (
-                type(self.cursor) is not int
-                or not 0 <= self.cursor <= buffer.size
-                or type(self.targets) is not int
-                or self.targets < 0
-            ):
-                raise ValueError("Corrupt reach recovery progress")
-            trace = state["trace"]
+        if state is None:
+            env.batch.enable_reach()
+        else:
+            if state.get("protocol") != REACH_PROTOCOL or state.get("label_policy") != LABEL_POLICY:
+                raise ValueError(
+                    "Incompatible reach recovery; start fresh with future cell/home supervision"
+                )
+            self.phase, self.cursor = ReachPhase(state["phase"]), state["cursor"]
+            if type(self.cursor) is not int or not 0 <= self.cursor <= buffer.size:
+                raise ValueError("Corrupt reach preparation cursor")
+            trace, started = state["trace"], state["started"]
             if (
                 trace.dtype != torch.int64
-                or trace.ndim != 3
+                or trace.shape != (env.batch.n, 5, 10)
+                or (trace < 0).any()
+                or state["errors"].dtype != torch.int64
                 or state["errors"].shape != (env.batch.n,)
+                or started.dtype != torch.bool
+                or started.shape != (env.batch.n,)
             ):
-                raise ValueError("Corrupt reach recovery trace")
-            self.metrics.update(state["metrics"])
-            if archive is None:
-                raise ValueError("Reach recovery requires its private target archive")
-            with archive.open("reach/targets.bin") as source, self.path.open("wb") as target:
-                import shutil
-
-                shutil.copyfileobj(source, target, length=1024**2)
-            if self.path.stat().st_size != self.targets * TARGET_DTYPE.itemsize:
-                raise ValueError("Truncated reach target recovery")
-            env.batch.enable_reach(state["trace"].numpy())
+                raise ValueError("Corrupt future-reach recovery")
+            env.batch.enable_reach(trace.numpy())
             env.batch.reach_error[:] = env.cp.asarray(state["errors"].numpy())
-            if self.exercise:
-                from pvz_rl.envs.reach_exercise import EXERCISE_WIDTH
-
-                if state.get("exercise_protocol") != self.exercise_protocol:
-                    raise ValueError("Scenario reach endpoint policy differs from recovery")
-                saved = state["exercise"]
-                if saved.shape != (env.batch.n, EXERCISE_WIDTH) or saved.dtype != torch.int64:
-                    raise ValueError("Corrupt placement reach continuation")
-                values = saved.numpy()
-                mode = 3 if self.natural_end else (2 if env.tile_scenario == "attacker_pre" else 1)
-                reasons = (0, 8, 9) if self.natural_end else range(8)
-                if (
-                    np.any(~np.isin(values[:, 0], (0, mode)))
-                    or np.any(~np.isin(values[:, 2], reasons))
-                    or np.any(values[:, 1:7] < 0)
-                    or np.any(~np.isin(values[:, 7:9], (0, 1)))
-                ):
-                    raise ValueError("Invalid placement reach endpoint state")
-                env.batch.reach_exercise[:] = env.cp.asarray(saved.numpy())
-                self._exercise_state = saved.numpy().copy()
-                flags = state["conservative_lanes"]
-                if flags.shape != (env.batch.n, 5) or flags.dtype != torch.bool:
-                    raise ValueError("Corrupt reach label provenance")
-                if self.natural_end and flags.any():
-                    raise ValueError(
-                        "Natural-end recovery cannot contain conservative reach labels"
-                    )
-                self.conservative_lanes[:] = flags.numpy()
-        else:
-            self.path.write_bytes(b"")
-            env.batch.enable_reach()
-        self.stream = self.path.open("ab")
-        self._trace = None
+            self._started[:] = env.cp.asarray(started.numpy())
+            self.metrics.update(state["metrics"])
+            for name in ("trace", "final_header", "final_facts"):
+                value = state.get("prepared_" + name)
+                setattr(self, "_" + name, None if value is None else value.numpy().copy())
+            if self.phase != ReachPhase.COLLECTING and (
+                self._trace is None
+                or self._trace.shape != (env.batch.n, 5, 10)
+                or self._final_header is None
+                or self._final_header.shape != env.batch.header.shape
+                or self._final_facts is None
+                or self._final_facts.shape != (env.batch.n, 5, 3)
+            ):
+                raise ValueError("Incomplete prepared future-reach recovery")
 
     @property
     def estimated_bytes(self):
-        return (
-            int(self.env.batch.reach_trace.nbytes + self.env.batch.reach_exercise.nbytes)
-            + self.conservative_lanes.nbytes
-            + (0 if self._exercise_state is None else self._exercise_state.nbytes)
-            + (0 if self._trace is None else self._trace.nbytes)
+        return int(
+            self.env.batch.reach_trace.nbytes
+            + self.env.batch.reach_error.nbytes
+            + self._started.nbytes
+        ) + sum(
+            x.nbytes for x in (self._trace, self._final_header, self._final_facts) if x is not None
         )
 
     def before(self, actions, active):
-        """Arm private endpoint hooks without changing the main action or cadence."""
-        if not self.exercise:
-            return
-        from pvz_rl.envs.reach_exercise import EXERCISE_WIDTH
-
-        cp, batch = self.env.cp, self.env.batch
-        selected = cp.from_dlpack(active)
-        if self.natural_end:
-            batch.reach_exercise[:, 0] = cp.where(selected, 3, batch.reach_exercise[:, 0])
-            self._exercise_state = None
-            return
-        data = np.zeros((batch.n, EXERCISE_WIDTH), np.int64)
-        for i, board in self.env.tile_boards.items():
-            data[i, 0] = 2 if self.env.tile_scenario == "attacker_pre" else 1
-            wanted = board.get("target_ids", [])
-            if board.get("supplied_plant") == "potato_mine":
-                wanted = wanted[:1]
-            data[i, 5 : 5 + len(wanted)] = wanted
-        data[:, 4] = int(
-            self.env.cfg["environment"]["cutoff_seconds"] * batch.rules.game["tick_rate"]
-        )
-        staged = cp.asarray(data)
-        staged[:, 1] = batch.header[:, 3]
-        batch.reach_exercise[:] = cp.where(selected[:, None], staged, batch.reach_exercise)
-        self._exercise_state = None
+        self._started |= self.env.cp.from_dlpack(active)
 
     def continue_exercises(self):
-        """One bounded Wait-only device chunk, outside all episode accounting."""
         if not self.exercise:
             return True
-        from pvz_rl.envs.reach_exercise import STOP_REASONS
-
         cp, batch = self.env.cp, self.env.batch
-        started = perf_counter()
-        current = self._exercise_state
-        if current is None:
-            current = batch.reach_exercise.get()
-        pending = (current[:, 0] != 0) & (current[:, 2] == 0)
-        if pending.any():
-            batch.reach_exercise[:, 8] = 1
-            batch.header[:, 17] = cp.asarray(pending)
+        start = perf_counter()
+        header = batch.header.get()
+        pending = self._started & cp.asarray(header[:, 1] == 0)
+        if bool(pending.any()):
+            batch.header[:, 17] = pending
             try:
                 batch.step_device(
                     cp.zeros(batch.n, cp.int64),
@@ -202,178 +113,121 @@ class ReachSupervision:
                     ),
                     per_tick=False,
                 )
-                progress = cp.concatenate(
-                    (batch.reach_exercise, batch.header[:, 14:15]), axis=1
-                ).get()
-                current = progress[:, :-1]
-                self.metrics["continuation_ticks"] += int(progress[pending, -1].sum())
+                header = batch.header.get()
+                self.metrics["continuation_ticks"] += int(header[cp.asnumpy(pending), 14].sum())
             finally:
                 batch.header[:, 17] = 0
-            pending = (current[:, 0] != 0) & (current[:, 2] == 0)
-        self._exercise_state = current
-        self.metrics["continuation_seconds"] += perf_counter() - started
-        if pending.any():
+        self.metrics["continuation_seconds"] += perf_counter() - start
+        pending_host = cp.asnumpy(self._started) & (header[:, 1] == 0)
+        if pending_host.any():
             return False
+        started = cp.asnumpy(self._started)
         self.metrics["stop_reasons"] = {
-            name: int(np.count_nonzero((current[:, 0] != 0) & (current[:, 2] == code)))
-            for code, name in STOP_REASONS.items()
-            if (code in (8, 9)) == self.natural_end
+            "natural_win": int(((header[:, 1] == 1) & started).sum()),
+            "home_breach": int(((header[:, 1] == 2) & started).sum()),
         }
         return True
 
-    def capture(self, rows, observations, identities):
-        """Called after the existing handoff, before the trajectory append commits."""
+    def capture(self, rows):
         if self.phase != ReachPhase.COLLECTING:
             raise RuntimeError("Cannot append to completed reach traces")
-        started = perf_counter()
-        for slot in np.flatnonzero(rows["active"] & rows["branch_usable"] & (rows["action"] != 0)):
-            count, offset = int(observations.counts[slot]), int(observations.offsets[slot])
-            ids = identities[slot, :count]
-            selected = np.flatnonzero(ids > 0)
-            rows["reach_offset"][slot] = self.targets
-            rows["reach_count"][slot] = len(selected)
-            cleared = int(rows["reach_cleared"][slot]) if "reach_cleared" in rows.dtype.names else 0
-            if len(selected) or cleared:
-                self.metrics["eligible_decisions"] += 1
-            if cleared and not len(selected):
-                self.metrics["cleared_only_decisions"] += 1
-            if not len(selected):
-                continue
-            public = observations.entities[offset : offset + count][selected]
-            targets = np.empty(len(selected), TARGET_DTYPE)
-            targets["id"] = ids[selected]
-            targets["lane"] = public[:, 2]
-            targets["initial"] = [
-                position_category(x, self.env.batch.rules.game["units_per_tile"])
-                for x in public[:, 3]
-            ]
-            self.stream.write(targets.tobytes())
-            self.targets += len(targets)
-            self.metrics["tracked_zombies"] += len(targets)
-        self.metrics["tracking_seconds"] += perf_counter() - started
-        self.metrics["storage_bytes"] = self.targets * TARGET_DTYPE.itemsize + self.estimated_bytes
+        self.metrics["eligible_decisions"] += int(rows["reach_valid"].sum())
+        self.metrics["storage_bytes"] = self.estimated_bytes
 
     def prepare(self):
-        """One bounded, idempotent metadata block per deadline/interruption boundary."""
-        started = perf_counter()
+        start = perf_counter()
         if self.phase == ReachPhase.COLLECTING:
             if not self.continue_exercises():
                 return False
-            started = perf_counter()
-            self.stream.flush()
             if bool(self.env.batch.reach_error.any()):
-                raise RuntimeError(
-                    "CUDA reach tracker exhausted capacity or lost identity; recovery retained"
-                )
+                raise RuntimeError("CUDA future-reach tracker failed; recovery retained")
+            self._trace = self.env.batch.reach_trace.get()
+            self._final_header = self.env.batch.header.get()
+            # Full public endpoint facts, without policy inference or trajectory changes.
+            saved = self.env.batch.header[:, 17].copy()
+            try:
+                self.env.batch.header[:, 17] = self._started
+                self.env.features.encode(publish=False)
+                self._final_facts = self.env.features.reach_facts[: self.env.batch.n].get()
+            finally:
+                self.env.batch.header[:, 17] = saved
             self.phase = ReachPhase.TRACES_COMPLETE
         if self.phase != ReachPhase.TRACES_COMPLETE:
             return True
-        if self._trace is None:
-            self._trace = self.env.batch.reach_trace.get()
         last = min(self.buffer.size, self.cursor + self.buffer.block_rows)
-        if self.targets:
-            data = np.memmap(self.path, dtype=TARGET_DTYPE, mode="r", shape=(self.targets,))
-        else:
-            data = np.empty(0, TARGET_DTYPE)
-        observed_lanes = conservative_lanes = cleared_lanes = 0
-        try:
-            for index in range(self.cursor, last):
-                block, offset = divmod(index, self.buffer.block_rows)
-                row = self.buffer.blocks[block][offset]
-                labels = np.full(5, -1, np.int8)
-                conservative = np.zeros(5, bool)
-                if row["reach_count"]:
-                    begin, count = int(row["reach_offset"]), int(row["reach_count"])
-                    if begin + count > self.targets:
-                        raise ValueError("Reach membership exceeds private target archive")
-                    targets = data[begin : begin + count].view("<i8").reshape(-1, 3)
-                    if (
-                        np.any(targets[:, 0] <= 0)
-                        or np.any((targets[:, 1] < 0) | (targets[:, 1] >= 5))
-                        or np.any((targets[:, 2] < 0) | (targets[:, 2] > 9))
-                    ):
-                        raise ValueError("Invalid private reach target membership")
-                    labels = suffix_labels(targets, self._trace[int(row["env"])], int(row["tick"]))
-                    if self.exercise and not self.natural_end:
-                        trace = {int(x[0]): x for x in self._trace[int(row["env"])] if x[0]}
-                        for identity, lane, _ in targets:
-                            if not trace[int(identity)][3]:
-                                conservative[int(lane)] = True
-                        labels[conservative] = 0
-                        self.conservative_lanes[int(row["env"])] = conservative
-                cleared = np.zeros(5, bool)
-                if "reach_cleared" in row.dtype.names:
-                    cleared = (int(row["reach_cleared"]) & (1 << np.arange(5))) != 0
-                    if np.any(labels[cleared] >= 0):
-                        raise ValueError("Cleared lane conflicts with pre-action zombie membership")
-                    labels[cleared] = 9
-                row["reach_labels"] = labels
-                observed_lanes += int(((labels >= 0) & ~conservative & ~cleared).sum())
-                conservative_lanes += int(conservative.sum())
-                cleared_lanes += int(cleared.sum())
-                examples = self.metrics.setdefault("examples", [])
-                if (
-                    (labels >= 0).any()
-                    and len(examples) < 4
-                    and not any(
-                        item["env"] == int(row["env"]) and item["labels"] == labels.tolist()
-                        for item in examples
+        counts = dict(
+            observed_cells=0, snapshot_cells=0, unknown_cells=0, home_targets=0, unknown_homes=0
+        )
+        examples = list(self.metrics.get("examples", []))
+        for index in range(self.cursor, last):
+            block, offset = divmod(index, self.buffer.block_rows)
+            row = self.buffer.blocks[block][offset]
+            row["reach_labels"], row["home_labels"] = -1, -1
+            if not row["reach_valid"]:
+                continue
+            env = int(row["env"])
+            cells, home = future_labels(
+                row["reach_facts"],
+                self._trace[env],
+                int(row["tick"]),
+                snapshot_only=self.snapshot_only,
+                terminal=self._final_header[env, 1] != 0,
+                final_facts=self._final_facts[env],
+            )
+            row["reach_labels"], row["home_labels"] = cells, home
+            row["reach_provenance"] = 1 if self.snapshot_only else 2
+            counts["snapshot_cells" if self.snapshot_only else "observed_cells"] += int(
+                (cells >= 0).sum()
+            )
+            counts["unknown_cells"] += int((cells < 0).sum())
+            counts["home_targets"] += int((home >= 0).sum())
+            counts["unknown_homes"] += int((home < 0).sum())
+            if len(examples) < 4 and not any(
+                item["env"] == env and item["labels"] == cells.tolist() for item in examples
+            ):
+                examples.append(
+                    dict(
+                        row=index,
+                        env=env,
+                        tick=int(row["tick"]),
+                        labels=cells.tolist(),
+                        home_labels=home.tolist(),
+                        prediction=row["reach_prediction"].astype(float).tolist(),
+                        home_prediction=row["home_prediction"].astype(float).tolist(),
+                        provenance="snapshot constraints"
+                        if self.snapshot_only
+                        else "factual future / safe constraints",
                     )
-                ):
-                    examples.append(
-                        dict(
-                            row=index,
-                            env=int(row["env"]),
-                            tick=int(row["tick"]),
-                            prediction=row["reach_prediction"].astype(float).tolist(),
-                            labels=labels.tolist(),
-                            conservative_lanes=conservative.tolist(),
-                            cleared_lanes=cleared.tolist(),
-                            stop_reason=int(self._exercise_state[int(row["env"]), 2])
-                            if self.exercise
-                            else None,
-                        )
-                    )
-            self.cursor = last
-            self.metrics["observed_lanes"] += observed_lanes
-            self.metrics["conservative_lanes"] += conservative_lanes
-            self.metrics["cleared_lanes"] += cleared_lanes
-        finally:
-            if isinstance(data, np.memmap):
-                data._mmap.close()
-        self.metrics["tracking_seconds"] += perf_counter() - started
-        self.metrics["storage_bytes"] = self.targets * TARGET_DTYPE.itemsize + self.estimated_bytes
+                )
+        # Commit one bounded block together; retry overwrites identical labels.
+        for key, value in counts.items():
+            self.metrics[key] += value
+        self.metrics["examples"] = examples
+        self.cursor = last
+        self.metrics["tracking_seconds"] += perf_counter() - start
+        self.metrics["storage_bytes"] = self.estimated_bytes
         if self.cursor == self.buffer.size:
             self.phase = ReachPhase.LABELS_READY
         return self.phase == ReachPhase.LABELS_READY
 
     def snapshot(self):
-        self.stream.flush()
         return dict(
             protocol=REACH_PROTOCOL,
-            label_policy=self.label_policy,
+            label_policy=LABEL_POLICY,
             phase=self.phase.value,
             cursor=self.cursor,
-            targets=self.targets,
             metrics=dict(self.metrics),
             trace=torch.from_numpy(self.env.batch.reach_trace.get()),
             errors=torch.from_numpy(self.env.batch.reach_error.get()),
-            exercise_protocol=self.exercise_protocol if self.exercise else None,
-            exercise=torch.from_numpy(self.env.batch.reach_exercise.get())
-            if self.exercise
-            else None,
-            conservative_lanes=torch.from_numpy(self.conservative_lanes.copy())
-            if self.exercise
-            else None,
+            started=torch.from_numpy(self.env.cp.asnumpy(self._started)),
+            **{
+                "prepared_" + name: None
+                if getattr(self, "_" + name) is None
+                else torch.from_numpy(getattr(self, "_" + name).copy())
+                for name in ("trace", "final_header", "final_facts")
+            },
         )
 
-    def write_archive(self, archive):
-        self.stream.flush()
-        archive.write(self.path, "reach/targets.bin")
-
     def close(self):
-        self.stream.close()
-        # Recovery owns its archived copy; this sidecar belongs to the live cohort.
-        self.path.unlink(missing_ok=True)
-        self._trace = None
+        self._trace = self._final_header = self._final_facts = None
         self.env.batch.disable_reach()

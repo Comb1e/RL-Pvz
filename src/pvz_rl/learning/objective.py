@@ -153,7 +153,7 @@ def residual_sun_wait_penalties(rows, amount):
     }
 
 
-OBJECTIVE_PROTOCOL = "complete_return_reach_v1"
+OBJECTIVE_PROTOCOL = "complete_return_reach_v2"
 # These are the only reward components that train the policy.  The simulator
 # still publishes the older diagnostic fields (combat_value, home_proximity,
 # victory_time, and so on) for reports and replay verification. Cohort-ranked

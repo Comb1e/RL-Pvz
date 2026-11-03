@@ -42,6 +42,8 @@ def test_cpu_agent_inference():
             features = policy.tile_features(board, torch.tensor([1]))
             reach = policy.reach_values(features)
         assert reach.shape == (1, 5, 10) and torch.isfinite(reach).all()
+        assert policy.reach_map(reach).shape == (1, 5, 9)
+        assert policy.home_map(reach).shape == (1, 5)
         assert species.shape == (1, len(cfg["environment"]["plants"]) + 2)
         assert tiles.shape == (1, env.codec.rows * env.codec.cols)
         assert torch.isfinite(species).all() and torch.isfinite(tiles).all()

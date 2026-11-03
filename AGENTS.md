@@ -18,34 +18,30 @@ This file owns project-specific invariants and the code map.
   ten-way action Q readout and action-conditioned 45-query cross-attention decoder.
   Wait and unavailable branches skip decoding. All 45 tiles remain candidates;
   branch impossibility precedes tile invalidity. No across-decision feature cache.
-- All autonomous stages train visible-zombie reach alongside their primary loss;
-  normal cohorts jointly train action/tile Q returns and reach.
+- All autonomous stages train cell reach and home danger alongside their primary
+  loss; normal cohorts jointly train action/tile Q returns and auxiliary forecasts.
   Preserve reward conversion, tick discounting, rejection compaction/weighting,
   species exploration, greedy tiles, four passes, BF16 runtime and FP32 masters.
   No factual followers or normal tile-max species consistency.
-- Reach tracks only active non-headless zombies retained by the root observation.
-  Include root positions, exclude later spawns/headless movement and capture
-  between-decision movement. Fresh scenario stages observe until natural victory
-  or first home entry, including rejected placements. One-placement stages use
-  Wait after their proposal; Peashooter uses Wait after its gameplay cutoff.
-  Private continuations have no simulated-time cutoff and use observed reach only;
-  preserve primary outcomes/rewards and checkpoint unfinished wall-time work.
-  Saved endpoint versions retain legacy semantics and conservative labels. These tails
-  add no episodes, rewards, fitting actions or policy calls. Categories
-  are columns 1–9 plus outside. With saved `training.reach_cleared_lanes` enabled,
-  pre-action lanes with no non-headless entities after the final spawn receive
-  outside/zero-penetration targets. Use the complete public roster before truncation;
-  otherwise absent lanes have no loss. Missing saved settings disable this rule.
-  Normalize by eligible lanes then equally by decisions. Reach is neither reward
-  nor a mastery gate.
+- Reach predicts independent future cell visitation and per-lane home entry,
+  including current non-headless positions and later spawns. Count swept cells,
+  including vaults; stop at defeat and capture actual home entry after mower
+  resolution. Full-public pre-action facts precede encoding truncation. After
+  the final spawn, cells right of the rightmost zombie and empty lanes are safe.
+  Pending spawns never imply zero danger for empty lanes. Use masked FP32 BCE,
+  equal lane/decision normalization and separate stage cell/home weights.
+- Bomb/attacker reach labels use only root snapshot constraints, with no private
+  tails. Keep placement oracles and validation. Peashooter privately Waits after
+  cutoff to natural termination; normal games add no tail. Incomplete normal
+  cutoffs preserve observed positives and provable zeros, leaving others unknown.
+  Private work changes no primary outcomes/rewards, progress or policy calls.
 - CUDA reach hooks are owned, guarded extensions. No extra environments, policy
   calls or hot-loop host synchronization. Charge private storage to shared budgets;
   tracker/storage failures retain recovery rather than fabricating labels.
 - Preliminary stages keep their automatic targets. They train shared/tile/reach parameters
   while action-readout parameters and their EMA stay untouched; shared updates may
   change action predictions. Update EMA only for the phase's trained groups.
-  Reach weights are independent stage settings; old shared-model recovery without
-  preliminary weights retains normal-only supervision. Demo initialization has no reach loss.
+  Cell/home weights are independent stage settings. Demo initialization has no auxiliary loss.
 - Bomb/attacker stages use successful-set cross-entropy over all 45 outputs,
   including occupied cells. Stage temperature follows completed-cohort accuracy,
   fixed across passes. Peashooter uses prioritized visible-lane engine labels and
@@ -98,18 +94,18 @@ Paths are relative to `src/pvz_rl/` unless stated otherwise.
 | --- | --- |
 | Repository `tools/bootstrap.*`, `tools/stage_game.py` | Verified installation of the pinned engine. |
 | `config.py`, `data/train.toml`, `gpu.py` | Stage tuning, validation panels, model dimensions and device selection. |
-| `policy/` | Shared public encoder, conditional tile decoder, action/tile/reach readouts, stateless runner and bounded graphs/batching. |
-| `envs/` | CPU/CUDA adapters, public encoding, actions, rewards, source credit and scenarios. `reach_tracking.py` owns guarded identity/movement hooks; `reach_exercise.py` owns versioned natural-game-end scenario endpoints. |
+| `policy/` | Shared public encoder, conditional tile decoder, action/tile/cell/home readouts, stateless runner and bounded graphs/batching. |
+| `envs/` | CPU/CUDA adapters, public encoding, actions, rewards, source credit and scenarios. `reach_tracking.py` owns guarded movement hooks; compact visit timestamps also record home entry after mower resolution. |
 | `envs/scratch_game.py`, `bomb_preparation.py`, `cuda_bomb_oracle.py`, `cuda_snapshots.py`, `attacker_scenarios.py` | Validated automatic exercises, persistent preparation, bounded oracles and conservative attacker labels. |
 | `learning/training.py`, `cuda_q.py`, `sequential_training.py` | Cohort orchestration, collection/fitting, reporting and atomic recovery. |
-| `learning/reach_supervision.py`, `reach_objective.py` | Private targets, pre-action cleared-lane provenance, resumable Wait-only continuations, observed/conservative labels, categorical reach loss and normalization. |
+| `learning/reach_supervision.py`, `reach_objective.py` | Private full-board root facts, future-cell/home labels, resumable Peashooter continuations, masked BCE and normalization. |
 | `learning/flat_q.py`, `objective.py`, `action_routing.py`, `placement_labels.py`, `bomb_objective.py` | Shared Q fitting/economics, legality attribution and automatic placement losses. |
 | `learning/peashooter_rules.py`, `peashooter_teacher.py`, `envs/lane_preparation.py`, `cuda_lane_oracle.py` | Prioritized lane targets and resumable bounded lane oracles. |
 | `learning/cuda_buffer.py`, `batch_transport.py`, `collection_scheduler.py`, `exploration.py` | Bounded trajectories/transport, decision tickets and committed species exploration. |
 | `learning/tile_curriculum.py`, `validation_trigger.py`, `budget.py`, `training_requirements.py` | Stage transitions, validation qualification, budgets and model/objective identities. |
 | `learning/checkpoints.py`, `training_artifacts.py`, `performance.py`, `demo_initialization.py` | Recovery/weights, artifact retention, execution settings and verified human demo fitting. |
 | `evaluation/`, `monitoring/`, repository diagnostic tools | Greedy evaluation, CPU verification, bounded profiling and benchmarks. |
-| `presentation/` | Demo recording/replay, live cohort subscriptions and retained reports. `reach_view.py` distinguishes predicted/factual penetration; both viewers place the latest timestamped prediction beside each board, using the episode-scoped journal cache without model calls. |
+| `presentation/` | Demo recording/replay, live cohort subscriptions and retained reports. `reach_view.py` distinguishes raw cell/home forecasts from masked snapshot/factual targets; both viewers place the latest timestamped prediction beside each board, using the episode-scoped journal cache without model calls. |
 
 ## Test ownership
 

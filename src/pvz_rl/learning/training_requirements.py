@@ -10,7 +10,7 @@ from pvz_rl.policy.sequential_q import ACTION_DISTRIBUTION
 from pvz_rl.provenance import weight_engine_config
 
 TRAINING_CONDITIONS = ("masked",)
-CURRENT_OBJECTIVE = "complete_return_reach_v1"
+CURRENT_OBJECTIVE = "complete_return_reach_v2"
 CURRENT_REWARD = "action_global_value_v5"
 FIT_SCHEDULE_PROTOCOL = "joint_shared_reach_cohorts_v1"
 
@@ -45,7 +45,7 @@ def current_model_config(cfg):
         identity
         in {
             (
-                "shared_board_reach_q_v1",
+                "shared_board_reach_q_v2",
                 "entity_v1",
                 CURRENT_OBJECTIVE,
                 CURRENT_OBJECTIVE,

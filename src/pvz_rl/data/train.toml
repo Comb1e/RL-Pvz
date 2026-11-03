@@ -81,8 +81,7 @@ block_value_by_plant = { sunflower = 0.074074074, peashooter = 0.074074074, wall
 [training]
 gamma = 1.0
 discount_clock = "simulation_ticks"
-method = "complete_return_reach_v1"
-reach_cleared_lanes = true # Zero-penetration targets for empty lanes after the final spawn.
+method = "complete_return_reach_v2"
 budget_unit = "games"
 until_stage_complete = false # With --stage: stop only when its mastery gate passes.
 total_games = 10000
@@ -103,11 +102,11 @@ enabled = true # Missing in older checkpoints: retain their original validation 
 cohort_success_threshold = 0.9 # Strictly above; full configured cohorts only (normally 116/128).
 
 [training.tile_scenarios]
-reach_endpoint = "natural_game_end_v1" # Private Wait-only reach tails have no simulated cutoff.
 enabled = true # Automatic preliminary stages; selected normal stages skip them.
 sampling_max_attempts = 100
 
 [training.cherry_bomb]
+home_prediction_weight = 0.1
 reach_prediction_weight = 0.1
 # Shared by both bomb stages except temperature and validation mastery; no exploration or search.
 n_envs = 640 # Fastest measured collection time/env with 32 workers and the CUDA oracle.
@@ -128,10 +127,12 @@ oracle_lanes = 2048 # Shrinks to fit VRAM without changing labels.
 oracle_vram_mib = 2048
 
 [training.cherry_bomb_obstacle]
+home_prediction_weight = 0.1
 reach_prediction_weight = 0.1
 softmax_temperature = { zero_success = 1, full_success = 1 } # Independent schedule; mastery still requires 100/100.
 
 [training.attacker_pre]
+home_prediction_weight = 0.1
 reach_prediction_weight = 0.1
 n_envs = 640 # Lowest measured collection time/env on the RTX 4070 Laptop profile.
 plants = [4, 8] # Total across four non-zombie lanes; at least one in each.
@@ -150,6 +151,7 @@ oracle_lanes = 640 # Independent scratch limits; used only for natural cooldown 
 oracle_vram_mib = 1024
 
 [training.peashooter]
+home_prediction_weight = 0.1
 reach_prediction_weight = 0.1
 # Independent cohort/preparation sizing; shared optimizer and fitting passes.
 n_envs = 128
@@ -167,7 +169,8 @@ oracle_chunk_ticks = 4096
 
 [training.normal]
 n_envs = 128
-reach_prediction_weight = 0.1 # Auxiliary visible-zombie leftmost-column cross-entropy.
+home_prediction_weight = 0.1
+reach_prediction_weight = 0.1 # Masked future cell-reach binary cross-entropy.
 validation_schedule = "stage_success" # Evaluate normal games only after each stage passes.
 eval_interval_games = 2000 # Periodic game-count diagnostic/fixed checks.
 # Species exploration stays fixed throughout a cohort; tile proposals are greedy.
@@ -208,7 +211,7 @@ ram_gib = 6
 block_rows = 32768
 
 [training.objective]
-protocol = "complete_return_reach_v1"
+protocol = "complete_return_reach_v2"
 accepted_outcome_share = 0.5
 species_consistency_weight = 1.0 # Verified demo objective only; normal Q fitting omits consistency.
 species_consistency_huber_delta = 1.0
@@ -259,7 +262,7 @@ curriculum = true
 hybrid = false
 
 [policy]
-kind = "shared_board_reach_q_v1"
+kind = "shared_board_reach_q_v2"
 action_distribution = "sequential_q_unmasked_tiles_v2"
 shared_width = 192
 encoder_blocks = 4
