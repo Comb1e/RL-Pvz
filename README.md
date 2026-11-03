@@ -3,7 +3,7 @@
 Train a sequential Q policy against a pinned Plants vs. Zombies simulator. A
 shared Transformer understands the public board, an action readout chooses
 Wait/species/Dig, and a conditional decoder scores all 45 tiles. Every autonomous
-stage also learns future cell reach and home danger. Labels never override
+stage also learns hindsight threats and baseline-relative action effects. Labels never override
 actions; validation uses the greedy network.
 
 ## Requirements
@@ -43,7 +43,7 @@ Demo initialization verifies the replay before fitting. Manual tile annotation i
 removed; existing datasets and recordings remain on disk. The shared-encoder
 architecture starts fresh: old model weights and autonomous checkpoints are
 incompatible. Compatible weights transfer with `--init-from`; interrupted runs
-resume with `--resume` and preserve optimizer updates and unfinished reach labels.
+resume with `--resume` and preserve optimizer updates and unfinished forks, hindsight labels and fitting passes.
 
 Start autonomous training when ready:
 
@@ -59,29 +59,38 @@ Use `--stage NAME --until-stage-complete` for one stage, or `--games N` for a
 completed-episode budget. Explicit normal stages skip preliminary stages. Omit
 `--init-from` to start with random weights.
 
-Tune [train.toml](src/pvz_rl/data/train.toml): stage settings live under
-`training.cherry_bomb`, `training.cherry_bomb_obstacle`, `training.attacker_pre`,
-`training.peashooter` and `training.normal`; architecture dimensions live under
-`policy`. Preliminary stages retain their automatic placement targets and train
-the shared encoder/decoder and reach heads while leaving the action readout
-untouched. Normal cohorts jointly fit action/tile returns and future cell reach,
-using four passes. Each stage table has independent `reach_prediction_weight`
-and `home_prediction_weight` settings, default 0.1; zero disables that loss.
-Cell forecasts include current positions and later spawns. Home danger is a
-separate per-lane probability, displayed left of column 1 in both game viewers.
-Predictions are raw, timestamped to the latest tile decision and remain visible
-during Wait, without extra model calls. Grey supervision cells are unknown.
+Tune [train.toml](src/pvz_rl/data/train.toml): stage tables own their placement
+settings and independent `threat_prediction_weight` / `effect_prediction_weight`.
+Normal stages jointly fit n-step Q targets; preliminary stages preserve their
+placement losses and freeze the action readout. Four fitting passes, greedy tiles
+and normal species exploration remain in use.
 
-Bomb and attacker exercises use snapshot-only reach targets: current zombie cells
-are positive; after the last spawn, cells behind the rightmost zombie and empty
-lanes are negative. Other cells and threatened home outcomes remain unlabeled.
-These exercises have no private reach continuation; placement oracles and engine
-validation remain unchanged. Peashooter privately continues with Wait after its
-cutoff until natural victory or first home entry, without changing primary rewards
-or outcomes. Normal cutoffs retain uncertain future targets as unknown. Empty
-rows with pending spawns are never automatically labeled safe. Wall-time limits
-save unfinished work. This prediction version requires fresh training; old model
-initialization and recovery are rejected without modifying existing files.
+`training.forecasts` controls isolated CUDA forks, sampled alternatives, private
+random/scripted effect pretraining, auxiliary warmup, feature injection and TD
+horizons. Every decision receives a static baseline: existing zombies finish with
+no actions or future spawns, then Conehead probes test the damaged defenses. Lanes
+continue independently after actual home entries. Executed and sampled actions
+receive signed categorical changes relative to that baseline; forks never select
+real actions or consume the real RNG. Baselines are required during inference and
+validation too. This work can be substantial; resource limits bound resident
+scratch lanes, not the simulated duration of a fork.
+
+Threat targets summarize realized penetration at 2τ, 9τ and episode end, breach
+time and per-lane loss. τ is the reference Basic-zombie tile-crossing time,
+including its gait. Loss and
+cutoff windows retain observed lower bounds instead of invented safe outcomes.
+Peashooter privately Waits after its cutoff for hindsight labels; normal cutoffs
+remain censored. The viewer shows the raw end-horizon penetration CDF and home
+risk, with unknown targets grey. Head predictions never override actions.
+
+Defaults pretrain on 2,048 private boards, warm auxiliary weights over 2,048 real
+episodes, and enable detached forecast features after 4,096 normal games. The TD
+schedule increases from 5 to 20 steps and from a 60-step to a 600-step discount
+half-life. Potential shaping starts disabled. Reports separate primary/threat/effect
+loss, calibration, gradient ratios, fork cost and real-game outcomes. Use
+`python -m pvz_rl.monitoring.forecast_ablation --help` for seed-matched ablations;
+these require their own explicit game and wall-time budgets. New fork-model weights
+start fresh; older models and recoveries are rejected without changing user files.
 
 Validation uses fresh random panels, saved for interrupted retries. Full fitted
 cohorts must strictly exceed the configured qualification threshold before a due

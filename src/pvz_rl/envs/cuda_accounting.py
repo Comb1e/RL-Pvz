@@ -49,9 +49,9 @@ class AccountingCudaBatch(CudaBatch):
         self.sky_sun_rate = 1.0
         self.accounting = self.cp.zeros((self.n, ACCOUNTING_WIDTH), self.cp.int64)
         self.source = accounting_kernel_source(self.source)
-        from pvz_rl.envs.reach_tracking import reach_kernel_source
+        from pvz_rl.envs.reach_tracking import forecast_kernel_source
 
-        self.source = reach_kernel_source(self.source)
+        self.source = forecast_kernel_source(self.source, self.max_step_ticks)
         self.reach_enabled = False
         self.reach_trace = self.cp.zeros(1, self.cp.int64)
         self.reach_error = self.cp.zeros(self.n, self.cp.int64)
@@ -64,9 +64,9 @@ class AccountingCudaBatch(CudaBatch):
         self.sky_sun_rate = validate_sky_sun_rate(rate, self.rules)
 
     def enable_reach(self, saved=None):
-        from pvz_rl.envs.reach_tracking import REACH_WIDTH
+        from pvz_rl.envs.reach_tracking import FORECAST_HEADER
 
-        shape = (self.n, 5, REACH_WIDTH)
+        shape = (self.n, FORECAST_HEADER + (self.max_step_ticks + 1) * 5)
         if saved is None:
             self.reach_trace = self.cp.zeros(shape, self.cp.int64)
         else:

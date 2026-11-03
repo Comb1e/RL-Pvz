@@ -348,7 +348,7 @@ class ResearchCallback(BaseCallback):
             "fitting_objective": (
                 RULE_OBJECTIVE
                 if self.model.peashooter_rule_training
-                else "complete_return_reach_v2"
+                else "nstep_fork_forecast_v3"
                 if not self.model.tile_skills.active
                 else None
             ),
@@ -638,16 +638,21 @@ class ResearchCallback(BaseCallback):
             "peashooter_preferred_column_accuracy",
             "total_loss",
             "primary_loss",
-            "reach_loss",
-            "home_loss",
-            "reach_brier",
-            "home_brier",
-            "reach_accuracy",
-            "home_accuracy",
-            "reach_labeled_cells",
-            "home_labeled_lanes",
-            "home_eligible_decisions",
-            "reach_eligible_decisions",
+            "threat_loss",
+            "effect_loss",
+            "threat_depth_brier",
+            "effect_brier",
+            "threat_depth_accuracy",
+            "effect_accuracy",
+            "threat_exact_depths",
+            "threat_time_brier",
+            "threat_time_accuracy",
+            "threat_loss_brier",
+            "threat_loss_accuracy",
+            "changed_effect_accuracy",
+            "effect_labeled_terms",
+            "effect_eligible_decisions",
+            "threat_eligible_decisions",
             "q_loss",
             "tile_ranking_loss",
             "bomb_cross_entropy_loss",
@@ -1695,7 +1700,7 @@ def train(
     target_kind = (
         "successful-set placement supervision"
         if is_placement_skill(selected_stage(cfg))
-        else "actual returns and factual future cell reach and home danger"
+        else "n-step Q targets with hindsight threats and signed fork effects"
     )
     progress.emit(
         f"Policy: {cfg.get('policy', {'kind': 'flat'})}; {target_kind}; "
@@ -1735,7 +1740,8 @@ def train(
     progress.emit(
         f"Agent cadence: {cfg['environment'].get('action_frequency_hz', 'derived')} Hz; "
         f"{cfg['environment']['decision_ticks']} simulator ticks per decision; "
-        f"discount {cfg['training']['gamma']} per simulation tick",
+        f"accounting discount {cfg['training']['gamma']} per simulation tick; "
+        "TD uses the saved forecast half-life schedule",
         force=True,
     )
     training_complete = False
@@ -2012,6 +2018,9 @@ def train(
             model._reach = None
         if model is not None and getattr(model, "_peashooter_teacher", None) is not None:
             model._peashooter_teacher.close()
+        if model is not None and getattr(model, "_pretrainer", None) is not None:
+            model._pretrainer.close()
+            model._pretrainer = None
         if model is not None and getattr(model, "_buffer", None) is not None:
             model._buffer.close()
         if model is not None and getattr(model, "_fitting_spool", None) is not None:

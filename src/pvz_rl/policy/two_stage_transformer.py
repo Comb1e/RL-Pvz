@@ -9,6 +9,13 @@ from torch import nn
 from pvz_rl.envs.actions import ActionSchema as A
 from pvz_rl.envs.actions import dig_branch_available
 from pvz_rl.envs.encoding import collate_observations
+from pvz_rl.learning.forecast_labels import (
+    EFFECT_WIDTH,
+    THREAT_WIDTH,
+    effect_summary,
+    penetration_map,
+    threat_summary,
+)
 from pvz_rl.policy.active_batch import encode_active
 from pvz_rl.policy.entity_attention import SpatialTransformer
 from pvz_rl.policy.sequential_q import (
@@ -34,10 +41,14 @@ class TwoStageTransformerPolicy(nn.Module):
         self.board_encoder = SpatialTransformer(self.layout, spec, "board")
         self.tile_decoder = TileDecoder(self.layout, spec)
         width = spec["shared_width"]
-        self.species_head = nn.Sequential(nn.Linear(width, 128), nn.ReLU(), nn.Linear(128, 10))
-        self.tile_head = nn.Sequential(nn.Linear(width, 128), nn.ReLU(), nn.Linear(128, 1))
-        self.reach_head = nn.Linear(width, 1)
-        self.reach_home_head = nn.Linear(width, 1)
+        self.species_head = nn.Sequential(nn.Linear(width + 30, 128), nn.ReLU(), nn.Linear(128, 10))
+        self.tile_head = nn.Sequential(nn.Linear(width + 20, 128), nn.ReLU(), nn.Linear(128, 1))
+        self.threat_head = nn.Linear(width, 5 * THREAT_WIDTH)
+        self.effect_head = nn.Sequential(
+            nn.Linear(width, width), nn.GELU(), nn.Linear(width, 5 * EFFECT_WIDTH)
+        )
+        self.null_projection = nn.Linear(width, width)
+        self.injection_enabled = cfg["training"].get("forecasts", {}).get("injection_active", False)
         self._master_parameters = []
         self._master_names = []
         self._initialize_masters()
@@ -57,10 +68,16 @@ class TwoStageTransformerPolicy(nn.Module):
 
     @staticmethod
     def _eligible(name, stage):
+        if stage == "effect_pretrain":
+            return name.startswith(
+                ("board_encoder.", "tile_decoder.", "effect_head.", "null_projection.")
+            )
         if stage == "tile_reach":
             return not name.startswith("species_head.")
         if stage == "tile":
-            return not name.startswith("species_head.") and not name.startswith("reach_")
+            return not name.startswith(
+                ("species_head.", "threat_head.", "effect_head.", "null_projection.")
+            )
         return name.startswith(("board_encoder.", "species_head."))
 
     @property
@@ -121,7 +138,7 @@ class TwoStageTransformerPolicy(nn.Module):
     def master_parameters(self, stage=None):
         if stage is None:
             return tuple(self._master_parameters)
-        if stage not in ("species", "tile", "tile_reach"):
+        if stage not in ("species", "tile", "tile_reach", "effect_pretrain"):
             raise ValueError("Parameter stage must be species, tile or tile_reach")
         return tuple(
             master
@@ -139,7 +156,7 @@ class TwoStageTransformerPolicy(nn.Module):
         parameters = tuple(super().parameters())
         if stage is None:
             return parameters
-        if stage not in ("species", "tile", "tile_reach"):
+        if stage not in ("species", "tile", "tile_reach", "effect_pretrain"):
             raise ValueError("Parameter stage must be species, tile or tile_reach")
         return tuple(
             parameter
@@ -272,7 +289,39 @@ class TwoStageTransformerPolicy(nn.Module):
     def species_values(self, observations, *, plan=None, memory=None):
         observations = collate_observations(observations, self.device)
         memory = self._memory(observations, plan) if memory is None else memory
-        return self.species_head(memory[0][:, 0])
+        return self.action_values(memory)
+
+    def threat_values(self, observations=None, *, memory=None):
+        if memory is None:
+            memory = self._memory(observations)
+        return self.threat_head(memory[0][:, 0]).reshape(-1, 5, THREAT_WIDTH)
+
+    def action_values(self, memory, *, rows=None):
+        global_features = memory[0][:, 0] if rows is None else memory[0][rows, 0]
+        logits = self.threat_head(global_features).reshape(-1, 5, THREAT_WIDTH)
+        summaries = threat_summary(logits).detach()
+        if not self.injection_enabled:
+            summaries = torch.zeros_like(summaries)
+        return self.species_head(
+            torch.cat((global_features, summaries.to(global_features.dtype)), -1)
+        )
+
+    def effect_values(self, features):
+        return self.effect_head(features).reshape(*features.shape[:-1], 5, EFFECT_WIDTH)
+
+    def null_features(self, memory, branches=None):
+        pooled = memory[0][:, 0]
+        if branches is None:
+            branches = torch.zeros(len(pooled), dtype=torch.long, device=pooled.device)
+        return self.null_projection(pooled + self.tile_decoder.branch_embedding(branches))
+
+    def tile_values(self, features, *, null=None):
+        summaries = effect_summary(self.effect_values(features)).detach()
+        if null is not None:
+            summaries = summaries - effect_summary(self.effect_values(null)).detach()[:, None]
+        if not self.injection_enabled:
+            summaries = torch.zeros_like(summaries)
+        return self.tile_head(torch.cat((features, summaries.to(features.dtype)), -1)).squeeze(-1)
 
     def tile_features(self, observations, branches, *, rows=None, plan=None, memory=None):
         observations = collate_observations(observations, self.device)
@@ -287,11 +336,13 @@ class TwoStageTransformerPolicy(nn.Module):
         memory = self._memory(observations, plan) if memory is None else memory
         return self.tile_decoder(memory[0][rows], memory[1][rows], branches)
 
-    def reach_values(self, features):
-        features = features.reshape(-1, 5, 9, self.cfg["policy"]["shared_width"])
-        cells = self.reach_head(features).squeeze(-1)
-        home = self.reach_home_head(features.mean(2))
-        return torch.cat((cells, home), -1)
+    def forecast_display(self, memory):
+        logits = self.threat_values(memory=memory)
+        cells = penetration_map(logits[..., 22:33])
+        # Viewers accept a common cell/home-logit carrier; these are derived raw
+        # predictions, never clamped by public facts or training labels.
+        home = logits[..., 39].float().sigmoid()[..., None]
+        return torch.logit(torch.cat((cells, home), -1).clamp(1e-7, 1 - 1e-7))
 
     @staticmethod
     def reach_map(logits):
@@ -319,15 +370,20 @@ class TwoStageTransformerPolicy(nn.Module):
         features = self.tile_features(
             observations, branches[requested], rows=rows[requested], plan=plan, memory=memory
         )
-        result = result.index_copy(0, requested, self.tile_head(features).squeeze(-1))
+        memory = self._memory(observations, plan) if memory is None else memory
+        null = self.null_features((memory[0][rows[requested]], memory[1][rows[requested]]))
+        result = result.index_copy(0, requested, self.tile_values(features, null=null))
         if return_reach:
-            reach = reach.index_copy(0, requested, self.reach_values(features))
+            reach = self.forecast_display((memory[0][rows], memory[1][rows]))
             return result, reach
         return result
 
     def fitting_tiles(self, observations, branches, *, rows):
-        features = self.tile_features(observations, branches, rows=rows)
-        return self.tile_head(features).squeeze(-1)
+        observations = collate_observations(observations, self.device)
+        memory = self._memory(observations)
+        features = self.tile_features(observations, branches, rows=rows, memory=memory)
+        null = self.null_features((memory[0][rows], memory[1][rows]))
+        return self.tile_values(features, null=null)
 
     def collection_tiles(
         self, observations, branches, *, plan=None, memory=None, return_reach=False
@@ -430,5 +486,6 @@ class TwoStageTransformerPolicy(nn.Module):
         details["tile_inference_skipped"] = (branches > 0) & ~tile_rows
         details["observations"] = observations
         details["board_memory"] = memory
-        details["reach_logits"] = reach
+        details["reach_logits"] = self.forecast_display(memory)
+        details["threat_logits"] = self.threat_values(memory=memory)
         return actions, details

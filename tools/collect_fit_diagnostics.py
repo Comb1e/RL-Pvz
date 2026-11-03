@@ -585,6 +585,7 @@ class FitDiagnostics:
             cfg = deepcopy(cfg)
             cfg["training"].pop("peashooter_rules", None)
             cfg.setdefault("diagnostics", {})["reach_tracking"] = False
+            cfg["training"]["forecasts"]["enabled"] = False
             return ordinary_train(cfg, *args, **kwargs)
 
         self.patches.enter_context(patch.object(training, "train", diagnostic_train))

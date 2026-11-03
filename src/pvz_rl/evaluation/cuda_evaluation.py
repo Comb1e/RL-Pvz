@@ -106,6 +106,8 @@ def refilled_games(
         with env.device_context():
             while finished < len(cases):
                 check_deadline(deadline)
+                if not env.prepare_baseline():
+                    continue
                 with torch.inference_mode():
                     active = torch.as_tensor(env.enabled_envs.copy(), device=policy.policy.device)
                     with timer.track("inference"):
@@ -192,6 +194,8 @@ def fixed_batches(
                 with env.device_context():
                     while len(completed) < len(chunk):
                         check_deadline(deadline)
+                        if not env.prepare_baseline():
+                            continue
                         with torch.inference_mode():
                             active = torch.as_tensor(
                                 env.enabled_envs.copy(), device=policy.policy.device

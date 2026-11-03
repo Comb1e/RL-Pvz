@@ -63,9 +63,17 @@ class CollectionScheduler:
         self.decisions += executing
 
     def snapshot(self):
-        if self.pending.any():
-            raise RuntimeError("Finish issued decisions before saving scheduler counters")
-        return dict(decisions=self.decisions.copy(), resets=self.resets.copy(), round=self.round)
+        return dict(
+            decisions=self.decisions.copy(),
+            resets=self.resets.copy(),
+            round=self.round,
+            pending=self.pending.copy(),
+            columns=None if self.columns is None else self.columns.cpu(),
+            draws={
+                name: getattr(self, name).cpu()
+                for name in ("order", "species_coins", "species_choices", "wait_species_choices")
+            },
+        )
 
     def restore(self, state):
         for name, dtype in (("decisions", np.int64), ("resets", bool)):
@@ -76,3 +84,27 @@ class CollectionScheduler:
         if np.any(self.decisions < 0) or type(state.get("round")) is not int or state["round"] < 0:
             raise ValueError("Invalid collection scheduler recovery timing")
         self.round = state["round"]
+        pending = np.asarray(state.get("pending"))
+        if pending.shape != self.pending.shape or pending.dtype != bool:
+            raise ValueError("Invalid pending decision tickets")
+        self.pending = pending.copy()
+        columns = state.get("columns")
+        if columns is not None and (
+            columns.shape != (len(pending), 25) or not torch.isfinite(columns).all()
+        ):
+            raise ValueError("Invalid retained decision evidence")
+        if pending.any() and columns is None:
+            raise ValueError("Pending decisions have no retained evidence")
+        self.columns = None if columns is None else columns.to(self.order.device)
+        names = ("order", "species_coins", "species_choices", "wait_species_choices")
+        if set(state.get("draws", {})) != set(names):
+            raise ValueError("Incomplete retained exploration draws")
+        for name in names:
+            value, target = state["draws"][name], getattr(self, name)
+            if (
+                value.shape != target.shape
+                or value.dtype != target.dtype
+                or not torch.isfinite(value).all()
+            ):
+                raise ValueError("Invalid retained exploration draw")
+            target.copy_(value.to(self.order.device))

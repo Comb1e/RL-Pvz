@@ -200,7 +200,9 @@ def _verify_reward_facts(row: dict, reconstructed: dict, cfg=None) -> None:
         raise ValueError(error)
 
 
-def _verify_action_order(archive_rows: list[dict], replay_path: Path, cfg: dict) -> dict:
+def _verify_action_order(
+    archive_rows: list[dict], replay_path: Path, cfg: dict, *, prepare_baselines=False
+) -> dict:
     transitions = [row for row in archive_rows if row.get("record_type") == "transition"]
     open_playback(replay_path)
     data = read_recording(replay_path)
@@ -219,6 +221,7 @@ def _verify_action_order(archive_rows: list[dict], replay_path: Path, cfg: dict)
     native_masks = []
     native_branch_availability = []
     observations = []
+    fork_inputs = []
     native_truncation = []
     native_actions = []
     native_outcomes = []
@@ -240,6 +243,12 @@ def _verify_action_order(archive_rows: list[dict], replay_path: Path, cfg: dict)
             )[0]
         )
         observations.append(observation_json(encoder.encode(before)))
+        if prepare_baselines and cfg["training"]["forecasts"]["enabled"]:
+            from pvz_rl.envs.static_fork import StaticFork, reference_tau
+            from pvz_rl.learning.forecast_labels import baseline_features
+
+            outcomes = StaticFork(game, probe=cfg["training"]["forecasts"]["probe"]).run()
+            fork_inputs.append(baseline_features(outcomes, reference_tau(game.rules)))
         native_truncation.append(dict(encoder.last_truncation))
         native_actions.append(codec.encode(decode_action(entry["action"])))
         action_id = len(native_actions) - 1
@@ -380,6 +389,19 @@ def _verify_action_order(archive_rows: list[dict], replay_path: Path, cfg: dict)
         final = observation_json(encoder.encode(game.observe()))
         if not observations_equal(final_rows[-1]["observation"], final):
             raise ValueError("final observation reconstruction mismatch")
+    # Recordings retain their inexpensive public facts. Add the derived static
+    # baseline only to verified in-memory fitting inputs, never to user files.
+    if fork_inputs:
+        from pvz_rl.envs.encoding import BOARD_GLOBAL_FIELDS
+
+        for row, baseline in zip(transitions, fork_inputs, strict=True):
+            row["observation"] = dict(
+                row["observation"],
+                globals=[
+                    *row["observation"]["globals"][: len(BOARD_GLOBAL_FIELDS)],
+                    *baseline.tolist(),
+                ],
+            )
     return {
         "replay_sha256": file_hash(replay_path),
         "decisions": len(transitions),
@@ -404,7 +426,7 @@ def verify_demo(archive: str | Path, replay: str | Path, cfg: dict | None = None
 
 
 def _load_verified_demo(
-    archive: str | Path, replay: str | Path, cfg: dict | None = None
+    archive: str | Path, replay: str | Path, cfg: dict | None = None, *, prepare_baselines=False
 ) -> VerifiedDemo:
     cfg = cfg or load_demo_config()
     archive, replay = Path(archive), Path(replay)
@@ -415,9 +437,7 @@ def _load_verified_demo(
     if not manifest_path.exists():
         raise ValueError("Demonstration archive manifest is missing")
     if manifest.get("protocol") != "pvz-rl/transition-archive-v2":
-        raise ValueError(
-            "Unsupported demonstration archive protocol; record a fresh entity_v1 demonstration"
-        )
+        raise ValueError("Unsupported demonstration archive protocol; record a fresh demonstration")
     # Learning settings are not recording inputs. Validate the pinned engine,
     # schema and native replay facts instead of the complete configuration hash.
     if manifest.get("engine") != {
@@ -457,7 +477,7 @@ def _load_verified_demo(
         "outcome": manifest.get("outcome"),
     }
     replay_check = verify_replay(replay)
-    order = _verify_action_order(rows, replay, cfg)
+    order = _verify_action_order(rows, replay, cfg, prepare_baselines=prepare_baselines)
     if archive_check["outcome"] not in ("won", "lost") or order["outcome"] not in ("won", "lost"):
         raise ValueError("initialization requires a completed won or lost demonstration")
     if (
@@ -506,7 +526,7 @@ def _initialize_demo(
 ) -> dict:
     """Fit one complete game and publish a checkpoint only after whole passes."""
     cfg = cfg or load_demo_config()
-    demonstration = _load_verified_demo(archive, replay, cfg)
+    demonstration = _load_verified_demo(archive, replay, cfg, prepare_baselines=True)
     verification = demonstration.report
     if not verification["verified"]:
         raise ValueError("demonstration verification did not complete")

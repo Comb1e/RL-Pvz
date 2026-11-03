@@ -26,7 +26,11 @@ from pvz_rl.policy.runner import PolicyRunner
 def validate_tile_skills(cfg, model, seeds, *, deadline=None, progress=None, skills=LEGACY_SKILLS):
     results = {}
     with deterministic_validation(model):
-        if not skills or len(set(skills)) != len(skills) or any(skill not in SKILLS for skill in skills):
+        if (
+            not skills
+            or len(set(skills)) != len(skills)
+            or any(skill not in SKILLS for skill in skills)
+        ):
             raise ValueError("Select at least one distinct supported tile skill")
         for skill in skills:
             cases = [namespace_seed(f"tile-validation/{skill}", seed) for seed in seeds]
@@ -42,9 +46,14 @@ def validate_tile_skills(cfg, model, seeds, *, deadline=None, progress=None, ski
                     if skill == "attacker_pre":
                         settings = local["training"]["tile_scenarios"]["attacker"]
                         kinds = settings["provided_plants"]
-                        counts = list(range(settings["zombie_count"][0], settings["zombie_count"][1] + 1))
+                        counts = list(
+                            range(settings["zombie_count"][0], settings["zombie_count"][1] + 1)
+                        )
                         env.queue.validation_cases = [
-                            (kinds[i % len(kinds)], counts[(i // len(kinds) + i % len(kinds)) % len(counts)])
+                            (
+                                kinds[i % len(kinds)],
+                                counts[(i // len(kinds) + i % len(kinds)) % len(counts)],
+                            )
                             for i in range(offset, offset + len(chunk))
                         ]
                     traces = [[] for _ in chunk]
@@ -54,6 +63,8 @@ def validate_tile_skills(cfg, model, seeds, *, deadline=None, progress=None, ski
                         runner = PolicyRunner(model.policy)
                         while env.enabled_envs.any():
                             check_deadline(deadline)
+                            if not env.prepare_baseline():
+                                continue
                             with torch.inference_mode():
                                 active = torch.as_tensor(
                                     env.enabled_envs.copy(), device=model.device
@@ -81,10 +92,19 @@ def validate_tile_skills(cfg, model, seeds, *, deadline=None, progress=None, ski
 
                                     action = traces[index][0]
                                     board = env.tile_boards[index]
-                                    details = attacker_result(
-                                        local, board, (action - 1) % 45 if action else -1,
-                                        rules=env.queue.rules, deadline=deadline,
-                                    ) if action else dict(win=False, target_correct=False, actual_kill=False)
+                                    details = (
+                                        attacker_result(
+                                            local,
+                                            board,
+                                            (action - 1) % 45 if action else -1,
+                                            rules=env.queue.rules,
+                                            deadline=deadline,
+                                        )
+                                        if action
+                                        else dict(
+                                            win=False, target_correct=False, actual_kill=False
+                                        )
+                                    )
                                     success = details.pop("win")
                                 elif is_bomb_skill(skill):
                                     action = traces[index][0]

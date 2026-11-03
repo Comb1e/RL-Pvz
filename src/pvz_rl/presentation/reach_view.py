@@ -1,4 +1,4 @@
-"""Raw future-cell forecasts and masked factual/snapshot targets."""
+"""Raw end-horizon penetration forecasts and realized/censored targets."""
 
 import numpy as np
 
@@ -48,7 +48,7 @@ def report_reach_maps(metrics, output, save, *, stage="normal"):
         for ax, grid, title in zip(
             pair,
             values,
-            ("Predicted future reach", sample.get("provenance", "Reach target")),
+            ("Predicted end-horizon penetration", sample.get("provenance", "Reach target")),
             strict=True,
         ):
             ax.imshow(grid, vmin=0, vmax=1, cmap=cmap, aspect="auto")
@@ -58,13 +58,13 @@ def report_reach_maps(metrics, output, save, *, stage="normal"):
                 xticklabels=["Home", *range(1, 10)],
                 yticks=range(5),
                 yticklabels=list("ABCDE"),
-                xlabel="Home entry | board cells; grey = unknown",
+                xlabel="Home entry | penetration at least this column; grey = censored",
             )
     name = f"{stage}-reach-maps"
     fig.tight_layout()
     save(fig, output, name)
     return (
-        f"{stage.replace('_', ' ').title()} future reach and home danger: raw predictions / masked targets",
+        f"{stage.replace('_', ' ').title()} threat: raw end-depth CDF / observed targets",
         name + ".png",
     )
 
@@ -111,13 +111,13 @@ def draw_live_reach(surface, frame, rect):
     decision = frame.get("reach_decision") or frame.get("decision") or {}
     valid = decision.get("reach_valid")
     surface.blit(
-        font.render("Predicted future reach", True, (237, 231, 188)), (rect.x + 8, rect.y + 5)
+        font.render("Predicted penetration (end)", True, (237, 231, 188)), (rect.x + 8, rect.y + 5)
     )
     rate = max(1, frame["observation"].tick_rate)
     stamp = (
         f"Decision #{decision['sequence']} @ {decision['tick'] / rate:.2f}s"
         if valid
-        else "Awaiting tile decision"
+        else "Awaiting decision"
     )
     surface.blit(font.render(stamp, True, (184, 205, 186)), (rect.x + 8, rect.y + 23))
     grid = pygame.Rect(rect.x + 20, rect.y + 56, max(10, rect.w - 28), max(10, rect.h - 80))
@@ -145,9 +145,9 @@ def draw_reach(surface, font, decision, x, y, width):
     if not decision or not decision.get("reach_valid"):
         return 0
     kind = (
-        "snapshot constraints"
-        if decision.get("reach_provenance") == 1
-        else "factual future / safe constraints"
+        "observed depth / censored lower bound"
+        if decision.get("reach_provenance") == 3
+        else "historical reach target"
     )
     surface.blit(font.render(f"Reach target: {kind}", True, (224, 231, 216)), (x, y))
     surface.blit(

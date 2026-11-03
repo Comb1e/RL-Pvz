@@ -44,7 +44,7 @@ zombie_states = ["walking", "carrying_pole", "vaulting", "biting", "dead"]
 mower_states = ["ready", "moving", "spent"]
 
 [encoding]
-version = "entity_v1"
+version = "entity_fork_v3"
 max_entities = 256 # RTX 4070 Laptop: lower attention cost than 512; see docs/math/entity-inputs.md.
 count_scale = 75
 wave_scale = 15
@@ -81,7 +81,7 @@ block_value_by_plant = { sunflower = 0.074074074, peashooter = 0.074074074, wall
 [training]
 gamma = 1.0
 discount_clock = "simulation_ticks"
-method = "complete_return_reach_v2"
+method = "nstep_fork_forecast_v3"
 budget_unit = "games"
 until_stage_complete = false # With --stage: stop only when its mastery gate passes.
 total_games = 10000
@@ -101,13 +101,33 @@ torch_threads = 1
 enabled = true # Missing in older checkpoints: retain their original validation workflow.
 cohort_success_threshold = 0.9 # Strictly above; full configured cohorts only (normally 116/128).
 
+[training.forecasts]
+enabled = true
+protocol = "static-fork-threat-effect-v1"
+probe = "conehead" # One reference threat per lane; retain damaged field-phase defenses.
+extra_actions = 4 # Half near the selected branch's Q maximum, half uniformly legal.
+lanes = 256
+vram_mib = 512
+chunk_ticks = 256
+warmup_games = 2048 # Completed main games; auxiliary weight ramps from zero.
+injection_after_games = 4096
+n_step = 5
+injected_n_step = 20
+initial_discount_half_life_steps = 60
+discount_half_life_steps = 600 # Longer horizon after injection; 60 simulated seconds at 10 Hz.
+pretrain_roots = 2048
+pretrain_passes = 4
+shaping_weight = 0.0 # Disabled initially. Do not use network forecasts as rewards.
+shaping_weights = [1.0, 1.0, 1.0, 0.25] # Field depth, breach urgency, loss, probe depth.
+measure_gradient_norms = true # First fitted microbatch per cohort only.
+
 [training.tile_scenarios]
 enabled = true # Automatic preliminary stages; selected normal stages skip them.
 sampling_max_attempts = 100
 
 [training.cherry_bomb]
-home_prediction_weight = 0.1
-reach_prediction_weight = 0.1
+effect_prediction_weight = 0.1
+threat_prediction_weight = 0.1
 # Shared by both bomb stages except temperature and validation mastery; no exploration or search.
 n_envs = 640 # Fastest measured collection time/env with 32 workers and the CUDA oracle.
 probe_interval_games = 10000 # Independent clock for each bomb stage; pending probes retry first.
@@ -127,13 +147,13 @@ oracle_lanes = 2048 # Shrinks to fit VRAM without changing labels.
 oracle_vram_mib = 2048
 
 [training.cherry_bomb_obstacle]
-home_prediction_weight = 0.1
-reach_prediction_weight = 0.1
+effect_prediction_weight = 0.1
+threat_prediction_weight = 0.1
 softmax_temperature = { zero_success = 1, full_success = 1 } # Independent schedule; mastery still requires 100/100.
 
 [training.attacker_pre]
-home_prediction_weight = 0.1
-reach_prediction_weight = 0.1
+effect_prediction_weight = 0.1
+threat_prediction_weight = 0.1
 n_envs = 640 # Lowest measured collection time/env on the RTX 4070 Laptop profile.
 plants = [4, 8] # Total across four non-zombie lanes; at least one in each.
 zombie_count = [1, 2] # Basic zombies, all in the remaining empty lane.
@@ -151,8 +171,8 @@ oracle_lanes = 640 # Independent scratch limits; used only for natural cooldown 
 oracle_vram_mib = 1024
 
 [training.peashooter]
-home_prediction_weight = 0.1
-reach_prediction_weight = 0.1
+effect_prediction_weight = 0.1
+threat_prediction_weight = 0.1
 # Independent cohort/preparation sizing; shared optimizer and fitting passes.
 n_envs = 128
 sky_sun_rate = 1.5 # Divide sky-drop delays by this rate; keep each drop at 25 sun.
@@ -169,8 +189,8 @@ oracle_chunk_ticks = 4096
 
 [training.normal]
 n_envs = 128
-home_prediction_weight = 0.1
-reach_prediction_weight = 0.1 # Masked future cell-reach binary cross-entropy.
+effect_prediction_weight = 0.1
+threat_prediction_weight = 0.1 # Categorical hindsight depth/time and lane loss.
 validation_schedule = "stage_success" # Evaluate normal games only after each stage passes.
 eval_interval_games = 2000 # Periodic game-count diagnostic/fixed checks.
 # Species exploration stays fixed throughout a cohort; tile proposals are greedy.
@@ -211,7 +231,7 @@ ram_gib = 6
 block_rows = 32768
 
 [training.objective]
-protocol = "complete_return_reach_v2"
+protocol = "nstep_fork_forecast_v3"
 accepted_outcome_share = 0.5
 species_consistency_weight = 1.0 # Verified demo objective only; normal Q fitting omits consistency.
 species_consistency_huber_delta = 1.0
@@ -262,7 +282,7 @@ curriculum = true
 hybrid = false
 
 [policy]
-kind = "shared_board_reach_q_v2"
+kind = "shared_fork_forecast_q_v3"
 action_distribution = "sequential_q_unmasked_tiles_v2"
 shared_width = 192
 encoder_blocks = 4

@@ -61,6 +61,7 @@ def measure(cfg, output, *, initial=None, seed=101, seconds=1800, trajectory=Non
     cfg = copy.deepcopy(cfg)
     cfg["training"].pop("peashooter_rules", None)
     cfg.setdefault("diagnostics", {})["reach_tracking"] = False
+    cfg["training"]["forecasts"]["enabled"] = False
     cfg["visualization"].update(enabled=False, live_enabled=False, demos=False, videos=False)
     cfg["training"].update(until_stage_complete=False, total_games=2 * cfg["training"]["n_envs"])
     torch.set_num_threads(cfg["training"]["torch_threads"])

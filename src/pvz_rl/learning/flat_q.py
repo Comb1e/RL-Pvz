@@ -56,7 +56,7 @@ def batch_loss(
     demonstration=False,
 ):
     """One encoder pass; attempted-branch Q calibration and optional factual reach."""
-    from pvz_rl.learning.reach_objective import reach_auxiliary
+    from pvz_rl.learning.forecast_objective import forecast_auxiliary
     from pvz_rl.policy.sequential_q import action_groups
 
     device = policy.device
@@ -84,7 +84,7 @@ def batch_loss(
     with policy.board_context(observations) as memory:
         if len(species_rows):
             # The complete board batch was encoded once, including tile-only routes.
-            species = policy.species_head(memory[0][species_rows, 0])
+            species = policy.action_values(memory, rows=species_rows)
             dense_species = dense_species.index_copy(0, species_rows, species)
             prediction = species.float().gather(1, branches[species_rows, None]).flatten()
             expected = selected_action_targets(
@@ -102,7 +102,9 @@ def batch_loss(
             features = policy.tile_features(
                 observations, branches[tile_rows], rows=tile_rows, memory=memory
             )
-            tables = policy.tile_head(features).squeeze(-1)
+            tables = policy.tile_values(
+                features, null=policy.null_features((memory[0][tile_rows], memory[1][tile_rows]))
+            )
             dense_tiles = dense_tiles.index_copy(0, tile_rows, tables)
             prediction = tables.float().gather(1, positions[tile_rows, None]).flatten()
             expected = selected_action_targets(
@@ -126,12 +128,16 @@ def batch_loss(
     )
     q_loss = (errors * weights[action_groups(actions), accepted.long()]).sum()
     loss = q_loss
+    policy._primary_graph = q_loss
     policy._last_reach_metrics = torch.zeros(10, device=device, dtype=torch.float64)
-    if reach_enabled and features is not None:
-        auxiliary, metrics = reach_auxiliary(
+    if reach_enabled:
+        auxiliary, metrics = forecast_auxiliary(
             policy,
-            features,
-            rows[plan["tiles"]],
+            observations,
+            rows,
+            memory,
+            features=features,
+            feature_rows=plan["tiles"],
             decision_count=reach_decision_count,
         )
         loss = loss + auxiliary

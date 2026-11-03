@@ -22,7 +22,7 @@ ENTITY_FIELDS = (
     "damage",
 )
 ENTITY_WIDTH = len(ENTITY_FIELDS)
-GLOBAL_FIELDS = (
+BOARD_GLOBAL_FIELDS = (
     "sun",
     "elapsed",
     "wave",
@@ -35,8 +35,14 @@ GLOBAL_FIELDS = (
     "projectile_count",
     "mower_count",
 )
+FORK_FIELDS = tuple(
+    f"fork_{row}_{field}"
+    for row in range(5)
+    for field in ("field_depth", "breach_time", "loss", "probe_depth")
+)
+GLOBAL_FIELDS = (*BOARD_GLOBAL_FIELDS, *FORK_FIELDS)
 GLOBAL_WIDTH = len(GLOBAL_FIELDS)
-OBSERVATION_PROTOCOL = "entity_v1"
+OBSERVATION_PROTOCOL = "entity_fork_v3"
 MINIMUM_PADDING = 32
 
 
@@ -134,6 +140,8 @@ class EntityBatch:
         return self.entities, self.entity_mask, self.globals
 
     def to(self, device, *, non_blocking=False):
+        if self.device == torch.device(device):
+            return self
         return EntityBatch(
             *(x.to(device, non_blocking=non_blocking) for x in self.tensors()),
             validated=self.validated,
@@ -183,7 +191,7 @@ def collate_observations(observations, device=None):
             raise ValueError("entity fields must be finite int32 values")
         g = np.asarray(obs["globals"], dtype=np.float32)
         if g.shape != (GLOBAL_WIDTH,) or not np.isfinite(g).all():
-            raise ValueError("globals must contain 18 finite values")
+            raise ValueError(f"globals must contain {GLOBAL_WIDTH} finite values")
         entities[i, : len(raw)] = raw
         valid[i, : len(raw)] = True
         globals_[i] = g
@@ -268,7 +276,7 @@ class ObservationEncoder:
             selection="mowers_plants_zombies_projectiles_v1",
         )
 
-    def encode(self, obs: Observation):
+    def encode(self, obs: Observation, baseline=None):
         rows = []
         unit = self.rules.game["units_per_tile"]
         try:
@@ -375,6 +383,11 @@ class ObservationEncoder:
                 *(
                     len(xs) / self.count_scale
                     for xs in (obs.plants, obs.zombies, obs.projectiles, obs.mowers)
+                ),
+                *(
+                    np.zeros(20, np.float32)
+                    if baseline is None
+                    else np.asarray(baseline).reshape(20)
                 ),
             ],
             dtype=np.float32,

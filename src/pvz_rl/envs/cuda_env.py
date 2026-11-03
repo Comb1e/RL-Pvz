@@ -272,6 +272,10 @@ class CudaVecEnv(VecEnv):
         )
         self.active_tasks, self._tasks = Counter(), {}
         self.enabled_envs = np.ones(count, dtype=bool)
+        self.static_forks = None
+        self._baseline_ready = np.zeros(count, dtype=bool)
+        self._baseline_outcomes = np.zeros((count, 5, 4), np.int64)
+        self._baseline_indices = None
         self._pending_spawns = np.zeros(count, dtype=np.int64)
         self.tile_scenario = "complete"
         self.tile_boards = {}
@@ -295,7 +299,7 @@ class CudaVecEnv(VecEnv):
             # future simulation.  Allocate both portions up front so resume does
             # not fail merely because the checkpoint was saved after firing.
             projectile_capacity=2 * projectile_bound(self.queue.rules),
-            max_step_ticks=self._decision_ticks,
+            max_step_ticks=max(256, self._decision_ticks),
             diagnostic=False,
         )
         self.cp = self.batch.cp
@@ -337,6 +341,7 @@ class CudaVecEnv(VecEnv):
             yield
 
     def reset_indices(self, indices, cases=None, *, tile_seeds=None):
+        self._baseline_ready[:] = False
         started = perf_counter()
         if self.live_view is not None:
             try:
@@ -429,6 +434,61 @@ class CudaVecEnv(VecEnv):
         usable = availability.gather(1, branches[:, None]).squeeze(1)
         return torch.where(usable, branches, 0)
 
+    def fork_service(self):
+        if self.static_forks is None:
+            from pvz_rl.envs.fork_service import ForkService
+
+            settings = dict(self.cfg["training"]["forecasts"])
+            settings["headroom_mib"] = self.cfg["training"]["performance"].get(
+                "collection_vram_headroom_mib", 0
+            )
+            self.static_forks = ForkService(
+                self.batch, settings, sky_sun_rate=self.batch.sky_sun_rate
+            )
+        return self.static_forks
+
+    def prepare_baseline(self, active=None):
+        """One bounded fork chunk, before policy encoding; retries are idempotent."""
+        if not self.cfg["training"].get("forecasts", {}).get("enabled", False):
+            return True
+        from pvz_rl.envs.encoding import BOARD_GLOBAL_FIELDS
+        from pvz_rl.envs.static_fork import reference_tau
+        from pvz_rl.learning.forecast_labels import baseline_features
+
+        active = self.enabled_envs if active is None else np.asarray(active, bool)
+        if self._baseline_indices is None:
+            indices = np.flatnonzero(active & ~self._baseline_ready)
+            if not len(indices):
+                return True
+            service = self.fork_service()
+            service.begin(indices)
+            self._baseline_indices = indices
+        service = self.fork_service()
+        if not service.advance():
+            return False
+        indices = self._baseline_indices
+        values = service.take()
+        self._baseline_outcomes[indices] = values
+        self.features.globals[self.cp.asarray(indices), len(BOARD_GLOBAL_FIELDS) :] = (
+            self.cp.asarray(baseline_features(values, reference_tau(self.batch.rules)))
+        )
+        self._baseline_ready[indices] = True
+        self._baseline_indices = None
+        return True
+
+    def restore_baseline_inputs(self, indices):
+        """Deferred tickets retain their original physical roots and baseline."""
+        from pvz_rl.envs.encoding import BOARD_GLOBAL_FIELDS
+        from pvz_rl.envs.static_fork import reference_tau
+        from pvz_rl.learning.forecast_labels import baseline_features
+
+        indices = np.asarray(indices, np.int64)
+        self.features.globals[self.cp.asarray(indices), len(BOARD_GLOBAL_FIELDS) :] = (
+            self.cp.asarray(
+                baseline_features(self._baseline_outcomes[indices], reference_tau(self.batch.rules))
+            )
+        )
+
     def reset(self):
         for index, seed in enumerate(self._seeds):
             if seed is not None and self.training:
@@ -517,6 +577,7 @@ class CudaVecEnv(VecEnv):
             except Exception as exc:
                 viewer.fail(exc)
             self.profiler.host("presentation", perf_counter() - presentation_started)
+        self._baseline_ready[:] = False
         self._step_active = self.enabled_envs.copy()
         self._device_active = (
             torch.as_tensor(self.enabled_envs, device=actions.device) if active is None else active
@@ -716,6 +777,10 @@ class CudaVecEnv(VecEnv):
             "queue_stage": self.queue.stage,
             "tile_scenario": self.tile_scenario,
             "sky_sun_rate": self.batch.sky_sun_rate,
+            "baseline_ready": self._baseline_ready.copy(),
+            "baseline_outcomes": self._baseline_outcomes.copy(),
+            "baseline_indices": self._baseline_indices,
+            "static_forks": self.static_forks.snapshot() if self.static_forks else None,
             "tile_boards": deepcopy(
                 {
                     i: dict(board, snapshot=dict(board["snapshot"]))
@@ -793,6 +858,18 @@ class CudaVecEnv(VecEnv):
             for key, value in state["attributes"].items():
                 setattr(self, key, deepcopy(value))
             self._reset_seeds()  # Saved per-worker RNG replaces constructor seed requests.
+        self._baseline_ready[:] = state.get("baseline_ready", False)
+        self._baseline_outcomes[:] = state.get("baseline_outcomes", 0)
+        self._baseline_indices = state.get("baseline_indices")
+        if state.get("static_forks") is not None:
+            self.fork_service().restore(state["static_forks"])
+        from pvz_rl.envs.encoding import BOARD_GLOBAL_FIELDS
+        from pvz_rl.envs.static_fork import reference_tau
+        from pvz_rl.learning.forecast_labels import baseline_features
+
+        self.features.globals[:, len(BOARD_GLOBAL_FIELDS) :] = self.cp.asarray(
+            baseline_features(self._baseline_outcomes, reference_tau(self.batch.rules))
+        )
         return self.features.obs_tensor
 
     def task_counts(self):
@@ -892,6 +969,9 @@ class CudaVecEnv(VecEnv):
 
     def close(self):
         self.queue.close()
+        if self.static_forks is not None:
+            self.static_forks.close()
+            self.static_forks = None
         if getattr(self, "lane_preparation", None) is not None:
             self.lane_preparation.close()
             self.lane_preparation = None

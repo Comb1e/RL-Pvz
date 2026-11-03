@@ -133,9 +133,9 @@ def load_torch_snapshot(path):
 
 
 def protocol_for(kind):
-    if kind != "shared_board_reach_q_v2":
+    if kind != "shared_fork_forecast_q_v3":
         raise ValueError(
-            f"Incompatible checkpoint model family: {kind}; entity_v1 requires fresh initialization"
+            f"Incompatible checkpoint model family: {kind}; entity_fork_v3 requires fresh initialization"
         )
     from pvz_rl.learning.exploration import EXPLORATION_PROTOCOL
 
@@ -403,8 +403,8 @@ def _inspect_completed_weights(path, *, weights_only):
 
 
 def model_class(cfg):
-    if cfg["policy"]["kind"] != "shared_board_reach_q_v2":
-        raise ValueError("Retired model; entity_v1 requires fresh initialization")
+    if cfg["policy"]["kind"] != "shared_fork_forecast_q_v3":
+        raise ValueError("Retired model; entity_fork_v3 requires fresh initialization")
     from pvz_rl.learning.sequential_training import CudaSequentialQ
 
     return CudaSequentialQ

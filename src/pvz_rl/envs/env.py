@@ -42,6 +42,23 @@ class EpisodeState(StrEnum):
 class PvZEnv(gym.Env):
     metadata = {"render_modes": ["rgb_array"], "render_fps": 2}
 
+    def _encoded_public(self):
+        baseline = None
+        settings = self.cfg["training"].get("forecasts", {})
+        if settings.get("enabled", False):
+            from pvz_rl.envs.static_fork import StaticFork, reference_tau
+            from pvz_rl.learning.forecast_labels import baseline_features
+
+            key = self.game._tick, self.game._next_id, self.game._sun, self.game._status
+            if getattr(self, "_baseline_key", None) != key:
+                fork = StaticFork(
+                    self.game, probe=settings["probe"], sky_sun_rate=self.sky_sun_rate
+                )
+                self._baseline_value = baseline_features(fork.run(), reference_tau(self.rules))
+                self._baseline_key = key
+            baseline = self._baseline_value
+        return self.encoder.encode(self.public, baseline)
+
     def __init__(
         self,
         cfg: dict | None = None,
@@ -192,7 +209,8 @@ class PvZEnv(gym.Env):
         self.first_attacker_tick = None
         self.episode_reward = 0.0
         self.cutoff_ticks = self.cfg["environment"]["cutoff_seconds"] * self.public.tick_rate
-        encoded = self.encoder.encode(self.public)
+        self._baseline_key = None
+        encoded = self._encoded_public()
         return encoded, {
             "status": self.state.value,
             "entity_truncation": self.encoder.last_truncation,
@@ -268,6 +286,7 @@ class PvZEnv(gym.Env):
         return mask
 
     def step(self, action):
+        self._baseline_key = None
         if self.state != EpisodeState.RUNNING:
             raise RuntimeError("Reset after an episode finishes")
         if not self.action_space.contains(action) or isinstance(action, (bool, np.bool_)):
@@ -451,7 +470,7 @@ class PvZEnv(gym.Env):
                     }
                 )
             info["episode_metrics"] = self.episode_metrics()
-        encoded = self.encoder.encode(self.public)
+        encoded = self._encoded_public()
         info["entity_truncation"] = self.encoder.last_truncation
         return encoded, parts["total"], terminated, truncated, info
 

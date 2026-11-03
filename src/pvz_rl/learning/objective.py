@@ -153,7 +153,7 @@ def residual_sun_wait_penalties(rows, amount):
     }
 
 
-OBJECTIVE_PROTOCOL = "complete_return_reach_v2"
+OBJECTIVE_PROTOCOL = "nstep_fork_forecast_v3"
 # These are the only reward components that train the policy.  The simulator
 # still publishes the older diagnostic fields (combat_value, home_proximity,
 # victory_time, and so on) for reports and replay verification. Cohort-ranked
@@ -172,7 +172,7 @@ def selected_action_targets(returns, routes, minimum_q, invalid_offset):
     """Fit invalid proposals below their responsible head's detached minimum.
 
     Shared by autonomous/demo regression and NumPy prefit diagnostics. Ordinary
-    waits and accepted actions keep their original complete-return targets.
+    waits and accepted actions keep their supplied value targets.
     """
     invalid = (routes == FitRoute.SPECIES_INVALID) | (routes == FitRoute.TILE_INVALID)
     if isinstance(returns, torch.Tensor):

@@ -309,6 +309,7 @@ def main():
     cfg = load_config(args.config)
     cfg["training"].pop("peashooter_rules", None)
     cfg.setdefault("diagnostics", {})["reach_tracking"] = False
+    cfg["training"]["forecasts"]["enabled"] = False
     from pvz_rl.gpu import apply_gpu_profile, select_gpu
 
     device = select_gpu(args.gpu)

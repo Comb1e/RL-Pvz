@@ -27,8 +27,8 @@ _STAGE_PARAMETERS = {
             key: f"training.{key}"
             for key in (
                 "n_envs",
-                "reach_prediction_weight",
-                "home_prediction_weight",
+                "threat_prediction_weight",
+                "effect_prediction_weight",
                 "exploration",
                 "validation_schedule",
                 "eval_interval_games",
@@ -37,8 +37,8 @@ _STAGE_PARAMETERS = {
         "curriculum": "curriculum",
     },
     "cherry_bomb": {
-        "reach_prediction_weight": "training.stage_reach_weights.cherry_bomb",
-        "home_prediction_weight": "training.stage_home_weights.cherry_bomb",
+        "threat_prediction_weight": "training.stage_threat_weights.cherry_bomb",
+        "effect_prediction_weight": "training.stage_effect_weights.cherry_bomb",
         "n_envs": "training.tile_scenarios.cherry_bomb_n_envs",
         "initial_sun": "training.tile_scenarios.bomb_initial_sun",
         "plants": "training.tile_scenarios.bomb_plants",
@@ -70,13 +70,13 @@ _STAGE_PARAMETERS = {
         "validation_success_threshold": "curriculum.cherry_bomb_validation_success_threshold",
     },
     "cherry_bomb_obstacle": {
-        "reach_prediction_weight": "training.stage_reach_weights.cherry_bomb_obstacle",
-        "home_prediction_weight": "training.stage_home_weights.cherry_bomb_obstacle",
+        "threat_prediction_weight": "training.stage_threat_weights.cherry_bomb_obstacle",
+        "effect_prediction_weight": "training.stage_effect_weights.cherry_bomb_obstacle",
         "softmax_temperature": "training.tile_scenarios.obstacle_softmax_temperature",
     },
     "attacker_pre": {
-        "reach_prediction_weight": "training.stage_reach_weights.attacker_pre",
-        "home_prediction_weight": "training.stage_home_weights.attacker_pre",
+        "threat_prediction_weight": "training.stage_threat_weights.attacker_pre",
+        "effect_prediction_weight": "training.stage_effect_weights.attacker_pre",
         **{
             key: f"training.tile_scenarios.attacker.{key}"
             for key in (
@@ -104,8 +104,8 @@ _STAGE_PARAMETERS = {
         "probe_interval_games": "curriculum.attacker_pre_probe_interval_games",
     },
     "peashooter": {
-        "reach_prediction_weight": "training.stage_reach_weights.peashooter",
-        "home_prediction_weight": "training.stage_home_weights.peashooter",
+        "threat_prediction_weight": "training.stage_threat_weights.peashooter",
+        "effect_prediction_weight": "training.stage_effect_weights.peashooter",
         "sky_sun_rate": "training.tile_scenarios.peashooter_sky_sun_rate",
         **{
             key: f"training.peashooter_rules.{key}"
@@ -127,19 +127,19 @@ _STAGE_PARAMETERS = {
 }
 
 
-def reach_prediction_weight(cfg, stage="normal"):
-    """Resolve the stage-specific future-cell loss weight."""
+def threat_prediction_weight(cfg, stage="normal"):
+    """Resolve the stage-specific hindsight threat loss weight."""
     training = cfg["training"]
     if stage in ("cherry_bomb", "cherry_bomb_obstacle", "attacker_pre", "peashooter"):
-        return training.get("stage_reach_weights", {}).get(stage, 0.0)
-    return training.get("reach_prediction_weight", 0.1)
+        return training.get("stage_threat_weights", {}).get(stage, 0.0)
+    return training.get("threat_prediction_weight", 0.1)
 
 
-def home_prediction_weight(cfg, stage="normal"):
+def effect_prediction_weight(cfg, stage="normal"):
     training = cfg["training"]
     if stage in ("cherry_bomb", "cherry_bomb_obstacle", "attacker_pre", "peashooter"):
-        return training.get("stage_home_weights", {}).get(stage, 0.0)
-    return training.get("home_prediction_weight", 0.1)
+        return training.get("stage_effect_weights", {}).get(stage, 0.0)
+    return training.get("effect_prediction_weight", 0.1)
 
 
 def _resolve_training_sections(cfg):
@@ -399,8 +399,8 @@ def load_demo_config(path: str | Path | None = None, *, profile: str = "demo") -
     """Recording verification profile; execution options are supplied separately."""
     cfg = load_config(path, profile=profile)
     if (
-        cfg["encoding"]["version"] != "entity_v1"
-        or cfg["policy"]["kind"] != "shared_board_reach_q_v2"
+        cfg["encoding"]["version"] != "entity_fork_v3"
+        or cfg["policy"]["kind"] != "shared_fork_forecast_q_v3"
     ):
         raise ValueError("Human demonstrations require the stateless two-stage Transformer profile")
     return copy.deepcopy(cfg)
@@ -442,7 +442,7 @@ def validate_config(cfg: dict) -> None:
                 "training.objective contains retired or missing settings, including "
                 "species_consistency_huber_delta"
             )
-        if objective.get("protocol") != "complete_return_reach_v2":
+        if objective.get("protocol") != "nstep_fork_forecast_v3":
             raise ValueError(
                 "Unsupported training objective protocol; fresh initialization is required"
             )
@@ -504,8 +504,8 @@ def validate_config(cfg: dict) -> None:
     if type(weight) not in (int, float) or not math.isfinite(weight) or weight < 0:
         raise ValueError("win_time_weight must be finite and nonnegative")
     current_policy = (
-        cfg.get("encoding", {}).get("version") == "entity_v1"
-        and cfg.get("policy", {}).get("kind") == "shared_board_reach_q_v2"
+        cfg.get("encoding", {}).get("version") == "entity_fork_v3"
+        and cfg.get("policy", {}).get("kind") == "shared_fork_forecast_q_v3"
     )
     if cfg["training"].get("validation_schedule", "periodic") not in (
         "periodic",
@@ -516,7 +516,7 @@ def validate_config(cfg: dict) -> None:
         raise ValueError("simulation.backend must be cpu or cuda")
     if not current_policy:
         raise ValueError(
-            "Retired observation/policy format; entity_v1 requires fresh initialization"
+            "Retired observation/policy format; entity_fork_v3 requires fresh initialization"
         )
     if cfg["reward"].get("version") != "action_global_value_v5":
         raise ValueError(
@@ -671,12 +671,15 @@ def validate_config(cfg: dict) -> None:
     if policy["shared_width"] % policy["attention_heads"]:
         raise ValueError("shared_width must be divisible by attention_heads")
     stages = ("normal", "cherry_bomb", "cherry_bomb_obstacle", "attacker_pre", "peashooter")
-    if set(cfg["training"].get("stage_reach_weights", {})) - set(stages[1:]):
+    if set(cfg["training"].get("stage_threat_weights", {})) - set(stages[1:]):
         raise ValueError("Unknown preliminary reach stage")
-    if set(cfg["training"].get("stage_home_weights", {})) - set(stages[1:]):
+    if set(cfg["training"].get("stage_effect_weights", {})) - set(stages[1:]):
         raise ValueError("Unknown preliminary home stage")
     for stage in stages:
-        for name, resolve in (("reach", reach_prediction_weight), ("home", home_prediction_weight)):
+        for name, resolve in (
+            ("threat", threat_prediction_weight),
+            ("effect", effect_prediction_weight),
+        ):
             weight = resolve(cfg, stage)
             if type(weight) not in (int, float) or not math.isfinite(weight) or weight < 0:
                 raise ValueError(
@@ -1000,9 +1003,44 @@ def validate_config(cfg: dict) -> None:
     if not math.isfinite(visual["final_hold_seconds"]) or visual["final_hold_seconds"] < 0:
         raise ValueError("Visualization final_hold_seconds must be finite and nonnegative")
     env, train = cfg["environment"], cfg["training"]
-    expected_method = "complete_return_reach_v2"
+    expected_method = "nstep_fork_forecast_v3"
     if train.get("method") != expected_method:
-        raise ValueError("Training requires a supported complete-return method and fresh models")
+        raise ValueError(
+            "Training requires a supported n-step fork-forecast method and fresh models"
+        )
+    forecasts = train.get("forecasts", {})
+    if forecasts.get("protocol") != "static-fork-threat-effect-v1":
+        raise ValueError("Training requires fresh static-fork threat/effect settings")
+    if type(forecasts.get("enabled")) is not bool:
+        raise ValueError("training.forecasts.enabled must be boolean")
+    if forecasts.get("probe") not in ("basic", "conehead", "buckethead"):
+        raise ValueError("Static probe must be basic, conehead or buckethead")
+    if forecasts.get("extra_actions") not in (2, 3, 4):
+        raise ValueError("training.forecasts.extra_actions must be 2, 3 or 4")
+    for key in ("lanes", "vram_mib", "chunk_ticks", "n_step", "injected_n_step", "pretrain_passes"):
+        if type(forecasts.get(key)) is not int or forecasts[key] <= 0:
+            raise ValueError(f"training.forecasts.{key} must be a positive integer")
+    for key in ("warmup_games", "injection_after_games", "pretrain_roots"):
+        if type(forecasts.get(key)) is not int or forecasts[key] < 0:
+            raise ValueError(f"training.forecasts.{key} must be a nonnegative integer")
+    for key in ("shaping_weight", "initial_discount_half_life_steps", "discount_half_life_steps"):
+        value = forecasts.get(key)
+        if (
+            type(value) not in (int, float)
+            or not math.isfinite(value)
+            or value < 0
+            or ("half_life" in key and value == 0)
+        ):
+            raise ValueError(f"training.forecasts.{key} is invalid")
+    if type(forecasts.get("measure_gradient_norms")) is not bool:
+        raise ValueError("training.forecasts.measure_gradient_norms must be boolean")
+    weights = forecasts.get("shaping_weights")
+    if (
+        not isinstance(weights, list)
+        or len(weights) != 4
+        or any(type(x) not in (int, float) or not math.isfinite(x) or x < 0 for x in weights)
+    ):
+        raise ValueError("training.forecasts.shaping_weights needs four finite nonnegative values")
     if any(
         k in train
         for k in (

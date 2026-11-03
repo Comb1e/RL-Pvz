@@ -1,4 +1,4 @@
-"""One CUDA trainer: complete games and sequential Q Monte Carlo regression."""
+"""One CUDA trainer: complete cohorts, private forks and frozen n-step targets."""
 
 import io
 import json
@@ -88,6 +88,8 @@ class CudaCohortLifecycle(BaseAlgorithm):
         self.phase = CohortPhase.IDLE
         self.training_games = self._n_updates = 0
         self.optimizer_commits = 0
+        self.forecaster_pretrained = False
+        self._phase_times = {}
         self.cohort_metrics = {}
         self.runtime_state = None
         self._buffer = self._runner = None
@@ -239,21 +241,27 @@ class CudaCohortLifecycle(BaseAlgorithm):
         self._buffer = self._new_buffer()
         self._fit_epoch = 0
         self.cohort_games, self.cohort_start_steps = count, self.num_timesteps
-        self._phase_times = {"collect": 0.0, "finalize_rewards": 0.0, "returns": 0.0, "fit": 0.0}
+        self._phase_times = {
+            "collect": 0.0,
+            "finalize_rewards": 0.0,
+            "returns": 0.0,
+            "fit": 0.0,
+            "td_targets": 0.0,
+        }
         self._device_seconds = 0.0
         self._simulation_ticks = 0
         self._planting_samples = 0
         for key in (
-            "reach_loss",
-            "home_loss",
-            "reach_brier",
-            "home_brier",
-            "reach_accuracy",
-            "home_accuracy",
-            "reach_labeled_cells",
-            "home_labeled_lanes",
-            "home_eligible_decisions",
-            "reach_eligible_decisions",
+            "threat_loss",
+            "effect_loss",
+            "threat_depth_brier",
+            "effect_brier",
+            "threat_depth_accuracy",
+            "effect_accuracy",
+            "threat_exact_depths",
+            "effect_labeled_terms",
+            "effect_eligible_decisions",
+            "threat_eligible_decisions",
             "primary_loss",
             "total_loss",
             "peashooter_cross_entropy_loss",
@@ -327,6 +335,10 @@ class CudaCohortLifecycle(BaseAlgorithm):
             "scenario_preparation": self.env.queue.preparation_metrics,
             "fit_seconds": self._phase_times["fit"],
             "returns_seconds": self._phase_times["returns"],
+            "td_target_seconds": self._phase_times.get("td_targets", 0.0),
+            "pretraining": getattr(self, "pretraining_metrics", {}),
+            "seconds_per_completed_env": (elapsed + self.env.last_preparation_seconds)
+            / max(1, self.cohort_games),
             "window_seconds": elapsed,
             "optimization_seconds": self._phase_times["fit"],
             "transitions_per_second": transitions / max(elapsed, 1e-9),
@@ -377,7 +389,7 @@ class CudaCohortLifecycle(BaseAlgorithm):
             self._last_obs = EntityBatch(
                 torch.zeros(self.n_envs, 0, 11, dtype=torch.int32, device=self.device),
                 torch.zeros(self.n_envs, 0, dtype=torch.bool, device=self.device),
-                torch.zeros(self.n_envs, 18, device=self.device),
+                torch.zeros(self.n_envs, len(self.policy.layout.global_fields), device=self.device),
             )
             self._last_episode_starts = np.ones(self.n_envs, dtype=bool)
         total, callback = self._setup_learn(
@@ -390,6 +402,18 @@ class CudaCohortLifecycle(BaseAlgorithm):
             self.tile_skills.active or self.num_timesteps < total or self.phase != CohortPhase.IDLE
         ):
             if self.phase == CohortPhase.IDLE:
+                settings = self.cfg["training"].get("forecasts", {})
+                if (
+                    settings.get("enabled", False)
+                    and settings.get("pretrain_roots", 0)
+                    and not self.forecaster_pretrained
+                ):
+                    from pvz_rl.learning.forecast_pretraining import ForecastPretraining
+
+                    self._ensure_teacher()
+                    self._pretrainer = ForecastPretraining(self)
+                    self._phase(CohortPhase.PRETRAIN, callback)
+                    continue
                 from pvz_rl.learning.budget import budget_target, progress_value, uses_games
                 from pvz_rl.learning.curriculum import pre_stage
 
@@ -414,7 +438,18 @@ class CudaCohortLifecycle(BaseAlgorithm):
             start = perf_counter()
             try:
                 with atomic_transition():
-                    if phase == CohortPhase.COLLECT:
+                    if phase == CohortPhase.PRETRAIN:
+                        if hasattr(callback, "check_deadline"):
+                            callback.check_deadline()
+                        if self._pretrainer.advance():
+                            self.pretraining_metrics = dict(self._pretrainer.metrics)
+                            self._pretrainer.close()
+                            self._pretrainer = None
+                            self.forecaster_pretrained = True
+                            self._phase(CohortPhase.IDLE, callback)
+                        if hasattr(callback, "log_progress"):
+                            callback.log_progress()
+                    elif phase == CohortPhase.COLLECT:
                         self._collect_step(callback)
                     elif phase == CohortPhase.FINALIZE_REWARDS:
                         self._finalize_rewards(callback)
@@ -434,14 +469,26 @@ class CudaCohortLifecycle(BaseAlgorithm):
                                     "ranking_objective", "top1_hinge_v1"
                                 )
                             )
-                        for name, values in self.prefit_errors.items():
-                            self.logger.record("train/action_count_" + name, values["count"])
-                            self.logger.record("train/value_target_error_" + name, values["mse"])
-                            self.logger.record(
-                                "train/placement_gap_" + name, values["placement_gap"]
-                            )
-                        self._phase(CohortPhase.FIT, callback)
-                        self._prefetch_cohort(callback)
+                        if not self.tile_skills.active and self.cfg["training"].get(
+                            "forecasts", {}
+                        ).get("enabled", False):
+                            from pvz_rl.learning.td_targets import TDTargetBuilder
+
+                            self._td_builder = TDTargetBuilder(self)
+                            self._phase(CohortPhase.TD_TARGETS, callback)
+                        else:
+                            self._log_prefit_errors()
+                            self._phase(CohortPhase.FIT, callback)
+                            self._prefetch_cohort(callback)
+                    elif phase == CohortPhase.TD_TARGETS:
+                        if hasattr(callback, "check_deadline"):
+                            callback.check_deadline()
+                        if self._td_builder.advance():
+                            self.prefit_errors = self._td_builder.diagnostics()
+                            self._log_prefit_errors()
+                            self._td_builder = None
+                            self._phase(CohortPhase.FIT, callback)
+                            self._prefetch_cohort(callback)
                     elif phase == CohortPhase.FIT:
                         self._fit_step(callback)
                     elif phase == CohortPhase.SYNCHRONIZE:
@@ -451,6 +498,12 @@ class CudaCohortLifecycle(BaseAlgorithm):
                     self._phase_times[phase.value] += perf_counter() - start
         callback.on_training_end()
         return self
+
+    def _log_prefit_errors(self):
+        for name, values in self.prefit_errors.items():
+            self.logger.record("train/action_count_" + name, values["count"])
+            self.logger.record("train/value_target_error_" + name, values["mse"])
+            self.logger.record("train/placement_gap_" + name, values["placement_gap"])
 
     def _restore_runtime(self):
         state = self.runtime_state
@@ -462,7 +515,7 @@ class CudaCohortLifecycle(BaseAlgorithm):
         with ZipFile(self._checkpoint_source) as archive:
             self.env.action_journal.restore_archive_safe(archive)
         self.resumed_cohort = True
-        if self.phase == CohortPhase.IDLE:
+        if self.phase in (CohortPhase.IDLE, CohortPhase.PRETRAIN):
             self._restore_rng(state)
             self.runtime_state = None
             return
@@ -488,6 +541,22 @@ class CudaCohortLifecycle(BaseAlgorithm):
         path = Path(path)
         if not path.suffix:
             path = path.with_suffix(".zip")
+        if self.runtime_state is not None and hasattr(self, "_checkpoint_source"):
+            # No new work may commit until recovery finishes. In particular, a
+            # resource/validation failure while restoring must not replace the
+            # saved pending query with half-initialized in-memory owners.
+            source = Path(self._checkpoint_source)
+            if source.resolve() == path.resolve():
+                return
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with tempfile.NamedTemporaryFile(dir=path.parent, suffix=".zip", delete=False) as file:
+                temporary = Path(file.name)
+            try:
+                shutil.copyfile(source, temporary)
+                temporary.replace(path)
+            finally:
+                temporary.unlink(missing_ok=True)
+            return
         runtime = self.runtime_state or {
             "environment": self.env.snapshot_training()
             if self.env is not None and self.env._tasks
@@ -536,17 +605,20 @@ class CudaCohortLifecycle(BaseAlgorithm):
                 archive.writestr(
                     "run.json",
                     json.dumps(
-                        getattr(
-                            self,
-                            "research_metadata",
-                            {
-                                "config": self.cfg,
-                                "condition": "masked",
-                                "family": "preset",
-                                "learner_seed": self.seed,
-                                "validation_limit": None,
-                                "exploration_protocol": EXPLORATION_PROTOCOL,
-                            },
+                        dict(
+                            getattr(
+                                self,
+                                "research_metadata",
+                                {
+                                    "config": self.cfg,
+                                    "condition": "masked",
+                                    "family": "preset",
+                                    "learner_seed": self.seed,
+                                    "validation_limit": None,
+                                    "exploration_protocol": EXPLORATION_PROTOCOL,
+                                },
+                            ),
+                            config=self.cfg,
                         )
                     ),
                 )

@@ -62,7 +62,7 @@ __device__ int shot_order(const Shot &a, const Shot &b) {
 extern "C" __global__ void encode_canonical(const I *headers, const I *plants,
     const I *zombies, const I *projectiles, const I *mowers, const I *cooldowns,
     int *records, int *entities, bool *mask, float *globals, double *assets,
-    I *summary, short *reach_facts, I n) {
+    I *summary, short *lane_zombies, I n) {
   I i = blockIdx.x;
   if (i >= n) return;
   Header h = ((Header *)headers)[i];
@@ -75,7 +75,7 @@ extern "C" __global__ void encode_canonical(const I *headers, const I *plants,
       globals[i * GLOBAL_WIDTH + index] = 0;
     if (!threadIdx.x) {
       assets[i] = 0;
-      for (I j = 0; j < 15; j++) reach_facts[i * 15 + j] = 0;
+      for (I j = 0; j < 5; j++) lane_zombies[i * 5 + j] = 0;
       for (I index = 0; index < 4; index++) summary[i * 4 + index] = 0;
     }
     return;
@@ -90,21 +90,9 @@ extern "C" __global__ void encode_canonical(const I *headers, const I *plants,
   I kept = lo(staged_count + h.nq, ENTITY_LIMIT);
   if (!threadIdx.x) {
     // Complete public roster, before encoding truncation. No schedules enter inputs.
-    I occupied[5] = {0}, present[5] = {0}, rightmost[5] = {-1, -1, -1, -1, -1};
-    for (I j = 0; j < h.nz; j++) if (!z[j].headless) {
-      I row = z[j].row, col = z[j].x < 0 ? -1 : z[j].x / G_units_per_tile;
-      present[row] = 1;
-      rightmost[row] = hi(rightmost[row], col);
-      if (col >= 0 && col < 9) occupied[row] |= 1 << col;
-    }
-    for (I row = 0; row < 5; row++) {
-      I safe = 0;
-      if (h.spawn_index == h.total_spawns)
-        for (I col = 0; col < 9; col++) if (col > rightmost[row]) safe |= 1 << col;
-      reach_facts[i * 15 + row * 3] = occupied[row];
-      reach_facts[i * 15 + row * 3 + 1] = safe;
-      reach_facts[i * 15 + row * 3 + 2] = h.spawn_index == h.total_spawns && !present[row];
-    }
+    I counts[5] = {0};
+    for (I j = 0; j < h.nz; j++) if (!z[j].headless) counts[z[j].row]++;
+    for (I row = 0; row < 5; row++) lane_zombies[i * 5 + row] = counts[row];
     float *g = globals + i * GLOBAL_WIDTH;
     g[O_sun] = (double)h.sun / COST_SCALE;
     g[O_elapsed] = (double)h.tick / G_tick_rate / CUTOFF_SECONDS;

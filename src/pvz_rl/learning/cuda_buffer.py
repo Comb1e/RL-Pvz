@@ -29,10 +29,11 @@ from pvz_rl.learning.objective import (
 from pvz_rl.learning.source_actions import AppendReceipt, SourceActionRef
 from pvz_rl.monitoring.moments import RunningMoments
 
-TRAJECTORY_PROTOCOL = "pvz-rl/future-cell-home-trajectory-v2"
+TRAJECTORY_PROTOCOL = "pvz-rl/fork-threat-effect-trajectory-v3"
 
 
 def trajectory_dtype(cfg=None):
+    ticks = (cfg or {}).get("environment", {}).get("decision_ticks", 10)
     fields = [
         ("entity_offset", "<u8"),
         ("entity_count", "<u4"),
@@ -65,11 +66,22 @@ def trajectory_dtype(cfg=None):
         ("tile_coin", "?"),
         ("reach_prediction", "<f2", (5, 9)),
         ("reach_valid", "?"),
-        ("reach_facts", "<i2", (5, 3)),
+        ("lane_zombies", "<u2", 5),
         ("reach_labels", "i1", (5, 9)),
         ("home_labels", "i1", 5),
         ("home_prediction", "<f2", 5),
         ("reach_provenance", "u1"),
+        ("forecast_trace", "u1", (ticks + 1, 5)),
+        ("forecast_breach", "<i8", 5),
+        ("forecast_contacts", "<i8", 5),
+        ("threat_depth", "i1", (5, 3)),
+        ("threat_censored", "?", (5, 3)),
+        ("threat_time", "i1", 5),
+        ("threat_loss", "i1", 5),
+        ("effect_actions", "<u2", 5),
+        ("effect_valid", "?", 5),
+        ("effect_labels", "i1", (5, 5, 4)),
+        ("baseline_outcomes", "<i8", (5, 4)),
         ("target", "<f4"),
         ("accepted", "?"),
         ("route", "u1"),
@@ -1084,10 +1096,14 @@ class CompleteGameBuffer:
                     or not np.isfinite(rows["reach_prediction"]).all()
                     or np.any((rows["home_labels"] < -1) | (rows["home_labels"] > 1))
                     or not np.isfinite(rows["home_prediction"]).all()
-                    or np.any((rows["reach_facts"] < 0) | (rows["reach_facts"] > 511))
-                    or np.any(rows["reach_facts"][:, :, 2] > 1)
-                    or np.any(rows["reach_facts"][:, :, 0] & rows["reach_facts"][:, :, 1])
-                    or np.any(rows["reach_provenance"] > 2)
+                    or np.any(rows["reach_provenance"] > 3)
+                    or np.any(rows["forecast_trace"] > 10)
+                    or np.any((rows["threat_depth"] < -1) | (rows["threat_depth"] > 10))
+                    or np.any((rows["threat_time"] < -1) | (rows["threat_time"] > 5))
+                    or np.any((rows["threat_loss"] < -1) | (rows["threat_loss"] > 1))
+                    or np.any(rows["effect_actions"] >= A.size)
+                    or np.any(rows["effect_labels"] < 0)
+                    or np.any(rows["effect_labels"] >= np.array([21, 11, 3, 21]))
                 ):
                     raise ValueError("Invalid reach labels or predictions in trajectory")
                 if np.any(rows["action"] >= A.size) or np.any(rows["executed_action"] >= A.size):

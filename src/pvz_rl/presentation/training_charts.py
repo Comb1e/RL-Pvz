@@ -233,25 +233,49 @@ def report_charts(segments, cfg, output, save):
             for key, title, get in fitting
         ]
         if any(
-            value(row, "optimization.reach_loss") is not None for _, rows in records for row in rows
+            value(row, "optimization.threat_loss") is not None
+            for _, rows in records
+            for row in rows
         ):
             reach_fields = fields(
                 [
-                    ("optimization.reach_loss", "Future-cell binary cross-entropy"),
-                    ("optimization.home_loss", "Home-danger binary cross-entropy"),
-                    ("optimization.reach_brier", "Future-cell Brier score"),
-                    ("optimization.home_brier", "Home-danger Brier score"),
-                    ("optimization.reach_accuracy", "Labeled-cell accuracy"),
-                    ("optimization.home_accuracy", "Labeled-home accuracy"),
-                    ("optimization.reach_labeled_cells", "Labeled cells"),
-                    ("optimization.home_labeled_lanes", "Labeled home lanes"),
-                    ("optimization.reach_eligible_decisions", "Cell-supervised decisions"),
-                    ("optimization.home_eligible_decisions", "Home-supervised decisions"),
-                    ("reach_tracking.observed_cells", "Factual future / safe cell targets"),
-                    ("reach_tracking.snapshot_cells", "Snapshot-only cell targets"),
-                    ("reach_tracking.unknown_cells", "Unknown cell targets"),
-                    ("reach_tracking.home_targets", "Known home targets"),
-                    ("reach_tracking.unknown_homes", "Unknown home targets"),
+                    ("optimization.threat_loss", "Threat categorical / censored loss"),
+                    ("optimization.effect_loss", "Signed-effect categorical loss"),
+                    ("optimization.threat_depth_brier", "Exact depth Brier score"),
+                    ("optimization.effect_brier", "Effect Brier score"),
+                    ("optimization.threat_depth_accuracy", "Exact depth accuracy"),
+                    ("optimization.effect_accuracy", "Effect class accuracy"),
+                    ("optimization.changed_effect_accuracy", "Nonzero-effect accuracy"),
+                    ("optimization.threat_time_brier", "Breach-time Brier score"),
+                    ("optimization.threat_loss_brier", "Lane-loss Brier score"),
+                    ("forecast_calibration.depth.classwise_ece", "Depth class calibration error"),
+                    (
+                        "forecast_calibration.breach_time.classwise_ece",
+                        "Breach-time calibration error",
+                    ),
+                    ("forecast_calibration.loss.classwise_ece", "Lane-loss calibration error"),
+                    ("forecast_calibration.effect.classwise_ece", "Effect class calibration error"),
+                    ("reach_tracking.exact_depths", "Exact horizon targets"),
+                    ("reach_tracking.censored_depths", "Censored horizon targets"),
+                    (
+                        "reach_tracking.defense_lead_time_to_lane_bite_seconds",
+                        "Defensive placement to next lane bite (seconds)",
+                    ),
+                    (
+                        "reach_tracking.defense_empty_lane_fraction",
+                        "Defenses placed in empty lanes",
+                    ),
+                    ("static_forks.forks", "Completed isolated forks"),
+                    ("static_forks.ticks", "Fork simulation ticks"),
+                    ("static_forks.seconds", "Fork wall time (seconds)"),
+                    (
+                        "forecast_gradient_ratios.threat_to_primary",
+                        "Threat / primary trunk gradient",
+                    ),
+                    (
+                        "forecast_gradient_ratios.effect_to_primary",
+                        "Effect / primary trunk gradient",
+                    ),
                     ("reach_tracking.tracking_seconds", "Tracking and preparation (seconds)"),
                     ("reach_tracking.storage_bytes", "Private reach storage (bytes)"),
                     ("reach_tracking.continuation_seconds", "Private continuation (seconds)"),
@@ -271,9 +295,9 @@ def report_charts(segments, cfg, output, save):
                 ]
             add(
                 "reach",
-                "future reach and home danger",
+                "threat and causal effects",
                 reach_fields,
-                ("optimization.reach_accuracy", "optimization.home_accuracy"),
+                ("optimization.threat_depth_accuracy", "optimization.effect_accuracy"),
             )
         rule_fields = fields(
             [

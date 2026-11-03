@@ -10,9 +10,9 @@ from pvz_rl.policy.sequential_q import ACTION_DISTRIBUTION
 from pvz_rl.provenance import weight_engine_config
 
 TRAINING_CONDITIONS = ("masked",)
-CURRENT_OBJECTIVE = "complete_return_reach_v2"
+CURRENT_OBJECTIVE = "nstep_fork_forecast_v3"
 CURRENT_REWARD = "action_global_value_v5"
-FIT_SCHEDULE_PROTOCOL = "joint_shared_reach_cohorts_v1"
+FIT_SCHEDULE_PROTOCOL = "joint_nstep_fork_forecast_cohorts_v1"
 
 
 @dataclass(frozen=True)
@@ -45,8 +45,8 @@ def current_model_config(cfg):
         identity
         in {
             (
-                "shared_board_reach_q_v2",
-                "entity_v1",
+                "shared_fork_forecast_q_v3",
+                "entity_fork_v3",
                 CURRENT_OBJECTIVE,
                 CURRENT_OBJECTIVE,
             ),
@@ -66,7 +66,7 @@ def inference_config(cfg):
     """Validate this architecture before adapting execution-only engine metadata."""
     if not current_model_config(cfg):
         raise ValueError(
-            "Incompatible old model. Start the shared board encoder fresh; no weight migration is supported."
+            "Incompatible old model. Start the fork/threat/effect architecture fresh; no weight migration is supported."
         )
     return weight_engine_config(cfg)
 
@@ -80,7 +80,7 @@ def require_supported_policy(cfg, condition="masked"):
         or not current_model_config(cfg)
     ):
         raise ValueError(
-            "Retired policy or scheduler. Use the shared board encoder and conditional decoder, entity_v1, "
+            "Retired policy or scheduler. Use the fork/threat/effect shared encoder and conditional decoder, entity_fork_v3, "
             "action_global_value_v5 and complete-game collection. "
             "Start fresh with the bundled train profile."
         )
@@ -161,6 +161,7 @@ def resume_protocol(cfg, condition):
     # This trigger changes only at a collection boundary; probability schedules
     # and every other learning setting remain part of strict resume identity.
     result["training"]["exploration"].pop("plant_wait_check_seconds", None)
+    result["training"].get("forecasts", {}).pop("injection_active", None)
     # Only the Cherry probe interval may refresh; pending probes still run
     # against their saved weights before any further fitting.
     result["curriculum"].pop("cherry_bomb_probe_interval_games", None)
