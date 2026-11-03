@@ -75,6 +75,12 @@ real actions or consume the real RNG. Baselines are required during inference an
 validation too. This work can be substantial; resource limits bound resident
 scratch lanes, not the simulated duration of a fork.
 
+Fork execution reuses exact field-continuation checkpoints across Waits and
+rejections, rebasing breach times and checking the full physical state. Cache
+misses run fresh forks. Wait/rejected decisions still receive hypothetical action
+examples. Tune `fork_*` execution settings under `training.performance`; cache
+storage shares the existing fork VRAM cap. The encoder always sees the current board.
+
 Threat targets summarize realized penetration at 2τ, 9τ and episode end, breach
 time and per-lane loss. τ is the reference Basic-zombie tile-crossing time,
 including its gait. Loss and

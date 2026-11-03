@@ -4,6 +4,13 @@ import copy
 
 ENCODER_SETTINGS = ("encoder_microbatch", "encoder_token_budget", "attention_query_chunk")
 PERFORMANCE_SETTINGS = (
+    "fork_packed",
+    "fork_threads",
+    "fork_suffix_cache",
+    "fork_cache_steps",
+    "fork_cache_zombies",
+    "fork_cache_projectiles",
+    "fork_cache_vram_mib",
     "reach_chunk_ticks",
     "fit_precision",
     "prefetch",

@@ -50,6 +50,12 @@ class ForecastPretraining:
             self.source,
             dict(
                 self.settings,
+                **{
+                    k: v
+                    for k, v in self.cfg["training"]["performance"].items()
+                    if k.startswith("fork_") and k != "fork_suffix_cache"
+                },
+                fork_suffix_cache=False,  # Each private pretraining board is queried once.
                 headroom_mib=self.cfg["training"]["performance"].get(
                     "collection_vram_headroom_mib", 0
                 ),

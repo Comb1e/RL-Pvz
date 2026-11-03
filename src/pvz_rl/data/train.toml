@@ -106,9 +106,9 @@ enabled = true
 protocol = "static-fork-threat-effect-v1"
 probe = "conehead" # One reference threat per lane; retain damaged field-phase defenses.
 extra_actions = 4 # Half near the selected branch's Q maximum, half uniformly legal.
-lanes = 256
-vram_mib = 512
-chunk_ticks = 256
+lanes = 1024 # Upper bound; allocate no more than the current cohort can request.
+vram_mib = 1536 # Shared by physical scratch, job storage and the disposable cache.
+chunk_ticks = 1024
 warmup_games = 2048 # Completed main games; auxiliary weight ramps from zero.
 injection_after_games = 4096
 n_step = 5
@@ -243,6 +243,13 @@ demo_rank_loss_weight = 0.10
 demo_rank_margin = 0.05
 
 [training.performance]
+fork_packed = false # Packed layouts were slower in the seeded 128-env screen.
+fork_threads = 32
+fork_suffix_cache = true # Reuse only exactly matching future physical checkpoints.
+fork_cache_steps = 8
+fork_cache_zombies = 128 # Larger live rosters safely miss the disposable cache.
+fork_cache_projectiles = 256
+fork_cache_vram_mib = 128 # Included in training.forecasts.vram_mib, not additional VRAM.
 reach_chunk_ticks = 256 # Bounded Wait-only continuation; no additional policy calls.
 compile_collection = true
 compile_fitting = true

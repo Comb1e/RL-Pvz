@@ -1062,6 +1062,18 @@ def validate_config(cfg: dict) -> None:
         if type(storage.get(key)) is not int or storage[key] < 1:
             raise ValueError(f"training.storage.{key} must be a positive integer")
     performance = train.get("performance", {})
+    for key in ("fork_packed", "fork_suffix_cache"):
+        if type(performance.get(key, True)) is not bool:
+            raise ValueError(f"training.performance.{key} must be boolean")
+    threads = performance.get("fork_threads", 32)
+    if type(threads) is not int or threads not in (32, 64, 128, 256):
+        raise ValueError("training.performance.fork_threads must be 32, 64, 128 or 256")
+    for key, default in (("fork_cache_steps", 8), ("fork_cache_vram_mib", 128)):
+        if type(performance.get(key, default)) is not int or performance.get(key, default) < 0:
+            raise ValueError(f"training.performance.{key} must be a nonnegative integer")
+    for key, default in (("fork_cache_zombies", 128), ("fork_cache_projectiles", 256)):
+        if type(performance.get(key, default)) is not int or performance.get(key, default) < 1:
+            raise ValueError(f"training.performance.{key} must be a positive integer")
     if "compile_kernels" in performance:
         raise ValueError("compile_kernels was replaced by compile_collection and compile_fitting")
     for key in ("compile_collection", "compile_fitting", "telemetry"):
@@ -1101,6 +1113,13 @@ def validate_config(cfg: dict) -> None:
         if type(value) is not int or value < 1:
             raise ValueError(f"training.performance.{key} must be a positive integer")
     if set(performance) - {
+        "fork_packed",
+        "fork_threads",
+        "fork_suffix_cache",
+        "fork_cache_steps",
+        "fork_cache_vram_mib",
+        "fork_cache_zombies",
+        "fork_cache_projectiles",
         "reach_chunk_ticks",
         "compile_collection",
         "compile_fitting",

@@ -342,6 +342,8 @@ class CudaVecEnv(VecEnv):
 
     def reset_indices(self, indices, cases=None, *, tile_seeds=None):
         self._baseline_ready[:] = False
+        if self.static_forks is not None:
+            self.static_forks.invalidate(indices)
         started = perf_counter()
         if self.live_view is not None:
             try:
@@ -439,6 +441,19 @@ class CudaVecEnv(VecEnv):
             from pvz_rl.envs.fork_service import ForkService
 
             settings = dict(self.cfg["training"]["forecasts"])
+            settings.update(
+                {
+                    k: v
+                    for k, v in self.cfg["training"]["performance"].items()
+                    if k.startswith("fork_")
+                }
+            )
+            settings["fork_wait_ticks"] = self._decision_ticks
+            settings["fork_max_jobs"] = max(1, int(self.enabled_envs.sum())) * (
+                5 if self.training else 1
+            )
+            if is_placement_skill(self.tile_scenario):
+                settings["fork_suffix_cache"] = False  # Only one query per board.
             settings["headroom_mib"] = self.cfg["training"]["performance"].get(
                 "collection_vram_headroom_mib", 0
             )
@@ -590,6 +605,11 @@ class CudaVecEnv(VecEnv):
             publish=False,
             observation_active=self.cp.asarray(self.enabled_envs),
         )
+        if self.static_forks is not None:
+            self.static_forks.invalidate(
+                actions=self.cp.from_dlpack(actions.detach().contiguous()),
+                active=self.cp.from_dlpack(self._device_active),
+            )
         self._device_active = torch.from_dlpack(self.features.enabled)
         h = self.header_tensor
         self.proposed_actions.copy_(actions)
