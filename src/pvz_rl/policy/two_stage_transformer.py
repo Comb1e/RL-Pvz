@@ -6,11 +6,13 @@ import torch
 from pvz_game import Rules
 from torch import nn
 
-from pvz_rl.config import forecast_forks_enabled, forecast_version
+from pvz_rl.config import absolute_outcomes, forecast_forks_enabled, forecast_version
 from pvz_rl.envs.actions import ActionSchema as A
 from pvz_rl.envs.actions import dig_branch_available
 from pvz_rl.envs.encoding import collate_observations
 from pvz_rl.learning.forecast_labels import (
+    ABSOLUTE_SIZES,
+    EFFECT_SIZES,
     EFFECT_WIDTH,
     THREAT_WIDTH,
     effect_forecast,
@@ -37,6 +39,10 @@ class TwoStageTransformerPolicy(nn.Module):
         from pvz_rl.envs.encoding import ObservationEncoder
 
         self.cfg = cfg
+        self.protocol = cfg["policy"]["kind"]
+        self.absolute_outcomes = absolute_outcomes(cfg)
+        self.effect_width = EFFECT_WIDTH
+        self.effect_sizes = ABSOLUTE_SIZES if self.absolute_outcomes else EFFECT_SIZES
         self.layout = ObservationEncoder(cfg, Rules())
         self.fit_precision = "bf16_master"
         spec = cfg["policy"]
@@ -47,7 +53,7 @@ class TwoStageTransformerPolicy(nn.Module):
         self.tile_head = nn.Sequential(nn.Linear(width + 20, 128), nn.ReLU(), nn.Linear(128, 1))
         self.threat_head = nn.Linear(width, 5 * THREAT_WIDTH)
         self.effect_head = nn.Sequential(
-            nn.Linear(width, width), nn.GELU(), nn.Linear(width, 5 * EFFECT_WIDTH)
+            nn.Linear(width, width), nn.GELU(), nn.Linear(width, 5 * self.effect_width)
         )
         self.null_projection = nn.Linear(width, width)
         self.injection_enabled = cfg["training"].get("forecasts", {}).get("injection_active", False)
@@ -311,7 +317,8 @@ class TwoStageTransformerPolicy(nn.Module):
         )
 
     def effect_values(self, features):
-        return self.effect_head(features).reshape(*features.shape[:-1], 5, EFFECT_WIDTH)
+        """Stable 56-slot carrier; effect_sizes defines each block's valid classes."""
+        return self.effect_head(features).reshape(*features.shape[:-1], 5, self.effect_width)
 
     def null_features(self, memory, branches=None):
         pooled = memory[0][:, 0]
@@ -325,9 +332,14 @@ class TwoStageTransformerPolicy(nn.Module):
             logits = self.effect_values(features)
             if capture:
                 self._last_tile_effects = logits.detach()
-            summaries = effect_summary(logits).detach()
+            summaries = effect_summary(logits, absolute=self.absolute_outcomes).detach()
             if null is not None and self.injection_enabled:
-                summaries = summaries - effect_summary(self.effect_values(null)).detach()[:, None]
+                summaries = (
+                    summaries
+                    - effect_summary(
+                        self.effect_values(null), absolute=self.absolute_outcomes
+                    ).detach()[:, None]
+                )
             if not self.injection_enabled:
                 summaries = torch.zeros_like(summaries)
         else:
@@ -530,6 +542,8 @@ class TwoStageTransformerPolicy(nn.Module):
             logits = logits.index_copy(
                 0, rows, torch.where(selected[:, None, None], chosen, logits[rows])
             )
+        if self.absolute_outcomes:
+            return effect_forecast(logits, absolute=True)
         baseline = (
             observations.globals[:, len(BOARD_GLOBAL_FIELDS) :].reshape(-1, 5, 4).float().clone()
         )

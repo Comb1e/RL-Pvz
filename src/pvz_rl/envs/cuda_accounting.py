@@ -52,6 +52,10 @@ class AccountingCudaBatch(CudaBatch):
         from pvz_rl.envs.reach_tracking import forecast_kernel_source
 
         self.source = forecast_kernel_source(self.source, self.max_step_ticks)
+        from pvz_rl.envs.wait_capture import wait_capture_source
+
+        self.source = wait_capture_source(self.source)
+        self.wait_capture = None
         self.reach_enabled = False
         self.reach_trace = self.cp.zeros(1, self.cp.int64)
         self.reach_error = self.cp.zeros(self.n, self.cp.int64)
@@ -125,6 +129,8 @@ class AccountingCudaBatch(CudaBatch):
         return view
 
     def _step_with_accounting(self, grid, block, args):
+        from pvz_rl.envs.wait_capture import capture_arguments
+
         self._step_kernel(
             grid,
             block,
@@ -136,5 +142,6 @@ class AccountingCudaBatch(CudaBatch):
                 self.reach_trace,
                 self.reach_error,
                 self.cp.int64(self.reach_enabled),
+                *capture_arguments(self),
             ),
         )

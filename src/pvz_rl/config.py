@@ -128,6 +128,12 @@ _STAGE_PARAMETERS = {
 
 for _stage, _fields in _STAGE_PARAMETERS.items():
     _fields["forecast_mode"] = f"training.stage_forecast_modes.{_stage}"
+    _fields["extra_actions"] = f"training.stage_extra_actions.{_stage}"
+
+
+def absolute_outcomes(cfg):
+    """Public-only model with absolute action outcomes; saved v3 stays unchanged."""
+    return cfg["encoding"]["version"] == "entity_public_v4"
 
 
 def forecast_version(cfg):
@@ -166,6 +172,15 @@ def effect_prediction_weight(cfg, stage="normal"):
     if stage in ("cherry_bomb", "cherry_bomb_obstacle", "attacker_pre", "peashooter"):
         return training.get("stage_effect_weights", {}).get(stage, 0.0)
     return training.get("effect_prediction_weight", 0.1)
+
+
+def effect_extra_actions(cfg, stage="normal"):
+    """Stage overrides are collection-only; absent saved overrides retain sampling."""
+    training = cfg["training"]
+    stage = stage if stage in _STAGE_PARAMETERS else "normal"
+    return training.get("stage_extra_actions", {}).get(
+        stage, training["forecasts"]["extra_actions"]
+    )
 
 
 def _resolve_training_sections(cfg):
@@ -424,10 +439,10 @@ def load_config(path: str | Path | None = None, *, profile: str = "train") -> di
 def load_demo_config(path: str | Path | None = None, *, profile: str = "demo") -> dict:
     """Recording verification profile; execution options are supplied separately."""
     cfg = load_config(path, profile=profile)
-    if (
-        cfg["encoding"]["version"] != "entity_fork_v3"
-        or cfg["policy"]["kind"] != "shared_fork_forecast_q_v3"
-    ):
+    if (cfg["encoding"]["version"], cfg["policy"]["kind"]) not in {
+        ("entity_fork_v3", "shared_fork_forecast_q_v3"),
+        ("entity_public_v4", "shared_public_forecast_q_v4"),
+    }:
         raise ValueError("Human demonstrations require the stateless two-stage Transformer profile")
     return copy.deepcopy(cfg)
 
@@ -530,9 +545,12 @@ def validate_config(cfg: dict) -> None:
     if type(weight) not in (int, float) or not math.isfinite(weight) or weight < 0:
         raise ValueError("win_time_weight must be finite and nonnegative")
     current_policy = (
-        cfg.get("encoding", {}).get("version") == "entity_fork_v3"
-        and cfg.get("policy", {}).get("kind") == "shared_fork_forecast_q_v3"
-    )
+        cfg.get("encoding", {}).get("version"),
+        cfg.get("policy", {}).get("kind"),
+    ) in {
+        ("entity_fork_v3", "shared_fork_forecast_q_v3"),
+        ("entity_public_v4", "shared_public_forecast_q_v4"),
+    }
     if cfg["training"].get("validation_schedule", "periodic") not in (
         "periodic",
         "stage_success",
@@ -541,9 +559,7 @@ def validate_config(cfg: dict) -> None:
     if simulator(cfg) not in ("cpu", "cuda"):
         raise ValueError("simulation.backend must be cpu or cuda")
     if not current_policy:
-        raise ValueError(
-            "Retired observation/policy format; entity_fork_v3 requires fresh initialization"
-        )
+        raise ValueError("Retired observation/policy format; use the bundled public model profile")
     if cfg["reward"].get("version") != "action_global_value_v5":
         raise ValueError(
             "Retired reward format; ranked endgame action/global rewards require fresh training with the bundled train profile"
@@ -1037,7 +1053,7 @@ def validate_config(cfg: dict) -> None:
             "Training requires a supported n-step fork-forecast method and fresh models"
         )
     forecasts = train.get("forecasts", {})
-    if forecast_version(cfg) not in (1, 2):
+    if forecast_version(cfg) not in (1, 2, 3):
         raise ValueError("Unsupported forecast supervision version")
     for stage, mode in train.get("stage_forecast_modes", {}).items():
         if (
@@ -1052,6 +1068,7 @@ def validate_config(cfg: dict) -> None:
     if forecasts.get("effect_objective", "categorical_v1") not in (
         "categorical_v1",
         "change_conditional_v2",
+        "absolute_outcome_v3",
     ):
         raise ValueError("Unsupported effect objective")
     beta = forecasts.get("effect_conditional_weight", 1.0)
@@ -1066,8 +1083,17 @@ def validate_config(cfg: dict) -> None:
     if forecasts.get("extra_actions") not in (2, 3, 4):
         raise ValueError("training.forecasts.extra_actions must be 2, 3 or 4")
     collection = forecasts.get("collection_protocol", "per_decision_v1")
-    if collection not in ("per_decision_v1", "wait_interval_v2"):
+    if collection not in ("per_decision_v1", "wait_interval_v2", "wait_trajectory_v3"):
         raise ValueError("Unsupported forecast collection protocol")
+    absolute_protocols = (
+        collection == "wait_trajectory_v3",
+        forecasts.get("effect_objective") == "absolute_outcome_v3",
+        forecast_version(cfg) == 3,
+    )
+    if any(flag != absolute_outcomes(cfg) for flag in absolute_protocols):
+        raise ValueError(
+            "Public-only inputs require absolute outcomes and Wait trajectory collection"
+        )
     probability = forecasts.get("wait_effect_sample_probability", 1.0)
     if (
         type(probability) not in (int, float)
@@ -1075,8 +1101,13 @@ def validate_config(cfg: dict) -> None:
         or not 0 <= probability <= 1
     ):
         raise ValueError("wait_effect_sample_probability must be between zero and one")
-    if collection == "wait_interval_v2" and forecasts["extra_actions"] != 2:
-        raise ValueError("wait_interval_v2 requires exactly two alternative slots")
+    if collection in ("wait_interval_v2", "wait_trajectory_v3") and forecasts["extra_actions"] != 2:
+        raise ValueError("Wait interval collection requires exactly two alternative slots")
+    for stage, count in train.get("stage_extra_actions", {}).items():
+        if stage not in _STAGE_PARAMETERS or type(count) is not int or count not in (0, 2, 3, 4):
+            raise ValueError("Stage extra_actions must be 0, 2, 3 or 4 for a known training stage")
+        if collection in ("wait_interval_v2", "wait_trajectory_v3") and count not in (0, 2):
+            raise ValueError("Wait interval stage extra_actions must be zero or two")
     for key in ("lanes", "vram_mib", "chunk_ticks", "n_step", "injected_n_step", "pretrain_passes"):
         if type(forecasts.get(key)) is not int or forecasts[key] <= 0:
             raise ValueError(f"training.forecasts.{key} must be a positive integer")

@@ -45,7 +45,7 @@ class ForkExecution:
         self.invalidate_kernel = self.module.get_function("invalidate_fork_cache")
         self.job_ids = cp.full(batch.n, -1, cp.int64)
         self.next_job = cp.zeros(1, cp.int64)
-        self.progress = cp.zeros(11, cp.int64)
+        self.progress = cp.zeros(13, cp.int64)
         self.capacity = 5 * source.n
         self.roots = cp.empty(self.capacity, cp.int64)
         self.actions = cp.empty_like(self.roots)
@@ -132,7 +132,7 @@ class ForkExecution:
 
     def advance(self, *, probe):
         if not self.count:
-            return np.zeros(11, np.int64)
+            return np.zeros(13, np.int64)
         b, source, cp = self.batch, self.source, self.cp
         grid = (
             ((self.workers + self.threads - 1) // self.threads,) if self.packed else (self.workers,)
@@ -204,6 +204,8 @@ class ForkExecution:
         ids, progress, output = state["job_ids"], state["progress"], state["output"]
         if state.get("version") == 1:
             progress = np.pad(progress, (0, 3))
+        if progress.shape == (11,):
+            progress = np.pad(progress, (0, 2))
         live = ids[ids >= 0]
         if (
             not 0 <= n <= self.count
@@ -211,7 +213,7 @@ class ForkExecution:
             or ids.shape != (n,)
             or ids.dtype != np.int64
             or np.any((ids < -1) | (ids >= self.count))
-            or progress.shape != (11,)
+            or progress.shape != (13,)
             or progress.dtype != np.int64
             or np.any(progress < 0)
             or not 0 <= progress[0] <= self.count

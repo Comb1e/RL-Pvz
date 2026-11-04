@@ -9,6 +9,7 @@ import numpy as np
 import torch
 
 from pvz_rl.config import (
+    absolute_outcomes,
     bomb_max_illegal_distance,
     bomb_ranking_margin,
     bomb_softmax_temperature,
@@ -80,7 +81,7 @@ def flat_batches(buffer, decision_budget, spool=None):
 
 
 class CudaSequentialQ(CudaCohortLifecycle):
-    policy_protocol = "shared_fork_forecast_q_v3"
+    policy_protocol = "shared_public_forecast_q_v4"
     optimizer_version = FIT_SCHEDULE_PROTOCOL
 
     @property
@@ -165,7 +166,23 @@ class CudaSequentialQ(CudaCohortLifecycle):
         )
 
     def _prepare_collection(self, callback):
-        if forecast_forks_enabled(self.cfg, self.tile_skills.phase):
+        if absolute_outcomes(self.cfg):
+            self._scheduler.draining = getattr(self, "_pending_effect", None) is not None
+            owner = getattr(self, "_wait_outcomes", None)
+            if owner is not None:
+                started = perf_counter()
+                try:
+                    with atomic_transition(), self.env.device_context():
+                        owner.advance()
+                        if not self.env.enabled_envs.any() and not self._scheduler.pending.any():
+                            if not owner.finalize():
+                                if hasattr(callback, "log_progress"):
+                                    callback.log_progress()
+                                return False
+                finally:
+                    self._phase_times["collect"] += perf_counter() - started
+                    self._stats["wait_outcomes"] = dict(owner.metrics)
+        elif forecast_forks_enabled(self.cfg, self.tile_skills.phase):
             from pvz_rl.learning.effect_collection import finish_effects
 
             if hasattr(callback, "check_deadline"):
@@ -258,6 +275,9 @@ class CudaSequentialQ(CudaCohortLifecycle):
         for name in ("_collection_reach", "_collection_home", "_collection_effect"):
             if hasattr(self, name):
                 delattr(self, name)
+        if getattr(self, "_wait_outcomes", None) is not None:
+            self._wait_outcomes.close()
+            self._wait_outcomes = None
         super()._begin(callback)
         self._stats["phase_memory"] = [boundary, released]
         self._stats["collection_logical_rows"] = 0
@@ -333,6 +353,15 @@ class CudaSequentialQ(CudaCohortLifecycle):
             )
         self._scheduler = CollectionScheduler(self.n_envs, self.device)
         self._pending_effect = None
+        self._wait_outcomes = None
+        if (
+            absolute_outcomes(self.cfg)
+            and self.reach_training
+            and forecast_forks_enabled(self.cfg, self.tile_skills.phase)
+        ):
+            from pvz_rl.learning.wait_outcomes import WaitOutcomes
+
+            self._wait_outcomes = WaitOutcomes(self.env, self._buffer)
         if compilation_requested(self.cfg["training"]["performance"]):
             for encoder in self._teacher.encoders:
                 if encoder.compilation_status == "disabled":
@@ -424,6 +453,12 @@ class CudaSequentialQ(CudaCohortLifecycle):
 
     def _phase(self, phase, callback):
         if phase == CohortPhase.FIT:
+            if getattr(self, "_wait_outcomes", None) is not None:
+                if not self._wait_outcomes.published:
+                    raise RuntimeError("Cannot fit unresolved absolute outcomes")
+                self._stats["wait_outcomes"] = dict(self._wait_outcomes.metrics)
+                self._wait_outcomes.close()
+                self._wait_outcomes = None
             if self.env.static_forks is not None:
                 if self.env.static_forks.request is not None:
                     raise RuntimeError("Cannot fit with an unfinished static fork")
@@ -588,6 +623,7 @@ class CudaSequentialQ(CudaCohortLifecycle):
             executing = issued
             if (
                 forecast_forks_enabled(self.cfg, self.tile_skills.phase)
+                and (not absolute_outcomes(self.cfg) or self.reach_training)
                 and getattr(self, "_pending_effect", None) is None
                 and issued_host.any()
             ):
@@ -595,7 +631,8 @@ class CudaSequentialQ(CudaCohortLifecycle):
 
                 self._pending_effect = begin_effects(self, actions, details, issued_host)
                 self._scheduler.pending |= issued_host
-                return
+                if not absolute_outcomes(self.cfg):
+                    return
             with env.profiler.track("encoding"):
                 counts = torch.where(executing, env.features.summary_tensor[: self.n_envs, 0], 0)
                 offsets = counts.cumsum(0) - counts
@@ -645,6 +682,8 @@ class CudaSequentialQ(CudaCohortLifecycle):
                 self._peashooter_teacher.before(actions, executing, branch_available)
             if self.reach_training:
                 self._reach.before(actions, executing)
+            if getattr(self, "_wait_outcomes", None) is not None:
+                self._wait_outcomes.arm(self._pending_effect)
             env.step_device(actions, active=executing)
             forecast_host = None
             if (
@@ -796,7 +835,8 @@ class CudaSequentialQ(CudaCohortLifecycle):
                 rows["effect_actions"] = pending["actions"]
                 rows["effect_valid"] = pending["valid"]
                 rows["effect_labels"] = pending["labels"]
-                rows["baseline_outcomes"] = env._baseline_outcomes
+                if not absolute_outcomes(self.cfg):
+                    rows["baseline_outcomes"] = env._baseline_outcomes
                 from pvz_rl.learning.effect_collection import promote_executed_probes
 
                 promote_executed_probes(env, pending, active, rows["done"])
@@ -826,6 +866,10 @@ class CudaSequentialQ(CudaCohortLifecycle):
             receipt = self._buffer.append(
                 rows, observations, identities=(env._episode_serial, source_decisions)
             )
+            if getattr(self, "_wait_outcomes", None) is not None:
+                self._wait_outcomes.observe(pending, rows, receipt)
+                if not self._buffer.reserve_staging(staging + self._wait_outcomes.estimated_bytes):
+                    raise MemoryError("Shared RAM budget cannot hold Wait target metadata")
             if self.peashooter_rule_training:
                 self._peashooter_teacher.observe(receipt)
             env.profiler.host("storage", perf_counter() - storage_started)
@@ -1253,7 +1297,9 @@ class CudaSequentialQ(CudaCohortLifecycle):
                     unchanged_effect_accuracy=unchanged_correct / unchanged if unchanged else None,
                     effect_change_precision=tp / (tp + fp) if tp + fp else None,
                     effect_change_recall=tp / (tp + fn) if tp + fn else None,
-                    effect_change_brier=change_brier / effects if effects else None,
+                    effect_change_brier=change_brier / effects
+                    if effects and not absolute_outcomes(self.cfg)
+                    else None,
                     effect_conditional_accuracy=conditional_correct / conditional_count
                     if conditional_count
                     else None,
@@ -1265,6 +1311,11 @@ class CudaSequentialQ(CudaCohortLifecycle):
                 ).items():
                     self.logger.record("train/" + key, value)
                     self._stats[key] = value
+                if absolute_outcomes(self.cfg):
+                    self._stats["outcome_objective"] = "absolute_outcome_v3"
+                    self._stats["outcome_loss"] = effect if effects else None
+                    self._stats["outcome_accuracy"] = effect_correct / effects if effects else None
+                    self._stats["outcome_brier"] = effect_brier / effects if effects else None
                 loss -= self.reach_weight * threat + self.home_weight * effect
                 self._cached_metrics = (loss, self._cached_metrics[1], self._cached_metrics[2])
             self.logger.record("train/primary_loss", loss)
@@ -1764,6 +1815,22 @@ class CudaSequentialQ(CudaCohortLifecycle):
         if extra and extra.get("collection_scheduler") is not None:
             self._scheduler.restore(extra["collection_scheduler"])
         self._pending_effect = extra.get("pending_effect") if extra else None
+        self._wait_outcomes = None
+        if extra and extra.get("wait_outcomes") is not None:
+            from pvz_rl.learning.wait_outcomes import WaitOutcomes
+
+            self._wait_outcomes = WaitOutcomes(self.env, self._buffer, extra["wait_outcomes"])
+        elif (
+            absolute_outcomes(self.cfg)
+            and self.reach_training
+            and forecast_forks_enabled(self.cfg, self.tile_skills.phase)
+            and self.phase == CohortPhase.COLLECT
+        ):
+            if self._buffer.size:
+                raise ValueError("Missing semantic Wait trajectory recovery")
+            from pvz_rl.learning.wait_outcomes import WaitOutcomes
+
+            self._wait_outcomes = WaitOutcomes(self.env, self._buffer)
         if (
             forecast_forks_enabled(self.cfg, self.tile_skills.phase)
             and self.phase == CohortPhase.COLLECT
@@ -1815,6 +1882,9 @@ class CudaSequentialQ(CudaCohortLifecycle):
             if getattr(self, "_td_builder", None)
             else None,
             pending_effect=getattr(self, "_pending_effect", None),
+            wait_outcomes=self._wait_outcomes.snapshot()
+            if getattr(self, "_wait_outcomes", None) is not None
+            else None,
             collection_valid=self._runner.valid.cpu() if getattr(self, "_runner", None) else None,
             collection_reach=getattr(self, "_collection_reach", None),
             collection_home=getattr(self, "_collection_home", None),
@@ -1886,4 +1956,5 @@ class CudaSequentialQ(CudaCohortLifecycle):
             "_pretrainer",
             "_td_builder",
             "_pending_effect",
+            "_wait_outcomes",
         ]

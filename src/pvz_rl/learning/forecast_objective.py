@@ -1,13 +1,14 @@
-"""Shared-forward categorical threat and signed causal-effect supervision."""
+"""Shared-forward threats, absolute outcomes and saved signed-effect supervision."""
 
 import numpy as np
 import torch
 
 from pvz_rl.config import effect_prediction_weight, forecast_forks_enabled, threat_prediction_weight
 from pvz_rl.learning.forecast_labels import (
-    EFFECT_SIZES,
     conditional_effect_loss,
+    effect_blocks,
     effect_loss,
+    outcome_codes,
     threat_eligible,
     threat_loss,
 )
@@ -76,8 +77,21 @@ def _effect_objective(policy, observations, rows, memory, features, feature_rows
     zero = torch.tensor([10, 5, 1, 10], device=device)
     null = policy.null_features(memory)
     null_logits = policy.effect_values(null)
-    null_targets = zero.expand(len(rows), 5, 4)
-    per_root = None if factored else effect_loss(null_logits, null_targets).mean(-1)
+    if policy.absolute_outcomes:
+        from pvz_rl.envs.static_fork import reference_tau
+
+        null_targets = torch.as_tensor(
+            outcome_codes(np.array(rows["baseline_outcomes"]), reference_tau(policy.layout.rules)),
+            device=device,
+            dtype=torch.long,
+        )
+    else:
+        null_targets = zero.expand(len(rows), 5, 4)
+    per_root = (
+        None
+        if factored
+        else effect_loss(null_logits, null_targets, absolute=policy.absolute_outcomes).mean(-1)
+    )
     tokens = torch.ones(len(rows), device=device)
     cache = {}
     if features is not None:
@@ -119,7 +133,11 @@ def _effect_objective(policy, observations, rows, memory, features, feature_rows
         )
         roots = torch.tensor([r for r, *_ in requests], device=device)
         if not factored:
-            per_root = per_root.index_add(0, roots, effect_loss(predictions, targets).mean(-1))
+            per_root = per_root.index_add(
+                0,
+                roots,
+                effect_loss(predictions, targets, absolute=policy.absolute_outcomes).mean(-1),
+            )
         tokens = tokens.index_add(0, roots, tokens.new_ones(len(requests)))
     metric_tokens = [(null_logits, null_targets)]
     if requests:
@@ -180,7 +198,7 @@ def _forecast_metrics(policy, rows, threats, tloss, eloss, metric_tokens, tokens
     effect_count = threats.new_zeros((), dtype=torch.float32)
     effect_correct = threats.new_zeros((), dtype=torch.float32)
     for logits, target in metric_tokens:
-        for term, block in enumerate(logits.float().split(EFFECT_SIZES, -1)):
+        for term, block in enumerate(effect_blocks(logits, absolute=policy.absolute_outcomes)):
             label = target[..., term]
             categorical_histogram(
                 calibration["effect"], block.softmax(-1), label, label >= 0, term=term
@@ -190,6 +208,8 @@ def _forecast_metrics(policy, rows, threats, tloss, eloss, metric_tokens, tokens
             effect_brier += (p - expected).square().sum()
             effect_count += label.numel()
             effect_correct += (block.argmax(-1) == label).sum()
+            if policy.absolute_outcomes:
+                continue
             changed = label != block.shape[-1] // 2
             policy._forecast_score_totals[6] += ((block.argmax(-1) == label) & changed).sum()
             policy._forecast_score_totals[7] += changed.sum()

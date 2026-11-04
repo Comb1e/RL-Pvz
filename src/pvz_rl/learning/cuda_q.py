@@ -103,11 +103,15 @@ class CudaCohortLifecycle(BaseAlgorithm):
         self.policy = self.policy_class(
             self.observation_space, self.action_space, self.lr_schedule, **self.policy_kwargs
         ).to(self.device)
+        self.policy_protocol = self.policy.features_extractor.cfg["policy"]["kind"]
         configure_exploration(self, self.policy.features_extractor.cfg)
 
     @classmethod
     def load(cls, path, *args, **kwargs):
-        if checkpoint_metadata(path)["policy"] != cls.policy_protocol:
+        if checkpoint_metadata(path)["policy"] not in (
+            "shared_fork_forecast_q_v3",
+            "shared_public_forecast_q_v4",
+        ):
             raise ValueError("Incompatible checkpoint model family for this loader")
         model = super().load(path, *args, **kwargs)
         model.phase = CohortPhase(model.phase)
@@ -368,6 +372,9 @@ class CudaCohortLifecycle(BaseAlgorithm):
         if getattr(self, "_peashooter_teacher", None) is not None:
             self._peashooter_teacher.close()
             self._peashooter_teacher = None
+        if getattr(self, "_wait_outcomes", None) is not None:
+            self._wait_outcomes.close()
+            self._wait_outcomes = None
         # Sidecar owners must release their files before the directory owner closes.
         self._buffer.close()
         self._buffer = self._runner = None

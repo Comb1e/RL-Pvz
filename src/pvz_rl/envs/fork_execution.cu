@@ -222,6 +222,7 @@ extern "C" __global__ void run_fork_jobs(
       s.h->enabled = 0; job_ids[i] = -1; fork_add(progress, 1);
       continue;
     }
+    fork_add(progress + (*s.forecast_phase == 0 ? 11 : 12), 1);
     s.advance(); used++;
   }
   fork_add(progress + 1, used);

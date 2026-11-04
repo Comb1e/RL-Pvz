@@ -243,7 +243,11 @@ def _verify_action_order(
             )[0]
         )
         observations.append(observation_json(encoder.encode(before)))
-        if prepare_baselines and cfg["training"]["forecasts"]["enabled"]:
+        if (
+            prepare_baselines
+            and cfg["training"]["forecasts"]["enabled"]
+            and cfg["encoding"]["version"] == "entity_fork_v3"
+        ):
             from pvz_rl.envs.static_fork import StaticFork, reference_tau
             from pvz_rl.learning.forecast_labels import baseline_features
 

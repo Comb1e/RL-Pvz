@@ -40,6 +40,8 @@ class ForkService:
             field_only_rollouts=0,
             sampled_waits=0,
             skipped_waits=0,
+            field_ticks=0,
+            probe_ticks=0,
         )
         torch.cuda.empty_cache()
         free, _ = cp.cuda.runtime.memGetInfo()
@@ -94,7 +96,7 @@ class ForkService:
         )
         if self.metrics["device_bytes"] > budget:
             raise MemoryError("Static fork storage exceeds its VRAM budget; increase vram_mib")
-        self._reported = np.zeros(11, np.int64)
+        self._reported = np.zeros(13, np.int64)
 
     def begin(self, indices, actions=None, *, field_only=None):
         if self.request is not None:
@@ -149,6 +151,8 @@ class ForkService:
                     "baseline_probes",
                     "candidate_probes",
                     "field_only_rollouts",
+                    "field_ticks",
+                    "probe_ticks",
                 ),
                 delta,
                 strict=True,
@@ -224,7 +228,7 @@ class ForkService:
                     raise ValueError("Static-fork publication disagrees with pending progress")
                 self.execution.restore(state["execution"])
                 reported = state["reported"]
-                self._reported[:] = np.pad(reported, (0, 11 - len(reported)))
+                self._reported[:] = np.pad(reported, (0, 13 - len(reported)))
                 self.cursor, self.results = state["cursor"], state["results"]
             else:
                 self._restore_panel(state)
@@ -245,6 +249,8 @@ class ForkService:
             "field_only_rollouts",
             "sampled_waits",
             "skipped_waits",
+            "field_ticks",
+            "probe_ticks",
         ):
             self.metrics[key] = state["metrics"].get(key, 0)
 

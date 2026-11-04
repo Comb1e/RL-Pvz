@@ -10,10 +10,10 @@ from pvz_rl.config import forecast_version
 from pvz_rl.envs.actions import ActionSchema as A
 from pvz_rl.envs.encoding import (
     ENTITY_WIDTH,
-    GLOBAL_WIDTH,
     EntityBatch,
     PackedEntityBatch,
     collate_observations,
+    global_width,
     validate_entity_records,
 )
 from pvz_rl.learning.action_routing import FitRoute, validate_routes
@@ -32,6 +32,7 @@ from pvz_rl.monitoring.moments import RunningMoments
 
 TRAJECTORY_PROTOCOL = "pvz-rl/fork-threat-effect-trajectory-v3"
 CONSTRAINT_TRAJECTORY_PROTOCOL = "pvz-rl/fork-threat-effect-trajectory-v4"
+ABSOLUTE_TRAJECTORY_PROTOCOL = "pvz-rl/absolute-wait-trajectory-v5"
 
 
 def trajectory_dtype(cfg=None):
@@ -40,7 +41,7 @@ def trajectory_dtype(cfg=None):
         ("entity_offset", "<u8"),
         ("entity_count", "<u4"),
         ("entity_omitted", "<u4", 3),
-        ("globals", "<f4", GLOBAL_WIDTH),
+        ("globals", "<f4", global_width(cfg) if cfg else 18),
         ("action", "<u2"),
         ("tick", "<u4"),
         ("reset", "?"),
@@ -104,6 +105,8 @@ def trajectory_dtype(cfg=None):
                 ("effect_prediction_valid", "?"),
             ]
         )
+    if cfg is not None and forecast_version(cfg) >= 3:
+        fields.extend([("outcome_ready", "?"), ("outcome_interval", "<i8")])
     return np.dtype(fields)
 
 
@@ -384,7 +387,7 @@ class CompleteGameBuffer:
             result = EntityBatch(
                 torch.empty(len(flat), width, ENTITY_WIDTH, dtype=torch.int32),
                 torch.empty(len(flat), width, dtype=torch.bool),
-                torch.empty(len(flat), GLOBAL_WIDTH),
+                torch.empty(len(flat), self.dtype["globals"].shape[0]),
                 validated=True,
             )
         else:
@@ -441,7 +444,7 @@ class CompleteGameBuffer:
             result = EntityBatch(
                 torch.empty(len(counts), width, ENTITY_WIDTH, dtype=torch.int32),
                 torch.empty(len(counts), width, dtype=torch.bool),
-                torch.empty(len(counts), GLOBAL_WIDTH),
+                torch.empty(len(counts), packed.globals.shape[-1]),
                 validated=True,
             )
         else:
@@ -755,6 +758,13 @@ class CompleteGameBuffer:
 
     def finalize(self, *, cohort=None, diagnostics=True):
         """Actual per-game returns and errors measured before fitting either head."""
+        if "outcome_ready" in self.dtype.names:
+            for index, block in enumerate(self.blocks):
+                rows = block[: min(self.block_rows, self.size - index * self.block_rows)]
+                if np.any(
+                    rows["reach_valid"] & rows["effect_valid"].any(-1) & ~rows["outcome_ready"]
+                ):
+                    raise RuntimeError("Cannot fit unresolved absolute outcome targets")
         self.finalize_rewards()
         running = np.zeros(self.n_envs, np.float64)
         running_episode = [None] * self.n_envs
@@ -983,7 +993,9 @@ class CompleteGameBuffer:
     def metadata(self):
         return dict(
             protocol=(
-                CONSTRAINT_TRAJECTORY_PROTOCOL
+                ABSOLUTE_TRAJECTORY_PROTOCOL
+                if self.cfg is not None and forecast_version(self.cfg) >= 3
+                else CONSTRAINT_TRAJECTORY_PROTOCOL
                 if self.cfg is not None and forecast_version(self.cfg) >= 2
                 else TRAJECTORY_PROTOCOL
             ),
@@ -1026,7 +1038,9 @@ class CompleteGameBuffer:
     @staticmethod
     def validate_metadata(state):
         expected = (
-            CONSTRAINT_TRAJECTORY_PROTOCOL
+            ABSOLUTE_TRAJECTORY_PROTOCOL
+            if state.get("cfg") is not None and forecast_version(state["cfg"]) >= 3
+            else CONSTRAINT_TRAJECTORY_PROTOCOL
             if state.get("cfg") is not None and forecast_version(state["cfg"]) >= 2
             else TRAJECTORY_PROTOCOL
         )

@@ -12,9 +12,10 @@ This file owns project-specific invariants and the code map.
   overlays. Preserve user tuning. Group stage settings under `training.cherry_bomb`,
   `cherry_bomb_obstacle`, `attacker_pre`, `peashooter` and `normal`; resolve once
   into the runtime layout. Shared scenario sampling attempts live in `tile_scenarios`.
-- Policy inputs are public board facts plus derived static-fork baseline outcomes.
-  Factual future spawns are suppressed inside forks. Identities, schedules, seeds,
-  snapshots, traces and accounting context remain private.
+- Fresh policy inputs are public board facts: entity records and 18 globals.
+  Simulated field/probe outcomes are private auxiliary targets, never observations.
+  Saved legacy fork models retain their 20 baseline channels. Factual future
+  spawns are suppressed inside forks; IDs, schedules, seeds and snapshots stay private.
 - Encode once per decision/fitting call: shared encoder, ten-way action Q head,
   action-conditioned 45-query decoder. Wait/unavailable branches skip decoding;
   use a pooled null branch for effect labels. All tiles remain candidates. Cache
@@ -25,27 +26,41 @@ This file owns project-specific invariants and the code map.
   no forecast forks/effect loss/tails, and freeze effect/null parameters and EMA.
   Peashooter/normal retain factual depth at 2τ/9τ/end, breach-time bins and lane
   loss. Allowed-class NLL preserves censored observations and exact permanently
-  safe lanes without erasing prior penetration. Effect predicts signed baseline
-  changes using occurrence BCE plus separately normalized conditional nonzero CE.
-  Normalize lanes/tokens/roots equally; never invent untested labels.
+  safe lanes without erasing prior penetration. Fresh action outcomes predict
+  absolute field depth (11), breach-time bin (6), lane loss (2) and probe depth (11)
+  with categorical NLL. Retain the 56-slot output carrier and legacy block offsets;
+  reserved classes never enter distributions, summaries or losses. Saved signed
+  objectives retain their original losses. Normalize terms/lanes/tokens/roots
+  equally; never invent untested labels or gate fitting on argmax errors.
 - Static forks own physical/RNG storage, suppress actions/future spawns/logs and
   resolve mowers before recording home entry. Continue other lanes after a loss;
   probes inherit damaged plants and spent mowers. The real game is unchanged.
-  In fork-enabled stages, baselines feed collection, validation and inference. Effect
-  samples are labels only; no rollout policy or action override.
-- Fork execution uses bounded refillable scratch workers and an exact field-suffix
-  cache. Check full physical/RNG state before reuse; rebase times and exclude prior
-  penetration. In `wait_interval_v2`, one semantic probe belongs to each interval
-  of executed Waits/rejections, anchored at the first field-clearing state. Only
-  accepted non-Waits, actual spawn-counter changes and reset/end close it; deaths
-  do not. Exact-cache misses rerun fields only. Completed accepted-action probes
-  may seed the next interval if no spawn occurred. Interval lifecycle, identity,
-  anchor and result survive recovery; field-cache storage is disposable and shares
-  the fork VRAM cap. Pending jobs and sampled choices are never disposable.
-  Legal non-Waits always receive effects; effective Waits sample at the configured
-  probability. Two fixed alternative slots hold a legal branch runner-up (ties by
-  action ID) and one uniform remaining legal action. Five-slot storage and private
-  pretraining remain unchanged. Saved collection protocols govern legacy resume.
+  Fresh inference and validation compute no field/probe simulations. Learned
+  threat/outcome summaries retain detached Q-head injection and its saved schedule.
+  Legacy baselines remain enabled only under their saved model protocol.
+- `wait_trajectory_v3` follows real Waits/rejections and records guarded per-tick
+  field observations. One semantic probe belongs to each owned interval, anchored
+  at its first field-clearing state (immediately when empty). Accepted planting/Dig,
+  actual spawn-counter changes and reset/end close intervals; deaths do not.
+  Capture pre-spawn full-tick states before physical/RNG changes, including spawns
+  that die within one decision. Finish interrupted fields from those owned roots;
+  never replay borrowed prefixes. Rebase breach times and exclude penetration
+  before each decision, including within the preceding tick. A successful action's
+  target belongs to its new post-action interval. Unexecuted alternatives need
+  isolated forks. Cache entries remain exact, bounded and disposable; pending roots,
+  choices, row references, anchors and partial jobs survive recovery. Queue closed
+  intervals independently; publish exact labels before fitting. Resource failures
+  retain work. Charge capture/roots/workers/cache against the shared fork VRAM cap
+  and metadata against trajectory RAM; spill pending physical roots to owned storage.
+  Saved `wait_interval_v2` and earlier recoveries retain their original lifecycle.
+- Legal non-Wait proposals always receive outcome supervision. Effective Waits
+  sample alternatives with the configured probability. Two slots hold a legal
+  branch runner-up (ties by action ID) and a uniform remaining legal action;
+  keep five-slot storage with unused slots invalid. Fresh Peashooter uses zero
+  alternatives, retaining its teacher and actual-action targets. Normal stages
+  retain shared sampling; missing saved overrides preserve legacy behavior.
+  Private pretraining retains its procedure, sampling and counters while adapting
+  its inputs/targets to the saved model's objective.
 - Normal cohorts jointly fit frozen-cohort n-step Double-Q targets and auxiliaries.
   Preserve economic conversion, tick discounting, rejection compaction/weighting,
   species exploration, greedy tiles, four passes, BF16 and FP32 masters. No
@@ -71,8 +86,10 @@ This file owns project-specific invariants and the code map.
   Preserve existing user datasets/recordings. Retain human recording, replay
   verification and demo initialization with their demonstration objectives and
   no auxiliary supervision.
-- Older architectures reject initialization/recovery without conversion. Compatible
-  fork-model weights transfer with fresh optimizer/counters; saved v1 recoveries
+- Earlier model families reject initialization/recovery. Shared fork-model weights
+  explicitly transfer to the public model by retaining public projection columns
+  and compatible FP32 weights, with a fresh absolute outcome readout and optimizer/
+  counters. Resume never converts architecture or label meaning. Saved v1 recoveries
   retain their original forecast workflow and pending-record interpretation.
   Resume preserves saved forecast modes/objectives, pending panels/decision tickets, TD targets,
   pretraining and committed passes. Hindsight lifecycle:
@@ -109,8 +126,8 @@ This file owns project-specific invariants and the code map.
   configured mastery thresholds; other fresh stages require perfect validation.
 - Every validation uses fresh random seeds outside reserved splits. Save panels
   before execution and retry interruptions against the same weights before fitting.
-  Greedy validation computes baseline inputs only in fork-enabled stages; it has no exploration, effect-label
-  sampling or fitting updates.
+  Greedy validation uses public-only inputs for fresh models; legacy fork models
+  retain saved baselines. It has no exploration, auxiliary-label sampling or fitting updates.
   Release idle scratch/graphs without losing workers or speculative seed state.
 
 ## Code structure
@@ -125,9 +142,9 @@ Paths are relative to `src/pvz_rl/` unless stated otherwise.
 | `envs/` | CPU/CUDA adapters, public encoding, actions, rewards, source credit and scenarios. `reach_tracking.py` owns guarded per-tick depth, bite-contact and home-entry hooks. |
 | `envs/scratch_game.py`, `bomb_preparation.py`, `cuda_bomb_oracle.py`, `cuda_snapshots.py`, `attacker_scenarios.py` | Validated automatic exercises, persistent preparation, bounded oracles and conservative attacker labels. |
 | `learning/training.py`, `cuda_q.py`, `sequential_training.py` | Cohort orchestration, collection/fitting, reporting and atomic recovery. |
-| `envs/probe_intervals.py`, `static_fork.py`, `cuda_static_fork.py`, `fork_service.py`, `fork_execution.py/.cu` | Semantic interval probes, isolated field/probe phases, bounded refillable scratch workers, verified suffix caching and panel/queue recovery. |
-| `learning/reach_supervision.py`, `forecast_targets.py`, `forecast_labels.py`, `forecast_objective.py`, `forecast_metrics.py` | Versioned snapshot/factual constraints, hindsight, factored signed effects, shared-forward losses and calibration. |
-| `learning/effect_collection.py`, `forecast_pretraining.py`, `td_targets.py` | Sampled effect labels, private pretraining and frozen-cohort n-step TD. |
+| `envs/probe_intervals.py`, `wait_capture.py`, `static_fork.py`, `cuda_static_fork.py`, `fork_service.py`, `fork_execution.py/.cu` | Legacy interval probes, exact real-tick capture, isolated field/probe phases, bounded refillable workers, verified suffix caching and queue recovery. |
+| `learning/reach_supervision.py`, `forecast_targets.py`, `forecast_labels.py`, `forecast_objective.py`, `forecast_metrics.py` | Versioned snapshot/factual constraints, hindsight, absolute outcomes and legacy signed effects, shared-forward losses and calibration. |
+| `learning/effect_collection.py`, `wait_outcomes.py`, `forecast_pretraining.py`, `td_targets.py` | Saved candidate tickets, deferred absolute interval targets from real Wait prefixes, private pretraining and frozen-cohort n-step TD. |
 | `learning/flat_q.py`, `objective.py`, `action_routing.py`, `placement_labels.py`, `bomb_objective.py` | Shared Q fitting/economics, legality attribution and automatic placement losses. |
 | `learning/peashooter_rules.py`, `peashooter_teacher.py`, `envs/lane_preparation.py`, `cuda_lane_oracle.py` | Prioritized lane targets and resumable bounded lane oracles. |
 | `learning/cuda_buffer.py`, `batch_transport.py`, `collection_scheduler.py`, `exploration.py` | Bounded trajectories/transport, decision tickets and committed species exploration. |

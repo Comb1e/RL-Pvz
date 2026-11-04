@@ -133,9 +133,9 @@ def load_torch_snapshot(path):
 
 
 def protocol_for(kind):
-    if kind != "shared_fork_forecast_q_v3":
+    if kind not in ("shared_fork_forecast_q_v3", "shared_public_forecast_q_v4"):
         raise ValueError(
-            f"Incompatible checkpoint model family: {kind}; entity_fork_v3 requires fresh initialization"
+            f"Incompatible checkpoint model family: {kind}; use the bundled public model profile"
         )
     from pvz_rl.learning.exploration import EXPLORATION_PROTOCOL
 
@@ -150,7 +150,16 @@ def compatible_config(source, target, *, weights_only=False):
             "Old model weights and recovery cannot migrate; initialize this architecture fresh."
         )
     protocol = weight_transfer_protocol if weights_only else transfer_protocol
-    if protocol(source) != protocol(target):
+    left, right = protocol(source), protocol(target)
+    if (
+        weights_only
+        and source["policy"]["kind"] == "shared_fork_forecast_q_v3"
+        and target["policy"]["kind"] == "shared_public_forecast_q_v4"
+    ):
+        left = copy.deepcopy(left)
+        left["encoding"]["version"] = right["encoding"]["version"]
+        left["policy"]["kind"] = right["policy"]["kind"]
+    if left != right:
         raise ValueError(
             "Checkpoint transfer requires matching engine, observation encoding, action "
             "semantics and network structure; incompatible model transfer"
@@ -403,8 +412,8 @@ def _inspect_completed_weights(path, *, weights_only):
 
 
 def model_class(cfg):
-    if cfg["policy"]["kind"] != "shared_fork_forecast_q_v3":
-        raise ValueError("Retired model; entity_fork_v3 requires fresh initialization")
+    if cfg["policy"]["kind"] not in ("shared_fork_forecast_q_v3", "shared_public_forecast_q_v4"):
+        raise ValueError("Retired model; use the bundled public model profile")
     from pvz_rl.learning.sequential_training import CudaSequentialQ
 
     return CudaSequentialQ

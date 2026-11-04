@@ -355,6 +355,13 @@ class ResearchCallback(BaseCallback):
                     self.model.cohort_metrics.get("static_forks", {}),
                 )
             ),
+            "wait_outcomes": dict(
+                getattr(
+                    getattr(self.model, "_wait_outcomes", None),
+                    "metrics",
+                    self.model.cohort_metrics.get("wait_outcomes", {}),
+                )
+            ),
             "collection_policy": "network",
             "fitting_objective": (
                 RULE_OBJECTIVE
@@ -1479,12 +1486,26 @@ def initial_weights(checkpoint, cfg):
         raise ValueError("Checkpoint contains invalid or non-finite model weights")
     with torch.random.fork_rng(devices=[]):
         model = TwoStageTransformerPolicy(cfg)
+    conversion = "none"
+    if (
+        source_cfg["policy"]["kind"] == "shared_fork_forecast_q_v3"
+        and cfg["policy"]["kind"] == "shared_public_forecast_q_v4"
+    ):
+        from pvz_rl.envs.encoding import BOARD_GLOBAL_FIELDS
+
+        weights = dict(weights)
+        key = "board_encoder.global_projection.weight"
+        weights[key] = weights[key][:, : len(BOARD_GLOBAL_FIELDS)].clone()
+        initialized = model.state_dict()
+        for key in ("effect_head.2.weight", "effect_head.2.bias"):
+            weights[key] = initialized[key]
+        conversion = "public_inputs_absolute_outcomes_v1"
     model.load_state_dict(weights, strict=True)
     weights = {key: value.detach().clone() for key, value in model.state_dict().items()}
     return weights, {
         "mode": "weights_only",
         "type": saved["initialization_type"],
-        "conversion": "none",
+        "conversion": conversion,
         "checkpoint": str(Path(checkpoint).resolve()),
         "checkpoint_sha256": saved.get("snapshot_sha256") or file_hash(checkpoint),
         "source_learner_seed": saved["learner_seed"],
@@ -1720,7 +1741,11 @@ def train(
     target_kind = (
         "successful-set placement supervision"
         if is_placement_skill(selected_stage(cfg))
-        else "n-step Q targets with hindsight threats and signed fork effects"
+        else (
+            "n-step Q targets with hindsight threats and absolute action outcomes"
+            if cfg["encoding"]["version"] == "entity_public_v4"
+            else "n-step Q targets with hindsight threats and signed fork effects"
+        )
     )
     progress.emit(
         f"Policy: {cfg.get('policy', {'kind': 'flat'})}; {target_kind}; "
@@ -2041,6 +2066,9 @@ def train(
         if model is not None and getattr(model, "_pretrainer", None) is not None:
             model._pretrainer.close()
             model._pretrainer = None
+        if model is not None and getattr(model, "_wait_outcomes", None) is not None:
+            model._wait_outcomes.close()
+            model._wait_outcomes = None
         if model is not None and getattr(model, "_buffer", None) is not None:
             model._buffer.close()
         if model is not None and getattr(model, "_fitting_spool", None) is not None:

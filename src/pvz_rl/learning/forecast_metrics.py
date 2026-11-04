@@ -15,6 +15,9 @@ def reset_calibration(policy):
             (5, 4, 20, 10, 3), device=policy.device, dtype=torch.float64
         ),
     }
+    if policy.absolute_outcomes:
+        policy._forecast_calibration.pop("effect_change")
+        policy._forecast_calibration.pop("effect_conditional")
 
 
 def categorical_histogram(histogram, probabilities, labels, valid, *, term=0):
@@ -60,4 +63,7 @@ def calibration_report(policy):
             classwise_ece=float((prediction - actual).abs().sum()) / total if total else None,
             class_predictions=int(total),
         )
+    if policy.absolute_outcomes and "effect" in report:
+        report["effect"]["objective"] = "absolute_outcome_v3"
+        report["effect"]["valid_classes"] = list(policy.effect_sizes)
     return report

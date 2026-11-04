@@ -3,6 +3,7 @@
 import numpy as np
 import torch
 
+from pvz_rl.config import absolute_outcomes, effect_extra_actions
 from pvz_rl.envs.actions import ActionSchema
 from pvz_rl.envs.probe_intervals import ProbeState, interval_probes_enabled
 from pvz_rl.envs.static_fork import reference_tau
@@ -53,10 +54,12 @@ def begin_effects(model, actions, details, issued):
         (env.batch.header, env.batch.plants, env.batch.cooldowns, scratch_masks, env.batch.n),
     )
     legal = scratch_masks.get()
-    interval = interval_probes_enabled(model.cfg)
+    absolute = absolute_outcomes(model.cfg)
+    interval = interval_probes_enabled(model.cfg) or absolute
+    maximum = effect_extra_actions(model.cfg, model.tile_skills.phase)
     effective_wait = (proposed == 0) | ~legal[np.arange(env.num_envs), proposed]
-    sampled = issued.copy()
-    if interval:
+    sampled = issued.copy() if maximum else np.zeros_like(issued)
+    if interval and maximum:
         probability = model.cfg["training"]["forecasts"]["wait_effect_sample_probability"]
         for slot in enabled[effective_wait[enabled]]:
             sampled[slot] = sampling_rng(model, slot, 0xEFF0).random() < probability
@@ -84,7 +87,6 @@ def begin_effects(model, actions, details, issued):
             ).float()
         near_branch = torch.where(replacement, best_branch, branches).cpu().numpy()
         scores = tables.cpu().numpy()
-    maximum = model.cfg["training"]["forecasts"]["extra_actions"]
     commands = np.zeros((env.num_envs, 5), np.uint16)
     valid = np.zeros((env.num_envs, 5), bool)
     labels = np.broadcast_to(np.array([10, 5, 1, 10], np.int8), (env.num_envs, 5, 5, 4)).copy()
@@ -109,18 +111,19 @@ def begin_effects(model, actions, details, issued):
                         jobs.append((int(slot), token))
             continue
         selected = [action]
-        candidates = np.flatnonzero(legal[slot])
-        candidates = candidates[(candidates != action) & (candidates != 0)]
-        branch = int(near_branch[slot])
-        branch_candidates = [int(a) for a in candidates if (a - 1) // 45 + 1 == branch]
-        branch_candidates.sort(key=lambda a: (-float(scores[slot, (a - 1) % 45]), a))
-        selected.extend(branch_candidates[: maximum // 2])
-        remaining = np.array([a for a in candidates if a not in selected], np.int64)
-        # Separate keyed RNG: neither policy exploration nor real engine RNG is consumed.
-        rng = sampling_rng(model, slot, 0xEFFE)
-        take = min(maximum + 1 - len(selected), len(remaining))
-        if take:
-            selected.extend(int(a) for a in rng.choice(remaining, take, replace=False))
+        if maximum:
+            candidates = np.flatnonzero(legal[slot])
+            candidates = candidates[(candidates != action) & (candidates != 0)]
+            branch = int(near_branch[slot])
+            branch_candidates = [int(a) for a in candidates if (a - 1) // 45 + 1 == branch]
+            branch_candidates.sort(key=lambda a: (-float(scores[slot, (a - 1) % 45]), a))
+            selected.extend(branch_candidates[: maximum // 2])
+            remaining = np.array([a for a in candidates if a not in selected], np.int64)
+            # Separate keyed RNG: neither policy exploration nor real engine RNG is consumed.
+            rng = sampling_rng(model, slot, 0xEFFE)
+            take = min(maximum + 1 - len(selected), len(remaining))
+            if take:
+                selected.extend(int(a) for a in rng.choice(remaining, take, replace=False))
         shortages += maximum + 1 - len(selected)
         for token, action in enumerate(selected):
             commands[slot, token], valid[slot, token] = action, True
@@ -135,6 +138,25 @@ def begin_effects(model, actions, details, issued):
         shortages=shortages,
         policy_identity=(model.cohort_number, model.optimizer_commits),
     )
+    if absolute:
+        from pvz_rl.envs.cuda_snapshots import download_snapshots
+
+        need = np.flatnonzero(
+            issued & (((proposed != 0) & ~effective_wait) | valid[:, 1:].any(-1))
+        ).tolist()
+        request.update(
+            version=3,
+            ready=True,
+            sampled=sampled,
+            effective_wait=effective_wait & issued,
+            legal_proposal=~effective_wait,
+            pre_states=dict(zip(need, download_snapshots(env.batch, indices=need), strict=True)),
+        )
+        request["labels"].fill(0)
+        request["jobs"] = [(slot, token) for slot, token in jobs if token != 0]
+        model._pending_effect = request
+        model._scheduler.pending |= issued
+        return request
     if interval:
         request.update(
             version=2,
@@ -208,6 +230,44 @@ def validate_effect_request(request, model):
             raise ValueError("Pending effect recovery is missing; use an intact checkpoint")
         return
     count = model.n_envs
+    if request.get("version") == 3:
+        if not absolute_outcomes(model.cfg) or request.get("ready") is not True:
+            raise ValueError("Absolute action tickets disagree with the model protocol")
+        for name, shape, dtype in (
+            ("actions", (count, 5), np.uint16),
+            ("valid", (count, 5), bool),
+            ("labels", (count, 5, 5, 4), np.int8),
+            ("sampled", (count,), bool),
+            ("effective_wait", (count,), bool),
+            ("legal_proposal", (count,), bool),
+        ):
+            value = np.asarray(request[name])
+            if value.shape != shape or value.dtype != dtype:
+                raise ValueError("Invalid saved absolute action ticket")
+        if (
+            tuple(request["policy_identity"]) != (model.cohort_number, model.optimizer_commits)
+            or np.any(request["actions"] >= ActionSchema.size)
+            or np.any(request["labels"] < 0)
+            or np.any(request["labels"] >= np.array([11, 6, 2, 11]))
+        ):
+            raise ValueError("Absolute ticket identity, action or label changed")
+        for slot in np.flatnonzero(model._scheduler.pending):
+            if not request["valid"][slot, 0]:
+                raise ValueError("Pending command has no absolute action ticket")
+            candidates = request["actions"][slot, request["valid"][slot]]
+            if len(set(candidates)) != len(candidates):
+                raise ValueError("Duplicated saved alternative")
+            needs_state = (
+                request["legal_proposal"][slot] and request["actions"][slot, 0] != 0
+            ) or request["valid"][slot, 1:].any()
+            if needs_state and int(slot) not in request["pre_states"]:
+                raise ValueError("Pending action lost its owned physical root")
+        pending = model._scheduler.pending
+        if pending.any() and not np.array_equal(
+            request["actions"][pending, 0], model._scheduler.columns[pending, 1].cpu().numpy()
+        ):
+            raise ValueError("Absolute tickets disagree with retained commands")
+        return
     if request.get("version", 1) not in (1, 2):
         raise ValueError("Unsupported pending effect version")
     if interval_probes_enabled(model.cfg) != (request.get("version") == 2):

@@ -12,6 +12,7 @@ from pvz_game import Dig, Game, LevelSpec, Place, Rules, Status, Wait, WaveSpec
 from pvz_game.replay import Recorder
 
 from pvz_rl.config import (
+    absolute_outcomes,
     forecast_forks_enabled,
     load_config,
     runtime_settings,
@@ -45,6 +46,8 @@ class PvZEnv(gym.Env):
     metadata = {"render_modes": ["rgb_array"], "render_fps": 2}
 
     def _encoded_public(self):
+        if absolute_outcomes(self.cfg):
+            return self.encoder.encode(self.public)
         baseline = None
         settings = self.cfg["training"].get("forecasts", {})
         if interval_probes_enabled(self.cfg) and self.state != EpisodeState.RUNNING:

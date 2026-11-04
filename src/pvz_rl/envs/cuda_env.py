@@ -16,7 +16,12 @@ from pvz_game.cuda.backend import projectile_bound
 from pvz_game.cuda.schema import HEADER
 from stable_baselines3.common.vec_env import VecEnv
 
-from pvz_rl.config import bomb_max_illegal_distance, forecast_forks_enabled, training_env_capacity
+from pvz_rl.config import (
+    absolute_outcomes,
+    bomb_max_illegal_distance,
+    forecast_forks_enabled,
+    training_env_capacity,
+)
 from pvz_rl.envs.actions import ActionSchema as A
 from pvz_rl.envs.actions import dig_branch_available
 from pvz_rl.envs.cuda_accounting import AccountingCudaBatch
@@ -522,7 +527,7 @@ class CudaVecEnv(VecEnv):
 
     def prepare_baseline(self, active=None):
         """One bounded fork chunk, before policy encoding; retries are idempotent."""
-        if not forecast_forks_enabled(self.cfg, self.tile_scenario):
+        if absolute_outcomes(self.cfg) or not forecast_forks_enabled(self.cfg, self.tile_scenario):
             from pvz_rl.envs.encoding import BOARD_GLOBAL_FIELDS
 
             self.features.globals[:, len(BOARD_GLOBAL_FIELDS) :] = 0
@@ -570,6 +575,8 @@ class CudaVecEnv(VecEnv):
         return True
 
     def restore_baseline_inputs(self, indices):
+        if absolute_outcomes(self.cfg):
+            return
         """Deferred tickets retain their original physical roots and baseline."""
         from pvz_rl.envs.encoding import BOARD_GLOBAL_FIELDS
         from pvz_rl.envs.static_fork import reference_tau
@@ -998,13 +1005,14 @@ class CudaVecEnv(VecEnv):
         from pvz_rl.envs.static_fork import reference_tau
         from pvz_rl.learning.forecast_labels import baseline_features
 
-        self.features.globals[:, len(BOARD_GLOBAL_FIELDS) :] = (
-            self.cp.asarray(
-                baseline_features(self._baseline_outcomes, reference_tau(self.batch.rules))
+        if not absolute_outcomes(self.cfg):
+            self.features.globals[:, len(BOARD_GLOBAL_FIELDS) :] = (
+                self.cp.asarray(
+                    baseline_features(self._baseline_outcomes, reference_tau(self.batch.rules))
+                )
+                if forecast_forks_enabled(self.cfg, self.tile_scenario)
+                else 0
             )
-            if forecast_forks_enabled(self.cfg, self.tile_scenario)
-            else 0
-        )
         return self.features.obs_tensor
 
     def task_counts(self):

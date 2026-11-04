@@ -45,6 +45,12 @@ def current_model_config(cfg):
         identity
         in {
             (
+                "shared_public_forecast_q_v4",
+                "entity_public_v4",
+                CURRENT_OBJECTIVE,
+                CURRENT_OBJECTIVE,
+            ),
+            (
                 "shared_fork_forecast_q_v3",
                 "entity_fork_v3",
                 CURRENT_OBJECTIVE,
@@ -80,7 +86,7 @@ def require_supported_policy(cfg, condition="masked"):
         or not current_model_config(cfg)
     ):
         raise ValueError(
-            "Retired policy or scheduler. Use the fork/threat/effect shared encoder and conditional decoder, entity_fork_v3, "
+            "Retired policy or scheduler. Use the shared public encoder and conditional decoder, entity_public_v4, "
             "action_global_value_v5 and complete-game collection. "
             "Start fresh with the bundled train profile."
         )

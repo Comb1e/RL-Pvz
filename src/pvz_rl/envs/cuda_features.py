@@ -13,9 +13,9 @@ from pvz_rl.envs.cuda_accounting import ACCOUNTING_WIDTH
 from pvz_rl.envs.encoding import (
     ENTITY_FIELDS,
     ENTITY_WIDTH,
-    GLOBAL_WIDTH,
     EntityBatch,
     ObservationEncoder,
+    global_width,
     width_bucket,
 )
 from pvz_rl.envs.rewards import LEDGER_METRICS, REWARD_METRICS
@@ -52,7 +52,7 @@ class CudaFeatures:
             "ACCOUNTING_WIDTH": ACCOUNTING_WIDTH,
             "ENTITY_LIMIT": self.limit,
             "RECORD_CAPACITY": 50 + batch.zcap,
-            "GLOBAL_WIDTH": GLOBAL_WIDTH,
+            "GLOBAL_WIDTH": global_width(cfg),
             "ACTION_DIG_START": ActionSchema.dig_start,
             "ACTION_COUNT": ActionSchema.size,
             "ACTION_TILES": ActionSchema.tiles,
@@ -123,7 +123,7 @@ class CudaFeatures:
         rows = 0 if accounting_only else (batch.n if store_rows is None else store_rows)
         self.entities = cp.zeros((rows, self.limit, ENTITY_WIDTH), cp.int32)
         self.entity_mask = cp.zeros((rows, self.limit), cp.bool_)
-        self.globals = cp.zeros((rows, GLOBAL_WIDTH), cp.float32)
+        self.globals = cp.zeros((rows, global_width(cfg)), cp.float32)
         # Kept count, then plants/zombies/projectiles omitted by the entity cap.
         self.summary = cp.zeros((rows, 4), cp.int64)
         self.lane_zombies = cp.zeros((rows, 5), cp.int16)

@@ -40,9 +40,24 @@ FORK_FIELDS = tuple(
     for row in range(5)
     for field in ("field_depth", "breach_time", "loss", "probe_depth")
 )
-GLOBAL_FIELDS = (*BOARD_GLOBAL_FIELDS, *FORK_FIELDS)
+GLOBAL_FIELDS = BOARD_GLOBAL_FIELDS
+LEGACY_GLOBAL_FIELDS = (*BOARD_GLOBAL_FIELDS, *FORK_FIELDS)
 GLOBAL_WIDTH = len(GLOBAL_FIELDS)
-OBSERVATION_PROTOCOL = "entity_fork_v3"
+OBSERVATION_PROTOCOL = "entity_public_v4"
+
+
+def global_fields(cfg):
+    return (
+        GLOBAL_FIELDS
+        if cfg["encoding"]["version"] == OBSERVATION_PROTOCOL
+        else LEGACY_GLOBAL_FIELDS
+    )
+
+
+def global_width(cfg):
+    return len(global_fields(cfg))
+
+
 MINIMUM_PADDING = 32
 
 
@@ -84,9 +99,11 @@ class PackedEntityBatch:
     globals: np.ndarray
 
     def validate(self):
-        if self.offsets.shape != self.counts.shape or self.globals.shape != (
-            *self.counts.shape,
-            GLOBAL_WIDTH,
+        if (
+            self.offsets.shape != self.counts.shape
+            or self.globals.ndim != self.counts.ndim + 1
+            or self.globals.shape[:-1] != self.counts.shape
+            or self.globals.shape[-1] not in (GLOBAL_WIDTH, len(LEGACY_GLOBAL_FIELDS))
         ):
             raise ValueError("Packed observation shapes disagree")
         if self.entities.ndim != 2 or self.entities.shape[1] != ENTITY_WIDTH:
@@ -152,7 +169,7 @@ class EntityBatch:
 
     def reshape(self, *shape):
         n = self.entities.shape[-2]
-        globals_ = self.globals.reshape(*shape, GLOBAL_WIDTH)
+        globals_ = self.globals.reshape(*shape, self.globals.shape[-1])
         batch_shape = globals_.shape[:-1]
         return EntityBatch(
             self.entities.reshape(*batch_shape, n, ENTITY_WIDTH),
@@ -180,7 +197,10 @@ def collate_observations(observations, device=None):
     width = max((len(o["entities"]) for o in observations), default=0)
     entities = np.zeros((count, width, ENTITY_WIDTH), np.int32)
     valid = np.zeros((count, width), bool)
-    globals_ = np.zeros((count, GLOBAL_WIDTH), np.float32)
+    global_size = len(observations[0]["globals"]) if count else GLOBAL_WIDTH
+    if global_size not in (GLOBAL_WIDTH, len(LEGACY_GLOBAL_FIELDS)):
+        raise ValueError("Unsupported public observation width")
+    globals_ = np.zeros((count, global_size), np.float32)
     for i, obs in enumerate(observations):
         raw = np.asarray(obs["entities"])
         if raw.size == 0:
@@ -190,8 +210,8 @@ def collate_observations(observations, device=None):
         if not np.isfinite(raw).all() or not np.equal(raw, raw.astype(np.int32)).all():
             raise ValueError("entity fields must be finite int32 values")
         g = np.asarray(obs["globals"], dtype=np.float32)
-        if g.shape != (GLOBAL_WIDTH,) or not np.isfinite(g).all():
-            raise ValueError(f"globals must contain {GLOBAL_WIDTH} finite values")
+        if g.shape != (global_size,) or not np.isfinite(g).all():
+            raise ValueError(f"globals must contain {global_size} finite values")
         entities[i, : len(raw)] = raw
         valid[i, : len(raw)] = True
         globals_[i] = g
@@ -216,7 +236,7 @@ def observations_equal(left, right, *, atol=0):
 
 class ObservationEncoder:
     def __init__(self, cfg: dict, rules: Rules):
-        if cfg["encoding"]["version"] != OBSERVATION_PROTOCOL:
+        if cfg["encoding"]["version"] not in (OBSERVATION_PROTOCOL, "entity_fork_v3"):
             raise ValueError("Retired observations; entity_v1 requires fresh initialization")
         self.cfg, self.rules = cfg, rules
         env = cfg["environment"]
@@ -237,8 +257,8 @@ class ObservationEncoder:
             *(f"mower:{s}" for s in MOWER_STATES),
         ]
         self.states = {name: i + 1 for i, name in enumerate(states)}
-        self.global_fields = {name: i for i, name in enumerate(GLOBAL_FIELDS)}
-        self.global_width = GLOBAL_WIDTH
+        self.global_fields = {name: i for i, name in enumerate(global_fields(cfg))}
+        self.global_width = global_width(cfg)
         self.count_scale = cfg["encoding"]["count_scale"]
         self.max_entities = cfg["encoding"]["max_entities"]
         self.cost_scale = max(p["cost"] for p in rules.plants.values())
@@ -259,15 +279,17 @@ class ObservationEncoder:
                     ),
                     stack=True,
                 ),
-                "globals": spaces.Box(-np.inf, np.inf, shape=(GLOBAL_WIDTH,), dtype=np.float32),
+                "globals": spaces.Box(
+                    -np.inf, np.inf, shape=(self.global_width,), dtype=np.float32
+                ),
             }
         )
 
     def schema(self):
         return dict(
-            version=OBSERVATION_PROTOCOL,
+            version=self.cfg["encoding"]["version"],
             fields=list(ENTITY_FIELDS),
-            globals=list(GLOBAL_FIELDS),
+            globals=list(global_fields(self.cfg)),
             types=self.types,
             states=self.states,
             normalization="pinned_rules_v1",
@@ -277,6 +299,8 @@ class ObservationEncoder:
         )
 
     def encode(self, obs: Observation, baseline=None):
+        if self.global_width == len(BOARD_GLOBAL_FIELDS):
+            baseline = None
         rows = []
         unit = self.rules.game["units_per_tile"]
         try:
@@ -392,10 +416,12 @@ class ObservationEncoder:
             ],
             dtype=np.float32,
         )
-        return {"entities": raw, "globals": globals_}
+        return {"entities": raw, "globals": globals_[: self.global_width]}
 
     def validate(self, batch):
         """Validate once at ingestion, outside encoder microbatches/recomputation."""
+        if batch.globals.shape[-1] != self.global_width:
+            raise ValueError("Observation globals disagree with the model protocol")
         if batch.validated:
             return
         raw = batch.entities

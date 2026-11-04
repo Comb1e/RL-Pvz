@@ -44,7 +44,7 @@ zombie_states = ["walking", "carrying_pole", "vaulting", "biting", "dead"]
 mower_states = ["ready", "moving", "spent"]
 
 [encoding]
-version = "entity_fork_v3"
+version = "entity_public_v4"
 max_entities = 256 # RTX 4070 Laptop: lower attention cost than 512; see docs/math/entity-inputs.md.
 count_scale = 75
 wave_scale = 15
@@ -104,14 +104,14 @@ cohort_success_threshold = 0.9 # Strictly above; full configured cohorts only (n
 
 [training.forecasts]
 enabled = true
-supervision_version = 2 # Missing in saved runs: preserve legacy labels and forks.
-effect_objective = "change_conditional_v2"
-effect_conditional_weight = 1.0
+supervision_version = 3 # Missing in saved runs: preserve legacy labels and forks.
+effect_objective = "absolute_outcome_v3" # Direct post-action outcomes; legacy recoveries retain signed effects.
+effect_conditional_weight = 1.0 # Used by saved change_conditional_v2 objectives only.
 protocol = "static-fork-threat-effect-v1"
 probe = "conehead" # One reference threat per lane; retain damaged field-phase defenses.
 extra_actions = 2 # Branch runner-up, then one uniformly legal remaining action.
-wait_effect_sample_probability = 0.05
-collection_protocol = "wait_interval_v2"
+wait_effect_sample_probability = 0.005
+collection_protocol = "wait_trajectory_v3"
 lanes = 1024 # Upper bound; allocate no more than the current cohort can request.
 vram_mib = 1536 # Shared by physical scratch, job storage and the disposable cache.
 chunk_ticks = 1024
@@ -182,6 +182,7 @@ oracle_vram_mib = 1024
 
 [training.peashooter]
 forecast_mode = "factual"
+extra_actions = 0 # The placement teacher supplies targets; retain actual-action effects only.
 effect_prediction_weight = 0.1
 threat_prediction_weight = 0.1
 # Independent cohort/preparation sizing; shared optimizer and fitting passes.
@@ -301,7 +302,7 @@ curriculum = true
 hybrid = false
 
 [policy]
-kind = "shared_fork_forecast_q_v3"
+kind = "shared_public_forecast_q_v4"
 action_distribution = "sequential_q_unmasked_tiles_v2"
 shared_width = 192
 encoder_blocks = 4

@@ -9,6 +9,7 @@ from pvz_game import LevelSpec, Spawn
 from pvz_game.cuda import CudaBatch
 from pvz_game.cuda.backend import projectile_bound
 
+from pvz_rl.config import absolute_outcomes
 from pvz_rl.envs.cuda_features import CudaFeatures
 from pvz_rl.envs.cuda_snapshots import download_snapshots, upload_snapshots
 from pvz_rl.envs.encoding import BOARD_GLOBAL_FIELDS
@@ -16,7 +17,7 @@ from pvz_rl.envs.fork_service import ForkService
 from pvz_rl.envs.scratch_game import scratch_game, set_initial_mowers
 from pvz_rl.envs.static_fork import reference_tau
 from pvz_rl.learning.cuda_buffer import trajectory_dtype
-from pvz_rl.learning.forecast_labels import baseline_features, effect_labels
+from pvz_rl.learning.forecast_labels import baseline_features, effect_labels, outcome_codes
 from pvz_rl.learning.forecast_objective import forecast_auxiliary
 
 
@@ -157,22 +158,30 @@ class ForecastPretraining:
             return
         after = self.service.take()
         for (root, token), outcome in zip(self.jobs, after, strict=True):
-            self.rows["effect_labels"][root, token] = effect_labels(
-                self.baseline[root], outcome, reference_tau(self.source.rules)
+            self.rows["effect_labels"][root, token] = (
+                outcome_codes(outcome, reference_tau(self.source.rules))
+                if absolute_outcomes(self.cfg)
+                else effect_labels(self.baseline[root], outcome, reference_tau(self.source.rules))
             )
         self.features.encode()
-        self.features.globals[: self.count, len(BOARD_GLOBAL_FIELDS) :] = self.source.cp.asarray(
-            baseline_features(self.baseline, reference_tau(self.source.rules))
-        )
+        if not absolute_outcomes(self.cfg):
+            self.features.globals[: self.count, len(BOARD_GLOBAL_FIELDS) :] = (
+                self.source.cp.asarray(
+                    baseline_features(self.baseline, reference_tau(self.source.rules))
+                )
+            )
         self.fit_pass, self.phase = 0, "fit"
 
     def _fit(self):
         policy, model = self.model.policy, self.model
         observations = self.features.obs_tensor[: self.count]
         # Recovery reconstructs the public input from the saved private source.
-        self.features.globals[: self.count, len(BOARD_GLOBAL_FIELDS) :] = self.source.cp.asarray(
-            baseline_features(self.baseline, reference_tau(self.source.rules))
-        )
+        if not absolute_outcomes(self.cfg):
+            self.features.globals[: self.count, len(BOARD_GLOBAL_FIELDS) :] = (
+                self.source.cp.asarray(
+                    baseline_features(self.baseline, reference_tau(self.source.rules))
+                )
+            )
         policy.zero_grad(set_to_none=True)
         policy.auxiliary_scale = 1.0
         policy.injection_enabled = False
@@ -247,7 +256,10 @@ class ForecastPretraining:
                     -1,
                     -1,
                 )
-                self.rows["effect_labels"] = np.array([10, 5, 1, 10])
+                self.rows["baseline_outcomes"] = self.baseline
+                self.rows["effect_labels"] = (
+                    -1 if absolute_outcomes(self.cfg) else np.array([10, 5, 1, 10])
+                )
                 legal = self.source.action_masks_device().get()
                 self.jobs = []
                 for root in range(self.count):

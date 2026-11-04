@@ -3,8 +3,10 @@
 Train a sequential Q policy against a pinned Plants vs. Zombies simulator. A
 shared Transformer understands the public board, an action readout chooses
 Wait/species/Dig, and a conditional decoder scores all 45 tiles. Every autonomous
-stage also learns lane-threat predictions. Full-game stages learn baseline-relative
-action effects. Labels never override actions; validation uses the greedy network.
+stage also learns lane-threat predictions. Peashooter and full-game stages predict
+absolute post-action field/probe outcomes. The policy receives public board facts;
+exact simulated outcomes are auxiliary targets. Learned forecast summaries can
+feed the Q heads. Labels never override actions; validation uses the greedy network.
 
 ## Requirements
 
@@ -40,10 +42,11 @@ Record human gameplay into unused paths and finish with a natural win or loss:
 ```
 
 Demo initialization verifies the replay before fitting. Manual tile annotation is
-removed; existing datasets and recordings remain on disk. Older architectures are
-incompatible; current fork-model weights remain compatible. Transfer with
-`--init-from`; interrupted runs
-resume with `--resume` and preserve optimizer updates and unfinished forks, hindsight labels and fitting passes.
+removed; existing datasets and recordings remain on disk. `--init-from` starts with
+fresh optimizer and counters. Legacy shared fork-model weights transfer their
+public-input projection and compatible weights, with a fresh absolute-outcome
+readout; earlier model families remain incompatible. `--resume` preserves the
+saved architecture, optimizer, pending labels and committed fitting passes.
 
 Start autonomous training when ready:
 
@@ -78,41 +81,27 @@ Normal stages jointly fit n-step Q targets; preliminary stages preserve their
 placement losses and freeze the action readout. Four fitting passes, greedy tiles
 and normal species exploration remain in use.
 
-The first three stages use `forecast_mode = "snapshot_rules"`: once all scenario
-zombies have appeared, empty lanes target zero threat. The zombie lane remains
-unknown, except that a ready mower targets zero home danger. These stages use a
-zero baseline-input sentinel, run no forecast forks or effect pretraining, and
-freeze the effect/null heads. Their placement oracles and objectives are unchanged.
+The first three stages use snapshot threat constraints and their existing placement
+objectives. Peashooter keeps its prioritized lane teacher and sets
+`training.peashooter.extra_actions = 0`. Normal stages retain two alternatives:
+the relevant branch's second-highest-Q legal tile and one uniformly selected
+remaining legal action. Waits/rejections sample alternatives at probability
+`0.005`; legal non-Wait proposals always receive supervision.
 
-Peashooter and normal stages retain static field/probe forks, sampled effect
-labels and factual threat targets. With `collection_protocol = "wait_interval_v2"`,
-consecutive executed Waits (including rejections) share one probe, anchored at the
-first field-clearing state. Deaths and empty-board waiting preserve it; accepted
-placements/Dig, actual spawns and resets end the interval. Current field labels
-remain relative to the current decision; cache misses rerun only the field.
-Legal non-Wait proposals receive effects every time. Waits/rejections sample
-alternatives with probability `0.05`: the relevant branch's second-highest-Q legal
-tile and one uniform remaining legal action. Unavailable slots stay invalid.
-Forks neither choose actions nor consume the real RNG;
-full-game inference and validation also compute baseline inputs. Tune execution
-limits under `training.performance` and pretraining/TD schedules under
-`training.forecasts`. Private pretraining starts at the first fork-enabled stage.
+Fresh runs use `collection_protocol = "wait_trajectory_v3"` and
+`effect_objective = "absolute_outcome_v3"`. Real uninterrupted Waits, including
+rejections, supply the field trajectory for auxiliary labels. At first clearance,
+one private probe is anchored and reused through later empty-board Waits.
+Planting/Dig, actual spawning and episode boundaries close an interval; any
+unfinished suffix continues from its saved state. Field targets remain specific
+to each decision. Collection proceeds with pending labels, which finish before
+fitting. Inference and greedy validation run no field/probe simulations.
 
-Threat targets preserve exact windows and permanently safe lanes, including prior
-penetration. Losses/cutoffs leave unresolved futures partially labeled; Peashooter
-retains its private Wait tail. Effect fitting separates change occurrence from
-conditional signed change. Tune `effect_objective` and
-`effect_conditional_weight` under `training.forecasts`. Reports separate these
-losses, detection/calibration, fork cost and outcomes. Viewers show raw factual
-threat beside predicted static field/probe maps; unknown targets stay grey.
-
-Saved recoveries retain their original supervision and collection protocol,
-including unfinished probes and saved alternative choices. Compatible `--init-from`
-uses current settings with a fresh optimizer, counters and interval state. Reports
-separate baseline probes/reuses, candidate probes, field-only rollouts and sampled/
-skipped Waits. The Peashooter teacher and private pretraining are unchanged.
-For bounded seed-matched ablations,
-see `python -m pvz_rl.monitoring.forecast_ablation --help`.
+Private pretraining retains its sampling procedure and separate counters, using
+public-only inputs and absolute targets. Saved recoveries retain their original
+supervision and collection behavior. Reports separate borrowed real ticks,
+private field/probe work, interval reuse, alternatives and labeling time. Tune
+resource caps under `training.performance` / `training.forecasts`.
 
 Validation uses fresh random panels, saved for interrupted retries. Full fitted
 cohorts must strictly exceed the configured qualification threshold before a due

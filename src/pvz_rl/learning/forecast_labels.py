@@ -15,6 +15,21 @@ TIME_CLASSES = 6
 THREAT_WIDTH = 3 * DEPTH_CLASSES + TIME_CLASSES + 1
 EFFECT_SIZES = (21, 11, 3, 21)
 EFFECT_WIDTH = sum(EFFECT_SIZES)
+ABSOLUTE_SIZES = (11, 6, 2, 11)
+
+
+def effect_blocks(logits, *, absolute=False):
+    """Keep the public 56-slot carrier; absolute readouts use 30 valid slots.
+
+    Legacy block offsets remain stable. Reserved slots never participate in a
+    probability distribution, loss, summary or displayed forecast.
+    """
+    blocks = logits.float().split(EFFECT_SIZES, -1)
+    return (
+        tuple(block[..., :size] for block, size in zip(blocks, ABSOLUTE_SIZES, strict=True))
+        if absolute
+        else blocks
+    )
 
 
 def depth_code(x, units=1000, house=-500):
@@ -138,10 +153,10 @@ def threat_loss(
     return per_root.sum() / divisor
 
 
-def effect_loss(logits, labels, *, root_count=None):
+def effect_loss(logits, labels, *, root_count=None, absolute=False):
     """One root may have many candidate tokens; average candidates before roots."""
     losses = []
-    for index, block in enumerate(logits.float().split(EFFECT_SIZES, -1)):
+    for index, block in enumerate(effect_blocks(logits, absolute=absolute)):
         loss, known = categorical_loss(block, labels[..., index])
         losses.append(loss * known)
     return torch.stack(losses, -1).mean(-1)
@@ -179,32 +194,47 @@ def conditional_effect_loss(logits, labels):
     return gate, conditional, valid.any(-1)
 
 
-def effect_forecast(logits, baseline):
-    """Derive post-action field/probe CDFs from signed probabilities, not labels."""
-    baseline = torch.as_tensor(baseline, device=logits.device, dtype=torch.float32)
+def effect_forecast(logits, baseline=None, *, absolute=False):
+    """Derive post-action field/probe CDFs from learned outcome distributions."""
+    if not absolute:
+        baseline = torch.as_tensor(baseline, device=logits.device, dtype=torch.float32)
     result = []
     for term in (0, 3):
-        block = logits.float().split(EFFECT_SIZES, -1)[term]
-        support = torch.arange(-10, 11, device=logits.device)
-        after = baseline[..., term, None] + support
+        block = effect_blocks(logits, absolute=absolute)[term]
+        support = (
+            torch.arange(11, device=logits.device)
+            if absolute
+            else torch.arange(-10, 11, device=logits.device)
+        )
+        after = support if absolute else baseline[..., term, None] + support
         p = block.softmax(-1)
         thresholds = torch.arange(9, 0, -1, device=logits.device)
         cells = (p[..., None, :] * (after[..., None, :] >= thresholds[:, None])).sum(-1)
         home = (p * (after >= 10)).sum(-1)
         if term == 0:
-            loss_p = logits.float().split(EFFECT_SIZES, -1)[2].softmax(-1)
+            loss_p = effect_blocks(logits, absolute=absolute)[2].softmax(-1)
             home = (
-                loss_p * (baseline[..., 2, None] + torch.arange(-1, 2, device=logits.device) >= 1)
-            ).sum(-1)
+                loss_p[..., 1]
+                if absolute
+                else (
+                    loss_p
+                    * (baseline[..., 2, None] + torch.arange(-1, 2, device=logits.device) >= 1)
+                ).sum(-1)
+            )
         result.append(torch.cat((home[..., None], cells), -1))
     return torch.stack(result, -3)
 
 
-def effect_summary(logits):
+def effect_summary(logits, *, absolute=False):
     summaries = []
-    for classes, block in zip(EFFECT_SIZES, logits.float().split(EFFECT_SIZES, -1), strict=True):
-        radius = classes // 2
-        support = torch.arange(-radius, radius + 1, device=logits.device)
+    sizes = ABSOLUTE_SIZES if absolute else EFFECT_SIZES
+    for classes, block in zip(sizes, effect_blocks(logits, absolute=absolute), strict=True):
+        radius = classes - 1 if absolute else classes // 2
+        support = (
+            torch.arange(classes, device=logits.device)
+            if absolute
+            else torch.arange(-radius, radius + 1, device=logits.device)
+        )
         summaries.append((block.softmax(-1) * support).sum(-1) / max(1, radius))
     return torch.stack(summaries, -1).flatten(-2)
 

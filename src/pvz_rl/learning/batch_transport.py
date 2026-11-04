@@ -11,7 +11,6 @@ import torch
 
 from pvz_rl.envs.encoding import (
     ENTITY_WIDTH,
-    GLOBAL_WIDTH,
     EntityBatch,
     PackedEntityBatch,
     collate_observations,
@@ -377,7 +376,9 @@ class PreparedDataSource(PreparedPlans):
             width = self.buckets[
                 np.searchsorted(self.buckets, int(rows["entity_count"].max(initial=0)))
             ]
-            amount += (stop - start) * (int(width) * (ENTITY_WIDTH * 4 + 1) + GLOBAL_WIDTH * 4)
+            amount += (stop - start) * (
+                int(width) * (ENTITY_WIDTH * 4 + 1) + self.buffer.dtype["globals"].shape[0] * 4
+            )
         return amount
 
     def iter_batches(self, batch_size):
@@ -528,7 +529,8 @@ class BatchPrefetch:
         self.base_staging = buffer.staging_bytes
         self.batch_size = batch_size
         self.max_entities = max_entities
-        amount = 2 * batch_size * ((GLOBAL_WIDTH + 8) * 4 + buffer.dtype.itemsize + 5 * 8)
+        self.global_width = buffer.dtype["globals"].shape[0]
+        amount = 2 * batch_size * ((self.global_width + 8) * 4 + buffer.dtype.itemsize + 5 * 8)
         if not buffer.reserve_staging(self.base_staging + amount):
             raise MemoryError("Trajectory RAM budget cannot accommodate pinned staging")
         self.closed = False
@@ -554,7 +556,7 @@ class BatchPrefetch:
                                 pin_memory=True,
                             ),
                             torch.empty(batch_size, 0, dtype=torch.bool, pin_memory=True),
-                            torch.empty(batch_size, GLOBAL_WIDTH, pin_memory=True),
+                            torch.empty(batch_size, self.global_width, pin_memory=True),
                             validated=True,
                         ),
                         torch.empty(batch_size, 8, pin_memory=True),
@@ -592,7 +594,7 @@ class BatchPrefetch:
                 self.batch_size
                 * (
                     w * (ENTITY_WIDTH * 8 + 1 + 3 * 8)
-                    + (GLOBAL_WIDTH + 8) * 4
+                    + (self.global_width + 8) * 4
                     + self.buffer.dtype.itemsize
                     + 5 * 8
                 )
