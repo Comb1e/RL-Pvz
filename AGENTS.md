@@ -177,7 +177,7 @@ Paths are relative to `src/pvz_rl/` unless stated otherwise.
 | `learning/tile_curriculum.py`, `validation_trigger.py`, `budget.py`, `training_requirements.py` | Stage transitions, validation qualification, budgets and model/objective identities. |
 | `learning/checkpoints.py`, `training_artifacts.py`, `performance.py`, `demo_initialization.py` | Recovery/weights, artifact retention, execution settings and verified human demo fitting. |
 | `evaluation/`, `monitoring/`, repository diagnostic tools | Greedy evaluation, CPU verification, bounded profiling and benchmarks. |
-| Repository `tools/benchmark_peashooter.py`, `tools/draw_collection_process.py` | Seed-matched total-time/latency sweeps, optional real-collection CPU/GPU timing and measured state diagrams with explicit wait dependencies. |
+| Repository `tools/benchmark_peashooter.py`, `tools/draw_collection_process.py` | Seed-matched total-time/latency sweeps, optional real-collection host/CUDA event timing and two chronological CPU/GPU timelines. Collapse loops to start/end markers; identify waits and unavailable device timing explicitly. |
 | Repository `tools/profile_training_workflow.py` | Bounded actual-CLI startup, collection and recovery audits. Preserve production cutoff, initialization, pretraining and presentation; do not equate shortened frozen-policy benchmarks with full training. |
 | `presentation/` | Demo recording/replay, live cohort subscriptions and retained reports. `reach_view.py` separates factual threat, proposed-action field/probe predictions and exact/partial targets; disabled effects and unknown targets are explicit. Viewers reuse timestamped episode-scoped journal predictions without model calls. |
 

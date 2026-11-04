@@ -189,7 +189,7 @@ def measure(base, settings, args, workspace):
                     auxiliary=auxiliary,
                     games=count,
                     ended=collected,
-                    setup_seconds=setup_done - started,
+                    setup_seconds=trace.origin - started,
                     workload=dict(
                         cutoff_seconds=args.seconds,
                         initial_weights=str(args.weights) if args.weights else "random",

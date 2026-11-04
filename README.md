@@ -126,7 +126,7 @@ The full hybrid modes `cuda hybrid deferred` remain available for separate teach
 experiments. Compare total collection-plus-labeling time, including drain, and
 report cold preparation separately from warmed execution.
 
-Record a real collection and draw its CPU/GPU states and wait causes:
+Record a real collection and draw two chronological CPU/GPU timelines:
 
 ```powershell
 .\.venv\Scripts\python.exe tools\benchmark_peashooter.py `
@@ -140,6 +140,10 @@ Record a real collection and draw its CPU/GPU states and wait causes:
 
 CPU call spans, GPU stream spans, summed worker/job times and collection wall time
 are reported separately because concurrent work overlaps.
+The diagram shares elapsed timestamps across its two lanes, marks each loop's
+start/end once, and names wait dependencies. New collection traces record CUDA
+event timestamps; older inputs mark unavailable device timing explicitly. The
+script writes PNG, SVG and a `.timeline.json` with the displayed phase boundaries.
 These fixed-cohort benchmarks bypass CLI startup and private pretraining, disable
 the viewer, and use the requested cutoff and optional `--weights`. The 60-second
 random-weight control does not estimate a full initialized training cohort.

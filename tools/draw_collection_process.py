@@ -1,26 +1,38 @@
-"""Draw measured collection states: benchmark_peashooter.py --process-trace records them."""
+"""Draw chronological CPU/GPU timelines; collapse loops to their start/end markers.
+
+Record inputs with benchmark_peashooter.py --process-trace or
+profile_training_workflow.py. Older host-only recordings remain supported.
+"""
 
 import argparse
 import json
 import threading
 from collections import defaultdict
+from contextlib import contextmanager, nullcontext
 from functools import wraps
 from pathlib import Path
 from time import perf_counter
 
 
 class CollectionTrace:
-    """Optional diagnostic wrappers; no synchronization or production-path hooks."""
+    """Optional wrappers; one epoch calibration, event queries otherwise nonblocking."""
 
     def __init__(self, model):
         from pvz_rl.learning import effect_collection
 
         self.model, self.env = model, model.env
         self.events, self.originals = [], []
+        self.device_events = []
+        self.epoch = self.env.cp.cuda.Event()
+        # One diagnostic calibration before collection; never synchronize per span.
+        with self.env.device_context():
+            self.epoch.record()
+        self.epoch.synchronize()
         self.origin = perf_counter()
         self.main_thread = threading.get_ident()
         self.first_drain = None
         self.gpu_before = dict(self.env.profiler.flush())
+        self.trace_profiler()
         self.wrap(model, "_prepare_collection", "prepare / label publication")
         self.wrap(model, "_collect_step", "decision")
         self.wrap(model._runner, "decide", "policy inference")
@@ -37,9 +49,37 @@ class CollectionTrace:
                 for name in ("before", "arm", "observe", "advance", "finalize"):
                     if hasattr(owner, name):
                         self.wrap(owner, name, f"{prefix}: {name}")
+        reach = getattr(model, "_reach", None)
+        if reach is not None:
+            self.wrap(reach, "prepare", "factual: prepare")
+        teacher = getattr(model, "_peashooter_teacher", None)
+        if teacher is not None and hasattr(teacher, "_run_chunk"):
+            self.wrap(teacher, "_initialize", "teacher: initialize")
+            self.wrap(teacher, "_fill", "teacher: fill")
+            traced_batches = set()
+
+            def trace_teacher_batch():
+                if teacher.batch is not None and id(teacher.batch) not in traced_batches:
+                    self.wrap(
+                        teacher.batch,
+                        "step_device",
+                        "teacher simulation submission",
+                        device_label="teacher simulation",
+                    )
+                    traced_batches.add(id(teacher.batch))
+
+            self.wrap(teacher, "_run_chunk", "teacher: run chunk", before=trace_teacher_batch)
         service = getattr(self.env, "auxiliary", None)
         if service:
-            self.wrap(service, "capture", "freeze snapshot")
+            self.wrap(service, "capture", "freeze snapshot", device_label="freeze snapshot")
+            for family, backend in service.gpu.items():
+                self.wrap(
+                    backend,
+                    "launch",
+                    f"auxiliary: {family} submission",
+                    device_label=f"auxiliary: {family}",
+                    stream=backend.stream,
+                )
             for name in (
                 "_prepare_boards",
                 "_dispatch_cpu",
@@ -52,21 +92,49 @@ class CollectionTrace:
             for name in ("materialize", "spill"):
                 self.wrap(service.store, name, f"coordinator: {name}")
 
-    def wrap(self, owner, name, label, *, gpu=False):
+    @contextmanager
+    def device_span(self, label, stream=None):
+        cp = self.env.cp
+        stream = stream if stream is not None else cp.cuda.get_current_stream()
+        start, end = cp.cuda.Event(), cp.cuda.Event()
+        start.record(stream)
+        try:
+            yield
+        finally:
+            end.record(stream)
+            self.device_events.append((label, start, end, int(stream.ptr)))
+
+    def trace_profiler(self):
+        profiler = self.env.profiler
+        original = profiler.track
+        self.originals.append((profiler, "track", original))
+
+        @contextmanager
+        def track(phase):
+            with original(phase), self.device_span(phase):
+                yield
+
+        profiler.track = track
+
+    def wrap(self, owner, name, label, *, gpu=False, device_label=None, stream=None, before=None):
         original = getattr(owner, name)
         self.originals.append((owner, name, original))
 
         @wraps(original)
         def measured(*args, **kwargs):
             started = perf_counter()
+            if before:
+                before()
             if name == "_prepare_collection" and not self.env.enabled_envs.any():
                 if self.first_drain is None:
                     self.first_drain = started
             try:
-                if gpu:
-                    with self.env.profiler.track("profile_main_environment"):
+                with self.device_span(device_label, stream) if device_label else nullcontext():
+                    if gpu:
+                        with self.env.profiler.track("profile_main_environment"):
+                            return original(*args, **kwargs)
+                    else:
                         return original(*args, **kwargs)
-                return original(*args, **kwargs)
             finally:
                 self.events.append(
                     dict(
@@ -93,8 +161,18 @@ class CollectionTrace:
             totals[event["name"]] += event["seconds"]
             counts[event["name"]] += 1
         gpu = {k: v - self.gpu_before.get(k, 0) for k, v in self.env.profiler.flush().items()}
+        device_events = [
+            dict(
+                name=label,
+                start=self.env.cp.cuda.get_elapsed_time(self.epoch, start) / 1000,
+                seconds=self.env.cp.cuda.get_elapsed_time(start, end) / 1000,
+                stream=stream,
+            )
+            for label, start, end, stream in self.device_events
+            if end.done
+        ]
         data = dict(
-            protocol="measured-collection-process-v1",
+            protocol="measured-collection-process-v2",
             games=games,
             settings=settings,
             workload=workload,
@@ -107,333 +185,442 @@ class CollectionTrace:
             gpu_stream_seconds=gpu,
             auxiliary=auxiliary,
             events=events,
+            gpu_events=device_events,
+            pending_gpu_events=len(self.device_events) - len(device_events),
             timing_notes=[
                 "CPU call spans are wall time and include thread scheduling; nested spans overlap.",
                 "GPU main-stream event spans include launch gaps and stream dependencies.",
                 "Auxiliary CUDA seconds measure kernel time; CPU seconds sum dispatch-to-result spans.",
                 "Queue wait is summed per job; it overlaps collection and is not added to wall time.",
                 "Drain starts after the last real decision and ends when all labels are published.",
+                "GPU event timestamps share one calibrated epoch; no per-operation synchronization is added.",
             ],
         )
         path.write_text(json.dumps(data, indent=2), encoding="utf-8")
         return data
 
 
+def _seconds(value):
+    return f"{value:.3f} s" if value < 1 else f"{value:.2f} s"
+
+
+def _events(data, *, workflow=False, offset=0):
+    """Normalize recorded spans; never fabricate positions from aggregate totals."""
+    return [
+        dict(
+            name=e.get("operation") if workflow else e["name"],
+            start=e.get("start_seconds", 0) if workflow else e["start"] + offset,
+            seconds=e.get("duration_seconds", 0) if workflow else e["seconds"],
+            thread=e.get("thread", "main"),
+        )
+        for e in data.get("events", [])
+    ]
+
+
+def _total(events, name, start, end):
+    return sum(
+        max(0, min(e["start"] + e["seconds"], end) - max(e["start"], start))
+        for e in events
+        if e["name"] == name
+    )
+
+
+def timeline(data):
+    """One ordered phase frontier shared by CPU and GPU; loop interiors collapse."""
+    workflow = "command" in data and "timings" in data
+    setup = 0 if workflow else data.get("setup_seconds", 0)
+    events = _events(data, workflow=workflow, offset=setup)
+    gpu_events = [dict(e, start=e["start"] + setup) for e in data.get("gpu_events", [])]
+    phases = []
+
+    def add(start, end, name, cpu, gpu, *, loop=False, complete=True, wait=None):
+        if end <= start:
+            return
+
+        def measured(choices, source):
+            return [
+                f"{label}: {_seconds(value)}"
+                for key, label in choices
+                if (value := _total(source, key, start, end)) > 0
+            ]
+
+        phases.append(
+            dict(
+                name=name,
+                start=start,
+                end=end,
+                loop=loop,
+                complete=complete,
+                cpu=measured(cpu, events),
+                gpu=measured(gpu, gpu_events),
+                wait=wait,
+            )
+        )
+        return phases[-1]
+
+    main_cpu = [
+        ("interval: advance", "Poll / finish intervals (nested)"),
+        ("policy inference", "Choose action"),
+        ("candidate / snapshot preparation", "Prepare candidates"),
+        ("main environment submission", "Submit real step"),
+        ("wait: main stream + result copies", "WAIT for step / D2H"),
+        ("interpret physical results", "Interpret results"),
+        ("trajectory storage", "Retain trajectory"),
+        ("teacher: observe", "Retain teacher roots"),
+    ]
+    gpu_ops = [
+        ("online_inference", "Policy inference"),
+        ("freeze snapshot", "Freeze packed roots"),
+        ("profile_main_environment", "Real environment step"),
+        ("auxiliary: outcomes", "Interval chunks + D2H"),
+        ("auxiliary: teacher", "Teacher chunks + D2H"),
+        ("teacher simulation", "Teacher simulation"),
+    ]
+    if workflow:
+        collection_start = data.get("collection_started_seconds")
+        if collection_start is None:
+            collection_start = data["elapsed_seconds"]
+        advances = [
+            e
+            for e in events
+            if e["name"] == "ForecastPretraining.advance" and e["start"] < collection_start
+        ]
+        pretrain_start = min((e["start"] for e in advances), default=collection_start)
+        add(
+            0,
+            pretrain_start,
+            "Startup",
+            [
+                ("imports", "Import packages"),
+                ("pvz_rl.learning.training.initial_weights", "Load weights"),
+                ("pvz_rl.learning.training.vector_env", "Create environment"),
+                ("pvz_rl.learning.training.build_model", "Build model"),
+            ],
+            [],
+        )
+        pretraining = add(
+            pretrain_start, collection_start, "Private pretraining", [], [], loop=True
+        )
+        if advances and pretraining is not None:
+            startup = data.get("timings_by_phase", {}).get("startup", data["timings"])
+            seconds = startup.get("ForecastPretraining.advance", {}).get("seconds", 0)
+            pretraining["cpu"] = [
+                f"Prepare roots / submit / wait / fit: {_seconds(seconds)} total",
+                "Repeated private panels; inner iterations collapsed",
+            ]
+            pretraining["gpu_activity"] = "Simulate private roots, then fit auxiliary heads"
+        window = data.get("collection_window_seconds")
+        if window is None:
+            final = data.get("final_collection") or (data.get("samples") or [{}])[-1]
+            window = max(0, final.get("elapsed_seconds", collection_start) - collection_start)
+        end = collection_start + window
+        drain = data.get("label_drain_started_seconds")
+        main_end = min(end, drain) if drain is not None else end
+        main_cpu = [
+            ("CudaSequentialQ._prepare_collection", "Prepare / label work"),
+            ("CudaSequentialQ._collect_step", "Choose / step / retain"),
+            ("WaitOutcomes.advance", "Interval labeling (nested)"),
+            ("CudaVecEnv.step_device", "Submit real step (nested)"),
+            ("CudaVecEnv.step_host", "Interpret results (nested)"),
+        ]
+        decision = add(
+            collection_start,
+            main_end,
+            "Decision loop",
+            main_cpu,
+            [],
+            loop=True,
+            complete=drain is not None,
+            wait="Legacy synchronous labels / result copies are included in host calls",
+        )
+        # Workflow v1 records selected spans only; cumulative totals are authoritative.
+        stats = data.get("timings_by_phase", {}).get("collection", data["timings"])
+        if decision is not None:
+            # Selected v1 events cannot partition cumulative totals across a drain.
+            suffix = "whole collection" if drain is not None and drain < end else "total"
+            decision["cpu"] = [
+                f"{label}: {_seconds(stats[key]['seconds'])} {suffix}"
+                for key, label in main_cpu
+                if key in stats
+            ]
+        if drain is not None and drain < end:
+            add(
+                drain,
+                end,
+                "Label drain",
+                [],
+                [],
+                loop=True,
+                complete=False,
+                wait="Field / probe continuations and teacher descendants",
+            )
+        if phases:
+            phases[-1]["end_note"] = "Recording stops here; pending work is not assigned a duration"
+    else:
+        total = setup + data["collection_seconds"]
+        main_end = setup + data["main_trajectory_seconds"]
+        add(0, setup, "Cohort preparation", [], [])
+        if setup:
+            phases[-1]["cpu"] = ["Prepare boards / interval owners / worker resources"]
+            phases[-1]["gpu_activity"] = "Initialize boards and prewarm scratch / kernels"
+        add(
+            setup,
+            main_end,
+            "Decision loop",
+            main_cpu,
+            gpu_ops,
+            loop=True,
+            wait="Real-step completion / D2H; interval work is included in this loop",
+        )
+        # Only introduce boundaries actually present in the recording.
+        factual = min(
+            (
+                e["start"]
+                for e in events
+                if e["name"] == "factual: prepare" and e["start"] >= main_end
+            ),
+            default=total,
+        )
+        teacher = min(
+            (
+                e["start"]
+                for e in events
+                if e["name"] in ("teacher: run chunk", "teacher: advance")
+                and e["start"] >= main_end
+            ),
+            default=total,
+        )
+        split = min(factual, teacher)
+        add(
+            main_end,
+            split,
+            "Interval drain / publish",
+            [
+                ("interval: advance", "Poll / finish intervals"),
+                ("interval: finalize", "Publish interval targets"),
+            ],
+            gpu_ops,
+            loop=True,
+            wait="Remaining interval field / probe jobs; publish all exact targets",
+        )
+        run = min(
+            (
+                e["start"]
+                for e in events
+                if e["name"] == "teacher: run chunk" and e["start"] >= split
+            ),
+            default=split,
+        )
+        add(
+            split,
+            run,
+            "Factual targets / teacher preparation",
+            [
+                ("factual: prepare", "Build factual targets"),
+                ("teacher: initialize", "Project / prepare teacher roots"),
+            ],
+            gpu_ops,
+            loop=True,
+            wait="CPU lane-preparation replies (included in preparation calls)"
+            if data.get("settings", {}).get("prepare_workers", 0)
+            else None,
+        )
+        add(
+            run,
+            total,
+            "Teacher / remaining label drain",
+            [
+                ("factual: prepare", "Build remaining factual targets"),
+                ("teacher: initialize", "Prepare remaining teacher roots"),
+                ("teacher: fill", "Refill teacher workers"),
+                ("teacher: run chunk", "Submit / download / publish (nested)"),
+                ("teacher: advance", "Teacher total (includes nested calls)"),
+            ],
+            gpu_ops,
+            loop=True,
+            wait="Teacher coverage / candidate results; synchronous header copies included",
+        )
+        phases[-1]["end_note"] = "All required labels ready; fitting may start (not timed here)"
+
+    for phase in phases:
+        if not phase["cpu"]:
+            phase["cpu"] = ["Host activity not separately instrumented"]
+        if not phase["gpu"]:
+            if phase["name"] == "Startup":
+                phase["gpu_activity"] = "Initialize CUDA / load weights / allocate model"
+            if phase["name"] == "Decision loop":
+                phase["gpu_activity"] = "Policy inference → real step; interval jobs when admitted"
+            phase["gpu"] = [
+                phase.get("gpu_activity", "Private simulations / transfers when submitted"),
+                "Device timestamps unavailable for this phase",
+            ]
+    return dict(phases=phases, gpu_timestamps=bool(gpu_events), workflow=workflow)
+
+
 def draw(data, output):
+    """Two timelines, top to bottom in wall-clock order, with no unrolled loops."""
     import matplotlib
 
     matplotlib.use("Agg")
+    from textwrap import wrap
+
     import matplotlib.pyplot as plt
-    from matplotlib.patches import FancyArrowPatch, FancyBboxPatch
+    from matplotlib.patches import FancyBboxPatch
 
-    cpu, gpu, aux = (data[k] for k in ("cpu_wall_seconds", "gpu_stream_seconds", "auxiliary"))
-
-    def sec(value):
-        return f"{value:.2f} s"
-
-    total, drain = data["collection_seconds"], data["label_drain_seconds"]
-    setup = data.get("setup_seconds", 0)
-    fig, ax = plt.subplots(figsize=(15, 11), layout="constrained")
-    ax.set(xlim=(0, 15), ylim=(0, 12))
-    ax.axis("off")
-    fig.suptitle(
-        f"Fixed-cohort Peashooter collection · {data['games']} environments · {total + setup:.2f} s "
-        f"({(total + setup) / data['games']:.3f} s/env)",
-        fontsize=17,
-        fontweight="bold",
-    )
-    colors = {"CPU": "#e8f0fa", "GPU": "#e6f4ec", "WAIT": "#fff1d6"}
-
-    def box(x, y, title, body, kind, width=4.3, height=1.05):
-        ax.add_patch(
-            FancyBboxPatch(
-                (x, y),
-                width,
-                height,
-                boxstyle="round,pad=0.09",
-                facecolor=colors[kind],
-                edgecolor="#78848f",
-                linewidth=0.8,
-            )
-        )
-        ax.text(x + 0.13, y + height - 0.16, title, fontsize=11, fontweight="bold", va="top")
-        ax.text(x + 0.13, y + height - 0.44, body, fontsize=10, va="top", linespacing=1.4)
-
-    def arrow(x1, y1, x2, y2, label=None):
-        ax.add_patch(
-            FancyArrowPatch(
-                (x1, y1),
-                (x2, y2),
-                arrowstyle="->",
-                mutation_scale=13,
-                color="#53616d",
-                linewidth=1.1,
-            )
-        )
-        if label:
-            ax.text(
-                (x1 + x2) / 2,
-                (y1 + y2) / 2 + 0.06,
-                label,
-                fontsize=9,
-                ha="center",
-                bbox=dict(facecolor="white", edgecolor="none", pad=1.5),
-            )
-
-    ax.text(0.2, 11.5, "MAIN COLLECTION THREAD", fontsize=11, fontweight="bold")
-    ax.text(5.3, 11.5, "GPU STREAMS", fontsize=11, fontweight="bold")
-    ax.text(10.3, 11.5, "BACKGROUND CPU", fontsize=11, fontweight="bold")
-    box(
-        0.2,
-        9.95,
-        "CPU → GPU · Choose action",
-        f"Inference call wall: {sec(cpu.get('policy inference', 0))}\n"
-        f"GPU stream: {sec(gpu.get('online_inference', 0))}",
-        "CPU",
-    )
-    box(
-        0.2,
-        8.4,
-        "CPU / GPU copy · Freeze owned roots",
-        f"Capture call wall: {sec(cpu.get('freeze snapshot', 0))}\n"
-        f"Storage backpressure: {sec(aux.get('host_wait_seconds', 0))}",
-        "CPU",
-    )
-    box(
-        5.3,
-        8.4,
-        "GPU · Step real environments",
-        f"Stream: {sec(gpu.get('profile_main_environment', 0))} · simulation: {sec(gpu.get('simulation', 0))}\n"
-        "Physical state / RNG; record Wait prefixes",
-        "GPU",
-    )
-    box(
-        0.2,
-        6.85,
-        "CPU WAIT · Main result handoff",
-        f"Blocked: {sec(cpu.get('wait: main stream + result copies', 0))}\n"
-        "Waits for policy + step + pinned D2H copies",
-        "WAIT",
-    )
-    book = sum(
-        cpu.get(k, 0)
-        for k in (
-            "interpret physical results",
-            "trajectory storage",
-            "interval: observe",
-            "teacher: observe",
-        )
-    )
-    box(
-        0.2,
-        5.3,
-        "CPU · Commit decision / publish labels",
-        f"Physical + row/owner calls: {sec(book)}\nNext action needs no simulation labels",
-        "CPU",
-    )
-    box(
-        10.3,
-        9.95,
-        "CPU · Decode / expand dependencies",
-        f"Decode: {sec(aux.get('decode_seconds', 0))} · expand: {sec(cpu.get('coordinator: prepare_boards', 0))}\n"
-        f"Spill: {sec(cpu.get('coordinator: spill', 0))} · {aux.get('root_spill_bytes', 0) / 2**20:.1f} MiB",
-        "CPU",
-    )
-    box(
-        10.3,
-        8.4,
-        "CPU · Shared queue / admission",
-        f"Mean queued/job: {sec(aux.get('queue_wait_seconds', 0) / max(1, aux.get('submitted', 0)))} · max: {sec(aux.get('peak_queue_age_seconds', 0))}\n"
-        f"Dispatch calls: GPU {sec(cpu.get('coordinator: dispatch_cuda', 0))} / CPU {sec(cpu.get('coordinator: dispatch_cpu', 0))}",
-        "WAIT",
-    )
-    box(
-        10.3,
-        6.85,
-        "CPU · Persistent simulation processes",
-        f"Dispatch-to-result sum: {sec(aux.get('cpu_seconds', 0))}\n"
-        f"{aux.get('cpu_jobs', 0):,} jobs · exact physical simulator",
-        "CPU",
-    )
-    box(
-        5.3,
-        6.85,
-        "GPU · Auxiliary low-priority chunks",
-        f"Kernel sum: {sec(aux.get('cuda_seconds', 0))}\n"
-        f"{aux.get('cuda_jobs', 0):,} jobs · field / probe / teacher",
-        "GPU",
-    )
-    box(
-        5.3,
-        5.3,
-        "CPU polling · Consume ready results",
-        f"Result handling: {sec(cpu.get('coordinator: harvest_cuda', 0) + cpu.get('coordinator: harvest_cpu', 0))}\n"
-        "Polls CUDA copy events / worker replies",
-        "CPU",
-    )
-    box(
-        0.2,
-        3.5,
-        "CPU WAIT · Cohort label drain",
-        f"Wall: {sec(drain)} after all real games finish\n"
-        "Waits for field/probe + teacher descendants",
-        "WAIT",
-        width=9.4,
-    )
-    box(
-        10.3,
-        3.5,
-        "GPU · Fitting may now start",
-        "Every required target published exactly once\nFitting excluded from this collection timing",
-        "GPU",
-    )
-    for y in (9.95, 8.4, 6.85):
-        arrow(2.35, y, 2.35, y - 0.5)
-    arrow(4.5, 8.9, 5.3, 8.9)
-    arrow(5.3, 8.9, 4.5, 7.35)
-    arrow(2.35, 5.3, 2.35, 4.55, "all games ended")
-    arrow(0.12, 5.75, 0.12, 10.4)
-    ax.text(0.06, 8, "next decision", fontsize=9, rotation=90, ha="center", va="center")
-    arrow(4.5, 9.3, 10.3, 10.55, "owned snapshot / no label barrier")
-    arrow(12.45, 9.95, 12.45, 9.45)
-    arrow(12.45, 8.4, 12.45, 7.9)
-    arrow(10.3, 8.7, 9.6, 7.55, "GPU admitted")
-    arrow(7.45, 6.85, 7.45, 6.35)
-    arrow(12.45, 6.85, 9.6, 5.8)
-    arrow(5.3, 5.8, 4.5, 5.8, "ready labels")
-    arrow(9.6, 4.0, 10.3, 4.0, "labels ready")
-    notes = [
-        f"Setup: {sec(setup)}; main trajectory: {sec(data['main_trajectory_seconds'])}; label drain: {sec(drain)}.",
-        "CUDA admission waits for main-stream readiness, an available auxiliary slot and memory headroom.",
-        "CPU calls are wall spans; GPU stream spans include launch gaps. Nested / parallel spans must not be added.",
-        "Queue residence and worker dispatch-to-result spans overlap across jobs / processes and the main trajectory.",
-        "Benchmark scope excludes CLI startup / private pretraining; cutoff and initial weights determine its workload.",
+    result = timeline(data)
+    phases = result["phases"]
+    heights = [
+        max(2.0, 0.30 * (max(len(p["cpu"]), len(p["gpu"])) + 4)) + (0.45 if p["wait"] else 0)
+        for p in phases
     ]
-    ax.text(0.2, 2.95, "\n".join(notes), va="top", fontsize=10, linespacing=1.6)
+    gaps = [0.58 if p.get("end_note") else 0.35 for p in phases]
+    height = sum(heights) + sum(gaps) + 2.5
+    fig, ax = plt.subplots(figsize=(15, height * 0.82))
+    ax.set(xlim=(0, 15), ylim=(height, 0))
+    ax.axis("off")
+    fig.subplots_adjust(left=0.015, right=0.985, top=0.98, bottom=0.02)
+    ax.text(7.5, 0.20, "CPU / GPU process timelines", ha="center", fontsize=18, weight="bold")
+    ax.text(
+        7.5,
+        0.58,
+        "Time flows downward · shared elapsed timestamps · loop interiors collapsed · spacing is schematic",
+        ha="center",
+        fontsize=10,
+        color="#526170",
+    )
+    ax.text(
+        3.8,
+        1.02,
+        "CPU timeline · main thread + coordinator / workers",
+        ha="center",
+        fontsize=11,
+        weight="bold",
+        color="#275d93",
+    )
+    ax.text(
+        11.2,
+        1.02,
+        "GPU timeline · main + auxiliary streams",
+        ha="center",
+        fontsize=11,
+        weight="bold",
+        color="#25724b",
+    )
+    for x, color in ((0.45, "#4b7aab"), (14.55, "#43966b")):
+        ax.annotate(
+            "",
+            xy=(x, height - 1.15),
+            xytext=(x, 1.2),
+            arrowprops=dict(arrowstyle="->", color=color, lw=2),
+        )
+
+    y = 1.35
+    for phase, span, gap in zip(phases, heights, gaps, strict=True):
+        top, bottom = y + 0.28, y + span - 0.25
+        duration = phase["end"] - phase["start"]
+        marker = "LOOP START · " if phase["loop"] else ""
+        ax.text(
+            7.5,
+            y,
+            f"{marker}{phase['name']} · wall {_seconds(duration)}",
+            fontsize=11,
+            ha="center",
+            va="center",
+            weight="bold",
+        )
+        for x, lane, color in ((0.8, "cpu", "#e9f1fa"), (8.1, "gpu", "#e5f4eb")):
+            unknown = lane == "gpu" and phase[lane][-1].startswith("Device timestamps")
+            ax.add_patch(
+                FancyBboxPatch(
+                    (x, top),
+                    6.1,
+                    bottom - top,
+                    boxstyle="round,pad=0.06",
+                    facecolor=color,
+                    edgecolor="#7a8c9b",
+                    hatch="/" if unknown else None,
+                    lw=0.7,
+                )
+            )
+            lines = phase[lane]
+            ax.text(
+                x + 0.15,
+                top + 0.12,
+                "\n".join(lines),
+                va="top",
+                fontsize=10.2,
+                linespacing=1.45,
+                color="#173044",
+            )
+            if lane == "cpu" and phase["wait"]:
+                wait = "\n".join(wrap("WAIT FOR: " + phase["wait"], width=78))
+                ax.text(
+                    x + 0.15,
+                    bottom - 0.13,
+                    wait,
+                    va="bottom",
+                    fontsize=9,
+                    color="#925000",
+                    bbox=dict(facecolor="#fff0ce", edgecolor="none", pad=3),
+                )
+        for stamp, at in ((phase["start"], top + 0.06), (phase["end"], bottom - 0.04)):
+            ax.text(
+                7.5,
+                at,
+                f"{stamp:.2f} s",
+                ha="center",
+                va="center",
+                fontsize=9,
+                color="#526170",
+                bbox=dict(facecolor="white", edgecolor="none", pad=1),
+            )
+        if phase["loop"]:
+            end = "LOOP END" if phase["complete"] else "LOOP STILL OPEN · window ends"
+            ax.text(7.5, bottom + 0.18, end, ha="center", fontsize=9.5, weight="bold")
+        if phase.get("end_note"):
+            ax.text(7.5, bottom + 0.42, phase["end_note"], ha="center", fontsize=9, color="#526170")
+        y += span + gap
+    notes = [
+        "Call durations are cumulative within each phase; nested CPU spans overlap. "
+        "GPU event spans include launch gaps / stream dependencies, not GPU utilization.",
+        "Each box spans its phase's wall window. Unmeasured GPU placement is hatched; "
+        "missing timing never means idle or zero work.",
+    ]
+    if not result["gpu_timestamps"]:
+        gpu = data.get("gpu_stream_seconds", {})
+        parts = [
+            f"{name} {_seconds(gpu[key])}"
+            for key, name in (("online_inference", "inference"), ("simulation", "real simulation"))
+            if key in gpu
+        ]
+        notes.append(
+            "This older recording has aggregate GPU timing only: " + "; ".join(parts)
+            if parts
+            else "Host-only recording; no device timestamp trace was captured."
+        )
+    notes.append(
+        "Benchmark traces exclude CLI startup / private pretraining. Actual-CLI audits "
+        "retain startup and explicitly mark unfinished collection windows."
+    )
+    ax.text(
+        0.8,
+        height - 0.8,
+        "\n".join(notes),
+        va="top",
+        fontsize=8.8,
+        color="#526170",
+        linespacing=1.45,
+    )
     output.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(output, dpi=160)
     fig.savefig(output.with_suffix(".svg"))
+    output.with_suffix(".timeline.json").write_text(json.dumps(result, indent=2), encoding="utf-8")
     plt.close(fig)
 
 
 def draw_workflow(data, output):
-    """Render a bounded actual-CLI audit without implying its cohort is complete."""
-    import matplotlib
-
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
-    from matplotlib.patches import FancyArrowPatch, FancyBboxPatch
-
-    timings = data.get("timings_by_phase", {}).get("collection", data["timings"])
-    startup = data.get("timings_by_phase", {}).get("startup", data["timings"])
-
-    def seconds(values, name):
-        return values.get(name, {}).get("seconds", 0)
-
-    final = data.get("final_collection") or data["samples"][-1]
-    collection = data.get("collection_window_seconds")
-    if collection is None:
-        collection = seconds(timings, "CudaSequentialQ._collect_step") + seconds(
-            timings, "CudaSequentialQ._prepare_collection"
-        )
-    active = final.get("active_games", 0)
-    pretraining = seconds(startup, "ForecastPretraining.advance")
-    workload = data.get("workload") or {}
-    roots = (data.get("pretraining") or {}).get(
-        "roots", workload.get("pretrain_roots", "configured")
-    )
-    passes = workload.get("pretrain_passes", "configured")
-    figure, ax = plt.subplots(figsize=(15, 9))
-    ax.set(xlim=(0, 15), ylim=(0, 9))
-    ax.axis("off")
-    figure.suptitle(
-        "Actual Peashooter CLI · startup and bounded collection window",
-        fontsize=18,
-        fontweight="bold",
-    )
-
-    def box(x, y, title, body, color, width=6.5, height=1.25):
-        ax.add_patch(
-            FancyBboxPatch(
-                (x, y),
-                width,
-                height,
-                boxstyle="round,pad=0.12",
-                facecolor=color,
-                edgecolor="#687787",
-            )
-        )
-        ax.text(x + 0.15, y + height - 0.18, title, fontsize=12, fontweight="bold", va="top")
-        ax.text(x + 0.15, y + height - 0.55, body, fontsize=11, va="top", linespacing=1.4)
-
-    def arrow(x1, y1, x2, y2):
-        ax.add_patch(
-            FancyArrowPatch(
-                (x1, y1), (x2, y2), arrowstyle="-|>", mutation_scale=14, color="#687787"
-            )
-        )
-
-    box(
-        0.3,
-        6.9,
-        "CPU + GPU · Import, load and initialize",
-        f"Other startup: {max(0, data['collection_started_seconds'] - pretraining):.1f} s\nCheckpoint weights: {seconds(startup, 'pvz_rl.learning.training.initial_weights'):.2f} s",
-        "#e8f0fa",
-    )
-    box(
-        8,
-        6.9,
-        "GPU + CPU · Private forecast pretraining",
-        f"{pretraining:.1f} s · {roots} roots · {passes} fitting passes\nReal collection starts {data['collection_started_seconds']:.1f} s after launch",
-        "#e6f4ec",
-    )
-    arrow(6.95, 7.5, 7.85, 7.5)
-    box(
-        0.3,
-        4.8,
-        "GPU + CPU WAIT · Interval labeling between decisions",
-        f"{seconds(timings, 'WaitOutcomes.advance'):.1f} s of this measured window\nSynchronous fork chunks, owned-root I/O and progress copies",
-        "#fff1d6",
-    )
-    box(
-        8,
-        4.8,
-        "GPU + CPU · Decide, step and retain experience",
-        f"{seconds(timings, 'CudaSequentialQ._collect_step'):.1f} s of this measured window\nPolicy / real step / teacher snapshots / trajectory accounting",
-        "#e8f0fa",
-    )
-    arrow(11.3, 6.75, 11.3, 6.2)
-    arrow(7.85, 5.45, 6.95, 5.45)
-    arrow(3.6, 4.65, 3.6, 4.15)
-    box(
-        0.3,
-        2.8,
-        "COLLECT remains open · Work still pending",
-        f"Window: {collection:.1f} s · {final.get('steps', 0):,} retained decisions\n{active} games active · {final.get('teacher', {}).get('roots', 0):,} teacher roots retained",
-        "#fff1d6",
-        width=14.2,
-    )
-    arrow(11.3, 4.65, 11.3, 4.15)
-    box(
-        0.3,
-        0.6,
-        "CPU → GPU → FIT · Required completion path",
-        "Publish absolute targets → build factual targets on CPU → project teacher lanes on CPU\nTeacher coverage / candidate simulations on GPU → publish labels → fitting may start",
-        "#e6f4ec",
-        width=14.2,
-    )
-    arrow(7.4, 2.65, 7.4, 2)
-    ax.text(
-        0.3,
-        2.35,
-        "These later phases are not assigned a full-cohort duration by this bounded window.",
-        fontsize=10,
-    )
-    output.parent.mkdir(parents=True, exist_ok=True)
-    figure.tight_layout(rect=(0, 0, 1, 0.95))
-    figure.savefig(output, dpi=160)
-    figure.savefig(output.with_suffix(".svg"))
-    plt.close(figure)
+    """Compatibility entry point; actual-CLI and benchmark inputs share two lanes."""
+    draw(data, output)
 
 
 def main():
