@@ -50,7 +50,8 @@ class ForkService:
             settings["vram_mib"] * 2**20, max(0, free - settings.get("headroom_mib", 0) * 2**20)
         )
         per_lane = sum(getattr(source, name)[0].nbytes for name in PHYSICAL) + 65536
-        queue_fixed = 5 * source.n * (20 + 4) * 8 + 96 + source.n * 8
+        candidates = settings.get("fork_candidates_per_root", 5)
+        queue_fixed = candidates * source.n * (20 + 4) * 8 + 104 + source.n * 8
         available = max(0, budget - queue_fixed - source.n * 8)
         count = min(
             settings["lanes"],

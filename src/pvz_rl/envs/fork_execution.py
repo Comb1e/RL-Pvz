@@ -46,7 +46,7 @@ class ForkExecution:
         self.job_ids = cp.full(batch.n, -1, cp.int64)
         self.next_job = cp.zeros(1, cp.int64)
         self.progress = cp.zeros(13, cp.int64)
-        self.capacity = 5 * source.n
+        self.capacity = settings.get("fork_candidates_per_root", 5) * source.n
         self.roots = cp.empty(self.capacity, cp.int64)
         self.actions = cp.empty_like(self.roots)
         self.field_only = cp.zeros_like(self.roots)
@@ -117,7 +117,7 @@ class ForkExecution:
     def begin(self, indices, actions, *, baseline=False, field_only=None):
         self.count, self.baseline = len(indices), baseline
         if self.count > self.capacity:
-            raise ValueError("Fork request exceeds five actions per main environment")
+            raise ValueError("Fork request exceeds its configured candidate capacity")
         self.workers = min(self.count, self.batch.n)
         self.batch.count = self.workers
         self.roots[: self.count].set(np.ascontiguousarray(indices, dtype=np.int64))
@@ -130,9 +130,9 @@ class ForkExecution:
         self.output[: self.count].fill(0)
         self.batch.header[:, schema.HEADER.index("enabled")] = 0
 
-    def advance(self, *, probe):
+    def advance(self, *, probe, download=True):
         if not self.count:
-            return np.zeros(13, np.int64)
+            return np.zeros(13, np.int64) if download else self.progress
         b, source, cp = self.batch, self.source, self.cp
         grid = (
             ((self.workers + self.threads - 1) // self.threads,) if self.packed else (self.workers,)
@@ -180,7 +180,7 @@ class ForkExecution:
             ),
         )
         # One progress synchronization: completion, ticks, hits and misses together.
-        return self.progress.get()
+        return self.progress.get() if download else self.progress
 
     def snapshot(self):
         return dict(

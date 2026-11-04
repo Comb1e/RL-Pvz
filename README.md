@@ -107,6 +107,31 @@ older recoveries preserve the legacy backend.
 `auxiliary_hybrid = true` additionally routes the teacher through the shared CPU/CUDA
 queue. Hybrid remains opt-in. Both families respect the combined auxiliary VRAM cap.
 
+The first forecast-enabled stage performs private forecast pretraining before real
+collection. Fresh runs use `training.forecasts.pretrain_execution = "device_pipeline_v1"`:
+larger GPU simulation waves share a queue, exact targets stay on the GPU, and a
+bounded CUDA graph reduces fitting overhead. The 2,048 roots, sampled actions,
+32-root optimizer panels, four passes and 256 updates remain unchanged. Preparation
+runs ahead on one CPU thread. Source roots, workers and label scratch share the
+auxiliary VRAM cap; the policy reserve covers fitting. Unfinished legacy resumes
+retain their original private-pretraining execution. Exact simulation labels are
+unchanged; padded CUDA fitting can introduce BF16 rounding differences from eager fitting.
+
+Measure the complete section, including allocation, graph capture and cleanup:
+
+```powershell
+.\.venv\Scripts\python.exe tools\benchmark_pretraining.py `
+  --weights runs\compact-stages\attacker_pre\final.zip `
+  --output runs\diagnostics\pretraining.json
+```
+
+The benchmark retains the normal 128-environment allocation and reports progress
+transfers, simulated work, memory bounds and whether the 10-second target was met.
+Use `--settings PATH` with a JSON list of forecast overrides to compare
+`pretrain_queue_panels`, `pretrain_simulation_lanes`, `pretrain_simulation_ticks`
+and `pretrain_graphs`. `--audit` hashes every panel's physical state, sampled actions
+and targets; its extra downloads are included in the reported time.
+
 Benchmark multiple execution settings on fixed cohorts before choosing tuning:
 
 ```powershell

@@ -1,11 +1,9 @@
 """Private random/scripted play pretraining, with independent counters and recovery."""
 
-import random
 from time import perf_counter
 
 import numpy as np
 import torch
-from pvz_game import LevelSpec, Spawn
 from pvz_game.cuda import CudaBatch
 from pvz_game.cuda.backend import projectile_bound
 
@@ -14,14 +12,14 @@ from pvz_rl.envs.cuda_features import CudaFeatures
 from pvz_rl.envs.cuda_snapshots import download_snapshots, upload_snapshots
 from pvz_rl.envs.encoding import BOARD_GLOBAL_FIELDS
 from pvz_rl.envs.fork_service import ForkService
-from pvz_rl.envs.scratch_game import scratch_game, set_initial_mowers
 from pvz_rl.envs.static_fork import reference_tau
 from pvz_rl.learning.cuda_buffer import trajectory_dtype
 from pvz_rl.learning.forecast_labels import baseline_features, effect_labels, outcome_codes
 from pvz_rl.learning.forecast_objective import forecast_auxiliary
+from pvz_rl.learning.pretraining_sampling import play_commands, prepare_roots, sample_actions
 
 
-class ForecastPretraining:
+class LegacyForecastPretraining:
     """generate → play → baseline → effects → fit → next panel.
 
     Only optimizer commits advance here. Main episodes, validation clocks,
@@ -96,55 +94,16 @@ class ForecastPretraining:
 
     def _generate(self):
         self.count = min(self.size, self.total - self.cursor)
-        snapshots = []
-        for index in range(self.count):
-            rng = random.Random(
-                (int(self.model.seed or 0) << 32) ^ (self.cursor + index) ^ 0xF0EC457
-            )
-            count = rng.randint(1, 8)
-            level = LevelSpec(
-                "forecast-pretraining",
-                tuple(
-                    Spawn(
-                        3501,
-                        rng.choice(self.cfg["environment"]["zombies"]),
-                        rng.randrange(5),
-                        x=rng.randrange(9 * self.source.rules.game["units_per_tile"]),
-                    )
-                    for _ in range(count)
-                ),
-                initial_sun=500,
-                mowers=False,
-            )
-            game = scratch_game(self.source.rules)
-            game.reset(level, rng.randrange(2**31))
-            set_initial_mowers(game, [r for r in range(5) if rng.random() < 0.5])
-            snapshots.append(game.snapshot())
+        snapshots = prepare_roots(
+            self.cfg, self.source.rules, self.model.seed, self.cursor, self.count
+        )
         self.source.header[:, 17] = 0
         upload_snapshots(self.source, snapshots, indices=range(self.count))
         self.play_tick, self.phase = 0, "play"
 
     def _play(self):
         legal = self.source.action_masks_device().get()
-        commands = np.zeros(self.size, np.int64)
-        for slot in range(self.count):
-            choices = np.flatnonzero(legal[slot])
-            rng = np.random.default_rng(
-                [int(self.model.seed or 0), self.cursor + slot, self.play_tick, 17]
-            )
-            if (self.cursor + slot) % 2 == 0:
-                commands[slot] = int(rng.choice(choices))
-            else:
-                # Public scripted economy/defense mixture: economy first, then
-                # spread shooters toward the left, paying every real cooldown.
-                priority = [1, 2, 8, 6, 3, 5, 7, 4]
-                candidates = [
-                    a
-                    for branch in priority
-                    for a in choices
-                    if a > 0 and (a - 1) // 45 + 1 == branch
-                ]
-                commands[slot] = int(candidates[0]) if candidates else 0
+        commands = play_commands(legal, self.model.seed, self.cursor, self.play_tick, self.count)
         ticks = min(self.source.max_step_ticks, 3501 - self.play_tick)
         self.source.step_device(self.source.cp.asarray(commands), ticks=ticks, per_tick=False)
         self.metrics["play_ticks"] += ticks * self.count
@@ -261,16 +220,11 @@ class ForecastPretraining:
                     -1 if absolute_outcomes(self.cfg) else np.array([10, 5, 1, 10])
                 )
                 legal = self.source.action_masks_device().get()
-                self.jobs = []
-                for root in range(self.count):
-                    rng = np.random.default_rng([int(self.model.seed or 0), self.cursor + root, 71])
-                    candidates = np.flatnonzero(legal[root])[1:]
-                    selected = rng.choice(candidates, min(5, len(candidates)), replace=False)
-                    for token, action in enumerate(selected):
-                        self.rows["effect_actions"][root, token] = action
-                        self.rows["effect_valid"][root, token] = True
-                        self.jobs.append((root, token))
-                    self.rows["action"][root] = selected[0] if len(selected) else 0
+                actions, valid, self.jobs = sample_actions(
+                    legal, self.model.seed, self.cursor, self.count
+                )
+                self.rows["effect_actions"], self.rows["effect_valid"] = actions, valid
+                self.rows["action"] = actions[:, 0]
                 self.service.begin(
                     [root for root, _ in self.jobs],
                     [self.rows["effect_actions"][r, t] for r, t in self.jobs],
@@ -310,3 +264,23 @@ class ForecastPretraining:
     def close(self):
         self.service.close()
         self.source = self.features = None
+
+
+class ForecastPretraining(LegacyForecastPretraining):
+    """Select execution without reinterpreting an unfinished legacy panel."""
+
+    def __new__(cls, model, state=None):
+        protocol = (
+            state.get("protocol", "legacy")
+            if state is not None
+            else model.cfg["training"]["forecasts"].get("pretrain_execution", "legacy")
+        )
+        if protocol == "device_pipeline_v1":
+            if not absolute_outcomes(model.cfg):
+                raise ValueError("Device private pretraining requires absolute outcomes")
+            from pvz_rl.learning.pretraining_pipeline import DeviceForecastPretraining
+
+            return DeviceForecastPretraining(model, state)
+        if protocol not in ("legacy", "device_pipeline_v1"):
+            raise ValueError(f"Unknown private pretraining execution: {protocol}")
+        return super().__new__(cls)

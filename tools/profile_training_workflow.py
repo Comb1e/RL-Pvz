@@ -220,6 +220,10 @@ def main():
     patch(sequential_training.CudaSequentialQ, "_phase", before=check_phase)
     for name in ("__init__", "advance", "_generate", "_play", "_effects", "_fit"):
         patch(forecast_pretraining.ForecastPretraining, name)
+    from pvz_rl.learning.pretraining_pipeline import DeviceForecastPretraining
+
+    for name in ("__init__", "advance", "_generate", "_play", "_effects", "_fit"):
+        patch(DeviceForecastPretraining, name, label=f"ForecastPretraining.{name}")
     for name in ("advance", "before", "observe", "_initialize", "_allocate", "_fill", "_run_chunk"):
         patch(peashooter_teacher.PeashooterTeacher, name)
     for name in ("advance", "finalize", "_spill_roots", "_root", "_allocate"):

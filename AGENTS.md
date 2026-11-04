@@ -93,6 +93,20 @@ This file owns project-specific invariants and the code map.
   is detached; potential shaping starts disabled. Private pretraining is deferred
   until the first fork-enabled stage, has separate counters and updates
   encoder/decoder/effect parameters only.
+- Fresh absolute private pretraining uses `device_pipeline_v1`: CPU preparation
+  may run ahead and baseline/candidate jobs share device simulation waves, but
+  root-indexed random/scripted choices, private-play cadence, five candidate slots,
+  32-root optimizer panels, consecutive passes and update order remain unchanged.
+  Cache only immutable device targets and request indices across fitting passes;
+  replay must recompute learned encoder/decoder activations. Bounded eager CUDA
+  capture may cover forward/backward, FP32 gradient transfer and clipping, never
+  optimizer/EMA warmup commits. Check finite loss/gradients before every commit.
+  Count roots/features, worker storage and conversion/results under the combined
+  auxiliary VRAM cap; retain policy headroom for graph scratch. Save wave size,
+  sampling, private physical/RNG continuations, unpublished targets and committed
+  pass/cursor state. Recreate CPU threads, events and graphs on restore; legacy
+  unfinished panels retain their saved interpretation. Include setup, capture and
+  teardown when comparing the 10-second private-pretraining target.
 - Main-game guarded CUDA traces record per-tick depth before defeat and actual home
   entries after mower resolution. Peashooter Waits privately past its gameplay
   cutoff; normal games add no tail. Loss/truncated futures remain censored.
@@ -171,6 +185,7 @@ Paths are relative to `src/pvz_rl/` unless stated otherwise.
 | `learning/reach_supervision.py`, `forecast_targets.py`, `forecast_labels.py`, `forecast_objective.py`, `forecast_metrics.py` | Versioned snapshot/factual constraints, hindsight, absolute outcomes and legacy signed effects, shared-forward losses and calibration. |
 | `learning/auxiliary_service.py`, `auxiliary_settings.py`, `async_teacher.py`, `envs/auxiliary_cpu.py`, `auxiliary_cuda.py`, `snapshot_packet.py`, `teacher_rules.py`, `outcome_math.py` | Shared execution with independent interval/teacher routing, immutable packed device roots, event-polled exact continuations, CPU workers and model-free simulation rules. |
 | `learning/effect_collection.py`, `wait_outcomes.py`, `forecast_pretraining.py`, `td_targets.py` | Saved candidate tickets, deferred absolute interval targets from real Wait prefixes, private pretraining and frozen-cohort n-step TD. |
+| `learning/pretraining_sampling.py`, `pretraining_pipeline.py`, `pretraining_graph.py`, repository `tools/benchmark_pretraining.py` | Shared model-free samples, bounded device-target pretraining, ordered optimizer commits, exact continuation recovery and complete-section timing/parameter sweeps. |
 | `learning/flat_q.py`, `objective.py`, `action_routing.py`, `placement_labels.py`, `bomb_objective.py` | Shared Q fitting/economics, legality attribution and automatic placement losses. |
 | `learning/peashooter_rules.py`, `peashooter_teacher.py`, `envs/lane_preparation.py`, `cuda_lane_oracle.py` | Prioritized lane targets and resumable bounded lane oracles. |
 | `learning/cuda_buffer.py`, `batch_transport.py`, `collection_scheduler.py`, `exploration.py` | Bounded trajectories/transport, decision tickets and committed species exploration. |

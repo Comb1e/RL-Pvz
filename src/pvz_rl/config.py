@@ -1114,6 +1114,22 @@ def validate_config(cfg: dict) -> None:
     for key in ("warmup_games", "injection_after_games", "pretrain_roots"):
         if type(forecasts.get(key)) is not int or forecasts[key] < 0:
             raise ValueError(f"training.forecasts.{key} must be a nonnegative integer")
+    if forecasts.get("pretrain_execution", "legacy") not in ("legacy", "device_pipeline_v1"):
+        raise ValueError("Invalid training.forecasts.pretrain_execution")
+    if type(forecasts.get("pretrain_graphs", False)) is not bool:
+        raise ValueError("training.forecasts.pretrain_graphs must be boolean")
+    for key in ("pretrain_queue_panels", "pretrain_simulation_lanes", "pretrain_simulation_ticks"):
+        if key in forecasts and (type(forecasts[key]) is not int or forecasts[key] <= 0):
+            raise ValueError(f"training.forecasts.{key} must be a positive integer")
+    if forecasts.get("pretrain_execution", "legacy") == "device_pipeline_v1" and any(
+        key not in forecasts
+        for key in (
+            "pretrain_queue_panels",
+            "pretrain_simulation_lanes",
+            "pretrain_simulation_ticks",
+        )
+    ):
+        raise ValueError("Device pretraining requires explicit queue, lane and chunk settings")
     for key in ("shaping_weight", "initial_discount_half_life_steps", "discount_half_life_steps"):
         value = forecasts.get(key)
         if (

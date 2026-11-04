@@ -19,6 +19,70 @@ def forecast_eligible(rows):
     return rows["reach_valid"] & (threat_eligible(rows) | rows["effect_valid"].any(-1))
 
 
+class PreparedAbsoluteEffects:
+    """Immutable, device-resident requests reused across private fitting passes.
+
+    Uses the same null/candidate/lane/term/root normalization as _effect_objective.
+    Only indices and targets are cached: learned board/decoder memory is call-local.
+    """
+
+    def __init__(self, actions, valid, null_targets, candidate_targets, *, padded=False):
+        device = null_targets.device
+        roots, slots = np.nonzero(valid & (actions != 0))
+        selected = actions[roots, slots]
+        branches, tiles = (selected - 1) // 45 + 1, (selected - 1) % 45
+        missing = sorted(set(zip(roots.tolist(), branches.tolist(), strict=True)))
+        lookup = {key: i for i, key in enumerate(missing)}
+        decoder_rows = [r for r, _ in missing]
+        decoder_branches = [b for _, b in missing]
+        gather = [lookup[r, b] for r, b in zip(roots.tolist(), branches.tolist(), strict=True)]
+        target_roots, target_slots = roots, slots
+        request_count = len(roots)
+        if padded and request_count:
+            size = actions.size
+            decoder_rows += [0] * (size - len(missing))
+            decoder_branches += [1] * (size - len(missing))
+            gather += [0] * (size - request_count)
+            roots = np.pad(roots, (0, size - request_count))
+            tiles = np.pad(tiles, (0, size - request_count))
+        self.rows = torch.tensor(decoder_rows, device=device, dtype=torch.long)
+        self.branches = torch.tensor(decoder_branches, device=device, dtype=torch.long)
+        self.gather = torch.tensor(
+            gather,
+            device=device,
+            dtype=torch.long,
+        )
+        self.tiles = torch.as_tensor(tiles, device=device, dtype=torch.long)
+        self.roots = torch.as_tensor(roots, device=device, dtype=torch.long)
+        self.null_targets = null_targets.long()
+        targets = candidate_targets[
+            torch.as_tensor(target_roots, device=device),
+            torch.as_tensor(target_slots, device=device),
+        ].long()
+        self.targets = torch.zeros((len(roots), 5, 4), device=device, dtype=torch.long)
+        self.targets[:request_count] = targets
+        self.request_mask = torch.arange(len(roots), device=device) < request_count
+        self.tokens = torch.as_tensor(
+            1 + np.bincount(target_roots, minlength=len(actions)), device=device
+        )
+        self.count = len(actions)
+
+    def loss(self, policy, observations, memory):
+        null_logits = policy.effect_values(policy.null_features(memory))
+        per_root = effect_loss(null_logits, self.null_targets, absolute=True).mean(-1)
+        if len(self.rows):
+            decoded = policy.tile_features(
+                observations, self.branches, rows=self.rows, memory=memory
+            )
+            predictions = policy.effect_values(decoded[self.gather, self.tiles])
+            per_root = per_root.index_add(
+                0,
+                self.roots,
+                effect_loss(predictions, self.targets, absolute=True).mean(-1) * self.request_mask,
+            )
+        return (per_root / self.tokens).sum() / max(1, self.count)
+
+
 def forecast_auxiliary(
     policy,
     observations,
