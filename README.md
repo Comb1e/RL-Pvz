@@ -139,6 +139,28 @@ Record a real collection and draw its CPU/GPU states and wait causes:
 
 CPU call spans, GPU stream spans, summed worker/job times and collection wall time
 are reported separately because concurrent work overlaps.
+These fixed-cohort benchmarks bypass CLI startup and private pretraining, disable
+the viewer, and use the requested cutoff and optional `--weights`. The 60-second
+random-weight control does not estimate a full initialized training cohort.
+
+Time the actual CLI path, retaining its weights, pretraining, viewer and game cutoff:
+
+```powershell
+.\.venv\Scripts\python.exe tools\profile_training_workflow.py `
+  --output runs\diagnostics\workflow.json --collect-seconds 180 -- train `
+  --until-stage-complete --stage peashooter --gpu 0 --gpu-profile rtx4070-laptop `
+  --init-from runs\compact-stages\attacker_pre\final.zip `
+  --output runs\diagnostics\workflow-run
+.\.venv\Scripts\python.exe tools\draw_collection_process.py `
+  --input runs\diagnostics\workflow.json --output runs\diagnostics\workflow.png
+```
+
+Use an unused diagnostic run directory. The profiler stops between collection operations
+after its wall window, saves recovery, and reports startup/collection/recovery
+separately; one bounded labeling unit can extend the window. `--cprofile` adds
+Python call profiling during collection. Fresh fork-enabled runs first pretrain
+the forecast on 2,048 private roots with four passes; weights-only initialization
+starts those counters afresh. The RTX 4070 Laptop profile disables compilation.
 
 Private pretraining retains its sampling procedure and separate counters, using
 public-only inputs and absolute targets. Saved recoveries retain their original

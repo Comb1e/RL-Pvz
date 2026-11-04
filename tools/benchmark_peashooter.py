@@ -176,6 +176,13 @@ def measure(base, settings, args, workspace):
                     games=count,
                     ended=collected,
                     setup_seconds=setup_done - started,
+                    workload=dict(
+                        cutoff_seconds=args.seconds,
+                        initial_weights=str(args.weights) if args.weights else "random",
+                        private_pretraining="bypassed",
+                        live_view=False,
+                        seed=args.seed,
+                    ),
                 )
             print(
                 json.dumps(

@@ -81,7 +81,9 @@ class CollectionTrace:
 
         setattr(owner, name, measured)
 
-    def finish(self, path, *, settings, auxiliary, games, ended=None, setup_seconds=0):
+    def finish(
+        self, path, *, settings, auxiliary, games, ended=None, setup_seconds=0, workload=None
+    ):
         finished = ended if ended is not None else perf_counter()
         for owner, name, original in reversed(self.originals):
             setattr(owner, name, original)
@@ -95,6 +97,7 @@ class CollectionTrace:
             protocol="measured-collection-process-v1",
             games=games,
             settings=settings,
+            workload=workload,
             collection_seconds=finished - self.origin,
             setup_seconds=setup_seconds,
             main_trajectory_seconds=(self.first_drain or finished) - self.origin,
@@ -134,7 +137,7 @@ def draw(data, output):
     ax.set(xlim=(0, 15), ylim=(0, 12))
     ax.axis("off")
     fig.suptitle(
-        f"Real Peashooter collection · {data['games']} environments · {total + setup:.2f} s "
+        f"Fixed-cohort Peashooter collection · {data['games']} environments · {total + setup:.2f} s "
         f"({(total + setup) / data['games']:.3f} s/env)",
         fontsize=17,
         fontweight="bold",
@@ -304,6 +307,7 @@ def draw(data, output):
         "CUDA admission waits for main-stream readiness, an available auxiliary slot and memory headroom.",
         "CPU calls are wall spans; GPU stream spans include launch gaps. Nested / parallel spans must not be added.",
         "Queue residence and worker dispatch-to-result spans overlap across jobs / processes and the main trajectory.",
+        "Benchmark scope excludes CLI startup / private pretraining; cutoff and initial weights determine its workload.",
     ]
     ax.text(0.2, 2.95, "\n".join(notes), va="top", fontsize=10, linespacing=1.6)
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -312,12 +316,136 @@ def draw(data, output):
     plt.close(fig)
 
 
+def draw_workflow(data, output):
+    """Render a bounded actual-CLI audit without implying its cohort is complete."""
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from matplotlib.patches import FancyArrowPatch, FancyBboxPatch
+
+    timings = data.get("timings_by_phase", {}).get("collection", data["timings"])
+    startup = data.get("timings_by_phase", {}).get("startup", data["timings"])
+
+    def seconds(values, name):
+        return values.get(name, {}).get("seconds", 0)
+
+    final = data.get("final_collection") or data["samples"][-1]
+    collection = data.get("collection_window_seconds")
+    if collection is None:
+        collection = seconds(timings, "CudaSequentialQ._collect_step") + seconds(
+            timings, "CudaSequentialQ._prepare_collection"
+        )
+    active = final.get("active_games", 0)
+    pretraining = seconds(startup, "ForecastPretraining.advance")
+    workload = data.get("workload") or {}
+    roots = (data.get("pretraining") or {}).get(
+        "roots", workload.get("pretrain_roots", "configured")
+    )
+    passes = workload.get("pretrain_passes", "configured")
+    figure, ax = plt.subplots(figsize=(15, 9))
+    ax.set(xlim=(0, 15), ylim=(0, 9))
+    ax.axis("off")
+    figure.suptitle(
+        "Actual Peashooter CLI · startup and bounded collection window",
+        fontsize=18,
+        fontweight="bold",
+    )
+
+    def box(x, y, title, body, color, width=6.5, height=1.25):
+        ax.add_patch(
+            FancyBboxPatch(
+                (x, y),
+                width,
+                height,
+                boxstyle="round,pad=0.12",
+                facecolor=color,
+                edgecolor="#687787",
+            )
+        )
+        ax.text(x + 0.15, y + height - 0.18, title, fontsize=12, fontweight="bold", va="top")
+        ax.text(x + 0.15, y + height - 0.55, body, fontsize=11, va="top", linespacing=1.4)
+
+    def arrow(x1, y1, x2, y2):
+        ax.add_patch(
+            FancyArrowPatch(
+                (x1, y1), (x2, y2), arrowstyle="-|>", mutation_scale=14, color="#687787"
+            )
+        )
+
+    box(
+        0.3,
+        6.9,
+        "CPU + GPU · Import, load and initialize",
+        f"Other startup: {max(0, data['collection_started_seconds'] - pretraining):.1f} s\nCheckpoint weights: {seconds(startup, 'pvz_rl.learning.training.initial_weights'):.2f} s",
+        "#e8f0fa",
+    )
+    box(
+        8,
+        6.9,
+        "GPU + CPU · Private forecast pretraining",
+        f"{pretraining:.1f} s · {roots} roots · {passes} fitting passes\nReal collection starts {data['collection_started_seconds']:.1f} s after launch",
+        "#e6f4ec",
+    )
+    arrow(6.95, 7.5, 7.85, 7.5)
+    box(
+        0.3,
+        4.8,
+        "GPU + CPU WAIT · Interval labeling between decisions",
+        f"{seconds(timings, 'WaitOutcomes.advance'):.1f} s of this measured window\nSynchronous fork chunks, owned-root I/O and progress copies",
+        "#fff1d6",
+    )
+    box(
+        8,
+        4.8,
+        "GPU + CPU · Decide, step and retain experience",
+        f"{seconds(timings, 'CudaSequentialQ._collect_step'):.1f} s of this measured window\nPolicy / real step / teacher snapshots / trajectory accounting",
+        "#e8f0fa",
+    )
+    arrow(11.3, 6.75, 11.3, 6.2)
+    arrow(7.85, 5.45, 6.95, 5.45)
+    arrow(3.6, 4.65, 3.6, 4.15)
+    box(
+        0.3,
+        2.8,
+        "COLLECT remains open · Work still pending",
+        f"Window: {collection:.1f} s · {final.get('steps', 0):,} retained decisions\n{active} games active · {final.get('teacher', {}).get('roots', 0):,} teacher roots retained",
+        "#fff1d6",
+        width=14.2,
+    )
+    arrow(11.3, 4.65, 11.3, 4.15)
+    box(
+        0.3,
+        0.6,
+        "CPU → GPU → FIT · Required completion path",
+        "Publish absolute targets → build factual targets on CPU → project teacher lanes on CPU\nTeacher coverage / candidate simulations on GPU → publish labels → fitting may start",
+        "#e6f4ec",
+        width=14.2,
+    )
+    arrow(7.4, 2.65, 7.4, 2)
+    ax.text(
+        0.3,
+        2.35,
+        "These later phases are not assigned a full-cohort duration by this bounded window.",
+        fontsize=10,
+    )
+    output.parent.mkdir(parents=True, exist_ok=True)
+    figure.tight_layout(rect=(0, 0, 1, 0.95))
+    figure.savefig(output, dpi=160)
+    figure.savefig(output.with_suffix(".svg"))
+    plt.close(figure)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--input", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
-    draw(json.loads(args.input.read_text(encoding="utf-8")), args.output)
+    data = json.loads(args.input.read_text(encoding="utf-8"))
+    if "command" in data and "timings" in data:
+        draw_workflow(data, args.output)
+    else:
+        draw(data, args.output)
 
 
 if __name__ == "__main__":
