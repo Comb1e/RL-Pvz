@@ -53,6 +53,22 @@ This file owns project-specific invariants and the code map.
   retain work. Charge capture/roots/workers/cache against the shared fork VRAM cap
   and metadata against trajectory RAM; spill pending physical roots to owned storage.
   Saved `wait_interval_v2` and earlier recoveries retain their original lifecycle.
+- Public-model auxiliary execution uses one hybrid service for interval outcomes
+  and the unchanged Peashooter teacher. Freeze occupied physical records before
+  real mutation; asynchronous host buffers and device roots remain owned until
+  their events finish. Main policy/environment work has GPU priority; admit only
+  one bounded low-priority CUDA chunk and use measured CPU assistance. Never use
+  GPU utilization percentages as admission control. Worker processes import no
+  model/CUDA modules, own RNG/physical state, and persist across cohorts.
+  Queue/dependency state, partial CPU/CUDA continuations and unpublished results
+  survive recovery. Publish each stable job identity once. Checkpoints quiesce at
+  chunk boundaries; events/process handles are execution resources, not state.
+  Charge capture/packets/roots/workers/caches to the combined auxiliary VRAM cap
+  and CPU worker reservations/metadata to shared trajectory RAM. Spill I/O and
+  decoding belong to the coordinator. Resource failure preserves work; it never
+  creates a label. Inference, legacy policy dependencies and private pretraining
+  keep their saved workflows. Choose tuning by total time per environment and
+  report main-decision latency and cohort drain separately.
 - Legal non-Wait proposals always receive outcome supervision. Effective Waits
   sample alternatives with the configured probability. Two slots hold a legal
   branch runner-up (ties by action ID) and a uniform remaining legal action;
@@ -144,6 +160,7 @@ Paths are relative to `src/pvz_rl/` unless stated otherwise.
 | `learning/training.py`, `cuda_q.py`, `sequential_training.py` | Cohort orchestration, collection/fitting, reporting and atomic recovery. |
 | `envs/probe_intervals.py`, `wait_capture.py`, `static_fork.py`, `cuda_static_fork.py`, `fork_service.py`, `fork_execution.py/.cu` | Legacy interval probes, exact real-tick capture, isolated field/probe phases, bounded refillable workers, verified suffix caching and queue recovery. |
 | `learning/reach_supervision.py`, `forecast_targets.py`, `forecast_labels.py`, `forecast_objective.py`, `forecast_metrics.py` | Versioned snapshot/factual constraints, hindsight, absolute outcomes and legacy signed effects, shared-forward losses and calibration. |
+| `learning/auxiliary_service.py`, `auxiliary_settings.py`, `async_teacher.py`, `envs/auxiliary_cpu.py`, `auxiliary_cuda.py`, `snapshot_packet.py`, `teacher_rules.py`, `outcome_math.py` | Shared hybrid execution, exact continuation transport, CPU workers and model-free simulation rules. |
 | `learning/effect_collection.py`, `wait_outcomes.py`, `forecast_pretraining.py`, `td_targets.py` | Saved candidate tickets, deferred absolute interval targets from real Wait prefixes, private pretraining and frozen-cohort n-step TD. |
 | `learning/flat_q.py`, `objective.py`, `action_routing.py`, `placement_labels.py`, `bomb_objective.py` | Shared Q fitting/economics, legality attribution and automatic placement losses. |
 | `learning/peashooter_rules.py`, `peashooter_teacher.py`, `envs/lane_preparation.py`, `cuda_lane_oracle.py` | Prioritized lane targets and resumable bounded lane oracles. |
@@ -151,6 +168,7 @@ Paths are relative to `src/pvz_rl/` unless stated otherwise.
 | `learning/tile_curriculum.py`, `validation_trigger.py`, `budget.py`, `training_requirements.py` | Stage transitions, validation qualification, budgets and model/objective identities. |
 | `learning/checkpoints.py`, `training_artifacts.py`, `performance.py`, `demo_initialization.py` | Recovery/weights, artifact retention, execution settings and verified human demo fitting. |
 | `evaluation/`, `monitoring/`, repository diagnostic tools | Greedy evaluation, CPU verification, bounded profiling and benchmarks. |
+| Repository `tools/benchmark_peashooter.py`, `tools/draw_collection_process.py` | Seed-matched total-time/latency sweeps, optional real-collection CPU/GPU timing and measured state diagrams with explicit wait dependencies. |
 | `presentation/` | Demo recording/replay, live cohort subscriptions and retained reports. `reach_view.py` separates factual threat, proposed-action field/probe predictions and exact/partial targets; disabled effects and unknown targets are explicit. Viewers reuse timestamped episode-scoped journal predictions without model calls. |
 
 ## Test ownership

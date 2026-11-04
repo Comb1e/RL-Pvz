@@ -166,6 +166,16 @@ class CudaSequentialQ(CudaCohortLifecycle):
         )
 
     def _prepare_collection(self, callback):
+        if hasattr(callback, "check_deadline"):
+            callback.check_deadline()
+        auxiliary = getattr(self.env, "auxiliary", None)
+        if auxiliary is not None:
+            if self.peashooter_rule_training:
+                with atomic_transition():
+                    self._peashooter_teacher.advance()
+                    if not self.env.enabled_envs.any() and not self._scheduler.pending.any():
+                        self._peashooter_teacher.seal()
+            self._stats["auxiliary_simulation"] = dict(auxiliary.metrics)
         if absolute_outcomes(self.cfg):
             self._scheduler.draining = getattr(self, "_pending_effect", None) is not None
             owner = getattr(self, "_wait_outcomes", None)
@@ -176,6 +186,10 @@ class CudaSequentialQ(CudaCohortLifecycle):
                         owner.advance()
                         if not self.env.enabled_envs.any() and not self._scheduler.pending.any():
                             if not owner.finalize():
+                                if auxiliary is not None:
+                                    from time import sleep
+
+                                    sleep(0.001)
                                 if hasattr(callback, "log_progress"):
                                     callback.log_progress()
                                 return False
@@ -236,6 +250,10 @@ class CudaSequentialQ(CudaCohortLifecycle):
                 self._phase_times["collect"] += perf_counter() - started
             if hasattr(callback, "log_progress"):
                 callback.log_progress()
+            if auxiliary is not None and not ready:
+                from time import sleep
+
+                sleep(0.001)
             return False
         return True
 
@@ -342,6 +360,15 @@ class CudaSequentialQ(CudaCohortLifecycle):
             from pvz_rl.learning.reach_supervision import ReachSupervision
 
             self._reach = ReachSupervision(self.env, self._buffer)
+        from pvz_rl.learning.auxiliary_settings import enabled as hybrid_enabled
+
+        if hybrid_enabled(self.cfg) and (
+            self.peashooter_rule_training
+            or (self.reach_training and forecast_forks_enabled(self.cfg, self.tile_skills.phase))
+        ):
+            from pvz_rl.learning.auxiliary_service import AuxiliarySimulationService
+
+            self.env.auxiliary = AuxiliarySimulationService(self.env, self._buffer)
         if self.peashooter_rule_training:
             from pvz_rl.learning.peashooter_teacher import PeashooterTeacher
 
@@ -362,6 +389,8 @@ class CudaSequentialQ(CudaCohortLifecycle):
             from pvz_rl.learning.wait_outcomes import WaitOutcomes
 
             self._wait_outcomes = WaitOutcomes(self.env, self._buffer)
+        if getattr(self.env, "auxiliary", None) is not None:
+            self.env.auxiliary.start()
         if compilation_requested(self.cfg["training"]["performance"]):
             for encoder in self._teacher.encoders:
                 if encoder.compilation_status == "disabled":
@@ -472,6 +501,9 @@ class CudaSequentialQ(CudaCohortLifecycle):
                     + (self._reach.estimated_bytes if self.reach_training else 0)
                 ):
                     raise MemoryError("Shared RAM budget cannot hold placement/reach metadata")
+            if getattr(self.env, "auxiliary", None) is not None:
+                self._stats["auxiliary_simulation"] = dict(self.env.auxiliary.metrics)
+                self.env.auxiliary.close()
             for encoder in self.policy.encoders:
                 encoder.release_collection()
             if getattr(self, "_teacher", None) is not None:
@@ -485,6 +517,16 @@ class CudaSequentialQ(CudaCohortLifecycle):
         super()._phase(phase, callback)
 
     def _collect_step(self, callback, *, draining=False):
+        auxiliary = getattr(self.env, "auxiliary", None)
+        if auxiliary is not None:
+            auxiliary.main_start()
+        try:
+            return self._collect_step_body(callback, draining=draining)
+        finally:
+            if auxiliary is not None:
+                auxiliary.main_end()
+
+    def _collect_step_body(self, callback, *, draining=False):
         if not draining:
             check_transition_interruption()
         self._collection_callback = callback
@@ -679,7 +721,16 @@ class CudaSequentialQ(CudaCohortLifecycle):
                     ),
                 )
             if self.peashooter_rule_training:
-                self._peashooter_teacher.before(actions, executing, branch_available)
+                if getattr(env, "auxiliary", None) is not None:
+                    self._peashooter_teacher.before(
+                        actions,
+                        executing,
+                        branch_available,
+                        self._pending_effect,
+                        issued=issued_host,
+                    )
+                else:
+                    self._peashooter_teacher.before(actions, executing, branch_available)
             if self.reach_training:
                 self._reach.before(actions, executing)
             if getattr(self, "_wait_outcomes", None) is not None:
@@ -731,6 +782,8 @@ class CudaSequentialQ(CudaCohortLifecycle):
                         wait_checks=checks.wait_checks,
                     ),
                 )
+            if getattr(env, "auxiliary", None) is not None:
+                env.auxiliary.main_end()
             previous_wait = env.handoff.wait_seconds
             env.handoff.wait()
             for encoder in self.policy.encoders:
@@ -793,6 +846,8 @@ class CudaSequentialQ(CudaCohortLifecycle):
                 :, [REWARD_FIELDS.index(k) for k in ("home_outer_entries", "home_inner_entries")]
             ]
             staging = env.handoff.nbytes + self._scheduler.retained_bytes
+            if getattr(env, "auxiliary", None) is not None:
+                staging += env.auxiliary.estimated_bytes
             if env.static_forks is not None:
                 staging += env.static_forks.host_bytes
             if getattr(self, "_pending_effect", None) is not None:
@@ -1735,6 +1790,24 @@ class CudaSequentialQ(CudaCohortLifecycle):
                 self._reach = ReachSupervision(self.env, self._buffer)
             else:
                 raise ValueError("Missing private reach recovery; start fresh")
+        from pvz_rl.learning.auxiliary_settings import enabled as hybrid_enabled
+
+        if (
+            self._buffer is not None
+            and self.phase == CohortPhase.COLLECT
+            and (
+                self.peashooter_rule_training
+                or (
+                    self.reach_training and forecast_forks_enabled(self.cfg, self.tile_skills.phase)
+                )
+            )
+            and (hybrid_enabled(self.cfg) or (extra and extra.get("auxiliary_simulation")))
+        ):
+            from pvz_rl.learning.auxiliary_service import AuxiliarySimulationService
+
+            self.env.auxiliary = AuxiliarySimulationService(
+                self.env, self._buffer, extra.get("auxiliary_simulation") if extra else None
+            )
         if extra and extra.get("peashooter_teacher") is not None:
             from zipfile import ZipFile
 
@@ -1838,6 +1911,8 @@ class CudaSequentialQ(CudaCohortLifecycle):
             from pvz_rl.learning.effect_collection import validate_effect_request
 
             validate_effect_request(self._pending_effect, self)
+        if getattr(self.env, "auxiliary", None) is not None:
+            self.env.auxiliary.start()
         if extra and extra.get("collection_valid") is not None and self._runner is not None:
             self._runner.valid &= extra["collection_valid"].to(self.device)
         if extra and extra.get("forecast_schedule"):
@@ -1873,7 +1948,26 @@ class CudaSequentialQ(CudaCohortLifecycle):
                         encoder.activation_checkpointing = False
 
     def _extra_runtime(self):
+        auxiliary = getattr(self.env, "auxiliary", None)
+        if auxiliary is None:
+            return self._extra_runtime_body()
+        with auxiliary.quiescent():
+            return self._extra_runtime_body()
+
+    def _extra_runtime_body(self):
+        pending = getattr(self, "_pending_effect", None)
+        if pending is not None and getattr(self.env, "auxiliary", None) is not None:
+            pending = dict(
+                pending,
+                pre_states={
+                    k: v.resolve(wait=True) if hasattr(v, "resolve") else v
+                    for k, v in pending["pre_states"].items()
+                },
+            )
         skills = dict(
+            auxiliary_simulation=self.env.auxiliary.snapshot()
+            if getattr(self.env, "auxiliary", None) is not None
+            else None,
             forecast_pretraining=self._pretrainer.snapshot()
             if getattr(self, "_pretrainer", None)
             else None,
@@ -1881,7 +1975,7 @@ class CudaSequentialQ(CudaCohortLifecycle):
             td_preparation=self._td_builder.snapshot()
             if getattr(self, "_td_builder", None)
             else None,
-            pending_effect=getattr(self, "_pending_effect", None),
+            pending_effect=pending,
             wait_outcomes=self._wait_outcomes.snapshot()
             if getattr(self, "_wait_outcomes", None) is not None
             else None,

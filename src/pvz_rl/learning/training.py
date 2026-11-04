@@ -362,6 +362,13 @@ class ResearchCallback(BaseCallback):
                     self.model.cohort_metrics.get("wait_outcomes", {}),
                 )
             ),
+            "auxiliary_simulation": dict(
+                getattr(
+                    getattr(self.model.env, "auxiliary", None),
+                    "metrics",
+                    self.model.cohort_metrics.get("auxiliary_simulation", {}),
+                )
+            ),
             "collection_policy": "network",
             "fitting_objective": (
                 RULE_OBJECTIVE

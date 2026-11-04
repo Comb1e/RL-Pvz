@@ -9,6 +9,9 @@ import numpy as np
 import torch
 from torch.nn import functional as F
 
+from pvz_rl.envs.outcome_math import depth_code as depth_code
+from pvz_rl.envs.outcome_math import time_bin
+
 FORECAST_PROTOCOL = "static-fork-threat-effect-v1"
 DEPTH_CLASSES = 11
 TIME_CLASSES = 6
@@ -30,20 +33,6 @@ def effect_blocks(logits, *, absolute=False):
         if absolute
         else blocks
     )
-
-
-def depth_code(x, units=1000, house=-500):
-    if x <= house:
-        return 10
-    return max(0, min(9, 9 - max(0, int(x) // units)))
-
-
-def time_bin(ticks, tau):
-    """The right-open thresholds make an exact tau breach part of bin 1."""
-    ticks = np.asarray(ticks)
-    return np.where(
-        ticks < 0, 5, np.searchsorted(np.array([1, 2, 4, 8]) * tau, ticks, side="right")
-    ).astype(np.int8)
 
 
 def outcome_codes(outcomes, tau):

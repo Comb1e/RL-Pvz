@@ -1203,7 +1203,18 @@ def validate_config(cfg: dict) -> None:
         value = performance.get(key, default)
         if type(value) is not int or value < 1:
             raise ValueError(f"training.performance.{key} must be a positive integer")
+    from pvz_rl.learning.auxiliary_settings import validate_auxiliary_settings
+
+    validate_auxiliary_settings(performance)
     if set(performance) - {
+        "auxiliary_hybrid",
+        "auxiliary_cpu_workers",
+        "auxiliary_worker_ram_mib",
+        "auxiliary_cuda_target_ms",
+        "auxiliary_vram_mib",
+        "auxiliary_spill_gib",
+        "auxiliary_interval_lanes",
+        "auxiliary_teacher_lanes",
         "fork_packed",
         "fork_threads",
         "fork_suffix_cache",

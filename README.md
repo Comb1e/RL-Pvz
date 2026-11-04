@@ -97,6 +97,49 @@ unfinished suffix continues from its saved state. Field targets remain specific
 to each decision. Collection proceeds with pending labels, which finish before
 fitting. Inference and greedy validation run no field/probe simulations.
 
+Public-model training can run interval outcomes and the Peashooter teacher through a
+shared hybrid queue with `training.performance.auxiliary_hybrid = true`.
+The main environment has GPU priority; short asynchronous
+CUDA chunks and persistent CPU processes finish exact labels in the background.
+Both families share the auxiliary VRAM cap. Pending snapshots spill within the
+configured storage limit, and fitting waits for every required label. Resume can
+refresh these execution settings without changing saved objectives or targets.
+
+Benchmark multiple execution settings on fixed cohorts before choosing tuning:
+
+```powershell
+.\.venv\Scripts\python.exe tools\benchmark_peashooter.py `
+  --output runs\diagnostics\hybrid.json --envs 128 --seconds 90 `
+  --auxiliary-workers 4 8 12 --auxiliary-ms 1 2 --modes hybrid
+```
+
+Compare `--modes sync cuda hybrid deferred` for synchronous execution,
+asynchronous CUDA, hybrid workers and a collection-latency control that defers
+simulation until collection ends. Results report total seconds per environment,
+spawn-decision latency and simulated work. `auxiliary_*` settings live under
+`training.performance`; existing stage resource limits remain upper bounds.
+The warmed 4/8/12-worker screen selected four CPU workers and 2 ms chunks among
+asynchronous settings. Small cohorts did not beat synchronous execution, and the
+5% decision-latency target was unmet; use total seconds/env to compare your workload.
+The 128-env, 60-second diagnostic collected and labeled in 130.0 s with hybrid
+execution versus 98.9 s synchronously. Hybrid remains opt-in; synchronous is the
+default until the coordinator and label drain improve.
+
+Record a real collection and draw its CPU/GPU states and wait causes:
+
+```powershell
+.\.venv\Scripts\python.exe tools\benchmark_peashooter.py `
+  --output runs\diagnostics\process.json --envs 128 --seconds 60 `
+  --modes hybrid --auxiliary-workers 4 --auxiliary-ms 2 `
+  --warmup 0 --repetitions 1 --eager --process-trace
+.\.venv\Scripts\python.exe tools\draw_collection_process.py `
+  --input runs\diagnostics\process.hybrid-4-0.process.json `
+  --output runs\diagnostics\process.png
+```
+
+CPU call spans, GPU stream spans, summed worker/job times and collection wall time
+are reported separately because concurrent work overlaps.
+
 Private pretraining retains its sampling procedure and separate counters, using
 public-only inputs and absolute targets. Saved recoveries retain their original
 supervision and collection behavior. Reports separate borrowed real ticks,

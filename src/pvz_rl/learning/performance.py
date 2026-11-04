@@ -4,6 +4,14 @@ import copy
 
 ENCODER_SETTINGS = ("encoder_microbatch", "encoder_token_budget", "attention_query_chunk")
 PERFORMANCE_SETTINGS = (
+    "auxiliary_hybrid",
+    "auxiliary_cpu_workers",
+    "auxiliary_worker_ram_mib",
+    "auxiliary_cuda_target_ms",
+    "auxiliary_vram_mib",
+    "auxiliary_spill_gib",
+    "auxiliary_interval_lanes",
+    "auxiliary_teacher_lanes",
     "fork_packed",
     "fork_threads",
     "fork_suffix_cache",

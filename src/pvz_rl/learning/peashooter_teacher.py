@@ -33,7 +33,10 @@ class SnapshotStore:
     def __init__(self, buffer):
         self.path = buffer.path / "peashooter"
         self.path.mkdir(exist_ok=True)
-        self.limit = min(buffer.cfg["training"]["peashooter_rules"].get("snapshot_cache_mib", 256) * 2**20, buffer.ram_bytes // 8)
+        self.limit = min(
+            buffer.cfg["training"]["peashooter_rules"].get("snapshot_cache_mib", 256) * 2**20,
+            buffer.ram_bytes // 8,
+        )
         self.cache, self.nbytes, self.spilled = {}, 0, 0
         self.trusted = set()
         self.shared = {}
@@ -58,14 +61,21 @@ class SnapshotStore:
     def _encode(self, value):
         # Spills are process-owned. Refer to immutable metadata once rather
         # than serializing the rules, wave plan and RNG tuple for every root.
-        metadata = {field: self.shared_ids[id(value[field])] for field in ("rules", "rng_state", "level")}
-        return json.dumps(dict(metadata=metadata,
-            snapshot={k: v for k, v in value.items() if k not in metadata}),
-            separators=(",", ":"), allow_nan=False).encode()
+        metadata = {
+            field: self.shared_ids[id(value[field])] for field in ("rules", "rng_state", "level")
+        }
+        return json.dumps(
+            dict(metadata=metadata, snapshot={k: v for k, v in value.items() if k not in metadata}),
+            separators=(",", ":"),
+            allow_nan=False,
+        ).encode()
 
     def _decode(self, data):
         value = json.loads(data)
-        return dict(value["snapshot"], **{field: self.shared[key] for field, key in value["metadata"].items()})
+        return dict(
+            value["snapshot"],
+            **{field: self.shared[key] for field, key in value["metadata"].items()},
+        )
 
     def put(self, key, value):
         self.trusted.discard(key)
@@ -78,6 +88,7 @@ class SnapshotStore:
         # Share their values across roots instead of charging/copying thousands
         # of identical rule dictionaries and 625-element RNG states.
         from pvz_game.config import canonical_hash
+
         value = copy.copy(value)
         for field in ("rules", "rng_state", "level"):
             original = value[field]
@@ -93,7 +104,9 @@ class SnapshotStore:
             if original is not self.shared[digest]:
                 self.shared_ids.pop(id(original), None)
             value[field] = self.shared[digest]
-        size = snapshot_bytes({k: v for k, v in value.items() if k not in ("rules", "rng_state", "level")})
+        size = snapshot_bytes(
+            {k: v for k, v in value.items() if k not in ("rules", "rng_state", "level")}
+        )
         if self.nbytes + size <= self.limit:
             self.cache[key] = (value, size)
             self.nbytes += size
@@ -114,11 +127,17 @@ class SnapshotStore:
 
     def archive(self, archive):
         for key, (value, _) in self.cache.items():
-            archive.writestr(f"peashooter/{key}.json", json.dumps(value, separators=(",", ":"), allow_nan=False))
+            archive.writestr(
+                f"peashooter/{key}.json", json.dumps(value, separators=(",", ":"), allow_nan=False)
+            )
         for key in self.disk:
             if key not in self.cache:
-                archive.writestr(f"peashooter/{key}.json", json.dumps(self._decode(self._read(key)),
-                    separators=(",", ":"), allow_nan=False))
+                archive.writestr(
+                    f"peashooter/{key}.json",
+                    json.dumps(
+                        self._decode(self._read(key)), separators=(",", ":"), allow_nan=False
+                    ),
+                )
 
     def flush(self):
         for key, (value, _) in self.cache.items():
@@ -165,24 +184,52 @@ def snapshot_bytes(value):
 
 
 class _LaneBatch(AccountingCudaBatch):
-    def __init__(self, *args, cutoff, **kwargs):
+    def __init__(self, *args, cutoff, timing=False, **kwargs):
         super().__init__(*args, **kwargs)
         before = "s.step(actions[i], ticks, per_tick);"
         if self.source.count(before) != 1:
             raise RuntimeError("Pinned lane-oracle cutoff hook changed")
-        self.source = self.source.replace(before,
-            f"s.step(actions[i], lo(ticks, hi(0LL, {cutoff}LL - s.h->tick)), per_tick);")
+        step = f"s.step(actions[i], lo(ticks, hi(0LL, {cutoff}LL - s.h->tick)), per_tick);"
+        if timing:
+            self.source = self.source.replace(
+                "I wait_enabled) {", "I wait_enabled, I *kernel_time) {"
+            )
+            step = (
+                'unsigned long long begin, end; asm volatile("mov.u64 %0, %%globaltimer;" : "=l"(begin));\n'
+                + step
+                + '\nasm volatile("mov.u64 %0, %%globaltimer;" : "=l"(end)); kernel_time[2*i]=(I)begin; kernel_time[2*i+1]=(I)end;'
+            )
+        self.source = self.source.replace(before, step)
         self.module = self.cp.RawModule(code=self.source, options=("--std=c++11", "--fmad=false"))
         self._step_kernel = self.module.get_function("step_games")
+        if timing:
+            from functools import partial
+            from weakref import proxy
+
+            self.kernel_time = self.cp.zeros((self.n, 2), self.cp.int64)
+            self._timed_kernel = self._step_kernel
+            self._step_kernel = partial(type(self)._timed_step, proxy(self))
+
+    def _timed_step(self, grid, block, args):
+        self._timed_kernel(grid, block, (*args, self.kernel_time))
 
 
 class PeashooterTeacher:
+    def __new__(cls, env, buffer, identity, state=None, archive=None):
+        if getattr(env, "auxiliary", None) is not None or (state and state.get("async_execution")):
+            from pvz_rl.learning.async_teacher import AsyncPeashooterTeacher
+
+            return AsyncPeashooterTeacher(env, buffer, identity, state, archive)
+        return super().__new__(cls)
+
     def __init__(self, env, buffer, identity, state=None, archive=None):
         self.env, self.buffer, self.cfg = env, buffer, buffer.cfg
         self.settings = copy.deepcopy(rule_settings(self.cfg))
         self.identity = tuple(identity)
         self.store = SnapshotStore(buffer)
-        self.compactor = RepeatedRowCompactor(self.cfg["training"]["objective"]["invalid_fit_group_size"])
+        self.compactor = RepeatedRowCompactor(
+            self.cfg["training"]["objective"]["invalid_fit_group_size"]
+        )
         self.roots, self.jobs, self.labels = [], [], {}
         self.queue = deque()
         self.batch, self.slots, self.capture = None, [], None
@@ -190,6 +237,7 @@ class PeashooterTeacher:
         self.pool = None
         self.preparing = None
         from pvz_rl.envs.lane_preparation import LanePreparation
+
         workers = self.settings.get("prepare_workers", 0)
         preparation = getattr(env, "lane_preparation", None)
         if preparation is None or preparation.requested != workers:
@@ -197,13 +245,29 @@ class PeashooterTeacher:
                 preparation.close()
             env.lane_preparation = LanePreparation(workers, buffer.ram_bytes)
         self.preparation = env.lane_preparation
-        self.cutoff = math.ceil(self.cfg["environment"]["cutoff_seconds"] * env.batch.rules.game["tick_rate"])
+        self.cutoff = math.ceil(
+            self.cfg["environment"]["cutoff_seconds"] * env.batch.rules.game["tick_rate"]
+        )
         self.initialized = False
         self.next_root = 0
-        self.metrics = dict(roots=0, labeled=0, rule_1=0, rule_2=0, rule_3=0,
-            preferred_tiles=0, fallback_lanes=0, blocked_lanes=0, unlabeled=0,
-            completed_rollouts=0, oracle_successes=0, oracle_timeouts=0,
-            simulated_ticks=0, oracle_seconds=0.0, pending=0, spill_bytes=0)
+        self.metrics = dict(
+            roots=0,
+            labeled=0,
+            rule_1=0,
+            rule_2=0,
+            rule_3=0,
+            preferred_tiles=0,
+            fallback_lanes=0,
+            blocked_lanes=0,
+            unlabeled=0,
+            completed_rollouts=0,
+            oracle_successes=0,
+            oracle_timeouts=0,
+            simulated_ticks=0,
+            oracle_seconds=0.0,
+            pending=0,
+            spill_bytes=0,
+        )
         if state is not None:
             if tuple(state["identity"]) != self.identity or state["settings"] != self.settings:
                 raise ValueError("Peashooter oracle identity/settings differ from recovery")
@@ -227,8 +291,13 @@ class PeashooterTeacher:
 
     @property
     def estimated_bytes(self):
-        return (self.store.nbytes + len(self.store.disk) * 256 + len(self.roots) * 1024 + len(self.jobs) * 512
-                + self.preparation.workers * 128 * 2**20)
+        return (
+            self.store.nbytes
+            + len(self.store.disk) * 256
+            + len(self.roots) * 1024
+            + len(self.jobs) * 512
+            + self.preparation.workers * 128 * 2**20
+        )
 
     @property
     def settled(self):
@@ -239,8 +308,12 @@ class PeashooterTeacher:
         cp, original = self.env.cp, self.env.batch
         branch = self.cfg["environment"]["plants"].index("peashooter") + 1
         action = cp.from_dlpack(actions.detach())
-        selected = cp.flatnonzero(cp.from_dlpack(active) & cp.from_dlpack(branch_available[:, branch].contiguous())
-            & (action >= 1 + (branch - 1) * A.tiles) & (action < 1 + branch * A.tiles))
+        selected = cp.flatnonzero(
+            cp.from_dlpack(active)
+            & cp.from_dlpack(branch_available[:, branch].contiguous())
+            & (action >= 1 + (branch - 1) * A.tiles)
+            & (action < 1 + branch * A.tiles)
+        )
         self.capture_slots = selected.get().tolist()
         if not self.capture_slots:
             self.capture = None
@@ -249,11 +322,12 @@ class PeashooterTeacher:
         view.n = len(self.capture_slots)
         view.header = original.header[selected].copy()
         from pvz_game.cuda.schema import HEADER
+
         # Snapshot readers use the live counts. Copy no unoccupied projectile
         # reserve (the pinned engine reserves >20,000 shots per main lane).
         counts = view.header[:, [HEADER.index(k) for k in ("np", "nz", "nq")]].max(axis=0).get()
         for name, width in zip(("plants", "zombies", "projectiles"), counts, strict=True):
-            setattr(view, name, getattr(original, name)[selected, :int(width)].copy())
+            setattr(view, name, getattr(original, name)[selected, : int(width)].copy())
         for name in ("mowers", "cooldowns"):
             setattr(view, name, getattr(original, name)[selected].copy())
         view._templates = [original._templates[i] for i in self.capture_slots]
@@ -265,14 +339,19 @@ class PeashooterTeacher:
         local = {slot: index for index, slot in enumerate(self.capture_slots)}
         selected = [i for i in retained if int(rows["env"][i]) in local]
         if selected:
-            snapshots = download_snapshots(self.capture,
-                indices=[local[int(rows["env"][i])] for i in selected], share_metadata=True)
+            snapshots = download_snapshots(
+                self.capture,
+                indices=[local[int(rows["env"][i])] for i in selected],
+                share_metadata=True,
+            )
             for i, snapshot in zip(selected, snapshots, strict=True):
                 row = rows[i]
                 identity = tuple(int(row[k]) for k in ("env", "episode", "decision"))
                 index = len(self.roots)
                 self.store.put(f"root-{index}", snapshot)
-                self.roots.append(dict(identity=identity, state="queued", coverage={}, successes={}, pending=0))
+                self.roots.append(
+                    dict(identity=identity, state="queued", coverage={}, successes={}, pending=0)
+                )
         self.capture = None
         self.metrics.update(roots=len(self.roots), spill_bytes=self.store.spilled)
 
@@ -281,13 +360,17 @@ class PeashooterTeacher:
         if not self.store.contains(key):
             snap = lane_snapshot(self.store.get(f"root-{root_index}"), row, self.env.batch.rules)
             self.store.put(key, snap)
-        self.jobs.append(dict(root=root_index, row=row, tile=tile, key=key, state="queued", placed=False))
+        self.jobs.append(
+            dict(root=root_index, row=row, tile=tile, key=key, state="queued", placed=False)
+        )
         self.queue.append(len(self.jobs) - 1)
         self.roots[root_index]["pending"] += 1
 
     def _label(self, index, tiles, fallback=()):
         root = self.roots[index]
-        label = dict(rule=root["rule"], tiles=tiles, fallback_rows=list(fallback), blocked=root["blocked"])
+        label = dict(
+            rule=root["rule"], tiles=tiles, fallback_rows=list(fallback), blocked=root["blocked"]
+        )
         self.labels[tuple(root["identity"])] = label
         root["state"] = "labeled"
         self.metrics[f"rule_{root['rule']}"] += 1
@@ -330,6 +413,7 @@ class PeashooterTeacher:
             # Do not spin while a process prepares roots. Preserve the existing
             # bounded deadline/interrupt boundary with a short host yield.
             from time import sleep
+
             sleep(0.001)
             return
         prepared = self.preparation.resolve(self.preparing)
@@ -357,7 +441,9 @@ class PeashooterTeacher:
         cp.get_default_memory_pool().free_all_blocks()
         free, _ = cp.cuda.runtime.memGetInfo()
         free += cp.get_default_memory_pool().free_bytes()
-        headroom = self.cfg["training"]["performance"].get("collection_vram_headroom_mib", 0) * 2**20
+        headroom = (
+            self.cfg["training"]["performance"].get("collection_vram_headroom_mib", 0) * 2**20
+        )
         budget = min(self.settings["oracle_vram_mib"] * 2**20, max(0, free - headroom))
         cache_bytes = min(64 * 2**20, budget // 8)
         qcap = original.qcap + projectile_bound(original.rules)
@@ -368,10 +454,18 @@ class PeashooterTeacher:
             candidate = None
             try:
                 with cp.cuda.using_allocator(self.pool.malloc):
-                    candidate = _LaneBatch(count, cutoff=self.cutoff, zombie_capacity=original.zcap,
-                        projectile_capacity=qcap, max_step_ticks=self.settings["oracle_chunk_ticks"],
-                        rules=original.rules, device=original.device)
-                actual = sum(v.nbytes for v in vars(candidate).values() if isinstance(v, cp.ndarray))
+                    candidate = _LaneBatch(
+                        count,
+                        cutoff=self.cutoff,
+                        zombie_capacity=original.zcap,
+                        projectile_capacity=qcap,
+                        max_step_ticks=self.settings["oracle_chunk_ticks"],
+                        rules=original.rules,
+                        device=original.device,
+                    )
+                actual = sum(
+                    v.nbytes for v in vars(candidate).values() if isinstance(v, cp.ndarray)
+                )
                 if actual + cache_bytes > budget:
                     candidate = None
                     count //= 2
@@ -379,17 +473,23 @@ class PeashooterTeacher:
                 candidate.set_sky_sun_rate(original.sky_sun_rate)
                 self.batch = candidate
                 from pvz_rl.envs.cuda_lane_oracle import LaneTransfers
+
                 self.transfers = LaneTransfers(cp, cache_bytes)
                 self.slots = [None] * count
                 self.slot_ticks = np.zeros(count, dtype=np.int64)
-                self.metrics.update(scratch_lanes=count, scratch_mib=actual / 2**20,
-                                    root_cache_limit_mib=cache_bytes / 2**20)
+                self.metrics.update(
+                    scratch_lanes=count,
+                    scratch_mib=actual / 2**20,
+                    root_cache_limit_mib=cache_bytes / 2**20,
+                )
                 return
             except cp.cuda.memory.OutOfMemoryError:
                 candidate = None
                 self.pool.free_all_blocks()
                 count //= 2
-        raise MemoryError("Peashooter oracle cannot allocate one lane; free VRAM or increase oracle_vram_mib")
+        raise MemoryError(
+            "Peashooter oracle cannot allocate one lane; free VRAM or increase oracle_vram_mib"
+        )
 
     def _fill(self):
         entries = []
@@ -431,7 +531,9 @@ class PeashooterTeacher:
             self.metrics["spill_bytes"] = self.store.spilled
             self.metrics["pending"] = len(self.queue) + sum(i is not None for i in self.slots)
             self.metrics["queued_boards"] = len(self.roots) - self.next_root
-            self.metrics["mean_preferred_set_size"] = self.metrics["preferred_tiles"] / max(1, self.metrics["labeled"])
+            self.metrics["mean_preferred_set_size"] = self.metrics["preferred_tiles"] / max(
+                1, self.metrics["labeled"]
+            )
 
     def _run_chunk(self):
         self._fill()
@@ -443,7 +545,11 @@ class PeashooterTeacher:
                 if not job["placed"] and job["tile"] >= 0:
                     branch = self.cfg["environment"]["plants"].index("peashooter")
                     actions[slot] = 1 + branch * A.tiles + job["tile"]
-        batch.step_device(cp.asarray(actions), ticks=self.settings["oracle_chunk_ticks"], per_tick=self.env._per_tick)
+        batch.step_device(
+            cp.asarray(actions),
+            ticks=self.settings["oracle_chunk_ticks"],
+            per_tick=self.env._per_tick,
+        )
         headers = batch.header[:, [0, 1, 12]].get()
         finished = []
         for slot, index in enumerate(self.slots):
@@ -462,7 +568,9 @@ class PeashooterTeacher:
                 self.metrics["oracle_successes"] += success
                 self.metrics["oracle_timeouts"] += not status
                 root = self.roots[job["root"]]
-                root["coverage" if job["tile"] < 0 else "successes"][job["row"] if job["tile"] < 0 else job["tile"]] = success
+                root["coverage" if job["tile"] < 0 else "successes"][
+                    job["row"] if job["tile"] < 0 else job["tile"]
+                ] = success
                 root["pending"] -= 1
                 job.update(state="completed", success=success, tick=int(tick))
                 finished.append(slot)
@@ -470,10 +578,12 @@ class PeashooterTeacher:
                 self._resolve(job["root"])
         if finished:
             batch.header[cp.asarray(finished), 17] = 0
-        self.metrics.update(root_cache_hits=self.transfers.hits,
+        self.metrics.update(
+            root_cache_hits=self.transfers.hits,
             root_cache_misses=self.transfers.misses,
             root_upload_bytes=self.transfers.uploaded_bytes,
-            root_cache_mib=self.transfers.nbytes / 2**20)
+            root_cache_mib=self.transfers.nbytes / 2**20,
+        )
         self.metrics["pending"] = len(self.queue) + sum(i is not None for i in self.slots)
         return self.settled
 
@@ -488,10 +598,21 @@ class PeashooterTeacher:
                 key = f"progress-{index}"
                 self.store.put(key, snapshot)
                 self.jobs[index]["partial"] = key
-        return copy.deepcopy(dict(protocol=RULE_PROTOCOL, objective=RULE_OBJECTIVE, settings=self.settings,
-            identity=self.identity, roots=self.roots, jobs=self.jobs, labels=self.labels,
-            initialized=self.initialized, next_root=self.next_root,
-            compactor=vars(self.compactor), metrics=self.metrics))
+        return copy.deepcopy(
+            dict(
+                protocol=RULE_PROTOCOL,
+                objective=RULE_OBJECTIVE,
+                settings=self.settings,
+                identity=self.identity,
+                roots=self.roots,
+                jobs=self.jobs,
+                labels=self.labels,
+                initialized=self.initialized,
+                next_root=self.next_root,
+                compactor=vars(self.compactor),
+                metrics=self.metrics,
+            )
+        )
 
     def write_archive(self, archive):
         self.store.archive(archive)
@@ -527,38 +648,80 @@ def validate_rule_recovery(state, cfg):
         if state.get("buffer") is not None and rules_enabled(cfg, phase):
             raise ValueError("Missing Peashooter rule recovery; use --init-from for fresh training")
         return
-    if (not rules_enabled(cfg, phase) or payload.get("protocol") != RULE_PROTOCOL
-            or payload.get("objective") != RULE_OBJECTIVE or payload.get("settings") != rule_settings(cfg)):
+    if (
+        not rules_enabled(cfg, phase)
+        or payload.get("protocol") != RULE_PROTOCOL
+        or payload.get("objective") != RULE_OBJECTIVE
+        or payload.get("settings") != rule_settings(cfg)
+    ):
         raise ValueError("Peashooter rule objective differs from recovery; use --init-from")
-    if any(key not in payload for key in (
-        "identity", "roots", "jobs", "labels", "initialized", "next_root", "compactor", "metrics",
-    )):
+    if any(
+        key not in payload
+        for key in (
+            "identity",
+            "roots",
+            "jobs",
+            "labels",
+            "initialized",
+            "next_root",
+            "compactor",
+            "metrics",
+        )
+    ):
         raise ValueError("Incomplete Peashooter oracle recovery")
-    if (len(payload["identity"]) != 2 or any(type(i) is not int or i < 0 for i in payload["identity"])
-            or type(payload["next_root"]) is not int or not 0 <= payload["next_root"] <= len(payload["roots"])):
+    if (
+        len(payload["identity"]) != 2
+        or any(type(i) is not int or i < 0 for i in payload["identity"])
+        or type(payload["next_root"]) is not int
+        or not 0 <= payload["next_root"] <= len(payload["roots"])
+    ):
         raise ValueError("Invalid Peashooter oracle cohort identity/cursor")
     identities = set()
+    asynchronous = payload.get("async_execution", False)
+    if (
+        asynchronous
+        and state.get("auxiliary_simulation") is None
+        and len(payload["labels"]) != len(payload["roots"])
+    ):
+        raise ValueError("Missing unfinished asynchronous simulation recovery")
     pending = [0] * len(payload["roots"])
     for root in payload["roots"]:
         identity = tuple(root["identity"])
-        if (len(identity) != 3 or any(type(i) is not int or i < 0 for i in identity)
-                or identity in identities or root["state"] not in ("queued", "coverage", "candidate_testing", "labeled")):
+        if (
+            len(identity) != 3
+            or any(type(i) is not int or i < 0 for i in identity)
+            or identity in identities
+            or root["state"] not in ("queued", "coverage", "candidate_testing", "labeled")
+        ):
             raise ValueError("Invalid Peashooter root recovery")
         identities.add(identity)
     for job in payload["jobs"]:
-        if (not 0 <= job["root"] < len(payload["roots"]) or job["state"] not in ("queued", "running", "completed")
-                or not 0 <= job["row"] < A.rows or not -1 <= job["tile"] < A.tiles
-                or (job["tile"] >= 0 and job["tile"] // A.cols != job["row"])):
+        if (
+            not 0 <= job["root"] < len(payload["roots"])
+            or job["state"] not in ("queued", "running", "completed")
+            or not 0 <= job["row"] < A.rows
+            or not -1 <= job["tile"] < A.tiles
+            or (job["tile"] >= 0 and job["tile"] // A.cols != job["row"])
+        ):
             raise ValueError("Invalid Peashooter oracle job")
         pending[job["root"]] += job["state"] != "completed"
     for index, root in enumerate(payload["roots"]):
-        if root["pending"] != pending[index]:
+        if not asynchronous and root["pending"] != pending[index]:
             raise ValueError("Peashooter pending rollout count differs from saved jobs")
         key = tuple(root["identity"])
         if (root["state"] == "labeled") != (key in payload["labels"]):
             raise ValueError("Peashooter label commit differs from saved root state")
+        if asynchronous and root["state"] != "labeled":
+            service = state["auxiliary_simulation"]
+            identity = ("teacher", *key)
+            if identity not in service["boards"] and identity not in service["results"]:
+                raise ValueError("An unfinished teacher root lost its simulation owner")
     for key, label in payload["labels"].items():
         tiles = label["tiles"]
-        if (tuple(key) not in identities or label["rule"] not in (1, 2, 3)
-                or len(tiles) != len(set(tiles)) or any(type(t) is not int or not 0 <= t < A.tiles for t in tiles)):
+        if (
+            tuple(key) not in identities
+            or label["rule"] not in (1, 2, 3)
+            or len(tiles) != len(set(tiles))
+            or any(type(t) is not int or not 0 <= t < A.tiles for t in tiles)
+        ):
             raise ValueError("Invalid Peashooter preferred set")

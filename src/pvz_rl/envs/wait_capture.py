@@ -77,8 +77,19 @@ class WaitCapture:
         self.meta.fill(-1)
         self.watch[:] = self.batch.cp.asarray(watch, self.batch.cp.int64)
 
-    def read(self, active):
-        meta = self.meta.get()
+    def enqueue(self, handoff):
+        import torch
+
+        self.host = handoff.enqueue_fields(
+            "wait_capture",
+            dict(
+                meta=torch.from_dlpack(self.meta),
+                headers=torch.from_dlpack(self.states[:, :, : self.shapes[0][0]]),
+            ),
+        )
+
+    def read(self, active, service=None):
+        meta = self.host["meta"].numpy().copy() if service is not None else self.meta.get()
         captures = [{}, {}]
         for slot in range(2):
             selected = np.flatnonzero(active & (meta[:, slot] >= 0)).tolist()
@@ -98,9 +109,12 @@ class WaitCapture:
                     self.states[:, slot, offset : offset + size].reshape(self.batch.n, *shape),
                 )
                 offset += size
-            captures[slot] = dict(
-                zip(selected, download_snapshots(view, indices=selected), strict=True)
+            snapshots = (
+                service.capture(view, selected, self.host["headers"].numpy()[selected, slot])
+                if service is not None
+                else download_snapshots(view, indices=selected)
             )
+            captures[slot] = dict(zip(selected, snapshots, strict=True))
         return meta, captures
 
 

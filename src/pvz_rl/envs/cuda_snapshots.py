@@ -30,7 +30,9 @@ def reset_owned(batch, levels, seeds, *, indices):
         cp = batch.cp
         ix = cp.asarray(indices)
         due = s.HEADER.index("sky_due")
-        batch.header[ix, due] = cp.maximum(1, cp.floor(batch.header[ix, due] / batch.sky_sun_rate)).astype(cp.int64)
+        batch.header[ix, due] = cp.maximum(
+            1, cp.floor(batch.header[ix, due] / batch.sky_sun_rate)
+        ).astype(cp.int64)
 
 
 def pack_snapshots(batch, snapshots):
@@ -135,11 +137,19 @@ def download_snapshots(batch, *, indices, share_metadata=False):
         getattr(batch, name)[ix, : int(size.max())].get().tolist()
         for name, size in zip(GROUPS, counts, strict=True)
     ]
+    templates = [batch._templates[index] for index in indices]
+    return unpack_snapshots(
+        templates, headers, cooldowns, slabs, counts, share_metadata=share_metadata
+    )
+
+
+def unpack_snapshots(templates, headers, cooldowns, slabs, counts, *, share_metadata=False):
+    """Decode already-owned host slabs; no device access or mutable templates."""
     snapshots = []
-    for i, index in enumerate(indices):
+    for i, template in enumerate(templates):
         # Internal oracle consumers never mutate rules, level or RNG metadata.
         # Other callers retain the ordinary fully detached snapshot contract.
-        raw = dict(batch._templates[index]) if share_metadata else deepcopy(batch._templates[index])
+        raw = dict(template) if share_metadata else deepcopy(template)
         header = dict(zip(s.HEADER, headers[i].tolist(), strict=True))
         for key in (
             "tick",

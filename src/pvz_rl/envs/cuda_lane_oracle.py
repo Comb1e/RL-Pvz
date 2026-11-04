@@ -6,7 +6,7 @@ import numpy as np
 
 from pvz_rl.envs.cuda_snapshots import pack_snapshots
 
-_COPY = r'''
+_COPY = r"""
 extern "C" __global__ void copy_roots(const unsigned long long *sources,
     const long long *slots, const long long *widths, long long *destination,
     long long stride, long long n) {
@@ -16,7 +16,7 @@ extern "C" __global__ void copy_roots(const unsigned long long *sources,
   for (long long i = threadIdx.x; i < widths[row]; i += blockDim.x)
     destination[slots[row] * stride + i] = source[i];
 }
-'''
+"""
 
 
 class LaneTransfers:
@@ -30,6 +30,7 @@ class LaneTransfers:
         self.cp, self.limit = cp, limit
         self.cache, self.nbytes = OrderedDict(), 0
         self.hits = self.misses = self.uploaded_bytes = 0
+        self.inflight = []
         self.copy = cp.RawKernel(_COPY, "copy_roots", options=("--std=c++11",))
 
     def fill(self, batch, entries):
@@ -64,14 +65,20 @@ class LaneTransfers:
             # independent of how many roots or candidates share this refill.
             pointers = cp.asarray([r[name].data.ptr for r in roots], dtype=cp.uint64)
             widths = cp.asarray([r[name].size for r in roots], dtype=cp.int64)
-            self.copy((len(entries),), (128,), (pointers, slots, widths, target,
-                np.int64(target[0].size), np.int64(len(entries))))
+            self.copy(
+                (len(entries),),
+                (128,),
+                (pointers, slots, widths, target, np.int64(target[0].size), np.int64(len(entries))),
+            )
         batch.facts[slots] = 0
         batch._event_counts[slots] = 0
-        batch.accounting[slots] = 0
+        if hasattr(batch, "accounting"):
+            batch.accounting[slots] = 0
+        self.inflight = roots
         for (slot, _, _), template in zip(entries, templates, strict=True):
             batch._templates[slot] = template
 
     def close(self):
+        self.inflight = []
         self.cache.clear()
         self.nbytes = 0

@@ -256,6 +256,14 @@ demo_rank_loss_weight = 0.10
 demo_rank_margin = 0.05
 
 [training.performance]
+auxiliary_hybrid = false # Opt in: the 128-env control still drained more slowly than synchronous execution.
+auxiliary_cpu_workers = 4 # Fastest asynchronous setting in the warmed 4/8/12-worker screen.
+auxiliary_worker_ram_mib = 192
+auxiliary_cuda_target_ms = 2.0
+auxiliary_vram_mib = 4096 # Combined captures, interval workers, teacher workers and caches.
+auxiliary_spill_gib = 8
+auxiliary_interval_lanes = 32 # Active interval workers while the main games collect.
+auxiliary_teacher_lanes = 128 # Drain may use the existing larger oracle limit.
 fork_packed = false # Packed layouts were slower in the seeded 128-env screen.
 fork_threads = 32
 fork_suffix_cache = true # Reuse only exactly matching future physical checkpoints.

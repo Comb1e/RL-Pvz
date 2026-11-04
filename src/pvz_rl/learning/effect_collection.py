@@ -150,7 +150,15 @@ def begin_effects(model, actions, details, issued):
             sampled=sampled,
             effective_wait=effective_wait & issued,
             legal_proposal=~effective_wait,
-            pre_states=dict(zip(need, download_snapshots(env.batch, indices=need), strict=True)),
+            pre_states=dict(
+                zip(
+                    need,
+                    env.auxiliary.capture(env.batch, need, env._physical_header[need])
+                    if getattr(env, "auxiliary", None) is not None
+                    else download_snapshots(env.batch, indices=need),
+                    strict=True,
+                )
+            ),
         )
         request["labels"].fill(0)
         request["jobs"] = [(slot, token) for slot, token in jobs if token != 0]

@@ -653,6 +653,8 @@ class CudaVecEnv(VecEnv):
     def _refresh_growth_bounds(self, indices):
         header = self.batch.header.get()
         self._update_public_counts(header, indices)
+        self._physical_header = header.copy()
+        self._physical_cooldowns = self.batch.cooldowns.get()
 
     def _update_public_counts(self, header, indices):
         self._pending_spawns[indices] = (
@@ -729,17 +731,30 @@ class CudaVecEnv(VecEnv):
             self._step_state_host = self.handoff.enqueue_fields(
                 "step_state",
                 dict(
+                    **(
+                        dict(
+                            physical_header=h,
+                            physical_cooldowns=torch.from_dlpack(self.batch.cooldowns),
+                        )
+                        if getattr(self, "auxiliary", None) is not None
+                        else {}
+                    ),
                     executing=self._device_active,
                     spawned=h[:, HEADER.index("spawn_index")] != before_spawns,
                     pending_spawns=h[:, HEADER.index("total_spawns")]
                     - h[:, HEADER.index("spawn_index")],
                 ),
             )
+        if getattr(self, "auxiliary", None) is not None and self.batch.wait_capture is not None:
+            self.batch.wait_capture.enqueue(self.handoff)
         self._step_device_result = reward, done, timed_out
 
     def step_host(self, *, autoreset=True, active=None, packed=False):
         """Interpret the completed step record after the handoff wait."""
         host = self._record.numpy()
+        if "physical_header" in self._step_state_host:
+            self._physical_header = self._step_state_host["physical_header"].numpy().copy()
+            self._physical_cooldowns = self._step_state_host["physical_cooldowns"].numpy().copy()
         executed = self._step_state_host["executing"].numpy()
         self._step_active = executed.copy()
         if active is not None and not np.array_equal(np.asarray(active, dtype=bool), executed):
@@ -1111,6 +1126,11 @@ class CudaVecEnv(VecEnv):
         return [False] * len(list(self._get_indices(indices)))
 
     def close(self):
+        if getattr(self, "auxiliary", None) is not None:
+            self.auxiliary.close()
+        from pvz_rl.learning.auxiliary_service import close_cpu_workers
+
+        close_cpu_workers(self)
         self.queue.close()
         if self.static_forks is not None:
             self.static_forks.close()

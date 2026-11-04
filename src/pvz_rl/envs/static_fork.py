@@ -12,8 +12,8 @@ import numpy as np
 from pvz_game import Dig, Game, Place, Status
 from pvz_game.engine import _Zombie
 
+from pvz_rl.envs.outcome_math import depth_code
 from pvz_rl.envs.scratch_game import fork_game, restored_game
-from pvz_rl.learning.forecast_labels import depth_code
 
 
 def reference_tau(rules):
@@ -38,12 +38,37 @@ def _reference_tau(units, minimum, maximum):
     return max(1, int(np.ceil(sum(durations) / 18)))
 
 
+def apply_action(game, action):
+    """The engine placement/Dig operation, without inventing a time tick."""
+    accepted = True
+    if action:
+        tile, species = (action - 1) % 45, (action - 1) // 45
+        from pvz_game.config import PLANT_TYPES
+
+        command = (
+            Dig(tile // 9, tile % 9)
+            if species == 8
+            else Place(PLANT_TYPES[species], tile // 9, tile % 9)
+        )
+        accepted = game.validate_action(command).accepted
+        if accepted:
+            if species == 8:
+                game._remove_plant(game._tiles[tile // 9, tile % 9], "dug")
+            else:
+                kind = PLANT_TYPES[species]
+                game._sun -= game.rules.plants[kind]["cost"]
+                game._cooldowns[kind] = game.rules.plants[kind]["recharge_ticks"] + 1
+                game._add_plant(kind, tile // 9, tile % 9)
+    return accepted
+
+
 class StaticFork:
     def __init__(self, game, *, action=0, probe="conehead", sky_sun_rate=1.0, field_only=False):
         # Public snapshot boundary validates subclasses as well as external input.
         source = restored_game(game.snapshot(), game.rules) if type(game) is not Game else game
         self.game = fork_game(source)
         self.phase, self.start, self.probe = "field", source._tick, probe
+        self.field_ticks = self.probe_ticks = 0
         self.field_only, self.anchor_tick = field_only, -1
         self.sky_sun_rate = sky_sun_rate
         self.labels = np.zeros((5, 4), np.int64)
@@ -68,25 +93,7 @@ class StaticFork:
             return result
 
         self.game._damage, self.game._move_zombie = damage, move
-        self.accepted = True
-        if action:
-            tile, species = (action - 1) % 45, (action - 1) // 45
-            from pvz_game.config import PLANT_TYPES
-
-            command = (
-                Dig(tile // 9, tile % 9)
-                if species == 8
-                else Place(PLANT_TYPES[species], tile // 9, tile % 9)
-            )
-            self.accepted = self.game.validate_action(command).accepted
-            if self.accepted:
-                if species == 8:
-                    self.game._remove_plant(self.game._tiles[tile // 9, tile % 9], "dug")
-                else:
-                    kind = PLANT_TYPES[species]
-                    self.game._sun -= self.game.rules.plants[kind]["cost"]
-                    self.game._cooldowns[kind] = self.game.rules.plants[kind]["recharge_ticks"] + 1
-                    self.game._add_plant(kind, tile // 9, tile % 9)
+        self.accepted = apply_action(self.game, action)
         self._scan()
         self._resolve_breaches()
 
@@ -151,6 +158,10 @@ class StaticFork:
                 self._probe()
             self.game._status = Status.RUNNING
             drops = self.game._sky_drops
+            if self.phase == "field":
+                self.field_ticks += 1
+            else:
+                self.probe_ticks += 1
             self.game._advance()
             if self.game._sky_drops != drops and self.sky_sun_rate != 1:
                 self.game._sky_due = self.game._tick + max(

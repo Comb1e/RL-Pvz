@@ -33,6 +33,7 @@ class WaitOutcomes:
 
     def __init__(self, env, buffer, state=None):
         self.env, self.buffer = env, buffer
+        self.auxiliary = getattr(env, "auxiliary", None)
         self.current = np.full(env.num_envs, -1, np.int64)
         self.intervals, self.rows, self.jobs = {}, {}, []
         self.next_id = 0
@@ -120,6 +121,19 @@ class WaitOutcomes:
             self.metrics["root_disk_bytes"] += len(payload)
 
     def _enqueue(self, snapshot, *, interval=None, row=None, token=None, action=0):
+        if self.auxiliary is not None:
+            identity = (
+                ("outcomes", "interval", interval)
+                if interval is not None
+                else ("outcomes", "alternative", row, token)
+            )
+            self.auxiliary.submit(identity, snapshot, action=action)
+            self.jobs.append(
+                dict(id=identity, interval=interval, row=row, token=token, root_bytes=0)
+            )
+            self.metrics["queued_jobs"] += 1
+            self.metrics["peak_queued_jobs"] = max(self.metrics["peak_queued_jobs"], len(self.jobs))
+            return
         key = f"root-{self.next_id}-{len(self.jobs)}-{self.metrics['queued_jobs']}.pkl"
         size = (
             8192
@@ -161,7 +175,7 @@ class WaitOutcomes:
     def observe(self, request, rows, receipt):
         """Consume completed real actions atomically with their buffer receipts."""
         active = rows["active"]
-        meta, captures = self.env.batch.wait_capture.read(active)
+        meta, captures = self.env.batch.wait_capture.read(active, self.auxiliary)
         slots_to_snapshot = [
             int(slot)
             for slot in np.flatnonzero(active & rows["done"])
@@ -170,7 +184,11 @@ class WaitOutcomes:
         terminals = dict(
             zip(
                 slots_to_snapshot,
-                download_snapshots(self.env.batch, indices=slots_to_snapshot),
+                self.auxiliary.capture(
+                    self.env.batch, slots_to_snapshot, self.env._physical_header[slots_to_snapshot]
+                )
+                if self.auxiliary is not None
+                else download_snapshots(self.env.batch, indices=slots_to_snapshot),
                 strict=True,
             )
         )
@@ -200,7 +218,11 @@ class WaitOutcomes:
                 raise RuntimeError("Spawn counter changed without an exact pre-tick snapshot")
             if (
                 spawned
-                and int(self.env.batch.header[slot, HEADER.index("spawn_index")].get())
+                and (
+                    int(self.env._physical_header[slot, HEADER.index("spawn_index")])
+                    if self.auxiliary is not None
+                    else int(self.env.batch.header[slot, HEADER.index("spawn_index")].get())
+                )
                 <= meta[slot, 2]
             ):
                 raise RuntimeError("Predicted spawn boundary was not confirmed by execution")
@@ -289,6 +311,12 @@ class WaitOutcomes:
 
     def advance(self):
         """One bounded labeling unit; collection need not await its completion."""
+        if self.auxiliary is not None:
+            started = perf_counter()
+            try:
+                return self._advance_async()
+            finally:
+                self.metrics["labeling_seconds"] += perf_counter() - started
         if not self.jobs:
             return True
         started = perf_counter()
@@ -350,6 +378,30 @@ class WaitOutcomes:
                 )
             self.metrics["labeling_seconds"] += perf_counter() - started
 
+    def _advance_async(self):
+        lookup = {job["id"]: job for job in self.jobs}
+        for identity, result in self.auxiliary.poll("outcomes"):
+            job = lookup[identity]
+            if job["interval"] is not None:
+                record = self.intervals[job["interval"]]
+                record.update(
+                    outcome=result["outcome"],
+                    anchor=result["anchor"],
+                    phase=IntervalPhase.READY,
+                    counted=True,
+                )
+                self.metrics["interval_probes"] += 1
+            else:
+                self.rows[job["row"]]["alternatives"][job["token"]] = outcome_codes(
+                    result["outcome"], reference_tau(self.env.batch.rules)
+                )
+            self.jobs.remove(job)
+            self.auxiliary.acknowledge(identity)
+        for key in ("field_ticks", "probe_ticks", "device_bytes"):
+            self.metrics[key] = self.auxiliary.metrics.get(key, 0)
+        self.metrics["live_jobs"] = len(self.jobs)
+        return not self.jobs
+
     def _index(self, record):
         if "suffix_depth" in record:
             return
@@ -400,6 +452,8 @@ class WaitOutcomes:
         for slot in slots:
             self._close(int(self.current[slot]), snapshots.get(slot))
             self.current[slot] = -1
+        if self.auxiliary is not None:
+            self.auxiliary.seal("outcomes")
         if not self.advance():
             return False
         tau = reference_tau(self.env.batch.rules)
@@ -423,6 +477,25 @@ class WaitOutcomes:
         return True
 
     def snapshot(self):
+        if self.auxiliary is not None:
+            return dict(
+                protocol=self.protocol,
+                auxiliary=True,
+                current=self.current.copy(),
+                next_id=self.next_id,
+                intervals={
+                    identity: {
+                        k: copy.deepcopy(v)
+                        for k, v in record.items()
+                        if k not in ("ticks", "suffix_depth")
+                    }
+                    for identity, record in self.intervals.items()
+                },
+                rows=copy.deepcopy(self.rows),
+                jobs=copy.deepcopy(self.jobs),
+                metrics=dict(self.metrics),
+                published=self.published,
+            )
         return dict(
             protocol=self.protocol,
             current=self.current.copy(),
@@ -447,6 +520,58 @@ class WaitOutcomes:
         )
 
     def restore(self, state):
+        if self.auxiliary is not None and state.get("auxiliary"):
+            self.current = state["current"].copy()
+            self.next_id = state["next_id"]
+            self.intervals, self.rows, self.jobs = copy.deepcopy(
+                (state["intervals"], state["rows"], state["jobs"])
+            )
+            self.metrics, self.published = dict(state["metrics"]), state["published"]
+            if state.get("protocol") != self.protocol or self.current.shape != (self.env.num_envs,):
+                raise ValueError("Invalid asynchronous interval recovery")
+            if (
+                self.current.dtype != np.int64
+                or type(self.next_id) is not int
+                or self.next_id < 0
+                or any(
+                    type(key) is not int or not 0 <= key < self.next_id for key in self.intervals
+                )
+            ):
+                raise ValueError("Invalid asynchronous interval directory")
+            for identity in self.current[self.current >= 0]:
+                if int(identity) not in self.intervals or not self.intervals[int(identity)]["open"]:
+                    raise ValueError("Current interval lost its open owner")
+            for record in self.intervals.values():
+                if (
+                    record["phase"] not in set(IntervalPhase)
+                    or type(record["open"]) is not bool
+                    or record["start"] < 0
+                    or record["anchor"] < -1
+                    or record["origin"] < -1
+                ):
+                    raise ValueError("Invalid asynchronous interval lifecycle")
+                if record["phase"] == IntervalPhase.READY and (
+                    np.asarray(record["outcome"]).shape != (5, 4) or record["anchor"] < 0
+                ):
+                    raise ValueError("A completed interval lost its absolute probe")
+            known = set(self.auxiliary.jobs) | set(self.auxiliary.results)
+            if len({job["id"] for job in self.jobs}) != len(self.jobs) or any(
+                job["id"] not in known for job in self.jobs
+            ):
+                raise ValueError("A pending interval/alternative lost its exact job")
+            if any(
+                row["null"] not in self.intervals or row["actual"] not in self.intervals
+                for row in self.rows.values()
+            ):
+                raise ValueError("An outcome row lost its Wait interval")
+            pending = {job["interval"] for job in self.jobs if job["interval"] is not None}
+            if any(
+                record["phase"] not in (IntervalPhase.FOLLOWING, IntervalPhase.READY)
+                and identity not in pending
+                for identity, record in self.intervals.items()
+            ):
+                raise ValueError("An unfinished interval lost its probe job")
+            return
         if state.get("protocol") != self.protocol:
             raise ValueError("Incompatible absolute Wait trajectory recovery")
         self.current = np.asarray(state["current"]).copy()
@@ -508,12 +633,87 @@ class WaitOutcomes:
         self.metrics = dict(state["metrics"])
         self.metrics["root_disk_bytes"] = 0
         self.published = bool(state["published"])
-        if state["service"] is not None:
+        if state["service"] is not None and self.auxiliary is None:
             self._allocate()
             self.live = self.jobs[: state["live"]]
             if state["source"]:
                 upload_snapshots(self.source, state["source"], indices=range(len(self.live)))
             self.service.restore(state["service"])
+        if self.auxiliary is not None:
+            self._import_legacy_jobs(state)
+
+    def _import_legacy_jobs(self, state):
+        from pvz_game.cuda import schema
+
+        from pvz_rl.envs.cuda_snapshots import GROUPS, unpack_snapshots
+
+        old_jobs = self.jobs
+        continuations, completed = {}, {}
+        saved = state.get("service")
+        if saved is not None and saved["request"] is not None:
+            execution = saved["execution"]
+            arrays = execution["batch"]["arrays"]
+            ids = execution["job_ids"]
+            for slot, index in enumerate(ids):
+                if index < 0:
+                    continue
+                header = arrays["header"][slot : slot + 1]
+                counts = [header[:, schema.HEADER.index(k)] for k in ("np", "nz", "nq")] + [
+                    np.array([5])
+                ]
+                slabs = [
+                    arrays[name][slot : slot + 1, : int(count[0])].tolist()
+                    for name, count in zip(GROUPS, counts, strict=True)
+                ]
+                physical = unpack_snapshots(
+                    [self._root(old_jobs[index])],
+                    header,
+                    arrays["cooldowns"][slot : slot + 1].tolist(),
+                    slabs,
+                    counts,
+                    share_metadata=True,
+                )[0]
+                continuations[int(index)] = dict(
+                    snapshot=physical,
+                    phase="field" if arrays["forecast_phase"][slot] == 0 else "probe",
+                    start=int(arrays["forecast_start"][slot]),
+                    anchor=int(execution["anchors"][index]),
+                    labels=arrays["forecast"][slot].copy(),
+                    ticks={},
+                    action_applied=True,
+                )
+            for index in range(min(execution["next_job"], state["live"])):
+                if index not in continuations:
+                    completed[index] = dict(
+                        outcome=execution["output"][index].copy(),
+                        anchor=int(execution["anchors"][index]),
+                        ticks={},
+                    )
+        self.jobs = []
+        for index, job in enumerate(old_jobs):
+            identity = (
+                ("outcomes", "interval", job["interval"])
+                if job["interval"] is not None
+                else ("outcomes", "alternative", job["row"], job["token"])
+            )
+            self.auxiliary.submit(
+                identity,
+                self._root(job),
+                action=job["action"],
+                continuation=continuations.get(index),
+            )
+            self.jobs.append(
+                dict(
+                    id=identity,
+                    interval=job["interval"],
+                    row=job["row"],
+                    token=job["token"],
+                    root_bytes=0,
+                )
+            )
+            if index in completed:
+                self.auxiliary.import_result(identity, completed[index])
+        self.live = []
 
     def close(self):
         if self.service is not None:
