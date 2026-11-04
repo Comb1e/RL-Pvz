@@ -69,6 +69,15 @@ This file owns project-specific invariants and the code map.
   creates a label. Inference, legacy policy dependencies and private pretraining
   keep their saved workflows. Choose tuning by total time per environment and
   report main-decision latency and cohort drain separately.
+- `interval_backend = "packed_async"` routes interval jobs independently of the
+  teacher. Keep occupied roots device-resident from capture through private worker
+  copies; ordinary collection must not decode, serialize, spill or re-upload them.
+  Download roots only for recovery or bounded storage pressure. Event-polled
+  pinned progress/results belong to one chunk until consumed. Refill persistent,
+  memory-admitted panels; count trajectory/root storage incrementally and publish
+  decision targets in interval batches. Missing saved settings retain the legacy
+  backend. Peashooter teacher rules, sampling and synchronous routing remain intact
+  unless the shared hybrid setting explicitly selects both families.
 - Legal non-Wait proposals always receive outcome supervision. Effective Waits
   sample alternatives with the configured probability. Two slots hold a legal
   branch runner-up (ties by action ID) and a uniform remaining legal action;
@@ -160,7 +169,7 @@ Paths are relative to `src/pvz_rl/` unless stated otherwise.
 | `learning/training.py`, `cuda_q.py`, `sequential_training.py` | Cohort orchestration, collection/fitting, reporting and atomic recovery. |
 | `envs/probe_intervals.py`, `wait_capture.py`, `static_fork.py`, `cuda_static_fork.py`, `fork_service.py`, `fork_execution.py/.cu` | Legacy interval probes, exact real-tick capture, isolated field/probe phases, bounded refillable workers, verified suffix caching and queue recovery. |
 | `learning/reach_supervision.py`, `forecast_targets.py`, `forecast_labels.py`, `forecast_objective.py`, `forecast_metrics.py` | Versioned snapshot/factual constraints, hindsight, absolute outcomes and legacy signed effects, shared-forward losses and calibration. |
-| `learning/auxiliary_service.py`, `auxiliary_settings.py`, `async_teacher.py`, `envs/auxiliary_cpu.py`, `auxiliary_cuda.py`, `snapshot_packet.py`, `teacher_rules.py`, `outcome_math.py` | Shared hybrid execution, exact continuation transport, CPU workers and model-free simulation rules. |
+| `learning/auxiliary_service.py`, `auxiliary_settings.py`, `async_teacher.py`, `envs/auxiliary_cpu.py`, `auxiliary_cuda.py`, `snapshot_packet.py`, `teacher_rules.py`, `outcome_math.py` | Shared execution with independent interval/teacher routing, immutable packed device roots, event-polled exact continuations, CPU workers and model-free simulation rules. |
 | `learning/effect_collection.py`, `wait_outcomes.py`, `forecast_pretraining.py`, `td_targets.py` | Saved candidate tickets, deferred absolute interval targets from real Wait prefixes, private pretraining and frozen-cohort n-step TD. |
 | `learning/flat_q.py`, `objective.py`, `action_routing.py`, `placement_labels.py`, `bomb_objective.py` | Shared Q fitting/economics, legality attribution and automatic placement losses. |
 | `learning/peashooter_rules.py`, `peashooter_teacher.py`, `envs/lane_preparation.py`, `cuda_lane_oracle.py` | Prioritized lane targets and resumable bounded lane oracles. |

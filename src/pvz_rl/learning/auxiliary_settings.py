@@ -3,6 +3,7 @@
 import math
 
 DEFAULTS = dict(
+    interval_backend="legacy",
     auxiliary_hybrid=False,
     auxiliary_cpu_workers=4,
     auxiliary_worker_ram_mib=192,
@@ -17,13 +18,19 @@ DEFAULTS = dict(
 def enabled(cfg):
     from pvz_rl.config import absolute_outcomes
 
-    return absolute_outcomes(cfg) and cfg["training"]["performance"].get("auxiliary_hybrid", False)
+    settings = cfg["training"]["performance"]
+    return absolute_outcomes(cfg) and (
+        settings.get("auxiliary_hybrid", False)
+        or settings.get("interval_backend", "legacy") == "packed_async"
+    )
 
 
 def validate_auxiliary_settings(settings):
     for key, default in DEFAULTS.items():
         value = settings.get(key, default)
-        if isinstance(default, bool):
+        if key == "interval_backend":
+            valid = value in ("legacy", "packed_async")
+        elif isinstance(default, bool):
             valid = type(value) is bool
         elif isinstance(default, float):
             valid = type(value) in (float, int) and math.isfinite(value) and value > 0

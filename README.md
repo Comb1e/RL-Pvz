@@ -97,13 +97,15 @@ unfinished suffix continues from its saved state. Field targets remain specific
 to each decision. Collection proceeds with pending labels, which finish before
 fitting. Inference and greedy validation run no field/probe simulations.
 
-Public-model training can run interval outcomes and the Peashooter teacher through a
-shared hybrid queue with `training.performance.auxiliary_hybrid = true`.
-The main environment has GPU priority; short asynchronous
-CUDA chunks and persistent CPU processes finish exact labels in the background.
-Both families share the auxiliary VRAM cap. Pending snapshots spill within the
-configured storage limit, and fitting waits for every required label. Resume can
-refresh these execution settings without changing saved objectives or targets.
+Fresh public-model training uses `training.performance.interval_backend = "packed_async"`.
+Interval roots stay packed on the GPU, workers receive private device copies, and
+small results transfer asynchronously. The main environment has priority; fitting
+waits for all labels. Snapshots decode/spill only under storage pressure or during
+recovery. The Peashooter teacher keeps its existing workflow. Missing settings in
+older recoveries preserve the legacy backend.
+
+`auxiliary_hybrid = true` additionally routes the teacher through the shared CPU/CUDA
+queue. Hybrid remains opt-in. Both families respect the combined auxiliary VRAM cap.
 
 Benchmark multiple execution settings on fixed cohorts before choosing tuning:
 
@@ -113,17 +115,16 @@ Benchmark multiple execution settings on fixed cohorts before choosing tuning:
   --auxiliary-workers 4 8 12 --auxiliary-ms 1 2 --modes hybrid
 ```
 
-Compare `--modes sync cuda hybrid deferred` for synchronous execution,
-asynchronous CUDA, hybrid workers and a collection-latency control that defers
-simulation until collection ends. Results report total seconds per environment,
+Compare `--modes sync interval interval-deferred` for the legacy backend, packed
+interval execution, and the same capture path with execution deferred until drain.
+Use a JSON `--settings` list to sweep `auxiliary_interval_lanes` (32/64/128) and
+`auxiliary_cuda_target_ms` (1/2). `--collect-only` includes every required label and
+the full drain, skipping fitting. Results report total seconds per environment,
 spawn-decision latency and simulated work. `auxiliary_*` settings live under
 `training.performance`; existing stage resource limits remain upper bounds.
-The warmed 4/8/12-worker screen selected four CPU workers and 2 ms chunks among
-asynchronous settings. Small cohorts did not beat synchronous execution, and the
-5% decision-latency target was unmet; use total seconds/env to compare your workload.
-The 128-env, 60-second diagnostic collected and labeled in 130.0 s with hybrid
-execution versus 98.9 s synchronously. Hybrid remains opt-in; synchronous is the
-default until the coordinator and label drain improve.
+The full hybrid modes `cuda hybrid deferred` remain available for separate teacher
+experiments. Compare total collection-plus-labeling time, including drain, and
+report cold preparation separately from warmed execution.
 
 Record a real collection and draw its CPU/GPU states and wait causes:
 

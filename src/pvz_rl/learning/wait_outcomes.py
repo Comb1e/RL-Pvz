@@ -36,6 +36,9 @@ class WaitOutcomes:
         self.auxiliary = getattr(env, "auxiliary", None)
         self.current = np.full(env.num_envs, -1, np.int64)
         self.intervals, self.rows, self.jobs = {}, {}, []
+        if self.auxiliary is not None:
+            self.jobs = {}
+        self.segment_bytes = self.root_bytes = self.index_bytes = 0
         self.next_id = 0
         self.live = []
         self.source = self.service = None
@@ -71,9 +74,9 @@ class WaitOutcomes:
         return (
             len(self.rows) * 512
             + len(self.intervals) * 512
-            + sum(sum(d.nbytes for _, d in r["segments"]) for r in self.intervals.values())
-            + sum(job["root_bytes"] for job in self.jobs if "snapshot" in job)
-            + sum(job["root_bytes"] for job in self.live)
+            + self.segment_bytes
+            + self.root_bytes
+            + self.index_bytes
         )
 
     def arm(self, request):
@@ -118,6 +121,7 @@ class WaitOutcomes:
             temporary.write_bytes(payload)
             temporary.replace(path)
             job.pop("snapshot")
+            self.root_bytes -= job["root_bytes"]
             self.metrics["root_disk_bytes"] += len(payload)
 
     def _enqueue(self, snapshot, *, interval=None, row=None, token=None, action=0):
@@ -128,8 +132,8 @@ class WaitOutcomes:
                 else ("outcomes", "alternative", row, token)
             )
             self.auxiliary.submit(identity, snapshot, action=action)
-            self.jobs.append(
-                dict(id=identity, interval=interval, row=row, token=token, root_bytes=0)
+            self.jobs[identity] = dict(
+                id=identity, interval=interval, row=row, token=token, root_bytes=0
             )
             self.metrics["queued_jobs"] += 1
             self.metrics["peak_queued_jobs"] = max(self.metrics["peak_queued_jobs"], len(self.jobs))
@@ -153,6 +157,7 @@ class WaitOutcomes:
                 root_bytes=size,
             )
         )
+        self.root_bytes += size
         self.metrics["queued_jobs"] += 1
         self.metrics["peak_queued_jobs"] = max(self.metrics["peak_queued_jobs"], len(self.jobs))
 
@@ -230,6 +235,7 @@ class WaitOutcomes:
             trace = np.array(rows["forecast_trace"][slot, 1 : stop - tick + 1], dtype=np.uint8)
             if len(trace):
                 record["segments"].append((tick + 1, trace))
+                self.segment_bytes += trace.nbytes
             for lane, when in enumerate(rows["forecast_breach"][slot]):
                 if tick < when <= stop and record["homes"][lane] < 0:
                     record["homes"][lane] = when
@@ -379,9 +385,8 @@ class WaitOutcomes:
             self.metrics["labeling_seconds"] += perf_counter() - started
 
     def _advance_async(self):
-        lookup = {job["id"]: job for job in self.jobs}
         for identity, result in self.auxiliary.poll("outcomes"):
-            job = lookup[identity]
+            job = self.jobs[identity]
             if job["interval"] is not None:
                 record = self.intervals[job["interval"]]
                 record.update(
@@ -395,7 +400,7 @@ class WaitOutcomes:
                 self.rows[job["row"]]["alternatives"][job["token"]] = outcome_codes(
                     result["outcome"], reference_tau(self.env.batch.rules)
                 )
-            self.jobs.remove(job)
+            del self.jobs[identity]
             self.auxiliary.acknowledge(identity)
         for key in ("field_ticks", "probe_ticks", "device_bytes"):
             self.metrics[key] = self.auxiliary.metrics.get(key, 0)
@@ -415,30 +420,46 @@ class WaitOutcomes:
             if depths
             else np.empty((0, 5), np.uint8)
         )
+        self.index_bytes += record["ticks"].nbytes + record["suffix_depth"].nbytes
 
     def target(self, identity, tick, initial):
+        return self.targets(identity, np.asarray([tick]), np.asarray(initial)[None])[0]
+
+    def targets(self, identity, ticks, initial):
+        """Reconstruct one interval's decision suffixes in a single array pass."""
         record = self.intervals[identity]
         if record["phase"] != IntervalPhase.READY:
             raise RuntimeError("An unfinished interval cannot publish auxiliary targets")
         self._index(record)
-        result = record["outcome"].copy()
-        at = np.searchsorted(record["ticks"], tick, side="right")
+        ticks = np.asarray(ticks)
+        result = np.broadcast_to(record["outcome"], (len(ticks), 5, 4)).copy()
+        at = np.searchsorted(record["ticks"], ticks, side="right")
         observed = (
-            record["suffix_depth"][at] if at < len(record["ticks"]) else np.zeros(5, np.int64)
+            np.where(
+                (at < len(record["ticks"]))[:, None],
+                record["suffix_depth"][np.minimum(at, len(record["ticks"]) - 1)],
+                0,
+            )
+            if len(record["ticks"])
+            else np.zeros((len(ticks), 5), np.int64)
         )
-        result[:, 0] = np.maximum(
-            np.maximum(initial, observed), result[:, 0] if tick <= record["origin"] else 0
+        result[:, :, 0] = np.maximum(
+            np.maximum(initial, observed),
+            np.where((ticks <= record["origin"])[:, None], result[:, :, 0], 0),
         )
         homes = record["homes"].copy()
         tail = record["outcome"][:, 1]
         tail = np.where(tail >= 0, tail + record["origin"], -1)
         homes = np.where((homes < 0) | ((tail >= 0) & (tail < homes)), tail, homes)
-        result[:, 1] = np.where(homes >= tick, homes - tick, -1)
-        result[:, 2] = result[:, 1] >= 0
+        relative = homes[None] - ticks[:, None]
+        result[:, :, 1] = np.where(homes[None] >= ticks[:, None], relative, -1)
+        result[:, :, 2] = result[:, :, 1] >= 0
         return result
 
     def finalize(self):
         if self.published:
+            if self.auxiliary is not None:
+                self.auxiliary.release_completed_intervals()
             return True
         # Diagnostic collection windows can stop with live games. Preserve the
         # observed prefix and resolve the untouched remainder privately.
@@ -456,24 +477,44 @@ class WaitOutcomes:
             self.auxiliary.seal("outcomes")
         if not self.advance():
             return False
-        tau = reference_tau(self.env.batch.rules)
+        tau, grouped = reference_tau(self.env.batch.rules), {}
         for index, record in self.rows.items():
-            block, offset = divmod(index, self.buffer.block_rows)
-            row = self.buffer.blocks[block][offset]
-            before = self.target(record["null"], record["tick"], record["initial"])
-            after = self.target(record["actual"], record["tick"], record["initial"])
-            row["baseline_outcomes"] = before
-            row["effect_labels"][0] = outcome_codes(after, tau)
-            for token, label in record["alternatives"].items():
-                row["effect_labels"][token] = label
+            grouped.setdefault(record["null"], []).append(
+                (index, 3 if record["null"] == record["actual"] else 1)
+            )
+            if record["actual"] != record["null"]:
+                grouped.setdefault(record["actual"], []).append((index, 2))
             if any(
                 int(token) not in record["alternatives"]
                 for token in np.flatnonzero(record["valid"])[1:]
             ):
                 raise RuntimeError("A sampled alternative lost its exact target")
+        for identity, references in grouped.items():
+            indices, roles = np.asarray(references, np.int64).T
+            records = [self.rows[int(i)] for i in indices]
+            targets = self.targets(
+                identity,
+                np.array([r["tick"] for r in records]),
+                np.array([r["initial"] for r in records]),
+            )
+            codes = outcome_codes(targets, tau)
+            blocks, offsets = np.divmod(indices, self.buffer.block_rows)
+            for block in np.unique(blocks):
+                storage = self.buffer.blocks[int(block)]
+                before = (blocks == block) & ((roles & 1) != 0)
+                after = (blocks == block) & ((roles & 2) != 0)
+                storage["baseline_outcomes"][offsets[before]] = targets[before]
+                storage["effect_labels"][offsets[after], 0] = codes[after]
+        for index, record in self.rows.items():
+            block, offset = divmod(index, self.buffer.block_rows)
+            row = self.buffer.blocks[block][offset]
+            for token, label in record["alternatives"].items():
+                row["effect_labels"][token] = label
             row["outcome_ready"] = True
         self.metrics["published_rows"] = len(self.rows)
         self.published = True
+        if self.auxiliary is not None:
+            self.auxiliary.release_completed_intervals()
         return True
 
     def snapshot(self):
@@ -492,7 +533,7 @@ class WaitOutcomes:
                     for identity, record in self.intervals.items()
                 },
                 rows=copy.deepcopy(self.rows),
-                jobs=copy.deepcopy(self.jobs),
+                jobs=copy.deepcopy(list(self.jobs.values())),
                 metrics=dict(self.metrics),
                 published=self.published,
             )
@@ -571,6 +612,8 @@ class WaitOutcomes:
                 for identity, record in self.intervals.items()
             ):
                 raise ValueError("An unfinished interval lost its probe job")
+            self.jobs = {job["id"]: job for job in self.jobs}
+            self._recount_storage()
             return
         if state.get("protocol") != self.protocol:
             raise ValueError("Incompatible absolute Wait trajectory recovery")
@@ -641,6 +684,18 @@ class WaitOutcomes:
             self.service.restore(state["service"])
         if self.auxiliary is not None:
             self._import_legacy_jobs(state)
+        self._recount_storage()
+
+    def _recount_storage(self):
+        self.index_bytes = 0
+        self.segment_bytes = sum(
+            values.nbytes for record in self.intervals.values() for _, values in record["segments"]
+        )
+        self.root_bytes = (
+            0
+            if self.auxiliary is not None
+            else sum(job["root_bytes"] for job in self.jobs if "snapshot" in job)
+        )
 
     def _import_legacy_jobs(self, state):
         from pvz_game.cuda import schema
@@ -714,6 +769,7 @@ class WaitOutcomes:
             if index in completed:
                 self.auxiliary.import_result(identity, completed[index])
         self.live = []
+        self.jobs = {job["id"]: job for job in self.jobs}
 
     def close(self):
         if self.service is not None:

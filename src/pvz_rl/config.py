@@ -1207,6 +1207,7 @@ def validate_config(cfg: dict) -> None:
 
     validate_auxiliary_settings(performance)
     if set(performance) - {
+        "interval_backend",
         "auxiliary_hybrid",
         "auxiliary_cpu_workers",
         "auxiliary_worker_ram_mib",

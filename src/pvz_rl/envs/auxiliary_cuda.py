@@ -8,6 +8,7 @@ from pvz_rl.envs.cuda_lane_oracle import LaneTransfers
 from pvz_rl.envs.cuda_snapshots import download_snapshots
 from pvz_rl.envs.cuda_static_fork import StaticForkBatch
 from pvz_rl.envs.scratch_game import EngineSnapshot
+from pvz_rl.envs.snapshot_packet import SnapshotRoot
 
 FORK_STEP = r"""
 extern "C" __global__ void advance_auxiliary(
@@ -122,7 +123,7 @@ class CudaWorkers:
             if key not in self.transfers.cache and key not in prepared:
                 prepared[key] = (
                     snapshot
-                    if isinstance(snapshot, EngineSnapshot)
+                    if isinstance(snapshot, (EngineSnapshot, SnapshotRoot))
                     else EngineSnapshot._seal(snapshot)
                 )
             transfers.append((slot, key, prepared.get(key, snapshot)))
@@ -231,6 +232,7 @@ class CudaWorkers:
         if not self.pending or not self.event.done:
             return None
         self.pending = False
+        self.transfers.inflight = []
         results = []
         for slot, job in enumerate(self.slots):
             if job is None:

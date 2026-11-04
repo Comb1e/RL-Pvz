@@ -14,6 +14,16 @@ from tempfile import TemporaryDirectory
 from time import perf_counter
 
 
+def close_interval_owners(model):
+    owner = getattr(model, "_wait_outcomes", None)
+    if owner is not None:
+        owner.close()
+        model._wait_outcomes = None
+    service = getattr(model.env, "auxiliary", None)
+    if service is not None:
+        service.close()
+
+
 def measure(base, settings, args, workspace):
     import numpy as np
     import torch
@@ -74,10 +84,13 @@ def measure(base, settings, args, workspace):
         }
     )
     cfg["training"]["performance"].update(
-        {k: v for k, v in settings.items() if k.startswith("auxiliary_")}
+        {k: v for k, v in settings.items() if k.startswith("auxiliary_") or k == "interval_backend"}
     )
     mode = settings.get("mode", "hybrid")
-    cfg["training"]["performance"]["auxiliary_hybrid"] = mode != "sync"
+    cfg["training"]["performance"]["auxiliary_hybrid"] = mode in ("cuda", "hybrid", "deferred")
+    cfg["training"]["performance"]["interval_backend"] = (
+        "packed_async" if mode in ("interval", "interval-deferred") else "legacy"
+    )
     if mode in ("cuda", "deferred"):
         cfg["training"]["performance"]["auxiliary_cpu_workers"] = 0
     # The production cohort-size resolver is used when present.
@@ -123,7 +136,7 @@ def measure(base, settings, args, workspace):
             model._begin(callback)
             setup_done = perf_counter()
             if getattr(env, "auxiliary", None) is not None:
-                env.auxiliary.defer_until_seal = mode == "deferred"
+                env.auxiliary.defer_until_seal = mode in ("deferred", "interval-deferred")
             trace = None
             if args.process_trace and repeat >= args.warmup:
                 from draw_collection_process import CollectionTrace
@@ -166,6 +179,7 @@ def measure(base, settings, args, workspace):
                     target_hash.update(row[field].tobytes())
                 target_hash.update(row["effect_labels"][row["effect_valid"]].tobytes())
             auxiliary = deepcopy(getattr(getattr(env, "auxiliary", None), "metrics", {}))
+            intervals = deepcopy(getattr(getattr(model, "_wait_outcomes", None), "metrics", {}))
             if trace is not None:
                 trace.finish(
                     args.output.with_suffix(
@@ -195,15 +209,19 @@ def measure(base, settings, args, workspace):
                 ),
                 flush=True,
             )
-            model._finalize_rewards(callback)
-            model._buffer.finalize(cohort=model.cohort_number, diagnostics=False)
-            model._phase(CohortPhase.FIT, callback)
-            metrics["scratch_retained_mib"] = teacher.metrics.get("scratch_retained_mib")
-            while model.phase == CohortPhase.FIT:
-                model._fit_step(callback)
-                callback.log_progress()
+            fitting_started = perf_counter()
+            if not args.collect_only:
+                model._finalize_rewards(callback)
+                model._buffer.finalize(cohort=model.cohort_number, diagnostics=False)
+                model._phase(CohortPhase.FIT, callback)
+                metrics["scratch_retained_mib"] = teacher.metrics.get("scratch_retained_mib")
+                while model.phase == CohortPhase.FIT:
+                    model._fit_step(callback)
+                    callback.log_progress()
             torch.cuda.synchronize()
             finished = perf_counter()
+            fitting_seconds = 0.0 if args.collect_only else finished - fitting_started
+            total_seconds = collected - started + fitting_seconds
             samples.append(
                 dict(
                     warmup=repeat < args.warmup,
@@ -211,6 +229,7 @@ def measure(base, settings, args, workspace):
                     wins=sum(outcomes),
                     setup_seconds=setup_done - started,
                     auxiliary=auxiliary,
+                    intervals=intervals,
                     decision_latency_seconds=dict(
                         zip(
                             ("p50", "p95", "p99"),
@@ -230,9 +249,10 @@ def measure(base, settings, args, workspace):
                     timeouts=sum(m["status"] == "truncated" for m in episode_metrics),
                     mean_simulated_seconds=mean(m["simulated_seconds"] for m in episode_metrics),
                     collection_seconds=collected - started,
-                    fitting_seconds=finished - collected,
-                    total_seconds=finished - started,
-                    seconds_per_env=(finished - started) / len(outcomes),
+                    post_collection_audit_seconds=fitting_started - collected,
+                    fitting_seconds=fitting_seconds,
+                    total_seconds=total_seconds,
+                    seconds_per_env=total_seconds / len(outcomes),
                     collect_seconds_per_env=(collected - started) / len(outcomes),
                     signature=digest(
                         dict(
@@ -260,6 +280,7 @@ def measure(base, settings, args, workspace):
                 model._fitting_spool.close()
                 model._fitting_spool = None
             model._peashooter_objective = None
+            close_interval_owners(model)
             teacher.close()
             model._peashooter_teacher = None
             model._buffer.close()
@@ -278,6 +299,7 @@ def measure(base, settings, args, workspace):
         )
     finally:
         model._close_batches()
+        close_interval_owners(model)
         if getattr(model, "_peashooter_teacher", None):
             model._peashooter_teacher.close()
         if model._buffer:
@@ -308,6 +330,9 @@ def main():
     )
     parser.add_argument("--eager", action="store_true")
     parser.add_argument(
+        "--collect-only", action="store_true", help="Include all labeling/drain; skip fitting"
+    )
+    parser.add_argument(
         "--automatic-layout",
         action="store_true",
         help="Include inactive capacity retained by the automatic stage pipeline",
@@ -326,7 +351,11 @@ def main():
     parser.add_argument("--chunks", type=int, nargs="+")
     parser.add_argument("--auxiliary-workers", type=int, nargs="+")
     parser.add_argument("--auxiliary-ms", type=float, nargs="+")
-    parser.add_argument("--modes", nargs="+", choices=("sync", "cuda", "hybrid", "deferred"))
+    parser.add_argument(
+        "--modes",
+        nargs="+",
+        choices=("sync", "cuda", "hybrid", "deferred", "interval", "interval-deferred"),
+    )
     args = parser.parse_args()
     if args.repetitions < 1 or args.warmup < 0 or args.seconds < 1 or args.case_panel < 1:
         parser.error("Use positive repetitions, cutoff seconds and case-panel size")
@@ -388,7 +417,7 @@ def main():
         ]
     result = dict(
         protocol="peashooter_full_cohort_benchmark_v1",
-        optimizer_passes=cfg["training"]["n_epochs"],
+        optimizer_passes=0 if args.collect_only else cfg["training"]["n_epochs"],
         implementation="hybrid_exact_simulation_v1",
         gpu_profile=profile_name,
         automatic_layout=args.automatic_layout,
@@ -441,7 +470,7 @@ def main():
             s["decision_latency_seconds"]["p95"] for s in row["samples"] if not s["warmup"]
         )
         for row in feasible
-        if row.get("mode") == "deferred"
+        if row.get("mode") in ("deferred", "interval-deferred")
     }
     for row in feasible:
         p95 = mean(s["decision_latency_seconds"]["p95"] for s in row["samples"] if not s["warmup"])
@@ -451,7 +480,7 @@ def main():
     qualified = [
         row
         for row in feasible
-        if row.get("mode") in ("cuda", "hybrid")
+        if row.get("mode") in ("cuda", "hybrid", "interval")
         and row["main_p95_ratio"] is not None
         and row["main_p95_ratio"] <= 1.05
     ]

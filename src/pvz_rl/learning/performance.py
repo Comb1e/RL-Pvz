@@ -4,6 +4,7 @@ import copy
 
 ENCODER_SETTINGS = ("encoder_microbatch", "encoder_token_budget", "attention_query_chunk")
 PERFORMANCE_SETTINGS = (
+    "interval_backend",
     "auxiliary_hybrid",
     "auxiliary_cpu_workers",
     "auxiliary_worker_ram_mib",
@@ -56,6 +57,8 @@ def refresh_performance(cfg, current):
         result["policy"][key] = current["policy"][key]
     target = result["training"].setdefault("performance", {})
     for key in PERFORMANCE_SETTINGS:
+        if key == "interval_backend" and key not in target:
+            continue  # Saved runs without routing metadata retain legacy execution.
         if key in current["training"]["performance"]:
             target[key] = current["training"]["performance"][key]
         else:

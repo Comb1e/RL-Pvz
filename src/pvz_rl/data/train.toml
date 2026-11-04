@@ -257,12 +257,13 @@ demo_rank_margin = 0.05
 
 [training.performance]
 auxiliary_hybrid = false # Opt in: the 128-env control still drained more slowly than synchronous execution.
+interval_backend = "packed_async" # Interval-only device roots; teacher keeps its existing workflow.
 auxiliary_cpu_workers = 4 # Fastest asynchronous setting in the warmed 4/8/12-worker screen.
 auxiliary_worker_ram_mib = 192
 auxiliary_cuda_target_ms = 2.0
 auxiliary_vram_mib = 4096 # Combined captures, interval workers, teacher workers and caches.
 auxiliary_spill_gib = 8
-auxiliary_interval_lanes = 32 # Active interval workers while the main games collect.
+auxiliary_interval_lanes = 128 # Fastest 32/64/128 interval screen; shrinks to fit VRAM.
 auxiliary_teacher_lanes = 128 # Drain may use the existing larger oracle limit.
 fork_packed = false # Packed layouts were slower in the seeded 128-env screen.
 fork_threads = 32
@@ -356,7 +357,7 @@ performance = {fit_species_microbatch = 32, fit_tile_microbatch = 32, fit_token_
 device_names = ["NVIDIA GeForce RTX 4070 Laptop GPU"]
 status = "measured-eager-2026-10-15"
 torch_threads = 2
-performance = {compile_collection = false, compile_fitting = false, fit_species_microbatch = 64, fit_tile_microbatch = 64, fit_token_budget = 16384, fit_batch_groups = 2, collection_vram_headroom_mib = 1638}
+performance = {compile_collection = true, compile_fitting = true, fit_species_microbatch = 64, fit_tile_microbatch = 64, fit_token_budget = 16384, fit_batch_groups = 2, collection_vram_headroom_mib = 1638}
 
 [gpu_profiles.rtx4080-super]
 device_names = ["NVIDIA GeForce RTX 4080 SUPER"]

@@ -170,7 +170,7 @@ class CudaSequentialQ(CudaCohortLifecycle):
             callback.check_deadline()
         auxiliary = getattr(self.env, "auxiliary", None)
         if auxiliary is not None:
-            if self.peashooter_rule_training:
+            if self.peashooter_rule_training and "teacher" in auxiliary.families:
                 with atomic_transition():
                     self._peashooter_teacher.advance()
                     if not self.env.enabled_envs.any() and not self._scheduler.pending.any():
@@ -229,6 +229,11 @@ class CudaSequentialQ(CudaCohortLifecycle):
             try:
                 with atomic_transition(), self.env.device_context():
                     ready, staging = True, 0
+                    owner = getattr(self, "_wait_outcomes", None)
+                    if owner is not None:
+                        staging += owner.estimated_bytes
+                    if auxiliary is not None:
+                        staging += auxiliary.estimated_bytes
                     if self.reach_training:
                         ready = self._reach.prepare()
                         staging += self._reach.estimated_bytes
@@ -721,7 +726,10 @@ class CudaSequentialQ(CudaCohortLifecycle):
                     ),
                 )
             if self.peashooter_rule_training:
-                if getattr(env, "auxiliary", None) is not None:
+                if (
+                    getattr(env, "auxiliary", None) is not None
+                    and "teacher" in env.auxiliary.families
+                ):
                     self._peashooter_teacher.before(
                         actions,
                         executing,

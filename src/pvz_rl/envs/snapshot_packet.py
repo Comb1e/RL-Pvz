@@ -31,11 +31,14 @@ extern "C" __global__ void pack_physical(const long long *h, const long long *p,
 class SnapshotPacket:
     """Freeze before mutation; decoding and hashing happen on the coordinator."""
 
-    def __init__(self, batch, indices, headers, *, stream, pool=None):
+    def __init__(self, batch, indices, headers, *, stream, pool=None, device_only=False):
         self.headers = np.array(headers, dtype=np.int64, copy=True)
         self.templates = [copy(batch._templates[i]) for i in indices]
         self.indices = list(indices)
         self.decoded = None
+        self.cp, self.stream = batch.cp, stream
+        self.device_only = device_only
+        self.event = None
         self.counts = [self.headers[:, s.HEADER.index(k)] for k in ("np", "nz", "nq")]
         lengths = (
             len(s.HEADER)
@@ -95,14 +98,21 @@ class SnapshotPacket:
             ),
         )
         self.references = (slots, offsets)
-        ready = cp.cuda.Event(disable_timing=True)
-        ready.record()
+        self.ready = cp.cuda.Event(disable_timing=True)
+        self.ready.record()
+        self.size_bytes = self.device.nbytes
+        if not device_only:
+            self.download()
+
+    def download(self):
+        if self.event is not None:
+            return
+        cp, stream = self.cp, self.stream
         self.memory = cp.cuda.alloc_pinned_memory(self.device.nbytes)
         self.host = np.frombuffer(self.memory, np.int64, count=self.device.size)
-        self.size_bytes = self.device.nbytes
         self.event = cp.cuda.Event(disable_timing=True)
         with stream:
-            stream.wait_event(ready)
+            stream.wait_event(self.ready)
             self.device.get(out=self.host, stream=stream, blocking=False)
             self.event.record()
 
@@ -113,6 +123,7 @@ class SnapshotPacket:
     def resolve(self, *, wait=False):
         if self.decoded is not None:
             return self.decoded
+        self.download()
         if wait:
             self.event.synchronize()
         elif not self.event.done:
@@ -155,6 +166,27 @@ class SnapshotRoot:
     def resolve(self, *, wait=False):
         decoded = self.packet.resolve(wait=wait)
         return decoded[self.index] if decoded is not None else None
+
+    def device_slabs(self, stream):
+        """Immutable occupied records; worker copies never alias the real game."""
+        packet, row = self.packet, self.index
+        if packet.device is None:
+            return None
+        stream.wait_event(packet.ready)
+        at = int(packet.offsets[row])
+        slabs = {}
+        for name, count, width in (
+            ("header", 1, len(s.HEADER)),
+            ("plants", packet.counts[0][row], len(s.PLANT)),
+            ("zombies", packet.counts[1][row], len(s.ZOMBIE)),
+            ("projectiles", packet.counts[2][row], len(s.PROJECTILE)),
+            ("mowers", 5, len(s.MOWER)),
+            ("cooldowns", 1, 8),
+        ):
+            size = int(count) * width
+            slabs[name] = packet.device[at : at + size]
+            at += size
+        return packet.templates[row], slabs
 
     def __getitem__(self, key):
         if key == "tick":

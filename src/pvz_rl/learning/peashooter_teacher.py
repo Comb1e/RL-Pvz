@@ -216,7 +216,10 @@ class _LaneBatch(AccountingCudaBatch):
 
 class PeashooterTeacher:
     def __new__(cls, env, buffer, identity, state=None, archive=None):
-        if getattr(env, "auxiliary", None) is not None or (state and state.get("async_execution")):
+        service = getattr(env, "auxiliary", None)
+        if (service is not None and "teacher" in service.families) or (
+            state and state.get("async_execution")
+        ):
             from pvz_rl.learning.async_teacher import AsyncPeashooterTeacher
 
             return AsyncPeashooterTeacher(env, buffer, identity, state, archive)
@@ -445,6 +448,16 @@ class PeashooterTeacher:
             self.cfg["training"]["performance"].get("collection_vram_headroom_mib", 0) * 2**20
         )
         budget = min(self.settings["oracle_vram_mib"] * 2**20, max(0, free - headroom))
+        service = getattr(self.env, "auxiliary", None)
+        if service is not None:
+            budget = min(
+                budget,
+                max(
+                    0,
+                    service.settings["auxiliary_vram_mib"] * 2**20
+                    - service.metrics["device_bytes"],
+                ),
+            )
         cache_bytes = min(64 * 2**20, budget // 8)
         qcap = original.qcap + projectile_bound(original.rules)
         per_lane = (qcap * 6 + original.zcap * 29 + 512) * 8 + 16384

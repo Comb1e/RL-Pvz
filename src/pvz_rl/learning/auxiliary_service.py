@@ -6,7 +6,8 @@ import os
 import pickle
 import threading
 import traceback
-from collections import Counter, deque
+import weakref
+from collections import Counter, OrderedDict, deque
 from contextlib import contextmanager
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -42,7 +43,7 @@ class RootStore:
         self.limit, self.spill_limit = ram_limit, spill_limit
         self.entries, self.identities = {}, {}
         self.next_id = self.nbytes = self.spilled = 0
-        self.pending = deque()
+        self.pending = OrderedDict()
 
     def retain(self, value):
         identity = id(value)
@@ -57,10 +58,10 @@ class RootStore:
         self.identities[identity] = key
         self.nbytes += size
         if isinstance(value, SnapshotRoot):
-            self.pending.append(key)
+            self.pending[key] = None
         return key
 
-    def get(self, key, *, wait=False):
+    def get(self, key, *, wait=False, packed=False):
         entry = self.entries[key]
         if "value" not in entry:
             self.spool.seek(entry["offset"])
@@ -69,17 +70,19 @@ class RootStore:
                 raise OSError("Truncated auxiliary root spool")
             return pickle.loads(data)
         value = entry["value"]
+        if packed and isinstance(value, SnapshotRoot) and value.packet.device is not None:
+            return value
         return value.resolve(wait=wait) if isinstance(value, SnapshotRoot) else value
 
     def materialize(self):
         for _ in range(min(32, len(self.pending))):
-            key = self.pending.popleft()
+            key, _ = self.pending.popitem(last=False)
             entry = self.entries.get(key)
             if entry is None or not isinstance(entry.get("value"), SnapshotRoot):
                 continue
             value = entry["value"].resolve()
             if value is None:
-                self.pending.append(key)
+                self.pending[key] = None
                 continue
             if self.identities.get(entry["identity"]) == key:
                 self.identities.pop(entry["identity"], None)
@@ -124,9 +127,12 @@ class RootStore:
         if self.identities.get(entry["identity"]) == key:
             self.identities.pop(entry["identity"], None)
         del self.entries[key]
+        self.pending.pop(key, None)
 
     def close(self):
         self.entries.clear()
+        self.identities.clear()
+        self.pending.clear()
         self.spool.close()
         self.directory.cleanup()
 
@@ -142,6 +148,16 @@ class AuxiliarySimulationService:
             DEFAULTS,
             **{k: v for k, v in env.cfg["training"]["performance"].items() if k in DEFAULTS},
         )
+        # Saved services without a family directory used both queues. Missing
+        # settings on old runs must never silently change their teacher workflow.
+        self.families = set(
+            state.get("families", ("outcomes", "teacher"))
+            if state is not None
+            else (("outcomes", "teacher") if self.settings["auxiliary_hybrid"] else ("outcomes",))
+        )
+        if self.families not in ({"outcomes"}, {"outcomes", "teacher"}):
+            raise ValueError("Invalid saved auxiliary execution families")
+        self.packed_only = self.families == {"outcomes"}
         self.forecasts = dict(env.cfg["training"]["forecasts"])
         self.teacher_settings = dict(env.cfg["training"].get("peashooter_rules", {}))
         self.teacher_settings.update(
@@ -169,6 +185,7 @@ class AuxiliarySimulationService:
         self.gpu = {}
         self.workers = []
         self.estimates = {}
+        self.retired_transfers = dict(uploaded_bytes=0, progress_bytes=0)
         self.metrics = dict(
             cpu_jobs=0,
             cuda_jobs=0,
@@ -206,7 +223,7 @@ class AuxiliarySimulationService:
             uploaded_bytes=0,
             progress_bytes=0,
         )
-        requested = self.settings["auxiliary_cpu_workers"]
+        requested = 0 if self.packed_only else self.settings["auxiliary_cpu_workers"]
         reservation = self.settings["auxiliary_worker_ram_mib"] * 2**20
         count = min(
             requested, max(0, (os.cpu_count() or 1) - 4), buffer.ram_bytes // (2 * reservation)
@@ -301,21 +318,26 @@ class AuxiliarySimulationService:
         self.metrics["capture_bytes"] = capture
         per_lane = device_bytes(b) // b.n + 131072
         for family in ("outcomes", "teacher"):
+            if family not in self.families:
+                continue
             if family == "teacher" and not self.teacher_settings.get("oracle_lanes"):
                 continue
             child_cap = (
-                self.forecasts["vram_mib"] * 2**20 - capture
+                self.forecasts["vram_mib"] * 2**20 - capture - packet_reserve
                 if family == "outcomes"
                 else self.teacher_settings["oracle_vram_mib"] * 2**20
             )
             maximum = (
-                min(b.n, self.forecasts["lanes"])
+                min(
+                    b.n,
+                    self.forecasts["lanes"],
+                    self.settings["auxiliary_interval_lanes"] if self.packed_only else b.n,
+                )
                 if family == "outcomes"
                 else self.teacher_settings["oracle_lanes"]
             )
             available = min(
-                remaining
-                // (2 if family == "outcomes" and self.teacher_settings.get("oracle_lanes") else 1),
+                remaining // (2 if family == "outcomes" and "teacher" in self.families else 1),
                 child_cap,
             )
             count = min(maximum, max(0, int((available - 16 * 2**20) // per_lane)))
@@ -336,14 +358,16 @@ class AuxiliarySimulationService:
         self.stream.synchronize()
         self.metrics["device_bytes"] = budget - remaining - packet_reserve
         self.packet_limit = min(128 * 2**20, remaining + packet_reserve)
-        self.packets = []
+        self.packets = weakref.WeakSet() if self.packed_only else []
+        self.live_packet_bytes = 0
         if not self.gpu and not self.settings["auxiliary_cpu_workers"]:
             raise MemoryError("No exact auxiliary simulation worker fits the resource budget")
 
     def capture(self, batch, indices, headers):
         if not indices:
             return []
-        self.packets = [p for p in self.packets if p.device is not None]
+        if not self.packed_only:
+            self.packets = [p for p in self.packets if p.device is not None]
         # Packet capacity is charged separately from worker and capture slabs.
         from pvz_game.cuda.schema import HEADER, MOWER, PLANT, PROJECTILE, ZOMBIE
 
@@ -354,7 +378,8 @@ class AuxiliarySimulationService:
                 for key, schema in (("np", PLANT), ("nz", ZOMBIE), ("nq", PROJECTILE))
             )
         ) * 8
-        if sum(p.nbytes for p in self.packets) + estimated > self.packet_limit:
+        live = self.live_packet_bytes if self.packed_only else sum(p.nbytes for p in self.packets)
+        if live + estimated > self.packet_limit:
             # This is storage backpressure, never a dependency on completed labels.
             if estimated > self.packet_limit:
                 raise MemoryError(
@@ -363,26 +388,60 @@ class AuxiliarySimulationService:
             started = perf_counter()
             with self.condition:
                 while (
-                    sum(p.nbytes for p in self.packets if p.device is not None) + estimated
-                    > self.packet_limit
-                ):
+                    self.live_packet_bytes
+                    if self.packed_only
+                    else sum(p.nbytes for p in self.packets if p.device is not None)
+                ) + estimated > self.packet_limit:
                     self._check()
                     self.condition.wait(timeout=0.001)
             self.metrics["host_wait_seconds"] += perf_counter() - started
-        packet = SnapshotPacket(batch, indices, headers, stream=self.transfer_stream)
-        self.packets.append(packet)
+        packet = SnapshotPacket(
+            batch, indices, headers, stream=self.transfer_stream, device_only=self.packed_only
+        )
+        if self.packed_only:
+            with self.condition:
+                self.packets.add(packet)
+                self.live_packet_bytes += packet.nbytes
+            # CuPy views retain their base ndarray. Charge the allocation until
+            # both the packet and any in-flight private-copy views release it.
+            weakref.finalize(packet.device, self._release_packet, packet.nbytes)
+        else:
+            self.packets.append(packet)
         self.metrics["packet_bytes"] += packet.nbytes
-        live = sum(p.nbytes for p in self.packets if p.device is not None)
+        live = (
+            self.live_packet_bytes
+            if self.packed_only
+            else sum(p.nbytes for p in self.packets if p.device is not None)
+        )
         self.metrics["peak_packet_bytes"] = max(self.metrics["peak_packet_bytes"], live)
         self.metrics["peak_device_bytes"] = max(
             self.metrics["peak_device_bytes"], self.metrics["device_bytes"] + live
         )
         return packet.roots()
 
+    def _release_packet(self, size):
+        with self.condition:
+            self.live_packet_bytes -= size
+            self.condition.notify_all()
+
     def start(self):
         with self.condition:
             self.pause_requested = False
             self.condition.notify_all()
+
+    def release_completed_intervals(self):
+        """Drain boundary: return idle interval scratch before the teacher allocates."""
+        if not self.packed_only or "outcomes" not in self.gpu:
+            return
+        with self.quiescent():
+            if self.jobs or self.results:
+                raise RuntimeError("Cannot release interval scratch with unpublished exact work")
+            with self.stream:
+                backend = self.gpu.pop("outcomes")
+                self.metrics["device_bytes"] -= backend.nbytes + backend.transfers.limit
+                self.retired_transfers["uploaded_bytes"] += backend.transfers.uploaded_bytes
+                self.retired_transfers["progress_bytes"] += backend.progress_bytes
+                backend.close()
 
     def import_result(self, identity, result):
         job = self.jobs[identity]
@@ -502,7 +561,7 @@ class AuxiliarySimulationService:
     def _ready(self, job):
         if job["state"] not in ("capturing", "queued"):
             return False
-        root = self.store.get(job["root"])
+        root = self.store.get(job["root"], packed=self.packed_only)
         if root is None:
             return False
         job["state"] = "queued"
@@ -521,7 +580,7 @@ class AuxiliarySimulationService:
         return None
 
     def _payload(self, job):
-        return dict(job, snapshot=self.store.get(job["root"]))
+        return dict(job, snapshot=self.store.get(job["root"], packed=self.packed_only))
 
     def _dispatch_cpu(self, gpu_available):
         for slot in self.workers:
@@ -870,9 +929,14 @@ class AuxiliarySimulationService:
                     decoding = perf_counter()
                     # Compaction can discard every row in a capture. Such packets
                     # still need their transfer consumed, without retaining a root.
-                    for packet in [p for p in list(self.packets) if p.device is not None][:32]:
-                        packet.resolve()
-                    self.store.materialize()
+                    if not self.packed_only:
+                        for packet in [p for p in list(self.packets) if p.device is not None][:32]:
+                            packet.resolve()
+                        self.store.materialize()
+                    elif self.live_packet_bytes > self.packet_limit * 0.75:
+                        # Pressure only: download cold queued roots on the
+                        # coordinator. Ordinary jobs remain on device end to end.
+                        self.store.materialize()
                     self.metrics["decode_seconds"] += perf_counter() - decoding
                     if self.draining or not self.defer_until_seal:
                         self._prepare_boards()
@@ -889,10 +953,10 @@ class AuxiliarySimulationService:
                         peak_root_ram_bytes=max(
                             self.metrics["peak_root_ram_bytes"], self.store.nbytes
                         ),
-                        uploaded_bytes=sum(
-                            backend.transfers.uploaded_bytes for backend in self.gpu.values()
-                        ),
-                        progress_bytes=sum(backend.progress_bytes for backend in self.gpu.values()),
+                        uploaded_bytes=self.retired_transfers["uploaded_bytes"]
+                        + sum(backend.transfers.uploaded_bytes for backend in self.gpu.values()),
+                        progress_bytes=self.retired_transfers["progress_bytes"]
+                        + sum(backend.progress_bytes for backend in self.gpu.values()),
                         root_spill_bytes=self.store.spilled,
                         queued_jobs=max(0, len(self.jobs) - cpu_live - cuda_live),
                         live_jobs=len(self.jobs),
@@ -938,6 +1002,7 @@ class AuxiliarySimulationService:
                 job["queued_age"] = max(0, monotonic() - job["queued"])
             return dict(
                 protocol=PROTOCOL,
+                families=sorted(self.families),
                 jobs=jobs,
                 boards=copy.deepcopy(self.boards),
                 roots={key: self.store.get(key, wait=True) for key in self.store.entries},
@@ -1019,6 +1084,9 @@ class AuxiliarySimulationService:
             }
         )
         self.estimates = copy.deepcopy(state.get("estimates", {}))
+        self.retired_transfers = {
+            key: state["metrics"].get(key, 0) for key in ("uploaded_bytes", "progress_bytes")
+        }
         self.draining = bool(self.sealed)
         if self.draining:
             self.drain_started = perf_counter() - self.metrics.get("drain_seconds", 0)

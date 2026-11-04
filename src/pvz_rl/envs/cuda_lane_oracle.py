@@ -5,6 +5,7 @@ from collections import OrderedDict
 import numpy as np
 
 from pvz_rl.envs.cuda_snapshots import pack_snapshots
+from pvz_rl.envs.snapshot_packet import SnapshotRoot
 
 _COPY = r"""
 extern "C" __global__ void copy_roots(const unsigned long long *sources,
@@ -37,6 +38,17 @@ class LaneTransfers:
         cp = self.cp
         roots, templates = [], []
         for slot, key, snapshot in entries:
+            direct = (
+                snapshot.device_slabs(cp.cuda.get_current_stream())
+                if isinstance(snapshot, SnapshotRoot)
+                else None
+            )
+            if direct is not None:
+                templates.append(direct[0])
+                roots.append(direct[1])
+                continue
+            if isinstance(snapshot, SnapshotRoot):
+                snapshot = snapshot.resolve(wait=True)
             cached = self.cache.get(key)
             if cached is None:
                 self.misses += 1
@@ -74,7 +86,7 @@ class LaneTransfers:
         batch._event_counts[slots] = 0
         if hasattr(batch, "accounting"):
             batch.accounting[slots] = 0
-        self.inflight = roots
+        self.inflight = (roots, [entry[2] for entry in entries])
         for (slot, _, _), template in zip(entries, templates, strict=True):
             batch._templates[slot] = template
 
