@@ -107,7 +107,7 @@ class CollectionTrace:
     def trace_profiler(self):
         profiler = self.env.profiler
         original = profiler.track
-        self.originals.append((profiler, "track", original))
+        self.originals.append((profiler, "track", original, "track" in vars(profiler)))
 
         @contextmanager
         def track(phase):
@@ -118,7 +118,7 @@ class CollectionTrace:
 
     def wrap(self, owner, name, label, *, gpu=False, device_label=None, stream=None, before=None):
         original = getattr(owner, name)
-        self.originals.append((owner, name, original))
+        self.originals.append((owner, name, original, name in vars(owner)))
 
         @wraps(original)
         def measured(*args, **kwargs):
@@ -149,12 +149,20 @@ class CollectionTrace:
 
         setattr(owner, name, measured)
 
+    def restore(self):
+        """Remove inherited-method overrides so checkpoint data cannot retain this tracer."""
+        for owner, name, original, owned in reversed(self.originals):
+            if owned:
+                setattr(owner, name, original)
+            else:
+                delattr(owner, name)
+        self.originals.clear()
+
     def finish(
         self, path, *, settings, auxiliary, games, ended=None, setup_seconds=0, workload=None
     ):
         finished = ended if ended is not None else perf_counter()
-        for owner, name, original in reversed(self.originals):
-            setattr(owner, name, original)
+        self.restore()
         totals, counts = defaultdict(float), defaultdict(int)
         events = list(self.events)
         for event in events:
@@ -227,6 +235,29 @@ def _total(events, name, start, end):
 
 def timeline(data):
     """One ordered phase frontier shared by CPU and GPU; loop interiors collapse."""
+    if data.get("process_trace") is not None:
+        source = dict(data)
+        detailed = timeline(source.pop("process_trace"))
+        prefix = timeline(source)
+        phases = [p for p in prefix["phases"] if p["name"] in ("Startup", "Private pretraining")]
+        offset = data["collection_started_seconds"]
+        for phase in detailed["phases"]:
+            if phase["name"] == "Decision loop":
+                graphs = (
+                    (data.get("final_collection") or {})
+                    .get("collection_execution", {})
+                    .get("graph_cache", {})
+                )
+                captures = sum(
+                    value.get("capture_setup_seconds", 0)
+                    for value in graphs.get("online", {}).values()
+                )
+                if captures:
+                    phase["cpu"].append(
+                        f"Graph capture setup (within inference): {_seconds(captures)}"
+                    )
+            phases.append(dict(phase, start=phase["start"] + offset, end=phase["end"] + offset))
+        return dict(phases=phases, gpu_timestamps=detailed["gpu_timestamps"], workflow=True)
     workflow = "command" in data and "timings" in data
     setup = 0 if workflow else data.get("setup_seconds", 0)
     events = _events(data, workflow=workflow, offset=setup)
@@ -441,6 +472,44 @@ def timeline(data):
             wait="Teacher coverage / candidate results; synchronous header copies included",
         )
         phases[-1]["end_note"] = "All required labels ready; fitting may start (not timed here)"
+        if data.get("cohort_finished_seconds") is not None:
+            phases[-1].pop("end_note", None)
+            fitting_start = setup + data["fitting_started_seconds"]
+            fitting_end = max(
+                (
+                    e["start"] + e["seconds"]
+                    for e in events
+                    if e["name"] == "fit pass / forward backward optimizer"
+                ),
+                default=setup + data["cohort_finished_seconds"],
+            )
+            preparation = add(
+                total,
+                fitting_start,
+                "Prepare fitting targets / release simulation scratch",
+                [
+                    ("finalize rewards", "Finalize rewards"),
+                    ("assemble fitting targets", "Assemble targets"),
+                ],
+                [],
+            )
+            if preparation is not None:
+                preparation["gpu_activity"] = "Release simulation scratch / stage fitting tensors"
+            fitting = add(
+                fitting_start,
+                fitting_end,
+                "Four fitting passes",
+                [
+                    (
+                        "fit pass / forward backward optimizer",
+                        "Forward / backward / commit (host wall)",
+                    )
+                ],
+                [("fit forward backward optimizer", "Forward / backward / optimizer event spans")],
+                loop=True,
+                wait="Batch staging / GPU loss and gradient checks before each optimizer commit",
+            )
+            fitting["end_note"] = "Full cohort fitted; checkpoint / report cleanup excluded"
 
     for phase in phases:
         if not phase["cpu"]:

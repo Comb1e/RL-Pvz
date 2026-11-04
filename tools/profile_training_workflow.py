@@ -1,4 +1,4 @@
-"""Time the real training CLI, stopping collection after a bounded wall window.
+"""Time the real training CLI for a bounded window or one fully fitted cohort.
 
 Example: python tools/profile_training_workflow.py --output runs/diagnostics/workflow.json
 --collect-seconds 180 -- train --stage peashooter --until-stage-complete ...
@@ -21,6 +21,12 @@ def main():
     parser.add_argument("--collect-seconds", type=float, default=180)
     parser.add_argument("--stop-after-collect", action="store_true")
     parser.add_argument(
+        "--full-cohort", action="store_true", help="Stop after one fully fitted cohort"
+    )
+    parser.add_argument(
+        "--process-trace", action="store_true", help="Capture ordered CPU/CUDA spans"
+    )
+    parser.add_argument(
         "--cprofile", action="store_true", help="Record Python calls during collection"
     )
     parser.add_argument("training_args", nargs=argparse.REMAINDER)
@@ -30,6 +36,10 @@ def main():
         command = command[1:]
     if command[:1] != ["train"] or args.collect_seconds <= 0:
         parser.error("Supply a positive collection window and -- train ...")
+    if args.full_cohort and args.stop_after_collect:
+        parser.error("Choose --full-cohort or --stop-after-collect")
+    if args.process_trace and not args.full_cohort:
+        parser.error("--process-trace requires --full-cohort")
     started = perf_counter()
     spans, events, samples = (
         defaultdict(lambda: dict(calls=0, seconds=0.0, max_seconds=0.0)),
@@ -41,9 +51,14 @@ def main():
     collection_ended = None
     final_collection = None
     drain_started = None
+    trace = None
+    process_trace = None
+    cohort_finished = None
+    fitting_started = None
+    phase_events = []
     scoped = {
         phase: defaultdict(lambda: dict(calls=0, seconds=0.0, max_seconds=0.0))
-        for phase in ("startup", "collection", "recovery")
+        for phase in ("startup", "collection", "fitting", "recovery")
     }
     patches = []
     stop = threading.Event()
@@ -57,6 +72,7 @@ def main():
         row = dict(elapsed_seconds=perf_counter() - started)
         if model is not None:
             row.update(phase=str(model.phase), steps=model.num_timesteps)
+            row["completed_games"] = len(getattr(model, "_pending_episodes", {}))
             row["simulated_seconds_per_env"] = (
                 getattr(model, "_simulation_ticks", 0)
                 / max(1, model.n_envs)
@@ -90,6 +106,8 @@ def main():
             if collection_started is None
             else "collection"
             if collection_ended is None
+            else "fitting"
+            if args.full_cohort and cohort_finished is None
             else "recovery"
         )
 
@@ -105,7 +123,6 @@ def main():
         if collection_ended is None:
             collection_ended = perf_counter()
             final_collection = snapshot()
-            stop.set()
             if profile is not None:
                 profile.disable()
 
@@ -191,10 +208,22 @@ def main():
                 profile.enable()
 
     def check_window(value, *unused, **kwargs):
-        nonlocal drain_started
+        nonlocal drain_started, trace
         remember(value)
         if collection_started is None:
             begin_collection(value)
+        if args.process_trace and trace is None:
+            from draw_collection_process import CollectionTrace
+
+            trace = CollectionTrace(value)
+            trace.wrap(
+                value,
+                "_fit_step",
+                "fit pass / forward backward optimizer",
+                device_label="fit forward backward optimizer",
+            )
+            trace.wrap(value, "_finalize_rewards", "finalize rewards")
+            trace.wrap(value._buffer, "finalize", "assemble fitting targets")
         if drain_started is None and not value.env.enabled_envs.any():
             drain_started = perf_counter()
             events.append(
@@ -208,10 +237,51 @@ def main():
             raise KeyboardInterrupt("Workflow profiling collection window completed")
 
     def check_phase(value, phase, *unused, **kwargs):
+        nonlocal fitting_started
         remember(value)
-        if args.stop_after_collect and phase == CohortPhase.FINALIZE_REWARDS:
+        phase_events.append(dict(phase=phase.value, start_seconds=perf_counter() - started))
+        if phase == CohortPhase.FINALIZE_REWARDS and (args.full_cohort or args.stop_after_collect):
             end_collection()
+        if phase == CohortPhase.FIT:
+            fitting_started = perf_counter()
+        if args.stop_after_collect and phase == CohortPhase.FINALIZE_REWARDS:
             raise KeyboardInterrupt("Workflow profiling completed one collection")
+
+    original_sync = sequential_training.CudaSequentialQ._synchronize
+
+    def synchronize(value, callback):
+        nonlocal cohort_finished, process_trace
+        capture_ended = perf_counter()
+        if trace is not None:
+            with value.env.device_context():
+                value.env.cp.cuda.get_current_stream().synchronize()
+            process_trace = trace.finish(
+                args.output.with_suffix(".process.json"),
+                settings=dict(value.cfg["training"]["performance"]),
+                auxiliary=dict(getattr(getattr(value.env, "auxiliary", None), "metrics", {})),
+                games=value.cohort_games,
+                ended=collection_ended,
+                setup_seconds=trace.origin - collection_started,
+                workload=dict(
+                    cutoff_seconds=value.cfg["environment"]["cutoff_seconds"],
+                    private_pretraining="production",
+                    live_view=value.cfg["visualization"]["live_enabled"],
+                ),
+            )
+            process_trace["cohort_finished_seconds"] = capture_ended - trace.origin
+            process_trace["fitting_started_seconds"] = fitting_started - trace.origin
+            args.output.with_suffix(".process.json").write_text(
+                json.dumps(process_trace, indent=2), encoding="utf-8"
+            )
+        original_sync(value, callback)
+        cohort_finished = perf_counter()
+        if args.full_cohort:
+            for owner, name, original in reversed(patches):
+                setattr(owner, name, original)
+            raise KeyboardInterrupt("Workflow profiling completed one fully fitted cohort")
+
+    sequential_training.CudaSequentialQ._synchronize = synchronize
+    patches.append((sequential_training.CudaSequentialQ, "_synchronize", original_sync))
 
     patch(sequential_training.CudaSequentialQ, "_begin", before=begin_collection)
     patch(sequential_training.CudaSequentialQ, "_prepare_collection", before=check_window)
@@ -291,6 +361,12 @@ def main():
                     label_drain_started_seconds=None
                     if drain_started is None
                     else drain_started - started,
+                    cohort_finished_seconds=None
+                    if cohort_finished is None
+                    else cohort_finished - started,
+                    cohort_metrics=getattr(model, "cohort_metrics", None),
+                    phase_events=phase_events,
+                    process_trace=process_trace,
                     events=events,
                     samples=samples,
                     timing_notes=[

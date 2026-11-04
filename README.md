@@ -192,6 +192,14 @@ Python call profiling during collection. Fresh fork-enabled runs first pretrain
 the forecast on 2,048 private roots with four passes; weights-only initialization
 starts those counters afresh. The RTX 4070 Laptop profile disables compilation.
 
+For a complete production cohort, add `--full-cohort --process-trace` before
+`-- train` and allow a sufficiently long collection window, such as
+`--collect-seconds 7200`. This retains the configured cohort size and cutoff,
+finishes all required labels and four fitting passes, then saves recovery and
+stops. The same drawing command includes startup, collection, label drain and
+fitting, with measured CUDA events for collection and fitting. Instrumented wall
+times include tracing overhead; checkpoint/report cleanup is reported separately.
+
 Private pretraining retains its sampling procedure and separate counters, using
 public-only inputs and absolute targets. Saved recoveries retain their original
 supervision and collection behavior. Reports separate borrowed real ticks,
