@@ -83,8 +83,10 @@ def measure(base, settings, args, workspace):
             if k in ("oracle_lanes", "oracle_vram_mib", "oracle_chunk_ticks", "prepare_workers")
         }
     )
+    from pvz_rl.learning.performance import PERFORMANCE_SETTINGS
+
     cfg["training"]["performance"].update(
-        {k: v for k, v in settings.items() if k.startswith("auxiliary_") or k == "interval_backend"}
+        {k: v for k, v in settings.items() if k in PERFORMANCE_SETTINGS}
     )
     mode = settings.get("mode", "hybrid")
     cfg["training"]["performance"]["auxiliary_hybrid"] = mode in ("cuda", "hybrid", "deferred")
@@ -118,6 +120,7 @@ def measure(base, settings, args, workspace):
     samples = []
     try:
         for repeat in range(args.repetitions + args.warmup):
+            model.tile_skill_state = initial_tile_state(cfg)
             model.policy.load_state_dict(frozen)
             model.policy.optimizer.state.clear()
             if getattr(model, "_teacher", None) is not None:
@@ -128,6 +131,8 @@ def measure(base, settings, args, workspace):
                 ).bit_generator.state
             env._reset_seeds()
             env._episode_serial[:] = [0] * env.num_envs
+            for slot in range(env.num_envs):
+                env.action_journal.reset(slot, -1)
             torch.manual_seed(args.seed)
             torch.cuda.manual_seed_all(args.seed)
             torch.cuda.synchronize()
@@ -210,13 +215,24 @@ def measure(base, settings, args, workspace):
                 flush=True,
             )
             fitting_started = perf_counter()
+            fit_passes = []
             if not args.collect_only:
                 model._finalize_rewards(callback)
                 model._buffer.finalize(cohort=model.cohort_number, diagnostics=False)
                 model._phase(CohortPhase.FIT, callback)
                 metrics["scratch_retained_mib"] = teacher.metrics.get("scratch_retained_mib")
                 while model.phase == CohortPhase.FIT:
+                    epoch = model._fit_epoch
                     model._fit_step(callback)
+                    if model._fit_epoch != epoch:
+                        fit_passes.append(
+                            dict(
+                                pass_number=epoch + 1,
+                                end_seconds=perf_counter() - fitting_started,
+                                total_loss=model._stats.get("total_loss"),
+                                primary_loss=model._stats.get("primary_loss"),
+                            )
+                        )
                     callback.log_progress()
             torch.cuda.synchronize()
             finished = perf_counter()
@@ -251,6 +267,7 @@ def measure(base, settings, args, workspace):
                     collection_seconds=collected - started,
                     post_collection_audit_seconds=fitting_started - collected,
                     fitting_seconds=fitting_seconds,
+                    fitting_passes=fit_passes,
                     total_seconds=total_seconds,
                     seconds_per_env=total_seconds / len(outcomes),
                     collect_seconds_per_env=(collected - started) / len(outcomes),
@@ -299,6 +316,15 @@ def measure(base, settings, args, workspace):
         )
     finally:
         model._close_batches()
+        # Parameter sweeps create multiple models in one process. Dynamo can
+        # retain their code objects after Python owners are dropped; explicitly
+        # release graph buffers before admitting the next configuration.
+        torch.cuda.synchronize()
+        for network in (model.policy, getattr(model, "_teacher", None)):
+            if network is not None:
+                for encoder in network.encoders:
+                    encoder.release_fitting()
+                    encoder.release_collection()
         close_interval_owners(model)
         if getattr(model, "_peashooter_teacher", None):
             model._peashooter_teacher.close()

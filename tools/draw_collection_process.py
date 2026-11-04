@@ -7,6 +7,7 @@ profile_training_workflow.py. Older host-only recordings remain supported.
 import argparse
 import json
 import threading
+import weakref
 from collections import defaultdict
 from contextlib import contextmanager, nullcontext
 from functools import wraps
@@ -30,6 +31,9 @@ class CollectionTrace:
         self.epoch.synchronize()
         self.origin = perf_counter()
         self.main_thread = threading.get_ident()
+        from profiling_metrics import GarbageCollectionTrace
+
+        self.gc_trace = GarbageCollectionTrace(self.events, self.origin)
         self.first_drain = None
         self.gpu_before = dict(self.env.profiler.flush())
         self.trace_profiler()
@@ -41,6 +45,21 @@ class CollectionTrace:
         self.wrap(self.env, "step_host", "interpret physical results")
         self.wrap(self.env.handoff, "wait", "wait: main stream + result copies")
         self.wrap(model._buffer, "append", "trajectory storage")
+        self.wrap(model._buffer, "reserve_staging", "RAM accounting")
+        self.wrap(self.env.profiler, "snapshot", "collection telemetry")
+        self.wrap(model.policy, "effect_action_display", "forecast display predictions")
+        for owner, names, label in (
+            (
+                model._scheduler,
+                ("retain", "retain_species_draws", "commit", "complete"),
+                "decision tickets",
+            ),
+            (self.env.handoff, ("enqueue_fields",), "stage host transfers"),
+            (self.env.action_journal, ("record_batch_safe",), "viewer journal"),
+        ):
+            for name in names:
+                if hasattr(owner, name):
+                    self.wrap(owner, name, f"{label}: {name}")
         for owner, prefix in (
             (getattr(model, "_wait_outcomes", None), "interval"),
             (getattr(model, "_peashooter_teacher", None), "teacher"),
@@ -51,11 +70,16 @@ class CollectionTrace:
                         self.wrap(owner, name, f"{prefix}: {name}")
         reach = getattr(model, "_reach", None)
         if reach is not None:
-            self.wrap(reach, "prepare", "factual: prepare")
+            self.wrap(
+                reach, "prepare", "factual: prepare", device_label="factual target preparation"
+            )
         teacher = getattr(model, "_peashooter_teacher", None)
         if teacher is not None and hasattr(teacher, "_run_chunk"):
             self.wrap(teacher, "_initialize", "teacher: initialize")
             self.wrap(teacher, "_fill", "teacher: fill")
+            for name in ("_consume_progress", "_publish_progress"):
+                if hasattr(teacher, name):
+                    self.wrap(teacher, name, f"teacher: {name[1:]}")
             traced_batches = set()
 
             def trace_teacher_batch():
@@ -107,7 +131,14 @@ class CollectionTrace:
     def trace_profiler(self):
         profiler = self.env.profiler
         original = profiler.track
-        self.originals.append((profiler, "track", original, "track" in vars(profiler)))
+        self.originals.append(
+            (
+                weakref.ref(profiler),
+                "track",
+                weakref.WeakMethod(original),
+                "track" in vars(profiler),
+            )
+        )
 
         @contextmanager
         def track(phase):
@@ -118,11 +149,14 @@ class CollectionTrace:
 
     def wrap(self, owner, name, label, *, gpu=False, device_label=None, stream=None, before=None):
         original = getattr(owner, name)
-        self.originals.append((owner, name, original, name in vars(owner)))
+        bound = getattr(original, "__self__", None) is not None
+        invoke = weakref.WeakMethod(original) if bound else lambda: original
+        self.originals.append((weakref.ref(owner), name, invoke, name in vars(owner)))
 
-        @wraps(original)
+        @wraps(original.__func__ if bound else original)
         def measured(*args, **kwargs):
             started = perf_counter()
+            fitting_pass = self.model._fit_epoch + 1 if name == "_fit_step" else None
             if before:
                 before()
             if name == "_prepare_collection" and not self.env.enabled_envs.any():
@@ -132,9 +166,9 @@ class CollectionTrace:
                 with self.device_span(device_label, stream) if device_label else nullcontext():
                     if gpu:
                         with self.env.profiler.track("profile_main_environment"):
-                            return original(*args, **kwargs)
+                            return invoke()(*args, **kwargs)
                     else:
-                        return original(*args, **kwargs)
+                        return invoke()(*args, **kwargs)
             finally:
                 self.events.append(
                     dict(
@@ -144,6 +178,8 @@ class CollectionTrace:
                         thread="main"
                         if threading.get_ident() == self.main_thread
                         else "coordinator",
+                        thread_id=threading.get_ident(),
+                        **({"fitting_pass": fitting_pass} if name == "_fit_step" else {}),
                     )
                 )
 
@@ -151,7 +187,14 @@ class CollectionTrace:
 
     def restore(self):
         """Remove inherited-method overrides so checkpoint data cannot retain this tracer."""
-        for owner, name, original, owned in reversed(self.originals):
+        if self.gc_trace is not None:
+            self.gc_trace.close()
+            self.gc_trace = None
+        for owner_ref, name, original_ref, owned in reversed(self.originals):
+            owner = owner_ref()
+            if owner is None:
+                continue
+            original = original_ref()
             if owned:
                 setattr(owner, name, original)
             else:
@@ -168,6 +211,9 @@ class CollectionTrace:
         for event in events:
             totals[event["name"]] += event["seconds"]
             counts[event["name"]] += 1
+        from profiling_metrics import host_attribution
+
+        attribution = host_attribution(events)
         gpu = {k: v - self.gpu_before.get(k, 0) for k, v in self.env.profiler.flush().items()}
         device_events = [
             dict(
@@ -190,6 +236,17 @@ class CollectionTrace:
             label_drain_seconds=finished - self.first_drain if self.first_drain else 0,
             cpu_wall_seconds=dict(totals),
             calls=dict(counts),
+            host_attribution=attribution,
+            decision_batches=counts.get("decision", 0),
+            decision_roots=self.model._buffer.size,
+            milliseconds_per_decision_batch={
+                name: seconds * 1000 / max(1, counts.get("decision", 0))
+                for name, seconds in totals.items()
+            },
+            milliseconds_per_decision_root={
+                name: seconds * 1000 / max(1, self.model._buffer.size)
+                for name, seconds in totals.items()
+            },
             gpu_stream_seconds=gpu,
             auxiliary=auxiliary,
             events=events,
@@ -257,6 +314,27 @@ def timeline(data):
                         f"Graph capture setup (within inference): {_seconds(captures)}"
                     )
             phases.append(dict(phase, start=phase["start"] + offset, end=phase["end"] + offset))
+        for phase in phases:
+            if phase["name"] in ("Private pretraining", "Cohort preparation"):
+                key = (
+                    "ForecastPretraining.advance"
+                    if phase["name"] == "Private pretraining"
+                    else "CudaSequentialQ._begin"
+                )
+                stages = data.get("stage_gpu_events", [])
+                covered = _total(stages, key, phase["start"], phase["end"])
+                if covered:
+                    phase["gpu"] = [f"Main-stream event spans: {_seconds(covered)}"]
+                    auxiliary = _total(
+                        stages, key + " / simulation stream", phase["start"], phase["end"]
+                    )
+                    if auxiliary:
+                        phase["gpu"].append(
+                            f"Private simulation-stream spans: {_seconds(auxiliary)} (overlaps main)"
+                        )
+                    phase["gpu"].append(
+                        "Event spans include host launch gaps; not kernel busy time"
+                    )
         return dict(phases=phases, gpu_timestamps=detailed["gpu_timestamps"], workflow=True)
     workflow = "command" in data and "timings" in data
     setup = 0 if workflow else data.get("setup_seconds", 0)
@@ -275,6 +353,30 @@ def timeline(data):
                 if (value := _total(source, key, start, end)) > 0
             ]
 
+        cpu_lines = measured(cpu, events)
+        if data.get("host_attribution"):
+            from profiling_metrics import host_attribution
+
+            attribution = host_attribution(events, start=start, end=end)["operations"]
+            cpu_lines = [
+                f"{label}: {_seconds(attribution[key]['inclusive_seconds'])} incl / {_seconds(attribution[key]['self_seconds'])} self"
+                for key, label in cpu
+                if key in attribution
+            ]
+            if name == "Decision loop":
+                cpu_lines.insert(
+                    0,
+                    f"{data.get('decision_batches', 0):,} batch calls / {data.get('decision_roots', 0):,} board decisions",
+                )
+                for key, label in (
+                    ("teacher: before", "Freeze teacher roots"),
+                    ("decision", "Other decision bookkeeping"),
+                    ("Python GC", "Garbage collection"),
+                ):
+                    if key in attribution:
+                        cpu_lines.append(
+                            f"{label}: {_seconds(attribution[key]['self_seconds'])} self"
+                        )
         phases.append(
             dict(
                 name=name,
@@ -282,7 +384,7 @@ def timeline(data):
                 end=end,
                 loop=loop,
                 complete=complete,
-                cpu=measured(cpu, events),
+                cpu=cpu_lines,
                 gpu=measured(gpu, gpu_events),
                 wait=wait,
             )
@@ -450,7 +552,7 @@ def timeline(data):
                 ("factual: prepare", "Build factual targets"),
                 ("teacher: initialize", "Project / prepare teacher roots"),
             ],
-            gpu_ops,
+            gpu_ops + [("factual target preparation", "Factual target staging / event span")],
             loop=True,
             wait="CPU lane-preparation replies (included in preparation calls)"
             if data.get("settings", {}).get("prepare_workers", 0)
@@ -469,7 +571,9 @@ def timeline(data):
             ],
             gpu_ops,
             loop=True,
-            wait="Teacher coverage / candidate results; synchronous header copies included",
+            wait="Teacher coverage / candidate results; event-polled pinned progress"
+            if data.get("settings", {}).get("teacher_pipeline", False)
+            else "Teacher coverage / candidate results; synchronous header copies included",
         )
         phases[-1]["end_note"] = "All required labels ready; fitting may start (not timed here)"
         if data.get("cohort_finished_seconds") is not None:
@@ -491,7 +595,10 @@ def timeline(data):
                     ("finalize rewards", "Finalize rewards"),
                     ("assemble fitting targets", "Assemble targets"),
                 ],
-                [],
+                [
+                    ("finalize rewards", "Finalize rewards event span"),
+                    ("assemble fitting targets", "Assemble targets event span"),
+                ],
             )
             if preparation is not None:
                 preparation["gpu_activity"] = "Release simulation scratch / stage fitting tensors"

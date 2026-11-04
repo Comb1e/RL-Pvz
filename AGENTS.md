@@ -78,6 +78,14 @@ This file owns project-specific invariants and the code map.
   decision targets in interval batches. Missing saved settings retain the legacy
   backend. Peashooter teacher rules, sampling and synchronous routing remain intact
   unless the shared hybrid setting explicitly selects both families.
+- Teacher drain may pipeline incremental root preparation with its unchanged
+  CUDA simulations. Poll double-buffered pinned progress only after its event;
+  checkpoint by consuming completed progress before saving partial states.
+  Validate owned roots once, batch slab uploads, charge shared cache allocations
+  and in-flight refills, and commit queue ownership only after copy admission.
+  Factual target batching uses exact inclusive range maxima and preserves every
+  censoring bitset. Vectorized outcome gathers retain null/token/root loss weights.
+  Collection decoder row padding never adds an action or removes a public entity.
 - Legal non-Wait proposals always receive outcome supervision. Effective Waits
   sample alternatives with the configured probability. Two slots hold a legal
   branch runner-up (ties by action ID) and a uniform remaining legal action;
@@ -194,6 +202,7 @@ Paths are relative to `src/pvz_rl/` unless stated otherwise.
 | `evaluation/`, `monitoring/`, repository diagnostic tools | Greedy evaluation, CPU verification, bounded profiling and benchmarks. |
 | Repository `tools/benchmark_peashooter.py`, `tools/draw_collection_process.py` | Seed-matched total-time/latency sweeps, optional real-collection host/CUDA event timing and two chronological CPU/GPU timelines. Collapse loops to start/end markers; identify waits and unavailable device timing explicitly. |
 | Repository `tools/profile_training_workflow.py` | Bounded actual-CLI startup, collection and recovery audits, or one fully fitted production cohort with CPU/CUDA trace capture. Preserve production cutoff, initialization, pretraining and presentation; do not equate shortened frozen-policy benchmarks with full training. |
+| Repository `tools/profiling_metrics.py`, `tools/report_training_hotspots.py` | Per-thread exclusive host attribution, GC pauses, calibrated stage events, bounded CUPTI/cProfile windows, per-pass losses and costs per batch/board decision. Tracing must not retain released CUDA scratch; parameter sweeps release each model's graphs before creating the next model. |
 | `presentation/` | Demo recording/replay, live cohort subscriptions and retained reports. `reach_view.py` separates factual threat, proposed-action field/probe predictions and exact/partial targets; disabled effects and unknown targets are explicit. Viewers reuse timestamped episode-scoped journal predictions without model calls. |
 
 ## Test ownership

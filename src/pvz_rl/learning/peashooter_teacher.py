@@ -239,6 +239,10 @@ class PeashooterTeacher:
         self.transfers = None
         self.pool = None
         self.preparing = None
+        self.pipeline = self.cfg["training"]["performance"].get("teacher_pipeline", False)
+        self.progress = None
+        self.progress_buffers = []
+        self.progress_turn = 0
         from pvz_rl.envs.lane_preparation import LanePreparation
 
         workers = self.settings.get("prepare_workers", 0)
@@ -461,7 +465,12 @@ class PeashooterTeacher:
         cache_bytes = min(64 * 2**20, budget // 8)
         qcap = original.qcap + projectile_bound(original.rules)
         per_lane = (qcap * 6 + original.zcap * 29 + 512) * 8 + 16384
-        count = min(self.settings["oracle_lanes"], int((budget - cache_bytes) // per_lane))
+        # Reserve a second cache-sized allowance for an in-flight refill. An
+        # evicted bundle can remain referenced until its copy kernel finishes.
+        cache_reservation = cache_bytes * (
+            2 if self.cfg["training"]["performance"].get("teacher_batched_transfers", False) else 1
+        )
+        count = min(self.settings["oracle_lanes"], int((budget - cache_reservation) // per_lane))
         self.pool = cp.cuda.MemoryPool()
         while count:
             candidate = None
@@ -479,7 +488,7 @@ class PeashooterTeacher:
                 actual = sum(
                     v.nbytes for v in vars(candidate).values() if isinstance(v, cp.ndarray)
                 )
-                if actual + cache_bytes > budget:
+                if actual + cache_reservation > budget:
                     candidate = None
                     count //= 2
                     continue
@@ -487,9 +496,27 @@ class PeashooterTeacher:
                 self.batch = candidate
                 from pvz_rl.envs.cuda_lane_oracle import LaneTransfers
 
-                self.transfers = LaneTransfers(cp, cache_bytes)
+                self.transfers = LaneTransfers(
+                    cp,
+                    cache_bytes,
+                    batched_owned=self.cfg["training"]["performance"].get(
+                        "teacher_batched_transfers", False
+                    ),
+                )
                 self.slots = [None] * count
                 self.slot_ticks = np.zeros(count, dtype=np.int64)
+                self.actions_host = np.zeros(count, dtype=np.int64)
+                self.actions_device = cp.zeros(count, dtype=cp.int64)
+                if self.pipeline:
+                    for _ in range(2):
+                        memory = cp.cuda.alloc_pinned_memory(count * 3 * 8)
+                        host = np.frombuffer(memory, dtype=np.int64, count=count * 3).reshape(
+                            count, 3
+                        )
+                        self.progress_buffers.append(
+                            (host, cp.empty((count, 3), cp.int64), cp.cuda.Event())
+                        )
+                    self.progress_columns = cp.asarray([0, 1, 12])
                 self.metrics.update(
                     scratch_lanes=count,
                     scratch_mib=actual / 2**20,
@@ -498,6 +525,13 @@ class PeashooterTeacher:
                 return
             except cp.cuda.memory.OutOfMemoryError:
                 candidate = None
+                self.batch = None
+                self.slots = []
+                self.actions_device = None
+                self.progress_buffers.clear()
+                if self.transfers is not None:
+                    self.transfers.close()
+                    self.transfers = None
                 self.pool.free_all_blocks()
                 count //= 2
         raise MemoryError(
@@ -505,11 +539,17 @@ class PeashooterTeacher:
         )
 
     def _fill(self):
-        entries = []
+        from pvz_game.cuda import schema
+
+        entries, assigned = [], []
+        missing, maxima = set(), np.zeros(3, dtype=np.int64)
+        pending = iter(self.queue)
         for slot, current in enumerate(self.slots):
-            if current is not None or not self.queue:
+            if current is not None:
                 continue
-            index = self.queue.popleft()
+            index = next(pending, None)
+            if index is None:
+                break
             job = self.jobs[index]
             key = job.get("partial", job["key"])
             cached = self.transfers.cache.get(key)
@@ -519,23 +559,61 @@ class PeashooterTeacher:
                 snapshot = raw = cached[0]
             else:
                 raw = self.store.get(key)
-                snapshot = raw if isinstance(raw, EngineSnapshot) else EngineSnapshot._seal(raw)
+                snapshot = (
+                    raw
+                    if self.transfers.batched_owned or isinstance(raw, EngineSnapshot)
+                    else EngineSnapshot._seal(raw)
+                )
+            if self.transfers.batched_owned and cached is None and key not in missing:
+                widths = np.maximum(
+                    maxima, [len(raw[name]) for name in ("plants", "zombies", "projectiles")]
+                )
+                per_root = 8 * (
+                    len(schema.HEADER)
+                    + 8
+                    + self.batch.zcap * 5
+                    + 5 * len(schema.MOWER)
+                    + int(
+                        widths
+                        @ np.array([len(schema.PLANT), len(schema.ZOMBIE), len(schema.PROJECTILE)])
+                    )
+                )
+                if (len(missing) + 1) * per_root > self.transfers.limit:
+                    if not entries:
+                        raise MemoryError("One teacher root exceeds the bounded refill allowance")
+                    break
+                maxima = widths
+                missing.add(key)
             entries.append((slot, key, snapshot))
-            self.slot_ticks[slot] = raw["tick"]
+            assigned.append((slot, index, raw["tick"]))
+        # Queue ownership changes only after all copies were admitted. On an
+        # allocation failure free scratch slots may be dirty; owned roots and
+        # the queue still contain the exact unexecuted work.
+        self.transfers.fill(self.batch, entries)
+        for slot, index, tick in assigned:
+            if self.queue.popleft() != index:
+                raise RuntimeError("Teacher refill queue changed during submission")
+            self.slot_ticks[slot] = tick
+            job = self.jobs[index]
             job["state"] = "running"
             self.slots[slot] = index
-        self.transfers.fill(self.batch, entries)
 
     def advance(self):
         """One bounded engine chunk, including a recoverable commit of results."""
         started = perf_counter()
         try:
+            if self.progress is not None and self.progress[2].done:
+                self._consume_progress()
             if not self.initialized:
                 self._initialize()
-                if not self.initialized:
+                if not self.initialized and not self.pipeline:
                     return False
             if self.settled:
                 return True
+            if self.progress is not None:
+                return False
+            if not self.queue and not any(index is not None for index in self.slots):
+                return False
             self._allocate()
             with self.env.cp.cuda.using_allocator(self.pool.malloc):
                 return self._run_chunk()
@@ -551,19 +629,45 @@ class PeashooterTeacher:
     def _run_chunk(self):
         self._fill()
         cp, batch = self.env.cp, self.batch
-        actions = np.zeros(batch.n, np.int64)
+        actions = self.actions_host
+        actions.fill(0)
         for slot, index in enumerate(self.slots):
             if index is not None:
                 job = self.jobs[index]
                 if not job["placed"] and job["tile"] >= 0:
                     branch = self.cfg["environment"]["plants"].index("peashooter")
                     actions[slot] = 1 + branch * A.tiles + job["tile"]
+        self.actions_device.set(actions)
         batch.step_device(
-            cp.asarray(actions),
+            self.actions_device,
             ticks=self.settings["oracle_chunk_ticks"],
             per_tick=self.env._per_tick,
         )
-        headers = batch.header[:, [0, 1, 12]].get()
+        if self.pipeline:
+            host, device, event = self.progress_buffers[self.progress_turn % 2]
+            self.progress_turn += 1
+            cp.take(batch.header, self.progress_columns, axis=1, out=device)
+            device.get(out=host, blocking=False)
+            event.record()
+            self.progress = host, device, event
+            self.metrics["progress_transfers"] = self.metrics.get("progress_transfers", 0) + 1
+            self.metrics["progress_bytes"] = self.metrics.get("progress_bytes", 0) + host.nbytes
+            return False
+        return self._publish_progress(batch.header[:, [0, 1, 12]].get())
+
+    def _consume_progress(self, *, wait=False):
+        if self.progress is None:
+            return
+        host, _, event = self.progress
+        if wait:
+            event.synchronize()
+        elif not event.done:
+            raise RuntimeError("Teacher progress consumed before its completion event")
+        self._publish_progress(host)
+        self.progress = None
+
+    def _publish_progress(self, headers):
+        cp, batch = self.env.cp, self.batch
         finished = []
         for slot, index in enumerate(self.slots):
             if index is None:
@@ -596,6 +700,8 @@ class PeashooterTeacher:
             root_cache_misses=self.transfers.misses,
             root_upload_bytes=self.transfers.uploaded_bytes,
             root_cache_mib=self.transfers.nbytes / 2**20,
+            root_upload_submits=self.transfers.submits,
+            root_refills=self.transfers.refills,
         )
         self.metrics["pending"] = len(self.queue) + sum(i is not None for i in self.slots)
         return self.settled
@@ -603,6 +709,7 @@ class PeashooterTeacher:
     def snapshot(self):
         if self.capture is not None:
             raise RuntimeError("Cannot save an uncommitted Peashooter capture")
+        self._consume_progress(wait=True)
         if self.batch is not None:
             slots = [i for i, job in enumerate(self.slots) if job is not None]
             snapshots = download_snapshots(self.batch, indices=slots)
@@ -631,10 +738,14 @@ class PeashooterTeacher:
         self.store.archive(archive)
 
     def release(self):
+        self._consume_progress(wait=True)
         if self.transfers is not None:
             self.transfers.close()
             self.transfers = None
         self.batch = None
+        self.progress_buffers.clear()
+        self.actions_device = None
+        self.progress_columns = None
         self.slots = []
         if self.pool is not None:
             self.pool.free_all_blocks()

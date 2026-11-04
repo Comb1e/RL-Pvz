@@ -40,12 +40,15 @@ class TileDecoder(nn.Module):
     # tensor memory explicitly; no cached board survives a decision or update.
     enable_compilation = SpatialTransformer.enable_compilation
     collection_metrics = SpatialTransformer.collection_metrics
-    configure_collection = SpatialTransformer.configure_collection
     release_collection = SpatialTransformer.release_collection
     release_retired = SpatialTransformer.release_retired
     release_fitting = SpatialTransformer.release_fitting
     disable_compilation = SpatialTransformer.disable_compilation
     _encode_with_optional_compile = SpatialTransformer._encode_with_optional_compile
+
+    def configure_collection(self, performance):
+        SpatialTransformer.configure_collection(self, performance)
+        self.collection_bucket_rows = performance.get("collection_tile_buckets", False)
 
     def __init__(self, layout, spec):
         super().__init__()
@@ -115,9 +118,17 @@ class TileDecoder(nn.Module):
                 valid[start : start + size],
                 branches[start : start + size],
             )
+            logical = len(args[0])
+            if self.collection_bucket_rows and not self.fitting and not torch.is_grad_enabled():
+                padded = min(size, 1 << (logical - 1).bit_length())
+                if padded != logical:
+                    args = tuple(
+                        torch.cat((value, value.new_zeros((padded - logical, *value.shape[1:]))))
+                        for value in args
+                    )
             if self.activation_checkpointing and self.training and torch.is_grad_enabled():
                 result = checkpoint(self._encode, *args, use_reentrant=False)
             else:
                 result = self._encode_with_optional_compile(args)
-            results.append(result)
+            results.append(result[:logical])
         return torch.cat(results) if results else memory.new_empty((0, 45, self.width))

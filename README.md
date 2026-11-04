@@ -200,6 +200,25 @@ stops. The same drawing command includes startup, collection, label drain and
 fitting, with measured CUDA events for collection and fitting. Instrumented wall
 times include tracing overhead; checkpoint/report cleanup is reported separately.
 
+For bottleneck diagnosis, add `--kernel-profile` to capture bounded CUPTI kernel
+windows and Python call profiles, then summarize exclusive host time and both
+batch-call / board-decision costs:
+
+```powershell
+.\.venv\Scripts\python.exe tools\report_training_hotspots.py runs\diagnostics\workflow.json `
+  --kernels runs\diagnostics\workflow.kernels.json --output runs\diagnostics\workflow.hotspots.json
+```
+
+Use separate unprofiled repetitions for performance comparisons. Kernel-busy ratios
+describe the sampled windows; CUDA event spans include launch gaps. The tracer uses
+weak ownership so released simulation scratch stays released during fitting.
+An optional `--stop-file PATH` requests a checkpoint at the next bounded operation.
+Fresh execution settings batch teacher uploads, poll pinned progress buffers while
+preparing roots, batch exact factual targets, bucket decoder captures, and gather
+tested outcome tokens in arrays. Their switches live in `training.performance`.
+Set `collection_tile_buckets = false` for bitwise fixed-weight comparisons:
+padding changes BF16 batch rounding, while exact target construction is unchanged.
+
 Private pretraining retains its sampling procedure and separate counters, using
 public-only inputs and absolute targets. Saved recoveries retain their original
 supervision and collection behavior. Reports separate borrowed real ticks,

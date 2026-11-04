@@ -4,6 +4,74 @@ import numpy as np
 
 from pvz_rl.learning.forecast_labels import time_bin
 
+FACTUAL_FIELDS = (
+    "threat_depth_allowed",
+    "threat_time_allowed",
+    "threat_depth",
+    "threat_time",
+    "threat_loss",
+    "threat_censored",
+    "reach_labels",
+    "home_labels",
+    "reach_provenance",
+)
+
+
+def factual_maxima(trace, tau):
+    """Exact inclusive 2τ/9τ/end maxima for every tick, using a sparse table."""
+    count = len(trace)
+    table, stride = [trace], 1
+    while stride * 2 <= count:
+        previous = table[-1]
+        table.append(np.maximum(previous[:-stride], previous[stride:]))
+        stride *= 2
+    starts = np.arange(count)
+    result = np.empty((count, 5, 3), dtype=trace.dtype)
+    for horizon, distance in enumerate((2 * tau, 9 * tau, count)):
+        ends = np.minimum(starts + distance + 1, count)
+        lengths = ends - starts
+        levels = np.floor(np.log2(lengths)).astype(np.int64)
+        for level in np.unique(levels):
+            at = np.flatnonzero(levels == level)
+            result[at, :, horizon] = np.maximum(
+                table[level][starts[at]], table[level][ends[at] - (1 << int(level))]
+            )
+    return result
+
+
+def factual_targets_batch(rows, maxima, homes, finished, won, tau):
+    """Array equivalent of factual_targets; preserve all censoring and bitsets."""
+    ticks, end = rows["tick"].astype(np.int64), len(maxima) - 1
+    depths = maxima[ticks].astype(np.int16)
+    safe = (rows["forecast_pending"][:, None] == 0) & (rows["lane_zombies"] == 0)
+    done = np.asarray(finished, bool)[None] | safe
+    stops = ticks[:, None] + np.array([2 * tau, 9 * tau, end + 1])[None]
+    exact = won | ((np.arange(3) < 2)[None, None] & (stops[:, None] <= end))
+    exact = exact | done[..., None] | (depths == 10)
+    rows["threat_depth"] = depths
+    rows["threat_censored"] = ~exact
+    rows["threat_depth_allowed"] = np.where(exact, 1 << depths, 2047 ^ ((1 << depths) - 1))
+    elapsed = end - ticks
+    allowed = np.full((len(rows), 5), (1 << 4) | (1 << 5), np.uint16)
+    for code, upper in enumerate((tau, 2 * tau, 4 * tau, 8 * tau)):
+        allowed |= np.where(upper > elapsed[:, None] + 1, 1 << code, 0).astype(np.uint16)
+    observed = homes[None] >= ticks[:, None]
+    survived = ~observed & (won | done)
+    bins = time_bin(homes[None] - ticks[:, None], tau)
+    rows["threat_time_allowed"] = np.where(observed, 1 << bins, np.where(survived, 1 << 5, allowed))
+    rows["threat_time"] = np.where(observed, bins, np.where(survived, 5, -1))
+    rows["threat_loss"] = np.where(observed, 1, np.where(survived, 0, -1))
+    rows["home_labels"] = rows["threat_loss"]
+    rows["reach_provenance"] = 3
+    # Final-depth allowed sets are either one exact class or an inclusive tail.
+    final = depths[..., 2]
+    thresholds = 9 - np.arange(9)
+    rows["reach_labels"] = np.where(
+        final[..., None] >= thresholds,
+        1,
+        np.where(exact[..., 2, None], 0, -1),
+    )
+
 
 def snapshot_targets(row):
     """Never turn the zombie lane into a safe-depth or no-breach example."""

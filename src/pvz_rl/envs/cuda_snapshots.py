@@ -43,6 +43,15 @@ def pack_snapshots(batch, snapshots):
         else restored_game(snapshot, batch.rules).snapshot()
         for snapshot in snapshots
     ]
+    return pack_owned_snapshots(batch, raw)
+
+
+def pack_owned_snapshots(batch, raw):
+    """Pack roots already validated by their private owner at ingestion.
+
+    Callers must own these records and never mutate them. External snapshots
+    enter through pack_snapshots or SnapshotStore.get before using this path.
+    """
     if any(snapshot["rules_hash"] != batch.rules.digest for snapshot in raw):
         raise ValueError("Snapshot rules differ from this batch")
     count = len(raw)

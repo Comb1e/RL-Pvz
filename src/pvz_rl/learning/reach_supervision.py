@@ -35,6 +35,7 @@ class ReachSupervision:
         self._timelines = {}
         self._contacts = {}
         self._finished = {}
+        self._factual_maxima = {}
         self.metrics = dict(
             label_policy=self.protocol,
             forecast_mode="snapshot_rules" if self.snapshot_only else "factual",
@@ -79,6 +80,7 @@ class ReachSupervision:
             + sum(v[0].nbytes + v[1].nbytes for v in self._timelines.values())
             + sum(sum(a.nbytes for a in lanes) for lanes in self._contacts.values())
             + sum(mask.nbytes for mask in self._finished.values())
+            + sum(values.nbytes for values in self._factual_maxima.values())
         )
 
     def before(self, actions, active):
@@ -192,7 +194,14 @@ class ReachSupervision:
         tau = reference_tau(self.env.batch.rules)
         last = min(self.buffer.size, self.cursor + self.buffer.block_rows)
         headers = self.env.batch.header.get()
-        for index in range(self.cursor, last):
+        batched = (
+            self.version >= 2
+            and not self.snapshot_only
+            and self.env.cfg["training"]["performance"].get("factual_batch_targets", False)
+        )
+        if batched:
+            self._prepare_factual_batch(last, headers, tau)
+        for index in () if batched else range(self.cursor, last):
             block, offset = divmod(index, self.buffer.block_rows)
             row = self.buffer.blocks[block][offset]
             row["threat_depth"], row["threat_time"], row["threat_loss"] = -1, -1, -1
@@ -276,6 +285,80 @@ class ReachSupervision:
             )
         return self.phase == ReachPhase.LABELS_READY
 
+    def _prepare_factual_batch(self, last, headers, tau):
+        from pvz_rl.learning.forecast_targets import (
+            FACTUAL_FIELDS,
+            factual_maxima,
+            factual_targets_batch,
+        )
+
+        block, offset = divmod(self.cursor, self.buffer.block_rows)
+        # The ordinary prepare chunk may straddle a block after recovery.
+        while self.cursor < last:
+            stop = min(last - self.cursor, self.buffer.block_rows - offset)
+            rows = self.buffer.blocks[block][offset : offset + stop]
+            for field in (
+                "threat_depth",
+                "threat_time",
+                "threat_loss",
+                "reach_labels",
+                "home_labels",
+            ):
+                rows[field] = -1
+            eligible = np.flatnonzero(rows["reach_valid"])
+            fields = (*FACTUAL_FIELDS, "tick", "forecast_pending", "lane_zombies")
+            dtype = np.dtype([(name, rows.dtype.fields[name][0]) for name in fields])
+            pairs = np.stack((rows["env"][eligible], rows["episode"][eligible]), -1)
+            for env, episode in np.unique(pairs, axis=0):
+                key = int(env), int(episode)
+                at = eligible[(pairs == (env, episode)).all(-1)]
+                trace, homes = self._timeline(*key)
+                if key not in self._factual_maxima:
+                    self._factual_maxima[key] = factual_maxima(trace, tau)
+                packet = np.empty(len(at), dtype=dtype)
+                for name in fields:
+                    packet[name] = rows[name][at]
+                factual_targets_batch(
+                    packet,
+                    self._factual_maxima[key],
+                    homes,
+                    self._finished[key],
+                    headers[env, 1] == 1,
+                    tau,
+                )
+                for name in FACTUAL_FIELDS:
+                    rows[name][at] = packet[name]
+            allowed = rows["threat_depth_allowed"][eligible]
+            exact = (allowed != 0) & ((allowed & (allowed - np.uint16(1))) == 0)
+            self.metrics["exact_depths"] += int(exact.sum())
+            self.metrics["censored_depths"] += int(
+                ((allowed != 0) & (allowed != 2047) & ~exact).sum()
+            )
+            self.metrics["breach_targets"] += int((rows["threat_loss"][eligible] == 1).sum())
+            # Preserve the original chronological reporting, including ties.
+            for i in eligible[: max(0, 3 - len(self.metrics["examples"]))]:
+                self._constraint_example(rows[i])
+            placements = eligible[
+                rows["accepted"][eligible]
+                & (rows["action"][eligible] > 45)
+                & (rows["action"][eligible] <= 360)
+            ]
+            self.metrics["defensive_placements"] += len(placements)
+            lanes = ((rows["action"][placements] - 1) % 45) // 9
+            self.metrics["empty_lane_defenses"] += int(
+                (rows["lane_zombies"][placements, lanes] == 0).sum()
+            )
+            for i, lane in zip(placements, lanes, strict=True):
+                key = int(rows["env"][i]), int(rows["episode"][i])
+                contacts = self._contacts[key][lane]
+                tick = int(rows["tick"][i])
+                next_contact = np.searchsorted(contacts, tick)
+                if next_contact < len(contacts):
+                    self.metrics["contact_lead_ticks"] += int(contacts[next_contact] - tick)
+                    self.metrics["contact_observations"] += 1
+            self.cursor += stop
+            block, offset = block + 1, 0
+
     def _constraint_row(self, row, headers, tau):
         from pvz_rl.learning.forecast_targets import factual_targets, snapshot_targets
 
@@ -295,6 +378,9 @@ class ReachSupervision:
         exact = (allowed != 0) & ((allowed & (allowed - np.uint16(1))) == 0)
         self.metrics["exact_depths"] += int(exact.sum())
         self.metrics["censored_depths"] += int(((allowed != 0) & (allowed != 2047) & ~exact).sum())
+        self._constraint_example(row)
+
+    def _constraint_example(self, row):
         if len(self.metrics["examples"]) < 3:
             self.metrics["examples"].append(
                 dict(
@@ -329,4 +415,5 @@ class ReachSupervision:
         self._timelines.clear()
         self._contacts.clear()
         self._finished.clear()
+        self._factual_maxima.clear()
         self.env.batch.disable_reach()

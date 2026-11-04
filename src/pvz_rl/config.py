@@ -1266,9 +1266,23 @@ def validate_config(cfg: dict) -> None:
         "fit_entity_buckets",
         "fit_token_budget",
         "collection_graph_cache_entries",
+        "collection_tile_buckets",
+        "teacher_batched_transfers",
+        "teacher_pipeline",
+        "factual_batch_targets",
+        "vectorized_effect_gather",
         "collection_vram_headroom_mib",
     }:
         raise ValueError("training.performance contains unsupported execution settings")
+    for key in (
+        "collection_tile_buckets",
+        "teacher_batched_transfers",
+        "teacher_pipeline",
+        "factual_batch_targets",
+        "vectorized_effect_gather",
+    ):
+        if key in performance and type(performance[key]) is not bool:
+            raise ValueError(f"training.performance.{key} must be a boolean")
     fit_batch_groups = performance.get("fit_batch_groups", 4)
     if type(fit_batch_groups) is not int or not 1 <= fit_batch_groups <= 16:
         raise ValueError("training.performance.fit_batch_groups must be an integer from 1 to 16")

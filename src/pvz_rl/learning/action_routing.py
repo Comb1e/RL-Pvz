@@ -213,7 +213,40 @@ class RepeatedRowCompactor:
         waits = active & (rows["route"] == FitRoute.WAIT_RETURN) & (rows["action"] == 0)
         compactable = invalid | waits
         keep = active & ~compactable
-        for env in np.unique(environments):
+        unique = np.unique(environments)
+        if len(unique) == len(rows):
+            # Collection receipts contain one row per environment. Avoid a
+            # structured-row copy and a dozen NumPy allocations for every
+            # single-row group (the full record contains large trace arrays).
+            for i, env in enumerate(environments):
+                key = tuple(
+                    int(rows[field][i]) for field in ("action", "route", "rejection_reason")
+                )
+                prior = self.state.get(int(env))
+                continuation = prior is not None and prior[1] and not prior[2] and key == prior[0]
+                continuation &= not any(
+                    bool(rows[k][i]) for k in ("reset", "run_break") if k in names
+                )
+                if prior is not None:
+                    if "episode" in names:
+                        continuation &= int(rows["episode"][i]) == prior[3]
+                    if "decision" in names:
+                        continuation &= int(rows["decision"][i]) == prior[4] + 1
+                length = prior[5] if continuation else 0
+                repeated = bool(compactable[i])
+                keep[i] |= repeated and length % self.group_size == 0
+                self.invalid_runs += int(invalid[i] and not continuation)
+                self.wait_runs += int(waits[i] and not continuation)
+                self.state[int(env)] = (
+                    key,
+                    repeated,
+                    bool(rows["done"][i]) if "done" in names else False,
+                    int(rows["episode"][i]) if "episode" in names else 0,
+                    int(rows["decision"][i]) if "decision" in names else 0,
+                    length + 1 if repeated else 0,
+                )
+            unique = ()
+        for env in unique:
             ix = np.flatnonzero(environments == env)
             current = rows[ix]
             live, repeated = active[ix], compactable[ix]

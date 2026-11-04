@@ -135,6 +135,12 @@ def forecast_auxiliary(
 
 
 def _effect_objective(policy, observations, rows, memory, features, feature_rows, root_count):
+    if policy.absolute_outcomes and policy.cfg["training"]["performance"].get(
+        "vectorized_effect_gather", False
+    ):
+        return _absolute_effect_objective(
+            policy, observations, rows, memory, features, feature_rows, root_count
+        )
     device = policy.device
     settings = policy.cfg["training"]["forecasts"]
     factored = settings.get("effect_objective", "categorical_v1") == "change_conditional_v2"
@@ -220,6 +226,80 @@ def _effect_objective(policy, observations, rows, memory, features, feature_rows
     else:
         eloss = (per_root / tokens).sum() / max(1, int(root_count))
     return eloss, metric_tokens, tokens
+
+
+def _absolute_effect_objective(
+    policy, observations, rows, memory, features, feature_rows, root_count
+):
+    """Gather tested tokens in arrays; do not create one CUDA view per root."""
+    from pvz_rl.envs.static_fork import reference_tau
+
+    device = policy.device
+    null_logits = policy.effect_values(policy.null_features(memory))
+    null_targets = torch.as_tensor(
+        outcome_codes(np.array(rows["baseline_outcomes"]), reference_tau(policy.layout.rules)),
+        device=device,
+        dtype=torch.long,
+    )
+    per_root = effect_loss(null_logits, null_targets, absolute=True).mean(-1)
+    root, token = np.nonzero(rows["effect_valid"] & (rows["effect_actions"] != 0))
+    tokens = torch.as_tensor(
+        1 + np.bincount(root, minlength=len(rows)), device=device, dtype=torch.float32
+    )
+    metric_tokens = [(null_logits, null_targets)]
+    if len(root):
+        actions = rows["effect_actions"][root, token]
+        branches, tiles = (
+            (actions.astype(np.int64) - 1) // 45 + 1,
+            (actions.astype(np.int64) - 1) % 45,
+        )
+        unavailable = (token == 0) & ~rows["branch_usable"][root]
+        lookup = np.full((len(rows), 10), -1, np.int64)
+        banks = []
+        if features is not None:
+            at = np.asarray(feature_rows)
+            lookup[at, (rows["action"][at].astype(np.int64) - 1) // 45 + 1] = np.arange(len(at))
+            banks.append(features)
+        legal = np.flatnonzero(~unavailable)
+        missing = np.unique(np.stack((root[legal], branches[legal]), -1), axis=0)
+        missing = missing[lookup[missing[:, 0], missing[:, 1]] < 0]
+        if len(missing):
+            offset = 0 if features is None else len(features)
+            lookup[missing[:, 0], missing[:, 1]] = offset + np.arange(len(missing))
+            banks.append(
+                policy.tile_features(
+                    observations,
+                    torch.as_tensor(missing[:, 1], device=device),
+                    rows=torch.as_tensor(missing[:, 0], device=device),
+                    memory=memory,
+                )
+            )
+        gathered = null_logits.new_zeros((len(root), policy.cfg["policy"]["shared_width"]))
+        if len(legal):
+            bank = banks[0] if len(banks) == 1 else torch.cat(banks)
+            selected = bank[
+                torch.as_tensor(lookup[root[legal], branches[legal]], device=device),
+                torch.as_tensor(tiles[legal], device=device),
+            ]
+            gathered = gathered.index_copy(0, torch.as_tensor(legal, device=device), selected)
+        rejected = np.flatnonzero(unavailable)
+        if len(rejected):
+            at = torch.as_tensor(root[rejected], device=device)
+            selected = policy.null_features(
+                (memory[0][at], memory[1][at]), torch.as_tensor(branches[rejected], device=device)
+            )
+            gathered = gathered.index_copy(0, torch.as_tensor(rejected, device=device), selected)
+        predictions = policy.effect_values(gathered)
+        targets = torch.as_tensor(
+            np.array(rows["effect_labels"][root, token]), device=device, dtype=torch.long
+        )
+        per_root = per_root.index_add(
+            0,
+            torch.as_tensor(root, device=device),
+            effect_loss(predictions, targets, absolute=True).mean(-1),
+        )
+        metric_tokens.append((predictions, targets))
+    return (per_root / tokens).sum() / max(1, int(root_count)), metric_tokens, tokens
 
 
 def _forecast_metrics(policy, rows, threats, tloss, eloss, metric_tokens, tokens, tw, ew):

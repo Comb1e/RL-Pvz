@@ -34,10 +34,14 @@ def categorical_histogram(histogram, probabilities, labels, valid, *, term=0):
         maximum = histogram.shape[2]
         index = (((rows * histogram.shape[1] + hs) * maximum + cs) * 10 + bins).expand_as(p)
         mask = valid[..., None].expand_as(p)
-        predicted = p[mask]
-        outcome = (cs == labels[..., None]).expand_as(p)[mask].double()
-        at = index[mask].flatten()
-        values = torch.stack((torch.ones_like(predicted), predicted, outcome), -1)
+        # Boolean compaction allocates a dynamic CUDA result and synchronizes
+        # the host to discover its size. Keep the known shape and zero unknown
+        # terms instead; their contribution to every histogram remains zero.
+        weight = mask.double()
+        predicted = torch.where(mask, p, 0)
+        outcome = (cs == labels[..., None]).expand_as(p).double() * weight
+        at = index.flatten()
+        values = torch.stack((weight, predicted, outcome), -1).reshape(-1, 3)
         histogram.reshape(-1, 3).index_add_(0, at, values)
 
 

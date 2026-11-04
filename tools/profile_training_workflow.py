@@ -29,6 +29,14 @@ def main():
     parser.add_argument(
         "--cprofile", action="store_true", help="Record Python calls during collection"
     )
+    parser.add_argument(
+        "--kernel-profile",
+        action="store_true",
+        help="Capture bounded CUPTI/cProfile windows; use separate unprofiled timing runs",
+    )
+    parser.add_argument(
+        "--stop-file", type=Path, help="Stop at the next bounded operation when this file exists"
+    )
     parser.add_argument("training_args", nargs=argparse.REMAINDER)
     args = parser.parse_args()
     command = args.training_args
@@ -56,6 +64,8 @@ def main():
     cohort_finished = None
     fitting_started = None
     phase_events = []
+    fitting_passes = []
+    label_signature = None
     scoped = {
         phase: defaultdict(lambda: dict(calls=0, seconds=0.0, max_seconds=0.0))
         for phase in ("startup", "collection", "fitting", "recovery")
@@ -63,6 +73,8 @@ def main():
     patches = []
     stop = threading.Event()
     profile = None
+    kernels = None
+    stage_trace = None
     if args.cprofile:
         import cProfile
 
@@ -132,15 +144,50 @@ def main():
 
         @wraps(original)
         def measured(*values, **keywords):
+            nonlocal stage_trace
             if before:
                 before(*values, **keywords)
             scope = timing_scope()
             begin = perf_counter()
+            ends = []
+            if args.process_trace and key in (
+                "ForecastPretraining.advance",
+                "CudaSequentialQ._begin",
+            ):
+                value = values[0]
+                env = value.model.env if key.startswith("Forecast") else value.env
+                if stage_trace is None:
+                    from profiling_metrics import DeviceStageTrace
+
+                    stage_trace = DeviceStageTrace(env, started)
+                stream = env.cp.cuda.ExternalStream(
+                    env.stream.cuda_stream, device_id=env.batch.device
+                )
+                ends.append((stage_trace.begin(key, stream), stream))
+                if key.startswith("Forecast") and hasattr(value, "stream"):
+                    ends.append(
+                        (
+                            stage_trace.begin(key + " / simulation stream", value.stream),
+                            value.stream,
+                        )
+                    )
+            epoch = getattr(values[0], "_fit_epoch", None) if name == "_fit_step" else None
             try:
                 return original(*values, **keywords)
             finally:
+                for end, stream in ends:
+                    end.record(stream)
                 duration = perf_counter() - begin
                 record(key, duration, scope)
+                if epoch is not None and values[0]._fit_epoch != epoch:
+                    fitting_passes.append(
+                        dict(
+                            pass_number=epoch + 1,
+                            end_seconds=perf_counter() - started,
+                            total_loss=values[0]._stats.get("total_loss"),
+                            primary_loss=values[0]._stats.get("primary_loss"),
+                        )
+                    )
                 if spans[key]["calls"] == 1 or duration >= 5:
                     events.append(
                         dict(
@@ -207,23 +254,47 @@ def main():
             if profile is not None:
                 profile.enable()
 
+    def restore_observers():
+        if trace is not None:
+            trace.restore()
+        if kernels is not None:
+            kernels.close()
+        for owner, name, original in reversed(patches):
+            setattr(owner, name, original)
+
     def check_window(value, *unused, **kwargs):
         nonlocal drain_started, trace
         remember(value)
+        if args.stop_file and args.stop_file.exists():
+            restore_observers()
+            end_collection()
+            raise KeyboardInterrupt("Workflow stop file requested a checkpoint")
         if collection_started is None:
             begin_collection(value)
         if args.process_trace and trace is None:
             from draw_collection_process import CollectionTrace
 
             trace = CollectionTrace(value)
+            callback = unused[0] if unused else None
+            if callback is not None:
+                for name in ("update_locals", "on_step", "log_progress"):
+                    if hasattr(callback, name):
+                        trace.wrap(callback, name, f"callbacks: {name}")
             trace.wrap(
                 value,
                 "_fit_step",
                 "fit pass / forward backward optimizer",
                 device_label="fit forward backward optimizer",
             )
-            trace.wrap(value, "_finalize_rewards", "finalize rewards")
-            trace.wrap(value._buffer, "finalize", "assemble fitting targets")
+            trace.wrap(
+                value, "_finalize_rewards", "finalize rewards", device_label="finalize rewards"
+            )
+            trace.wrap(
+                value._buffer,
+                "finalize",
+                "assemble fitting targets",
+                device_label="assemble fitting targets",
+            )
         if drain_started is None and not value.env.enabled_envs.any():
             drain_started = perf_counter()
             events.append(
@@ -234,17 +305,52 @@ def main():
             and perf_counter() - collection_started >= args.collect_seconds
         ):
             end_collection()
+            restore_observers()
             raise KeyboardInterrupt("Workflow profiling collection window completed")
 
     def check_phase(value, phase, *unused, **kwargs):
-        nonlocal fitting_started
+        nonlocal fitting_started, label_signature
         remember(value)
         phase_events.append(dict(phase=phase.value, start_seconds=perf_counter() - started))
         if phase == CohortPhase.FINALIZE_REWARDS and (args.full_cohort or args.stop_after_collect):
             end_collection()
+            if args.full_cohort:
+                import hashlib
+
+                from pvz_rl.config import digest
+
+                signature = hashlib.sha256()
+                for block_index, block in enumerate(value._buffer.blocks):
+                    rows = block[
+                        : min(
+                            value._buffer.block_rows,
+                            value._buffer.size - block_index * value._buffer.block_rows,
+                        )
+                    ]
+                    for field in (
+                        "action",
+                        "accepted",
+                        "tick",
+                        "duration",
+                        "executed_action",
+                        "baseline_outcomes",
+                        "effect_valid",
+                        "effect_labels",
+                        "threat_depth_allowed",
+                        "threat_time_allowed",
+                        "threat_loss",
+                    ):
+                        if field in rows.dtype.names:
+                            signature.update(rows[field].tobytes())
+                teacher = getattr(value, "_peashooter_teacher", None)
+                label_signature = dict(
+                    trajectories_and_targets=signature.hexdigest(),
+                    teacher=None if teacher is None else digest(sorted(teacher.labels.items())),
+                )
         if phase == CohortPhase.FIT:
             fitting_started = perf_counter()
         if args.stop_after_collect and phase == CohortPhase.FINALIZE_REWARDS:
+            restore_observers()
             raise KeyboardInterrupt("Workflow profiling completed one collection")
 
     original_sync = sequential_training.CudaSequentialQ._synchronize
@@ -276,8 +382,7 @@ def main():
         original_sync(value, callback)
         cohort_finished = perf_counter()
         if args.full_cohort:
-            for owner, name, original in reversed(patches):
-                setattr(owner, name, original)
+            restore_observers()
             raise KeyboardInterrupt("Workflow profiling completed one fully fitted cohort")
 
     sequential_training.CudaSequentialQ._synchronize = synchronize
@@ -285,8 +390,8 @@ def main():
 
     patch(sequential_training.CudaSequentialQ, "_begin", before=begin_collection)
     patch(sequential_training.CudaSequentialQ, "_prepare_collection", before=check_window)
-    for name in ("_collect_step", "_fit_step"):
-        patch(sequential_training.CudaSequentialQ, name, before=remember)
+    patch(sequential_training.CudaSequentialQ, "_collect_step", before=remember)
+    patch(sequential_training.CudaSequentialQ, "_fit_step", before=check_window)
     patch(sequential_training.CudaSequentialQ, "_phase", before=check_phase)
     for name in ("__init__", "advance", "_generate", "_play", "_effects", "_fit"):
         patch(forecast_pretraining.ForecastPretraining, name)
@@ -311,6 +416,17 @@ def main():
     for name in ("step_device", "step_host"):
         patch(cuda_env.CudaVecEnv, name)
 
+    if args.kernel_profile:
+        from profiling_metrics import KernelWindows
+
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        kernels = KernelWindows(args.output.with_suffix(".kernels.json"), origin=started)
+        kernels.wrap(DeviceForecastPretraining, "advance", "private-pretraining", skip=2)
+        kernels.wrap(sequential_training.CudaSequentialQ, "_collect_step", "decisions", skip=30)
+        kernels.wrap(ReachSupervision, "prepare", "factual-targets", calls=1)
+        kernels.wrap(peashooter_teacher.PeashooterTeacher, "_run_chunk", "teacher", skip=20)
+        kernels.wrap(sequential_training.CudaSequentialQ, "_fit_step", "fitting", skip=2)
+
     def pulse():
         while not stop.wait(15):
             row = snapshot()
@@ -325,13 +441,12 @@ def main():
     except KeyboardInterrupt:
         pass
     finally:
+        restore_observers()
         stop.set()
         thread.join()
         if profile is not None:
             profile.disable()
             profile.dump_stats(str(args.output.with_suffix(".pstats")))
-        for owner, name, original in reversed(patches):
-            setattr(owner, name, original)
         args.output.write_text(
             json.dumps(
                 dict(
@@ -365,6 +480,9 @@ def main():
                     if cohort_finished is None
                     else cohort_finished - started,
                     cohort_metrics=getattr(model, "cohort_metrics", None),
+                    label_signature=label_signature,
+                    fitting_passes=fitting_passes,
+                    stage_gpu_events=[] if stage_trace is None else stage_trace.finish(),
                     phase_events=phase_events,
                     process_trace=process_trace,
                     events=events,

@@ -291,6 +291,11 @@ fit_tile_microbatch = 192
 fit_entity_buckets = [8, 16, 32, 64, 128, 256]
 fit_token_budget = 65536
 collection_graph_cache_entries = 8
+collection_tile_buckets = true # Bound decoder capture shapes as legal non-Wait counts change.
+teacher_batched_transfers = true # One slab upload per refill; validate roots once at ingestion.
+teacher_pipeline = true # Prepare roots during CUDA chunks; pinned event-polled progress.
+factual_batch_targets = true # Exact range maxima and array target construction per episode.
+vectorized_effect_gather = true # One indexed gather for tested outcome tokens, retaining loss normalization.
 collection_vram_headroom_mib = 512
 
 [splits]
