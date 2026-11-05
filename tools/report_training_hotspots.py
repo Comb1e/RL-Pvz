@@ -17,11 +17,10 @@ def report(data, kernels=None):
     events = [dict(e, start=e["start"] + offset) for e in trace.get("events", [])]
     phases = []
     names = {
-        "Private pretraining": "private-pretraining",
         "Decision loop": "decisions",
-        "Factual targets / teacher preparation": "factual-targets",
+        "Teacher preparation": "teacher-preparation",
         "Teacher / remaining label drain": "teacher",
-        "Four fitting passes": "fitting",
+        "Fitting passes": "fitting",
     }
     decisions = trace.get("decision_batches", trace.get("calls", {}).get("decision", 0))
     roots = trace.get("decision_roots", (data.get("final_collection") or {}).get("steps", 0))

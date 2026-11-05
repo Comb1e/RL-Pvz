@@ -331,7 +331,7 @@ class CudaLiveCapture:
                 history = self.env.action_journal.page(frame["env"], frame["episode"])
                 frame["history"] = history
                 frame["decision"] = history["latest"] if history else None
-                frame["reach_decision"] = history.get("latest_reach") if history else None
+                frame["outcome_decision"] = history.get("latest_outcome") if history else None
 
                 if cache_completed:
                     self.session.selection.remember_completed(frame)
@@ -350,17 +350,6 @@ class CudaLiveCapture:
             active=set(np.flatnonzero(self.env.enabled_envs)),
         )
         self.indices = None
-
-    def finalize_reach(self):
-        self.drain(wait=True)
-        frames = list(self.session.selection.completed_frames.values())
-        frames += [panel.frame for panel in self.session.selection.panels if panel.frame]
-        for frame in frames:
-            history = self.env.action_journal.page(frame["env"], frame["episode"])
-            frame["history"] = history
-            frame["decision"] = history["latest"] if history else None
-            frame["reach_decision"] = history.get("latest_reach") if history else None
-        self.session.publish(force=True)
 
     def finalize_rewards(self, pending):
         """At the cohort boundary, publish authoritative host episode totals."""

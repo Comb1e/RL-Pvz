@@ -29,7 +29,7 @@ class IntervalPhase(StrEnum):
 
 
 class WaitOutcomes:
-    protocol = "absolute-wait-trajectory-v3"
+    protocol = "absolute-wait-trajectory-v4"
 
     def __init__(self, env, buffer, state=None):
         self.env, self.buffer = env, buffer
@@ -64,8 +64,8 @@ class WaitOutcomes:
         )
         env.batch.wait_capture = WaitCapture(env.batch)
         self.metrics["capture_bytes"] = env.batch.wait_capture.nbytes
-        if not env.batch.reach_enabled:
-            env.batch.enable_reach()
+        if not env.batch.field_enabled:
+            env.batch.enable_field_tracking()
         if state is not None:
             self.restore(state)
 
@@ -232,11 +232,11 @@ class WaitOutcomes:
             ):
                 raise RuntimeError("Predicted spawn boundary was not confirmed by execution")
             stop = boundary if spawned else tick + count
-            trace = np.array(rows["forecast_trace"][slot, 1 : stop - tick + 1], dtype=np.uint8)
+            trace = np.array(rows["field_trace"][slot, 1 : stop - tick + 1], dtype=np.uint8)
             if len(trace):
                 record["segments"].append((tick + 1, trace))
                 self.segment_bytes += trace.nbytes
-            for lane, when in enumerate(rows["forecast_breach"][slot]):
+            for lane, when in enumerate(rows["field_breach"][slot]):
                 if tick < when <= stop and record["homes"][lane] < 0:
                     record["homes"][lane] = when
             self.metrics["borrowed_real_ticks"] += stop - tick
@@ -256,7 +256,7 @@ class WaitOutcomes:
                 tick=tick,
                 null=old,
                 actual=actual,
-                initial=np.array(rows["forecast_trace"][slot, 0], copy=True),
+                initial=np.array(rows["field_trace"][slot, 0], copy=True),
                 actions=request["actions"][slot].copy(),
                 valid=request["valid"][slot].copy(),
                 alternatives={},
@@ -510,6 +510,7 @@ class WaitOutcomes:
             row = self.buffer.blocks[block][offset]
             for token, label in record["alternatives"].items():
                 row["effect_labels"][token] = label
+            row["null_target_valid"] = True
             row["outcome_ready"] = True
         self.metrics["published_rows"] = len(self.rows)
         self.published = True

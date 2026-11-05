@@ -219,7 +219,6 @@ class ResearchCallback(BaseCallback):
                 {
                     "training": Activity.UPDATING,
                     "idle": Activity.UPDATING,
-                    "forecast_pretraining": Activity.UPDATING,
                     "validation": Activity.VALIDATING,
                     "reporting": Activity.REPORTING,
                     "collect": Activity.COLLECTING,
@@ -334,13 +333,6 @@ class ResearchCallback(BaseCallback):
             "training_steps": self.model.num_timesteps,
             "training_games": games,
             "tile_scenarios": self.model.tile_skills.to_dict(),
-            "reach_tracking": dict(
-                getattr(
-                    getattr(self.model, "_reach", None),
-                    "metrics",
-                    self.model.cohort_metrics.get("reach_tracking", {}),
-                )
-            ),
             "peashooter_teacher": dict(
                 getattr(
                     getattr(self.model, "_peashooter_teacher", None),
@@ -663,17 +655,9 @@ class ResearchCallback(BaseCallback):
             "peashooter_preferred_column_accuracy",
             "total_loss",
             "primary_loss",
-            "threat_loss",
             "effect_loss",
-            "threat_depth_brier",
             "effect_brier",
-            "threat_depth_accuracy",
             "effect_accuracy",
-            "threat_exact_depths",
-            "threat_time_brier",
-            "threat_time_accuracy",
-            "threat_loss_brier",
-            "threat_loss_accuracy",
             "changed_effect_accuracy",
             "unchanged_effect_accuracy",
             "effect_change_precision",
@@ -682,7 +666,6 @@ class ResearchCallback(BaseCallback):
             "effect_conditional_accuracy",
             "effect_labeled_terms",
             "effect_eligible_decisions",
-            "threat_eligible_decisions",
             "q_loss",
             "tile_ranking_loss",
             "bomb_cross_entropy_loss",
@@ -1493,26 +1476,12 @@ def initial_weights(checkpoint, cfg):
         raise ValueError("Checkpoint contains invalid or non-finite model weights")
     with torch.random.fork_rng(devices=[]):
         model = TwoStageTransformerPolicy(cfg)
-    conversion = "none"
-    if (
-        source_cfg["policy"]["kind"] == "shared_fork_forecast_q_v3"
-        and cfg["policy"]["kind"] == "shared_public_forecast_q_v4"
-    ):
-        from pvz_rl.envs.encoding import BOARD_GLOBAL_FIELDS
-
-        weights = dict(weights)
-        key = "board_encoder.global_projection.weight"
-        weights[key] = weights[key][:, : len(BOARD_GLOBAL_FIELDS)].clone()
-        initialized = model.state_dict()
-        for key in ("effect_head.2.weight", "effect_head.2.bias"):
-            weights[key] = initialized[key]
-        conversion = "public_inputs_absolute_outcomes_v1"
     model.load_state_dict(weights, strict=True)
     weights = {key: value.detach().clone() for key, value in model.state_dict().items()}
     return weights, {
         "mode": "weights_only",
         "type": saved["initialization_type"],
-        "conversion": conversion,
+        "conversion": "none",
         "checkpoint": str(Path(checkpoint).resolve()),
         "checkpoint_sha256": saved.get("snapshot_sha256") or file_hash(checkpoint),
         "source_learner_seed": saved["learner_seed"],
@@ -1602,7 +1571,6 @@ def train(
     cfg = copy.deepcopy(cfg)
     if family == "diagnostic":
         cfg["training"].pop("peashooter_rules", None)
-        cfg.setdefault("diagnostics", {})["reach_tracking"] = False
     validate_config(cfg)
     output = Path(output)
     require_cuda_training(cfg, condition, runtime=False)
@@ -1746,13 +1714,9 @@ def train(
         force=True,
     )
     target_kind = (
-        "successful-set placement supervision"
+        "successful-set placement supervision with absolute action outcomes"
         if is_placement_skill(selected_stage(cfg))
-        else (
-            "n-step Q targets with hindsight threats and absolute action outcomes"
-            if cfg["encoding"]["version"] == "entity_public_v4"
-            else "n-step Q targets with hindsight threats and signed fork effects"
-        )
+        else "n-step Q targets with absolute action outcomes"
     )
     progress.emit(
         f"Policy: {cfg.get('policy', {'kind': 'flat'})}; {target_kind}; "
@@ -1765,7 +1729,7 @@ def train(
     if cfg["training"].get("peashooter_rules"):
         progress.emit(
             "Peashooter: prioritized visible-lane oracle targets; column-decaying cross-entropy; "
-            "greedy main actions, no factual followers",
+            "greedy main actions",
             force=True,
         )
     progress.emit(
@@ -2065,14 +2029,8 @@ def train(
     finally:
         if callback:
             callback.close()
-        if model is not None and getattr(model, "_reach", None) is not None:
-            model._reach.close()
-            model._reach = None
         if model is not None and getattr(model, "_peashooter_teacher", None) is not None:
             model._peashooter_teacher.close()
-        if model is not None and getattr(model, "_pretrainer", None) is not None:
-            model._pretrainer.close()
-            model._pretrainer = None
         if model is not None and getattr(model, "_wait_outcomes", None) is not None:
             model._wait_outcomes.close()
             model._wait_outcomes = None

@@ -76,16 +76,30 @@ class LaneTransfers:
         if not entries:
             return
         slots = cp.asarray([e[0] for e in entries], dtype=cp.int64)
-        for name in roots[0]:
+        # Device packets omit schedules because their consumers suppress future
+        # spawns. Restored/decoded roots include that slab. A refill may contain
+        # both forms after recovery or pressure-driven decoding.
+        for name in dict.fromkeys(name for root in roots for name in root):
             target = getattr(batch, name)
+            present = [(index, root[name]) for index, root in enumerate(roots) if name in root]
             # One pointer/size upload and one parallel copy kernel per slab,
             # independent of how many roots or candidates share this refill.
-            pointers = cp.asarray([r[name].data.ptr for r in roots], dtype=cp.uint64)
-            widths = cp.asarray([r[name].size for r in roots], dtype=cp.int64)
+            pointers = cp.asarray([value.data.ptr for _, value in present], dtype=cp.uint64)
+            widths = cp.asarray([value.size for _, value in present], dtype=cp.int64)
+            destinations = (
+                slots if len(present) == len(entries) else slots[[index for index, _ in present]]
+            )
             self.copy(
-                (len(entries),),
+                (len(present),),
                 (128,),
-                (pointers, slots, widths, target, np.int64(target[0].size), np.int64(len(entries))),
+                (
+                    pointers,
+                    destinations,
+                    widths,
+                    target,
+                    np.int64(target[0].size),
+                    np.int64(len(present)),
+                ),
             )
         batch.facts[slots] = 0
         batch._event_counts[slots] = 0

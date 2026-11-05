@@ -10,9 +10,9 @@ from pvz_rl.policy.sequential_q import ACTION_DISTRIBUTION
 from pvz_rl.provenance import weight_engine_config
 
 TRAINING_CONDITIONS = ("masked",)
-CURRENT_OBJECTIVE = "nstep_fork_forecast_v3"
+CURRENT_OBJECTIVE = "nstep_action_outcomes_v4"
 CURRENT_REWARD = "action_global_value_v5"
-FIT_SCHEDULE_PROTOCOL = "joint_nstep_fork_forecast_cohorts_v1"
+FIT_SCHEDULE_PROTOCOL = "joint_nstep_action_outcome_cohorts_v2"
 
 
 @dataclass(frozen=True)
@@ -45,14 +45,8 @@ def current_model_config(cfg):
         identity
         in {
             (
-                "shared_public_forecast_q_v4",
+                "shared_public_outcomes_q_v5",
                 "entity_public_v4",
-                CURRENT_OBJECTIVE,
-                CURRENT_OBJECTIVE,
-            ),
-            (
-                "shared_fork_forecast_q_v3",
-                "entity_fork_v3",
                 CURRENT_OBJECTIVE,
                 CURRENT_OBJECTIVE,
             ),
@@ -72,7 +66,7 @@ def inference_config(cfg):
     """Validate this architecture before adapting execution-only engine metadata."""
     if not current_model_config(cfg):
         raise ValueError(
-            "Incompatible old model. Start the fork/threat/effect architecture fresh; no weight migration is supported."
+            "Incompatible old model. Old checkpoints are incompatible with the outcome-only architecture; start fresh."
         )
     return weight_engine_config(cfg)
 

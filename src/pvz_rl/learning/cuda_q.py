@@ -14,7 +14,7 @@ import numpy as np
 import torch
 from stable_baselines3.common.base_class import BaseAlgorithm
 
-from pvz_rl.config import cohort_envs, forecast_forks_enabled, forecast_version
+from pvz_rl.config import cohort_envs, forecast_version
 from pvz_rl.envs.tile_scenarios import BombGenerationFailure, is_placement_skill, placement_settings
 from pvz_rl.learning.cohort import (
     CohortPhase,
@@ -88,7 +88,6 @@ class CudaCohortLifecycle(BaseAlgorithm):
         self.phase = CohortPhase.IDLE
         self.training_games = self._n_updates = 0
         self.optimizer_commits = 0
-        self.forecaster_pretrained = False
         self._phase_times = {}
         self.cohort_metrics = {}
         self.runtime_state = None
@@ -108,10 +107,7 @@ class CudaCohortLifecycle(BaseAlgorithm):
 
     @classmethod
     def load(cls, path, *args, **kwargs):
-        if checkpoint_metadata(path)["policy"] not in (
-            "shared_fork_forecast_q_v3",
-            "shared_public_forecast_q_v4",
-        ):
+        if checkpoint_metadata(path)["policy"] not in ("shared_public_outcomes_q_v5",):
             raise ValueError("Incompatible checkpoint model family for this loader")
         model = super().load(path, *args, **kwargs)
         model.phase = CohortPhase(model.phase)
@@ -259,16 +255,11 @@ class CudaCohortLifecycle(BaseAlgorithm):
         self._simulation_ticks = 0
         self._planting_samples = 0
         for key in (
-            "threat_loss",
             "effect_loss",
-            "threat_depth_brier",
             "effect_brier",
-            "threat_depth_accuracy",
             "effect_accuracy",
-            "threat_exact_depths",
             "effect_labeled_terms",
             "effect_eligible_decisions",
-            "threat_eligible_decisions",
             "primary_loss",
             "total_loss",
             "peashooter_cross_entropy_loss",
@@ -345,7 +336,6 @@ class CudaCohortLifecycle(BaseAlgorithm):
             "fit_seconds": self._phase_times["fit"],
             "returns_seconds": self._phase_times["returns"],
             "td_target_seconds": self._phase_times.get("td_targets", 0.0),
-            "pretraining": getattr(self, "pretraining_metrics", {}),
             "seconds_per_completed_env": (elapsed + self.env.last_preparation_seconds)
             / max(1, self.cohort_games),
             "window_seconds": elapsed,
@@ -366,9 +356,6 @@ class CudaCohortLifecycle(BaseAlgorithm):
         else:
             self.normal_updates += 1
         self.logger.record("train/n_updates", self._n_updates)
-        if getattr(self, "_reach", None) is not None:
-            self._reach.close()
-            self._reach = None
         if getattr(self, "_peashooter_teacher", None) is not None:
             self._peashooter_teacher.close()
             self._peashooter_teacher = None
@@ -416,8 +403,7 @@ class CudaCohortLifecycle(BaseAlgorithm):
             if self.phase == CohortPhase.IDLE:
                 from pvz_rl.learning.curriculum import pre_stage
 
-                # Probes may change the active skill. Resolve that handoff before
-                # deciding whether the next stage requires private pretraining.
+                # Validation may change the active skill before the next collection.
                 if forecast_version(self.cfg) >= 2 and not getattr(
                     self, "_rollout_start_notified", False
                 ):
@@ -429,35 +415,9 @@ class CudaCohortLifecycle(BaseAlgorithm):
                     and not self.tile_skills.active
                 ):
                     break
-                settings = self.cfg["training"].get("forecasts", {})
-                self.forecast_pretraining_state = (
-                    "complete"
-                    if self.forecaster_pretrained
-                    else "deferred"
-                    if not forecast_forks_enabled(self.cfg, self.tile_skills.phase)
-                    else "pending"
-                )
-                if (
-                    forecast_forks_enabled(self.cfg, self.tile_skills.phase)
-                    and settings.get("pretrain_roots", 0)
-                    and not self.forecaster_pretrained
-                ):
-                    from pvz_rl.learning.forecast_pretraining import ForecastPretraining
-
-                    self._ensure_teacher()
-                    self._pretrainer = ForecastPretraining(self)
-                    self.forecast_pretraining_state = "running"
-                    self._phase(CohortPhase.PRETRAIN, callback)
-                    continue
                 from pvz_rl.learning.budget import budget_target, progress_value, uses_games
 
                 target = budget_target(self.env.cfg)
-                if (
-                    forecast_version(self.cfg) == 1
-                    and pre_stage(self.env.cfg)
-                    and not self.tile_skills.active
-                ):
-                    break  # Preserve the saved legacy ordering around pretraining.
                 if (
                     uses_games(self.env.cfg)
                     and (pre_stage(self.env.cfg) or not self.tile_skills.active)
@@ -476,19 +436,7 @@ class CudaCohortLifecycle(BaseAlgorithm):
             start = perf_counter()
             try:
                 with atomic_transition():
-                    if phase == CohortPhase.PRETRAIN:
-                        if hasattr(callback, "check_deadline"):
-                            callback.check_deadline()
-                        if self._pretrainer.advance():
-                            self.pretraining_metrics = dict(self._pretrainer.metrics)
-                            self._pretrainer.close()
-                            self._pretrainer = None
-                            self.forecaster_pretrained = True
-                            self.forecast_pretraining_state = "complete"
-                            self._phase(CohortPhase.IDLE, callback)
-                        if hasattr(callback, "log_progress"):
-                            callback.log_progress()
-                    elif phase == CohortPhase.COLLECT:
+                    if phase == CohortPhase.COLLECT:
                         self._collect_step(callback)
                     elif phase == CohortPhase.FINALIZE_REWARDS:
                         self._finalize_rewards(callback)
@@ -554,7 +502,7 @@ class CudaCohortLifecycle(BaseAlgorithm):
         with ZipFile(self._checkpoint_source) as archive:
             self.env.action_journal.restore_archive_safe(archive)
         self.resumed_cohort = True
-        if self.phase in (CohortPhase.IDLE, CohortPhase.PRETRAIN):
+        if self.phase == CohortPhase.IDLE:
             self._restore_rng(state)
             self.runtime_state = None
             return

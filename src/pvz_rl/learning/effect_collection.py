@@ -3,11 +3,9 @@
 import numpy as np
 import torch
 
-from pvz_rl.config import absolute_outcomes, effect_extra_actions
+from pvz_rl.config import effect_extra_actions
 from pvz_rl.envs.actions import ActionSchema
-from pvz_rl.envs.probe_intervals import ProbeState, interval_probes_enabled
-from pvz_rl.envs.static_fork import reference_tau
-from pvz_rl.learning.forecast_labels import effect_labels
+from pvz_rl.envs.tile_scenarios import is_placement_skill
 from pvz_rl.policy.sequential_q import action_parts
 
 
@@ -54,12 +52,11 @@ def begin_effects(model, actions, details, issued):
         (env.batch.header, env.batch.plants, env.batch.cooldowns, scratch_masks, env.batch.n),
     )
     legal = scratch_masks.get()
-    absolute = absolute_outcomes(model.cfg)
-    interval = interval_probes_enabled(model.cfg) or absolute
+    placement = is_placement_skill(model.tile_skills.phase)
     maximum = effect_extra_actions(model.cfg, model.tile_skills.phase)
     effective_wait = (proposed == 0) | ~legal[np.arange(env.num_envs), proposed]
     sampled = issued.copy() if maximum else np.zeros_like(issued)
-    if interval and maximum:
+    if maximum:
         probability = model.cfg["training"]["forecasts"]["wait_effect_sample_probability"]
         for slot in enabled[effective_wait[enabled]]:
             sampled[slot] = sampling_rng(model, slot, 0xEFF0).random() < probability
@@ -89,147 +86,62 @@ def begin_effects(model, actions, details, issued):
         scores = tables.cpu().numpy()
     commands = np.zeros((env.num_envs, 5), np.uint16)
     valid = np.zeros((env.num_envs, 5), bool)
-    labels = np.broadcast_to(np.array([10, 5, 1, 10], np.int8), (env.num_envs, 5, 5, 4)).copy()
     jobs, shortages = [], 0
     for slot in enabled:
         action = int(proposed[slot])
-        if interval:
-            selected = [action, None, None]
-            if sampled[slot]:
-                selected[1:] = interval_alternatives(
-                    action,
-                    legal[slot],
-                    int(near_branch[slot]),
-                    scores[slot],
-                    sampling_rng(model, slot, 0xEFFE),
-                )
-            shortages += sum(a is None for a in selected[1:]) if sampled[slot] else 0
-            for token, candidate in enumerate(selected):
-                if candidate is not None:
-                    commands[slot, token], valid[slot, token] = candidate, True
-                    if candidate and legal[slot, candidate]:
-                        jobs.append((int(slot), token))
-            continue
-        selected = [action]
-        if maximum:
-            candidates = np.flatnonzero(legal[slot])
-            candidates = candidates[(candidates != action) & (candidates != 0)]
-            branch = int(near_branch[slot])
-            branch_candidates = [int(a) for a in candidates if (a - 1) // 45 + 1 == branch]
-            branch_candidates.sort(key=lambda a: (-float(scores[slot, (a - 1) % 45]), a))
-            selected.extend(branch_candidates[: maximum // 2])
-            remaining = np.array([a for a in candidates if a not in selected], np.int64)
-            # Separate keyed RNG: neither policy exploration nor real engine RNG is consumed.
-            rng = sampling_rng(model, slot, 0xEFFE)
-            take = min(maximum + 1 - len(selected), len(remaining))
-            if take:
-                selected.extend(int(a) for a in rng.choice(remaining, take, replace=False))
-        shortages += maximum + 1 - len(selected)
-        for token, action in enumerate(selected):
-            commands[slot, token], valid[slot, token] = action, True
-            if action and legal[slot, action]:
-                jobs.append((int(slot), token))
-    request = dict(
-        actions=commands,
-        valid=valid,
-        labels=labels,
-        jobs=jobs,
-        ready=not bool(jobs),
-        shortages=shortages,
-        policy_identity=(model.cohort_number, model.optimizer_commits),
-    )
-    if absolute:
-        from pvz_rl.envs.cuda_snapshots import download_snapshots
+        if placement and action == 0:
+            raise RuntimeError("A placement exercise cannot propose Wait")
+        selected = [action, None, None]
+        if sampled[slot]:
+            selected[1:] = interval_alternatives(
+                action,
+                legal[slot],
+                int(near_branch[slot]),
+                scores[slot],
+                sampling_rng(model, slot, 0xEFFE),
+            )
+        shortages += sum(a is None for a in selected[1:]) if sampled[slot] else 0
+        for token, candidate in enumerate(selected):
+            if candidate is not None:
+                commands[slot, token], valid[slot, token] = candidate, True
+                if token and candidate and legal[slot, candidate]:
+                    jobs.append((int(slot), token))
+    from pvz_rl.envs.cuda_snapshots import download_snapshots
 
-        need = np.flatnonzero(
+    need = (
+        enabled.tolist()
+        if placement
+        else np.flatnonzero(
             issued & (((proposed != 0) & ~effective_wait) | valid[:, 1:].any(-1))
         ).tolist()
-        request.update(
-            version=3,
-            ready=True,
-            sampled=sampled,
-            effective_wait=effective_wait & issued,
-            legal_proposal=~effective_wait,
-            pre_states=dict(
-                zip(
-                    need,
-                    env.auxiliary.capture(env.batch, need, env._physical_header[need])
-                    if getattr(env, "auxiliary", None) is not None
-                    else download_snapshots(env.batch, indices=need),
-                    strict=True,
-                )
-            ),
-        )
-        request["labels"].fill(0)
-        request["jobs"] = [(slot, token) for slot, token in jobs if token != 0]
-        model._pending_effect = request
-        model._scheduler.pending |= issued
-        return request
-    if interval:
-        request.update(
-            version=2,
-            sampled=sampled,
-            effective_wait=effective_wait & issued,
-            actual_probe=np.zeros((env.num_envs, 5), np.int64),
-            actual_anchor=np.full(env.num_envs, -1, np.int64),
-            actual_complete=np.zeros(env.num_envs, bool),
-        )
-        metrics = env.fork_service().metrics
-        metrics["sampled_waits"] += int((sampled & effective_wait).sum())
-        metrics["skipped_waits"] += int((issued & effective_wait & ~sampled).sum())
-    # Persist choices before launching scratch work; resume never samples again.
+    )
+    request = dict(
+        version=4,
+        placement=placement,
+        ready=True,
+        actions=commands,
+        valid=valid,
+        labels=np.zeros((env.num_envs, 5, 5, 4), np.int8),
+        jobs=jobs,
+        shortages=shortages,
+        policy_identity=(model.cohort_number, model.optimizer_commits),
+        sampled=sampled,
+        effective_wait=effective_wait & issued,
+        legal_proposal=~effective_wait,
+        pre_states=dict(
+            zip(
+                need,
+                env.auxiliary.capture(env.batch, need, env._physical_header[need])
+                if getattr(env, "auxiliary", None) is not None
+                else download_snapshots(env.batch, indices=need),
+                strict=True,
+            )
+        ),
+    )
+    # Persist commands, probability draws and owned roots before the real mutation.
     model._pending_effect = request
     model._scheduler.pending |= issued
-    if jobs:
-        env.fork_service().begin(
-            [slot for slot, _ in jobs], [commands[slot, token] for slot, token in jobs]
-        )
     return request
-
-
-def finish_effects(model):
-    req, env = model._pending_effect, model.env
-    if req["ready"]:
-        return True
-    service = env.fork_service()
-    if service.request is None:
-        # Queue preparation may have failed before any job launched. Retain the
-        # original probability decision and candidates across that recovery too.
-        service.begin(
-            [slot for slot, _ in req["jobs"]],
-            [req["actions"][slot, token] for slot, token in req["jobs"]],
-        )
-    if not service.advance():
-        return False
-    anchors = service.execution.anchors[: len(req["jobs"])].get()
-    outcomes = service.take()
-    for (slot, token), after, anchor in zip(req["jobs"], outcomes, anchors, strict=True):
-        req["labels"][slot, token] = effect_labels(
-            env._baseline_outcomes[slot], after, reference_tau(env.batch.rules)
-        )
-        if req.get("version") == 2 and token == 0:
-            req["actual_probe"][slot] = after[:, 3]
-            req["actual_anchor"][slot] = anchor
-            req["actual_complete"][slot] = True
-    req["ready"] = True
-    return True
-
-
-def promote_executed_probes(env, request, active, done):
-    if request.get("version") != 2:
-        return
-    actions = request["actions"][:, 0]
-    accepted = env.last_action_result_host[:, 0].astype(bool)
-    indices = np.flatnonzero(
-        active & accepted & (actions != 0) & ~done & ~env._last_spawned & request["actual_complete"]
-    )
-    # step_host has already ended the old interval using actual execution facts.
-    if np.any(env.probe_intervals.state[indices] != ProbeState.UNINITIALIZED):
-        raise RuntimeError("Accepted action did not end its probe interval")
-    env.probe_intervals.begin(indices)
-    env.probe_intervals.complete(
-        indices, request["actual_probe"][indices], request["actual_anchor"][indices]
-    )
 
 
 def validate_effect_request(request, model):
@@ -238,8 +150,10 @@ def validate_effect_request(request, model):
             raise ValueError("Pending effect recovery is missing; use an intact checkpoint")
         return
     count = model.n_envs
-    if request.get("version") == 3:
-        if not absolute_outcomes(model.cfg) or request.get("ready") is not True:
+    if request.get("version") == 4:
+        if request.get("ready") is not True or request.get("placement") != is_placement_skill(
+            model.tile_skills.phase
+        ):
             raise ValueError("Absolute action tickets disagree with the model protocol")
         for name, shape, dtype in (
             ("actions", (count, 5), np.uint16),
@@ -266,8 +180,10 @@ def validate_effect_request(request, model):
             if len(set(candidates)) != len(candidates):
                 raise ValueError("Duplicated saved alternative")
             needs_state = (
-                request["legal_proposal"][slot] and request["actions"][slot, 0] != 0
-            ) or request["valid"][slot, 1:].any()
+                request["placement"]
+                or (request["legal_proposal"][slot] and request["actions"][slot, 0] != 0)
+                or request["valid"][slot, 1:].any()
+            )
             if needs_state and int(slot) not in request["pre_states"]:
                 raise ValueError("Pending action lost its owned physical root")
         pending = model._scheduler.pending
@@ -276,50 +192,4 @@ def validate_effect_request(request, model):
         ):
             raise ValueError("Absolute tickets disagree with retained commands")
         return
-    if request.get("version", 1) not in (1, 2):
-        raise ValueError("Unsupported pending effect version")
-    if interval_probes_enabled(model.cfg) != (request.get("version") == 2):
-        raise ValueError("Pending effects disagree with saved collection protocol")
-    if request.get("version") == 2:
-        for name, shape, dtype in (
-            ("sampled", (count,), bool),
-            ("effective_wait", (count,), bool),
-            ("actual_probe", (count, 5), np.int64),
-            ("actual_anchor", (count,), np.int64),
-            ("actual_complete", (count,), bool),
-        ):
-            value = np.asarray(request[name])
-            if value.shape != shape or value.dtype != dtype:
-                raise ValueError("Invalid saved interval effect metadata")
-    for name, shape, dtype in (
-        ("actions", (count, 5), np.uint16),
-        ("valid", (count, 5), bool),
-        ("labels", (count, 5, 5, 4), np.int8),
-    ):
-        value = np.asarray(request[name])
-        if value.shape != shape or value.dtype != dtype:
-            raise ValueError("Invalid pending effect storage")
-    if (
-        type(request["ready"]) is not bool
-        or np.any(request["actions"] >= ActionSchema.size)
-        or np.any(request["labels"] < 0)
-        or np.any(request["labels"] >= np.array([21, 11, 3, 21]))
-        or tuple(request["policy_identity"]) != (model.cohort_number, model.optimizer_commits)
-    ):
-        raise ValueError("Pending effect labels or frozen policy identity disagree")
-    jobs = [tuple(job) for job in request["jobs"]]
-    if len(set(jobs)) != len(jobs) or any(
-        not (
-            0 <= root < count
-            and 0 <= token < 5
-            and request["valid"][root, token]
-            and request["actions"][root, token] > 0
-        )
-        for root, token in jobs
-    ):
-        raise ValueError("Invalid pending effect jobs")
-    pending = model._scheduler.pending
-    if pending.any() and not np.array_equal(
-        request["actions"][pending, 0], model._scheduler.columns[pending, 1].cpu().numpy()
-    ):
-        raise ValueError("Effect roots disagree with retained main commands")
+    raise ValueError("Unsupported pending action outcome version; start fresh")

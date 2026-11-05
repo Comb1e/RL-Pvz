@@ -24,8 +24,8 @@ from pvz_rl.learning.training_requirements import (
 )
 
 DEMO_PROTOCOL = "pvz-rl/shared-demo-initialization-v1"
-MODEL_STATE_PROTOCOL = "pvz-rl/shared-board-reach-bf16-master-state-v1"
-AUTONOMOUS_STATE_PROTOCOL = "pvz-rl/shared-reach-state-v1"
+MODEL_STATE_PROTOCOL = "pvz-rl/shared-board-outcomes-bf16-master-state-v2"
+AUTONOMOUS_STATE_PROTOCOL = "pvz-rl/shared-outcomes-state-v2"
 
 
 class SnapshotStager:
@@ -133,7 +133,7 @@ def load_torch_snapshot(path):
 
 
 def protocol_for(kind):
-    if kind not in ("shared_fork_forecast_q_v3", "shared_public_forecast_q_v4"):
+    if kind != "shared_public_outcomes_q_v5":
         raise ValueError(
             f"Incompatible checkpoint model family: {kind}; use the bundled public model profile"
         )
@@ -151,14 +151,6 @@ def compatible_config(source, target, *, weights_only=False):
         )
     protocol = weight_transfer_protocol if weights_only else transfer_protocol
     left, right = protocol(source), protocol(target)
-    if (
-        weights_only
-        and source["policy"]["kind"] == "shared_fork_forecast_q_v3"
-        and target["policy"]["kind"] == "shared_public_forecast_q_v4"
-    ):
-        left = copy.deepcopy(left)
-        left["encoding"]["version"] = right["encoding"]["version"]
-        left["policy"]["kind"] = right["policy"]["kind"]
     if left != right:
         raise ValueError(
             "Checkpoint transfer requires matching engine, observation encoding, action "
@@ -372,18 +364,19 @@ def inspect_checkpoint(path, *, weights_only=False):
 
 
 def _inspect_completed_weights(path, *, weights_only):
-    from pvz_game import Rules
-
-    from pvz_rl.envs.encoding import ObservationEncoder
     from pvz_rl.learning.cuda_q import checkpoint_metadata
     from pvz_rl.learning.training_artifacts import WEIGHTS_PROTOCOL
 
+    checkpoint_metadata(path, weights_only=True)
     if not weights_only:
         raise ValueError(
             "Completed runs retain weights only; use --init-from or inference. "
             "Resume requires an interrupted/latest recovery checkpoint."
         )
-    checkpoint_metadata(path, weights_only=True)
+    from pvz_game import Rules
+
+    from pvz_rl.envs.encoding import ObservationEncoder
+
     with ZipFile(path) as archive:
         required = {
             "policy.pth",
@@ -412,7 +405,7 @@ def _inspect_completed_weights(path, *, weights_only):
 
 
 def model_class(cfg):
-    if cfg["policy"]["kind"] not in ("shared_fork_forecast_q_v3", "shared_public_forecast_q_v4"):
+    if cfg["policy"]["kind"] != "shared_public_outcomes_q_v5":
         raise ValueError("Retired model; use the bundled public model profile")
     from pvz_rl.learning.sequential_training import CudaSequentialQ
 

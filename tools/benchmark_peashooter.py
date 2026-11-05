@@ -198,7 +198,6 @@ def measure(base, settings, args, workspace):
                     workload=dict(
                         cutoff_seconds=args.seconds,
                         initial_weights=str(args.weights) if args.weights else "random",
-                        private_pretraining="bypassed",
                         live_view=False,
                         seed=args.seed,
                     ),

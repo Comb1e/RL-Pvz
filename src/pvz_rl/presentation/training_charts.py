@@ -233,93 +233,30 @@ def report_charts(segments, cfg, output, save):
             for key, title, get in fitting
         ]
         if any(
-            value(row, "optimization.threat_loss") is not None
+            value(row, "optimization.effect_loss") is not None
             for _, rows in records
             for row in rows
         ):
-            reach_fields = fields(
-                [
-                    ("optimization.threat_loss", "Threat categorical / censored loss"),
-                    ("optimization.effect_loss", "Signed-effect categorical loss"),
-                    ("optimization.threat_depth_brier", "Exact depth Brier score"),
-                    ("optimization.effect_brier", "Effect Brier score"),
-                    ("optimization.threat_depth_accuracy", "Exact depth accuracy"),
-                    ("optimization.effect_accuracy", "Effect class accuracy"),
-                    ("optimization.changed_effect_accuracy", "Nonzero-effect accuracy"),
-                    (
-                        "optimization.effect_conditional_accuracy",
-                        "Conditional signed-change accuracy",
-                    ),
-                    ("optimization.unchanged_effect_accuracy", "Zero-effect accuracy"),
-                    ("optimization.effect_change_precision", "Effect change precision"),
-                    ("optimization.effect_change_recall", "Effect change recall"),
-                    ("optimization.effect_change_brier", "Effect change Brier score"),
-                    ("optimization.threat_time_brier", "Breach-time Brier score"),
-                    ("optimization.threat_loss_brier", "Lane-loss Brier score"),
-                    ("forecast_calibration.depth.classwise_ece", "Depth class calibration error"),
-                    (
-                        "forecast_calibration.breach_time.classwise_ece",
-                        "Breach-time calibration error",
-                    ),
-                    ("forecast_calibration.loss.classwise_ece", "Lane-loss calibration error"),
-                    ("forecast_calibration.effect.classwise_ece", "Effect class calibration error"),
-                    ("reach_tracking.exact_depths", "Exact horizon targets"),
-                    ("reach_tracking.censored_depths", "Censored horizon targets"),
-                    (
-                        "reach_tracking.defense_lead_time_to_lane_bite_seconds",
-                        "Defensive placement to next lane bite (seconds)",
-                    ),
-                    (
-                        "reach_tracking.defense_empty_lane_fraction",
-                        "Defenses placed in empty lanes",
-                    ),
-                    ("static_forks.forks", "Completed fork requests (including cache hits)"),
-                    ("static_forks.ticks", "Fork simulation ticks"),
-                    ("static_forks.seconds", "Fork wall time (seconds)"),
-                    ("static_forks.cache_hits", "Exact baseline cache hits"),
-                    ("static_forks.cache_misses", "Fresh baseline evaluations"),
-                    ("static_forks.cache_mismatches", "Cache physical-state mismatches"),
-                    ("static_forks.cache_spawn_misses", "Cache invalidations after spawns"),
-                    ("static_forks.cache_exhausted", "Exhausted baseline cache windows"),
-                    ("static_forks.cache_empty", "Empty-field baseline requests"),
-                    ("static_forks.baseline_probes", "Baseline probe executions"),
-                    ("static_forks.baseline_probe_reuses", "Interval probe reuses"),
-                    ("static_forks.candidate_probes", "Candidate probe executions"),
-                    ("static_forks.field_only_rollouts", "Field-only rollouts"),
-                    ("static_forks.sampled_waits", "Sampled Wait decisions"),
-                    ("static_forks.skipped_waits", "Skipped Wait decisions"),
-                    ("static_forks.synchronizations", "Fork progress synchronizations"),
-                    ("static_forks.device_bytes", "Fork and cache device bytes"),
-                    (
-                        "forecast_gradient_ratios.threat_to_primary",
-                        "Threat / primary trunk gradient",
-                    ),
-                    (
-                        "forecast_gradient_ratios.effect_to_primary",
-                        "Effect / primary trunk gradient",
-                    ),
-                    ("reach_tracking.tracking_seconds", "Tracking and preparation (seconds)"),
-                    ("reach_tracking.storage_bytes", "Private reach storage (bytes)"),
-                    ("reach_tracking.continuation_seconds", "Private continuation (seconds)"),
-                    ("reach_tracking.continuation_ticks", "Private continuation ticks"),
-                    ("reach_tracking.stop_reasons.natural_win", "Natural victories"),
-                    ("reach_tracking.stop_reasons.home_breach", "Home entries"),
-                    ("optimization.total_loss", "Combined fitting loss"),
-                ]
-            )
-            if scope != "peashooter":
-                reach_fields = [
-                    item
-                    for item in reach_fields
-                    if not item[0].startswith(
-                        ("reach_tracking.continuation_", "reach_tracking.stop_reasons.")
-                    )
-                ]
             add(
-                "reach",
-                "threat and causal effects",
-                reach_fields,
-                ("optimization.threat_depth_accuracy", "optimization.effect_accuracy"),
+                "outcomes",
+                "post-action field and probe",
+                fields(
+                    [
+                        ("optimization.effect_loss", "Outcome categorical loss"),
+                        ("optimization.effect_brier", "Outcome Brier score"),
+                        ("optimization.effect_accuracy", "Outcome class accuracy"),
+                        (
+                            "forecast_calibration.effect.classwise_ece",
+                            "Outcome class calibration error",
+                        ),
+                        (
+                            "forecast_gradient_ratios.effect_to_primary",
+                            "Outcome / primary trunk gradient",
+                        ),
+                        ("optimization.total_loss", "Combined fitting loss"),
+                    ]
+                ),
+                ("optimization.effect_accuracy",),
             )
         rule_fields = fields(
             [

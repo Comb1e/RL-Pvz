@@ -585,7 +585,6 @@ class FitDiagnostics:
             cfg = deepcopy(cfg)
             cfg["training"]["random_cohort_seeds"] = False
             cfg["training"].pop("peashooter_rules", None)
-            cfg.setdefault("diagnostics", {})["reach_tracking"] = False
             cfg["training"]["forecasts"]["enabled"] = False
             return ordinary_train(cfg, *args, **kwargs)
 

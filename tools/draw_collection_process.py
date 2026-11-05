@@ -68,11 +68,6 @@ class CollectionTrace:
                 for name in ("before", "arm", "observe", "advance", "finalize"):
                     if hasattr(owner, name):
                         self.wrap(owner, name, f"{prefix}: {name}")
-        reach = getattr(model, "_reach", None)
-        if reach is not None:
-            self.wrap(
-                reach, "prepare", "factual: prepare", device_label="factual target preparation"
-            )
         teacher = getattr(model, "_peashooter_teacher", None)
         if teacher is not None and hasattr(teacher, "_run_chunk"):
             self.wrap(teacher, "_initialize", "teacher: initialize")
@@ -296,7 +291,7 @@ def timeline(data):
         source = dict(data)
         detailed = timeline(source.pop("process_trace"))
         prefix = timeline(source)
-        phases = [p for p in prefix["phases"] if p["name"] in ("Startup", "Private pretraining")]
+        phases = [p for p in prefix["phases"] if p["name"] in ("Startup",)]
         offset = data["collection_started_seconds"]
         for phase in detailed["phases"]:
             if phase["name"] == "Decision loop":
@@ -315,12 +310,8 @@ def timeline(data):
                     )
             phases.append(dict(phase, start=phase["start"] + offset, end=phase["end"] + offset))
         for phase in phases:
-            if phase["name"] in ("Private pretraining", "Cohort preparation"):
-                key = (
-                    "ForecastPretraining.advance"
-                    if phase["name"] == "Private pretraining"
-                    else "CudaSequentialQ._begin"
-                )
+            if phase["name"] in ("Cohort preparation",):
+                key = "CudaSequentialQ._begin"
                 stages = data.get("stage_gpu_events", [])
                 covered = _total(stages, key, phase["start"], phase["end"])
                 if covered:
@@ -392,7 +383,7 @@ def timeline(data):
         return phases[-1]
 
     main_cpu = [
-        ("interval: advance", "Poll / finish intervals (nested)"),
+        ("interval: advance", "Poll / finish outcomes (nested)"),
         ("policy inference", "Choose action"),
         ("candidate / snapshot preparation", "Prepare candidates"),
         ("main environment submission", "Submit real step"),
@@ -405,7 +396,7 @@ def timeline(data):
         ("online_inference", "Policy inference"),
         ("freeze snapshot", "Freeze packed roots"),
         ("profile_main_environment", "Real environment step"),
-        ("auxiliary: outcomes", "Interval chunks + D2H"),
+        ("auxiliary: outcomes", "Field/probe chunks + D2H"),
         ("auxiliary: teacher", "Teacher chunks + D2H"),
         ("teacher simulation", "Teacher simulation"),
     ]
@@ -413,15 +404,9 @@ def timeline(data):
         collection_start = data.get("collection_started_seconds")
         if collection_start is None:
             collection_start = data["elapsed_seconds"]
-        advances = [
-            e
-            for e in events
-            if e["name"] == "ForecastPretraining.advance" and e["start"] < collection_start
-        ]
-        pretrain_start = min((e["start"] for e in advances), default=collection_start)
         add(
             0,
-            pretrain_start,
+            collection_start,
             "Startup",
             [
                 ("imports", "Import packages"),
@@ -431,17 +416,6 @@ def timeline(data):
             ],
             [],
         )
-        pretraining = add(
-            pretrain_start, collection_start, "Private pretraining", [], [], loop=True
-        )
-        if advances and pretraining is not None:
-            startup = data.get("timings_by_phase", {}).get("startup", data["timings"])
-            seconds = startup.get("ForecastPretraining.advance", {}).get("seconds", 0)
-            pretraining["cpu"] = [
-                f"Prepare roots / submit / wait / fit: {_seconds(seconds)} total",
-                "Repeated private panels; inner iterations collapsed",
-            ]
-            pretraining["gpu_activity"] = "Simulate private roots, then fit auxiliary heads"
         window = data.get("collection_window_seconds")
         if window is None:
             final = data.get("final_collection") or (data.get("samples") or [{}])[-1]
@@ -503,17 +477,9 @@ def timeline(data):
             main_cpu,
             gpu_ops,
             loop=True,
-            wait="Real-step completion / D2H; interval work is included in this loop",
+            wait="Real-step completion / D2H; outcome work is included in this loop",
         )
         # Only introduce boundaries actually present in the recording.
-        factual = min(
-            (
-                e["start"]
-                for e in events
-                if e["name"] == "factual: prepare" and e["start"] >= main_end
-            ),
-            default=total,
-        )
         teacher = min(
             (
                 e["start"]
@@ -523,18 +489,18 @@ def timeline(data):
             ),
             default=total,
         )
-        split = min(factual, teacher)
+        split = teacher
         add(
             main_end,
             split,
-            "Interval drain / publish",
+            "Outcome drain / publish",
             [
-                ("interval: advance", "Poll / finish intervals"),
-                ("interval: finalize", "Publish interval targets"),
+                ("interval: advance", "Poll / finish outcomes"),
+                ("interval: finalize", "Publish outcome targets"),
             ],
             gpu_ops,
             loop=True,
-            wait="Remaining interval field / probe jobs; publish all exact targets",
+            wait="Remaining field / probe jobs; publish all exact targets",
         )
         run = min(
             (
@@ -547,12 +513,11 @@ def timeline(data):
         add(
             split,
             run,
-            "Factual targets / teacher preparation",
+            "Teacher preparation",
             [
-                ("factual: prepare", "Build factual targets"),
                 ("teacher: initialize", "Project / prepare teacher roots"),
             ],
-            gpu_ops + [("factual target preparation", "Factual target staging / event span")],
+            gpu_ops,
             loop=True,
             wait="CPU lane-preparation replies (included in preparation calls)"
             if data.get("settings", {}).get("prepare_workers", 0)
@@ -563,7 +528,6 @@ def timeline(data):
             total,
             "Teacher / remaining label drain",
             [
-                ("factual: prepare", "Build remaining factual targets"),
                 ("teacher: initialize", "Prepare remaining teacher roots"),
                 ("teacher: fill", "Refill teacher workers"),
                 ("teacher: run chunk", "Submit / download / publish (nested)"),
@@ -605,7 +569,7 @@ def timeline(data):
             fitting = add(
                 fitting_start,
                 fitting_end,
-                "Four fitting passes",
+                "Fitting passes",
                 [
                     (
                         "fit pass / forward backward optimizer",
@@ -775,7 +739,7 @@ def draw(data, output):
             else "Host-only recording; no device timestamp trace was captured."
         )
     notes.append(
-        "Benchmark traces exclude CLI startup / private pretraining. Actual-CLI audits "
+        "Benchmark traces exclude CLI startup. Actual-CLI audits "
         "retain startup and explicitly mark unfinished collection windows."
     )
     ax.text(

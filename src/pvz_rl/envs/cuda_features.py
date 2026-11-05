@@ -114,7 +114,6 @@ class CudaFeatures:
         self.source = source
         self.module = cp.RawModule(code=source, options=("--std=c++11", "--fmad=false"))
         self.encode_kernel = self.module.get_function("encode_canonical")
-        self.forecast_facts_kernel = self.module.get_function("capture_forecast_facts")
         self.policy_mask_kernel = self.module.get_function("policy_masks")
         self.reward_kernel = self.module.get_function("reward_metrics")
         self.home_kernel = self.module.get_function("home_entries")
@@ -127,7 +126,6 @@ class CudaFeatures:
         # Kept count, then plants/zombies/projectiles omitted by the entity cap.
         self.summary = cp.zeros((rows, 4), cp.int64)
         self.lane_zombies = cp.zeros((rows, 5), cp.int16)
-        self.forecast_facts = cp.zeros((rows, 7), cp.int64)
         self.records = cp.zeros(
             (0 if accounting_only else batch.n, 50 + batch.zcap, ENTITY_WIDTH), cp.int32
         )
@@ -223,7 +221,6 @@ class CudaFeatures:
                 self.assets,
                 self.summary[rows],
                 self.lane_zombies[rows],
-                self.forecast_facts[rows],
                 b.n,
             ),
         )
@@ -235,16 +232,6 @@ class CudaFeatures:
         if not publish:
             return None
         return self.publish(self.summary[rows].get(), b.header[:, 17].get() != 0)
-
-    def capture_forecast_facts(self):
-        """Public endpoint facts only; no encoding, accounting or physical mutation."""
-        b = self.batch
-        self.forecast_facts_kernel(
-            ((b.n + 63) // 64,),
-            (64,),
-            (b.header, b.zombies, b.mowers, self.forecast_facts, b.n),
-        )
-        return self.forecast_facts
 
     def view(self, offset, rows, width):
         """Validated canonical rows at a fixed padding width (no copy)."""

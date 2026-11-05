@@ -35,9 +35,9 @@ def wait_capture_source(source):
   }
 """
     hooks = {
-        "I *reach, *reach_error; I reach_enabled;": "I *reach, *reach_error; I reach_enabled; I *wait_states, *wait_meta, *wait_watch; I wait_stride, wait_enabled;",
-        "I reach_enabled) {": "I reach_enabled, I *wait_states, I *wait_meta, I *wait_watch, I wait_stride, I wait_enabled) {",
-        "reach_error + i, reach_enabled};": "reach_error + i, reach_enabled, wait_states + i * 2 * wait_stride, wait_meta + i * 3, wait_watch + i, wait_stride, wait_enabled};",
+        "I *field, *field_error; I field_enabled;": "I *field, *field_error; I field_enabled; I *wait_states, *wait_meta, *wait_watch; I wait_stride, wait_enabled;",
+        "I field_enabled) {": "I field_enabled, I *wait_states, I *wait_meta, I *wait_watch, I wait_stride, I wait_enabled) {",
+        "field_error + i, field_enabled};": "field_error + i, field_enabled, wait_states + i * 2 * wait_stride, wait_meta + i * 3, wait_watch + i, wait_stride, wait_enabled};",
         "  __device__ void advance() {": methods
         + r"""
   __device__ void advance() {
@@ -122,5 +122,5 @@ def capture_arguments(batch):
     cp = batch.cp
     capture = getattr(batch, "wait_capture", None)
     if capture is None:
-        return (batch.reach_error, batch.reach_error, batch.reach_error, cp.int64(0), cp.int64(0))
+        return (batch.field_error, batch.field_error, batch.field_error, cp.int64(0), cp.int64(0))
     return capture.states, capture.meta, capture.watch, cp.int64(capture.stride), cp.int64(1)

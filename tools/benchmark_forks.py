@@ -153,7 +153,6 @@ def cohort(args):
     t.update(
         n_envs=args.envs, total_games=args.envs, max_minutes=args.minutes, random_cohort_seeds=False
     )
-    t["forecasts"]["pretrain_roots"] = 0  # Separate startup phase, identical for both variants.
     t["tile_scenarios"]["cherry_bomb_n_envs"] = args.envs
     t["tile_scenarios"]["attacker"]["n_envs"] = args.envs
     t["peashooter_rules"]["n_envs"] = args.envs
@@ -241,10 +240,6 @@ def cohort(args):
                                 "effect_actions",
                                 "effect_valid",
                                 "effect_labels",
-                                "threat_depth",
-                                "threat_censored",
-                                "threat_time",
-                                "threat_loss",
                             ):
                                 hasher.update(np.ascontiguousarray(block[name]).tobytes())
                         captured["training_data_sha256"] = hasher.hexdigest()
@@ -303,9 +298,7 @@ def cohort(args):
                     )
                     # Never extrapolate a timed-out or otherwise incomplete cohort.
                     if "cohorts" in captured:
-                        observed = (
-                            captured["training_data_sha256"], captured["weights_sha256"]
-                        )
+                        observed = (captured["training_data_sha256"], captured["weights_sha256"])
                         if signature is None:
                             signature = observed
                         if observed != signature:

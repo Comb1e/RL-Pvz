@@ -27,7 +27,6 @@ _STAGE_PARAMETERS = {
             key: f"training.{key}"
             for key in (
                 "n_envs",
-                "threat_prediction_weight",
                 "effect_prediction_weight",
                 "exploration",
                 "validation_schedule",
@@ -37,7 +36,6 @@ _STAGE_PARAMETERS = {
         "curriculum": "curriculum",
     },
     "cherry_bomb": {
-        "threat_prediction_weight": "training.stage_threat_weights.cherry_bomb",
         "effect_prediction_weight": "training.stage_effect_weights.cherry_bomb",
         "n_envs": "training.tile_scenarios.cherry_bomb_n_envs",
         "initial_sun": "training.tile_scenarios.bomb_initial_sun",
@@ -70,12 +68,10 @@ _STAGE_PARAMETERS = {
         "validation_success_threshold": "curriculum.cherry_bomb_validation_success_threshold",
     },
     "cherry_bomb_obstacle": {
-        "threat_prediction_weight": "training.stage_threat_weights.cherry_bomb_obstacle",
         "effect_prediction_weight": "training.stage_effect_weights.cherry_bomb_obstacle",
         "softmax_temperature": "training.tile_scenarios.obstacle_softmax_temperature",
     },
     "attacker_pre": {
-        "threat_prediction_weight": "training.stage_threat_weights.attacker_pre",
         "effect_prediction_weight": "training.stage_effect_weights.attacker_pre",
         **{
             key: f"training.tile_scenarios.attacker.{key}"
@@ -104,7 +100,6 @@ _STAGE_PARAMETERS = {
         "probe_interval_games": "curriculum.attacker_pre_probe_interval_games",
     },
     "peashooter": {
-        "threat_prediction_weight": "training.stage_threat_weights.peashooter",
         "effect_prediction_weight": "training.stage_effect_weights.peashooter",
         "sky_sun_rate": "training.tile_scenarios.peashooter_sky_sun_rate",
         **{
@@ -132,12 +127,12 @@ for _stage, _fields in _STAGE_PARAMETERS.items():
 
 
 def absolute_outcomes(cfg):
-    """Public-only model with absolute action outcomes; saved v3 stays unchanged."""
+    """The supported model uses public inputs and absolute action outcomes."""
     return cfg["encoding"]["version"] == "entity_public_v4"
 
 
 def forecast_version(cfg):
-    """Absent saved settings retain the original labels and fork workflow."""
+    """Persisted outcome supervision identity; older versions are rejected."""
     return cfg["training"].get("forecasts", {}).get("supervision_version", 1)
 
 
@@ -145,32 +140,13 @@ def forecast_mode(cfg, stage=None):
     stage = stage or cfg.get("curriculum", {}).get("run_stage") or "normal"
     if stage not in ("cherry_bomb", "cherry_bomb_obstacle", "attacker_pre", "peashooter"):
         stage = "normal"
-    if forecast_version(cfg) == 1:
-        return "factual"
-    return cfg["training"].get("stage_forecast_modes", {}).get(stage, "factual")
+    return cfg["training"]["stage_forecast_modes"][stage]
 
 
 def forecast_forks_enabled(cfg, stage=None):
     return cfg["training"].get("forecasts", {}).get("enabled", False) and forecast_mode(
         cfg, stage
-    ) in ("factual", "action_outcomes")
-
-
-def threat_supervision_enabled(cfg, stage=None):
-    """Saved factual/snapshot heads remain active; all fresh modes skip them."""
-    return cfg["training"].get("forecasts", {}).get("enabled", False) and forecast_mode(
-        cfg, stage
-    ) in ("factual", "snapshot_rules")
-
-
-def threat_prediction_weight(cfg, stage="normal"):
-    """Resolve snapshot/legacy factual supervision independently of outcomes."""
-    if forecast_mode(cfg, stage) in ("action_outcomes", "placement_only"):
-        return 0.0
-    training = cfg["training"]
-    if stage in ("cherry_bomb", "cherry_bomb_obstacle", "attacker_pre", "peashooter"):
-        return training.get("stage_threat_weights", {}).get(stage, 0.0)
-    return training.get("threat_prediction_weight", 0.1)
+    ) in ("placement_outcomes", "action_outcomes")
 
 
 def effect_prediction_weight(cfg, stage="normal"):
@@ -448,8 +424,7 @@ def load_demo_config(path: str | Path | None = None, *, profile: str = "demo") -
     """Recording verification profile; execution options are supplied separately."""
     cfg = load_config(path, profile=profile)
     if (cfg["encoding"]["version"], cfg["policy"]["kind"]) not in {
-        ("entity_fork_v3", "shared_fork_forecast_q_v3"),
-        ("entity_public_v4", "shared_public_forecast_q_v4"),
+        ("entity_public_v4", "shared_public_outcomes_q_v5"),
     }:
         raise ValueError("Human demonstrations require the stateless two-stage Transformer profile")
     return copy.deepcopy(cfg)
@@ -491,7 +466,7 @@ def validate_config(cfg: dict) -> None:
                 "training.objective contains retired or missing settings, including "
                 "species_consistency_huber_delta"
             )
-        if objective.get("protocol") != "nstep_fork_forecast_v3":
+        if objective.get("protocol") != "nstep_action_outcomes_v4":
             raise ValueError(
                 "Unsupported training objective protocol; fresh initialization is required"
             )
@@ -556,8 +531,7 @@ def validate_config(cfg: dict) -> None:
         cfg.get("encoding", {}).get("version"),
         cfg.get("policy", {}).get("kind"),
     ) in {
-        ("entity_fork_v3", "shared_fork_forecast_q_v3"),
-        ("entity_public_v4", "shared_public_forecast_q_v4"),
+        ("entity_public_v4", "shared_public_outcomes_q_v5"),
     }
     if cfg["training"].get("validation_schedule", "periodic") not in (
         "periodic",
@@ -721,23 +695,14 @@ def validate_config(cfg: dict) -> None:
     if policy["shared_width"] % policy["attention_heads"]:
         raise ValueError("shared_width must be divisible by attention_heads")
     stages = ("normal", "cherry_bomb", "cherry_bomb_obstacle", "attacker_pre", "peashooter")
-    if set(cfg["training"].get("stage_threat_weights", {})) - set(stages[1:]):
-        raise ValueError("Unknown preliminary reach stage")
     if set(cfg["training"].get("stage_effect_weights", {})) - set(stages[1:]):
-        raise ValueError("Unknown preliminary home stage")
+        raise ValueError("Unknown preliminary outcome stage")
     for stage in stages:
-        for name, resolve in (
-            ("threat", threat_prediction_weight),
-            ("effect", effect_prediction_weight),
-        ):
-            weight = resolve(cfg, stage)
-            if type(weight) not in (int, float) or not math.isfinite(weight) or weight < 0:
-                raise ValueError(
-                    f"training.{stage}.{name}_prediction_weight must be finite and nonnegative"
-                )
-    chunk = cfg["training"]["performance"].get("reach_chunk_ticks", 256)
-    if type(chunk) is not int or chunk < 1:
-        raise ValueError("reach_chunk_ticks must be a positive integer")
+        weight = effect_prediction_weight(cfg, stage)
+        if type(weight) not in (int, float) or not math.isfinite(weight) or weight < 0:
+            raise ValueError(
+                f"training.{stage}.effect_prediction_weight must be finite and nonnegative"
+            )
 
     attempts = cfg["training"]["tile_scenarios"].get("sampling_max_attempts")
     if type(attempts) is not int or attempts < 1:
@@ -1055,57 +1020,45 @@ def validate_config(cfg: dict) -> None:
     env, train = cfg["environment"], cfg["training"]
     if type(train.get("random_cohort_seeds", False)) is not bool:
         raise ValueError("training.random_cohort_seeds must be boolean")
-    expected_method = "nstep_fork_forecast_v3"
+    expected_method = "nstep_action_outcomes_v4"
     if train.get("method") != expected_method:
         raise ValueError(
             "Training requires a supported n-step fork-forecast method and fresh models"
         )
     forecasts = train.get("forecasts", {})
-    if forecast_version(cfg) not in (1, 2, 3):
-        raise ValueError("Unsupported forecast supervision version")
-    for stage, mode in train.get("stage_forecast_modes", {}).items():
-        if (
-            stage not in _STAGE_PARAMETERS
-            or mode not in ("factual", "snapshot_rules", "action_outcomes", "placement_only")
-            or (
-                mode in ("snapshot_rules", "placement_only")
-                and stage not in ("cherry_bomb", "cherry_bomb_obstacle", "attacker_pre")
-            )
-            or (
-                mode == "action_outcomes"
-                and (stage not in ("peashooter", "normal") or not absolute_outcomes(cfg))
-            )
-        ):
-            raise ValueError(f"Unsupported forecast mode for {stage}")
-    if forecasts.get("effect_objective", "categorical_v1") not in (
-        "categorical_v1",
-        "change_conditional_v2",
-        "absolute_outcome_v3",
-    ):
-        raise ValueError("Unsupported effect objective")
-    beta = forecasts.get("effect_conditional_weight", 1.0)
-    if type(beta) not in (int, float) or not math.isfinite(beta) or beta < 0:
-        raise ValueError("effect_conditional_weight must be finite and nonnegative")
-    if forecasts.get("protocol") != "static-fork-threat-effect-v1":
-        raise ValueError("Training requires fresh static-fork threat/effect settings")
+    if forecast_version(cfg) != 4:
+        raise ValueError(
+            "Unsupported outcome supervision; old checkpoints are incompatible, start fresh"
+        )
+    if any(k.startswith("pretrain_") or k == "effect_conditional_weight" for k in forecasts):
+        raise ValueError(
+            "Removed private pretraining/legacy effect settings; use the current profile"
+        )
+    if "threat_prediction_weight" in train or "stage_threat_weights" in train:
+        raise ValueError(
+            "Removed factual prediction settings; use the current outcome-only profile"
+        )
+    for stage in _STAGE_PARAMETERS:
+        expected = (
+            "placement_outcomes"
+            if stage in ("cherry_bomb", "cherry_bomb_obstacle", "attacker_pre")
+            else "action_outcomes"
+        )
+        if train.get("stage_forecast_modes", {}).get(stage) != expected:
+            raise ValueError(f"Unsupported outcome mode for {stage}; expected {expected}")
+    if forecasts.get("effect_objective") != "absolute_outcome_v3":
+        raise ValueError("Training requires absolute action outcomes")
+    if forecasts.get("protocol") != "static-fork-action-outcomes-v2":
+        raise ValueError("Training requires the outcome-only fork protocol")
     if type(forecasts.get("enabled")) is not bool:
         raise ValueError("training.forecasts.enabled must be boolean")
     if forecasts.get("probe") not in ("basic", "conehead", "buckethead"):
         raise ValueError("Static probe must be basic, conehead or buckethead")
-    if forecasts.get("extra_actions") not in (2, 3, 4):
-        raise ValueError("training.forecasts.extra_actions must be 2, 3 or 4")
-    collection = forecasts.get("collection_protocol", "per_decision_v1")
-    if collection not in ("per_decision_v1", "wait_interval_v2", "wait_trajectory_v3"):
-        raise ValueError("Unsupported forecast collection protocol")
-    absolute_protocols = (
-        collection == "wait_trajectory_v3",
-        forecasts.get("effect_objective") == "absolute_outcome_v3",
-        forecast_version(cfg) == 3,
-    )
-    if any(flag != absolute_outcomes(cfg) for flag in absolute_protocols):
-        raise ValueError(
-            "Public-only inputs require absolute outcomes and Wait trajectory collection"
-        )
+    if forecasts.get("extra_actions") != 2:
+        raise ValueError("training.forecasts.extra_actions must be 2")
+    collection = forecasts.get("collection_protocol")
+    if collection != "stage_action_outcomes_v4" or not absolute_outcomes(cfg):
+        raise ValueError("Training requires public-only stage action outcomes")
     probability = forecasts.get("wait_effect_sample_probability", 1.0)
     if (
         type(probability) not in (int, float)
@@ -1113,35 +1066,18 @@ def validate_config(cfg: dict) -> None:
         or not 0 <= probability <= 1
     ):
         raise ValueError("wait_effect_sample_probability must be between zero and one")
-    if collection in ("wait_interval_v2", "wait_trajectory_v3") and forecasts["extra_actions"] != 2:
-        raise ValueError("Wait interval collection requires exactly two alternative slots")
     for stage, count in train.get("stage_extra_actions", {}).items():
-        if stage not in _STAGE_PARAMETERS or type(count) is not int or count not in (0, 2, 3, 4):
-            raise ValueError("Stage extra_actions must be 0, 2, 3 or 4 for a known training stage")
-        if collection in ("wait_interval_v2", "wait_trajectory_v3") and count not in (0, 2):
-            raise ValueError("Wait interval stage extra_actions must be zero or two")
-    for key in ("lanes", "vram_mib", "chunk_ticks", "n_step", "injected_n_step", "pretrain_passes"):
+        if stage not in _STAGE_PARAMETERS or type(count) is not int or count not in (0, 2):
+            raise ValueError("Stage extra_actions must be zero or two")
+    for stage in ("cherry_bomb", "cherry_bomb_obstacle", "attacker_pre", "peashooter"):
+        if effect_extra_actions(cfg, stage) != 0:
+            raise ValueError(f"{stage} requires zero extra actions")
+    for key in ("lanes", "vram_mib", "chunk_ticks", "n_step", "injected_n_step"):
         if type(forecasts.get(key)) is not int or forecasts[key] <= 0:
             raise ValueError(f"training.forecasts.{key} must be a positive integer")
-    for key in ("warmup_games", "injection_after_games", "pretrain_roots"):
+    for key in ("warmup_games", "injection_after_games"):
         if type(forecasts.get(key)) is not int or forecasts[key] < 0:
             raise ValueError(f"training.forecasts.{key} must be a nonnegative integer")
-    if forecasts.get("pretrain_execution", "legacy") not in ("legacy", "device_pipeline_v1"):
-        raise ValueError("Invalid training.forecasts.pretrain_execution")
-    if type(forecasts.get("pretrain_graphs", False)) is not bool:
-        raise ValueError("training.forecasts.pretrain_graphs must be boolean")
-    for key in ("pretrain_queue_panels", "pretrain_simulation_lanes", "pretrain_simulation_ticks"):
-        if key in forecasts and (type(forecasts[key]) is not int or forecasts[key] <= 0):
-            raise ValueError(f"training.forecasts.{key} must be a positive integer")
-    if forecasts.get("pretrain_execution", "legacy") == "device_pipeline_v1" and any(
-        key not in forecasts
-        for key in (
-            "pretrain_queue_panels",
-            "pretrain_simulation_lanes",
-            "pretrain_simulation_ticks",
-        )
-    ):
-        raise ValueError("Device pretraining requires explicit queue, lane and chunk settings")
     for key in ("shaping_weight", "initial_discount_half_life_steps", "discount_half_life_steps"):
         value = forecasts.get(key)
         if (
@@ -1251,7 +1187,6 @@ def validate_config(cfg: dict) -> None:
         "fork_cache_vram_mib",
         "fork_cache_zombies",
         "fork_cache_projectiles",
-        "reach_chunk_ticks",
         "compile_collection",
         "compile_fitting",
         "telemetry",
@@ -1281,7 +1216,6 @@ def validate_config(cfg: dict) -> None:
         "collection_tile_buckets",
         "teacher_batched_transfers",
         "teacher_pipeline",
-        "factual_batch_targets",
         "vectorized_effect_gather",
         "collection_vram_headroom_mib",
     }:
@@ -1290,7 +1224,6 @@ def validate_config(cfg: dict) -> None:
         "collection_tile_buckets",
         "teacher_batched_transfers",
         "teacher_pipeline",
-        "factual_batch_targets",
         "vectorized_effect_gather",
     ):
         if key in performance and type(performance[key]) is not bool:

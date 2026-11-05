@@ -81,7 +81,7 @@ block_value_by_plant = { sunflower = 0.074074074, peashooter = 0.074074074, wall
 [training]
 gamma = 1.0
 discount_clock = "simulation_ticks"
-method = "nstep_fork_forecast_v3"
+method = "nstep_action_outcomes_v4"
 budget_unit = "games"
 until_stage_complete = false # With --stage: stop only when its mastery gate passes.
 total_games = 10000
@@ -104,14 +104,13 @@ cohort_success_threshold = 0.9 # Strictly above; full configured cohorts only (n
 
 [training.forecasts]
 enabled = true
-supervision_version = 3 # Missing in saved runs: preserve legacy labels and forks.
-effect_objective = "absolute_outcome_v3" # Direct post-action outcomes; legacy recoveries retain signed effects.
-effect_conditional_weight = 1.0 # Used by saved change_conditional_v2 objectives only.
-protocol = "static-fork-threat-effect-v1"
+supervision_version = 4 # Outcome-only records; previous checkpoints are incompatible.
+effect_objective = "absolute_outcome_v3" # Direct post-action outcomes.
+protocol = "static-fork-action-outcomes-v2"
 probe = "conehead" # One reference threat per lane; retain damaged field-phase defenses.
 extra_actions = 2 # Branch runner-up, then one uniformly legal remaining action.
 wait_effect_sample_probability = 0.005
-collection_protocol = "wait_trajectory_v3"
+collection_protocol = "stage_action_outcomes_v4"
 lanes = 1024 # Upper bound; allocate no more than the current cohort can request.
 vram_mib = 1536 # Shared by physical scratch, job storage and the disposable cache.
 chunk_ticks = 1024
@@ -121,13 +120,6 @@ n_step = 5
 injected_n_step = 20
 initial_discount_half_life_steps = 60
 discount_half_life_steps = 600 # Longer horizon after injection; 60 simulated seconds at 10 Hz.
-pretrain_roots = 2048
-pretrain_passes = 4
-pretrain_execution = "device_pipeline_v1" # Missing in saved runs: retain sequential private panels.
-pretrain_queue_panels = 32 # Simulation waves only; optimizer panels remain 32 roots.
-pretrain_simulation_lanes = 1024 # Admitted against the existing forecast VRAM cap.
-pretrain_simulation_ticks = 32768 # Independent of the unchanged private-play action cadence.
-pretrain_graphs = true # Bounded eager capture; optimizer/EMA commits retain their order.
 shaping_weight = 0.0 # Disabled initially. Do not use network forecasts as rewards.
 shaping_weights = [1.0, 1.0, 1.0, 0.25] # Field depth, breach urgency, loss, probe depth.
 measure_gradient_norms = true # First fitted microbatch per cohort only.
@@ -137,10 +129,9 @@ enabled = true # Automatic preliminary stages; selected normal stages skip them.
 sampling_max_attempts = 100
 
 [training.cherry_bomb]
-forecast_mode = "placement_only" # Placement objective only; no threat prediction or forecast forks.
-# Saved recoveries retain their original supervision mode and weights.
+forecast_mode = "placement_outcomes" # Placement teacher plus one post-action field/probe target.
+extra_actions = 0
 effect_prediction_weight = 0.1
-threat_prediction_weight = 0.0
 # Shared by both bomb stages except temperature and validation mastery; no exploration or search.
 n_envs = 640 # Fastest measured collection time/env with 32 workers and the CUDA oracle.
 probe_interval_games = 10000 # Independent clock for each bomb stage; pending probes retry first.
@@ -160,15 +151,15 @@ oracle_lanes = 2048 # Shrinks to fit VRAM without changing labels.
 oracle_vram_mib = 2048
 
 [training.cherry_bomb_obstacle]
-forecast_mode = "placement_only"
+forecast_mode = "placement_outcomes"
+extra_actions = 0
 effect_prediction_weight = 0.1
-threat_prediction_weight = 0.0
 softmax_temperature = { zero_success = 1, full_success = 1 } # Independent schedule; mastery still requires 100/100.
 
 [training.attacker_pre]
-forecast_mode = "placement_only"
+forecast_mode = "placement_outcomes"
+extra_actions = 0
 effect_prediction_weight = 0.1
-threat_prediction_weight = 0.0
 n_envs = 640 # Lowest measured collection time/env on the RTX 4070 Laptop profile.
 plants = [4, 8] # Total across four non-zombie lanes; at least one in each.
 zombie_count = [1, 2] # Basic zombies, all in the remaining empty lane.
@@ -186,10 +177,9 @@ oracle_lanes = 640 # Independent scratch limits; used only for natural cooldown 
 oracle_vram_mib = 1024
 
 [training.peashooter]
-forecast_mode = "action_outcomes" # Teacher plus field/probe targets; no factual threat prediction.
+forecast_mode = "action_outcomes" # Teacher plus field/probe targets.
 extra_actions = 0 # The placement teacher supplies targets; retain actual-action effects only.
 effect_prediction_weight = 0.1
-threat_prediction_weight = 0.0
 # Independent cohort/preparation sizing; shared optimizer and fitting passes.
 n_envs = 128
 sky_sun_rate = 1.5 # Divide sky-drop delays by this rate; keep each drop at 25 sun.
@@ -205,10 +195,9 @@ oracle_vram_mib = 4096 # Upper bound; actual lanes shrink to preserve profile he
 oracle_chunk_ticks = 4096
 
 [training.normal]
-forecast_mode = "action_outcomes" # Post-action field/probe targets only; saved factual runs stay unchanged.
+forecast_mode = "action_outcomes" # Post-action field/probe targets only.
 n_envs = 128
 effect_prediction_weight = 0.1
-threat_prediction_weight = 0.0
 validation_schedule = "stage_success" # Evaluate normal games only after each stage passes.
 eval_interval_games = 2000 # Periodic game-count diagnostic/fixed checks.
 # Species exploration stays fixed throughout a cohort; tile proposals are greedy.
@@ -249,7 +238,7 @@ ram_gib = 6
 block_rows = 32768
 
 [training.objective]
-protocol = "nstep_fork_forecast_v3"
+protocol = "nstep_action_outcomes_v4"
 accepted_outcome_share = 0.5
 species_consistency_weight = 1.0 # Verified demo objective only; normal Q fitting omits consistency.
 species_consistency_huber_delta = 1.0
@@ -277,7 +266,6 @@ fork_cache_steps = 8
 fork_cache_zombies = 128 # Larger live rosters safely miss the disposable cache.
 fork_cache_projectiles = 256
 fork_cache_vram_mib = 128 # Included in training.forecasts.vram_mib, not additional VRAM.
-reach_chunk_ticks = 256 # Bounded Wait-only continuation; no additional policy calls.
 compile_collection = true
 compile_fitting = true
 telemetry = true
@@ -294,7 +282,6 @@ collection_graph_cache_entries = 8
 collection_tile_buckets = true # Bound decoder capture shapes as legal non-Wait counts change.
 teacher_batched_transfers = true # One slab upload per refill; validate roots once at ingestion.
 teacher_pipeline = true # Prepare roots during CUDA chunks; pinned event-polled progress.
-factual_batch_targets = true # Exact range maxima and array target construction per episode.
 vectorized_effect_gather = true # One indexed gather for tested outcome tokens, retaining loss normalization.
 collection_vram_headroom_mib = 512
 
@@ -321,7 +308,7 @@ curriculum = true
 hybrid = false
 
 [policy]
-kind = "shared_public_forecast_q_v4"
+kind = "shared_public_outcomes_q_v5"
 action_distribution = "sequential_q_unmasked_tiles_v2"
 shared_width = 192
 encoder_blocks = 4
@@ -342,7 +329,6 @@ time_budget_minutes = 30
 backend = "cuda"
 
 [diagnostics]
-reach_tracking = true # Disable only for bounded controls; no auxiliary labels when false.
 early_dig_seconds = 5
 
 # The demo profile intentionally inherits the same reward settings as training.

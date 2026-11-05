@@ -173,15 +173,11 @@ class CommittedPlantExploration:
         policy_branches, _ = action_parts(actions)
         reuse = ready & (policy_branches == pending)
         requests = torch.where(ready & ~reuse, pending, 0)
-        conditional, reach = policy.conditional_tiles(
+        conditional = policy.conditional_tiles(
             details["observations"],
             requests,
             plan=plan,
             memory=details["board_memory"],
-            return_reach=True,
-        )
-        details["reach_logits"] = torch.where(
-            (ready & ~reuse)[:, None, None], reach, details["reach_logits"]
         )
         conditional = torch.where(reuse[:, None], details["tile_q"], conditional)
         tiles, _, fired, tile_q = select_q_tiles(

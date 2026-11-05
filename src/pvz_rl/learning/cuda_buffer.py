@@ -6,7 +6,6 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from pvz_rl.config import forecast_version
 from pvz_rl.envs.actions import ActionSchema as A
 from pvz_rl.envs.encoding import (
     ENTITY_WIDTH,
@@ -30,9 +29,7 @@ from pvz_rl.learning.objective import (
 from pvz_rl.learning.source_actions import AppendReceipt, SourceActionRef
 from pvz_rl.monitoring.moments import RunningMoments
 
-TRAJECTORY_PROTOCOL = "pvz-rl/fork-threat-effect-trajectory-v3"
-CONSTRAINT_TRAJECTORY_PROTOCOL = "pvz-rl/fork-threat-effect-trajectory-v4"
-ABSOLUTE_TRAJECTORY_PROTOCOL = "pvz-rl/absolute-wait-trajectory-v5"
+TRAJECTORY_PROTOCOL = "pvz-rl/action-outcome-trajectory-v6"
 
 
 def trajectory_dtype(cfg=None):
@@ -67,20 +64,9 @@ def trajectory_dtype(cfg=None):
         ("next_species", "u1"),
         ("species_coin", "?"),
         ("tile_coin", "?"),
-        ("reach_prediction", "<f2", (5, 9)),
-        ("reach_valid", "?"),
-        ("lane_zombies", "<u2", 5),
-        ("reach_labels", "i1", (5, 9)),
-        ("home_labels", "i1", 5),
-        ("home_prediction", "<f2", 5),
-        ("reach_provenance", "u1"),
-        ("forecast_trace", "u1", (ticks + 1, 5)),
-        ("forecast_breach", "<i8", 5),
-        ("forecast_contacts", "<i8", 5),
-        ("threat_depth", "i1", (5, 3)),
-        ("threat_censored", "?", (5, 3)),
-        ("threat_time", "i1", 5),
-        ("threat_loss", "i1", 5),
+        ("field_trace", "u1", (ticks + 1, 5)),
+        ("field_breach", "<i8", 5),
+        ("null_target_valid", "?"),
         ("effect_actions", "<u2", 5),
         ("effect_valid", "?", 5),
         ("effect_labels", "i1", (5, 5, 4)),
@@ -93,20 +79,14 @@ def trajectory_dtype(cfg=None):
         ("done", "?"),
         ("executed_action", "<u2"),
     ]
-    if cfg is not None and forecast_version(cfg) >= 2:
-        fields.extend(
-            [
-                ("forecast_pending", "<u4"),
-                ("forecast_mowers", "?", 5),
-                ("forecast_finished", "?", 5),
-                ("threat_depth_allowed", "<u2", (5, 3)),
-                ("threat_time_allowed", "u1", 5),
-                ("effect_prediction", "<f2", (2, 5, 10)),
-                ("effect_prediction_valid", "?"),
-            ]
-        )
-    if cfg is not None and forecast_version(cfg) >= 3:
-        fields.extend([("outcome_ready", "?"), ("outcome_interval", "<i8")])
+    fields.extend(
+        [
+            ("effect_prediction", "<f2", (2, 5, 10)),
+            ("effect_prediction_valid", "?"),
+            ("outcome_ready", "?"),
+            ("outcome_interval", "<i8"),
+        ]
+    )
     return np.dtype(fields)
 
 
@@ -761,7 +741,10 @@ class CompleteGameBuffer:
         if "outcome_ready" in self.dtype.names:
             for index, block in enumerate(self.blocks):
                 rows = block[: min(self.block_rows, self.size - index * self.block_rows)]
-                if np.any(rows["effect_valid"].any(-1) & ~rows["outcome_ready"]):
+                if np.any(
+                    (rows["null_target_valid"] | rows["effect_valid"].any(-1))
+                    & ~rows["outcome_ready"]
+                ):
                     raise RuntimeError("Cannot fit unresolved absolute outcome targets")
         self.finalize_rewards()
         running = np.zeros(self.n_envs, np.float64)
@@ -990,13 +973,7 @@ class CompleteGameBuffer:
 
     def metadata(self):
         return dict(
-            protocol=(
-                ABSOLUTE_TRAJECTORY_PROTOCOL
-                if self.cfg is not None and forecast_version(self.cfg) >= 3
-                else CONSTRAINT_TRAJECTORY_PROTOCOL
-                if self.cfg is not None and forecast_version(self.cfg) >= 2
-                else TRAJECTORY_PROTOCOL
-            ),
+            protocol=TRAJECTORY_PROTOCOL,
             schema=self.schema,
             n_envs=self.n_envs,
             ram_bytes=self.ram_bytes,
@@ -1035,13 +1012,7 @@ class CompleteGameBuffer:
 
     @staticmethod
     def validate_metadata(state):
-        expected = (
-            ABSOLUTE_TRAJECTORY_PROTOCOL
-            if state.get("cfg") is not None and forecast_version(state["cfg"]) >= 3
-            else CONSTRAINT_TRAJECTORY_PROTOCOL
-            if state.get("cfg") is not None and forecast_version(state["cfg"]) >= 2
-            else TRAJECTORY_PROTOCOL
-        )
+        expected = TRAJECTORY_PROTOCOL
         if state.get("protocol") != expected:
             raise ValueError("Retired trajectory schema; fresh initialization is required")
         if any(
@@ -1126,31 +1097,15 @@ class CompleteGameBuffer:
             for at in range(0, obj.size, width):
                 rows = obj.take(np.arange(at, min(obj.size, at + width)))
                 if (
-                    np.any((rows["reach_labels"] < -1) | (rows["reach_labels"] > 1))
-                    or not np.isfinite(rows["reach_prediction"]).all()
-                    or np.any((rows["home_labels"] < -1) | (rows["home_labels"] > 1))
-                    or not np.isfinite(rows["home_prediction"]).all()
-                    or np.any(
-                        rows["reach_provenance"]
-                        > (4 if "threat_depth_allowed" in rows.dtype.names else 3)
-                    )
-                    or np.any(rows["forecast_trace"] > 10)
-                    or np.any((rows["threat_depth"] < -1) | (rows["threat_depth"] > 10))
-                    or np.any((rows["threat_time"] < -1) | (rows["threat_time"] > 5))
-                    or np.any((rows["threat_loss"] < -1) | (rows["threat_loss"] > 1))
+                    np.any(rows["field_trace"] > 10)
                     or np.any(rows["effect_actions"] >= A.size)
                     or np.any(rows["effect_labels"] < 0)
-                    or np.any(rows["effect_labels"] >= np.array([21, 11, 3, 21]))
-                ):
-                    raise ValueError("Invalid reach labels or predictions in trajectory")
-                if np.any(rows["action"] >= A.size) or np.any(rows["executed_action"] >= A.size):
-                    raise ValueError("Corrupt trajectory action")
-                if "threat_depth_allowed" in rows.dtype.names and (
-                    np.any(rows["threat_depth_allowed"] > 2047)
-                    or np.any(rows["threat_time_allowed"] > 63)
+                    or np.any(rows["effect_labels"] >= np.array([11, 6, 2, 11]))
                     or not np.isfinite(rows["effect_prediction"]).all()
                 ):
-                    raise ValueError("Invalid forecast constraints or predictions")
+                    raise ValueError("Invalid action outcome targets or predictions")
+                if np.any(rows["action"] >= A.size) or np.any(rows["executed_action"] >= A.size):
+                    raise ValueError("Corrupt trajectory action")
                 if not all(
                     np.isfinite(rows[name]).all()
                     for name in ("branch_value", "tile_value", "placement_gap")

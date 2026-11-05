@@ -27,15 +27,8 @@ RECORD = np.dtype(
         ("coins", "?", 2),
         ("legal", "?", 10),
         ("q", "<f4", 10),
-        ("reach_valid", "?"),
-        ("reach_prediction", "<f2", (5, 9)),
-        ("reach_labels", "i1", (5, 9)),
-        ("home_prediction", "<f2", 5),
-        ("home_labels", "i1", 5),
-        ("reach_provenance", "u1"),
         ("effect_prediction", "<f2", (2, 5, 10)),
         ("effect_prediction_valid", "?"),
-        ("forecast_mode", "u1"),  # 0: absent, 1: factual, 2: snapshot, 3: outcomes, 4: placement.
     ]
 )
 
@@ -64,7 +57,7 @@ class ActionJournal:
         self.sequences = [0] * count
         self.blocks = [[] for _ in range(count)]
         self.latest = [None] * count
-        self.latest_reach = [None] * count
+        self.latest_outcome = [None] * count
         try:
             self.workspace = tempfile.TemporaryDirectory(prefix="pvz-action-history-")
             self.root = Path(self.workspace.name)
@@ -84,7 +77,7 @@ class ActionJournal:
         blocks, self.blocks[env] = self.blocks[env], []
         self.sizes[env] = self.sequences[env] = 0
         self.episodes[env], self.latest[env] = int(episode), None
-        self.latest_reach[env] = None
+        self.latest_outcome[env] = None
         for block in blocks:
             if isinstance(block, np.memmap):
                 try:
@@ -111,15 +104,15 @@ class ActionJournal:
         self.blocks[env].append(block)
         return block
 
-    def record_batch_safe(self, rows, scores, results, episodes, *, forecast_mode=None):
+    def record_batch_safe(self, rows, scores, results, episodes):
         if self.disabled:
             return
         try:
-            self.record_batch(rows, scores, results, episodes, forecast_mode=forecast_mode)
+            self.record_batch(rows, scores, results, episodes)
         except (OSError, MemoryError, ValueError) as exc:
             self.fail(exc)
 
-    def record_batch(self, rows, scores, results, episodes, *, forecast_mode=None):
+    def record_batch(self, rows, scores, results, episodes):
         records = np.zeros(self.count, dtype=RECORD)
         for name in (
             "tick",
@@ -133,21 +126,9 @@ class ActionJournal:
             "next_species",
         ):
             records[name] = rows[name]
-        if "reach_valid" in rows.dtype.names:
-            records["reach_valid"] = rows["reach_valid"]
-            records["reach_prediction"] = rows["reach_prediction"]
-        records["home_prediction"] = rows["home_prediction"]
         if "effect_prediction" in rows.dtype.names:
             records["effect_prediction"] = rows["effect_prediction"]
             records["effect_prediction_valid"] = rows["effect_prediction_valid"]
-            records["forecast_mode"] = np.where(
-                rows["reach_valid"],
-                np.where(rows["effect_prediction_valid"], 1, 2),
-                np.where(rows["effect_prediction_valid"], 3, 0),
-            )
-        if forecast_mode == "placement_only":
-            records["forecast_mode"] = 4
-        records["reach_labels"], records["home_labels"] = -1, -1
         records["coins"][:, 0] = rows["species_coin"]
         records["coins"][:, 1] = rows["tile_coin"]
         records["q"] = scores
@@ -164,43 +145,14 @@ class ActionJournal:
             row = records[env]
             row["sequence"] = self.sequences[env]
             self.latest[env] = row.copy()
-            if row["reach_valid"] or row["effect_prediction_valid"]:
-                self.latest_reach[env] = row.copy()
+            if row["effect_prediction_valid"]:
+                self.latest_outcome[env] = row.copy()
             if row["action"]:
                 index, offset = divmod(self.sizes[env], self.block_rows)
                 if index == len(self.blocks[env]):
                     self._allocate(env)
                 self.blocks[env][index][offset] = row
                 self.sizes[env] += 1
-
-    def finalize_reach(self, buffer):
-        if self.disabled:
-            return
-        cursors = [0] * self.count
-        for block, rows in enumerate(buffer.blocks):
-            rows = rows[: min(buffer.block_rows, buffer.size - block * buffer.block_rows)]
-            for row in rows[rows["reach_valid"]]:
-                env, episode = int(row["env"]), int(row["episode"])
-                if episode != self.episodes[env]:
-                    continue
-                sequence = int(row["decision"]) + 1
-                targets = [
-                    latest
-                    for latest in (self.latest[env], self.latest_reach[env])
-                    if latest is not None and latest["sequence"] == sequence
-                ]
-                while cursors[env] < self.sizes[env]:
-                    number, offset = divmod(cursors[env], self.block_rows)
-                    target = self.blocks[env][number][offset]
-                    if target["sequence"] > sequence:
-                        break
-                    cursors[env] += 1
-                    if target["sequence"] == sequence:
-                        targets.append(target)
-                        break
-                for target in targets:
-                    for name in ("reach_labels", "home_labels", "reach_provenance"):
-                        target[name] = row[name]
 
     def page(self, env, episode, start=None, limit=PAGE_ROWS):
         if self.disabled or not 0 <= env < self.count or self.episodes[env] != episode:
@@ -219,8 +171,10 @@ class ActionJournal:
             total=size,
             rows=rows,
             latest=None if self.latest[env] is None else public_record(self.latest[env]),
-            latest_reach=(
-                None if self.latest_reach[env] is None else public_record(self.latest_reach[env])
+            latest_outcome=(
+                None
+                if self.latest_outcome[env] is None
+                else public_record(self.latest_outcome[env])
             ),
         )
 
@@ -275,6 +229,8 @@ class ActionJournal:
                 if "executed_action" not in latest:
                     row["executed_action"] = row["action"] if row["accepted"] else 0
                 self.latest[env] = row
+                if row["effect_prediction_valid"]:
+                    self.latest_outcome[env] = row.copy()
             for index in range((self.sizes[env] + self.block_rows - 1) // self.block_rows):
                 with archive.open(f"journal/{env}-{index}.npy") as stream:
                     block = np.load(stream, allow_pickle=False)
@@ -286,14 +242,14 @@ class ActionJournal:
                     target[: len(block)]["executed_action"] = np.where(
                         target[: len(block)]["accepted"], target[: len(block)]["action"], 0
                     )
-                # Derive this optional viewer cache from archived decisions, including
-                # older recoveries; Wait records never displace the last prediction.
-                valid = np.flatnonzero(
-                    target[: len(block)]["reach_valid"]
-                    | target[: len(block)]["effect_prediction_valid"]
-                )
+                # Restore the latest timestamped prediction without displacing a
+                # newer Wait prediction retained by the latest-record cache.
+                valid = np.flatnonzero(target[: len(block)]["effect_prediction_valid"])
                 if len(valid):
-                    self.latest_reach[env] = target[valid[-1]].copy()
+                    candidate = target[valid[-1]]
+                    current = self.latest_outcome[env]
+                    if current is None or candidate["sequence"] > current["sequence"]:
+                        self.latest_outcome[env] = candidate.copy()
 
     def close(self):
         for env in range(self.count):

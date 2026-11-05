@@ -96,8 +96,6 @@ def main():
             for name, attr in (
                 ("teacher", "_peashooter_teacher"),
                 ("outcomes", "_wait_outcomes"),
-                ("pretraining", "_pretrainer"),
-                ("factual_targets", "_reach"),
             ):
                 owner = getattr(model, attr, None)
                 if owner is not None:
@@ -150,12 +148,8 @@ def main():
             scope = timing_scope()
             begin = perf_counter()
             ends = []
-            if args.process_trace and key in (
-                "ForecastPretraining.advance",
-                "CudaSequentialQ._begin",
-            ):
-                value = values[0]
-                env = value.model.env if key.startswith("Forecast") else value.env
+            if args.process_trace and key == "CudaSequentialQ._begin":
+                env = values[0].env
                 if stage_trace is None:
                     from profiling_metrics import DeviceStageTrace
 
@@ -164,13 +158,6 @@ def main():
                     env.stream.cuda_stream, device_id=env.batch.device
                 )
                 ends.append((stage_trace.begin(key, stream), stream))
-                if key.startswith("Forecast") and hasattr(value, "stream"):
-                    ends.append(
-                        (
-                            stage_trace.begin(key + " / simulation stream", value.stream),
-                            value.stream,
-                        )
-                    )
             epoch = getattr(values[0], "_fit_epoch", None) if name == "_fit_step" else None
             try:
                 return original(*values, **keywords)
@@ -219,7 +206,6 @@ def main():
     from pvz_rl.envs.fork_execution import ForkExecution
     from pvz_rl.envs.fork_service import ForkService
     from pvz_rl.learning import (
-        forecast_pretraining,
         peashooter_teacher,
         sequential_training,
         training,
@@ -228,7 +214,6 @@ def main():
     )
     from pvz_rl.learning.cohort import CohortPhase
     from pvz_rl.learning.cuda_q import CudaCohortLifecycle
-    from pvz_rl.learning.reach_supervision import ReachSupervision
 
     events.append(
         dict(operation="imports", start_seconds=0, duration_seconds=perf_counter() - started)
@@ -336,9 +321,6 @@ def main():
                         "baseline_outcomes",
                         "effect_valid",
                         "effect_labels",
-                        "threat_depth_allowed",
-                        "threat_time_allowed",
-                        "threat_loss",
                     ):
                         if field in rows.dtype.names:
                             signature.update(rows[field].tobytes())
@@ -370,7 +352,6 @@ def main():
                 setup_seconds=trace.origin - collection_started,
                 workload=dict(
                     cutoff_seconds=value.cfg["environment"]["cutoff_seconds"],
-                    private_pretraining="production",
                     live_view=value.cfg["visualization"]["live_enabled"],
                 ),
             )
@@ -393,18 +374,10 @@ def main():
     patch(sequential_training.CudaSequentialQ, "_collect_step", before=remember)
     patch(sequential_training.CudaSequentialQ, "_fit_step", before=check_window)
     patch(sequential_training.CudaSequentialQ, "_phase", before=check_phase)
-    for name in ("__init__", "advance", "_generate", "_play", "_effects", "_fit"):
-        patch(forecast_pretraining.ForecastPretraining, name)
-    from pvz_rl.learning.pretraining_pipeline import DeviceForecastPretraining
-
-    for name in ("__init__", "advance", "_generate", "_play", "_effects", "_fit"):
-        patch(DeviceForecastPretraining, name, label=f"ForecastPretraining.{name}")
     for name in ("advance", "before", "observe", "_initialize", "_allocate", "_fill", "_run_chunk"):
         patch(peashooter_teacher.PeashooterTeacher, name)
     for name in ("advance", "finalize", "_spill_roots", "_root", "_allocate"):
         patch(wait_outcomes.WaitOutcomes, name)
-    for name in ("prepare", "continue_exercises"):
-        patch(ReachSupervision, name)
     patch_property(wait_outcomes.WaitOutcomes, "estimated_bytes")
     for owner in (ForkService, ForkExecution):
         patch(owner, "advance")
@@ -421,9 +394,7 @@ def main():
 
         args.output.parent.mkdir(parents=True, exist_ok=True)
         kernels = KernelWindows(args.output.with_suffix(".kernels.json"), origin=started)
-        kernels.wrap(DeviceForecastPretraining, "advance", "private-pretraining", skip=2)
         kernels.wrap(sequential_training.CudaSequentialQ, "_collect_step", "decisions", skip=30)
-        kernels.wrap(ReachSupervision, "prepare", "factual-targets", calls=1)
         kernels.wrap(peashooter_teacher.PeashooterTeacher, "_run_chunk", "teacher", skip=20)
         kernels.wrap(sequential_training.CudaSequentialQ, "_fit_step", "fitting", skip=2)
 
@@ -461,15 +432,11 @@ def main():
                     if collection_ended is None
                     else collection_ended - collection_started,
                     final_collection=final_collection,
-                    pretraining=getattr(model, "pretraining_metrics", None),
                     workload=None
                     if model is None
                     else dict(
                         cutoff_seconds=model.cfg["environment"]["cutoff_seconds"],
-                        pretrain_roots=model.cfg["training"]["forecasts"]["pretrain_roots"],
-                        pretrain_passes=model.cfg["training"]["forecasts"]["pretrain_passes"],
                         auxiliary_hybrid=model.cfg["training"]["performance"]["auxiliary_hybrid"],
-                        forecaster_pretrained=getattr(model, "forecaster_pretrained", False),
                     ),
                     timings=dict(spans),
                     timings_by_phase={phase: dict(values) for phase, values in scoped.items()},
@@ -489,7 +456,7 @@ def main():
                     samples=samples,
                     timing_notes=[
                         "Inclusive host wall spans overlap; do not add nested operations.",
-                        "Collection keeps the real configured cutoff, weights, pretraining, viewer and callback paths; startup is reported separately.",
+                        "Collection keeps the real configured cutoff, weights, viewer and callback paths; startup is reported separately.",
                         "Recovery archive writing and cleanup follow the bounded collection window; they are not collection.",
                     ],
                 ),

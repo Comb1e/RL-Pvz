@@ -10,7 +10,7 @@ from pvz_game.config import PLANT_TYPES
 from pvz_game.cuda.schema import REASONS
 
 from pvz_rl.envs.actions import ActionSchema as A
-from pvz_rl.presentation.reach_view import draw_live_reach, draw_reach
+from pvz_rl.presentation.outcome_view import draw_live_outcomes
 from pvz_rl.presentation.rendering import render_context, reward_label
 
 NAMES = ("wait", *PLANT_TYPES, "dig")
@@ -285,8 +285,8 @@ def draw_view(surface, packets, activity, *, renderers, boards, pending=(), coun
                 )
             ),
         )
-        reach_w = min(360, (cell_w - 28) * 2 // 5)
-        size = (max(1, cell_w - 28 - reach_w), board_h)
+        outcome_w = min(360, (cell_w - 28) * 2 // 5)
+        size = (max(1, cell_w - 28 - outcome_w), board_h)
         cache_key = (index, size)
         if cache_key not in renderers:
             # At most one board renderer per panel, plus ordinary UI state.
@@ -301,7 +301,9 @@ def draw_view(surface, packets, activity, *, renderers, boards, pending=(), coun
                 renderers[cache_key].render(frame["observation"], context=render_context(frame)),
             )
         surface.blit(boards[index][1], (x + 10, y + 42))
-        draw_live_reach(surface, frame, pygame.Rect(x + 18 + size[0], y + 42, reach_w, board_h))
+        draw_live_outcomes(
+            surface, frame, pygame.Rect(x + 18 + size[0], y + 42, outcome_w, board_h)
+        )
         obs = frame["observation"]
         top = y + 45 + board_h
         caption = f"Board {obs.elapsed_seconds:.2f}s | sun {obs.sun} | {frame['outcome']}"
@@ -359,8 +361,6 @@ def draw_view(surface, packets, activity, *, renderers, boards, pending=(), coun
                     ),
                 )
         table_y = top + 126
-        if focus is not None:
-            table_y += draw_reach(surface, small, decision, x + 12, table_y, cell_w - 24)
         row_height = 22
         if table_y + row_height > y + cell_h - 27:
             continue  # Compact panels reserve their space for the board and decision.

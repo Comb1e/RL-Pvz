@@ -40,9 +40,8 @@ def test_cpu_agent_inference():
             tiles = policy.conditional_tiles(board, [1])
             actions, _ = policy.decide(board)
             features = policy.tile_features(board, torch.tensor([1]))
-            threat = policy.threat_values(board)
             effect = policy.effect_values(features)
-        assert threat.shape == (1, 5, 40) and torch.isfinite(threat).all()
+        assert not hasattr(policy, "threat_head")
         assert effect.shape == (1, 45, 5, 56) and torch.isfinite(effect).all()
         assert species.shape == (1, len(cfg["environment"]["plants"]) + 2)
         assert tiles.shape == (1, env.codec.rows * env.codec.cols)
@@ -70,7 +69,6 @@ def test_cuda_learning_and_checkpoint(tmp_path):
         cfg = load_config()
         cfg["training"]["tile_scenarios"]["enabled"] = False
         cfg["training"].pop("peashooter_rules", None)
-        cfg["diagnostics"]["reach_tracking"] = False
         cfg["training"]["forecasts"]["enabled"] = False
         cfg["environment"]["cutoff_seconds"] = 1
         cfg["training"].update(

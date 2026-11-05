@@ -63,8 +63,6 @@ def validate_tile_skills(cfg, model, seeds, *, deadline=None, progress=None, ski
                         runner = PolicyRunner(model.policy)
                         while env.enabled_envs.any():
                             check_deadline(deadline)
-                            if not env.prepare_baseline():
-                                continue
                             with torch.inference_mode():
                                 active = torch.as_tensor(
                                     env.enabled_envs.copy(), device=model.device

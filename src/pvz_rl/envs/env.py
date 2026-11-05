@@ -12,8 +12,6 @@ from pvz_game import Dig, Game, LevelSpec, Place, Rules, Status, Wait, WaveSpec
 from pvz_game.replay import Recorder
 
 from pvz_rl.config import (
-    absolute_outcomes,
-    forecast_forks_enabled,
     load_config,
     runtime_settings,
     validate_config,
@@ -22,7 +20,6 @@ from pvz_rl.envs.action_credit import CausalCreditLedger
 from pvz_rl.envs.action_timing import ActionPhaseGame, per_tick_actions
 from pvz_rl.envs.actions import ActionCodec
 from pvz_rl.envs.encoding import ObservationEncoder
-from pvz_rl.envs.probe_intervals import ProbeIntervals, ProbeState, interval_probes_enabled
 from pvz_rl.envs.rewards import LEDGER_METRICS, REWARD_METRICS, HomeProximityLedger, reward_parts
 from pvz_rl.envs.scenarios import difficulty_weights, scenario
 from pvz_rl.envs.sky_sun import SkySunGame, validate_sky_sun_rate
@@ -46,39 +43,7 @@ class PvZEnv(gym.Env):
     metadata = {"render_modes": ["rgb_array"], "render_fps": 2}
 
     def _encoded_public(self):
-        if absolute_outcomes(self.cfg):
-            return self.encoder.encode(self.public)
-        baseline = None
-        settings = self.cfg["training"].get("forecasts", {})
-        if interval_probes_enabled(self.cfg) and self.state != EpisodeState.RUNNING:
-            return self.encoder.encode(self.public, getattr(self, "_baseline_value", None))
-        if forecast_forks_enabled(self.cfg, getattr(self, "tile_scenario", None)):
-            from pvz_rl.envs.static_fork import StaticFork, reference_tau
-            from pvz_rl.learning.forecast_labels import baseline_features
-
-            key = self.game._tick, self.game._next_id, self.game._sun, self.game._status
-            if getattr(self, "_baseline_key", None) != key:
-                interval = interval_probes_enabled(self.cfg)
-                ready = interval and self.probe_intervals.state[0] == ProbeState.READY
-                if interval and not ready:
-                    self.probe_intervals.begin([0])
-                fork = StaticFork(
-                    self.game,
-                    probe=settings["probe"],
-                    sky_sun_rate=self.sky_sun_rate,
-                    field_only=ready,
-                )
-                outcomes = fork.run()
-                if interval:
-                    if ready:
-                        outcomes[:, 3] = self.probe_intervals.probe[0]
-                    else:
-                        self.probe_intervals.complete([0], outcomes[None, :, 3], [fork.anchor_tick])
-                self._baseline_outcomes = outcomes
-                self._baseline_value = baseline_features(outcomes, reference_tau(self.rules))
-                self._baseline_key = key
-            baseline = self._baseline_value
-        return self.encoder.encode(self.public, baseline)
+        return self.encoder.encode(self.public)
 
     def __init__(
         self,
@@ -118,7 +83,6 @@ class PvZEnv(gym.Env):
             + self.cfg["environment"]["decision_ticks"],
         )
         self.game = self._new_game()
-        self.probe_intervals = ProbeIntervals(1)
         self.metadata = {
             **self.metadata,
             "render_fps": self.rules.game["tick_rate"]
@@ -231,8 +195,6 @@ class PvZEnv(gym.Env):
         self.first_attacker_tick = None
         self.episode_reward = 0.0
         self.cutoff_ticks = self.cfg["environment"]["cutoff_seconds"] * self.public.tick_rate
-        self._baseline_key = None
-        self.probe_intervals.end([0])
         encoded = self._encoded_public()
         return encoded, {
             "status": self.state.value,
@@ -309,7 +271,6 @@ class PvZEnv(gym.Env):
         return mask
 
     def step(self, action):
-        self._baseline_key = None
         if self.state != EpisodeState.RUNNING:
             raise RuntimeError("Reset after an episode finishes")
         if not self.action_space.contains(action) or isinstance(action, (bool, np.bool_)):
@@ -339,7 +300,6 @@ class PvZEnv(gym.Env):
             )
         else:
             ticks = min(self.cfg["environment"]["decision_ticks"], self.cutoff_ticks - before.tick)
-        spawn_index = self.game._spawn_index
         result = (self.recorder or self.game).step(concrete, ticks=ticks)
         self.public = result.observation
         causal_credits = self.causal_credit.attribute(
@@ -369,13 +329,6 @@ class PvZEnv(gym.Env):
         self._candidates = None
         terminated = result.status != Status.RUNNING
         truncated = not terminated and self.public.tick >= self.cutoff_ticks
-        if interval_probes_enabled(self.cfg) and (
-            self.game._spawn_index != spawn_index
-            or (result.action_result.accepted and not isinstance(concrete, Wait))
-            or terminated
-            or truncated
-        ):
-            self.probe_intervals.end([0])
         self.state = (
             EpisodeState(result.status.value)
             if terminated

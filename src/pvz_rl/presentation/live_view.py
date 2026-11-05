@@ -221,7 +221,6 @@ def learning_settings(cfg):
                     "learning_rate",
                     "max_grad_norm",
                     "batch_size",
-                    "threat_prediction_weight",
                     "n_epochs",
                     "gamma",
                 )
@@ -229,12 +228,12 @@ def learning_settings(cfg):
             + (f"fit_batch_groups={training['performance']['fit_batch_groups']}",),
         ),
         (
-            "Reach weights",
+            "Outcome weights",
             tuple(
                 f"{stage}={weight}"
                 for stage, weight in {
-                    "normal": training.get("threat_prediction_weight", 0.1),
-                    **training.get("stage_threat_weights", {}),
+                    "normal": training.get("effect_prediction_weight", 0.1),
+                    **training.get("stage_effect_weights", {}),
                 }.items()
             ),
         ),

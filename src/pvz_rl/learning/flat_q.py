@@ -51,11 +51,11 @@ def batch_loss(
     coefficients=None,
     fit_stage="joint",
     return_forward=False,
-    reach_decision_count=None,
-    reach_enabled=False,
+    outcome_decision_count=None,
+    outcome_enabled=False,
     demonstration=False,
 ):
-    """One encoder pass; attempted-branch Q calibration and optional factual reach."""
+    """One encoder pass; attempted-branch Q calibration and optional exact outcome fitting."""
     from pvz_rl.learning.forecast_objective import forecast_auxiliary
     from pvz_rl.policy.sequential_q import action_groups
 
@@ -129,8 +129,8 @@ def batch_loss(
     q_loss = (errors * weights[action_groups(actions), accepted.long()]).sum()
     loss = q_loss
     policy._primary_graph = q_loss
-    policy._last_reach_metrics = torch.zeros(10, device=device, dtype=torch.float64)
-    if reach_enabled:
+    policy._last_outcome_metrics = torch.zeros(5, device=device, dtype=torch.float64)
+    if outcome_enabled:
         auxiliary, metrics = forecast_auxiliary(
             policy,
             observations,
@@ -138,10 +138,10 @@ def batch_loss(
             memory,
             features=features,
             feature_rows=plan["tiles"],
-            decision_count=reach_decision_count,
+            decision_count=outcome_decision_count,
         )
         loss = loss + auxiliary
-        policy._last_reach_metrics = metrics
+        policy._last_outcome_metrics = metrics
     consistency = q_loss.detach() * 0
     policy._last_species_consistency_metrics = q_loss.new_zeros(4, dtype=torch.float64)
     if demonstration and len(plan["ema"]) and objective["species_consistency_weight"]:

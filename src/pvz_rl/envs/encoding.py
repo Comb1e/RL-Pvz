@@ -35,23 +35,15 @@ BOARD_GLOBAL_FIELDS = (
     "projectile_count",
     "mower_count",
 )
-FORK_FIELDS = tuple(
-    f"fork_{row}_{field}"
-    for row in range(5)
-    for field in ("field_depth", "breach_time", "loss", "probe_depth")
-)
 GLOBAL_FIELDS = BOARD_GLOBAL_FIELDS
-LEGACY_GLOBAL_FIELDS = (*BOARD_GLOBAL_FIELDS, *FORK_FIELDS)
 GLOBAL_WIDTH = len(GLOBAL_FIELDS)
 OBSERVATION_PROTOCOL = "entity_public_v4"
 
 
 def global_fields(cfg):
-    return (
-        GLOBAL_FIELDS
-        if cfg["encoding"]["version"] == OBSERVATION_PROTOCOL
-        else LEGACY_GLOBAL_FIELDS
-    )
+    if cfg["encoding"]["version"] != OBSERVATION_PROTOCOL:
+        raise ValueError("Old observations are incompatible; use public board facts")
+    return GLOBAL_FIELDS
 
 
 def global_width(cfg):
@@ -103,7 +95,7 @@ class PackedEntityBatch:
             self.offsets.shape != self.counts.shape
             or self.globals.ndim != self.counts.ndim + 1
             or self.globals.shape[:-1] != self.counts.shape
-            or self.globals.shape[-1] not in (GLOBAL_WIDTH, len(LEGACY_GLOBAL_FIELDS))
+            or self.globals.shape[-1] != GLOBAL_WIDTH
         ):
             raise ValueError("Packed observation shapes disagree")
         if self.entities.ndim != 2 or self.entities.shape[1] != ENTITY_WIDTH:
@@ -198,7 +190,7 @@ def collate_observations(observations, device=None):
     entities = np.zeros((count, width, ENTITY_WIDTH), np.int32)
     valid = np.zeros((count, width), bool)
     global_size = len(observations[0]["globals"]) if count else GLOBAL_WIDTH
-    if global_size not in (GLOBAL_WIDTH, len(LEGACY_GLOBAL_FIELDS)):
+    if global_size != GLOBAL_WIDTH:
         raise ValueError("Unsupported public observation width")
     globals_ = np.zeros((count, global_size), np.float32)
     for i, obs in enumerate(observations):
@@ -236,7 +228,7 @@ def observations_equal(left, right, *, atol=0):
 
 class ObservationEncoder:
     def __init__(self, cfg: dict, rules: Rules):
-        if cfg["encoding"]["version"] not in (OBSERVATION_PROTOCOL, "entity_fork_v3"):
+        if cfg["encoding"]["version"] != OBSERVATION_PROTOCOL:
             raise ValueError("Retired observations; entity_v1 requires fresh initialization")
         self.cfg, self.rules = cfg, rules
         env = cfg["environment"]
@@ -298,9 +290,7 @@ class ObservationEncoder:
             selection="mowers_plants_zombies_projectiles_v1",
         )
 
-    def encode(self, obs: Observation, baseline=None):
-        if self.global_width == len(BOARD_GLOBAL_FIELDS):
-            baseline = None
+    def encode(self, obs: Observation):
         rows = []
         unit = self.rules.game["units_per_tile"]
         try:
@@ -407,11 +397,6 @@ class ObservationEncoder:
                 *(
                     len(xs) / self.count_scale
                     for xs in (obs.plants, obs.zombies, obs.projectiles, obs.mowers)
-                ),
-                *(
-                    np.zeros(20, np.float32)
-                    if baseline is None
-                    else np.asarray(baseline).reshape(20)
                 ),
             ],
             dtype=np.float32,
