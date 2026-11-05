@@ -998,7 +998,7 @@ class CudaSequentialQ(CudaCohortLifecycle):
         for network in (self.policy, getattr(self, "_teacher", None)):
             if network is not None:
                 for encoder in network.encoders:
-                    encoder.release_fitting()
+                    encoder.release_fitting(recompile=True)
                     encoder.release_collection()
 
     def _fit_step(self, callback):

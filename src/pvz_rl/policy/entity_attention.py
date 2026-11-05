@@ -207,14 +207,19 @@ class SpatialTransformer(nn.Module):
         """Drain completed evictions after the existing collection handoff, without waiting."""
         return self._collection_cache.release_retired()
 
-    def release_fitting(self):
-        """Quiescent collection entry, after all fitting backwards and stream work finish."""
+    def release_fitting(self, *, recompile=False):
+        """Quiescent collection entry, after all fitting backwards and stream work finish.
+
+        Captures re-record lazily; in-place parameter updates keep traced graphs valid.
+        Recompiling every cohort retained compiler artifacts and grew fitting time, so
+        only shape-changing fallbacks request a fresh phase cache.
+        """
         if self._fitting_backend is not None:
             self._fitting_backend.release()
-        self._compiled_shapes.clear()
         self._fitting_inference_cache.release()
         self.fitting = False
-        if self._compiled_encode is not None:
+        if recompile and self._compiled_encode is not None:
+            self._compiled_shapes.clear()
             self._compiled_encode = self._fitting_backend.compile(self._encode)
             self.compilation_status = "requested"
 

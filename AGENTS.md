@@ -123,6 +123,9 @@ This file owns project-specific invariants and the code map.
   the saved boards. Missing tickets after collection starts remain invalid.
 - Preserve CPU/CUDA cadence, legality, physical trajectories, reward conversion and
   attribution agreement. Viewers/diagnostics must not affect learning.
+- Fitting encoders compile once per shape and keep that cache across cohorts and
+  validation; releases free CUDA captures only. Recompile only for shape-changing
+  pass fallbacks; per-cohort recompilation leaks compiler objects and slows fitting.
 - Preparation/prefetch is bounded and speculative: commit seeds only on consumption,
   regenerate unfinished work on resume, share RAM/VRAM limits, and preserve exact
   attributed labels. Respect independent configured stage cohort/resource sizes.
