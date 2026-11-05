@@ -75,10 +75,15 @@ recreates the same unfinished boards. `--seed` optionally fixes initialization;
 `training.random_cohort_seeds = false` also restores reproducible scenario streams
 for controlled diagnostics. Existing recoveries retain their saved seed behavior.
 
-Tune [train.toml](src/pvz_rl/data/train.toml): stage tables own their placement
-settings and `effect_prediction_weight`. The first three stages use
-`placement_outcomes`: each proposed placement receives one exact field/probe
-auxiliary target alongside its existing placement teacher. Rejected placements
+Tune [train.toml](src/pvz_rl/data/train.toml): each stage independently sets
+`static_field_prediction_weight` (field depth, breach time and lane loss) and
+`probe_prediction_weight` (probe depth). Equal values of `0.1` preserve the prior
+loss; coefficients scale terms before the existing known-term average and warmup.
+Setting either to zero removes only its loss contribution; shared parameters
+still receive the other losses. Saved outcome-only runs with one combined weight
+retain it for both groups on resume.
+The first three stages use `placement_outcomes`: each proposed placement receives
+one exact field/probe auxiliary target alongside its existing placement teacher. Rejected placements
 receive the engine's no-op continuation. They add no Wait target or alternatives;
 outcomes guide shared feature learning without entering tile scores in these stages.
 Their memory budget charges occupied proposal snapshots and workers; Wait-interval

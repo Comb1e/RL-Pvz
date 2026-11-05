@@ -41,13 +41,20 @@ def categorical_loss(logits, labels):
     return torch.where(known, exact, 0), known
 
 
-def effect_loss(logits, labels):
+def effect_loss_components(logits, labels):
+    """Separate field/probe contributions with the same known-term denominator."""
     losses, known = [], []
     for index, block in enumerate(effect_blocks(logits)):
         loss, valid = categorical_loss(block, labels[..., index])
         losses.append(loss)
         known.append(valid)
-    return torch.stack(losses, -1).sum(-1) / torch.stack(known, -1).sum(-1).clamp_min(1)
+    denominator = torch.stack(known, -1).sum(-1).clamp_min(1)
+    field = torch.stack(losses[:3], -1).sum(-1)
+    return torch.stack((field, losses[3]), -1) / denominator[..., None]
+
+
+def effect_loss(logits, labels):
+    return effect_loss_components(logits, labels).sum(-1)
 
 
 def effect_forecast(logits):

@@ -27,7 +27,6 @@ _STAGE_PARAMETERS = {
             key: f"training.{key}"
             for key in (
                 "n_envs",
-                "effect_prediction_weight",
                 "exploration",
                 "validation_schedule",
                 "eval_interval_games",
@@ -36,7 +35,6 @@ _STAGE_PARAMETERS = {
         "curriculum": "curriculum",
     },
     "cherry_bomb": {
-        "effect_prediction_weight": "training.stage_effect_weights.cherry_bomb",
         "n_envs": "training.tile_scenarios.cherry_bomb_n_envs",
         "initial_sun": "training.tile_scenarios.bomb_initial_sun",
         "plants": "training.tile_scenarios.bomb_plants",
@@ -68,11 +66,9 @@ _STAGE_PARAMETERS = {
         "validation_success_threshold": "curriculum.cherry_bomb_validation_success_threshold",
     },
     "cherry_bomb_obstacle": {
-        "effect_prediction_weight": "training.stage_effect_weights.cherry_bomb_obstacle",
         "softmax_temperature": "training.tile_scenarios.obstacle_softmax_temperature",
     },
     "attacker_pre": {
-        "effect_prediction_weight": "training.stage_effect_weights.attacker_pre",
         **{
             key: f"training.tile_scenarios.attacker.{key}"
             for key in (
@@ -100,7 +96,6 @@ _STAGE_PARAMETERS = {
         "probe_interval_games": "curriculum.attacker_pre_probe_interval_games",
     },
     "peashooter": {
-        "effect_prediction_weight": "training.stage_effect_weights.peashooter",
         "sky_sun_rate": "training.tile_scenarios.peashooter_sky_sun_rate",
         **{
             key: f"training.peashooter_rules.{key}"
@@ -124,6 +119,10 @@ _STAGE_PARAMETERS = {
 for _stage, _fields in _STAGE_PARAMETERS.items():
     _fields["forecast_mode"] = f"training.stage_forecast_modes.{_stage}"
     _fields["extra_actions"] = f"training.stage_extra_actions.{_stage}"
+    for _outcome in ("static_field", "probe"):
+        _fields[f"{_outcome}_prediction_weight"] = (
+            f"training.stage_outcome_weights.{_stage}.{_outcome}"
+        )
 
 
 def absolute_outcomes(cfg):
@@ -149,13 +148,19 @@ def forecast_forks_enabled(cfg, stage=None):
     ) in ("placement_outcomes", "action_outcomes")
 
 
-def effect_prediction_weight(cfg, stage="normal"):
-    if not forecast_forks_enabled(cfg, stage):
-        return 0.0
+def outcome_prediction_weights(cfg, stage="normal"):
+    """Static-field/probe coefficients; saved single-weight runs retain their loss."""
     training = cfg["training"]
-    if stage in ("cherry_bomb", "cherry_bomb_obstacle", "attacker_pre", "peashooter"):
-        return training.get("stage_effect_weights", {}).get(stage, 0.0)
-    return training.get("effect_prediction_weight", 0.1)
+    stage = stage if stage in _STAGE_PARAMETERS else "normal"
+    weights = training.get("stage_outcome_weights", {}).get(stage)
+    if weights is not None:
+        return weights["static_field"], weights["probe"]
+    weight = (
+        training.get("effect_prediction_weight", 0.1)
+        if stage == "normal"
+        else training.get("stage_effect_weights", {}).get(stage, 0.0)
+    )
+    return weight, weight
 
 
 def effect_extra_actions(cfg, stage="normal"):
@@ -697,12 +702,32 @@ def validate_config(cfg: dict) -> None:
     stages = ("normal", "cherry_bomb", "cherry_bomb_obstacle", "attacker_pre", "peashooter")
     if set(cfg["training"].get("stage_effect_weights", {})) - set(stages[1:]):
         raise ValueError("Unknown preliminary outcome stage")
+    split_weights = cfg["training"].get("stage_outcome_weights", {})
+    if not isinstance(split_weights, dict) or set(split_weights) - set(stages):
+        raise ValueError("Unknown outcome weight stage")
     for stage in stages:
-        weight = effect_prediction_weight(cfg, stage)
-        if type(weight) not in (int, float) or not math.isfinite(weight) or weight < 0:
+        weights = split_weights.get(stage)
+        if stage in split_weights and (
+            not isinstance(weights, dict) or set(weights) != {"static_field", "probe"}
+        ):
             raise ValueError(
-                f"training.{stage}.effect_prediction_weight must be finite and nonnegative"
+                f"training.{stage} requires both static_field_prediction_weight and "
+                "probe_prediction_weight"
             )
+        legacy = (
+            cfg["training"].get("effect_prediction_weight")
+            if stage == "normal"
+            else cfg["training"].get("stage_effect_weights", {}).get(stage)
+        )
+        if weights is not None and legacy is not None:
+            raise ValueError(f"Duplicate combined and separate outcome weights for {stage}")
+        for name, weight in zip(
+            ("static_field", "probe"), outcome_prediction_weights(cfg, stage), strict=True
+        ):
+            if type(weight) not in (int, float) or not math.isfinite(weight) or weight < 0:
+                raise ValueError(
+                    f"training.{stage}.{name}_prediction_weight must be finite and nonnegative"
+                )
 
     attempts = cfg["training"]["tile_scenarios"].get("sampling_max_attempts")
     if type(attempts) is not int or attempts < 1:

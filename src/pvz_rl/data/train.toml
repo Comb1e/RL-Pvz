@@ -131,7 +131,8 @@ sampling_max_attempts = 100
 [training.cherry_bomb]
 forecast_mode = "placement_outcomes" # Placement teacher plus one post-action field/probe target.
 extra_actions = 0
-effect_prediction_weight = 0.1
+static_field_prediction_weight = 0.5 # Scales field depth, breach time and lane loss terms.
+probe_prediction_weight = 0.2 # Scales probe depth; retain the shared known-term average.
 # Shared by both bomb stages except temperature and validation mastery; no exploration or search.
 n_envs = 640 # Fastest measured collection time/env with 32 workers and the CUDA oracle.
 probe_interval_games = 10000 # Independent clock for each bomb stage; pending probes retry first.
@@ -153,13 +154,15 @@ oracle_vram_mib = 2048
 [training.cherry_bomb_obstacle]
 forecast_mode = "placement_outcomes"
 extra_actions = 0
-effect_prediction_weight = 0.1
+static_field_prediction_weight = 0.1
+probe_prediction_weight = 0.1
 softmax_temperature = { zero_success = 1, full_success = 1 } # Independent schedule; mastery still requires 100/100.
 
 [training.attacker_pre]
 forecast_mode = "placement_outcomes"
 extra_actions = 0
-effect_prediction_weight = 0.1
+static_field_prediction_weight = 0.1
+probe_prediction_weight = 0.1
 n_envs = 640 # Lowest measured collection time/env on the RTX 4070 Laptop profile.
 plants = [4, 8] # Total across four non-zombie lanes; at least one in each.
 zombie_count = [1, 2] # Basic zombies, all in the remaining empty lane.
@@ -179,7 +182,8 @@ oracle_vram_mib = 1024
 [training.peashooter]
 forecast_mode = "action_outcomes" # Teacher plus field/probe targets.
 extra_actions = 0 # The placement teacher supplies targets; retain actual-action effects only.
-effect_prediction_weight = 0.1
+static_field_prediction_weight = 0.1
+probe_prediction_weight = 0.1
 # Independent cohort/preparation sizing; shared optimizer and fitting passes.
 n_envs = 128
 sky_sun_rate = 1.5 # Divide sky-drop delays by this rate; keep each drop at 25 sun.
@@ -197,7 +201,8 @@ oracle_chunk_ticks = 4096
 [training.normal]
 forecast_mode = "action_outcomes" # Post-action field/probe targets only.
 n_envs = 128
-effect_prediction_weight = 0.1
+static_field_prediction_weight = 0.1
+probe_prediction_weight = 0.1
 validation_schedule = "stage_success" # Evaluate normal games only after each stage passes.
 eval_interval_games = 2000 # Periodic game-count diagnostic/fixed checks.
 # Species exploration stays fixed throughout a cohort; tile proposals are greedy.

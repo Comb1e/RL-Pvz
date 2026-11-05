@@ -2,6 +2,8 @@
 
 import torch
 
+OUTCOME_METRIC_WIDTH = 7  # Raw loss, calibration (4), weighted field and weighted probe.
+
 
 def reset_calibration(policy):
     policy._forecast_calibration = {

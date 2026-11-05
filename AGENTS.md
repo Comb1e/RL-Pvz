@@ -32,6 +32,11 @@ This file owns project-specific invariants and the code map.
   Predict absolute field depth (11), breach bin (6), lane loss (2) and probe depth
   (11); preserve the 56-slot carrier, excluding reserved classes. Average known
   terms/lanes, valid tokens and roots equally; never invent unsimulated labels.
+  Each stage owns separate `static_field_prediction_weight` and
+  `probe_prediction_weight`: scale their terms before the unchanged known-term
+  average and shared warmup, including valid null targets. Zeroing a group never
+  renormalizes the other group. Saved outcome-only single-weight runs retain
+  that coefficient for both groups; model/labels/collection stay unchanged.
 - Static forks own physical/RNG storage, suppress actions/future spawns/logs and
   resolve mowers before recording home entry. Continue other lanes after a loss;
   probes inherit damaged plants and spent mowers. The real game is unchanged.

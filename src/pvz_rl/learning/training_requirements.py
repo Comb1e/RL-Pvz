@@ -3,7 +3,7 @@
 from dataclasses import asdict, dataclass
 from functools import lru_cache
 
-from pvz_rl.config import research_config, simulator, validate_config
+from pvz_rl.config import outcome_prediction_weights, research_config, simulator, validate_config
 from pvz_rl.envs.actions import ActionSchema
 from pvz_rl.learning.curriculum import selected_stage
 from pvz_rl.policy.sequential_q import ACTION_DISTRIBUTION
@@ -152,6 +152,15 @@ def resume_protocol(cfg, condition):
     result = without_performance(research_config(cfg))
     result.pop("profile", None)
     result["conditions"] = {condition: cfg["conditions"][condition]}
+    # Equal split coefficients preserve saved outcome-only single-weight runs.
+    result["training"]["stage_outcome_weights"] = {
+        stage: dict(
+            zip(("static_field", "probe"), outcome_prediction_weights(cfg, stage), strict=True)
+        )
+        for stage in ("normal", "cherry_bomb", "cherry_bomb_obstacle", "attacker_pre", "peashooter")
+    }
+    result["training"].pop("effect_prediction_weight", None)
+    result["training"].pop("stage_effect_weights", None)
     for key in ("total_games", "total_steps", "max_minutes", "finalization_minutes"):
         result["training"].pop(key, None)
     # Residual-sun passivity shaping is a cohort-scoped reward update. The

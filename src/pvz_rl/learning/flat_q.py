@@ -7,6 +7,7 @@ import torch
 
 from pvz_rl.envs.encoding import collate_observations
 from pvz_rl.learning.action_routing import route_indices
+from pvz_rl.learning.forecast_metrics import OUTCOME_METRIC_WIDTH
 from pvz_rl.learning.objective import (
     selected_action_targets,
     species_consistency_loss,
@@ -129,7 +130,9 @@ def batch_loss(
     q_loss = (errors * weights[action_groups(actions), accepted.long()]).sum()
     loss = q_loss
     policy._primary_graph = q_loss
-    policy._last_outcome_metrics = torch.zeros(5, device=device, dtype=torch.float64)
+    policy._last_outcome_metrics = torch.zeros(
+        OUTCOME_METRIC_WIDTH, device=device, dtype=torch.float64
+    )
     if outcome_enabled:
         auxiliary, metrics = forecast_auxiliary(
             policy,

@@ -3,9 +3,9 @@
 import numpy as np
 import torch
 
-from pvz_rl.config import effect_prediction_weight, forecast_forks_enabled
+from pvz_rl.config import forecast_forks_enabled, outcome_prediction_weights
 from pvz_rl.envs.static_fork import reference_tau
-from pvz_rl.learning.forecast_labels import effect_blocks, effect_loss, outcome_codes
+from pvz_rl.learning.forecast_labels import effect_blocks, effect_loss_components, outcome_codes
 from pvz_rl.learning.forecast_metrics import categorical_histogram, reset_calibration
 
 
@@ -26,14 +26,17 @@ def forecast_auxiliary(
 ):
     count = len(rows) if decision_count is None else decision_count
     if forecast_forks_enabled(policy.cfg, stage):
-        loss, metric_tokens, tokens = _effect_objective(
+        components, metric_tokens, tokens = _effect_objective(
             policy, observations, rows, memory, features, feature_rows, count
         )
     else:
-        loss, metric_tokens = memory[0].new_zeros((), dtype=torch.float32), []
-        tokens = loss.new_zeros(len(rows))
-    weight = effect_prediction_weight(policy.cfg, stage) * getattr(policy, "auxiliary_scale", 1)
-    policy._forecast_components = (weight * loss,)
+        components, metric_tokens = memory[0].new_zeros(2, dtype=torch.float32), []
+        tokens = components.new_zeros(len(rows))
+    loss = components.sum()
+    weights = components.new_tensor(outcome_prediction_weights(policy.cfg, stage))
+    weighted = components * weights * getattr(policy, "auxiliary_scale", 1)
+    auxiliary = weighted.sum()
+    policy._forecast_components = (auxiliary,)
     if not hasattr(policy, "_forecast_calibration"):
         reset_calibration(policy)
     brier, terms, correct = (loss.new_zeros(()) for _ in range(3))
@@ -49,20 +52,22 @@ def forecast_auxiliary(
             brier += ((p - expected).square().sum(-1) * known).sum()
             terms += known.sum()
             correct += ((block.argmax(-1) == label) & known).sum()
-    metrics = torch.stack((loss.detach(), brier, terms, (tokens > 0).sum(), correct)).double()
-    return weight * loss, metrics
+    metrics = torch.cat(
+        (torch.stack((loss.detach(), brier, terms, (tokens > 0).sum(), correct)), weighted.detach())
+    ).double()
+    return auxiliary, metrics
 
 
-def _token_loss(logits, targets):
+def _token_loss_components(logits, targets):
     lanes = (targets >= 0).any(-1)
-    per_lane = effect_loss(logits, targets)
-    return per_lane.sum(-1) / lanes.sum(-1).clamp_min(1)
+    per_lane = effect_loss_components(logits, targets)
+    return per_lane.sum(-2) / lanes.sum(-1).clamp_min(1)[..., None]
 
 
 def _effect_objective(policy, observations, rows, memory, features, feature_rows, root_count):
     """Average known terms, lanes, valid tokens and decision roots equally."""
     device = policy.device
-    per_root = memory[0].new_zeros(len(rows), dtype=torch.float32)
+    per_root = memory[0].new_zeros((len(rows), 2), dtype=torch.float32)
     null_rows = np.flatnonzero(rows["null_target_valid"])
     tokens = torch.as_tensor(rows["null_target_valid"].astype(np.float32), device=device)
     metric_tokens = []
@@ -76,7 +81,7 @@ def _effect_objective(policy, observations, rows, memory, features, feature_rows
             device=device,
             dtype=torch.long,
         )
-        per_root = per_root.index_add(0, at, _token_loss(null_logits, target))
+        per_root = per_root.index_add(0, at, _token_loss_components(null_logits, target))
         metric_tokens.append((null_logits, target))
     root, token = np.nonzero(rows["effect_valid"] & (rows["effect_actions"] != 0))
     if len(root):
@@ -124,10 +129,11 @@ def _effect_objective(policy, observations, rows, memory, features, feature_rows
             np.array(rows["effect_labels"][root, token]), device=device, dtype=torch.long
         )
         at = torch.as_tensor(root, device=device)
-        per_root = per_root.index_add(0, at, _token_loss(predictions, targets))
+        per_root = per_root.index_add(0, at, _token_loss_components(predictions, targets))
         tokens = tokens.index_add(0, at, tokens.new_ones(len(root)))
         metric_tokens.append((predictions, targets))
-    return (per_root / tokens.clamp_min(1)).sum() / max(1, int(root_count)), metric_tokens, tokens
+    loss = (per_root / tokens.clamp_min(1)[:, None]).sum(0) / max(1, int(root_count))
+    return loss, metric_tokens, tokens
 
 
 def gradient_norm_ratios(policy):

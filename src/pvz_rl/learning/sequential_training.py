@@ -13,10 +13,10 @@ from pvz_rl.config import (
     bomb_max_illegal_distance,
     bomb_ranking_margin,
     bomb_softmax_temperature,
-    effect_prediction_weight,
     forecast_forks_enabled,
     forecast_mode,
     forecast_version,
+    outcome_prediction_weights,
     passivity_settings,
     plant_wait_check_ticks,
 )
@@ -48,6 +48,7 @@ from pvz_rl.learning.exploration import (
     refresh_wait_exploration,
 )
 from pvz_rl.learning.flat_q import CohortCoefficients, batch_loss
+from pvz_rl.learning.forecast_metrics import OUTCOME_METRIC_WIDTH
 from pvz_rl.learning.objective import (
     COMPONENTS,
     consistency_diagnostics,
@@ -133,7 +134,7 @@ class CudaSequentialQ(CudaCohortLifecycle):
 
     @property
     def outcome_weight(self):
-        return effect_prediction_weight(self.cfg, self.tile_skills.phase) * getattr(
+        return max(outcome_prediction_weights(self.cfg, self.tile_skills.phase)) * getattr(
             self.policy, "auxiliary_scale", 1
         )
 
@@ -1079,7 +1080,9 @@ class CudaSequentialQ(CudaCohortLifecycle):
             raise RuntimeError("BF16 runtime inference is unavailable on this CUDA device")
         self.policy.zero_grad(set_to_none=True)
         self._pass_metrics = torch.zeros(10, device=self.device, dtype=torch.float64)
-        self._outcome_pass_metrics = torch.zeros(5, device=self.device, dtype=torch.float64)
+        self._outcome_pass_metrics = torch.zeros(
+            OUTCOME_METRIC_WIDTH, device=self.device, dtype=torch.float64
+        )
         self._bomb_pass_metrics = torch.zeros(
             len(bomb_loss_metrics(placement_settings(self.cfg, self.tile_skills.phase))),
             device=self.device,
@@ -1175,9 +1178,15 @@ class CudaSequentialQ(CudaCohortLifecycle):
             )
             self._cached_fit_examples = int(selected_n)
             if self.outcome_training:
-                effect, effect_brier, effects, decisions, effect_correct = (
-                    self._outcome_pass_metrics.cpu().tolist()
-                )
+                (
+                    effect,
+                    effect_brier,
+                    effects,
+                    decisions,
+                    effect_correct,
+                    weighted_field,
+                    weighted_probe,
+                ) = self._outcome_pass_metrics.cpu().tolist()
                 from pvz_rl.learning.forecast_metrics import calibration_report
 
                 self._stats["forecast_calibration"] = calibration_report(self.policy)
@@ -1192,11 +1201,13 @@ class CudaSequentialQ(CudaCohortLifecycle):
                     outcome_loss=effect if effects else None,
                     outcome_accuracy=effect_correct / effects if effects else None,
                     outcome_brier=effect_brier / effects if effects else None,
+                    static_field_weighted_loss=weighted_field,
+                    probe_weighted_loss=weighted_probe,
                 ).items():
                     if not isinstance(value, str):
                         self.logger.record("train/" + key, value)
                     self._stats[key] = value
-                loss -= self.outcome_weight * effect
+                loss -= weighted_field + weighted_probe
                 self._cached_metrics = (loss, self._cached_metrics[1], self._cached_metrics[2])
             self.logger.record("train/primary_loss", loss)
             self._stats["primary_loss"] = loss
@@ -1367,9 +1378,6 @@ class CudaSequentialQ(CudaCohortLifecycle):
                 self._peashooter_pass_metrics += detail
             else:
                 loss, error, gap = self._bomb_loss(rows, observations, features=features)
-            self.policy._last_outcome_metrics = torch.zeros(
-                5, device=self.device, dtype=torch.float64
-            )
             self.policy._primary_graph = loss
             auxiliary, metrics = forecast_auxiliary(
                 self.policy,

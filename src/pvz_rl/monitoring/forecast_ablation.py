@@ -11,7 +11,7 @@ import gc
 import json
 from pathlib import Path
 
-from pvz_rl.config import load_config
+from pvz_rl.config import load_config, outcome_prediction_weights
 from pvz_rl.learning import training_artifacts
 from pvz_rl.learning.training import train
 from pvz_rl.provenance import write_json
@@ -31,8 +31,10 @@ def configure(base, mode, *, games, minutes, half_life=None):
         shaping_weight=0.01 if mode.endswith("shaping") else 0.0,
         injection_after_games=0 if "injection" in mode else 2**63 - 1,
     )
-    training["effect_prediction_weight"] = (
-        0.0 if mode == "none" else base["training"]["effect_prediction_weight"]
+    field, probe = (0.0, 0.0) if mode == "none" else outcome_prediction_weights(base)
+    training.pop("effect_prediction_weight", None)
+    training.setdefault("stage_outcome_weights", {})["normal"] = dict(
+        static_field=field, probe=probe
     )
     if half_life is not None:
         settings["initial_discount_half_life_steps"] = half_life
