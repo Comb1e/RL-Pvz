@@ -1,12 +1,10 @@
 # PVZ plant research
 
 Train a sequential Q policy against a pinned Plants vs. Zombies simulator. A
-shared Transformer understands the public board, an action readout chooses
-Wait/species/Dig, and a conditional decoder scores all 45 tiles. Every stage learns
-absolute post-action field/probe outcomes alongside its placement or Q objective.
-The policy receives public board facts;
-exact simulated outcomes are auxiliary targets. Learned forecast summaries can
-feed the Q heads. Labels never override actions; validation uses the greedy network.
+shared Transformer encodes the public board, an action readout chooses
+Wait/species/Dig, and a conditional decoder scores all 45 tiles. Exact simulated
+post-action outcomes serve as auxiliary training targets only; validation uses
+the greedy network on public inputs.
 
 ## Requirements
 
@@ -41,11 +39,9 @@ Record human gameplay into unused paths and finish with a natural win or loss:
   --output runs\human-init --device cuda
 ```
 
-Demo initialization verifies the replay before fitting. Manual tile annotation is
-removed; existing datasets and recordings remain on disk. `--init-from` accepts
-outcome-only checkpoints from this version and starts with fresh optimizer and
-counters. All earlier checkpoints are incompatible. `--resume` preserves the
-optimizer, pending labels and committed fitting passes of a same-version run.
+Demo initialization verifies the replay before fitting. `--init-from` starts fresh
+optimizer and counters from same-version weights; `--resume` continues a
+same-version run exactly. Checkpoints from earlier model versions are rejected.
 
 Start autonomous training when ready:
 
@@ -61,63 +57,27 @@ Use `--stage NAME --until-stage-complete` for one stage, or `--games N` for a
 completed-episode budget. Explicit normal stages skip preliminary stages. Omit
 `--init-from` to start with random weights.
 
-After training the attacker stage with this version, initialize Peashooter from
-its compatible weights:
+Each stage can start from the previous stage's weights;
+[pre_train.ps1](tools/pre_train.ps1) chains them in order:
 
 ```powershell
 .\.venv\Scripts\python.exe -m pvz_rl train --stage peashooter --until-stage-complete `
-  --init-from runs\compact-stages\attacker_pre\final.zip --output runs\peashooter-new
+  --init-from runs\compact-stages\attacker_pre\final.zip --output runs\compact-stages\peashooter
 ```
 
-No seed is required: initialization is random and every training cohort draws an
-independent random seed. Pending seeds are saved before preparation so recovery
-recreates the same unfinished boards. `--seed` optionally fixes initialization;
-`training.random_cohort_seeds = false` also restores reproducible scenario streams
-for controlled diagnostics. Existing recoveries retain their saved seed behavior.
+Resume an interrupted stage from its recovery checkpoint:
 
-Tune [train.toml](src/pvz_rl/data/train.toml): each stage independently sets
-`static_field_prediction_weight` (field depth, breach time and lane loss) and
-`probe_prediction_weight` (probe depth). Equal values of `0.1` preserve the prior
-loss; coefficients scale terms before the existing known-term average and warmup.
-Setting either to zero removes only its loss contribution; shared parameters
-still receive the other losses. Saved outcome-only runs with one combined weight
-retain it for both groups on resume.
-The first three stages use `placement_outcomes`: each proposed placement receives
-one exact field/probe auxiliary target alongside its existing placement teacher. Rejected placements
-receive the engine's no-op continuation. They add no Wait target or alternatives;
-outcomes guide shared feature learning without entering tile scores in these stages.
-Their memory budget charges occupied proposal snapshots and workers; Wait-interval
-boundary buffers are reserved only for Peashooter/normal collection.
+```powershell
+.\.venv\Scripts\python.exe -m pvz_rl train --stage cherry_bomb_obstacle --until-stage-complete `
+  --resume runs\compact-stages\cherry_bomb_obstacle\interrupted.zip `
+  --output runs\compact-stages\cherry_bomb_obstacle
+```
 
-Peashooter and normal stages use `action_outcomes`. Peashooter keeps its prioritized
-lane teacher and zero alternatives. Normal stages retain the branch runner-up and
-one random legal alternative; effective Waits sample them with probability `0.005`.
-Four fitting passes, normal n-step Q targets and species exploration remain in use.
-
-The model uses public entities and 18 global values. It predicts post-action field
-depth, breach time, lane loss and probe depth. Exact simulations supply auxiliary
-targets only. Factual prediction and separate private forecast pretraining are removed;
-stage collection starts directly after ordinary preparation. Previous checkpoints
-are incompatible with inference, `--resume` and `--init-from`; start a fresh run.
-New outcome-only checkpoints support those loading modes within this version.
-
-`collection_protocol = "stage_action_outcomes_v4"` routes single-placement exercises
-and real Wait trajectories separately. In Peashooter/normal, uninterrupted Waits and
-rejections supply field ticks. One probe is anchored at first clearance and reused
-until planting/Dig, actual spawning or an episode boundary closes its interval.
-Interrupted fields continue from owned roots. Field labels exclude earlier
-penetration and rebase breach times for each decision. Labels finish before fitting.
-Inference and greedy validation run no field/probe simulations.
-
-`training.performance.interval_backend = "packed_async"` keeps roots packed on the
-GPU and transfers small results asynchronously. Main decisions have GPU priority.
-Snapshots decode/spill under storage pressure or during recovery. The Peashooter
-teacher keeps its workflow; `auxiliary_hybrid = true` additionally routes it through
-the shared CPU/CUDA queue. Both families respect the combined auxiliary memory cap.
-
-Validation uses fresh random panels after fully fitted cohorts. Completed runs
-retain portable `final.zip` weights and visualizations; unfinished runs retain
-recovery checkpoints and their exact pending work.
+No seed is required; `--seed` optionally fixes initialization. Tune stages,
+loss weights and execution settings in [train.toml](src/pvz_rl/data/train.toml);
+each setting is commented there. Validation uses fresh random panels after fully
+fitted cohorts. Completed runs keep portable `final.zip` weights and
+visualizations; unfinished runs keep recovery checkpoints.
 
 ## Common checks
 
@@ -128,15 +88,10 @@ recovery checkpoints and their exact pending work.
 .\.venv\Scripts\python.exe -m pvz_rl visualize --run runs\my-run --report-only
 ```
 
-The [collection benchmark](tools/benchmark_peashooter.py) compares execution
-settings by total time per environment. The [workflow profiler](tools/profile_training_workflow.py)
-records an actual CLI cohort; the [diagram tool](tools/draw_collection_process.py)
-draws chronological CPU/GPU timelines with wait dependencies. Use each tool's
-`--help` for bounded controls and trace options.
-
-Exactly three smoke tests cover CLI startup, CPU inference and bounded CUDA
-learning/reload. They establish workflow availability, not mastery. Report-only
-visualization loads no policy and starts no training.
+The smoke tests check that the workflow runs, not that the agent masters a stage.
+For throughput work, the [collection benchmark](tools/benchmark_peashooter.py),
+[workflow profiler](tools/profile_training_workflow.py) and
+[timeline tool](tools/draw_collection_process.py) document their options in `--help`.
 
 - [Code structure and test ownership](AGENTS.md)
 - [Architecture and workflows](docs/architecture.md)
