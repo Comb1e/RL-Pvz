@@ -2,6 +2,8 @@
 
 import torch
 
+from pvz_rl.config import threat_supervision_enabled
+
 
 def reset_calibration(policy):
     policy._forecast_score_totals = torch.zeros(16, device=policy.device, dtype=torch.float64)
@@ -18,6 +20,9 @@ def reset_calibration(policy):
     if policy.absolute_outcomes:
         policy._forecast_calibration.pop("effect_change")
         policy._forecast_calibration.pop("effect_conditional")
+    if not threat_supervision_enabled(policy.cfg, getattr(policy, "forecast_stage", None)):
+        for name in ("depth", "breach_time", "loss"):
+            policy._forecast_calibration.pop(name)
 
 
 def categorical_histogram(histogram, probabilities, labels, valid, *, term=0):

@@ -20,6 +20,7 @@ from pvz_rl.config import (
     passivity_settings,
     plant_wait_check_ticks,
     threat_prediction_weight,
+    threat_supervision_enabled,
 )
 from pvz_rl.envs.actions import ActionSchema as A
 from pvz_rl.envs.cuda_features import REWARD_FIELDS
@@ -137,6 +138,10 @@ class CudaSequentialQ(CudaCohortLifecycle):
             available
             and self.cfg.get("diagnostics", {}).get("reach_tracking", True)
             and self.cfg["training"].get("forecasts", {}).get("enabled", False)
+            and (
+                threat_supervision_enabled(self.cfg, self.tile_skills.phase)
+                or forecast_forks_enabled(self.cfg, self.tile_skills.phase)
+            )
         )
 
     @property
@@ -144,6 +149,10 @@ class CudaSequentialQ(CudaCohortLifecycle):
         return threat_prediction_weight(self.cfg, self.tile_skills.phase) * getattr(
             self.policy, "auxiliary_scale", 1
         )
+
+    @property
+    def threat_training(self):
+        return self.reach_training and threat_supervision_enabled(self.cfg, self.tile_skills.phase)
 
     @property
     def home_weight(self):
@@ -155,15 +164,11 @@ class CudaSequentialQ(CudaCohortLifecycle):
     def fitting_parameter_stage(self):
         if self._fit_kind != "tile_only":
             return None
-        return (
-            (
-                "tile_reach"
-                if forecast_forks_enabled(self.cfg, self.tile_skills.phase)
-                else "tile_threat"
-            )
-            if self.reach_training and (self.reach_weight > 0 or self.home_weight > 0)
-            else "tile"
-        )
+        if not self.reach_training or not (self.reach_weight > 0 or self.home_weight > 0):
+            return "tile"
+        if forecast_forks_enabled(self.cfg, self.tile_skills.phase):
+            return "tile_reach" if self.threat_training else "tile_outcomes"
+        return "tile_threat"
 
     def _prepare_collection(self, callback):
         if hasattr(callback, "check_deadline"):
@@ -234,7 +239,7 @@ class CudaSequentialQ(CudaCohortLifecycle):
                         staging += owner.estimated_bytes
                     if auxiliary is not None:
                         staging += auxiliary.estimated_bytes
-                    if self.reach_training:
+                    if self.threat_training:
                         ready = self._reach.prepare()
                         staging += self._reach.estimated_bytes
                         self._stats["reach_tracking"] = dict(self._reach.metrics)
@@ -245,7 +250,7 @@ class CudaSequentialQ(CudaCohortLifecycle):
                     if not self._buffer.reserve_staging(staging):
                         raise MemoryError("Shared RAM budget cannot hold placement/reach metadata")
                     if ready:
-                        if self.reach_training:
+                        if self.threat_training:
                             self.env.action_journal.finalize_reach(self._buffer)
                             viewer = getattr(self.env, "live_view", None)
                             if viewer is not None:
@@ -361,7 +366,7 @@ class CudaSequentialQ(CudaCohortLifecycle):
         self._stats["forecast_pretraining_state"] = getattr(
             self, "forecast_pretraining_state", "pending"
         )
-        if self.reach_training:
+        if self.threat_training:
             from pvz_rl.learning.reach_supervision import ReachSupervision
 
             self._reach = ReachSupervision(self.env, self._buffer)
@@ -430,7 +435,7 @@ class CudaSequentialQ(CudaCohortLifecycle):
         self.env.handoff.clear()
         if not self._buffer.reserve_staging(
             (self._peashooter_teacher.estimated_bytes if self.peashooter_rule_training else 0)
-            + (self._reach.estimated_bytes if self.reach_training else 0)
+            + (self._reach.estimated_bytes if self.threat_training else 0)
         ):
             raise MemoryError("Shared RAM budget cannot hold placement/reach metadata")
         pending = getattr(self, "_pending_episodes", {})
@@ -503,7 +508,7 @@ class CudaSequentialQ(CudaCohortLifecycle):
                 self._peashooter_teacher.release()
                 if not self._buffer.reserve_staging(
                     self._peashooter_teacher.estimated_bytes
-                    + (self._reach.estimated_bytes if self.reach_training else 0)
+                    + (self._reach.estimated_bytes if self.threat_training else 0)
                 ):
                     raise MemoryError("Shared RAM budget cannot hold placement/reach metadata")
             if getattr(self.env, "auxiliary", None) is not None:
@@ -598,12 +603,16 @@ class CudaSequentialQ(CudaCohortLifecycle):
                         )
                     if not hasattr(self, "_collection_home"):
                         self._collection_home = torch.zeros((self.n_envs, 5), device=self.device)
-                    self._collection_home[enabled] = self.policy.home_map(details["reach_logits"])[
-                        enabled
-                    ]
-                    self._collection_reach[enabled] = self.policy.reach_map(
-                        details["reach_logits"]
-                    )[enabled]
+                    if self.threat_training:
+                        self._collection_home[enabled] = self.policy.home_map(
+                            details["reach_logits"]
+                        )[enabled]
+                        self._collection_reach[enabled] = self.policy.reach_map(
+                            details["reach_logits"]
+                        )[enabled]
+                    else:
+                        self._collection_home[enabled] = 0
+                        self._collection_reach[enabled] = 0
                     if forecast_version(self.cfg) >= 2:
                         if not hasattr(self, "_collection_effect"):
                             self._collection_effect = torch.zeros(
@@ -711,7 +720,7 @@ class CudaSequentialQ(CudaCohortLifecycle):
                                             env.features.forecast_facts[: self.n_envs]
                                         )
                                     }
-                                    if forecast_version(self.cfg) >= 2
+                                    if forecast_version(self.cfg) >= 2 and self.threat_training
                                     else {}
                                 ),
                                 **(
@@ -739,7 +748,7 @@ class CudaSequentialQ(CudaCohortLifecycle):
                     )
                 else:
                     self._peashooter_teacher.before(actions, executing, branch_available)
-            if self.reach_training:
+            if self.threat_training:
                 self._reach.before(actions, executing)
             if getattr(self, "_wait_outcomes", None) is not None:
                 self._wait_outcomes.arm(self._pending_effect)
@@ -759,10 +768,16 @@ class CudaSequentialQ(CudaCohortLifecycle):
                             env.batch.reach_trace[:, FORECAST_HEADER : FORECAST_HEADER + count * 5]
                         ).to(torch.uint8),
                         breaches=torch.from_dlpack(env.batch.reach_trace[:, 1:6]),
-                        contacts=torch.from_dlpack(env.batch.reach_trace[:, 6:11]),
                         **(
-                            {"finished": torch.from_dlpack(env.features.forecast_facts)}
-                            if forecast_version(self.cfg) >= 2
+                            dict(
+                                contacts=torch.from_dlpack(env.batch.reach_trace[:, 6:11]),
+                                **(
+                                    {"finished": torch.from_dlpack(env.features.forecast_facts)}
+                                    if forecast_version(self.cfg) >= 2
+                                    else {}
+                                ),
+                            )
+                            if self.threat_training
                             else {}
                         ),
                     ),
@@ -868,7 +883,7 @@ class CudaSequentialQ(CudaCohortLifecycle):
                 raise MemoryError("RAM budget cannot hold actual collection staging")
             if self.reach_training:
                 rows["reach_prediction"] = host["reach_prediction"].numpy()
-                rows["reach_valid"] = active
+                rows["reach_valid"] = active & self.threat_training
                 rows["home_prediction"] = host["home_prediction"].numpy()
                 rows["lane_zombies"] = host["lane_zombies"].numpy()
                 if forecast_host is not None:
@@ -876,20 +891,22 @@ class CudaSequentialQ(CudaCohortLifecycle):
                         forecast_host["trace"].numpy().reshape(self.n_envs, -1, 5)
                     )
                     rows["forecast_breach"] = forecast_host["breaches"].numpy()
-                    rows["forecast_contacts"] = forecast_host["contacts"].numpy()
+                    if self.threat_training:
+                        rows["forecast_contacts"] = forecast_host["contacts"].numpy()
                 if forecast_version(self.cfg) >= 2:
-                    facts = host["forecast_facts"].numpy()
-                    rows["forecast_pending"] = facts[:, 0]
                     rows["effect_prediction"] = host["effect_prediction"].numpy()
                     rows["effect_prediction_valid"] = forecast_forks_enabled(
                         self.cfg, self.tile_skills.phase
                     )
-                    rows["forecast_mowers"] = (facts[:, 6, None] & (1 << np.arange(5))) != 0
-                    if forecast_host is not None:
-                        finished = forecast_host["finished"].numpy()
-                        rows["forecast_finished"] = (finished[:, 0, None] == 0) & (
-                            finished[:, 1:6] == 0
-                        )
+                    if self.threat_training:
+                        facts = host["forecast_facts"].numpy()
+                        rows["forecast_pending"] = facts[:, 0]
+                        rows["forecast_mowers"] = (facts[:, 6, None] & (1 << np.arange(5))) != 0
+                        if forecast_host is not None:
+                            finished = forecast_host["finished"].numpy()
+                            rows["forecast_finished"] = (finished[:, 0, None] == 0) & (
+                                finished[:, 1:6] == 0
+                            )
             rows["threat_depth"], rows["threat_time"], rows["threat_loss"] = -1, -1, -1
             pending = getattr(self, "_pending_effect", None)
             if pending is not None:
@@ -913,6 +930,7 @@ class CudaSequentialQ(CudaCohortLifecycle):
                 packed[:, 7:17],
                 env.last_action_result_host,
                 env._episode_serial,
+                forecast_mode=forecast_mode(self.cfg, self.tile_skills.phase),
             )
             env.profiler.host("presentation", perf_counter() - presentation_started)
             rows["executed_action"] = np.where(rows["accepted"], rows["action"], 0)
@@ -921,8 +939,9 @@ class CudaSequentialQ(CudaCohortLifecycle):
             if self.reach_training:
                 if bool(host["reach_errors"].any()):
                     raise RuntimeError("CUDA future-reach tracker failure; recovery retained")
-                self._reach.capture(rows)
-                staging += self._reach.estimated_bytes
+                if self.threat_training:
+                    self._reach.capture(rows)
+                    staging += self._reach.estimated_bytes
                 if not self._buffer.reserve_staging(staging):
                     raise MemoryError("RAM budget cannot hold reach tracking staging")
             storage_started = perf_counter()
@@ -1243,7 +1262,7 @@ class CudaSequentialQ(CudaCohortLifecycle):
                 self.device,
             )
             self._peashooter_pass_metrics = torch.zeros(3, device=self.device)
-        if self.reach_training:
+        if self.threat_training:
             from pvz_rl.learning.reach_supervision import ReachPhase
 
             if self._reach.phase not in (ReachPhase.LABELS_READY, ReachPhase.FITTING):
@@ -1253,8 +1272,8 @@ class CudaSequentialQ(CudaCohortLifecycle):
             targets = self._fitting_spool.rows
             from pvz_rl.learning.forecast_labels import threat_eligible
 
-            threat = threat_eligible(targets)
-            self._reach_decisions = (int(threat.sum()), len(targets))
+            threat_count = int(threat_eligible(targets).sum()) if self.threat_training else 0
+            self._reach_decisions = (threat_count, len(targets))
         else:
             self._reach_decisions = (0, 0)
         self._fit_kind = self.fit_stage
@@ -1346,7 +1365,7 @@ class CudaSequentialQ(CudaCohortLifecycle):
                     self.policy._forecast_score_totals[14:].cpu().tolist()
                 )
                 for key, value in dict(
-                    threat_loss=threat,
+                    threat_loss=threat if self.threat_training else None,
                     effect_loss=effect if effects else None,
                     threat_depth_brier=depth_brier / depths if depths else None,
                     effect_brier=effect_brier / effects if effects else None,
@@ -1623,7 +1642,7 @@ class CudaSequentialQ(CudaCohortLifecycle):
 
     def _synchronize(self, callback):
         self._drain()
-        if self.reach_training:
+        if self.threat_training:
             from pvz_rl.learning.reach_supervision import ReachPhase
 
             self._reach.phase = ReachPhase.COMMITTED
@@ -1791,7 +1810,7 @@ class CudaSequentialQ(CudaCohortLifecycle):
                 self._reach = ReachSupervision(
                     self.env, self._buffer, extra["reach_supervision"], archive
                 )
-        elif self.reach_training and self.phase != CohortPhase.IDLE:
+        elif self.threat_training and self.phase != CohortPhase.IDLE:
             if self.phase == CohortPhase.COLLECT and self._buffer.size == 0:
                 from pvz_rl.learning.reach_supervision import ReachSupervision
 

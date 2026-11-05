@@ -35,7 +35,7 @@ RECORD = np.dtype(
         ("reach_provenance", "u1"),
         ("effect_prediction", "<f2", (2, 5, 10)),
         ("effect_prediction_valid", "?"),
-        ("forecast_mode", "u1"),  # 0: not recorded, 1: factual, 2: snapshot rules.
+        ("forecast_mode", "u1"),  # 0: absent, 1: factual, 2: snapshot, 3: outcomes, 4: placement.
     ]
 )
 
@@ -111,15 +111,15 @@ class ActionJournal:
         self.blocks[env].append(block)
         return block
 
-    def record_batch_safe(self, rows, scores, results, episodes):
+    def record_batch_safe(self, rows, scores, results, episodes, *, forecast_mode=None):
         if self.disabled:
             return
         try:
-            self.record_batch(rows, scores, results, episodes)
+            self.record_batch(rows, scores, results, episodes, forecast_mode=forecast_mode)
         except (OSError, MemoryError, ValueError) as exc:
             self.fail(exc)
 
-    def record_batch(self, rows, scores, results, episodes):
+    def record_batch(self, rows, scores, results, episodes, *, forecast_mode=None):
         records = np.zeros(self.count, dtype=RECORD)
         for name in (
             "tick",
@@ -141,8 +141,12 @@ class ActionJournal:
             records["effect_prediction"] = rows["effect_prediction"]
             records["effect_prediction_valid"] = rows["effect_prediction_valid"]
             records["forecast_mode"] = np.where(
-                rows["reach_valid"], np.where(rows["effect_prediction_valid"], 1, 2), 0
+                rows["reach_valid"],
+                np.where(rows["effect_prediction_valid"], 1, 2),
+                np.where(rows["effect_prediction_valid"], 3, 0),
             )
+        if forecast_mode == "placement_only":
+            records["forecast_mode"] = 4
         records["reach_labels"], records["home_labels"] = -1, -1
         records["coins"][:, 0] = rows["species_coin"]
         records["coins"][:, 1] = rows["tile_coin"]
@@ -160,7 +164,7 @@ class ActionJournal:
             row = records[env]
             row["sequence"] = self.sequences[env]
             self.latest[env] = row.copy()
-            if row["reach_valid"]:
+            if row["reach_valid"] or row["effect_prediction_valid"]:
                 self.latest_reach[env] = row.copy()
             if row["action"]:
                 index, offset = divmod(self.sizes[env], self.block_rows)
@@ -284,7 +288,10 @@ class ActionJournal:
                     )
                 # Derive this optional viewer cache from archived decisions, including
                 # older recoveries; Wait records never displace the last prediction.
-                valid = np.flatnonzero(target[: len(block)]["reach_valid"])
+                valid = np.flatnonzero(
+                    target[: len(block)]["reach_valid"]
+                    | target[: len(block)]["effect_prediction_valid"]
+                )
                 if len(valid):
                     self.latest_reach[env] = target[valid[-1]].copy()
 

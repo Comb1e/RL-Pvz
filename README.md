@@ -2,9 +2,10 @@
 
 Train a sequential Q policy against a pinned Plants vs. Zombies simulator. A
 shared Transformer understands the public board, an action readout chooses
-Wait/species/Dig, and a conditional decoder scores all 45 tiles. Every autonomous
-stage also learns lane-threat predictions. Peashooter and full-game stages predict
-absolute post-action field/probe outcomes. The policy receives public board facts;
+Wait/species/Dig, and a conditional decoder scores all 45 tiles. Bomb/attacker
+stages learn placement objectives; Peashooter and full-game stages also predict
+absolute post-action field/probe outcomes. Fresh stages have no threat-prediction
+supervision or threat-summary injection. The policy receives public board facts;
 exact simulated outcomes are auxiliary targets. Learned forecast summaries can
 feed the Q heads. Labels never override actions; validation uses the greedy network.
 
@@ -81,9 +82,12 @@ Normal stages jointly fit n-step Q targets; preliminary stages preserve their
 placement losses and freeze the action readout. Four fitting passes, greedy tiles
 and normal species exploration remain in use.
 
-The first three stages use snapshot threat constraints and their existing placement
-objectives. Peashooter keeps its prioritized lane teacher and sets
-`training.peashooter.extra_actions = 0`. Normal stages retain two alternatives:
+The first three stages use `forecast_mode = "placement_only"` and their existing
+placement objectives. Fresh Peashooter and normal stages use `forecast_mode = "action_outcomes"`:
+no factual threat labels, loss, private cutoff tail or threat-summary injection.
+Saved factual/snapshot runs retain their original workflow on `--resume`; weights-only
+initialization uses the current settings. Peashooter keeps its prioritized lane
+teacher and sets `training.peashooter.extra_actions = 0`. Normal stages retain two alternatives:
 the relevant branch's second-highest-Q legal tile and one uniformly selected
 remaining legal action. Waits/rejections sample alternatives at probability
 `0.005`; legal non-Wait proposals always receive supervision.

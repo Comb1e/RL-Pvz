@@ -6,7 +6,12 @@ import torch
 from pvz_game import Rules
 from torch import nn
 
-from pvz_rl.config import absolute_outcomes, forecast_forks_enabled, forecast_version
+from pvz_rl.config import (
+    absolute_outcomes,
+    forecast_forks_enabled,
+    forecast_version,
+    threat_supervision_enabled,
+)
 from pvz_rl.envs.actions import ActionSchema as A
 from pvz_rl.envs.actions import dig_branch_available
 from pvz_rl.envs.encoding import collate_observations
@@ -82,6 +87,8 @@ class TwoStageTransformerPolicy(nn.Module):
             )
         if stage == "tile_reach":
             return not name.startswith("species_head.")
+        if stage == "tile_outcomes":
+            return not name.startswith(("species_head.", "threat_head."))
         if stage == "tile_threat":
             return not name.startswith(("species_head.", "effect_head.", "null_projection."))
         if stage == "tile":
@@ -148,7 +155,14 @@ class TwoStageTransformerPolicy(nn.Module):
     def master_parameters(self, stage=None):
         if stage is None:
             return tuple(self._master_parameters)
-        if stage not in ("species", "tile", "tile_reach", "tile_threat", "effect_pretrain"):
+        if stage not in (
+            "species",
+            "tile",
+            "tile_reach",
+            "tile_threat",
+            "tile_outcomes",
+            "effect_pretrain",
+        ):
             raise ValueError("Parameter stage must be species, tile or tile_reach")
         return tuple(
             master
@@ -166,7 +180,14 @@ class TwoStageTransformerPolicy(nn.Module):
         parameters = tuple(super().parameters())
         if stage is None:
             return parameters
-        if stage not in ("species", "tile", "tile_reach", "tile_threat", "effect_pretrain"):
+        if stage not in (
+            "species",
+            "tile",
+            "tile_reach",
+            "tile_threat",
+            "tile_outcomes",
+            "effect_pretrain",
+        ):
             raise ValueError("Parameter stage must be species, tile or tile_reach")
         return tuple(
             parameter
@@ -304,14 +325,19 @@ class TwoStageTransformerPolicy(nn.Module):
     def threat_values(self, observations=None, *, memory=None):
         if memory is None:
             memory = self._memory(observations)
+        if not threat_supervision_enabled(self.cfg, getattr(self, "forecast_stage", None)):
+            return memory[0].new_zeros((len(memory[0]), 5, THREAT_WIDTH))
         return self.threat_head(memory[0][:, 0]).reshape(-1, 5, THREAT_WIDTH)
 
     def action_values(self, memory, *, rows=None):
         global_features = memory[0][:, 0] if rows is None else memory[0][rows, 0]
-        logits = self.threat_head(global_features).reshape(-1, 5, THREAT_WIDTH)
-        summaries = threat_summary(logits).detach()
-        if not self.injection_enabled:
-            summaries = torch.zeros_like(summaries)
+        if self.injection_enabled and threat_supervision_enabled(
+            self.cfg, getattr(self, "forecast_stage", None)
+        ):
+            logits = self.threat_head(global_features).reshape(-1, 5, THREAT_WIDTH)
+            summaries = threat_summary(logits).detach()
+        else:
+            summaries = global_features.new_zeros((len(global_features), 30))
         return self.species_head(
             torch.cat((global_features, summaries.to(global_features.dtype)), -1)
         )
@@ -360,6 +386,8 @@ class TwoStageTransformerPolicy(nn.Module):
         return self.tile_decoder(memory[0][rows], memory[1][rows], branches)
 
     def forecast_display(self, memory):
+        if not threat_supervision_enabled(self.cfg, getattr(self, "forecast_stage", None)):
+            return memory[0].new_zeros((len(memory[0]), 5, 10))
         logits = self.threat_values(memory=memory)
         cells = penetration_map(logits[..., 22:33])
         # Viewers accept a common cell/home-logit carrier; these are derived raw
@@ -520,8 +548,13 @@ class TwoStageTransformerPolicy(nn.Module):
         details["tile_inference_skipped"] = (branches > 0) & ~tile_rows
         details["observations"] = observations
         details["board_memory"] = memory
-        details["reach_logits"] = self.forecast_display(memory)
-        details["threat_logits"] = self.threat_values(memory=memory)
+        if threat_supervision_enabled(self.cfg, getattr(self, "forecast_stage", None)):
+            details["reach_logits"] = self.forecast_display(memory)
+            details["threat_logits"] = self.threat_values(memory=memory)
+        else:
+            # Stable legacy carriers, explicitly invalid in the collection journal.
+            details["reach_logits"] = memory[0].new_zeros((len(actions), 5, 10))
+            details["threat_logits"] = memory[0].new_zeros((len(actions), 5, THREAT_WIDTH))
         return actions, details
 
     def effect_action_display(self, observations, actions, memory, branch_usable):

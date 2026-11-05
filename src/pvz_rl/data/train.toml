@@ -137,10 +137,10 @@ enabled = true # Automatic preliminary stages; selected normal stages skip them.
 sampling_max_attempts = 100
 
 [training.cherry_bomb]
-forecast_mode = "snapshot_rules" # No forecast forks; safe lanes and ready-mower home targets.
-# Effect weights apply only in factual mode; saved recoveries keep their original mode.
+forecast_mode = "placement_only" # Placement objective only; no threat prediction or forecast forks.
+# Saved recoveries retain their original supervision mode and weights.
 effect_prediction_weight = 0.1
-threat_prediction_weight = 0.1
+threat_prediction_weight = 0.0
 # Shared by both bomb stages except temperature and validation mastery; no exploration or search.
 n_envs = 640 # Fastest measured collection time/env with 32 workers and the CUDA oracle.
 probe_interval_games = 10000 # Independent clock for each bomb stage; pending probes retry first.
@@ -160,15 +160,15 @@ oracle_lanes = 2048 # Shrinks to fit VRAM without changing labels.
 oracle_vram_mib = 2048
 
 [training.cherry_bomb_obstacle]
-forecast_mode = "snapshot_rules"
+forecast_mode = "placement_only"
 effect_prediction_weight = 0.1
-threat_prediction_weight = 0.1
+threat_prediction_weight = 0.0
 softmax_temperature = { zero_success = 1, full_success = 1 } # Independent schedule; mastery still requires 100/100.
 
 [training.attacker_pre]
-forecast_mode = "snapshot_rules"
+forecast_mode = "placement_only"
 effect_prediction_weight = 0.1
-threat_prediction_weight = 0.1
+threat_prediction_weight = 0.0
 n_envs = 640 # Lowest measured collection time/env on the RTX 4070 Laptop profile.
 plants = [4, 8] # Total across four non-zombie lanes; at least one in each.
 zombie_count = [1, 2] # Basic zombies, all in the remaining empty lane.
@@ -186,10 +186,10 @@ oracle_lanes = 640 # Independent scratch limits; used only for natural cooldown 
 oracle_vram_mib = 1024
 
 [training.peashooter]
-forecast_mode = "factual"
+forecast_mode = "action_outcomes" # Teacher plus field/probe targets; no factual threat prediction.
 extra_actions = 0 # The placement teacher supplies targets; retain actual-action effects only.
 effect_prediction_weight = 0.1
-threat_prediction_weight = 0.1
+threat_prediction_weight = 0.0
 # Independent cohort/preparation sizing; shared optimizer and fitting passes.
 n_envs = 128
 sky_sun_rate = 1.5 # Divide sky-drop delays by this rate; keep each drop at 25 sun.
@@ -205,10 +205,10 @@ oracle_vram_mib = 4096 # Upper bound; actual lanes shrink to preserve profile he
 oracle_chunk_ticks = 4096
 
 [training.normal]
-forecast_mode = "factual"
+forecast_mode = "action_outcomes" # Post-action field/probe targets only; saved factual runs stay unchanged.
 n_envs = 128
 effect_prediction_weight = 0.1
-threat_prediction_weight = 0.1 # Categorical hindsight depth/time and lane loss.
+threat_prediction_weight = 0.0
 validation_schedule = "stage_success" # Evaluate normal games only after each stage passes.
 eval_interval_games = 2000 # Periodic game-count diagnostic/fixed checks.
 # Species exploration stays fixed throughout a cohort; tile proposals are greedy.

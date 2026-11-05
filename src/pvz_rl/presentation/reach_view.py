@@ -128,20 +128,43 @@ def draw_live_reach(surface, frame, rect):
     pygame.draw.rect(surface, (24, 39, 32), rect, border_radius=4)
     font = pygame.font.SysFont("Segoe UI", 13 if rect.w >= 230 else 11)
     decision = frame.get("reach_decision") or frame.get("decision") or {}
+    if decision.get("forecast_mode") == 4:
+        for y, message in ((5, "Placement training"), (28, "No outcome forecasts in this stage")):
+            surface.blit(font.render(message, True, (184, 205, 186)), (rect.x + 8, rect.y + y))
+        surface.set_clip(old_clip)
+        return
     valid = decision.get("reach_valid")
+    outcomes_only = decision.get("forecast_mode") == 3
+    has_effects = bool(decision.get("effect_prediction_valid", False))
     surface.blit(
-        font.render("Factual future threat", True, (237, 231, 188)), (rect.x + 8, rect.y + 5)
+        font.render(
+            "Post-action outcomes" if outcomes_only else "Factual future threat",
+            True,
+            (237, 231, 188),
+        ),
+        (rect.x + 8, rect.y + 5),
     )
     rate = max(1, frame["observation"].tick_rate)
     stamp = (
         f"Decision #{decision['sequence']} @ {decision['tick'] / rate:.2f}s"
-        if valid
+        if valid or has_effects
         else "Awaiting decision"
     )
     surface.blit(font.render(stamp, True, (184, 205, 186)), (rect.x + 8, rect.y + 23))
-    has_effects = bool(decision.get("effect_prediction_valid", False))
-    height = max(10, (rect.h - 130) // 3) if has_effects else max(10, rect.h - 98)
-    grid = pygame.Rect(rect.x + 20, rect.y + 56, max(10, rect.w - 28), height)
+    panels = []
+    if not outcomes_only:
+        panels.append((None, predicted_map(decision) if valid else np.full((5, 10), np.nan)))
+    if has_effects:
+        panels.extend(
+            zip(
+                ("Static field after proposal", "Probe after proposal"),
+                decision["effect_prediction"],
+                strict=True,
+            )
+        )
+    top_margin = 74 if outcomes_only else 56
+    height = max(10, (rect.h - top_margin - 5 - 23 * len(panels)) // max(1, len(panels)))
+    grid = pygame.Rect(rect.x + 20, rect.y + top_margin, max(10, rect.w - 28), height)
     axis_font = pygame.font.SysFont("Segoe UI", max(7, min(11, grid.h // 5 - 2)))
     for col, text in enumerate(("H", *map(str, range(1, 10)))):
         label = axis_font.render(text, True, (184, 205, 186))
@@ -154,18 +177,13 @@ def draw_live_reach(surface, frame, rect):
             surface.blit(
                 label, label.get_rect(midright=(grid.x - 3, grid.y + (row + 0.5) * grid.h / 5))
             )
-    _draw_grid(surface, predicted_map(decision) if valid else np.full((5, 10), np.nan), grid, font)
-    if has_effects:
-        for index, title in enumerate(("Static field after proposal", "Probe after proposal")):
-            top = grid.bottom + 20 + index * (height + 23)
-            surface.blit(font.render(title, True, (237, 231, 188)), (rect.x + 8, top - 18))
-            _draw_grid(
-                surface,
-                decision["effect_prediction"][index],
-                pygame.Rect(grid.x, top, grid.w, height),
-                font,
-            )
-    else:
+    for index, (title, values) in enumerate(panels):
+        top = grid.y + index * (height + 23)
+        if title:
+            title_top = top - (34 if outcomes_only and index == 0 else 18)
+            surface.blit(font.render(title, True, (237, 231, 188)), (rect.x + 8, title_top))
+        _draw_grid(surface, values, pygame.Rect(grid.x, top, grid.w, height), font)
+    if not has_effects:
         message = (
             "Field/probe forecasts disabled"
             if decision.get("forecast_mode") == 2 or decision.get("reach_provenance") == 4

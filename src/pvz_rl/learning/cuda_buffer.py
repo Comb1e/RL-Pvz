@@ -761,9 +761,7 @@ class CompleteGameBuffer:
         if "outcome_ready" in self.dtype.names:
             for index, block in enumerate(self.blocks):
                 rows = block[: min(self.block_rows, self.size - index * self.block_rows)]
-                if np.any(
-                    rows["reach_valid"] & rows["effect_valid"].any(-1) & ~rows["outcome_ready"]
-                ):
+                if np.any(rows["effect_valid"].any(-1) & ~rows["outcome_ready"]):
                     raise RuntimeError("Cannot fit unresolved absolute outcome targets")
         self.finalize_rewards()
         running = np.zeros(self.n_envs, np.float64)

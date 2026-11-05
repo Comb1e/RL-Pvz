@@ -21,12 +21,15 @@ This file owns project-specific invariants and the code map.
   use a pooled null branch for effect labels. All tiles remain candidates. Cache
   memory within one forward only; branch impossibility precedes tile invalidity.
 - Forecast supervision is versioned and stage-resolved. Fresh bomb/attacker stages
-  train snapshot threat constraints: all-spawned empty lanes are safe; threatened
-  lanes are unknown except ready-mower home targets. They use zero baseline inputs,
-  no forecast forks/effect loss/tails, and freeze effect/null parameters and EMA.
-  Peashooter/normal retain factual depth at 2τ/9τ/end, breach-time bins and lane
-  loss. Allowed-class NLL preserves censored observations and exact permanently
-  safe lanes without erasing prior penetration. Fresh action outcomes predict
+  use `placement_only`: their placement objectives, zero baseline inputs and no
+  threat prediction, forecast forks/effect loss/tails. Freeze threat/effect/null
+  parameters and their EMA. No fresh stage trains or injects the threat head.
+  Fresh Peashooter/normal use `action_outcomes`: no factual threat tracking,
+  labels, loss, cutoff tail or threat-summary injection. Retain the dormant threat
+  carrier for saved snapshot/factual resumes, including their original
+  2τ/9τ/end targets and unfinished work. Allowed-class NLL preserves censored
+  observations and exact permanently safe lanes without erasing prior penetration.
+  Fresh action outcomes predict
   absolute field depth (11), breach-time bin (6), lane loss (2) and probe depth (11)
   with categorical NLL. Retain the 56-slot output carrier and legacy block offsets;
   reserved classes never enter distributions, summaries or losses. Saved signed
@@ -116,11 +119,13 @@ This file owns project-specific invariants and the code map.
   unfinished panels retain their saved interpretation. Include setup, capture and
   teardown when comparing the 10-second private-pretraining target.
 - Main-game guarded CUDA traces record per-tick depth before defeat and actual home
-  entries after mower resolution. Peashooter Waits privately past its gameplay
-  cutoff; normal games add no tail. Loss/truncated futures remain censored.
+  entries after mower resolution. Saved factual Peashooter runs Wait privately
+  past their gameplay cutoff; outcomes-only runs add no factual tail.
+  Loss/truncated factual futures remain censored.
   Fork/trace failures retain recovery; never convert resource errors to losses.
-- Preliminary stages keep their automatic targets. They train shared/tile/threat parameters
-  and effect parameters only when their saved forecast mode enables them,
+- Preliminary stages keep their automatic placement targets. Fresh placement-only
+  stages train shared/tile parameters; saved modes retain their threat supervision.
+  Peashooter also trains effect/null parameters under its saved outcome mode,
   while action-readout parameters and their EMA stay untouched; shared updates may
   change action predictions. Update EMA only for the phase's trained groups.
   Threat/effect weights are independent stage settings. Demo initialization has no auxiliary loss.

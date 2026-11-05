@@ -151,14 +151,22 @@ def forecast_mode(cfg, stage=None):
 
 
 def forecast_forks_enabled(cfg, stage=None):
-    return (
-        cfg["training"].get("forecasts", {}).get("enabled", False)
-        and forecast_mode(cfg, stage) == "factual"
-    )
+    return cfg["training"].get("forecasts", {}).get("enabled", False) and forecast_mode(
+        cfg, stage
+    ) in ("factual", "action_outcomes")
+
+
+def threat_supervision_enabled(cfg, stage=None):
+    """Saved factual/snapshot heads remain active; all fresh modes skip them."""
+    return cfg["training"].get("forecasts", {}).get("enabled", False) and forecast_mode(
+        cfg, stage
+    ) in ("factual", "snapshot_rules")
 
 
 def threat_prediction_weight(cfg, stage="normal"):
-    """Resolve the stage-specific hindsight threat loss weight."""
+    """Resolve snapshot/legacy factual supervision independently of outcomes."""
+    if forecast_mode(cfg, stage) in ("action_outcomes", "placement_only"):
+        return 0.0
     training = cfg["training"]
     if stage in ("cherry_bomb", "cherry_bomb_obstacle", "attacker_pre", "peashooter"):
         return training.get("stage_threat_weights", {}).get(stage, 0.0)
@@ -1058,10 +1066,14 @@ def validate_config(cfg: dict) -> None:
     for stage, mode in train.get("stage_forecast_modes", {}).items():
         if (
             stage not in _STAGE_PARAMETERS
-            or mode not in ("factual", "snapshot_rules")
+            or mode not in ("factual", "snapshot_rules", "action_outcomes", "placement_only")
             or (
-                mode == "snapshot_rules"
+                mode in ("snapshot_rules", "placement_only")
                 and stage not in ("cherry_bomb", "cherry_bomb_obstacle", "attacker_pre")
+            )
+            or (
+                mode == "action_outcomes"
+                and (stage not in ("peashooter", "normal") or not absolute_outcomes(cfg))
             )
         ):
             raise ValueError(f"Unsupported forecast mode for {stage}")

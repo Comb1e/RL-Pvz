@@ -3,7 +3,12 @@
 import numpy as np
 import torch
 
-from pvz_rl.config import effect_prediction_weight, forecast_forks_enabled, threat_prediction_weight
+from pvz_rl.config import (
+    effect_prediction_weight,
+    forecast_forks_enabled,
+    threat_prediction_weight,
+    threat_supervision_enabled,
+)
 from pvz_rl.learning.forecast_labels import (
     conditional_effect_loss,
     effect_blocks,
@@ -16,7 +21,7 @@ from pvz_rl.learning.forecast_metrics import categorical_histogram, reset_calibr
 
 
 def forecast_eligible(rows):
-    return rows["reach_valid"] & (threat_eligible(rows) | rows["effect_valid"].any(-1))
+    return (rows["reach_valid"] & threat_eligible(rows)) | rows["effect_valid"].any(-1)
 
 
 class PreparedAbsoluteEffects:
@@ -96,23 +101,26 @@ def forecast_auxiliary(
     loss_weights=None,
 ):
     counts = (len(rows), len(rows)) if decision_count is None else decision_count
-    threats = policy.threat_values(memory=memory)
-    tloss = threat_loss(
-        threats,
-        np.array(rows["threat_depth"]),
-        np.array(rows["threat_censored"]),
-        np.array(rows["threat_time"]),
-        np.array(rows["threat_loss"]),
-        decision_count=counts[0],
-        **(
-            dict(
-                depth_allowed=np.array(rows["threat_depth_allowed"]),
-                time_allowed=np.array(rows["threat_time_allowed"]),
-            )
-            if "threat_depth_allowed" in rows.dtype.names
-            else {}
-        ),
-    )
+    threats = None
+    tloss = memory[0].new_zeros((), dtype=torch.float32)
+    if threat_supervision_enabled(policy.cfg, stage):
+        threats = policy.threat_values(memory=memory)
+        tloss = threat_loss(
+            threats,
+            np.array(rows["threat_depth"]),
+            np.array(rows["threat_censored"]),
+            np.array(rows["threat_time"]),
+            np.array(rows["threat_loss"]),
+            decision_count=counts[0],
+            **(
+                dict(
+                    depth_allowed=np.array(rows["threat_depth_allowed"]),
+                    time_allowed=np.array(rows["threat_time_allowed"]),
+                )
+                if "threat_depth_allowed" in rows.dtype.names
+                else {}
+            ),
+        )
     enabled = forecast_forks_enabled(policy.cfg, stage) or (
         loss_weights is not None and loss_weights[1] > 0
     )
@@ -121,8 +129,8 @@ def forecast_auxiliary(
             policy, observations, rows, memory, features, feature_rows, counts[1]
         )
     else:
-        eloss, metric_tokens = threats.new_zeros((), dtype=torch.float32), []
-        tokens = threats.new_zeros(len(rows), dtype=torch.float32)
+        eloss, metric_tokens = tloss.new_zeros(()), []
+        tokens = tloss.new_zeros(len(rows))
     scale = getattr(policy, "auxiliary_scale", 1.0)
     tw, ew = (
         threat_prediction_weight(policy.cfg, stage) * scale,
@@ -306,41 +314,44 @@ def _forecast_metrics(policy, rows, threats, tloss, eloss, metric_tokens, tokens
     device = policy.device
     # Keep a fixed metric carrier for the existing cohort transport. Reporting
     # names below identify the new tasks, rather than calling them cell/home BCE.
-    depth_labels = torch.as_tensor(np.array(rows["threat_depth"]), device=device)
-    depth_logits = threats[..., :33].reshape(-1, 5, 3, 11).float()
-    censored = torch.as_tensor(np.array(rows["threat_censored"]), device=device)
-    valid = (depth_labels >= 0) & ~(censored & (depth_labels == 0))
-    exact = valid & ~censored
-    if "threat_depth_allowed" in rows.dtype.names:
-        allowed = torch.as_tensor(np.array(rows["threat_depth_allowed"]), device=device).long()
-        valid = (allowed != 0) & (allowed != 2047)
-        exact = (allowed != 0) & ((allowed & (allowed - 1)) == 0)
-    correct = (depth_logits.argmax(-1) == depth_labels) & exact
     if not hasattr(policy, "_forecast_calibration"):
         reset_calibration(policy)
     calibration = policy._forecast_calibration
-    categorical_histogram(calibration["depth"], depth_logits.softmax(-1), depth_labels, exact)
-    time_labels = torch.as_tensor(np.array(rows["threat_time"]), device=device)
-    categorical_histogram(
-        calibration["breach_time"],
-        threats[..., 33:39].float().softmax(-1),
-        time_labels,
-        time_labels >= 0,
-    )
-    loss_labels = torch.as_tensor(np.array(rows["threat_loss"]), device=device)
-    prob_loss = threats[..., 39].float().sigmoid()
-    categorical_histogram(
-        calibration["loss"],
-        torch.stack((1 - prob_loss, prob_loss), -1),
-        loss_labels,
-        loss_labels >= 0,
-    )
-    depth_p = depth_logits.detach().softmax(-1)
-    depth_target = torch.nn.functional.one_hot(depth_labels.long().clamp_min(0), 11)
-    depth_brier = ((depth_p - depth_target).square().sum(-1) * exact).sum()
-    effect_brier = threats.new_zeros((), dtype=torch.float32)
-    effect_count = threats.new_zeros((), dtype=torch.float32)
-    effect_correct = threats.new_zeros((), dtype=torch.float32)
+    depth_brier = tloss.new_zeros(())
+    exact = valid = correct = torch.zeros((), device=device, dtype=torch.bool)
+    if threats is not None:
+        depth_labels = torch.as_tensor(np.array(rows["threat_depth"]), device=device)
+        depth_logits = threats[..., :33].reshape(-1, 5, 3, 11).float()
+        censored = torch.as_tensor(np.array(rows["threat_censored"]), device=device)
+        valid = (depth_labels >= 0) & ~(censored & (depth_labels == 0))
+        exact = valid & ~censored
+        if "threat_depth_allowed" in rows.dtype.names:
+            allowed = torch.as_tensor(np.array(rows["threat_depth_allowed"]), device=device).long()
+            valid = (allowed != 0) & (allowed != 2047)
+            exact = (allowed != 0) & ((allowed & (allowed - 1)) == 0)
+        correct = (depth_logits.argmax(-1) == depth_labels) & exact
+        categorical_histogram(calibration["depth"], depth_logits.softmax(-1), depth_labels, exact)
+        time_labels = torch.as_tensor(np.array(rows["threat_time"]), device=device)
+        categorical_histogram(
+            calibration["breach_time"],
+            threats[..., 33:39].float().softmax(-1),
+            time_labels,
+            time_labels >= 0,
+        )
+        loss_labels = torch.as_tensor(np.array(rows["threat_loss"]), device=device)
+        prob_loss = threats[..., 39].float().sigmoid()
+        categorical_histogram(
+            calibration["loss"],
+            torch.stack((1 - prob_loss, prob_loss), -1),
+            loss_labels,
+            loss_labels >= 0,
+        )
+        depth_p = depth_logits.detach().softmax(-1)
+        depth_target = torch.nn.functional.one_hot(depth_labels.long().clamp_min(0), 11)
+        depth_brier = ((depth_p - depth_target).square().sum(-1) * exact).sum()
+    effect_brier = tloss.new_zeros((), dtype=torch.float32)
+    effect_count = tloss.new_zeros((), dtype=torch.float32)
+    effect_correct = tloss.new_zeros((), dtype=torch.float32)
     for logits, target in metric_tokens:
         for term, block in enumerate(effect_blocks(logits, absolute=policy.absolute_outcomes)):
             label = target[..., term]
@@ -392,19 +403,20 @@ def _forecast_metrics(policy, rows, threats, tloss, eloss, metric_tokens, tokens
                     changed.sum(),
                 )
             ).double()
-    times_p = threats[..., 33:39].detach().float().softmax(-1)
-    times_valid = time_labels >= 0
-    times_target = torch.nn.functional.one_hot(time_labels.long().clamp_min(0), 6)
-    policy._forecast_score_totals[:6] += torch.stack(
-        (
-            ((times_p - times_target).square().sum(-1) * times_valid).sum(),
-            times_valid.sum(),
-            ((times_p.argmax(-1) == time_labels) & times_valid).sum(),
-            ((prob_loss.detach() - loss_labels).square() * (loss_labels >= 0)).sum(),
-            (loss_labels >= 0).sum(),
-            (((prob_loss >= 0.5) == loss_labels.bool()) & (loss_labels >= 0)).sum(),
-        )
-    ).double()
+    if threats is not None:
+        times_p = threats[..., 33:39].detach().float().softmax(-1)
+        times_valid = time_labels >= 0
+        times_target = torch.nn.functional.one_hot(time_labels.long().clamp_min(0), 6)
+        policy._forecast_score_totals[:6] += torch.stack(
+            (
+                ((times_p - times_target).square().sum(-1) * times_valid).sum(),
+                times_valid.sum(),
+                ((times_p.argmax(-1) == time_labels) & times_valid).sum(),
+                ((prob_loss.detach() - loss_labels).square() * (loss_labels >= 0)).sum(),
+                (loss_labels >= 0).sum(),
+                (((prob_loss >= 0.5) == loss_labels.bool()) & (loss_labels >= 0)).sum(),
+            )
+        ).double()
     metrics = torch.stack(
         (
             tloss.detach(),
