@@ -316,21 +316,38 @@ def inspect_checkpoint(path, *, weights_only=False):
 
                 validate_rule_recovery(runtime, cfg)
                 if runtime.get("buffer") is not None:
-                    from pvz_rl.learning.collection_scheduler import CollectionScheduler
+                    from pvz_rl.learning.collection_scheduler import (
+                        CollectionScheduler,
+                        unissued_collection,
+                    )
                     from pvz_rl.learning.exploration import CommittedPlantExploration
 
                     if any(
                         runtime.get(key) is None
                         for key in (
-                            "collection_scheduler",
                             "teacher",
                             "compilation",
                             "pending_episodes",
                         )
                     ):
-                        raise ValueError("Incomplete no-probe recovery state")
+                        raise ValueError("Incomplete cohort recovery state")
                     capacity = training_env_capacity(cfg, metadata["family"])
-                    CollectionScheduler(capacity, "cpu").restore(runtime["collection_scheduler"])
+                    scheduler = runtime.get("collection_scheduler")
+                    if scheduler is None:
+                        # Admission failed during cohort setup, before ticket
+                        # creation. No action/RNG draw may be reconstructed once
+                        # any decision was issued; prepared boards stay owned.
+                        if not unissued_collection(
+                            runtime,
+                            stored.get("phase"),
+                            stored.get("num_timesteps"),
+                            stored.get("cohort_start_steps"),
+                        ):
+                            raise ValueError(
+                                "Missing collection tickets after decisions were issued"
+                            )
+                    else:
+                        CollectionScheduler(capacity, "cpu").restore(scheduler)
                     controller = runtime.get("plant_exploration")
                     if not isinstance(controller, dict):
                         raise ValueError("Incomplete committed plant recovery state")

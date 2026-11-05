@@ -26,6 +26,8 @@ This file owns project-specific invariants and the code map.
   including rejections; no null/Wait target or alternatives. Keep placement teachers
   and stage weights. Train shared/tile/outcome parameters; freeze action-type/null
   parameters and EMA. Early tile scores receive no outcome-summary injection.
+  Reserve no Wait boundary buffers for placement exercises; charge only their
+  occupied proposal packets and admitted workers to auxiliary VRAM.
   Peashooter/normal use `action_outcomes` with explicit valid Wait references.
   Predict absolute field depth (11), breach bin (6), lane loss (2) and probe depth
   (11); preserve the 56-slot carrier, excluding reserved classes. Average known
@@ -112,6 +114,8 @@ This file owns project-specific invariants and the code map.
   initialization; no conversions or legacy execution. New-version recovery retains
   optimizer/counters, owned roots/rows/choices, partial jobs, unpublished results
   and committed passes. Publish every target once before fitting.
+  A setup failure before any issued decision may rebuild an empty scheduler from
+  the saved boards. Missing tickets after collection starts remain invalid.
 - Preserve CPU/CUDA cadence, legality, physical trajectories, reward conversion and
   attribution agreement. Viewers/diagnostics must not affect learning.
 - Preparation/prefetch is bounded and speculative: commit seeds only on consumption,

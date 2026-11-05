@@ -57,6 +57,15 @@ def wait_capture_source(source):
 
 
 class WaitCapture:
+    @staticmethod
+    def required_bytes(batch):
+        """Two full-tick states plus metadata/watch storage for each game."""
+        physical = sum(
+            getattr(batch, name).nbytes
+            for name in ("header", "plants", "zombies", "projectiles", "mowers", "cooldowns")
+        )
+        return 2 * physical + batch.n * 4 * np.dtype(np.int64).itemsize
+
     def __init__(self, batch):
         self.batch = batch
         self.shapes = [

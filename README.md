@@ -81,6 +81,8 @@ settings and `effect_prediction_weight`. The first three stages use
 auxiliary target alongside its existing placement teacher. Rejected placements
 receive the engine's no-op continuation. They add no Wait target or alternatives;
 outcomes guide shared feature learning without entering tile scores in these stages.
+Their memory budget charges occupied proposal snapshots and workers; Wait-interval
+boundary buffers are reserved only for Peashooter/normal collection.
 
 Peashooter and normal stages use `action_outcomes`. Peashooter keeps its prioritized
 lane teacher and zero alternatives. Normal stages retain the branch runner-up and

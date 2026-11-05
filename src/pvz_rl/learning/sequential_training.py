@@ -39,7 +39,7 @@ from pvz_rl.learning.bomb_objective import (
     bomb_set_cross_entropy,
 )
 from pvz_rl.learning.cohort import CohortPhase, atomic_transition, check_transition_interruption
-from pvz_rl.learning.collection_scheduler import CollectionScheduler
+from pvz_rl.learning.collection_scheduler import CollectionScheduler, unissued_collection
 from pvz_rl.learning.cuda_q import CudaCohortLifecycle
 from pvz_rl.learning.exploration import (
     CommittedPlantExploration,
@@ -308,6 +308,11 @@ class CudaSequentialQ(CudaCohortLifecycle):
             network.auxiliary_scale = self._resolved_forecast_schedule["auxiliary_scale"]
         self._stats["forecast_schedule"] = dict(self._resolved_forecast_schedule)
         self._stats["forecast_mode"] = forecast_mode(self.cfg, self.tile_skills.phase)
+        # Resource admission can fail before the first action. Retain a complete
+        # empty ticket state so recovery can use the already prepared boards.
+        self._scheduler = CollectionScheduler(self.n_envs, self.device)
+        self._pending_effect = None
+        self._wait_outcomes = None
         from pvz_rl.learning.auxiliary_settings import enabled as hybrid_enabled
 
         if (hybrid_enabled(self.cfg) or is_placement_skill(self.tile_skills.phase)) and (
@@ -326,9 +331,6 @@ class CudaSequentialQ(CudaCohortLifecycle):
                 self._buffer,
                 (self.cohort_number, self.optimizer_commits),
             )
-        self._scheduler = CollectionScheduler(self.n_envs, self.device)
-        self._pending_effect = None
-        self._wait_outcomes = None
         if (
             absolute_outcomes(self.cfg)
             and self.outcome_training
@@ -1576,10 +1578,17 @@ class CudaSequentialQ(CudaCohortLifecycle):
                     "pending_episodes",
                     "compilation",
                     "plant_exploration",
-                    "collection_scheduler",
                 )
             ):
                 raise ValueError("Incomplete objective recovery state")
+            if (
+                self.phase != CohortPhase.IDLE
+                and extra.get("collection_scheduler") is None
+                and not unissued_collection(
+                    extra, self.phase, self.num_timesteps, self.cohort_start_steps
+                )
+            ):
+                raise ValueError("Missing collection tickets after decisions were issued")
         super()._restore_runtime()
         from pvz_rl.learning.auxiliary_settings import enabled as hybrid_enabled
 

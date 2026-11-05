@@ -4,6 +4,21 @@ import numpy as np
 import torch
 
 
+def unissued_collection(state, phase, steps, cohort_start):
+    """Setup failed before tickets: owned boards need no reconstructed decisions."""
+    buffer = state.get("buffer")
+    return (
+        phase == "collect"
+        and isinstance(buffer, dict)
+        and buffer.get("size") == 0
+        and type(steps) is int
+        and steps >= 0
+        and steps == cohort_start
+        and state.get("pending_effect") is None
+        and state.get("pending_episodes") == {}
+    )
+
+
 class CollectionScheduler:
     def __init__(self, count, device):
         self.pending = np.zeros(count, dtype=bool)
