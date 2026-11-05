@@ -126,6 +126,9 @@ This file owns project-specific invariants and the code map.
 - Fitting encoders compile once per shape and keep that cache across cohorts and
   validation; releases free CUDA captures only. Recompile only for shape-changing
   pass fallbacks; per-cohort recompilation leaks compiler objects and slows fitting.
+  Capture encoder graphs with `capture_begin(capture_error_mode="thread_local")`, not
+  `torch.cuda.graph()`: auxiliary threads poll CUDA events during capture, and the
+  context manager runs a full `gc.collect()` per capture.
 - Preparation/prefetch is bounded and speculative: commit seeds only on consumption,
   regenerate unfinished work on resume, share RAM/VRAM limits, and preserve exact
   attributed labels. Respect independent configured stage cohort/resource sizes.
