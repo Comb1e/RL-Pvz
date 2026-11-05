@@ -357,6 +357,17 @@ class CompleteGameBuffer:
             result[selected] = self.blocks[b][offsets[selected]]
         return result
 
+    def put(self, indices, field, values):
+        """Write one field of collected rows; the inverse of ``take``."""
+        indices = np.asarray(indices, dtype=np.int64)
+        if np.any(indices < 0) or np.any(indices >= self.size):
+            raise IndexError("Trajectory index outside collected history")
+        values = np.asarray(values)
+        blocks, offsets = np.divmod(indices, self.block_rows)
+        for b in np.unique(blocks):
+            selected = blocks == b
+            self.blocks[b][field][offsets[selected]] = values[selected]
+
     def observations(self, rows, device=None, *, destination=None):
         flat = rows.reshape(-1)
         starts, counts = flat["entity_offset"], flat["entity_count"]
@@ -575,18 +586,44 @@ class CompleteGameBuffer:
         if not by_episode or settings is None:
             return summary
 
-        terminal_rows = {}
-        episode_rows = {}
+        if not self.blocks:
+            return summary
+        # Group eligible rows by episode with array sorts; a Python pass per row
+        # took seconds for normal cohorts of ~200k decisions.
+        located = []
         for block_index, block in enumerate(self.blocks):
             rows = block[: min(self.block_rows, self.size - block_index * self.block_rows)]
-            for index in np.flatnonzero(rows["active"] & rows["components_valid"]):
-                row = rows[index]
-                key = int(row["env"]), int(row["episode"])
-                if key not in by_episode:
-                    continue
-                episode_rows.setdefault(key, []).append((block, int(index)))
-                if row["done"]:
-                    terminal_rows[key] = (block, int(index))
+            index = np.flatnonzero(rows["active"] & rows["components_valid"])
+            located.append(
+                (
+                    rows["env"][index].astype(np.int64),
+                    rows["episode"][index].astype(np.uint64),
+                    np.full(len(index), block_index, np.int64),
+                    index,
+                    rows["done"][index],
+                )
+            )
+        envs, episodes, block_ids, offsets, done = (
+            np.concatenate(parts) for parts in zip(*located, strict=True)
+        )
+        order = np.lexsort((offsets, block_ids, episodes, envs))  # collection order per episode
+        envs, episodes, block_ids, offsets, done = (
+            value[order] for value in (envs, episodes, block_ids, offsets, done)
+        )
+        boundaries = np.flatnonzero((np.diff(envs) != 0) | (np.diff(episodes) != 0)) + 1
+        starts = np.r_[0, boundaries] if len(envs) else np.empty(0, np.int64)
+        stops = np.r_[boundaries, len(envs)] if len(envs) else np.empty(0, np.int64)
+        terminal_rows = {}
+        episode_rows = {}
+        for start, stop in zip(starts, stops, strict=True):
+            key = int(envs[start]), int(episodes[start])
+            if key not in by_episode:
+                continue
+            episode_rows[key] = (block_ids[start:stop], offsets[start:stop])
+            finished = np.flatnonzero(done[start:stop])
+            if len(finished):
+                last = start + int(finished[-1])
+                terminal_rows[key] = (self.blocks[block_ids[last]], int(offsets[last]))
 
         for key, metrics in by_episode.items():
             terminal = terminal_rows.get(key)
@@ -616,35 +653,27 @@ class CompleteGameBuffer:
                 block[index]["reward"] = raw_rewards(block[index]["components"], self.cfg)
                 summary["win_final_rewards"] += magnitude
             else:
-                references = episode_rows.get(key, [])
-                references.sort(key=lambda item: int(item[0][item[1]]["decision"]))
-                raw = np.asarray(
-                    [
-                        candidate_block[candidate_index]
-                        for candidate_block, candidate_index in references
-                    ]
+                block_ids, offsets = episode_rows.get(
+                    key, (np.empty(0, np.int64), np.empty(0, np.int64))
                 )
+                raw = np.empty(len(offsets), dtype=self.dtype)
+                for b in np.unique(block_ids):
+                    selected = block_ids == b
+                    raw[selected] = self.blocks[b][offsets[selected]]
+                order = np.argsort(raw["decision"], kind="stable")
+                block_ids, offsets, raw = block_ids[order], offsets[order], raw[order]
                 penalties, details = residual_sun_wait_penalties(raw, magnitude)
-                for (candidate_block, candidate_index), penalty in zip(
-                    references, penalties, strict=True
-                ):
-                    if penalty == 0:
-                        continue
-                    candidate_block[candidate_index]["components"][0] += penalty
-                    candidate_block[candidate_index]["reward"] = raw_rewards(
-                        candidate_block[candidate_index]["components"], self.cfg
-                    )
+                for b in np.unique(block_ids[penalties != 0]):
+                    selected = (block_ids == b) & (penalties != 0)
+                    rows = self.blocks[b]
+                    at = offsets[selected]
+                    components = rows["components"][at]
+                    components[:, 0] += penalties[selected]
+                    rows["components"][at] = components
+                    rows["reward"][at] = raw_rewards(components, self.cfg)
                 episode_summary.update(
                     wait_rows=details["wait_rows"],
-                    wait_duration=int(
-                        sum(
-                            int(candidate_block[candidate_index]["duration"])
-                            for (candidate_block, candidate_index), penalty in zip(
-                                references, penalties, strict=True
-                            )
-                            if penalty < 0
-                        )
-                    ),
+                    wait_duration=int(raw["duration"][penalties < 0].astype(np.int64).sum()),
                     run_count=details["run_count"],
                     shortest_run=details["shortest_run"],
                     longest_run=details["longest_run"],

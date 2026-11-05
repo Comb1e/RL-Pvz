@@ -96,29 +96,20 @@ def residual_sun_wait_penalties(rows, amount):
         & (ordered["route"] == int(FitRoute.WAIT_RETURN))
         & (ordered["exploration_mode"] == 0)
     )
-    starts, stops = [], []
-    start = None
-    for index, is_eligible in enumerate(eligible):
-        continues = bool(is_eligible and start is not None)
-        if continues:
-            previous = index - 1
-            continues = bool(
-                eligible[previous]
-                and int(ordered["decision"][index]) == int(ordered["decision"][previous]) + 1
-                and not (
-                    ("reset" in names and ordered["reset"][index])
-                    or ("run_break" in names and ordered["run_break"][index])
-                    or ("done" in names and ordered["done"][previous])
-                )
-            )
-        if not continues:
-            if start is not None:
-                stops.append(index)
-            start = index if is_eligible else None
-            if start is not None:
-                starts.append(start)
-    if start is not None:
-        stops.append(len(ordered))
+    # A row continues the run when it and its predecessor are eligible
+    # consecutive decisions with no reset, run break or terminal between them.
+    decision = ordered["decision"]
+    continues = np.zeros(len(ordered), dtype=bool)
+    linked = (decision[1:] > decision[:-1]) & (decision[1:] - decision[:-1] == 1)
+    for name, at in (("reset", slice(1, None)), ("run_break", slice(1, None)), ("done", slice(-1))):
+        if name in names:
+            linked &= ~ordered[name][at].astype(bool)
+    continues[1:] = eligible[1:] & eligible[:-1] & linked
+    starts = np.flatnonzero(eligible & ~continues)
+    breaks = np.flatnonzero(~continues)
+    following = np.searchsorted(breaks, starts, side="right")
+    stops = np.append(breaks, len(ordered))[following]
+    starts, stops = starts.tolist(), stops.tolist()
 
     lengths = [stop - begin for begin, stop in zip(starts, stops, strict=True)]
     minimum = min(lengths, default=0)

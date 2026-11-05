@@ -10,18 +10,35 @@ from pvz_rl.learning.objective import selected_action_targets, training_rewards
 
 
 def nstep_returns(rewards, durations, bootstrap, terminal, *, n, gamma):
+    """Per-start n-step sums, vectorized across starts in the original step order."""
     rewards, durations = np.asarray(rewards), np.asarray(durations)
-    result = np.zeros(len(rewards), np.float64)
-    for start in range(len(rewards)):
-        factor = 1.0
-        stop = start
-        for stop in range(start, min(len(rewards), start + n)):
-            result[start] += factor * rewards[stop]
-            factor *= gamma ** int(durations[stop])
-            if terminal[stop]:
-                break
-        if not terminal[stop] and stop + 1 < len(rewards):
-            result[start] += factor * bootstrap[stop + 1]
+    bootstrap, terminal = np.asarray(bootstrap), np.asarray(terminal, dtype=bool)
+    size = len(rewards)
+    result = np.zeros(size, np.float64)
+    if not size:
+        return result
+    # Python float powers, matching the scalar gamma ** duration exactly.
+    values = np.unique(durations)
+    decay = np.array([gamma ** int(value) for value in values])[np.searchsorted(values, durations)]
+    starts = np.arange(size)
+    factor = np.ones(size)
+    stop = starts.copy()
+    alive = np.ones(size, dtype=bool)
+    for offset in range(n):
+        position = starts + offset
+        step = alive & (position < size)
+        if not step.any():
+            break
+        at = position[step]
+        result[step] += factor[step].astype(rewards.dtype) * rewards[at]
+        factor[step] *= decay[at]
+        stop[step] = at
+        alive[step] = ~terminal[at]
+    bootstrapped = ~terminal[stop] & (stop + 1 < size)
+    # The scalar loop multiplies a Python float by a bootstrap element in its own dtype.
+    result[bootstrapped] += (
+        factor[bootstrapped].astype(bootstrap.dtype) * bootstrap[stop[bootstrapped] + 1]
+    )
     return result
 
 
@@ -51,15 +68,11 @@ class TDTargetBuilder:
             self.cursor, self.episode_cursor = state["cursor"], state["episode_cursor"]
             self.bootstrap[:] = state["bootstrap"]
 
-    def _row(self, index):
-        block, offset = divmod(int(index), self.buffer.block_rows)
-        return self.buffer.blocks[block][offset]
-
     def advance(self):
         model, buffer = self.model, self.buffer
         if self.cursor < buffer.size:
             last = min(buffer.size, self.cursor + model.cfg["training"]["batch_size"])
-            rows = np.array([self._row(i) for i in range(self.cursor, last)])
+            rows = buffer.take(np.arange(self.cursor, last))
             obs = buffer.observations(rows, device=model.device)
             with torch.no_grad():
                 online = model.policy.species_values(obs).float()
@@ -73,7 +86,7 @@ class TDTargetBuilder:
         if self.episode_cursor < len(self.keys):
             blocks, length = buffer._source_index[self.keys[self.episode_cursor]]
             indices = np.concatenate(blocks)[:length]
-            rows = np.array([self._row(i) for i in indices])
+            rows = buffer.take(indices)
             rewards = training_rewards(rows["components"], model.cfg)
             settings = model._resolved_forecast_schedule
             shaping = model.cfg["training"]["forecasts"]
@@ -96,8 +109,7 @@ class TDTargetBuilder:
                 n=settings["n_step"],
                 gamma=settings["gamma_tick"],
             )
-            for index, target in zip(indices, targets, strict=True):
-                self._row(index)["target"] = target
+            buffer.put(indices, "target", targets)
             self.episode_cursor += 1
             return False
         return True
