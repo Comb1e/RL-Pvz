@@ -2,6 +2,7 @@
 
 import numpy as np
 import torch
+from torch._functorch import config as functorch_config
 
 from pvz_rl.config import forecast_forks_enabled, outcome_prediction_weights
 from pvz_rl.envs.static_fork import reference_tau
@@ -146,7 +147,10 @@ def gradient_norm_ratios(policy):
         if not loss.requires_grad:
             values.append(loss.new_zeros(()))
             continue
-        grads = torch.autograd.grad(loss, trunk, retain_graph=True, allow_unused=True)
+        # Persistent compiled shapes reject retained backwards once their graph was
+        # first run with donated buffers; owned CUDA-graph captures donate nothing.
+        with functorch_config.patch(donated_buffer=False):
+            grads = torch.autograd.grad(loss, trunk, retain_graph=True, allow_unused=True)
         squared = [g.detach().float().square().sum() for g in grads if g is not None]
         values.append(torch.stack(squared).sum().sqrt() if squared else loss.new_zeros(()))
     q, effect = torch.stack(values).cpu().tolist()
