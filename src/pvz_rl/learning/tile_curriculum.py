@@ -2,19 +2,28 @@
 
 from dataclasses import asdict, dataclass, field
 
-from pvz_rl.envs.tile_scenarios import LEGACY_SKILLS, SKILLS
+from pvz_rl.envs.tile_scenarios import LEGACY_SKILLS, SKILLS, attacker_mix
 from pvz_rl.learning.budget import validation_interval_games
 from pvz_rl.learning.curriculum import TILE_STAGES
 
 TILE_SCENARIO_PROTOCOL = "tile-skill-prerequisites-v1"
 
 
+def tile_validation_count(cfg, skill):
+    return (
+        attacker_mix(cfg)["validation_cases"]
+        if skill == "attacker"
+        else cfg["curriculum"]["probe_cases"]
+    )
+
+
 def required_validation_wins(cfg, skill):
     """Strict per-skill thresholds; absent settings and other skills require every case."""
-    count = cfg["curriculum"]["probe_cases"]
+    count = tile_validation_count(cfg, skill)
     threshold = (
         cfg["curriculum"].get(f"{skill}_validation_success_threshold")
-        if skill in ("cherry_bomb", "peashooter") else None
+        if skill in ("cherry_bomb", "peashooter")
+        else None
     )
     if threshold is None:
         return count
@@ -37,6 +46,7 @@ class TileSkillState:
         # Old saved stage orders and joint probes never acquire a new lesson.
         self.episodes.setdefault("cherry_bomb_obstacle", 0)
         self.episodes.setdefault("attacker_pre", 0)
+        self.episodes.setdefault("attacker", 0)
         self.scores = dict(self.scores)
         self.stage_probes = dict(self.stage_probes)
         if self.stage_order is not None:
@@ -44,7 +54,8 @@ class TileSkillState:
             if (
                 len(set(self.stage_order)) != len(self.stage_order)
                 or any(skill not in TILE_STAGES for skill in self.stage_order)
-                or self.active and self.phase not in self.stage_order
+                or self.active
+                and self.phase not in self.stage_order
             ):
                 raise ValueError("Invalid independent tile-stage order")
         if self.phase not in (*SKILLS, "complete"):
@@ -62,7 +73,8 @@ class TileSkillState:
             raise ValueError("Tile prerequisite probe exceeds completed episodes")
         invalid_score_keys = (
             set(self.scores) != set(LEGACY_SKILLS)
-            if self.stage_order is None else bool(set(self.scores) - set(SKILLS))
+            if self.stage_order is None
+            else bool(set(self.scores) - set(SKILLS))
         )
         if self.scores and (
             invalid_score_keys
@@ -99,13 +111,12 @@ class TileSkillState:
         previous = (
             self.last_probe if self.stage_order is None else self.stage_probes.get(self.phase, 0)
         )
-        return (
-            self.active
-            and self.progress - previous >= validation_interval_games(cfg, self.validation_domain)
+        return self.active and self.progress - previous >= validation_interval_games(
+            cfg, self.validation_domain
         )
 
     def observe(self, scores, cfg):
-        count = cfg["curriculum"]["probe_cases"]
+        count = tile_validation_count(cfg, self.validation_domain)
         if set(scores) != set(self.validation_skills) or any(
             type(value) is not int or not 0 <= value <= count for value in scores.values()
         ):
@@ -117,7 +128,9 @@ class TileSkillState:
             self.last_probe = self.total
             if scores[skill] >= required_validation_wins(cfg, skill):
                 index = self.stage_order.index(skill) + 1
-                self.phase = self.stage_order[index] if index < len(self.stage_order) else "complete"
+                self.phase = (
+                    self.stage_order[index] if index < len(self.stage_order) else "complete"
+                )
             return self.phase
         failed = [skill for skill in LEGACY_SKILLS if scores[skill] != count]
         self.scores = dict(scores)
@@ -147,6 +160,6 @@ def initial_tile_state(cfg, family="preset"):
     order = list(TILE_STAGES) if stage is None else [stage] if stage in TILE_STAGES else []
     if "attacker" not in cfg["training"].get("tile_scenarios", {}):
         order = [skill for skill in order if skill != "attacker_pre"]
-    return TileSkillState(
-        phase=order[0] if enabled else "complete", stage_order=order
-    ).to_dict()
+    if attacker_mix(cfg) is None:
+        order = [skill for skill in order if skill != "attacker"]
+    return TileSkillState(phase=order[0] if enabled else "complete", stage_order=order).to_dict()

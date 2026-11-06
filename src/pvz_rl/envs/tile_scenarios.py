@@ -2,6 +2,7 @@
 
 import random
 from dataclasses import replace
+from fractions import Fraction
 
 from pvz_game import LevelSpec, Place, Spawn, Status, Wait
 from pvz_game.config import InitialPlant, resolve_level
@@ -19,7 +20,8 @@ from pvz_rl.learning.deadline import check_deadline
 
 LEGACY_SKILLS = ("peashooter", "cherry_bomb")
 BOMB_SKILLS = ("cherry_bomb", "cherry_bomb_obstacle")
-SKILLS = (*LEGACY_SKILLS, "cherry_bomb_obstacle", "attacker_pre")
+ATTACKER_EXERCISES = (*BOMB_SKILLS, "attacker_pre")
+SKILLS = (*LEGACY_SKILLS, "cherry_bomb_obstacle", "attacker_pre", "attacker")
 
 
 def is_bomb_skill(skill):
@@ -27,7 +29,44 @@ def is_bomb_skill(skill):
 
 
 def is_placement_skill(skill):
-    return is_bomb_skill(skill) or skill == "attacker_pre"
+    return skill in (*ATTACKER_EXERCISES, "attacker")
+
+
+def attacker_mix(cfg):
+    return cfg["training"].get("tile_scenarios", {}).get("attacker_mix")
+
+
+def attacker_quotas(ratios, size):
+    """Largest remainder, breaking ties in source exercise order."""
+    shares = [size * Fraction(str(ratio)) for ratio in ratios]
+    counts = [int(share) for share in shares]
+    order = sorted(range(len(shares)), key=lambda i: counts[i] - shares[i])
+    for i in order[: size - sum(counts)]:
+        counts[i] += 1
+    return counts
+
+
+def shuffled_attacker_exercises(cfg, seeds, *, validation=False):
+    counts = attacker_quotas(attacker_mix(cfg)["ratios"], len(seeds))
+    exercises = [
+        skill for skill, count in zip(ATTACKER_EXERCISES, counts, strict=True) for _ in range(count)
+    ]
+    # Derive a separate stream from the panel identity without drawing any board RNG.
+    random.Random(repr(("attacker-exercises-v1", validation, tuple(seeds)))).shuffle(exercises)
+    return exercises
+
+
+def placement_source(stage, board):
+    return board["exercise"] if stage == "attacker" else stage
+
+
+def attacker_exercise_scores(rows):
+    scores = {skill: dict(games=0, wins=0) for skill in ATTACKER_EXERCISES}
+    for row in rows:
+        score = scores[row["exercise"]]
+        score["games"] += 1
+        score["wins"] += bool(row["win"])
+    return scores
 
 
 def placement_settings(cfg, skill):
@@ -39,7 +78,7 @@ def preparation_settings(cfg, skill):
     """One resource interface for all single-placement exercises."""
     perf = cfg["training"].get("performance", {})
     result = {k.removeprefix("cherry_"): v for k, v in perf.items() if k.startswith("cherry_")}
-    if skill == "attacker_pre":
+    if skill in ("attacker_pre", "attacker"):
         result.update(
             {k.removeprefix("attacker_"): v for k, v in perf.items() if k.startswith("attacker_")}
         )

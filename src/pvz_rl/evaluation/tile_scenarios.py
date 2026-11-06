@@ -11,20 +11,39 @@ from pvz_rl.envs.env import PvZEnv
 from pvz_rl.envs.scenarios import namespace_seed
 from pvz_rl.envs.sky_sun import peashooter_sky_sun_rate
 from pvz_rl.envs.tile_scenarios import (
+    ATTACKER_EXERCISES,
     LEGACY_SKILLS,
     SKILLS,
+    attacker_mix,
     bomb_hit,
     is_bomb_skill,
     is_placement_skill,
     peashooter_level,
+    shuffled_attacker_exercises,
 )
 from pvz_rl.evaluation.cuda_evaluation import deterministic_validation
 from pvz_rl.learning.deadline import check_deadline
 from pvz_rl.policy.runner import PolicyRunner
 
 
+def _validation_groups(cfg, skills, seeds):
+    for stage in skills:
+        if stage != "attacker":
+            yield stage, stage, list(enumerate(seeds))
+            continue
+        if len(seeds) != attacker_mix(cfg)["validation_cases"]:
+            raise ValueError("Mixed attacker validation requires a full panel")
+        assignments = shuffled_attacker_exercises(cfg, seeds, validation=True)
+        for skill in ATTACKER_EXERCISES:
+            yield (
+                stage,
+                skill,
+                [(i, seeds[i]) for i, source in enumerate(assignments) if source == skill],
+            )
+
+
 def validate_tile_skills(cfg, model, seeds, *, deadline=None, progress=None, skills=LEGACY_SKILLS):
-    results = {}
+    results = {skill: [] for skill in skills}
     with deterministic_validation(model):
         if (
             not skills
@@ -32,9 +51,10 @@ def validate_tile_skills(cfg, model, seeds, *, deadline=None, progress=None, ski
             or any(skill not in SKILLS for skill in skills)
         ):
             raise ValueError("Select at least one distinct supported tile skill")
-        for skill in skills:
-            cases = [namespace_seed(f"tile-validation/{skill}", seed) for seed in seeds]
-            rows = []
+        for stage, skill, indexed_seeds in _validation_groups(cfg, skills, seeds):
+            namespace = f"tile-validation/{stage}" + (f"/{skill}" if stage != skill else "")
+            cases = [namespace_seed(namespace, seed) for _, seed in indexed_seeds]
+            rows = results[stage]
             for offset in range(0, len(cases), cfg["training"]["n_envs"]):
                 check_deadline(deadline)
                 chunk = cases[offset : offset + cfg["training"]["n_envs"]]
@@ -144,22 +164,25 @@ def validate_tile_skills(cfg, model, seeds, *, deadline=None, progress=None, ski
                                                 "Tile prerequisite CUDA trace differs from CPU"
                                             )
                                     success = metrics["status"] == "won"
-                                rows.append(
-                                    dict(
-                                        skill=skill,
-                                        seed=chunk[index],
-                                        win=bool(success),
-                                        selected_action=traces[index][0]
-                                        if is_placement_skill(skill)
-                                        else None,
-                                        decisions=len(traces[index]),
-                                        cpu_verified=True,
-                                        **details,
-                                    )
+                                row = dict(
+                                    skill=stage,
+                                    seed=chunk[index],
+                                    win=bool(success),
+                                    selected_action=traces[index][0]
+                                    if is_placement_skill(skill)
+                                    else None,
+                                    decisions=len(traces[index]),
+                                    cpu_verified=True,
+                                    **details,
                                 )
+                                if stage != skill:
+                                    row["exercise"] = skill
+                                rows.append((indexed_seeds[offset + index][0], row))
                             if progress:
                                 progress.emit(
-                                    f"Tile validation {skill}: {len(rows)}/{len(cases)} complete"
+                                    f"Tile validation {stage}: {len(rows)}/{len(seeds)} complete"
                                 )
-            results[skill] = rows
-    return results
+    return {
+        stage: [row for _, row in sorted(rows, key=lambda item: item[0])]
+        for stage, rows in results.items()
+    }

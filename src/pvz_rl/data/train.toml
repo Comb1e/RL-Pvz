@@ -154,15 +154,15 @@ oracle_vram_mib = 2048
 [training.cherry_bomb_obstacle]
 forecast_mode = "placement_outcomes"
 extra_actions = 0
-static_field_prediction_weight = 0.1
-probe_prediction_weight = 0.1
+static_field_prediction_weight = 0.5
+probe_prediction_weight = 0.2
 softmax_temperature = { zero_success = 1, full_success = 1 } # Independent schedule; mastery still requires 100/100.
 
 [training.attacker_pre]
 forecast_mode = "placement_outcomes"
 extra_actions = 0
-static_field_prediction_weight = 0.1
-probe_prediction_weight = 0.1
+static_field_prediction_weight = 0.5
+probe_prediction_weight = 0.2
 n_envs = 640 # Lowest measured collection time/env on the RTX 4070 Laptop profile.
 plants = [4, 8] # Total across four non-zombie lanes; at least one in each.
 zombie_count = [1, 2] # Basic zombies, all in the remaining empty lane.
@@ -179,11 +179,21 @@ cuda_warmup = true # Natural initial cooldown only; distance labels use no candi
 oracle_lanes = 640 # Independent scratch limits; used only for natural cooldown warmup.
 oracle_vram_mib = 1024
 
+[training.attacker]
+forecast_mode = "placement_outcomes"
+extra_actions = 0
+static_field_prediction_weight = 0.5
+probe_prediction_weight = 0.2
+n_envs = 640
+validation_cases = 200 # All must pass.
+ratios = [0.1, 0.4, 0.5] # Cherry Bomb, Cherry Bomb Obstacle, Attacker Pre.
+probe_interval_games = 10000
+
 [training.peashooter]
 forecast_mode = "action_outcomes" # Teacher plus field/probe targets.
 extra_actions = 0 # The placement teacher supplies targets; retain actual-action effects only.
-static_field_prediction_weight = 0.1
-probe_prediction_weight = 0.1
+static_field_prediction_weight = 0.5
+probe_prediction_weight = 0.2
 # Independent cohort/preparation sizing; shared optimizer and fitting passes.
 n_envs = 128
 sky_sun_rate = 1.5 # Divide sky-drop delays by this rate; keep each drop at 25 sun.
@@ -201,8 +211,8 @@ oracle_chunk_ticks = 4096
 [training.normal]
 forecast_mode = "action_outcomes" # Post-action field/probe targets only.
 n_envs = 128
-static_field_prediction_weight = 0.1
-probe_prediction_weight = 0.1
+static_field_prediction_weight = 0.5
+probe_prediction_weight = 0.2
 validation_schedule = "stage_success" # Evaluate normal games only after each stage passes.
 eval_interval_games = 2000 # Periodic game-count diagnostic/fixed checks.
 # Species exploration stays fixed throughout a cohort; tile proposals are greedy.
@@ -215,7 +225,7 @@ residency = "episode_start_stage"
 probe_interval_games = 2000
 minimum_stage_games = 100
 probe_interval = 16384
-probe_cases = 100 # Shared validation panel size for every stage.
+probe_cases = 100 # Default validation panel size; attacker has its own.
 consecutive_passes = 1
 minimum_stage_steps = 16384
 boundaries = [0.1, 0.4]

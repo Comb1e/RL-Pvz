@@ -28,7 +28,12 @@ from pvz_rl.config import (
 from pvz_rl.envs.rewards import LEDGER_METRICS, REWARD_METRICS
 from pvz_rl.envs.scenarios import difficulty_weights
 from pvz_rl.envs.sky_sun import peashooter_sky_sun_rate
-from pvz_rl.envs.tile_scenarios import is_placement_skill, placement_settings
+from pvz_rl.envs.tile_scenarios import (
+    attacker_exercise_scores,
+    attacker_mix,
+    is_placement_skill,
+    placement_settings,
+)
 from pvz_rl.evaluation.runner import evaluate, summarize
 from pvz_rl.learning.budget import (
     budget_target,
@@ -58,7 +63,11 @@ from pvz_rl.learning.exploration import (
 from pvz_rl.learning.objective import components, training_rewards
 from pvz_rl.learning.peashooter_rules import RULE_OBJECTIVE
 from pvz_rl.learning.performance import compilation_requested
-from pvz_rl.learning.tile_curriculum import initial_tile_state, required_validation_wins
+from pvz_rl.learning.tile_curriculum import (
+    initial_tile_state,
+    required_validation_wins,
+    tile_validation_count,
+)
 from pvz_rl.learning.training_requirements import (
     FIT_SCHEDULE_PROTOCOL,
     parameter_changes,
@@ -976,11 +985,14 @@ class ResearchCallback(BaseCallback):
             if self.validation_panels and kind not in self.validation_panels:
                 raise ValueError("Another validation panel remains pending")
             if kind not in self.validation_panels:
-                self.validation_panels[kind] = (
-                    curriculum_probe_seeds(self.cfg)
-                    if kind in ("tile", "curriculum")
-                    else random_validation_seeds(self.cfg, limit=self.validation_limit)
-                )
+                if kind in ("tile", "curriculum"):
+                    count = (
+                        tile_validation_count(self.cfg, domain) if domain == "attacker" else None
+                    )
+                    panel = curriculum_probe_seeds(self.cfg, count=count)
+                else:
+                    panel = random_validation_seeds(self.cfg, limit=self.validation_limit)
+                self.validation_panels[kind] = panel
             self.validation_pending = True
         if checked:
             decision = self.validation_trigger.state["decision"]
@@ -1172,11 +1184,14 @@ class ResearchCallback(BaseCallback):
                     "Tile validation incomplete; mastery remains pending", force=True
                 )
                 return
-            count = self.cfg["curriculum"]["probe_cases"]
+            count = tile_validation_count(self.cfg, skills.validation_domain)
             if any(len(rows) != count for rows in results.values()):
                 raise ValueError("Incomplete tile-stage validation cannot certify mastery")
             scores = {skill: sum(row["win"] for row in rows) for skill, rows in results.items()}
             previous = skills.phase
+            breakdown = (
+                attacker_exercise_scores(results["attacker"]) if previous == "attacker" else None
+            )
             with atomic_transition():
                 skills.observe(scores, self.cfg)
                 self.complete_validation("tile")
@@ -1194,15 +1209,23 @@ class ResearchCallback(BaseCallback):
                             stage=previous if skills.stage_order is not None else "pre",
                             stage_episodes=skills.episodes[previous],
                             cases=results,
+                            **({"exercise_scores": breakdown} if breakdown is not None else {}),
                             optimizer_step=optimizer_step(self.model),
                             training_steps=self.model.num_timesteps,
                         ),
                     )
                 self.save_checkpoint("latest.zip")
-            self.progress.emit(
-                f"Tile validation: {scores}; next phase {skills.phase}",
-                force=True,
-            )
+            detail = str(scores)
+            if breakdown is not None:
+                detail = (
+                    f"attacker {scores['attacker']}/{count} overall ("
+                    + ", ".join(
+                        f"{skill} {score['wins']}/{score['games']}"
+                        for skill, score in breakdown.items()
+                    )
+                    + ")"
+                )
+            self.progress.emit(f"Tile validation: {detail}; next phase {skills.phase}", force=True)
             if not skills.active:
                 self.recent.clear()
                 self.recent_by_task.clear()
@@ -1698,7 +1721,8 @@ def train(
         f"Shared {condition} {cfg['policy']['kind']} policy; learner seed {learner_seed}; {cfg['training']['device']}; "
         f"{cohort_envs(cfg, 'peashooter')} Peashooter lanes, {cohort_envs(cfg)} normal lanes, "
         f"{cohort_envs(cfg, 'cherry_bomb')} Cherry Bomb lanes, "
-        f"{cfg['training'].get('tile_scenarios', {}).get('attacker', {}).get('n_envs', 0)} attacker-pre lanes; simulator {simulator(cfg)}; "
+        f"{cfg['training'].get('tile_scenarios', {}).get('attacker', {}).get('n_envs', 0)} attacker-pre lanes, "
+        f"{(attacker_mix(cfg) or {}).get('n_envs', 0)} mixed attacker lanes; simulator {simulator(cfg)}; "
         "one complete game per environment per cohort; "
         f"{budget_label}; "
         f"family {family}; output {output.resolve()}",
@@ -1817,6 +1841,8 @@ def train(
                         f"temperature {bomb.get('distance_temperature', 1)}"
                     )
                 )
+                if model.tile_skills.phase == "attacker":
+                    fitting = "set cross-entropy with separate temperatures from each exercise's cohort accuracy"
                 progress.emit(
                     f"Placement fitting: {objective}; {fitting}; no search or exploration",
                     force=True,
@@ -1836,7 +1862,7 @@ def train(
                 "stage episodes at a fitted "
                 "cohort boundary; require "
                 + ", ".join(
-                    f"{skill} {wins}/{cfg['curriculum']['probe_cases']}"
+                    f"{skill} {wins}/{tile_validation_count(cfg, skill)}"
                     for skill, wins in requirements.items()
                 )
                 + "; "

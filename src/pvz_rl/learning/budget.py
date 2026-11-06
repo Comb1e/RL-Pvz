@@ -5,11 +5,13 @@ def validation_interval_games(cfg, domain="normal"):
     """Stage clocks; absent overrides retain the saved common interval."""
     curriculum = cfg["curriculum"]
     if domain in ("cherry_bomb", "cherry_bomb_obstacle"):
-        return curriculum.get("cherry_bomb_probe_interval_games", curriculum["probe_interval_games"])
+        return curriculum.get(
+            "cherry_bomb_probe_interval_games", curriculum["probe_interval_games"]
+        )
     if domain == "peashooter":
         return curriculum.get("peashooter_probe_interval_games", curriculum["probe_interval_games"])
-    if domain == "attacker_pre":
-        return curriculum.get("attacker_pre_probe_interval_games", curriculum["probe_interval_games"])
+    if domain in ("attacker_pre", "attacker"):
+        return curriculum.get(f"{domain}_probe_interval_games", curriculum["probe_interval_games"])
     return curriculum["probe_interval_games"]
 
 
@@ -56,8 +58,10 @@ def evaluation_interval(cfg):
 
 
 def progress_value(cfg, model):
+    from pvz_rl.learning.curriculum import TILE_STAGES
+
     stage = cfg["curriculum"].get("run_stage")
-    if stage in ("cherry_bomb", "cherry_bomb_obstacle", "attacker_pre", "peashooter"):
+    if stage in TILE_STAGES:
         return model.tile_skills.episodes[stage]
     if stage == "pre":
         return model.tile_skills.total

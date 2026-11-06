@@ -3,6 +3,7 @@
 from copy import deepcopy
 
 from pvz_rl.learning.budget import validation_interval_games
+from pvz_rl.learning.curriculum import TILE_STAGES
 
 
 class ValidationTrigger:
@@ -12,7 +13,7 @@ class ValidationTrigger:
         self.threshold = settings.get("cohort_success_threshold", 0.9)
         self.intervals = {
             domain: validation_interval_games(cfg, domain)
-            for domain in ("normal", "pre", "peashooter", "cherry_bomb", "cherry_bomb_obstacle", "attacker_pre")
+            for domain in ("normal", "pre", *TILE_STAGES)
         }
         self.state = deepcopy(state) if state else dict(last_check={}, decision=None, pending=None)
 

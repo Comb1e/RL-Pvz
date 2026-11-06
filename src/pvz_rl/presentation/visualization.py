@@ -359,7 +359,8 @@ def build_run_report(run, cfg=None):
             f"Peashooter: {escape(skills.get('episodes', {}).get('peashooter', 0))}; "
             f"Cherry Bomb: {escape(skills.get('episodes', {}).get('cherry_bomb', 0))}; "
             f"Obstacle: {escape(skills.get('episodes', {}).get('cherry_bomb_obstacle', 0))}; "
-            f"Attacker pre: {escape(skills.get('episodes', {}).get('attacker_pre', 0))}. "
+            f"Attacker pre: {escape(skills.get('episodes', {}).get('attacker_pre', 0))}; "
+            f"Attacker: {escape(skills.get('episodes', {}).get('attacker', 0))}. "
             f"Generation failures: {escape(skills.get('generation_failures', 0))}. "
             + mastery
             + f"Latest validation successes: {escape(skills.get('scores') or 'not recorded')}. "
@@ -399,11 +400,16 @@ def build_run_report(run, cfg=None):
         )
         for probe in probes:
             counts = {skill: len(rows) for skill, rows in probe.get("cases", {}).items()}
+            breakdown = "".join(
+                f"<br>{escape(skill)} {score['wins']}/{score['games']}"
+                for skill, score in probe.get("exercise_scores", {}).items()
+            )
             run_progress += (
                 f"<tr><td>{escape(probe.get('stage', 'pre'))}</td>"
                 f"<td>{probe.get('stage_episodes', probe['episodes'])}</td>"
                 + "".join(
-                    f"<td>{probe['scores'][skill]}/{counts.get(skill, cfg['curriculum']['probe_cases'])}</td>"
+                    f"<td>{probe['scores'][skill]}/{counts.get(skill, cfg['curriculum']['probe_cases'])}"
+                    f"{breakdown if skill == 'attacker' else ''}</td>"
                     if skill in probe["scores"]
                     else "<td>—</td>"
                     for skill in TILE_STAGES

@@ -23,7 +23,13 @@ from pvz_rl.config import (
 from pvz_rl.envs.actions import ActionSchema as A
 from pvz_rl.envs.cuda_features import REWARD_FIELDS
 from pvz_rl.envs.encoding import ENTITY_WIDTH, PackedEntityBatch
-from pvz_rl.envs.tile_scenarios import is_placement_skill, placement_settings
+from pvz_rl.envs.tile_scenarios import (
+    attacker_exercise_scores,
+    is_placement_skill,
+    placement_settings,
+    placement_source,
+    skill_plant,
+)
 from pvz_rl.learning.action_routing import classify_actions
 from pvz_rl.learning.batch_transport import (
     BatchPrefetch,
@@ -1047,11 +1053,9 @@ class CudaSequentialQ(CudaCohortLifecycle):
                 torch.cuda.empty_cache()
 
     def _prepare_bomb_temperature(self):
-        settings = placement_settings(self.cfg, self.tile_skills.phase)
-        if (
-            not is_placement_skill(self.tile_skills.phase)
-            or settings.get("ranking_objective") != BOMB_OBJECTIVE
-        ):
+        stage = self.tile_skills.phase
+        settings = placement_settings(self.cfg, stage)
+        if not is_placement_skill(stage) or settings.get("ranking_objective") != BOMB_OBJECTIVE:
             return
         # These attributed-hit outcomes and the settings are already checkpointed.
         # Reconstruct the same scalar on pass replay; never use validation or a
@@ -1059,13 +1063,27 @@ class CudaSequentialQ(CudaCohortLifecycle):
         episodes = self._pending_episodes
         if not episodes or len(episodes) != self.cohort_games:
             raise RuntimeError("Bomb fitting temperature requires a completed cohort")
+        if stage == "attacker":
+            scores = attacker_exercise_scores(item["metrics"] for item in episodes.values())
+            self._bomb_fit_temperature = {
+                skill: bomb_softmax_temperature(
+                    placement_settings(self.cfg, skill),
+                    score["wins"] / score["games"],
+                    skill=skill,
+                )
+                for skill, score in scores.items()
+                if score["games"]
+            }
+            for skill, temperature in self._bomb_fit_temperature.items():
+                self.logger.record(f"train/attacker_softmax_temperature/{skill}", temperature)
+            return
         rate = sum(bool(item["metrics"]["win"]) for item in episodes.values()) / len(episodes)
         self._bomb_fit_temperature = bomb_softmax_temperature(
             settings,
             rate,
-            skill=self.tile_skills.phase,
+            skill=stage,
         )
-        prefix = "attacker" if self.tile_skills.phase == "attacker_pre" else "bomb"
+        prefix = "attacker" if stage == "attacker_pre" else "bomb"
         self.logger.record(f"train/{prefix}_softmax_temperature", self._bomb_fit_temperature)
 
     def _start_pass(self):
@@ -1216,7 +1234,9 @@ class CudaSequentialQ(CudaCohortLifecycle):
                 for key, number in zip(
                     bomb_loss_metrics(
                         placement_settings(self.cfg, self.tile_skills.phase),
-                        prefix="attacker" if self.tile_skills.phase == "attacker_pre" else "bomb",
+                        prefix="attacker"
+                        if self.tile_skills.phase in ("attacker_pre", "attacker")
+                        else "bomb",
                     ),
                     self._bomb_pass_metrics.cpu().tolist(),
                     strict=True,
@@ -1399,9 +1419,11 @@ class CudaSequentialQ(CudaCohortLifecycle):
 
         labels = [self.env.tile_boards[int(index)] for index in rows["env"]]
         observations = collate_observations(observations, self.device)
+        stage = self.tile_skills.phase
+        sources = [placement_source(stage, label) for label in labels]
         branches = [
-            self.cfg["environment"]["plants"].index(label.get("supplied_plant", "cherry_bomb")) + 1
-            for label in labels
+            self.cfg["environment"]["plants"].index(skill_plant(source, label)) + 1
+            for source, label in zip(sources, labels, strict=True)
         ]
         values = (
             self.policy.fitting_tiles(
@@ -1412,15 +1434,27 @@ class CudaSequentialQ(CudaCohortLifecycle):
             if features is None
             else self.policy.tile_values(features, null=null).float()
         )
-        settings = placement_settings(self.cfg, self.tile_skills.phase)
+        settings = placement_settings(self.cfg, stage)
         positives = [label["feasible_tiles"] for label in labels]
         objective = settings.get("ranking_objective", "top1_hinge_v1")
         if objective == BOMB_OBJECTIVE:
-            loss = bomb_set_cross_entropy(
-                values,
-                positives,
-                temperature=self._bomb_fit_temperature,
-            )
+            if stage == "attacker":
+                loss = values.new_zeros(())
+                for skill, temperature in self._bomb_fit_temperature.items():
+                    indices = [i for i, source in enumerate(sources) if source == skill]
+                    if indices:
+                        group = bomb_set_cross_entropy(
+                            values[indices],
+                            [positives[i] for i in indices],
+                            temperature=temperature,
+                        )
+                        loss = loss + group * (len(indices) / len(rows))
+            else:
+                loss = bomb_set_cross_entropy(
+                    values,
+                    positives,
+                    temperature=self._bomb_fit_temperature,
+                )
             detail = loss.detach().reshape(1)
         elif objective in DISTANCE_OBJECTIVES:
             illegal = [
@@ -1471,6 +1505,10 @@ class CudaSequentialQ(CudaCohortLifecycle):
             self._stats["bomb_selected_tile_distance"] = (
                 sum(distances) / len(distances) if distances else None
             )
+            if self.tile_skills.phase == "attacker":
+                self._stats["attacker_exercise_scores"] = attacker_exercise_scores(
+                    item["metrics"] for item in self._pending_episodes.values()
+                )
             if self.tile_skills.phase == "attacker_pre":
                 metrics = [item["metrics"] for item in self._pending_episodes.values()]
                 self._stats["attacker_selected_tile_distance"] = self._stats.pop(

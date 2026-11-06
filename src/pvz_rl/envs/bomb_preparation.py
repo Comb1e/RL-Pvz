@@ -5,6 +5,7 @@ from concurrent.futures import ProcessPoolExecutor, TimeoutError
 
 from pvz_rl.envs.scratch_game import EngineSnapshot, scratch_rules
 from pvz_rl.envs.tile_scenarios import (
+    ATTACKER_EXERCISES,
     bomb_candidates,
     bomb_initials,
     generation_failure,
@@ -34,7 +35,9 @@ def _prepare(job, cfg=None):
 
         if not preparation_settings(cfg, skill).get("cuda_warmup", False):
             return sample_attacker(cfg, seed, start=start, deadline=deadline, case=case)
-        candidate = next(attacker_initials(cfg, seed, start=start, deadline=deadline, case=case), None)
+        candidate = next(
+            attacker_initials(cfg, seed, start=start, deadline=deadline, case=case), None
+        )
         if candidate is None:
             raise generation_failure(cfg, seed, skill)
         game, attempt, metadata = candidate
@@ -42,7 +45,9 @@ def _prepare(job, cfg=None):
     if labels:
         return sample_bomb(cfg, seed, deadline=deadline, skill=skill)
     if cfg["training"].get("performance", {}).get("cherry_cuda_warmup", False):
-        candidate = next(bomb_initials(cfg, seed, start=start, deadline=deadline, skill=skill), None)
+        candidate = next(
+            bomb_initials(cfg, seed, start=start, deadline=deadline, skill=skill), None
+        )
         if candidate is None:
             raise generation_failure(cfg, seed, skill)
         game, attempt, metadata = candidate
@@ -52,7 +57,10 @@ def _prepare(job, cfg=None):
         raise generation_failure(cfg, seed, skill)
     game, target, attempt, metadata = candidate
     return dict(
-        snapshot=EngineSnapshot.capture(game), target_id=target, generation_failures=attempt, **metadata
+        snapshot=EngineSnapshot.capture(game),
+        target_id=target,
+        generation_failures=attempt,
+        **metadata,
     )
 
 
@@ -78,7 +86,9 @@ class BombPreparation:
     def reserved_bytes(self):
         return self.workers * self.worker_ram_mib * 1024**2
 
-    def submit(self, seeds, deadline=None, *, starts=None, skill="cherry_bomb", cases=None):
+    def submit(
+        self, seeds, deadline=None, *, starts=None, skill="cherry_bomb", cases=None, exercises=None
+    ):
         if self.workers and self.pool is None:
             self.pool = ProcessPoolExecutor(
                 max_workers=self.workers,
@@ -88,9 +98,14 @@ class BombPreparation:
             )
         starts = [0] * len(seeds) if starts is None else starts
         cases = [None] * len(seeds) if cases is None else cases
+        exercises = [skill] * len(seeds) if exercises is None else exercises
+        oracles = {
+            source: preparation_settings(self.cfg, source).get("oracle", "cpu")
+            for source in set(exercises)
+        }
         jobs = [
-            (seed, start, self.oracle == "cpu", deadline, skill, case)
-            for seed, start, case in zip(seeds, starts, cases, strict=True)
+            (seed, start, oracles[source] == "cpu", deadline, source, case)
+            for seed, start, case, source in zip(seeds, starts, cases, exercises, strict=True)
         ]
         return [self.pool.submit(_prepare, job) for job in jobs] if self.pool else jobs
 
@@ -111,10 +126,11 @@ class BombPreparation:
         boards = [None] * len(tasks)
         remaining = list(range(len(tasks)))
         cases = [None] * len(seeds) if cases is None else cases
+        oracle = preparation_settings(self.cfg, skill).get("oracle", "cpu")
         try:
             while remaining:
                 candidates = [self._resolve(task, deadline) for task in tasks]
-                if self.oracle == "cpu":
+                if oracle == "cpu":
                     return candidates
                 if skill == "attacker_pre":
                     from pvz_rl.envs.attacker_scenarios import (
@@ -129,7 +145,8 @@ class BombPreparation:
 
                             self.cuda = CudaBombOracle(self.cfg)
                         candidates = self.cuda.warmup(
-                            candidates, deadline=deadline,
+                            candidates,
+                            deadline=deadline,
                             ticks=warmup_ticks(self.cuda.rules, attacker_settings(self.cfg)),
                         )
                     retry, starts = [], []
@@ -141,8 +158,13 @@ class BombPreparation:
                             retry.append(index)
                             starts.append(candidate["generation_failures"] + 1)
                     remaining = retry
-                    tasks = self.submit([seeds[i] for i in retry], deadline, starts=starts,
-                                        skill=skill, cases=[cases[i] for i in retry])
+                    tasks = self.submit(
+                        [seeds[i] for i in retry],
+                        deadline,
+                        starts=starts,
+                        skill=skill,
+                        cases=[cases[i] for i in retry],
+                    )
                     continue
                 if self.cuda is None:
                     from pvz_rl.envs.cuda_bomb_oracle import CudaBombOracle
@@ -164,6 +186,30 @@ class BombPreparation:
                         starts.append(board["generation_failures"] + 1)
                 remaining = retry
                 tasks = self.submit([seeds[i] for i in retry], deadline, starts=starts, skill=skill)
+            return boards
+        except BaseException:
+            self.cancel(tasks)
+            raise
+
+    def collect_mixed(self, tasks, seeds, exercises, *, deadline=None):
+        """Use one pool, rotating the CUDA scratch between bomb and attacker settings."""
+        self.release_scratch()
+        boards = [None] * len(seeds)
+        try:
+            for skill in ATTACKER_EXERCISES:
+                indices = [i for i, source in enumerate(exercises) if source == skill]
+                if not indices:
+                    continue
+                if skill == "attacker_pre":
+                    self.release_scratch()
+                prepared = self.collect(
+                    [tasks[i] for i in indices],
+                    [seeds[i] for i in indices],
+                    deadline=deadline,
+                    skill=skill,
+                )
+                for index, board in zip(indices, prepared, strict=True):
+                    boards[index] = dict(board, exercise=skill)
             return boards
         except BaseException:
             self.cancel(tasks)

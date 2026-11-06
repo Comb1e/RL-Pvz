@@ -15,7 +15,13 @@ from random import SystemRandom
 from pvz_game.config import PLANT_TYPES, ZOMBIE_TYPES
 from pvz_game.cuda.schema import MOWER_STATES, PLANT_STATES, ZOMBIE_STATES
 
-from pvz_rl.envs.tile_scenarios import BOMB_SKILLS, is_bomb_skill, is_placement_skill
+from pvz_rl.envs.tile_scenarios import (
+    ATTACKER_EXERCISES,
+    BOMB_SKILLS,
+    attacker_mix,
+    is_bomb_skill,
+    is_placement_skill,
+)
 from pvz_rl.learning.budget import uses_games
 
 _CONFIG_RESOURCE = "data/train.toml"
@@ -95,6 +101,13 @@ _STAGE_PARAMETERS = {
         },
         "probe_interval_games": "curriculum.attacker_pre_probe_interval_games",
     },
+    "attacker": {
+        **{
+            key: f"training.tile_scenarios.attacker_mix.{key}"
+            for key in ("n_envs", "validation_cases", "ratios")
+        },
+        "probe_interval_games": "curriculum.attacker_probe_interval_games",
+    },
     "peashooter": {
         "sky_sun_rate": "training.tile_scenarios.peashooter_sky_sun_rate",
         **{
@@ -137,7 +150,7 @@ def forecast_version(cfg):
 
 def forecast_mode(cfg, stage=None):
     stage = stage or cfg.get("curriculum", {}).get("run_stage") or "normal"
-    if stage not in ("cherry_bomb", "cherry_bomb_obstacle", "attacker_pre", "peashooter"):
+    if stage not in _STAGE_PARAMETERS:
         stage = "normal"
     return cfg["training"]["stage_forecast_modes"][stage]
 
@@ -226,6 +239,8 @@ def runtime_settings(cfg: dict) -> dict:
 
 def cohort_envs(cfg, skill=None):
     """Configured real-episode cohort size; missing stage settings retain legacy size."""
+    if skill == "attacker":
+        return attacker_mix(cfg)["n_envs"]
     if skill == "attacker_pre":
         return cfg["training"]["tile_scenarios"]["attacker"]["n_envs"]
     if skill == "peashooter":
@@ -290,7 +305,8 @@ def training_env_capacity(cfg, family="preset"):
         if is_placement_skill(stage):
             return cohort_envs(cfg, stage)
         attacker = tile.get("attacker", {}).get("n_envs", 0)
-        return max(cherry, attacker, cohort_envs(cfg, "peashooter"), cohort_envs(cfg))
+        mixed = (attacker_mix(cfg) or {}).get("n_envs", 0)
+        return max(cherry, attacker, mixed, cohort_envs(cfg, "peashooter"), cohort_envs(cfg))
     if stage == "peashooter":
         return cohort_envs(cfg, "peashooter")
     return cohort_envs(cfg)
@@ -699,7 +715,9 @@ def validate_config(cfg: dict) -> None:
             raise ValueError(f"policy.{key} must be a positive integer")
     if policy["shared_width"] % policy["attention_heads"]:
         raise ValueError("shared_width must be divisible by attention_heads")
-    stages = ("normal", "cherry_bomb", "cherry_bomb_obstacle", "attacker_pre", "peashooter")
+    stages = tuple(
+        stage for stage in _STAGE_PARAMETERS if stage != "attacker" or attacker_mix(cfg) is not None
+    )
     if set(cfg["training"].get("stage_effect_weights", {})) - set(stages[1:]):
         raise ValueError("Unknown preliminary outcome stage")
     split_weights = cfg["training"].get("stage_outcome_weights", {})
@@ -769,6 +787,7 @@ def validate_config(cfg: dict) -> None:
         "cherry_bomb_probe_interval_games",
         "peashooter_probe_interval_games",
         "attacker_pre_probe_interval_games",
+        "attacker_probe_interval_games",
     ):
         if key in c and (type(c[key]) is not int or c[key] < 1):
             raise ValueError(f"{key} must be a positive integer")
@@ -924,7 +943,7 @@ def validate_config(cfg: dict) -> None:
             )
             if (
                 tile["enabled"]
-                and c.get("run_stage") in (None, "attacker_pre")
+                and c.get("run_stage") in (None, "attacker_pre", "attacker")
                 and warmup_ticks(rules, attacker) + horizon
                 >= cfg["environment"]["cutoff_seconds"] * rules.game["tick_rate"]
             ):
@@ -933,7 +952,7 @@ def validate_config(cfg: dict) -> None:
                 )
             if (
                 tile["enabled"]
-                and c.get("run_stage") in (None, "attacker_pre")
+                and c.get("run_stage") in (None, "attacker_pre", "attacker")
                 and "basic" not in cfg["environment"]["zombies"]
             ):
                 raise ValueError("attacker_pre requires Basic zombies in the configured roster")
@@ -949,6 +968,34 @@ def validate_config(cfg: dict) -> None:
         raise ValueError("Tile stages require training.tile_scenarios.enabled")
     if c.get("run_stage") == "attacker_pre" and "attacker" not in tile:
         raise ValueError("attacker_pre requires its training configuration section")
+    mix = attacker_mix(cfg)
+    if mix is not None:
+        from fractions import Fraction
+
+        if not isinstance(mix, dict) or "attacker" not in tile:
+            raise ValueError("attacker requires its mix and the attacker_pre settings")
+        if tile.get("ranking_objective") != "set_cross_entropy_v1":
+            raise ValueError(
+                "attacker requires successful-set cross-entropy for its bomb exercises"
+            )
+        ratios = mix.get("ratios")
+        if (
+            not isinstance(ratios, list)
+            or len(ratios) != len(ATTACKER_EXERCISES)
+            or any(type(r) not in (int, float) or not math.isfinite(r) or r <= 0 for r in ratios)
+            or sum(Fraction(str(r)) for r in ratios) != 1
+        ):
+            raise ValueError("attacker.ratios must contain three positive shares summing to one")
+        for key in ("n_envs", "validation_cases"):
+            size = mix.get(key)
+            if (
+                type(size) is not int
+                or size < 1
+                or any((size * Fraction(str(r))).denominator != 1 for r in ratios)
+            ):
+                raise ValueError(f"attacker.{key} must give integral exercise quotas")
+    elif c.get("run_stage") == "attacker":
+        raise ValueError("attacker requires its training configuration section")
     if c.get("lessons") or set(c.get("stages", {})) - {"easy", "standard", "shared"}:
         raise ValueError("Retired curriculum lesson; use easy, standard and shared stages")
     unlimited = cfg["training"].get("until_stage_complete", False)
@@ -1063,12 +1110,8 @@ def validate_config(cfg: dict) -> None:
         raise ValueError(
             "Removed factual prediction settings; use the current outcome-only profile"
         )
-    for stage in _STAGE_PARAMETERS:
-        expected = (
-            "placement_outcomes"
-            if stage in ("cherry_bomb", "cherry_bomb_obstacle", "attacker_pre")
-            else "action_outcomes"
-        )
+    for stage in stages:
+        expected = "placement_outcomes" if is_placement_skill(stage) else "action_outcomes"
         if train.get("stage_forecast_modes", {}).get(stage) != expected:
             raise ValueError(f"Unsupported outcome mode for {stage}; expected {expected}")
     if forecasts.get("effect_objective") != "absolute_outcome_v3":
@@ -1092,9 +1135,9 @@ def validate_config(cfg: dict) -> None:
     ):
         raise ValueError("wait_effect_sample_probability must be between zero and one")
     for stage, count in train.get("stage_extra_actions", {}).items():
-        if stage not in _STAGE_PARAMETERS or type(count) is not int or count not in (0, 2):
+        if stage not in stages or type(count) is not int or count not in (0, 2):
             raise ValueError("Stage extra_actions must be zero or two")
-    for stage in ("cherry_bomb", "cherry_bomb_obstacle", "attacker_pre", "peashooter"):
+    for stage in stages[1:]:
         if effect_extra_actions(cfg, stage) != 0:
             raise ValueError(f"{stage} requires zero extra actions")
     for key in ("lanes", "vram_mib", "chunk_ticks", "n_step", "injected_n_step"):
@@ -1402,8 +1445,10 @@ def seed_values(cfg: dict, split: str, limit: int | None = None) -> list[int]:
     return list(range(lo, hi + 1 if limit is None else lo + limit))
 
 
-def curriculum_probe_seeds(cfg: dict) -> list[int]:
+def curriculum_probe_seeds(cfg: dict, *, count: int | None = None) -> list[int]:
     """Draw a fresh mastery panel; callers retain it while validation is pending."""
+    if count is not None:
+        return _fresh_validation_seeds(cfg, count)
     split = "curriculum" if "curriculum" in cfg["splits"] else "validation"
     return random_validation_seeds(cfg, split, cfg["curriculum"]["probe_cases"])
 
@@ -1411,6 +1456,10 @@ def curriculum_probe_seeds(cfg: dict) -> list[int]:
 def random_validation_seeds(cfg: dict, split="validation", limit: int | None = None) -> list[int]:
     """Independent fresh cases outside every reserved split; splits still set counts."""
     count = len(seed_values(cfg, split, limit))
+    return _fresh_validation_seeds(cfg, count)
+
+
+def _fresh_validation_seeds(cfg, count):
     start = max(hi for _, hi in cfg["splits"].values()) + 1
     population = range(start, 2**63)
     if len(population) < count:

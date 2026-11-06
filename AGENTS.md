@@ -10,7 +10,7 @@ This file owns project-specific invariants and the code map.
   No dependency downloads in smoke checks or formal training without a request.
 - `src/pvz_rl/data/train.toml` is the single parameter source for training and demo
   overlays. Preserve user tuning. Group stage settings under `training.cherry_bomb`,
-  `cherry_bomb_obstacle`, `attacker_pre`, `peashooter` and `normal`; resolve once
+  `cherry_bomb_obstacle`, `attacker_pre`, `attacker`, `peashooter` and `normal`; resolve once
   into the runtime layout. Shared scenario sampling attempts live in `tile_scenarios`.
 - Fresh policy inputs are public board facts: entity records and 18 globals.
   Simulated field/probe outcomes are private auxiliary targets, never observations.
@@ -144,7 +144,7 @@ This file owns project-specific invariants and the code map.
 
 ## Stages and validation
 
-- Fresh progression: `cherry_bomb → cherry_bomb_obstacle → attacker_pre → peashooter
+- Fresh progression: `cherry_bomb → cherry_bomb_obstacle → attacker_pre → attacker → peashooter
   → easy → standard → shared`. Explicit normal stages start directly. Preserve
   normal stage indices, independent budgets/counters and saved stage orders.
 - Both bomb stages have no exploration/search. Obstacle boards have exactly one
@@ -152,6 +152,12 @@ This file owns project-specific invariants and the code map.
   use conservative distance placement labels, and report fallback
   correctness separately from attributed kills. Peashooter keeps easy waves,
   disabled mowers, configured sky-sun scaling and saved countdowns without rescaling.
+- Attacker draws exact, shuffled Cherry Bomb/Obstacle/Attacker Pre quotas of
+  64/256/320 for collection and 20/80/100 for validation. Retain source exercise
+  on each board and use its supplied branch, teacher, temperature and verification.
+  One shared pool and one active CUDA oracle prepare the mixed cohort. Validation
+  requires all 200 wins and reuses the saved panel on retry. Weights-only stage
+  transfers use `--init-from`; recovery retains the saved stage order.
 - Only real completed episodes advance budgets and validation clocks. Check at
   configured intervals after fully fitted cohorts. Entire configured cohorts must
   strictly exceed the qualification threshold; shortened cohorts cannot qualify.

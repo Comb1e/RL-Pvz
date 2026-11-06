@@ -5,7 +5,8 @@ from functools import lru_cache
 
 from pvz_rl.config import outcome_prediction_weights, research_config, simulator, validate_config
 from pvz_rl.envs.actions import ActionSchema
-from pvz_rl.learning.curriculum import selected_stage
+from pvz_rl.envs.tile_scenarios import attacker_mix
+from pvz_rl.learning.curriculum import TILE_STAGES, selected_stage
 from pvz_rl.policy.sequential_q import ACTION_DISTRIBUTION
 from pvz_rl.provenance import weight_engine_config
 
@@ -157,7 +158,8 @@ def resume_protocol(cfg, condition):
         stage: dict(
             zip(("static_field", "probe"), outcome_prediction_weights(cfg, stage), strict=True)
         )
-        for stage in ("normal", "cherry_bomb", "cherry_bomb_obstacle", "attacker_pre", "peashooter")
+        for stage in ("normal", *TILE_STAGES)
+        if stage != "attacker" or attacker_mix(cfg) is not None
     }
     result["training"].pop("effect_prediction_weight", None)
     result["training"].pop("stage_effect_weights", None)

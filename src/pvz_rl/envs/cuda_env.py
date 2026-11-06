@@ -33,7 +33,9 @@ from pvz_rl.envs.tile_scenarios import (
     bomb_tile_distances,
     is_placement_skill,
     peashooter_level,
+    placement_source,
     preparation_settings,
+    shuffled_attacker_exercises,
     skill_plant,
 )
 from pvz_rl.learning.budget import budget_target
@@ -150,11 +152,25 @@ class ScenarioQueue:
             else:
                 spec = scenario(level, family, seed, self.rules, cfg)
             staged.append((index, level, family, seed, spec))
+        if self.tile_scenario == "attacker":
+            exercises = shuffled_attacker_exercises(cfg, [s[3] for s in staged])
+            staged = [
+                (index, level, f"tile_{source}", seed, spec)
+                for (index, level, _, seed, spec), source in zip(staged, exercises, strict=True)
+            ]
         return staged
+
+    def _preparation_exercises(self, staged):
+        return (
+            [s[2].removeprefix("tile_") for s in staged]
+            if self.tile_scenario == "attacker"
+            else None
+        )
 
     def _bomb_preparation(self):
         if self._preparation is not None and (
-            (self._preparation.skill == "attacker_pre") != (self.tile_scenario == "attacker_pre")
+            (self._preparation.skill in ("attacker_pre", "attacker"))
+            != (self.tile_scenario in ("attacker_pre", "attacker"))
         ):
             self.discard_prefetch()
             self._preparation.close()
@@ -176,7 +192,10 @@ class ScenarioQueue:
         rngs = self._staging_rngs()
         staged = self._draft(list(range(count)), rngs)
         tasks = self._bomb_preparation().submit(
-            [s[3] for s in staged], self.deadline, skill=self.tile_scenario
+            [s[3] for s in staged],
+            self.deadline,
+            skill=self.tile_scenario,
+            exercises=self._preparation_exercises(staged),
         )
         self._prefetched = (staged, rngs, tasks, self.tile_scenario)
 
@@ -201,6 +220,7 @@ class ScenarioQueue:
                 and self.tile_scenario == saved_skill
                 and seeds is None
                 and indices == [s[0] for s in staged[: len(indices)]]
+                and (self.tile_scenario != "attacker" or len(indices) == len(staged))
             ):
                 staged, tasks = staged[: len(indices)], saved_tasks[: len(indices)]
                 self._preparation.cancel(saved_tasks[len(indices) :])
@@ -209,28 +229,38 @@ class ScenarioQueue:
                 self._prefetched = None
                 prefetched = True
             else:
+                pending = self.pending_cohort_seed
                 self.discard_prefetch()
+                if self.tile_scenario == saved_skill == "attacker" and seeds is None:
+                    self.pending_cohort_seed = pending
         if tasks is None:
             rngs = self._staging_rngs() if seeds is None and indices else deepcopy(self.rngs)
             staged = self._draft(indices, rngs, seeds)
         if is_placement_skill(self.tile_scenario):
             prep = self._bomb_preparation()
             selected_seeds = [s[3] for s in staged]
+            exercises = self._preparation_exercises(staged)
             if tasks is None:
                 tasks = prep.submit(
                     selected_seeds,
                     self.deadline,
                     skill=self.tile_scenario,
                     cases=self.validation_cases,
+                    exercises=exercises,
                 )
             try:
-                boards = prep.collect(
-                    tasks,
-                    selected_seeds,
-                    deadline=self.deadline,
-                    skill=self.tile_scenario,
-                    cases=self.validation_cases,
-                )
+                if exercises is None:
+                    boards = prep.collect(
+                        tasks,
+                        selected_seeds,
+                        deadline=self.deadline,
+                        skill=self.tile_scenario,
+                        cases=self.validation_cases,
+                    )
+                else:
+                    boards = prep.collect_mixed(
+                        tasks, selected_seeds, exercises, deadline=self.deadline
+                    )
             except BombGenerationFailure:
                 self.generation_failures += self.cfg["training"]["tile_scenarios"][
                     "sampling_max_attempts"
@@ -243,15 +273,17 @@ class ScenarioQueue:
             check_deadline(self.deadline)
             self.tile_boards.update(zip(indices, boards, strict=True))
             self.generation_failures += sum(b["generation_failures"] for b in boards)
+            warmup_backends = set()
+            for source in set(exercises or [self.tile_scenario]):
+                settings = preparation_settings(self.cfg, source)
+                uses_cuda = settings.get("oracle") in ("cuda", "distance") and settings.get(
+                    "cuda_warmup", False
+                )
+                warmup_backends.add("cuda" if uses_cuda else "cpu")
             self.preparation_metrics = dict(
                 workers=prep.workers,
-                oracle=prep.oracle,
-                warmup_backend=(
-                    "cuda"
-                    if prep.oracle in ("cuda", "distance")
-                    and preparation_settings(self.cfg, self.tile_scenario).get("cuda_warmup", False)
-                    else "cpu"
-                ),
+                oracle=prep.oracle if exercises is None else "mixed",
+                warmup_backend="mixed" if len(warmup_backends) > 1 else warmup_backends.pop(),
                 prefetched=prefetched,
                 scratch_lanes=prep.cuda.batch.n if prep.cuda is not None else 0,
                 host_reserved_bytes=self.reserved_bytes,
@@ -466,10 +498,13 @@ class CudaVecEnv(VecEnv):
 
     def supplied_branches(self, skill, availability):
         """Public exercise instruction, independently supplied for each board."""
-        if skill == "attacker_pre":
+        if skill in ("attacker_pre", "attacker"):
             branches = torch.tensor(
                 [
-                    self.cfg["environment"]["plants"].index(board["supplied_plant"]) + 1
+                    self.cfg["environment"]["plants"].index(
+                        skill_plant(placement_source(skill, board), board)
+                    )
+                    + 1
                     if (board := self.tile_boards.get(i)) is not None
                     else 0
                     for i in range(self.num_envs)
@@ -740,11 +775,9 @@ class CudaVecEnv(VecEnv):
                     action = int(actions[index, 0])
                     branch = 1 + (action - 1) // 45 if action else 0
                     board = self.tile_boards[index]
+                    source = placement_source(self.tile_scenario, board)
                     expected = (
-                        self.cfg["environment"]["plants"].index(
-                            skill_plant(self.tile_scenario, board)
-                        )
-                        + 1
+                        self.cfg["environment"]["plants"].index(skill_plant(source, board)) + 1
                     )
                     settings = self.cfg["training"]["tile_scenarios"]
                     success = bool(
@@ -761,8 +794,7 @@ class CudaVecEnv(VecEnv):
                         selected_tile_distance=bomb_tile_distances(
                             board["feasible_tiles"],
                             board["absolute_infeasible_tiles"]
-                            if self.tile_scenario == "attacker_pre"
-                            or bomb_max_illegal_distance(settings)
+                            if source == "attacker_pre" or bomb_max_illegal_distance(settings)
                             else [],
                             rows=self.cfg["environment"]["rows"],
                             cols=self.cfg["environment"]["cols"],
@@ -770,7 +802,9 @@ class CudaVecEnv(VecEnv):
                         if action > 0 and branch == expected
                         else None,
                     )
-                    if self.tile_scenario == "attacker_pre":
+                    if self.tile_scenario == "attacker":
+                        metrics["exercise"] = source
+                    if source == "attacker_pre":
                         metrics.update(
                             target_correct=success,
                             fallback=board["fallback"],
@@ -857,11 +891,22 @@ class CudaVecEnv(VecEnv):
         }
 
     def restore_training(self, state):
-        if state.get("tile_scenario") == "attacker_pre":
+        skill = state.get("tile_scenario", "complete")
+        if skill in ("attacker_pre", "attacker"):
             from pvz_rl.envs.attacker_scenarios import label_attacker
 
-            for board in state.get("tile_boards", {}).values():
-                if label_attacker(board, self.queue.rules) != board:
+            boards = state.get("tile_boards", {})
+            if skill == "attacker":
+                episodes = state["attributes"]["_episode"]
+                seeds = [episodes[index][2] for index in sorted(boards)]
+                expected = shuffled_attacker_exercises(self.cfg, seeds)
+                if [boards[i].get("exercise") for i in sorted(boards)] != expected:
+                    raise ValueError("Saved mixed attacker exercises differ from the cohort seeds")
+            for board in boards.values():
+                if (
+                    placement_source(skill, board) == "attacker_pre"
+                    and label_attacker(board, self.queue.rules) != board
+                ):
                     raise ValueError("Saved attacker labels or conservative bounds changed")
         ledger = state.get("home_ledger")
         if ledger is not None:

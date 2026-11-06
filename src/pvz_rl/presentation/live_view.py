@@ -237,6 +237,7 @@ def learning_settings(cfg):
                     "cherry_bomb",
                     "cherry_bomb_obstacle",
                     "attacker_pre",
+                    "attacker",
                     "peashooter",
                     "normal",
                 )
